@@ -13,6 +13,7 @@ import {
   createFinanceTransfer,
 } from '../services/transactionService.js';
 import { recordFinanceAuditLog } from '../services/auditLogService.js';
+import { deleteFinanceTransactionAndCleanupInvoice } from '../services/transactionDeletionService.js';
 
 function requireActor(req: AuthenticatedRequest): number {
   const actorId = req.authContext?.id;
@@ -120,11 +121,12 @@ export const updateTransactionHandler = async (req: Request, res: Response): Pro
 
 export const deleteTransaction = async (req: Request, res: Response): Promise<void> => {
   try {
-    const count = await FinanceTransaction.destroy({ where: { id: req.params.id } });
-    if (!count) {
+    const transaction = await FinanceTransaction.findByPk(req.params.id);
+    if (!transaction) {
       res.status(404).json([{ message: 'Transaction not found' }]);
       return;
     }
+    await deleteFinanceTransactionAndCleanupInvoice(transaction);
     await recordFinanceAuditLog({
       entity: 'finance_transaction',
       entityId: Number(req.params.id),
@@ -146,4 +148,3 @@ export const createTransferHandler = async (req: Request, res: Response): Promis
     res.status(400).json([{ message: (error as Error).message }]);
   }
 };
-

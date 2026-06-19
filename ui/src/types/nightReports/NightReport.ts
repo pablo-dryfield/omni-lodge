@@ -89,6 +89,17 @@ export type NightReportCost = {
   vendorId: number | null;
   vendorName: string | null;
   invoiceFileId: number | null;
+  invoiceReferenceCount: number;
+  receiptGroupKey: string | null;
+  receiptTotalMinor: number | null;
+  receiptCurrency: string | null;
+  receiptAllocationNote: string | null;
+  receiptLineOrder: number | null;
+  receiptItems: Array<{
+    description: string | null;
+    quantity: number;
+    amountMinor: number;
+  }>;
   invoiceFile: {
     id: number;
     originalName: string;
@@ -155,6 +166,17 @@ export type NightReportLinkableCost = {
   vendorId: number | null;
   vendorName: string | null;
   invoiceFileId: number | null;
+  invoiceReferenceCount: number;
+  receiptGroupKey: string | null;
+  receiptTotalMinor: number | null;
+  receiptCurrency: string | null;
+  receiptAllocationNote: string | null;
+  receiptLineOrder: number | null;
+  receiptItems: Array<{
+    description: string | null;
+    quantity: number;
+    amountMinor: number;
+  }>;
   invoiceFile: {
     id: number;
     originalName: string;
@@ -246,4 +268,27 @@ export type NightReportCostCreatePayload = {
   status?: 'planned' | 'approved' | 'awaiting_reimbursement' | 'paid' | 'reimbursed' | 'void';
   description?: string | null;
   invoiceFileId?: number | null;
+};
+
+export type NightReportReceiptAllocationCreatePayload = {
+  date: string;
+  accountId: number;
+  currency: string;
+  receiptTotalMinor: number;
+  categoryId: number | null;
+  counterpartyId: number;
+  paymentMethod?: string | null;
+  status?: 'planned' | 'approved' | 'awaiting_reimbursement' | 'paid' | 'reimbursed' | 'void';
+  description?: string | null;
+  invoiceFileId?: number | null;
+  lines: Array<{
+    reportId: number;
+    amountMinor: number;
+    receiptAllocationNote?: string | null;
+    receiptItems?: Array<{
+      description?: string | null;
+      quantity?: number;
+      amountMinor: number;
+    }>;
+  }>;
 };

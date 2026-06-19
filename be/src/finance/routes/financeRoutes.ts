@@ -51,6 +51,7 @@ import {
 import {
   uploadFinanceFileHandler,
   listFinanceFiles,
+  downloadFinanceFileHandler,
 } from '../controllers/fileController.js';
 import {
   listManagementRequests,
@@ -115,6 +116,7 @@ router.delete('/clients/:id', deleteClient);
 
 // Files
 router.get('/files', listFinanceFiles);
+router.get('/files/:id/download', downloadFinanceFileHandler);
 router.post('/files', upload.single('file'), uploadFinanceFileHandler);
 
 // Transactions

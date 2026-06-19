@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import FinanceFile from '../models/FinanceFile.js';
 import { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
-import { computeBufferSha256, uploadFinanceFile, findDuplicateFinanceFile } from '../services/driveService.js';
+import { computeBufferSha256, uploadFinanceFile, findDuplicateFinanceFile, openFinanceFileStream } from '../services/driveService.js';
 import { recordFinanceAuditLog } from '../services/auditLogService.js';
 
 function requireActor(req: AuthenticatedRequest): number {
@@ -73,3 +73,26 @@ export const listFinanceFiles = async (_req: Request, res: Response): Promise<vo
   }
 };
 
+export const downloadFinanceFileHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const file = await FinanceFile.findByPk(req.params.id);
+    if (!file) {
+      res.status(404).json([{ message: 'File not found' }]);
+      return;
+    }
+
+    const stream = await openFinanceFileStream(file.driveFileId);
+    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
+    stream.on('error', (error) => {
+      if (!res.headersSent) {
+        res.status(500).json([{ message: (error as Error).message }]);
+      } else {
+        res.end();
+      }
+    });
+    stream.pipe(res);
+  } catch (error) {
+    res.status(500).json([{ message: (error as Error).message }]);
+  }
+};

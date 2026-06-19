@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
+import crypto from 'crypto';
 import { Op, Transaction, fn, col, where } from 'sequelize';
 import dayjs from 'dayjs';
+import sequelize from '../config/database.js';
 import Booking from '../models/Booking.js';
 import Counter from '../models/Counter.js';
 import NightReport, { type NightReportStatus } from '../models/NightReport.js';
@@ -19,6 +21,10 @@ import FinanceFile from '../finance/models/FinanceFile.js';
 import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import FinanceVendor from '../finance/models/FinanceVendor.js';
 import { recordFinanceAuditLog } from '../finance/services/auditLogService.js';
+import {
+  cleanupInvoiceFileIfOrphan,
+  deleteFinanceTransactionAndCleanupInvoice,
+} from '../finance/services/transactionDeletionService.js';
 import { createFinanceTransaction, updateFinanceTransaction } from '../finance/services/transactionService.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
@@ -58,6 +64,16 @@ type CollectionAggregate = {
   currencyCode: string;
   direction: 'receivable' | 'payable';
   totalAmountMinor: string | number | null;
+};
+
+type CollectionLogAggregate = {
+  id: number;
+  venueId: number;
+  currencyCode: string;
+  direction: 'receivable' | 'payable';
+  amountMinor: string | number | null;
+  financeTransactionId: number | null;
+  createdAt: string | Date | null;
 };
 
 type VenueDetailAggregate = {
@@ -163,6 +179,17 @@ type NightReportPayload = {
     vendorId: number | null;
     vendorName: string | null;
     invoiceFileId: number | null;
+    invoiceReferenceCount: number;
+    receiptGroupKey: string | null;
+    receiptTotalMinor: number | null;
+    receiptCurrency: string | null;
+    receiptAllocationNote: string | null;
+    receiptLineOrder: number | null;
+    receiptItems: Array<{
+      description: string | null;
+      quantity: number;
+      amountMinor: number;
+    }>;
     invoiceFile: {
       id: number;
       originalName: string;
@@ -234,10 +261,43 @@ type NightReportCostPayload = {
   invoiceFileId?: number | null;
 };
 
-const ADMIN_ROLE_SLUGS = new Set(['admin', 'owner', 'super_admin']);
-type SummaryPeriod = 'this_month' | 'last_month' | 'custom';
+type NightReportReceiptAllocationLinePayload = {
+  reportId: number;
+  amountMinor: number;
+  receiptAllocationNote?: string | null;
+  receiptItems?: Array<{
+    description?: string | null;
+    quantity?: number;
+    amountMinor: number;
+  }>;
+};
 
-const SUMMARY_PERIODS: SummaryPeriod[] = ['this_month', 'last_month', 'custom'];
+type NightReportReceiptAllocationPayload = {
+  date: string;
+  accountId: number;
+  currency: string;
+  receiptTotalMinor: number;
+  categoryId: number | null;
+  counterpartyId: number;
+  paymentMethod?: string | null;
+  status?: 'planned' | 'approved' | 'awaiting_reimbursement' | 'paid' | 'reimbursed' | 'void';
+  description?: string | null;
+  invoiceFileId?: number | null;
+  lines: NightReportReceiptAllocationLinePayload[];
+};
+
+const ADMIN_ROLE_SLUGS = new Set(['admin', 'owner', 'super_admin']);
+type SummaryPeriod = 'this_month' | 'last_month' | 'this_week' | 'last_week' | 'this_year' | 'all_time' | 'custom';
+
+const SUMMARY_PERIODS: SummaryPeriod[] = [
+  'this_month',
+  'last_month',
+  'this_week',
+  'last_week',
+  'this_year',
+  'all_time',
+  'custom',
+];
 
 const roundCurrencyValue = (value: number): number => Math.round(value * 100) / 100;
 const convertMajorUnitsToMinor = (value: number): number => Math.round(value * 100);
@@ -498,11 +558,11 @@ const parseAmountToMinor = (value: unknown): number => {
   return Math.round(parsed * 100);
 };
 
-const resolveVenueSummaryRange = (
+const resolveVenueSummaryRange = async (
   rawPeriod: string | undefined,
   startDateParam?: string,
   endDateParam?: string,
-): { period: SummaryPeriod; start: dayjs.Dayjs; end: dayjs.Dayjs } => {
+): Promise<{ period: SummaryPeriod; start: dayjs.Dayjs; end: dayjs.Dayjs }> => {
   const normalized = SUMMARY_PERIODS.includes(rawPeriod as SummaryPeriod)
     ? (rawPeriod as SummaryPeriod)
     : ('this_month' as SummaryPeriod);
@@ -514,6 +574,36 @@ const resolveVenueSummaryRange = (
   if (normalized === 'last_month') {
     start = now.subtract(1, 'month').startOf('month');
     end = start.endOf('month');
+  } else if (normalized === 'this_week') {
+    start = now.startOf('week');
+    end = now.endOf('week');
+  } else if (normalized === 'last_week') {
+    start = now.subtract(1, 'week').startOf('week');
+    end = start.endOf('week');
+  } else if (normalized === 'this_year') {
+    start = now.startOf('year');
+    end = now.endOf('year');
+  } else if (normalized === 'all_time') {
+    const [firstReport, lastReport] = await Promise.all([
+      NightReport.findOne({
+        where: { status: 'submitted' },
+        attributes: ['activityDate'],
+        order: [['activityDate', 'ASC']],
+      }),
+      NightReport.findOne({
+        where: { status: 'submitted' },
+        attributes: ['activityDate'],
+        order: [['activityDate', 'DESC']],
+      }),
+    ]);
+
+    if (firstReport?.activityDate && lastReport?.activityDate) {
+      start = dayjs(firstReport.activityDate).startOf('day');
+      end = dayjs(lastReport.activityDate).endOf('day');
+    } else {
+      start = now.startOf('month');
+      end = now.endOf('month');
+    }
   } else if (normalized === 'custom') {
     if (!startDateParam || !endDateParam) {
       throw new HttpError(400, 'Provide startDate and endDate when using the custom period');
@@ -745,7 +835,198 @@ function resolveNightReportCostLinkOrigin(cost: FinanceTransaction): 'created' |
   return cost.meta?.source === 'night-report-cost' ? 'created' : 'linked';
 }
 
-function serializeNightReportCost(cost: FinanceTransaction): NightReportAvailableCostPayload {
+const SPLIT_GROUP_META_KEY = 'split_group_key';
+const SPLIT_TOTAL_META_KEY = 'split_total_minor';
+const SPLIT_ROOT_TRANSACTION_META_KEY = 'split_root_transaction_id';
+
+type SplitGroupMeta = {
+  splitGroupKey: string;
+  splitTotalMinor: number;
+  splitRootTransactionId: number | null;
+  meta: Record<string, unknown> | null;
+};
+
+function readSplitGroupMeta(cost: FinanceTransaction): SplitGroupMeta | null {
+  const meta = cost.meta && typeof cost.meta === 'object' ? (cost.meta as Record<string, unknown>) : null;
+  const splitGroupKeyValue = meta?.[SPLIT_GROUP_META_KEY];
+  const splitTotalMinorValue = meta?.[SPLIT_TOTAL_META_KEY];
+  const splitRootTransactionIdValue = meta?.[SPLIT_ROOT_TRANSACTION_META_KEY];
+
+  if (typeof splitGroupKeyValue !== 'string' || splitGroupKeyValue.trim().length === 0) {
+    return null;
+  }
+
+  const splitTotalMinor = Number(splitTotalMinorValue);
+  if (!Number.isFinite(splitTotalMinor) || splitTotalMinor < 0) {
+    return null;
+  }
+
+  const splitRootTransactionId = Number(splitRootTransactionIdValue);
+
+  return {
+    splitGroupKey: splitGroupKeyValue.trim(),
+    splitTotalMinor: Math.round(splitTotalMinor),
+    splitRootTransactionId: Number.isFinite(splitRootTransactionId) && splitRootTransactionId > 0
+      ? Math.round(splitRootTransactionId)
+      : null,
+    meta,
+  };
+}
+
+function buildSplitMeta(
+  baseMeta: Record<string, unknown> | null,
+  splitGroupKey: string,
+  splitTotalMinor: number,
+  splitRootTransactionId: number,
+): Record<string, unknown> {
+  return {
+    ...(baseMeta ?? {}),
+    [SPLIT_GROUP_META_KEY]: splitGroupKey,
+    [SPLIT_TOTAL_META_KEY]: splitTotalMinor,
+    [SPLIT_ROOT_TRANSACTION_META_KEY]: splitRootTransactionId,
+  };
+}
+
+function clearSplitMeta(baseMeta: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!baseMeta) {
+    return null;
+  }
+
+  const nextMeta = { ...baseMeta };
+  delete nextMeta[SPLIT_GROUP_META_KEY];
+  delete nextMeta[SPLIT_TOTAL_META_KEY];
+  delete nextMeta[SPLIT_ROOT_TRANSACTION_META_KEY];
+  return Object.keys(nextMeta).length > 0 ? nextMeta : null;
+}
+
+function distributeSplitAmount(totalMinor: number, count: number): number[] {
+  if (!Number.isFinite(totalMinor) || totalMinor < 0) {
+    return Array.from({ length: count }, () => 0);
+  }
+  if (!Number.isInteger(count) || count <= 0) {
+    return [];
+  }
+
+  const baseShare = Math.floor(totalMinor / count);
+  const remainder = totalMinor % count;
+  return Array.from({ length: count }, (_, index) => baseShare + (index < remainder ? 1 : 0));
+}
+
+async function listSplitGroupCosts(
+  splitGroupKey: string,
+  transaction?: Transaction,
+): Promise<FinanceTransaction[]> {
+  return FinanceTransaction.findAll({
+    where: {
+      kind: 'expense',
+      [Op.and]: [where(fn('jsonb_extract_path_text', col('meta'), SPLIT_GROUP_META_KEY), splitGroupKey)],
+    },
+    include: [
+      { model: FinanceAccount, as: 'account', required: false },
+      { model: FinanceCategory, as: 'category', required: false },
+      { model: FinanceVendor, as: 'vendor', required: false },
+      { model: Product, as: 'product', required: false },
+      {
+        model: NightReport,
+        as: 'nightReport',
+        required: false,
+        include: [{ model: User, as: 'leader', required: false }],
+      },
+      { model: FinanceFile, as: 'invoiceFile', required: false },
+    ],
+    order: [
+      ['id', 'ASC'],
+    ],
+    transaction,
+  });
+}
+
+async function rebalanceSplitGroupCosts(
+  splitGroupKey: string,
+  actorId: number,
+  options?: { transaction?: Transaction },
+): Promise<FinanceTransaction[]> {
+  const rows = await listSplitGroupCosts(splitGroupKey, options?.transaction);
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const meta = rows[0].meta && typeof rows[0].meta === 'object' ? (rows[0].meta as Record<string, unknown>) : null;
+  const splitTotalMinor = (() => {
+    const fromMeta = Number(meta?.[SPLIT_TOTAL_META_KEY]);
+    if (Number.isFinite(fromMeta) && fromMeta >= 0) {
+      return Math.round(fromMeta);
+    }
+    return rows.reduce((sum, row) => sum + row.amountMinor, 0);
+  })();
+
+  const splitRootTransactionId =
+    Number.isFinite(Number(meta?.[SPLIT_ROOT_TRANSACTION_META_KEY])) && Number(meta?.[SPLIT_ROOT_TRANSACTION_META_KEY]) > 0
+      ? Math.round(Number(meta?.[SPLIT_ROOT_TRANSACTION_META_KEY]))
+      : rows[0].id;
+
+  if (rows.length === 1) {
+    await updateFinanceTransaction(
+      rows[0].id,
+      {
+        amountMinor: splitTotalMinor,
+        meta: clearSplitMeta(meta),
+      },
+      actorId,
+      { transaction: options?.transaction },
+    );
+    const updated = await FinanceTransaction.findByPk(rows[0].id, { transaction: options?.transaction });
+    return updated ? [updated] : [];
+  }
+
+  const shares = distributeSplitAmount(splitTotalMinor, rows.length);
+  const orderedRows = [...rows].sort((left, right) => left.id - right.id);
+
+  for (const [index, row] of orderedRows.entries()) {
+    const rowMeta = row.meta && typeof row.meta === 'object' ? (row.meta as Record<string, unknown>) : null;
+    await updateFinanceTransaction(
+      row.id,
+      {
+        amountMinor: shares[index],
+        meta: buildSplitMeta(rowMeta, splitGroupKey, splitTotalMinor, splitRootTransactionId),
+      },
+      actorId,
+      { transaction: options?.transaction },
+    );
+  }
+
+  return listSplitGroupCosts(splitGroupKey, options?.transaction);
+}
+
+async function removeSplitGroupCostMember(
+  transaction: FinanceTransaction,
+  actorId: number,
+  options?: { transaction?: Transaction },
+): Promise<void> {
+  const splitMeta = readSplitGroupMeta(transaction);
+  if (!splitMeta) {
+    await deleteFinanceTransactionAndCleanupInvoice(transaction);
+    return;
+  }
+
+  const invoiceFileId = transaction.invoiceFileId ?? null;
+
+  await FinanceTransaction.destroy({
+    where: { id: transaction.id },
+    transaction: options?.transaction,
+  });
+
+  await rebalanceSplitGroupCosts(splitMeta.splitGroupKey, actorId, options);
+
+  await cleanupInvoiceFileIfOrphan(invoiceFileId);
+}
+
+function serializeNightReportCost(
+  cost: FinanceTransaction,
+  invoiceReferenceCounts?: Map<number, number>,
+): NightReportAvailableCostPayload {
+  const meta = cost.meta && typeof cost.meta === 'object' ? (cost.meta as Record<string, unknown>) : null;
+  const rawReceiptItems = Array.isArray(meta?.receipt_items) ? (meta.receipt_items as Array<Record<string, unknown>>) : [];
   const linkedReport =
     cost.nightReport && cost.nightReportId
       ? {
@@ -778,6 +1059,19 @@ function serializeNightReportCost(cost: FinanceTransaction): NightReportAvailabl
     vendorId: cost.counterpartyId ?? null,
     vendorName: cost.vendor?.name ?? null,
     invoiceFileId: cost.invoiceFileId ?? null,
+    invoiceReferenceCount:
+      cost.invoiceFileId != null ? invoiceReferenceCounts?.get(cost.invoiceFileId) ?? 1 : 0,
+    receiptGroupKey: cost.receiptGroupKey ?? null,
+    receiptTotalMinor: cost.receiptTotalMinor ?? null,
+    receiptCurrency: cost.receiptCurrency ?? null,
+    receiptAllocationNote: cost.receiptAllocationNote ?? null,
+    receiptLineOrder: cost.receiptLineOrder ?? null,
+    receiptItems: rawReceiptItems.map((item) => ({
+      description:
+        typeof item.description === 'string' && item.description.trim().length > 0 ? item.description.trim() : null,
+      quantity: Math.max(1, Math.round(Number.isFinite(Number(item.quantity)) ? Number(item.quantity) : 1)),
+      amountMinor: Number.isFinite(Number(item.amountMinor)) ? Math.round(Number(item.amountMinor)) : 0,
+    })),
     invoiceFile: cost.invoiceFile
       ? {
           id: cost.invoiceFile.id,
@@ -866,6 +1160,35 @@ async function listLinkableNightReportCosts(report: NightReport): Promise<Financ
   });
 }
 
+async function listNightReportReceiptGroupCosts(receiptGroupKey: string): Promise<FinanceTransaction[]> {
+  const rows = await FinanceTransaction.findAll({
+    where: {
+      kind: 'expense',
+      receiptGroupKey,
+    },
+    include: [
+      { model: FinanceAccount, as: 'account', required: false },
+      { model: FinanceCategory, as: 'category', required: false },
+      { model: FinanceVendor, as: 'vendor', required: false },
+      { model: Product, as: 'product', required: false },
+      {
+        model: NightReport,
+        as: 'nightReport',
+        required: false,
+        include: [{ model: User, as: 'leader', required: false }],
+      },
+      { model: FinanceFile, as: 'invoiceFile', required: false },
+    ],
+    order: [
+      ['receiptLineOrder', 'ASC'],
+      ['date', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+
+  return rows;
+}
+
 async function serializeNightReport(report: NightReport, req: AuthenticatedRequest): Promise<NightReportPayload> {
   const leader = report.leader
     ? {
@@ -914,7 +1237,34 @@ async function serializeNightReport(report: NightReport, req: AuthenticatedReque
   }));
 
   const costRows = await listNightReportCosts(report.id);
-  const costs = costRows.map(serializeNightReportCost);
+  const invoiceFileIds = Array.from(
+    new Set(
+      costRows
+        .map((cost) => cost.invoiceFileId)
+        .filter((value): value is number => Number.isInteger(value) && Number(value) > 0),
+    ),
+  );
+  const invoiceReferenceCounts = new Map<number, number>();
+  if (invoiceFileIds.length > 0) {
+    const usageRows = await FinanceTransaction.findAll({
+      attributes: ['invoiceFileId', [fn('COUNT', col('id')), 'usageCount']],
+      where: {
+        invoiceFileId: {
+          [Op.in]: invoiceFileIds,
+        },
+      },
+      group: ['invoiceFileId'],
+      raw: true,
+    });
+    usageRows.forEach((row) => {
+      const invoiceFileId = Number((row as { invoiceFileId?: number | string }).invoiceFileId);
+      const usageCount = Number((row as { usageCount?: number | string }).usageCount);
+      if (Number.isInteger(invoiceFileId) && invoiceFileId > 0) {
+        invoiceReferenceCounts.set(invoiceFileId, Number.isFinite(usageCount) && usageCount > 0 ? usageCount : 1);
+      }
+    });
+  }
+  const costs = costRows.map((cost) => serializeNightReportCost(cost, invoiceReferenceCounts));
   const costReconciliation = buildNightReportCostReconciliationSummary(report, costs.length);
   const requiresCostReconciliation = costReconciliation.required;
   const linkedCostAmount = roundCurrencyValue(costs.reduce((sum, cost) => sum + convertMinorUnitsToMajor(cost.amountMinor), 0));
@@ -2368,13 +2718,54 @@ export const createVenueCompensationCollectionLog = async (
   }
 };
 
+export const deleteVenueCompensationCollectionLog = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const collectionLogId = Number(req.params.id);
+    if (!Number.isInteger(collectionLogId) || collectionLogId <= 0) {
+      throw new HttpError(400, 'Provide a valid collection log id.');
+    }
+
+    const collectionLog = await VenueCompensationCollectionLog.findByPk(collectionLogId);
+    if (!collectionLog) {
+      throw new HttpError(404, 'Collection log not found.');
+    }
+
+    if (collectionLog.financeTransactionId) {
+      const transaction = await FinanceTransaction.findByPk(collectionLog.financeTransactionId);
+      if (transaction) {
+        await deleteFinanceTransactionAndCleanupInvoice(transaction);
+        await recordFinanceAuditLog({
+          entity: 'finance_transaction',
+          entityId: transaction.id,
+          action: 'delete',
+          performedBy: actorId,
+        });
+      }
+    }
+
+    await collectionLog.destroy();
+    res.status(204).send();
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to delete venue compensation collection', error);
+    res.status(500).json([{ message: 'Failed to delete collection' }]);
+  }
+};
+
 export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const periodParam = typeof req.query.period === 'string' ? req.query.period : undefined;
     const startDateParam = typeof req.query.startDate === 'string' ? req.query.startDate : undefined;
     const endDateParam = typeof req.query.endDate === 'string' ? req.query.endDate : undefined;
 
-    const { period, start, end } = resolveVenueSummaryRange(periodParam, startDateParam, endDateParam);
+    const { period, start, end } = await resolveVenueSummaryRange(periodParam, startDateParam, endDateParam);
     const isCanonicalRange =
       start.isSame(start.startOf('month'), 'day') &&
       end.isSame(start.endOf('month'), 'day') &&
@@ -2424,21 +2815,37 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
 
     const collectionRows = (await VenueCompensationCollectionLog.findAll({
       attributes: [
+        'id',
         'venueId',
         'currencyCode',
         'direction',
-        [fn('COALESCE', fn('SUM', col('amount_minor')), 0), 'totalAmountMinor'],
+        'amountMinor',
+        'financeTransactionId',
+        'createdAt',
       ],
       where: {
         rangeStart: startIso,
         rangeEnd: endIso,
       },
-      group: ['venue_id', 'currency_code', 'direction'],
+      order: [
+        ['venue_id', 'ASC'],
+        ['currency_code', 'ASC'],
+        ['direction', 'ASC'],
+        ['created_at', 'ASC'],
+        ['id', 'ASC'],
+      ],
       raw: true,
-    })) as unknown as CollectionAggregate[];
+    })) as unknown as CollectionLogAggregate[];
 
     const collectionMap = new Map<string, { receivable: number; payable: number }>();
     const currencyCollectionMap = new Map<string, { receivable: number; payable: number }>();
+    const latestCollectionMap = new Map<
+      string,
+      {
+        receivable: { logId: number | null; financeTransactionId: number | null };
+        payable: { logId: number | null; financeTransactionId: number | null };
+      }
+    >();
     const previousLedgerMap = new Map<string, VenueCompensationLedger>();
     const ledgerUpsertMap = new Map<
       string,
@@ -2470,13 +2877,28 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
 
     collectionRows.forEach((row) => {
       const venueKey = `${row.venueId ?? 'null'}|${(row.currencyCode ?? 'USD').toUpperCase()}`;
-      const majorAmount = roundCurrencyValue(Number(row.totalAmountMinor ?? 0) / 100);
+      const majorAmount = roundCurrencyValue(Number(row.amountMinor ?? 0) / 100);
       if (majorAmount === 0) {
         return;
       }
       const venueTotals = collectionMap.get(venueKey) ?? { receivable: 0, payable: 0 };
       venueTotals[row.direction] += majorAmount;
       collectionMap.set(venueKey, venueTotals);
+
+      const latestForVenue = latestCollectionMap.get(venueKey) ?? {
+        receivable: { logId: null, financeTransactionId: null },
+        payable: { logId: null, financeTransactionId: null },
+      };
+      const currentLogId = Number(row.id ?? 0);
+      const latestDirection = latestForVenue[row.direction];
+      if (latestDirection.logId === null || currentLogId > latestDirection.logId) {
+        latestForVenue[row.direction] = {
+          logId: currentLogId,
+          financeTransactionId:
+            row.financeTransactionId == null ? null : Number(row.financeTransactionId),
+        };
+      }
+      latestCollectionMap.set(venueKey, latestForVenue);
 
       const currencyKey = (row.currencyCode ?? 'USD').toUpperCase();
       const currencyTotals = currencyCollectionMap.get(currencyKey) ?? { receivable: 0, payable: 0 };
@@ -2505,6 +2927,10 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           cocktailsCount: number;
           brunchCount: number;
         }>;
+        latestReceivableCollectionLogId: number | null;
+        latestReceivableFinanceTransactionId: number | null;
+        latestPayableCollectionLogId: number | null;
+        latestPayableFinanceTransactionId: number | null;
       }
     >();
     const totalsMap = new Map<string, { receivable: number; payable: number }>();
@@ -2541,6 +2967,10 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           totalPeopleReceivable: 0,
           totalPeoplePayable: 0,
           daily: [],
+          latestReceivableCollectionLogId: null,
+          latestReceivableFinanceTransactionId: null,
+          latestPayableCollectionLogId: null,
+          latestPayableFinanceTransactionId: null,
         });
       }
 
@@ -2654,6 +3084,10 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
     const venues = Array.from(venueMap.values()).map((entry) => {
       const key = `${entry.venueId ?? 'null'}|${entry.currency}`;
       const collected = collectionMap.get(key) ?? { receivable: 0, payable: 0 };
+      const latestCollection = latestCollectionMap.get(key) ?? {
+        receivable: { logId: null, financeTransactionId: null },
+        payable: { logId: null, financeTransactionId: null },
+      };
       const receivable = roundCurrencyValue(entry.receivable);
       const payable = roundCurrencyValue(entry.payable);
       const receivableCollected = roundCurrencyValue(collected.receivable);
@@ -2703,6 +3137,10 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         rowKey: key,
         receivableLedger,
         payableLedger,
+        latestReceivableCollectionLogId: latestCollection.receivable.logId,
+        latestReceivableFinanceTransactionId: latestCollection.receivable.financeTransactionId,
+        latestPayableCollectionLogId: latestCollection.payable.logId,
+        latestPayableFinanceTransactionId: latestCollection.payable.financeTransactionId,
       };
     });
 
@@ -2870,6 +3308,88 @@ function parseNightReportCostPayload(body: Record<string, unknown>): NightReport
   };
 }
 
+function parseNightReportReceiptAllocationPayload(body: Record<string, unknown>): NightReportReceiptAllocationPayload {
+  const receiptTotalMinor = Number(body.receiptTotalMinor);
+  const base = parseNightReportCostPayload({
+    ...body,
+    amountMinor: receiptTotalMinor,
+  });
+
+  if (!Number.isFinite(receiptTotalMinor) || receiptTotalMinor <= 0) {
+    throw new HttpError(400, 'Provide a valid positive receipt total');
+  }
+
+  if (!Array.isArray(body.lines) || body.lines.length === 0) {
+    throw new HttpError(400, 'Add at least one allocation line');
+  }
+
+  const lines = body.lines.map((rawLine, index) => {
+    const line = (rawLine ?? {}) as Record<string, unknown>;
+    const reportId = Number(line.reportId);
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, `Select a valid target night report for allocation line ${index + 1}`);
+    }
+
+    const amountMinor = Number(line.amountMinor);
+    if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
+      throw new HttpError(400, `Provide a valid positive amount for allocation line ${index + 1}`);
+    }
+
+    const receiptItems = Array.isArray(line.receiptItems)
+      ? line.receiptItems.map((rawItem, itemIndex) => {
+          const item = (rawItem ?? {}) as Record<string, unknown>;
+          const quantity = Number(item.quantity ?? 1);
+          if (!Number.isFinite(quantity) || quantity <= 0) {
+            throw new HttpError(400, `Provide a valid positive quantity for item ${itemIndex + 1} in allocation line ${index + 1}`);
+          }
+          const itemAmountMinor = Number(item.amountMinor);
+          if (!Number.isFinite(itemAmountMinor) || itemAmountMinor <= 0) {
+            throw new HttpError(400, `Provide a valid positive amount for item ${itemIndex + 1} in allocation line ${index + 1}`);
+          }
+          const description =
+            typeof item.description === 'string' && item.description.trim().length > 0
+              ? item.description.trim()
+              : null;
+          return {
+            description,
+            quantity: Math.round(quantity),
+            amountMinor: Math.round(itemAmountMinor),
+          };
+        })
+      : [];
+
+    if (receiptItems.length > 0) {
+      const itemTotal = receiptItems.reduce((sum, item) => sum + item.amountMinor * item.quantity, 0);
+      if (Math.round(amountMinor) !== itemTotal) {
+        throw new HttpError(400, `Allocation line ${index + 1} amount must match the sum of its items`);
+      }
+    }
+
+    const receiptAllocationNote =
+      typeof line.receiptAllocationNote === 'string' && line.receiptAllocationNote.trim().length > 0
+        ? line.receiptAllocationNote.trim()
+        : null;
+
+    return {
+      reportId,
+      amountMinor: Math.round(amountMinor),
+      receiptAllocationNote,
+      receiptItems,
+    };
+  });
+
+  const allocatedTotal = lines.reduce((sum, line) => sum + line.amountMinor, 0);
+  if (allocatedTotal > Math.round(receiptTotalMinor)) {
+    throw new HttpError(400, 'Allocated total cannot exceed the receipt total');
+  }
+
+  return {
+    ...base,
+    receiptTotalMinor: Math.round(receiptTotalMinor),
+    lines,
+  };
+}
+
 export const createNightReportCost = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const actorId = requireActorId(req);
@@ -2954,6 +3474,374 @@ export const createNightReportCost = async (req: AuthenticatedRequest, res: Resp
   }
 };
 
+export const createNightReportReceiptAllocations = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const anchorReportId = Number(req.params.id);
+    if (!Number.isInteger(anchorReportId) || anchorReportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+
+    const anchorReport = await getNightReportById(anchorReportId);
+    if (!anchorReport) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(anchorReport, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to add costs to this report');
+    }
+
+    const payload = parseNightReportReceiptAllocationPayload((req.body ?? {}) as Record<string, unknown>);
+
+    if (payload.categoryId) {
+      const category = await FinanceCategory.findByPk(payload.categoryId);
+      if (!category || category.kind !== 'expense') {
+        throw new HttpError(400, 'Selected category must be an expense category');
+      }
+    }
+
+    if (payload.invoiceFileId) {
+      const fileExists = await FinanceFile.count({ where: { id: payload.invoiceFileId } });
+      if (!fileExists) {
+        throw new HttpError(400, 'Attached file was not found');
+      }
+    }
+
+    const uniqueReportIds = [...new Set(payload.lines.map((line) => line.reportId))];
+    const targetReports = await Promise.all(uniqueReportIds.map((reportId) => getNightReportById(reportId)));
+    const reportMap = new Map<number, NightReport>();
+
+    uniqueReportIds.forEach((reportId, index) => {
+      const report = targetReports[index];
+      if (!report) {
+        throw new HttpError(400, `Target night report #${reportId} was not found`);
+      }
+      if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+        throw new HttpError(403, `You do not have permission to allocate costs to night report #${reportId}`);
+      }
+      reportMap.set(reportId, report);
+    });
+
+    const receiptGroupKey = crypto.randomUUID();
+
+    await sequelize.transaction(async (transaction) => {
+      for (const [index, line] of payload.lines.entries()) {
+        const targetReport = reportMap.get(line.reportId);
+        if (!targetReport) {
+          throw new HttpError(400, `Target night report #${line.reportId} was not found`);
+        }
+
+        await createFinanceTransaction(
+          {
+            kind: 'expense',
+            date: payload.date,
+            accountId: payload.accountId,
+            currency: payload.currency,
+            amountMinor: line.amountMinor,
+            categoryId: payload.categoryId,
+            counterpartyType: 'vendor',
+            counterpartyId: payload.counterpartyId,
+            paymentMethod: payload.paymentMethod ?? null,
+            status: payload.status ?? 'paid',
+            description: payload.description ?? null,
+            invoiceFileId: payload.invoiceFileId ?? null,
+            nightReportId: targetReport.id,
+            productId: targetReport.counter?.productId ?? null,
+            serviceDate: targetReport.activityDate,
+            receiptGroupKey,
+            receiptTotalMinor: payload.receiptTotalMinor,
+            receiptCurrency: payload.currency,
+            receiptAllocationNote: line.receiptAllocationNote ?? null,
+            receiptLineOrder: index + 1,
+            meta: {
+              source: 'night-report-cost',
+              allocation_mode: 'receipt_split',
+              receipt_items: line.receiptItems ?? [],
+              receipt_allocation_note: line.receiptAllocationNote ?? null,
+            },
+          },
+          actorId,
+          { transaction },
+        );
+      }
+
+      await NightReport.update(
+        {
+          noExtraCostConfirmed: false,
+          noExtraCostConfirmedBy: null,
+          noExtraCostConfirmedAt: null,
+          updatedBy: actorId,
+        },
+        {
+          where: {
+            id: {
+              [Op.in]: uniqueReportIds,
+            },
+          },
+          transaction,
+        },
+      );
+    });
+
+    const fresh = await getNightReportById(anchorReportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(201).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to create night report receipt allocations', error);
+    res.status(500).json([{ message: 'Failed to create night report receipt allocations' }]);
+  }
+};
+
+export const updateNightReportReceiptAllocations = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const anchorReportId = Number(req.params.id);
+    if (!Number.isInteger(anchorReportId) || anchorReportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+
+    const receiptGroupKey =
+      typeof req.params.receiptGroupKey === 'string' ? req.params.receiptGroupKey.trim() : '';
+    if (!receiptGroupKey) {
+      throw new HttpError(400, 'Invalid receipt group key');
+    }
+
+    const anchorReport = await getNightReportById(anchorReportId);
+    if (!anchorReport) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(anchorReport, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to edit this shared receipt');
+    }
+
+    const existingRows = await FinanceTransaction.findAll({
+      where: {
+        kind: 'expense',
+        receiptGroupKey,
+      },
+      order: [
+        ['receiptLineOrder', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+    if (existingRows.length === 0) {
+      throw new HttpError(404, 'Shared receipt not found');
+    }
+
+    const payload = parseNightReportReceiptAllocationPayload((req.body ?? {}) as Record<string, unknown>);
+
+    if (payload.categoryId) {
+      const category = await FinanceCategory.findByPk(payload.categoryId);
+      if (!category || category.kind !== 'expense') {
+        throw new HttpError(400, 'Selected category must be an expense category');
+      }
+    }
+
+    if (payload.invoiceFileId) {
+      const fileExists = await FinanceFile.count({ where: { id: payload.invoiceFileId } });
+      if (!fileExists) {
+        throw new HttpError(400, 'Attached file was not found');
+      }
+    }
+
+    const uniqueReportIds = [...new Set(payload.lines.map((line) => line.reportId))];
+    const targetReports = await Promise.all(uniqueReportIds.map((reportId) => getNightReportById(reportId)));
+    const reportMap = new Map<number, NightReport>();
+
+    uniqueReportIds.forEach((reportId, index) => {
+      const report = targetReports[index];
+      if (!report) {
+        throw new HttpError(400, `Target night report #${reportId} was not found`);
+      }
+      if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+        throw new HttpError(403, `You do not have permission to allocate costs to night report #${reportId}`);
+      }
+      reportMap.set(reportId, report);
+    });
+
+    const oldInvoiceIds = Array.from(
+      new Set(
+        existingRows
+          .map((row) => row.invoiceFileId)
+          .filter((invoiceFileId): invoiceFileId is number => typeof invoiceFileId === 'number' && invoiceFileId > 0),
+      ),
+    );
+    const oldReportIds = Array.from(
+      new Set(
+        existingRows
+          .map((row) => row.nightReportId)
+          .filter((reportId): reportId is number => typeof reportId === 'number' && reportId > 0),
+      ),
+    );
+
+    await sequelize.transaction(async (transaction) => {
+      const remainingExisting = [...existingRows];
+      const existingByReportId = new Map<number, FinanceTransaction>();
+      remainingExisting.forEach((row) => {
+        if (
+          row.nightReportId != null &&
+          Number.isInteger(row.nightReportId) &&
+          row.nightReportId > 0 &&
+          !existingByReportId.has(row.nightReportId)
+        ) {
+          existingByReportId.set(row.nightReportId, row);
+        }
+      });
+
+      const retainedIds = new Set<number>();
+
+      for (const [index, line] of payload.lines.entries()) {
+        const targetReport = reportMap.get(line.reportId);
+        if (!targetReport) {
+          throw new HttpError(400, `Target night report #${line.reportId} was not found`);
+        }
+
+        let targetRow = existingByReportId.get(line.reportId) ?? null;
+        if (targetRow) {
+          existingByReportId.delete(line.reportId);
+        } else {
+          targetRow = remainingExisting.find((row) => !retainedIds.has(row.id)) ?? null;
+        }
+
+        if (targetRow) {
+          retainedIds.add(targetRow.id);
+          await updateFinanceTransaction(
+            targetRow.id,
+            {
+              date: payload.date,
+              accountId: payload.accountId,
+              currency: payload.currency,
+              amountMinor: line.amountMinor,
+              categoryId: payload.categoryId,
+              counterpartyType: 'vendor',
+              counterpartyId: payload.counterpartyId,
+              paymentMethod: payload.paymentMethod ?? null,
+              status: payload.status ?? 'paid',
+              description: payload.description ?? null,
+              invoiceFileId: payload.invoiceFileId ?? null,
+              nightReportId: targetReport.id,
+              productId: targetReport.counter?.productId ?? null,
+              serviceDate: targetReport.activityDate,
+              receiptGroupKey,
+              receiptTotalMinor: payload.receiptTotalMinor,
+              receiptCurrency: payload.currency,
+              receiptAllocationNote: line.receiptAllocationNote ?? null,
+              receiptLineOrder: index + 1,
+              meta: {
+                source: 'night-report-cost',
+                allocation_mode: 'receipt_split',
+                receipt_items: line.receiptItems ?? [],
+                receipt_allocation_note: line.receiptAllocationNote ?? null,
+              },
+            },
+            actorId,
+            { transaction },
+          );
+          continue;
+        }
+
+        const created = await createFinanceTransaction(
+          {
+            kind: 'expense',
+            date: payload.date,
+            accountId: payload.accountId,
+            currency: payload.currency,
+            amountMinor: line.amountMinor,
+            categoryId: payload.categoryId,
+            counterpartyType: 'vendor',
+            counterpartyId: payload.counterpartyId,
+            paymentMethod: payload.paymentMethod ?? null,
+            status: payload.status ?? 'paid',
+            description: payload.description ?? null,
+            invoiceFileId: payload.invoiceFileId ?? null,
+            nightReportId: targetReport.id,
+            productId: targetReport.counter?.productId ?? null,
+            serviceDate: targetReport.activityDate,
+            receiptGroupKey,
+            receiptTotalMinor: payload.receiptTotalMinor,
+            receiptCurrency: payload.currency,
+            receiptAllocationNote: line.receiptAllocationNote ?? null,
+            receiptLineOrder: index + 1,
+            meta: {
+              source: 'night-report-cost',
+              allocation_mode: 'receipt_split',
+              receipt_items: line.receiptItems ?? [],
+              receipt_allocation_note: line.receiptAllocationNote ?? null,
+            },
+          },
+          actorId,
+          { transaction },
+        );
+        retainedIds.add(created.id);
+      }
+
+      const staleIds = existingRows.filter((row) => !retainedIds.has(row.id)).map((row) => row.id);
+      if (staleIds.length > 0) {
+        await FinanceTransaction.destroy({
+          where: {
+            id: {
+              [Op.in]: staleIds,
+            },
+          },
+          transaction,
+        });
+      }
+
+      const affectedReportIds = Array.from(new Set([...oldReportIds, ...uniqueReportIds]));
+      if (affectedReportIds.length > 0) {
+        await NightReport.update(
+          {
+            noExtraCostConfirmed: false,
+            noExtraCostConfirmedBy: null,
+            noExtraCostConfirmedAt: null,
+            updatedBy: actorId,
+          },
+          {
+            where: {
+              id: {
+                [Op.in]: affectedReportIds,
+              },
+            },
+            transaction,
+          },
+        );
+      }
+    });
+
+    await Promise.all(oldInvoiceIds.map((invoiceFileId) => cleanupInvoiceFileIfOrphan(invoiceFileId)));
+
+    const fresh = await getNightReportById(anchorReportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(200).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to update night report receipt allocations', error);
+    res.status(500).json([{ message: 'Failed to update night report receipt allocations' }]);
+  }
+};
+
 export const getNightReportAvailableCosts = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const actorId = requireActorId(req);
@@ -2973,7 +3861,7 @@ export const getNightReportAvailableCosts = async (req: AuthenticatedRequest, re
     }
 
     const rows = await listLinkableNightReportCosts(report);
-    res.status(200).json(rows.map(serializeNightReportCost));
+    res.status(200).json(rows.map((row) => serializeNightReportCost(row)));
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
@@ -2981,6 +3869,47 @@ export const getNightReportAvailableCosts = async (req: AuthenticatedRequest, re
     }
     logger.error('Failed to list available night report costs', error);
     res.status(500).json([{ message: 'Failed to list available night report costs' }]);
+  }
+};
+
+export const getNightReportReceiptGroupCosts = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    const receiptGroupKey =
+      typeof req.params.receiptGroupKey === 'string' ? req.params.receiptGroupKey.trim() : '';
+
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+    if (!receiptGroupKey) {
+      throw new HttpError(400, 'Invalid receipt group key');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to view this shared receipt');
+    }
+
+    const rows = await listNightReportReceiptGroupCosts(receiptGroupKey);
+    if (rows.length === 0) {
+      res.status(404).json([{ message: 'Shared receipt not found' }]);
+      return;
+    }
+
+    res.status(200).json(rows.map((row) => serializeNightReportCost(row)));
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to load shared receipt group', error);
+    res.status(500).json([{ message: 'Failed to load shared receipt group' }]);
   }
 };
 
@@ -3020,27 +3949,121 @@ export const linkNightReportCost = async (req: AuthenticatedRequest, res: Respon
       if (!canManageReport(sourceReport, actorId, req.authContext?.roleSlug)) {
         throw new HttpError(403, 'You do not have permission to reassign this cost from its current night report');
       }
+
+      const splitMeta = readSplitGroupMeta(transaction);
+      const existingRows = splitMeta
+        ? await listSplitGroupCosts(splitMeta.splitGroupKey)
+        : [transaction];
+      const linkedReportIds = new Set(
+        existingRows
+          .map((row) => row.nightReportId)
+          .filter((linkedReportId): linkedReportId is number => typeof linkedReportId === 'number' && linkedReportId > 0),
+      );
+      const affectedReportIds = [...new Set([...linkedReportIds, reportId])];
+
+      for (const affectedReportId of affectedReportIds) {
+        const affectedReport = await getNightReportById(affectedReportId);
+        if (!affectedReport) {
+          throw new HttpError(409, 'One of the linked night reports could not be loaded');
+        }
+        if (!canManageReport(affectedReport, actorId, req.authContext?.roleSlug)) {
+          throw new HttpError(403, 'You do not have permission to split costs across one of the linked night reports');
+        }
+      }
+
+      if (!linkedReportIds.has(reportId)) {
+        const splitGroupKey = splitMeta?.splitGroupKey ?? crypto.randomUUID();
+        const splitTotalMinor = splitMeta?.splitTotalMinor ?? transaction.amountMinor;
+        const splitRootTransactionId = splitMeta?.splitRootTransactionId ?? transaction.id;
+        const rowsToRebalance = [...existingRows].sort((left, right) => left.id - right.id);
+        const nextShares = distributeSplitAmount(splitTotalMinor, rowsToRebalance.length + 1);
+        const targetShare = nextShares[nextShares.length - 1] ?? splitTotalMinor;
+
+        await sequelize.transaction(async (dbTransaction) => {
+          for (const [index, row] of rowsToRebalance.entries()) {
+            const rowMeta = row.meta && typeof row.meta === 'object' ? (row.meta as Record<string, unknown>) : null;
+            await updateFinanceTransaction(
+              row.id,
+              {
+                amountMinor: nextShares[index],
+                meta: buildSplitMeta(rowMeta, splitGroupKey, splitTotalMinor, splitRootTransactionId),
+              },
+              actorId,
+              { transaction: dbTransaction },
+            );
+          }
+
+          await createFinanceTransaction(
+            {
+              kind: 'expense',
+              date: transaction.date,
+              accountId: transaction.accountId,
+              currency: transaction.currency,
+              amountMinor: targetShare,
+              fxRate: transaction.fxRate,
+              categoryId: transaction.categoryId,
+              counterpartyType: transaction.counterpartyType,
+              counterpartyId: transaction.counterpartyId,
+              paymentMethod: transaction.paymentMethod,
+              status: transaction.status,
+              description: transaction.description,
+              nightReportId: reportId,
+              productId: report.counter?.productId ?? transaction.productId ?? null,
+              serviceDate: report.activityDate,
+              tags: transaction.tags,
+              meta: buildSplitMeta(
+                transaction.meta && typeof transaction.meta === 'object'
+                  ? (transaction.meta as Record<string, unknown>)
+                  : null,
+                splitGroupKey,
+                splitTotalMinor,
+                splitRootTransactionId,
+              ),
+              invoiceFileId: transaction.invoiceFileId,
+              receiptGroupKey: transaction.receiptGroupKey,
+              receiptTotalMinor: transaction.receiptTotalMinor,
+              receiptCurrency: transaction.receiptCurrency,
+              receiptAllocationNote: transaction.receiptAllocationNote,
+              receiptLineOrder: transaction.receiptLineOrder,
+            },
+            actorId,
+            { transaction: dbTransaction },
+          );
+        });
+
+        if (affectedReportIds.length > 0) {
+          await NightReport.update(
+            {
+              noExtraCostConfirmed: false,
+              noExtraCostConfirmedBy: null,
+              noExtraCostConfirmedAt: null,
+              updatedBy: actorId,
+            },
+            { where: { id: { [Op.in]: affectedReportIds } } },
+          );
+        }
+      }
+    } else {
+      await updateFinanceTransaction(
+        transactionId,
+        {
+          nightReportId: reportId,
+          productId: report.counter?.productId ?? transaction.productId ?? null,
+          serviceDate: report.activityDate,
+        },
+        actorId,
+      );
+
+      await NightReport.update(
+        {
+          noExtraCostConfirmed: false,
+          noExtraCostConfirmedBy: null,
+          noExtraCostConfirmedAt: null,
+          updatedBy: actorId,
+        },
+        { where: { id: reportId } },
+      );
     }
-
-    await updateFinanceTransaction(
-      transactionId,
-      {
-        nightReportId: reportId,
-        productId: report.counter?.productId ?? transaction.productId ?? null,
-        serviceDate: report.activityDate,
-      },
-      actorId,
-    );
-
-    await NightReport.update(
-      {
-        noExtraCostConfirmed: false,
-        noExtraCostConfirmedBy: null,
-        noExtraCostConfirmedAt: null,
-        updatedBy: actorId,
-      },
-      { where: { id: reportId } },
-    );
 
     const fresh = await getNightReportById(reportId);
     if (!fresh) {
@@ -3093,17 +4116,28 @@ export const unlinkNightReportCost = async (req: AuthenticatedRequest, res: Resp
       return;
     }
 
-    if (resolveNightReportCostLinkOrigin(transaction) === 'created') {
+    const splitMeta = readSplitGroupMeta(transaction);
+    if (resolveNightReportCostLinkOrigin(transaction) === 'created' && !splitMeta) {
       throw new HttpError(400, 'Costs created from the night report must be deleted instead of unlinked');
     }
 
-    await updateFinanceTransaction(
-      transactionId,
-      {
-        nightReportId: null,
-      },
-      actorId,
-    );
+    if (splitMeta) {
+      await removeSplitGroupCostMember(transaction, actorId);
+      await recordFinanceAuditLog({
+        entity: 'finance_transaction',
+        entityId: transactionId,
+        action: 'delete',
+        performedBy: actorId,
+      });
+    } else {
+      await updateFinanceTransaction(
+        transactionId,
+        {
+          nightReportId: null,
+        },
+        actorId,
+      );
+    }
 
     const fresh = await getNightReportById(reportId);
     if (!fresh) {
@@ -3156,7 +4190,12 @@ export const deleteNightReportCost = async (req: AuthenticatedRequest, res: Resp
       return;
     }
 
-    await FinanceTransaction.destroy({ where: { id: transactionId } });
+    const splitMeta = readSplitGroupMeta(transaction);
+    if (splitMeta) {
+      await removeSplitGroupCostMember(transaction, actorId);
+    } else {
+      await deleteFinanceTransactionAndCleanupInvoice(transaction);
+    }
     await recordFinanceAuditLog({
       entity: 'finance_transaction',
       entityId: transactionId,
@@ -3177,6 +4216,210 @@ export const deleteNightReportCost = async (req: AuthenticatedRequest, res: Resp
     }
     logger.error('Failed to delete night report cost', error);
     res.status(500).json([{ message: 'Failed to delete night report cost' }]);
+  }
+};
+
+export const deleteNightReportReceiptAllocations = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    const receiptGroupKey =
+      typeof req.params.receiptGroupKey === 'string' ? req.params.receiptGroupKey.trim() : '';
+
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+    if (!receiptGroupKey) {
+      throw new HttpError(400, 'Invalid receipt group key');
+    }
+
+    const report = await getNightReportById(reportId);
+    if (!report) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to delete this shared receipt');
+    }
+
+    const rows = await FinanceTransaction.findAll({
+      where: {
+        kind: 'expense',
+        receiptGroupKey,
+      },
+      order: [
+        ['receiptLineOrder', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+
+    if (rows.length === 0) {
+      res.status(404).json([{ message: 'Shared receipt not found' }]);
+      return;
+    }
+
+    const invoiceFileIds = Array.from(
+      new Set(
+        rows
+          .map((row) => row.invoiceFileId)
+          .filter((invoiceFileId): invoiceFileId is number => typeof invoiceFileId === 'number' && invoiceFileId > 0),
+      ),
+    );
+
+    await sequelize.transaction(async (transaction) => {
+      await FinanceTransaction.destroy({
+        where: {
+          kind: 'expense',
+          receiptGroupKey,
+        },
+        transaction,
+      });
+    });
+
+    for (const row of rows) {
+      await recordFinanceAuditLog({
+        entity: 'finance_transaction',
+        entityId: row.id,
+        action: 'delete',
+        performedBy: actorId,
+        metadata: {
+          receiptGroupKey,
+          sharedReceipt: true,
+        },
+      });
+    }
+
+    for (const invoiceFileId of invoiceFileIds) {
+      await cleanupInvoiceFileIfOrphan(invoiceFileId);
+    }
+
+    const fresh = await getNightReportById(reportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(200).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to delete shared receipt', error);
+    res.status(500).json([{ message: 'Failed to delete shared receipt' }]);
+  }
+};
+
+export const deleteNightReportReceiptAllocationsForReport = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const reportId = Number(req.params.id);
+    const targetReportId = Number(req.params.targetReportId);
+    const receiptGroupKey =
+      typeof req.params.receiptGroupKey === 'string' ? req.params.receiptGroupKey.trim() : '';
+
+    if (!Number.isInteger(reportId) || reportId <= 0) {
+      throw new HttpError(400, 'Invalid report id');
+    }
+    if (!Number.isInteger(targetReportId) || targetReportId <= 0) {
+      throw new HttpError(400, 'Invalid target report id');
+    }
+    if (!receiptGroupKey) {
+      throw new HttpError(400, 'Invalid receipt group key');
+    }
+
+    const anchorReport = await getNightReportById(reportId);
+    if (!anchorReport) {
+      res.status(404).json([{ message: 'Night report not found' }]);
+      return;
+    }
+
+    if (!canManageReport(anchorReport, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to delete allocations from this shared receipt');
+    }
+
+    const targetReport = await getNightReportById(targetReportId);
+    if (!targetReport) {
+      res.status(404).json([{ message: 'Target night report not found' }]);
+      return;
+    }
+    if (!canManageReport(targetReport, actorId, req.authContext?.roleSlug)) {
+      throw new HttpError(403, 'You do not have permission to edit the target night report');
+    }
+
+    const rows = await FinanceTransaction.findAll({
+      where: {
+        kind: 'expense',
+        receiptGroupKey,
+        nightReportId: targetReportId,
+      },
+      order: [
+        ['receiptLineOrder', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+
+    if (rows.length === 0) {
+      res.status(404).json([{ message: 'No allocations found for this night report within the shared receipt' }]);
+      return;
+    }
+
+    const invoiceFileIds = Array.from(
+      new Set(
+        rows
+          .map((row) => row.invoiceFileId)
+          .filter((invoiceFileId): invoiceFileId is number => typeof invoiceFileId === 'number' && invoiceFileId > 0),
+      ),
+    );
+
+    await sequelize.transaction(async (transaction) => {
+      await FinanceTransaction.destroy({
+        where: {
+          kind: 'expense',
+          receiptGroupKey,
+          nightReportId: targetReportId,
+        },
+        transaction,
+      });
+    });
+
+    for (const row of rows) {
+      await recordFinanceAuditLog({
+        entity: 'finance_transaction',
+        entityId: row.id,
+        action: 'delete',
+        performedBy: actorId,
+        metadata: {
+          receiptGroupKey,
+          sharedReceipt: true,
+          deletedForReportId: targetReportId,
+        },
+      });
+    }
+
+    for (const invoiceFileId of invoiceFileIds) {
+      await cleanupInvoiceFileIfOrphan(invoiceFileId);
+    }
+
+    const fresh = await getNightReportById(reportId);
+    if (!fresh) {
+      throw new HttpError(500, 'Failed to reload report');
+    }
+
+    res.status(200).json([await serializeNightReport(fresh, req)]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    logger.error('Failed to delete receipt allocations for report', error);
+    res.status(500).json([{ message: 'Failed to delete receipt allocations for report' }]);
   }
 };
 

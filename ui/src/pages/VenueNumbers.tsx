@@ -1,4 +1,5 @@
-import { Center, Loader, Tabs, Title } from '@mantine/core';
+import { Box, Center, Loader, Tabs, Title, useMantineTheme } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import VenueNumbersList from '../components/venueNumbers/VenueNumbersList';
@@ -13,6 +14,9 @@ const VenueNumbersSummary = lazy(() => import('../components/venueNumbers/VenueN
 
 const VenueNumbers = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const shellPadding = isMobile ? theme.spacing.sm : theme.spacing.md;
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = useMemo(() => searchParams.get('tab'), [searchParams]);
   const resolvedTab = tabParam === 'summary' ? 'summary' : 'entries';
@@ -48,10 +52,19 @@ const VenueNumbers = (props: GenericPageProps) => {
           <Tabs.Panel value="entries" pt="md">
             <VenueNumbersList active={tab === 'entries'} />
           </Tabs.Panel>
-          <Tabs.Panel value="summary" pt="md">
-            <Suspense fallback={<Center py="xl"><Loader /></Center>}>
-              <VenueNumbersSummary active={tab === 'summary'} />
-            </Suspense>
+          <Tabs.Panel
+            value="summary"
+            pt="md"
+            style={{
+              marginInline: `calc(-1 * ${shellPadding})`,
+              width: `calc(100% + ${shellPadding} * 2)`,
+            }}
+          >
+            <Box>
+              <Suspense fallback={<Center py="xl"><Loader /></Center>}>
+                <VenueNumbersSummary active={tab === 'summary'} />
+              </Suspense>
+            </Box>
           </Tabs.Panel>
         </Tabs>
       </div>

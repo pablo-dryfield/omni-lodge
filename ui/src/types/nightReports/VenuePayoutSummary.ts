@@ -48,6 +48,10 @@ export type VenuePayoutVenueBreakdown = {
   daily: VenuePayoutVenueDaily[];
   receivableLedger: VenueLedgerSnapshot;
   payableLedger: VenueLedgerSnapshot;
+  latestReceivableCollectionLogId?: number | null;
+  latestReceivableFinanceTransactionId?: number | null;
+  latestPayableCollectionLogId?: number | null;
+  latestPayableFinanceTransactionId?: number | null;
 };
 
 export type VenuePayoutSummary = {
