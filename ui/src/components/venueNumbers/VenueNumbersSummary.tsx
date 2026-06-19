@@ -12,16 +12,13 @@ import {
   NumberInput,
   ScrollArea,
   Select,
-  SegmentedControl,
+  SimpleGrid,
   Stack,
   Table,
   Text,
   Textarea,
-  Title,
   Box,
-  useMantineTheme,
 } from "@mantine/core";
-import { useMediaQuery } from "@mantine/hooks";
 import { DatePickerInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import isSameOrBefore from "dayjs/plugin/isSameOrBefore";
@@ -33,8 +30,6 @@ import type {
   VenuePayoutSummary,
   VenuePayoutVenueBreakdown,
   VenuePayoutVenueDaily,
-  VenuePayoutCurrencyTotals,
-  VenueLedgerSnapshot,
 } from "../../types/nightReports/VenuePayoutSummary";
 import { useSearchParams } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -54,17 +49,6 @@ import type { FinanceAccount } from "../../types/finance/Account";
 import type { FinanceCategory } from "../../types/finance/Category";
 import type { FinanceClient } from "../../types/finance/Client";
 import type { FinanceVendor } from "../../types/finance/Vendor";
-import {
-  ResponsiveContainer,
-  RadarChart,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
-  Radar,
-  Tooltip as RechartsTooltip,
-  Legend,
-} from "recharts";
-
 type DailyRow = VenuePayoutVenueDaily & { placeholder?: boolean };
 
 type MessageState = { type: "success" | "error"; text: string } | null;
@@ -85,6 +69,10 @@ type EntryModalState = {
 const PERIOD_OPTIONS = [
   { label: "This Month", value: "this_month" },
   { label: "Last Month", value: "last_month" },
+  { label: "This Week", value: "this_week" },
+  { label: "Last Week", value: "last_week" },
+  { label: "This Year", value: "this_year" },
+  { label: "All Time", value: "all_time" },
   { label: "Custom", value: "custom" },
 ];
 
@@ -100,15 +88,23 @@ const formatCurrency = (value: number, currency: string) =>
 
 const toMinorUnits = (value: number) => Math.round(value * 100);
 
-const formatCurrencyCompact = (value: number, currency: string) =>
-  new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency,
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value);
+const formatDateRangeLabel = (startDate: string, endDate: string) =>
+  `${dayjs(startDate).format("MMMM D, YYYY")} — ${dayjs(endDate).format("MMMM D, YYYY")}`;
 
 dayjs.extend(isSameOrBefore);
+
+const renderHeaderLabel = (label: string) => {
+  const words = label.split(" ").filter(Boolean);
+  if (words.length <= 1) return label;
+
+  return (
+    <Box style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.05 }}>
+      {words.map((word) => (
+        <span key={word}>{word}</span>
+      ))}
+    </Box>
+  );
+};
 
 const createEmptyEntryModalState = (): EntryModalState => ({
   open: false,
@@ -123,33 +119,9 @@ const createEmptyEntryModalState = (): EntryModalState => ({
   description: "",
 });
 
-type RadarMetric = {
-  key: keyof Pick<
-    VenuePayoutCurrencyTotals,
-    "receivableCollected" | "receivableOutstanding" | "payableCollected" | "payableOutstanding"
-  >;
-  label: string;
-};
-
-const RADAR_METRICS: readonly RadarMetric[] = [
-  { key: "receivableCollected", label: "Commission collected" },
-  { key: "receivableOutstanding", label: "Commission outstanding" },
-  { key: "payableCollected", label: "Payout paid" },
-  { key: "payableOutstanding", label: "Payout outstanding" },
-];
-
-const LEDGER_LINE_CONFIG = [
-  { key: "opening" as const, label: "Opening balance" },
-  { key: "due" as const, label: "New activity" },
-  { key: "paid" as const, label: "Payments" },
-  { key: "closing" as const, label: "Closing balance" },
-];
-
 const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
   const dispatch = useAppDispatch();
   const [searchParams, setSearchParams] = useSearchParams();
-  const theme = useMantineTheme();
-  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const accounts = useAppSelector(selectFinanceAccounts);
   const categories = useAppSelector(selectFinanceCategories);
   const vendors = useAppSelector(selectFinanceVendors);
@@ -168,6 +140,7 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
   const [entryModal, setEntryModal] = useState<EntryModalState>(() => createEmptyEntryModalState());
   const [entryMessage, setEntryMessage] = useState<MessageState>(null);
   const [entrySubmitting, setEntrySubmitting] = useState(false);
+  const [undoCollectionLogId, setUndoCollectionLogId] = useState<number | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [reportPreviewLoading, setReportPreviewLoading] = useState<number | null>(null);
   const [reportPreviewError, setReportPreviewError] = useState<string | null>(null);
@@ -185,7 +158,15 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
   const lastSummaryKeyRef = useRef<string | null>(null);
 
   const parseSummaryPeriod = useCallback((value: string | null): string => {
-    if (value === "last_month" || value === "custom" || value === "this_month") {
+    if (
+      value === "last_month" ||
+      value === "custom" ||
+      value === "this_month" ||
+      value === "this_week" ||
+      value === "last_week" ||
+      value === "this_year" ||
+      value === "all_time"
+    ) {
       return value;
     }
     return "this_month";
@@ -219,15 +200,24 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
         const end = range[1] ? dayjs(range[1]).endOf("day") : null;
         return { start, end };
       }
-      if (range[0] && range[1]) {
-        return {
-          start: dayjs(range[0]).startOf("day"),
-          end: dayjs(range[1]).endOf("day"),
-        };
-      }
       if (periodValue === "last_month") {
         const start = dayjs().subtract(1, "month").startOf("month");
         return { start, end: start.endOf("month") };
+      }
+      if (periodValue === "this_week") {
+        const start = dayjs().startOf("week");
+        return { start, end: start.endOf("week") };
+      }
+      if (periodValue === "last_week") {
+        const start = dayjs().subtract(1, "week").startOf("week");
+        return { start, end: start.endOf("week") };
+      }
+      if (periodValue === "this_year") {
+        const start = dayjs().startOf("year");
+        return { start, end: start.endOf("year") };
+      }
+      if (periodValue === "all_time") {
+        return { start: null, end: null };
       }
       const start = dayjs().startOf("month");
       return { start, end: start.endOf("month") };
@@ -243,7 +233,7 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
           const next = new URLSearchParams(prev);
           next.set("tab", "summary");
           next.set("summaryPeriod", periodValue);
-          if (start && end) {
+          if (periodValue === "custom" && start && end) {
             next.set("summaryStart", start.format("YYYY-MM-DD"));
             next.set("summaryEnd", end.format("YYYY-MM-DD"));
           } else {
@@ -265,7 +255,7 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
     if (period !== summaryPeriodParam) {
       setPeriod(summaryPeriodParam);
     }
-    if (summaryStartDate || summaryEndDate || summaryPeriodParam === "custom") {
+    if (summaryPeriodParam === "custom" && (summaryStartDate || summaryEndDate)) {
       setCustomRange([summaryStartDate, summaryEndDate]);
     }
   }, [active, period, summaryEndDate, summaryPeriodParam, summaryStartDate]);
@@ -592,25 +582,6 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
     [financeClientsById, financeVendorsById],
   );
 
-  const renderLedgerBreakdown = useCallback(
-    (label: string, ledger: VenueLedgerSnapshot, currency: string) => (
-      <Stack gap={2}>
-        <Text fw={600} size="sm">
-          {label}
-        </Text>
-        {LEDGER_LINE_CONFIG.map((line) => (
-          <Group justify="space-between" key={`${label}-${line.key}`}>
-            <Text c="dimmed" size="sm">
-              {line.label}
-            </Text>
-            <Text>{formatCurrency(ledger[line.key], currency)}</Text>
-          </Group>
-        ))}
-      </Stack>
-    ),
-    [],
-  );
-
   const resolveDefaultAccountId = useCallback(
     (currencyCode: string): string => {
       if (!accounts.data.length) {
@@ -775,6 +746,34 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
     }
   };
 
+  const handleUndoCollection = useCallback(
+    async (collectionLogId: number | null) => {
+      if (!collectionLogId) {
+        return;
+      }
+      const confirmed = window.confirm(
+        "This will delete the recorded payment transaction and the venue collection entry. Continue?",
+      );
+      if (!confirmed) {
+        return;
+      }
+      setUndoCollectionLogId(collectionLogId);
+      try {
+        await axiosInstance.delete(`/nightReports/venue-collections/${collectionLogId}`, {
+          withCredentials: true,
+        });
+        setEntryMessage({ type: "success", text: "Payment undone." });
+        await fetchSummary();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to undo payment.";
+        setEntryMessage({ type: "error", text: message });
+      } finally {
+        setUndoCollectionLogId((current) => (current === collectionLogId ? null : current));
+      }
+    },
+    [fetchSummary],
+  );
+
   const modalTitle =
     entryModal.kind === "receivable"
       ? "Record commission collection"
@@ -805,40 +804,6 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
       : entryModal.kind === "payable"
         ? entryModal.venue?.payableOutstanding ?? 0
         : 0;
-  const radarCurrencies = useMemo(
-    () => summary?.totalsByCurrency.map((row) => row.currency) ?? [],
-    [summary],
-  );
-  const radarData = useMemo(() => {
-    if (!summary) {
-      return [];
-    }
-    return RADAR_METRICS.map((metric) => {
-      const entry: Record<string, number | string> = { metric: metric.label };
-      summary.totalsByCurrency.forEach((row) => {
-        entry[row.currency] = row[metric.key] ?? 0;
-      });
-      return entry;
-    });
-  }, [summary]);
-  const chartSampleCurrency = radarCurrencies[0] ?? DEFAULT_CURRENCY;
-  const radarMaxValue = useMemo(() => {
-    let max = 0;
-    radarData.forEach((entry) => {
-      Object.entries(entry).forEach(([key, value]) => {
-        if (key === "metric") {
-          return;
-        }
-        const numeric = typeof value === "number" ? value : Number(value);
-        if (Number.isFinite(numeric)) {
-          max = Math.max(max, numeric);
-        }
-      });
-    });
-    return max || 1;
-  }, [radarData]);
-  const currencyColors = ["#4dabf7", "#69db7c", "#ffd43b", "#ff6b6b", "#b197fc", "#ffa94d"];
-
   const buildDailyRows = useCallback(
     (venue: VenuePayoutVenueBreakdown): DailyRow[] => {
       if (!summary) {
@@ -920,29 +885,33 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
   );
 
   return (
-    <Stack gap="xl">
+    <Stack gap="xs">
       <Card withBorder padding="md">
         <Stack gap="md">
-          <Group justify="space-between" align="flex-end" gap="sm" wrap="wrap">
-            <Stack gap={4} style={{ flex: "1 1 260px", minWidth: 0 }}>
-              <Text fw={600}>Reporting period</Text>
-              <SegmentedControl
-                value={period}
-                onChange={handlePeriodChange}
-                data={PERIOD_OPTIONS}
-                size="sm"
-                fullWidth
-              />
-            </Stack>
-            <Box
-              w={isMobile ? "100%" : "auto"}
-              style={{ display: "flex", justifyContent: "flex-end", flexGrow: 0 }}
-            >
-              <Button onClick={fetchSummary} disabled={!canFetch || summaryLoading} fullWidth={isMobile}>
-                Refresh
-              </Button>
-            </Box>
-          </Group>
+          <Stack gap={4} align="center" style={{ maxWidth: 320, marginInline: "auto" }}>
+            <Select
+              data={PERIOD_OPTIONS}
+              value={period}
+              onChange={(value) => handlePeriodChange(value ?? "this_month")}
+              searchable={false}
+              allowDeselect={false}
+              comboboxProps={{ withinPortal: true }}
+              size="sm"
+              styles={{
+                input: { textAlign: "center", fontWeight: 600 },
+                option: { textAlign: "center", justifyContent: "center" },
+              }}
+            />
+            <Text size="sm" c="dimmed" ta="center" fw={500}>
+              {summary
+                ? formatDateRangeLabel(summary.range.startDate, summary.range.endDate)
+                : period === "custom" && customRange[0] && customRange[1]
+                  ? formatDateRangeLabel(customRange[0].toISOString(), customRange[1].toISOString())
+                  : period === "all_time"
+                    ? "All time"
+                    : "Current period"}
+            </Text>
+          </Stack>
           {period === "custom" && (
             <DatePickerInput
               type="range"
@@ -970,18 +939,9 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
       )}
 
       {!summaryLoading && summary && (
-        <Stack gap="xl">
+        <Stack gap="xs">
           <Card withBorder padding="lg">
             <Stack gap="sm">
-              <Group justify="space-between">
-                <div>
-                  <Title order={4}>Totals</Title>
-                  <Text c="dimmed">
-                    {dayjs(summary.range.startDate).format("MMM D, YYYY")} -{" "}
-                    {dayjs(summary.range.endDate).format("MMM D, YYYY")}
-                  </Text>
-                </div>
-              </Group>
               {!rangeIsCanonical && (
                 <Alert color="yellow" variant="light">
                   This range is view-only. Collections and payouts can only be recorded for full calendar months.
@@ -991,150 +951,208 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                 <Text>No payouts or commissions recorded for this range.</Text>
               ) : (
                 <Grid gutter="xl" align="stretch">
-                  <Grid.Col span={{ base: 12, md: 6 }}>
-                    <Card shadow="sm" padding="md" withBorder h="100%">
-                      <Stack gap="xs" h="100%">
-                        <Box style={{ maxHeight: 260, overflowY: "auto" }}>
-                          <Stack gap="sm">
-                            {summary.totalsByCurrency.map((row) => (
-                              <Card shadow="sm" padding="md" withBorder key={row.currency}>
-                                <Stack gap={4}>
-                                  <Text fw={600}>{row.currency}</Text>
-                                  <Stack gap={2}>
-                                    <Group justify="space-between">
-                                      <Text c="dimmed" size="sm">
-                                        Commission owed
-                                      </Text>
-                                      <Text>{formatCurrency(row.receivable, row.currency)}</Text>
-                                    </Group>
-                                    <Group justify="space-between">
-                                      <Text c="dimmed" size="sm">
-                                        Collected
-                                      </Text>
-                                      <Text>{formatCurrency(row.receivableCollected, row.currency)}</Text>
-                                    </Group>
-                                    <Group justify="space-between">
-                                      <Text c="dimmed" size="sm">
-                                        Outstanding
-                                      </Text>
-                                      <Text>{formatCurrency(row.receivableOutstanding, row.currency)}</Text>
-                                    </Group>
-                                  </Stack>
-                                  <Stack gap={2}>
-                                    <Group justify="space-between">
-                                      <Text c="dimmed" size="sm">
-                                        Open bar payouts
-                                      </Text>
-                                      <Text>{formatCurrency(row.payable, row.currency)}</Text>
-                                    </Group>
-                                    <Group justify="space-between">
-                                      <Text c="dimmed" size="sm">
-                                        Paid
-                                      </Text>
-                                      <Text>{formatCurrency(row.payableCollected, row.currency)}</Text>
-                                    </Group>
-                                    <Group justify="space-between">
-                                      <Text c="dimmed" size="sm">
-                                        Outstanding
-                                      </Text>
-                                      <Text>{formatCurrency(row.payableOutstanding, row.currency)}</Text>
-                                    </Group>
-                                  </Stack>
-                                  <Group justify="space-between" mt="sm">
+                  <Grid.Col span={12}>
+                    <Stack gap="md">
+                      {summary.totalsByCurrency.map((row) => (
+                        <Card shadow="sm" padding="md" withBorder key={row.currency}>
+                          <Stack gap="md">
+                            <Stack gap={2} align="center">
+                              <Text fw={700} size="lg" ta="center">
+                                Net Earnings:{" "}
+                                <Text span c={row.net >= 0 ? "green" : "red"} fw={700}>
+                                  {formatCurrency(row.net, row.currency)}
+                                </Text>
+                              </Text>
+                            </Stack>
+
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                              <Card withBorder padding="sm" radius="md">
+                                <Stack gap={6}>
+                                  <Text fw={600} size="sm">
+                                    Commission
+                                  </Text>
+                                  <Group justify="space-between">
                                     <Text c="dimmed" size="sm">
-                                      Net
+                                      Owed
                                     </Text>
-                                    <Text fw={600} c={row.net >= 0 ? "green" : "red"}>
-                                      {formatCurrency(row.net, row.currency)}
-                                    </Text>
+                                    <Text>{formatCurrency(row.receivable, row.currency)}</Text>
                                   </Group>
-                                  <Stack gap="sm" mt="sm">
-                                    {renderLedgerBreakdown("Commission ledger", row.receivableLedger, row.currency)}
-                                    {renderLedgerBreakdown("Open bar ledger", row.payableLedger, row.currency)}
-                                  </Stack>
+                                  <Group justify="space-between">
+                                    <Text c="dimmed" size="sm">
+                                      Collected
+                                    </Text>
+                                    <Text>{formatCurrency(row.receivableCollected, row.currency)}</Text>
+                                  </Group>
+                                  <Group justify="space-between">
+                                    <Text c="dimmed" size="sm">
+                                      Outstanding
+                                    </Text>
+                                    <Text>{formatCurrency(row.receivableOutstanding, row.currency)}</Text>
+                                  </Group>
                                 </Stack>
                               </Card>
-                            ))}
+
+                              <Card withBorder padding="sm" radius="md">
+                                <Stack gap={6}>
+                                  <Text fw={600} size="sm">
+                                    Open bar
+                                  </Text>
+                                  <Group justify="space-between">
+                                    <Text c="dimmed" size="sm">
+                                      Owed
+                                    </Text>
+                                    <Text>{formatCurrency(row.payable, row.currency)}</Text>
+                                  </Group>
+                                  <Group justify="space-between">
+                                    <Text c="dimmed" size="sm">
+                                      Paid
+                                    </Text>
+                                    <Text>{formatCurrency(row.payableCollected, row.currency)}</Text>
+                                  </Group>
+                                  <Group justify="space-between">
+                                    <Text c="dimmed" size="sm">
+                                      Outstanding
+                                    </Text>
+                                    <Text>{formatCurrency(row.payableOutstanding, row.currency)}</Text>
+                                  </Group>
+                                </Stack>
+                              </Card>
+                            </SimpleGrid>
                           </Stack>
-                        </Box>
-                      </Stack>
-                    </Card>
-                  </Grid.Col>
-                  <Grid.Col span={{ base: 12, md: 6 }}>
-                    <Card shadow="sm" padding="md" withBorder h="100%">
-                      <Stack gap="xs" h="100%">
-                        <Group justify="space-between">
-                          <div>
-                            <Text fw={600}>Collections vs payouts</Text>
-                            <Text size="sm" c="dimmed">
-                              Outstanding vs collected amounts per currency
-                            </Text>
-                          </div>
-                        </Group>
-                        {radarData.length === 0 ? (
-                          <Text size="sm" c="dimmed">
-                            Not enough data to draw the chart.
-                          </Text>
-                        ) : (
-                          <ResponsiveContainer width="100%" height={260}>
-                            <RadarChart data={radarData}>
-                              <PolarGrid strokeDasharray="3 3" />
-                              <PolarAngleAxis dataKey="metric" />
-                              <PolarRadiusAxis
-                                tickFormatter={(value) => formatCurrencyCompact(value, chartSampleCurrency)}
-                                domain={[0, radarMaxValue]}
-                              />
-                              <RechartsTooltip
-                                formatter={(value: number, name) => {
-                                  const currency =
-                                    name && radarCurrencies.includes(name as string)
-                                      ? (name as string)
-                                      : chartSampleCurrency;
-                                  return [formatCurrency(value, currency), name];
-                                }}
-                              />
-                              <Legend />
-                              {radarCurrencies.map((currency, idx) => (
-                                <Radar
-                                  key={currency}
-                                  name={currency}
-                                  dataKey={currency}
-                                  stroke={currencyColors[idx % currencyColors.length]}
-                                  fill={currencyColors[idx % currencyColors.length]}
-                                  fillOpacity={0.25}
-                                />
-                              ))}
-                            </RadarChart>
-                          </ResponsiveContainer>
-                        )}
-                      </Stack>
-                    </Card>
+                        </Card>
+                      ))}
+                    </Stack>
                   </Grid.Col>
                 </Grid>
               )}
             </Stack>
           </Card>
-          <Card withBorder padding="lg">
-            <Stack gap="sm">
-              <Title order={5}>Breakdown by venue</Title>
+          <Card withBorder padding={0}>
+            <Stack gap={0}>
               {summary.venues.length === 0 ? (
                 <Text>No venue data for this range.</Text>
               ) : (
-                  <ScrollArea offsetScrollbars type="auto">
-                    <Table highlightOnHover withColumnBorders miw={900}>
+                <Box
+                  style={{
+                    width: "100%",
+                    maxHeight: "calc(100vh - 280px)",
+                    overflow: "auto",
+                    scrollbarWidth: "none",
+                    msOverflowStyle: "none",
+                  }}
+                >
+                  <style>{`
+                    .venue-numbers-summary-scroll::-webkit-scrollbar {
+                      display: none;
+                    }
+                    .venue-numbers-summary-scroll {
+                      scrollbar-width: none;
+                      -ms-overflow-style: none;
+                    }
+                  `}</style>
+                <Box style={{ minWidth: 900 }} className="venue-numbers-summary-scroll">
+                  <style>{`
+                    .venue-numbers-sticky-cell {
+                      position: sticky;
+                      background: var(--mantine-color-body) !important;
+                      background-color: var(--mantine-color-body) !important;
+                      background-clip: padding-box;
+                      isolation: isolate;
+                    }
+                    .venue-numbers-sticky-cell::after {
+                      content: "";
+                      position: absolute;
+                      top: 0;
+                      right: -1px;
+                      width: 18px;
+                      height: 100%;
+                      background: var(--mantine-color-body);
+                      pointer-events: none;
+                    }
+                  `}</style>
+                  <Table
+                    w="100%"
+                    highlightOnHover
+                      withColumnBorders
+                      miw={1240}
+                      styles={{
+                        table: { borderTop: "none", tableLayout: "auto" },
+                        thead: { borderTop: "none" },
+                        th: {
+                          borderTop: "none",
+                          position: "sticky",
+                          top: 0,
+                          zIndex: 8,
+                          background: "var(--mantine-color-body)",
+                          textAlign: "center",
+                          verticalAlign: "middle",
+                          whiteSpace: "normal",
+                          overflowWrap: "break-word",
+                          wordBreak: "normal",
+                          lineHeight: 1.15,
+                        },
+                        td: {
+                          textAlign: "center",
+                          verticalAlign: "middle",
+                        },
+                      }}
+                    >
                       <Table.Thead>
                         <Table.Tr>
-                          <Table.Th />
-                          <Table.Th>Venue</Table.Th>
-                          <Table.Th>Total People</Table.Th>
-                          <Table.Th>Commission Owed</Table.Th>
-                          <Table.Th>Commission Collected</Table.Th>
-                          <Table.Th>Commission Outstanding</Table.Th>
-                          <Table.Th>Payout Owed</Table.Th>
-                          <Table.Th>Payout Paid</Table.Th>
-                          <Table.Th>Payout Outstanding</Table.Th>
-                          <Table.Th>Net</Table.Th>
-                          <Table.Th>Actions</Table.Th>
+                          <Table.Th
+                            className="venue-numbers-sticky-cell"
+                            style={{
+                              position: "sticky",
+                              top: 0,
+                              left: 0,
+                              zIndex: 20,
+                              background: "var(--mantine-color-body)",
+                              backgroundColor: "var(--mantine-color-body)",
+                              width: 48,
+                              minWidth: 48,
+                              maxWidth: 48,
+                              paddingInline: 0,
+                              overflow: "hidden",
+                              textAlign: "center",
+                              verticalAlign: "middle",
+                            }}
+                          />
+                          <Table.Th
+                            className="venue-numbers-sticky-cell"
+                            style={{
+                              position: "sticky",
+                              top: 0,
+                              left: 48,
+                              zIndex: 19,
+                              background: "var(--mantine-color-body)",
+                              backgroundColor: "var(--mantine-color-body)",
+                              width: 120,
+                              minWidth: 120,
+                              maxWidth: 120,
+                              paddingInline: 0,
+                              overflow: "hidden",
+                              whiteSpace: "normal",
+                              overflowWrap: "break-word",
+                              wordBreak: "normal",
+                              lineHeight: 1.15,
+                              borderRight: "1px solid var(--mantine-color-gray-3)",
+                              textAlign: "center",
+                              verticalAlign: "middle",
+                            }}
+                          >
+                            {renderHeaderLabel("Venue")}
+                          </Table.Th>
+                            <Table.Th style={{ textAlign: "center", verticalAlign: "middle", minWidth: 110, width: 110, maxWidth: 110, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>
+                              {renderHeaderLabel("Total People")}
+                            </Table.Th>
+                          <Table.Th style={{ minWidth: 150, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>{renderHeaderLabel("Commission Owed")}</Table.Th>
+                          <Table.Th style={{ minWidth: 160, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>{renderHeaderLabel("Commission Collected")}</Table.Th>
+                          <Table.Th style={{ minWidth: 170, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>{renderHeaderLabel("Commission Outstanding")}</Table.Th>
+                          <Table.Th style={{ minWidth: 130, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>{renderHeaderLabel("Payout Owed")}</Table.Th>
+                          <Table.Th style={{ minWidth: 140, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>{renderHeaderLabel("Payout Paid")}</Table.Th>
+                          <Table.Th style={{ minWidth: 160, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>{renderHeaderLabel("Payout Outstanding")}</Table.Th>
+                          <Table.Th style={{ minWidth: 110, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>{renderHeaderLabel("Net")}</Table.Th>
+                          <Table.Th style={{ minWidth: 120, whiteSpace: "normal", overflowWrap: "break-word", wordBreak: "normal", lineHeight: 1.15 }}>{renderHeaderLabel("Actions")}</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
                       <Table.Tbody>
@@ -1156,10 +1174,34 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                         venue.allowsOpenBar === true && (payableOutstanding > 0 || payableCollected > 0);
                       const payDisabled =
                         !canRecordPayments || venue.venueId === null || payableOutstanding <= 0;
+                      const undoCollectDisabled =
+                        !canRecordPayments ||
+                        venue.venueId === null ||
+                        !venue.latestReceivableCollectionLogId ||
+                        undoCollectionLogId === venue.latestReceivableCollectionLogId;
+                      const undoPayDisabled =
+                        !canRecordPayments ||
+                        venue.venueId === null ||
+                        !venue.latestPayableCollectionLogId ||
+                        undoCollectionLogId === venue.latestPayableCollectionLogId;
                       return (
                         <Fragment key={venue.rowKey}>
                           <Table.Tr>
-                            <Table.Td w={40}>
+                          <Table.Td
+                              className="venue-numbers-sticky-cell"
+                              w={44}
+                              style={{
+                                position: "sticky",
+                                left: 0,
+                                zIndex: 10,
+                                background: "var(--mantine-color-body)",
+                                backgroundColor: "var(--mantine-color-body)",
+                                minWidth: 48,
+                                maxWidth: 48,
+                                paddingInline: 0,
+                                overflow: "hidden",
+                              }}
+                            >
                               <ActionIcon
                                 variant="subtle"
                                 onClick={() => toggleRow(venue.rowKey)}
@@ -1168,17 +1210,89 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                                 {isExpanded ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
                               </ActionIcon>
                             </Table.Td>
-                            <Table.Td>
-                              <Text fw={600}>{venue.venueName}</Text>
+                          <Table.Td
+                              className="venue-numbers-sticky-cell"
+                              style={{
+                                position: "sticky",
+                                left: 48,
+                                zIndex: 9,
+                                background: "var(--mantine-color-body)",
+                                backgroundColor: "var(--mantine-color-body)",
+                                width: 120,
+                                minWidth: 120,
+                                maxWidth: 120,
+                                paddingInline: 8,
+                                overflow: "hidden",
+                                whiteSpace: "normal",
+                                overflowWrap: "break-word",
+                                wordBreak: "normal",
+                                borderRight: "1px solid var(--mantine-color-gray-3)",
+                                textAlign: "center",
+                                verticalAlign: "middle",
+                              }}
+                            >
+                              {(() => {
+                                const parts = venue.venueName.trim().split(/\s+/).filter(Boolean);
+                                const lines =
+                                  parts.length <= 1
+                                    ? [venue.venueName]
+                                    : parts.length === 2
+                                      ? parts
+                                      : [
+                                          parts.slice(0, Math.max(1, Math.floor(parts.length / 2))).join(" "),
+                                          parts.slice(Math.max(1, Math.floor(parts.length / 2))).join(" "),
+                                        ].filter(Boolean);
+
+                                return (
+                                  <Box
+                                    style={{
+                                      width: "100%",
+                                      display: "flex",
+                                      flexDirection: "column",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      gap: 0,
+                                      whiteSpace: "normal",
+                                      overflowWrap: "break-word",
+                                      wordBreak: "normal",
+                                      lineHeight: 1.15,
+                                    }}
+                                  >
+                                    {lines.map((line) => (
+                                      <Text key={line} fw={600} style={{ lineHeight: 1.15, whiteSpace: "normal" }}>
+                                        {line}
+                                      </Text>
+                                    ))}
+                                  </Box>
+                                );
+                              })()}
                             </Table.Td>
-                            <Table.Td>
+                            <Table.Td
+                              style={{
+                                textAlign: "center",
+                                verticalAlign: "middle",
+                                minWidth: 110,
+                                width: 110,
+                                maxWidth: 110,
+                              }}
+                            >
                               {showSplitPeople ? (
-                                <Stack gap={0}>
-                                  <Text size="sm">Commission: {receivablePeople}</Text>
-                                  <Text size="sm">Open bar: {payablePeople}</Text>
+                                <Stack gap={2} align="center">
+                                  <Stack gap={0} align="center">
+                                    <Text size="xs" fw={700} style={{ lineHeight: 1.05 }}><strong>Commission:</strong></Text>
+                                    <Text size="sm" fw={700} style={{ lineHeight: 1.05 }}>
+                                      {receivablePeople}
+                                    </Text>
+                                  </Stack>
+                                  <Stack gap={0} align="center">
+                                    <Text size="xs" fw={700} style={{ lineHeight: 1.05 }}><strong>Open Bar:</strong></Text>
+                                    <Text size="sm" fw={700} style={{ lineHeight: 1.05 }}>
+                                      {payablePeople}
+                                    </Text>
+                                  </Stack>
                                 </Stack>
                               ) : (
-                                receivablePeople || payablePeople || 0
+                                <Text fw={700}>{receivablePeople || payablePeople || 0}</Text>
                               )}
                             </Table.Td>
                             <Table.Td>{formatCurrency(venue.receivable, venue.currency)}</Table.Td>
@@ -1190,8 +1304,8 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                             <Table.Td c={venue.net >= 0 ? "green" : "red"}>
                               {formatCurrency(venue.net, venue.currency)}
                             </Table.Td>
-                            <Table.Td>
-                              <Stack gap={4}>
+                            <Table.Td style={{ textAlign: "center", verticalAlign: "middle" }}>
+                              <Stack gap={4} align="center">
                                 {showCollectButton && (
                                   <Button
                                     size="xs"
@@ -1204,6 +1318,22 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                                     }}
                                   >
                                     Collect
+                                  </Button>
+                                )}
+                                {venue.latestReceivableCollectionLogId && receivableCollected > 0 && (
+                                  <Button
+                                    size="xs"
+                                    variant="light"
+                                    color="red"
+                                    loading={undoCollectionLogId === venue.latestReceivableCollectionLogId}
+                                    disabled={undoCollectDisabled}
+                                    onClick={() => {
+                                      void handleUndoCollection(
+                                        venue.latestReceivableCollectionLogId ?? null,
+                                      );
+                                    }}
+                                  >
+                                    Undo Collect
                                   </Button>
                                 )}
                                 {showPayButton && (
@@ -1221,6 +1351,20 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                                     Pay
                                   </Button>
                                 )}
+                                {venue.latestPayableCollectionLogId && payableCollected > 0 && (
+                                  <Button
+                                    size="xs"
+                                    variant="light"
+                                    color="red"
+                                    loading={undoCollectionLogId === venue.latestPayableCollectionLogId}
+                                    disabled={undoPayDisabled}
+                                    onClick={() => {
+                                      void handleUndoCollection(venue.latestPayableCollectionLogId ?? null);
+                                    }}
+                                  >
+                                    Undo Pay
+                                  </Button>
+                                )}
                               </Stack>
                             </Table.Td>
                           </Table.Tr>
@@ -1228,31 +1372,34 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                             <Table.Tr>
                               <Table.Td colSpan={11}>
                                 <Stack gap="xs">
-                                  <Group justify="space-between">
-                                    <Text fw={600} size="sm">
-                                      Daily performance
-                                    </Text>
-                                    <Text size="sm" c="dimmed">
-                                      {dailyRows.length} day{dailyRows.length === 1 ? "" : "s"} tracked
-                                    </Text>
-                                  </Group>
                                   {dailyRows.length === 0 ? (
                                     <Text size="sm" c="dimmed">
                                       No submitted reports match this venue during the selected period.
                                     </Text>
                                   ) : (
                                     <ScrollArea offsetScrollbars type="auto">
-                                      <Table striped withColumnBorders miw={720}>
+                                      <Table striped withColumnBorders miw={720} stickyHeader>
                                         <Table.Thead>
                                           <Table.Tr>
-                                            <Table.Th>Date</Table.Th>
-                                            <Table.Th>Total People</Table.Th>
-                                            <Table.Th>Normal</Table.Th>
-                                            <Table.Th>Cocktail</Table.Th>
-                                            <Table.Th>Brunch</Table.Th>
-                                            <Table.Th>Report</Table.Th>
-                                            <Table.Th>Type</Table.Th>
-                                            <Table.Th>Amount</Table.Th>
+                                            <Table.Th
+                                              style={{
+                                                position: "sticky",
+                                                left: 0,
+                                                zIndex: 4,
+                                                background: "var(--mantine-color-body)",
+                                                minWidth: 120,
+                                                textAlign: "center",
+                                              }}
+                                            >
+                                              Date
+                                            </Table.Th>
+                                            <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Total People</Table.Th>
+                                            <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Normal</Table.Th>
+                                            <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Cocktail</Table.Th>
+                                            <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Brunch</Table.Th>
+                                            <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Report</Table.Th>
+                                            <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Type</Table.Th>
+                                            <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Amount</Table.Th>
                                           </Table.Tr>
                                         </Table.Thead>
                                         <Table.Tbody>
@@ -1265,8 +1412,19 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                                               : "red";
                                           return (
                                             <Table.Tr key={`${day.date}-${day.reportId ?? "none"}-${day.direction}`}>
-                                              <Table.Td>{dayjs(day.date).format("MMM D, YYYY")}</Table.Td>
-                                              <Table.Td>{day.totalPeople}</Table.Td>
+                                              <Table.Td
+                                                style={{
+                                                  position: "sticky",
+                                                  left: 0,
+                                                  zIndex: 3,
+                                                  background: "var(--mantine-color-body)",
+                                                  minWidth: 120,
+                                                  textAlign: "center",
+                                                }}
+                                              >
+                                                {dayjs(day.date).format("MMM D, YYYY")}
+                                              </Table.Td>
+                                              <Table.Td style={{ textAlign: "center", verticalAlign: "middle" }}>{day.totalPeople}</Table.Td>
                                               <Table.Td>
                                                 {!placeholder && day.direction === "payable"
                                                   ? day.normalCount
@@ -1282,11 +1440,11 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                                                   ? day.brunchCount
                                                   : "—"}
                                               </Table.Td>
-                                              <Table.Td>
+                                              <Table.Td style={{ textAlign: "center", verticalAlign: "middle" }}>
                                                 {placeholder ? (
                                                   "No report"
                                                 ) : day.reportId ? (
-                                                  <Group gap="xs" wrap="nowrap">
+                                                  <Group gap="xs" wrap="nowrap" justify="center">
                                                     <Anchor
                                                       component="button"
                                                       type="button"
@@ -1308,7 +1466,7 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                                                     ? "Commission"
                                                     : "Open bar payout"}
                                               </Table.Td>
-                                              <Table.Td c={amountColor}>
+                                              <Table.Td c={amountColor} style={{ textAlign: "center", verticalAlign: "middle" }}>
                                                 {formatCurrency(day.amount, venue.currency)}
                                               </Table.Td>
                                             </Table.Tr>
@@ -1325,9 +1483,10 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                         </Fragment>
                       );
                     })}
-                  </Table.Tbody>
-                  </Table>
-                </ScrollArea>
+                                        </Table.Tbody>
+                    </Table>
+                  </Box>
+                </Box>
               )}
               {reportPreviewError && <Alert color="red">{reportPreviewError}</Alert>}
             </Stack>
@@ -1424,6 +1583,9 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
 };
 
 export default VenueNumbersSummary;
+
+
+
 
 
 

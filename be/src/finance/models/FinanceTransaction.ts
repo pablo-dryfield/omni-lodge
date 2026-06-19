@@ -158,6 +158,27 @@ export default class FinanceTransaction extends Model {
   @BelongsTo(() => FinanceFile, 'invoiceFileId')
   declare invoiceFile?: FinanceFile | null;
 
+  @Index('finance_transactions_receipt_group_key_idx')
+  @AllowNull(true)
+  @Column({ field: 'receipt_group_key', type: DataType.STRING(64) })
+  declare receiptGroupKey: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'receipt_total_minor', type: DataType.INTEGER })
+  declare receiptTotalMinor: number | null;
+
+  @AllowNull(true)
+  @Column({ field: 'receipt_currency', type: DataType.STRING(3) })
+  declare receiptCurrency: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'receipt_allocation_note', type: DataType.TEXT })
+  declare receiptAllocationNote: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'receipt_line_order', type: DataType.INTEGER })
+  declare receiptLineOrder: number | null;
+
   @ForeignKey(() => User)
   @AllowNull(false)
   @Column({ field: 'created_by', type: DataType.INTEGER })

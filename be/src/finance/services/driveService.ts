@@ -1,8 +1,9 @@
 import crypto from 'crypto';
 import dayjs from 'dayjs';
+import { Readable } from 'stream';
 import FinanceFile from '../models/FinanceFile.js';
 import logger from '../../utils/logger.js';
-import { ensureFolderPath, uploadBuffer } from '../../services/googleDrive.js';
+import { ensureFolderPath, getDriveClient, uploadBuffer } from '../../services/googleDrive.js';
 
 type UploadResult = {
   driveFileId: string;
@@ -57,4 +58,35 @@ export async function uploadFinanceFile(options: UploadOptions): Promise<UploadR
 
 export async function findDuplicateFinanceFile(sha256: string): Promise<FinanceFile | null> {
   return FinanceFile.findOne({ where: { sha256 } });
+}
+
+export async function openFinanceFileStream(driveFileId: string): Promise<Readable> {
+  if (!driveFileId || !driveFileId.trim()) {
+    throw new Error('Missing Drive file id');
+  }
+
+  const drive = await getDriveClient();
+  const response = await drive.files.get(
+    { fileId: driveFileId.trim(), alt: 'media' },
+    { responseType: 'stream' },
+  );
+  return response.data as unknown as Readable;
+}
+
+export async function deleteFinanceFileFromDrive(driveFileId: string | null | undefined): Promise<void> {
+  if (!driveFileId || !driveFileId.trim()) {
+    return;
+  }
+
+  try {
+    const drive = await getDriveClient();
+    await drive.files.delete({ fileId: driveFileId.trim() });
+  } catch (error) {
+    const code = (error as { code?: number })?.code;
+    if (code === 404) {
+      return;
+    }
+    logger.error(`Failed to delete finance file from Drive: ${(error as Error).message}`);
+    throw error;
+  }
 }

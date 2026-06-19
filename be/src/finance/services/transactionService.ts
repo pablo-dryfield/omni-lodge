@@ -28,6 +28,11 @@ export type FinanceTransactionInput = {
   tags?: Record<string, unknown> | null;
   meta?: Record<string, unknown> | null;
   invoiceFileId?: number | null;
+  receiptGroupKey?: string | null;
+  receiptTotalMinor?: number | null;
+  receiptCurrency?: string | null;
+  receiptAllocationNote?: string | null;
+  receiptLineOrder?: number | null;
   approvedBy?: number | null;
 };
 
@@ -111,6 +116,11 @@ export async function createFinanceTransaction(
       tags: data.tags ?? null,
       meta,
       invoiceFileId: data.invoiceFileId ?? null,
+      receiptGroupKey: data.receiptGroupKey?.trim() || null,
+      receiptTotalMinor: data.receiptTotalMinor ?? null,
+      receiptCurrency: data.receiptCurrency?.trim().toUpperCase() || null,
+      receiptAllocationNote: data.receiptAllocationNote?.trim() || null,
+      receiptLineOrder: data.receiptLineOrder ?? null,
       createdBy: userId,
       approvedBy: data.approvedBy ?? null,
     },
@@ -148,6 +158,10 @@ export async function updateFinanceTransaction(
         counterpartyId: record.counterpartyId,
       };
 
+  const nextAmountMinor =
+    'amountMinor' in changes && changes.amountMinor != null ? Number(changes.amountMinor) : record.amountMinor;
+  const nextFxRate = 'fxRate' in changes ? changes.fxRate ?? record.fxRate : record.fxRate;
+
   const payload: Partial<FinanceTransaction> = {
     ...('kind' in changes ? { kind: changes.kind } : {}),
     ...('date' in changes ? { date: changes.date } : {}),
@@ -156,8 +170,10 @@ export async function updateFinanceTransaction(
     ...('amountMinor' in changes ? { amountMinor: changes.amountMinor } : {}),
     ...('fxRate' in changes ? { fxRate: String(changes.fxRate ?? record.fxRate) } : {}),
     ...('baseAmountMinor' in changes
-      ? { baseAmountMinor: changes.baseAmountMinor ?? calculateBaseAmount(record.amountMinor, record.fxRate) }
-      : {}),
+      ? { baseAmountMinor: changes.baseAmountMinor ?? calculateBaseAmount(nextAmountMinor, nextFxRate) }
+      : 'amountMinor' in changes || 'fxRate' in changes
+        ? { baseAmountMinor: calculateBaseAmount(nextAmountMinor, nextFxRate) }
+        : {}),
     ...('categoryId' in changes ? { categoryId: changes.categoryId ?? null } : {}),
     counterpartyType: nextCounterparty.counterpartyType,
     counterpartyId: nextCounterparty.counterpartyId,
@@ -170,6 +186,11 @@ export async function updateFinanceTransaction(
     ...('tags' in changes ? { tags: changes.tags ?? null } : {}),
     ...('meta' in changes ? { meta: ensureMeta(changes.meta) } : {}),
     ...('invoiceFileId' in changes ? { invoiceFileId: changes.invoiceFileId ?? null } : {}),
+    ...('receiptGroupKey' in changes ? { receiptGroupKey: changes.receiptGroupKey?.trim() || null } : {}),
+    ...('receiptTotalMinor' in changes ? { receiptTotalMinor: changes.receiptTotalMinor ?? null } : {}),
+    ...('receiptCurrency' in changes ? { receiptCurrency: changes.receiptCurrency?.trim().toUpperCase() || null } : {}),
+    ...('receiptAllocationNote' in changes ? { receiptAllocationNote: changes.receiptAllocationNote?.trim() || null } : {}),
+    ...('receiptLineOrder' in changes ? { receiptLineOrder: changes.receiptLineOrder ?? null } : {}),
     ...('approvedBy' in changes ? { approvedBy: changes.approvedBy ?? null } : {}),
   };
 

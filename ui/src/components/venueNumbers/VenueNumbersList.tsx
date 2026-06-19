@@ -11,6 +11,7 @@ import {
   Chip,
   CircularProgress,
   Dialog,
+  DialogActions,
   DialogContent,
   Divider,
   Grid,
@@ -25,11 +26,26 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { ArrowBack, Add, Close, Delete, Edit, ExpandMore, InsertDriveFile, PictureAsPdf, Save, Send, UploadFile, Visibility } from "@mui/icons-material";
+import {
+  ArrowBack,
+  Add,
+  Close,
+  Delete,
+  Edit,
+  ExpandMore,
+  InsertDriveFile,
+  PictureAsPdf,
+  Save,
+  Send,
+  SwapHoriz,
+  UploadFile,
+  Visibility,
+} from "@mui/icons-material";
 import dayjs from "dayjs";
 import { ChangeEvent, Fragment, SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import NightReportPhotoPreviewDialog from "./NightReportPhotoPreviewDialog";
+import NightReportPhotoPreviewPanel from "./NightReportPhotoPreviewPanel";
 import { resolvePhotoDownloadUrl, type NightReportPhotoPreview } from "../../utils/nightReportPhotoUtils";
 import { alpha, useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -43,6 +59,11 @@ import {
   confirmNightReportNoExtraCost,
   clearNightReportNoExtraCost,
   createNightReportCost,
+  createNightReportReceiptAllocations,
+  deleteNightReportReceiptAllocationsForReport,
+  deleteNightReportReceiptAllocations,
+  fetchNightReportReceiptGroupCosts,
+  updateNightReportReceiptAllocations,
   fetchNightReportAvailableCosts,
   linkNightReportCost,
   deleteNightReportCost,
@@ -113,8 +134,53 @@ type NightReportCostDraft = {
   invoiceFileId: number | null;
   invoiceFileName: string;
   invoicePreviewHref: string | null;
+  invoicePreviewSrc: string | null;
   invoiceMimeType: string | null;
   invoiceSizeBytes: number | null;
+};
+
+type NightReportCostAllocationDraft = {
+  tempKey: string;
+  reportId: number | null;
+  amount: string;
+  note: string;
+  items: NightReportCostAllocationItemDraft[];
+};
+
+type NightReportCostAllocationItemDraft = {
+  tempKey: string;
+  description: string;
+  quantity: string;
+  amount: string;
+};
+
+type LinkedCostGroupItem = {
+  id: number;
+  linkOrigin: NightReportCost["linkOrigin"];
+  label: string;
+  metadata: string[];
+  description: string | null;
+  amount: number;
+  currency: string;
+  receiptGroupKey: string | null;
+  receiptTotalAmount: number | null;
+  receiptCurrency: string;
+  receiptAllocationNote: string | null;
+  invoiceHref: string | null;
+  invoiceName: string | null;
+  rawCost: NightReportCost;
+};
+
+type LinkedCostGroup = {
+  key: string;
+  receiptGroupKey: string | null;
+  title: string;
+  subtitle: string | null;
+  totalAmount: number;
+  totalCurrency: string;
+  invoiceHref: string | null;
+  invoiceName: string | null;
+  items: LinkedCostGroupItem[];
 };
 
 const OPEN_BAR_INDEX = 0;
@@ -145,8 +211,44 @@ const createEmptyCostDraft = (activityDate?: string | null): NightReportCostDraf
   invoiceFileId: null,
   invoiceFileName: "",
   invoicePreviewHref: null,
+  invoicePreviewSrc: null,
   invoiceMimeType: null,
   invoiceSizeBytes: null,
+});
+
+const createEmptyCostAllocationItemDraft = (): NightReportCostAllocationItemDraft => ({
+  tempKey: generateTempKey(),
+  description: "",
+  quantity: "1",
+  amount: "",
+});
+
+const createEmptyCostAllocationDraft = (reportId?: number | null): NightReportCostAllocationDraft => ({
+  tempKey: generateTempKey(),
+  reportId: reportId ?? null,
+  amount: "",
+  note: "",
+  items: [createEmptyCostAllocationItemDraft()],
+});
+
+const calculateCostAllocationItemTotal = (item: NightReportCostAllocationItemDraft): number => {
+  const quantity = Number(item.quantity);
+  const amount = Number(item.amount);
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(amount) || amount <= 0) {
+    return 0;
+  }
+  return quantity * amount;
+};
+
+const calculateCostAllocationItemsTotal = (items: NightReportCostAllocationItemDraft[]): number =>
+  items.reduce((sum, item) => sum + calculateCostAllocationItemTotal(item), 0);
+
+const calculateCostAllocationTotal = (allocation: NightReportCostAllocationDraft): number =>
+  allocation.items.length > 0 ? calculateCostAllocationItemsTotal(allocation.items) : Number(allocation.amount);
+
+const syncCostAllocationAmount = (allocation: NightReportCostAllocationDraft): NightReportCostAllocationDraft => ({
+  ...allocation,
+  amount: calculateCostAllocationItemsTotal(allocation.items).toFixed(2),
 });
 
 const createCostDraftFromExistingCost = (cost: NightReportCost): NightReportCostDraft => ({
@@ -161,6 +263,7 @@ const createCostDraftFromExistingCost = (cost: NightReportCost): NightReportCost
   invoiceFileId: cost.invoiceFileId ?? null,
   invoiceFileName: cost.invoiceFile?.originalName ?? "",
   invoicePreviewHref: cost.invoiceFile?.driveWebViewLink ?? null,
+  invoicePreviewSrc: null,
   invoiceMimeType: cost.invoiceFile?.mimeType ?? null,
   invoiceSizeBytes: cost.invoiceFile?.sizeBytes ?? null,
 });
@@ -206,6 +309,13 @@ const buildNightReportPhotoFileName = (
 const isPreviewableInvoiceMimeType = (mimeType: string | null | undefined): boolean => {
   const normalized = (mimeType ?? "").toLowerCase();
   return normalized.startsWith("image/") || normalized.includes("pdf");
+};
+
+const buildFinanceFileDownloadUrl = (fileId: number | null | undefined): string | null => {
+  if (!Number.isInteger(fileId) || Number(fileId) <= 0) {
+    return null;
+  }
+  return `/finance/files/${Number(fileId)}/download`;
 };
 
 const formatCurrencyLabel = (
@@ -373,7 +483,7 @@ const formatNightReportOptionLabel = (report: NightReportSummary): string => {
     report.productName?.trim() || null,
     report.leaderName?.trim() || null,
   ].filter(Boolean);
-  return segments.join(" • ");
+  return segments.join(" - ");
 };
 
 const resolveErrorMessage = (error: unknown, fallback: string): string => {
@@ -433,7 +543,12 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const [linkCostModalOpen, setLinkCostModalOpen] = useState(false);
   const [moveCostModalOpen, setMoveCostModalOpen] = useState(false);
   const [editingCostId, setEditingCostId] = useState<number | null>(null);
+  const [editingReceiptGroupKey, setEditingReceiptGroupKey] = useState<string | null>(null);
+  const [assistedCostSetupOpen, setAssistedCostSetupOpen] = useState(false);
   const [costDraft, setCostDraft] = useState<NightReportCostDraft>(() => createEmptyCostDraft());
+  const [splitReceiptMode, setSplitReceiptMode] = useState(false);
+  const [receiptTotalAmount, setReceiptTotalAmount] = useState("");
+  const [costAllocations, setCostAllocations] = useState<NightReportCostAllocationDraft[]>([]);
   const [costSubmitting, setCostSubmitting] = useState(false);
   const [costDialogError, setCostDialogError] = useState<string | null>(null);
   const [costUploadBusy, setCostUploadBusy] = useState(false);
@@ -445,6 +560,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const [selectedAvailableCost, setSelectedAvailableCost] = useState<NightReportLinkableCost | null>(null);
   const [selectedMoveCostId, setSelectedMoveCostId] = useState<number | null>(null);
   const [selectedMoveTargetReport, setSelectedMoveTargetReport] = useState<NightReportSummary | null>(null);
+  const [receiptGroupDeleteTarget, setReceiptGroupDeleteTarget] = useState<LinkedCostGroup | null>(null);
+  const costInvoicePreviewUrlRef = useRef<string | null>(null);
 
   const requestedCounterId = useMemo(() => {
     const raw = searchParams.get("counterId");
@@ -531,6 +648,54 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     () => reports.filter((report) => report.id !== selectedReportId),
     [reports, selectedReportId],
   );
+  const reportOptionsById = useMemo(() => {
+    const map = new Map<number, NightReportSummary>();
+    reports.forEach((report) => {
+      map.set(report.id, report);
+    });
+    return map;
+  }, [reports]);
+  const allocatedReceiptTotal = useMemo(
+    () =>
+      costAllocations.reduce((sum, allocation) => {
+        const amount = calculateCostAllocationTotal(allocation);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return sum;
+        }
+        return sum + amount;
+      }, 0),
+    [costAllocations],
+  );
+  const currentReceiptAllocatedTotal = useMemo(() => {
+    if (!editingReceiptGroupKey || selectedReportId == null) {
+      return allocatedReceiptTotal;
+    }
+    return costAllocations.reduce((sum, allocation) => {
+      if (allocation.reportId !== selectedReportId) {
+        return sum;
+      }
+      const amount = calculateCostAllocationTotal(allocation);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return sum;
+      }
+        return sum + amount;
+      }, 0);
+  }, [costAllocations, editingReceiptGroupKey, selectedReportId, allocatedReceiptTotal]);
+  const linkedReceiptAllocatedTotal = useMemo(() => {
+    if (!editingReceiptGroupKey || selectedReportId == null) {
+      return 0;
+    }
+    return costAllocations.reduce((sum, allocation) => {
+      if (allocation.reportId == null || allocation.reportId === selectedReportId) {
+        return sum;
+      }
+      const amount = calculateCostAllocationTotal(allocation);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return sum;
+      }
+      return sum + amount;
+    }, 0);
+  }, [costAllocations, editingReceiptGroupKey, selectedReportId]);
   const totalReports = reports.length;
   const totalReportPages = useMemo(
     () => Math.max(1, Math.ceil(totalReports / reportPageSize)),
@@ -713,7 +878,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     if (cost.linkedReport) {
       segments.push(`linked to report #${cost.linkedReport.id}`);
     }
-    return segments.join(" ? ");
+    return segments.join(" - ");
   }, []);
   const photoLimitReached = photos.length >= 1;
   const limitedPhotos = useMemo(() => photos.slice(0, 1), [photos]);
@@ -750,6 +915,65 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   useEffect(() => {
     photoPreviewUrlsRef.current = photoPreviews;
   }, [photoPreviews]);
+
+  useEffect(() => {
+    return () => {
+      if (costInvoicePreviewUrlRef.current) {
+        URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+        costInvoicePreviewUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!costModalOpen) {
+      return;
+    }
+    if (!costDraft.invoiceFileId || costDraft.invoicePreviewSrc || !isPreviewableInvoiceMimeType(costDraft.invoiceMimeType)) {
+      return;
+    }
+
+    const downloadUrl = buildFinanceFileDownloadUrl(costDraft.invoiceFileId);
+    if (!downloadUrl) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void axiosInstance
+      .get(downloadUrl, {
+        responseType: "blob",
+        withCredentials: true,
+      })
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        const objectUrl = URL.createObjectURL(response.data);
+        if (costInvoicePreviewUrlRef.current) {
+          URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+        }
+        costInvoicePreviewUrlRef.current = objectUrl;
+        setCostDraft((prev) => ({
+          ...prev,
+          invoicePreviewSrc: objectUrl,
+        }));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to load finance file thumbnail preview", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    costDraft.invoiceFileId,
+    costDraft.invoiceMimeType,
+    costDraft.invoicePreviewSrc,
+    costModalOpen,
+  ]);
 
   const entriesBootstrapRequestedRef = useRef(false);
   const loadEntriesBootstrap = useCallback(async () => {
@@ -1422,26 +1646,44 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   );
 
   const handleClosePhotoPreview = useCallback(() => {
-    setActivePhotoPreview(null);
+    setActivePhotoPreview((prev) => {
+      if (prev?.src?.startsWith("blob:")) {
+        URL.revokeObjectURL(prev.src);
+      }
+      return null;
+    });
   }, []);
 
   const handleOpenInvoicePreview = useCallback(
-    (file: {
+    async (file: {
+      id: number | null;
       originalName: string;
       driveWebViewLink: string | null;
       mimeType: string | null;
     }) => {
-      if (!file.driveWebViewLink) {
+      const downloadUrl = buildFinanceFileDownloadUrl(file.id);
+      if (!downloadUrl) {
         setValidationError("Unable to open this invoice preview. Please try again.");
         return;
       }
-      setActivePhotoPreview({
-        src: file.driveWebViewLink,
-        name: file.originalName,
-        capturedAt: null,
-        downloadHref: file.driveWebViewLink,
-        mimeType: file.mimeType,
-      });
+
+      try {
+        const response = await axiosInstance.get(downloadUrl, {
+          responseType: "blob",
+          withCredentials: true,
+        });
+        const objectUrl = URL.createObjectURL(response.data);
+        setActivePhotoPreview({
+          src: objectUrl,
+          name: file.originalName,
+          capturedAt: null,
+          downloadHref: downloadUrl,
+          mimeType: file.mimeType,
+        });
+      } catch (error) {
+        console.error("Failed to fetch finance file preview", error);
+        setValidationError("Unable to open this invoice preview. Please try again.");
+      }
     },
     [setValidationError],
   );
@@ -1585,6 +1827,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const readOnly = activeReportMode !== "edit";
   const inEditMode = activeReportMode === "edit";
   const showDetails = selectedReportId != null && activeReportMode != null;
+  const canManageCosts = selectedReportId != null;
+  const costPrerequisitesMet = Boolean(costDraft.accountId && costDraft.categoryId && costDraft.vendorId);
+  const showReceiptAllocationEditor = splitReceiptMode && !editingCostId;
   const formHasFieldErrors = useMemo(() => {
     if (readOnly || didNotOperate) {
       return false;
@@ -1635,10 +1880,121 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     [readOnly, didNotOperate, formState.leaderId, selectedLeaderOption],
   );
 
+  const resetCostDraftState = (activityDate?: string | null, reportId?: number | null) => {
+    setCostDraft(createEmptyCostDraft(activityDate));
+    setSplitReceiptMode(false);
+    setReceiptTotalAmount("");
+    setCostAllocations([createEmptyCostAllocationDraft(reportId)]);
+  };
+
+  const handleAddCostAllocation = () => {
+    setCostAllocations((prev) => [...prev, createEmptyCostAllocationDraft(null)]);
+  };
+
+  const handleUpdateCostAllocation = (
+    tempKey: string,
+    field: keyof Omit<NightReportCostAllocationDraft, "tempKey">,
+    value: string | number | null,
+  ) => {
+    setCostAllocations((prev) =>
+      prev.map((allocation) => (allocation.tempKey === tempKey ? { ...allocation, [field]: value } : allocation)),
+    );
+  };
+
+  const handleAddCostAllocationItem = (allocationTempKey: string) => {
+    setCostAllocations((prev) =>
+      prev.map((allocation) =>
+        allocation.tempKey === allocationTempKey
+          ? syncCostAllocationAmount({
+              ...allocation,
+              items: [...allocation.items, createEmptyCostAllocationItemDraft()],
+            })
+          : allocation,
+      ),
+    );
+  };
+
+  const handleUpdateCostAllocationItem = (
+    allocationTempKey: string,
+    itemTempKey: string,
+    field: keyof Omit<NightReportCostAllocationItemDraft, "tempKey">,
+    value: string,
+  ) => {
+    setCostAllocations((prev) =>
+      prev.map((allocation) =>
+        allocation.tempKey === allocationTempKey
+          ? {
+              ...allocation,
+              items: allocation.items.map((item) => (item.tempKey === itemTempKey ? { ...item, [field]: value } : item)),
+            }
+          : allocation,
+      ).map((allocation) => (allocation.tempKey === allocationTempKey ? syncCostAllocationAmount(allocation) : allocation)),
+    );
+  };
+
+  const handleRemoveCostAllocationItem = (allocationTempKey: string, itemTempKey: string) => {
+    setCostAllocations((prev) =>
+      prev.map((allocation) => {
+        if (allocation.tempKey !== allocationTempKey) {
+          return allocation;
+        }
+        if (allocation.items.length <= 1) {
+          return allocation;
+        }
+        return syncCostAllocationAmount({
+          ...allocation,
+          items: allocation.items.filter((item) => item.tempKey !== itemTempKey),
+        });
+      }),
+    );
+  };
+
+  const handleRemoveCostAllocation = (tempKey: string) => {
+    setCostAllocations((prev) => {
+      if (prev.length <= 1) {
+        return prev;
+      }
+      return prev.filter((allocation) => allocation.tempKey !== tempKey);
+    });
+  };
+
+  const buildReceiptGroupAllocations = (rows: NightReportLinkableCost[]) => {
+    return rows.map((row) =>
+      syncCostAllocationAmount({
+        tempKey: generateTempKey(),
+        reportId: row.nightReportId ?? null,
+        amount: ((Number.isFinite(Number(row.amountMinor)) ? Number(row.amountMinor) : 0) / 100).toFixed(2),
+        note: row.receiptAllocationNote ?? "",
+        items:
+          row.receiptItems.length > 0
+            ? row.receiptItems.map((receiptItem) => ({
+                tempKey: generateTempKey(),
+                description: receiptItem.description ?? "",
+                quantity: String(Math.max(1, Math.round(Number(receiptItem.quantity) || 1))),
+                amount: ((Number.isFinite(Number(receiptItem.amountMinor)) ? Number(receiptItem.amountMinor) : 0) / 100).toFixed(2),
+              }))
+            : [
+                {
+                  tempKey: generateTempKey(),
+                  description: row.receiptAllocationNote ?? "",
+                  quantity: "1",
+                  amount: ((Number.isFinite(Number(row.amountMinor)) ? Number(row.amountMinor) : 0) / 100).toFixed(2),
+                },
+          ],
+      }),
+    );
+  };
+
   const openCostModal = () => {
     const activityDate = nightReportDetail.data?.activityDate ?? formState.activityDate;
+    if (costInvoicePreviewUrlRef.current) {
+      URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+      costInvoicePreviewUrlRef.current = null;
+    }
     setEditingCostId(null);
-    setCostDraft(createEmptyCostDraft(activityDate));
+    setEditingReceiptGroupKey(null);
+    setAssistedCostSetupOpen(false);
+    resetCostDraftState(activityDate, selectedReportId);
     setCostDialogError(null);
     setCostUploadError(null);
     setCostUploadProgress(0);
@@ -1646,13 +2002,285 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   };
 
   const openEditCostModal = (cost: NightReportCost) => {
+    if (costInvoicePreviewUrlRef.current) {
+      URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+      costInvoicePreviewUrlRef.current = null;
+    }
     setEditingCostId(cost.id);
+    setEditingReceiptGroupKey(null);
+    setAssistedCostSetupOpen(false);
     setCostDraft(createCostDraftFromExistingCost(cost));
+    setSplitReceiptMode(false);
+    setReceiptTotalAmount("");
+    setCostAllocations([createEmptyCostAllocationDraft(selectedReportId)]);
     setCostDialogError(null);
     setCostUploadError(null);
     setCostUploadProgress(0);
     setCostModalOpen(true);
   };
+
+  const openEditReceiptGroupModal = (group: LinkedCostGroup) => {
+    if (!group.receiptGroupKey || group.items.length === 0) {
+      return;
+    }
+    if (costInvoicePreviewUrlRef.current) {
+      URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+      costInvoicePreviewUrlRef.current = null;
+    }
+
+    const primaryCost = group.items[0].rawCost;
+    const reportId = primaryCost.nightReportId ?? selectedReportId;
+    if (!reportId) {
+      setAvailableCostsError("Unable to load the shared receipt because the report could not be resolved.");
+      return;
+    }
+
+    setEditingCostId(null);
+    setEditingReceiptGroupKey(group.receiptGroupKey);
+    setAssistedCostSetupOpen(false);
+    setSelectedReportId(reportId);
+    setCostDraft(createCostDraftFromExistingCost(primaryCost));
+    setSplitReceiptMode(true);
+    setReceiptTotalAmount(group.totalAmount.toFixed(2));
+    setCostAllocations(
+      group.items.map((item) => ({
+        tempKey: crypto.randomUUID(),
+        reportId: item.rawCost.nightReportId ?? null,
+        amount: item.amount.toFixed(2),
+        note: item.receiptAllocationNote ?? "",
+        items:
+          item.rawCost.receiptItems.length > 0
+            ? item.rawCost.receiptItems.map((receiptItem) => ({
+                tempKey: crypto.randomUUID(),
+                description: receiptItem.description ?? "",
+                quantity: String(Math.max(1, Math.round(Number(receiptItem.quantity ?? 1)) || 1)),
+                amount: ((Number.isFinite(Number(receiptItem.amountMinor)) ? Number(receiptItem.amountMinor) : 0) / 100).toFixed(2),
+              }))
+            : [
+                {
+                  tempKey: crypto.randomUUID(),
+                  description: item.receiptAllocationNote ?? "",
+                  quantity: "1",
+                  amount: item.amount.toFixed(2),
+                },
+              ],
+      })).map((allocation) => syncCostAllocationAmount(allocation)),
+    );
+    setCostDialogError(null);
+    setCostUploadError(null);
+    setCostUploadProgress(0);
+    setCostModalOpen(true);
+    void dispatch(fetchNightReportReceiptGroupCosts({ reportId, receiptGroupKey: group.receiptGroupKey }))
+      .unwrap()
+      .then((rows) => {
+        if (rows.length === 0) {
+          throw new Error("Shared receipt data could not be loaded.");
+        }
+        const nextAllocations = buildReceiptGroupAllocations(rows);
+        setCostAllocations(
+          rows.some((row) => row.nightReportId === reportId)
+            ? nextAllocations
+            : [
+                ...nextAllocations,
+                syncCostAllocationAmount({
+                  tempKey: generateTempKey(),
+                  reportId,
+                  amount: "",
+                  note: "",
+                  items: [createEmptyCostAllocationItemDraft()],
+                }),
+              ],
+        );
+      })
+      .catch((error) => {
+        const message =
+          typeof error === "string"
+            ? error
+            : error instanceof Error
+              ? error.message
+              : "Shared receipt data could not be loaded.";
+        setCostDialogError(message);
+      });
+  };
+
+  const closeCostModal = () => {
+    setCostModalOpen(false);
+    setEditingCostId(null);
+    setEditingReceiptGroupKey(null);
+    setAssistedCostSetupOpen(false);
+    if (costInvoicePreviewUrlRef.current) {
+      URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+      costInvoicePreviewUrlRef.current = null;
+    }
+  };
+
+  const renderReceiptAllocationEditor = () => (
+    <Card variant="outlined">
+      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
+        <Stack spacing={2}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+            <Typography variant="subtitle2" fontWeight={600}>
+              Receipt Allocations
+            </Typography>
+            <IconButton
+              size="small"
+              onClick={handleAddCostAllocation}
+              disabled={costSubmitting || costUploadBusy}
+              aria-label="Add allocation line"
+            >
+              <Add fontSize="small" />
+            </IconButton>
+          </Stack>
+          {costAllocations.map((allocation, index) => (
+            <Card key={allocation.tempKey} variant="outlined">
+              <CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
+                <Stack spacing={1.5}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="subtitle2" fontWeight={600}>
+                      Allocation {index + 1}
+                    </Typography>
+                    <IconButton
+                      size="small"
+                      onClick={() => handleRemoveCostAllocation(allocation.tempKey)}
+                      disabled={costAllocations.length <= 1 || costSubmitting || costUploadBusy}
+                    >
+                      <Delete fontSize="small" />
+                    </IconButton>
+                  </Stack>
+                  <Autocomplete<NightReportSummary>
+                    options={reports}
+                    value={allocation.reportId != null ? reportOptionsById.get(allocation.reportId) ?? null : null}
+                    onChange={(_, value) => handleUpdateCostAllocation(allocation.tempKey, "reportId", value?.id ?? null)}
+                    getOptionLabel={formatNightReportOptionLabel}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    renderOption={(props, option) => (
+                      <li {...props} key={option.id}>
+                        {formatNightReportOptionLabel(option)}
+                      </li>
+                    )}
+                    renderInput={(params) => <TextField {...params} label="Night Report" fullWidth />}
+                    fullWidth
+                  />
+                  <Box>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} mb={1}>
+                      <Typography variant="caption" color="text.secondary">
+                        Items
+                      </Typography>
+                      <IconButton
+                        size="small"
+                        onClick={() => handleAddCostAllocationItem(allocation.tempKey)}
+                        disabled={costSubmitting || costUploadBusy}
+                        aria-label="Add item"
+                      >
+                        <Add fontSize="small" />
+                      </IconButton>
+                    </Stack>
+                    <Stack spacing={1}>
+                      {allocation.items.map((item, itemIndex) => (
+                        <Box key={item.tempKey}>
+                          <Grid container spacing={1} alignItems="center">
+                            <Grid size={{ xs: 12, sm: 7 }}>
+                              <TextField
+                                label={`Item ${itemIndex + 1}`}
+                                value={item.description}
+                                onChange={(event) =>
+                                  handleUpdateCostAllocationItem(allocation.tempKey, item.tempKey, "description", event.target.value)
+                                }
+                                placeholder="Cake, nachos, etc."
+                                fullWidth
+                              />
+                            </Grid>
+                          <Grid size={{ xs: 4, sm: 2 }}>
+                            <TextField
+                              label="Qty"
+                              type="number"
+                              inputProps={{ min: 1, step: "1" }}
+                              value={item.quantity}
+                              onChange={(event) =>
+                                handleUpdateCostAllocationItem(allocation.tempKey, item.tempKey, "quantity", event.target.value)
+                              }
+                              fullWidth
+                            />
+                          </Grid>
+                            <Grid size={{ xs: 6, sm: 2.5 }}>
+                            <TextField
+                              label="Amount"
+                              type="number"
+                              inputProps={{ min: 0, step: "0.01" }}
+                              value={item.amount}
+                              onChange={(event) =>
+                                handleUpdateCostAllocationItem(allocation.tempKey, item.tempKey, "amount", event.target.value)
+                              }
+                              fullWidth
+                              />
+                            </Grid>
+                            <Grid size={{ xs: 2, sm: 0.5 }}>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleRemoveCostAllocationItem(allocation.tempKey, item.tempKey)}
+                              disabled={allocation.items.length <= 1 || costSubmitting || costUploadBusy}
+                              aria-label="Remove item"
+                            >
+                              <Delete fontSize="small" />
+                            </IconButton>
+                          </Grid>
+                          </Grid>
+                          <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 0.5 }}>
+                            <Typography variant="caption" color="text.secondary">
+                              Line total: {calculateCostAllocationItemTotal(item).toFixed(2)} {costDraft.currency.trim().toUpperCase()}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      ))}
+                    </Stack>
+                  </Box>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="caption" color="text.secondary">
+                      Allocation note
+                    </Typography>
+                    <Typography variant="caption" fontWeight={600} color="text.primary">
+                      {calculateCostAllocationItemsTotal(allocation.items).toFixed(2)} {costDraft.currency.trim().toUpperCase()}
+                    </Typography>
+                  </Stack>
+                  <TextField
+                    label="Allocation Note"
+                    value={allocation.note}
+                    onChange={(event) => handleUpdateCostAllocation(allocation.tempKey, "note", event.target.value)}
+                    placeholder="Optional note for this allocation"
+                    fullWidth
+                  />
+                </Stack>
+              </CardContent>
+            </Card>
+          ))}
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+            <Chip
+              label={`Current Allocated: ${currentReceiptAllocatedTotal.toFixed(2)} ${costDraft.currency.trim().toUpperCase()}`}
+              color="primary"
+              variant="outlined"
+            />
+            <Chip
+              label={`Linked Allocated: ${linkedReceiptAllocatedTotal.toFixed(2)} ${costDraft.currency.trim().toUpperCase()}`}
+              color="secondary"
+              variant="outlined"
+            />
+            <Chip
+              label={`Remaining: ${(
+                (Number.isFinite(Number(receiptTotalAmount)) ? Number(receiptTotalAmount) : 0) - allocatedReceiptTotal
+              ).toFixed(2)} ${costDraft.currency.trim().toUpperCase()}`}
+              color={
+                Math.round(allocatedReceiptTotal * 100) ===
+                Math.round((Number.isFinite(Number(receiptTotalAmount)) ? Number(receiptTotalAmount) : 0) * 100)
+                  ? "success"
+                  : "warning"
+              }
+              variant="outlined"
+            />
+          </Stack>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
 
   const openLinkCostModal = async () => {
     if (!selectedReportId) {
@@ -1703,6 +2331,15 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       }
     }
 
+    const localPreviewUrl = isPreviewableInvoiceMimeType(preparedFile.type) ? URL.createObjectURL(preparedFile) : null;
+    if (costInvoicePreviewUrlRef.current) {
+      URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+      costInvoicePreviewUrlRef.current = null;
+    }
+    if (localPreviewUrl) {
+      costInvoicePreviewUrlRef.current = localPreviewUrl;
+    }
+
     const formData = new FormData();
     formData.append("file", preparedFile);
 
@@ -1719,6 +2356,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
           invoiceFileId: result.payload.id,
           invoiceFileName: result.payload.originalName,
           invoicePreviewHref: result.payload.driveWebViewLink,
+          invoicePreviewSrc: localPreviewUrl,
           invoiceMimeType: result.payload.mimeType,
           invoiceSizeBytes: result.payload.sizeBytes,
         }));
@@ -1772,14 +2410,76 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       return;
     }
     const amountValue = Number(costDraft.amount);
-    if (!Number.isFinite(amountValue) || amountValue <= 0) {
-      setCostDialogError("Enter a valid positive amount.");
-      return;
+    const receiptTotalValue = Number(receiptTotalAmount);
+    if (editingCostId || !splitReceiptMode) {
+      if (!Number.isFinite(amountValue) || amountValue <= 0) {
+        setCostDialogError("Enter a valid positive amount.");
+        return;
+      }
+    } else {
+      if (!Number.isFinite(receiptTotalValue) || receiptTotalValue <= 0) {
+        setCostDialogError("Enter a valid positive receipt total.");
+        return;
+      }
+      const invalidAllocation = costAllocations.find((allocation) => {
+        const lineAmount = calculateCostAllocationItemsTotal(allocation.items);
+        return allocation.reportId == null || !Number.isFinite(lineAmount) || lineAmount <= 0;
+      });
+      if (invalidAllocation) {
+        setCostDialogError("Each allocation line needs a target night report and at least one positive item amount.");
+        return;
+      }
+      const duplicateReportIds = new Set<number>();
+      for (const allocation of costAllocations) {
+        if (allocation.reportId == null) {
+          continue;
+        }
+        if (duplicateReportIds.has(allocation.reportId)) {
+          setCostDialogError("Use one allocation line per night report.");
+          return;
+        }
+        duplicateReportIds.add(allocation.reportId);
+      }
+      if (Math.round(allocatedReceiptTotal * 100) > Math.round(receiptTotalValue * 100)) {
+        setCostDialogError("Allocated total cannot exceed the receipt total.");
+        return;
+      }
     }
     setCostDialogError(null);
     setCostSubmitting(true);
     try {
-      if (editingCostId) {
+      if (editingReceiptGroupKey) {
+        await dispatch(
+          updateNightReportReceiptAllocations({
+            reportId: selectedReportId,
+            receiptGroupKey: editingReceiptGroupKey,
+            payload: {
+              date: costDraft.date,
+              accountId: Number(costDraft.accountId),
+              categoryId: Number(costDraft.categoryId),
+              counterpartyId: Number(costDraft.vendorId),
+              currency: costDraft.currency.trim().toUpperCase(),
+              receiptTotalMinor: Math.round(receiptTotalValue * 100),
+              paymentMethod: costDraft.paymentMethod.trim() || null,
+              status: "paid",
+              description: costDraft.description.trim() || null,
+              invoiceFileId: costDraft.invoiceFileId,
+              lines: costAllocations.map((allocation) => ({
+                reportId: allocation.reportId as number,
+                amountMinor: Math.round(calculateCostAllocationItemsTotal(allocation.items) * 100),
+                receiptAllocationNote: allocation.note.trim() || null,
+                receiptItems: allocation.items.map((item) => ({
+                  description: item.description.trim() || null,
+                  quantity: Math.max(1, Math.round(Number(item.quantity) || 1)),
+                  amountMinor: Math.round(Number(item.amount) * 100),
+                })),
+              })),
+            },
+          }),
+        ).unwrap();
+        await dispatch(fetchNightReportById(selectedReportId)).unwrap();
+        await dispatch(fetchNightReports()).unwrap();
+      } else if (editingCostId) {
         await dispatch(
           updateFinanceTransaction({
             id: editingCostId,
@@ -1799,6 +2499,36 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
           }),
         ).unwrap();
         await dispatch(fetchNightReportById(selectedReportId)).unwrap();
+      } else if (splitReceiptMode) {
+        await dispatch(
+          createNightReportReceiptAllocations({
+            reportId: selectedReportId,
+            payload: {
+              date: costDraft.date,
+              accountId: Number(costDraft.accountId),
+              categoryId: Number(costDraft.categoryId),
+              counterpartyId: Number(costDraft.vendorId),
+              currency: costDraft.currency.trim().toUpperCase(),
+              receiptTotalMinor: Math.round(receiptTotalValue * 100),
+              paymentMethod: costDraft.paymentMethod.trim() || null,
+              status: "paid",
+              description: costDraft.description.trim() || null,
+              invoiceFileId: costDraft.invoiceFileId,
+              lines: costAllocations.map((allocation) => ({
+                reportId: allocation.reportId as number,
+                amountMinor: Math.round(calculateCostAllocationItemsTotal(allocation.items) * 100),
+                receiptAllocationNote: allocation.note.trim() || null,
+                receiptItems: allocation.items.map((item) => ({
+                  description: item.description.trim() || null,
+                  quantity: Math.max(1, Math.round(Number(item.quantity) || 1)),
+                  amountMinor: Math.round(Number(item.amount) * 100),
+                })),
+              })),
+            },
+          }),
+        ).unwrap();
+        await dispatch(fetchNightReportById(selectedReportId)).unwrap();
+        await dispatch(fetchNightReports()).unwrap();
       } else {
         await dispatch(
           createNightReportCost({
@@ -1820,14 +2550,21 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       }
       setCostModalOpen(false);
       setEditingCostId(null);
-      setCostDraft(createEmptyCostDraft(nightReportDetail.data?.activityDate ?? formState.activityDate));
+      setEditingReceiptGroupKey(null);
+      if (costInvoicePreviewUrlRef.current) {
+        URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+        costInvoicePreviewUrlRef.current = null;
+      }
+      resetCostDraftState(nightReportDetail.data?.activityDate ?? formState.activityDate, selectedReportId);
     } catch (error) {
       const message =
         typeof error === "string"
           ? error
           : error instanceof Error
             ? error.message
-            : editingCostId
+            : editingReceiptGroupKey
+              ? "Failed to update shared receipt."
+              : editingCostId
               ? "Failed to update cost."
               : "Failed to create cost.";
       setCostDialogError(message);
@@ -1838,6 +2575,73 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
 
   const handleLinkExistingCost = async () => {
     if (!selectedReportId || !selectedAvailableCost) {
+      return;
+    }
+    if (selectedAvailableCost.receiptGroupKey) {
+      let sharedRows = availableCosts.filter(
+        (cost) => cost.receiptGroupKey === selectedAvailableCost.receiptGroupKey,
+      );
+      try {
+        const fetchedRows = await dispatch(
+          fetchNightReportReceiptGroupCosts({
+            reportId: selectedReportId,
+            receiptGroupKey: selectedAvailableCost.receiptGroupKey,
+          }),
+        ).unwrap();
+        if (fetchedRows.length > 0) {
+          sharedRows = fetchedRows;
+        }
+      } catch (error) {
+        console.warn("Failed to load shared receipt group details", error);
+      }
+      if (sharedRows.length === 0) {
+        setAvailableCostsError("Shared receipt data could not be loaded.");
+        return;
+      }
+      const primaryRow = sharedRows[0];
+      const existingReportIds = new Set(sharedRows.map((cost) => cost.nightReportId).filter((id): id is number => id != null));
+      const nextAllocations = buildReceiptGroupAllocations(sharedRows);
+
+      if (!existingReportIds.has(selectedReportId)) {
+        nextAllocations.push(
+          syncCostAllocationAmount({
+            tempKey: generateTempKey(),
+            reportId: selectedReportId,
+            amount: "",
+            note: "",
+            items: [createEmptyCostAllocationItemDraft()],
+          }),
+        );
+      }
+
+      setLinkCostModalOpen(false);
+      setEditingCostId(null);
+      setEditingReceiptGroupKey(selectedAvailableCost.receiptGroupKey);
+      setAssistedCostSetupOpen(false);
+      setCostDraft({
+        ...createEmptyCostDraft(selectedAvailableCost.date),
+        date: selectedAvailableCost.date,
+        accountId: selectedAvailableCost.accountId != null ? String(selectedAvailableCost.accountId) : "",
+        categoryId: selectedAvailableCost.categoryId != null ? String(selectedAvailableCost.categoryId) : "",
+        vendorId: selectedAvailableCost.vendorId != null ? String(selectedAvailableCost.vendorId) : "",
+        currency: (selectedAvailableCost.currency ?? "PLN").trim().toUpperCase(),
+        amount: ((selectedAvailableCost.amountMinor ?? 0) / 100).toFixed(2),
+        paymentMethod: selectedAvailableCost.paymentMethod ?? "",
+        description: selectedAvailableCost.description ?? "",
+        invoiceFileId: selectedAvailableCost.invoiceFileId ?? null,
+        invoiceFileName: selectedAvailableCost.invoiceFile?.originalName ?? "",
+        invoicePreviewHref: selectedAvailableCost.invoiceFile?.driveWebViewLink ?? null,
+        invoicePreviewSrc: null,
+        invoiceMimeType: selectedAvailableCost.invoiceFile?.mimeType ?? null,
+        invoiceSizeBytes: selectedAvailableCost.invoiceFile?.sizeBytes ?? null,
+      });
+      setSplitReceiptMode(true);
+      setReceiptTotalAmount(((selectedAvailableCost.receiptTotalMinor ?? primaryRow.receiptTotalMinor ?? 0) / 100).toFixed(2));
+      setCostAllocations(nextAllocations);
+      setCostDialogError(null);
+      setCostUploadError(null);
+      setCostUploadProgress(0);
+      setCostModalOpen(true);
       return;
     }
     setAvailableCostsError(null);
@@ -1913,7 +2717,13 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       setValidationError("Select a report first.");
       return;
     }
-    const confirmed = window.confirm("Delete this cost permanently?");
+    const targetCost = costs.find((cost) => cost.id === transactionId) ?? null;
+    const isLastInvoiceReference =
+      Boolean(targetCost?.invoiceFileId) && (targetCost?.invoiceReferenceCount ?? 0) <= 1;
+    const deleteMessage = isLastInvoiceReference
+      ? "Delete this cost permanently?\n\nThis is the last cost linked to its invoice, so the invoice file will also be deleted from OmniLodge and Google Drive."
+      : "Delete this cost permanently?";
+    const confirmed = window.confirm(deleteMessage);
     if (!confirmed) {
       return;
     }
@@ -1936,6 +2746,81 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       setValidationError(message);
     } finally {
       setCostSubmitting(false);
+    }
+  };
+
+  const handleDeleteReceiptGroup = async (receiptGroupKey: string) => {
+    if (!selectedReportId) {
+      setValidationError("Select a report first.");
+      return;
+    }
+    setValidationError(null);
+    setCostSubmitting(true);
+    try {
+      await dispatch(
+        deleteNightReportReceiptAllocations({
+          reportId: selectedReportId,
+          receiptGroupKey,
+        }),
+      ).unwrap();
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to delete shared receipt.";
+      setValidationError(message);
+    } finally {
+      setCostSubmitting(false);
+      setReceiptGroupDeleteTarget(null);
+    }
+  };
+
+  const handleDeleteReceiptGroupAllocationsForCurrentReport = async (group: LinkedCostGroup) => {
+    if (!selectedReportId) {
+      setValidationError("Select a report first.");
+      return;
+    }
+    const currentReportItems = group.items.filter((item) => item.rawCost.nightReportId === selectedReportId);
+    if (currentReportItems.length === 0) {
+      setValidationError("No allocations from the current night report were found in this shared receipt.");
+      return;
+    }
+
+    setValidationError(null);
+    setCostSubmitting(true);
+    try {
+      await dispatch(
+        deleteNightReportReceiptAllocationsForReport({
+          reportId: selectedReportId,
+          receiptGroupKey: group.receiptGroupKey ?? "",
+          targetReportId: selectedReportId,
+        }),
+      ).unwrap();
+      const refreshedRows = await dispatch(
+        fetchNightReportReceiptGroupCosts({
+          reportId: selectedReportId,
+          receiptGroupKey: group.receiptGroupKey ?? "",
+        }),
+      ).unwrap();
+      if (refreshedRows.length > 0) {
+        setCostAllocations(buildReceiptGroupAllocations(refreshedRows));
+        setEditingReceiptGroupKey(group.receiptGroupKey ?? null);
+      } else {
+        setCostAllocations([createEmptyCostAllocationDraft(selectedReportId)]);
+      }
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "Failed to delete allocations for this report.";
+      setValidationError(message);
+    } finally {
+      setCostSubmitting(false);
+      setReceiptGroupDeleteTarget(null);
     }
   };
 
@@ -2015,25 +2900,69 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   };
 
   const renderFinanceSummaryTiles = () => {
-    const linkedCostItems = costs.map((cost) => ({
+    const linkedCostItems: LinkedCostGroupItem[] = costs.map((cost) => ({
       id: cost.id,
       linkOrigin: cost.linkOrigin,
       label: cost.vendorName?.trim() || cost.description?.trim() || "Night report cost",
-      subtitle: [
+      metadata: [
         dayjs(cost.date).format("MMM D, YYYY"),
         cost.categoryName,
         cost.productName,
         cost.paymentMethod,
       ]
         .filter(Boolean)
-        .join(" • "),
+        .map((part) => String(part)),
       description: cost.description?.trim() || null,
       amount: Number((cost.amountMinor ?? 0) / 100),
       currency: (cost.currency ?? financeSummary.costCurrency).trim().toUpperCase(),
+      receiptGroupKey: cost.receiptGroupKey ?? null,
+      receiptTotalAmount:
+        cost.receiptTotalMinor != null && Number.isFinite(Number(cost.receiptTotalMinor))
+          ? Number(cost.receiptTotalMinor) / 100
+          : null,
+      receiptCurrency: (cost.receiptCurrency ?? cost.currency ?? financeSummary.costCurrency).trim().toUpperCase(),
+      receiptAllocationNote: cost.receiptAllocationNote?.trim() || null,
       invoiceHref: cost.invoiceFile?.driveWebViewLink ?? null,
       invoiceName: cost.invoiceFile?.originalName ?? null,
       rawCost: cost,
     }));
+    const linkedCostGroups = Array.from(
+      linkedCostItems
+        .reduce<Map<string, LinkedCostGroup>>((groups, item) => {
+          const key = item.receiptGroupKey ?? `single-${item.id}`;
+          const existing = groups.get(key);
+          if (existing) {
+            existing.items.push(item);
+            existing.totalAmount += item.amount;
+            if (!existing.invoiceHref && item.invoiceHref) {
+              existing.invoiceHref = item.invoiceHref;
+            }
+            if (!existing.invoiceName && item.invoiceName) {
+              existing.invoiceName = item.invoiceName;
+            }
+            return groups;
+          }
+
+          groups.set(key, {
+            key,
+            receiptGroupKey: item.receiptGroupKey,
+            title: item.receiptGroupKey ? item.rawCost.vendorName?.trim() || item.label : item.label,
+            subtitle: item.receiptGroupKey
+              ? item.label
+              : item.metadata.length > 0
+                ? item.metadata.join(" - ")
+                : null,
+            totalAmount: item.receiptGroupKey && item.receiptTotalAmount != null ? item.receiptTotalAmount : item.amount,
+            totalCurrency: item.receiptGroupKey ? item.receiptCurrency : item.currency,
+            invoiceHref: item.invoiceHref,
+            invoiceName: item.invoiceName,
+            items: [item],
+          });
+          return groups;
+        }, new Map())
+        .values(),
+    );
+
     const openBarItems = financeSummary.costItems.filter((item) => item.kind === "open_bar");
     const staffPayoutItems = financeSummary.costItems.filter((item) => item.kind === "staff_payout");
     const openBarTotal = openBarItems.reduce((sum, item) => sum + item.amount, 0);
@@ -2062,9 +2991,82 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         amount: Number(venue.payoutAmount),
         currency: (venue.currencyCode ?? financeSummary.revenueCurrency).toUpperCase(),
       }));
+
     const venueCommissionTotal = venueCommissionItems.reduce((sum, item) => sum + item.amount, 0);
     const revenueDisplayTotal = Number((bookingRevenueTotal + venueCommissionTotal).toFixed(2));
     const earningsDisplayTotal = Number((revenueDisplayTotal - financeSummary.totalCostAmount).toFixed(2));
+
+    const summaryItemCardSx = {
+      p: 1.25,
+      border: 1,
+      borderColor: "divider",
+      borderRadius: 1.5,
+      backgroundColor: (muiTheme: any) => alpha(muiTheme.palette.primary.light, 0.04),
+    };
+
+    const renderSimpleAccordion = (
+      title: string,
+      count: number,
+      singularLabel: string,
+      totalAmount: number,
+      totalCurrency: string,
+      items: Array<{ id: string | number; label: string; subtitle?: string | null; amount: number; currency: string }>,
+    ) => {
+      if (items.length === 0) {
+        return null;
+      }
+
+      return (
+        <Accordion
+          disableGutters
+          elevation={0}
+          sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
+        >
+          <AccordionSummary
+            expandIcon={<ExpandMore />}
+            sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
+          >
+            <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
+              <Typography variant="body2" fontWeight={700}>
+                {title}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" textAlign="center">
+                {count} {singularLabel}
+                {count === 1 ? "" : "s"} • {formatCurrencyLabel(totalAmount, totalCurrency)}
+              </Typography>
+            </Stack>
+          </AccordionSummary>
+          <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
+            <Stack spacing={1}>
+              {items.map((item) => (
+                <Box key={item.id} sx={summaryItemCardSx}>
+                  <Stack
+                    direction={isMobile ? "column" : "row"}
+                    spacing={1}
+                    justifyContent="space-between"
+                    alignItems={isMobile ? "stretch" : "flex-start"}
+                  >
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Typography variant="body2" fontWeight={700} sx={{ wordBreak: "break-word" }}>
+                        {item.label}
+                      </Typography>
+                      {item.subtitle ? (
+                        <Typography variant="caption" color="text.secondary" sx={{ wordBreak: "break-word" }}>
+                          {item.subtitle}
+                        </Typography>
+                      ) : null}
+                    </Box>
+                    <Typography variant="body2" fontWeight={700} whiteSpace="nowrap" textAlign={isMobile ? "left" : "right"}>
+                      {formatCurrencyLabel(item.amount, item.currency)}
+                    </Typography>
+                  </Stack>
+                </Box>
+              ))}
+            </Stack>
+          </AccordionDetails>
+        </Accordion>
+      );
+    };
 
     return (
       <Grid container spacing={1.5}>
@@ -2092,175 +3094,241 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                         Linked Costs
                       </Typography>
                       <Typography variant="caption" color="text.secondary" textAlign="center">
-                        {linkedCostItems.length} item{linkedCostItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(financeSummary.linkedCostAmount, financeSummary.costCurrency)}
+                        {linkedCostItems.length} item{linkedCostItems.length === 1 ? "" : "s"} - {formatCurrencyLabel(financeSummary.linkedCostAmount, financeSummary.costCurrency)}
                       </Typography>
                     </Stack>
                   </AccordionSummary>
                   <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
-                    <Stack spacing={0.75}>
-                      {linkedCostItems.map((item) => (
-                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
-                          <Box sx={{ minWidth: 0, flex: 1 }}>
-                            <Typography variant="body2" fontWeight={600} noWrap>
-                              {item.label}
-                            </Typography>
-                            {item.subtitle ? (
-                              <Typography variant="caption" color="text.secondary">
-                                {item.subtitle}
-                              </Typography>
+                    <Stack spacing={1}>
+                      {linkedCostGroups.map((group) => (
+                        <Box key={group.key} sx={summaryItemCardSx}>
+                          <Stack spacing={1.25}>
+                            {group.receiptGroupKey ? (
+                              <>
+                                <Stack
+                                  direction={isMobile ? "column" : "row"}
+                                  spacing={1}
+                                  justifyContent="space-between"
+                                  alignItems={isMobile ? "stretch" : "flex-start"}
+                                >
+                                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                                    <Typography variant="body2" fontWeight={700} sx={{ wordBreak: "break-word" }}>
+                                      {group.title}
+                                    </Typography>
+                                    {group.subtitle ? (
+                                      <Typography variant="caption" color="text.secondary" sx={{ wordBreak: "break-word" }}>
+                                        {group.subtitle}
+                                      </Typography>
+                                    ) : null}
+                                  </Box>
+                                  <Stack
+                                    direction={isMobile ? "row" : "column"}
+                                    spacing={0.5}
+                                    alignItems={isMobile ? "center" : "flex-end"}
+                                    sx={{
+                                      width: isMobile ? "100%" : "auto",
+                                      justifyContent: isMobile ? "space-between" : "flex-start",
+                                    }}
+                                  >
+                                    <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
+                                      {formatCurrencyLabel(group.totalAmount, group.totalCurrency)}
+                                    </Typography>
+                                    <Stack direction="row" spacing={0.25} justifyContent={isMobile ? "flex-end" : "flex-start"}>
+                                      {group.invoiceHref ? (
+                                        <Tooltip title="Open invoice">
+                                          <span>
+                                            <IconButton
+                                              size="small"
+                                              color="inherit"
+                                              onClick={() =>
+                                                handleOpenInvoicePreview({
+                                                  id: group.items[0]?.rawCost.invoiceFileId ?? null,
+                                                  originalName: group.invoiceName ?? group.title,
+                                                  driveWebViewLink: group.invoiceHref,
+                                                  mimeType: group.items[0]?.rawCost.invoiceFile?.mimeType ?? null,
+                                                })
+                                              }
+                                            >
+                                              <InsertDriveFile fontSize="small" />
+                                            </IconButton>
+                                          </span>
+                                        </Tooltip>
+                                      ) : null}
+                                      {group.receiptGroupKey && canManageCosts ? (
+                                        <Tooltip title="Edit shared receipt">
+                                          <span>
+                                            <IconButton
+                                              size="small"
+                                              color="inherit"
+                                              disabled={costSubmitting}
+                                              onClick={() => openEditReceiptGroupModal(group)}
+                                            >
+                                              <Edit fontSize="small" />
+                                            </IconButton>
+                                          </span>
+                                        </Tooltip>
+                                      ) : null}
+                                      {group.receiptGroupKey && canManageCosts ? (
+                                        <Tooltip title="Delete shared receipt">
+                                          <span>
+                                            <IconButton
+                                              size="small"
+                                              color="error"
+                                              disabled={costSubmitting}
+                                              onClick={() => setReceiptGroupDeleteTarget(group)}
+                                            >
+                                              <Delete fontSize="small" />
+                                            </IconButton>
+                                          </span>
+                                        </Tooltip>
+                                      ) : null}
+                                    </Stack>
+                                  </Stack>
+                                </Stack>
+                                <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap">
+                                  <Chip size="small" variant="outlined" color="primary" label="Shared Receipt" />
+                                  <Chip
+                                    size="small"
+                                    variant="outlined"
+                                    label={`${group.items.length} allocation${group.items.length === 1 ? "" : "s"}`}
+                                  />
+                                </Stack>
+                              </>
                             ) : null}
-                            {item.description ? (
-                              <Typography variant="caption" color="text.secondary" display="block">
-                                {item.description}
-                              </Typography>
-                            ) : null}
-                          </Box>
-                          <Stack spacing={0.5} alignItems="flex-end">
-                            <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
-                              {formatCurrencyLabel(item.amount, item.currency)}
-                            </Typography>
-                            <Stack direction="row" spacing={0.5} flexWrap="wrap" justifyContent="flex-end">
-                              {item.invoiceHref ? (
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  color="inherit"
-                                  onClick={() =>
-                                    handleOpenInvoicePreview({
-                                      originalName: item.invoiceName ?? item.label,
-                                      driveWebViewLink: item.invoiceHref,
-                                      mimeType: item.rawCost.invoiceFile?.mimeType ?? null,
-                                    })
-                                  }
+                            <Stack spacing={0.75}>
+                              {group.items.map((item) => (
+                                <Box
+                                  key={item.id}
+                                  sx={{
+                                    p: 1,
+                                    borderRadius: 1.25,
+                                    border: 1,
+                                    borderColor: "divider",
+                                    backgroundColor: (muiTheme) => alpha(muiTheme.palette.common.white, 0.55),
+                                  }}
                                 >
-                                  Invoice
-                                </Button>
-                              ) : null}
-                              {!readOnly ? (
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  color="inherit"
-                                  disabled={costSubmitting}
-                                  onClick={() => openEditCostModal(item.rawCost)}
-                                >
-                                  Edit
-                                </Button>
-                              ) : null}
-                              {!readOnly ? (
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  color="primary"
-                                  disabled={costSubmitting || moveCostTargetReports.length === 0}
-                                  onClick={() => openMoveCostModal(item.id)}
-                                >
-                                  Move
-                                </Button>
-                              ) : null}
-                              {!readOnly ? (
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  color="error"
-                                  disabled={costSubmitting}
-                                  onClick={() => handleDeleteCost(item.id)}
-                                >
-                                  Delete
-                                </Button>
-                              ) : null}
+                                  <Stack spacing={0.75}>
+                                    <Stack
+                                      direction={isMobile ? "column" : "row"}
+                                      spacing={1}
+                                      justifyContent="space-between"
+                                      alignItems={isMobile ? "stretch" : "flex-start"}
+                                    >
+                                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                                        <Typography variant="body2" fontWeight={700} sx={{ wordBreak: "break-word" }}>
+                                          {group.receiptGroupKey
+                                            ? item.rawCost.productName?.trim() || item.rawCost.categoryName?.trim() || "Receipt allocation"
+                                            : item.label}
+                                        </Typography>
+                                      </Box>
+                                      <Stack
+                                        direction={isMobile ? "row" : "column"}
+                                        spacing={0.5}
+                                        alignItems={isMobile ? "center" : "flex-end"}
+                                        sx={{
+                                          width: isMobile ? "100%" : "auto",
+                                          justifyContent: isMobile ? "space-between" : "flex-start",
+                                        }}
+                                      >
+                                        <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
+                                          {formatCurrencyLabel(item.amount, item.currency)}
+                                        </Typography>
+                                        <Stack direction="row" spacing={0.25} justifyContent={isMobile ? "flex-end" : "flex-start"}>
+                                          {!group.receiptGroupKey && item.invoiceHref ? (
+                                            <Tooltip title="Open invoice">
+                                              <span>
+                                                <IconButton
+                                                  size="small"
+                                                  color="inherit"
+                                                  onClick={() =>
+                                                    handleOpenInvoicePreview({
+                                                      id: item.rawCost.invoiceFileId,
+                                                      originalName: item.invoiceName ?? item.label,
+                                                      driveWebViewLink: item.invoiceHref,
+                                                      mimeType: item.rawCost.invoiceFile?.mimeType ?? null,
+                                                    })
+                                                  }
+                                                >
+                                                  <InsertDriveFile fontSize="small" />
+                                                </IconButton>
+                                              </span>
+                                            </Tooltip>
+                                          ) : null}
+                                          {!group.receiptGroupKey && canManageCosts ? (
+                                            <Tooltip title="Edit cost">
+                                              <span>
+                                                <IconButton
+                                                  size="small"
+                                                  color="inherit"
+                                                  disabled={costSubmitting}
+                                                  onClick={() => openEditCostModal(item.rawCost)}
+                                                >
+                                                  <Edit fontSize="small" />
+                                                </IconButton>
+                                              </span>
+                                            </Tooltip>
+                                          ) : null}
+                                          {!group.receiptGroupKey && canManageCosts ? (
+                                            <Tooltip title="Move cost">
+                                              <span>
+                                                <IconButton
+                                                  size="small"
+                                                  color="primary"
+                                                  disabled={costSubmitting || moveCostTargetReports.length === 0}
+                                                  onClick={() => openMoveCostModal(item.id)}
+                                                >
+                                                  <SwapHoriz fontSize="small" />
+                                                </IconButton>
+                                              </span>
+                                            </Tooltip>
+                                          ) : null}
+                                          {!group.receiptGroupKey && canManageCosts ? (
+                                            <Tooltip title="Delete cost">
+                                              <span>
+                                                <IconButton
+                                                  size="small"
+                                                  color="error"
+                                                  disabled={costSubmitting}
+                                                  onClick={() => handleDeleteCost(item.id)}
+                                                >
+                                                  <Delete fontSize="small" />
+                                                </IconButton>
+                                              </span>
+                                            </Tooltip>
+                                          ) : null}
+                                        </Stack>
+                                      </Stack>
+                                    </Stack>
+                                    {item.metadata.length > 0 ? (
+                                      <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap">
+                                        {item.metadata.map((meta) => (
+                                          <Chip key={`${item.id}-${meta}`} size="small" variant="outlined" label={meta} />
+                                        ))}
+                                      </Stack>
+                                    ) : null}
+                                    {group.receiptGroupKey && item.receiptAllocationNote ? (
+                                      <Typography variant="caption" color="text.secondary" sx={{ wordBreak: "break-word" }}>
+                                        {item.receiptAllocationNote}
+                                      </Typography>
+                                    ) : null}
+                                    {!group.receiptGroupKey && item.description ? (
+                                      <Typography variant="caption" color="text.secondary" sx={{ wordBreak: "break-word" }}>
+                                        {item.description}
+                                      </Typography>
+                                    ) : null}
+                                  </Stack>
+                                </Box>
+                              ))}
                             </Stack>
                           </Stack>
-                        </Stack>
+                        </Box>
                       ))}
                     </Stack>
                   </AccordionDetails>
                 </Accordion>
               ) : null}
-              {openBarItems.length > 0 ? (
-                <Accordion
-                  disableGutters
-                  elevation={0}
-                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
-                >
-                  <AccordionSummary
-                    expandIcon={<ExpandMore />}
-                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
-                  >
-                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
-                      <Typography variant="body2" fontWeight={700}>
-                        Open Bar
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" textAlign="center">
-                        {openBarItems.length} item{openBarItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(openBarTotal, financeSummary.costCurrency)}
-                      </Typography>
-                    </Stack>
-                  </AccordionSummary>
-                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
-                    <Stack spacing={0.75}>
-                      {openBarItems.map((item) => (
-                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
-                          <Box sx={{ minWidth: 0, flex: 1 }}>
-                            <Typography variant="body2" fontWeight={600} noWrap>
-                              {item.label}
-                            </Typography>
-                            {item.subtitle ? (
-                              <Typography variant="caption" color="text.secondary">
-                                {item.subtitle}
-                              </Typography>
-                            ) : null}
-                          </Box>
-                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
-                            {formatCurrencyLabel(item.amount, item.currency)}
-                          </Typography>
-                        </Stack>
-                      ))}
-                    </Stack>
-                  </AccordionDetails>
-                </Accordion>
-              ) : null}
-              {staffPayoutItems.length > 0 ? (
-                <Accordion
-                  disableGutters
-                  elevation={0}
-                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
-                >
-                  <AccordionSummary
-                    expandIcon={<ExpandMore />}
-                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
-                  >
-                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
-                      <Typography variant="body2" fontWeight={700}>
-                        Staff Payments
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" textAlign="center">
-                        {staffPayoutItems.length} item{staffPayoutItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(staffPayoutTotal, financeSummary.costCurrency)}
-                      </Typography>
-                    </Stack>
-                  </AccordionSummary>
-                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
-                    <Stack spacing={0.75}>
-                      {staffPayoutItems.map((item) => (
-                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
-                          <Box sx={{ minWidth: 0, flex: 1 }}>
-                            <Typography variant="body2" fontWeight={600} noWrap>
-                              {item.label}
-                            </Typography>
-                            {item.subtitle ? (
-                              <Typography variant="caption" color="text.secondary">
-                                {item.subtitle}
-                              </Typography>
-                            ) : null}
-                          </Box>
-                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
-                            {formatCurrencyLabel(item.amount, item.currency)}
-                          </Typography>
-                        </Stack>
-                      ))}
-                    </Stack>
-                  </AccordionDetails>
-                </Accordion>
-              ) : null}
+              {renderSimpleAccordion("Open Bar", openBarItems.length, "item", openBarTotal, financeSummary.costCurrency, openBarItems)}
+              {renderSimpleAccordion("Staff Payments", staffPayoutItems.length, "item", staffPayoutTotal, financeSummary.costCurrency, staffPayoutItems)}
             </CardContent>
           </Card>
         </Grid>
@@ -2273,90 +3341,22 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               <Typography variant="h6" fontWeight={700} textAlign="center">
                 {formatCurrencyLabel(revenueDisplayTotal, financeSummary.revenueCurrency)}
               </Typography>
-              {financeSummary.revenueItems.length > 0 ? (
-                <Accordion
-                  disableGutters
-                  elevation={0}
-                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
-                >
-                  <AccordionSummary
-                    expandIcon={<ExpandMore />}
-                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
-                  >
-                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
-                      <Typography variant="body2" fontWeight={700}>
-                        Bookings
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" textAlign="center">
-                        {financeSummary.revenueItems.length} booking{financeSummary.revenueItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(bookingRevenueTotal, financeSummary.revenueCurrency)}
-                      </Typography>
-                    </Stack>
-                  </AccordionSummary>
-                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
-                    <Stack spacing={0.75}>
-                      {financeSummary.revenueItems.map((item) => (
-                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
-                          <Box sx={{ minWidth: 0, flex: 1 }}>
-                            <Typography variant="body2" fontWeight={600} noWrap>
-                              {item.label}
-                            </Typography>
-                            {item.subtitle ? (
-                              <Typography variant="caption" color="text.secondary">
-                                {item.subtitle}
-                              </Typography>
-                            ) : null}
-                          </Box>
-                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
-                            {formatCurrencyLabel(item.amount, item.currency)}
-                          </Typography>
-                        </Stack>
-                      ))}
-                    </Stack>
-                  </AccordionDetails>
-                </Accordion>
-              ) : null}
-              {venueCommissionItems.length > 0 ? (
-                <Accordion
-                  disableGutters
-                  elevation={0}
-                  sx={{ mt: 0.5, border: 1, borderColor: "divider", borderRadius: 1, "&:before": { display: "none" } }}
-                >
-                  <AccordionSummary
-                    expandIcon={<ExpandMore />}
-                    sx={{ px: 1.5, minHeight: 44, "& .MuiAccordionSummary-content": { my: 0.75 } }}
-                  >
-                    <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center" width="100%">
-                      <Typography variant="body2" fontWeight={700}>
-                        Venue Commission
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" textAlign="center">
-                        {venueCommissionItems.length} venue{venueCommissionItems.length === 1 ? "" : "s"} • {formatCurrencyLabel(venueCommissionTotal, financeSummary.revenueCurrency)}
-                      </Typography>
-                    </Stack>
-                  </AccordionSummary>
-                  <AccordionDetails sx={{ pt: 0, px: 1.5, pb: 1.5 }}>
-                    <Stack spacing={0.75}>
-                      {venueCommissionItems.map((item) => (
-                        <Stack key={item.id} direction="row" spacing={1} justifyContent="space-between" alignItems="flex-start">
-                          <Box sx={{ minWidth: 0, flex: 1 }}>
-                            <Typography variant="body2" fontWeight={600} noWrap>
-                              {item.label}
-                            </Typography>
-                            {item.subtitle ? (
-                              <Typography variant="caption" color="text.secondary">
-                                {item.subtitle}
-                              </Typography>
-                            ) : null}
-                          </Box>
-                          <Typography variant="body2" fontWeight={700} whiteSpace="nowrap">
-                            {formatCurrencyLabel(item.amount, item.currency)}
-                          </Typography>
-                        </Stack>
-                      ))}
-                    </Stack>
-                  </AccordionDetails>
-                </Accordion>
-              ) : null}
+              {renderSimpleAccordion(
+                "Bookings",
+                financeSummary.revenueItems.length,
+                "booking",
+                bookingRevenueTotal,
+                financeSummary.revenueCurrency,
+                financeSummary.revenueItems,
+              )}
+              {renderSimpleAccordion(
+                "Venue Commission",
+                venueCommissionItems.length,
+                "venue",
+                venueCommissionTotal,
+                financeSummary.revenueCurrency,
+                venueCommissionItems,
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -2378,6 +3378,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       </Grid>
     );
   };
+
   const renderReportDetails = () => {
     if (readOnly) {
       type DisplayVenue = {
@@ -2480,7 +3481,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       const retentionTarget = secondVenueTotal != null ? secondVenueTotal * 5 : null;
 
       const formatNumberValue = (value: number | null | undefined): string =>
-        typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "—";
+        typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "-";
 
       const renderSummaryItem = (label: string, value: string) => (
         <Stack key={label} spacing={0.4} sx={{ minWidth: { xs: "auto", sm: 160 } }}>
@@ -2498,13 +3499,13 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       );
 
       const activityDateRaw = nightReportDetail.data?.activityDate ?? formState.activityDate;
-      const formattedActivityDate = activityDateRaw ? dayjs(activityDateRaw).format("dddd, MMM D, YYYY") : "—";
+      const formattedActivityDate = activityDateRaw ? dayjs(activityDateRaw).format("dddd, MMM D, YYYY") : "-";
       const counterDateRaw = currentCounter?.date ?? null;
       const formattedCounterDate = counterDateRaw ? dayjs(counterDateRaw).format("dddd, MMM D, YYYY") : null;
       const leaderName =
         selectedLeaderOption?.fullName?.trim() ||
         nightReportDetail.data?.leader?.fullName?.trim() ||
-        "—";
+        "-";
       const statusLabel = currentStatus === "submitted" ? "Submitted" : "Draft";
       const statusChipColor: "success" | "warning" = currentStatus === "submitted" ? "success" : "warning";
       const submittedTimestamp =
@@ -2514,7 +3515,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         null;
       const submittedLabel = nightReportDetail.data?.submittedAt ? "Submitted At" : "Last Updated";
       const submittedDisplay = submittedTimestamp ? dayjs(submittedTimestamp).format("MMM D, YYYY HH:mm") : null;
-      const productName = currentCounter?.product?.name ?? "—";
+      const productName = currentCounter?.product?.name ?? "-";
       const openBarModeLabel =
         openBarMode === "pubCrawl"
           ? "Pub Crawl"
@@ -3125,7 +4126,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                           {compensationSnapshot.rateApplied != null && (
                             <>
                               {" "}
-                              • Rate{" "}
+                              - Rate{" "}
                               {formatCurrencyLabel(
                                 compensationSnapshot.rateApplied,
                                 compensationSnapshot.currencyCode,
@@ -3366,7 +4367,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
           <Typography variant="body2" color="text.secondary">
             Date:{" "}
             <Typography component="span" variant="body1" fontWeight={600}>
-              {formState.activityDate ? dayjs(formState.activityDate).format("MMM D, YYYY") : "—"}
+              {formState.activityDate ? dayjs(formState.activityDate).format("MMM D, YYYY") : "-"}
             </Typography>
             {currentCounter?.product?.name ? (
               <>
@@ -3743,17 +4744,65 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         open={costModalOpen}
         onClose={() => {
           if (!costSubmitting) {
-            setCostModalOpen(false);
-            setEditingCostId(null);
+            closeCostModal();
           }
         }}
+        fullScreen={Boolean(isMobile)}
         fullWidth
-        maxWidth="sm"
+        maxWidth={isMobile ? false : "sm"}
+        scroll={isMobile ? "body" : "paper"}
+        PaperProps={{
+          sx: {
+            display: "flex",
+            flexDirection: "column",
+            maxHeight: isMobile ? "100%" : "90vh",
+          },
+        }}
       >
-        <DialogContent>
-          <Stack spacing={2} pt={1}>
-            <Typography variant="h6">{editingCostId ? "Edit Cost" : "Add Cost"}</Typography>
+        <DialogContent sx={{ p: 0, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+          <Box sx={{ flex: "1 1 auto", overflow: "auto", px: { xs: 2, sm: 3 }, pt: 2, pb: 2 }}>
+            <Stack spacing={2}>
+            <Typography variant="h6">
+              {editingReceiptGroupKey ? "Edit Shared Receipt" : editingCostId ? "Edit Cost" : "Add Cost"}
+            </Typography>
             {costDialogError ? <Alert severity="warning">{costDialogError}</Alert> : null}
+            {!editingCostId && !editingReceiptGroupKey ? (
+              <Stack spacing={1}>
+                <Typography variant="subtitle2" fontWeight={600}>
+                  Receipt Mode
+                </Typography>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                  <Button
+                    variant={!splitReceiptMode ? "contained" : "outlined"}
+                    onClick={() => {
+                      setSplitReceiptMode(false);
+                      setReceiptTotalAmount("");
+                    }}
+                    disabled={costSubmitting || costUploadBusy}
+                  >
+                    Single Cost
+                  </Button>
+                  <Button
+                    variant={splitReceiptMode ? "contained" : "outlined"}
+                    onClick={() => {
+                      setSplitReceiptMode(true);
+                      setCostAllocations((prev) =>
+                        prev.length > 0 ? prev : [createEmptyCostAllocationDraft(selectedReportId)],
+                      );
+                    }}
+                    disabled={costSubmitting || costUploadBusy}
+                  >
+                    Split Receipt
+                  </Button>
+                </Stack>
+                {splitReceiptMode ? (
+                  <Typography variant="caption" color="text.secondary">
+                    One uploaded invoice can be allocated across multiple night reports. The allocated line total
+                    cannot exceed the receipt total.
+                  </Typography>
+                ) : null}
+              </Stack>
+            ) : null}
             <TextField
               label="Date"
               type="date"
@@ -3815,11 +4864,15 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               </Grid>
               <Grid size={{ xs: 12, sm: 8 }}>
                 <TextField
-                  label="Amount"
+                  label={splitReceiptMode && !editingCostId ? "Receipt Total" : "Amount"}
                   type="number"
                   inputProps={{ min: 0, step: "0.01" }}
-                  value={costDraft.amount}
-                  onChange={(event) => setCostDraft((prev) => ({ ...prev, amount: event.target.value }))}
+                  value={splitReceiptMode && !editingCostId ? receiptTotalAmount : costDraft.amount}
+                  onChange={(event) =>
+                    splitReceiptMode && !editingCostId
+                      ? setReceiptTotalAmount(event.target.value)
+                      : setCostDraft((prev) => ({ ...prev, amount: event.target.value }))
+                  }
                   fullWidth
                   required
                 />
@@ -3839,6 +4892,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               minRows={2}
               fullWidth
             />
+            {editingReceiptGroupKey || (splitReceiptMode && !editingCostId) ? renderReceiptAllocationEditor() : null}
             <Stack spacing={1}>
               <Typography variant="subtitle2" fontWeight={600}>
                 Invoice / Receipt
@@ -3846,40 +4900,25 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               {costUploadError ? <Alert severity="warning">{costUploadError}</Alert> : null}
               {costUploadBusy ? <LinearProgress variant="determinate" value={costUploadProgress} /> : null}
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                <Button
-                  variant="outlined"
-                  startIcon={<UploadFile fontSize="small" />}
-                  onClick={() => openCostInvoicePicker()}
-                  disabled={costSubmitting || costUploadBusy}
-                >
-                  Upload Invoice
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<UploadFile fontSize="small" />}
-                  onClick={() => openCostInvoicePicker({ capture: true })}
-                  disabled={costSubmitting || costUploadBusy}
-                >
-                  Take Photo
-                </Button>
-                {costDraft.invoiceFileId ? (
-                  <Button
-                    variant="text"
-                    color="inherit"
-                    onClick={() =>
-                      setCostDraft((prev) => ({
-                        ...prev,
-                        invoiceFileId: null,
-                        invoiceFileName: "",
-                        invoicePreviewHref: null,
-                        invoiceMimeType: null,
-                        invoiceSizeBytes: null,
-                      }))
-                    }
-                    disabled={costSubmitting || costUploadBusy}
-                  >
-                    Remove File
-                  </Button>
+                {!costDraft.invoiceFileId ? (
+                  <>
+                    <Button
+                      variant="outlined"
+                      startIcon={<UploadFile fontSize="small" />}
+                      onClick={() => openCostInvoicePicker()}
+                      disabled={costSubmitting || costUploadBusy || !costPrerequisitesMet}
+                    >
+                      Upload Invoice
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<UploadFile fontSize="small" />}
+                      onClick={() => openCostInvoicePicker({ capture: true })}
+                      disabled={costSubmitting || costUploadBusy || !costPrerequisitesMet}
+                    >
+                      Take Photo
+                    </Button>
+                  </>
                 ) : null}
               </Stack>
               {costDraft.invoiceFileId ? (
@@ -3901,7 +4940,43 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                           position: "relative",
                         }}
                       >
-                        {costDraft.invoicePreviewHref && isPreviewableInvoiceMimeType(costDraft.invoiceMimeType) ? (
+                        <Tooltip title="Remove file">
+                          <span>
+                            <IconButton
+                              color="error"
+                              onClick={() => {
+                                if (costInvoicePreviewUrlRef.current) {
+                                  URL.revokeObjectURL(costInvoicePreviewUrlRef.current);
+                                  costInvoicePreviewUrlRef.current = null;
+                                }
+                                setAssistedCostSetupOpen(false);
+                                setCostDraft((prev) => ({
+                                  ...prev,
+                                  invoiceFileId: null,
+                                  invoiceFileName: "",
+                                  invoicePreviewHref: null,
+                                  invoicePreviewSrc: null,
+                                  invoiceMimeType: null,
+                                  invoiceSizeBytes: null,
+                                }));
+                              }}
+                              disabled={costSubmitting || costUploadBusy}
+                              aria-label="Remove file"
+                              sx={{
+                                position: "absolute",
+                                top: 8,
+                                right: 8,
+                                zIndex: 2,
+                                bgcolor: "rgba(255,255,255,0.85)",
+                                "&:hover": { bgcolor: "rgba(255,255,255,1)" },
+                              }}
+                            >
+                              <Delete />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        {(costDraft.invoicePreviewSrc || costDraft.invoicePreviewHref) &&
+                        isPreviewableInvoiceMimeType(costDraft.invoiceMimeType) ? (
                           (costDraft.invoiceMimeType ?? "").toLowerCase().includes("pdf") ? (
                             <Stack spacing={1} alignItems="center" justifyContent="center" px={2}>
                               <PictureAsPdf color="action" sx={{ fontSize: 52 }} />
@@ -3912,7 +4987,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                           ) : (
                             <Box
                               component="img"
-                              src={costDraft.invoicePreviewHref}
+                              src={costDraft.invoicePreviewSrc || costDraft.invoicePreviewHref || ""}
                               alt={costDraft.invoiceFileName || "Attached invoice"}
                               sx={{ width: "100%", height: "100%", objectFit: "cover" }}
                             />
@@ -3941,20 +5016,34 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                           </Typography>
                         </Box>
                       </Stack>
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        onClick={() =>
-                          handleOpenInvoicePreview({
-                            originalName: costDraft.invoiceFileName || `File #${costDraft.invoiceFileId}`,
-                            driveWebViewLink: costDraft.invoicePreviewHref,
-                            mimeType: costDraft.invoiceMimeType,
-                          })
-                        }
-                        disabled={!costDraft.invoicePreviewHref || !isPreviewableInvoiceMimeType(costDraft.invoiceMimeType)}
-                      >
-                        View Full Size
-                      </Button>
+                      <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() =>
+                            handleOpenInvoicePreview({
+                              id: costDraft.invoiceFileId,
+                              originalName: costDraft.invoiceFileName || `File #${costDraft.invoiceFileId}`,
+                              driveWebViewLink: costDraft.invoicePreviewSrc || costDraft.invoicePreviewHref,
+                              mimeType: costDraft.invoiceMimeType,
+                            })
+                          }
+                          disabled={
+                            !(costDraft.invoicePreviewSrc || costDraft.invoicePreviewHref) ||
+                            !isPreviewableInvoiceMimeType(costDraft.invoiceMimeType)
+                          }
+                        >
+                          View Full Size
+                        </Button>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={() => setAssistedCostSetupOpen(true)}
+                          disabled={!costDraft.invoiceFileId}
+                        >
+                          Assisted Setup
+                        </Button>
+                      </Stack>
                     </Stack>
                   </CardContent>
                 </Card>
@@ -3964,22 +5053,181 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                 </Typography>
               )}
             </Stack>
-            <Stack direction="row" spacing={1} justifyContent="flex-end">
+            </Stack>
+          </Box>
+          <Box
+            sx={{
+              flex: "0 0 auto",
+              bgcolor: "background.paper",
+              borderTop: "1px solid",
+              borderColor: "divider",
+              px: { xs: 2, sm: 3 },
+              py: 2,
+            }}
+          >
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Button onClick={closeCostModal} disabled={costSubmitting}>
+                  Cancel
+                </Button>
+                <Button variant="contained" onClick={handleSubmitCost} disabled={costSubmitting || costUploadBusy}>
+                  {editingReceiptGroupKey ? "Save Shared Receipt" : editingCostId ? "Save Changes" : "Create Cost"}
+                </Button>
+              </Stack>
+          </Box>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={Boolean(receiptGroupDeleteTarget)}
+        onClose={() => setReceiptGroupDeleteTarget(null)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogContent>
+          <Stack spacing={2} pt={1}>
+            <Typography variant="h6">Delete Receipt Allocations</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Choose whether you want to remove only the allocations for this report or delete the whole shared receipt.
+            </Typography>
+            <Stack spacing={1}>
               <Button
+                variant="outlined"
+                color="warning"
                 onClick={() => {
-                  setCostModalOpen(false);
-                  setEditingCostId(null);
+                  const target = receiptGroupDeleteTarget;
+                  if (!target) {
+                    return;
+                  }
+                  void handleDeleteReceiptGroupAllocationsForCurrentReport(target);
                 }}
                 disabled={costSubmitting}
               >
-                Cancel
+                Delete Allocations For This Report Only
               </Button>
-              <Button variant="contained" onClick={handleSubmitCost} disabled={costSubmitting || costUploadBusy}>
-                {editingCostId ? "Save Changes" : "Create Cost"}
+              <Button
+                variant="contained"
+                color="error"
+                onClick={() => {
+                  const target = receiptGroupDeleteTarget;
+                  if (!target?.receiptGroupKey) {
+                    return;
+                  }
+                  void handleDeleteReceiptGroup(target.receiptGroupKey);
+                }}
+                disabled={costSubmitting}
+              >
+                Delete Whole Shared Receipt
               </Button>
             </Stack>
           </Stack>
         </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReceiptGroupDeleteTarget(null)} disabled={costSubmitting}>
+            Cancel
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={assistedCostSetupOpen && Boolean(costDraft.invoiceFileId)}
+        onClose={() => {
+          if (!costSubmitting) {
+            setAssistedCostSetupOpen(false);
+          }
+        }}
+        fullScreen
+        fullWidth
+        maxWidth={false}
+        scroll="body"
+        PaperProps={{
+          sx: {
+            bgcolor: "common.black",
+            overflow: "hidden",
+          },
+        }}
+      >
+        <Box sx={{ display: "flex", flexDirection: "column", height: "100%", bgcolor: "common.black" }}>
+          <Box sx={{ flex: "0 0 42%", minHeight: 240, bgcolor: "common.black" }}>
+            <NightReportPhotoPreviewPanel
+              preview={
+                costDraft.invoiceFileId
+                  ? {
+                      src: costDraft.invoicePreviewSrc || costDraft.invoicePreviewHref || "",
+                      name: costDraft.invoiceFileName || `File #${costDraft.invoiceFileId}`,
+                      capturedAt: null,
+                      downloadHref: costDraft.invoicePreviewSrc || costDraft.invoicePreviewHref || undefined,
+                      mimeType: costDraft.invoiceMimeType ?? null,
+                    }
+                  : null
+              }
+              showCloseButton={false}
+              showDownloadButton={false}
+              showFileInfo={false}
+              compactHeader
+              bodyMinHeight={240}
+            />
+          </Box>
+          <Box
+            sx={{
+              flex: "1 1 58%",
+              minHeight: 0,
+              overflow: "auto",
+              bgcolor: "background.paper",
+              px: { xs: 2, sm: 3 },
+              pt: { xs: 2, sm: 3 },
+              pb: 2,
+            }}
+          >
+            <Stack spacing={2}>
+              {!splitReceiptMode || editingCostId ? (
+                <TextField
+                  label="Amount"
+                  type="number"
+                  inputProps={{ min: 0, step: "0.01" }}
+                  value={costDraft.amount}
+                  onChange={(event) => setCostDraft((prev) => ({ ...prev, amount: event.target.value }))}
+                  fullWidth
+                  required
+                />
+              ) : (
+                <TextField
+                  label="Receipt Total"
+                  type="number"
+                  inputProps={{ min: 0, step: "0.01" }}
+                  value={receiptTotalAmount}
+                  onChange={(event) => setReceiptTotalAmount(event.target.value)}
+                  fullWidth
+                  required
+                />
+              )}
+              {showReceiptAllocationEditor ? renderReceiptAllocationEditor() : null}
+            </Stack>
+          </Box>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 1.5,
+              px: { xs: 2, sm: 3 },
+              py: 2,
+              bgcolor: "background.paper",
+              borderTop: 1,
+              borderColor: "divider",
+            }}
+          >
+            <Button
+              onClick={() => {
+                if (!costSubmitting) {
+                  setAssistedCostSetupOpen(false);
+                }
+              }}
+              disabled={costSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button variant="contained" onClick={handleSubmitCost} disabled={costSubmitting || costUploadBusy}>
+              {editingReceiptGroupKey ? "Save Shared Receipt" : editingCostId ? "Save Changes" : "Create Cost"}
+            </Button>
+          </Box>
+        </Box>
       </Dialog>
       <Dialog open={linkCostModalOpen} onClose={() => (!costSubmitting ? setLinkCostModalOpen(false) : undefined)} fullWidth maxWidth="md">
         <DialogContent>
@@ -4084,5 +5332,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
 };
 
 export default VenueNumbersList;
+
+
+
+
 
 

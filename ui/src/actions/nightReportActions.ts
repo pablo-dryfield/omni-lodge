@@ -9,6 +9,7 @@ import type {
   NightReportUpdatePayload,
   NightReportPhotoUploadResponse,
   NightReportCostCreatePayload,
+  NightReportReceiptAllocationCreatePayload,
   NightReportLinkableCost,
 } from '../types/nightReports/NightReport';
 
@@ -227,6 +228,52 @@ export const createNightReportCost = createAsyncThunk<
   }
 });
 
+export const createNightReportReceiptAllocations = createAsyncThunk<
+  NightReport,
+  { reportId: number; payload: NightReportReceiptAllocationCreatePayload },
+  { rejectValue: string }
+>('nightReports/createNightReportReceiptAllocations', async ({ reportId, payload }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.post<NightReport[]>(
+      `/nightReports/${reportId}/costs/receipt-allocations`,
+      payload,
+      {
+        withCredentials: true,
+      },
+    );
+    const updated = response.data?.[0];
+    if (!updated) {
+      throw new Error('Night report payload missing');
+    }
+    return updated;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
+export const updateNightReportReceiptAllocations = createAsyncThunk<
+  NightReport,
+  { reportId: number; receiptGroupKey: string; payload: NightReportReceiptAllocationCreatePayload },
+  { rejectValue: string }
+>('nightReports/updateNightReportReceiptAllocations', async ({ reportId, receiptGroupKey, payload }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.patch<NightReport[]>(
+      `/nightReports/${reportId}/costs/receipt-groups/${encodeURIComponent(receiptGroupKey)}`,
+      payload,
+      {
+        withCredentials: true,
+      },
+    );
+    const updated = response.data?.[0];
+    if (!updated) {
+      throw new Error('Night report payload missing');
+    }
+    return updated;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
 export const fetchNightReportAvailableCosts = createAsyncThunk<
   NightReportLinkableCost[],
   number,
@@ -236,6 +283,24 @@ export const fetchNightReportAvailableCosts = createAsyncThunk<
     const response = await axiosInstance.get<NightReportLinkableCost[]>(`/nightReports/${reportId}/costs/available`, {
       withCredentials: true,
     });
+    return response.data;
+  } catch (error) {
+    return rejectWithValue(extractErrorMessage(error));
+  }
+});
+
+export const fetchNightReportReceiptGroupCosts = createAsyncThunk<
+  NightReportLinkableCost[],
+  { reportId: number; receiptGroupKey: string },
+  { rejectValue: string }
+>('nightReports/fetchNightReportReceiptGroupCosts', async ({ reportId, receiptGroupKey }, { rejectWithValue }) => {
+  try {
+    const response = await axiosInstance.get<NightReportLinkableCost[]>(
+      `/nightReports/${reportId}/costs/receipt-groups/${encodeURIComponent(receiptGroupKey)}`,
+      {
+        withCredentials: true,
+      },
+    );
     return response.data;
   } catch (error) {
     return rejectWithValue(extractErrorMessage(error));
@@ -298,3 +363,53 @@ export const deleteNightReportCost = createAsyncThunk<
     return rejectWithValue(extractErrorMessage(error));
   }
 });
+
+export const deleteNightReportReceiptAllocations = createAsyncThunk<
+  NightReport,
+  { reportId: number; receiptGroupKey: string },
+  { rejectValue: string }
+>(
+  'nightReports/deleteNightReportReceiptAllocations',
+  async ({ reportId, receiptGroupKey }, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.delete<NightReport[]>(
+        `/nightReports/${reportId}/costs/receipt-groups/${encodeURIComponent(receiptGroupKey)}`,
+        {
+          withCredentials: true,
+        },
+      );
+      const updated = response.data?.[0];
+      if (!updated) {
+        throw new Error('Night report payload missing');
+      }
+      return updated;
+    } catch (error) {
+      return rejectWithValue(extractErrorMessage(error));
+    }
+  },
+);
+
+export const deleteNightReportReceiptAllocationsForReport = createAsyncThunk<
+  NightReport,
+  { reportId: number; receiptGroupKey: string; targetReportId: number },
+  { rejectValue: string }
+>(
+  'nightReports/deleteNightReportReceiptAllocationsForReport',
+  async ({ reportId, receiptGroupKey, targetReportId }, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.delete<NightReport[]>(
+        `/nightReports/${reportId}/costs/receipt-groups/${encodeURIComponent(receiptGroupKey)}/reports/${targetReportId}`,
+        {
+          withCredentials: true,
+        },
+      );
+      const updated = response.data?.[0];
+      if (!updated) {
+        throw new Error('Night report payload missing');
+      }
+      return updated;
+    } catch (error) {
+      return rejectWithValue(extractErrorMessage(error));
+    }
+  },
+);
