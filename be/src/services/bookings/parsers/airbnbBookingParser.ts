@@ -259,9 +259,6 @@ const normalizeBookingId = (value: string): string | null => {
   if (!/^[A-Z0-9]{6,32}$/.test(upper)) {
     return null;
   }
-  if (!/\d/.test(upper)) {
-    return null;
-  }
   if (BOOKING_ID_STOP_WORDS.has(upper)) {
     return null;
   }
