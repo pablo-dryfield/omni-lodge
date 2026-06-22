@@ -98,7 +98,7 @@ const ingestWithOperation = async (req: Request, res: Response, operation: 'rese
     });
 
     if (operation === 'reserve') {
-      res.status(200).json(buildReservationResponse(result.booking.platformBookingId));
+      res.status(200).json(buildReservationResponse(result.booking.platformOrderId ?? result.booking.platformBookingId));
       return;
     }
 
