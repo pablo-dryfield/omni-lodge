@@ -16,6 +16,7 @@
         "start:dev": "cross-env NODE_ENV=development npm run build:dev && cross-env NODE_ENV=development node dist/app.js",
         "sync:access-control:dev": "npm run build:clean:dev && tsc && node dist/scripts/syncAccessControl.js",
         "sync:access-control:prod": "npm run build:clean:prod && tsc && node dist/scripts/syncAccessControl.js",
+        "gyg:test-outbound": "npm run build:prod && node dist/scripts/runGetYourGuideOutboundTests.js",
         "postinstall": "tsc",
         "dev": "nodemon --watch src --ext ts,json --exec tsx src/app.ts",
         "test": "jest",

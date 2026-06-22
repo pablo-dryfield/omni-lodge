@@ -31,6 +31,7 @@ import {
   IconTag,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
+import axiosInstance from "../../utils/axiosInstance";
 import { useAppSelector } from "../../store/hooks";
 import { selectAllowedPageSlugs } from "../../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
@@ -141,6 +142,8 @@ const sections: SettingsSection[] = [
 
 const PAGE_SLUG = PAGE_SLUGS.settings;
 
+const compareString = (value?: string | null) => value ?? "";
+
 const extractErrorMessage = (error: unknown): string => {
   if (typeof error === "object" && error !== null) {
     const maybeResponse = (error as { response?: { data?: unknown } }).response;
@@ -171,6 +174,7 @@ const extractErrorMessage = (error: unknown): string => {
 const SettingsLanding = () => {
   const navigate = useNavigate();
   const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
+  const { roleSlug } = useAppSelector((state) => state.session);
   const isProduction = process.env.NODE_ENV === "production";
   const [refreshing, setRefreshing] = useState(false);
   const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
@@ -182,8 +186,14 @@ const SettingsLanding = () => {
   const [logsOutput, setLogsOutput] = useState<string | null>(null);
   const logsLines = 200;
   const [logSource, setLogSource] = useState<"pm2" | "backend" | "ui">("pm2");
+  const [gygTestOpened, setGygTestOpened] = useState(false);
+  const [gygTestLoading, setGygTestLoading] = useState(false);
+  const [gygTestError, setGygTestError] = useState<string | null>(null);
+  const [gygTestRequestJson, setGygTestRequestJson] = useState<string>("");
+  const [gygTestResponseJson, setGygTestResponseJson] = useState<string>("");
   const pm2ProcessesQuery = usePm2Processes({ enabled: isProduction });
   const restartPm2Process = useRestartPm2Process();
+  const canRunGygSelfTest = ["admin", "owner", "manager"].includes(compareString(roleSlug).toLowerCase());
 
   const visibleSections = useMemo(
     () => sections.filter((section) => allowedPageSlugs.has(section.pageSlug)),
@@ -306,6 +316,35 @@ const SettingsLanding = () => {
       setLogsError(extractErrorMessage(error));
     } finally {
       setLogsLoading(false);
+    }
+  };
+
+  const handleRunGygSelfTest = async () => {
+    if (!canRunGygSelfTest) {
+      return;
+    }
+
+    const requestBody = {
+      includeAdditionalEndpoints: false,
+    };
+
+    setGygTestOpened(true);
+    setGygTestLoading(true);
+    setGygTestError(null);
+    setGygTestRequestJson(JSON.stringify(requestBody, null, 2));
+    setGygTestResponseJson("");
+
+    try {
+      const response = await axiosInstance.post("/gyg/outbound/self-test", requestBody);
+      setGygTestResponseJson(JSON.stringify(response.data, null, 2));
+    } catch (error) {
+      const responseData = (error as { response?: { data?: unknown } }).response?.data;
+      setGygTestResponseJson(
+        responseData !== undefined ? JSON.stringify(responseData, null, 2) : JSON.stringify({ error: extractErrorMessage(error) }, null, 2),
+      );
+      setGygTestError(extractErrorMessage(error));
+    } finally {
+      setGygTestLoading(false);
     }
   };
 
@@ -438,6 +477,22 @@ const SettingsLanding = () => {
             </Button>
           </Stack>
         </Card>
+        {canRunGygSelfTest && (
+          <Card withBorder radius="md" padding="lg">
+            <Stack gap="xs">
+              <ActionIcon variant="light" color="grape" size="lg" aria-label="GetYourGuide self-test">
+                <IconRefresh size={22} />
+              </ActionIcon>
+              <Title order={4}>GetYourGuide</Title>
+              <Text size="sm" c="dimmed">
+                Run the outbound GetYourGuide self-test and review the request and response payloads.
+              </Text>
+              <Button variant="light" color="grape" onClick={handleRunGygSelfTest} loading={gygTestLoading}>
+                Run self-test
+              </Button>
+            </Stack>
+          </Card>
+        )}
       </SimpleGrid>
 
       <Modal
@@ -480,6 +535,42 @@ const SettingsLanding = () => {
             loading={logsLoading}
           >
             Refresh logs
+          </Button>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={gygTestOpened}
+        onClose={() => setGygTestOpened(false)}
+        title="GetYourGuide self-test"
+        centered
+        size="xl"
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            Request JSON
+          </Text>
+          <ScrollArea h={140} type="always">
+            <Code block>{gygTestRequestJson || "{}"}</Code>
+          </ScrollArea>
+          <Text size="sm" c="dimmed">
+            Response JSON
+          </Text>
+          {gygTestError ? (
+            <Alert color="red" title="Self-test error">
+              {gygTestError}
+            </Alert>
+          ) : null}
+          <ScrollArea h={320} type="always">
+            <Code block>{gygTestLoading ? "Running self-test..." : gygTestResponseJson || "No response yet."}</Code>
+          </ScrollArea>
+          <Button
+            variant="default"
+            onClick={handleRunGygSelfTest}
+            loading={gygTestLoading}
+            disabled={gygTestLoading || !canRunGygSelfTest}
+          >
+            Run again
           </Button>
         </Stack>
       </Modal>
