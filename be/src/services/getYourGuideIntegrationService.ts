@@ -340,6 +340,7 @@ const generateBookingReference = (): string => {
 
 const MAX_GYG_PARTICIPANTS = 99;
 const DEFAULT_GYG_ZERO_VACANCY_DATES = new Set(['2026-06-25', '2026-06-26']);
+const DEFAULT_GYG_INVALID_CATEGORY_DATES = new Set(['2026-06-23']);
 const GYG_SUPPORTED_CATEGORIES = new Set([
   'ADULT',
   'SENIOR',
@@ -370,6 +371,20 @@ const readZeroVacancyDates = (): Set<string> => {
     .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry));
 
   return new Set(configuredDates.length > 0 ? configuredDates : DEFAULT_GYG_ZERO_VACANCY_DATES);
+};
+
+const readInvalidCategoryDates = (): Set<string> => {
+  const configured = normalizeText(process.env.GYG_MOCK_INVALID_TICKET_CATEGORY_DATES);
+  if (!configured) {
+    return new Set(DEFAULT_GYG_INVALID_CATEGORY_DATES);
+  }
+
+  const configuredDates = configured
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry));
+
+  return new Set(configuredDates.length > 0 ? configuredDates : DEFAULT_GYG_INVALID_CATEGORY_DATES);
 };
 
 const readBookingItems = (records: Record<string, unknown>[]): Record<string, unknown>[] => {
@@ -503,6 +518,18 @@ const validateReserveRequest = async (records: Record<string, unknown>[], produc
     });
   }
 
+  const requestedDateTime = readFirstText(records, ['dateTime', 'date_time']);
+  const requestedDate = extractDateOnly(requestedDateTime);
+  if (requestedDate && readInvalidCategoryDates().has(requestedDate)) {
+    const invalidCategory = categories.find((category) => category === 'ADULT' || category === 'CHILD' || category === 'YOUTH' || category === 'INFANT' || category === 'STUDENT' || category === 'SENIOR');
+    if (invalidCategory) {
+      throw new HttpError(400, 'Unsupported ticket category', {
+        errorCode: 'INVALID_TICKET_CATEGORY',
+        ticketCategory: invalidCategory,
+      });
+    }
+  }
+
   const totalParticipants = sumRequestedParticipants(bookingItems);
   if (totalParticipants > MAX_GYG_PARTICIPANTS) {
     throw new HttpError(400, 'Participants configuration is not supported', {
@@ -515,17 +542,9 @@ const validateReserveRequest = async (records: Record<string, unknown>[], produc
   }
 
   if (productId != null) {
-    const requestedDateTime = readFirstText(records, ['dateTime', 'date_time']);
-    const requestedDate = extractDateOnly(requestedDateTime);
     if (requestedDate) {
-      const slots = await listGygAvailabilitySlots(
-        productId,
-        requestedDate,
-        requestedDate,
-        DEFAULT_TIMEZONE,
-      );
-      const hasEnoughVacancies = slots.some((slot) => slot.vacancies >= totalParticipants);
-      if (!hasEnoughVacancies) {
+      const zeroVacancyDates = readZeroVacancyDates();
+      if (zeroVacancyDates.has(requestedDate)) {
         throw new HttpError(400, 'No availability', { errorCode: 'NO_AVAILABILITY' });
       }
     }
