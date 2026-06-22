@@ -1,6 +1,6 @@
 ## GetYourGuide Supplier API Integration
 
-This backend now exposes a supplier-facing endpoint under `GET/POST /api/gyg` so GetYourGuide can push bookings and cancellation updates into OmniLodge.
+This backend exposes supplier-facing endpoints under `GET/POST /api/gyg` so GetYourGuide can push bookings and cancellation updates into OmniLodge.
 
 ### Portal setup
 
@@ -25,21 +25,25 @@ The backend accepts either credential pair, so the same deployment can serve bot
 ### Exposed endpoints
 
 - `GET /api/gyg/health` — simple connectivity check.
-- `GET /api/gyg/1/get-availabilities?productId=123&fromDateTime=...&toDateTime=...` — GetYourGuide’s availability query.
+- `GET /api/gyg/1/get-availabilities?productId=123&fromDateTime=...&toDateTime=...` — availability query.
 - `GET /api/gyg/availability?date=YYYY-MM-DD&productId=123` — local fallback summary endpoint.
 - `POST /api/gyg/1/reserve` — reservation hold request.
-- `POST /api/gyg/1/cancel-reserve` — reservation cancellation.
-- `POST /api/gyg/1/bookings` — booking creation alias.
-- `POST /api/gyg/1/bookings/:platformBookingId/cancel` — booking cancellation alias.
+- `POST /api/gyg/1/cancel-reservation` — reservation cancellation.
+- `POST /api/gyg/1/book` — booking creation.
+- `POST /api/gyg/1/cancel-booking` — booking cancellation.
+- `POST /api/gyg/1/bookings` — legacy booking creation alias.
+- `POST /api/gyg/1/bookings/:platformBookingId/cancel` — legacy booking cancellation alias.
 - `GET /api/gyg/1/bookings/:platformBookingId` — fetch the normalized booking record for verification.
 
 ### Behavior
 
 - Each payload is normalized into `bookings` and `booking_events`.
-- The route reuses the existing `getyourguide` platform slug and tries to assign the `GetYourGuide` channel via the existing booking platform-channel map.
+- The route reuses the existing `getyourguide` platform slug and assigns the `GetYourGuide` channel via the existing booking platform-channel map.
 - Bookings are matched by `platform='getyourguide'` and the external booking reference.
 - Cancellation payloads set the booking status to `cancelled`.
-- Availability lookups now match the versioned GetYourGuide self-testing path and return a flat timeslot array. If GYG later enables category-level vacancy or pricing tests, we’ll need to extend the payload shape to match that exact contract.
+- Availability lookups return `data.availabilities[]` with `productId`, `dateTime`, `vacancies`, and `cutoffSeconds`.
+- Reserve responses return `data.reservationReference` plus `data.reservationExpiration`.
+- Booking responses return `data.bookingReference` plus a `tickets[]` array with a valid `COLLECTIVE` ticket.
 
 ### Portal notes
 
