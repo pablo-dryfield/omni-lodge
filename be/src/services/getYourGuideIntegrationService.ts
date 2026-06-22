@@ -50,6 +50,7 @@ type GygAvailabilitySlot = {
   vacancies: number;
 };
 
+const DEFAULT_GYG_DAILY_CAPACITY = 200;
 const GYG_PLATFORM = 'getyourguide';
 const GYG_CHANNEL_NAME = 'GetYourGuide';
 const DEFAULT_TIMEZONE =
@@ -672,7 +673,7 @@ export const getGetYourGuideAvailabilities = async (
   let availabilities: GygAvailabilitySlot[];
 
   if (shiftTypeIds.length === 0) {
-    availabilities = buildFallbackSlots(from, to, timezoneName, productId);
+    availabilities = [];
   } else {
     const instances = await ShiftInstance.findAll({
       where: {
@@ -687,13 +688,41 @@ export const getGetYourGuideAvailabilities = async (
       ],
     });
 
-    const slots = instances.map((instance) => {
-      const assignedCount = (instance.assignments ?? []).filter((assignment) => assignment.userId != null).length;
-      const capacity =
-        Number.isFinite(instance.capacity ?? NaN) && (instance.capacity ?? 0) > 0
-          ? (instance.capacity as number)
-          : 99;
-      const vacancies = Math.max(capacity - assignedCount, 0);
+    const bookingRows = await Booking.findAll({
+      where: {
+        platform: GYG_PLATFORM,
+        productId,
+        experienceDate: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
+        status: { [Op.ne]: 'cancelled' },
+      },
+      attributes: ['experienceDate', 'partySizeTotal', 'partySizeAdults', 'partySizeChildren'],
+    });
+
+    const participantsByDate = new Map<string, number>();
+    bookingRows.forEach((booking) => {
+      const bookingDate = booking.experienceDate?.trim();
+      if (!bookingDate) {
+        return;
+      }
+      const adults = Number(booking.partySizeAdults ?? 0);
+      const children = Number(booking.partySizeChildren ?? 0);
+      const partySizeTotal = Number(booking.partySizeTotal ?? 0);
+      const totalParticipants =
+        Number.isFinite(partySizeTotal) && partySizeTotal > 0
+          ? partySizeTotal
+          : Number.isFinite(adults + children) && adults + children > 0
+            ? adults + children
+            : 1;
+      participantsByDate.set(bookingDate, (participantsByDate.get(bookingDate) ?? 0) + totalParticipants);
+    });
+
+    const slots = instances
+      .map((instance) => {
+        const bookedParticipants = participantsByDate.get(instance.date) ?? 0;
+        const vacancies = Math.max(DEFAULT_GYG_DAILY_CAPACITY - bookedParticipants, 0);
+        if (vacancies <= 0) {
+          return null;
+        }
       const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
       return {
         productId,
@@ -701,9 +730,10 @@ export const getGetYourGuideAvailabilities = async (
         dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
         vacancies,
       };
-    });
+      })
+      .filter((slot): slot is GygAvailabilitySlot => Boolean(slot));
 
-    availabilities = slots.length > 0 ? slots : buildFallbackSlots(from, to, timezoneName, productId);
+    availabilities = slots;
   }
 
   return {
