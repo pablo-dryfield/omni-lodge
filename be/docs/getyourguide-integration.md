@@ -42,7 +42,7 @@ The backend accepts either credential pair, so the same deployment can serve bot
 - Bookings are matched by `platform='getyourguide'` and the external booking reference.
 - Cancellation payloads set the booking status to `cancelled`.
 - Availability lookups return `data.availabilities[]` with `productId`, `dateTime`, `vacancies`, and `cutoffSeconds`.
-- Reserve responses return `data.reservationReference` plus `data.reservationExpiration`.
+- Reserve responses return `data.reservationReference`; `reservationExpiration` is optional in the spec and omitted by our implementation.
 - Booking responses return `data.bookingReference` plus a `tickets[]` array with a valid `COLLECTIVE` ticket.
 
 ### Portal notes

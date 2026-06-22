@@ -33,6 +33,7 @@ type GygIngestResult = {
   bookingEvent: BookingEvent;
   createdBooking: boolean;
   eventType: BookingEventType;
+  reservationReference: string | null;
   status: BookingStatus;
 };
 
@@ -370,8 +371,8 @@ const sumRequestedParticipants = (bookingItems: Record<string, unknown>[]): numb
 
 const listGygAvailabilitySlots = async (
   productId: number,
-  from: dayjs.Dayjs,
-  to: dayjs.Dayjs,
+  fromDate: string,
+  toDate: string,
   timezoneName: string,
 ): Promise<GygAvailabilitySlot[]> => {
   const shiftTypeLinks = await ShiftTypeProduct.findAll({ where: { productId } });
@@ -384,7 +385,7 @@ const listGygAvailabilitySlots = async (
   const instances = await ShiftInstance.findAll({
     where: {
       shiftTypeId: { [Op.in]: shiftTypeIds },
-      date: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
+      date: { [Op.between]: [fromDate, toDate] },
     },
     include: [{ model: ShiftAssignment, as: 'assignments', required: false }],
     order: [
@@ -398,7 +399,7 @@ const listGygAvailabilitySlots = async (
     where: {
       platform: GYG_PLATFORM,
       productId,
-      experienceDate: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
+      experienceDate: { [Op.between]: [fromDate, toDate] },
       status: { [Op.ne]: 'cancelled' },
     },
     attributes: ['experienceDate', 'partySizeTotal', 'partySizeAdults', 'partySizeChildren'],
@@ -463,13 +464,17 @@ const validateReserveRequest = async (records: Record<string, unknown>[], produc
   }
 
   if (categories.every((category) => category === 'CHILD')) {
-    throw new HttpError(400, 'Unsupported ticket category', { errorCode: 'INVALID_TICKET_CATEGORY' });
+    throw new HttpError(400, 'Unsupported ticket category', {
+      errorCode: 'INVALID_TICKET_CATEGORY',
+      ticketCategory: 'CHILD',
+    });
   }
 
   const unsupportedCategory = categories.find((category) => !GYG_SUPPORTED_CATEGORIES.has(category));
   if (unsupportedCategory) {
     throw new HttpError(400, `Unsupported ticket category: ${unsupportedCategory}`, {
       errorCode: 'INVALID_TICKET_CATEGORY',
+      ticketCategory: unsupportedCategory,
     });
   }
 
@@ -477,6 +482,10 @@ const validateReserveRequest = async (records: Record<string, unknown>[], produc
   if (totalParticipants > MAX_GYG_PARTICIPANTS) {
     throw new HttpError(400, 'Participants configuration is not supported', {
       errorCode: 'INVALID_PARTICIPANTS_CONFIGURATION',
+      participantsConfiguration: {
+        min: 1,
+        max: MAX_GYG_PARTICIPANTS,
+      },
     });
   }
 
@@ -486,8 +495,8 @@ const validateReserveRequest = async (records: Record<string, unknown>[], produc
     if (requestedDate) {
       const slots = await listGygAvailabilitySlots(
         productId,
-        dayjs.tz(`${requestedDate} 00:00`, 'YYYY-MM-DD HH:mm', DEFAULT_TIMEZONE),
-        dayjs.tz(`${requestedDate} 23:59`, 'YYYY-MM-DD HH:mm', DEFAULT_TIMEZONE),
+        requestedDate,
+        requestedDate,
         DEFAULT_TIMEZONE,
       );
       if (slots.length === 0) {
@@ -500,32 +509,31 @@ const validateReserveRequest = async (records: Record<string, unknown>[], produc
 const resolveProductId = async (
   records: Record<string, unknown>[],
 ): Promise<{ productId: number | null; productName: string | null }> => {
-  const rawProductId = readFirstNumber(records, ['productId', 'product_id', 'activityId', 'activity_id', 'experienceId', 'experience_id', 'tourId', 'tour_id']);
-  if (rawProductId != null) {
-    const product = await Product.findByPk(rawProductId);
+  const rawProductId = readFirstText(records, ['productId', 'product_id']);
+  if (rawProductId) {
+    const parsedProductId = normalizeNumberish(rawProductId);
+    if (parsedProductId == null) {
+      throw new HttpError(400, `Invalid productId: ${rawProductId}`, {
+        errorCode: 'INVALID_PRODUCT',
+        productId: rawProductId,
+      });
+    }
+
+    const product = await Product.findByPk(Math.trunc(parsedProductId));
+    if (!product) {
+      throw new HttpError(400, `Product ${Math.trunc(parsedProductId)} not found`, {
+        errorCode: 'INVALID_PRODUCT',
+        productId: rawProductId,
+      });
+    }
+
     return {
-      productId: product?.id ?? null,
-      productName: product?.name ?? null,
+      productId: product.id,
+      productName: product.name,
     };
   }
 
-  const candidateName =
-    readFirstText(records, ['productName', 'product_name', 'activityName', 'activity_name', 'experienceName', 'experience_name', 'tourName', 'tour_name', 'title', 'name']) ??
-    null;
-  if (!candidateName) {
-    return { productId: null, productName: null };
-  }
-
-  const product = await Product.findOne({
-    where: {
-      name: candidateName,
-    },
-  });
-
-  return {
-    productId: product?.id ?? null,
-    productName: product?.name ?? candidateName,
-  };
+  throw new HttpError(400, 'productId is required', { errorCode: 'INVALID_PRODUCT' });
 };
 
 const deriveOperationStatus = (
@@ -548,6 +556,7 @@ const buildBookingFields = async (
 ): Promise<{
   platformBookingId: string;
   platformOrderId: string | null;
+  reservationReference: string | null;
   status: BookingStatus;
   eventType: BookingEventType;
   bookingFields: GygBookingFieldPatch;
@@ -573,6 +582,7 @@ const buildBookingFields = async (
       'supplierOrderId',
       'supplier_order_id',
     ]) ?? null;
+  const reservationReference = operation === 'reserve' ? platformOrderId ?? generateReservationReference() : platformOrderId;
 
   const status = deriveOperationStatus(records, operation);
   const eventType = deriveEventType(status, false);
@@ -667,12 +677,13 @@ const buildBookingFields = async (
   };
 
   if (operation === 'reserve' && !bookingFields.platformOrderId) {
-    bookingFields.platformOrderId = generateReservationReference();
+    bookingFields.platformOrderId = reservationReference;
   }
 
   return {
     platformBookingId,
     platformOrderId,
+    reservationReference,
     status,
     eventType,
     bookingFields,
@@ -759,7 +770,7 @@ export const ingestGetYourGuidePayload = async (
           source: 'getyourguide',
           operation: options.operation ?? 'upsert',
           platformBookingId: normalized.platformBookingId,
-          platformOrderId: normalized.platformOrderId,
+          platformOrderId: normalized.reservationReference ?? normalized.platformOrderId,
           bookingFields: normalized.bookingFields,
           rawPayload: normalized.rawPayload,
         },
@@ -774,6 +785,7 @@ export const ingestGetYourGuidePayload = async (
       bookingEvent: event,
       createdBooking,
       eventType,
+      reservationReference: normalized.reservationReference,
       status: normalized.status,
     };
   });
@@ -788,56 +800,13 @@ export const fetchGetYourGuideBooking = async (platformBookingId: string): Promi
   });
 };
 
-const parseDateTimeInput = (value: unknown): dayjs.Dayjs | null => {
-  const raw = normalizeText(value);
-  if (!raw) {
-    return null;
-  }
-  const parsed = dayjs(raw);
-  return parsed.isValid() ? parsed : null;
-};
-
-const readAvailabilityWindow = (query: Record<string, unknown>): { from: dayjs.Dayjs; to: dayjs.Dayjs } => {
-  const from = parseDateTimeInput(query.fromDateTime);
-  const to = parseDateTimeInput(query.toDateTime);
-  if (!from || !to) {
+const readAvailabilityWindow = (query: Record<string, unknown>): { fromDate: string; toDate: string } => {
+  const fromDate = extractDateOnly(normalizeText(query.fromDateTime));
+  const toDate = extractDateOnly(normalizeText(query.toDateTime));
+  if (!fromDate || !toDate) {
     throw new HttpError(400, 'fromDateTime and toDateTime are required');
   }
-  return { from, to };
-};
-
-const buildFallbackSlots = (
-  from: dayjs.Dayjs,
-  to: dayjs.Dayjs,
-  timezoneName: string,
-  productId: string,
-): GygAvailabilitySlot[] => {
-  const slots: GygAvailabilitySlot[] = [];
-  let cursor = from.startOf('day');
-  const end = to.startOf('day');
-
-  while (cursor.isBefore(end) || cursor.isSame(end, 'day')) {
-    const day = cursor.format('YYYY-MM-DD');
-    slots.push(
-      {
-        productId,
-        datetime: formatOffsetDateTime(day, '10:00', timezoneName),
-        dateTime: formatOffsetDateTime(day, '10:00', timezoneName),
-        vacancies: 99,
-        cutoffSeconds: 0,
-      },
-      {
-        productId,
-        datetime: formatOffsetDateTime(day, '14:00', timezoneName),
-        dateTime: formatOffsetDateTime(day, '14:00', timezoneName),
-        vacancies: 99,
-        cutoffSeconds: 0,
-      },
-    );
-    cursor = cursor.add(1, 'day');
-  }
-
-  return slots;
+  return { fromDate, toDate };
 };
 
 export const getGetYourGuideAvailabilities = async (
@@ -845,13 +814,16 @@ export const getGetYourGuideAvailabilities = async (
 ): Promise<GygAvailabilityResult> => {
   const productIdRaw = normalizeNumberish(query.productId);
   if (!productIdRaw) {
-    throw new HttpError(400, 'productId is required');
+    throw new HttpError(400, 'productId is required', { errorCode: 'INVALID_PRODUCT' });
   }
 
   const productId = Math.trunc(productIdRaw);
   const product = await Product.findByPk(productId);
   if (!product) {
-    throw new HttpError(404, `Product ${productId} not found`);
+    throw new HttpError(400, `Product ${productId} not found`, {
+      errorCode: 'INVALID_PRODUCT',
+      productId: String(productId),
+    });
   }
 
   const timezoneName =
@@ -859,8 +831,8 @@ export const getGetYourGuideAvailabilities = async (
     (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ??
     'Europe/Warsaw';
 
-  const { from, to } = readAvailabilityWindow(query);
-  const availabilities = await listGygAvailabilitySlots(productId, from, to, timezoneName);
+  const { fromDate, toDate } = readAvailabilityWindow(query);
+  const availabilities = await listGygAvailabilitySlots(productId, fromDate, toDate, timezoneName);
 
   return {
     productId: String(productId),
