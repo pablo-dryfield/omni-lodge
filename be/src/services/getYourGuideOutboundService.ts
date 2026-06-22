@@ -174,16 +174,24 @@ const resolveBaseUrl = (mode: GygOutboundMode): string => {
 };
 
 const resolveCredentials = (mode: GygOutboundMode): { username: string; password: string } => {
-  const usernameKey = mode === 'test' ? 'GYG_TEST_SUPPLIER_API_USERNAME' : 'GYG_PROD_SUPPLIER_API_USERNAME';
-  const passwordKey = mode === 'test' ? 'GYG_TEST_SUPPLIER_API_PASSWORD' : 'GYG_PROD_SUPPLIER_API_PASSWORD';
-  const username = readConfigString(usernameKey);
-  const password = readConfigString(passwordKey);
+  const username =
+    mode === 'test'
+      ? readConfigString('GYG_OUTBOUND_SUPPLIER_API_USERNAME_TEST') ??
+        readConfigString('GYG_TEST_SUPPLIER_API_USERNAME')
+      : readConfigString('GYG_OUTBOUND_SUPPLIER_API_USERNAME_PROD') ??
+        readConfigString('GYG_PROD_SUPPLIER_API_USERNAME');
+  const password =
+    mode === 'test'
+      ? readConfigString('GYG_OUTBOUND_SUPPLIER_API_PASSWORD_TEST') ??
+        readConfigString('GYG_TEST_SUPPLIER_API_PASSWORD')
+      : readConfigString('GYG_OUTBOUND_SUPPLIER_API_PASSWORD_PROD') ??
+        readConfigString('GYG_PROD_SUPPLIER_API_PASSWORD');
 
   if (!username) {
-    throw new HttpError(400, `${usernameKey} is not configured`);
+    throw new HttpError(400, `Outbound GetYourGuide ${mode} username is not configured`);
   }
   if (!password) {
-    throw new HttpError(400, `${passwordKey} is not configured`);
+    throw new HttpError(400, `Outbound GetYourGuide ${mode} password is not configured`);
   }
 
   return { username, password };
