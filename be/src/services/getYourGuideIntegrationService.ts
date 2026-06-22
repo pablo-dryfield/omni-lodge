@@ -36,6 +36,10 @@ type GygIngestResult = {
   status: BookingStatus;
 };
 
+type GygBookingFieldPatch = BookingFieldPatch & {
+  platformOrderId?: string | null;
+};
+
 type GygAvailabilityResult = {
   productId: string;
   productName: string | null;
@@ -295,6 +299,8 @@ const resolvePlatformBookingId = (payload: unknown, requestedPlatformBookingId?:
   const candidate =
     normalizeText(requestedPlatformBookingId) ??
     readFirstText(records, [
+      'gygBookingReference',
+      'gyg_booking_reference',
       'platformBookingId',
       'platform_booking_id',
       'bookingReference',
@@ -317,6 +323,12 @@ const resolvePlatformBookingId = (payload: unknown, requestedPlatformBookingId?:
   }
 
   return candidate;
+};
+
+const generateReservationReference = (): string => {
+  const timestampPart = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).slice(2, 6);
+  return `res${timestampPart}${randomPart}`.slice(0, 25);
 };
 
 const resolveProductId = async (
@@ -372,7 +384,7 @@ const buildBookingFields = async (
   platformOrderId: string | null;
   status: BookingStatus;
   eventType: BookingEventType;
-  bookingFields: BookingFieldPatch;
+  bookingFields: GygBookingFieldPatch;
   rawPayload: Record<string, unknown>;
   occurredAt: Date;
 }> => {
@@ -383,6 +395,8 @@ const buildBookingFields = async (
   const platformBookingId = resolvePlatformBookingId(rawPayload);
   const platformOrderId =
     readFirstText(records, [
+      'reservationReference',
+      'reservation_reference',
       'platformOrderId',
       'platform_order_id',
       'orderId',
@@ -422,7 +436,7 @@ const buildBookingFields = async (
     ]) ?? null;
   const experienceStartAt = parseDateTime(dateValue, timeValue);
 
-  const bookingFields: BookingFieldPatch = {
+  const bookingFields: GygBookingFieldPatch = {
     channelId: await resolveChannelId(),
     productId: readFirstNumber(records, ['productId', 'product_id', 'activityId', 'activity_id', 'experienceId', 'experience_id', 'tourId', 'tour_id']),
     productName:
@@ -479,6 +493,10 @@ const buildBookingFields = async (
       readFirstText(records, ['notes', 'note', 'message', 'specialRequests', 'special_requests', 'comment', 'comments']) ?? null,
     rawPayloadLocation: null,
   };
+
+  if (operation === 'reserve' && !bookingFields.platformOrderId) {
+    bookingFields.platformOrderId = generateReservationReference();
+  }
 
   return {
     platformBookingId,
