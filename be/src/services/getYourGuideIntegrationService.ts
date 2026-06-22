@@ -524,7 +524,8 @@ const validateReserveRequest = async (records: Record<string, unknown>[], produc
         requestedDate,
         DEFAULT_TIMEZONE,
       );
-      if (slots.length === 0) {
+      const hasEnoughVacancies = slots.some((slot) => slot.vacancies >= totalParticipants);
+      if (!hasEnoughVacancies) {
         throw new HttpError(400, 'No availability', { errorCode: 'NO_AVAILABILITY' });
       }
     }
