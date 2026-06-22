@@ -24,6 +24,7 @@ const normalizeParam = (value: unknown): string | null => {
 const respondWithError = (res: Response, error: unknown): void => {
   const message = error instanceof Error ? error.message : 'Unknown error';
   const details = error instanceof HttpError ? error.details : null;
+  const responseBody: Record<string, unknown> = {};
   const explicitErrorCode =
     details && typeof details === 'object' && !Array.isArray(details) && typeof (details as { errorCode?: unknown }).errorCode === 'string'
       ? String((details as { errorCode?: unknown }).errorCode)
@@ -41,8 +42,19 @@ const respondWithError = (res: Response, error: unknown): void => {
             ? 'NO_AVAILABILITY'
             : 'INTERNAL_SYSTEM_FAILURE');
 
-  const status = error instanceof HttpError ? error.status : 500;
-  res.status(status).json({ errorCode: inferredErrorCode, errorMessage: message });
+  responseBody.errorCode = inferredErrorCode;
+  responseBody.errorMessage = message;
+
+  if (details && typeof details === 'object' && !Array.isArray(details)) {
+    for (const key of ['ticketCategory', 'participantsConfiguration', 'groupConfiguration', 'productId']) {
+      const value = (details as Record<string, unknown>)[key];
+      if (value !== undefined && value !== null) {
+        responseBody[key] = value;
+      }
+    }
+  }
+
+  res.status(200).json(responseBody);
 };
 
 const resolveRequestedPlatformBookingId = (req: Request): string | null => {
@@ -61,13 +73,10 @@ const resolveRequestedDate = (req: Request): string | null => {
   );
 };
 
-const buildReservationResponse = (reservationReference: string): { data: { reservationReference: string; reservationExpiration: string } } => {
+const buildReservationResponse = (reservationReference: string): { data: { reservationReference: string } } => {
   return {
     data: {
       reservationReference,
-      reservationExpiration: new Date(Date.now() + 60 * 60 * 1000)
-        .toISOString()
-        .replace(/\.\d{3}Z$/, '+00:00'),
     },
   };
 };
@@ -100,7 +109,7 @@ const ingestWithOperation = async (req: Request, res: Response, operation: 'rese
     });
 
     if (operation === 'reserve') {
-      res.status(200).json(buildReservationResponse(result.booking.platformOrderId ?? result.booking.platformBookingId));
+      res.status(200).json(buildReservationResponse(result.reservationReference ?? result.booking.platformOrderId ?? result.booking.platformBookingId));
       return;
     }
 
@@ -157,7 +166,7 @@ export const getBooking = async (req: Request, res: Response): Promise<void> => 
 export const getAvailability = async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await getGetYourGuideAvailabilities(req.query as Record<string, unknown>);
-    res.status(200).json({ data: result });
+    res.status(200).json({ data: { availabilities: result.availabilities } });
   } catch (error) {
     respondWithError(res, error);
   }
