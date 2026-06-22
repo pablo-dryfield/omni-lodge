@@ -37,17 +37,15 @@ type GygIngestResult = {
 };
 
 type GygAvailabilityResult = {
-  date: string;
   productId: number | null;
   productName: string | null;
-  available: boolean;
-  bookingCount: number;
-  scheduledStaff: { userIds: number[]; managerIds: number[] };
-  notes: string[];
+  timezone: string;
+  availabilities: GygAvailabilitySlot[];
 };
 
 type GygAvailabilitySlot = {
-  dateTime: string;
+  datetime: string;
+  dateTime?: string;
   vacancies: number;
 };
 
@@ -623,8 +621,16 @@ const buildFallbackSlots = (from: dayjs.Dayjs, to: dayjs.Dayjs, timezoneName: st
   while (cursor.isBefore(end) || cursor.isSame(end, 'day')) {
     const day = cursor.format('YYYY-MM-DD');
     slots.push(
-      { dateTime: formatOffsetDateTime(day, '10:00', timezoneName), vacancies: 99 },
-      { dateTime: formatOffsetDateTime(day, '14:00', timezoneName), vacancies: 99 },
+      {
+        datetime: formatOffsetDateTime(day, '10:00', timezoneName),
+        dateTime: formatOffsetDateTime(day, '10:00', timezoneName),
+        vacancies: 99,
+      },
+      {
+        datetime: formatOffsetDateTime(day, '14:00', timezoneName),
+        dateTime: formatOffsetDateTime(day, '14:00', timezoneName),
+        vacancies: 99,
+      },
     );
     cursor = cursor.add(1, 'day');
   }
@@ -634,7 +640,7 @@ const buildFallbackSlots = (from: dayjs.Dayjs, to: dayjs.Dayjs, timezoneName: st
 
 export const getGetYourGuideAvailabilities = async (
   query: Record<string, unknown>,
-): Promise<GygAvailabilitySlot[]> => {
+): Promise<GygAvailabilityResult> => {
   const productIdRaw = normalizeNumberish(query.productId);
   if (!productIdRaw) {
     throw new HttpError(400, 'productId is required');
@@ -655,37 +661,46 @@ export const getGetYourGuideAvailabilities = async (
   const shiftTypeLinks = await ShiftTypeProduct.findAll({ where: { productId } });
   const shiftTypeIds = shiftTypeLinks.map((link) => link.shiftTypeId);
 
+  let availabilities: GygAvailabilitySlot[];
+
   if (shiftTypeIds.length === 0) {
-    return buildFallbackSlots(from, to, timezoneName);
+    availabilities = buildFallbackSlots(from, to, timezoneName);
+  } else {
+    const instances = await ShiftInstance.findAll({
+      where: {
+        shiftTypeId: { [Op.in]: shiftTypeIds },
+        date: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
+      },
+      include: [{ model: ShiftAssignment, as: 'assignments', required: false }],
+      order: [
+        ['date', 'ASC'],
+        ['timeStart', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
+
+    const slots = instances.map((instance) => {
+      const assignedCount = (instance.assignments ?? []).filter((assignment) => assignment.userId != null).length;
+      const capacity =
+        Number.isFinite(instance.capacity ?? NaN) && (instance.capacity ?? 0) > 0
+          ? (instance.capacity as number)
+          : 99;
+      const vacancies = Math.max(capacity - assignedCount, 0);
+      const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
+      return {
+        datetime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
+        dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
+        vacancies,
+      };
+    });
+
+    availabilities = slots.length > 0 ? slots : buildFallbackSlots(from, to, timezoneName);
   }
 
-  const instances = await ShiftInstance.findAll({
-    where: {
-      shiftTypeId: { [Op.in]: shiftTypeIds },
-      date: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
-    },
-    include: [{ model: ShiftAssignment, as: 'assignments', required: false }],
-    order: [
-      ['date', 'ASC'],
-      ['timeStart', 'ASC'],
-      ['id', 'ASC'],
-    ],
-  });
-
-  const slots = instances.map((instance) => {
-    const assignedCount = (instance.assignments ?? []).filter((assignment) => assignment.userId != null).length;
-    const capacity = Number.isFinite(instance.capacity ?? NaN) && (instance.capacity ?? 0) > 0 ? (instance.capacity as number) : 99;
-    const vacancies = Math.max(capacity - assignedCount, 0);
-    const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
-    return {
-      dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
-      vacancies,
-    };
-  });
-
-  if (slots.length > 0) {
-    return slots;
-  }
-
-  return buildFallbackSlots(from, to, timezoneName);
+  return {
+    productId,
+    productName: product.name,
+    timezone: timezoneName,
+    availabilities,
+  };
 };
