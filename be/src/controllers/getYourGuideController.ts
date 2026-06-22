@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import HttpError from '../errors/HttpError.js';
 import {
   fetchGetYourGuideBooking,
-  getGetYourGuideAvailability,
+  getGetYourGuideAvailabilities,
   ingestGetYourGuidePayload,
 } from '../services/getYourGuideIntegrationService.js';
 
@@ -104,21 +104,8 @@ export const getBooking = async (req: Request, res: Response): Promise<void> => 
 
 export const getAvailability = async (req: Request, res: Response): Promise<void> => {
   try {
-    const requestedDate = resolveRequestedDate(req);
-    if (!requestedDate) {
-      throw new HttpError(400, 'Missing date query parameter');
-    }
-
-    const requestedBody = (req.body as BodyParams | undefined) ?? {};
-    const requestedProduct = {
-      productId: requestedBody.productId ?? (req.params as BodyParams).productId ?? (req.query as BodyParams).productId ?? null,
-      productName: requestedBody.productName ?? (req.query as BodyParams).productName ?? null,
-    };
-    const result = await getGetYourGuideAvailability(requestedDate, requestedProduct);
-    res.status(200).json({
-      ok: true,
-      ...result,
-    });
+    const result = await getGetYourGuideAvailabilities(req.query as Record<string, unknown>);
+    res.status(200).json(result);
   } catch (error) {
     respondWithError(res, error);
   }
