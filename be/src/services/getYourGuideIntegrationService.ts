@@ -46,7 +46,7 @@ type GygAvailabilityResult = {
 type GygAvailabilitySlot = {
   productId: number;
   datetime: string;
-  dateTime?: string;
+  dateTime: string;
   vacancies: number;
 };
 
@@ -731,7 +731,7 @@ export const getGetYourGuideAvailabilities = async (
         vacancies,
       };
       })
-      .filter((slot): slot is GygAvailabilitySlot => Boolean(slot));
+      .filter((slot): slot is GygAvailabilitySlot => slot !== null);
 
     availabilities = slots;
   }
