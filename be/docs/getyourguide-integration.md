@@ -19,12 +19,14 @@ The production configuration should use the same path and the production Basic A
 
 | Variable | Purpose |
 | --- | --- |
-| `GYG_TEST_SUPPLIER_API_USERNAME` / `GYG_TEST_SUPPLIER_API_PASSWORD` | Basic Auth credentials accepted by the testing supplier endpoint. |
-| `GYG_PROD_SUPPLIER_API_USERNAME` / `GYG_PROD_SUPPLIER_API_PASSWORD` | Basic Auth credentials accepted by the production supplier endpoint. |
+| `GYG_TEST_SUPPLIER_API_USERNAME` / `GYG_TEST_SUPPLIER_API_PASSWORD` | Basic Auth credentials configured in the GetYourGuide portal for inbound calls to the testing supplier endpoint. |
+| `GYG_PROD_SUPPLIER_API_USERNAME` / `GYG_PROD_SUPPLIER_API_PASSWORD` | Basic Auth credentials configured in the GetYourGuide portal for inbound calls to the production supplier endpoint. |
+| `GYG_OUTBOUND_SUPPLIER_API_USERNAME_TEST` / `GYG_OUTBOUND_SUPPLIER_API_PASSWORD_TEST` | Basic Auth credentials used by OmniLodge when calling the GetYourGuide sandbox supplier API. |
+| `GYG_OUTBOUND_SUPPLIER_API_USERNAME_PROD` / `GYG_OUTBOUND_SUPPLIER_API_PASSWORD_PROD` | Basic Auth credentials used by OmniLodge when calling the GetYourGuide production supplier API. |
 | `GYG_SUPPLIER_API_BASE_URL_TEST` | Optional override for the sandbox outbound base URL. Defaults to `https://supplier-api.getyourguide.com/sandbox/1`. |
 | `GYG_SUPPLIER_API_BASE_URL_PROD` | Optional override for the production outbound base URL. Defaults to `https://supplier-api.getyourguide.com/1`. |
 
-The backend accepts either credential pair, so the same deployment can serve both portal environments.
+Keep inbound portal credentials and outbound supplier API credentials separate. The names above reflect the direction of the request.
 
 ### Exposed endpoints
 
