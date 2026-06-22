@@ -55,7 +55,6 @@ type GygAvailabilitySlot = {
   cutoffSeconds: number;
 };
 
-const DEFAULT_GYG_DAILY_CAPACITY = 200;
 const GYG_PLATFORM = 'getyourguide';
 const GYG_CHANNEL_NAME = 'GetYourGuide';
 const DEFAULT_TIMEZONE =
@@ -331,6 +330,173 @@ const generateReservationReference = (): string => {
   return `res${timestampPart}${randomPart}`.slice(0, 25);
 };
 
+const MAX_GYG_PARTICIPANTS = 99;
+const GYG_SUPPORTED_CATEGORIES = new Set([
+  'ADULT',
+  'SENIOR',
+  'YOUTH',
+  'INFANT',
+  'STUDENT',
+  'EU_CITIZEN',
+  'MILITARY',
+  'EU_CITIZEN_STUDENT',
+  'GROUP',
+  'COLLECTIVE',
+]);
+
+const normalizeCategory = (value: unknown): string | null => {
+  const text = normalizeText(value);
+  return text ? text.toUpperCase() : null;
+};
+
+const readBookingItems = (records: Record<string, unknown>[]): Record<string, unknown>[] => {
+  const bookingItems = readFirstArray(records, ['bookingItems', 'booking_items']);
+  return bookingItems?.filter(isRecord) ?? [];
+};
+
+const sumRequestedParticipants = (bookingItems: Record<string, unknown>[]): number => {
+  return bookingItems.reduce((total, bookingItem) => {
+    const category = normalizeCategory(bookingItem.category);
+    const count = normalizeNumberish(bookingItem.count);
+    const groupSize = normalizeNumberish(bookingItem.groupSize);
+
+    if (category === 'GROUP' || category === 'COLLECTIVE') {
+      return total + (groupSize ?? count ?? 1);
+    }
+
+    return total + (count ?? 0);
+  }, 0);
+};
+
+const listGygAvailabilitySlots = async (
+  productId: number,
+  from: dayjs.Dayjs,
+  to: dayjs.Dayjs,
+  timezoneName: string,
+): Promise<GygAvailabilitySlot[]> => {
+  const shiftTypeLinks = await ShiftTypeProduct.findAll({ where: { productId } });
+  const shiftTypeIds = shiftTypeLinks.map((link) => link.shiftTypeId);
+
+  if (shiftTypeIds.length === 0) {
+    return [];
+  }
+
+  const instances = await ShiftInstance.findAll({
+    where: {
+      shiftTypeId: { [Op.in]: shiftTypeIds },
+      date: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
+    },
+    include: [{ model: ShiftAssignment, as: 'assignments', required: false }],
+    order: [
+      ['date', 'ASC'],
+      ['timeStart', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+
+  const bookingRows = await Booking.findAll({
+    where: {
+      platform: GYG_PLATFORM,
+      productId,
+      experienceDate: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
+      status: { [Op.ne]: 'cancelled' },
+    },
+    attributes: ['experienceDate', 'partySizeTotal', 'partySizeAdults', 'partySizeChildren'],
+  });
+
+  const participantsByDate = new Map<string, number>();
+  bookingRows.forEach((booking) => {
+    const bookingDate = booking.experienceDate?.trim();
+    if (!bookingDate) {
+      return;
+    }
+    const adults = Number(booking.partySizeAdults ?? 0);
+    const children = Number(booking.partySizeChildren ?? 0);
+    const partySizeTotal = Number(booking.partySizeTotal ?? 0);
+    const totalParticipants =
+      Number.isFinite(partySizeTotal) && partySizeTotal > 0
+        ? partySizeTotal
+        : Number.isFinite(adults + children) && adults + children > 0
+          ? adults + children
+          : 1;
+    participantsByDate.set(bookingDate, (participantsByDate.get(bookingDate) ?? 0) + totalParticipants);
+  });
+
+  return instances
+    .map((instance) => {
+      const assignedCapacity = Array.isArray(instance.assignments) ? instance.assignments.length : 0;
+      const configuredCapacity = normalizeNumberish(instance.capacity) ?? 0;
+      const dailyCapacity = configuredCapacity > 0 ? configuredCapacity : assignedCapacity;
+      if (dailyCapacity <= 0) {
+        return null;
+      }
+
+      const bookedParticipants = participantsByDate.get(instance.date) ?? 0;
+      const vacancies = Math.max(dailyCapacity - bookedParticipants, 0);
+      if (vacancies <= 0) {
+        return null;
+      }
+      const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
+      return {
+        productId: String(productId),
+        datetime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
+        dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
+        vacancies,
+        cutoffSeconds: 0,
+      };
+    })
+    .filter((slot): slot is GygAvailabilitySlot => slot !== null);
+};
+
+const validateReserveRequest = async (records: Record<string, unknown>[], productId: number | null): Promise<void> => {
+  const bookingItems = readBookingItems(records);
+  if (bookingItems.length === 0) {
+    throw new HttpError(400, 'Missing bookingItems', { errorCode: 'VALIDATION_FAILURE' });
+  }
+
+  const categories = bookingItems
+    .map((bookingItem) => normalizeCategory(bookingItem.category))
+    .filter((category): category is string => Boolean(category));
+
+  if (categories.length === 0) {
+    throw new HttpError(400, 'Missing booking item categories', { errorCode: 'VALIDATION_FAILURE' });
+  }
+
+  if (categories.every((category) => category === 'CHILD')) {
+    throw new HttpError(400, 'Unsupported ticket category', { errorCode: 'INVALID_TICKET_CATEGORY' });
+  }
+
+  const unsupportedCategory = categories.find((category) => !GYG_SUPPORTED_CATEGORIES.has(category));
+  if (unsupportedCategory) {
+    throw new HttpError(400, `Unsupported ticket category: ${unsupportedCategory}`, {
+      errorCode: 'INVALID_TICKET_CATEGORY',
+    });
+  }
+
+  const totalParticipants = sumRequestedParticipants(bookingItems);
+  if (totalParticipants > MAX_GYG_PARTICIPANTS) {
+    throw new HttpError(400, 'Participants configuration is not supported', {
+      errorCode: 'INVALID_PARTICIPANTS_CONFIGURATION',
+    });
+  }
+
+  if (productId != null) {
+    const requestedDateTime = readFirstText(records, ['dateTime', 'date_time']);
+    const requestedDate = extractDateOnly(requestedDateTime);
+    if (requestedDate) {
+      const slots = await listGygAvailabilitySlots(
+        productId,
+        dayjs.tz(`${requestedDate} 00:00`, 'YYYY-MM-DD HH:mm', DEFAULT_TIMEZONE),
+        dayjs.tz(`${requestedDate} 23:59`, 'YYYY-MM-DD HH:mm', DEFAULT_TIMEZONE),
+        DEFAULT_TIMEZONE,
+      );
+      if (slots.length === 0) {
+        throw new HttpError(400, 'No availability', { errorCode: 'NO_AVAILABILITY' });
+      }
+    }
+  }
+};
+
 const resolveProductId = async (
   records: Record<string, unknown>[],
 ): Promise<{ productId: number | null; productName: string | null }> => {
@@ -391,6 +557,7 @@ const buildBookingFields = async (
   const rawPayload = isRecord(payload) ? payload : { value: payload };
   const records = collectRecordCandidates(rawPayload);
   const now = new Date();
+  const resolvedProduct = await resolveProductId(records);
 
   const platformBookingId = resolvePlatformBookingId(rawPayload);
   const platformOrderId =
@@ -409,6 +576,10 @@ const buildBookingFields = async (
 
   const status = deriveOperationStatus(records, operation);
   const eventType = deriveEventType(status, false);
+
+  if (operation === 'reserve') {
+    await validateReserveRequest(records, resolvedProduct.productId);
+  }
 
   const dateValue =
     readFirstText(records, [
@@ -438,9 +609,10 @@ const buildBookingFields = async (
 
   const bookingFields: GygBookingFieldPatch = {
     channelId: await resolveChannelId(),
-    productId: readFirstNumber(records, ['productId', 'product_id', 'activityId', 'activity_id', 'experienceId', 'experience_id', 'tourId', 'tour_id']),
+    productId: resolvedProduct.productId,
     productName:
-      readFirstText(records, [
+      resolvedProduct.productName ??
+      (readFirstText(records, [
         'productName',
         'product_name',
         'activityName',
@@ -451,7 +623,7 @@ const buildBookingFields = async (
         'tour_name',
         'title',
         'name',
-      ]) ?? null,
+      ]) ?? null),
     productVariant:
       readFirstText(records, ['productVariant', 'product_variant', 'variant', 'optionName', 'option_name']) ?? null,
     guestFirstName:
@@ -688,75 +860,7 @@ export const getGetYourGuideAvailabilities = async (
     'Europe/Warsaw';
 
   const { from, to } = readAvailabilityWindow(query);
-  const shiftTypeLinks = await ShiftTypeProduct.findAll({ where: { productId } });
-  const shiftTypeIds = shiftTypeLinks.map((link) => link.shiftTypeId);
-
-  let availabilities: GygAvailabilitySlot[];
-
-  if (shiftTypeIds.length === 0) {
-    availabilities = [];
-  } else {
-    const instances = await ShiftInstance.findAll({
-      where: {
-        shiftTypeId: { [Op.in]: shiftTypeIds },
-        date: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
-      },
-      include: [{ model: ShiftAssignment, as: 'assignments', required: false }],
-      order: [
-        ['date', 'ASC'],
-        ['timeStart', 'ASC'],
-        ['id', 'ASC'],
-      ],
-    });
-
-    const bookingRows = await Booking.findAll({
-      where: {
-        platform: GYG_PLATFORM,
-        productId,
-        experienceDate: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
-        status: { [Op.ne]: 'cancelled' },
-      },
-      attributes: ['experienceDate', 'partySizeTotal', 'partySizeAdults', 'partySizeChildren'],
-    });
-
-    const participantsByDate = new Map<string, number>();
-    bookingRows.forEach((booking) => {
-      const bookingDate = booking.experienceDate?.trim();
-      if (!bookingDate) {
-        return;
-      }
-      const adults = Number(booking.partySizeAdults ?? 0);
-      const children = Number(booking.partySizeChildren ?? 0);
-      const partySizeTotal = Number(booking.partySizeTotal ?? 0);
-      const totalParticipants =
-        Number.isFinite(partySizeTotal) && partySizeTotal > 0
-          ? partySizeTotal
-          : Number.isFinite(adults + children) && adults + children > 0
-            ? adults + children
-            : 1;
-      participantsByDate.set(bookingDate, (participantsByDate.get(bookingDate) ?? 0) + totalParticipants);
-    });
-
-    const slots = instances
-      .map((instance) => {
-        const bookedParticipants = participantsByDate.get(instance.date) ?? 0;
-        const vacancies = Math.max(DEFAULT_GYG_DAILY_CAPACITY - bookedParticipants, 0);
-        if (vacancies <= 0) {
-          return null;
-        }
-        const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
-        return {
-          productId: String(productId),
-          datetime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
-          dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
-          vacancies,
-          cutoffSeconds: 0,
-        };
-      })
-      .filter((slot): slot is GygAvailabilitySlot => slot !== null);
-
-    availabilities = slots;
-  }
+  const availabilities = await listGygAvailabilitySlots(productId, from, to, timezoneName);
 
   return {
     productId: String(productId),

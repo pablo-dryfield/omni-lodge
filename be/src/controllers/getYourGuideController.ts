@@ -65,7 +65,9 @@ const buildReservationResponse = (reservationReference: string): { data: { reser
   return {
     data: {
       reservationReference,
-      reservationExpiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      reservationExpiration: new Date(Date.now() + 60 * 60 * 1000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, '+00:00'),
     },
   };
 };
