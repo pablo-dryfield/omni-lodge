@@ -17,13 +17,27 @@ const normalizeParam = (value: unknown): string | null => {
 };
 
 const respondWithError = (res: Response, error: unknown): void => {
-  if (error instanceof HttpError) {
-    res.status(error.status).json({ error: error.message, details: error.details ?? null });
-    return;
-  }
-
   const message = error instanceof Error ? error.message : 'Unknown error';
-  res.status(500).json({ error: message });
+  const details = error instanceof HttpError ? error.details : null;
+  const explicitErrorCode =
+    details && typeof details === 'object' && !Array.isArray(details) && typeof (details as { errorCode?: unknown }).errorCode === 'string'
+      ? String((details as { errorCode?: unknown }).errorCode)
+      : null;
+  const lowerMessage = message.toLowerCase();
+  const inferredErrorCode =
+    explicitErrorCode ??
+    (lowerMessage.includes('ticket category')
+      ? 'INVALID_TICKET_CATEGORY'
+      : lowerMessage.includes('participants')
+        ? 'INVALID_PARTICIPANTS_CONFIGURATION'
+        : lowerMessage.includes('product')
+          ? 'INVALID_PRODUCT'
+          : lowerMessage.includes('availability')
+            ? 'NO_AVAILABILITY'
+            : 'INTERNAL_SYSTEM_FAILURE');
+
+  const status = error instanceof HttpError ? error.status : 500;
+  res.status(status).json({ errorCode: inferredErrorCode, errorMessage: message });
 };
 
 const resolveRequestedPlatformBookingId = (req: Request): string | null => {
@@ -51,14 +65,16 @@ const ingestWithOperation = async (req: Request, res: Response, operation: 'rese
     });
 
     res.status(200).json({
-      ok: true,
-      platform: result.booking.platform,
-      platformBookingId: result.booking.platformBookingId,
-      bookingId: result.booking.id,
-      eventId: result.bookingEvent.id,
-      eventType: result.eventType,
-      status: result.status,
-      createdBooking: result.createdBooking,
+      data: {
+        ok: true,
+        platform: result.booking.platform,
+        platformBookingId: result.booking.platformBookingId,
+        bookingId: result.booking.id,
+        eventId: result.bookingEvent.id,
+        eventType: result.eventType,
+        status: result.status,
+        createdBooking: result.createdBooking,
+      },
     });
   } catch (error) {
     respondWithError(res, error);
@@ -66,7 +82,7 @@ const ingestWithOperation = async (req: Request, res: Response, operation: 'rese
 };
 
 export const healthCheck = async (req: Request, res: Response): Promise<void> => {
-  res.status(200).json({ ok: true, service: 'getyourguide' });
+  res.status(200).json({ data: { ok: true, service: 'getyourguide' } });
 };
 
 export const ingestReservation = async (req: Request, res: Response): Promise<void> => {
@@ -94,8 +110,10 @@ export const getBooking = async (req: Request, res: Response): Promise<void> => 
     }
 
     res.status(200).json({
-      ok: true,
-      booking,
+      data: {
+        ok: true,
+        booking,
+      },
     });
   } catch (error) {
     respondWithError(res, error);
@@ -105,7 +123,7 @@ export const getBooking = async (req: Request, res: Response): Promise<void> => 
 export const getAvailability = async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await getGetYourGuideAvailabilities(req.query as Record<string, unknown>);
-    res.status(200).json(result);
+    res.status(200).json({ data: result });
   } catch (error) {
     respondWithError(res, error);
   }
