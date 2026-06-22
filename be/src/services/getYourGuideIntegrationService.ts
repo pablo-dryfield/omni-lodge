@@ -44,6 +44,7 @@ type GygAvailabilityResult = {
 };
 
 type GygAvailabilitySlot = {
+  productId: number;
   datetime: string;
   dateTime?: string;
   vacancies: number;
@@ -613,7 +614,12 @@ const readAvailabilityWindow = (query: Record<string, unknown>): { from: dayjs.D
   return { from, to };
 };
 
-const buildFallbackSlots = (from: dayjs.Dayjs, to: dayjs.Dayjs, timezoneName: string): GygAvailabilitySlot[] => {
+const buildFallbackSlots = (
+  from: dayjs.Dayjs,
+  to: dayjs.Dayjs,
+  timezoneName: string,
+  productId: number,
+): GygAvailabilitySlot[] => {
   const slots: GygAvailabilitySlot[] = [];
   let cursor = from.startOf('day');
   const end = to.startOf('day');
@@ -622,11 +628,13 @@ const buildFallbackSlots = (from: dayjs.Dayjs, to: dayjs.Dayjs, timezoneName: st
     const day = cursor.format('YYYY-MM-DD');
     slots.push(
       {
+        productId,
         datetime: formatOffsetDateTime(day, '10:00', timezoneName),
         dateTime: formatOffsetDateTime(day, '10:00', timezoneName),
         vacancies: 99,
       },
       {
+        productId,
         datetime: formatOffsetDateTime(day, '14:00', timezoneName),
         dateTime: formatOffsetDateTime(day, '14:00', timezoneName),
         vacancies: 99,
@@ -664,7 +672,7 @@ export const getGetYourGuideAvailabilities = async (
   let availabilities: GygAvailabilitySlot[];
 
   if (shiftTypeIds.length === 0) {
-    availabilities = buildFallbackSlots(from, to, timezoneName);
+    availabilities = buildFallbackSlots(from, to, timezoneName, productId);
   } else {
     const instances = await ShiftInstance.findAll({
       where: {
@@ -688,13 +696,14 @@ export const getGetYourGuideAvailabilities = async (
       const vacancies = Math.max(capacity - assignedCount, 0);
       const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
       return {
+        productId,
         datetime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
         dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
         vacancies,
       };
     });
 
-    availabilities = slots.length > 0 ? slots : buildFallbackSlots(from, to, timezoneName);
+    availabilities = slots.length > 0 ? slots : buildFallbackSlots(from, to, timezoneName, productId);
   }
 
   return {
