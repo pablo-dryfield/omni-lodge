@@ -50,18 +50,28 @@ type GygAvailabilityResult = {
   availabilities: GygAvailabilitySlot[];
 };
 
-type GygAvailabilitySlot = {
+type GygAvailabilitySlotBase = {
   productId: string;
   datetime: string;
   dateTime: string;
-  vacancies: number;
   cutoffSeconds: number;
   currency: string;
-  vacanciesByCategory: Array<{ category: GygTicketCategory; vacancies: number }>;
   pricesByCategory: {
     retailPrices: Array<{ category: GygTicketCategory; price: number }>;
   };
 };
+
+type GygAvailabilityVacanciesSlot = GygAvailabilitySlotBase & {
+  vacancies: number;
+  vacanciesByCategory?: never;
+};
+
+type GygAvailabilityCategorySlot = GygAvailabilitySlotBase & {
+  vacanciesByCategory: Array<{ category: GygTicketCategory; vacancies: number }>;
+  vacancies?: never;
+};
+
+type GygAvailabilitySlot = GygAvailabilityVacanciesSlot | GygAvailabilityCategorySlot;
 
 const GYG_PLATFORM = 'getyourguide';
 const GYG_CHANNEL_NAME = 'GetYourGuide';
@@ -369,6 +379,7 @@ const generateBookingReference = (): string => {
 const MAX_GYG_PARTICIPANTS = 99;
 const DEFAULT_GYG_ZERO_VACANCY_DATES = new Set(['2026-06-25', '2026-06-26']);
 const DEFAULT_GYG_INVALID_CATEGORY_DATES = new Set(['2026-06-23']);
+const DEFAULT_GYG_AVAILABILITY_RESPONSE_SHAPE: 'vacancies' | 'vacanciesByCategory' = 'vacancies';
 const GYG_SUPPORTED_CATEGORIES = new Set([
   'ADULT',
   'SENIOR',
@@ -413,6 +424,14 @@ const readInvalidCategoryDates = (): Set<string> => {
     .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry));
 
   return new Set(configuredDates.length > 0 ? configuredDates : DEFAULT_GYG_INVALID_CATEGORY_DATES);
+};
+
+const readAvailabilityResponseShape = (): 'vacancies' | 'vacanciesByCategory' => {
+  const configured = normalizeText(process.env.GYG_AVAILABILITY_RESPONSE_SHAPE);
+  if (configured === 'vacanciesbycategory' || configured === 'category' || configured === 'by-category') {
+    return 'vacanciesByCategory';
+  }
+  return DEFAULT_GYG_AVAILABILITY_RESPONSE_SHAPE;
 };
 
 const toMinorCurrencyUnits = (value: number): number => {
@@ -560,19 +579,28 @@ const listGygAvailabilitySlots = async (
         return null;
       }
 
-      return {
+      const responseShape = readAvailabilityResponseShape();
+      const baseAvailability: GygAvailabilitySlotBase = {
         productId: String(productId),
         datetime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
         dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
-        vacancies,
         cutoffSeconds: 0,
         currency: pricing.currency,
-        vacanciesByCategory: GYG_AVAILABILITY_CATEGORIES.map((category) => ({
-          category,
-          vacancies,
-        })),
         pricesByCategory: pricing.pricesByCategory,
       };
+
+      return responseShape === 'vacancies'
+        ? {
+            ...baseAvailability,
+            vacancies,
+          }
+        : {
+            ...baseAvailability,
+            vacanciesByCategory: GYG_AVAILABILITY_CATEGORIES.map((category) => ({
+              category,
+              vacancies,
+            })),
+          };
     })
     .filter((slot): slot is GygAvailabilitySlot => slot !== null);
 };
