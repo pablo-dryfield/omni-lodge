@@ -13,6 +13,8 @@ import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { Env } from '../types/Env.js';
 import logger from '../utils/logger.js';
 import HttpError from '../errors/HttpError.js';
+import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { sendBadgeToPrint } from '../services/badgePrintService.js';
 
 const NAME_TO_SLUG: Record<string, string[]> = {
   guide: ['guide', 'pub-crawl-guide'],
@@ -98,17 +100,32 @@ const normalizeOptionalString = (value: unknown): string | null => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+const canManageOtherUserBadges = (request: AuthenticatedRequest): boolean => {
+  const roleSlug = request.authContext?.roleSlug ?? null;
+  return ['owner', 'admin', 'manager', 'assistant-manager'].includes(roleSlug ?? '');
+};
+
+const buildDisplayName = (user: Pick<User, 'firstName' | 'lastName' | 'username' | 'email'>): string => {
+  const first = user.firstName?.trim() ?? '';
+  const last = user.lastName?.trim() ?? '';
+  const combined = `${first} ${last}`.trim();
+  return combined || user.username || user.email;
+};
+
 declare const process: {
   env: Env;
 };
 
 function buildUserColumns() {
   const attributes = User.getAttributes();
-  return Object.entries(attributes).map(([key, attribute]) => ({
-    header: key.charAt(0).toUpperCase() + key.slice(1),
-    accessorKey: key,
-    type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-  }));
+  const hiddenColumns = new Set(['badgeName', 'badgePrefixEmoji', 'badgeSuffixEmoji']);
+  return Object.entries(attributes)
+    .filter(([key]) => !hiddenColumns.has(key))
+    .map(([key, attribute]) => ({
+      header: key.charAt(0).toUpperCase() + key.slice(1),
+      accessorKey: key,
+      type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
+    }));
 }
 
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
@@ -152,6 +169,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         facebookProfileUrl,
         instagramProfileUrl,
         discoverySource,
+        badgeName,
+        badgePrefixEmoji,
+        badgeSuffixEmoji,
       } = req.body;
 
       const existingUser = await User.findOne({
@@ -192,6 +212,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         facebookProfileUrl: normalizeOptionalString(facebookProfileUrl),
         instagramProfileUrl: normalizeOptionalString(instagramProfileUrl),
         discoverySource: normalizeOptionalString(discoverySource),
+        badgeName: normalizeOptionalString(badgeName),
+        badgePrefixEmoji: normalizeOptionalString(badgePrefixEmoji),
+        badgeSuffixEmoji: normalizeOptionalString(badgeSuffixEmoji),
       };
 
       const newUser = await User.create(userPayload, { transaction });
@@ -575,6 +598,55 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
   }
 };
 
+export const sendUserBadgeToPrint = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const request = req as AuthenticatedRequest;
+    const { id } = req.params;
+    const userId = Number(id);
+    const authenticatedUserId = request.authContext?.id ?? null;
+
+    if (!authenticatedUserId) {
+      res.status(401).json([{ message: 'Unauthorized' }]);
+      return;
+    }
+
+    if (authenticatedUserId !== userId && !canManageOtherUserBadges(request)) {
+      res.status(403).json([{ message: 'You are not allowed to send this badge to print.' }]);
+      return;
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      res.status(404).json([{ message: 'User not found' }]);
+      return;
+    }
+
+    const badgeName = normalizeOptionalString(req.body.badgeName) ?? user.badgeName ?? null;
+    const badgePrefixEmoji =
+      normalizeOptionalString(req.body.badgePrefixEmoji) ?? user.badgePrefixEmoji ?? null;
+    const badgeSuffixEmoji =
+      normalizeOptionalString(req.body.badgeSuffixEmoji) ?? user.badgeSuffixEmoji ?? null;
+
+    if (!badgeName) {
+      res.status(400).json([{ message: 'Badge name is required before sending to print.' }]);
+      return;
+    }
+
+    await sendBadgeToPrint({
+      userDisplayName: buildDisplayName(user),
+      badgeName,
+      badgePrefixEmoji,
+      badgeSuffixEmoji,
+    });
+
+    res.status(200).json([{ message: 'Badge sent to print.' }]);
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    logger.error(`Failed to send badge to print: ${errorMessage}`);
+    res.status(500).json([{ message: errorMessage }]);
+  }
+};
+
 export const deleteUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
@@ -623,3 +695,5 @@ export const streamProfilePhoto = async (req: Request, res: Response): Promise<v
     res.status(500).json([{ message: errorMessage }]);
   }
 };
+
+

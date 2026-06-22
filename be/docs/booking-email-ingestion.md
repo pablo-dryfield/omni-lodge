@@ -2,6 +2,8 @@
 
 Incoming reservations from Fareharbor, Ecwid, Viator, GetYourGuide, FreeTour, Airbnb, or manual sources are now synchronized by inspecting the Gmail mailbox connected through the existing Google OAuth credentials.
 
+GetYourGuide also has a direct supplier API integration now documented in `be/docs/getyourguide-integration.md`. Use that path when the GetYourGuide portal is configured to call the backend directly; keep this email pipeline for any bookings that still arrive via mailbox.
+
 ### Required Environment Variables
 
 | Variable | Description |

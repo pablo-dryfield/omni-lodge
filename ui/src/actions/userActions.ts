@@ -122,6 +122,33 @@ export const updateUser = createAsyncThunk(
   },
 );
 
+export const sendUserBadgeToPrint = createAsyncThunk(
+  'users/sendUserBadgeToPrint',
+  async (
+    {
+      userId,
+      badgeData,
+    }: {
+      userId: number;
+      badgeData: Pick<User, 'badgeName' | 'badgePrefixEmoji' | 'badgeSuffixEmoji'>;
+    },
+    { rejectWithValue },
+  ) => {
+    try {
+      const response = await axiosInstance.post<[{ message: string }]>(
+        `/users/${userId}/badge/send-to-print`,
+        badgeData,
+        {
+          withCredentials: true,
+        },
+      );
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(extractErrorMessage(error));
+    }
+  },
+);
+
 export const deleteUser = createAsyncThunk(
   'users/deleteUser',
   async (userId: number, { rejectWithValue }) => {

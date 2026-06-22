@@ -11,6 +11,11 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 type NotificationChannel = 'in_app' | 'email';
+type EmailAttachment = {
+  filename: string;
+  content: string | Buffer;
+  contentType?: string;
+};
 
 type TemplateKey =
   | 'availability_reminder_first'
@@ -168,6 +173,35 @@ async function sendEmail(template: TemplateConfig, user: User, payload: Record<s
     });
   } catch (error) {
     logger.error(`Failed to send notification email to ${email}: ${(error as Error).message}`);
+  }
+}
+
+export async function sendDirectEmail(options: {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+  attachments?: EmailAttachment[];
+}): Promise<void> {
+  const activeTransporter = ensureTransporter();
+  if (!activeTransporter) {
+    return;
+  }
+
+  const from = (getConfigValue('SMTP_FROM') as string | null) ?? 'noreply@omni-lodge.test';
+
+  try {
+    await activeTransporter.sendMail({
+      from,
+      to: options.to,
+      subject: options.subject,
+      html: options.html,
+      text: options.text,
+      attachments: options.attachments,
+    });
+  } catch (error) {
+    logger.error(`Failed to send direct email to ${options.to}: ${(error as Error).message}`);
+    throw error;
   }
 }
 

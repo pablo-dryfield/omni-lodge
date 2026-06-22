@@ -21,9 +21,10 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { IconAlertCircle, IconDeviceFloppy, IconRefresh } from "@tabler/icons-react";
+import { IconAlertCircle, IconDeviceFloppy, IconIdBadge, IconPrinter, IconRefresh } from "@tabler/icons-react";
+import QRCode from "qrcode";
 
-import { fetchUsers, updateUser } from "../actions/userActions";
+import { fetchUsers, sendUserBadgeToPrint, updateUser } from "../actions/userActions";
 import { fetchStaffProfiles } from "../actions/staffProfileActions";
 import { setUserState } from "../actions/sessionActions";
 import { useShiftRoleAssignments, useShiftRoles } from "../api/shiftRoles";
@@ -85,6 +86,12 @@ type UserFormState = {
   discoverySource: string;
 };
 
+type BadgeFormState = {
+  badgeName: string;
+  badgePrefixEmoji: string;
+  badgeSuffixEmoji: string;
+};
+
 type StaffProfileFormState = {
   staffType: StaffProfile["staffType"] | "";
   livesInAccom: boolean;
@@ -100,6 +107,18 @@ const PROFILE_PHOTO_COMPRESSION_OPTIONS = {
   force: true,
   outputMimeType: "image/jpeg" as const,
 };
+
+const BADGE_TEMPLATE_SRC = "/assets/badges/ktk-guide-badge.svg";
+const BADGE_BACKSIDE_TEMPLATE_SRC = "/assets/badges/ktk-backside-badge.png";
+const BADGE_CAMPAIGN_BASE_URL =
+  "https://krawlthroughkrakow.com/store/Krakow-Pub-Crawl-with-Krawl-Through-Krakow-p637047413/";
+const BADGE_BACKSIDE_QR_STYLE = {
+  left: "30.7258%",
+  top: "19.4508%",
+  width: "36.4516%",
+  height: "25.8581%",
+} as const;
+
 
 const userFieldMap: Record<keyof UserFormState, keyof User> = {
   username: "username",
@@ -168,6 +187,55 @@ const buildUserFormState = (user?: Partial<User>): UserFormState => ({
   discoverySource: user?.discoverySource ?? "",
 });
 
+const buildBadgeFormState = (user?: Partial<User>): BadgeFormState => ({
+  badgeName: user?.badgeName ?? "",
+  badgePrefixEmoji: user?.badgePrefixEmoji ?? "",
+  badgeSuffixEmoji: user?.badgeSuffixEmoji ?? "",
+});
+
+const normalizeBadgeCampaignValue = (badgeName: string) => {
+  const trimmed = compareString(badgeName).trim();
+  if (!trimmed) {
+    return "Staff";
+  }
+  const lowerCased = trimmed.toLocaleLowerCase();
+  return `${lowerCased.charAt(0).toLocaleUpperCase()}${lowerCased.slice(1)}`;
+};
+
+const buildNormalizedBadgeValues = (badgeForm: BadgeFormState) => {
+  const badgeName = compareString(badgeForm.badgeName).trim();
+  const badgePrefixEmoji = compareString(badgeForm.badgePrefixEmoji).trim();
+  const badgeSuffixEmoji = compareString(badgeForm.badgeSuffixEmoji).trim();
+
+  return {
+    badgeName,
+    badgePrefixEmoji,
+    badgeSuffixEmoji,
+  };
+};
+
+const buildBadgeUpdatePayload = (
+  baseline: BadgeFormState,
+  badgeForm: BadgeFormState,
+): Partial<User> => {
+  const payload: Partial<User> = {};
+  const normalized = buildNormalizedBadgeValues(badgeForm);
+
+  if (compareString(baseline.badgeName) !== normalized.badgeName) {
+    payload.badgeName = normalized.badgeName.length > 0 ? normalized.badgeName : null;
+  }
+  if (compareString(baseline.badgePrefixEmoji) !== normalized.badgePrefixEmoji) {
+    payload.badgePrefixEmoji =
+      normalized.badgePrefixEmoji.length > 0 ? normalized.badgePrefixEmoji : null;
+  }
+  if (compareString(baseline.badgeSuffixEmoji) !== normalized.badgeSuffixEmoji) {
+    payload.badgeSuffixEmoji =
+      normalized.badgeSuffixEmoji.length > 0 ? normalized.badgeSuffixEmoji : null;
+  }
+
+  return payload;
+};
+
 const buildStaffProfileFormState = (profile?: Partial<StaffProfile>): StaffProfileFormState => ({
   staffType: profile?.staffType ?? "",
   livesInAccom: profile?.livesInAccom ?? false,
@@ -208,6 +276,14 @@ const makeInitials = (name: string | undefined) => {
 };
 
 const compareString = (value?: string | null) => value ?? "";
+
+const buildBadgeCampaignUrl = (badgeName: string) => {
+  const url = new URL(BADGE_CAMPAIGN_BASE_URL);
+  url.searchParams.set("utm_source", "Staff");
+  url.searchParams.set("utm_medium", "Badge");
+  url.searchParams.set("utm_campaign", normalizeBadgeCampaignValue(badgeName));
+  return url.toString();
+};
 
 const derivePronounState = (value?: string | null) => {
   const trimmed = value?.trim() ?? "";
@@ -267,6 +343,8 @@ const MyAccount = () => {
     () => buildStaffProfileFormState(currentStaffProfile),
     [currentStaffProfile],
   );
+  const badgeBaseline = useMemo(() => buildBadgeFormState(currentUser), [currentUser]);
+
   const pronounBaselineState = useMemo(
     () => derivePronounState(userBaseline.preferredPronouns),
     [userBaseline.preferredPronouns],
@@ -297,6 +375,8 @@ const MyAccount = () => {
   const [whatsappPhoneError, setWhatsappPhoneError] = useState<string | null>(null);
 
   useEffect(() => setUserForm(userBaseline), [userBaseline]);
+  useEffect(() => setBadgeForm(badgeBaseline), [badgeBaseline]);
+
   useEffect(() => {
     const phoneParts = splitPhoneNumber(userBaseline.phone);
     setPhoneCountryCode(phoneParts.code);
@@ -359,6 +439,15 @@ const MyAccount = () => {
 
   const [userFeedback, setUserFeedback] = useState<FeedbackState>(null);
   const [userSaving, setUserSaving] = useState(false);
+  const [badgeForm, setBadgeForm] = useState<BadgeFormState>({
+    badgeName: "",
+    badgePrefixEmoji: "",
+    badgeSuffixEmoji: "",
+  });
+  const [badgeFeedback, setBadgeFeedback] = useState<FeedbackState>(null);
+  const [badgeSaving, setBadgeSaving] = useState(false);
+  const [badgePrintSending, setBadgePrintSending] = useState(false);
+  const [badgeBacksideQrSrc, setBadgeBacksideQrSrc] = useState<string | null>(null);
   const [passwordForm, setPasswordForm] = useState({ newPassword: "", confirmPassword: "" });
   const [passwordFeedback, setPasswordFeedback] = useState<FeedbackState>(null);
   const [passwordSaving, setPasswordSaving] = useState(false);
@@ -441,6 +530,14 @@ const MyAccount = () => {
         return compareString(userForm[typedKey]) !== compareString(userBaseline[typedKey]);
       }),
     [userForm, userBaseline],
+  );
+
+  const badgeDirty = useMemo(
+    () =>
+      compareString(badgeForm.badgeName) !== compareString(badgeBaseline.badgeName) ||
+      compareString(badgeForm.badgePrefixEmoji) !== compareString(badgeBaseline.badgePrefixEmoji) ||
+      compareString(badgeForm.badgeSuffixEmoji) !== compareString(badgeBaseline.badgeSuffixEmoji),
+    [badgeBaseline, badgeForm],
   );
 
   const saveUser = async () => {
@@ -535,6 +632,75 @@ const MyAccount = () => {
       setUserFeedback({ type: "error", message: toMessage(error, "Unable to save user changes.") });
     } finally {
       setUserSaving(false);
+    }
+  };
+
+  const saveBadge = async () => {
+    if (!loggedUserId || !currentUser || !badgeDirty) {
+      return;
+    }
+
+    const payload = buildBadgeUpdatePayload(badgeBaseline, badgeForm);
+
+    if (Object.keys(payload).length === 0) {
+      setBadgeFeedback({ type: "success", message: "Nothing to update." });
+      return;
+    }
+
+    setBadgeFeedback(null);
+    setBadgeSaving(true);
+    try {
+      await dispatch(updateUser({ userId: loggedUserId, userData: payload })).unwrap();
+      setBadgeFeedback({ type: "success", message: "Badge updated successfully." });
+    } catch (error) {
+      setBadgeFeedback({ type: "error", message: toMessage(error, "Unable to save badge changes.") });
+    } finally {
+      setBadgeSaving(false);
+    }
+  };
+
+  const handleSendBadgeToPrint = async () => {
+    if (!loggedUserId || !currentUser) {
+      return;
+    }
+
+    const normalized = buildNormalizedBadgeValues(badgeForm);
+    if (!normalized.badgeName) {
+      setBadgeFeedback({ type: "error", message: "Badge name is required before sending to print." });
+      return;
+    }
+
+    const payload = buildBadgeUpdatePayload(badgeBaseline, badgeForm);
+
+    setBadgeFeedback(null);
+    setBadgePrintSending(true);
+    try {
+      if (Object.keys(payload).length > 0) {
+        await dispatch(updateUser({ userId: loggedUserId, userData: payload })).unwrap();
+      }
+
+      await dispatch(
+        sendUserBadgeToPrint({
+          userId: loggedUserId,
+          badgeData: {
+            badgeName: normalized.badgeName,
+            badgePrefixEmoji: normalized.badgePrefixEmoji || null,
+            badgeSuffixEmoji: normalized.badgeSuffixEmoji || null,
+          },
+        }),
+      ).unwrap();
+
+      setBadgeFeedback({
+        type: "success",
+        message:
+          Object.keys(payload).length > 0
+            ? "Badge updated and sent to print."
+            : "Badge sent to print.",
+      });
+    } catch (error) {
+      setBadgeFeedback({ type: "error", message: toMessage(error, "Unable to send badge to print.") });
+    } finally {
+      setBadgePrintSending(false);
     }
   };
 
@@ -942,6 +1108,51 @@ const MyAccount = () => {
       : null;
 
   const photoDirty = profilePhotoDirty && (Boolean(profilePhotoFile) || removePhotoRequested);
+  const badgePrefixEmoji = compareString(badgeForm.badgePrefixEmoji).trim();
+  const badgeName = compareString(badgeForm.badgeName).trim();
+  const badgeSuffixEmoji = compareString(badgeForm.badgeSuffixEmoji).trim();
+  const hasBadgePreviewLabel =
+    badgePrefixEmoji.length > 0 || badgeName.length > 0 || badgeSuffixEmoji.length > 0;
+  const badgePreviewUnits =
+    badgeName.length * 1.2 + (badgePrefixEmoji ? 3 : 0) + (badgeSuffixEmoji ? 3 : 0);
+  const badgePreviewFontSize =
+    badgePreviewUnits <= 7
+      ? "clamp(25px, 3.3vw, 35px)"
+      : badgePreviewUnits <= 10
+        ? "clamp(22px, 2.9vw, 30px)"
+        : badgePreviewUnits <= 13
+          ? "clamp(20px, 2.6vw, 27px)"
+          : badgePreviewUnits <= 16
+            ? "clamp(18px, 2.4vw, 24px)"
+            : "clamp(16px, 2.1vw, 21px)";
+
+  useEffect(() => {
+    let active = true;
+    const qrBadgeName = badgeName || "Staff";
+
+    QRCode.toDataURL(buildBadgeCampaignUrl(qrBadgeName), {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      color: {
+        dark: "#000000",
+        light: "#FFFFFF",
+      },
+    })
+      .then((value) => {
+        if (active) {
+          setBadgeBacksideQrSrc(value);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setBadgeBacksideQrSrc(null);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [badgeName]);
 
   if (!loggedUserId) {
     return (
@@ -1473,6 +1684,212 @@ const MyAccount = () => {
             <Stack gap="md">
               <Group justify="space-between" align="flex-start">
                 <div>
+                  <Group gap="xs" align="center">
+                    <IconIdBadge size={18} />
+                    <Title order={4}>Badge</Title>
+                  </Group>
+                  <Text size="sm" c="dimmed">
+                    Customize the text and emojis printed on your staff badge.
+                  </Text>
+                </div>
+                <Group gap="xs">
+                  <Button
+                    variant="light"
+                    size="sm"
+                    disabled={!badgeDirty || badgeSaving || badgePrintSending}
+                    onClick={() => {
+                      setBadgeForm(badgeBaseline);
+                      setBadgeFeedback(null);
+                    }}
+                  >
+                    Reset
+                  </Button>
+                  <Button
+                    leftSection={<IconPrinter size={16} />}
+                    size="sm"
+                    variant="light"
+                    onClick={handleSendBadgeToPrint}
+                    disabled={badgeSaving}
+                    loading={badgePrintSending}
+                  >
+                    Send to Print
+                  </Button>
+                  <Button
+                    leftSection={<IconDeviceFloppy size={16} />}
+                    size="sm"
+                    onClick={saveBadge}
+                    disabled={!badgeDirty || badgePrintSending}
+                    loading={badgeSaving}
+                  >
+                    Save badge
+                  </Button>
+                </Group>
+              </Group>
+              {badgeFeedback && (
+                <Alert
+                  color={badgeFeedback.type === "success" ? "teal" : "red"}
+                  icon={<IconAlertCircle size={16} />}
+                  variant="light"
+                >
+                  {badgeFeedback.message}
+                </Alert>
+              )}
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+                <Stack gap="md" align="center">
+                  <Box
+                    style={{
+                      position: "relative",
+                      width: "100%",
+                      maxWidth: 420,
+                      marginInline: "auto",
+                    }}
+                  >
+                    <Box
+                      component="img"
+                      src={BADGE_TEMPLATE_SRC}
+                      alt="Staff badge front preview"
+                      style={{ display: "block", width: "100%", height: "auto" }}
+                    />
+                    <Box
+                      style={{
+                        position: "absolute",
+                        left: "21.5%",
+                        top: "57.0%",
+                        width: "49.9%",
+                        height: "11.9%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        paddingInline: "4%",
+                        textAlign: "center",
+                        color: "#111",
+                        fontSize: badgePreviewFontSize,
+                        lineHeight: 1.05,
+                        overflow: "hidden",
+                        pointerEvents: "none",
+                        whiteSpace: "nowrap",
+                        flexWrap: "nowrap",
+                        gap: "0.12em",
+                      }}
+                    >
+                      {hasBadgePreviewLabel ? (
+                        <>
+                          {badgePrefixEmoji ? (
+                            <Text
+                              component="span"
+                              inherit
+                              style={{
+                                fontFamily:
+                                  '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif',
+                              }}
+                            >
+                              {badgePrefixEmoji}
+                            </Text>
+                          ) : null}
+                          {badgeName ? (
+                            <Text
+                              component="span"
+                              inherit
+                              fw={900}
+                              style={{
+                                fontFamily: '"Montserrat", sans-serif',
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {badgeName}
+                            </Text>
+                          ) : null}
+                          {badgeSuffixEmoji ? (
+                            <Text
+                              component="span"
+                              inherit
+                              style={{
+                                fontFamily:
+                                  '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif',
+                              }}
+                            >
+                              {badgeSuffixEmoji}
+                            </Text>
+                          ) : null}
+                        </>
+                      ) : (
+                        <Text
+                          component="span"
+                          inherit
+                          fw={900}
+                          style={{ fontFamily: '"Montserrat", sans-serif' }}
+                        >
+                          Your badge name
+                        </Text>
+                      )}
+                    </Box>
+                  </Box>
+                  <Box
+                    style={{
+                      position: "relative",
+                      width: "100%",
+                      maxWidth: 230,
+                      marginInline: "auto",
+                    }}
+                  >
+                    <Box
+                      component="img"
+                      src={BADGE_BACKSIDE_TEMPLATE_SRC}
+                      alt="Staff badge backside preview"
+                      style={{ display: "block", width: "100%", height: "auto" }}
+                    />
+                    {badgeBacksideQrSrc ? (
+                      <Box
+                        component="img"
+                        src={badgeBacksideQrSrc}
+                        alt="Personalized join the party QR code preview"
+                        style={{
+                          position: "absolute",
+                          ...BADGE_BACKSIDE_QR_STYLE,
+                          display: "block",
+                          objectFit: "contain",
+                        }}
+                      />
+                    ) : null}
+                  </Box>
+                </Stack>
+                <Stack gap="md">
+                  <TextInput
+                    label="Badge name"
+                    placeholder="Alex Marin"
+                    value={badgeForm.badgeName}
+                    onChange={(event) =>
+                      setBadgeForm((prev) => ({ ...prev, badgeName: event.currentTarget.value }))
+                    }
+                  />
+                  <TextInput
+                    label="Prefix emoji"
+                    placeholder="Prefix emoji"
+                    value={badgeForm.badgePrefixEmoji}
+                    onChange={(event) =>
+                      setBadgeForm((prev) => ({ ...prev, badgePrefixEmoji: event.currentTarget.value }))
+                    }
+                  />
+                  <TextInput
+                    label="Suffix emoji"
+                    placeholder="Suffix emoji"
+                    value={badgeForm.badgeSuffixEmoji}
+                    onChange={(event) =>
+                      setBadgeForm((prev) => ({ ...prev, badgeSuffixEmoji: event.currentTarget.value }))
+                    }
+                  />
+                  <Text size="xs" c="dimmed">
+                    Leave either emoji field empty if you do not want it printed.
+                  </Text>
+                </Stack>
+              </SimpleGrid>
+            </Stack>
+          </Card>
+
+          <Card withBorder radius="lg" shadow="sm">
+            <Stack gap="md">
+              <Group justify="space-between" align="flex-start">
+                <div>
                   <Title order={4}>Password</Title>
                   <Text size="sm" c="dimmed">
                     Use a unique password to keep your account secure.
@@ -1617,3 +2034,7 @@ const MyAccount = () => {
 };
 
 export default MyAccount;
+
+
+
+

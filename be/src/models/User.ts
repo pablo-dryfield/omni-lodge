@@ -118,6 +118,26 @@ export default class User extends Model {
   declare discoverySource: string | null;
 
   @AllowNull(true)
+  @Column({ field: 'profile_photo_path', type: DataType.STRING })
+  declare profilePhotoPath: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'profile_photo_url', type: DataType.STRING })
+  declare profilePhotoUrl: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'badge_name', type: DataType.STRING })
+  declare badgeName: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'badge_prefix_emoji', type: DataType.STRING })
+  declare badgePrefixEmoji: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'badge_suffix_emoji', type: DataType.STRING })
+  declare badgeSuffixEmoji: string | null;
+
+  @AllowNull(true)
   @Column(DataType.INTEGER)
   declare userTypeId: number;
 
@@ -148,14 +168,6 @@ export default class User extends Model {
   @Default(true)
   @Column(DataType.BOOLEAN)
   declare status: boolean;
-
-  @AllowNull(true)
-  @Column({ field: 'profile_photo_path', type: DataType.STRING })
-  declare profilePhotoPath: string | null;
-
-  @AllowNull(true)
-  @Column({ field: 'profile_photo_url', type: DataType.STRING })
-  declare profilePhotoUrl: string | null;
 
   @BelongsToMany(() => ShiftRole, () => UserShiftRole)
   declare shiftRoles?: NonAttribute<Array<ShiftRole & { UserShiftRole: UserShiftRole }>>;

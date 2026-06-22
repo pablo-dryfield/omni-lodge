@@ -24,6 +24,9 @@ export type User = {
   discoverySource?: string | null;
   profilePhotoPath?: string | null;
   profilePhotoUrl?: string | null;
+  badgeName?: string | null;
+  badgePrefixEmoji?: string | null;
+  badgeSuffixEmoji?: string | null;
   userTypeId?: number;
   createdAt: Date;
   updatedAt: Date;
@@ -34,3 +37,4 @@ export type User = {
   livesInAccom?: boolean;
   shiftRoleIds?: number[];
 };
+

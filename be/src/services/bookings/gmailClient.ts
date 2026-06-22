@@ -219,6 +219,11 @@ type SendMessageParams = {
   body?: string;
   textBody?: string;
   htmlBody?: string | null;
+  attachments?: Array<{
+    filename: string;
+    content: string | Buffer;
+    contentType?: string;
+  }>;
 };
 
 export type SendMessageResult = {
@@ -233,9 +238,13 @@ const encodeBase64Url = (value: string): string =>
     .replace(/\//g, '_')
     .replace(/=+$/g, '');
 
+const encodeBase64 = (value: string | Buffer): string =>
+  Buffer.isBuffer(value) ? value.toString('base64') : Buffer.from(value, 'utf-8').toString('base64');
+
 const buildRawMessage = (params: SendMessageParams): string => {
   const normalizedTextBody = (params.textBody ?? params.body ?? '').replace(/\r\n/g, '\n');
   const normalizedHtmlBody = (params.htmlBody ?? '').replace(/\r\n/g, '\n').trim();
+  const attachments = Array.isArray(params.attachments) ? params.attachments : [];
 
   const messageLines: string[] = [
     `To: ${params.to}`,
@@ -243,7 +252,55 @@ const buildRawMessage = (params: SendMessageParams): string => {
     'MIME-Version: 1.0',
   ];
 
-  if (normalizedHtmlBody.length > 0) {
+  if (attachments.length > 0) {
+    const mixedBoundary = `omni-lodge-mixed-${Date.now().toString(16)}`;
+    const alternativeBoundary = `omni-lodge-alt-${(Date.now() + 1).toString(16)}`;
+    messageLines.push(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"`);
+    messageLines.push('');
+    messageLines.push(`--${mixedBoundary}`);
+
+    if (normalizedHtmlBody.length > 0) {
+      messageLines.push(`Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`);
+      messageLines.push('');
+      messageLines.push(`--${alternativeBoundary}`);
+      messageLines.push('Content-Type: text/plain; charset="UTF-8"');
+      messageLines.push('Content-Transfer-Encoding: 8bit');
+      messageLines.push('');
+      messageLines.push(normalizedTextBody);
+      messageLines.push('');
+      messageLines.push(`--${alternativeBoundary}`);
+      messageLines.push('Content-Type: text/html; charset="UTF-8"');
+      messageLines.push('Content-Transfer-Encoding: 8bit');
+      messageLines.push('');
+      messageLines.push(normalizedHtmlBody);
+      messageLines.push('');
+      messageLines.push(`--${alternativeBoundary}--`);
+    } else {
+      messageLines.push('Content-Type: text/plain; charset="UTF-8"');
+      messageLines.push('Content-Transfer-Encoding: 8bit');
+      messageLines.push('');
+      messageLines.push(normalizedTextBody);
+    }
+
+    attachments.forEach((attachment) => {
+      const fileName = String(attachment.filename ?? 'attachment');
+      const contentType = String(attachment.contentType ?? 'application/octet-stream');
+      messageLines.push('');
+      messageLines.push(`--${mixedBoundary}`);
+      messageLines.push(`Content-Type: ${contentType}; name="${fileName}"`);
+      messageLines.push('Content-Transfer-Encoding: base64');
+      messageLines.push(`Content-Disposition: attachment; filename="${fileName}"`);
+      messageLines.push('');
+
+      const encoded = encodeBase64(attachment.content);
+      for (let index = 0; index < encoded.length; index += 76) {
+        messageLines.push(encoded.slice(index, index + 76));
+      }
+    });
+
+    messageLines.push('');
+    messageLines.push(`--${mixedBoundary}--`);
+  } else if (normalizedHtmlBody.length > 0) {
     const boundary = `omni-lodge-email-boundary-${Date.now().toString(16)}`;
     messageLines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
     messageLines.push('');

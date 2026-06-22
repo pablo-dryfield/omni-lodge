@@ -59,6 +59,13 @@ router.get(
   validate,
   userController.streamProfilePhoto,
 );
+router.post(
+  '/:id/badge/send-to-print',
+  authMiddleware,
+  validateId,
+  validate,
+  userController.sendUserBadgeToPrint,
+);
 router.put(
   '/:id',
   authMiddleware,
