@@ -24,8 +24,14 @@ router.post('/bookings/:platformBookingId', getYourGuideBasicAuthMiddleware, ing
 router.post('/bookings/:platformBookingId/cancel', getYourGuideBasicAuthMiddleware, ingestCancellation);
 router.post('/reserve', getYourGuideBasicAuthMiddleware, ingestReservation);
 router.post('/cancel-reserve', getYourGuideBasicAuthMiddleware, ingestCancellation);
+router.post('/book', getYourGuideBasicAuthMiddleware, ingestBooking);
+router.post('/cancel-booking', getYourGuideBasicAuthMiddleware, ingestCancellation);
+router.post('/cancel-reservation', getYourGuideBasicAuthMiddleware, ingestCancellation);
 router.post('/:version/reserve', getYourGuideBasicAuthMiddleware, ingestReservation);
 router.post('/:version/cancel-reserve', getYourGuideBasicAuthMiddleware, ingestCancellation);
+router.post('/:version/book', getYourGuideBasicAuthMiddleware, ingestBooking);
+router.post('/:version/cancel-booking', getYourGuideBasicAuthMiddleware, ingestCancellation);
+router.post('/:version/cancel-reservation', getYourGuideBasicAuthMiddleware, ingestCancellation);
 router.post('/:version/bookings', getYourGuideBasicAuthMiddleware, ingestBooking);
 router.post('/:version/bookings/:platformBookingId', getYourGuideBasicAuthMiddleware, ingestBooking);
 router.post('/:version/bookings/:platformBookingId/cancel', getYourGuideBasicAuthMiddleware, ingestCancellation);
