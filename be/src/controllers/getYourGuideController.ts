@@ -73,10 +73,15 @@ const resolveRequestedDate = (req: Request): string | null => {
   );
 };
 
-const buildReservationResponse = (reservationReference: string): { data: { reservationReference: string } } => {
+const buildReservationResponse = (
+  reservationReference: string,
+): { data: { reservationReference: string; reservationExpiration: string } } => {
   return {
     data: {
       reservationReference,
+      reservationExpiration: new Date(Date.now() + 60 * 60 * 1000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, '+00:00'),
     },
   };
 };

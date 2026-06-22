@@ -8,6 +8,7 @@ import Booking from '../models/Booking.js';
 import BookingEvent from '../models/BookingEvent.js';
 import Channel from '../models/Channel.js';
 import Product from '../models/Product.js';
+import ProductPrice from '../models/ProductPrice.js';
 import ShiftAssignment from '../models/ShiftAssignment.js';
 import ShiftInstance from '../models/ShiftInstance.js';
 import ShiftTypeProduct from '../models/ShiftTypeProduct.js';
@@ -55,10 +56,37 @@ type GygAvailabilitySlot = {
   dateTime: string;
   vacancies: number;
   cutoffSeconds: number;
+  currency: string;
+  vacanciesByCategory: Array<{ category: GygTicketCategory; vacancies: number }>;
+  pricesByCategory: {
+    retailPrices: Array<{ category: GygTicketCategory; price: number }>;
+  };
 };
 
 const GYG_PLATFORM = 'getyourguide';
 const GYG_CHANNEL_NAME = 'GetYourGuide';
+const GYG_AVAILABILITY_CURRENCY = 'EUR';
+type GygTicketCategory =
+  | 'ADULT'
+  | 'CHILD'
+  | 'YOUTH'
+  | 'INFANT'
+  | 'SENIOR'
+  | 'STUDENT'
+  | 'EU_CITIZEN'
+  | 'MILITARY'
+  | 'EU_CITIZEN_STUDENT';
+const GYG_AVAILABILITY_CATEGORIES: GygTicketCategory[] = [
+  'ADULT',
+  'CHILD',
+  'YOUTH',
+  'INFANT',
+  'SENIOR',
+  'STUDENT',
+  'EU_CITIZEN',
+  'MILITARY',
+  'EU_CITIZEN_STUDENT',
+];
 const DEFAULT_TIMEZONE =
   (getConfigValue('GETYOURGUIDE_TIMEZONE') as string | null) ??
   (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ??
@@ -387,6 +415,59 @@ const readInvalidCategoryDates = (): Set<string> => {
   return new Set(configuredDates.length > 0 ? configuredDates : DEFAULT_GYG_INVALID_CATEGORY_DATES);
 };
 
+const toMinorCurrencyUnits = (value: number): number => {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.round(value * 100));
+};
+
+const buildAvailabilityPricing = async (productId: number): Promise<{
+  currency: string;
+  pricesByCategory: { retailPrices: Array<{ category: GygTicketCategory; price: number }> };
+}> => {
+  const today = dayjs().format('YYYY-MM-DD');
+  const [currentProductPrice, product] = await Promise.all([
+    ProductPrice.findOne({
+      where: {
+        productId,
+        validFrom: { [Op.lte]: today },
+        [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: today } }],
+      },
+      order: [
+        ['validFrom', 'DESC'],
+        ['id', 'DESC'],
+      ],
+    }),
+    Product.findByPk(productId),
+  ]);
+
+  const fallbackBasePrice = Number(product?.price ?? 0) > 0 ? Number(product?.price ?? 0) : 15;
+  const basePrice = Number(currentProductPrice?.price ?? fallbackBasePrice);
+  const adultPrice = toMinorCurrencyUnits(basePrice > 0 ? basePrice : fallbackBasePrice);
+  const childPrice = toMinorCurrencyUnits(Math.max(basePrice * 0.7, 10));
+  const youthPrice = toMinorCurrencyUnits(Math.max(basePrice * 0.85, 10));
+  const seniorPrice = toMinorCurrencyUnits(Math.max(basePrice * 0.9, 10));
+  const infantPrice = 0;
+
+  return {
+    currency: GYG_AVAILABILITY_CURRENCY,
+    pricesByCategory: {
+      retailPrices: GYG_AVAILABILITY_CATEGORIES.map((category) => ({
+        category,
+        price:
+          category === 'CHILD' || category === 'YOUTH'
+            ? childPrice || 1000
+            : category === 'INFANT'
+              ? infantPrice
+              : category === 'SENIOR'
+                ? seniorPrice || adultPrice || 1500
+                : adultPrice || 1500,
+      })),
+    },
+  };
+};
+
 const readBookingItems = (records: Record<string, unknown>[]): Record<string, unknown>[] => {
   const bookingItems = readFirstArray(records, ['bookingItems', 'booking_items']);
   return bookingItems?.filter(isRecord) ?? [];
@@ -413,6 +494,7 @@ const listGygAvailabilitySlots = async (
   timezoneName: string,
 ): Promise<GygAvailabilitySlot[]> => {
   const zeroVacancyDates = readZeroVacancyDates();
+  const pricing = await buildAvailabilityPricing(productId);
   const shiftTypeLinks = await ShiftTypeProduct.findAll({ where: { productId } });
   const shiftTypeIds = shiftTypeLinks.map((link) => link.shiftTypeId);
 
@@ -484,6 +566,12 @@ const listGygAvailabilitySlots = async (
         dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
         vacancies,
         cutoffSeconds: 0,
+        currency: pricing.currency,
+        vacanciesByCategory: GYG_AVAILABILITY_CATEGORIES.map((category) => ({
+          category,
+          vacancies,
+        })),
+        pricesByCategory: pricing.pricesByCategory,
       };
     })
     .filter((slot): slot is GygAvailabilitySlot => slot !== null);
