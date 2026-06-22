@@ -25,12 +25,13 @@ The backend accepts either credential pair, so the same deployment can serve bot
 ### Exposed endpoints
 
 - `GET /api/gyg/health` — simple connectivity check.
-- `GET /api/gyg/availability?date=YYYY-MM-DD&productId=123` — returns a minimal availability summary backed by the existing schedule data.
-- `POST /api/gyg/reserve` — ingest a reservation-style booking payload.
-- `POST /api/gyg/cancel-reserve` — ingest a cancellation payload.
-- `POST /api/gyg/bookings` — generic ingest alias.
-- `POST /api/gyg/bookings/:platformBookingId/cancel` — cancellation alias.
-- `GET /api/gyg/bookings/:platformBookingId` — fetch the normalized booking record for verification.
+- `GET /api/gyg/1/get-availabilities?productId=123&fromDateTime=...&toDateTime=...` — GetYourGuide’s availability query.
+- `GET /api/gyg/availability?date=YYYY-MM-DD&productId=123` — local fallback summary endpoint.
+- `POST /api/gyg/1/reserve` — reservation hold request.
+- `POST /api/gyg/1/cancel-reserve` — reservation cancellation.
+- `POST /api/gyg/1/bookings` — booking creation alias.
+- `POST /api/gyg/1/bookings/:platformBookingId/cancel` — booking cancellation alias.
+- `GET /api/gyg/1/bookings/:platformBookingId` — fetch the normalized booking record for verification.
 
 ### Behavior
 
@@ -38,7 +39,7 @@ The backend accepts either credential pair, so the same deployment can serve bot
 - The route reuses the existing `getyourguide` platform slug and tries to assign the `GetYourGuide` channel via the existing booking platform-channel map.
 - Bookings are matched by `platform='getyourguide'` and the external booking reference.
 - Cancellation payloads set the booking status to `cancelled`.
-- Availability lookups use the internal product/schedule mapping as a pragmatic baseline; if GYG needs a stricter category-level availability contract, that should be wired next against the exact portal schema.
+- Availability lookups now match the versioned GetYourGuide self-testing path and return a flat timeslot array. If GYG later enables category-level vacancy or pricing tests, we’ll need to extend the payload shape to match that exact contract.
 
 ### Portal notes
 

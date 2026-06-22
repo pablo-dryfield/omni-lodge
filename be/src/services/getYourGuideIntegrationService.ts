@@ -8,6 +8,9 @@ import Booking from '../models/Booking.js';
 import BookingEvent from '../models/BookingEvent.js';
 import Channel from '../models/Channel.js';
 import Product from '../models/Product.js';
+import ShiftAssignment from '../models/ShiftAssignment.js';
+import ShiftInstance from '../models/ShiftInstance.js';
+import ShiftTypeProduct from '../models/ShiftTypeProduct.js';
 import HttpError from '../errors/HttpError.js';
 import { getConfigValue } from './configService.js';
 import { listScheduledStaffForProduct } from './scheduleService.js';
@@ -41,6 +44,11 @@ type GygAvailabilityResult = {
   bookingCount: number;
   scheduledStaff: { userIds: number[]; managerIds: number[] };
   notes: string[];
+};
+
+type GygAvailabilitySlot = {
+  dateTime: string;
+  vacancies: number;
 };
 
 const GYG_PLATFORM = 'getyourguide';
@@ -205,6 +213,11 @@ const parseDateTime = (dateValue: string | null, timeValue: string | null): Date
 
   const parsed = dayjs.tz(`${dateOnly} 00:00`, 'YYYY-MM-DD HH:mm', DEFAULT_TIMEZONE);
   return parsed.isValid() ? parsed.toDate() : null;
+};
+
+const formatOffsetDateTime = (date: string, time: string, timezoneName: string): string => {
+  const parsed = dayjs.tz(`${date} ${time}`, 'YYYY-MM-DD HH:mm', timezoneName);
+  return parsed.format('YYYY-MM-DDTHH:mm:ssZ');
 };
 
 const parseMoney = (value: unknown): string | null => {
@@ -584,56 +597,95 @@ export const fetchGetYourGuideBooking = async (platformBookingId: string): Promi
   });
 };
 
-export const getGetYourGuideAvailability = async (
-  date: string,
-  productIdOrPayload: unknown,
-): Promise<GygAvailabilityResult> => {
-  const normalizedDate = extractDateOnly(date);
-  if (!normalizedDate) {
-    throw new HttpError(400, 'A valid YYYY-MM-DD date is required');
+const parseDateTimeInput = (value: unknown): dayjs.Dayjs | null => {
+  const raw = normalizeText(value);
+  if (!raw) {
+    return null;
+  }
+  const parsed = dayjs(raw);
+  return parsed.isValid() ? parsed : null;
+};
+
+const readAvailabilityWindow = (query: Record<string, unknown>): { from: dayjs.Dayjs; to: dayjs.Dayjs } => {
+  const from = parseDateTimeInput(query.fromDateTime);
+  const to = parseDateTimeInput(query.toDateTime);
+  if (!from || !to) {
+    throw new HttpError(400, 'fromDateTime and toDateTime are required');
+  }
+  return { from, to };
+};
+
+const buildFallbackSlots = (from: dayjs.Dayjs, to: dayjs.Dayjs, timezoneName: string): GygAvailabilitySlot[] => {
+  const slots: GygAvailabilitySlot[] = [];
+  let cursor = from.startOf('day');
+  const end = to.startOf('day');
+
+  while (cursor.isBefore(end) || cursor.isSame(end, 'day')) {
+    const day = cursor.format('YYYY-MM-DD');
+    slots.push(
+      { dateTime: formatOffsetDateTime(day, '10:00', timezoneName), vacancies: 99 },
+      { dateTime: formatOffsetDateTime(day, '14:00', timezoneName), vacancies: 99 },
+    );
+    cursor = cursor.add(1, 'day');
   }
 
-  const records = collectRecordCandidates(productIdOrPayload);
-  const resolvedProduct = await resolveProductId(records);
-  if (!resolvedProduct.productId) {
+  return slots;
+};
+
+export const getGetYourGuideAvailabilities = async (
+  query: Record<string, unknown>,
+): Promise<GygAvailabilitySlot[]> => {
+  const productIdRaw = normalizeNumberish(query.productId);
+  if (!productIdRaw) {
+    throw new HttpError(400, 'productId is required');
+  }
+
+  const productId = Math.trunc(productIdRaw);
+  const product = await Product.findByPk(productId);
+  if (!product) {
+    throw new HttpError(404, `Product ${productId} not found`);
+  }
+
+  const timezoneName =
+    (getConfigValue('GETYOURGUIDE_TIMEZONE') as string | null) ??
+    (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ??
+    'Europe/Warsaw';
+
+  const { from, to } = readAvailabilityWindow(query);
+  const shiftTypeLinks = await ShiftTypeProduct.findAll({ where: { productId } });
+  const shiftTypeIds = shiftTypeLinks.map((link) => link.shiftTypeId);
+
+  if (shiftTypeIds.length === 0) {
+    return buildFallbackSlots(from, to, timezoneName);
+  }
+
+  const instances = await ShiftInstance.findAll({
+    where: {
+      shiftTypeId: { [Op.in]: shiftTypeIds },
+      date: { [Op.between]: [from.format('YYYY-MM-DD'), to.format('YYYY-MM-DD')] },
+    },
+    include: [{ model: ShiftAssignment, as: 'assignments', required: false }],
+    order: [
+      ['date', 'ASC'],
+      ['timeStart', 'ASC'],
+      ['id', 'ASC'],
+    ],
+  });
+
+  const slots = instances.map((instance) => {
+    const assignedCount = (instance.assignments ?? []).filter((assignment) => assignment.userId != null).length;
+    const capacity = Number.isFinite(instance.capacity ?? NaN) && (instance.capacity ?? 0) > 0 ? (instance.capacity as number) : 99;
+    const vacancies = Math.max(capacity - assignedCount, 0);
+    const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
     return {
-      date: normalizedDate,
-      productId: null,
-      productName: resolvedProduct.productName,
-      available: false,
-      bookingCount: 0,
-      scheduledStaff: { userIds: [], managerIds: [] },
-      notes: ['No matching product was found for the requested availability lookup.'],
+      dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
+      vacancies,
     };
+  });
+
+  if (slots.length > 0) {
+    return slots;
   }
 
-  const [scheduledStaff, bookingCount] = await Promise.all([
-    listScheduledStaffForProduct(normalizedDate, resolvedProduct.productId),
-    Booking.count({
-      where: {
-        platform: GYG_PLATFORM,
-        productId: resolvedProduct.productId,
-        experienceDate: normalizedDate,
-        status: { [Op.ne]: 'cancelled' },
-      },
-    }),
-  ]);
-
-  const notes: string[] = [];
-  if (scheduledStaff.userIds.length === 0) {
-    notes.push('No scheduled guide assignments were found for this date.');
-  }
-  if (bookingCount === 0) {
-    notes.push('No GYG bookings are currently stored for this date/product combination.');
-  }
-
-  return {
-    date: normalizedDate,
-    productId: resolvedProduct.productId,
-    productName: resolvedProduct.productName,
-    available: scheduledStaff.userIds.length > 0,
-    bookingCount,
-    scheduledStaff,
-    notes,
-  };
+  return buildFallbackSlots(from, to, timezoneName);
 };
