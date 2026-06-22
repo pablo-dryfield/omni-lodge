@@ -33,6 +33,7 @@ type GygIngestResult = {
   bookingEvent: BookingEvent;
   createdBooking: boolean;
   eventType: BookingEventType;
+  bookingReference: string | null;
   reservationReference: string | null;
   status: BookingStatus;
 };
@@ -331,7 +332,14 @@ const generateReservationReference = (): string => {
   return `res${timestampPart}${randomPart}`.slice(0, 25);
 };
 
+const generateBookingReference = (): string => {
+  const timestampPart = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).slice(2, 6);
+  return `bk${timestampPart}${randomPart}`.slice(0, 25);
+};
+
 const MAX_GYG_PARTICIPANTS = 99;
+const DEFAULT_GYG_ZERO_VACANCY_DATES = new Set(['2026-06-25', '2026-06-26']);
 const GYG_SUPPORTED_CATEGORIES = new Set([
   'ADULT',
   'SENIOR',
@@ -348,6 +356,20 @@ const GYG_SUPPORTED_CATEGORIES = new Set([
 const normalizeCategory = (value: unknown): string | null => {
   const text = normalizeText(value);
   return text ? text.toUpperCase() : null;
+};
+
+const readZeroVacancyDates = (): Set<string> => {
+  const configured = normalizeText(process.env.GYG_MOCK_ZERO_VACANCY_DATES);
+  if (!configured) {
+    return new Set(DEFAULT_GYG_ZERO_VACANCY_DATES);
+  }
+
+  const configuredDates = configured
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry));
+
+  return new Set(configuredDates.length > 0 ? configuredDates : DEFAULT_GYG_ZERO_VACANCY_DATES);
 };
 
 const readBookingItems = (records: Record<string, unknown>[]): Record<string, unknown>[] => {
@@ -375,6 +397,7 @@ const listGygAvailabilitySlots = async (
   toDate: string,
   timezoneName: string,
 ): Promise<GygAvailabilitySlot[]> => {
+  const zeroVacancyDates = readZeroVacancyDates();
   const shiftTypeLinks = await ShiftTypeProduct.findAll({ where: { productId } });
   const shiftTypeIds = shiftTypeLinks.map((link) => link.shiftTypeId);
 
@@ -428,16 +451,18 @@ const listGygAvailabilitySlots = async (
       const assignedCapacity = Array.isArray(instance.assignments) ? instance.assignments.length : 0;
       const configuredCapacity = normalizeNumberish(instance.capacity) ?? 0;
       const dailyCapacity = configuredCapacity > 0 ? configuredCapacity : assignedCapacity;
-      if (dailyCapacity <= 0) {
+      const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
+      const forcedZeroVacancy = zeroVacancyDates.has(instance.date);
+      const bookedParticipants = participantsByDate.get(instance.date) ?? 0;
+      const vacancies = forcedZeroVacancy ? 0 : Math.max(dailyCapacity - bookedParticipants, 0);
+
+      if (!forcedZeroVacancy && dailyCapacity <= 0) {
+        return null;
+      }
+      if (!forcedZeroVacancy && vacancies <= 0) {
         return null;
       }
 
-      const bookedParticipants = participantsByDate.get(instance.date) ?? 0;
-      const vacancies = Math.max(dailyCapacity - bookedParticipants, 0);
-      if (vacancies <= 0) {
-        return null;
-      }
-      const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
       return {
         productId: String(productId),
         datetime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
@@ -508,6 +533,7 @@ const validateReserveRequest = async (records: Record<string, unknown>[], produc
 
 const resolveProductId = async (
   records: Record<string, unknown>[],
+  options: { required: boolean },
 ): Promise<{ productId: number | null; productName: string | null }> => {
   const rawProductId = readFirstText(records, ['productId', 'product_id']);
   if (rawProductId) {
@@ -533,7 +559,11 @@ const resolveProductId = async (
     };
   }
 
-  throw new HttpError(400, 'productId is required', { errorCode: 'INVALID_PRODUCT' });
+  if (options.required) {
+    throw new HttpError(400, 'productId is required', { errorCode: 'INVALID_PRODUCT' });
+  }
+
+  return { productId: null, productName: null };
 };
 
 const deriveOperationStatus = (
@@ -556,6 +586,7 @@ const buildBookingFields = async (
 ): Promise<{
   platformBookingId: string;
   platformOrderId: string | null;
+  bookingReference: string | null;
   reservationReference: string | null;
   status: BookingStatus;
   eventType: BookingEventType;
@@ -566,7 +597,7 @@ const buildBookingFields = async (
   const rawPayload = isRecord(payload) ? payload : { value: payload };
   const records = collectRecordCandidates(rawPayload);
   const now = new Date();
-  const resolvedProduct = await resolveProductId(records);
+  const resolvedProduct = await resolveProductId(records, { required: operation !== 'cancel' });
 
   const platformBookingId = resolvePlatformBookingId(rawPayload);
   const platformOrderId =
@@ -583,6 +614,7 @@ const buildBookingFields = async (
       'supplier_order_id',
     ]) ?? null;
   const reservationReference = operation === 'reserve' ? platformOrderId ?? generateReservationReference() : platformOrderId;
+  const bookingReference = operation === 'upsert' ? generateBookingReference() : null;
 
   const status = deriveOperationStatus(records, operation);
   const eventType = deriveEventType(status, false);
@@ -679,10 +711,14 @@ const buildBookingFields = async (
   if (operation === 'reserve' && !bookingFields.platformOrderId) {
     bookingFields.platformOrderId = reservationReference;
   }
+  if (operation === 'upsert' && bookingReference) {
+    bookingFields.platformOrderId = bookingReference;
+  }
 
   return {
     platformBookingId,
     platformOrderId,
+    bookingReference,
     reservationReference,
     status,
     eventType,
@@ -785,6 +821,7 @@ export const ingestGetYourGuidePayload = async (
       bookingEvent: event,
       createdBooking,
       eventType,
+      bookingReference: normalized.bookingReference,
       reservationReference: normalized.reservationReference,
       status: normalized.status,
     };

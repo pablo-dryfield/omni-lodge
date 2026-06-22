@@ -114,7 +114,7 @@ const ingestWithOperation = async (req: Request, res: Response, operation: 'rese
     }
 
     if (operation === 'upsert') {
-      res.status(200).json(buildBookingResponse(result.booking.platformBookingId));
+      res.status(200).json(buildBookingResponse(result.bookingReference ?? result.booking.platformOrderId ?? result.booking.platformBookingId));
       return;
     }
 
