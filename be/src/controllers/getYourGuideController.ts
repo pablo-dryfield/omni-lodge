@@ -7,6 +7,11 @@ import {
 } from '../services/getYourGuideIntegrationService.js';
 
 type BodyParams = Record<string, unknown>;
+type GygBookingTicket = {
+  category: 'COLLECTIVE';
+  ticketCode: string;
+  ticketCodeType: 'QR_CODE';
+};
 
 const normalizeParam = (value: unknown): string | null => {
   if (typeof value !== 'string') {
@@ -56,6 +61,34 @@ const resolveRequestedDate = (req: Request): string | null => {
   );
 };
 
+const buildReservationResponse = (reservationReference: string): { data: { reservationReference: string; reservationExpiration: string } } => {
+  return {
+    data: {
+      reservationReference,
+      reservationExpiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    },
+  };
+};
+
+const buildBookingResponse = (bookingReference: string): { data: { bookingReference: string; tickets: GygBookingTicket[] } } => {
+  return {
+    data: {
+      bookingReference,
+      tickets: [
+        {
+          category: 'COLLECTIVE',
+          ticketCode: bookingReference,
+          ticketCodeType: 'QR_CODE',
+        },
+      ],
+    },
+  };
+};
+
+const buildEmptySuccessResponse = (): { data: Record<string, never> } => {
+  return { data: {} };
+};
+
 const ingestWithOperation = async (req: Request, res: Response, operation: 'reserve' | 'cancel' | 'upsert'): Promise<void> => {
   try {
     const requestedPlatformBookingId = resolveRequestedPlatformBookingId(req);
@@ -64,18 +97,17 @@ const ingestWithOperation = async (req: Request, res: Response, operation: 'rese
       requestedPlatformBookingId,
     });
 
-    res.status(200).json({
-      data: {
-        ok: true,
-        platform: result.booking.platform,
-        platformBookingId: result.booking.platformBookingId,
-        bookingId: result.booking.id,
-        eventId: result.bookingEvent.id,
-        eventType: result.eventType,
-        status: result.status,
-        createdBooking: result.createdBooking,
-      },
-    });
+    if (operation === 'reserve') {
+      res.status(200).json(buildReservationResponse(result.booking.platformBookingId));
+      return;
+    }
+
+    if (operation === 'upsert') {
+      res.status(200).json(buildBookingResponse(result.booking.platformBookingId));
+      return;
+    }
+
+    res.status(200).json(buildEmptySuccessResponse());
   } catch (error) {
     respondWithError(res, error);
   }

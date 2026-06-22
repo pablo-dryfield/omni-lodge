@@ -37,17 +37,18 @@ type GygIngestResult = {
 };
 
 type GygAvailabilityResult = {
-  productId: number | null;
+  productId: string;
   productName: string | null;
   timezone: string;
   availabilities: GygAvailabilitySlot[];
 };
 
 type GygAvailabilitySlot = {
-  productId: number;
+  productId: string;
   datetime: string;
   dateTime: string;
   vacancies: number;
+  cutoffSeconds: number;
 };
 
 const DEFAULT_GYG_DAILY_CAPACITY = 200;
@@ -619,7 +620,7 @@ const buildFallbackSlots = (
   from: dayjs.Dayjs,
   to: dayjs.Dayjs,
   timezoneName: string,
-  productId: number,
+  productId: string,
 ): GygAvailabilitySlot[] => {
   const slots: GygAvailabilitySlot[] = [];
   let cursor = from.startOf('day');
@@ -633,12 +634,14 @@ const buildFallbackSlots = (
         datetime: formatOffsetDateTime(day, '10:00', timezoneName),
         dateTime: formatOffsetDateTime(day, '10:00', timezoneName),
         vacancies: 99,
+        cutoffSeconds: 0,
       },
       {
         productId,
         datetime: formatOffsetDateTime(day, '14:00', timezoneName),
         dateTime: formatOffsetDateTime(day, '14:00', timezoneName),
         vacancies: 99,
+        cutoffSeconds: 0,
       },
     );
     cursor = cursor.add(1, 'day');
@@ -723,13 +726,14 @@ export const getGetYourGuideAvailabilities = async (
         if (vacancies <= 0) {
           return null;
         }
-      const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
-      return {
-        productId,
-        datetime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
-        dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
-        vacancies,
-      };
+        const slotTime = String(instance.timeStart ?? '00:00:00').slice(0, 5);
+        return {
+          productId: String(productId),
+          datetime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
+          dateTime: formatOffsetDateTime(instance.date, slotTime, timezoneName),
+          vacancies,
+          cutoffSeconds: 0,
+        };
       })
       .filter((slot): slot is GygAvailabilitySlot => slot !== null);
 
@@ -737,7 +741,7 @@ export const getGetYourGuideAvailabilities = async (
   }
 
   return {
-    productId,
+    productId: String(productId),
     productName: product.name,
     timezone: timezoneName,
     availabilities,
