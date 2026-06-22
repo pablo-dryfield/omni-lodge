@@ -57,12 +57,14 @@ import configRoutes from './routes/configRoutes.js';
 import channelNumbersRoutes from './routes/channelNumbersRoutes.js';
 import venueNumbersRoutes from './routes/venueNumbersRoutes.js';
 import catalogRoutes from './routes/catalogRoutes.js';
+import getYourGuideRoutes from './routes/getYourGuideRoutes.js';
 import gameScoreRoutes from './routes/gameScoreRoutes.js';
 import openBarRoutes from './routes/openBarRoutes.js';
 import cerebroRoutes from './routes/cerebroRoutes.js';
 import migrationAuditRoutes from './routes/migrationAuditRoutes.js';
 import maintenanceCommandRoutes from './routes/maintenanceCommandRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
+import affiliateRoutes from './routes/affiliateRoutes.js';
 import performanceRoutes from './routes/performanceRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import { financeRouter } from './finance/index.js';
@@ -80,8 +82,11 @@ import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
 import { defineAssociations } from './models/defineAssociations.js';
 import { initializeAccessControl } from './utils/initializeAccessControl.js';
+import { ensureAffiliateAccessControl } from './services/affiliateAccessControlService.js';
 import { getConfigValue, initializeConfigRegistry } from './services/configService.js';
 import { externalRequestDiagnosticsService } from './services/externalRequestDiagnosticsService.js';
+import { runSeedOnce } from './services/seedRunService.js';
+import { seedBookingUtmCatalogFromExistingBookings } from './services/bookings/bookingUtmCatalogService.js';
 
 // Scrapers
 // import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
@@ -219,7 +224,9 @@ app.use('/api/maintenance', maintenanceCommandRoutes);
 app.use('/api/gameScores', gameScoreRoutes);
 app.use('/api/openBar', openBarRoutes);
 app.use('/api/cerebro', cerebroRoutes);
+app.use('/api/gyg', getYourGuideRoutes);
 app.use('/api/marketing', marketingRoutes);
+app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/performance', performanceRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/rolePagePermissions', rolePagePermissionRoutes);
@@ -262,6 +269,30 @@ async function bootstrap(): Promise<void> {
       await initializeConfigRegistry();
     } catch (error) {
       logger.warn('[config] Failed to initialize config registry', error);
+    }
+
+    try {
+      await ensureAffiliateAccessControl();
+    } catch (error) {
+      logger.warn('[access-control] Failed to ensure affiliate access control records', error);
+    }
+
+    try {
+      const seedResult = await runSeedOnce({
+        seedKey: 'booking-utm-catalog',
+        runType: 'auto',
+        run: () => seedBookingUtmCatalogFromExistingBookings(),
+      });
+      if (seedResult.skipped) {
+        logger.info('[affiliate-utm] Booking UTM catalog seed skipped (already run)');
+      } else {
+        logger.info('[affiliate-utm] Booking UTM catalog seed completed', {
+          seededCount: seedResult.seededCount,
+          details: seedResult.details ?? null,
+        });
+      }
+    } catch (error) {
+      logger.warn('[affiliate-utm] Failed to seed booking UTM catalog', error);
     }
 
     if (shouldSeedAccessControl) {

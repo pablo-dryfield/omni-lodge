@@ -56,6 +56,7 @@ import ConfigKey from "../models/ConfigKey.js";
 import ConfigValue from "../models/ConfigValue.js";
 import ConfigHistory from "../models/ConfigHistory.js";
 import ConfigSeedRun from "../models/ConfigSeedRun.js";
+import BookingUtmCatalog from "../models/BookingUtmCatalog.js";
 import ShiftRole from "../models/ShiftRole.js";
 import UserShiftRole from "../models/UserShiftRole.js";
 import ReportTemplate from "../models/ReportTemplate.js";
@@ -226,6 +227,7 @@ const sequelize = new Sequelize({
     ConfigValue,
     ConfigHistory,
     ConfigSeedRun,
+    BookingUtmCatalog,
     ShiftRole,
     UserShiftRole,
     UserType,

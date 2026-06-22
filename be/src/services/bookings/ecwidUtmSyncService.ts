@@ -1,6 +1,7 @@
 import Booking from '../../models/Booking.js';
 import { getEcwidOrder, type EcwidOrder } from '../ecwidService.js';
 import logger from '../../utils/logger.js';
+import { syncBookingUtmCatalogSnapshot } from './bookingUtmCatalogService.js';
 
 type EcwidUtmSnapshot = {
   source: string | null;
@@ -74,6 +75,13 @@ export const syncEcwidBookingUtmByBookingId = async (bookingId: number): Promise
     if (!hasTrackedUtmValue(utm)) {
       return;
     }
+
+    await syncBookingUtmCatalogSnapshot({
+      source: utm.source,
+      medium: utm.medium,
+      campaign: utm.campaign,
+      seenAt: booking.createdAt ?? new Date(),
+    });
 
     const hasChanges =
       booking.utmSource !== utm.source ||

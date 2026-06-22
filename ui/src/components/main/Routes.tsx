@@ -26,6 +26,7 @@ const Counters = lazyRoute(() => import("../../pages/Counters"), loadCountersRed
 const VenueNumbers = lazyRoute(() => import("../../pages/VenueNumbers"), loadVenueNumbersReducers);
 const ChannelNumbers = lazyRoute(() => import("../../pages/ChannelNumbers"), loadChannelNumbersReducers);
 const MarketingPage = lazy(() => import("../../pages/MarketingPage"));
+const AffiliatesPage = lazy(() => import("../../pages/AffiliatesPage"));
 const PrivacyPolicyPage = lazy(() => import("../../pages/PrivacyPolicyPage"));
 const DataDeletionPage = lazy(() => import("../../pages/DataDeletionPage"));
 const TermsPage = lazy(() => import("../../pages/TermsPage"));
@@ -113,6 +114,7 @@ const Routes = () => {
         <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
         <Route path="/channelNumbers" element={<ChannelNumbers title="Channel Numbers" />} />
         <Route path="/marketing" element={<MarketingPage title="Marketing" />} />
+        <Route path="/affiliates" element={<AffiliatesPage title="Affiliates" />} />
         <Route path="/privacy-policy" element={<PrivacyPolicyPage title="Privacy Policy" />} />
         <Route path="/data-deletion" element={<DataDeletionPage title="Data Deletion Request" />} />
         <Route path="/terms" element={<TermsPage title="Terms" />} />
