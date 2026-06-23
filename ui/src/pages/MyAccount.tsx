@@ -279,9 +279,9 @@ const compareString = (value?: string | null) => value ?? "";
 
 const buildBadgeCampaignUrl = (badgeName: string) => {
   const url = new URL(BADGE_CAMPAIGN_BASE_URL);
-  url.searchParams.set("utm_source", "Staff");
+  url.searchParams.set("utm_source", normalizeBadgeCampaignValue(badgeName));
   url.searchParams.set("utm_medium", "Badge");
-  url.searchParams.set("utm_campaign", normalizeBadgeCampaignValue(badgeName));
+  url.searchParams.set("utm_campaign", "Staff");
   return url.toString();
 };
 
