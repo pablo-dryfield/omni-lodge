@@ -137,6 +137,15 @@ export default class User extends Model {
   @Column({ field: 'badge_suffix_emoji', type: DataType.STRING })
   declare badgeSuffixEmoji: string | null;
 
+  @AllowNull(false)
+  @Default(18.18)
+  @Column({ field: 'affiliate_commission_rate', type: DataType.DECIMAL(8, 4) })
+  declare affiliateCommissionRate: number;
+
+  @AllowNull(true)
+  @Column({ field: 'finance_vendor_id', type: DataType.INTEGER })
+  declare financeVendorId: number | null;
+
   @AllowNull(true)
   @Column(DataType.INTEGER)
   declare userTypeId: number;

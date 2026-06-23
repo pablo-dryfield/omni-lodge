@@ -4,6 +4,7 @@ import Booking from '../models/Booking.js';
 import Product from '../models/Product.js';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
+import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
 import { getConfigValue, updateConfigValue } from './configService.js';
 import { fetchBookingUtmCatalog } from './bookings/bookingUtmCatalogService.js';
 
@@ -25,9 +26,12 @@ export type AffiliateUserSummary = {
   fullName: string;
   firstName: string | null;
   lastName: string | null;
+  status: boolean;
   userTypeId: number | null;
   userTypeSlug: string | null;
   userTypeName: string | null;
+  affiliateCommissionRate: number;
+  financeVendorId: number | null;
 };
 
 export type AffiliateBookingRow = {
@@ -46,12 +50,17 @@ export type AffiliateBookingRow = {
   affiliateUserId: number | null;
   affiliateUserName: string | null;
   affiliateRuleId: string | null;
+  affiliateCommissionRate: number | null;
+  affiliateCommissionAmount: number;
+  affiliatePayoutLogId: number | null;
+  isCommissionPaid: boolean;
 };
 
 export type AffiliateDailySeriesPoint = {
   date: string;
   bookingCount: number;
   revenue: number;
+  commission: number;
 };
 
 export type AffiliateBreakdownRow = {
@@ -80,6 +89,12 @@ export type AffiliateOverviewResponse = {
   summary: {
     bookingCount: number;
     revenueTotal: number;
+    commissionTotal: number;
+    commissionPaidTotal: number;
+    commissionOutstandingTotal: number;
+    paidBookingCount: number;
+    unpaidBookingCount: number;
+    payoutCount: number;
     matchedAffiliateCount: number;
     unassignedBookingCount: number;
     affiliateCount: number;
@@ -88,8 +103,25 @@ export type AffiliateOverviewResponse = {
   affiliateBreakdown: Array<{
     userId: number;
     userName: string;
+    affiliateCommissionRate: number;
     bookingCount: number;
     revenue: number;
+    commission: number;
+    paidCommission: number;
+    outstandingCommission: number;
+  }>;
+  payoutLogs: Array<{
+    id: number;
+    affiliateUserId: number;
+    affiliateUserName: string;
+    currencyCode: string;
+    amount: number;
+    paidDate: string;
+    rangeStart: string;
+    rangeEnd: string;
+    bookingCount: number;
+    financeTransactionId: number | null;
+    note: string | null;
   }>;
   sourceBreakdown: AffiliateBreakdownRow[];
   mediumBreakdown: AffiliateBreakdownRow[];
@@ -128,6 +160,14 @@ const normalizeTagValue = (value: unknown): string | null => normalizeText(value
 const normalizeMoney = (value: unknown): number => {
   const numeric = typeof value === 'number' ? value : Number(value ?? 0);
   return Number.isFinite(numeric) ? Math.round((numeric + Number.EPSILON) * 100) / 100 : 0;
+};
+
+const normalizePercentage = (value: unknown, fallback = 18.18): number => {
+  const numeric = typeof value === 'number' ? value : Number(value ?? fallback);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return fallback;
+  }
+  return Math.round((numeric + Number.EPSILON) * 100) / 100;
 };
 
 const parseName = (firstName: string | null, lastName: string | null): string => {
@@ -223,16 +263,17 @@ const saveAssignments = async (rules: AffiliateAssignmentRule[], actorId: number
 };
 
 const buildMetricSeries = (rows: AffiliateBookingRow[]): AffiliateDailySeriesPoint[] => {
-  const map = new Map<string, { bookingCount: number; revenue: number }>();
+  const map = new Map<string, { bookingCount: number; revenue: number; commission: number }>();
 
   rows.forEach((row) => {
     const date = row.sourceReceivedAt ? dayjs(row.sourceReceivedAt).format('YYYY-MM-DD') : null;
     if (!date) {
       return;
     }
-    const entry = map.get(date) ?? { bookingCount: 0, revenue: 0 };
+    const entry = map.get(date) ?? { bookingCount: 0, revenue: 0, commission: 0 };
     entry.bookingCount += 1;
     entry.revenue += row.baseAmount;
+    entry.commission += row.affiliateCommissionAmount;
     map.set(date, entry);
   });
 
@@ -241,6 +282,7 @@ const buildMetricSeries = (rows: AffiliateBookingRow[]): AffiliateDailySeriesPoi
       date,
       bookingCount: metrics.bookingCount,
       revenue: normalizeMoney(metrics.revenue),
+      commission: normalizeMoney(metrics.commission),
     }))
     .sort((left, right) => left.date.localeCompare(right.date));
 };
@@ -326,7 +368,6 @@ const findMatchingRule = (booking: AffiliateBookingRow, rules: AffiliateAssignme
 
 const fetchAffiliateUsers = async (): Promise<AffiliateUserSummary[]> => {
   const users = await User.findAll({
-    where: { status: true },
     include: [
       {
         model: UserType,
@@ -346,11 +387,69 @@ const fetchAffiliateUsers = async (): Promise<AffiliateUserSummary[]> => {
       fullName: parseName(user.firstName ?? null, user.lastName ?? null),
       firstName: user.firstName ?? null,
       lastName: user.lastName ?? null,
+      status: Boolean(user.status),
       userTypeId: user.userTypeId ?? null,
       userTypeSlug: role?.slug ?? null,
       userTypeName: role?.name ?? null,
+      affiliateCommissionRate: normalizePercentage(user.affiliateCommissionRate),
+      financeVendorId: user.financeVendorId ?? null,
     };
   });
+};
+
+type NormalizedAffiliatePayoutLog = {
+  id: number;
+  affiliateUserId: number;
+  currencyCode: string;
+  amount: number;
+  amountMinor: number;
+  paidDate: string;
+  rangeStart: string;
+  rangeEnd: string;
+  bookingIds: number[];
+  financeTransactionId: number | null;
+  note: string | null;
+};
+
+const normalizeBookingIds = (value: unknown): number[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isInteger(entry) && entry > 0);
+};
+
+const fetchAffiliatePayoutLogs = async (affiliateUserIds: number[]): Promise<NormalizedAffiliatePayoutLog[]> => {
+  if (affiliateUserIds.length === 0) {
+    return [];
+  }
+
+  const rows = await AffiliatePayoutLog.findAll({
+    where: {
+      affiliateUserId: {
+        [Op.in]: affiliateUserIds,
+      },
+    },
+    order: [
+      ['paidDate', 'DESC'],
+      ['id', 'DESC'],
+    ],
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    affiliateUserId: row.affiliateUserId,
+    currencyCode: row.currencyCode,
+    amountMinor: row.amountMinor,
+    amount: normalizeMoney(row.amountMinor / 100),
+    paidDate: row.paidDate,
+    rangeStart: row.rangeStart,
+    rangeEnd: row.rangeEnd,
+    bookingIds: normalizeBookingIds(row.bookingIds),
+    financeTransactionId: row.financeTransactionId ?? null,
+    note: normalizeText(row.note) ?? null,
+  }));
 };
 
 const fetchAffiliateBookings = async (startDate: string, endDate: string): Promise<AffiliateBookingRow[]> => {
@@ -406,6 +505,10 @@ const fetchAffiliateBookings = async (startDate: string, endDate: string): Promi
     affiliateUserId: null,
     affiliateUserName: null,
     affiliateRuleId: null,
+    affiliateCommissionRate: null,
+    affiliateCommissionAmount: 0,
+    affiliatePayoutLogId: null,
+    isCommissionPaid: false,
   }));
 };
 
@@ -451,11 +554,15 @@ export const getAffiliateOverview = async (params: {
         };
       }
       const affiliateUser = affiliateUserMap.get(matchedRule.userId) ?? null;
+      const affiliateCommissionRate = affiliateUser ? normalizePercentage(affiliateUser.affiliateCommissionRate) : null;
       return {
         ...booking,
         affiliateUserId: matchedRule.userId,
         affiliateUserName: affiliateUser?.fullName ?? null,
         affiliateRuleId: matchedRule.id,
+        affiliateCommissionRate,
+        affiliateCommissionAmount:
+          affiliateCommissionRate != null ? normalizeMoney((booking.baseAmount * affiliateCommissionRate) / 100) : 0,
       };
     })
     .filter((booking) => {
@@ -468,17 +575,59 @@ export const getAffiliateOverview = async (params: {
       return booking.affiliateUserId === normalizedSelectedAffiliateUserId;
     });
 
-  const matchedAffiliateIds = Array.from(new Set(resolvedBookings.map((booking) => booking.affiliateUserId).filter((value): value is number => Boolean(value))));
-  const affiliateBreakdownMap = new Map<number, { bookingCount: number; revenue: number }>();
+  const matchedAffiliateIds = Array.from(
+    new Set(resolvedBookings.map((booking) => booking.affiliateUserId).filter((value): value is number => Boolean(value))),
+  );
+  const payoutLogs = await fetchAffiliatePayoutLogs(matchedAffiliateIds);
+  const visibleBookingIds = new Set(resolvedBookings.map((booking) => booking.id));
+  const relevantPayoutLogs = payoutLogs.filter((log) => log.bookingIds.some((bookingId) => visibleBookingIds.has(bookingId)));
+  const bookingPayoutMap = new Map<number, number>();
+  relevantPayoutLogs.forEach((log) => {
+    log.bookingIds.forEach((bookingId) => {
+      if (visibleBookingIds.has(bookingId) && !bookingPayoutMap.has(bookingId)) {
+        bookingPayoutMap.set(bookingId, log.id);
+      }
+    });
+  });
 
-  resolvedBookings.forEach((booking) => {
+  const bookingsWithPayoutState = resolvedBookings.map((booking) => {
+    const payoutLogId = bookingPayoutMap.get(booking.id) ?? null;
+    return {
+      ...booking,
+      affiliatePayoutLogId: payoutLogId,
+      isCommissionPaid: payoutLogId != null,
+    };
+  });
+
+  const affiliateBreakdownMap = new Map<number, { bookingCount: number; revenue: number; commission: number; affiliateCommissionRate: number }>();
+
+  const affiliateBreakdownPaidMap = new Map<number, { paidCommission: number; outstandingCommission: number }>();
+
+  bookingsWithPayoutState.forEach((booking) => {
     if (!booking.affiliateUserId) {
       return;
     }
-    const entry = affiliateBreakdownMap.get(booking.affiliateUserId) ?? { bookingCount: 0, revenue: 0 };
+    const entry = affiliateBreakdownMap.get(booking.affiliateUserId) ?? {
+      bookingCount: 0,
+      revenue: 0,
+      commission: 0,
+      affiliateCommissionRate: normalizePercentage(booking.affiliateCommissionRate),
+    };
     entry.bookingCount += 1;
     entry.revenue += booking.baseAmount;
+    entry.commission += booking.affiliateCommissionAmount;
     affiliateBreakdownMap.set(booking.affiliateUserId, entry);
+
+    const payoutEntry = affiliateBreakdownPaidMap.get(booking.affiliateUserId) ?? {
+      paidCommission: 0,
+      outstandingCommission: 0,
+    };
+    if (booking.isCommissionPaid) {
+      payoutEntry.paidCommission += booking.affiliateCommissionAmount;
+    } else {
+      payoutEntry.outstandingCommission += booking.affiliateCommissionAmount;
+    }
+    affiliateBreakdownPaidMap.set(booking.affiliateUserId, payoutEntry);
   });
 
   const unassignedBookings = bookings.filter((booking) => !findMatchingRule(booking, assignments.rules));
@@ -507,27 +656,54 @@ export const getAffiliateOverview = async (params: {
     assignments,
     summary: {
       bookingCount: resolvedBookings.length,
-      revenueTotal: normalizeMoney(resolvedBookings.reduce((sum, booking) => sum + booking.baseAmount, 0)),
+      revenueTotal: normalizeMoney(bookingsWithPayoutState.reduce((sum, booking) => sum + booking.baseAmount, 0)),
+      commissionTotal: normalizeMoney(bookingsWithPayoutState.reduce((sum, booking) => sum + booking.affiliateCommissionAmount, 0)),
+      commissionPaidTotal: normalizeMoney(
+        bookingsWithPayoutState.reduce((sum, booking) => sum + (booking.isCommissionPaid ? booking.affiliateCommissionAmount : 0), 0),
+      ),
+      commissionOutstandingTotal: normalizeMoney(
+        bookingsWithPayoutState.reduce((sum, booking) => sum + (!booking.isCommissionPaid ? booking.affiliateCommissionAmount : 0), 0),
+      ),
+      paidBookingCount: bookingsWithPayoutState.filter((booking) => booking.isCommissionPaid).length,
+      unpaidBookingCount: bookingsWithPayoutState.filter((booking) => !booking.isCommissionPaid).length,
+      payoutCount: relevantPayoutLogs.length,
       matchedAffiliateCount: matchedAffiliateIds.length,
       unassignedBookingCount: unassignedBookings.length,
       affiliateCount: affiliateUsers.length,
     },
-    dailySeries: buildMetricSeries(resolvedBookings),
+    dailySeries: buildMetricSeries(bookingsWithPayoutState),
     affiliateBreakdown: Array.from(affiliateBreakdownMap.entries())
       .map(([userId, metrics]) => ({
         userId,
         userName: affiliateUserMap.get(userId)?.fullName ?? `Affiliate ${userId}`,
+        affiliateCommissionRate: metrics.affiliateCommissionRate,
         bookingCount: metrics.bookingCount,
         revenue: normalizeMoney(metrics.revenue),
+        commission: normalizeMoney(metrics.commission),
+        paidCommission: normalizeMoney(affiliateBreakdownPaidMap.get(userId)?.paidCommission ?? 0),
+        outstandingCommission: normalizeMoney(affiliateBreakdownPaidMap.get(userId)?.outstandingCommission ?? 0),
       }))
-      .sort((left, right) => right.revenue - left.revenue || right.bookingCount - left.bookingCount),
-    sourceBreakdown: buildBreakdown(resolvedBookings, (booking) => booking.utmSource),
-    mediumBreakdown: buildBreakdown(resolvedBookings, (booking) => booking.utmMedium),
-    campaignBreakdown: buildBreakdown(resolvedBookings, (booking) => booking.utmCampaign),
+      .sort((left, right) => right.commission - left.commission || right.revenue - left.revenue || right.bookingCount - left.bookingCount),
+    payoutLogs: relevantPayoutLogs.map((log) => ({
+      id: log.id,
+      affiliateUserId: log.affiliateUserId,
+      affiliateUserName: affiliateUserMap.get(log.affiliateUserId)?.fullName ?? `Affiliate ${log.affiliateUserId}`,
+      currencyCode: log.currencyCode,
+      amount: log.amount,
+      paidDate: log.paidDate,
+      rangeStart: log.rangeStart,
+      rangeEnd: log.rangeEnd,
+      bookingCount: log.bookingIds.filter((bookingId) => visibleBookingIds.has(bookingId)).length,
+      financeTransactionId: log.financeTransactionId,
+      note: log.note,
+    })),
+    sourceBreakdown: buildBreakdown(bookingsWithPayoutState, (booking) => booking.utmSource),
+    mediumBreakdown: buildBreakdown(bookingsWithPayoutState, (booking) => booking.utmMedium),
+    campaignBreakdown: buildBreakdown(bookingsWithPayoutState, (booking) => booking.utmCampaign),
     discoveredTags,
     unassignedTags,
     utmCatalog,
-    bookings: resolvedBookings,
+    bookings: bookingsWithPayoutState,
   };
 
   return response;

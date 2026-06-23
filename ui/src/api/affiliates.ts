@@ -5,9 +5,12 @@ export type AffiliateUserSummary = {
   fullName: string;
   firstName: string | null;
   lastName: string | null;
+  status: boolean;
   userTypeId: number | null;
   userTypeSlug: string | null;
   userTypeName: string | null;
+  affiliateCommissionRate: number;
+  financeVendorId: number | null;
 };
 
 export type AffiliateAssignmentRule = {
@@ -35,12 +38,17 @@ export type AffiliateBooking = {
   affiliateUserId: number | null;
   affiliateUserName: string | null;
   affiliateRuleId: string | null;
+  affiliateCommissionRate: number | null;
+  affiliateCommissionAmount: number;
+  affiliatePayoutLogId: number | null;
+  isCommissionPaid: boolean;
 };
 
 export type AffiliateDailySeriesPoint = {
   date: string;
   bookingCount: number;
   revenue: number;
+  commission: number;
 };
 
 export type AffiliateBreakdownRow = {
@@ -71,6 +79,12 @@ export type AffiliateOverviewResponse = {
   summary: {
     bookingCount: number;
     revenueTotal: number;
+    commissionTotal: number;
+    commissionPaidTotal: number;
+    commissionOutstandingTotal: number;
+    paidBookingCount: number;
+    unpaidBookingCount: number;
+    payoutCount: number;
     matchedAffiliateCount: number;
     unassignedBookingCount: number;
     affiliateCount: number;
@@ -79,8 +93,25 @@ export type AffiliateOverviewResponse = {
   affiliateBreakdown: Array<{
     userId: number;
     userName: string;
+    affiliateCommissionRate: number;
     bookingCount: number;
     revenue: number;
+    commission: number;
+    paidCommission: number;
+    outstandingCommission: number;
+  }>;
+  payoutLogs: Array<{
+    id: number;
+    affiliateUserId: number;
+    affiliateUserName: string;
+    currencyCode: string;
+    amount: number;
+    paidDate: string;
+    rangeStart: string;
+    rangeEnd: string;
+    bookingCount: number;
+    financeTransactionId: number | null;
+    note: string | null;
   }>;
   sourceBreakdown: AffiliateBreakdownRow[];
   mediumBreakdown: AffiliateBreakdownRow[];
@@ -123,4 +154,25 @@ export const saveAffiliateAssignments = async (rules: AffiliateAssignmentRule[])
     rules,
   });
   return response.data;
+};
+
+export type CreateAffiliatePayoutInput = {
+  affiliateUserId: number;
+  startDate: string;
+  endDate: string;
+  accountId: number;
+  categoryId: number;
+  paidDate: string;
+  note?: string | null;
+};
+
+export const createAffiliatePayout = async (
+  payload: CreateAffiliatePayoutInput,
+): Promise<AffiliateOverviewResponse["payoutLogs"][number]> => {
+  const response = await axiosInstance.post<AffiliateOverviewResponse["payoutLogs"][number]>("/affiliates/payouts", payload);
+  return response.data;
+};
+
+export const undoAffiliatePayout = async (payoutLogId: number): Promise<void> => {
+  await axiosInstance.delete(`/affiliates/payouts/${payoutLogId}`);
 };

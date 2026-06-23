@@ -4,6 +4,8 @@ import { authorizeModuleAction, requireRoles } from '../middleware/authorization
 import {
   getAffiliateOverviewController,
   updateAffiliateAssignmentsController,
+  createAffiliatePayoutController,
+  undoAffiliatePayoutController,
 } from '../controllers/affiliateController.js';
 
 const router = Router();
@@ -14,6 +16,18 @@ router.put(
   authMiddleware,
   requireRoles(['owner', 'admin', 'administrator', 'manager']),
   updateAffiliateAssignmentsController,
+);
+router.post(
+  '/payouts',
+  authMiddleware,
+  requireRoles(['owner', 'admin', 'administrator', 'manager']),
+  createAffiliatePayoutController,
+);
+router.delete(
+  '/payouts/:id',
+  authMiddleware,
+  requireRoles(['owner', 'admin', 'administrator', 'manager']),
+  undoAffiliatePayoutController,
 );
 
 export default router;
