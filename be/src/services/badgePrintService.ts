@@ -17,7 +17,7 @@ const BADGE_BACKSIDE_TEMPLATE_PATH = path.resolve(
   __dirname,
   '../../../ui/public/assets/badges/ktk-backside-badge.png',
 );
-const BADGE_PRINT_RECIPIENT = 'pjcampo1@gmail.com';
+const BADGE_PRINT_RECIPIENT = 'dluga@bbzpolska.pl';
 const BADGE_FRONT_PAGE_WIDTH_MM = 105;
 const BADGE_FRONT_PAGE_HEIGHT_MM = 148;
 const BADGE_FRONT_EXPORT_VIEWBOX = {
