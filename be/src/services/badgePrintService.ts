@@ -17,7 +17,7 @@ const BADGE_BACKSIDE_TEMPLATE_PATH = path.resolve(
   __dirname,
   '../../../ui/public/assets/badges/ktk-backside-badge.png',
 );
-const BADGE_PRINT_RECIPIENT = 'dluga@bbzpolska.pl';
+const BADGE_PRINT_RECIPIENT_FALLBACK = 'pjcampo1@gmail.com';
 const BADGE_FRONT_PAGE_WIDTH_MM = 105;
 const BADGE_FRONT_PAGE_HEIGHT_MM = 148;
 const BADGE_FRONT_EXPORT_VIEWBOX = {
@@ -32,6 +32,7 @@ const BADGE_FRONT_BLEED_OFFSET_MM = -0.5;
 const BADGE_FRONT_LABEL_WIDTH = 272.18;
 const BADGE_FRONT_LABEL_CENTER_X = 253.03;
 const BADGE_FRONT_LABEL_CENTER_Y = 305.41;
+const BADGE_FRONT_LABEL_MAX_TEXT_WIDTH = BADGE_FRONT_LABEL_WIDTH - 26;
 const BADGE_BACKSIDE_IMAGE_WIDTH = 1240;
 const BADGE_BACKSIDE_IMAGE_HEIGHT = 1748;
 const BADGE_BACKSIDE_QR = {
@@ -49,6 +50,8 @@ const escapeXml = (value: string): string =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+const emojiSvgCache = new Map<string, string>();
 
 const sanitizeFileName = (value: string): string =>
   value
@@ -78,6 +81,118 @@ const buildBadgeFontSize = (badgeName: string, prefixEmoji: string, suffixEmoji:
 
 const buildBadgeLabel = (badgeName: string, prefixEmoji: string, suffixEmoji: string): string =>
   [prefixEmoji.trim(), badgeName.trim(), suffixEmoji.trim()].filter(Boolean).join(' ');
+
+const getEmojiCodepointSlug = (emoji: string): string =>
+  Array.from(emoji.trim())
+    .map((symbol) => symbol.codePointAt(0)?.toString(16))
+    .filter((value): value is string => Boolean(value))
+    .join('-');
+
+const getEmojiDataUrl = async (emoji: string): Promise<string | null> => {
+  const slug = getEmojiCodepointSlug(emoji);
+  if (!slug) {
+    return null;
+  }
+  const cached = emojiSvgCache.get(slug);
+  if (cached) {
+    return cached;
+  }
+
+  const response = await fetch(`https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/${slug}.svg`);
+  if (!response.ok) {
+    return null;
+  }
+
+  const svgBuffer = Buffer.from(await response.arrayBuffer());
+  const dataUrl = `data:image/svg+xml;base64,${svgBuffer.toString('base64')}`;
+  emojiSvgCache.set(slug, dataUrl);
+  return dataUrl;
+};
+
+const buildBadgeFrontLabelNode = async (badgeName: string, prefixEmoji: string, suffixEmoji: string): Promise<string> => {
+  const fontSize = buildBadgeFontSize(badgeName, prefixEmoji, suffixEmoji);
+  const naturalNameWidth = Math.max(badgeName.length * fontSize * 0.68, fontSize * 1.8);
+  const naturalEmojiSize = fontSize * 0.98;
+  const naturalGap = fontSize * 0.2;
+  const totalNaturalWidth =
+    naturalNameWidth +
+    (prefixEmoji ? naturalEmojiSize : 0) +
+    (suffixEmoji ? naturalEmojiSize : 0) +
+    (prefixEmoji && badgeName ? naturalGap : 0) +
+    (suffixEmoji && badgeName ? naturalGap : 0);
+  const scale = Math.min(1, BADGE_FRONT_LABEL_MAX_TEXT_WIDTH / totalNaturalWidth);
+  const scaledFontSize = fontSize * scale;
+  const scaledNameWidth = naturalNameWidth * scale;
+  const scaledEmojiSize = naturalEmojiSize * scale;
+  const scaledGap = naturalGap * scale;
+  const totalWidth =
+    scaledNameWidth +
+    (prefixEmoji ? scaledEmojiSize : 0) +
+    (suffixEmoji ? scaledEmojiSize : 0) +
+    (prefixEmoji && badgeName ? scaledGap : 0) +
+    (suffixEmoji && badgeName ? scaledGap : 0);
+  const startX = BADGE_FRONT_LABEL_CENTER_X - totalWidth / 2;
+
+  let cursorX = startX;
+  const nodes: string[] = ['<g aria-label="badge-print-name">'];
+
+  if (prefixEmoji) {
+    const prefixDataUrl = await getEmojiDataUrl(prefixEmoji);
+    if (prefixDataUrl) {
+      nodes.push(`
+    <image
+      href="${prefixDataUrl}"
+      x="${cursorX}"
+      y="${BADGE_FRONT_LABEL_CENTER_Y - scaledEmojiSize / 2}"
+      width="${scaledEmojiSize}"
+      height="${scaledEmojiSize}"
+      preserveAspectRatio="xMidYMid meet"
+    />`);
+      cursorX += scaledEmojiSize;
+      if (badgeName) {
+        cursorX += scaledGap;
+      }
+    }
+  }
+
+  const textCenterX = cursorX + scaledNameWidth / 2;
+  nodes.push(`
+    <text
+      x="${textCenterX}"
+      y="${BADGE_FRONT_LABEL_CENTER_Y}"
+      text-anchor="middle"
+      dominant-baseline="middle"
+      font-family="'Montserrat', sans-serif"
+      font-size="${scaledFontSize}"
+      font-weight="900"
+      fill="#111111"
+      textLength="${scaledNameWidth}"
+      lengthAdjust="spacingAndGlyphs"
+    >${escapeXml(badgeName)}</text>`);
+
+  cursorX += scaledNameWidth;
+  if (suffixEmoji && badgeName) {
+    cursorX += scaledGap;
+  }
+
+  if (suffixEmoji) {
+    const suffixDataUrl = await getEmojiDataUrl(suffixEmoji);
+    if (suffixDataUrl) {
+      nodes.push(`
+    <image
+      href="${suffixDataUrl}"
+      x="${cursorX}"
+      y="${BADGE_FRONT_LABEL_CENTER_Y - scaledEmojiSize / 2}"
+      width="${scaledEmojiSize}"
+      height="${scaledEmojiSize}"
+      preserveAspectRatio="xMidYMid meet"
+    />`);
+    }
+  }
+
+  nodes.push('\n  </g>\n</svg>');
+  return nodes.join('');
+};
 
 const normalizeBadgeCampaignValue = (badgeName: string): string => {
   const trimmed = badgeName.trim();
@@ -132,6 +247,11 @@ const buildPrintEmailHtml = (): string => `
   <p>The KTK Pub Crawl Team</p>
 `;
 
+const resolveBadgePrintRecipient = (): string => {
+  const configured = String(getConfigValue('BADGE_PRINT_RECIPIENT') ?? '').trim();
+  return configured || BADGE_PRINT_RECIPIENT_FALLBACK;
+};
+
 const launchBadgeBrowser = async () => {
   const headlessEnv = String(getConfigValue('PUPPETEER_HEADLESS') ?? '').toLowerCase();
   const headlessMode: boolean | 'shell' | undefined =
@@ -157,25 +277,7 @@ export const renderBadgeSvg = async (options: {
   }
 
   const template = await readFile(BADGE_TEMPLATE_PATH, 'utf8');
-  const escapedLabel = escapeXml(label);
-  const fontSize = buildBadgeFontSize(badgeName, badgePrefixEmoji, badgeSuffixEmoji);
-  const maxTextLength = BADGE_FRONT_LABEL_WIDTH - 26;
-  const textNode = `
-  <g aria-label="badge-print-name">
-    <text
-      x="${BADGE_FRONT_LABEL_CENTER_X}"
-      y="${BADGE_FRONT_LABEL_CENTER_Y}"
-      text-anchor="middle"
-      dominant-baseline="middle"
-      font-family="'Montserrat', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif"
-      font-size="${fontSize}"
-      font-weight="900"
-      fill="#111111"
-      textLength="${maxTextLength}"
-      lengthAdjust="spacingAndGlyphs"
-    >${escapedLabel}</text>
-  </g>
-</svg>`;
+  const textNode = await buildBadgeFrontLabelNode(badgeName, badgePrefixEmoji, badgeSuffixEmoji);
   const croppedTemplate = template.replace(
     /<svg\b([^>]*?)\bwidth="[^"]*"\s+height="[^"]*"\s+([^>]*?)viewBox="[^"]*"([^>]*)>/i,
     `<svg$1width="${BADGE_FRONT_EXPORT_VIEWBOX.width}mm" height="${BADGE_FRONT_EXPORT_VIEWBOX.height}mm" $2viewBox="${BADGE_FRONT_EXPORT_VIEWBOX.x} ${BADGE_FRONT_EXPORT_VIEWBOX.y} ${BADGE_FRONT_EXPORT_VIEWBOX.width} ${BADGE_FRONT_EXPORT_VIEWBOX.height}"$3>`,
@@ -242,7 +344,7 @@ export const renderBadgePdf = async (options: {
       { waitUntil: 'networkidle0' },
     );
 
-    const pdf = await page.pdf({
+    const pdfBytes = await page.pdf({
       width: `${BADGE_FRONT_PAGE_WIDTH_MM}mm`,
       height: `${BADGE_FRONT_PAGE_HEIGHT_MM}mm`,
       printBackground: true,
@@ -255,7 +357,7 @@ export const renderBadgePdf = async (options: {
     });
 
     return {
-      pdf: Buffer.from(pdf),
+      pdf: pdfBytes,
       fileName: fileName.replace(/\.svg$/i, '.pdf'),
     };
   } finally {
@@ -370,7 +472,7 @@ export const renderBadgePrintPdf = async (options: {
     });
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    const pdf = await page.pdf({
+    const pdfBytes = await page.pdf({
       width: `${BADGE_FRONT_PAGE_WIDTH_MM}mm`,
       height: `${BADGE_FRONT_PAGE_HEIGHT_MM}mm`,
       preferCSSPageSize: true,
@@ -384,7 +486,7 @@ export const renderBadgePrintPdf = async (options: {
     });
 
     return {
-      pdf: Buffer.from(pdf),
+      pdf: pdfBytes,
       fileName: fileName.replace(/-guide-badge\.svg$/i, '-badge-print.pdf'),
     };
   } finally {
@@ -401,7 +503,7 @@ export const sendBadgeToPrint = async (options: {
   const { pdf, fileName } = await renderBadgePrintPdf(options);
 
   await sendGmailMessage({
-    to: BADGE_PRINT_RECIPIENT,
+    to: resolveBadgePrintRecipient(),
     subject: `Badge Print Request - ${options.userDisplayName}`,
     textBody: buildPrintEmailText(),
     htmlBody: buildPrintEmailHtml(),

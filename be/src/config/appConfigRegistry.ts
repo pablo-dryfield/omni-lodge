@@ -162,6 +162,15 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     impact: 'medium',
   },
   {
+    key: 'BADGE_PRINT_RECIPIENT',
+    label: 'Badge print recipient',
+    description: 'Email address that receives staff badge print requests.',
+    category: 'Badge Printing',
+    valueType: 'string',
+    defaultValue: 'pjcampo1@gmail.com',
+    validation: { maxLength: 255, required: true },
+  },
+  {
     key: 'BOOKING_EMAIL_POLL_CRON',
     label: 'Booking email poll cron',
     description: 'Cron schedule for Gmail polling.',
