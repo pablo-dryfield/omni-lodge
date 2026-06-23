@@ -319,7 +319,7 @@ const classifyEmailKind = (
 
   if (newFlowEligible) {
     if (
-      normalizedBody.includes('otrzymalismy potwierdzenie dostepnosci dla zapytania') ||
+      normalizedBody.includes('otrzymalismy potwierdzenie') ||
       normalizedBody.includes('skontaktujemy sie z toba po potwierdzeniu rezerwacji przez klienta')
     ) {
       return 'availability_confirmed';
