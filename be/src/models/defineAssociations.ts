@@ -69,6 +69,7 @@ import ReportDashboard from './ReportDashboard.js';
 import ReportDashboardCard from './ReportDashboardCard.js';
 import UserHomePreference from './UserHomePreference.js';
 import GameScore from './GameScore.js';
+import AffiliatePayoutLog from './AffiliatePayoutLog.js';
 import CompensationComponent from './CompensationComponent.js';
 import CompensationComponentAssignment from './CompensationComponentAssignment.js';
 import AssistantManagerTaskTemplate from './AssistantManagerTaskTemplate.js';
@@ -110,6 +111,9 @@ export function defineAssociations() {
   User.hasMany(ConfigValue, { foreignKey: 'updated_by', as: 'configValuesUpdated' });
   User.hasMany(CerebroQuizAttempt, { foreignKey: 'user_id', as: 'cerebroQuizAttempts' });
   User.hasMany(CerebroAcknowledgement, { foreignKey: 'user_id', as: 'cerebroAcknowledgements' });
+  User.hasMany(AffiliatePayoutLog, { foreignKey: 'affiliate_user_id', as: 'affiliatePayoutLogs' });
+  User.hasMany(AffiliatePayoutLog, { foreignKey: 'created_by', as: 'affiliatePayoutLogsCreated' });
+  User.belongsTo(FinanceVendor, { foreignKey: 'finance_vendor_id', as: 'financeVendor' });
 
   // UserType Associations
   UserType.hasMany(User, { foreignKey: 'userTypeId', as: 'users' });
@@ -296,6 +300,7 @@ export function defineAssociations() {
   FinanceVendor.hasMany(Venue, { foreignKey: 'finance_vendor_id', as: 'venues' });
   FinanceClient.hasMany(Venue, { foreignKey: 'finance_client_id', as: 'venues' });
   FinanceVendor.hasMany(StaffProfile, { foreignKey: 'finance_vendor_id', as: 'staffProfiles' });
+  FinanceVendor.hasMany(User, { foreignKey: 'finance_vendor_id', as: 'users' });
   FinanceClient.hasMany(StaffProfile, { foreignKey: 'finance_client_id', as: 'staffProfiles' });
   FinanceAccount.hasMany(FinanceTransaction, { foreignKey: 'accountId', as: 'transactions' });
   FinanceCategory.hasMany(FinanceTransaction, { foreignKey: 'categoryId', as: 'transactions' });
@@ -309,6 +314,10 @@ export function defineAssociations() {
   });
   FinanceCategory.hasMany(FinanceVendor, { foreignKey: 'defaultCategoryId', as: 'vendors' });
   FinanceCategory.hasMany(FinanceClient, { foreignKey: 'defaultCategoryId', as: 'clients' });
+  FinanceTransaction.hasOne(AffiliatePayoutLog, { foreignKey: 'finance_transaction_id', as: 'affiliatePayoutLog' });
+  AffiliatePayoutLog.belongsTo(FinanceTransaction, { foreignKey: 'finance_transaction_id', as: 'financeTransaction' });
+  AffiliatePayoutLog.belongsTo(User, { foreignKey: 'affiliate_user_id', as: 'affiliateUser' });
+  AffiliatePayoutLog.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUser' });
 
   // Scheduling associations are defined via model decorators
   ShiftType.belongsToMany(Product, {

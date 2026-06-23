@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
+  Modal,
   Button,
   Card,
   Divider,
@@ -14,6 +15,8 @@ import {
   Table,
   Text,
   TextInput,
+  PasswordInput,
+  NumberInput,
   Title,
   ThemeIcon,
   ScrollArea,
@@ -36,14 +39,21 @@ import { navigateToPage } from "../actions/navigationActions";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import AffiliateChartSection from "../components/affiliates/AffiliateChartSection";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
+import { createUser, updateUser } from "../actions/userActions";
 import { useAppDispatch } from "../store/hooks";
 import type { GenericPageProps } from "../types/general/GenericPageProps";
+import type { User } from "../types/users/User";
+import type { UserType } from "../types/userTypes/UserType";
+import axiosInstance from "../utils/axiosInstance";
 import {
   fetchAffiliateOverview,
+  createAffiliatePayout,
   saveAffiliateAssignments,
+  undoAffiliatePayout,
   type AffiliateAssignmentRule,
   type AffiliateOverviewResponse,
 } from "../api/affiliates";
+import type { FinanceAccount, FinanceCategory } from "../types/finance";
 
 const PAGE_SLUG = PAGE_SLUGS.affiliates;
 
@@ -224,6 +234,103 @@ const parseCsvValues = (value: string | null): string[] =>
 const makeRuleId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `rule-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+const buildEmptyRule = (
+  source: Pick<AffiliateOverviewResponse, "affiliateUsers" | "currentUser"> | null | undefined,
+): AffiliateAssignmentRule => ({
+  id: makeRuleId(),
+  userId: source?.affiliateUsers?.[0]?.id ?? source?.currentUser.id ?? 0,
+  utmSource: null,
+  utmMedium: null,
+  utmCampaign: null,
+  notes: null,
+});
+
+type AffiliateUserFormState = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  username: string;
+  password: string;
+  affiliateCommissionRate: string;
+};
+
+const INITIAL_AFFILIATE_USER_FORM: AffiliateUserFormState = {
+  firstName: "",
+  lastName: "",
+  email: "",
+  username: "",
+  password: "",
+  affiliateCommissionRate: "18.18",
+};
+
+type AffiliatePayoutFormState = {
+  accountId: string;
+  categoryId: string;
+  paidDate: Date | null;
+  note: string;
+};
+
+const INITIAL_AFFILIATE_PAYOUT_FORM: AffiliatePayoutFormState = {
+  accountId: "",
+  categoryId: "",
+  paidDate: new Date(),
+  note: "",
+};
+
+const normalizeText = (value?: string | null): string => (value ?? "").trim();
+
+const extractErrorMessage = (error: unknown): string => {
+  if (isAxiosError(error)) {
+    const payload = error.response?.data as unknown;
+
+    if (Array.isArray(payload) && payload[0] && typeof payload[0] === "object") {
+      const firstEntry = payload[0] as { message?: unknown };
+      if (typeof firstEntry.message === "string" && firstEntry.message.trim()) {
+        return firstEntry.message;
+      }
+    }
+
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      const normalizedPayload = payload as {
+        message?: unknown;
+        errors?: Array<{ msg?: unknown; message?: unknown }>;
+      };
+      if (typeof normalizedPayload.message === "string" && normalizedPayload.message.trim()) {
+        return normalizedPayload.message;
+      }
+      if (Array.isArray(normalizedPayload.errors) && normalizedPayload.errors[0]) {
+        const firstError = normalizedPayload.errors[0];
+        if (typeof firstError.msg === "string" && firstError.msg.trim()) {
+          return firstError.msg;
+        }
+        if (typeof firstError.message === "string" && firstError.message.trim()) {
+          return firstError.message;
+        }
+      }
+    }
+
+    return error.message;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Unexpected error occurred";
+};
+
+const extractCreatedUserId = (payload: unknown): number | null => {
+  if (Array.isArray(payload) && payload.length > 0) {
+    const first = payload[0] as { id?: unknown };
+    return typeof first?.id === "number" ? first.id : null;
+  }
+  if (payload && typeof payload === "object") {
+    const maybe = payload as { id?: unknown };
+    return typeof maybe.id === "number" ? maybe.id : null;
+  }
+  return null;
+};
+
 const AffiliatesPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const isMobile = useMediaQuery("(max-width: 48em)");
@@ -236,17 +343,62 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [draftRules, setDraftRules] = useState<AffiliateAssignmentRule[]>([]);
+  const [createAffiliateUserOpen, setCreateAffiliateUserOpen] = useState(false);
+  const [createAffiliateUserForm, setCreateAffiliateUserForm] = useState<AffiliateUserFormState>(INITIAL_AFFILIATE_USER_FORM);
+  const [createAffiliateUserError, setCreateAffiliateUserError] = useState<string | null>(null);
+  const [createAffiliateUserLoading, setCreateAffiliateUserLoading] = useState(false);
+  const [payoutModalOpen, setPayoutModalOpen] = useState(false);
+  const [payoutForm, setPayoutForm] = useState<AffiliatePayoutFormState>(INITIAL_AFFILIATE_PAYOUT_FORM);
+  const [payoutError, setPayoutError] = useState<string | null>(null);
+  const [payoutLoading, setPayoutLoading] = useState(false);
+  const [undoPayoutId, setUndoPayoutId] = useState<number | null>(null);
+  const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
+  const [financeCategories, setFinanceCategories] = useState<FinanceCategory[]>([]);
+  const [userTypes, setUserTypes] = useState<Partial<UserType>[]>([]);
+  const initializedDraftRulesRef = useRef(false);
+  const lastLoadedOverviewKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     dispatch(navigateToPage("Affiliates"));
   }, [dispatch, title]);
 
-  const startDate = useMemo(() => dayjs(range[0] ?? new Date()).format("YYYY-MM-DD"), [range]);
-  const endDate = useMemo(() => dayjs(range[1] ?? range[0] ?? new Date()).format("YYYY-MM-DD"), [range]);
+  useEffect(() => {
+    let active = true;
+
+    const loadUserTypes = async () => {
+      try {
+        const response = await axiosInstance.get<Array<{ data?: Partial<UserType>[] }>>("/userTypes", {
+          withCredentials: true,
+        });
+        if (!active) {
+          return;
+        }
+        const nextUserTypes = Array.isArray(response.data?.[0]?.data) ? response.data[0].data : [];
+        setUserTypes(nextUserTypes);
+      } catch {
+        if (!active) {
+          return;
+        }
+        setUserTypes([]);
+      }
+    };
+
+    void loadUserTypes();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const canManageAssignments = Boolean(data?.currentUser.canManageAssignments);
   const isAffiliateUser = data?.currentUser.roleSlug === "affiliate";
   const selectedAffiliateUserId = affiliateFilter === "all" ? null : Number(affiliateFilter);
+  const startDate = useMemo(() => dayjs(range[0] ?? new Date()).format("YYYY-MM-DD"), [range]);
+  const endDate = useMemo(() => dayjs(range[1] ?? range[0] ?? new Date()).format("YYYY-MM-DD"), [range]);
+  const overviewKey = useMemo(
+    () => `${startDate}|${endDate}|${selectedAffiliateUserId == null ? "all" : selectedAffiliateUserId}`,
+    [endDate, selectedAffiliateUserId, startDate],
+  );
   const affiliateOptions = useMemo(
     () => [
       { value: "all", label: "All affiliates" },
@@ -257,45 +409,101 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     ],
     [data?.affiliateUsers],
   );
+  const affiliateUserTypeId = useMemo(() => {
+    const affiliateType = userTypes.find((userType) => {
+      const slug = normalizeText(userType.slug).toLowerCase();
+      const name = normalizeText(userType.name).toLowerCase();
+      return slug === "affiliate" || name === "affiliate";
+    });
+    return typeof affiliateType?.id === "number" ? affiliateType.id : null;
+  }, [userTypes]);
 
-  const createEmptyRule = useCallback(
-    (): AffiliateAssignmentRule => ({
-      id: makeRuleId(),
-      userId: data?.affiliateUsers[0]?.id ?? data?.currentUser.id ?? 0,
-      utmSource: null,
-      utmMedium: null,
-      utmCampaign: null,
-      notes: null,
-    }),
-    [data?.affiliateUsers, data?.currentUser.id],
-  );
+  const loadOverview = useCallback(async (
+    start: string,
+    end: string,
+    affiliateUserId: number | null,
+    options?: { force?: boolean; keepCurrentData?: boolean },
+  ) => {
+    const nextKey = `${start}|${end}|${affiliateUserId == null ? "all" : affiliateUserId}`;
+    if (!options?.force && lastLoadedOverviewKeyRef.current === nextKey) {
+      return null;
+    }
+
+    lastLoadedOverviewKeyRef.current = nextKey;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const next = await fetchAffiliateOverview(start, end, affiliateUserId);
+      setData(next);
+      if (!initializedDraftRulesRef.current) {
+        setDraftRules(next.assignments.rules.length > 0 ? next.assignments.rules : [buildEmptyRule(next)]);
+        initializedDraftRulesRef.current = true;
+      }
+      if (!next.currentUser.canManageAssignments) {
+        setAffiliateFilter("all");
+      }
+      return next;
+    } catch (err: unknown) {
+      lastLoadedOverviewKeyRef.current = null;
+      const message = isAxiosError(err) ? err.response?.data?.message ?? err.message : "Unable to load affiliate overview";
+      setError(message);
+      if (!options?.keepCurrentData) {
+        setData(null);
+      }
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!canManageAssignments) {
+      setFinanceAccounts([]);
+      setFinanceCategories([]);
+      return;
+    }
+
+    let active = true;
+
+    const loadFinanceOptions = async () => {
+      try {
+        const [accountsResponse, categoriesResponse] = await Promise.all([
+          axiosInstance.get<FinanceAccount[]>("/finance/accounts", { withCredentials: true }),
+          axiosInstance.get<FinanceCategory[]>("/finance/categories", { withCredentials: true }),
+        ]);
+        if (!active) {
+          return;
+        }
+        setFinanceAccounts(Array.isArray(accountsResponse.data) ? accountsResponse.data.filter((account) => account.isActive) : []);
+        setFinanceCategories(
+          Array.isArray(categoriesResponse.data)
+            ? categoriesResponse.data.filter((category) => category.isActive && category.kind === "expense")
+            : [],
+        );
+      } catch {
+        if (!active) {
+          return;
+        }
+        setFinanceAccounts([]);
+        setFinanceCategories([]);
+      }
+    };
+
+    void loadFinanceOptions();
+
+    return () => {
+      active = false;
+    };
+  }, [canManageAssignments]);
 
   useEffect(() => {
     let active = true;
 
     const load = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const next = await fetchAffiliateOverview(startDate, endDate, selectedAffiliateUserId);
-        if (!active) {
-          return;
-        }
-        setData(next);
-        setDraftRules(next.assignments.rules.length > 0 ? next.assignments.rules : [createEmptyRule()]);
-        if (!next.currentUser.canManageAssignments) {
-          setAffiliateFilter("all");
-        }
-      } catch (err: unknown) {
-        if (!active) {
-          return;
-        }
-        const message = isAxiosError(err) ? err.response?.data?.message ?? err.message : "Unable to load affiliate overview";
-        setError(message);
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
+      const next = await loadOverview(startDate, endDate, selectedAffiliateUserId);
+      if (!active || !next) {
+        return;
       }
     };
 
@@ -304,16 +512,16 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     return () => {
       active = false;
     };
-  }, [createEmptyRule, endDate, selectedAffiliateUserId, startDate]);
+  }, [loadOverview, overviewKey, selectedAffiliateUserId, startDate, endDate]);
 
   useEffect(() => {
     if (!canManageAssignments) {
       return;
     }
     if (draftRules.length === 0) {
-      setDraftRules([createEmptyRule()]);
+      setDraftRules([buildEmptyRule(data)]);
     }
-  }, [canManageAssignments, createEmptyRule, draftRules.length]);
+  }, [canManageAssignments, data, draftRules.length]);
 
   const applyPreset = (value: Exclude<DatePreset, "custom">) => {
     setPreset(value);
@@ -321,7 +529,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   };
 
   const addRule = () => {
-    setDraftRules((current) => [...current, createEmptyRule()]);
+    setDraftRules((current) => [...current, buildEmptyRule(data)]);
   };
 
   const updateRule = (ruleId: string, patch: Partial<AffiliateAssignmentRule>) => {
@@ -340,9 +548,12 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
       setSaveError(null);
       const cleanedRules = draftRules.map((rule) => normalizeRule(rule)).filter((rule) => rule.userId > 0);
       await saveAffiliateAssignments(cleanedRules);
-      const refreshed = await fetchAffiliateOverview(startDate, endDate, selectedAffiliateUserId);
+      const refreshed = await loadOverview(startDate, endDate, selectedAffiliateUserId, { force: true, keepCurrentData: true });
+      if (!refreshed) {
+        throw new Error("Unable to refresh affiliate overview after saving assignments");
+      }
       setData(refreshed);
-      setDraftRules(refreshed.assignments.rules.length > 0 ? refreshed.assignments.rules : [createEmptyRule()]);
+      setDraftRules(refreshed.assignments.rules.length > 0 ? refreshed.assignments.rules : [buildEmptyRule(refreshed)]);
     } catch (err: unknown) {
       const message = isAxiosError(err) ? err.response?.data?.message ?? err.message : "Unable to save affiliate assignments";
       setSaveError(message);
@@ -351,8 +562,160 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     }
   };
 
+  const handleCreateAffiliateUser = async () => {
+    const firstName = createAffiliateUserForm.firstName.trim();
+    const lastName = createAffiliateUserForm.lastName.trim();
+    const email = createAffiliateUserForm.email.trim();
+    const username = createAffiliateUserForm.username.trim();
+    const password = createAffiliateUserForm.password.trim();
+    const affiliateCommissionRate = Number(createAffiliateUserForm.affiliateCommissionRate);
+
+    if (!firstName) {
+      setCreateAffiliateUserError("First name is required.");
+      return;
+    }
+    if (!lastName) {
+      setCreateAffiliateUserError("Last name is required.");
+      return;
+    }
+    if (!email) {
+      setCreateAffiliateUserError("Email is required.");
+      return;
+    }
+    if (!username) {
+      setCreateAffiliateUserError("Username is required.");
+      return;
+    }
+    if (password.length < 8) {
+      setCreateAffiliateUserError("Password must be at least 8 characters.");
+      return;
+    }
+    if (!Number.isFinite(affiliateCommissionRate) || affiliateCommissionRate < 0) {
+      setCreateAffiliateUserError("Commission rate must be a valid positive percentage.");
+      return;
+    }
+    if (!affiliateUserTypeId) {
+      setCreateAffiliateUserError("Affiliate role was not found. Check the user type catalog.");
+      return;
+    }
+
+    setCreateAffiliateUserLoading(true);
+    setCreateAffiliateUserError(null);
+    setSaveError(null);
+
+    try {
+      const createPayload: Partial<User> = {
+        firstName,
+        lastName,
+        email,
+        username,
+        password,
+      };
+
+      const createResult = await dispatch(createUser(createPayload)).unwrap();
+      const createdUserId = extractCreatedUserId(createResult);
+
+      if (!createdUserId) {
+        throw new Error("The new affiliate user was created without a valid ID.");
+      }
+
+      await dispatch(
+        updateUser({
+          userId: createdUserId,
+          userData: {
+            userTypeId: affiliateUserTypeId,
+            status: true,
+            affiliateCommissionRate,
+          },
+        }),
+      ).unwrap();
+
+      const refreshed = await loadOverview(startDate, endDate, selectedAffiliateUserId, { force: true, keepCurrentData: true });
+      if (!refreshed) {
+        throw new Error("Unable to refresh affiliate overview after creating the affiliate user");
+      }
+      setData(refreshed);
+      setDraftRules(refreshed.assignments.rules.length > 0 ? refreshed.assignments.rules : [buildEmptyRule(refreshed)]);
+      setCreateAffiliateUserForm(INITIAL_AFFILIATE_USER_FORM);
+      setCreateAffiliateUserOpen(false);
+    } catch (err: unknown) {
+      setCreateAffiliateUserError(extractErrorMessage(err));
+    } finally {
+      setCreateAffiliateUserLoading(false);
+    }
+  };
+
+  const handleOpenPayoutModal = () => {
+    setPayoutError(null);
+    setPayoutForm(INITIAL_AFFILIATE_PAYOUT_FORM);
+    setPayoutModalOpen(true);
+  };
+
+  const handleCreatePayout = async () => {
+    if (!selectedAffiliateUserId) {
+      setPayoutError("Select a specific affiliate before creating a payout.");
+      return;
+    }
+    if (!payoutForm.accountId) {
+      setPayoutError("Finance account is required.");
+      return;
+    }
+    if (!payoutForm.categoryId) {
+      setPayoutError("Expense category is required.");
+      return;
+    }
+    if (!payoutForm.paidDate) {
+      setPayoutError("Paid date is required.");
+      return;
+    }
+
+    try {
+      setPayoutLoading(true);
+      setPayoutError(null);
+      await createAffiliatePayout({
+        affiliateUserId: selectedAffiliateUserId,
+        startDate,
+        endDate,
+        accountId: Number(payoutForm.accountId),
+        categoryId: Number(payoutForm.categoryId),
+        paidDate: dayjs(payoutForm.paidDate).format("YYYY-MM-DD"),
+        note: payoutForm.note.trim() || null,
+      });
+      await loadOverview(startDate, endDate, selectedAffiliateUserId, { force: true, keepCurrentData: true });
+      setPayoutModalOpen(false);
+      setPayoutForm(INITIAL_AFFILIATE_PAYOUT_FORM);
+    } catch (err: unknown) {
+      setPayoutError(extractErrorMessage(err));
+    } finally {
+      setPayoutLoading(false);
+    }
+  };
+
+  const handleUndoPayout = async (payoutLogId: number) => {
+    try {
+      setUndoPayoutId(payoutLogId);
+      setPayoutError(null);
+      await undoAffiliatePayout(payoutLogId);
+      await loadOverview(startDate, endDate, selectedAffiliateUserId, { force: true, keepCurrentData: true });
+    } catch (err: unknown) {
+      setPayoutError(extractErrorMessage(err));
+    } finally {
+      setUndoPayoutId(null);
+    }
+  };
+
   const revenueCurrency = data?.bookings.find((booking) => booking.currency)?.currency ?? "PLN";
   const utmCatalog = data?.utmCatalog ?? { utmSource: [], utmMedium: [], utmCampaign: [] };
+  const payoutAccountOptions = financeAccounts.map((account) => ({
+    value: String(account.id),
+    label: `${account.name} (${account.currency})`,
+  }));
+  const payoutCategoryOptions = financeCategories.map((category) => ({
+    value: String(category.id),
+    label: category.name,
+  }));
+  const selectedAffiliate = data?.affiliateUsers.find((affiliate) => affiliate.id === selectedAffiliateUserId) ?? null;
+  const canPaySelectedAffiliate = canManageAssignments && selectedAffiliateUserId != null && data != null && data.summary.commissionOutstandingTotal > 0;
 
   const sourceRows = data?.sourceBreakdown ?? [];
   const mediumRows = data?.mediumBreakdown ?? [];
@@ -469,18 +832,22 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                 icon={<IconChartBar size={18} />}
               />
               <MetricCard
-                label="Affiliate users"
-                value={formatCount(data.affiliateUsers.length)}
-                description={data.currentUser.canManageAssignments ? "Assignable accounts" : "Your account"}
-                icon={<IconUsers size={18} />}
+                label="Commission"
+                value={formatMoney(data.summary.commissionTotal, revenueCurrency)}
+                description="Affiliate earnings from matched bookings"
+                icon={<IconDeviceFloppy size={18} />}
               />
               <MetricCard
-                label="Unassigned tags"
-                value={formatCount(
-                  data.unassignedTags.utmSource.length + data.unassignedTags.utmMedium.length + data.unassignedTags.utmCampaign.length,
-                )}
-                description="UTM values not mapped yet"
+                label="Outstanding"
+                value={formatMoney(data.summary.commissionOutstandingTotal, revenueCurrency)}
+                description={`${formatCount(data.summary.unpaidBookingCount)} unpaid bookings`}
                 icon={<IconChartBar size={18} />}
+              />
+              <MetricCard
+                label="Paid"
+                value={formatMoney(data.summary.commissionPaidTotal, revenueCurrency)}
+                description={`${formatCount(data.summary.paidBookingCount)} paid bookings / ${formatCount(data.summary.payoutCount)} payouts`}
+                icon={<IconUsers size={18} />}
               />
             </SimpleGrid>
 
@@ -613,24 +980,98 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               </Accordion.Item>
             </Accordion>
 
+            <SectionCard
+              title="Affiliate payouts"
+              icon={<IconDeviceFloppy size={18} />}
+              right={
+                canPaySelectedAffiliate ? (
+                  <Button onClick={handleOpenPayoutModal}>
+                    Pay outstanding
+                  </Button>
+                ) : undefined
+              }
+            >
+              {payoutError ? (
+                <Alert color="red" radius="md" title="Affiliate payout error">
+                  {payoutError}
+                </Alert>
+              ) : null}
+
+              <ScrollArea h={320}>
+                <Table stickyHeader withColumnBorders highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Affiliate</Table.Th>
+                      <Table.Th>Date paid</Table.Th>
+                      <Table.Th>Range</Table.Th>
+                      <Table.Th ta="right">Bookings</Table.Th>
+                      <Table.Th ta="right">Amount</Table.Th>
+                      <Table.Th>Note</Table.Th>
+                      {canManageAssignments ? <Table.Th ta="center">Actions</Table.Th> : null}
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {data.payoutLogs.length === 0 ? (
+                      <Table.Tr>
+                        <Table.Td colSpan={canManageAssignments ? 7 : 6}>
+                          <Text c="dimmed" ta="center">
+                            No affiliate payouts in this range
+                          </Text>
+                        </Table.Td>
+                      </Table.Tr>
+                    ) : (
+                      data.payoutLogs.map((payoutLog) => (
+                        <Table.Tr key={payoutLog.id}>
+                          <Table.Td>{payoutLog.affiliateUserName}</Table.Td>
+                          <Table.Td>{formatBookingDate(payoutLog.paidDate)}</Table.Td>
+                          <Table.Td>
+                            {formatBookingDate(payoutLog.rangeStart)} - {formatBookingDate(payoutLog.rangeEnd)}
+                          </Table.Td>
+                          <Table.Td ta="right">{formatCount(payoutLog.bookingCount)}</Table.Td>
+                          <Table.Td ta="right">{formatMoney(payoutLog.amount, payoutLog.currencyCode)}</Table.Td>
+                          <Table.Td>{payoutLog.note ?? "-"}</Table.Td>
+                          {canManageAssignments ? (
+                            <Table.Td ta="center">
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color="red"
+                                loading={undoPayoutId === payoutLog.id}
+                                onClick={() => handleUndoPayout(payoutLog.id)}
+                              >
+                                Undo payout
+                              </Button>
+                            </Table.Td>
+                          ) : null}
+                        </Table.Tr>
+                      ))
+                    )}
+                  </Table.Tbody>
+                </Table>
+              </ScrollArea>
+            </SectionCard>
+
             <SectionCard title="Bookings" icon={<IconUsers size={18} />}>
               <ScrollArea h={520}>
                 <Table stickyHeader withColumnBorders highlightOnHover>
                   <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Date</Table.Th>
-                      <Table.Th>Booking</Table.Th>
-                      <Table.Th>Guest</Table.Th>
-                      <Table.Th>Product</Table.Th>
-                      <Table.Th ta="right">Revenue</Table.Th>
-                      <Table.Th>Affiliate</Table.Th>
-                      <Table.Th>UTM</Table.Th>
-                    </Table.Tr>
+                      <Table.Tr>
+                        <Table.Th>Date</Table.Th>
+                        <Table.Th>Booking</Table.Th>
+                        <Table.Th>Guest</Table.Th>
+                        <Table.Th>Product</Table.Th>
+                        <Table.Th ta="right">Revenue</Table.Th>
+                        <Table.Th ta="right">Commission</Table.Th>
+                        <Table.Th ta="right">Rate</Table.Th>
+                        <Table.Th>Status</Table.Th>
+                        <Table.Th>Affiliate</Table.Th>
+                        <Table.Th>UTM</Table.Th>
+                      </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
                     {bookings.length === 0 ? (
-                      <Table.Tr>
-                        <Table.Td colSpan={7}>
+                        <Table.Tr>
+                        <Table.Td colSpan={10}>
                           <Text c="dimmed" ta="center">
                             No bookings found for this range
                           </Text>
@@ -644,6 +1085,13 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                           <Table.Td>{booking.guestName}</Table.Td>
                           <Table.Td>{booking.productName ?? "-"}</Table.Td>
                           <Table.Td ta="right">{formatMoney(booking.baseAmount, booking.currency ?? revenueCurrency)}</Table.Td>
+                          <Table.Td ta="right">
+                            {formatMoney(booking.affiliateCommissionAmount, booking.currency ?? revenueCurrency)}
+                          </Table.Td>
+                          <Table.Td ta="right">
+                            {booking.affiliateCommissionRate != null ? `${formatCount(booking.affiliateCommissionRate)}%` : "-"}
+                          </Table.Td>
+                          <Table.Td>{booking.isCommissionPaid ? "Paid" : "Outstanding"}</Table.Td>
                           <Table.Td>{booking.affiliateUserName ?? "-"}</Table.Td>
                           <Table.Td>
                             <Stack gap={4}>
@@ -671,9 +1119,18 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                 title="Affiliate assignments"
                 icon={<IconUsers size={18} />}
                 right={
-                  <Button variant="light" leftSection={<IconPlus size={16} />} onClick={addRule}>
-                    Add rule
-                  </Button>
+                  <Group gap="xs">
+                    <Button variant="default" onClick={() => {
+                      setCreateAffiliateUserError(null);
+                      setCreateAffiliateUserForm(INITIAL_AFFILIATE_USER_FORM);
+                      setCreateAffiliateUserOpen(true);
+                    }}>
+                      Create affiliate user
+                    </Button>
+                    <Button variant="light" leftSection={<IconPlus size={16} />} onClick={addRule}>
+                      Add rule
+                    </Button>
+                  </Group>
                 }
               >
                 <Alert color="blue" variant="light" radius="md">
@@ -716,6 +1173,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                             data={utmCatalog.utmSource}
                             searchable
                             clearable
+                            comboboxProps={{ withinPortal: true }}
                             nothingFoundMessage="No catalog values found"
                             placeholder="Select source tags"
                             value={parseCsvValues(rule.utmSource)}
@@ -728,6 +1186,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                             data={utmCatalog.utmMedium}
                             searchable
                             clearable
+                            comboboxProps={{ withinPortal: true }}
                             nothingFoundMessage="No catalog values found"
                             placeholder="Select medium tags"
                             value={parseCsvValues(rule.utmMedium)}
@@ -740,6 +1199,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                             data={utmCatalog.utmCampaign}
                             searchable
                             clearable
+                            comboboxProps={{ withinPortal: true }}
                             nothingFoundMessage="No catalog values found"
                             placeholder="Select campaign tags"
                             value={parseCsvValues(rule.utmCampaign)}
@@ -763,6 +1223,191 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
           </>
         ) : null}
       </Stack>
+
+      <Modal
+        opened={payoutModalOpen}
+        onClose={() => {
+          if (payoutLoading) {
+            return;
+          }
+          setPayoutModalOpen(false);
+          setPayoutError(null);
+        }}
+        title="Create Affiliate Payout"
+        centered
+        fullScreen={Boolean(isMobile)}
+      >
+        <Stack gap="md">
+          {payoutError ? (
+            <Alert color="red" radius="md" title="Affiliate payout failed">
+              {payoutError}
+            </Alert>
+          ) : null}
+
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            <Paper withBorder radius="md" p="sm">
+              <Stack gap={2}>
+                <Text size="xs" tt="uppercase" fw={700} c="dimmed">
+                  Affiliate
+                </Text>
+                <Text fw={700}>{selectedAffiliate?.fullName ?? "-"}</Text>
+              </Stack>
+            </Paper>
+            <Paper withBorder radius="md" p="sm">
+              <Stack gap={2}>
+                <Text size="xs" tt="uppercase" fw={700} c="dimmed">
+                  Outstanding commission
+                </Text>
+                <Text fw={700}>{formatMoney(data?.summary.commissionOutstandingTotal ?? 0, revenueCurrency)}</Text>
+              </Stack>
+            </Paper>
+            <Paper withBorder radius="md" p="sm">
+              <Stack gap={2}>
+                <Text size="xs" tt="uppercase" fw={700} c="dimmed">
+                  Unpaid bookings
+                </Text>
+                <Text fw={700}>{formatCount(data?.summary.unpaidBookingCount ?? 0)}</Text>
+              </Stack>
+            </Paper>
+            <Paper withBorder radius="md" p="sm">
+              <Stack gap={2}>
+                <Text size="xs" tt="uppercase" fw={700} c="dimmed">
+                  Range
+                </Text>
+                <Text fw={700}>{formatDisplayRange(range)}</Text>
+              </Stack>
+            </Paper>
+          </SimpleGrid>
+
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            <Select
+              label="Finance account"
+              data={payoutAccountOptions}
+              value={payoutForm.accountId}
+              onChange={(value) => setPayoutForm((current) => ({ ...current, accountId: value ?? "" }))}
+              searchable
+              nothingFoundMessage="No active accounts"
+            />
+            <Select
+              label="Expense category"
+              data={payoutCategoryOptions}
+              value={payoutForm.categoryId}
+              onChange={(value) => setPayoutForm((current) => ({ ...current, categoryId: value ?? "" }))}
+              searchable
+              nothingFoundMessage="No active expense categories"
+            />
+            <DatePickerInput
+              label="Paid date"
+              value={payoutForm.paidDate}
+              onChange={(value) => setPayoutForm((current) => ({ ...current, paidDate: value }))}
+            />
+            <TextInput
+              label="Note"
+              value={payoutForm.note}
+              onChange={(event) => setPayoutForm((current) => ({ ...current, note: event.currentTarget.value }))}
+            />
+          </SimpleGrid>
+
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPayoutModalOpen(false)} disabled={payoutLoading}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreatePayout} loading={payoutLoading}>
+              Create payout
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={createAffiliateUserOpen}
+        onClose={() => {
+          if (createAffiliateUserLoading) {
+            return;
+          }
+          setCreateAffiliateUserOpen(false);
+          setCreateAffiliateUserError(null);
+        }}
+        title="Create Affiliate User"
+        centered
+        fullScreen={Boolean(isMobile)}
+      >
+        <Stack gap="md">
+          {createAffiliateUserError ? (
+            <Alert color="red" radius="md" title="User creation failed">
+              {createAffiliateUserError}
+            </Alert>
+          ) : null}
+
+          {!affiliateUserTypeId ? (
+            <Alert color="orange" radius="md" title="Affiliate role missing">
+              The `affiliate` user type could not be found. Create or seed that role first.
+            </Alert>
+          ) : null}
+
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            <TextInput
+              label="First name"
+              value={createAffiliateUserForm.firstName}
+              onChange={(event) =>
+                setCreateAffiliateUserForm((current) => ({ ...current, firstName: event.currentTarget.value }))
+              }
+            />
+            <TextInput
+              label="Last name"
+              value={createAffiliateUserForm.lastName}
+              onChange={(event) =>
+                setCreateAffiliateUserForm((current) => ({ ...current, lastName: event.currentTarget.value }))
+              }
+            />
+            <TextInput
+              label="Email"
+              type="email"
+              value={createAffiliateUserForm.email}
+              onChange={(event) =>
+                setCreateAffiliateUserForm((current) => ({ ...current, email: event.currentTarget.value }))
+              }
+            />
+            <TextInput
+              label="Username"
+              value={createAffiliateUserForm.username}
+              onChange={(event) =>
+                setCreateAffiliateUserForm((current) => ({ ...current, username: event.currentTarget.value }))
+              }
+            />
+            <PasswordInput
+              label="Password"
+              value={createAffiliateUserForm.password}
+              onChange={(event) =>
+                setCreateAffiliateUserForm((current) => ({ ...current, password: event.currentTarget.value }))
+              }
+            />
+            <NumberInput
+              label="Commission rate %"
+              min={0}
+              decimalScale={2}
+              fixedDecimalScale={false}
+              value={createAffiliateUserForm.affiliateCommissionRate}
+              onChange={(value) =>
+                setCreateAffiliateUserForm((current) => ({
+                  ...current,
+                  affiliateCommissionRate: value === "" ? "" : String(value),
+                }))
+              }
+            />
+            <TextInput label="Role" value="Affiliate" disabled />
+          </SimpleGrid>
+
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setCreateAffiliateUserOpen(false)} disabled={createAffiliateUserLoading}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateAffiliateUser} loading={createAffiliateUserLoading} disabled={!affiliateUserTypeId}>
+              Create affiliate user
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </PageAccessGuard>
   );
 };

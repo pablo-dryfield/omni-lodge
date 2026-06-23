@@ -1,5 +1,5 @@
 import { type ReactElement, type ReactNode } from "react";
-import { Group, Paper, Stack, Text } from "@mantine/core";
+import { Paper, Stack, Text } from "@mantine/core";
 import dayjs from "dayjs";
 import {
   Area,
@@ -64,6 +64,12 @@ const AffiliateChartSection = ({
                         Revenue:
                       </Text>{" "}
                       {formatMoney(point.revenue, revenueCurrency)}
+                    </Text>
+                    <Text size="sm">
+                      <Text span fw={700}>
+                        Commission:
+                      </Text>{" "}
+                      {formatMoney(point.commission, revenueCurrency)}
                     </Text>
                     <Text size="sm">
                       <Text span fw={700}>

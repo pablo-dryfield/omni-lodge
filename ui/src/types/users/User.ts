@@ -27,6 +27,8 @@ export type User = {
   badgeName?: string | null;
   badgePrefixEmoji?: string | null;
   badgeSuffixEmoji?: string | null;
+  affiliateCommissionRate?: number | null;
+  financeVendorId?: number | null;
   userTypeId?: number;
   createdAt: Date;
   updatedAt: Date;
