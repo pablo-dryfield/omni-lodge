@@ -19,6 +19,7 @@ type AffiliateChartSectionProps = {
   formatMoney: (value: number, currency?: string | null) => string;
   revenueCurrency?: string | null;
   isMobile: boolean;
+  showRevenue: boolean;
   sectionCard: (children: ReactNode) => ReactElement;
 };
 
@@ -28,8 +29,12 @@ const AffiliateChartSection = ({
   formatMoney,
   revenueCurrency,
   isMobile,
+  showRevenue,
   sectionCard,
 }: AffiliateChartSectionProps) => {
+  const primaryDataKey = showRevenue ? "revenue" : "commission";
+  const primaryStroke = showRevenue ? "#228be6" : "#2f9e44";
+
   return sectionCard(
     <div style={{ width: "100%", height: isMobile ? 300 : 360 }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -59,12 +64,14 @@ const AffiliateChartSection = ({
                     <Text fw={800} size="md">
                       {dayjs(label).format("DD MMM YYYY")}
                     </Text>
-                    <Text size="sm">
-                      <Text span fw={700}>
-                        Revenue:
-                      </Text>{" "}
-                      {formatMoney(point.revenue, revenueCurrency)}
-                    </Text>
+                    {showRevenue ? (
+                      <Text size="sm">
+                        <Text span fw={700}>
+                          Revenue:
+                        </Text>{" "}
+                        {formatMoney(point.revenue, revenueCurrency)}
+                      </Text>
+                    ) : null}
                     <Text size="sm">
                       <Text span fw={700}>
                         Commission:
@@ -77,6 +84,12 @@ const AffiliateChartSection = ({
                       </Text>{" "}
                       {point.bookingCount}
                     </Text>
+                    <Text size="sm">
+                      <Text span fw={700}>
+                        People:
+                      </Text>{" "}
+                      {formatCount(point.peopleCount)}
+                    </Text>
                   </Stack>
                 </Paper>
               );
@@ -85,9 +98,9 @@ const AffiliateChartSection = ({
           <Area
             yAxisId="left"
             type="monotone"
-            dataKey="revenue"
-            stroke="#228be6"
-            fill="#228be6"
+            dataKey={primaryDataKey}
+            stroke={primaryStroke}
+            fill={primaryStroke}
             fillOpacity={0.18}
             strokeWidth={2}
             dot={{ r: 3 }}

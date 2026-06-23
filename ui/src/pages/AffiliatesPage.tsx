@@ -113,6 +113,17 @@ const formatCount = (value: number): string =>
     maximumFractionDigits: Number.isInteger(value) ? 0 : 2,
   }).format(value);
 
+const centeredTableStyles = {
+  th: {
+    textAlign: "center" as const,
+    verticalAlign: "middle" as const,
+  },
+  td: {
+    textAlign: "center" as const,
+    verticalAlign: "middle" as const,
+  },
+};
+
 const formatDisplayRange = (range: DateRangeValue): string => {
   const [start, end] = range;
   if (!start || !end) {
@@ -167,7 +178,7 @@ const MetricCard = ({
 }: {
   label: string;
   value: string;
-  description: string;
+  description?: string;
   icon: ReactNode;
 }) => (
   <Card withBorder radius="lg" p="md" shadow="xs">
@@ -181,27 +192,72 @@ const MetricCard = ({
       <Text fw={800} fz={{ base: 24, sm: 28 }} ta="center">
         {value}
       </Text>
-      <Text size="sm" c="dimmed" ta="center">
-        {description}
-      </Text>
+      {description ? (
+        <Text size="sm" c="dimmed" ta="center">
+          {description}
+        </Text>
+      ) : null}
     </Stack>
+  </Card>
+);
+
+const BookingsPeopleCard = ({
+  bookingCount,
+  peopleCount,
+}: {
+  bookingCount: string;
+  peopleCount: string;
+}) => (
+  <Card withBorder radius="lg" p="md" shadow="xs">
+    <SimpleGrid cols={2} spacing="md" w="100%">
+      <Stack gap={6} align="center">
+        <ThemeIcon radius="xl" variant="light" size="lg">
+          <IconCalendarEvent size={18} />
+        </ThemeIcon>
+        <Stack gap={2} align="center">
+          <Text size="xs" tt="uppercase" fw={700} c="dimmed" ta="center" style={{ letterSpacing: "0.08em" }}>
+            Bookings
+          </Text>
+          <Text fw={800} fz={{ base: 24, sm: 28 }} ta="center">
+            {bookingCount}
+          </Text>
+        </Stack>
+      </Stack>
+      <Stack gap={6} align="center">
+        <ThemeIcon radius="xl" variant="light" size="lg">
+          <IconUsers size={18} />
+        </ThemeIcon>
+        <Stack gap={2} align="center">
+          <Text size="xs" tt="uppercase" fw={700} c="dimmed" ta="center" style={{ letterSpacing: "0.08em" }}>
+            People
+          </Text>
+          <Text fw={800} fz={{ base: 24, sm: 28 }} ta="center">
+            {peopleCount}
+          </Text>
+        </Stack>
+      </Stack>
+    </SimpleGrid>
   </Card>
 );
 
 const SectionCard = ({ title, icon, right, children }: { title: string; icon: ReactNode; right?: ReactNode; children: ReactNode }) => (
   <Card withBorder radius="lg" p="md" shadow="xs">
     <Stack gap="md">
-      <Group justify="space-between" align="center" wrap="nowrap">
-        <Group gap="sm" wrap="nowrap">
+      <div style={{ position: "relative", minHeight: 44 }}>
+        <Group gap="sm" wrap="nowrap" justify="center">
           <ThemeIcon radius="xl" variant="light" size="lg">
             {icon}
           </ThemeIcon>
-          <Text fw={800} size="lg">
+          <Text fw={800} size="lg" ta="center">
             {title}
           </Text>
         </Group>
-        {right}
-      </Group>
+        {right ? (
+          <div style={{ position: "absolute", top: 0, right: 0 }}>
+            {right}
+          </div>
+        ) : null}
+      </div>
       {children}
     </Stack>
   </Card>
@@ -251,7 +307,7 @@ type AffiliateUserFormState = {
   email: string;
   username: string;
   password: string;
-  affiliateCommissionRate: string;
+  affiliateCommissionPerPerson: string;
 };
 
 const INITIAL_AFFILIATE_USER_FORM: AffiliateUserFormState = {
@@ -260,7 +316,7 @@ const INITIAL_AFFILIATE_USER_FORM: AffiliateUserFormState = {
   email: "",
   username: "",
   password: "",
-  affiliateCommissionRate: "18.18",
+  affiliateCommissionPerPerson: "0",
 };
 
 type AffiliatePayoutFormState = {
@@ -391,7 +447,6 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   }, []);
 
   const canManageAssignments = Boolean(data?.currentUser.canManageAssignments);
-  const isAffiliateUser = data?.currentUser.roleSlug === "affiliate";
   const selectedAffiliateUserId = affiliateFilter === "all" ? null : Number(affiliateFilter);
   const startDate = useMemo(() => dayjs(range[0] ?? new Date()).format("YYYY-MM-DD"), [range]);
   const endDate = useMemo(() => dayjs(range[1] ?? range[0] ?? new Date()).format("YYYY-MM-DD"), [range]);
@@ -568,7 +623,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     const email = createAffiliateUserForm.email.trim();
     const username = createAffiliateUserForm.username.trim();
     const password = createAffiliateUserForm.password.trim();
-    const affiliateCommissionRate = Number(createAffiliateUserForm.affiliateCommissionRate);
+    const affiliateCommissionPerPerson = Number(createAffiliateUserForm.affiliateCommissionPerPerson);
 
     if (!firstName) {
       setCreateAffiliateUserError("First name is required.");
@@ -590,8 +645,8 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
       setCreateAffiliateUserError("Password must be at least 8 characters.");
       return;
     }
-    if (!Number.isFinite(affiliateCommissionRate) || affiliateCommissionRate < 0) {
-      setCreateAffiliateUserError("Commission rate must be a valid positive percentage.");
+    if (!Number.isFinite(affiliateCommissionPerPerson) || affiliateCommissionPerPerson < 0) {
+      setCreateAffiliateUserError("Commission per person must be a valid positive amount.");
       return;
     }
     if (!affiliateUserTypeId) {
@@ -625,7 +680,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
           userData: {
             userTypeId: affiliateUserTypeId,
             status: true,
-            affiliateCommissionRate,
+            affiliateCommissionRate: affiliateCommissionPerPerson,
           },
         }),
       ).unwrap();
@@ -705,6 +760,8 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   };
 
   const revenueCurrency = data?.bookings.find((booking) => booking.currency)?.currency ?? "PLN";
+  const isAffiliateViewer = (data?.currentUser.roleSlug ?? "").trim().toLowerCase() === "affiliate";
+  const showRevenueDetails = !isAffiliateViewer;
   const utmCatalog = data?.utmCatalog ?? { utmSource: [], utmMedium: [], utmCampaign: [] };
   const payoutAccountOptions = financeAccounts.map((account) => ({
     value: String(account.id),
@@ -720,7 +777,11 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   const sourceRows = data?.sourceBreakdown ?? [];
   const mediumRows = data?.mediumBreakdown ?? [];
   const campaignRows = data?.campaignBreakdown ?? [];
-  const bookings = data?.bookings ?? [];
+  const bookings = useMemo(() => data?.bookings ?? [], [data?.bookings]);
+  const peopleCount = useMemo(
+    () => bookings.reduce((sum, booking) => sum + (Number.isFinite(booking.partySizeTotal) ? booking.partySizeTotal : 0), 0),
+    [bookings],
+  );
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
@@ -741,58 +802,77 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               </Group>
             </Group>
 
-            <Group grow align="end" wrap="wrap">
-              {canManageAssignments ? (
+            {canManageAssignments ? (
+              <Group justify="center">
                 <Select
-                  label="Affiliate"
                   data={affiliateOptions}
                   value={affiliateFilter}
                   onChange={(value) => setAffiliateFilter(value ?? "all")}
                   w={isMobile ? "100%" : 260}
+                  checkIconPosition="right"
+                  allowDeselect={false}
+                  styles={{
+                    input: { textAlign: "center", fontWeight: 700 },
+                    dropdown: { textAlign: "center" },
+                    options: { textAlign: "center" },
+                    option: { justifyContent: "center", textAlign: "center", fontWeight: 600 },
+                  }}
                 />
-              ) : (
-                <Paper withBorder radius="md" p="sm" style={{ width: isMobile ? "100%" : 260 }}>
-                  <Stack gap={2}>
-                    <Text size="xs" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: "0.12em" }}>
-                      Affiliate
-                    </Text>
-                    <Text fw={600}>{isAffiliateUser ? "Your bookings only" : "All visible bookings"}</Text>
-                  </Stack>
-                </Paper>
-              )}
-              <Select
-                label="Period"
-                data={DATE_PRESET_OPTIONS}
-                value={preset}
-                onChange={(value) => {
-                  if (!value) {
-                    return;
-                  }
-                  if (value === "custom") {
-                    setPreset("custom");
-                    return;
-                  }
-                  applyPreset(value as Exclude<DatePreset, "custom">);
-                }}
-                w={isMobile ? "100%" : 240}
-              />
-              <DatePickerInput
-                type="range"
-                label="Custom range"
-                value={range}
-                onChange={(nextRange) => {
-                  const normalized: DateRangeValue = [nextRange[0] ?? null, nextRange[1] ?? null];
-                  setPreset("custom");
-                  setRange(normalized);
-                }}
-                disabled={preset !== "custom"}
-                w={isMobile ? "100%" : 320}
-              />
-            </Group>
+              </Group>
+            ) : null}
 
-            <Text size="sm" c="dimmed" ta="center">
-              {formatDisplayRange(range)}
-            </Text>
+            <Stack gap="sm" mx="auto" style={{ width: "100%", maxWidth: 860 }}>
+              <Group gap="sm" wrap="wrap" align="center" justify="center">
+                <Select
+                  value={preset}
+                  onChange={(value) => {
+                    if (!value) {
+                      return;
+                    }
+                    if (value === "custom") {
+                      setPreset("custom");
+                      return;
+                    }
+                    applyPreset(value as Exclude<DatePreset, "custom">);
+                  }}
+                  data={DATE_PRESET_OPTIONS}
+                  placeholder="This Month"
+                  size={isMobile ? "xs" : "sm"}
+                  w={isMobile ? "100%" : 220}
+                  checkIconPosition="right"
+                  allowDeselect={false}
+                  styles={{
+                    input: { textAlign: "center", fontWeight: 700 },
+                    dropdown: { textAlign: "center" },
+                    options: { textAlign: "center" },
+                    option: { justifyContent: "center", textAlign: "center", fontWeight: 600 },
+                  }}
+                />
+                {preset === "custom" && (
+                  <DatePickerInput
+                    type="range"
+                    value={range}
+                    onChange={(nextRange) => {
+                      const normalized: DateRangeValue = [nextRange[0] ?? null, nextRange[1] ?? null];
+                      setPreset("custom");
+                      setRange(normalized);
+                    }}
+                    placeholder="Select custom range"
+                    size={isMobile ? "xs" : "sm"}
+                    valueFormat="YYYY-MM-DD"
+                    clearable
+                    w={isMobile ? "100%" : 280}
+                    styles={{
+                      input: { textAlign: "center" },
+                    }}
+                  />
+                )}
+              </Group>
+
+              <Text size="sm" c="dimmed" ta="center">
+                {formatDisplayRange(range)}
+              </Text>
+            </Stack>
           </Stack>
         </Paper>
 
@@ -814,39 +894,30 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
           </Group>
         ) : null}
 
-        {data ? (
+            {data ? (
           <>
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
-              <MetricCard
-                label="Bookings"
-                value={formatCount(data.summary.bookingCount)}
-                description={`${formatCount(data.summary.matchedAffiliateCount)} matched / ${formatCount(
-                  data.summary.unassignedBookingCount,
-                )} unassigned`}
-                icon={<IconCalendarEvent size={18} />}
-              />
-              <MetricCard
-                label="Revenue"
-                value={formatMoney(data.summary.revenueTotal, revenueCurrency)}
-                description={`${formatCount(data.summary.affiliateCount)} affiliates with sales`}
-                icon={<IconChartBar size={18} />}
-              />
+            <SimpleGrid cols={{ base: 1, sm: 2, lg: showRevenueDetails ? 5 : 4 }} spacing="md">
+              <BookingsPeopleCard bookingCount={formatCount(data.summary.bookingCount)} peopleCount={formatCount(peopleCount)} />
+              {showRevenueDetails ? (
+                <MetricCard
+                  label="Revenue"
+                  value={formatMoney(data.summary.revenueTotal, revenueCurrency)}
+                  icon={<IconChartBar size={18} />}
+                />
+              ) : null}
               <MetricCard
                 label="Commission"
                 value={formatMoney(data.summary.commissionTotal, revenueCurrency)}
-                description="Affiliate earnings from matched bookings"
                 icon={<IconDeviceFloppy size={18} />}
               />
               <MetricCard
                 label="Outstanding"
                 value={formatMoney(data.summary.commissionOutstandingTotal, revenueCurrency)}
-                description={`${formatCount(data.summary.unpaidBookingCount)} unpaid bookings`}
                 icon={<IconChartBar size={18} />}
               />
               <MetricCard
                 label="Paid"
                 value={formatMoney(data.summary.commissionPaidTotal, revenueCurrency)}
-                description={`${formatCount(data.summary.paidBookingCount)} paid bookings / ${formatCount(data.summary.payoutCount)} payouts`}
                 icon={<IconUsers size={18} />}
               />
             </SimpleGrid>
@@ -857,106 +928,75 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               formatMoney={formatMoney}
               revenueCurrency={revenueCurrency}
               isMobile={Boolean(isMobile)}
+              showRevenue={showRevenueDetails}
               sectionCard={(children) => (
-                <SectionCard title="Sales trend" icon={<IconChartBar size={18} />}>
+                <SectionCard title={showRevenueDetails ? "Sales trend" : "Commission trend"} icon={<IconChartBar size={18} />}>
                   {children}
                 </SectionCard>
               )}
             />
 
-            <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="md">
-              <SectionCard title="Breakdown by source" icon={<IconCalendarEvent size={18} />}>
-                <ScrollArea h={320}>
-                  <Table stickyHeader withColumnBorders highlightOnHover>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Source</Table.Th>
-                        <Table.Th ta="right">Bookings</Table.Th>
-                        <Table.Th ta="right">Revenue</Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {sourceRows.length === 0 ? (
-                        <Table.Tr>
-                          <Table.Td colSpan={3}>
-                            <Text c="dimmed" ta="center">
-                              No source data
-                            </Text>
-                          </Table.Td>
-                        </Table.Tr>
-                      ) : (
-                        sourceRows.map((row) => (
-                          <Table.Tr key={row.label}>
-                            <Table.Td>{row.label}</Table.Td>
-                            <Table.Td ta="right">{formatCount(row.bookingCount)}</Table.Td>
-                            <Table.Td ta="right">{formatMoney(row.revenue, revenueCurrency)}</Table.Td>
-                          </Table.Tr>
-                        ))
-                      )}
-                    </Table.Tbody>
-                  </Table>
-                </ScrollArea>
-              </SectionCard>
-
-              <SectionCard title="Breakdown by campaign" icon={<IconCalendarEvent size={18} />}>
-                <ScrollArea h={320}>
-                  <Table stickyHeader withColumnBorders highlightOnHover>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Campaign</Table.Th>
-                        <Table.Th ta="right">Bookings</Table.Th>
-                        <Table.Th ta="right">Revenue</Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {campaignRows.length === 0 ? (
-                        <Table.Tr>
-                          <Table.Td colSpan={3}>
-                            <Text c="dimmed" ta="center">
-                              No campaign data
-                            </Text>
-                          </Table.Td>
-                        </Table.Tr>
-                      ) : (
-                        campaignRows.map((row) => (
-                          <Table.Tr key={row.label}>
-                            <Table.Td>{row.label}</Table.Td>
-                            <Table.Td ta="right">{formatCount(row.bookingCount)}</Table.Td>
-                            <Table.Td ta="right">{formatMoney(row.revenue, revenueCurrency)}</Table.Td>
-                          </Table.Tr>
-                        ))
-                      )}
-                    </Table.Tbody>
-                  </Table>
-                </ScrollArea>
-              </SectionCard>
-            </SimpleGrid>
-
-            <SectionCard title="Breakdown by medium" icon={<IconCalendarEvent size={18} />}>
-              <ScrollArea h={280}>
-                <Table stickyHeader withColumnBorders highlightOnHover>
+            <SectionCard title="Bookings" icon={<IconUsers size={18} />}>
+              <ScrollArea h={520}>
+                <Table stickyHeader withColumnBorders highlightOnHover styles={centeredTableStyles}>
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>Medium</Table.Th>
-                      <Table.Th ta="right">Bookings</Table.Th>
-                      <Table.Th ta="right">Revenue</Table.Th>
+                      <Table.Th>Date</Table.Th>
+                      <Table.Th>Booking</Table.Th>
+                      <Table.Th>Guest</Table.Th>
+                      <Table.Th>Product</Table.Th>
+                      <Table.Th>Guests</Table.Th>
+                      <Table.Th>Rate Per Person</Table.Th>
+                      {showRevenueDetails ? <Table.Th>Revenue</Table.Th> : null}
+                      <Table.Th>Commission</Table.Th>
+                      <Table.Th>Status</Table.Th>
+                      <Table.Th>Affiliate</Table.Th>
+                      <Table.Th>UTM</Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {mediumRows.length === 0 ? (
+                    {bookings.length === 0 ? (
                       <Table.Tr>
-                        <Table.Td colSpan={3}>
+                        <Table.Td colSpan={showRevenueDetails ? 11 : 10}>
                           <Text c="dimmed" ta="center">
-                            No medium data
+                            No bookings found for this range
                           </Text>
                         </Table.Td>
                       </Table.Tr>
                     ) : (
-                      mediumRows.map((row) => (
-                        <Table.Tr key={row.label}>
-                          <Table.Td>{row.label}</Table.Td>
-                          <Table.Td ta="right">{formatCount(row.bookingCount)}</Table.Td>
-                          <Table.Td ta="right">{formatMoney(row.revenue, revenueCurrency)}</Table.Td>
+                      bookings.map((booking) => (
+                        <Table.Tr key={booking.id}>
+                          <Table.Td>{formatBookingDate(booking.sourceReceivedAt)}</Table.Td>
+                          <Table.Td>{booking.platformBookingId}</Table.Td>
+                          <Table.Td>{booking.guestName}</Table.Td>
+                          <Table.Td>{booking.productName ?? "-"}</Table.Td>
+                          <Table.Td>{formatCount(booking.partySizeTotal)}</Table.Td>
+                          <Table.Td>
+                            {booking.affiliateCommissionPerPerson != null
+                              ? formatMoney(booking.affiliateCommissionPerPerson, booking.currency ?? revenueCurrency)
+                              : "-"}
+                          </Table.Td>
+                          {showRevenueDetails ? (
+                            <Table.Td>{formatMoney(booking.baseAmount, booking.currency ?? revenueCurrency)}</Table.Td>
+                          ) : null}
+                          <Table.Td>
+                            {formatMoney(booking.affiliateCommissionAmount, booking.currency ?? revenueCurrency)}
+                          </Table.Td>
+                          <Table.Td>{booking.isCommissionPaid ? "Paid" : "Outstanding"}</Table.Td>
+                          <Table.Td>{booking.affiliateUserName ?? "-"}</Table.Td>
+                          <Table.Td>
+                            <Stack gap={4} align="center">
+                              <Text size="xs" c="dimmed" ta="center">
+                                Source: {booking.utmSource ?? "-"}
+                              </Text>
+                              <Text size="xs" c="dimmed" ta="center">
+                                Medium: {booking.utmMedium ?? "-"}
+                              </Text>
+                              <Text size="xs" c="dimmed" ta="center">
+                                Campaign: {booking.utmCampaign ?? "-"}
+                              </Text>
+                            </Stack>
+                          </Table.Td>
                         </Table.Tr>
                       ))
                     )}
@@ -965,20 +1005,110 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               </ScrollArea>
             </SectionCard>
 
-            <Accordion variant="separated" radius="lg">
-              <Accordion.Item value="tags">
-                <Accordion.Control>
-                  <Text fw={800}>Discovered UTM tags</Text>
-                </Accordion.Control>
-                <Accordion.Panel>
-                  <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">
-                    <TagListCard title="utm_source" rows={data.discoveredTags.utmSource} currency={revenueCurrency} />
-                    <TagListCard title="utm_medium" rows={data.discoveredTags.utmMedium} currency={revenueCurrency} />
-                    <TagListCard title="utm_campaign" rows={data.discoveredTags.utmCampaign} currency={revenueCurrency} />
-                  </SimpleGrid>
-                </Accordion.Panel>
-              </Accordion.Item>
-            </Accordion>
+            {showRevenueDetails ? (
+              <>
+                <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="md">
+                  <SectionCard title="Breakdown by source" icon={<IconCalendarEvent size={18} />}>
+                    <ScrollArea h={320}>
+                      <Table stickyHeader withColumnBorders highlightOnHover styles={centeredTableStyles}>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Source</Table.Th>
+                            <Table.Th>Bookings</Table.Th>
+                            <Table.Th>Revenue</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {sourceRows.length === 0 ? (
+                            <Table.Tr>
+                              <Table.Td colSpan={3}>
+                                <Text c="dimmed" ta="center">
+                                  No source data
+                                </Text>
+                              </Table.Td>
+                            </Table.Tr>
+                          ) : (
+                            sourceRows.map((row) => (
+                              <Table.Tr key={row.label}>
+                                <Table.Td>{row.label}</Table.Td>
+                                <Table.Td>{formatCount(row.bookingCount)}</Table.Td>
+                                <Table.Td>{formatMoney(row.revenue, revenueCurrency)}</Table.Td>
+                              </Table.Tr>
+                            ))
+                          )}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea>
+                  </SectionCard>
+
+                  <SectionCard title="Breakdown by campaign" icon={<IconCalendarEvent size={18} />}>
+                    <ScrollArea h={320}>
+                      <Table stickyHeader withColumnBorders highlightOnHover styles={centeredTableStyles}>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Campaign</Table.Th>
+                            <Table.Th>Bookings</Table.Th>
+                            <Table.Th>Revenue</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {campaignRows.length === 0 ? (
+                            <Table.Tr>
+                              <Table.Td colSpan={3}>
+                                <Text c="dimmed" ta="center">
+                                  No campaign data
+                                </Text>
+                              </Table.Td>
+                            </Table.Tr>
+                          ) : (
+                            campaignRows.map((row) => (
+                              <Table.Tr key={row.label}>
+                                <Table.Td>{row.label}</Table.Td>
+                                <Table.Td>{formatCount(row.bookingCount)}</Table.Td>
+                                <Table.Td>{formatMoney(row.revenue, revenueCurrency)}</Table.Td>
+                              </Table.Tr>
+                            ))
+                          )}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea>
+                  </SectionCard>
+                </SimpleGrid>
+
+                <SectionCard title="Breakdown by medium" icon={<IconCalendarEvent size={18} />}>
+                  <ScrollArea h={280}>
+                    <Table stickyHeader withColumnBorders highlightOnHover styles={centeredTableStyles}>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Medium</Table.Th>
+                          <Table.Th>Bookings</Table.Th>
+                          <Table.Th>Revenue</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {mediumRows.length === 0 ? (
+                          <Table.Tr>
+                            <Table.Td colSpan={3}>
+                              <Text c="dimmed" ta="center">
+                                No medium data
+                              </Text>
+                            </Table.Td>
+                          </Table.Tr>
+                        ) : (
+                          mediumRows.map((row) => (
+                            <Table.Tr key={row.label}>
+                              <Table.Td>{row.label}</Table.Td>
+                              <Table.Td>{formatCount(row.bookingCount)}</Table.Td>
+                              <Table.Td>{formatMoney(row.revenue, revenueCurrency)}</Table.Td>
+                            </Table.Tr>
+                          ))
+                        )}
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea>
+                </SectionCard>
+              </>
+            ) : null}
 
             <SectionCard
               title="Affiliate payouts"
@@ -998,16 +1128,16 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               ) : null}
 
               <ScrollArea h={320}>
-                <Table stickyHeader withColumnBorders highlightOnHover>
+                <Table stickyHeader withColumnBorders highlightOnHover styles={centeredTableStyles}>
                   <Table.Thead>
                     <Table.Tr>
                       <Table.Th>Affiliate</Table.Th>
                       <Table.Th>Date paid</Table.Th>
                       <Table.Th>Range</Table.Th>
-                      <Table.Th ta="right">Bookings</Table.Th>
-                      <Table.Th ta="right">Amount</Table.Th>
+                      <Table.Th>Bookings</Table.Th>
+                      <Table.Th>Amount</Table.Th>
                       <Table.Th>Note</Table.Th>
-                      {canManageAssignments ? <Table.Th ta="center">Actions</Table.Th> : null}
+                      {canManageAssignments ? <Table.Th>Actions</Table.Th> : null}
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
@@ -1027,11 +1157,11 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                           <Table.Td>
                             {formatBookingDate(payoutLog.rangeStart)} - {formatBookingDate(payoutLog.rangeEnd)}
                           </Table.Td>
-                          <Table.Td ta="right">{formatCount(payoutLog.bookingCount)}</Table.Td>
-                          <Table.Td ta="right">{formatMoney(payoutLog.amount, payoutLog.currencyCode)}</Table.Td>
+                          <Table.Td>{formatCount(payoutLog.bookingCount)}</Table.Td>
+                          <Table.Td>{formatMoney(payoutLog.amount, payoutLog.currencyCode)}</Table.Td>
                           <Table.Td>{payoutLog.note ?? "-"}</Table.Td>
                           {canManageAssignments ? (
-                            <Table.Td ta="center">
+                            <Table.Td>
                               <Button
                                 size="xs"
                                 variant="light"
@@ -1051,68 +1181,24 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               </ScrollArea>
             </SectionCard>
 
-            <SectionCard title="Bookings" icon={<IconUsers size={18} />}>
-              <ScrollArea h={520}>
-                <Table stickyHeader withColumnBorders highlightOnHover>
-                  <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Date</Table.Th>
-                        <Table.Th>Booking</Table.Th>
-                        <Table.Th>Guest</Table.Th>
-                        <Table.Th>Product</Table.Th>
-                        <Table.Th ta="right">Revenue</Table.Th>
-                        <Table.Th ta="right">Commission</Table.Th>
-                        <Table.Th ta="right">Rate</Table.Th>
-                        <Table.Th>Status</Table.Th>
-                        <Table.Th>Affiliate</Table.Th>
-                        <Table.Th>UTM</Table.Th>
-                      </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {bookings.length === 0 ? (
-                        <Table.Tr>
-                        <Table.Td colSpan={10}>
-                          <Text c="dimmed" ta="center">
-                            No bookings found for this range
-                          </Text>
-                        </Table.Td>
-                      </Table.Tr>
-                    ) : (
-                      bookings.map((booking) => (
-                        <Table.Tr key={booking.id}>
-                          <Table.Td>{formatBookingDate(booking.sourceReceivedAt)}</Table.Td>
-                          <Table.Td>{booking.platformBookingId}</Table.Td>
-                          <Table.Td>{booking.guestName}</Table.Td>
-                          <Table.Td>{booking.productName ?? "-"}</Table.Td>
-                          <Table.Td ta="right">{formatMoney(booking.baseAmount, booking.currency ?? revenueCurrency)}</Table.Td>
-                          <Table.Td ta="right">
-                            {formatMoney(booking.affiliateCommissionAmount, booking.currency ?? revenueCurrency)}
-                          </Table.Td>
-                          <Table.Td ta="right">
-                            {booking.affiliateCommissionRate != null ? `${formatCount(booking.affiliateCommissionRate)}%` : "-"}
-                          </Table.Td>
-                          <Table.Td>{booking.isCommissionPaid ? "Paid" : "Outstanding"}</Table.Td>
-                          <Table.Td>{booking.affiliateUserName ?? "-"}</Table.Td>
-                          <Table.Td>
-                            <Stack gap={4}>
-                              <Text size="xs" c="dimmed">
-                                Source: {booking.utmSource ?? "-"}
-                              </Text>
-                              <Text size="xs" c="dimmed">
-                                Medium: {booking.utmMedium ?? "-"}
-                              </Text>
-                              <Text size="xs" c="dimmed">
-                                Campaign: {booking.utmCampaign ?? "-"}
-                              </Text>
-                            </Stack>
-                          </Table.Td>
-                        </Table.Tr>
-                      ))
-                    )}
-                  </Table.Tbody>
-                </Table>
-              </ScrollArea>
-            </SectionCard>
+            {showRevenueDetails ? (
+              <Accordion variant="separated" radius="lg">
+                <Accordion.Item value="tags">
+                  <Accordion.Control>
+                    <Text fw={800} ta="center">
+                      Discovered UTM tags
+                    </Text>
+                  </Accordion.Control>
+                  <Accordion.Panel>
+                    <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">
+                      <TagListCard title="utm_source" rows={data.discoveredTags.utmSource} currency={revenueCurrency} showRevenue={showRevenueDetails} />
+                      <TagListCard title="utm_medium" rows={data.discoveredTags.utmMedium} currency={revenueCurrency} showRevenue={showRevenueDetails} />
+                      <TagListCard title="utm_campaign" rows={data.discoveredTags.utmCampaign} currency={revenueCurrency} showRevenue={showRevenueDetails} />
+                    </SimpleGrid>
+                  </Accordion.Panel>
+                </Accordion.Item>
+              </Accordion>
+            ) : null}
 
             {canManageAssignments ? (
               <SectionCard
@@ -1133,10 +1219,6 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                   </Group>
                 }
               >
-                <Alert color="blue" variant="light" radius="md">
-                  UTM matches are exact and comma-separated values are allowed. Admins and managers can map tags to affiliate users here.
-                </Alert>
-
                 <Stack gap="md">
                   {draftRules.map((rule, index) => (
                     <Card key={rule.id} withBorder radius="md" p="md">
@@ -1383,15 +1465,15 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               }
             />
             <NumberInput
-              label="Commission rate %"
+              label="Commission per person (PLN)"
               min={0}
               decimalScale={2}
               fixedDecimalScale={false}
-              value={createAffiliateUserForm.affiliateCommissionRate}
+              value={createAffiliateUserForm.affiliateCommissionPerPerson}
               onChange={(value) =>
                 setCreateAffiliateUserForm((current) => ({
                   ...current,
-                  affiliateCommissionRate: value === "" ? "" : String(value),
+                  affiliateCommissionPerPerson: value === "" ? "" : String(value),
                 }))
               }
             />
@@ -1416,14 +1498,18 @@ const TagListCard = ({
   title,
   rows,
   currency,
+  showRevenue,
 }: {
   title: string;
-  rows: Array<{ value: string; bookingCount: number; revenue: number }>;
+  rows: Array<{ value: string; bookingCount: number; revenue: number; commission: number }>;
   currency?: string | null;
+  showRevenue: boolean;
 }) => (
   <Card withBorder radius="md" p="md">
     <Stack gap="sm">
-      <Text fw={800}>{title}</Text>
+      <Text fw={800} ta="center">
+        {title}
+      </Text>
       <Divider />
       <Stack gap={6}>
         {rows.length === 0 ? (
@@ -1437,12 +1523,12 @@ const TagListCard = ({
                 <Text fw={600} lineClamp={1}>
                   {row.value}
                 </Text>
-                <Text size="xs" c="dimmed">
+                <Text size="xs" c="dimmed" ta="center">
                   {formatCount(row.bookingCount)} bookings
                 </Text>
               </Stack>
               <Text size="sm" fw={700} style={{ whiteSpace: "nowrap" }}>
-                {formatMoney(row.revenue, currency)}
+                {formatMoney(showRevenue ? row.revenue : row.commission, currency)}
               </Text>
             </Group>
           ))

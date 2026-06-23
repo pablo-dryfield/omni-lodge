@@ -30,7 +30,7 @@ export type AffiliateUserSummary = {
   userTypeId: number | null;
   userTypeSlug: string | null;
   userTypeName: string | null;
-  affiliateCommissionRate: number;
+  affiliateCommissionPerPerson: number;
   financeVendorId: number | null;
 };
 
@@ -42,6 +42,7 @@ export type AffiliateBookingRow = {
   guestName: string;
   experienceDate: string | null;
   sourceReceivedAt: string | null;
+  partySizeTotal: number;
   baseAmount: number;
   currency: string | null;
   utmSource: string | null;
@@ -50,7 +51,7 @@ export type AffiliateBookingRow = {
   affiliateUserId: number | null;
   affiliateUserName: string | null;
   affiliateRuleId: string | null;
-  affiliateCommissionRate: number | null;
+  affiliateCommissionPerPerson: number | null;
   affiliateCommissionAmount: number;
   affiliatePayoutLogId: number | null;
   isCommissionPaid: boolean;
@@ -59,6 +60,7 @@ export type AffiliateBookingRow = {
 export type AffiliateDailySeriesPoint = {
   date: string;
   bookingCount: number;
+  peopleCount: number;
   revenue: number;
   commission: number;
 };
@@ -67,12 +69,14 @@ export type AffiliateBreakdownRow = {
   label: string;
   bookingCount: number;
   revenue: number;
+  commission: number;
 };
 
 export type AffiliateTagRow = {
   value: string;
   bookingCount: number;
   revenue: number;
+  commission: number;
 };
 
 export type AffiliateOverviewResponse = {
@@ -103,7 +107,7 @@ export type AffiliateOverviewResponse = {
   affiliateBreakdown: Array<{
     userId: number;
     userName: string;
-    affiliateCommissionRate: number;
+    affiliateCommissionPerPerson: number;
     bookingCount: number;
     revenue: number;
     commission: number;
@@ -162,12 +166,32 @@ const normalizeMoney = (value: unknown): number => {
   return Number.isFinite(numeric) ? Math.round((numeric + Number.EPSILON) * 100) / 100 : 0;
 };
 
-const normalizePercentage = (value: unknown, fallback = 18.18): number => {
+const normalizeAffiliateCommissionPerPerson = (value: unknown, fallback = 20): number => {
   const numeric = typeof value === 'number' ? value : Number(value ?? fallback);
   if (!Number.isFinite(numeric) || numeric < 0) {
     return fallback;
   }
   return Math.round((numeric + Number.EPSILON) * 100) / 100;
+};
+
+const resolvePartySizeTotal = (booking: {
+  partySizeTotal?: unknown;
+  partySizeAdults?: unknown;
+  partySizeChildren?: unknown;
+}): number => {
+  const total = Number(booking.partySizeTotal);
+  if (Number.isFinite(total) && total > 0) {
+    return Math.round(total);
+  }
+
+  const adults = Number(booking.partySizeAdults ?? 0);
+  const children = Number(booking.partySizeChildren ?? 0);
+  const fallbackTotal = adults + children;
+  if (Number.isFinite(fallbackTotal) && fallbackTotal > 0) {
+    return Math.round(fallbackTotal);
+  }
+
+  return 1;
 };
 
 const parseName = (firstName: string | null, lastName: string | null): string => {
@@ -263,15 +287,16 @@ const saveAssignments = async (rules: AffiliateAssignmentRule[], actorId: number
 };
 
 const buildMetricSeries = (rows: AffiliateBookingRow[]): AffiliateDailySeriesPoint[] => {
-  const map = new Map<string, { bookingCount: number; revenue: number; commission: number }>();
+  const map = new Map<string, { bookingCount: number; peopleCount: number; revenue: number; commission: number }>();
 
   rows.forEach((row) => {
     const date = row.sourceReceivedAt ? dayjs(row.sourceReceivedAt).format('YYYY-MM-DD') : null;
     if (!date) {
       return;
     }
-    const entry = map.get(date) ?? { bookingCount: 0, revenue: 0, commission: 0 };
+    const entry = map.get(date) ?? { bookingCount: 0, peopleCount: 0, revenue: 0, commission: 0 };
     entry.bookingCount += 1;
+    entry.peopleCount += row.partySizeTotal;
     entry.revenue += row.baseAmount;
     entry.commission += row.affiliateCommissionAmount;
     map.set(date, entry);
@@ -281,6 +306,7 @@ const buildMetricSeries = (rows: AffiliateBookingRow[]): AffiliateDailySeriesPoi
     .map(([date, metrics]) => ({
       date,
       bookingCount: metrics.bookingCount,
+      peopleCount: metrics.peopleCount,
       revenue: normalizeMoney(metrics.revenue),
       commission: normalizeMoney(metrics.commission),
     }))
@@ -291,13 +317,14 @@ const buildBreakdown = (
   rows: AffiliateBookingRow[],
   selector: (row: AffiliateBookingRow) => string | null,
 ): AffiliateBreakdownRow[] => {
-  const map = new Map<string, { bookingCount: number; revenue: number }>();
+  const map = new Map<string, { bookingCount: number; revenue: number; commission: number }>();
 
   rows.forEach((row) => {
     const label = buildDisplayTag(selector(row)) ?? '(missing)';
-    const entry = map.get(label) ?? { bookingCount: 0, revenue: 0 };
+    const entry = map.get(label) ?? { bookingCount: 0, revenue: 0, commission: 0 };
     entry.bookingCount += 1;
     entry.revenue += row.baseAmount;
+    entry.commission += row.affiliateCommissionAmount;
     map.set(label, entry);
   });
 
@@ -306,12 +333,13 @@ const buildBreakdown = (
       label,
       bookingCount: metrics.bookingCount,
       revenue: normalizeMoney(metrics.revenue),
+      commission: normalizeMoney(metrics.commission),
     }))
-    .sort((left, right) => right.revenue - left.revenue || right.bookingCount - left.bookingCount || left.label.localeCompare(right.label));
+    .sort((left, right) => right.commission - left.commission || right.revenue - left.revenue || right.bookingCount - left.bookingCount || left.label.localeCompare(right.label));
 };
 
 const buildTagSummary = (rows: AffiliateBookingRow[], selector: (row: AffiliateBookingRow) => string | null): AffiliateTagRow[] => {
-  const map = new Map<string, { value: string; bookingCount: number; revenue: number }>();
+  const map = new Map<string, { value: string; bookingCount: number; revenue: number; commission: number }>();
 
   rows.forEach((row) => {
     const rawValue = selector(row);
@@ -320,9 +348,10 @@ const buildTagSummary = (rows: AffiliateBookingRow[], selector: (row: AffiliateB
       return;
     }
     const key = label.toLowerCase();
-    const entry = map.get(key) ?? { value: label, bookingCount: 0, revenue: 0 };
+    const entry = map.get(key) ?? { value: label, bookingCount: 0, revenue: 0, commission: 0 };
     entry.bookingCount += 1;
     entry.revenue += row.baseAmount;
+    entry.commission += row.affiliateCommissionAmount;
     map.set(key, entry);
   });
 
@@ -331,8 +360,9 @@ const buildTagSummary = (rows: AffiliateBookingRow[], selector: (row: AffiliateB
       value: entry.value,
       bookingCount: entry.bookingCount,
       revenue: normalizeMoney(entry.revenue),
+      commission: normalizeMoney(entry.commission),
     }))
-    .sort((left, right) => right.bookingCount - left.bookingCount || right.revenue - left.revenue || left.value.localeCompare(right.value));
+    .sort((left, right) => right.commission - left.commission || right.bookingCount - left.bookingCount || right.revenue - left.revenue || left.value.localeCompare(right.value));
 };
 
 const findMatchingRule = (booking: AffiliateBookingRow, rules: AffiliateAssignmentRule[]): AffiliateAssignmentRule | null => {
@@ -391,7 +421,7 @@ const fetchAffiliateUsers = async (): Promise<AffiliateUserSummary[]> => {
       userTypeId: user.userTypeId ?? null,
       userTypeSlug: role?.slug ?? null,
       userTypeName: role?.name ?? null,
-      affiliateCommissionRate: normalizePercentage(user.affiliateCommissionRate),
+      affiliateCommissionPerPerson: normalizeAffiliateCommissionPerPerson(user.affiliateCommissionRate),
       financeVendorId: user.financeVendorId ?? null,
     };
   });
@@ -476,6 +506,9 @@ const fetchAffiliateBookings = async (startDate: string, endDate: string): Promi
       'guestLastName',
       'experienceDate',
       'sourceReceivedAt',
+      'partySizeTotal',
+      'partySizeAdults',
+      'partySizeChildren',
       'baseAmount',
       'currency',
       'utmSource',
@@ -497,6 +530,7 @@ const fetchAffiliateBookings = async (startDate: string, endDate: string): Promi
     guestName: parseName(row.guestFirstName ?? null, row.guestLastName ?? null),
     experienceDate: row.experienceDate ?? null,
     sourceReceivedAt: row.sourceReceivedAt ? dayjs(row.sourceReceivedAt).toISOString() : null,
+    partySizeTotal: resolvePartySizeTotal(row),
     baseAmount: normalizeMoney(row.baseAmount),
     currency: row.currency ?? null,
     utmSource: normalizeText(row.utmSource),
@@ -505,7 +539,7 @@ const fetchAffiliateBookings = async (startDate: string, endDate: string): Promi
     affiliateUserId: null,
     affiliateUserName: null,
     affiliateRuleId: null,
-    affiliateCommissionRate: null,
+    affiliateCommissionPerPerson: null,
     affiliateCommissionAmount: 0,
     affiliatePayoutLogId: null,
     isCommissionPaid: false,
@@ -554,15 +588,17 @@ export const getAffiliateOverview = async (params: {
         };
       }
       const affiliateUser = affiliateUserMap.get(matchedRule.userId) ?? null;
-      const affiliateCommissionRate = affiliateUser ? normalizePercentage(affiliateUser.affiliateCommissionRate) : null;
+      const affiliateCommissionPerPerson = affiliateUser
+        ? normalizeAffiliateCommissionPerPerson(affiliateUser.affiliateCommissionPerPerson)
+        : null;
       return {
         ...booking,
         affiliateUserId: matchedRule.userId,
         affiliateUserName: affiliateUser?.fullName ?? null,
         affiliateRuleId: matchedRule.id,
-        affiliateCommissionRate,
+        affiliateCommissionPerPerson,
         affiliateCommissionAmount:
-          affiliateCommissionRate != null ? normalizeMoney((booking.baseAmount * affiliateCommissionRate) / 100) : 0,
+          affiliateCommissionPerPerson != null ? normalizeMoney(booking.partySizeTotal * affiliateCommissionPerPerson) : 0,
       };
     })
     .filter((booking) => {
@@ -599,7 +635,7 @@ export const getAffiliateOverview = async (params: {
     };
   });
 
-  const affiliateBreakdownMap = new Map<number, { bookingCount: number; revenue: number; commission: number; affiliateCommissionRate: number }>();
+  const affiliateBreakdownMap = new Map<number, { bookingCount: number; revenue: number; commission: number; affiliateCommissionPerPerson: number }>();
 
   const affiliateBreakdownPaidMap = new Map<number, { paidCommission: number; outstandingCommission: number }>();
 
@@ -611,7 +647,7 @@ export const getAffiliateOverview = async (params: {
       bookingCount: 0,
       revenue: 0,
       commission: 0,
-      affiliateCommissionRate: normalizePercentage(booking.affiliateCommissionRate),
+      affiliateCommissionPerPerson: normalizeAffiliateCommissionPerPerson(booking.affiliateCommissionPerPerson),
     };
     entry.bookingCount += 1;
     entry.revenue += booking.baseAmount;
@@ -676,7 +712,7 @@ export const getAffiliateOverview = async (params: {
       .map(([userId, metrics]) => ({
         userId,
         userName: affiliateUserMap.get(userId)?.fullName ?? `Affiliate ${userId}`,
-        affiliateCommissionRate: metrics.affiliateCommissionRate,
+        affiliateCommissionPerPerson: metrics.affiliateCommissionPerPerson,
         bookingCount: metrics.bookingCount,
         revenue: normalizeMoney(metrics.revenue),
         commission: normalizeMoney(metrics.commission),

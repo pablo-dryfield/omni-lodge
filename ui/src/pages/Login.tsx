@@ -22,12 +22,13 @@ import {
 } from '@mantine/core';
 import { IconUser, IconLock, IconCheck, IconX } from '@tabler/icons-react';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { setUserState } from '../actions/sessionActions';
+import { fetchSession, setUserState } from '../actions/sessionActions';
 import { loginUser, createUser } from '../actions/userActions';
 import { clearSessionError } from '../reducers/sessionReducer';
 import { useShiftRoles } from '../api/shiftRoles';
 import type { ShiftRole } from '../types/shiftRoles/ShiftRole';
 import { useMediaQuery } from '@mantine/hooks';
+import { useNavigate } from 'react-router-dom';
 import PhoneCodeSelectField from '../components/common/PhoneCodeSelectField';
 import { PRONOUN_OPTIONS } from '../constants/pronouns';
 import { DEFAULT_PHONE_CODE } from '../constants/phoneCodes';
@@ -248,6 +249,7 @@ const PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 
 const LoginPage: React.FC = () => {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const { user, error } = useAppSelector((state) => state.session);
   const [isSignup, setIsSignup] = useState(false);
   const [password, setPassword] = useState('');
@@ -437,6 +439,9 @@ const LoginPage: React.FC = () => {
     setLoading(true);
     try {
       await dispatch(loginUser({ email: user, password })).unwrap();
+      const sessionPayload = await dispatch(fetchSession()).unwrap();
+      const roleSlug = String(sessionPayload?.[0]?.roleSlug ?? '').trim().toLowerCase();
+      navigate(roleSlug === 'affiliate' ? '/affiliates' : '/', { replace: true });
     } catch (err) {
       console.error('Login failed:', err);
     } finally {
