@@ -9,7 +9,7 @@ export type AffiliateUserSummary = {
   userTypeId: number | null;
   userTypeSlug: string | null;
   userTypeName: string | null;
-  affiliateCommissionRate: number;
+  affiliateCommissionPerPerson: number;
   financeVendorId: number | null;
 };
 
@@ -30,6 +30,7 @@ export type AffiliateBooking = {
   guestName: string;
   experienceDate: string | null;
   sourceReceivedAt: string | null;
+  partySizeTotal: number;
   baseAmount: number;
   currency: string | null;
   utmSource: string | null;
@@ -38,7 +39,7 @@ export type AffiliateBooking = {
   affiliateUserId: number | null;
   affiliateUserName: string | null;
   affiliateRuleId: string | null;
-  affiliateCommissionRate: number | null;
+  affiliateCommissionPerPerson: number | null;
   affiliateCommissionAmount: number;
   affiliatePayoutLogId: number | null;
   isCommissionPaid: boolean;
@@ -47,6 +48,7 @@ export type AffiliateBooking = {
 export type AffiliateDailySeriesPoint = {
   date: string;
   bookingCount: number;
+  peopleCount: number;
   revenue: number;
   commission: number;
 };
@@ -55,12 +57,14 @@ export type AffiliateBreakdownRow = {
   label: string;
   bookingCount: number;
   revenue: number;
+  commission: number;
 };
 
 export type AffiliateTagRow = {
   value: string;
   bookingCount: number;
   revenue: number;
+  commission: number;
 };
 
 export type AffiliateOverviewResponse = {
@@ -93,7 +97,7 @@ export type AffiliateOverviewResponse = {
   affiliateBreakdown: Array<{
     userId: number;
     userName: string;
-    affiliateCommissionRate: number;
+    affiliateCommissionPerPerson: number;
     bookingCount: number;
     revenue: number;
     commission: number;
