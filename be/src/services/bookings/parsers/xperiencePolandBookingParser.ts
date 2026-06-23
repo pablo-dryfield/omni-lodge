@@ -342,7 +342,7 @@ const classifyEmailKind = (
     if (
       normalizedBody.includes('status rezerwacji: oczekujace') ||
       normalizedBody.includes('nowa rezerwacja czeka na twoje potwierdzenie') ||
-      AVAILABILITY_SUBJECT_PATTERN.test(subject) ||
+      AVAILABILITY_SUBJECT_PATTERN.test(subject) || LEGACY_BOOKING_SUBJECT_PATTERN.test(subject) ||
       normalizedSubject.includes('potwierdzenie dostepnosci')
     ) {
       return 'availability_request';
@@ -429,7 +429,7 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
       kind === 'legacy_booking'
         ? LEGACY_BOOKING_SUBJECT_PATTERN.test(subject) && !replySubjectMatch
         : kind
-          ? AVAILABILITY_SUBJECT_PATTERN.test(subject) || REPLY_SUBJECT_PATTERN.test(subject)
+          ? AVAILABILITY_SUBJECT_PATTERN.test(subject) || REPLY_SUBJECT_PATTERN.test(subject) || LEGACY_BOOKING_SUBJECT_PATTERN.test(subject)
           : false,
     );
 
