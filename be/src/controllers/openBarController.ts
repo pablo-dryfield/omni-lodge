@@ -21,6 +21,10 @@ import OpenBarInventoryMovement, { type OpenBarMovementType } from '../models/Op
 import OpenBarIngredientVariant from '../models/OpenBarIngredientVariant.js';
 import User from '../models/User.js';
 import Venue from '../models/Venue.js';
+import NightReport from '../models/NightReport.js';
+import NightReportVenue from '../models/NightReportVenue.js';
+import Counter from '../models/Counter.js';
+import CounterUser from '../models/CounterUser.js';
 
 const INGREDIENT_UNITS: OpenBarIngredientUnit[] = ['ml', 'unit'];
 const DRINK_TYPES: OpenBarDrinkType[] = ['classic', 'cocktail', 'beer', 'soft', 'custom'];
@@ -85,16 +89,21 @@ const setCachedOpenBarPayload = (
   });
 };
 
-const getOverviewCacheKey = (businessDate: string, actorId: number | null, managerAccess: boolean): string =>
-  `${businessDate}\u0000${actorId ?? 'guest'}\u0000${managerAccess ? 'manager' : 'member'}`;
+const getOverviewCacheKey = (
+  startDate: string,
+  endDate: string,
+  actorId: number | null,
+  managerAccess: boolean,
+): string => `${startDate}\u0000${endDate}\u0000${actorId ?? 'guest'}\u0000${managerAccess ? 'manager' : 'member'}`;
 
 const getOrLoadOpenBarOverviewPayload = (
-  businessDate: string,
+  startDate: string,
+  endDate: string,
   req: AuthenticatedRequest | undefined,
   actorId: number | null,
   managerAccess: boolean,
 ): Promise<unknown> => {
-  const cacheKey = getOverviewCacheKey(businessDate, actorId, managerAccess);
+  const cacheKey = getOverviewCacheKey(startDate, endDate, actorId, managerAccess);
   const cached = getCachedOpenBarPayload(openBarOverviewCache, cacheKey);
   if (cached) {
     return Promise.resolve(cached);
@@ -102,7 +111,7 @@ const getOrLoadOpenBarOverviewPayload = (
 
   let pending = openBarOverviewInFlight.get(cacheKey);
   if (!pending) {
-    pending = buildOpenBarOverviewPayload(businessDate, req)
+    pending = buildOpenBarOverviewPayload(startDate, endDate, req)
       .then((payload) => {
         setCachedOpenBarPayload(openBarOverviewCache, cacheKey, payload, OPEN_BAR_OVERVIEW_CACHE_TTL_MS);
         return payload;
@@ -3829,15 +3838,23 @@ export const createOpenBarInventoryAdjustment = async (req: AuthenticatedRequest
   }
 };
 
-const buildOpenBarOverviewPayload = async (businessDate: string, req?: AuthenticatedRequest) => {
+const buildOpenBarOverviewPayload = async (startDate: string, endDate: string, req?: AuthenticatedRequest) => {
   const actorId = req ? getActorId(req) : null;
   const managerAccess = req ? hasOpenBarManagerOverrideAccess(req) : true;
   const membershipContext =
     actorId == null
       ? { joinedSessionIds: new Set<number>(), activeJoinedSessionIds: new Set<number>() }
-      : await getUserSessionMembershipContext(actorId, { businessDate });
+      : await getUserSessionMembershipContext(actorId);
 
-  const sessionWhereClauses: Array<Record<string | symbol, unknown>> = [{ businessDate }];
+  const sessionWhereClauses: Array<Record<string | symbol, unknown>> = [
+    startDate === endDate
+      ? { businessDate: startDate }
+      : {
+          businessDate: {
+            [Op.between]: [startDate, endDate],
+          },
+        },
+  ];
   if (actorId != null && !managerAccess) {
     sessionWhereClauses.push(buildSessionVisibilityFilter(actorId, membershipContext.joinedSessionIds));
   }
@@ -3847,6 +3864,34 @@ const buildOpenBarOverviewPayload = async (businessDate: string, req?: Authentic
     include: [
       { model: Venue, as: 'venue', attributes: ['id', 'name'] },
       { model: OpenBarSessionType, as: 'sessionType', attributes: ['id', 'name', 'slug'] },
+      {
+        model: NightReport,
+        as: 'nightReport',
+        attributes: ['id', 'counterId', 'activityDate'],
+        required: false,
+        include: [
+          {
+            model: NightReportVenue,
+            as: 'venues',
+            required: false,
+            attributes: ['id', 'totalPeople', 'isOpenBar'],
+          },
+          {
+            model: Counter,
+            as: 'counter',
+            required: false,
+            attributes: ['id'],
+            include: [
+              {
+                model: CounterUser,
+                as: 'staff',
+                required: false,
+                attributes: ['id', 'userId'],
+              },
+            ],
+          },
+        ],
+      },
     ],
     order: [['id', 'DESC']],
   });
@@ -3878,8 +3923,8 @@ const buildOpenBarOverviewPayload = async (businessDate: string, req?: Authentic
   const issuesCount = issues.length;
   const totalServings = issues.reduce((sum, issue) => sum + parseNumber(issue.servings, 0), 0);
 
-  const recipeUsageMap = new Map<number, { recipeId: number; recipeName: string; drinkType: string; servings: number; issues: number }>();
-  const ingredientUsageMap = new Map<number, { ingredientId: number; ingredientName: string; baseUnit: string; usedQuantity: number }>();
+  const recipeUsageMap = new Map<number, { recipeId: number; recipeName: string; drinkType: string; servings: number; issues: number; estimatedCost: number }>();
+  const ingredientUsageMap = new Map<number, { ingredientId: number; ingredientName: string; baseUnit: string; usedQuantity: number; usedCost: number }>();
 
   issues.forEach((issue) => {
     const recipe = issue.recipe;
@@ -3893,10 +3938,18 @@ const buildOpenBarOverviewPayload = async (businessDate: string, req?: Authentic
       drinkType: recipe.drinkType,
       servings: 0,
       issues: 0,
+      estimatedCost: 0,
     };
     recipeUsage.servings += servings;
     recipeUsage.issues += 1;
     recipeUsageMap.set(recipe.id, recipeUsage);
+  });
+
+  const issueRecipeIdByIssueId = new Map<number, number>();
+  issues.forEach((issue) => {
+    if (issue.recipe?.id != null) {
+      issueRecipeIdByIssueId.set(issue.id, issue.recipe.id);
+    }
   });
 
   const issueIds = issues.map((issue) => issue.id);
@@ -3915,28 +3968,70 @@ const buildOpenBarOverviewPayload = async (businessDate: string, req?: Authentic
   issueMovements.forEach((movement) => {
     const ingredient = movement.ingredient;
     const usedQuantity = Math.abs(parseNumber(movement.quantityDelta, 0));
+    const unitCost = ingredient?.costPerUnit != null ? parseNumber(ingredient.costPerUnit, 0) : 0;
+    const movementCost = unitCost > 0 ? usedQuantity * unitCost : 0;
     const entry = ingredientUsageMap.get(movement.ingredientId) ?? {
       ingredientId: movement.ingredientId,
       ingredientName: ingredient?.name ?? `Ingredient #${movement.ingredientId}`,
       baseUnit: ingredient?.baseUnit ?? 'ml',
       usedQuantity: 0,
+      usedCost: 0,
     };
     entry.usedQuantity += usedQuantity;
+    entry.usedCost += movementCost;
     ingredientUsageMap.set(movement.ingredientId, entry);
 
-    if (ingredient?.costPerUnit != null) {
-      estimatedCost += usedQuantity * parseNumber(ingredient.costPerUnit, 0);
+    if (movementCost > 0) {
+      estimatedCost += movementCost;
+    }
+
+    const recipeId = movement.issueId != null ? issueRecipeIdByIssueId.get(movement.issueId) : undefined;
+    if (recipeId != null) {
+      const recipeUsage = recipeUsageMap.get(recipeId);
+      if (recipeUsage) {
+        recipeUsage.estimatedCost += movementCost;
+      }
     }
   });
 
   const deliveries = await OpenBarDelivery.count({
     where: {
       deliveredAt: {
-        [Op.gte]: startOfBusinessDate(businessDate),
-        [Op.lt]: endOfBusinessDateExclusive(businessDate),
+        [Op.gte]: startOfBusinessDate(startDate),
+        [Op.lt]: endOfBusinessDateExclusive(endDate),
       },
     },
   });
+
+  const countedNightReportIds = new Set<number>();
+  let totalGuests = 0;
+  let totalStaff = 0;
+
+  sessions.forEach((session) => {
+    const report = session.nightReport;
+    if (!report || report.id == null || countedNightReportIds.has(report.id)) {
+      return;
+    }
+
+    countedNightReportIds.add(report.id);
+    const openBarGuests = (report.venues ?? [])
+      .filter((venue) => venue.isOpenBar)
+      .reduce((sum, venue) => sum + Math.max(0, parseNumber(venue.totalPeople, 0)), 0);
+    const staffUserIds = new Set<number>();
+    (report.counter?.staff ?? []).forEach((staffAssignment) => {
+      const userId = parseInteger(staffAssignment.userId);
+      if (userId != null) {
+        staffUserIds.add(userId);
+      }
+    });
+
+    totalGuests += openBarGuests;
+    totalStaff += staffUserIds.size;
+  });
+
+  const totalPeopleIncludingStaff = totalGuests + totalStaff;
+  const averageCostPerPerson = totalPeopleIncludingStaff > 0 ? estimatedCost / totalPeopleIncludingStaff : 0;
+  const averageDrinksPerPerson = totalPeopleIncludingStaff > 0 ? totalServings / totalPeopleIncludingStaff : 0;
 
   const ingredients = await OpenBarIngredient.findAll({
     where: { isActive: true },
@@ -3949,15 +4044,16 @@ const buildOpenBarOverviewPayload = async (businessDate: string, req?: Authentic
     .sort((a, b) => a.currentStock - b.currentStock);
 
   const topDrinks = Array.from(recipeUsageMap.values())
-    .sort((a, b) => b.servings - a.servings || b.issues - a.issues)
-    .slice(0, 10);
+    .sort((a, b) => b.servings - a.servings || b.issues - a.issues);
 
   const ingredientUsage = Array.from(ingredientUsageMap.values())
     .sort((a, b) => b.usedQuantity - a.usedQuantity)
     .slice(0, 20);
 
   return {
-    businessDate,
+    businessDate: startDate,
+    startDate,
+    endDate,
     activeSession: activeSession
       ? {
           id: activeSession.id,
@@ -3980,6 +4076,11 @@ const buildOpenBarOverviewPayload = async (businessDate: string, req?: Authentic
       activeIngredients: ingredients.length,
       lowStockCount: lowStock.length,
       estimatedCost,
+      totalGuests,
+      totalStaff,
+      totalPeopleIncludingStaff,
+      averageCostPerPerson,
+      averageDrinksPerPerson,
     },
     topDrinks,
     ingredientUsage,
@@ -3993,7 +4094,12 @@ export const getOpenBarOverview = async (req: AuthenticatedRequest, res: Respons
     const actorId = getActorId(req);
     const managerAccess = hasOpenBarManagerOverrideAccess(req);
     const businessDate = normalizeDateOnly(req.query.businessDate);
-    const overview = await getOrLoadOpenBarOverviewPayload(businessDate, req, actorId, managerAccess);
+    const startDate = normalizeDateOnly(req.query.startDate, businessDate);
+    const endDate = normalizeDateOnly(req.query.endDate, startDate);
+    if (dayjs(endDate).isBefore(dayjs(startDate), 'day')) {
+      throw new HttpError(400, 'endDate cannot be before startDate');
+    }
+    const overview = await getOrLoadOpenBarOverviewPayload(startDate, endDate, req, actorId, managerAccess);
     res.status(200).json(overview);
   } catch (error) {
     handleError(res, error, 'Failed to load open bar overview');
@@ -4063,7 +4169,7 @@ export const getOpenBarBootstrap = async (req: AuthenticatedRequest, res: Respon
         ? joinableWhereClauses[0]
         : { [Op.and]: joinableWhereClauses };
 
-    const overviewPromise = getOrLoadOpenBarOverviewPayload(businessDate, req, actorId, managerAccess);
+    const overviewPromise = getOrLoadOpenBarOverviewPayload(businessDate, businessDate, req, actorId, managerAccess);
     const stockMapPromise = getStockMap();
     const drinkLabelMapPromise = getDrinkLabelSettingMap();
     const sessionInclude = [

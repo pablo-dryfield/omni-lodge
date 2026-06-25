@@ -195,6 +195,8 @@ export type OpenBarDelivery = {
 
 export type OpenBarOverview = {
   businessDate: string;
+  startDate: string;
+  endDate: string;
   activeSession: {
     id: number;
     sessionName: string;
@@ -215,6 +217,11 @@ export type OpenBarOverview = {
     activeIngredients: number;
     lowStockCount: number;
     estimatedCost: number;
+    totalGuests: number;
+    totalStaff: number;
+    totalPeopleIncludingStaff: number;
+    averageCostPerPerson: number;
+    averageDrinksPerPerson: number;
   };
   topDrinks: Array<{
     recipeId: number;
@@ -222,12 +229,14 @@ export type OpenBarOverview = {
     drinkType: string;
     servings: number;
     issues: number;
+    estimatedCost: number;
   }>;
   ingredientUsage: Array<{
     ingredientId: number;
     ingredientName: string;
     baseUnit: string;
     usedQuantity: number;
+    usedCost: number;
   }>;
   lowStock: OpenBarIngredient[];
   recentIssues: OpenBarIssue[];
@@ -272,12 +281,13 @@ export const useOpenBarBootstrap = (params: { businessDate: string; sessionLimit
     },
   });
 
-export const useOpenBarOverview = (businessDate: string) =>
+export const useOpenBarOverview = (params: { startDate: string; endDate: string; enabled?: boolean }) =>
   useQuery<OpenBarOverview>({
-    queryKey: ["open-bar", "overview", businessDate],
+    queryKey: ["open-bar", "overview", params.startDate, params.endDate],
+    enabled: params.enabled ?? true,
     queryFn: async () => {
       const response = await axiosInstance.get("/openBar/overview", {
-        params: { businessDate },
+        params: { startDate: params.startDate, endDate: params.endDate },
       });
       return response.data as OpenBarOverview;
     },

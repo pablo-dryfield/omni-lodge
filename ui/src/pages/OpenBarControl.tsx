@@ -25,7 +25,7 @@ import {
   Textarea,
   Title,
 } from "@mantine/core";
-import { DateInput } from "@mantine/dates";
+import { DateInput, DatePickerInput } from "@mantine/dates";
 import { useMediaQuery } from "@mantine/hooks";
 import {
   IconAlertTriangle,
@@ -73,6 +73,7 @@ import {
   useCreateOpenBarRecipe,
   useCreateOpenBarSession,
   useOpenBarBootstrap,
+  useOpenBarOverview,
   useJoinOpenBarSession,
   useLeaveOpenBarSession,
   useUpdateOpenBarIngredientCategory,
@@ -128,6 +129,20 @@ type RecipePreviewSegment = {
   color: string;
 };
 
+type OverviewDatePreset =
+  | "today"
+  | "yesterday"
+  | "this_week"
+  | "last_week"
+  | "last_7_days"
+  | "last_14_days"
+  | "this_month"
+  | "last_month"
+  | "all_time"
+  | "custom";
+
+type OverviewDateRangeValue = [Date | null, Date | null];
+
 const DEFAULT_ICE_CUBES_PER_DRINK = 3;
 const ICE_CUBE_VOLUME_ML = 25;
 const ICE_FLOATING_SUBMERGED_RATIO = 0.917;
@@ -135,6 +150,79 @@ const BARTENDER_SESSION_PANEL_MIN_WIDTH = 320;
 const BARTENDER_SESSION_PANEL_DEFAULT_WIDTH = 420;
 const BARTENDER_SERVICE_PANEL_MIN_WIDTH = 520;
 const globalSyncingDrinkIssueIds = new Set<string>();
+const OPEN_BAR_OVERVIEW_PRESET_OPTIONS: Array<{ value: OverviewDatePreset; label: string }> = [
+  { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "this_week", label: "This week" },
+  { value: "last_week", label: "Last week" },
+  { value: "last_7_days", label: "Last 7 days" },
+  { value: "last_14_days", label: "Last 14 days" },
+  { value: "this_month", label: "This month" },
+  { value: "last_month", label: "Last month" },
+  { value: "all_time", label: "All time" },
+  { value: "custom", label: "Custom" },
+];
+
+const createOverviewRange = (start: Date, end: Date): OverviewDateRangeValue => [start, end];
+
+const getOverviewPresetRange = (
+  preset: Exclude<OverviewDatePreset, "custom">,
+  reference: dayjs.Dayjs = dayjs(),
+): OverviewDateRangeValue => {
+  const today = reference.startOf("day");
+  switch (preset) {
+    case "today":
+      return createOverviewRange(today.toDate(), today.toDate());
+    case "yesterday": {
+      const yesterday = today.subtract(1, "day");
+      return createOverviewRange(yesterday.toDate(), yesterday.toDate());
+    }
+    case "this_week":
+      return createOverviewRange(today.startOf("week").toDate(), today.toDate());
+    case "last_week": {
+      const lastWeekEnd = today.startOf("week").subtract(1, "day");
+      return createOverviewRange(lastWeekEnd.startOf("week").toDate(), lastWeekEnd.toDate());
+    }
+    case "last_7_days": {
+      const yesterday = today.subtract(1, "day");
+      return createOverviewRange(yesterday.subtract(6, "day").toDate(), yesterday.toDate());
+    }
+    case "last_14_days": {
+      const yesterday = today.subtract(1, "day");
+      return createOverviewRange(yesterday.subtract(13, "day").toDate(), yesterday.toDate());
+    }
+    case "this_month":
+      return createOverviewRange(today.startOf("month").toDate(), today.toDate());
+    case "last_month": {
+      const lastMonthEnd = today.startOf("month").subtract(1, "day");
+      return createOverviewRange(lastMonthEnd.startOf("month").toDate(), lastMonthEnd.toDate());
+    }
+    case "all_time":
+      return createOverviewRange(new Date("2000-01-01T00:00:00.000Z"), today.toDate());
+  }
+};
+
+const formatOverviewDisplayRange = (range: OverviewDateRangeValue): string => {
+  const [start, end] = range;
+  if (!start || !end) {
+    return "Select a range";
+  }
+  const startLabel = dayjs(start).format("MMM D, YYYY");
+  const endLabel = dayjs(end).format("MMM D, YYYY");
+  return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
+};
+
+const formatOpenBarMoney = (value: number): string =>
+  `${new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value)} z\u0142`;
+
+const formatOpenBarNumber = (value: number, fractionDigits = 2): string =>
+  new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: fractionDigits,
+  }).format(value);
 
 const resolveIceCubes = (hasIce: boolean, iceCubes: number): number => {
   if (!hasIce) {
@@ -1166,6 +1254,8 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
     buildDefaultDrinkLabelDisplayByType(),
   );
   const [businessDate, setBusinessDate] = useState<string>(dayjs().format("YYYY-MM-DD"));
+  const [overviewPreset, setOverviewPreset] = useState<OverviewDatePreset>("this_month");
+  const [overviewRange, setOverviewRange] = useState<OverviewDateRangeValue>(() => getOverviewPresetRange("this_month"));
   const [feedback, setFeedback] = useState<{ tone: "red" | "green"; message: string } | null>(null);
   const [bartenderLaunchOpen, setBartenderLaunchOpen] = useState<boolean>(false);
   const [bartenderSessionPanelWidth, setBartenderSessionPanelWidth] = useState<number>(BARTENDER_SESSION_PANEL_DEFAULT_WIDTH);
@@ -1370,6 +1460,13 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
   }, [lockedOperationMode, operationMode]);
 
   useEffect(() => {
+    if (overviewPreset === "custom") {
+      return;
+    }
+    setOverviewRange(getOverviewPresetRange(overviewPreset));
+  }, [overviewPreset]);
+
+  useEffect(() => {
     bartenderLaunchQuantityRef.current = bartenderLaunchQuantity;
   }, [bartenderLaunchQuantity]);
 
@@ -1479,7 +1576,20 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
     deliveryLimit: 100,
     sessionIssueLimit: 300,
   });
-  const overviewQuery = { data: bootstrapQuery.data?.overview };
+  const dashboardOverview = bootstrapQuery.data?.overview;
+  const overviewStartDate = useMemo(
+    () => dayjs(overviewRange[0] ?? new Date()).format("YYYY-MM-DD"),
+    [overviewRange],
+  );
+  const overviewEndDate = useMemo(
+    () => dayjs(overviewRange[1] ?? overviewRange[0] ?? new Date()).format("YYYY-MM-DD"),
+    [overviewRange],
+  );
+  const overviewQuery = useOpenBarOverview({
+    startDate: overviewStartDate,
+    endDate: overviewEndDate,
+    enabled: managerMode && activeTab === "overview",
+  });
   const ingredientsQuery = { data: { ingredients: bootstrapQuery.data?.ingredients ?? [] } };
   const ingredientCategoriesQuery = { data: { categories: bootstrapQuery.data?.ingredientCategories ?? [] } };
   const ingredientVariantsQuery = { data: { variants: bootstrapQuery.data?.ingredientVariants ?? [] } };
@@ -1493,6 +1603,7 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
   const sessionsQuery = { data: { sessions: bootstrapQuery.data?.sessions ?? [] } };
   const joinableSessionsQuery = { data: { sessions: bootstrapQuery.data?.joinableSessions ?? [] } };
   const activeSession = bootstrapQuery.data?.currentUserSession ?? null;
+  const overviewData = activeTab === "overview" ? overviewQuery.data ?? null : dashboardOverview ?? null;
   const canCloseSessionTarget = useCallback(
     (createdBy: number | null | undefined): boolean => {
       if (managerMode) {
@@ -7028,20 +7139,20 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
           <SimpleGrid cols={{ base: 1, md: 3 }}>
             <Card withBorder>
               <Text size="sm" c="dimmed">Active Session</Text>
-              <Text fw={700}>{overviewQuery.data?.activeSession?.sessionName ?? "No active session"}</Text>
+              <Text fw={700}>{dashboardOverview?.activeSession?.sessionName ?? "No active session"}</Text>
               <Text size="sm" c="dimmed">
-                {overviewQuery.data?.activeSession?.venueName ?? "No venue"}
+                {dashboardOverview?.activeSession?.venueName ?? "No venue"}
               </Text>
             </Card>
             <Card withBorder>
               <Text size="sm" c="dimmed">Drinks Logged</Text>
-              <Text fw={700}>{overviewQuery.data?.totals.issuesCount ?? 0}</Text>
-              <Text size="sm" c="dimmed">Servings: {overviewQuery.data?.totals.totalServings ?? 0}</Text>
+              <Text fw={700}>{dashboardOverview?.totals.issuesCount ?? 0}</Text>
+              <Text size="sm" c="dimmed">Servings: {dashboardOverview?.totals.totalServings ?? 0}</Text>
             </Card>
             <Card withBorder>
               <Text size="sm" c="dimmed">Low Stock Alerts</Text>
-              <Text fw={700}>{overviewQuery.data?.totals.lowStockCount ?? 0}</Text>
-              <Text size="sm" c="dimmed">Deliveries today: {overviewQuery.data?.totals.deliveriesCount ?? 0}</Text>
+              <Text fw={700}>{dashboardOverview?.totals.lowStockCount ?? 0}</Text>
+              <Text size="sm" c="dimmed">Deliveries today: {dashboardOverview?.totals.deliveriesCount ?? 0}</Text>
             </Card>
           </SimpleGrid>
         ) : null}
@@ -7877,25 +7988,104 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
           </Tabs.Panel>
 
           <Tabs.Panel value="overview" pt="md">
-            <Grid>
+            <Stack gap="md">
+              <Paper withBorder p="md">
+                <Stack gap="xs">
+                  <Select
+                    data={OPEN_BAR_OVERVIEW_PRESET_OPTIONS}
+                    value={overviewPreset}
+                    onChange={(value) => {
+                      if (!value) {
+                        return;
+                      }
+                      setOverviewPreset(value as OverviewDatePreset);
+                    }}
+                    allowDeselect={false}
+                    styles={{
+                      input: { textAlign: "center", fontWeight: 700 },
+                      option: { textAlign: "center" },
+                    }}
+                  />
+                  <Text size="sm" c="dimmed" ta="center">
+                    {formatOverviewDisplayRange(overviewRange)}
+                  </Text>
+                  {overviewPreset === "custom" ? (
+                    <DatePickerInput
+                      type="range"
+                      allowSingleDateInRange
+                      value={overviewRange}
+                      onChange={(value) => {
+                        setOverviewRange(value);
+                      }}
+                      styles={{ input: { textAlign: "center", fontWeight: 600 } }}
+                    />
+                  ) : null}
+                </Stack>
+              </Paper>
+
+              {overviewQuery.error ? (
+                <Alert color="red" title="Overview unavailable">
+                  {isAxiosError(overviewQuery.error)
+                    ? overviewQuery.error.response?.data?.message ?? "Failed to load overview."
+                    : "Failed to load overview."}
+                </Alert>
+              ) : null}
+
+              <SimpleGrid cols={{ base: 1, md: 3 }}>
+                <Card withBorder>
+                  <Stack gap={4} align="center">
+                    <Text size="sm" c="dimmed" ta="center">Sessions in range</Text>
+                    <Text fw={700} fz={28} ta="center">{overviewData?.totals.sessions ?? 0}</Text>
+                    <Text size="sm" c="dimmed" ta="center">
+                      People incl. staff: {overviewData?.totals.totalPeopleIncludingStaff ?? 0}
+                    </Text>
+                  </Stack>
+                </Card>
+                <Card withBorder>
+                  <Stack gap={4} align="center">
+                    <Text size="sm" c="dimmed" ta="center">Average cost / person</Text>
+                    <Text fw={700} fz={28} ta="center">
+                      {formatOpenBarMoney(overviewData?.totals.averageCostPerPerson ?? 0)}
+                    </Text>
+                    <Text size="sm" c="dimmed" ta="center">
+                      Est. consumed cost: {formatOpenBarMoney(overviewData?.totals.estimatedCost ?? 0)}
+                    </Text>
+                  </Stack>
+                </Card>
+                <Card withBorder>
+                  <Stack gap={4} align="center">
+                    <Text size="sm" c="dimmed" ta="center">Average drinks / person</Text>
+                    <Text fw={700} fz={28} ta="center">
+                      {formatOpenBarNumber(overviewData?.totals.averageDrinksPerPerson ?? 0)}
+                    </Text>
+                    <Text size="sm" c="dimmed" ta="center">
+                      Total servings: {formatOpenBarNumber(overviewData?.totals.totalServings ?? 0, 0)}
+                    </Text>
+                  </Stack>
+                </Card>
+              </SimpleGrid>
+
+              <Grid>
               <Grid.Col span={{ base: 12, md: 6 }}>
                 <Paper withBorder p="md">
                   <Stack>
-                    <Title order={5}>Top Drinks</Title>
+                    <Title order={5}>All Drinks</Title>
                     <Table withTableBorder withColumnBorders>
                       <Table.Thead>
                         <Table.Tr>
                           <Table.Th>Drink</Table.Th>
                           <Table.Th>Servings</Table.Th>
                           <Table.Th>Issues</Table.Th>
+                          <Table.Th>Cost</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
                       <Table.Tbody>
-                        {(overviewQuery.data?.topDrinks ?? []).map((drink) => (
+                        {(overviewData?.topDrinks ?? []).map((drink) => (
                           <Table.Tr key={drink.recipeId}>
                             <Table.Td>{drink.recipeName}</Table.Td>
                             <Table.Td>{drink.servings}</Table.Td>
                             <Table.Td>{drink.issues}</Table.Td>
+                            <Table.Td>{formatOpenBarMoney(drink.estimatedCost ?? 0)}</Table.Td>
                           </Table.Tr>
                         ))}
                       </Table.Tbody>
@@ -7912,13 +8102,15 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
                         <Table.Tr>
                           <Table.Th>Ingredient</Table.Th>
                           <Table.Th>Used</Table.Th>
+                          <Table.Th>Cost</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
                       <Table.Tbody>
-                        {(overviewQuery.data?.ingredientUsage ?? []).map((usage) => (
+                        {(overviewData?.ingredientUsage ?? []).map((usage) => (
                           <Table.Tr key={usage.ingredientId}>
                             <Table.Td>{usage.ingredientName}</Table.Td>
                             <Table.Td>{usage.usedQuantity.toFixed(2)} {usage.baseUnit}</Table.Td>
+                            <Table.Td>{formatOpenBarMoney(usage.usedCost ?? 0)}</Table.Td>
                           </Table.Tr>
                         ))}
                       </Table.Tbody>
@@ -7967,7 +8159,8 @@ const OpenBarControl = ({ title }: GenericPageProps) => {
                   </Stack>
                 </Paper>
               </Grid.Col>
-            </Grid>
+              </Grid>
+            </Stack>
           </Tabs.Panel>
         </Tabs>
       </Stack>

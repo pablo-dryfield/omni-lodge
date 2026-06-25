@@ -183,6 +183,9 @@ const normalizeDateToken = (value: string): string => {
 const normalizeTimeMarker = (value: string): string =>
   value.replace(/\b(am|pm)\b/gi, (match) => match.toUpperCase());
 
+const FAREHARBOR_DATE_TOKEN_PATTERN = '([A-Za-z]+,\\s+\\d{1,2}\\s+[A-Za-z]+\\s+\\d{4})';
+const FAREHARBOR_TIME_TOKEN_PATTERN = '(\\d{1,2}:\\d{2}(?:\\s*(?:am|pm))?)';
+
 const parseDateTimeTokens = (dateToken: string, timeToken: string): Date | null => {
   const sanitizedDate = normalizeDateToken(dateToken);
   const sanitizedTime = normalizeTimeMarker(normalizeDateToken(timeToken));
@@ -204,7 +207,7 @@ const parseDateTimeTokens = (dateToken: string, timeToken: string): Date | null 
 const extractExperience = (
   text: string,
 ): { experienceDate: string | null; experienceStartAt: Date | null; experienceEndAt: Date | null } => {
-  const regex = /([A-Za-z]+,\s+\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*@\s*([\d:]+\s*(?:am|pm))/gi;
+  const regex = new RegExp(`${FAREHARBOR_DATE_TOKEN_PATTERN}\\s*@\\s*${FAREHARBOR_TIME_TOKEN_PATTERN}`, 'gi');
   const matches = Array.from(text.matchAll(regex));
   if (matches.length === 0) {
     return { experienceDate: null, experienceStartAt: null, experienceEndAt: null };
@@ -237,14 +240,14 @@ const extractExperienceFromSubject = (
   const remainder = subject.slice(idx + marker.length);
   const hyphenIdx = remainder.indexOf('-');
   const startSegment = hyphenIdx === -1 ? remainder : remainder.slice(0, hyphenIdx);
-  const startTokens = startSegment.match(/([A-Za-z]+,\s+\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*@\s*([\d:]+\s*(?:am|pm))/i);
+  const startTokens = startSegment.match(new RegExp(`${FAREHARBOR_DATE_TOKEN_PATTERN}\\s*@\\s*${FAREHARBOR_TIME_TOKEN_PATTERN}`, 'i'));
   if (!startTokens) {
     return null;
   }
   const start = parseDateTimeTokens(clean(startTokens[1]), clean(startTokens[2]));
 
   const endSegment = hyphenIdx === -1 ? '' : remainder.slice(hyphenIdx + 1);
-  const endTokens = endSegment.match(/([A-Za-z]+,\s+\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*@\s*([\d:]+\s*(?:am|pm))/i);
+  const endTokens = endSegment.match(new RegExp(`${FAREHARBOR_DATE_TOKEN_PATTERN}\\s*@\\s*${FAREHARBOR_TIME_TOKEN_PATTERN}`, 'i'));
   const end =
     endTokens && endTokens[1] && endTokens[2]
       ? parseDateTimeTokens(clean(endTokens[1]), clean(endTokens[2]))
