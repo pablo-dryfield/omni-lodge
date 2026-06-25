@@ -151,6 +151,41 @@ const extractPartyCounts = (text: string): PartyCounts => {
   };
 };
 
+const extractPartyCountsFromAttendeeRows = (text: string): PartyCounts => {
+  let adults = 0;
+  let children = 0;
+  let men = 0;
+  let women = 0;
+  const attendeePattern =
+    /(\d+)\s+(Man|Men|Woman|Women|Guest|Guests|People|Persons|Adult|Adults|Child|Children|Kid|Kids)(?=\s+Name:|\s+Phone:|\s+Email:|\s+Affiliate\b|\s+Voucher\b|\s+Details\b|$)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = attendeePattern.exec(text)) !== null) {
+    const qty = Number.parseInt(match[1], 10);
+    if (Number.isNaN(qty) || qty <= 0) {
+      continue;
+    }
+    const label = match[2].toLowerCase();
+    if (ADULT_TERMS.has(label)) {
+      adults += qty;
+      if (MALE_TERMS.has(label)) {
+        men += qty;
+      } else if (FEMALE_TERMS.has(label)) {
+        women += qty;
+      }
+    } else if (CHILD_TERMS.has(label)) {
+      children += qty;
+    }
+  }
+  const total = adults + children;
+  return {
+    total: total > 0 ? total : null,
+    adults: adults > 0 ? adults : null,
+    children: children > 0 ? children : null,
+    men: men > 0 ? men : null,
+    women: women > 0 ? women : null,
+  };
+};
+
 const extractPartyCountsFromCustomers = (text: string): PartyCounts => {
   const boundaries = ['item', 'details', 'payments', 'booking total', 'total paid'];
   let customersSection: string | null = null;
@@ -172,7 +207,11 @@ const extractPartyCountsFromCustomers = (text: string): PartyCounts => {
   }
   const paymentsIdx = text.toLowerCase().indexOf('payments');
   const headerScope = paymentsIdx === -1 ? text : text.slice(0, paymentsIdx);
-  return extractPartyCounts(headerScope);
+  const headerCounts = extractPartyCounts(headerScope);
+  if (headerCounts.total !== null || headerCounts.children !== null || headerCounts.adults !== null) {
+    return headerCounts;
+  }
+  return extractPartyCountsFromAttendeeRows(headerScope);
 };
 
 const normalizeDateToken = (value: string): string => {
