@@ -18,6 +18,24 @@ const BADGE_BACKSIDE_TEMPLATE_PATH = path.resolve(
   '../../../ui/public/assets/badges/ktk-backside-badge.png',
 );
 const BADGE_PRINT_RECIPIENT_FALLBACK = 'pjcampo1@gmail.com';
+const BADGE_PRINT_EMAIL_SUBJECT_FALLBACK = 'Badge Print Request - {{userDisplayName}}';
+const BADGE_PRINT_EMAIL_BODY_FALLBACK = `Hello!
+
+I'd like to order:
+
+A6 Size (It's a badge)
+Glossy lamination and the thickest paper (320g - 350g).
+Perforated at the hole (it doesn't need to be exact).
+
+Faktura:
+
+Nazwa pe\u0142na: KRAKTIVITY SP\u00D3\u0141KA Z OGRANICZON\u0104 ODPOWIEDZIALNO\u015ACI\u0104
+NIP: 6762661275
+Adres siedziby: Cegielniana 4A / 27, 30-404 Krak\u00F3w, Polska
+
+Best,
+
+The KTK Pub Crawl Team`;
 const BADGE_FRONT_PAGE_WIDTH_MM = 105;
 const BADGE_FRONT_PAGE_HEIGHT_MM = 148;
 const BADGE_FRONT_EXPORT_VIEWBOX = {
@@ -211,46 +229,29 @@ const buildBadgeCampaignUrl = (badgeName: string): string => {
   return url.toString();
 };
 
-const buildPrintEmailText = (): string => `Hello!
-
-I'd like to order:
-
-A6 Size (It's a badge)
-Glossy lamination and the thickest paper (320g - 350g).
-Perforated at the hole (it doesn't need to be exact).
-
-Faktura:
-
-Nazwa pe\u0142na: KRAKTIVITY SP\u00D3\u0141KA Z OGRANICZON\u0104 ODPOWIEDZIALNO\u015ACI\u0104
-NIP: 6762661275
-Adres siedziby: Cegielniana 4A / 27, 30-404 Krak\u00F3w, Polska
-
-Best,
-
-The KTK Pub Crawl Team`;
-
-const buildPrintEmailHtml = (): string => `
-  <p>Hello!</p>
-  <p>I'd like to order:</p>
-  <p>
-    A6 Size (It's a badge)<br />
-    Glossy lamination and the thickest paper (320g - 350g).<br />
-    Perforated at the hole (it doesn't need to be exact).
-  </p>
-  <p><strong>Faktura:</strong></p>
-  <p>
-    Nazwa pe&#322;na: KRAKTIVITY SP&Oacute;&#321;KA Z OGRANICZON&#260; ODPOWIEDZIALNO&#346;CI&#260;<br />
-    NIP: 6762661275<br />
-    Adres siedziby: Cegielniana 4A / 27, 30-404 Krak&oacute;w, Polska
-  </p>
-  <p>Best,</p>
-  <p>The KTK Pub Crawl Team</p>
-`;
-
 const resolveBadgePrintRecipient = (): string => {
   const configured = String(getConfigValue('BADGE_PRINT_RECIPIENT') ?? '').trim();
   return configured || BADGE_PRINT_RECIPIENT_FALLBACK;
 };
+
+const buildBadgePrintEmailSubject = (userDisplayName: string): string => {
+  const configured = String(getConfigValue('BADGE_PRINT_EMAIL_SUBJECT') ?? '').trim();
+  const template = configured || BADGE_PRINT_EMAIL_SUBJECT_FALLBACK;
+  return template.replaceAll('{{userDisplayName}}', userDisplayName.trim());
+};
+
+const resolveBadgePrintEmailBody = (): string => {
+  const configured = String(getConfigValue('BADGE_PRINT_EMAIL_BODY') ?? '').trim();
+  return configured || BADGE_PRINT_EMAIL_BODY_FALLBACK;
+};
+
+const buildPrintEmailText = (): string => resolveBadgePrintEmailBody();
+
+const buildPrintEmailHtml = (): string =>
+  resolveBadgePrintEmailBody()
+    .split(/\r?\n\r?\n/)
+    .map((paragraph) => `<p>${escapeXml(paragraph).replace(/\r?\n/g, '<br />')}</p>`)
+    .join('\n');
 
 const launchBadgeBrowser = async () => {
   const headlessEnv = String(getConfigValue('PUPPETEER_HEADLESS') ?? '').toLowerCase();
@@ -504,7 +505,7 @@ export const sendBadgeToPrint = async (options: {
 
   await sendGmailMessage({
     to: resolveBadgePrintRecipient(),
-    subject: `Badge Print Request - ${options.userDisplayName}`,
+    subject: buildBadgePrintEmailSubject(options.userDisplayName),
     textBody: buildPrintEmailText(),
     htmlBody: buildPrintEmailHtml(),
     attachments: [

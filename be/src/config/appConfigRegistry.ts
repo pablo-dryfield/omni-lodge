@@ -171,6 +171,41 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     validation: { maxLength: 255, required: true },
   },
   {
+    key: 'BADGE_PRINT_EMAIL_BODY',
+    label: 'Badge print email body',
+    description: 'Body text used for badge print request emails. Plain text with line breaks preserved.',
+    category: 'Badge Printing',
+    valueType: 'string',
+    defaultValue: `Hello!
+
+I'd like to order:
+
+A6 Size (It's a badge)
+Glossy lamination and the thickest paper (320g - 350g).
+Perforated at the hole (it doesn't need to be exact).
+
+Faktura:
+
+Nazwa pełna: KRAKTIVITY SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ
+NIP: 6762661275
+Adres siedziby: Cegielniana 4A / 27, 30-404 Kraków, Polska
+
+Best,
+
+    The KTK Pub Crawl Team`,
+    validation: { required: true, maxLength: 5000 },
+  },
+  {
+    key: 'BADGE_PRINT_EMAIL_SUBJECT',
+    label: 'Badge print email subject',
+    description:
+      'Subject used for badge print request emails. Supports {{userDisplayName}} as a placeholder.',
+    category: 'Badge Printing',
+    valueType: 'string',
+    defaultValue: 'Badge Print Request - {{userDisplayName}}',
+    validation: { required: true, maxLength: 255 },
+  },
+  {
     key: 'BOOKING_EMAIL_POLL_CRON',
     label: 'Booking email poll cron',
     description: 'Cron schedule for Gmail polling.',
