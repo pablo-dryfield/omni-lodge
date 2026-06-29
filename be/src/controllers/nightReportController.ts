@@ -37,6 +37,9 @@ import {
   openNightReportPhotoStream,
 } from '../services/nightReportStorageService.js';
 import { fetchLeaderNightReportStats } from '../services/nightReportMetricsService.js';
+import {
+  reconcileNightReportTaskWaiversForReport,
+} from '../services/assistantManagerTaskWaiverService.js';
 import { getConfigValue } from '../services/configService.js';
 import { getCommissionByDateRange } from './reportController.js';
 
@@ -2123,6 +2126,7 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
     }
 
     const body = req.body ?? {};
+    const originalActivityDate = report.activityDate;
     const updatePayload: Partial<NightReport> = {};
 
     if (typeof body.activityDate === 'string' && body.activityDate.trim() !== '') {
@@ -2215,6 +2219,11 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
     if (!fresh) {
       throw new HttpError(500, 'Failed to reload report');
     }
+
+    if (updatePayload.activityDate && updatePayload.activityDate !== originalActivityDate) {
+      await reconcileNightReportTaskWaiversForReport(report, { mode: 'restore' });
+    }
+    await reconcileNightReportTaskWaiversForReport(fresh, { mode: 'sync' });
 
     res.status(200).json([await serializeNightReport(fresh, req)]);
   } catch (error) {
@@ -2318,6 +2327,8 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
     if (!fresh) {
       throw new HttpError(500, 'Failed to reload report');
     }
+
+    await reconcileNightReportTaskWaiversForReport(fresh, { mode: 'sync' });
 
     res.status(200).json([await serializeNightReport(fresh, req)]);
   } catch (error) {
@@ -2441,6 +2452,8 @@ export const deleteNightReport = async (req: AuthenticatedRequest, res: Response
     if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
       throw new HttpError(403, 'You do not have permission to delete this report');
     }
+
+    await reconcileNightReportTaskWaiversForReport(report, { mode: 'restore' });
 
     await sequelize.transaction(async (transaction) => {
       const photos = await NightReportPhoto.findAll({ where: { reportId }, transaction });
