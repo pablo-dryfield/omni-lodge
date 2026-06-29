@@ -626,13 +626,21 @@ export const uploadAmTaskEvidenceImage = createAsyncThunk(
       logId,
       ruleKey,
       file,
-    }: { logId: number; ruleKey: string; file: File },
+      subjectUserId,
+      subjectName,
+    }: { logId: number; ruleKey: string; file: File; subjectUserId?: number | null; subjectName?: string | null },
     { rejectWithValue },
   ) => {
     try {
       const formData = new FormData();
       formData.append('ruleKey', ruleKey);
       formData.append('file', file);
+      if (subjectUserId != null) {
+        formData.append('subjectUserId', String(subjectUserId));
+      }
+      if (typeof subjectName === 'string' && subjectName.trim()) {
+        formData.append('subjectName', subjectName.trim());
+      }
       const response = await axiosInstance.post<UploadAmTaskEvidenceImageResponse[]>(
         `/assistantManagerTasks/logs/${logId}/evidence-files`,
         formData,

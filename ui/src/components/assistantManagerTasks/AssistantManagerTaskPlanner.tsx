@@ -24,12 +24,14 @@ import {
   Select,
   SimpleGrid,
   Stack,
+  Tabs,
   Switch,
   Text,
   Textarea,
   TextInput,
   ThemeIcon,
   Tooltip,
+  UnstyledButton,
   useMantineTheme,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
@@ -92,6 +94,7 @@ import {
 } from '../../actions/assistantManagerTaskActions';
 import { fetchUserTypes } from '../../actions/userTypeActions';
 import { useShiftRoles } from '../../api/shiftRoles';
+import { useShiftTypes } from '../../api/scheduling';
 import { useActiveUsers } from '../../api/users';
 import { CerebroRichTextContent } from '../cerebro/CerebroRichTextContent';
 import { useConfigEntry } from '../../api/config';
@@ -99,11 +102,13 @@ import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { compressImageFile } from '../../utils/imageCompression';
 import type { ShiftRole } from '../../types/shiftRoles/ShiftRole';
+import type { ShiftType } from '../../types/scheduling';
 import type { ServerResponse } from '../../types/general/ServerResponse';
 import type {
   AssistantManagerTaskAssignment,
   AssistantManagerTaskCadence,
   AssistantManagerTaskEvidenceItem,
+  AssistantManagerTaskExpectedEvidenceItem,
   AssistantManagerTaskEvidenceRule,
   AssistantManagerTaskLog,
   AssistantManagerTaskLogMeta,
@@ -138,6 +143,8 @@ type TemplateFormState = {
   reminderMinutesBeforeStart: string;
   notifyAtStart: boolean;
   evidenceRules: EvidenceRuleDraft[];
+  shiftEvidenceSources: ShiftEvidenceSourceDraft[];
+  nightReportWaiverRules: NightReportWaiverRuleDraft[];
   linkedKnowledgeEntryIds: string[];
   linkedPolicyEntryIds: string[];
   linkedQuizIds: string[];
@@ -197,6 +204,23 @@ type EvidenceRulePreset = {
   draft: Omit<EvidenceRuleDraft, 'id'>;
 };
 
+type ShiftEvidenceSourceDraft = {
+  id: string;
+  key: string;
+  label: string;
+  shiftTypeIds: string[];
+  evidenceRuleKey: string;
+};
+
+type NightReportWaiverRuleDraft = {
+  id: string;
+  noteEquals: string;
+  noteContains: string;
+  productNames: string;
+  productIds: string;
+  taskDateOffsetDays: string;
+};
+
 type PlannerDisplayTask = {
   id: number;
   templateName: string;
@@ -230,11 +254,14 @@ type TaskEvidenceImagePreview = {
   name: string;
   capturedAt: string | null;
   downloadHref: string | null;
+  subjectName?: string | null;
 };
 
 type CameraCaptureState = {
   opened: boolean;
   rule: AssistantManagerTaskEvidenceRule | null;
+  subjectUserId?: number | null;
+  subjectName?: string | null;
 };
 
 const defaultTemplateFormState: TemplateFormState = {
@@ -257,6 +284,8 @@ const defaultTemplateFormState: TemplateFormState = {
   reminderMinutesBeforeStart: '',
   notifyAtStart: true,
   evidenceRules: [],
+  shiftEvidenceSources: [],
+  nightReportWaiverRules: [],
   linkedKnowledgeEntryIds: [],
   linkedPolicyEntryIds: [],
   linkedQuizIds: [],
@@ -350,6 +379,21 @@ const defaultManualTaskFormState: ManualTaskFormState = {
   requireShift: true,
 };
 
+const DEFAULT_NIGHT_REPORT_NOTE = "The activity didn't operate.";
+const NIGHT_REPORT_RULES_CONFIG_KEY = 'nightReportRules';
+
+const createNightReportWaiverRuleDraft = (
+  overrides?: Partial<NightReportWaiverRuleDraft>,
+): NightReportWaiverRuleDraft => ({
+  id: createClientSideId(),
+  noteEquals: DEFAULT_NIGHT_REPORT_NOTE,
+  noteContains: '',
+  productNames: '',
+  productIds: '',
+  taskDateOffsetDays: '1',
+  ...overrides,
+});
+
 const defaultLogDetailFormState: LogDetailFormState = {
   taskDate: null,
   time: '',
@@ -412,6 +456,9 @@ const STATUS_COLORS: Record<AssistantManagerTaskLog['status'], string> = {
   waived: 'yellow',
 };
 
+const isSatisfiedTaskStatus = (status: AssistantManagerTaskLog['status']) =>
+  status === 'completed' || status === 'waived';
+
 const EVIDENCE_PREVIEW_MIN_ZOOM = 0.5;
 const EVIDENCE_PREVIEW_MAX_ZOOM = 4;
 
@@ -470,15 +517,15 @@ const EVIDENCE_RULE_PRESETS: EvidenceRulePreset[] = [
   {
     id: 'drive-screenshot',
     label: 'Drive Screenshot',
-    description: 'Require one uploaded screenshot as image evidence.',
+    description: 'Require uploaded screenshots as image evidence, one per staff member when needed.',
     draft: {
       key: 'drive_screenshot',
       label: 'Drive screenshot',
       type: 'image',
       required: true,
-      multiple: false,
+      multiple: true,
       minItems: '1',
-      maxItems: '1',
+      maxItems: '',
       hosts: '',
       contains: '',
       regex: '',
@@ -626,6 +673,136 @@ const buildEvidenceRuleDrafts = (template?: AssistantManagerTaskTemplate | null)
     }),
   );
 
+const SHIFT_EVIDENCE_SOURCES_CONFIG_KEY = 'shiftEvidenceSources';
+
+const getTemplateShiftEvidenceSources = (
+  template?: AssistantManagerTaskTemplate | null,
+): ShiftEvidenceSourceDraft[] => {
+  const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
+  const rawSources = scheduleConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY];
+  if (!Array.isArray(rawSources)) {
+    return [];
+  }
+
+  return rawSources
+    .map((entry, index) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+
+      const source = entry as Record<string, unknown>;
+      const key = typeof source.key === 'string' ? source.key.trim() : '';
+      const label = typeof source.label === 'string' ? source.label.trim() : '';
+      const evidenceRuleKey =
+        typeof source.evidenceRuleKey === 'string'
+          ? source.evidenceRuleKey.trim()
+          : typeof source.ruleKey === 'string'
+            ? source.ruleKey.trim()
+            : '';
+      const shiftTypeIds = Array.isArray(source.shiftTypeIds)
+        ? source.shiftTypeIds
+            .map((value) => Number(value))
+            .filter((value) => Number.isInteger(value) && value > 0)
+            .map(String)
+        : typeof source.shiftTypeId === 'number' && Number.isInteger(source.shiftTypeId) && source.shiftTypeId > 0
+          ? [String(source.shiftTypeId)]
+          : [];
+
+      if (!key || !label || !evidenceRuleKey || shiftTypeIds.length === 0) {
+        return null;
+      }
+
+      return {
+        id: `${key}-${index}`,
+        key,
+        label,
+        shiftTypeIds: Array.from(new Set(shiftTypeIds)),
+        evidenceRuleKey,
+      };
+    })
+    .filter((entry): entry is ShiftEvidenceSourceDraft => Boolean(entry));
+};
+
+const getNextShiftEvidenceSourceKey = (baseKey: string, existingSources: ShiftEvidenceSourceDraft[]) => {
+  const normalizedBaseKey = baseKey.trim() || 'shift_evidence_source';
+  const existingKeys = new Set(existingSources.map((source) => source.key.trim()).filter(Boolean));
+  if (!existingKeys.has(normalizedBaseKey)) {
+    return normalizedBaseKey;
+  }
+
+  let suffix = 2;
+  while (existingKeys.has(`${normalizedBaseKey}_${suffix}`)) {
+    suffix += 1;
+  }
+
+  return `${normalizedBaseKey}_${suffix}`;
+};
+
+const buildShiftEvidenceSourceDrafts = (
+  template?: AssistantManagerTaskTemplate | null,
+): ShiftEvidenceSourceDraft[] => getTemplateShiftEvidenceSources(template);
+
+const normalizeNumberListInput = (value: string): number[] =>
+  value
+    .split(/[\n,]+/)
+    .map((entry) => Number(entry.trim()))
+    .filter((entry) => Number.isInteger(entry) && entry > 0);
+
+const buildNightReportWaiverRuleDrafts = (
+  template?: AssistantManagerTaskTemplate | null,
+): NightReportWaiverRuleDraft[] => {
+  const scheduleConfig = (template?.scheduleConfig ?? {}) as Record<string, unknown>;
+  const rawRules = scheduleConfig[NIGHT_REPORT_RULES_CONFIG_KEY];
+  if (!Array.isArray(rawRules)) {
+    return [];
+  }
+
+  return rawRules
+    .map((entry, index) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+
+      const source = entry as Record<string, unknown>;
+      const action = typeof source.action === 'string' ? source.action.trim().toLowerCase() : 'waive';
+      if (action !== 'waive') {
+        return null;
+      }
+
+      const productNames = Array.isArray(source.productNames)
+        ? source.productNames
+            .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+            .filter(Boolean)
+            .join(', ')
+        : '';
+      const productIds = Array.isArray(source.productIds)
+        ? source.productIds
+            .map((candidate) => Number(candidate))
+            .filter((candidate) => Number.isInteger(candidate) && candidate > 0)
+            .join(', ')
+        : '';
+
+      return createNightReportWaiverRuleDraft({
+        id: `night-report-rule-${index + 1}-${createClientSideId()}`,
+        noteEquals:
+          typeof source.noteEquals === 'string' && source.noteEquals.trim()
+            ? source.noteEquals.trim()
+            : DEFAULT_NIGHT_REPORT_NOTE,
+        noteContains:
+          typeof source.noteContains === 'string' && source.noteContains.trim()
+            ? source.noteContains.trim()
+            : '',
+        productNames,
+        productIds,
+        taskDateOffsetDays:
+          typeof source.taskDateOffsetDays === 'number' && Number.isFinite(source.taskDateOffsetDays)
+            ? String(Math.trunc(source.taskDateOffsetDays))
+            : '1',
+      });
+    })
+    .filter((rule): rule is NightReportWaiverRuleDraft => Boolean(rule));
+};
+
 const CEREBRO_LINKS_CONFIG_KEY = 'cerebroLinks';
 
 type TemplateCerebroLinks = {
@@ -677,6 +854,8 @@ const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate |
   delete nextConfig.completionWindowMode;
   delete nextConfig.timesPerWeekPerAssignedUser;
   delete nextConfig.evidenceRules;
+  delete nextConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY];
+  delete nextConfig[NIGHT_REPORT_RULES_CONFIG_KEY];
   delete nextConfig[CEREBRO_LINKS_CONFIG_KEY];
   return JSON.stringify(nextConfig, null, 2);
 };
@@ -695,6 +874,42 @@ const getNormalizedEvidenceItems = (meta?: AssistantManagerTaskLogMeta | null): 
       ruleKey: entry.ruleKey,
       type: entry.type,
     }));
+};
+
+const getNormalizedExpectedEvidenceItems = (
+  meta?: AssistantManagerTaskLogMeta | null,
+): AssistantManagerTaskExpectedEvidenceItem[] => {
+  const evidenceItems = meta?.expectedEvidenceItems;
+  if (!Array.isArray(evidenceItems)) {
+    return [];
+  }
+
+  return evidenceItems
+    .filter(
+      (entry): entry is AssistantManagerTaskExpectedEvidenceItem =>
+        Boolean(entry && typeof entry === 'object'),
+    )
+    .map((entry) => ({
+      ...entry,
+      id: entry.id || createClientSideId(),
+      sourceKey: entry.sourceKey,
+      sourceLabel: entry.sourceLabel,
+      ruleKey: entry.ruleKey,
+      type: entry.type,
+      subjectUserId: Number(entry.subjectUserId),
+      subjectName: entry.subjectName,
+      shiftTypeIds: Array.isArray(entry.shiftTypeIds)
+        ? entry.shiftTypeIds
+            .map((value) => Number(value))
+            .filter((value) => Number.isInteger(value) && value > 0)
+        : [],
+    }))
+    .filter(
+      (entry) =>
+        Boolean(entry.ruleKey && entry.subjectName) &&
+        Number.isInteger(entry.subjectUserId) &&
+        entry.subjectUserId > 0,
+    );
 };
 
 const getRuleItems = (
@@ -780,9 +995,19 @@ const applyUploadedEvidenceItem = (
   rule: AssistantManagerTaskEvidenceRule,
   nextItem: AssistantManagerTaskEvidenceItem,
 ) => {
-  const remainingItems = rule.multiple
-    ? items
-    : items.filter((item) => !(item.ruleKey === rule.key && item.type === rule.type));
+  const remainingItems =
+    rule.multiple && nextItem.subjectUserId != null
+      ? items.filter(
+          (item) =>
+            !(
+              item.ruleKey === rule.key &&
+              item.type === rule.type &&
+              item.subjectUserId === nextItem.subjectUserId
+            ),
+        )
+      : rule.multiple
+        ? items
+        : items.filter((item) => !(item.ruleKey === rule.key && item.type === rule.type));
   return [...remainingItems, nextItem];
 };
 
@@ -2523,7 +2748,7 @@ const DayTaskBucketsBoard = ({
         pending.push(log);
         return;
       }
-      if (log.status === 'completed') {
+      if (isSatisfiedTaskStatus(log.status)) {
         completed.push(log);
         return;
       }
@@ -2772,7 +2997,7 @@ const WeeklyTaskPlannerBoard = ({
           return 0;
         }
         const completedPoints = dayTasks
-          .filter((task) => task.status === 'completed')
+          .filter((task) => isSatisfiedTaskStatus(task.status))
           .reduce((sum, task) => {
             const points = Number.isFinite(task.points) && task.points >= 0 ? task.points : 1;
             return sum + points;
@@ -2962,6 +3187,7 @@ const AssistantManagerTaskPlanner = () => {
   const logState = useAppSelector((state) => state.assistantManagerTasks.logs)[0];
   const userTypesState = useAppSelector((state) => state.userTypes[0]);
   const { data: shiftRolesResponse, isLoading: shiftRolesLoading, error: shiftRolesError } = useShiftRoles();
+  const { data: shiftTypesResponse, isLoading: shiftTypesLoading } = useShiftTypes();
   const { data: activeUsers = [], isLoading: activeUsersLoading, error: activeUsersError } = useActiveUsers();
   const { data: plannerStartConfig } = useConfigEntry(
     canReadControlPanelConfig ? 'AM_TASK_PLANNER_START_DATE' : null,
@@ -3006,6 +3232,59 @@ const AssistantManagerTaskPlanner = () => {
       })),
     [shiftRoles],
   );
+  const shiftTypeOptions = useMemo(
+    () => {
+      const categorizeShiftType = (shiftType: ShiftType) => {
+        const combined = `${shiftType.key ?? ''} ${shiftType.name ?? ''} ${shiftType.description ?? ''}`
+          .toLowerCase();
+        if (combined.includes('clean')) {
+          return 'Cleaning';
+        }
+        if (combined.includes('promotion')) {
+          return 'Promotion';
+        }
+        if (combined.includes('pub crawl')) {
+          return 'Pub Crawl';
+        }
+        if (combined.includes('social')) {
+          return 'Social Media';
+        }
+        if (combined.includes('brunch')) {
+          return 'Brunch';
+        }
+        if (combined.includes('kart')) {
+          return 'Go Karting';
+        }
+        if (combined.includes('manager') || combined.includes('operations')) {
+          return 'Operations';
+        }
+        return 'Other';
+      };
+
+      const grouped = new Map<string, Array<{ value: string; label: string }>>();
+      ((shiftTypesResponse ?? []) as ShiftType[]).forEach((shiftType) => {
+        const group = categorizeShiftType(shiftType);
+        const items = grouped.get(group) ?? [];
+        items.push({
+          value: String(shiftType.id),
+          label: shiftType.name,
+        });
+        grouped.set(group, items);
+      });
+
+      return Array.from(grouped.entries())
+        .sort(([left], [right]) => {
+          const priority = ['Pub Crawl', 'Cleaning', 'Promotion', 'Social Media', 'Brunch', 'Go Karting', 'Operations', 'Other'];
+          return (priority.indexOf(left) === -1 ? priority.length : priority.indexOf(left)) -
+            (priority.indexOf(right) === -1 ? priority.length : priority.indexOf(right));
+        })
+        .map(([group, items]) => ({
+          group,
+          items: items.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' })),
+        }));
+    },
+    [shiftTypesResponse],
+  );
   const activeUserOptions = useMemo(
     () =>
       [...activeUsers]
@@ -3022,6 +3301,16 @@ const AssistantManagerTaskPlanner = () => {
             label: `${displayName} (#${user.id})${secondaryText}`,
           };
         }),
+    [activeUsers],
+  );
+  const activeUserNameById = useMemo(
+    () =>
+      new Map(
+        activeUsers.map((user) => [
+          String(user.id),
+          `${user.firstName} ${user.lastName}`.trim() || user.email || `User ${user.id}`,
+        ]),
+      ),
     [activeUsers],
   );
   const defaultAssistantManagerUserTypeId = useMemo(
@@ -3073,6 +3362,16 @@ const AssistantManagerTaskPlanner = () => {
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templateFormState, setTemplateFormState] =
     useState<TemplateFormState>(defaultTemplateFormState);
+  const imageEvidenceRuleOptions = useMemo(
+    () =>
+      templateFormState.evidenceRules
+        .filter((rule) => rule.type === 'image' && rule.key.trim())
+        .map((rule) => ({
+          value: rule.key.trim(),
+          label: rule.label.trim() || rule.key.trim(),
+        })),
+    [templateFormState.evidenceRules],
+  );
   const [templateFormError, setTemplateFormError] = useState<string | null>(null);
   const [editingTemplate, setEditingTemplate] =
     useState<AssistantManagerTaskTemplate | null>(null);
@@ -3086,6 +3385,9 @@ const AssistantManagerTaskPlanner = () => {
   const [cerebroLinkOptionsError, setCerebroLinkOptionsError] = useState<string | null>(null);
   const [templateReorderBusyKey, setTemplateReorderBusyKey] = useState<string | null>(null);
   const [templateReorderDirection, setTemplateReorderDirection] = useState<'up' | 'down' | null>(null);
+  const [templateAccordionValue, setTemplateAccordionValue] = useState<string[]>([]);
+  const templateAccordionLastValueRef = useRef<string[]>([]);
+  const [templateModalTab, setTemplateModalTab] = useState<'core' | 'rules'>('core');
 
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
@@ -3109,6 +3411,158 @@ const AssistantManagerTaskPlanner = () => {
     useState<SyncAmTaskLogsWithTemplateConfigResponse | null>(null);
   const [syncExistingTasksTemplate, setSyncExistingTasksTemplate] =
     useState<AssistantManagerTaskTemplate | null>(null);
+  const templateSectionRefs = useRef<{
+    evidence: HTMLDivElement | null;
+    shiftEvidence: HTMLDivElement | null;
+    waivers: HTMLDivElement | null;
+    cerebro: HTMLDivElement | null;
+    advanced: HTMLDivElement | null;
+  }>({
+    evidence: null,
+    shiftEvidence: null,
+    waivers: null,
+    cerebro: null,
+    advanced: null,
+  });
+
+  const scrollToTemplateSection = useCallback(
+    (section: keyof typeof templateSectionRefs.current) => {
+      setTemplateAccordionValue((prev) => {
+        const nextValue = prev.includes(section) ? prev : [...prev, section];
+        templateAccordionLastValueRef.current = templateAccordionLastValueRef.current.includes(section)
+          ? templateAccordionLastValueRef.current
+          : [...templateAccordionLastValueRef.current, section];
+        return nextValue;
+      });
+      setTemplateModalTab(
+        ['evidence', 'shiftEvidence', 'waivers', 'cerebro', 'advanced'].includes(section) ? 'rules' : 'core',
+      );
+      window.setTimeout(() => {
+        templateSectionRefs.current[section]?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 50);
+    },
+    [],
+  );
+
+  const templateRuleSummary = useMemo(() => {
+    const summary: Array<{ label: string; value: string }> = [];
+
+    summary.push({
+      label: 'Completion window',
+      value: templateFormState.completionWindowMode === 'strict' ? 'Strict' : 'Day',
+    });
+
+    summary.push({
+      label: 'Shift tie',
+      value: templateFormState.requireShift ? 'Requires scheduled shift' : 'No shift requirement',
+    });
+
+    if (templateFormState.timesPerWeekPerAssignedUser.trim()) {
+      summary.push({
+        label: 'Cadence cap',
+        value: `${templateFormState.timesPerWeekPerAssignedUser.trim()} per assigned user`,
+      });
+    }
+
+    summary.push({
+      label: 'Evidence rules',
+      value: `${templateFormState.evidenceRules.length} configured`,
+    });
+
+    summary.push({
+      label: 'Shift evidence',
+      value: `${templateFormState.shiftEvidenceSources.length} configured`,
+    });
+
+    summary.push({
+      label: 'Night report waivers',
+      value: `${templateFormState.nightReportWaiverRules.length} configured`,
+    });
+
+    const cerebroCount =
+      templateFormState.linkedKnowledgeEntryIds.length +
+      templateFormState.linkedPolicyEntryIds.length +
+      templateFormState.linkedQuizIds.length;
+    summary.push({
+      label: 'Cerebro links',
+      value: `${cerebroCount} linked`,
+    });
+
+    return summary;
+  }, [
+    templateFormState.completionWindowMode,
+    templateFormState.evidenceRules.length,
+    templateFormState.shiftEvidenceSources.length,
+    templateFormState.linkedKnowledgeEntryIds.length,
+    templateFormState.linkedPolicyEntryIds.length,
+    templateFormState.linkedQuizIds.length,
+    templateFormState.nightReportWaiverRules.length,
+    templateFormState.requireShift,
+    templateFormState.timesPerWeekPerAssignedUser,
+  ]);
+
+  const hasExpandedTemplateSections = templateAccordionValue.length > 0;
+
+  const templateSummaryPanel = (compact: boolean) => (
+    <Paper
+      withBorder
+      radius="lg"
+      p={compact ? 'xs' : 'sm'}
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 5,
+        backdropFilter: 'blur(12px)',
+      }}
+    >
+      <Stack gap={compact ? 2 : 6}>
+        <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+          <Box>
+            <Text fw={700} size={compact ? 'sm' : 'md'}>
+              Task Rule Summary
+            </Text>
+          </Box>
+          <Group gap={compact ? 4 : 6} wrap="wrap">
+            {templateRuleSummary.map((item) => (
+              <Badge key={item.label} variant="light" color="gray" size={compact ? 'xs' : 'md'}>
+                {item.label}: {item.value}
+              </Badge>
+            ))}
+          </Group>
+        </Group>
+        <Group gap={compact ? 4 : 6} wrap="wrap">
+          <UnstyledButton onClick={() => scrollToTemplateSection('evidence')}>
+            <Badge variant="light" color="teal" size={compact ? 'xs' : 'md'} style={{ cursor: 'pointer' }}>
+              Evidence Rules
+            </Badge>
+          </UnstyledButton>
+          <UnstyledButton onClick={() => scrollToTemplateSection('shiftEvidence')}>
+            <Badge variant="light" color="grape" size={compact ? 'xs' : 'md'} style={{ cursor: 'pointer' }}>
+              Shift Evidence
+            </Badge>
+          </UnstyledButton>
+          <UnstyledButton onClick={() => scrollToTemplateSection('waivers')}>
+            <Badge variant="light" color="orange" size={compact ? 'xs' : 'md'} style={{ cursor: 'pointer' }}>
+              Night Report Waivers
+            </Badge>
+          </UnstyledButton>
+          <UnstyledButton onClick={() => scrollToTemplateSection('cerebro')}>
+            <Badge variant="light" color="blue" size={compact ? 'xs' : 'md'} style={{ cursor: 'pointer' }}>
+              Cerebro Links
+            </Badge>
+          </UnstyledButton>
+          <UnstyledButton onClick={() => scrollToTemplateSection('advanced')}>
+            <Badge variant="light" color="gray" size={compact ? 'xs' : 'md'} style={{ cursor: 'pointer' }}>
+              Advanced
+            </Badge>
+          </UnstyledButton>
+        </Group>
+      </Stack>
+    </Paper>
+  );
 
   const getThisWeekRange = useCallback((): [Date, Date] => {
     const weekStart = startOfPlannerWeek(new Date());
@@ -3190,6 +3644,9 @@ const AssistantManagerTaskPlanner = () => {
   const evidenceImageThumbRequestedRef = useRef<Set<string>>(new Set());
   const [linkInputCounts, setLinkInputCounts] = useState<Record<string, number>>({});
   const [evidenceRuleEditModes, setEvidenceRuleEditModes] = useState<Record<string, boolean>>({});
+  const [evidenceImageSubjectSelections, setEvidenceImageSubjectSelections] = useState<
+    Record<string, string>
+  >({});
   const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
   const pushSupported =
     typeof window !== 'undefined' &&
@@ -3229,6 +3686,10 @@ const AssistantManagerTaskPlanner = () => {
   const selectedLogEvidenceRules = useMemo(
     () => getTemplateEvidenceRules(selectedLog ? templateMap.get(selectedLog.templateId) : null),
     [selectedLog, templateMap],
+  );
+  const selectedLogExpectedEvidenceItems = useMemo(
+    () => getNormalizedExpectedEvidenceItems(selectedLog?.meta ?? null),
+    [selectedLog?.meta],
   );
   const templateKnowledgeOptions = useMemo(
     () =>
@@ -3595,6 +4056,7 @@ const AssistantManagerTaskPlanner = () => {
     if (!selectedLogId || !selectedLog) {
       initializedEvidenceModesLogIdRef.current = null;
       setEvidenceRuleEditModes({});
+      setEvidenceImageSubjectSelections({});
       return;
     }
 
@@ -3614,6 +4076,25 @@ const AssistantManagerTaskPlanner = () => {
     initializedEvidenceModesLogIdRef.current = selectedLogId;
     setEvidenceRuleEditModes(nextModes);
   }, [evidenceRuleEditModes, selectedLog, selectedLogEvidenceRules, selectedLogId]);
+
+  useEffect(() => {
+    if (!selectedLog || selectedLogEvidenceRules.length === 0) {
+      setEvidenceImageSubjectSelections({});
+      return;
+    }
+
+    const nextSelections: Record<string, string> = {};
+    selectedLogEvidenceRules.forEach((rule) => {
+      if (rule.type !== 'image') {
+        return;
+      }
+      const savedItem = getRuleItems(getNormalizedEvidenceItems(selectedLog.meta), rule).find(
+        (item) => item.subjectUserId != null,
+      );
+      nextSelections[rule.key] = String(savedItem?.subjectUserId ?? selectedLog.userId);
+    });
+    setEvidenceImageSubjectSelections(nextSelections);
+  }, [selectedLog, selectedLogEvidenceRules]);
 
   useEffect(
     () => () => {
@@ -4086,6 +4567,8 @@ const AssistantManagerTaskPlanner = () => {
             : '',
         notifyAtStart: defaults.notifyAtStart,
         evidenceRules: buildEvidenceRuleDrafts(template),
+        shiftEvidenceSources: buildShiftEvidenceSourceDrafts(template),
+        nightReportWaiverRules: buildNightReportWaiverRuleDrafts(template),
         linkedKnowledgeEntryIds: cerebroLinks.knowledgeEntryIds.map(String),
         linkedPolicyEntryIds: cerebroLinks.policyEntryIds.map(String),
         linkedQuizIds: cerebroLinks.quizIds.map(String),
@@ -4094,6 +4577,8 @@ const AssistantManagerTaskPlanner = () => {
       setEditingTemplate(null);
       setTemplateFormState(defaultTemplateFormState);
     }
+    setTemplateModalTab('core');
+    setTemplateAccordionValue(templateAccordionLastValueRef.current);
 
     setTemplateFormError(null);
     setTemplateModalOpen(true);
@@ -4107,6 +4592,7 @@ const AssistantManagerTaskPlanner = () => {
     setTemplateModalOpen(false);
     setEditingTemplate(null);
     setTemplateFormState(defaultTemplateFormState);
+    setTemplateModalTab('core');
     setTemplateFormError(null);
   }, [templateSubmitting]);
 
@@ -4297,6 +4783,124 @@ const AssistantManagerTaskPlanner = () => {
         nextScheduleConfig.evidenceRules = evidenceRules;
       } else {
         delete nextScheduleConfig.evidenceRules;
+      }
+
+      const imageEvidenceRuleKeys = new Set(
+        evidenceRules.filter((rule) => rule.type === 'image').map((rule) => rule.key.trim()).filter(Boolean),
+      );
+      const shiftEvidenceSourceKeys = new Set<string>();
+      const shiftEvidenceSources: Array<{
+        key: string;
+        label: string;
+        evidenceRuleKey: string;
+        shiftTypeIds: number[];
+      }> = [];
+      for (let index = 0; index < templateFormState.shiftEvidenceSources.length; index += 1) {
+        const draft = templateFormState.shiftEvidenceSources[index];
+        const key = draft.key.trim();
+        const label = draft.label.trim();
+        const evidenceRuleKey = draft.evidenceRuleKey.trim();
+        const shiftTypeIds = draft.shiftTypeIds
+          .map((value) => Number(value))
+          .filter((value) => Number.isInteger(value) && value > 0);
+
+        if (!key) {
+          setTemplateFormError(`Shift evidence source ${index + 1} needs a key`);
+          return;
+        }
+        if (!label) {
+          setTemplateFormError(`Shift evidence source ${index + 1} needs a label`);
+          return;
+        }
+        if (shiftEvidenceSourceKeys.has(key)) {
+          setTemplateFormError(`Shift evidence source key "${key}" must be unique`);
+          return;
+        }
+        if (!evidenceRuleKey) {
+          setTemplateFormError(`Shift evidence source ${index + 1} needs an image evidence rule`);
+          return;
+        }
+        if (!imageEvidenceRuleKeys.has(evidenceRuleKey)) {
+          setTemplateFormError(
+            `Shift evidence source "${label}" must point to an existing image evidence rule`,
+          );
+          return;
+        }
+        if (shiftTypeIds.length === 0) {
+          setTemplateFormError(`Shift evidence source "${label}" needs at least one shift type`);
+          return;
+        }
+
+        shiftEvidenceSourceKeys.add(key);
+        shiftEvidenceSources.push({
+          key,
+          label,
+          evidenceRuleKey,
+          shiftTypeIds: Array.from(new Set(shiftTypeIds)),
+        });
+      }
+
+      if (shiftEvidenceSources.length > 0) {
+        nextScheduleConfig.shiftEvidenceSources = shiftEvidenceSources;
+      } else {
+        delete nextScheduleConfig.shiftEvidenceSources;
+      }
+
+      const nightReportWaiverRules: Array<{
+        action: 'waive';
+        noteEquals: string;
+        noteContains?: string;
+        productNames?: string[];
+        productIds?: number[];
+        taskDateOffsetDays?: number;
+      }> = [];
+      for (let index = 0; index < templateFormState.nightReportWaiverRules.length; index += 1) {
+        const draft = templateFormState.nightReportWaiverRules[index];
+        const noteEquals = draft.noteEquals.trim();
+        if (!noteEquals) {
+          setTemplateFormError(`Night report waiver rule ${index + 1} needs a note match`);
+          return;
+        }
+
+        const productNames = splitDelimitedValues(draft.productNames);
+        const productIds = normalizeNumberListInput(draft.productIds);
+        if (productNames.length === 0 && productIds.length === 0) {
+          setTemplateFormError(`Night report waiver rule ${index + 1} needs at least one product name or product id`);
+          return;
+        }
+
+        const offsetRaw = draft.taskDateOffsetDays.trim();
+        const offsetValue = offsetRaw === '' ? 1 : Number(offsetRaw);
+        if (!Number.isInteger(offsetValue)) {
+          setTemplateFormError(`Night report waiver rule ${index + 1} needs a valid day offset`);
+          return;
+        }
+
+        const nextRule: {
+          action: 'waive';
+          noteEquals: string;
+          noteContains?: string;
+          productNames?: string[];
+          productIds?: number[];
+          taskDateOffsetDays?: number;
+        } = {
+          action: 'waive',
+          noteEquals,
+          productNames,
+          productIds,
+          taskDateOffsetDays: offsetValue,
+        };
+        const noteContains = draft.noteContains.trim();
+        if (noteContains) {
+          nextRule.noteContains = noteContains;
+        }
+        nightReportWaiverRules.push(nextRule);
+      }
+
+      if (nightReportWaiverRules.length > 0) {
+        nextScheduleConfig[NIGHT_REPORT_RULES_CONFIG_KEY] = nightReportWaiverRules;
+      } else {
+        delete nextScheduleConfig[NIGHT_REPORT_RULES_CONFIG_KEY];
       }
 
       if (
@@ -5040,6 +5644,8 @@ const AssistantManagerTaskPlanner = () => {
     setCameraCaptureState({
       opened: false,
       rule: null,
+      subjectUserId: null,
+      subjectName: null,
     });
     setCameraCaptureError(null);
     setCameraCaptureLoading(false);
@@ -5047,14 +5653,25 @@ const AssistantManagerTaskPlanner = () => {
     setCameraPreviewReady(false);
   }, [stopCameraCaptureStream]);
 
-  const openCameraCaptureModal = useCallback((rule: AssistantManagerTaskEvidenceRule) => {
-    setCameraCaptureState({
-      opened: true,
-      rule,
-    });
-    setCameraCaptureError(null);
-    setCameraPreviewReady(false);
-  }, []);
+  const openCameraCaptureModal = useCallback(
+    (
+      rule: AssistantManagerTaskEvidenceRule,
+      subjectOverride?: {
+        subjectUserId?: number | null;
+        subjectName?: string | null;
+      },
+    ) => {
+      setCameraCaptureState({
+        opened: true,
+        rule,
+        subjectUserId: subjectOverride?.subjectUserId ?? null,
+        subjectName: subjectOverride?.subjectName ?? null,
+      });
+      setCameraCaptureError(null);
+      setCameraPreviewReady(false);
+    },
+    [],
+  );
 
   const handleOpenCerebroItem = useCallback(
     async (type: AmTaskCerebroLinkItemType, id: number) => {
@@ -5188,6 +5805,82 @@ const AssistantManagerTaskPlanner = () => {
     }));
   }, []);
 
+  const handleShiftEvidenceSourceDraftChange = useCallback(
+    (
+      draftId: string,
+      field: keyof ShiftEvidenceSourceDraft,
+      value: string | string[],
+    ) => {
+      setTemplateFormState((prev) => ({
+        ...prev,
+        shiftEvidenceSources: prev.shiftEvidenceSources.map((source) =>
+          source.id === draftId ? ({ ...source, [field]: value } as ShiftEvidenceSourceDraft) : source,
+        ),
+      }));
+    },
+    [],
+  );
+
+  const addTemplateShiftEvidenceSourceDraft = useCallback(() => {
+    setTemplateFormState((prev) => {
+      const defaultRuleKey =
+        prev.evidenceRules.find((rule) => rule.type === 'image' && rule.key.trim())?.key.trim() ?? '';
+      return {
+        ...prev,
+          shiftEvidenceSources: [
+            ...prev.shiftEvidenceSources,
+            {
+              id: createClientSideId(),
+              key: getNextShiftEvidenceSourceKey('shift_evidence_source', prev.shiftEvidenceSources),
+              label: 'Shift evidence',
+              shiftTypeIds: [],
+              evidenceRuleKey: defaultRuleKey,
+            },
+          ],
+        };
+    });
+  }, []);
+
+  const removeTemplateShiftEvidenceSourceDraft = useCallback((draftId: string) => {
+    setTemplateFormState((prev) => ({
+      ...prev,
+      shiftEvidenceSources: prev.shiftEvidenceSources.filter((source) => source.id !== draftId),
+    }));
+  }, []);
+
+  const handleNightReportWaiverRuleDraftChange = useCallback(
+    (
+      draftId: string,
+      field: keyof NightReportWaiverRuleDraft,
+      value: string,
+    ) => {
+      setTemplateFormState((prev) => ({
+        ...prev,
+        nightReportWaiverRules: prev.nightReportWaiverRules.map((rule) =>
+          rule.id === draftId ? ({ ...rule, [field]: value } as NightReportWaiverRuleDraft) : rule,
+        ),
+      }));
+    },
+    [],
+  );
+
+  const addTemplateNightReportWaiverRuleDraft = useCallback(() => {
+    setTemplateFormState((prev) => ({
+      ...prev,
+      nightReportWaiverRules: [
+        ...prev.nightReportWaiverRules,
+        createNightReportWaiverRuleDraft(),
+      ],
+    }));
+  }, []);
+
+  const removeTemplateNightReportWaiverRuleDraft = useCallback((draftId: string) => {
+    setTemplateFormState((prev) => ({
+      ...prev,
+      nightReportWaiverRules: prev.nightReportWaiverRules.filter((rule) => rule.id !== draftId),
+    }));
+  }, []);
+
   const handleLinkEvidenceChange = useCallback(
     (rule: AssistantManagerTaskEvidenceRule, index: number, value: string) => {
       setLogDetailFormState((prev) => ({
@@ -5217,10 +5910,31 @@ const AssistantManagerTaskPlanner = () => {
   );
 
   const handleEvidenceImageSelected = useCallback(
-    async (rule: AssistantManagerTaskEvidenceRule, file: File | null) => {
+    async (
+      rule: AssistantManagerTaskEvidenceRule,
+      file: File | null,
+      subjectOverride?: {
+        subjectUserId?: number | null;
+        subjectName?: string | null;
+      },
+    ) => {
       if (!selectedLog || !file) {
         return;
       }
+
+      const selectedSubjectIdRaw = evidenceImageSubjectSelections[rule.key] ?? String(selectedLog.userId);
+      const selectedSubjectId = Number(selectedSubjectIdRaw);
+      const fallbackSubjectUserId =
+        Number.isInteger(selectedSubjectId) && selectedSubjectId > 0 ? selectedSubjectId : selectedLog.userId;
+      const subjectUserId =
+        subjectOverride?.subjectUserId != null && subjectOverride.subjectUserId > 0
+          ? subjectOverride.subjectUserId
+          : fallbackSubjectUserId;
+      const subjectName =
+        subjectOverride?.subjectName?.trim() ||
+        activeUserNameById.get(String(subjectUserId)) ||
+        selectedLog.userName ||
+        `User #${subjectUserId}`;
 
       setEvidenceUploadingRuleKey(rule.key);
       setLogDetailError(null);
@@ -5232,6 +5946,8 @@ const AssistantManagerTaskPlanner = () => {
             logId: selectedLog.id,
             ruleKey: rule.key,
             file: compressedFile,
+            subjectUserId,
+            subjectName,
           }),
         ).unwrap()) as UploadAmTaskEvidenceImageResponse[];
         const uploadedItem = response?.[0];
@@ -5273,12 +5989,19 @@ const AssistantManagerTaskPlanner = () => {
         setEvidenceUploadingRuleKey(null);
       }
     },
-    [dispatch, refreshLogs, selectedLog],
+    [activeUserNameById, dispatch, evidenceImageSubjectSelections, refreshLogs, selectedLog],
   );
 
   const handleNativeCameraFileSelected = useCallback(
-    (rule: AssistantManagerTaskEvidenceRule, file: File | null) => {
-      void handleEvidenceImageSelected(rule, file);
+    (
+      rule: AssistantManagerTaskEvidenceRule,
+      file: File | null,
+      subjectOverride?: {
+        subjectUserId?: number | null;
+        subjectName?: string | null;
+      },
+    ) => {
+      void handleEvidenceImageSelected(rule, file, subjectOverride);
     },
     [handleEvidenceImageSelected],
   );
@@ -5288,6 +6011,8 @@ const AssistantManagerTaskPlanner = () => {
       rule: AssistantManagerTaskEvidenceRule,
       options?: {
         capture?: boolean;
+        subjectUserId?: number | null;
+        subjectName?: string | null;
       },
     ) => {
       const input = document.createElement('input');
@@ -5311,9 +6036,15 @@ const AssistantManagerTaskPlanner = () => {
       const handleChange = () => {
         const nextFile = input.files?.[0] ?? null;
         if (options?.capture) {
-          handleNativeCameraFileSelected(rule, nextFile);
+          handleNativeCameraFileSelected(rule, nextFile, {
+            subjectUserId: options?.subjectUserId ?? null,
+            subjectName: options?.subjectName ?? null,
+          });
         } else {
-          void handleEvidenceImageSelected(rule, nextFile);
+          void handleEvidenceImageSelected(rule, nextFile, {
+            subjectUserId: options?.subjectUserId ?? null,
+            subjectName: options?.subjectName ?? null,
+          });
         }
         cleanup();
       };
@@ -5454,7 +6185,10 @@ const AssistantManagerTaskPlanner = () => {
         lastModified: Date.now(),
       });
 
-      await handleEvidenceImageSelected(cameraCaptureState.rule, file);
+      await handleEvidenceImageSelected(cameraCaptureState.rule, file, {
+        subjectUserId: cameraCaptureState.subjectUserId ?? null,
+        subjectName: cameraCaptureState.subjectName ?? null,
+      });
       closeCameraCaptureModal();
     } catch (error) {
       setCameraCaptureError(getErrorMessage(error, 'Failed to capture photo'));
@@ -5463,6 +6197,8 @@ const AssistantManagerTaskPlanner = () => {
     }
   }, [
     cameraCaptureState.rule,
+    cameraCaptureState.subjectName,
+    cameraCaptureState.subjectUserId,
     cameraPreviewReady,
     cameraVideoElement,
     closeCameraCaptureModal,
@@ -5470,13 +6206,23 @@ const AssistantManagerTaskPlanner = () => {
   ]);
 
   const handleTakePhotoClick = useCallback(
-    (rule: AssistantManagerTaskEvidenceRule) => {
+    (
+      rule: AssistantManagerTaskEvidenceRule,
+      subjectOverride?: {
+        subjectUserId?: number | null;
+        subjectName?: string | null;
+      },
+    ) => {
       if (cameraCaptureSupported) {
-        openCameraCaptureModal(rule);
+        openCameraCaptureModal(rule, subjectOverride);
         return;
       }
 
-      openNativeImageFilePicker(rule, { capture: true });
+      openNativeImageFilePicker(rule, {
+        capture: true,
+        subjectUserId: subjectOverride?.subjectUserId ?? null,
+        subjectName: subjectOverride?.subjectName ?? null,
+      });
     },
     [cameraCaptureSupported, openCameraCaptureModal, openNativeImageFilePicker],
   );
@@ -5693,6 +6439,7 @@ const AssistantManagerTaskPlanner = () => {
           name: item.fileName ?? 'Uploaded image',
           capturedAt: item.uploadedAt ?? null,
           downloadHref: item.driveWebViewLink ?? downloadHref,
+          subjectName: item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`,
         });
         setEvidenceImageZoom(1);
         return;
@@ -5717,6 +6464,7 @@ const AssistantManagerTaskPlanner = () => {
           name: item.fileName ?? 'Uploaded image',
           capturedAt: item.uploadedAt ?? null,
           downloadHref: item.driveWebViewLink ?? downloadHref,
+          subjectName: item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`,
         });
         setEvidenceImageZoom(1);
       } catch (error) {
@@ -5726,6 +6474,7 @@ const AssistantManagerTaskPlanner = () => {
             name: item.fileName ?? 'Uploaded image',
             capturedAt: item.uploadedAt ?? null,
             downloadHref: item.driveWebViewLink,
+            subjectName: item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`,
           });
           setEvidenceImageZoom(1);
         } else {
@@ -5979,14 +6728,14 @@ const AssistantManagerTaskPlanner = () => {
 
   const dashboardSummary = useMemo(() => {
     const now = dayjs();
-    const completedCount = orderedLogs.filter((log) => log.status === 'completed').length;
+    const completedCount = orderedLogs.filter((log) => isSatisfiedTaskStatus(log.status)).length;
     const pendingCount = orderedLogs.filter(
       (log) => log.status === 'pending' && !isTaskCompletionWindowExpired(log, templateMap, now),
     ).length;
     const manualCount = orderedLogs.filter((log) => Boolean(log.meta?.manual)).length;
     const totalPoints = orderedLogs.reduce((sum, log) => sum + getLogPoints(log, templateMap), 0);
     const completedPoints = orderedLogs
-      .filter((log) => log.status === 'completed')
+      .filter((log) => isSatisfiedTaskStatus(log.status))
       .reduce((sum, log) => sum + getLogPoints(log, templateMap), 0);
     const completionRate = totalPoints > 0 ? Math.round((completedPoints / totalPoints) * 100) : 0;
 
@@ -6813,510 +7562,810 @@ const AssistantManagerTaskPlanner = () => {
       )}
 
       <Modal
-        opened={templateModalOpen}
-        onClose={closeTemplateModal}
-        title={editingTemplate ? 'Edit Template' : 'New Template'}
-        centered
-        size="lg"
-        fullScreen={Boolean(isMobile)}
+      opened={templateModalOpen}
+      onClose={closeTemplateModal}
+      title={editingTemplate ? 'Edit Template' : 'New Template'}
+      centered
+      size="lg"
+      fullScreen={Boolean(isMobile)}
       >
-        <Stack gap="md">
-          <Paper withBorder radius="xl" p="md">
-            <Stack gap="md">
-              <Stack gap={2}>
-                <Text fw={700}>Basics</Text>
-                <Text size="sm" c="dimmed">
-                  Define the task and where it belongs in the template library.
-                </Text>
-              </Stack>
-              <TextInput
-                label="Name"
-                required
-                value={templateFormState.name}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    name: value,
-                  }));
-                }}
-              />
-              <Textarea
-                label="Description"
-                minRows={3}
-                value={templateFormState.description}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    description: value,
-                  }));
-                }}
-              />
-              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-                <TextInput
-                  label="Category"
-                  description="Top-level library grouping."
-                  value={templateFormState.category}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setTemplateFormState((prev) => ({
-                      ...prev,
-                      category: value,
-                    }));
-                  }}
-                />
-                <TextInput
-                  label="Subgroup"
-                  description="Section inside the category."
-                  value={templateFormState.subgroup}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setTemplateFormState((prev) => ({
-                      ...prev,
-                      subgroup: value,
-                    }));
-                  }}
-                />
-              </SimpleGrid>
-            </Stack>
-          </Paper>
-          <Paper withBorder radius="xl" p="md">
-            <Stack gap="md">
-              <Stack gap={2}>
-                <Text fw={700}>Schedule Defaults</Text>
-                <Text size="sm" c="dimmed">
-                  These values prefill generated tasks and manual logs.
-                </Text>
-              </Stack>
-              <Select
-                label="Cadence"
-                data={Object.entries(CADENCE_LABELS).map(([value, label]) => ({
-                  value,
-                  label,
-                }))}
-                value={templateFormState.cadence}
-                onChange={(value) =>
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    cadence: (value as AssistantManagerTaskCadence) ?? prev.cadence,
-                  }))
-                }
-              />
-              <Select
-                label="Completion Window"
-                description="Choose whether the task can be completed until end of day or only until its scheduled end time."
-                data={Object.entries(TASK_COMPLETION_WINDOW_MODE_LABELS).map(([value, label]) => ({
-                  value,
-                  label,
-                }))}
-                value={templateFormState.completionWindowMode}
-                onChange={(value) =>
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    completionWindowMode: normalizeTaskCompletionWindowMode(value),
-                  }))
-                }
-              />
-              <TextInput
-                label="Times Per Week Per Assigned User"
-                placeholder="2"
-                description="For weekly/biweekly person-based tasks, generate the task on each matched user's first N scheduled workdays of the week."
-                value={templateFormState.timesPerWeekPerAssignedUser}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    timesPerWeekPerAssignedUser: value,
-                  }));
-                }}
-              />
-              <TextInput
-                label="Reminder Minutes Before Start"
-                placeholder="30"
-                description="Send a reminder notification this many minutes before the task start time."
-                value={templateFormState.reminderMinutesBeforeStart}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    reminderMinutesBeforeStart: value,
-                  }));
-                }}
-              />
-              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-                <TextInput
-                  label="Default Start Time"
-                  placeholder="08:00"
-                  value={templateFormState.defaultTime}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setTemplateFormState((prev) => ({
-                      ...prev,
-                      defaultTime: value,
-                    }));
-                  }}
-                />
-                <TextInput
-                  label="Default Duration (hours)"
-                  placeholder="1.5"
-                  value={templateFormState.defaultDuration}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setTemplateFormState((prev) => ({
-                      ...prev,
-                      defaultDuration: value,
-                    }));
-                  }}
-                />
-              </SimpleGrid>
-              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-                <Select
-                  label="Default Priority"
-                  data={(Object.keys(PRIORITY_META) as PlannerPriority[]).map((priority) => ({
-                    value: priority,
-                    label: PRIORITY_META[priority].label,
-                  }))}
-                  value={templateFormState.defaultPriority}
-                  onChange={(value) =>
-                    setTemplateFormState((prev) => ({
-                      ...prev,
-                      defaultPriority: (value as PlannerPriority) ?? prev.defaultPriority,
-                    }))
-                  }
-                />
-                <TextInput
-                  label="Default Points"
-                  placeholder="1"
-                  value={templateFormState.defaultPoints}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setTemplateFormState((prev) => ({
-                      ...prev,
-                      defaultPoints: value,
-                    }));
-                  }}
-                />
-              </SimpleGrid>
-              <Switch
-                label="Notify again at task start time"
-                checked={templateFormState.notifyAtStart}
-                onChange={(event) => {
-                  const checked = event.currentTarget.checked;
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    notifyAtStart: checked,
-                  }));
-                }}
-              />
-              <Switch
-                label="Require staff to be on shift by default"
-                checked={templateFormState.requireShift}
-                onChange={(event) => {
-                  const checked = event.currentTarget.checked;
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    requireShift: checked,
-                  }));
-                }}
-              />
-            </Stack>
-          </Paper>
-          <Paper withBorder radius="xl" p="md">
-            <Stack gap="md">
-              <Stack gap={2}>
-                <Text fw={700}>Evidence Requirements</Text>
-                <Text size="sm" c="dimmed">
-                  Create one rule per required proof item. For example, use separate link rules for
-                  Instagram and TikTok when both links are required.
-                </Text>
-              </Stack>
-              <Stack gap="xs">
-                <Text size="sm" fw={600}>
-                  Quick Presets
-                </Text>
-                <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-                  {EVIDENCE_RULE_PRESETS.map((preset) => (
-                    <Button
-                      key={preset.id}
-                      variant="light"
-                      color="dark"
-                      fullWidth
-                      onClick={() => addTemplateEvidencePreset(preset)}
-                    >
-                      <Box w="100%" ta="left">
-                        <Text span fw={600}>
-                          {preset.label}
-                        </Text>
-                        <Text size="xs" c="dimmed">
-                          {preset.description}
-                        </Text>
-                      </Box>
-                    </Button>
-                  ))}
-                </SimpleGrid>
-              </Stack>
-              <Group gap="sm" wrap="wrap">
-                <Button
-                  variant="default"
-                  leftSection={<IconPlus size={16} />}
-                  onClick={() => addTemplateEvidenceRuleDraft('link')}
-                >
-                  Add Link Rule
-                </Button>
-                <Button
-                  variant="default"
-                  leftSection={<IconPlus size={16} />}
-                  onClick={() => addTemplateEvidenceRuleDraft('image')}
-                >
-                  Add Image Rule
-                </Button>
-              </Group>
-              {templateFormState.evidenceRules.length > 0 ? (
+        <Stack gap={isMobile ? 4 : 'sm'}>
+          {isMobile && !hasExpandedTemplateSections ? templateSummaryPanel(true) : null}
+          <Group align="flex-start" gap={isMobile ? 4 : 'sm'} wrap="nowrap">
+            <Box style={{ flex: 1, minWidth: 0 }}>
+              <Tabs
+                value={templateModalTab}
+                onChange={(value) => setTemplateModalTab((value as 'core' | 'rules') ?? 'core')}
+              >
+                <Tabs.List grow mb={isMobile ? 2 : 'xs'}>
+                  <Tabs.Tab value="core">Core</Tabs.Tab>
+                  <Tabs.Tab value="rules">Rules</Tabs.Tab>
+                </Tabs.List>
+                <Tabs.Panel value="core" pt={isMobile ? 0 : 'xs'}>
+                  <Accordion
+                    multiple
+                    value={templateAccordionValue}
+                    onChange={(value) => setTemplateAccordionValue(value as string[])}
+                    variant="contained"
+                    radius="xl"
+                  >
+            <Accordion.Item value="basics">
+              <Accordion.Control style={{ paddingTop: 8, paddingBottom: 8 }}>
+                <Box>
+                  <Text fw={700} size="sm">
+                    Basics
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Define the task and where it belongs in the template library.
+                  </Text>
+                </Box>
+              </Accordion.Control>
+              <Accordion.Panel pt="xs" pb="sm">
                 <Stack gap="sm">
-                  {templateFormState.evidenceRules.map((rule, index) => (
-                    <Paper key={rule.id} withBorder radius="lg" p="md">
-                      <Stack gap="md">
-                        <Group justify="space-between" wrap="wrap">
-                          <Group gap="xs">
-                            <Badge variant="light">Rule {index + 1}</Badge>
-                            <Badge color={rule.type === 'link' ? 'blue' : 'grape'} variant="light">
-                              {rule.type}
-                            </Badge>
-                          </Group>
-                          <ActionIcon
-                            color="red"
-                            variant="subtle"
-                            onClick={() => removeTemplateEvidenceRuleDraft(rule.id)}
-                            aria-label={`Remove evidence rule ${index + 1}`}
-                          >
-                            <IconX size={16} />
-                          </ActionIcon>
-                        </Group>
-                        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-                          <TextInput
-                            label="Rule Key"
-                            placeholder="instagram_post_link"
-                            value={rule.key}
-                            onChange={(event) =>
-                              handleEvidenceRuleDraftChange(rule.id, 'key', event.currentTarget.value)
-                            }
-                          />
-                          <TextInput
-                            label="Label"
-                            placeholder="Instagram post link"
-                            value={rule.label}
-                            onChange={(event) =>
-                              handleEvidenceRuleDraftChange(rule.id, 'label', event.currentTarget.value)
-                            }
-                          />
-                        </SimpleGrid>
-                        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-                          <Select
-                            label="Evidence Type"
-                            data={[
-                              { value: 'link', label: 'Link' },
-                              { value: 'image', label: 'Image' },
-                            ]}
-                            value={rule.type}
-                            onChange={(value) =>
-                              handleEvidenceRuleDraftChange(
-                                rule.id,
-                                'type',
-                                (value as 'link' | 'image') ?? rule.type,
-                              )
-                            }
-                          />
-                          <Group grow align="flex-end">
-                            <Switch
-                              label="Required"
-                              checked={rule.required}
-                              onChange={(event) =>
-                                handleEvidenceRuleDraftChange(
-                                  rule.id,
-                                  'required',
-                                  event.currentTarget.checked,
-                                )
-                              }
-                            />
-                            <Switch
-                              label="Allow Multiple"
-                              checked={rule.multiple}
-                              onChange={(event) =>
-                                handleEvidenceRuleDraftChange(
-                                  rule.id,
-                                  'multiple',
-                                  event.currentTarget.checked,
-                                )
-                              }
-                            />
-                          </Group>
-                        </SimpleGrid>
-                        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-                          <TextInput
-                            label="Minimum Items"
-                            placeholder={rule.required ? '1' : '0'}
-                            value={rule.minItems}
-                            onChange={(event) =>
-                              handleEvidenceRuleDraftChange(
-                                rule.id,
-                                'minItems',
-                                event.currentTarget.value,
-                              )
-                            }
-                          />
-                          <TextInput
-                            label="Maximum Items"
-                            placeholder={rule.multiple ? 'Leave empty for no limit' : '1'}
-                            value={rule.maxItems}
-                            onChange={(event) =>
-                              handleEvidenceRuleDraftChange(
-                                rule.id,
-                                'maxItems',
-                                event.currentTarget.value,
-                              )
-                            }
-                          />
-                        </SimpleGrid>
-                        {rule.type === 'link' && (
-                          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
-                            <TextInput
-                              label="Allowed Hosts"
-                              description="Comma-separated hostnames."
-                              placeholder="instagram.com, www.instagram.com"
-                              value={rule.hosts}
-                              onChange={(event) =>
-                                handleEvidenceRuleDraftChange(
-                                  rule.id,
-                                  'hosts',
-                                  event.currentTarget.value,
-                                )
-                              }
-                            />
-                            <TextInput
-                              label="Required Keywords"
-                              description="Comma-separated words to find in the URL."
-                              placeholder="instagram, reel"
-                              value={rule.contains}
-                              onChange={(event) =>
-                                handleEvidenceRuleDraftChange(
-                                  rule.id,
-                                  'contains',
-                                  event.currentTarget.value,
-                                )
-                              }
-                            />
-                            <TextInput
-                              label="Regex"
-                              description="Optional advanced URL validation."
-                              placeholder="^https://(www\\.)?instagram\\.com/"
-                              value={rule.regex}
-                              onChange={(event) =>
-                                handleEvidenceRuleDraftChange(
-                                  rule.id,
-                                  'regex',
-                                  event.currentTarget.value,
-                                )
-                              }
-                            />
-                          </SimpleGrid>
-                        )}
-                      </Stack>
-                    </Paper>
-                  ))}
+                  <TextInput
+                    label="Name"
+                    required
+                    value={templateFormState.name}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        name: value,
+                      }));
+                    }}
+                  />
+                  <Textarea
+                    label="Description"
+                    minRows={3}
+                    value={templateFormState.description}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        description: value,
+                      }));
+                    }}
+                  />
+                  <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <TextInput
+                      label="Category"
+                      description="Top-level library grouping."
+                      value={templateFormState.category}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setTemplateFormState((prev) => ({
+                          ...prev,
+                          category: value,
+                        }));
+                      }}
+                    />
+                    <TextInput
+                      label="Subgroup"
+                      description="Section inside the category."
+                      value={templateFormState.subgroup}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setTemplateFormState((prev) => ({
+                          ...prev,
+                          subgroup: value,
+                        }));
+                      }}
+                    />
+                  </SimpleGrid>
                 </Stack>
-              ) : (
-                <Text size="sm" c="dimmed">
-                  No evidence rules yet.
-                </Text>
-              )}
-            </Stack>
-          </Paper>
-          <Paper withBorder radius="xl" p="md">
-            <Stack gap="md">
-              <Stack gap={2}>
-                <Text fw={700}>Cerebro Links</Text>
-                <Text size="sm" c="dimmed">
-                  Attach related knowledge, policies, and quizzes so staff can open them from task details.
-                </Text>
-              </Stack>
-              {cerebroLinkOptionsError ? (
-                <Alert color="red" title="Cerebro Links">
-                  {cerebroLinkOptionsError}
-                </Alert>
-              ) : null}
-              <MultiSelect
-                label="Knowledge"
-                placeholder={cerebroLinkOptionsLoading ? 'Loading knowledge...' : 'Select knowledge articles'}
-                data={templateKnowledgeOptions}
-                value={templateFormState.linkedKnowledgeEntryIds}
-                onChange={(value) =>
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    linkedKnowledgeEntryIds: value,
-                  }))
-                }
-                searchable
-                clearable
-                disabled={cerebroLinkOptionsLoading}
-                nothingFoundMessage="No knowledge entries found"
-              />
-              <MultiSelect
-                label="Policies"
-                placeholder={cerebroLinkOptionsLoading ? 'Loading policies...' : 'Select policies'}
-                data={templatePolicyOptions}
-                value={templateFormState.linkedPolicyEntryIds}
-                onChange={(value) =>
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    linkedPolicyEntryIds: value,
-                  }))
-                }
-                searchable
-                clearable
-                disabled={cerebroLinkOptionsLoading}
-                nothingFoundMessage="No policies found"
-              />
-              <MultiSelect
-                label="Quizzes"
-                placeholder={cerebroLinkOptionsLoading ? 'Loading quizzes...' : 'Select quizzes'}
-                data={templateQuizOptions}
-                value={templateFormState.linkedQuizIds}
-                onChange={(value) =>
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    linkedQuizIds: value,
-                  }))
-                }
-                searchable
-                clearable
-                disabled={cerebroLinkOptionsLoading}
-                nothingFoundMessage="No quizzes found"
-              />
-            </Stack>
-          </Paper>
-          <Paper withBorder radius="xl" p="md">
-            <Stack gap="md">
-              <Stack gap={2}>
-                <Text fw={700}>Advanced</Text>
-                <Text size="sm" c="dimmed">
-                  Optional cadence-specific JSON like `daysOfWeek`, `dayOfMonth`, or tags.
-                </Text>
-              </Stack>
-              <Textarea
-                label="Schedule Config (JSON)"
-                minRows={4}
-                value={templateFormState.scheduleConfigText}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setTemplateFormState((prev) => ({
-                    ...prev,
-                    scheduleConfigText: value,
-                  }));
-                }}
-              />
-            </Stack>
-          </Paper>
+              </Accordion.Panel>
+            </Accordion.Item>
+            <Accordion.Item value="schedule">
+              <Accordion.Control style={{ paddingTop: 8, paddingBottom: 8 }}>
+                <Box>
+                  <Text fw={700} size="sm">
+                    Schedule Defaults
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    These values prefill generated tasks and manual logs.
+                  </Text>
+                </Box>
+              </Accordion.Control>
+              <Accordion.Panel pt="xs" pb="sm">
+                <Stack gap="xs">
+                  <Select
+                    label="Cadence"
+                    data={Object.entries(CADENCE_LABELS).map(([value, label]) => ({ value, label }))}
+                    value={templateFormState.cadence}
+                    onChange={(value) =>
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        cadence: (value as AssistantManagerTaskCadence) ?? prev.cadence,
+                      }))
+                    }
+                  />
+                  <Select
+                    label="Completion Window"
+                    description="Choose whether the task can be completed until end of day or only until its scheduled end time."
+                    data={Object.entries(TASK_COMPLETION_WINDOW_MODE_LABELS).map(([value, label]) => ({
+                      value,
+                      label,
+                    }))}
+                    value={templateFormState.completionWindowMode}
+                    onChange={(value) =>
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        completionWindowMode: normalizeTaskCompletionWindowMode(value),
+                      }))
+                    }
+                  />
+                  <TextInput
+                    label="Times Per Week Per Assigned User"
+                    placeholder="2"
+                    description="For weekly/biweekly person-based tasks, generate the task on each matched user's first N scheduled workdays of the week."
+                    value={templateFormState.timesPerWeekPerAssignedUser}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        timesPerWeekPerAssignedUser: value,
+                      }));
+                    }}
+                  />
+                  <TextInput
+                    label="Reminder Minutes Before Start"
+                    placeholder="30"
+                    description="Send a reminder notification this many minutes before the task start time."
+                    value={templateFormState.reminderMinutesBeforeStart}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        reminderMinutesBeforeStart: value,
+                      }));
+                    }}
+                  />
+                  <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <TextInput
+                      label="Default Start Time"
+                      placeholder="08:00"
+                      value={templateFormState.defaultTime}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setTemplateFormState((prev) => ({
+                          ...prev,
+                          defaultTime: value,
+                        }));
+                      }}
+                    />
+                    <TextInput
+                      label="Default Duration (hours)"
+                      placeholder="1.5"
+                      value={templateFormState.defaultDuration}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setTemplateFormState((prev) => ({
+                          ...prev,
+                          defaultDuration: value,
+                        }));
+                      }}
+                    />
+                  </SimpleGrid>
+                  <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <Select
+                      label="Default Priority"
+                      data={(Object.keys(PRIORITY_META) as PlannerPriority[]).map((priority) => ({
+                        value: priority,
+                        label: PRIORITY_META[priority].label,
+                      }))}
+                      value={templateFormState.defaultPriority}
+                      onChange={(value) =>
+                        setTemplateFormState((prev) => ({
+                          ...prev,
+                          defaultPriority: (value as PlannerPriority) ?? prev.defaultPriority,
+                        }))
+                      }
+                    />
+                    <TextInput
+                      label="Default Points"
+                      placeholder="1"
+                      value={templateFormState.defaultPoints}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        setTemplateFormState((prev) => ({
+                          ...prev,
+                          defaultPoints: value,
+                        }));
+                      }}
+                    />
+                  </SimpleGrid>
+                  <Switch
+                    label="Notify again at task start time"
+                    checked={templateFormState.notifyAtStart}
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        notifyAtStart: checked,
+                      }));
+                    }}
+                  />
+                  <Switch
+                    label="Require staff to be on shift by default"
+                    checked={templateFormState.requireShift}
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        requireShift: checked,
+                      }));
+                    }}
+                  />
+                </Stack>
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
+        </Tabs.Panel>
+        <Tabs.Panel value="rules" pt="sm">
+          <Accordion
+            multiple
+            value={templateAccordionValue}
+            onChange={(value) => setTemplateAccordionValue(value as string[])}
+            variant="contained"
+            radius="xl"
+          >
+            <Accordion.Item value="evidence">
+              <Accordion.Control ref={(node) => { templateSectionRefs.current.evidence = node as HTMLDivElement | null; }}>
+                <Box>
+                  <Text fw={700} size="sm">
+                    Evidence Requirements
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Create one rule per required proof item.
+                  </Text>
+                </Box>
+              </Accordion.Control>
+              <Accordion.Panel pt="xs" pb="sm">
+                <Stack gap="xs">
+                  <Stack gap={4}>
+                    <Text size="sm" fw={600}>
+                      Quick Presets
+                    </Text>
+                    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                      {EVIDENCE_RULE_PRESETS.map((preset) => (
+                        <Button
+                          key={preset.id}
+                          variant="light"
+                          color="dark"
+                          fullWidth
+                          onClick={() => addTemplateEvidencePreset(preset)}
+                        >
+                          <Box w="100%" ta="left">
+                            <Text span fw={600}>
+                              {preset.label}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              {preset.description}
+                            </Text>
+                          </Box>
+                        </Button>
+                      ))}
+                    </SimpleGrid>
+                  </Stack>
+                  <Group gap="xs" wrap="wrap">
+                    <Button
+                      variant="default"
+                      leftSection={<IconPlus size={16} />}
+                      onClick={() => addTemplateEvidenceRuleDraft('link')}
+                    >
+                      Add Link Rule
+                    </Button>
+                    <Button
+                      variant="default"
+                      leftSection={<IconPlus size={16} />}
+                      onClick={() => addTemplateEvidenceRuleDraft('image')}
+                    >
+                      Add Image Rule
+                    </Button>
+                  </Group>
+                  {templateFormState.evidenceRules.length > 0 ? (
+                    <Stack gap="xs">
+                      {templateFormState.evidenceRules.map((rule, index) => (
+                        <Paper key={rule.id} withBorder radius="lg" p="xs">
+                          <Stack gap="xs">
+                            <Group justify="space-between" wrap="wrap">
+                              <Group gap="xs">
+                                <Badge variant="light">Rule {index + 1}</Badge>
+                                <Badge color={rule.type === 'link' ? 'blue' : 'grape'} variant="light">
+                                  {rule.type}
+                                </Badge>
+                              </Group>
+                              <ActionIcon
+                                color="red"
+                                variant="subtle"
+                                onClick={() => removeTemplateEvidenceRuleDraft(rule.id)}
+                                aria-label={`Remove evidence rule ${index + 1}`}
+                              >
+                                <IconX size={16} />
+                              </ActionIcon>
+                            </Group>
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+                              <TextInput
+                                label="Rule Key"
+                                placeholder="instagram_post_link"
+                                value={rule.key}
+                                onChange={(event) =>
+                                  handleEvidenceRuleDraftChange(rule.id, 'key', event.currentTarget.value)
+                                }
+                              />
+                              <TextInput
+                                label="Label"
+                                placeholder="Instagram post link"
+                                value={rule.label}
+                                onChange={(event) =>
+                                  handleEvidenceRuleDraftChange(rule.id, 'label', event.currentTarget.value)
+                                }
+                              />
+                            </SimpleGrid>
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+                              <Select
+                                label="Evidence Type"
+                                data={[
+                                  { value: 'link', label: 'Link' },
+                                  { value: 'image', label: 'Image' },
+                                ]}
+                                value={rule.type}
+                                onChange={(value) =>
+                                  handleEvidenceRuleDraftChange(
+                                    rule.id,
+                                    'type',
+                                    (value as 'link' | 'image') ?? rule.type,
+                                  )
+                                }
+                              />
+                              <Group grow align="flex-end">
+                                <Switch
+                                  label="Required"
+                                  checked={rule.required}
+                                  onChange={(event) =>
+                                    handleEvidenceRuleDraftChange(
+                                      rule.id,
+                                      'required',
+                                      event.currentTarget.checked,
+                                    )
+                                  }
+                                />
+                                <Switch
+                                  label="Allow Multiple"
+                                  checked={rule.multiple}
+                                  onChange={(event) =>
+                                    handleEvidenceRuleDraftChange(
+                                      rule.id,
+                                      'multiple',
+                                      event.currentTarget.checked,
+                                    )
+                                  }
+                                />
+                              </Group>
+                            </SimpleGrid>
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                              <TextInput
+                                label="Minimum Items"
+                                placeholder={rule.required ? '1' : '0'}
+                                value={rule.minItems}
+                                onChange={(event) =>
+                                  handleEvidenceRuleDraftChange(
+                                    rule.id,
+                                    'minItems',
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              />
+                              <TextInput
+                                label="Maximum Items"
+                                placeholder={rule.multiple ? 'Leave empty for no limit' : '1'}
+                                value={rule.maxItems}
+                                onChange={(event) =>
+                                  handleEvidenceRuleDraftChange(
+                                    rule.id,
+                                    'maxItems',
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              />
+                            </SimpleGrid>
+                            {rule.type === 'link' && (
+                              <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="xs">
+                                <TextInput
+                                  label="Allowed Hosts"
+                                  description="Comma-separated hostnames."
+                                  placeholder="instagram.com, www.instagram.com"
+                                  value={rule.hosts}
+                                  onChange={(event) =>
+                                    handleEvidenceRuleDraftChange(
+                                      rule.id,
+                                      'hosts',
+                                      event.currentTarget.value,
+                                    )
+                                  }
+                                />
+                                <TextInput
+                                  label="Required Keywords"
+                                  description="Comma-separated words to find in the URL."
+                                  placeholder="instagram, reel"
+                                  value={rule.contains}
+                                  onChange={(event) =>
+                                    handleEvidenceRuleDraftChange(
+                                      rule.id,
+                                      'contains',
+                                      event.currentTarget.value,
+                                    )
+                                  }
+                                />
+                                <TextInput
+                                  label="Regex"
+                                  description="Optional advanced URL validation."
+                                  placeholder="^https://(www\\.)?instagram\\.com/"
+                                  value={rule.regex}
+                                  onChange={(event) =>
+                                    handleEvidenceRuleDraftChange(
+                                      rule.id,
+                                      'regex',
+                                      event.currentTarget.value,
+                                    )
+                                  }
+                                />
+                              </SimpleGrid>
+                            )}
+                          </Stack>
+                        </Paper>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      No evidence rules yet.
+                    </Text>
+                  )}
+                </Stack>
+              </Accordion.Panel>
+            </Accordion.Item>
+            <Accordion.Item value="shiftEvidence">
+              <Accordion.Control ref={(node) => { templateSectionRefs.current.shiftEvidence = node as HTMLDivElement | null; }}>
+                <Box>
+                  <Text fw={700} size="sm">
+                    Shift-Based Evidence
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Generate one evidence slot per staff member on the selected shift types.
+                  </Text>
+                </Box>
+              </Accordion.Control>
+              <Accordion.Panel pt="xs" pb="sm">
+                <Stack gap="xs">
+                  <Group justify="space-between" align="flex-start" wrap="wrap">
+                    <Text size="sm" c="dimmed">
+                      Use this for cleaning, promotion, or any other shift-type check where assistant managers upload proof per person.
+                    </Text>
+                    <Button
+                      variant="light"
+                      leftSection={<IconPlus size={16} />}
+                      onClick={addTemplateShiftEvidenceSourceDraft}
+                      disabled={imageEvidenceRuleOptions.length === 0}
+                    >
+                      Add Shift Evidence Source
+                    </Button>
+                  </Group>
+                  {imageEvidenceRuleOptions.length === 0 && (
+                    <Alert color="yellow" title="Need an image evidence rule first">
+                      Create at least one image evidence rule before adding shift-based evidence sources.
+                    </Alert>
+                  )}
+                  {templateFormState.shiftEvidenceSources.length > 0 ? (
+                    <Stack gap="xs">
+                      {templateFormState.shiftEvidenceSources.map((source, index) => (
+                        <Paper key={source.id} withBorder radius="lg" p="xs">
+                          <Stack gap="xs">
+                            <Group justify="space-between" wrap="wrap" align="flex-start">
+                              <Group gap="xs" wrap="wrap">
+                                <Badge variant="light">Source {index + 1}</Badge>
+                                <Badge color="grape" variant="light">
+                                  Expected slots
+                                </Badge>
+                              </Group>
+                              <ActionIcon
+                                color="red"
+                                variant="subtle"
+                                onClick={() => removeTemplateShiftEvidenceSourceDraft(source.id)}
+                                aria-label={`Remove shift evidence source ${index + 1}`}
+                              >
+                                <IconX size={16} />
+                              </ActionIcon>
+                            </Group>
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+                              <TextInput
+                                label="Source Key"
+                                placeholder="cleaning_shift_screenshots"
+                                value={source.key}
+                                onChange={(event) =>
+                                  handleShiftEvidenceSourceDraftChange(source.id, 'key', event.currentTarget.value)
+                                }
+                              />
+                              <TextInput
+                                label="Label"
+                                placeholder="Cleaning screenshots"
+                                value={source.label}
+                                onChange={(event) =>
+                                  handleShiftEvidenceSourceDraftChange(source.id, 'label', event.currentTarget.value)
+                                }
+                              />
+                            </SimpleGrid>
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+                              <MultiSelect
+                                label="Shift Types"
+                                placeholder="Select shift types"
+                                data={shiftTypeOptions}
+                                value={source.shiftTypeIds}
+                                onChange={(value) =>
+                                  handleShiftEvidenceSourceDraftChange(source.id, 'shiftTypeIds', value)
+                                }
+                                searchable
+                                clearable
+                                disabled={shiftTypesLoading}
+                                nothingFoundMessage="No shift types found"
+                              />
+                              <Select
+                                label="Image Evidence Rule"
+                                placeholder="Select image rule"
+                                data={imageEvidenceRuleOptions}
+                                value={source.evidenceRuleKey || null}
+                                onChange={(value) =>
+                                  handleShiftEvidenceSourceDraftChange(
+                                    source.id,
+                                    'evidenceRuleKey',
+                                    value ?? '',
+                                  )
+                                }
+                                searchable
+                                clearable={false}
+                                disabled={imageEvidenceRuleOptions.length === 0}
+                                nothingFoundMessage="No image evidence rules found"
+                              />
+                            </SimpleGrid>
+                          </Stack>
+                        </Paper>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      No shift evidence sources yet.
+                    </Text>
+                  )}
+                </Stack>
+              </Accordion.Panel>
+            </Accordion.Item>
+            <Accordion.Item value="waivers">
+              <Accordion.Control ref={(node) => { templateSectionRefs.current.waivers = node as HTMLDivElement | null; }}>
+                <Box>
+                  <Text fw={700} size="sm">
+                    Night Report Waivers
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Waive next-day tasks when a night report says the activity did not operate.
+                  </Text>
+                </Box>
+              </Accordion.Control>
+              <Accordion.Panel pt="xs" pb="sm">
+                <Stack gap="xs">
+                  <Group justify="space-between" align="flex-start" wrap="wrap">
+                    <Text size="sm" c="dimmed">
+                      Use one rule per product or product group.
+                    </Text>
+                    <Button
+                      variant="light"
+                      leftSection={<IconPlus size={16} />}
+                      onClick={addTemplateNightReportWaiverRuleDraft}
+                    >
+                      Add Waiver Rule
+                    </Button>
+                  </Group>
+                  {templateFormState.nightReportWaiverRules.length > 0 ? (
+                    <Stack gap="xs">
+                      {templateFormState.nightReportWaiverRules.map((rule, index) => (
+                        <Paper key={rule.id} withBorder radius="lg" p="xs">
+                          <Stack gap="xs">
+                            <Group justify="space-between" wrap="wrap" align="flex-start">
+                              <Group gap="xs" wrap="wrap">
+                                <Badge variant="light">Rule {index + 1}</Badge>
+                                <Badge color="orange" variant="light">
+                                  Waive
+                                </Badge>
+                              </Group>
+                              <ActionIcon
+                                color="red"
+                                variant="subtle"
+                                onClick={() => removeTemplateNightReportWaiverRuleDraft(rule.id)}
+                                aria-label={`Remove night report waiver rule ${index + 1}`}
+                              >
+                                <IconX size={16} />
+                              </ActionIcon>
+                            </Group>
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+                              <TextInput
+                                label="Report Note Equals"
+                                placeholder={DEFAULT_NIGHT_REPORT_NOTE}
+                                value={rule.noteEquals}
+                                onChange={(event) =>
+                                  handleNightReportWaiverRuleDraftChange(
+                                    rule.id,
+                                    'noteEquals',
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              />
+                              <TextInput
+                                label="Report Note Contains"
+                                placeholder="optional keyword"
+                                value={rule.noteContains}
+                                onChange={(event) =>
+                                  handleNightReportWaiverRuleDraftChange(
+                                    rule.id,
+                                    'noteContains',
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              />
+                            </SimpleGrid>
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+                              <TextInput
+                                label="Product Names"
+                                description="Comma-separated product names from the night report counter."
+                                placeholder="Pub Crawl"
+                                value={rule.productNames}
+                                onChange={(event) =>
+                                  handleNightReportWaiverRuleDraftChange(
+                                    rule.id,
+                                    'productNames',
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              />
+                              <TextInput
+                                label="Product IDs"
+                                description="Optional comma-separated product IDs."
+                                placeholder="1, 2, 3"
+                                value={rule.productIds}
+                                onChange={(event) =>
+                                  handleNightReportWaiverRuleDraftChange(
+                                    rule.id,
+                                    'productIds',
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              />
+                            </SimpleGrid>
+                            <TextInput
+                              label="Task Date Offset Days"
+                              description="How many days after the activity date the waived task is expected."
+                              placeholder="1"
+                              value={rule.taskDateOffsetDays}
+                              onChange={(event) =>
+                                handleNightReportWaiverRuleDraftChange(
+                                  rule.id,
+                                  'taskDateOffsetDays',
+                                  event.currentTarget.value,
+                                )
+                              }
+                            />
+                          </Stack>
+                        </Paper>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      No waiver rules yet.
+                    </Text>
+                  )}
+                </Stack>
+              </Accordion.Panel>
+            </Accordion.Item>
+            <Accordion.Item value="cerebro">
+              <Accordion.Control ref={(node) => { templateSectionRefs.current.cerebro = node as HTMLDivElement | null; }}>
+                <Box>
+                  <Text fw={700} size="sm">
+                    Cerebro Links
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Attach related knowledge, policies, and quizzes so staff can open them from task details.
+                  </Text>
+                </Box>
+              </Accordion.Control>
+              <Accordion.Panel pt="xs" pb="sm">
+                <Stack gap="xs">
+                  {cerebroLinkOptionsError ? (
+                    <Alert color="red" title="Cerebro Links">
+                      {cerebroLinkOptionsError}
+                    </Alert>
+                  ) : null}
+                  <MultiSelect
+                    label="Knowledge"
+                    placeholder={cerebroLinkOptionsLoading ? 'Loading knowledge...' : 'Select knowledge articles'}
+                    data={templateKnowledgeOptions}
+                    value={templateFormState.linkedKnowledgeEntryIds}
+                    onChange={(value) =>
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        linkedKnowledgeEntryIds: value,
+                      }))
+                    }
+                    searchable
+                    clearable
+                    disabled={cerebroLinkOptionsLoading}
+                    nothingFoundMessage="No knowledge entries found"
+                  />
+                  <MultiSelect
+                    label="Policies"
+                    placeholder={cerebroLinkOptionsLoading ? 'Loading policies...' : 'Select policies'}
+                    data={templatePolicyOptions}
+                    value={templateFormState.linkedPolicyEntryIds}
+                    onChange={(value) =>
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        linkedPolicyEntryIds: value,
+                      }))
+                    }
+                    searchable
+                    clearable
+                    disabled={cerebroLinkOptionsLoading}
+                    nothingFoundMessage="No policies found"
+                  />
+                  <MultiSelect
+                    label="Quizzes"
+                    placeholder={cerebroLinkOptionsLoading ? 'Loading quizzes...' : 'Select quizzes'}
+                    data={templateQuizOptions}
+                    value={templateFormState.linkedQuizIds}
+                    onChange={(value) =>
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        linkedQuizIds: value,
+                      }))
+                    }
+                    searchable
+                    clearable
+                    disabled={cerebroLinkOptionsLoading}
+                    nothingFoundMessage="No quizzes found"
+                  />
+                </Stack>
+              </Accordion.Panel>
+            </Accordion.Item>
+            <Accordion.Item value="advanced">
+              <Accordion.Control ref={(node) => { templateSectionRefs.current.advanced = node as HTMLDivElement | null; }}>
+                <Box>
+                  <Text fw={700} size="sm">
+                    Advanced
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Optional cadence-specific JSON like `daysOfWeek`, `dayOfMonth`, or tags.
+                  </Text>
+                </Box>
+              </Accordion.Control>
+              <Accordion.Panel pt="xs" pb="sm">
+                <Textarea
+                  label="Schedule Config (JSON)"
+                  minRows={4}
+                  value={templateFormState.scheduleConfigText}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setTemplateFormState((prev) => ({
+                      ...prev,
+                      scheduleConfigText: value,
+                    }));
+                  }}
+                />
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
+                </Tabs.Panel>
+              </Tabs>
+            </Box>
+            <Box visibleFrom="sm" style={{ width: 300, flexShrink: 0 }}>
+              {templateSummaryPanel(false)}
+            </Box>
+          </Group>
           {templateFormError && (
             <Alert color="red" title="Unable to save">
               {templateFormError}
@@ -8293,6 +9342,22 @@ const AssistantManagerTaskPlanner = () => {
                   if (rule.type === 'link' && rule.match?.regex) {
                     helperParts.push(`Pattern: ${rule.match.regex}`);
                   }
+                  const expectedItemsForRule =
+                    rule.type === 'image'
+                      ? selectedLogExpectedEvidenceItems.filter(
+                          (item) => item.ruleKey === rule.key && item.type === 'image',
+                        )
+                      : [];
+                  const expectedItemSubjectIds = new Set(
+                    expectedItemsForRule.map((item) => item.subjectUserId),
+                  );
+                  const additionalImageRuleItems =
+                    rule.type === 'image'
+                      ? ruleItems.filter(
+                          (item) =>
+                            !expectedItemSubjectIds.has(Number(item.subjectUserId ?? -1)),
+                        )
+                      : [];
 
                   return (
                     <Paper
@@ -8552,7 +9617,279 @@ const AssistantManagerTaskPlanner = () => {
                           </Stack>
                         ) : (
                           <Stack gap="sm">
-                            {ruleItems.length > 0 ? (
+                            {expectedItemsForRule.length > 0 ? (
+                              <Stack gap="sm">
+                                {expectedItemsForRule.map((expectedItem) => {
+                                  const matchingItem = ruleItems.find(
+                                    (item) =>
+                                      item.ruleKey === rule.key &&
+                                      item.type === 'image' &&
+                                      Number(item.subjectUserId ?? -1) === expectedItem.subjectUserId,
+                                  );
+
+                                  return (
+                                    <Paper key={expectedItem.id} withBorder radius="md" p="sm" bg={matchingItem ? 'gray.0' : undefined}>
+                                      <Stack gap="sm">
+                                        <Group justify="space-between" align="flex-start" wrap="wrap">
+                                          <Stack gap={2}>
+                                            <Text fw={600} size="sm">
+                                              {expectedItem.subjectName}
+                                            </Text>
+                                            <Group gap="xs" wrap="wrap">
+                                              <Badge variant="light" color="gray">
+                                                {expectedItem.sourceLabel}
+                                              </Badge>
+                                              <Badge variant="outline" color="teal">
+                                                Expected
+                                              </Badge>
+                                            </Group>
+                                          </Stack>
+                                          {!selectedLogEvidenceReadOnly && (
+                                            <Group gap={6} wrap="nowrap">
+                                              <Button
+                                                size="xs"
+                                                variant="default"
+                                                loading={evidenceUploadingRuleKey === rule.key}
+                                                onClick={() => {
+                                                  openNativeImageFilePicker(rule, {
+                                                    subjectUserId: expectedItem.subjectUserId,
+                                                    subjectName: expectedItem.subjectName,
+                                                  });
+                                                }}
+                                              >
+                                                Upload Image
+                                              </Button>
+                                              <Button
+                                                size="xs"
+                                                variant="light"
+                                                leftSection={<IconCamera size={16} />}
+                                                disabled={evidenceUploadingRuleKey === rule.key}
+                                                onClick={() => {
+                                                  handleTakePhotoClick(rule, {
+                                                    subjectUserId: expectedItem.subjectUserId,
+                                                    subjectName: expectedItem.subjectName,
+                                                  });
+                                                }}
+                                              >
+                                                Take Photo
+                                              </Button>
+                                            </Group>
+                                          )}
+                                        </Group>
+                                        {matchingItem ? (
+                                          <Stack gap="sm">
+                                            <Box
+                                              style={{
+                                                width: '100%',
+                                                height: 180,
+                                                borderRadius: 8,
+                                                backgroundColor: '#f3f4f6',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                overflow: 'hidden',
+                                                border: '1px solid #d1d5db',
+                                                position: 'relative',
+                                              }}
+                                            >
+                                              {evidenceImageThumbs[matchingItem.id] ? (
+                                                <img
+                                                  src={evidenceImageThumbs[matchingItem.id]}
+                                                  alt={matchingItem.fileName ?? 'Uploaded image'}
+                                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                                />
+                                              ) : evidenceImageThumbErrors[matchingItem.id] ? (
+                                                <Text size="xs" c="dimmed" ta="center" px="md">
+                                                  Preview unavailable
+                                                </Text>
+                                              ) : (
+                                                <Text size="xs" c="dimmed">
+                                                  Loading preview...
+                                                </Text>
+                                              )}
+                                              {!selectedLogEvidenceReadOnly && (
+                                                <Tooltip label="Delete image">
+                                                  <ActionIcon
+                                                    variant="filled"
+                                                    color="red"
+                                                    size="sm"
+                                                    aria-label={`Delete image evidence for ${rule.label}`}
+                                                    onClick={() => {
+                                                      void handleEvidenceImageDelete(rule, matchingItem.id);
+                                                    }}
+                                                    disabled={logDetailSubmitting}
+                                                    style={{
+                                                      position: 'absolute',
+                                                      top: 8,
+                                                      right: 8,
+                                                    }}
+                                                  >
+                                                    <IconTrash size={14} />
+                                                  </ActionIcon>
+                                                </Tooltip>
+                                              )}
+                                            </Box>
+                                            <Text size="sm" fw={600} style={{ minWidth: 0 }}>
+                                              {matchingItem.fileName ?? 'Uploaded image'}
+                                            </Text>
+                                            <Group gap="xs" wrap="wrap">
+                                              {formatEvidenceFileSize(matchingItem.fileSize) && (
+                                                <Badge variant="outline">
+                                                  {formatEvidenceFileSize(matchingItem.fileSize)}
+                                                </Badge>
+                                              )}
+                                              <Badge variant="light" color="gray">
+                                                {matchingItem.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`}
+                                              </Badge>
+                                              {matchingItem.uploadedAt && (
+                                                <Badge variant="light" color="gray">
+                                                  {dayjs(matchingItem.uploadedAt).format('MMM D, HH:mm')}
+                                                </Badge>
+                                              )}
+                                            </Group>
+                                            <Button
+                                              size="xs"
+                                              variant="default"
+                                              loading={evidencePreviewLoadingItemId === matchingItem.id}
+                                              onClick={() => {
+                                                void handleEvidenceImagePreviewOpen(matchingItem);
+                                              }}
+                                              disabled={
+                                                !matchingItem.driveWebViewLink &&
+                                                !evidenceImageThumbs[matchingItem.id] &&
+                                                Boolean(evidenceImageThumbErrors[matchingItem.id])
+                                              }
+                                            >
+                                              View Full Size
+                                            </Button>
+                                          </Stack>
+                                        ) : (
+                                          <Text size="sm" c="dimmed" ta="center">
+                                            No screenshot uploaded yet.
+                                          </Text>
+                                        )}
+                                      </Stack>
+                                    </Paper>
+                                  );
+                                })}
+                                {additionalImageRuleItems.length > 0 && (
+                                  <Stack gap="xs">
+                                    <Text size="xs" c="dimmed" ta="center">
+                                      Additional uploads
+                                    </Text>
+                                    {additionalImageRuleItems.map((item) => (
+                                      <Paper key={item.id} withBorder radius="md" p="sm">
+                                        <Stack gap="sm">
+                                          <Box
+                                            style={{
+                                              width: '100%',
+                                              height: 180,
+                                              borderRadius: 8,
+                                              backgroundColor: '#f3f4f6',
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'center',
+                                              overflow: 'hidden',
+                                              border: '1px solid #d1d5db',
+                                              position: 'relative',
+                                            }}
+                                          >
+                                            {evidenceImageThumbs[item.id] ? (
+                                              <img
+                                                src={evidenceImageThumbs[item.id]}
+                                                alt={item.fileName ?? 'Uploaded image'}
+                                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                              />
+                                            ) : evidenceImageThumbErrors[item.id] ? (
+                                              <Text size="xs" c="dimmed" ta="center" px="md">
+                                                Preview unavailable
+                                              </Text>
+                                            ) : (
+                                              <Text size="xs" c="dimmed">
+                                                Loading preview...
+                                              </Text>
+                                            )}
+                                            {!selectedLogEvidenceReadOnly && (
+                                              <Tooltip label="Delete image">
+                                                <ActionIcon
+                                                  variant="filled"
+                                                  color="red"
+                                                  size="sm"
+                                                  aria-label={`Delete image evidence for ${rule.label}`}
+                                                  onClick={() => {
+                                                    void handleEvidenceImageDelete(rule, item.id);
+                                                  }}
+                                                  disabled={logDetailSubmitting}
+                                                  style={{
+                                                    position: 'absolute',
+                                                    top: 8,
+                                                    right: 8,
+                                                  }}
+                                                >
+                                                  <IconTrash size={14} />
+                                                </ActionIcon>
+                                              </Tooltip>
+                                            )}
+                                          </Box>
+                                          <Text size="sm" fw={600} style={{ minWidth: 0 }}>
+                                            {item.fileName ?? 'Uploaded image'}
+                                          </Text>
+                                          <Group gap="xs" wrap="wrap">
+                                            {formatEvidenceFileSize(item.fileSize) && (
+                                              <Badge variant="outline">
+                                                {formatEvidenceFileSize(item.fileSize)}
+                                              </Badge>
+                                            )}
+                                            <Badge variant="light" color="gray">
+                                              {item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`}
+                                            </Badge>
+                                            {item.uploadedAt && (
+                                              <Badge variant="light" color="gray">
+                                                {dayjs(item.uploadedAt).format('MMM D, HH:mm')}
+                                              </Badge>
+                                            )}
+                                          </Group>
+                                          <Button
+                                            size="xs"
+                                            variant="default"
+                                            loading={evidencePreviewLoadingItemId === item.id}
+                                            onClick={() => {
+                                              void handleEvidenceImagePreviewOpen(item);
+                                            }}
+                                            disabled={
+                                              !item.driveWebViewLink &&
+                                              !evidenceImageThumbs[item.id] &&
+                                              Boolean(evidenceImageThumbErrors[item.id])
+                                            }
+                                          >
+                                            View Full Size
+                                          </Button>
+                                        </Stack>
+                                      </Paper>
+                                    ))}
+                                  </Stack>
+                                )}
+                              </Stack>
+                            ) : null}
+                            {expectedItemsForRule.length === 0 && !selectedLogEvidenceReadOnly && (
+                              <Select
+                                label="Staff member"
+                                description="Use one screenshot per staff member when the task covers more than one person."
+                                data={activeUserOptions}
+                                value={evidenceImageSubjectSelections[rule.key] ?? String(selectedLog.userId)}
+                                onChange={(value) =>
+                                  setEvidenceImageSubjectSelections((prev) => ({
+                                    ...prev,
+                                    [rule.key]: value ?? String(selectedLog.userId),
+                                  }))
+                                }
+                                searchable
+                                clearable={false}
+                                disabled={activeUsersLoading}
+                                nothingFoundMessage="No active users found"
+                              />
+                            )}
+                            {expectedItemsForRule.length === 0 && ruleItems.length > 0 ? (
                               ruleItems.map((item) => (
                                 <Paper key={item.id} withBorder radius="md" p="sm">
                                   <Stack gap="sm">
@@ -8616,6 +9953,9 @@ const AssistantManagerTaskPlanner = () => {
                                           {formatEvidenceFileSize(item.fileSize)}
                                         </Badge>
                                       )}
+                                      <Badge variant="light" color="gray">
+                                        {item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`}
+                                      </Badge>
                                       {item.uploadedAt && (
                                         <Badge variant="light" color="gray">
                                           {dayjs(item.uploadedAt).format('MMM D, HH:mm')}
@@ -8641,7 +9981,7 @@ const AssistantManagerTaskPlanner = () => {
                                 </Paper>
                               ))
                             ) : null}
-                            {!ruleReadOnly && (
+                            {expectedItemsForRule.length === 0 && !ruleReadOnly && (
                               <Group justify="center">
                                 <Group gap="sm" justify="center" wrap="wrap">
                                   <Button
@@ -9022,6 +10362,11 @@ const AssistantManagerTaskPlanner = () => {
                 <Text c="white" fw={600}>
                   {activeEvidenceImagePreview.name}
                 </Text>
+                {activeEvidenceImagePreview.subjectName && (
+                  <Text size="sm" c="gray.4">
+                    {activeEvidenceImagePreview.subjectName}
+                  </Text>
+                )}
                 {activeEvidenceImagePreview.capturedAt && (
                   <Text size="sm" c="gray.4">
                     {dayjs(activeEvidenceImagePreview.capturedAt).format('MMM D, YYYY h:mm A')}

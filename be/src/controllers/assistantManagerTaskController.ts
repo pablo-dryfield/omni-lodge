@@ -27,6 +27,9 @@ import {
   storeAssistantManagerTaskEvidenceImage,
 } from '../services/assistantManagerTaskEvidenceStorageService.js';
 import { getConfigValue } from '../services/configService.js';
+import {
+  reconcileNightReportTaskWaiversForRange,
+} from '../services/assistantManagerTaskWaiverService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -38,6 +41,7 @@ const ASSIGNMENT_SCOPE_VALUES = new Set<AssistantManagerTaskAssignmentScope>(['s
 const GLOBAL_TASK_VIEWER_ROLES = new Set(['admin', 'owner', 'manager']);
 const EVIDENCE_RULE_TYPE_VALUES = new Set(['link', 'image']);
 const AM_TASK_PLANNER_START_DATE_KEY = 'AM_TASK_PLANNER_START_DATE';
+const SHIFT_EVIDENCE_SOURCES_CONFIG_KEY = 'shiftEvidenceSources';
 const TEMPLATE_CONFIG_MANAGED_META_KEYS = [
   'manual',
   'time',
@@ -53,6 +57,7 @@ const TEMPLATE_CONFIG_MANAGED_META_KEYS = [
   'shiftAssignmentId',
   'shiftTimeStart',
   'shiftTimeEnd',
+  'expectedEvidenceItems',
 ] as const;
 
 const startOfPlannerWeek = (value?: string | dayjs.Dayjs | Date | null) => {
@@ -124,11 +129,31 @@ type ShiftDayInfo = {
 
 type ScheduledShiftCandidate = {
   userId: number;
+  userName: string;
   userTypeId: number | null;
+  shiftTypeId: number | null;
   shiftRoleId: number | null;
   staffType: string | null;
   livesInAccom: boolean | null;
   shiftInfo: ShiftDayInfo;
+};
+
+type ShiftEvidenceSourceConfig = {
+  key: string;
+  label: string;
+  evidenceRuleKey: string;
+  shiftTypeIds: number[];
+};
+
+type AssistantManagerTaskExpectedEvidenceItem = {
+  id: string;
+  sourceKey: string;
+  sourceLabel: string;
+  ruleKey: string;
+  type: 'image';
+  subjectUserId: number;
+  subjectName: string;
+  shiftTypeIds: number[];
 };
 
 type PlannedGeneratedLog = {
@@ -136,6 +161,7 @@ type PlannedGeneratedLog = {
   assignment: AssistantManagerTaskAssignment;
   candidate: ScheduledShiftCandidate;
   taskDate: string;
+  expectedEvidenceItems: AssistantManagerTaskExpectedEvidenceItem[];
 };
 
 const buildTaskLogKey = (templateId: number, userId: number, taskDate: string) =>
@@ -182,6 +208,8 @@ type AssistantManagerTaskEvidenceItem = {
   type: 'link' | 'image';
   value?: string | null;
   valid?: boolean;
+  subjectUserId?: number | null;
+  subjectName?: string | null;
   fileName?: string | null;
   mimeType?: string | null;
   fileSize?: number | null;
@@ -206,6 +234,17 @@ const normalizeStringArray = (value: unknown): string[] => {
   return value
     .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
     .filter(Boolean);
+};
+
+const normalizePositiveIntArray = (value: unknown): number[] => {
+  const values = Array.isArray(value) ? value : value == null ? [] : [value];
+  return Array.from(
+    new Set(
+      values
+        .map((entry) => Number(entry))
+        .filter((entry) => Number.isInteger(entry) && entry > 0),
+    ),
+  );
 };
 
 const sanitizeEvidenceRules = (value: unknown): AssistantManagerTaskEvidenceRule[] => {
@@ -283,12 +322,74 @@ const sanitizeEvidenceRules = (value: unknown): AssistantManagerTaskEvidenceRule
   });
 };
 
+const sanitizeShiftEvidenceSources = (value: unknown): ShiftEvidenceSourceConfig[] => {
+  if (value == null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('shiftEvidenceSources must be an array');
+  }
+
+  const seenKeys = new Set<string>();
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== 'object') {
+      throw new Error(`shiftEvidenceSources[${index}] must be an object`);
+    }
+
+    const source = entry as Record<string, unknown>;
+    const key = typeof source.key === 'string' ? source.key.trim() : '';
+    const label = typeof source.label === 'string' ? source.label.trim() : '';
+    const evidenceRuleKey =
+      typeof source.evidenceRuleKey === 'string'
+        ? source.evidenceRuleKey.trim()
+        : typeof source.ruleKey === 'string'
+          ? source.ruleKey.trim()
+          : '';
+    const shiftTypeIds = normalizePositiveIntArray(source.shiftTypeIds ?? source.shiftTypeId);
+
+    if (!key) {
+      throw new Error(`shiftEvidenceSources[${index}].key is required`);
+    }
+    if (seenKeys.has(key)) {
+      throw new Error(`shiftEvidenceSources key "${key}" must be unique`);
+    }
+    seenKeys.add(key);
+    if (!label) {
+      throw new Error(`shiftEvidenceSources[${index}].label is required`);
+    }
+    if (!evidenceRuleKey) {
+      throw new Error(`shiftEvidenceSources[${index}].evidenceRuleKey is required`);
+    }
+    if (shiftTypeIds.length === 0) {
+      throw new Error(`shiftEvidenceSources[${index}].shiftTypeIds must contain at least one shift type`);
+    }
+
+    return {
+      key,
+      label,
+      evidenceRuleKey,
+      shiftTypeIds,
+    };
+  });
+};
+
 const getEvidenceRules = (template?: AssistantManagerTaskTemplate | null): AssistantManagerTaskEvidenceRule[] => {
   if (!template) {
     return [];
   }
   try {
     return sanitizeEvidenceRules(template.scheduleConfig?.['evidenceRules']);
+  } catch {
+    return [];
+  }
+};
+
+const getShiftEvidenceSources = (template?: AssistantManagerTaskTemplate | null): ShiftEvidenceSourceConfig[] => {
+  if (!template) {
+    return [];
+  }
+  try {
+    return sanitizeShiftEvidenceSources(template.scheduleConfig?.[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY]);
   } catch {
     return [];
   }
@@ -321,6 +422,13 @@ const sanitizeEvidenceItems = (value: unknown): AssistantManagerTaskEvidenceItem
       type: type as 'link' | 'image',
       value: typeof source.value === 'string' ? source.value.trim() : null,
       valid: source.valid === undefined ? undefined : Boolean(source.valid),
+      subjectUserId:
+        source.subjectUserId == null
+          ? null
+          : Number.isInteger(Number(source.subjectUserId)) && Number(source.subjectUserId) > 0
+            ? Number(source.subjectUserId)
+            : null,
+      subjectName: typeof source.subjectName === 'string' ? source.subjectName.trim() : null,
       fileName: typeof source.fileName === 'string' ? source.fileName.trim() : null,
       mimeType: typeof source.mimeType === 'string' ? source.mimeType.trim() : null,
       fileSize: source.fileSize == null ? null : Number(source.fileSize),
@@ -481,6 +589,11 @@ const sanitizeTemplatePayload = (body: Record<string, unknown>) => {
     }
     if ('evidenceRules' in next.scheduleConfig) {
       next.scheduleConfig.evidenceRules = sanitizeEvidenceRules(next.scheduleConfig.evidenceRules);
+    }
+    if (SHIFT_EVIDENCE_SOURCES_CONFIG_KEY in next.scheduleConfig) {
+      next.scheduleConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY] = sanitizeShiftEvidenceSources(
+        next.scheduleConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY],
+      );
     }
   }
   if (body.isActive != null) {
@@ -909,14 +1022,19 @@ const buildShiftMeta = (shiftInfo: ShiftDayInfo | null, requireShift: boolean) =
   };
 };
 
-const buildShiftAvailabilityMap = async (userId: number, rangeStart: dayjs.Dayjs, rangeEnd: dayjs.Dayjs) => {
+const buildShiftAvailabilityMap = async (
+  userId: number,
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+  timezoneName = resolveTaskPlannerTimezone(),
+) => {
   const assignments = await ShiftAssignment.findAll({
     where: { userId },
     include: [
       {
         model: ShiftInstance,
         as: 'shiftInstance',
-        attributes: ['id', 'date', 'timeStart', 'timeEnd'],
+        attributes: ['id', 'date', 'shiftTypeId', 'timeStart', 'timeEnd'],
         required: true,
         where: {
           date: {
@@ -930,10 +1048,11 @@ const buildShiftAvailabilityMap = async (userId: number, rangeStart: dayjs.Dayjs
   assignments.forEach((assignment) => {
     const instance = assignment.shiftInstance;
     if (instance?.date) {
-      map.set(instance.date, {
+      const dateKey = dayjs(instance.date).tz(timezoneName).format('YYYY-MM-DD');
+      map.set(dateKey, {
         shiftInstanceId: instance.id,
         shiftAssignmentId: assignment.id,
-        date: instance.date,
+        date: dateKey,
         timeStart: instance.timeStart ?? null,
         timeEnd: instance.timeEnd ?? null,
       });
@@ -948,11 +1067,12 @@ const getShiftInfoForUserOnDate = async (
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
   cache?: Map<number, Map<string, ShiftDayInfo>>,
+  timezoneName = resolveTaskPlannerTimezone(),
 ): Promise<ShiftDayInfo | null> => {
   const store = cache ?? new Map<number, Map<string, ShiftDayInfo>>();
   let userMap = store.get(userId);
   if (!userMap) {
-    userMap = await buildShiftAvailabilityMap(userId, rangeStart, rangeEnd);
+    userMap = await buildShiftAvailabilityMap(userId, rangeStart, rangeEnd, timezoneName);
     store.set(userId, userMap);
   }
   return userMap.get(taskDate) ?? null;
@@ -961,13 +1081,14 @@ const getShiftInfoForUserOnDate = async (
 const buildScheduledShiftCandidateMap = async (
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
+  timezoneName = resolveTaskPlannerTimezone(),
 ) => {
   const assignments = await ShiftAssignment.findAll({
     include: [
       {
         model: ShiftInstance,
         as: 'shiftInstance',
-        attributes: ['id', 'date', 'timeStart', 'timeEnd'],
+        attributes: ['id', 'date', 'shiftTypeId', 'timeStart', 'timeEnd'],
         required: true,
         where: {
           date: {
@@ -978,7 +1099,7 @@ const buildScheduledShiftCandidateMap = async (
       {
         model: User,
         as: 'assignee',
-        attributes: ['id', 'userTypeId', 'status'],
+        attributes: ['id', 'firstName', 'lastName', 'userTypeId', 'status'],
         required: true,
         where: { status: true },
         include: [{ model: StaffProfile, as: 'staffProfile', attributes: ['staffType', 'livesInAccom'], required: false }],
@@ -999,25 +1120,79 @@ const buildScheduledShiftCandidateMap = async (
       return;
     }
 
-    const candidates = map.get(instance.date) ?? [];
+    const dateKey = dayjs(instance.date).tz(timezoneName).format('YYYY-MM-DD');
+    const userName =
+      `${assignee.firstName ?? ''} ${assignee.lastName ?? ''}`.trim() ||
+      `User #${assignee.id}`;
+
+    const candidates = map.get(dateKey) ?? [];
     candidates.push({
       userId: assignee.id,
+      userName,
       userTypeId: assignee.userTypeId ?? null,
+      shiftTypeId: instance.shiftTypeId ?? null,
       shiftRoleId: assignment.shiftRoleId ?? null,
       staffType: assignee.staffProfile?.staffType ?? null,
       livesInAccom: assignee.staffProfile?.livesInAccom ?? null,
       shiftInfo: {
         shiftInstanceId: instance.id,
         shiftAssignmentId: assignment.id,
-        date: instance.date,
+        date: dateKey,
         timeStart: instance.timeStart ?? null,
         timeEnd: instance.timeEnd ?? null,
       },
     });
-    map.set(instance.date, candidates);
+    map.set(dateKey, candidates);
   });
 
   return map;
+};
+
+const buildExpectedEvidenceItemsForDate = (
+  template: AssistantManagerTaskTemplate,
+  taskDate: string,
+  scheduledShiftCandidatesByDate: Map<string, ScheduledShiftCandidate[]>,
+) => {
+  const sources = getShiftEvidenceSources(template);
+  if (sources.length === 0) {
+    return [];
+  }
+
+  const candidatesForDate = scheduledShiftCandidatesByDate.get(taskDate) ?? [];
+  if (candidatesForDate.length === 0) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const expectedItems: AssistantManagerTaskExpectedEvidenceItem[] = [];
+
+  for (const source of sources) {
+    const sourceTypeIds = new Set(source.shiftTypeIds);
+    const matchingCandidates = candidatesForDate.filter((candidate) =>
+      sourceTypeIds.has(candidate.shiftTypeId ?? 0),
+    );
+
+    for (const candidate of matchingCandidates) {
+      const dedupeKey = `${source.key}:${candidate.userId}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+
+      expectedItems.push({
+        id: randomUUID(),
+        sourceKey: source.key,
+        sourceLabel: source.label,
+        ruleKey: source.evidenceRuleKey,
+        type: 'image',
+        subjectUserId: candidate.userId,
+        subjectName: candidate.userName,
+        shiftTypeIds: source.shiftTypeIds,
+      });
+    }
+  }
+
+  return expectedItems;
 };
 
 const matchesScheduledShiftCandidate = (
@@ -1234,7 +1409,7 @@ const formatLog = (
   templateDescription: log.template?.description ?? null,
   userId: log.userId,
   userName: log.user ? `${log.user.firstName ?? ''} ${log.user.lastName ?? ''}`.trim() || null : null,
-  taskDate: log.taskDate,
+  taskDate: dayjs(log.taskDate).tz(resolveTaskPlannerTimezone()).format('YYYY-MM-DD'),
   status: log.status,
   completedAt: log.completedAt?.toISOString() ?? null,
   notes: log.notes ?? null,
@@ -1242,6 +1417,79 @@ const formatLog = (
   createdAt: log.createdAt?.toISOString() ?? null,
   updatedAt: log.updatedAt?.toISOString() ?? null,
 });
+
+const getNormalizedExpectedEvidenceItems = (
+  value: unknown,
+): AssistantManagerTaskExpectedEvidenceItem[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((entry): entry is AssistantManagerTaskExpectedEvidenceItem => Boolean(entry && typeof entry === 'object'))
+    .map((entry) => ({
+      id: typeof entry.id === 'string' && entry.id.trim() ? entry.id.trim() : randomUUID(),
+      sourceKey: typeof entry.sourceKey === 'string' ? entry.sourceKey.trim() : '',
+      sourceLabel: typeof entry.sourceLabel === 'string' ? entry.sourceLabel.trim() : '',
+      ruleKey: typeof entry.ruleKey === 'string' ? entry.ruleKey.trim() : '',
+      type: entry.type,
+      subjectUserId: Number(entry.subjectUserId),
+      subjectName: typeof entry.subjectName === 'string' ? entry.subjectName.trim() : '',
+      shiftTypeIds: Array.isArray(entry.shiftTypeIds)
+        ? entry.shiftTypeIds
+            .map((value) => Number(value))
+            .filter((value) => Number.isInteger(value) && value > 0)
+        : [],
+    }))
+    .filter(
+      (entry) =>
+        Boolean(entry.sourceKey && entry.sourceLabel && entry.ruleKey && entry.subjectName) &&
+        Number.isInteger(entry.subjectUserId) &&
+        entry.subjectUserId > 0 &&
+        entry.type === 'image',
+    );
+};
+
+const resolveLogExpectedEvidenceItems = (
+  log: AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null },
+  scheduledShiftCandidatesByDate?: Map<string, ScheduledShiftCandidate[]>,
+) => {
+  const storedExpected = getNormalizedExpectedEvidenceItems((log.meta ?? {})['expectedEvidenceItems']);
+  if (storedExpected.length > 0) {
+    return storedExpected;
+  }
+  if (!log.template) {
+    return [];
+  }
+
+  const map = scheduledShiftCandidatesByDate ?? new Map<string, ScheduledShiftCandidate[]>();
+  const taskDateKey = dayjs(log.taskDate).tz(resolveTaskPlannerTimezone()).format('YYYY-MM-DD');
+  return buildExpectedEvidenceItemsForDate(log.template, taskDateKey, map);
+};
+
+const formatLogWithLiveExpectedEvidenceItems = (
+  log: AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null },
+  scheduledShiftCandidatesByDate?: Map<string, ScheduledShiftCandidate[]>,
+) => {
+  const expectedEvidenceItems = resolveLogExpectedEvidenceItems(log, scheduledShiftCandidatesByDate);
+  const meta = { ...(log.meta ?? {}) } as Record<string, unknown>;
+  if (expectedEvidenceItems.length > 0) {
+    meta.expectedEvidenceItems = expectedEvidenceItems;
+  } else {
+    delete meta.expectedEvidenceItems;
+  }
+
+  const plainLog =
+    typeof (log as AssistantManagerTaskLog & { toJSON?: () => Record<string, unknown> }).toJSON ===
+    'function'
+      ? (log as AssistantManagerTaskLog & { toJSON: () => Record<string, unknown> }).toJSON()
+      : (log as unknown as Record<string, unknown>);
+
+  return formatLog({
+    ...(plainLog as Record<string, unknown>),
+    meta,
+  } as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null });
+};
 
 const getActorId = (req: AuthenticatedRequest) => req.authContext?.id ?? null;
 
@@ -1786,6 +2034,11 @@ const planGeneratedLogsForAssignments = async (
       assignment,
       candidate,
       taskDate,
+      expectedEvidenceItems: buildExpectedEvidenceItemsForDate(
+        template,
+        taskDate,
+        scheduledShiftCandidatesByDate,
+      ),
     });
   };
 
@@ -1992,7 +2245,7 @@ const generateLogsForAssignments = async (
   let unchangedCount = 0;
 
   for (const entry of plannedEntries) {
-    const { template, assignment, candidate, taskDate } = entry;
+    const { template, assignment, candidate, taskDate, expectedEvidenceItems } = entry;
     const requireShift = getRequireShiftFlag(template);
     const shiftInfo = candidate.shiftInfo;
     const shiftTime = shiftInfo?.timeStart ? normalizeTimeValue(shiftInfo.timeStart) : null;
@@ -2001,6 +2254,9 @@ const generateLogsForAssignments = async (
       manual: false,
       ...scheduleMeta,
     };
+    if (expectedEvidenceItems.length > 0) {
+      baseMeta.expectedEvidenceItems = expectedEvidenceItems;
+    }
     if (!Object.prototype.hasOwnProperty.call(baseMeta, 'priority')) {
       baseMeta.priority = 'medium';
     }
@@ -2456,6 +2712,7 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
 
     const actorId = getActorId(req);
     const shiftAvailabilityCache = new Map<number, Map<string, ShiftDayInfo>>();
+    const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(effectiveStart, end);
     let updatedCount = 0;
     let unchangedCount = 0;
     let skippedManualCount = 0;
@@ -2508,6 +2765,16 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
       if (!Object.prototype.hasOwnProperty.call(nextManagedMeta, 'time') && shiftTime) {
         nextManagedMeta.time = shiftTime;
       }
+      const expectedEvidenceItems = buildExpectedEvidenceItemsForDate(
+        template,
+        taskDate,
+        scheduledShiftCandidatesByDate,
+      );
+      if (expectedEvidenceItems.length > 0) {
+        nextManagedMeta.expectedEvidenceItems = expectedEvidenceItems;
+      } else {
+        delete nextManagedMeta.expectedEvidenceItems;
+      }
       Object.assign(nextManagedMeta, buildShiftMeta(shiftInfo, getRequireShiftFlag(template)));
 
       const unmanagedMeta = { ...existingMeta };
@@ -2535,6 +2802,8 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
       );
       updatedCount += 1;
     }
+
+    await reconcileNightReportTaskWaiversForRange(effectiveStart, end);
 
     res.status(200).json([
       {
@@ -2632,6 +2901,7 @@ export const generateTaskLogsForRange = async (
       end,
       actorId,
     );
+    await reconcileNightReportTaskWaiversForRange(effectiveStart, end);
 
     res.status(200).json([
       {
@@ -3160,7 +3430,7 @@ export const listTaskLogs = async (req: AuthenticatedRequest, res: Response): Pr
     const logs = await AssistantManagerTaskLog.findAll({
       where,
       include: [
-        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence'] },
+        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'] },
         { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
       ],
       order: [
@@ -3168,11 +3438,18 @@ export const listTaskLogs = async (req: AuthenticatedRequest, res: Response): Pr
         ['userId', 'ASC'],
       ],
     });
+    const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
+      effectiveStart,
+      effectiveEnd,
+    );
 
     res.status(200).json([
       {
         data: logs.map((log) =>
-          formatLog(log as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null }),
+          formatLogWithLiveExpectedEvidenceItems(
+            log as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null },
+            scheduledShiftCandidatesByDate,
+          ),
         ),
         columns: [],
       },
@@ -3239,11 +3516,28 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
     await AssistantManagerTaskLog.update(payload, { where: { id: logId } });
     const refreshed = await AssistantManagerTaskLog.findByPk(logId, {
       include: [
-        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence'] },
+        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'] },
         { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
       ],
     });
-    res.status(200).json([{ data: refreshed ? [formatLog(refreshed as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null })] : [] }]);
+    const refreshedCandidates = refreshed
+      ? await buildScheduledShiftCandidateMap(
+          dayjs(refreshed.taskDate).startOf('day'),
+          dayjs(refreshed.taskDate).endOf('day'),
+        )
+      : undefined;
+    res.status(200).json([
+      {
+        data: refreshed
+          ? [
+              formatLogWithLiveExpectedEvidenceItems(
+                refreshed as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null },
+                refreshedCandidates,
+              ),
+            ]
+          : [],
+      },
+    ]);
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
@@ -3368,6 +3662,10 @@ export const createManualTaskLog = async (req: AuthenticatedRequest, res: Respon
     }
     const actorId = getActorId(req);
     const taskDay = dayjs(payload.taskDate);
+    const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
+      taskDay.startOf('day'),
+      taskDay.endOf('day'),
+    );
     const shiftInfo = await getShiftInfoForUserOnDate(
       payload.userId,
       payload.taskDate,
@@ -3390,6 +3688,14 @@ export const createManualTaskLog = async (req: AuthenticatedRequest, res: Respon
     ) {
       meta['time'] = normalizeTimeValue(shiftInfo.timeStart);
     }
+    const expectedEvidenceItems = buildExpectedEvidenceItemsForDate(
+      template,
+      payload.taskDate,
+      scheduledShiftCandidatesByDate,
+    );
+    if (expectedEvidenceItems.length > 0) {
+      meta.expectedEvidenceItems = expectedEvidenceItems;
+    }
     Object.assign(meta, buildShiftMeta(shiftInfo, payload.requireShift));
     if (payload.initialComment) {
       const actorName = await getActorIdentity(actorId);
@@ -3408,14 +3714,23 @@ export const createManualTaskLog = async (req: AuthenticatedRequest, res: Respon
     });
     const refreshed = await AssistantManagerTaskLog.findByPk(created.id, {
       include: [
-        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence'] },
+        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'] },
         { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
       ],
     });
+    const refreshedCandidates = await buildScheduledShiftCandidateMap(
+      taskDay.startOf('day'),
+      taskDay.endOf('day'),
+    );
     res.status(201).json([
       {
         data: refreshed
-          ? [formatLog(refreshed as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null })]
+          ? [
+              formatLogWithLiveExpectedEvidenceItems(
+                refreshed as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null },
+                refreshedCandidates,
+              ),
+            ]
           : [],
         columns: [],
       },
@@ -3467,6 +3782,18 @@ export const uploadTaskLogEvidenceImage = async (
     if (!ruleKey) {
       throw new HttpError(400, 'ruleKey is required');
     }
+    const subjectUserIdRaw = req.body?.subjectUserId;
+    const subjectUserId =
+      subjectUserIdRaw == null || subjectUserIdRaw === ''
+        ? null
+        : Number(subjectUserIdRaw);
+    const subjectName =
+      typeof req.body?.subjectName === 'string' && req.body.subjectName.trim()
+        ? req.body.subjectName.trim()
+        : null;
+    if (subjectUserId != null && (!Number.isInteger(subjectUserId) || subjectUserId <= 0)) {
+      throw new HttpError(400, 'subjectUserId must be a positive integer');
+    }
 
     const rule = getEvidenceRules(log.template).find((entry) => entry.key === ruleKey);
     if (!rule) {
@@ -3501,11 +3828,33 @@ export const uploadTaskLogEvidenceImage = async (
       driveWebViewLink: stored.driveWebViewLink,
       uploadedAt: new Date().toISOString(),
       uploadedBy: actorId,
+      subjectUserId,
+      subjectName,
     };
+    const removedEvidenceItems =
+      rule.multiple && subjectUserId != null
+        ? evidenceItems.filter(
+            (item) =>
+              item.ruleKey === ruleKey &&
+              item.type === 'image' &&
+              item.subjectUserId === subjectUserId,
+          )
+        : rule.multiple
+          ? []
+          : evidenceItems.filter((item) => !(item.ruleKey === ruleKey && item.type === 'image'));
     const remainingItems =
-      rule.multiple
-        ? evidenceItems
-        : evidenceItems.filter((item) => !(item.ruleKey === ruleKey && item.type === 'image'));
+      rule.multiple && subjectUserId != null
+        ? evidenceItems.filter(
+            (item) =>
+              !(
+                item.ruleKey === ruleKey &&
+                item.type === 'image' &&
+                item.subjectUserId === subjectUserId
+              ),
+          )
+        : rule.multiple
+          ? evidenceItems
+          : evidenceItems.filter((item) => !(item.ruleKey === ruleKey && item.type === 'image'));
     const nextItems = [...remainingItems, nextItem];
     const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
       getEvidenceRules(log.template),
@@ -3524,6 +3873,16 @@ export const uploadTaskLogEvidenceImage = async (
       },
       { where: { id: log.id } },
     );
+    if (removedEvidenceItems.length > 0) {
+      await Promise.all(
+        removedEvidenceItems.map((item) =>
+          deleteAssistantManagerTaskEvidenceImage({
+            storagePath: item.storagePath ?? null,
+            driveFileId: item.driveFileId ?? null,
+          }),
+        ),
+      );
+    }
 
     res.status(201).json([
       {
@@ -3538,6 +3897,8 @@ export const uploadTaskLogEvidenceImage = async (
         driveWebViewLink: nextItem.driveWebViewLink ?? null,
         uploadedAt: nextItem.uploadedAt,
         uploadedBy: nextItem.uploadedBy ?? null,
+        subjectUserId: nextItem.subjectUserId ?? null,
+        subjectName: nextItem.subjectName ?? null,
       },
     ]);
   } catch (error) {
@@ -3716,6 +4077,24 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
       day.startOf('day'),
       day.endOf('day'),
     );
+    const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
+      day.startOf('day'),
+      day.endOf('day'),
+    );
+    if (log.template) {
+      const expectedEvidenceItems = buildExpectedEvidenceItemsForDate(
+        log.template,
+        nextTaskDate,
+        scheduledShiftCandidatesByDate,
+      );
+      if (expectedEvidenceItems.length > 0) {
+        meta['expectedEvidenceItems'] = expectedEvidenceItems;
+      } else {
+        delete meta['expectedEvidenceItems'];
+      }
+    } else {
+      delete meta['expectedEvidenceItems'];
+    }
     Object.assign(meta, buildShiftMeta(shiftInfo, effectiveRequireShift));
     if (
       (!Object.prototype.hasOwnProperty.call(meta, 'time') || meta['time'] == null) &&
@@ -3750,14 +4129,23 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
     }
     const refreshed = await AssistantManagerTaskLog.findByPk(logId, {
       include: [
-        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence'] },
+        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'] },
         { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
       ],
     });
+    const refreshedCandidates = await buildScheduledShiftCandidateMap(
+      dayjs(log.taskDate).startOf('day'),
+      dayjs(log.taskDate).endOf('day'),
+    );
     res.status(200).json([
       {
         data: refreshed
-          ? [formatLog(refreshed as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null })]
+          ? [
+              formatLogWithLiveExpectedEvidenceItems(
+                refreshed as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null },
+                refreshedCandidates,
+              ),
+            ]
           : [],
         columns: [],
       },

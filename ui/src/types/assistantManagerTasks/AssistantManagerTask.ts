@@ -25,6 +25,8 @@ export type AssistantManagerTaskEvidenceItem = {
   type: AssistantManagerTaskEvidenceRuleType;
   value?: string | null;
   valid?: boolean;
+  subjectUserId?: number | null;
+  subjectName?: string | null;
   fileName?: string | null;
   mimeType?: string | null;
   fileSize?: number | null;
@@ -33,6 +35,17 @@ export type AssistantManagerTaskEvidenceItem = {
   driveWebViewLink?: string | null;
   uploadedAt?: string | null;
   uploadedBy?: number | null;
+};
+
+export type AssistantManagerTaskExpectedEvidenceItem = {
+  id: string;
+  sourceKey: string;
+  sourceLabel: string;
+  ruleKey: string;
+  type: 'image';
+  subjectUserId: number;
+  subjectName: string;
+  shiftTypeIds: number[];
 };
 
 export type AssistantManagerTaskTemplate = {
@@ -68,6 +81,7 @@ export type AssistantManagerTaskLogMeta = {
   tags?: string[];
   evidence?: string[];
   evidenceItems?: AssistantManagerTaskEvidenceItem[];
+  expectedEvidenceItems?: AssistantManagerTaskExpectedEvidenceItem[];
   manual?: boolean;
   comments?: TaskCommentEntry[];
   requireShift?: boolean;
@@ -160,4 +174,6 @@ export type UploadAmTaskEvidenceImageResponse = {
   driveWebViewLink?: string | null;
   uploadedAt: string;
   uploadedBy: number | null;
+  subjectUserId?: number | null;
+  subjectName?: string | null;
 };
