@@ -19,7 +19,7 @@ import Product from '../models/Product.js';
 import ProductAlias from '../models/ProductAlias.js';
 import ProductAddon from '../models/ProductAddon.js';
 import HttpError from '../errors/HttpError.js';
-import { getStripeClient } from '../finance/services/stripeClient.js';
+import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
 import type Stripe from 'stripe';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import {
@@ -62,6 +62,11 @@ import {
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
 import { getConfigValue } from '../services/configService.js';
 import type { EmailTemplateType } from '../models/EmailTemplate.js';
+import {
+  sendDirectBookingActionEmail,
+  sendInternalDirectBookingActionEmail,
+  type DirectBookingActionEmailOptions,
+} from '../services/directBookingActionEmailService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -3887,13 +3892,16 @@ const summarizePaymentIntent = (
   };
 };
 
-const resolveStripeTransaction = async (externalTransactionId: string): Promise<StripeTransactionSummary> => {
+const resolveStripeTransaction = async (
+  externalTransactionId: string,
+  stripeClient?: Stripe,
+): Promise<StripeTransactionSummary> => {
   const trimmed = externalTransactionId.trim();
   if (!trimmed) {
     throw new Error('External transaction ID is missing');
   }
 
-  const stripe = getStripeClient();
+  const stripe = stripeClient ?? getStripeClient();
 
   const tryPaymentIntent = async (): Promise<StripeTransactionSummary | null> => {
     try {
@@ -4002,6 +4010,222 @@ const requireStripeRefundPreview = (
     throw new Error('Ecwid order is missing an external transaction ID');
   }
   return preview as EcwidRefundPreview & { externalTransactionId: string; stripe: StripeTransactionSummary };
+};
+
+const isDirectFoodTourBooking = (booking: Booking): boolean => {
+  const platform = String(booking.platform ?? '').trim().toLowerCase();
+  const productName = String(booking.productName ?? booking.product?.name ?? '').trim().toLowerCase();
+  return platform === 'direct' && productName.includes('food tour');
+};
+
+const requireDirectFoodTourBooking = async (bookingId: number): Promise<Booking> => {
+  const booking = await Booking.findByPk(bookingId, {
+    include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+  });
+  if (!booking) {
+    throw new HttpError(404, 'Booking not found');
+  }
+  if (!isDirectFoodTourBooking(booking)) {
+    throw new HttpError(400, 'Only direct Food Tour bookings support this manifest action.');
+  }
+  return booking;
+};
+
+const extractDirectStripeTransactionId = (booking: Booking): string | null => {
+  const candidates = [
+    booking.notes,
+    booking.platformOrderId,
+    booking.platformBookingId,
+    booking.rawPayloadLocation,
+  ];
+
+  for (const candidate of candidates) {
+    const match = String(candidate ?? '').match(/\b(?:pi|ch)_[A-Za-z0-9]+\b/);
+    if (match?.[0]) {
+      return match[0];
+    }
+  }
+
+  return null;
+};
+
+type DirectStripeMode = 'test' | 'live';
+
+const getDirectStripeClientForMode = (mode: DirectStripeMode): Stripe =>
+  mode === 'live' ? getStripeClient() : getStripeTestClient();
+
+const extractDirectStripeMode = (booking: Booking): DirectStripeMode | null => {
+  const candidates = [booking.notes, booking.rawPayloadLocation];
+
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '');
+    const livemodeMatch = value.match(/\bstripe\s+livemode\s*:\s*(true|false|1|0|yes|no)\b/i);
+    if (livemodeMatch?.[1]) {
+      return ['true', '1', 'yes'].includes(livemodeMatch[1].toLowerCase()) ? 'live' : 'test';
+    }
+
+    const modeMatch = value.match(/\bstripe\s+mode\s*:\s*(live|test)\b/i);
+    if (modeMatch?.[1]) {
+      return modeMatch[1].toLowerCase() === 'live' ? 'live' : 'test';
+    }
+  }
+
+  return null;
+};
+
+const isStripeTransactionNotFound = (error: unknown): boolean =>
+  isStripeResourceMissing(error) ||
+  (error instanceof Error && error.message.toLowerCase().includes('stripe transaction not found'));
+
+const resolveDirectStripeTransactionForMode = async (
+  externalTransactionId: string,
+  stripeMode: DirectStripeMode,
+): Promise<{
+  externalTransactionId: string;
+  stripe: StripeTransactionSummary;
+  stripeClient: Stripe;
+  stripeMode: DirectStripeMode;
+}> => {
+  const stripeClient = getDirectStripeClientForMode(stripeMode);
+  const stripe = await resolveStripeTransaction(externalTransactionId, stripeClient);
+  return { externalTransactionId, stripe, stripeClient, stripeMode };
+};
+
+const resolveDirectStripeTransaction = async (booking: Booking): Promise<{
+  externalTransactionId: string;
+  stripe: StripeTransactionSummary;
+  stripeClient: Stripe;
+  stripeMode: DirectStripeMode;
+}> => {
+  const externalTransactionId = extractDirectStripeTransactionId(booking);
+  if (!externalTransactionId) {
+    throw new HttpError(400, 'Direct booking is missing the Stripe payment intent or charge ID in notes.');
+  }
+
+  const storedStripeMode = extractDirectStripeMode(booking);
+  if (storedStripeMode) {
+    return resolveDirectStripeTransactionForMode(externalTransactionId, storedStripeMode);
+  }
+
+  logger.warn(
+    `[direct-bookings] Stripe mode missing for booking ${booking.id}; trying test key before live key for ${externalTransactionId}`,
+  );
+
+  let lastError: unknown = null;
+  for (const fallbackMode of ['test', 'live'] as const) {
+    try {
+      return await resolveDirectStripeTransactionForMode(externalTransactionId, fallbackMode);
+    } catch (error) {
+      lastError = error;
+      if (error instanceof HttpError && error.status === 503) {
+        continue;
+      }
+      if (isStripeTransactionNotFound(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Stripe transaction not found.');
+};
+
+const saveDirectBookingEvent = async (
+  booking: Booking,
+  eventType: 'note' | 'cancelled' | 'amended',
+  actorId: number | null,
+  payload: Record<string, unknown>,
+  transaction?: Transaction,
+): Promise<void> => {
+  const now = new Date();
+  const event = BookingEvent.build();
+  event.bookingId = booking.id;
+  event.emailId = null;
+  event.eventType = eventType;
+  event.platform = booking.platform;
+  event.statusAfter = booking.status;
+  event.emailMessageId = null;
+  event.eventPayload = {
+    source: 'manual',
+    actorId,
+    ...payload,
+  };
+  event.occurredAt = now;
+  event.ingestedAt = now;
+  event.processedAt = now;
+  await event.save(transaction ? { transaction } : undefined);
+};
+
+const sendDirectActionEmailWithStatus = async (
+  booking: Booking,
+  options: DirectBookingActionEmailOptions,
+): Promise<{
+  customerEmailStatus: 'sent' | 'skipped' | 'failed';
+  customerEmailMessageId: string | null;
+  customerEmailFrom: string | null;
+  customerEmailTo: string | null;
+  customerEmailRfcMessageId: string | null;
+  customerEmailLabelIds: string[];
+}> => {
+  try {
+    const emailResult = await sendDirectBookingActionEmail(booking, options);
+    return {
+      customerEmailStatus: emailResult ? 'sent' : 'skipped',
+      customerEmailMessageId: emailResult?.id ?? null,
+      customerEmailFrom: emailResult?.from ?? null,
+      customerEmailTo: emailResult?.to ?? booking.guestEmail ?? null,
+      customerEmailRfcMessageId: emailResult?.rfcMessageId ?? null,
+      customerEmailLabelIds: emailResult?.labelIds ?? [],
+    };
+  } catch (error) {
+    logger.error(
+      `[direct-bookings] Failed to send ${options.kind} email for booking ${booking.id}: ${(error as Error).message}`,
+    );
+    return {
+      customerEmailStatus: 'failed',
+      customerEmailMessageId: null,
+      customerEmailFrom: null,
+      customerEmailTo: booking.guestEmail ?? null,
+      customerEmailRfcMessageId: null,
+      customerEmailLabelIds: [],
+    };
+  }
+};
+
+const sendInternalDirectActionEmailWithStatus = async (
+  booking: Booking,
+  options: DirectBookingActionEmailOptions,
+): Promise<{
+  internalEmailStatus: 'sent' | 'skipped' | 'failed';
+  internalEmailMessageId: string | null;
+  internalEmailFrom: string | null;
+  internalEmailTo: string | null;
+  internalEmailRfcMessageId: string | null;
+  internalEmailLabelIds: string[];
+}> => {
+  try {
+    const emailResult = await sendInternalDirectBookingActionEmail(booking, options);
+    return {
+      internalEmailStatus: emailResult ? 'sent' : 'skipped',
+      internalEmailMessageId: emailResult?.id ?? null,
+      internalEmailFrom: emailResult?.from ?? null,
+      internalEmailTo: emailResult?.to ?? null,
+      internalEmailRfcMessageId: emailResult?.rfcMessageId ?? null,
+      internalEmailLabelIds: emailResult?.labelIds ?? [],
+    };
+  } catch (error) {
+    logger.error(
+      `[direct-bookings] Failed to send internal ${options.kind} notification for booking ${booking.id}: ${(error as Error).message}`,
+    );
+    return {
+      internalEmailStatus: 'failed',
+      internalEmailMessageId: null,
+      internalEmailFrom: null,
+      internalEmailTo: null,
+      internalEmailRfcMessageId: null,
+      internalEmailLabelIds: [],
+    };
+  }
 };
 
 type ResolvedPartialRefundAddon = {
@@ -4360,8 +4584,9 @@ const createStripeRefundFromSummary = async (
   summary: StripeTransactionSummary,
   metadata: { bookingId: number; orderId: string },
   amount?: number,
+  stripeClient?: Stripe,
 ): Promise<Stripe.Refund | null> => {
-  const stripe = getStripeClient();
+  const stripe = stripeClient ?? getStripeClient();
 
   if (summary.fullyRefunded) {
     return null;
@@ -4660,6 +4885,374 @@ export const cancelCivitatisBooking = async (req: AuthenticatedRequest, res: Res
   }
 };
 
+export const resendDirectFoodTourConfirmation = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await requireDirectFoodTourBooking(bookingIdParam);
+    const emailOptions: DirectBookingActionEmailOptions = { kind: 'confirmation' };
+    const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
+    const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
+    await saveDirectBookingEvent(booking, 'note', req.authContext?.id ?? null, {
+      action: 'resend-direct-confirmation',
+      customerEmailStatus: email.customerEmailStatus,
+      customerEmailMessageId: email.customerEmailMessageId,
+      customerEmailFrom: email.customerEmailFrom,
+      customerEmailTo: email.customerEmailTo,
+      customerEmailRfcMessageId: email.customerEmailRfcMessageId,
+      customerEmailLabelIds: email.customerEmailLabelIds,
+      internalEmailStatus: internalEmail.internalEmailStatus,
+      internalEmailMessageId: internalEmail.internalEmailMessageId,
+      internalEmailFrom: internalEmail.internalEmailFrom,
+      internalEmailTo: internalEmail.internalEmailTo,
+      internalEmailRfcMessageId: internalEmail.internalEmailRfcMessageId,
+      internalEmailLabelIds: internalEmail.internalEmailLabelIds,
+    });
+
+    res.status(200).json({
+      message: 'Confirmation email action completed',
+      bookingId: booking.id,
+      ...email,
+      ...internalEmail,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to resend confirmation email';
+    res.status(500).json({ message });
+  }
+};
+
+export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const { pickupDate, pickupTime } = req.body as AmendPickupRequestBody;
+    const date = typeof pickupDate === 'string' ? pickupDate.trim() : '';
+    const time = typeof pickupTime === 'string' ? pickupTime.trim() : '';
+    const nextDate = dayjs(date, DATE_FORMAT, true);
+    const timeMatch = time.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+    if (!nextDate.isValid() || !timeMatch) {
+      res.status(400).json({ message: 'pickupDate and pickupTime are required and must be valid' });
+      return;
+    }
+    const normalizedTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
+
+    const booking = await requireDirectFoodTourBooking(bookingIdParam);
+    if (booking.status === 'cancelled') {
+      res.status(400).json({ message: 'Cancelled bookings cannot be amended' });
+      return;
+    }
+
+    const previousExperienceStartAt = booking.experienceStartAt ?? null;
+    const nextStartAt = dayjs.tz(`${nextDate.format(DATE_FORMAT)} ${normalizedTime}`, 'YYYY-MM-DD HH:mm', STORE_TIMEZONE);
+    const now = new Date();
+    booking.experienceDate = nextDate.format(DATE_FORMAT);
+    booking.experienceStartAt = nextStartAt.toDate();
+    booking.status = 'amended';
+    booking.statusChangedAt = now;
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    const sequelizeClient = Booking.sequelize;
+    if (!sequelizeClient) {
+      throw new Error('Database client is not initialized');
+    }
+
+    await sequelizeClient.transaction(async (transaction) => {
+      await booking.save({ transaction });
+      await saveDirectBookingEvent(booking, 'amended', req.authContext?.id ?? null, {
+        action: 'amend-direct-food-tour',
+        previousExperienceStartAt: previousExperienceStartAt ? previousExperienceStartAt.toISOString() : null,
+        nextExperienceStartAt: booking.experienceStartAt ? booking.experienceStartAt.toISOString() : null,
+      }, transaction);
+    });
+
+    const emailOptions: DirectBookingActionEmailOptions = {
+      kind: 'amend',
+      previousExperienceStartAt,
+    };
+    const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
+    const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
+
+    res.status(200).json({
+      message: 'Booking amended successfully',
+      booking: {
+        id: booking.id,
+        status: booking.status,
+        experienceDate: booking.experienceDate,
+        experienceStartAt: booking.experienceStartAt,
+      },
+      ...email,
+      ...internalEmail,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to amend direct booking';
+    res.status(500).json({ message });
+  }
+};
+
+export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await requireDirectFoodTourBooking(bookingIdParam);
+    if (booking.status === 'cancelled') {
+      res.status(400).json({ message: 'Booking is already cancelled' });
+      return;
+    }
+
+    const { externalTransactionId, stripe, stripeClient, stripeMode } = await resolveDirectStripeTransaction(booking);
+    const refund = await createStripeRefundFromSummary(
+      stripe,
+      { bookingId: booking.id, orderId: booking.platformOrderId ?? booking.platformBookingId },
+      undefined,
+      stripeClient,
+    );
+
+    const refundAmount = refund?.amount ? roundMoney(refund.amount / 100) : 0;
+    const refundedBefore = parseMoneyValue(booking.refundedAmount) ?? 0;
+    const now = new Date();
+    booking.status = 'cancelled';
+    booking.statusChangedAt = now;
+    booking.cancelledAt = now;
+    booking.paymentStatus = 'refunded';
+    booking.baseAmount = formatMoneyValue(0);
+    booking.refundedAmount = formatMoneyValue(refundedBefore + refundAmount);
+    booking.refundedCurrency = (booking.currency ?? stripe.currency ?? '').toUpperCase() || null;
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    const sequelizeClient = Booking.sequelize;
+    if (!sequelizeClient) {
+      throw new Error('Database client is not initialized');
+    }
+
+    await sequelizeClient.transaction(async (transaction) => {
+      await booking.save({ transaction });
+      await saveDirectBookingEvent(booking, 'cancelled', req.authContext?.id ?? null, {
+        action: 'cancel-direct-food-tour',
+        externalTransactionId,
+        stripeTransactionId: stripe.id,
+        stripeTransactionType: stripe.type,
+        stripeMode,
+        stripeRefundId: refund?.id ?? null,
+        refundedAmount: refundAmount,
+        currency: booking.refundedCurrency,
+      }, transaction);
+    });
+
+    const emailOptions: DirectBookingActionEmailOptions = {
+      kind: 'cancellation',
+      refundedAmount: refundAmount,
+      refundCurrency: booking.refundedCurrency,
+    };
+    const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
+    const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
+
+    res.status(200).json({
+      message: refund ? 'Booking cancelled and refund issued successfully' : 'Booking cancelled successfully',
+      booking: {
+        id: booking.id,
+        status: booking.status,
+        cancelledAt: booking.cancelledAt,
+      },
+      refund,
+      stripe,
+      stripeMode,
+      ...email,
+      ...internalEmail,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to cancel direct booking';
+    res.status(500).json({ message });
+  }
+};
+
+export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const booking = await requireDirectFoodTourBooking(bookingIdParam);
+    if (booking.status === 'cancelled') {
+      res.status(400).json({ message: 'Cancelled bookings cannot be partially refunded' });
+      return;
+    }
+
+    const { externalTransactionId, stripe, stripeClient, stripeMode } = await resolveDirectStripeTransaction(booking);
+    const resolvedAddons = await resolvePartialRefundAddons(booking, stripe.currency);
+    const addonsTotalAmount = resolveAddonsTotalAmount(resolvedAddons);
+    const people = resolvePartialRefundPeopleFromBaseAmount(booking, stripe.currency, addonsTotalAmount);
+    const addonByBookingAddonId = new Map(resolvedAddons.map((entry) => [entry.bookingAddon.id, entry]));
+    const body = req.body as {
+      amount?: unknown;
+      peopleQuantity?: unknown;
+      addonQuantities?: Record<string, unknown>;
+      manualAmountUnlocked?: unknown;
+    };
+    const peopleQuantityRaw = Number(body.peopleQuantity ?? 0);
+    const requestedPeopleQuantity = Number.isFinite(peopleQuantityRaw)
+      ? Math.max(0, Math.min(Math.round(peopleQuantityRaw), people.quantity))
+      : 0;
+    const addonQuantitiesRaw = body.addonQuantities && typeof body.addonQuantities === 'object'
+      ? body.addonQuantities
+      : {};
+    const requestedAddonQuantities = new Map<number, number>();
+    for (const [rawKey, rawValue] of Object.entries(addonQuantitiesRaw)) {
+      const parsedQty = Number(rawValue);
+      const bookingAddonId = Number.parseInt(rawKey, 10);
+      const addonEntry =
+        Number.isFinite(bookingAddonId) && addonByBookingAddonId.has(bookingAddonId)
+          ? addonByBookingAddonId.get(bookingAddonId)
+          : undefined;
+      if (!addonEntry || !Number.isFinite(parsedQty) || parsedQty <= 0) {
+        continue;
+      }
+      requestedAddonQuantities.set(
+        addonEntry.bookingAddon.id,
+        Math.max(0, Math.min(Math.round(parsedQty), addonEntry.quantity)),
+      );
+    }
+    const peopleRefundAmount = roundMoney(requestedPeopleQuantity * people.unitPrice);
+    const addonsRefundAmount = roundMoney(
+      resolvedAddons.reduce((sum, entry) => {
+        const refundQty = requestedAddonQuantities.get(entry.bookingAddon.id) ?? 0;
+        return sum + roundMoney(refundQty * entry.unitPrice);
+      }, 0),
+    );
+    const computedAmount = roundMoney(peopleRefundAmount + addonsRefundAmount);
+    const rawAmount = body.amount;
+    const manualAmount =
+      rawAmount !== null && rawAmount !== undefined && `${rawAmount}`.trim() !== ''
+        ? typeof rawAmount === 'string'
+          ? Number.parseFloat(rawAmount.replace(',', '.'))
+          : Number(rawAmount)
+        : null;
+    if (manualAmount !== null && (!Number.isFinite(manualAmount) || manualAmount <= 0)) {
+      res.status(400).json({ message: 'A valid positive refund amount is required' });
+      return;
+    }
+    const useManualAmount = body.manualAmountUnlocked === true;
+    const amountMajor = useManualAmount ? manualAmount : computedAmount > 0 ? computedAmount : manualAmount;
+    if (!amountMajor || amountMajor <= 0) {
+      res.status(400).json({ message: 'Select refunded people or enter a custom refund amount.' });
+      return;
+    }
+
+    const amountInMinor = Math.round(roundMoney(amountMajor) * 100);
+    const remaining = Math.max(stripe.amount - stripe.amountRefunded, 0);
+    if (amountInMinor >= remaining) {
+      res.status(400).json({ message: 'Partial refund amount must be less than the remaining paid amount. Use Cancellation for full refunds.' });
+      return;
+    }
+
+    const refund = await createStripeRefundFromSummary(
+      stripe,
+      { bookingId: booking.id, orderId: booking.platformOrderId ?? booking.platformBookingId },
+      amountInMinor,
+      stripeClient,
+    );
+    const refundedAmount = refund?.amount ? roundMoney(refund.amount / 100) : roundMoney(amountMajor);
+    const refundedBefore = parseMoneyValue(booking.refundedAmount) ?? 0;
+    const currentBase = parseMoneyValue(booking.baseAmount) ?? parseMoneyValue(booking.priceGross) ?? 0;
+    const previousPartySizeTotal = Number.isFinite(Number(booking.partySizeTotal))
+      ? Math.max(0, Math.round(Number(booking.partySizeTotal)))
+      : people.quantity;
+    const currentPartySizeTotal =
+      !useManualAmount && requestedPeopleQuantity > 0
+        ? Math.max(previousPartySizeTotal - requestedPeopleQuantity, 0)
+        : previousPartySizeTotal;
+    booking.paymentStatus = 'partial';
+    booking.baseAmount = formatMoneyValue(Math.max(roundMoney(currentBase - refundedAmount), 0));
+    booking.refundedAmount = formatMoneyValue(refundedBefore + refundedAmount);
+    booking.refundedCurrency = (booking.currency ?? stripe.currency ?? '').toUpperCase() || null;
+    if (currentPartySizeTotal !== previousPartySizeTotal) {
+      booking.partySizeTotal = currentPartySizeTotal;
+    }
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+
+    const sequelizeClient = Booking.sequelize;
+    if (!sequelizeClient) {
+      throw new Error('Database client is not initialized');
+    }
+
+    await sequelizeClient.transaction(async (transaction) => {
+      await booking.save({ transaction });
+      await saveDirectBookingEvent(booking, 'note', req.authContext?.id ?? null, {
+        action: 'partial-refund-direct-food-tour',
+        externalTransactionId,
+        stripeTransactionId: stripe.id,
+        stripeTransactionType: stripe.type,
+        stripeMode,
+        stripeRefundId: refund?.id ?? null,
+        refundedAmount,
+        currency: booking.refundedCurrency,
+        peopleQuantity: requestedPeopleQuantity,
+        previousPartySizeTotal,
+        currentPartySizeTotal,
+        addonQuantities: Object.fromEntries(requestedAddonQuantities),
+        manualAmount: useManualAmount || computedAmount <= 0 ? amountMajor : null,
+      }, transaction);
+    });
+
+    const emailOptions: DirectBookingActionEmailOptions = {
+      kind: 'partial_refund',
+      refundedAmount,
+      refundCurrency: booking.refundedCurrency,
+      previousPartySizeTotal: currentPartySizeTotal !== previousPartySizeTotal ? previousPartySizeTotal : null,
+      currentPartySizeTotal: currentPartySizeTotal !== previousPartySizeTotal ? currentPartySizeTotal : null,
+    };
+    const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
+    const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
+
+    res.status(200).json({
+      message: 'Partial refund issued successfully',
+      booking: {
+        id: booking.id,
+        paymentStatus: booking.paymentStatus,
+        refundedAmount: booking.refundedAmount,
+        refundedCurrency: booking.refundedCurrency,
+      },
+      refund,
+      stripe,
+      stripeMode,
+      ...email,
+      ...internalEmail,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Failed to issue direct booking partial refund';
+    res.status(500).json({ message });
+  }
+};
+
 export const getEcwidRefundPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
@@ -4705,12 +5298,25 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    if (booking.platform !== 'ecwid') {
-      res.status(400).json({ message: 'Only Ecwid bookings can be refunded through this endpoint' });
+    if (booking.platform !== 'ecwid' && !isDirectFoodTourBooking(booking)) {
+      res.status(400).json({ message: 'Only Ecwid and direct Food Tour bookings can be refunded through this endpoint' });
       return;
     }
 
-    const preview = requireStripeRefundPreview(await buildEcwidRefundPreview(booking));
+    const preview = isDirectFoodTourBooking(booking)
+      ? await (async () => {
+          const direct = await resolveDirectStripeTransaction(booking);
+          return {
+            bookingId: booking.id,
+            orderId: booking.platformOrderId ?? booking.platformBookingId ?? String(booking.id),
+            externalTransactionId: direct.externalTransactionId,
+            stripe: direct.stripe,
+            stripeMode: direct.stripeMode,
+            refundAvailable: true,
+            refundBlockedReason: null,
+          };
+        })()
+      : requireStripeRefundPreview(await buildEcwidRefundPreview(booking));
     const remaining = Math.max(preview.stripe.amount - preview.stripe.amountRefunded, 0);
     const resolvedAddons = await resolvePartialRefundAddons(booking, preview.stripe.currency);
     const addonsTotalAmount = resolveAddonsTotalAmount(resolvedAddons);

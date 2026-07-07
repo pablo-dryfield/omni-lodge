@@ -215,6 +215,7 @@ export type GmailMessagePayload = {
 
 type SendMessageParams = {
   to: string;
+  from?: string | null;
   subject: string;
   body?: string;
   textBody?: string;
@@ -229,6 +230,10 @@ type SendMessageParams = {
 export type SendMessageResult = {
   id: string | null;
   threadId: string | null;
+  from: string | null;
+  to: string;
+  rfcMessageId: string | null;
+  labelIds: string[];
 };
 
 const encodeBase64Url = (value: string): string =>
@@ -241,14 +246,50 @@ const encodeBase64Url = (value: string): string =>
 const encodeBase64 = (value: string | Buffer): string =>
   Buffer.isBuffer(value) ? value.toString('base64') : Buffer.from(value, 'utf-8').toString('base64');
 
+const sanitizeHeaderValue = (value: string): string => value.replace(/[\r\n]+/g, ' ').trim();
+
+const extractEmailAddress = (value: string): string | null => {
+  const trimmed = sanitizeHeaderValue(value);
+  const angleMatch = trimmed.match(/<([^<>@\s]+@[^<>\s]+)>/);
+  const address = angleMatch?.[1] ?? trimmed;
+  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address) ? address.toLowerCase() : null;
+};
+
+const assertVerifiedSendAsAlias = async (gmail: gmail_v1.Gmail, from: string | null | undefined): Promise<void> => {
+  if (!from) {
+    return;
+  }
+
+  const requestedAddress = extractEmailAddress(from);
+  if (!requestedAddress) {
+    throw new Error(`Invalid Gmail From address: ${from}`);
+  }
+
+  const { data } = await gmail.users.settings.sendAs.list({ userId: 'me' });
+  const aliases = data.sendAs ?? [];
+  const alias = aliases.find((entry) => entry.sendAsEmail?.toLowerCase() === requestedAddress);
+  if (!alias) {
+    throw new Error(
+      `Gmail From address ${requestedAddress} is not configured as a Send mail as alias for this Google account`,
+    );
+  }
+
+  if (alias.verificationStatus && alias.verificationStatus !== 'accepted') {
+    throw new Error(
+      `Gmail From address ${requestedAddress} is configured but not verified; current status: ${alias.verificationStatus}`,
+    );
+  }
+};
+
 const buildRawMessage = (params: SendMessageParams): string => {
   const normalizedTextBody = (params.textBody ?? params.body ?? '').replace(/\r\n/g, '\n');
   const normalizedHtmlBody = (params.htmlBody ?? '').replace(/\r\n/g, '\n').trim();
   const attachments = Array.isArray(params.attachments) ? params.attachments : [];
 
   const messageLines: string[] = [
-    `To: ${params.to}`,
-    `Subject: ${params.subject}`,
+    `To: ${sanitizeHeaderValue(params.to)}`,
+    ...(params.from ? [`From: ${sanitizeHeaderValue(params.from)}`] : []),
+    `Subject: ${sanitizeHeaderValue(params.subject)}`,
     'MIME-Version: 1.0',
   ];
 
@@ -367,14 +408,28 @@ export const fetchMessagePayload = async (messageId: string): Promise<GmailMessa
 export const sendMessage = async (params: SendMessageParams): Promise<SendMessageResult> => {
   const gmail = getGmailClient();
   try {
+    await assertVerifiedSendAsAlias(gmail, params.from);
     const raw = buildRawMessage(params);
     const { data } = await gmail.users.messages.send({
       userId: 'me',
       requestBody: { raw },
     });
+    const sentMessageId = data.id ?? null;
+    const metadata = sentMessageId
+      ? await gmail.users.messages.get({
+          userId: 'me',
+          id: sentMessageId,
+          format: 'metadata',
+          metadataHeaders: ['Message-ID'],
+        })
+      : null;
     return {
-      id: data.id ?? null,
+      id: sentMessageId,
       threadId: data.threadId ?? null,
+      from: params.from ? sanitizeHeaderValue(params.from) : null,
+      to: sanitizeHeaderValue(params.to),
+      rfcMessageId: metadata?.data.payload ? extractHeaderFromMetadata(metadata.data.payload, 'Message-ID') : null,
+      labelIds: metadata?.data.labelIds ?? data.labelIds ?? [],
     };
   } catch (error) {
     logger.error(`[booking-email] Failed to send Gmail message: ${(error as Error).message}`);
