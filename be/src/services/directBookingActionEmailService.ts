@@ -132,12 +132,15 @@ const buildGuestName = (booking: Booking): string => {
   return fullName || 'Guest';
 };
 
-const bookingInfoRow = (label: string, value: unknown): string => `
+const bookingInfoRow = (label: string, value: unknown): string => {
+  const displayValue = value === null || value === undefined || value === '' ? '-' : value;
+  return `
   <tr>
-    <td style="padding:12px 0;color:#7d6b70;font-family:Arial,sans-serif;font-size:15px;">${escapeHtml(label)}</td>
-    <td style="padding:12px 0;color:#2f2128;font-family:Arial,sans-serif;font-size:15px;font-weight:700;text-align:right;">${escapeHtml(value || '-')}</td>
+    <td style="width:42%;max-width:42%;padding:12px 8px 12px 0;color:#7d6b70;font-family:Arial,sans-serif;font-size:15px;line-height:1.35;vertical-align:top;word-break:break-word;overflow-wrap:anywhere;">${escapeHtml(label)}</td>
+    <td style="width:58%;max-width:58%;padding:12px 0 12px 8px;color:#2f2128;font-family:Arial,sans-serif;font-size:15px;font-weight:700;line-height:1.35;text-align:right;vertical-align:top;word-break:break-word;overflow-wrap:anywhere;">${escapeHtml(displayValue)}</td>
   </tr>
 `;
+};
 
 const getEmailCopy = (
   booking: Booking,
@@ -255,9 +258,9 @@ export const buildDirectBookingActionEmail = (
   const htmlBody = `
 <!doctype html>
 <html>
-  <body style="margin:0;background:#2f2128;padding:24px;">
-    <div style="max-width:640px;margin:0 auto;background:#fac7b3;border-radius:32px;padding:18px;font-family:Arial,sans-serif;">
-      <div style="background:#fffaf6;border-radius:26px;padding:34px 28px;text-align:center;">
+  <body style="margin:0;background:#2f2128;padding:16px;">
+    <div style="width:100%;max-width:640px;margin:0 auto;background:#fac7b3;border-radius:32px;padding:18px;font-family:Arial,sans-serif;box-sizing:border-box;">
+      <div style="background:#fffaf6;border-radius:26px;padding:34px 24px;text-align:center;box-sizing:border-box;">
         <p style="margin:0 0 18px;color:#8b4a2e;font-family:Arial,sans-serif;font-size:13px;font-weight:800;letter-spacing:5px;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
         <h1 style="margin:0;color:#2f2128;font-family:Georgia,serif;font-size:44px;line-height:1.02;font-weight:500;">${escapeHtml(copy.headline)}</h1>
         <p style="margin:18px 0 0;color:#4b3b40;font-size:17px;line-height:1.55;">${escapeHtml(copy.body)}</p>
@@ -267,7 +270,7 @@ export const buildDirectBookingActionEmail = (
           <div style="font-size:30px;font-weight:900;line-height:1.2;">${escapeHtml(orderNumber)}</div>
         </div>
 
-        <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;margin:28px 0 0;border-collapse:collapse;border-top:1px solid #f0ded6;border-bottom:1px solid #f0ded6;">
+        <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;margin:28px 0 0;border-collapse:collapse;table-layout:fixed;border-top:1px solid #f0ded6;border-bottom:1px solid #f0ded6;">
           ${bookingInfoRow('Tour', tourName)}
           ${previousDateTime ? bookingInfoRow('Previous start', previousDateTime) : ''}
           ${bookingInfoRow('Date', date)}
@@ -390,16 +393,16 @@ export const buildInternalDirectBookingActionEmail = (
   const htmlBody = `
 <!doctype html>
 <html>
-  <body style="margin:0;background:#2f2128;padding:24px;">
-    <div style="max-width:640px;margin:0 auto;background:#fac7b3;border-radius:28px;padding:18px;font-family:Arial,sans-serif;">
-      <div style="background:#fffaf6;border-radius:22px;padding:30px 26px;">
+  <body style="margin:0;background:#2f2128;padding:16px;">
+    <div style="width:100%;max-width:640px;margin:0 auto;background:#fac7b3;border-radius:28px;padding:18px;font-family:Arial,sans-serif;box-sizing:border-box;">
+      <div style="background:#fffaf6;border-radius:22px;padding:30px 22px;box-sizing:border-box;">
         <p style="margin:0 0 14px;color:#8b4a2e;font-size:13px;font-weight:800;letter-spacing:4px;text-transform:uppercase;text-align:center;">${escapeHtml(copy.eyebrow)}</p>
         <h1 style="margin:0;color:#2f2128;font-family:Georgia,serif;font-size:36px;line-height:1.08;font-weight:500;text-align:center;">${escapeHtml(copy.headline)}</h1>
         <div style="margin:24px auto;background:#2f2128;color:#fff;border-radius:18px;padding:16px 18px;max-width:320px;text-align:center;">
           <div style="color:#e39b6e;font-size:12px;font-weight:900;letter-spacing:3px;text-transform:uppercase;">Omni-Lodge reference</div>
           <div style="font-size:28px;font-weight:900;line-height:1.2;">${escapeHtml(booking.id)}</div>
         </div>
-        <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border-top:1px solid #f0ded6;border-bottom:1px solid #f0ded6;">
+        <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;border-top:1px solid #f0ded6;border-bottom:1px solid #f0ded6;">
           ${bookingInfoRow('Action', copy.headline)}
           ${bookingInfoRow('Tour', tourName)}
           ${previousDateTime ? bookingInfoRow('Previous start', previousDateTime) : ''}
