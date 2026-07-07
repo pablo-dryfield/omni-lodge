@@ -387,6 +387,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   getyourguide: "GetYourGuide",
   freetour: "FreeTour",
   xperiencepoland: "XperiencePoland",
+  direct: "Direct",
   airbnb: "Airbnb",
   unknown: "Unknown",
 };
@@ -1131,6 +1132,13 @@ const isXperiencePolandOrder = (order: UnifiedOrder): boolean => {
   return (order.platform ?? '').toLowerCase() === 'xperiencepoland';
 };
 
+const isDirectFoodTourOrder = (order: UnifiedOrder): boolean => {
+  return (
+    (order.platform ?? '').toLowerCase() === 'direct' &&
+    String(order.productName ?? '').toLowerCase().includes('food tour')
+  );
+};
+
 const isOrderExperienceDateOnOrBeforeToday = (order: UnifiedOrder): boolean => {
   const rawDate = String(order.date ?? "").trim();
   if (!rawDate) {
@@ -1305,7 +1313,7 @@ type AmendModalState = {
   opened: boolean;
   order: UnifiedOrder | null;
   bookingId: number | null;
-  mode: "ecwid" | "xperience" | null;
+  mode: "ecwid" | "xperience" | "direct" | null;
   formDate: Date | null;
   formTime: string;
   submitting: boolean;
@@ -2003,6 +2011,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     useState<PartialRefundEmailPreviewState>(createDefaultPartialRefundEmailPreviewState());
   const [amendEmailPreviewState, setAmendEmailPreviewState] =
     useState<AmendEmailPreviewState>(createDefaultAmendEmailPreviewState());
+  const [directActionLoadingKey, setDirectActionLoadingKey] = useState<string | null>(null);
   const [mailVariableDropdown, setMailVariableDropdown] = useState<MailVariableDropdownState>({
     field: null,
     tokenStart: -1,
@@ -2116,10 +2125,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const baseState = createDefaultAmendState();
     const ecwidOrder = isEcwidOrder(order);
     const xperienceOrder = isXperiencePolandOrder(order);
+    const directFoodTourOrder = isDirectFoodTourOrder(order);
     baseState.opened = true;
     baseState.order = order;
     baseState.bookingId = getBookingIdFromOrder(order);
-    baseState.mode = ecwidOrder ? "ecwid" : xperienceOrder ? "xperience" : null;
+    baseState.mode = ecwidOrder ? "ecwid" : xperienceOrder ? "xperience" : directFoodTourOrder ? "direct" : null;
     baseState.formDate = order.date && dayjs(order.date, DATE_FORMAT, true).isValid()
       ? dayjs(order.date, DATE_FORMAT).toDate()
       : null;
@@ -2530,6 +2540,23 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       }
       const nextUnlocked = !prev.manualAmountUnlocked;
       if (nextUnlocked) {
+        if (prev.order && isDirectFoodTourOrder(prev.order)) {
+          const resetAddonQuantities = Object.keys(prev.addonQuantities).reduce<Record<number, number>>((acc, key) => {
+            const parsedKey = Number.parseInt(key, 10);
+            if (Number.isFinite(parsedKey)) {
+              acc[parsedKey] = 0;
+            }
+            return acc;
+          }, {});
+          return {
+            ...prev,
+            manualAmountUnlocked: true,
+            peopleQuantity: 0,
+            addonQuantities: resetAddonQuantities,
+            success: null,
+            error: null,
+          };
+        }
         return {
           ...prev,
           manualAmountUnlocked: true,
@@ -2563,13 +2590,19 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     const remainingMajor = getPartialRefundRemainingAmountMajor(partialRefundState.preview);
     const shouldProceedToCancel = remainingMajor > 0 && partialRefundState.amount + 0.0001 >= remainingMajor;
+    const isDirectRefund = Boolean(partialRefundState.order && isDirectFoodTourOrder(partialRefundState.order));
     if (shouldProceedToCancel) {
       if (!partialRefundState.order) {
         setPartialRefundState((prev) => ({ ...prev, error: "Missing booking details for cancellation." }));
         return;
       }
+      const order = partialRefundState.order;
       closePartialRefundModal();
-      await openCancelModal(partialRefundState.order);
+      if (isDirectRefund) {
+        await handleDirectCancellation(order);
+      } else {
+        await openCancelModal(order);
+      }
       return;
     }
 
@@ -2586,7 +2619,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       (sum, value) => sum + (Number.isFinite(value) ? value : 0),
       0,
     );
-    if ((partialRefundState.peopleQuantity ?? 0) <= 0 && selectedAddonQty <= 0) {
+    if (!partialRefundState.manualAmountUnlocked && (partialRefundState.peopleQuantity ?? 0) <= 0 && selectedAddonQty <= 0) {
       setPartialRefundState((prev) => ({
         ...prev,
         error: "Select refunded people quantity or add-on quantities.",
@@ -2595,24 +2628,32 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
 
     let preparedEmail: { payload: EmailTemplateRenderRequestPayload; templateName: string | null } | null = null;
-    try {
-      preparedEmail = await buildPartialRefundEmailPayload();
-    } catch (error) {
-      setPartialRefundState((prev) => ({
-        ...prev,
-        error: extractErrorMessage(error),
-      }));
-      return;
+    if (!isDirectRefund) {
+      try {
+        preparedEmail = await buildPartialRefundEmailPayload();
+      } catch (error) {
+        setPartialRefundState((prev) => ({
+          ...prev,
+          error: extractErrorMessage(error),
+        }));
+        return;
+      }
     }
 
     setPartialRefundState((prev) => ({ ...prev, submitting: true, error: null, success: null }));
     try {
-      await axiosInstance.post(`/bookings/${partialRefundState.bookingId}/partial-refund`, {
+      const endpoint = isDirectRefund
+        ? `/bookings/${partialRefundState.bookingId}/direct-actions/partial-refund`
+        : `/bookings/${partialRefundState.bookingId}/partial-refund`;
+      await axiosInstance.post(endpoint, {
         amount: partialRefundState.amount,
         peopleQuantity: partialRefundState.peopleQuantity,
         addonQuantities: addonQuantitiesPayload,
+        manualAmountUnlocked: partialRefundState.manualAmountUnlocked,
       });
-      let successMessage = "Partial refund submitted and email sent.";
+      let successMessage = isDirectRefund
+        ? "Partial refund submitted and direct booking emails sent."
+        : "Partial refund submitted and email sent.";
       if (preparedEmail) {
         try {
           await axiosInstance.post("/bookings/emails/send", preparedEmail.payload, {
@@ -2626,12 +2667,22 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           }));
         }
       }
+      if (successMessage === "Partial refund submitted, but sending the email failed.") {
+        setPartialRefundState((prev) => ({
+          ...prev,
+          submitting: false,
+          success: successMessage,
+        }));
+        setReloadToken((token) => token + 1);
+        return;
+      }
       setPartialRefundState((prev) => ({
         ...prev,
         submitting: false,
         success: successMessage,
       }));
       setReloadToken((token) => token + 1);
+      closePartialRefundModal();
     } catch (error) {
       setPartialRefundState((prev) => ({
         ...prev,
@@ -2783,7 +2834,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const endpoint =
       amendState.mode === "ecwid"
         ? `/bookings/${amendState.bookingId}/amend-ecwid`
-        : `/bookings/${amendState.bookingId}/amend-xperience`;
+        : amendState.mode === "xperience"
+          ? `/bookings/${amendState.bookingId}/amend-xperience`
+          : `/bookings/${amendState.bookingId}/direct-actions/amend`;
     await axiosInstance.post(endpoint, {
       pickupDate,
       pickupTime: normalizedTime,
@@ -3360,6 +3413,39 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
   };
 
+  const handleConfirmDirectAmend = async () => {
+    if (amendState.submitting || amendState.mode !== "direct") {
+      return;
+    }
+
+    setAmendState((prev) => ({
+      ...prev,
+      submitting: true,
+      error: null,
+    }));
+
+    try {
+      await submitAmendBookingUpdate();
+      setAmendState(createDefaultAmendState());
+      setAmendPreview(createDefaultAmendPreview());
+      setAmendEmailPreviewState(createDefaultAmendEmailPreviewState());
+      setReconcileState((prev) => ({
+        ...prev,
+        itemIndex: null,
+        loading: false,
+        error: null,
+        success: null,
+      }));
+      setReloadToken((token) => token + 1);
+    } catch (error) {
+      setAmendState((prev) => ({
+        ...prev,
+        submitting: false,
+        error: extractErrorMessage(error),
+      }));
+    }
+  };
+
   const handleConfirmRefund = async () => {
     if (!cancelState.bookingId) {
       setCancelState((prev) => ({ ...prev, error: "Missing OmniLodge booking reference." }));
@@ -3440,7 +3526,52 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     const order = mobileActionsOrder;
     closeMobileActionsModal();
+    if (isDirectFoodTourOrder(order)) {
+      await handleDirectCancellation(order);
+      return;
+    }
     await openCancelModal(order);
+  };
+
+  const handleDirectConfirmation = async (order: UnifiedOrder) => {
+    const bookingId = getBookingIdFromOrder(order);
+    if (!bookingId) {
+      window.alert("Unable to locate OmniLodge booking reference for this order.");
+      return;
+    }
+    const loadingKey = `${bookingId}:confirmation`;
+    setDirectActionLoadingKey(loadingKey);
+    try {
+      await axiosInstance.post(`/bookings/${bookingId}/direct-actions/confirmation`);
+      setReloadToken((token) => token + 1);
+      window.alert("Confirmation email sent.");
+    } catch (error) {
+      window.alert(extractErrorMessage(error));
+    } finally {
+      setDirectActionLoadingKey((current) => (current === loadingKey ? null : current));
+    }
+  };
+
+  const handleDirectCancellation = async (order: UnifiedOrder) => {
+    const bookingId = getBookingIdFromOrder(order);
+    if (!bookingId) {
+      window.alert("Unable to locate OmniLodge booking reference for this order.");
+      return;
+    }
+    if (!window.confirm("Cancel this Food Tour booking, issue the Stripe test refund, and email the customer?")) {
+      return;
+    }
+    const loadingKey = `${bookingId}:cancellation`;
+    setDirectActionLoadingKey(loadingKey);
+    try {
+      await axiosInstance.post(`/bookings/${bookingId}/direct-actions/cancellation`);
+      setReloadToken((token) => token + 1);
+      window.alert("Booking cancelled and cancellation email sent.");
+    } catch (error) {
+      window.alert(extractErrorMessage(error));
+    } finally {
+      setDirectActionLoadingKey((current) => (current === loadingKey ? null : current));
+    }
   };
 
   const buildMailDraftFromOrder = (order: UnifiedOrder) => {
@@ -4740,9 +4871,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     partialRefundRemainingMajor > 0 &&
     partialRefundHasPositiveAmount &&
     partialRefundAmountValue + 0.0001 >= partialRefundRemainingMajor;
+  const partialRefundIsDirect = Boolean(partialRefundState.order && isDirectFoodTourOrder(partialRefundState.order));
   const partialRefundHasCustomerEmail = Boolean(String(partialRefundState.order?.customerEmail ?? "").trim());
   const partialRefundCanPreviewEmail =
     Boolean(partialRefundState.preview) &&
+    !partialRefundIsDirect &&
     !partialRefundState.submitting &&
     !partialRefundState.loading &&
     partialRefundHasCustomerEmail &&
@@ -4752,7 +4885,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     Boolean(partialRefundState.preview) &&
     !partialRefundState.submitting &&
     partialRefundHasPositiveAmount &&
-    (partialRefundShouldProceedToCancel || partialRefundHasCustomerEmail);
+    (partialRefundShouldProceedToCancel || partialRefundIsDirect || partialRefundHasCustomerEmail);
   const amendOriginalDate = String(amendState.order?.date ?? "").trim();
   const amendOriginalTime = normalizeTimeInput(String(amendState.order?.timeslot ?? "")) ?? "";
   const amendProposedDate = amendState.formDate ? dayjs(amendState.formDate).format(DATE_FORMAT) : "";
@@ -4763,11 +4896,16 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     (amendProposedDate !== amendOriginalDate || amendProposedTime !== amendOriginalTime);
   const amendHasCustomerEmail = Boolean(String(amendState.order?.customerEmail ?? "").trim());
   const amendCanPreviewEmail =
-    Boolean(amendState.opened && amendState.mode && amendState.bookingId) &&
+    Boolean(amendState.opened && amendState.mode && amendState.mode !== "direct" && amendState.bookingId) &&
     !amendState.submitting &&
     amendHasRequiredScheduleFields &&
     amendHasPendingScheduleChange &&
     amendHasCustomerEmail;
+  const directAmendCanSubmit =
+    Boolean(amendState.opened && amendState.mode === "direct" && amendState.bookingId) &&
+    !amendState.submitting &&
+    amendHasRequiredScheduleFields &&
+    amendHasPendingScheduleChange;
   const mailTemplateOptions = useMemo(
     () =>
       mailTemplateState.templates.map((template) => ({
@@ -4778,9 +4916,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   );
   const hasSelectedMailTemplate = Boolean(selectedMailTemplate);
   const mobileActionsBookingId = mobileActionsOrder ? getBookingIdFromOrder(mobileActionsOrder) : null;
+  const mobileActionsCanDirectConfirmation = Boolean(
+    mobileActionsOrder &&
+      isDirectFoodTourOrder(mobileActionsOrder) &&
+      mobileActionsBookingId,
+  );
   const mobileActionsCanAmend = Boolean(
     mobileActionsOrder &&
-      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder)) &&
+      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder) || isDirectFoodTourOrder(mobileActionsOrder)) &&
       mobileActionsBookingId,
   );
   const mobileActionsCanCancel = Boolean(
@@ -4788,6 +4931,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       (
         isEcwidOrder(mobileActionsOrder) ||
         isXperiencePolandOrder(mobileActionsOrder) ||
+        isDirectFoodTourOrder(mobileActionsOrder) ||
         (
           isCivitatisOrder(mobileActionsOrder) &&
           isOrderExperienceDateOnOrBeforeToday(mobileActionsOrder) &&
@@ -4799,7 +4943,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   );
   const mobileActionsCanPartialRefund = Boolean(
     mobileActionsOrder &&
-      isEcwidOrder(mobileActionsOrder) &&
+      (isEcwidOrder(mobileActionsOrder) || isDirectFoodTourOrder(mobileActionsOrder)) &&
       mobileActionsBookingId &&
       mobileActionsOrder.status !== "cancelled",
   );
@@ -5895,6 +6039,22 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           <Button variant="default" fullWidth onClick={handleMobileActionsDetails}>
             Details
           </Button>
+          {mobileActionsCanDirectConfirmation && (
+            <Button
+              variant="light"
+              fullWidth
+              loading={directActionLoadingKey === `${mobileActionsBookingId}:confirmation`}
+              onClick={() => {
+                if (mobileActionsOrder) {
+                  const order = mobileActionsOrder;
+                  closeMobileActionsModal();
+                  void handleDirectConfirmation(order);
+                }
+              }}
+            >
+              Confirmation
+            </Button>
+          )}
           {mobileActionsCanAmend && (
             <Button variant="light" fullWidth onClick={handleMobileActionsAmend}>
               Amend
@@ -5941,6 +6101,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               ? "Updating the pickup details will sync the change to Ecwid first and then to OmniLodge."
               : amendState.mode === "xperience"
                 ? "Updating the pickup details will update this XperiencePoland booking in OmniLodge."
+                : amendState.mode === "direct"
+                  ? "Updating the pickup details will update this Food Tour booking and email the customer."
                 : "Updating the pickup details will update this booking in OmniLodge."}
           </Text>
           {amendState.mode === "ecwid" && amendPreview.status === "loading" && (
@@ -6134,15 +6296,27 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             </Alert>
           )}
           <Group justify="flex-end">
-            <Button
-              onClick={() => {
-                void handlePreviewAmendEmail();
-              }}
-              loading={amendEmailPreviewState.loading}
-              disabled={!amendCanPreviewEmail}
-            >
-              Preview Email
-            </Button>
+            {amendState.mode === "direct" ? (
+              <Button
+                onClick={() => {
+                  void handleConfirmDirectAmend();
+                }}
+                loading={amendState.submitting}
+                disabled={!directAmendCanSubmit}
+              >
+                Save Changes & Send Email
+              </Button>
+            ) : (
+              <Button
+                onClick={() => {
+                  void handlePreviewAmendEmail();
+                }}
+                loading={amendEmailPreviewState.loading}
+                disabled={!amendCanPreviewEmail}
+              >
+                Preview Email
+              </Button>
+            )}
           </Group>
         </Stack>
       </Modal>
@@ -6238,7 +6412,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               {partialRefundState.error}
             </Alert>
           )}
-          {partialRefundState.preview && !partialRefundHasCustomerEmail && !partialRefundShouldProceedToCancel && (
+          {partialRefundState.preview && !partialRefundIsDirect && !partialRefundHasCustomerEmail && !partialRefundShouldProceedToCancel && (
             <Alert color="yellow" title="Missing customer email" style={{ width: "100%", textAlign: "center" }}>
               Partial refund confirmation email cannot be sent because this booking has no customer email.
             </Alert>

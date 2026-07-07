@@ -51,19 +51,7 @@ import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 
 const DATE_FORMAT = "YYYY-MM-DD";
-const EXCLUDED_BOOKINGS_PRODUCT_PATTERNS = ["food tour"];
 const BookingsExecutiveDashboard = lazy(() => import("../components/bookings/BookingsExecutiveDashboard"));
-
-const shouldExcludeBookingsPageProductName = (value?: string | null): boolean => {
-  const normalized = String(value ?? "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) {
-    return false;
-  }
-  return EXCLUDED_BOOKINGS_PRODUCT_PATTERNS.some((pattern) => normalized.includes(pattern));
-};
 
 type ViewMode = "week" | "month";
 
@@ -1484,20 +1472,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
           return sum + (Number.isFinite(amount) ? amount : 0);
         }, 0);
 
-        const filteredOrdersPayload = (ordersPayload as UnifiedOrder[]).filter(
-          (order) => !shouldExcludeBookingsPageProductName(order.productName),
-        );
-        const filteredProductsPayload = (productsPayload as UnifiedProduct[]).filter((product) => {
-          if (shouldExcludeBookingsPageProductName(product.name)) {
-            return false;
-          }
-          return !shouldExcludeBookingsPageProductName(
-            (product as UnifiedProduct & { productName?: string | null }).productName,
-          );
-        });
-
-        setProducts(filteredProductsPayload);
-        setOrders(filteredOrdersPayload);
+        setProducts(productsPayload as UnifiedProduct[]);
+        setOrders(ordersPayload as UnifiedOrder[]);
         setBookingAddons(bookingAddonsPayload as BookingAddonDashboardRow[]);
         setAddonCatalog(
           addonCatalogPayload
