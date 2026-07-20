@@ -29,6 +29,7 @@ import {
   IconTools,
   IconCalendarEvent,
   IconTag,
+  IconBrandGoogle,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import axiosInstance from "../../utils/axiosInstance";
@@ -109,6 +110,13 @@ const sections: SettingsSection[] = [
     icon: IconStars,
     to: "/settings/review-platforms",
     pageSlug: PAGE_SLUGS.settingsReviewPlatforms,
+  },
+  {
+    label: "Google API",
+    description: "Inspect OAuth credentials and currently granted Google scopes.",
+    icon: IconBrandGoogle,
+    to: "/settings/google-api",
+    pageSlug: PAGE_SLUGS.settingsGoogleApi,
   },
   {
     label: "Compensation Components",

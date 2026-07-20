@@ -56,6 +56,7 @@ import ConfigKey from "../models/ConfigKey.js";
 import ConfigValue from "../models/ConfigValue.js";
 import ConfigHistory from "../models/ConfigHistory.js";
 import ConfigSeedRun from "../models/ConfigSeedRun.js";
+import SeoActionLog from "../models/SeoActionLog.js";
 import BookingUtmCatalog from "../models/BookingUtmCatalog.js";
 import AffiliatePayoutLog from "../models/AffiliatePayoutLog.js";
 import ShiftRole from "../models/ShiftRole.js";
@@ -228,6 +229,7 @@ const sequelize = new Sequelize({
     ConfigValue,
     ConfigHistory,
     ConfigSeedRun,
+    SeoActionLog,
     BookingUtmCatalog,
     AffiliatePayoutLog,
     ShiftRole,
