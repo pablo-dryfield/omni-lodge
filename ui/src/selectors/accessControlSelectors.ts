@@ -22,6 +22,10 @@ const PAGE_SLUG_ALIASES: Record<string, string[]> = {
   [PAGE_SLUGS.settingsModules]: [PAGE_SLUGS.settingsPermissions],
   [PAGE_SLUGS.settingsPagePermissions]: [PAGE_SLUGS.settingsPermissions],
   [PAGE_SLUGS.settingsModulePermissions]: [PAGE_SLUGS.settingsPermissions],
+  [PAGE_SLUGS.settingsControlPanel]: [PAGE_SLUGS.settingsGoogleApi],
+  [PAGE_SLUGS.settingsGoogleApi]: [PAGE_SLUGS.settingsControlPanel],
+  [PAGE_SLUGS.marketing]: [PAGE_SLUGS.searchConsole],
+  [PAGE_SLUGS.searchConsole]: [PAGE_SLUGS.marketing],
 };
 
 export const selectAllowedPageSlugs = createSelector(selectAccessControlState, ({ pages, modules }) => {

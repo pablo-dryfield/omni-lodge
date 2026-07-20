@@ -26,6 +26,7 @@ const Counters = lazyRoute(() => import("../../pages/Counters"), loadCountersRed
 const VenueNumbers = lazyRoute(() => import("../../pages/VenueNumbers"), loadVenueNumbersReducers);
 const ChannelNumbers = lazyRoute(() => import("../../pages/ChannelNumbers"), loadChannelNumbersReducers);
 const MarketingPage = lazy(() => import("../../pages/MarketingPage"));
+const SearchConsolePage = lazy(() => import("../../pages/SearchConsolePage"));
 const AffiliatesPage = lazy(() => import("../../pages/AffiliatesPage"));
 const PrivacyPolicyPage = lazy(() => import("../../pages/PrivacyPolicyPage"));
 const DataDeletionPage = lazy(() => import("../../pages/DataDeletionPage"));
@@ -64,6 +65,7 @@ const SettingsSqlHelper = lazy(() => import("../../pages/settings/SettingsSqlHel
 const SettingsDbBackups = lazy(() => import("../../pages/settings/SettingsDbBackups"));
 const SettingsHomeExperience = lazy(() => import("../../pages/settings/SettingsHomeExperience"));
 const SettingsControlPanel = lazy(() => import("../../pages/settings/SettingsControlPanel"));
+const SettingsGoogleApi = lazy(() => import("../../pages/settings/SettingsGoogleApi"));
 const SettingsMaintenance = lazy(() => import("../../pages/settings/SettingsMaintenance"));
 const SettingsReviewPlatforms = lazy(() => import("../../pages/settings/SettingsReviewPlatforms"));
 const SettingsCompensationComponents = lazy(() => import("../../pages/settings/SettingsCompensationComponents"));
@@ -114,6 +116,7 @@ const Routes = () => {
         <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
         <Route path="/channelNumbers" element={<ChannelNumbers title="Channel Numbers" />} />
         <Route path="/marketing" element={<MarketingPage title="Marketing" />} />
+        <Route path="/search-console" element={<SearchConsolePage title="Search Console" />} />
         <Route path="/affiliates" element={<AffiliatesPage title="Affiliates" />} />
         <Route path="/privacy-policy" element={<PrivacyPolicyPage title="Privacy Policy" />} />
         <Route path="/data-deletion" element={<DataDeletionPage title="Data Deletion Request" />} />
@@ -188,6 +191,7 @@ const Routes = () => {
           <Route path="compensation-components" element={<SettingsCompensationComponents />} />
           <Route path="home-experience" element={<SettingsHomeExperience />} />
           <Route path="control-panel" element={<SettingsControlPanel />} />
+          <Route path="google-api" element={<SettingsGoogleApi />} />
           <Route path="maintenance" element={<SettingsMaintenance />} />
         </Route>
       </ReactRoutes>

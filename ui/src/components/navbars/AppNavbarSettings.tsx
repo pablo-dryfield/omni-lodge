@@ -25,6 +25,7 @@ import {
   IconCloudDownload,
   IconCoin,
   IconSettings,
+  IconBrandGoogle,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -154,6 +155,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/channels",
         slug: PAGE_SLUGS.settingsChannels,
         icon: <IconBroadcast size={20} />,
+      },
+      {
+        label: "Google API",
+        to: "/settings/google-api",
+        slug: PAGE_SLUGS.settingsGoogleApi,
+        icon: <IconBrandGoogle size={20} />,
       },
       {
         label: "Payment Methods",

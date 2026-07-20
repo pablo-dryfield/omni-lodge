@@ -44,6 +44,7 @@ const defaultPages = [
   { slug: 'venue-numbers', name: 'Venue Numbers', description: 'Nightly venue headcounts and open bar metrics', sortOrder: 5 },
   { slug: 'channel-numbers', name: 'Channel Numbers', description: 'Channel performance summary across products and add-ons', sortOrder: 6 },
   { slug: 'marketing', name: 'Marketing', description: 'Marketing revenue and ad performance', sortOrder: 7 },
+  { slug: 'search-console', name: 'Search Console', description: 'Google Search performance and indexing diagnostics', sortOrder: 7 },
   { slug: 'affiliates', name: 'Affiliates', description: 'Affiliate sales and UTM attribution portal', sortOrder: 8 },
   { slug: 'performance', name: 'Performance', description: 'Server and application performance diagnostics', sortOrder: 8 },
   { slug: 'reviews', name: 'Reviews', description: 'Track review credits and staff allocations', sortOrder: 7 },
@@ -73,7 +74,8 @@ const defaultPages = [
   { slug: 'settings-db-backups', name: 'Database Backups', description: 'Review and manage PostgreSQL backups', sortOrder: 23 },
   { slug: 'settings-home-experience', name: 'Home Experience', description: 'Assign default home modules per user', sortOrder: 24 },
   { slug: 'settings-control-panel', name: 'Control Panel', description: 'Manage dynamic configuration values', sortOrder: 25 },
-  { slug: 'settings-maintenance', name: 'Maintenance', description: 'Review seeds, migrations, and configuration health', sortOrder: 26 },
+  { slug: 'settings-google-api', name: 'Google API', description: 'Inspect Google OAuth credentials and granted scopes', sortOrder: 26 },
+  { slug: 'settings-maintenance', name: 'Maintenance', description: 'Review seeds, migrations, and configuration health', sortOrder: 27 },
 ];
 
 const defaultModules = [
@@ -86,6 +88,7 @@ const defaultModules = [
   { slug: 'venue-numbers-management', name: 'Venue Numbers', pageSlug: 'venue-numbers', description: 'Capture nightly venue counts and upload signed sheets', componentRef: 'VenueNumbersList', sortOrder: 1 },
   { slug: 'channel-numbers-summary', name: 'Channel Numbers Summary', pageSlug: 'channel-numbers', description: 'Analyze booking channels across tickets and add-ons', componentRef: 'ChannelNumbersSummary', sortOrder: 1 },
   { slug: 'marketing-overview', name: 'Marketing Overview', pageSlug: 'marketing', description: 'Review marketing revenue and Google Ads spend', componentRef: 'MarketingOverview', sortOrder: 1 },
+  { slug: 'search-console-overview', name: 'Search Console Overview', pageSlug: 'search-console', description: 'Review Google Search performance for connected properties', componentRef: 'SearchConsoleOverview', sortOrder: 1 },
   { slug: 'affiliate-overview', name: 'Affiliate Overview', pageSlug: 'affiliates', description: 'Review affiliate-tagged booking sales and attribution', componentRef: 'AffiliatesPage', sortOrder: 1 },
   { slug: 'performance-overview', name: 'Performance Overview', pageSlug: 'performance', description: 'Inspect live server, process, and request performance diagnostics', componentRef: 'PerformanceOverview', sortOrder: 1 },
   { slug: 'staff-payouts-all', name: 'Staff Payments (All)', pageSlug: 'pays', description: 'View commission data for all staff', componentRef: 'StaffPayoutsAll', sortOrder: 1 },
@@ -132,7 +135,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'performance', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'search-console', 'performance', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -147,10 +150,11 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-db-backups',
 'settings-home-experience',
 'settings-control-panel',
+'settings-google-api',
 'settings-maintenance'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'affiliates', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience', 'settings-product-aliases'],
-  manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'affiliates', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks'],
-  'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'affiliates', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'search-console', 'affiliates', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience', 'settings-product-aliases'],
+  manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'search-console', 'affiliates', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks'],
+  'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'search-console', 'affiliates', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks'],
   affiliate: ['affiliates'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'pays', 'cerebro', 'scheduling'],
 };
@@ -180,6 +184,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'venue-numbers-management': ['view', 'create', 'update', 'delete'],
       'channel-numbers-summary': ['view'],
       'marketing-overview': ['view'],
+      'search-console-overview': ['view'],
       'affiliate-overview': ['view', 'update'],
       'performance-overview': ['view'],
       'staff-payouts-all': ['view'],
@@ -233,6 +238,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'venue-numbers-management': ['view', 'create', 'update'],
       'channel-numbers-summary': ['view'],
       'marketing-overview': ['view'],
+      'search-console-overview': ['view'],
       'affiliate-overview': ['view', 'update'],
       'staff-payouts-all': ['view'],
       'scheduling-availability': ['view', 'create', 'update', 'delete'],
@@ -268,6 +274,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'venue-numbers-management': ['view', 'create', 'update'],
       'channel-numbers-summary': ['view'],
       'marketing-overview': ['view'],
+      'search-console-overview': ['view'],
       'affiliate-overview': ['view', 'update'],
       'staff-payouts-all': ['view'],
       'scheduling-availability': ['view', 'create', 'update'],
@@ -301,6 +308,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'venue-numbers-management': ['view', 'create', 'update'],
       'channel-numbers-summary': ['view'],
       'marketing-overview': ['view'],
+      'search-console-overview': ['view'],
       'affiliate-overview': ['view'],
       'staff-payouts-self': ['view'],
       'scheduling-availability': ['view', 'create', 'update'],

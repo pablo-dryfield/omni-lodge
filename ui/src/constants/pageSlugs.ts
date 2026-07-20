@@ -19,6 +19,7 @@ export const PAGE_SLUGS = {
   venueNumbers: "venue-numbers",
   channelNumbers: "channel-numbers",
   marketing: "marketing",
+  searchConsole: "search-console",
   affiliates: "affiliates",
   performance: "performance",
   reviews: "reviews",
@@ -72,6 +73,7 @@ export const PAGE_SLUGS = {
   settingsDbBackups: "settings-db-backups",
   settingsHomeExperience: "settings-home-experience",
   settingsControlPanel: "settings-control-panel",
+  settingsGoogleApi: "settings-google-api",
   settingsMaintenance: "settings-maintenance",
 };
 

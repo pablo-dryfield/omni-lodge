@@ -60,6 +60,7 @@ import AuditLog from './AuditLog.js';
 import ConfigKey from './ConfigKey.js';
 import ConfigValue from './ConfigValue.js';
 import ConfigHistory from './ConfigHistory.js';
+import SeoActionLog from './SeoActionLog.js';
 import ShiftRole from './ShiftRole.js';
 import UserShiftRole from './UserShiftRole.js';
 import ReportTemplate from './ReportTemplate.js';
@@ -109,6 +110,7 @@ export function defineAssociations() {
   StaffPayoutLedger.belongsTo(User, { foreignKey: 'staff_user_id', as: 'ledgerUser' });
   User.hasMany(ConfigHistory, { foreignKey: 'actor_id', as: 'configHistory' });
   User.hasMany(ConfigValue, { foreignKey: 'updated_by', as: 'configValuesUpdated' });
+  User.hasMany(SeoActionLog, { foreignKey: 'created_by', as: 'seoActionLogs' });
   User.hasMany(CerebroQuizAttempt, { foreignKey: 'user_id', as: 'cerebroQuizAttempts' });
   User.hasMany(CerebroAcknowledgement, { foreignKey: 'user_id', as: 'cerebroAcknowledgements' });
   User.hasMany(AffiliatePayoutLog, { foreignKey: 'affiliate_user_id', as: 'affiliatePayoutLogs' });
