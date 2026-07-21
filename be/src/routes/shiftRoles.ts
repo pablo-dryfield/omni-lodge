@@ -18,7 +18,7 @@ router.post('/', authMiddleware, requireRoles(MANAGER_ROLES), createShiftRole);
 router.patch('/:id', authMiddleware, requireRoles(MANAGER_ROLES), updateShiftRole);
 router.delete('/:id', authMiddleware, requireRoles(MANAGER_ROLES), deleteShiftRole);
 
-router.get('/assignments', authMiddleware, requireRoles(MANAGER_ROLES), listUserShiftRoleAssignments);
+router.get('/assignments', authMiddleware, listUserShiftRoleAssignments);
 router.put('/assignments/:userId', authMiddleware, requireRoles(MANAGER_ROLES), updateUserShiftRoles);
 
 export default router;

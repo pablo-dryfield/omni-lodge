@@ -61,6 +61,7 @@ type UserFormState = {
   departureDate: string;
   userTypeId: string | null;
   status: boolean;
+  approved: boolean;
 };
 
 const INITIAL_FORM_STATE: UserFormState = {
@@ -75,6 +76,7 @@ const INITIAL_FORM_STATE: UserFormState = {
   departureDate: "",
   userTypeId: null,
   status: true,
+  approved: true,
 };
 
 const coerceUserPayload = (payload: Partial<User>) => {
@@ -84,6 +86,9 @@ const coerceUserPayload = (payload: Partial<User>) => {
   }
   if (next.status !== undefined && next.status !== null) {
     next.status = Boolean(next.status);
+  }
+  if (next.approved !== undefined && next.approved !== null) {
+    next.approved = Boolean(next.approved);
   }
   return next;
 };
@@ -182,11 +187,28 @@ const mapUserToFormState = (user?: Partial<User> | null): UserFormState => {
     departureDate: asDateInput(user.departureDate ?? null),
     userTypeId: typeof user.userTypeId === "number" ? String(user.userTypeId) : null,
     status: Boolean(user.status),
+    approved: user.approved !== false,
   };
 };
 
 const userNeedsApproval = (user: Partial<User>): boolean =>
-  Boolean(user.status) && !(typeof user.userTypeId === "number" && Number.isFinite(user.userTypeId));
+  user.approved === false ||
+  (user.approved == null && Boolean(user.status) && !(typeof user.userTypeId === "number" && Number.isFinite(user.userTypeId)));
+
+const normalizeUserTypeKey = (value?: string | null): string =>
+  (value ?? "").trim().toLowerCase().replace(/[_\s]+/g, "-").replace(/-+/g, "-");
+
+const formatRequestedUserType = (value?: string | null): string | null => {
+  const normalized = normalizeUserTypeKey(value);
+  if (!normalized) {
+    return null;
+  }
+  return normalized
+    .split("-")
+    .filter(Boolean)
+    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+};
 
 const buildWhatsappLink = (raw?: string | null): { label: string; href: string } | null => {
   const normalized = (raw ?? "").trim();
@@ -213,6 +235,16 @@ const formatDisplayDate = (value?: string | null): string | null => {
   const parsed = dayjs(value);
   return parsed.isValid() ? parsed.format("YYYY-MM-DD") : null;
 };
+
+const formatDisplayDateTime = (value?: string | Date | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm") : null;
+};
+
+const formatActorId = (value?: number | null): string => (typeof value === "number" ? `User #${value}` : "unknown");
 
 const getUserSortTimestamp = (user: Partial<User>, sortField: SortField): number | null => {
   const value = user[sortField];
@@ -286,6 +318,16 @@ const SettingsUsersPanel = () => {
     userTypes.forEach((typeRecord) => {
       if (typeof typeRecord.id === "number") {
         map.set(typeRecord.id, typeRecord.name ?? `Role #${typeRecord.id}`);
+      }
+    });
+    return map;
+  }, [userTypes]);
+
+  const userTypeIdBySlug = useMemo(() => {
+    const map = new Map<string, number>();
+    userTypes.forEach((typeRecord) => {
+      if (typeof typeRecord.id === "number") {
+        map.set(normalizeUserTypeKey(typeRecord.slug ?? typeRecord.name), typeRecord.id);
       }
     });
     return map;
@@ -408,7 +450,14 @@ const SettingsUsersPanel = () => {
   const openEditEditor = (user: Partial<User>) => {
     setEditorMode("edit");
     setSelectedUser(user);
-    setFormState(mapUserToFormState(user));
+    const nextFormState = mapUserToFormState(user);
+    if (!nextFormState.userTypeId && user.requestedUserType) {
+      const requestedRoleId = userTypeIdBySlug.get(normalizeUserTypeKey(user.requestedUserType));
+      if (requestedRoleId) {
+        nextFormState.userTypeId = String(requestedRoleId);
+      }
+    }
+    setFormState(nextFormState);
     setEditorError(null);
     setEditorOpen(true);
   };
@@ -441,6 +490,10 @@ const SettingsUsersPanel = () => {
       setEditorError("Password must be at least 8 characters.");
       return;
     }
+    if (formState.approved && !formState.userTypeId) {
+      setEditorError("A role is required before approving the user.");
+      return;
+    }
 
     const basePayload: Partial<User> = {
       username,
@@ -453,6 +506,7 @@ const SettingsUsersPanel = () => {
       departureDate: formState.departureDate.trim() || null,
       userTypeId: formState.userTypeId ? Number(formState.userTypeId) : undefined,
       status: formState.status,
+      approved: formState.approved,
     };
     if (password) {
       basePayload.password = password;
@@ -475,6 +529,7 @@ const SettingsUsersPanel = () => {
         if (basePayload.status === false) {
           createFollowUp.status = false;
         }
+        createFollowUp.approved = basePayload.approved;
         if (createdUserId && Object.keys(createFollowUp).length > 0) {
           const followUpPayload = removeEmptyKeys(coerceUserPayload(createFollowUp), loggedUserId);
           await dispatch(updateUser({ userId: createdUserId, userData: followUpPayload })).unwrap();
@@ -680,6 +735,11 @@ const SettingsUsersPanel = () => {
               typeof user.userTypeId === "number"
                 ? userTypeLabelById.get(user.userTypeId) ?? `Role #${user.userTypeId}`
                 : "Needs approval";
+            const requestedRoleLabel = formatRequestedUserType(user.requestedUserType);
+            const approvedDate = formatDisplayDateTime(user.approvedAt ?? null);
+            const revokedDate = formatDisplayDateTime(user.approvalRevokedAt ?? null);
+            const deactivatedDate = formatDisplayDateTime(user.deactivatedAt ?? null);
+            const reactivatedDate = formatDisplayDateTime(user.reactivatedAt ?? null);
             const isRowBusy = rowActionUserId === user.id;
             return (
               <Card key={user.id ?? `${user.username}-${user.email}`} withBorder radius="md" p="md">
@@ -736,9 +796,19 @@ const SettingsUsersPanel = () => {
                     <Badge color={Boolean(user.status) ? "green" : "gray"} variant="light">
                       {Boolean(user.status) ? "Active" : "Inactive"}
                     </Badge>
+                    {needsApproval ? (
+                      <Badge color="orange" variant="light">
+                        Pending approval
+                      </Badge>
+                    ) : null}
                     <Badge color={needsApproval ? "orange" : "indigo"} variant="light">
                       {roleLabel}
                     </Badge>
+                    {needsApproval && requestedRoleLabel ? (
+                      <Badge color="blue" variant="light">
+                        Requested: {requestedRoleLabel}
+                      </Badge>
+                    ) : null}
                   </Group>
 
                   <Group gap={8} wrap="nowrap">
@@ -767,6 +837,29 @@ const SettingsUsersPanel = () => {
                         : "No arrival/departure dates"}
                     </Text>
                   </Group>
+
+                  <Stack gap={2}>
+                    {approvedDate ? (
+                      <Text size="xs" c="dimmed">
+                        Approved {approvedDate} by {formatActorId(user.approvedBy)}
+                      </Text>
+                    ) : null}
+                    {revokedDate ? (
+                      <Text size="xs" c="dimmed">
+                        Approval revoked {revokedDate} by {formatActorId(user.approvalRevokedBy)}
+                      </Text>
+                    ) : null}
+                    {deactivatedDate ? (
+                      <Text size="xs" c="dimmed">
+                        Deactivated {deactivatedDate} by {formatActorId(user.deactivatedBy)}
+                      </Text>
+                    ) : null}
+                    {reactivatedDate ? (
+                      <Text size="xs" c="dimmed">
+                        Reactivated {reactivatedDate} by {formatActorId(user.reactivatedBy)}
+                      </Text>
+                    ) : null}
+                  </Stack>
 
                   <Text size="xs" c="dimmed">
                     Updated{" "}
@@ -874,6 +967,13 @@ const SettingsUsersPanel = () => {
               label="Active account"
               checked={formState.status}
               onChange={(event) => setFormState((prev) => ({ ...prev, status: event.currentTarget.checked }))}
+              mt="xl"
+            />
+            <Switch
+              label="Approved account"
+              description="Approved users can sign in and use the role assigned above."
+              checked={formState.approved}
+              onChange={(event) => setFormState((prev) => ({ ...prev, approved: event.currentTarget.checked }))}
               mt="xl"
             />
           </SimpleGrid>

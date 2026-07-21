@@ -25,11 +25,13 @@ import { IconAlertCircle, IconDeviceFloppy, IconIdBadge, IconPrinter, IconRefres
 import QRCode from "qrcode";
 
 import { fetchUsers, sendUserBadgeToPrint, updateUser } from "../actions/userActions";
+import { fetchUserTypes } from "../actions/userTypeActions";
 import { fetchStaffProfiles } from "../actions/staffProfileActions";
 import { setUserState } from "../actions/sessionActions";
 import { useShiftRoleAssignments, useShiftRoles } from "../api/shiftRoles";
 import type { StaffProfile } from "../types/staffProfiles/StaffProfile";
 import type { User } from "../types/users/User";
+import type { UserType } from "../types/userTypes/UserType";
 import type { ShiftRole } from "../types/shiftRoles/ShiftRole";
 import type { UserShiftRoleAssignment } from "../types/shiftRoles/UserShiftRoleAssignment";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
@@ -41,6 +43,7 @@ import { DISCOVERY_SOURCE_OPTIONS } from "../constants/discoverySources";
 import { EMAIL_REGEX, normalizePhoneNumber, isPhoneNumberValid } from "../utils/contactValidation";
 import { DEFAULT_PHONE_CODE } from "../constants/phoneCodes";
 import { buildPhoneFromParts, splitPhoneNumber } from "../utils/phone";
+import { StaffBadgeFrontPreview } from "../components/badges/StaffBadgeFrontPreview";
 
 type FeedbackState = { type: "success" | "error"; message: string } | null;
 
@@ -109,6 +112,7 @@ const PROFILE_PHOTO_COMPRESSION_OPTIONS = {
 };
 
 const BADGE_TEMPLATE_SRC = "/assets/badges/ktk-guide-badge.svg";
+const BADGE_MEDIA_TEMPLATE_SRC = "/assets/badges/ktk-media-badge.svg";
 const BADGE_BACKSIDE_TEMPLATE_SRC = "/assets/badges/ktk-backside-badge.png";
 const BADGE_CAMPAIGN_BASE_URL =
   "https://krawlthroughkrakow.com/store/Krakow-Pub-Crawl-with-Krawl-Through-Krakow-p637047413/";
@@ -193,13 +197,30 @@ const buildBadgeFormState = (user?: Partial<User>): BadgeFormState => ({
   badgeSuffixEmoji: user?.badgeSuffixEmoji ?? "",
 });
 
-const normalizeBadgeCampaignValue = (badgeName: string) => {
-  const trimmed = compareString(badgeName).trim();
+const normalizeBadgeVariantValue = (value?: string | null) =>
+  compareString(value).trim().toLowerCase().replace(/[_\s]+/g, "-").replace(/-+/g, "-");
+
+const isSocialMediaUserType = (userType?: Partial<UserType> | null) => {
+  const slug = normalizeBadgeVariantValue(userType?.slug);
+  const name = normalizeBadgeVariantValue(userType?.name);
+  return slug === "social-media" || name === "social-media";
+};
+
+const isSocialMediaRequestedUserType = (value?: string | null) =>
+  normalizeBadgeVariantValue(value) === "social-media";
+
+const normalizeBadgeCampaignValue = (sourceName: string) => {
+  const trimmed = compareString(sourceName).trim();
   if (!trimmed) {
     return "Staff";
   }
   const lowerCased = trimmed.toLocaleLowerCase();
   return `${lowerCased.charAt(0).toLocaleUpperCase()}${lowerCased.slice(1)}`;
+};
+
+const buildBadgeCampaignSourceName = (firstName?: string | null, userId?: number | null) => {
+  const normalizedFirstName = normalizeBadgeCampaignValue(firstName ?? "");
+  return userId ? `${normalizedFirstName}_${userId}` : normalizedFirstName;
 };
 
 const buildNormalizedBadgeValues = (badgeForm: BadgeFormState) => {
@@ -277,9 +298,9 @@ const makeInitials = (name: string | undefined) => {
 
 const compareString = (value?: string | null) => value ?? "";
 
-const buildBadgeCampaignUrl = (badgeName: string) => {
+const buildBadgeCampaignUrl = (sourceName: string) => {
   const url = new URL(BADGE_CAMPAIGN_BASE_URL);
-  url.searchParams.set("utm_source", normalizeBadgeCampaignValue(badgeName));
+  url.searchParams.set("utm_source", sourceName);
   url.searchParams.set("utm_medium", "Badge");
   url.searchParams.set("utm_campaign", "Staff");
   return url.toString();
@@ -304,6 +325,7 @@ const MyAccount = () => {
   const { loggedUserId } = useAppSelector((state) => state.session);
   const usersState = useAppSelector((state) => state.users)[0];
   const staffProfilesState = useAppSelector((state) => state.staffProfiles)[0];
+  const userTypesState = useAppSelector((state) => state.userTypes?.[0]);
 
   const shiftRolesQuery = useShiftRoles();
   const shiftRoleAssignmentsQuery = useShiftRoleAssignments();
@@ -316,11 +338,22 @@ const MyAccount = () => {
     () => (staffProfilesState.data?.[0]?.data ?? []) as Partial<StaffProfile>[],
     [staffProfilesState],
   );
+  const userTypes = useMemo(
+    () => (userTypesState.data?.[0]?.data ?? []) as Partial<UserType>[],
+    [userTypesState?.data],
+  );
 
   const currentUser = useMemo(
     () => userRecords.find((record) => record.id === loggedUserId),
     [userRecords, loggedUserId],
   );
+  const currentUserType = useMemo(
+    () => userTypes.find((record) => record.id === currentUser?.userTypeId),
+    [currentUser?.userTypeId, userTypes],
+  );
+  const badgeTemplateSrc = isSocialMediaUserType(currentUserType) || isSocialMediaRequestedUserType(currentUser?.requestedUserType)
+    ? BADGE_MEDIA_TEMPLATE_SRC
+    : BADGE_TEMPLATE_SRC;
   const remoteProfilePhotoUrl = useMemo(
     () => buildUserProfilePhotoUrl({ user: currentUser }),
     [currentUser],
@@ -453,6 +486,7 @@ const MyAccount = () => {
   const [passwordSaving, setPasswordSaving] = useState(false);
 
   const [usersRequested, setUsersRequested] = useState(false);
+  const [userTypesRequested, setUserTypesRequested] = useState(false);
   const [staffProfilesRequested, setStaffProfilesRequested] = useState(false);
 
   useEffect(() => {
@@ -461,6 +495,13 @@ const MyAccount = () => {
       dispatch(fetchUsers());
     }
   }, [dispatch, loggedUserId, currentUser, usersRequested, usersState.loading]);
+
+  useEffect(() => {
+    if (userTypesState && !userTypesState.loading && userTypes.length === 0 && !userTypesRequested) {
+      setUserTypesRequested(true);
+      dispatch(fetchUserTypes());
+    }
+  }, [dispatch, userTypes.length, userTypesRequested, userTypesState]);
 
   useEffect(() => {
     if (loggedUserId && !currentStaffProfile && !staffProfilesState.loading && !staffProfilesRequested) {
@@ -686,6 +727,7 @@ const MyAccount = () => {
             badgeName: normalized.badgeName,
             badgePrefixEmoji: normalized.badgePrefixEmoji || null,
             badgeSuffixEmoji: normalized.badgeSuffixEmoji || null,
+            campaignSourceName: buildBadgeCampaignSourceName(currentUser.firstName, loggedUserId),
           },
         }),
       ).unwrap();
@@ -1111,26 +1153,12 @@ const MyAccount = () => {
   const badgePrefixEmoji = compareString(badgeForm.badgePrefixEmoji).trim();
   const badgeName = compareString(badgeForm.badgeName).trim();
   const badgeSuffixEmoji = compareString(badgeForm.badgeSuffixEmoji).trim();
-  const hasBadgePreviewLabel =
-    badgePrefixEmoji.length > 0 || badgeName.length > 0 || badgeSuffixEmoji.length > 0;
-  const badgePreviewUnits =
-    badgeName.length * 1.2 + (badgePrefixEmoji ? 3 : 0) + (badgeSuffixEmoji ? 3 : 0);
-  const badgePreviewFontSize =
-    badgePreviewUnits <= 7
-      ? "clamp(25px, 3.3vw, 35px)"
-      : badgePreviewUnits <= 10
-        ? "clamp(22px, 2.9vw, 30px)"
-        : badgePreviewUnits <= 13
-          ? "clamp(20px, 2.6vw, 27px)"
-          : badgePreviewUnits <= 16
-            ? "clamp(18px, 2.4vw, 24px)"
-            : "clamp(16px, 2.1vw, 21px)";
 
   useEffect(() => {
     let active = true;
-    const qrBadgeName = badgeName || "Staff";
+    const qrSourceName = buildBadgeCampaignSourceName(currentUser?.firstName, currentUser?.id ?? loggedUserId);
 
-    QRCode.toDataURL(buildBadgeCampaignUrl(qrBadgeName), {
+    QRCode.toDataURL(buildBadgeCampaignUrl(qrSourceName), {
       errorCorrectionLevel: "M",
       margin: 1,
       color: {
@@ -1152,7 +1180,7 @@ const MyAccount = () => {
     return () => {
       active = false;
     };
-  }, [badgeName]);
+  }, [currentUser?.firstName, currentUser?.id, loggedUserId]);
 
   if (!loggedUserId) {
     return (
@@ -1736,94 +1764,13 @@ const MyAccount = () => {
               )}
               <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
                 <Stack gap="md" align="center">
-                  <Box
-                    style={{
-                      position: "relative",
-                      width: "100%",
-                      maxWidth: 420,
-                      marginInline: "auto",
-                    }}
-                  >
-                    <Box
-                      component="img"
-                      src={BADGE_TEMPLATE_SRC}
-                      alt="Staff badge front preview"
-                      style={{ display: "block", width: "100%", height: "auto" }}
-                    />
-                    <Box
-                      style={{
-                        position: "absolute",
-                        left: "21.5%",
-                        top: "57.0%",
-                        width: "49.9%",
-                        height: "11.9%",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        paddingInline: "4%",
-                        textAlign: "center",
-                        color: "#111",
-                        fontSize: badgePreviewFontSize,
-                        lineHeight: 1.05,
-                        overflow: "hidden",
-                        pointerEvents: "none",
-                        whiteSpace: "nowrap",
-                        flexWrap: "nowrap",
-                        gap: "0.12em",
-                      }}
-                    >
-                      {hasBadgePreviewLabel ? (
-                        <>
-                          {badgePrefixEmoji ? (
-                            <Text
-                              component="span"
-                              inherit
-                              style={{
-                                fontFamily:
-                                  '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif',
-                              }}
-                            >
-                              {badgePrefixEmoji}
-                            </Text>
-                          ) : null}
-                          {badgeName ? (
-                            <Text
-                              component="span"
-                              inherit
-                              fw={900}
-                              style={{
-                                fontFamily: '"Montserrat", sans-serif',
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {badgeName}
-                            </Text>
-                          ) : null}
-                          {badgeSuffixEmoji ? (
-                            <Text
-                              component="span"
-                              inherit
-                              style={{
-                                fontFamily:
-                                  '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif',
-                              }}
-                            >
-                              {badgeSuffixEmoji}
-                            </Text>
-                          ) : null}
-                        </>
-                      ) : (
-                        <Text
-                          component="span"
-                          inherit
-                          fw={900}
-                          style={{ fontFamily: '"Montserrat", sans-serif' }}
-                        >
-                          Your badge name
-                        </Text>
-                      )}
-                    </Box>
-                  </Box>
+                  <StaffBadgeFrontPreview
+                    templateSrc={badgeTemplateSrc}
+                    badgeName={badgeName}
+                    prefixEmoji={badgePrefixEmoji}
+                    suffixEmoji={badgeSuffixEmoji}
+                    maxWidth={420}
+                  />
                   <Box
                     style={{
                       position: "relative",

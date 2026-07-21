@@ -64,6 +64,11 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       return;
     }
 
+    if (!user.status || !user.approved || !user.userTypeId) {
+      res.status(403).json({ error: 'Account is inactive or waiting for approval' });
+      return;
+    }
+
     const role = (user as unknown as { role?: UserType | null }).role ?? null;
     const shiftRoles = (user as unknown as { shiftRoles?: Array<Pick<ShiftRole, 'slug'>> }).shiftRoles ?? [];
     const explicitRole = (user as unknown as { roleKey?: string | null }).roleKey ?? null;

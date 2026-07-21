@@ -13,6 +13,10 @@ const BADGE_TEMPLATE_PATH = path.resolve(
   __dirname,
   '../../../ui/public/assets/badges/ktk-guide-badge.svg',
 );
+const BADGE_MEDIA_TEMPLATE_PATH = path.resolve(
+  __dirname,
+  '../../../ui/public/assets/badges/ktk-media-badge.svg',
+);
 const BADGE_BACKSIDE_TEMPLATE_PATH = path.resolve(
   __dirname,
   '../../../ui/public/assets/badges/ktk-backside-badge.png',
@@ -61,6 +65,8 @@ const BADGE_BACKSIDE_QR = {
 const BADGE_CAMPAIGN_BASE_URL =
   'https://krawlthroughkrakow.com/store/Krakow-Pub-Crawl-with-Krawl-Through-Krakow-p637047413/';
 
+export type BadgeTemplateVariant = 'guide' | 'media';
+
 const escapeXml = (value: string): string =>
   value
     .replace(/&/g, '&amp;')
@@ -99,6 +105,25 @@ const buildBadgeFontSize = (badgeName: string, prefixEmoji: string, suffixEmoji:
 
 const buildBadgeLabel = (badgeName: string, prefixEmoji: string, suffixEmoji: string): string =>
   [prefixEmoji.trim(), badgeName.trim(), suffixEmoji.trim()].filter(Boolean).join(' ');
+
+const normalizeBadgeVariantValue = (value?: string | null): string =>
+  value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/-+/g, '-') ?? '';
+
+export const resolveBadgeTemplateVariant = (options: {
+  userTypeSlug?: string | null;
+  userTypeName?: string | null;
+}): BadgeTemplateVariant => {
+  const slug = normalizeBadgeVariantValue(options.userTypeSlug);
+  const name = normalizeBadgeVariantValue(options.userTypeName);
+  return slug === 'social-media' || name === 'social-media' ? 'media' : 'guide';
+};
+
+const getBadgeTemplatePath = (variant: BadgeTemplateVariant): string =>
+  variant === 'media' ? BADGE_MEDIA_TEMPLATE_PATH : BADGE_TEMPLATE_PATH;
 
 const getEmojiCodepointSlug = (emoji: string): string =>
   Array.from(emoji.trim())
@@ -212,8 +237,8 @@ const buildBadgeFrontLabelNode = async (badgeName: string, prefixEmoji: string, 
   return nodes.join('');
 };
 
-const normalizeBadgeSourceValue = (badgeName: string): string => {
-  const trimmed = badgeName.trim();
+const normalizeBadgeSourceValue = (sourceName: string): string => {
+  const trimmed = sourceName.trim();
   if (!trimmed) {
     return 'Staff';
   }
@@ -221,9 +246,14 @@ const normalizeBadgeSourceValue = (badgeName: string): string => {
   return `${lowerCased.charAt(0).toLocaleUpperCase()}${lowerCased.slice(1)}`;
 };
 
-const buildBadgeCampaignUrl = (badgeName: string): string => {
+export const buildBadgeCampaignSourceName = (firstName?: string | null, userId?: number | null): string => {
+  const normalizedFirstName = normalizeBadgeSourceValue(firstName ?? '');
+  return userId ? `${normalizedFirstName}_${userId}` : normalizedFirstName;
+};
+
+const buildBadgeCampaignUrl = (sourceName: string): string => {
   const url = new URL(BADGE_CAMPAIGN_BASE_URL);
-  url.searchParams.set('utm_source', normalizeBadgeSourceValue(badgeName));
+  url.searchParams.set('utm_source', sourceName);
   url.searchParams.set('utm_medium', 'Badge');
   url.searchParams.set('utm_campaign', 'Staff');
   return url.toString();
@@ -267,17 +297,19 @@ export const renderBadgeSvg = async (options: {
   badgeName: string;
   badgePrefixEmoji?: string | null;
   badgeSuffixEmoji?: string | null;
+  templateVariant?: BadgeTemplateVariant;
 }): Promise<{ svg: string; fileName: string }> => {
   const badgeName = options.badgeName.trim();
   const badgePrefixEmoji = options.badgePrefixEmoji?.trim() ?? '';
   const badgeSuffixEmoji = options.badgeSuffixEmoji?.trim() ?? '';
+  const templateVariant = options.templateVariant ?? 'guide';
   const label = buildBadgeLabel(badgeName, badgePrefixEmoji, badgeSuffixEmoji);
 
   if (!label) {
     throw new Error('Badge name is required before sending to print.');
   }
 
-  const template = await readFile(BADGE_TEMPLATE_PATH, 'utf8');
+  const template = await readFile(getBadgeTemplatePath(templateVariant), 'utf8');
   const textNode = await buildBadgeFrontLabelNode(badgeName, badgePrefixEmoji, badgeSuffixEmoji);
   const croppedTemplate = template.replace(
     /<svg\b([^>]*?)\bwidth="[^"]*"\s+height="[^"]*"\s+([^>]*?)viewBox="[^"]*"([^>]*)>/i,
@@ -286,7 +318,7 @@ export const renderBadgeSvg = async (options: {
 
   return {
     svg: croppedTemplate.replace('</svg>', textNode),
-    fileName: `${sanitizeFileName(badgeName)}-guide-badge.svg`,
+    fileName: `${sanitizeFileName(badgeName)}-${templateVariant}-badge.svg`,
   };
 };
 
@@ -294,6 +326,7 @@ export const renderBadgePdf = async (options: {
   badgeName: string;
   badgePrefixEmoji?: string | null;
   badgeSuffixEmoji?: string | null;
+  templateVariant?: BadgeTemplateVariant;
 }): Promise<{ pdf: Buffer; fileName: string }> => {
   const { svg, fileName } = await renderBadgeSvg(options);
   const browser = await launchBadgeBrowser();
@@ -369,10 +402,11 @@ export const renderBadgePdf = async (options: {
 const buildBadgePrintHtml = async (options: {
   frontSvg: string;
   badgeName: string;
+  campaignSourceName: string;
 }): Promise<string> => {
   const backsideBuffer = await readFile(BADGE_BACKSIDE_TEMPLATE_PATH);
   const backsideDataUrl = `data:image/png;base64,${backsideBuffer.toString('base64')}`;
-  const qrDataUrl = await QRCode.toDataURL(buildBadgeCampaignUrl(options.badgeName), {
+  const qrDataUrl = await QRCode.toDataURL(buildBadgeCampaignUrl(options.campaignSourceName), {
     errorCorrectionLevel: 'M',
     margin: 1,
     color: {
@@ -461,6 +495,8 @@ export const renderBadgePrintPdf = async (options: {
   badgeName: string;
   badgePrefixEmoji?: string | null;
   badgeSuffixEmoji?: string | null;
+  campaignSourceName?: string | null;
+  templateVariant?: BadgeTemplateVariant;
 }): Promise<{ pdf: Buffer; fileName: string }> => {
   const { svg, fileName } = await renderBadgeSvg(options);
   const browser = await launchBadgeBrowser();
@@ -470,6 +506,7 @@ export const renderBadgePrintPdf = async (options: {
     const html = await buildBadgePrintHtml({
       frontSvg: svg,
       badgeName: options.badgeName.trim(),
+      campaignSourceName: options.campaignSourceName?.trim() || 'Staff',
     });
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
@@ -488,7 +525,7 @@ export const renderBadgePrintPdf = async (options: {
 
     return {
       pdf: pdfBytes,
-      fileName: fileName.replace(/-guide-badge\.svg$/i, '-badge-print.pdf'),
+      fileName: fileName.replace(/-badge\.svg$/i, '-badge-print.pdf'),
     };
   } finally {
     await browser.close();
@@ -500,6 +537,8 @@ export const sendBadgeToPrint = async (options: {
   badgeName: string;
   badgePrefixEmoji?: string | null;
   badgeSuffixEmoji?: string | null;
+  campaignSourceName?: string | null;
+  templateVariant?: BadgeTemplateVariant;
 }): Promise<void> => {
   const { pdf, fileName } = await renderBadgePrintPdf(options);
 

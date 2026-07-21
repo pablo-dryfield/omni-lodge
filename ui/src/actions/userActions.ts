@@ -130,7 +130,9 @@ export const sendUserBadgeToPrint = createAsyncThunk(
       badgeData,
     }: {
       userId: number;
-      badgeData: Pick<User, 'badgeName' | 'badgePrefixEmoji' | 'badgeSuffixEmoji'>;
+      badgeData: Pick<User, 'badgeName' | 'badgePrefixEmoji' | 'badgeSuffixEmoji'> & {
+        campaignSourceName?: string | null;
+      };
     },
     { rejectWithValue },
   ) => {
