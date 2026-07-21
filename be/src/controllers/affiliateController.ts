@@ -36,6 +36,9 @@ export const getAffiliateOverviewController = async (req: AuthenticatedRequest, 
   const selectedAffiliateUserId = parseOptionalAffiliateUserId(req.query.affiliateUserId);
   const currentUserId = req.authContext?.id ?? 0;
   const currentRoleSlug = req.authContext?.roleSlug ?? null;
+  const canViewStaffAssignments = ['admin', 'administrator', 'owner', 'manager'].includes(
+    (currentRoleSlug ?? '').trim().toLowerCase(),
+  );
 
   try {
     const payload = await getAffiliateOverview({
@@ -44,6 +47,7 @@ export const getAffiliateOverviewController = async (req: AuthenticatedRequest, 
       selectedAffiliateUserId,
       currentUserId,
       currentRoleSlug,
+      includeStaffAffiliateAssignments: canViewStaffAssignments,
     });
     res.status(200).json(payload);
   } catch (error) {
