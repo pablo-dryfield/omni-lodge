@@ -138,7 +138,7 @@ export default class User extends Model {
   declare badgeSuffixEmoji: string | null;
 
   @AllowNull(false)
-  @Default(0)
+  @Default(20)
   @Column({ field: 'affiliate_commission_rate', type: DataType.DECIMAL(8, 4) })
   declare affiliateCommissionRate: number;
 

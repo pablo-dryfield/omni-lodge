@@ -1,4 +1,4 @@
-import React, { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Paper,
   Container,
@@ -25,14 +25,15 @@ import {
   Textarea,
   TextInput,
   Switch,
-  SegmentedControl,
   Checkbox,
+  Accordion,
+  Tooltip,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
+import { useSearchParams } from 'react-router-dom';
 import dayjs, { Dayjs } from 'dayjs';
 import {
   type Pay,
-  type PayBreakdown,
   type PayComponentSummary,
   type PlatformGuestTierBreakdown,
   type LockedComponentSummary,
@@ -65,15 +66,35 @@ import { IconTrash } from '@tabler/icons-react';
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
 const DEFAULT_CURRENCY = 'PLN';
-const PaysCharts = lazy(() => import('../components/pays/PaysCharts'));
+const URL_DATE_FORMAT = 'YYYY-MM-DD';
+const URL_PRESET_PARAM = 'preset';
+const URL_START_DATE_PARAM = 'startDate';
+const URL_END_DATE_PARAM = 'endDate';
 
 type DatePreset = 'this_month' | 'last_month' | 'custom';
+
+type IncentiveBadgeDetail = {
+  letter: string;
+  name: string;
+  amount: number | null;
+};
 
 const DATE_PRESET_OPTIONS: Array<{ value: DatePreset; label: string }> = [
   { value: 'this_month', label: 'This month' },
   { value: 'last_month', label: 'Last month' },
   { value: 'custom', label: 'Custom range' },
 ];
+
+const isDatePreset = (value: string | null): value is DatePreset =>
+  value === 'this_month' || value === 'last_month' || value === 'custom';
+
+const parseUrlDate = (value: string | null): Dayjs | null => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed : null;
+};
 
 const formatCurrency = (value: number | undefined, currencyCode?: string): string => {
   const numberPart = (value ?? 0).toLocaleString('en-US', {
@@ -86,19 +107,16 @@ const formatCurrency = (value: number | undefined, currencyCode?: string): strin
   return `${numberPart} zł`;
 };
 
-const computePreviousRange = (start: Dayjs, end: Dayjs) => {
-  const diffDays = end.startOf('day').diff(start.startOf('day'), 'day');
-  const previousRangeEnd = start.subtract(1, 'day');
-  const previousRangeStart =
-    diffDays > 0 ? previousRangeEnd.subtract(diffDays, 'day') : previousRangeEnd;
-  return {
-    start: previousRangeStart,
-    end: previousRangeEnd,
-  };
-};
-
 const formatRangeLabel = (start: string, end: string) =>
   `${dayjs(start).format('MMM D, YYYY')} - ${dayjs(end).format('MMM D, YYYY')}`;
+
+const formatDateTimeLabel = (value: string | null | undefined) => {
+  if (!value) {
+    return 'Not recorded';
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format('MMM D, YYYY HH:mm') : value;
+};
 
 const getComponentColor = (category: string) => {
   switch (category) {
@@ -122,11 +140,6 @@ const getComponentColor = (category: string) => {
 };
 
 const normalizeTotal = (summary: Pay) => summary.totalPayout ?? summary.totalCommission;
-const calculateIncentiveTotal = (summary: Pay) =>
-  (summary.componentTotals ?? []).reduce(
-    (sum, component) => (component.category === 'incentive' ? sum + component.amount : sum),
-    0,
-  );
 
 const humanizeErrorMessage = (rawMessage?: string | null): { title: string; description: string; details?: string } => {
   const defaultDescription = 'Please adjust the selected period or try again in a moment.';
@@ -184,6 +197,91 @@ const FULL_ACCESS_MODULE = 'staff-payouts-all';
 const SELF_ACCESS_MODULE = 'staff-payouts-self';
 const PAGE_SLUG = PAGE_SLUGS.pays;
 
+const KPI_CARD_STYLE: React.CSSProperties = {
+  minHeight: 104,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  textAlign: 'center',
+};
+const BREAKDOWN_ROW_STYLE: React.CSSProperties = {
+  padding: '8px 0',
+  borderBottom: '1px solid var(--mantine-color-gray-2)',
+};
+const BREAKDOWN_ROW_CENTER_STYLE: React.CSSProperties = {
+  width: '100%',
+  alignItems: 'center',
+  textAlign: 'center',
+};
+const BREAKDOWN_ROW_HEADER_STYLE: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '116px minmax(0, 1fr)',
+  columnGap: 8,
+  alignItems: 'center',
+  width: 'min(100%, 310px)',
+  margin: '0 auto',
+};
+const BREAKDOWN_ROW_BADGE_STYLE: React.CSSProperties = {
+  justifySelf: 'end',
+  width: 108,
+  display: 'flex',
+  justifyContent: 'center',
+};
+const BREAKDOWN_ROW_TITLE_STYLE: React.CSSProperties = {
+  minWidth: 0,
+  justifySelf: 'start',
+  textAlign: 'left',
+};
+const DESKTOP_FIXED_TABLE_HEADER_TOP = 69;
+
+type DetailAccordionSectionProps = {
+  title: string;
+  description?: string;
+  rightSection?: React.ReactNode;
+  children: React.ReactNode;
+};
+
+const DetailAccordionSection: React.FC<DetailAccordionSectionProps> = ({
+  title,
+  description,
+  rightSection,
+  children,
+}) => (
+  <Accordion variant="contained" radius="md">
+    <Accordion.Item value="content">
+      <Accordion.Control>
+        <Box style={{ position: 'relative', minHeight: description ? 36 : 20 }}>
+          <Stack gap={0} align="center" style={{ minWidth: 0 }}>
+            <Text size="sm" fw={600} ta="center">
+              {title}
+            </Text>
+            {description && (
+              <Text size="xs" c="dimmed" ta="center">
+                {description}
+              </Text>
+            )}
+          </Stack>
+          {rightSection && (
+            <Box
+              style={{
+                position: 'absolute',
+                right: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+              }}
+            >
+              {rightSection}
+            </Box>
+          )}
+        </Box>
+      </Accordion.Control>
+      <Accordion.Panel>
+        <Stack gap="xs">{children}</Stack>
+      </Accordion.Panel>
+    </Accordion.Item>
+  </Accordion>
+);
+
 type ComponentListItemProps = {
   component: PayComponentSummary;
   breakdown: PlatformGuestTierBreakdown[];
@@ -198,6 +296,7 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
   platformGuestTotals,
 }) => {
   const [showBaseDays, setShowBaseDays] = useState(false);
+  const [showPlatformDetails, setShowPlatformDetails] = useState(false);
   const explicitBaseDays = Array.isArray(component.baseDays) ? component.baseDays.filter(Boolean) : [];
   const computedBaseDayCount =
     explicitBaseDays.length > 0
@@ -212,25 +311,31 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
         : computedBaseDayCount.toFixed(2)
       : null;
   const hasBaseDayList = explicitBaseDays.length > 0;
+  const platformGuestCount =
+    showPlatformTotals && platformGuestTotals && platformGuestTotals.totalGuests > 0
+      ? platformGuestTotals.totalGuests
+      : breakdown.length > 0
+      ? breakdown[breakdown.length - 1].cumulativeGuests
+      : null;
+  const hasPlatformDetails = platformGuestCount !== null && (showPlatformTotals || breakdown.length > 0);
 
   return (
-    <Stack gap={4}>
-      <Group justify="space-between" gap="xs">
-        <Group gap={6} align="center">
-          <Badge color={getComponentColor(component.category)} variant="light">
-            {component.category}
-          </Badge>
-          <Text size="sm">
-            {component.name}
+    <Box style={BREAKDOWN_ROW_STYLE}>
+      <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+        <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+            <Box style={BREAKDOWN_ROW_HEADER_STYLE}>
+              <Badge color={getComponentColor(component.category)} variant="light" style={BREAKDOWN_ROW_BADGE_STYLE}>
+                {component.category}
+              </Badge>
+              <Text size="sm" fw={500} style={BREAKDOWN_ROW_TITLE_STYLE}>
+                {component.name}
+              </Text>
+            </Box>
             {computedBaseDayCount !== null && (
-              <Text
-                component="span"
-                size="xs"
-                c="dimmed"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-              >
-                {'  '}
-                ({formattedBaseDays} {computedBaseDayCount === 1 ? 'day' : 'days'} counted
+              <Group gap={4} align="center" justify="center" wrap="nowrap">
+                <Text size="xs" c="dimmed" ta="center">
+                  {formattedBaseDays} {computedBaseDayCount === 1 ? 'day' : 'days'} counted
+                </Text>
                 {hasBaseDayList && (
                   <ActionIcon
                     size="xs"
@@ -242,15 +347,28 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
                     {showBaseDays ? '\u25B2' : '\u25BC'}
                   </ActionIcon>
                 )}
-                )
-              </Text>
+              </Group>
             )}
+            {hasPlatformDetails && (
+              <Group gap={4} align="center" justify="center" wrap="nowrap">
+                <Text size="xs" c="dimmed" ta="center">
+                  {platformGuestCount} {platformGuestCount === 1 ? 'guest' : 'guests'}
+                </Text>
+                <ActionIcon
+                  size="xs"
+                  variant="subtle"
+                  color="blue"
+                  onClick={() => setShowPlatformDetails((prev) => !prev)}
+                  aria-label={showPlatformDetails ? 'Hide guest incentive details' : 'Show guest incentive details'}
+                >
+                  {showPlatformDetails ? '\u25B2' : '\u25BC'}
+                </ActionIcon>
+              </Group>
+            )}
+          </Stack>
+          <Text size="sm" fw={700} ta="center">
+            {formatCurrency(component.amount)}
           </Text>
-        </Group>
-        <Text size="sm" fw={600}>
-          {formatCurrency(component.amount)}
-        </Text>
-      </Group>
 
       {hasBaseDayList && (
         <Collapse in={showBaseDays}>
@@ -268,6 +386,8 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
         </Collapse>
       )}
 
+      {hasPlatformDetails && (
+        <Collapse in={showPlatformDetails}>
       {showPlatformTotals && platformGuestTotals && platformGuestTotals.totalGuests > 0 && (
         <Text size="xs" c="dimmed">
           Total guests: {platformGuestTotals.totalGuests} (Booked {platformGuestTotals.totalBooked}, Attended{' '}
@@ -289,7 +409,124 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
           ))}
         </Stack>
       )}
+        </Collapse>
+      )}
+      </Stack>
+    </Box>
+  );
+};
+
+const normalizePaymentBucketKey = (value: string) => value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+const getPaymentBucketSortRank = (bucket: string) => {
+  const normalized = normalizePaymentBucketKey(bucket);
+  if (normalized === 'base' || normalized === 'salary' || normalized === 'base_salary') {
+    return 10;
+  }
+  if (normalized === 'commission' || normalized === 'commissions') {
+    return 20;
+  }
+  if (normalized === 'affiliate_commission' || normalized === 'affiliate_commissions') {
+    return 25;
+  }
+  if (normalized === 'incentive' || normalized === 'incentives') {
+    return 30;
+  }
+  if (normalized === 'reimbursement' || normalized === 'reimbursements') {
+    return 40;
+  }
+  return 100;
+};
+
+const hasPositivePaymentBucket = (staff: Pay) =>
+  Object.entries(staff.bucketTotals ?? {}).some(([bucket, amount]) => {
+    const normalized = normalizePaymentBucketKey(bucket);
+    return normalized !== 'affiliate_commission' && normalized !== 'affiliate_commissions' && amount > 0;
+  }) ||
+  (staff.affiliateSales?.commissionOutstandingTotal ?? 0) > 0;
+
+const renderProductCommissionChips = (staff?: Pay) => {
+  const rows =
+    staff?.productTotals
+      ?.filter((product) => product.totalCommission > 0)
+      .map((product) => ({
+        key: `${product.productId ?? 'legacy'}-${product.productName}`,
+        label: product.productName || 'Product commission',
+        amount: product.totalCommission,
+      })) ?? [];
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <Stack gap={0}>
+      {rows.map((row) => (
+        <Box key={row.key} style={BREAKDOWN_ROW_STYLE}>
+          <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+            <Box style={BREAKDOWN_ROW_HEADER_STYLE}>
+              <Badge color="green" variant="light" style={BREAKDOWN_ROW_BADGE_STYLE}>
+                Commission
+              </Badge>
+              <Text size="sm" fw={500} style={BREAKDOWN_ROW_TITLE_STYLE}>
+                {row.label}
+              </Text>
+            </Box>
+            <Text size="sm" fw={700} ta="center">
+              {formatCurrency(row.amount)}
+            </Text>
+          </Stack>
+        </Box>
+      ))}
     </Stack>
+  );
+};
+
+const renderReimbursementBreakdownChip = (staff?: Pay) => {
+  const amount = (staff?.reimbursements?.awaitingAmount ?? 0) + (staff?.reimbursements?.reimbursedAmount ?? 0);
+  if (amount <= 0) {
+    return null;
+  }
+
+  return (
+    <Box style={BREAKDOWN_ROW_STYLE}>
+      <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+        <Box style={BREAKDOWN_ROW_HEADER_STYLE}>
+          <Badge color="orange" variant="light" style={BREAKDOWN_ROW_BADGE_STYLE}>
+            Reimbursement
+          </Badge>
+          <Text size="sm" fw={500} style={BREAKDOWN_ROW_TITLE_STYLE}>Reimbursements</Text>
+        </Box>
+        <Text size="sm" fw={700} ta="center">
+          {formatCurrency(amount)}
+        </Text>
+      </Stack>
+    </Box>
+  );
+};
+
+const renderAffiliateCommissionBreakdownChip = (staff?: Pay) => {
+  const amount = roundLineAmount(staff?.affiliateSales?.commissionOutstandingTotal ?? 0);
+  if (amount <= 0) {
+    return null;
+  }
+
+  return (
+    <Box style={BREAKDOWN_ROW_STYLE}>
+      <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+        <Box style={BREAKDOWN_ROW_HEADER_STYLE}>
+          <Badge color="green" variant="light" style={BREAKDOWN_ROW_BADGE_STYLE}>
+            Commission
+          </Badge>
+          <Text size="sm" fw={500} style={BREAKDOWN_ROW_TITLE_STYLE}>
+            Promotion Sales
+          </Text>
+        </Box>
+        <Text size="sm" fw={700} ta="center">
+          {formatCurrency(amount)}
+        </Text>
+      </Stack>
+    </Box>
   );
 };
 
@@ -303,40 +540,59 @@ const renderComponentList = (
 ) => {
   const paidComponents = components ?? [];
   const lockedList = lockedComponents ?? [];
-  if (paidComponents.length === 0 && lockedList.length === 0) {
+  const productCommissionChips = renderProductCommissionChips(staff);
+  const affiliateCommissionChip = renderAffiliateCommissionBreakdownChip(staff);
+  const reimbursementChip = renderReimbursementBreakdownChip(staff);
+  if (
+    paidComponents.length === 0 &&
+    lockedList.length === 0 &&
+    !productCommissionChips &&
+    !affiliateCommissionChip &&
+    !reimbursementChip
+  ) {
     return null;
   }
 
+  const lastBaseIndex = paidComponents.reduce(
+    (lastIndex, component, index) => (component.category?.toLowerCase() === 'base' ? index : lastIndex),
+    -1,
+  );
+  const lastIncentiveIndex = paidComponents.reduce(
+    (lastIndex, component, index) => (component.category?.toLowerCase() === 'incentive' ? index : lastIndex),
+    -1,
+  );
+
   return (
-    <Stack gap="xs">
-      <Text size="sm" fw={600}>
-        Breakdown
-      </Text>
-      {paidComponents.length > 0 && (
+    <DetailAccordionSection title="Breakdown">
+      {(paidComponents.length > 0 || productCommissionChips || affiliateCommissionChip || reimbursementChip) && (
         <Stack gap={4}>
-          {paidComponents.map((component) => {
+          {lastBaseIndex < 0 && productCommissionChips}
+          {lastBaseIndex < 0 && affiliateCommissionChip}
+          {paidComponents.map((component, componentIndex) => {
             const breakdown = platformGuestBreakdowns?.[String(component.componentId)] ?? [];
             const showPlatformTotals =
               component.name?.toLowerCase().includes('platform') &&
               platformGuestTotals &&
               platformGuestTotals.totalGuests > 0;
             return (
-              <ComponentListItem
-                key={component.componentId}
-                component={component}
-                breakdown={breakdown}
-                showPlatformTotals={Boolean(showPlatformTotals)}
-                platformGuestTotals={platformGuestTotals}
-              />
+              <React.Fragment key={component.componentId}>
+                <ComponentListItem
+                  component={component}
+                  breakdown={breakdown}
+                  showPlatformTotals={Boolean(showPlatformTotals)}
+                  platformGuestTotals={platformGuestTotals}
+                />
+                {componentIndex === lastBaseIndex && productCommissionChips}
+                {componentIndex === lastBaseIndex && affiliateCommissionChip}
+                {componentIndex === lastIncentiveIndex && reimbursementChip}
+              </React.Fragment>
             );
           })}
+          {lastIncentiveIndex < 0 && reimbursementChip}
         </Stack>
       )}
       {lockedList.length > 0 && (
         <Stack gap={4} pt="xs">
-          <Text size="xs" c="red" fw={600}>
-            Components requiring approval
-          </Text>
           {lockedList.map((entry, index) => {
             const requirement = entry.requirement;
             const reviewRequirement = requirement?.type === 'review_target' ? requirement : null;
@@ -359,46 +615,53 @@ const renderComponentList = (
             if (reviewRequirement) {
               const { minReviews, actualReviews } = reviewRequirement;
               requirementDetails = (
-                <Text component="span" size="xs" c="dimmed">
-                  (needs {minReviews} reviews, current {actualReviews})
+                <Text component="span" size="xs" c="dimmed" ta="center">
+                  Needs {minReviews} reviews, current {actualReviews}
                 </Text>
               );
             } else if (baseRequirement) {
               requirementDetails = (
-                <Text component="span" size="xs" c="dimmed">
-                  (quota {baseRequirement.allowedUnits} days, worked {baseRequirement.workedUnits} days; extra{' '}
-                  {baseRequirement.extraUnits})
+                <Text component="span" size="xs" c="dimmed" ta="center">
+                  Quota {baseRequirement.allowedUnits} days, worked {baseRequirement.workedUnits} days; extra{' '}
+                  {baseRequirement.extraUnits}
                 </Text>
               );
             } else if (performanceRequirement) {
               requirementDetails = (
-                <Text component="span" size="xs" c="dimmed">
-                  (completed {performanceRequirement.progressPercent.toFixed(2)}%, multiplier{' '}
+                <Text component="span" size="xs" c="dimmed" ta="center">
+                  Completed {performanceRequirement.progressPercent.toFixed(2)}%, multiplier{' '}
                   {performanceRequirement.multiplier.toFixed(2)}x
                   {performanceRequirement.matchedTierLabel
                     ? `, tier ${performanceRequirement.matchedTierLabel}`
-                    : ''})
+                    : ''}
                 </Text>
               );
             }
 
             return (
-              <Stack key={`${entry.componentId}-${index}`} gap={2}>
-                <Group justify="space-between" align="flex-start">
-                  <Group gap={6}>
-                    <Badge color="red" variant="light">
-                      {entry.category}
-                    </Badge>
-                    <Text size="sm">
-                      {entry.name} {requirementDetails}
-                    </Text>
-                  </Group>
-                  <Text size="sm" fw={600} c="red">
-                    {formatCurrency(entry.amount)}
-                  </Text>
-                </Group>
+              <Box key={`${entry.componentId}-${index}`} style={BREAKDOWN_ROW_STYLE}>
+                <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+                  <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+                      <Box style={BREAKDOWN_ROW_HEADER_STYLE}>
+                        <Badge color="red" variant="light" style={BREAKDOWN_ROW_BADGE_STYLE}>
+                          {entry.category}
+                        </Badge>
+                        <Text size="sm" fw={500} style={BREAKDOWN_ROW_TITLE_STYLE}>
+                          {entry.name}
+                        </Text>
+                      </Box>
+                      {requirementDetails}
+                    </Stack>
+                    <Stack gap={0} align="center">
+                      <Text size="sm" fw={700} c="red.6" ta="center">
+                        {formatCurrency(entry.amount)}
+                      </Text>
+                      <Text size="xs" c="dimmed" ta="center">
+                        Not included
+                      </Text>
+                    </Stack>
                 {baseRequirement && baseRequirement.extraDays && baseRequirement.extraDays.length > 0 && (
-                  <Text size="xs" c="dimmed">
+                  <Text size="xs" c="dimmed" ta="center">
                     Extra days:{' '}
                     {baseRequirement.extraDays
                       .map((day: string) => dayjs(day).format('MMM D'))
@@ -406,12 +669,12 @@ const renderComponentList = (
                   </Text>
                 )}
                 {requiresMonthlyRangeHint && (
-                  <Text size="xs" c="dimmed">
+                  <Text size="xs" c="dimmed" ta="center">
                     Switch to a full monthly range to approve these extra days.
                   </Text>
                 )}
                 {canApproveBaseOverride && (
-                  <Group justify="flex-end">
+                  <Group justify="center">
                     <Button
                       size="xs"
                       variant="subtle"
@@ -422,24 +685,30 @@ const renderComponentList = (
                     </Button>
                   </Group>
                 )}
-              </Stack>
+                </Stack>
+              </Box>
             );
           })}
         </Stack>
       )}
-    </Stack>
+    </DetailAccordionSection>
   );
 };
 
 type EntryPaymentLine = {
   id: string;
   label: string;
+  labelEditable?: boolean;
   amount: number;
   categoryId: string;
   categoryLabel?: string | null;
   accountId?: string | null;
   accountLabel?: string | null;
   componentId?: number;
+  affiliatePayout?: {
+    affiliateUserId: number;
+    bookingIds: number[];
+  };
   description: string;
   include: boolean;
 };
@@ -456,9 +725,6 @@ type EntryModalState = {
   description: string;
   rangeStart: string;
   rangeEnd: string;
-  period: 'current' | 'previous';
-  previousRangeStart?: string;
-  previousRangeEnd?: string;
   lines: EntryPaymentLine[];
   includeReimbursements: boolean;
   reimbursementEntries: PayReimbursementEntry[];
@@ -470,6 +736,18 @@ type PaidEntriesModalState = {
   open: boolean;
   staff: Pay | null;
   selectedIds: number[];
+};
+
+type OpeningBalanceDetailRow = {
+  staff: Pay;
+  openingBalance: number;
+};
+
+type FixedDesktopHeaderState = {
+  visible: boolean;
+  left: number;
+  width: number;
+  columnWidths: number[];
 };
 
 const createEmptyEntryModalState = (): EntryModalState => ({
@@ -484,9 +762,6 @@ const createEmptyEntryModalState = (): EntryModalState => ({
   description: '',
   rangeStart: '',
   rangeEnd: '',
-  period: 'current',
-  previousRangeStart: undefined,
-  previousRangeEnd: undefined,
   lines: [],
   includeReimbursements: false,
   reimbursementEntries: [],
@@ -519,6 +794,8 @@ const PAYMENT_BUCKET_METADATA: Record<
   bonuses: { label: 'Bonus', categoryHint: 'Bonuses' },
   reimbursement: { label: 'Reimbursements', categoryHint: 'Reimbursements' },
   reimbursements: { label: 'Reimbursements', categoryHint: 'Reimbursements' },
+  affiliate_commission: { label: 'Affiliate Commission', categoryHint: 'Commission' },
+  affiliate_commissions: { label: 'Affiliate Commission', categoryHint: 'Commission' },
 };
 
 const createLineId = () => `line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -543,6 +820,11 @@ const findCategoryIdByName = (
     return String(record.id);
   }
   return fallback;
+};
+
+const normalizeRecordedLineLabel = (value: string | null | undefined) => {
+  const normalized = (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return normalized === 'affiliate commission' ? 'promotion sales' : normalized;
 };
 
 const buildDefaultPaymentLines = (
@@ -692,7 +974,12 @@ const buildDefaultPaymentLines = (
   >();
   Object.entries(staff.bucketTotals ?? {}).forEach(([bucket, amount]) => {
     const normalizedBucket = bucket.toLowerCase();
-    if (normalizedBucket === 'reimbursement' || normalizedBucket === 'reimbursements') {
+    if (
+      normalizedBucket === 'reimbursement' ||
+      normalizedBucket === 'reimbursements' ||
+      normalizedBucket === 'affiliate_commission' ||
+      normalizedBucket === 'affiliate_commissions'
+    ) {
       return;
     }
     if (amount > 0) {
@@ -720,6 +1007,73 @@ const buildDefaultPaymentLines = (
   });
 
   const lines: EntryPaymentLine[] = [];
+  const paidByComponentId = new Map<number, number>();
+  const paidByLabel = new Map<string, number>();
+
+  (staff.paidEntries ?? []).forEach((entry) => {
+    const amount = roundLineAmount(entry.amount ?? 0);
+    if (amount <= 0) {
+      return;
+    }
+    if (entry.componentId && entry.componentId > 0) {
+      paidByComponentId.set(entry.componentId, roundLineAmount((paidByComponentId.get(entry.componentId) ?? 0) + amount));
+      return;
+    }
+    const labelKey = normalizeRecordedLineLabel(entry.label);
+    if (labelKey) {
+      paidByLabel.set(labelKey, roundLineAmount((paidByLabel.get(labelKey) ?? 0) + amount));
+    }
+  });
+
+  const consumePaidAmount = (line: Pick<EntryPaymentLine, 'label' | 'componentId'>, amount: number) => {
+    let consumed = 0;
+    const consumeFromMap = <T,>(map: Map<T, number>, key: T, requested: number) => {
+      const available = map.get(key) ?? 0;
+      if (available <= 0 || requested <= 0) {
+        return 0;
+      }
+      const used = Math.min(available, requested);
+      const remaining = roundLineAmount(available - used);
+      if (remaining > 0) {
+        map.set(key, remaining);
+      } else {
+        map.delete(key);
+      }
+      return used;
+    };
+
+    if (line.componentId && line.componentId > 0) {
+      consumed += consumeFromMap(paidByComponentId, line.componentId, amount);
+    }
+
+    if (consumed < amount) {
+      const labelKey = normalizeRecordedLineLabel(line.label);
+      if (labelKey) {
+        consumed += consumeFromMap(paidByLabel, labelKey, amount - consumed);
+      }
+    }
+
+    return roundLineAmount(consumed);
+  };
+
+  const pushRemainingLine = (line: Omit<EntryPaymentLine, 'id'>) => {
+    const grossAmount = roundLineAmount(line.amount);
+    if (grossAmount <= 0) {
+      return 0;
+    }
+    const paidAmount = consumePaidAmount(line, grossAmount);
+    const remainingAmount = roundLineAmount(Math.max(grossAmount - paidAmount, 0));
+    if (remainingAmount <= 0) {
+      return 0;
+    }
+    lines.push({
+      id: createLineId(),
+      ...line,
+      amount: remainingAmount,
+    });
+    return remainingAmount;
+  };
+
   const componentAggregates = new Map<
     number,
     {
@@ -818,8 +1172,7 @@ const buildDefaultPaymentLines = (
     const label = options?.productName ? `${options.productName} - ${baseName}` : baseName;
     const roundedAmount = roundLineAmount(amount);
 
-    lines.push({
-      id: createLineId(),
+    pushRemainingLine({
       label,
       componentId,
       amount: roundedAmount,
@@ -868,8 +1221,7 @@ const buildDefaultPaymentLines = (
         return;
       }
 
-      lines.push({
-        id: createLineId(),
+      pushRemainingLine({
         label: `${productName} - Commission`,
         amount: roundedCommission,
         categoryId: findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId),
@@ -894,8 +1246,7 @@ const buildDefaultPaymentLines = (
     }
     const metadata = PAYMENT_BUCKET_METADATA[key];
     const fallbackCategory = findCategoryIdByName(categoryLookup, metadata?.categoryHint, fallbackCategoryId);
-    lines.push({
-      id: createLineId(),
+    pushRemainingLine({
       label: metadata?.label ?? entry.label,
       amount: roundLineAmount(entry.amount),
       categoryId: fallbackCategory,
@@ -905,20 +1256,43 @@ const buildDefaultPaymentLines = (
     });
   });
 
+  const outstandingAffiliateBookings =
+    staff.affiliateSales?.bookings.filter((booking) => !booking.isCommissionPaid && booking.affiliateCommissionAmount > 0) ?? [];
+  const affiliateCommissionAmount = roundLineAmount(
+    outstandingAffiliateBookings.reduce((sum, booking) => sum + booking.affiliateCommissionAmount, 0),
+  );
+  if (staff.userId && affiliateCommissionAmount > 0 && outstandingAffiliateBookings.length > 0) {
+    pushRemainingLine({
+      label: 'Promotion Sales',
+      amount: affiliateCommissionAmount,
+      categoryId: findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId),
+      accountId: '',
+      description: `Promotion sales payout for ${staff.firstName}`,
+      affiliatePayout: {
+        affiliateUserId: staff.userId,
+        bookingIds: outstandingAffiliateBookings.map((booking) => booking.id),
+      },
+      include: true,
+    });
+  }
+
   if (lines.length === 0) {
     const outstanding =
       staff.closingBalance ??
       staff.payouts?.payableOutstanding ??
       Math.max(staff.totalPayout ?? staff.totalCommission ?? 0, 0);
-    lines.push({
-      id: createLineId(),
-      label: 'Outstanding payout',
-      amount: roundLineAmount(Math.max(outstanding, 0)),
-      categoryId: fallbackCategoryId,
-      accountId: '',
-      description: `Payout for ${staff.firstName}`,
-      include: true,
-    });
+    const fallbackAmount = roundLineAmount(Math.max(outstanding, 0));
+    if (fallbackAmount > 0) {
+      lines.push({
+        id: createLineId(),
+        label: 'Outstanding payout',
+        amount: fallbackAmount,
+        categoryId: fallbackCategoryId,
+        accountId: '',
+        description: `Payout for ${staff.firstName}`,
+        include: true,
+      });
+    }
   }
 
   return lines;
@@ -928,32 +1302,69 @@ const buildDefaultPaymentLines = (
 const renderBucketTotals = (
   bucketTotals?: Record<string, number>,
   lockedComponents?: LockedComponentSummary[],
+  staff?: Pay,
 ) => {
-  if (!bucketTotals || Object.keys(bucketTotals).length === 0) {
+  const displayBucketTotals = { ...(bucketTotals ?? {}) };
+  const promotionSalesAmount = roundLineAmount(staff?.affiliateSales?.commissionOutstandingTotal ?? 0);
+  const hasCommissionBucket = Object.keys(displayBucketTotals).some((bucket) => {
+    const normalized = normalizePaymentBucketKey(bucket);
+    return normalized === 'commission' || normalized === 'commissions';
+  });
+  if (promotionSalesAmount > 0 && !hasCommissionBucket) {
+    displayBucketTotals.commission = 0;
+  }
+
+  if (Object.keys(displayBucketTotals).length === 0) {
     return null;
   }
-  const entries = Object.entries(bucketTotals).filter(([, amount]) => amount !== 0);
-  if (entries.length === 0) {
-    return null;
-  }
-  const lockedMap = new Map<string, LockedComponentSummary[]>();
+
+  const lockedAmountsByBucket = new Map<string, number>();
   lockedComponents?.forEach((entry) => {
+    if (!entry.amount || entry.amount <= 0) {
+      return;
+    }
     const bucket = entry.bucketCategory ?? entry.category;
     if (!bucket) {
       return;
     }
-    const list = lockedMap.get(bucket) ?? [];
-    list.push(entry);
-    lockedMap.set(bucket, list);
+    const normalized = normalizePaymentBucketKey(bucket);
+    lockedAmountsByBucket.set(normalized, (lockedAmountsByBucket.get(normalized) ?? 0) + entry.amount);
   });
+
+  const entries = Object.entries(displayBucketTotals)
+    .filter(([bucket]) => {
+      const normalized = normalizePaymentBucketKey(bucket);
+      return normalized !== 'affiliate_commission' && normalized !== 'affiliate_commissions';
+    })
+    .map(([bucket, amount]) => {
+      const lockedAmount = lockedAmountsByBucket.get(normalizePaymentBucketKey(bucket)) ?? 0;
+      const normalized = normalizePaymentBucketKey(bucket);
+      const adjustedAmount =
+        normalized === 'commission' || normalized === 'commissions'
+          ? amount + promotionSalesAmount
+          : amount;
+      return [bucket, Math.max(adjustedAmount - lockedAmount, 0)] as const;
+    })
+    .filter(([, amount]) => amount > 0)
+    .sort(([leftBucket], [rightBucket]) => {
+      const rankDifference = getPaymentBucketSortRank(leftBucket) - getPaymentBucketSortRank(rightBucket);
+      if (rankDifference !== 0) {
+        return rankDifference;
+      }
+      return leftBucket.localeCompare(rightBucket);
+    });
+  if (entries.length === 0) {
+    return null;
+  }
+  const lockedMap = new Map<string, LockedComponentSummary[]>();
   return (
-    <Stack gap="xs">
-      <Text size="sm" fw={600}>
-        Payments
-      </Text>
+    <DetailAccordionSection title="Payments">
       <Stack gap={4}>
         {entries.map(([bucket, amount]) => {
           const lockedList = lockedMap.get(bucket) ?? [];
+          const normalizedBucket = normalizePaymentBucketKey(bucket);
+          const bucketMeta = PAYMENT_BUCKET_METADATA[normalizedBucket] ?? PAYMENT_BUCKET_METADATA[bucket.toLowerCase()];
+          const bucketLabel = bucketMeta?.label ?? bucket;
           const lockedLabel =
             lockedList.length > 0
               ? Array.from(
@@ -972,26 +1383,31 @@ const renderBucketTotals = (
                 ).join(' • ')
               : null;
           return (
-            <Group key={bucket} justify="space-between" align="center">
-              <Group gap="xs" align="center">
+            <Box key={bucket} style={BREAKDOWN_ROW_STYLE}>
+              <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+                <Box style={BREAKDOWN_ROW_HEADER_STYLE}>
                 <Badge
                   variant={lockedList.length > 0 ? 'light' : 'outline'}
                   color={lockedList.length > 0 ? 'red' : getComponentColor(bucket)}
+                  style={BREAKDOWN_ROW_BADGE_STYLE}
                 >
-                  {bucket}
+                  {bucketLabel}
                 </Badge>
-                {lockedLabel && (
-                  <Text size="xs" c="dimmed">
-                    {lockedLabel}
+                <Box style={BREAKDOWN_ROW_TITLE_STYLE}>
+                  <Text size={lockedLabel ? 'xs' : 'sm'} c={lockedLabel ? 'dimmed' : undefined} fw={lockedLabel ? undefined : 500}>
+                    {lockedLabel ?? bucketLabel}
                   </Text>
-                )}
-              </Group>
-              <Text size="sm">{formatCurrency(amount)}</Text>
-            </Group>
+                </Box>
+                </Box>
+                <Text size="sm" fw={700} ta="center">
+                  {formatCurrency(amount)}
+                </Text>
+              </Stack>
+            </Box>
           );
         })}
       </Stack>
-    </Stack>
+    </DetailAccordionSection>
   );
 };
 
@@ -1017,12 +1433,65 @@ const getReimbursementStatusMeta = (status: string | undefined) => {
 const ReimbursementEntriesTable = ({
   entries,
   maxHeight,
+  compact = false,
 }: {
   entries: PayReimbursementEntry[];
   maxHeight?: number;
+  compact?: boolean;
 }) => {
   if (entries.length === 0) {
     return null;
+  }
+  if (compact) {
+    return (
+      <Stack gap="xs">
+        {entries.map((entry) => {
+          const statusMeta = getReimbursementStatusMeta(entry.status);
+          const showOriginalAmount =
+            entry.originalCurrency &&
+            entry.originalCurrency !== '' &&
+            (entry.originalCurrency.toUpperCase() !== DEFAULT_CURRENCY ||
+              Math.abs(entry.originalAmount - entry.amount) > 0.005);
+
+          return (
+            <Paper key={entry.transactionId} withBorder radius="md" p="sm" style={{ backgroundColor: 'var(--mantine-color-gray-0)' }}>
+              <Stack gap={6} align="center" ta="center">
+                <Group gap={6} justify="center" wrap="wrap">
+                  <Text size="sm" fw={600}>
+                    {dayjs(entry.date).format('MMM D, YYYY')}
+                  </Text>
+                  <Badge color={statusMeta.color} variant={statusMeta.color === 'gray' ? 'outline' : 'light'}>
+                    {statusMeta.label}
+                  </Badge>
+                </Group>
+                <Stack gap={0} align="center">
+                  <Text size="sm" fw={600}>
+                    {entry.vendorName ?? 'No vendor'}
+                  </Text>
+                  <Text size="sm" c={entry.description ? undefined : 'dimmed'}>
+                    {entry.description ?? 'No description'}
+                  </Text>
+                </Stack>
+                <Stack gap={0} align="center">
+                  <Text size="sm" fw={700}>
+                    {formatCurrency(entry.amount)}
+                  </Text>
+                  {showOriginalAmount && (
+                    <Text size="xs" c="dimmed">
+                      {entry.originalCurrency.toUpperCase()}{' '}
+                      {entry.originalAmount.toLocaleString('en-US', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </Text>
+                  )}
+                </Stack>
+              </Stack>
+            </Paper>
+          );
+        })}
+      </Stack>
+    );
   }
   const table = (
     <Table striped highlightOnHover withColumnBorders>
@@ -1048,7 +1517,10 @@ const ReimbursementEntriesTable = ({
                     <Text size="sm" fw={600}>
                       {formatCurrency(entry.amount)}
                     </Text>
-                    {entry.originalCurrency && entry.originalCurrency !== '' && (
+                    {entry.originalCurrency &&
+                      entry.originalCurrency !== '' &&
+                      (entry.originalCurrency.toUpperCase() !== DEFAULT_CURRENCY ||
+                        Math.abs(entry.originalAmount - entry.amount) > 0.005) && (
                       <Text size="xs" c="dimmed">
                         {entry.originalCurrency.toUpperCase()}{' '}
                         {entry.originalAmount.toLocaleString('en-US', {
@@ -1084,55 +1556,107 @@ const PaidEntriesTable = ({
   entries,
   selectedIds,
   onToggle,
+  compact = false,
 }: {
   entries: PayRecordedEntry[];
   selectedIds: number[];
   onToggle: (entryId: number, checked: boolean) => void;
-}) => (
-  <Table striped highlightOnHover withColumnBorders>
-    <thead>
-      <tr>
-        <th style={{ width: 56, textAlign: 'center' }}>Select</th>
-        <th>Date</th>
-        <th>Component</th>
-        <th>Amount</th>
-        <th>Note</th>
-      </tr>
-    </thead>
-    <tbody>
-      {entries.map((entry) => (
-        <tr key={entry.id}>
-          <td style={{ textAlign: 'center' }}>
-            <Checkbox
-              checked={selectedIds.includes(entry.id)}
-              disabled={!entry.canDelete}
-              onChange={(event) => onToggle(entry.id, event.currentTarget.checked)}
-            />
-          </td>
-          <td>{dayjs(entry.date).format('MMM D, YYYY')}</td>
-          <td>
-            <Stack gap={0}>
-              <Text size="sm" fw={600}>
-                {entry.label}
-              </Text>
-              {entry.financeTransactionId ? (
-                <Text size="xs" c="dimmed">
-                  Finance TX #{entry.financeTransactionId}
+  compact?: boolean;
+}) => {
+  if (compact) {
+    return (
+      <Stack gap="xs">
+        {entries.map((entry) => {
+          const selected = selectedIds.includes(entry.id);
+          return (
+            <Paper
+              key={entry.id}
+              withBorder
+              radius="md"
+              p="sm"
+              style={{ backgroundColor: selected ? 'var(--mantine-color-blue-0)' : 'var(--mantine-color-gray-0)' }}
+            >
+              <Stack gap={8} align="center" ta="center">
+                <Group justify="space-between" w="100%" wrap="nowrap">
+                  <Checkbox
+                    checked={selected}
+                    disabled={!entry.canDelete}
+                    onChange={(event) => onToggle(entry.id, event.currentTarget.checked)}
+                    aria-label={`Select ${entry.label}`}
+                  />
+                  <Badge color={entry.canDelete ? (selected ? 'blue' : 'gray') : 'gray'} variant={selected ? 'light' : 'outline'}>
+                    {entry.canDelete ? (selected ? 'Selected' : 'Available') : 'Locked'}
+                  </Badge>
+                </Group>
+                <Stack gap={2} align="center">
+                  <Text size="sm" fw={700}>
+                    {entry.label}
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    {dayjs(entry.date).format('MMM D, YYYY')}
+                    {entry.financeTransactionId ? ` · Finance TX #${entry.financeTransactionId}` : ''}
+                  </Text>
+                </Stack>
+                <Text size="lg" fw={700}>
+                  {formatCurrency(entry.amount, entry.currency)}
                 </Text>
-              ) : null}
-            </Stack>
-          </td>
-          <td>{formatCurrency(entry.amount, entry.currency)}</td>
-          <td>
-            <Text size="sm" c={entry.note ? undefined : 'dimmed'}>
-              {entry.note || 'No note'}
-            </Text>
-          </td>
+                <Text size="sm" c={entry.note ? undefined : 'dimmed'}>
+                  {entry.note || 'No note'}
+                </Text>
+              </Stack>
+            </Paper>
+          );
+        })}
+      </Stack>
+    );
+  }
+
+  return (
+    <Table striped highlightOnHover withColumnBorders>
+      <thead>
+        <tr>
+          <th style={{ width: 56, textAlign: 'center' }}>Select</th>
+          <th>Date</th>
+          <th>Component</th>
+          <th>Amount</th>
+          <th>Note</th>
         </tr>
-      ))}
-    </tbody>
-  </Table>
-);
+      </thead>
+      <tbody>
+        {entries.map((entry) => (
+          <tr key={entry.id}>
+            <td style={{ textAlign: 'center' }}>
+              <Checkbox
+                checked={selectedIds.includes(entry.id)}
+                disabled={!entry.canDelete}
+                onChange={(event) => onToggle(entry.id, event.currentTarget.checked)}
+              />
+            </td>
+            <td>{dayjs(entry.date).format('MMM D, YYYY')}</td>
+            <td>
+              <Stack gap={0}>
+                <Text size="sm" fw={600}>
+                  {entry.label}
+                </Text>
+                {entry.financeTransactionId ? (
+                  <Text size="xs" c="dimmed">
+                    Finance TX #{entry.financeTransactionId}
+                  </Text>
+                ) : null}
+              </Stack>
+            </td>
+            <td>{formatCurrency(entry.amount, entry.currency)}</td>
+            <td>
+              <Text size="sm" c={entry.note ? undefined : 'dimmed'}>
+                {entry.note || 'No note'}
+              </Text>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+};
 
 const renderReimbursements = (staff: Pay) => {
   const reimbursements = staff.reimbursements;
@@ -1143,36 +1667,200 @@ const renderReimbursements = (staff: Pay) => {
     reimbursements.entries.length > 6 ? Math.min(360, reimbursements.entries.length * 52 + 60) : undefined;
 
   return (
-    <Stack gap="xs">
-      <Group justify="space-between" align="flex-start">
-        <div>
-          <Text size="sm" fw={600}>
-            Reimbursements
-          </Text>
-          <Text size="xs" c="dimmed">
-            Expenses covered by staff during the selected range.
-          </Text>
-        </div>
-        <Stack gap={4} align="flex-end">
-          <Badge variant="light" color={reimbursements.awaitingAmount > 0 ? 'orange' : 'gray'}>
-            Awaiting {formatCurrency(reimbursements.awaitingAmount)}
-          </Badge>
-          <Badge variant="light" color={reimbursements.reimbursedAmount > 0 ? 'teal' : 'gray'}>
-            Reimbursed {formatCurrency(reimbursements.reimbursedAmount)}
-          </Badge>
-        </Stack>
+    <DetailAccordionSection
+      title="Reimbursements"
+    >
+      <Group gap="xs" justify="center">
+        <Badge variant="light" color={reimbursements.awaitingAmount > 0 ? 'orange' : 'gray'}>
+          Awaiting {formatCurrency(reimbursements.awaitingAmount)}
+        </Badge>
+        <Badge variant="light" color={reimbursements.reimbursedAmount > 0 ? 'teal' : 'gray'}>
+          Reimbursed {formatCurrency(reimbursements.reimbursedAmount)}
+        </Badge>
       </Group>
+      <ReimbursementEntriesTable entries={reimbursements.entries} maxHeight={tableHeight} compact />
+    </DetailAccordionSection>
+  );
+};
 
-      <ReimbursementEntriesTable entries={reimbursements.entries} maxHeight={tableHeight} />
-      <Text size="xs" c="dimmed">
-        Include reimbursements when recording a staff payout to mark them as reimbursed.
-      </Text>
+const renderAffiliateSalesBreakdownCards = (staff: Pay) => {
+  const affiliateSales = staff.affiliateSales;
+  if (!affiliateSales || affiliateSales.bookingCount === 0 || affiliateSales.bookings.length === 0) {
+    return null;
+  }
+
+  const currency = affiliateSales.currency ?? staff.payouts?.currency ?? DEFAULT_CURRENCY;
+  const rows = affiliateSales.bookings.filter((booking) => booking.affiliateCommissionAmount > 0);
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <Stack gap="xs">
+      {rows.map((booking) => {
+        const bookingCurrency = booking.currency ?? currency;
+        const saleDate = booking.sourceReceivedAt ?? booking.experienceDate;
+        return (
+          <Paper
+            key={booking.id}
+            withBorder
+            radius="md"
+            p="sm"
+            style={{ backgroundColor: 'var(--mantine-color-gray-0)' }}
+          >
+            <Stack gap={8} align="center" ta="center">
+              <Stack gap={2} align="center">
+                <Text size="sm" fw={700}>
+                  {saleDate && dayjs(saleDate).isValid() ? dayjs(saleDate).format('MMM D, YYYY') : 'No date'}
+                </Text>
+                <Text size="sm">{booking.productName ?? 'Promotion sale'}</Text>
+              </Stack>
+              <Group gap="lg" justify="center" wrap="wrap">
+                <Stack gap={0} align="center">
+                  <Text size="xs" c="dimmed">
+                    Customers
+                  </Text>
+                  <Text size="sm" fw={600}>
+                    {booking.partySizeTotal}
+                  </Text>
+                </Stack>
+                <Stack gap={0} align="center">
+                  <Text size="xs" c="dimmed">
+                    Rate
+                  </Text>
+                  <Text size="sm" fw={600}>
+                    {booking.affiliateCommissionPerPerson != null
+                      ? formatCurrency(booking.affiliateCommissionPerPerson, bookingCurrency)
+                      : '-'}
+                  </Text>
+                </Stack>
+                <Stack gap={0} align="center">
+                  <Text size="xs" c="dimmed">
+                    Commission
+                  </Text>
+                  <Text size="sm" fw={700}>
+                    {formatCurrency(booking.affiliateCommissionAmount, bookingCurrency)}
+                  </Text>
+                </Stack>
+              </Group>
+            </Stack>
+          </Paper>
+        );
+      })}
     </Stack>
   );
 };
 
-const buildIncentiveLookup = (summary: Pay): Map<number, string[]> => {
-  const map = new Map<number, string[]>();
+const renderAffiliateSalesPayoutCard = (staff: Pay) => {
+  const affiliateSales = staff.affiliateSales;
+  if (
+    !affiliateSales ||
+    affiliateSales.bookings.length === 0 ||
+    affiliateSales.commissionTotal <= 0 ||
+    !affiliateSales.bookings.some((booking) => booking.affiliateCommissionAmount > 0)
+  ) {
+    return null;
+  }
+
+  const currency = affiliateSales.currency ?? staff.payouts?.currency ?? DEFAULT_CURRENCY;
+  const detailsHeight =
+    affiliateSales.bookings.length > 6 ? Math.min(420, affiliateSales.bookings.length * 120 + 60) : undefined;
+  const detailCards = renderAffiliateSalesBreakdownCards(staff);
+  return (
+    <Card withBorder padding="md" radius="md">
+      <Stack gap="md" align="center">
+        <Stack gap={4} align="center" ta="center">
+          <Text fw={700} size="lg">
+            Promotion Sales
+          </Text>
+          <Text fw={700} size="xl">
+            {formatCurrency(affiliateSales.commissionTotal, currency)}
+          </Text>
+          <Text size="xs" c="dimmed">
+            Total payout
+          </Text>
+        </Stack>
+        <Group gap="xl" justify="center" wrap="wrap">
+          <Stack gap={0} align="center">
+            <Text size="xs" c="dimmed">
+              Commission share
+            </Text>
+            <Text size="sm" fw={600}>
+              {formatCurrency(affiliateSales.commissionTotal, currency)}
+            </Text>
+          </Stack>
+          <Stack gap={0} align="center">
+            <Text size="xs" c="dimmed">
+              Customers
+            </Text>
+            <Text size="sm" fw={600}>
+              {affiliateSales.peopleCount}
+            </Text>
+          </Stack>
+        </Group>
+        {detailCards && (
+          <Stack gap="xs" pt="xs" style={{ width: '100%' }}>
+            <Text size="xs" c="dimmed" ta="center">
+              Details
+            </Text>
+            {detailsHeight ? (
+              <ScrollArea mah={detailsHeight} offsetScrollbars>
+                {detailCards}
+              </ScrollArea>
+            ) : (
+              detailCards
+            )}
+          </Stack>
+        )}
+      </Stack>
+    </Card>
+  );
+};
+
+const normalizeIncentiveLetter = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed[0].toUpperCase() : null;
+};
+
+const addIncentiveBadgeDetail = (
+  details: IncentiveBadgeDetail[],
+  next: IncentiveBadgeDetail,
+): IncentiveBadgeDetail[] => {
+  const existing = details.find((detail) => detail.letter === next.letter && detail.name === next.name);
+  if (!existing) {
+    return [...details, next];
+  }
+  if (next.amount !== null) {
+    existing.amount = (existing.amount ?? 0) + next.amount;
+  }
+  return details;
+};
+
+const buildIncentiveLookup = (summary: Pay): Map<number, IncentiveBadgeDetail[]> => {
+  const map = new Map<number, IncentiveBadgeDetail[]>();
+  const details = summary.counterIncentiveDetails ?? {};
+  Object.entries(details).forEach(([counterIdKey, incentiveDetails]) => {
+    const counterId = Number(counterIdKey);
+    if (!Number.isFinite(counterId) || counterId <= 0 || !Array.isArray(incentiveDetails)) {
+      return;
+    }
+    const normalized = incentiveDetails.reduce<IncentiveBadgeDetail[]>((acc, detail) => {
+      const letter = normalizeIncentiveLetter(detail.letter || detail.name);
+      if (!letter) {
+        return acc;
+      }
+      const amount = Number(detail.amount);
+      return addIncentiveBadgeDetail(acc, {
+        letter,
+        name: detail.name?.trim() || 'Incentive',
+        amount: Number.isFinite(amount) ? amount : 0,
+      });
+    }, []);
+    if (normalized.length > 0) {
+      map.set(counterId, normalized);
+    }
+  });
+
   const markers = summary.counterIncentiveMarkers ?? {};
   Object.entries(markers).forEach(([counterIdKey, letters]) => {
     const counterId = Number(counterIdKey);
@@ -1187,10 +1875,67 @@ const buildIncentiveLookup = (summary: Pay): Map<number, string[]> => {
       ),
     );
     if (normalized.length > 0) {
-      map.set(counterId, normalized);
+      const existing = map.get(counterId) ?? [];
+      const merged = normalized.reduce<IncentiveBadgeDetail[]>(
+        (acc, letter) =>
+          acc.some((detail) => detail.letter === letter)
+            ? acc
+            : [...acc, { letter, name: letter, amount: null }],
+        existing,
+      );
+      map.set(counterId, merged);
     }
   });
   return map;
+};
+
+const renderIncentiveBadges = (
+  counterId: number | null | undefined,
+  incentiveLookup?: Map<number, IncentiveBadgeDetail[]>,
+) => {
+  if (counterId === undefined || counterId === null) {
+    return null;
+  }
+  const details = incentiveLookup?.get(counterId);
+  if (!details || details.length === 0) {
+    return null;
+  }
+
+  return (
+    <span style={{ marginLeft: 6, display: 'inline-flex', gap: 4 }}>
+      {details.map((detail) => (
+        <Tooltip
+          key={`${counterId}-${detail.letter}-${detail.name}`}
+          label={
+            detail.amount === null
+              ? detail.name
+              : `${detail.name} - ${formatCurrency(detail.amount)}`
+          }
+          withArrow
+          events={{ hover: true, focus: true, touch: true }}
+        >
+          <span
+            tabIndex={0}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 16,
+              height: 16,
+              borderRadius: '50%',
+              backgroundColor: '#edf2ff',
+              color: '#3b5bdb',
+              fontSize: 10,
+              fontWeight: 700,
+              cursor: 'help',
+            }}
+          >
+            {detail.letter}
+          </span>
+        </Tooltip>
+      ))}
+    </span>
+  );
 };
 
 const hasPlatformGuestDetails = (summary: Pay): boolean =>
@@ -1206,10 +1951,11 @@ const getCounterIncentiveAmount = (summary: Pay, counterId?: number | null) => {
   return summary.counterIncentiveTotals?.[key] ?? 0;
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const renderBreakdownTable = (
   summary: Pay,
-  items: PayBreakdown[],
-  incentiveLookup?: Map<number, string[]>,
+  items: Pay['breakdown'],
+  incentiveLookup?: Map<number, IncentiveBadgeDetail[]>,
 ) => {
   const hasProduct = items.some((entry) => Boolean(entry.productName));
   const filteredItems = items.filter((entry) => {
@@ -1236,34 +1982,7 @@ const renderBreakdownTable = (
           <tr key={`${entry.date}-${index}`}>
             <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>
               {entry.date}
-              {entry.counterId !== undefined &&
-                entry.counterId !== null &&
-                incentiveLookup?.get(entry.counterId) &&
-                incentiveLookup.get(entry.counterId)!.length > 0 && (
-                  <span style={{ marginLeft: 6, display: 'inline-flex', gap: 4 }}>
-                    {incentiveLookup
-                      .get(entry.counterId)!
-                      .map((letter) => (
-                        <span
-                          key={`${entry.counterId}-${letter}`}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            width: 16,
-                            height: 16,
-                            borderRadius: '50%',
-                            backgroundColor: '#edf2ff',
-                            color: '#3b5bdb',
-                            fontSize: 10,
-                            fontWeight: 700,
-                          }}
-                        >
-                          {letter}
-                        </span>
-                      ))}
-                  </span>
-                )}
+              {renderIncentiveBadges(entry.counterId, incentiveLookup)}
             </td>
             {hasProduct && (
               <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>{entry.productName ?? '—'}</td>
@@ -1283,12 +2002,150 @@ const renderBreakdownTable = (
   );
 };
 
+const renderProductBreakdownTable = (
+  summary: Pay,
+  product: NonNullable<Pay['productTotals']>[number],
+  incentiveLookup?: Map<number, IncentiveBadgeDetail[]>,
+) => {
+  const productCounterIds = new Set(product.counterIds ?? []);
+  const items = summary.breakdown.filter((entry) => {
+    if (productCounterIds.size > 0 && entry.counterId != null) {
+      return productCounterIds.has(entry.counterId);
+    }
+    return (entry.productId ?? null) === (product.productId ?? null);
+  });
+  const filteredItems = items.filter((entry) => {
+    const incentiveAmount = getCounterIncentiveAmount(summary, entry.counterId);
+    return incentiveAmount !== 0 || entry.commission !== 0;
+  });
+  if (filteredItems.length === 0) {
+    return null;
+  }
+
+  return (
+    <Table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead>
+        <tr>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'left' }}>Date</th>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Customers</th>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Guides</th>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Incentives</th>
+          <th style={{ borderBottom: '1px solid #ddd', padding: 6, textAlign: 'right' }}>Commission</th>
+        </tr>
+      </thead>
+      <tbody>
+        {filteredItems.map((entry, index) => (
+          <tr key={`${product.productId ?? 'legacy'}-${entry.counterId ?? index}-${entry.date}`}>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6 }}>
+              {entry.date}
+              {renderIncentiveBadges(entry.counterId, incentiveLookup)}
+            </td>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.customers}</td>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>{entry.guidesCount}</td>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>
+              {formatCurrency(getCounterIncentiveAmount(summary, entry.counterId))}
+            </td>
+            <td style={{ borderBottom: '1px solid #eee', padding: 6, textAlign: 'right' }}>
+              {formatCurrency(entry.commission)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+};
+
+const renderProductBreakdownCards = (
+  summary: Pay,
+  product: NonNullable<Pay['productTotals']>[number],
+  incentiveLookup?: Map<number, IncentiveBadgeDetail[]>,
+) => {
+  const productCounterIds = new Set(product.counterIds ?? []);
+  const items = summary.breakdown.filter((entry) => {
+    if (productCounterIds.size > 0 && entry.counterId != null) {
+      return productCounterIds.has(entry.counterId);
+    }
+    return (entry.productId ?? null) === (product.productId ?? null);
+  });
+  const filteredItems = items.filter((entry) => {
+    const incentiveAmount = getCounterIncentiveAmount(summary, entry.counterId);
+    return incentiveAmount !== 0 || entry.commission !== 0;
+  });
+  if (filteredItems.length === 0) {
+    return null;
+  }
+
+  return (
+    <Stack gap="xs">
+      {filteredItems.map((entry, index) => {
+        const incentiveAmount = getCounterIncentiveAmount(summary, entry.counterId);
+        return (
+          <Paper
+            key={`${product.productId ?? 'legacy'}-${entry.counterId ?? index}-${entry.date}-card`}
+            withBorder
+            radius="md"
+            p="sm"
+            style={{ backgroundColor: 'var(--mantine-color-gray-0)' }}
+          >
+            <Stack gap={8} align="center" ta="center">
+              <Group gap={6} justify="center" wrap="wrap">
+                <Text size="sm" fw={700}>
+                  {dayjs(entry.date).isValid() ? dayjs(entry.date).format('MMM D, YYYY') : entry.date}
+                </Text>
+                {renderIncentiveBadges(entry.counterId, incentiveLookup)}
+              </Group>
+              <Group gap="lg" justify="center" wrap="wrap">
+                <Stack gap={0} align="center">
+                  <Text size="xs" c="dimmed">
+                    Customers
+                  </Text>
+                  <Text size="sm" fw={600}>
+                    {entry.customers}
+                  </Text>
+                </Stack>
+                <Stack gap={0} align="center">
+                  <Text size="xs" c="dimmed">
+                    Guides
+                  </Text>
+                  <Text size="sm" fw={600}>
+                    {entry.guidesCount}
+                  </Text>
+                </Stack>
+              </Group>
+              <Group gap="lg" justify="center" wrap="wrap">
+                <Stack gap={0} align="center">
+                  <Text size="xs" c="dimmed">
+                    Incentives
+                  </Text>
+                  <Text size="sm" fw={700}>
+                    {formatCurrency(incentiveAmount)}
+                  </Text>
+                </Stack>
+                <Stack gap={0} align="center">
+                  <Text size="xs" c="dimmed">
+                    Commission
+                  </Text>
+                  <Text size="sm" fw={700}>
+                    {formatCurrency(entry.commission)}
+                  </Text>
+                </Stack>
+              </Group>
+            </Stack>
+          </Paper>
+        );
+      })}
+    </Stack>
+  );
+};
+
 const renderProductTotals = (
   productTotals?: Pay['productTotals'],
   componentSummaries?: PayComponentSummary[],
   lockedComponents?: LockedComponentSummary[],
+  staff?: Pay,
 ) => {
-  if (!productTotals || productTotals.length === 0) {
+  const affiliateSalesCard = staff ? renderAffiliateSalesPayoutCard(staff) : null;
+  if ((!productTotals || productTotals.length === 0) && !affiliateSalesCard) {
     return null;
   }
 
@@ -1296,14 +2153,12 @@ const renderProductTotals = (
   componentSummaries?.forEach((component) => {
     componentLookup.set(component.componentId, component);
   });
+  const incentiveLookup = staff ? buildIncentiveLookup(staff) : undefined;
 
   return (
-    <Stack gap="xs">
-      <Text size="sm" fw={600}>
-        Payout Details
-      </Text>
+    <DetailAccordionSection title="Payout Details">
       <Stack gap="sm">
-        {productTotals.map((product, index) => {
+        {(productTotals ?? []).map((product, index) => {
           const componentBreakdown = product.componentTotals ?? [];
           const incentiveTotal = componentBreakdown.reduce((sum, component) => sum + component.amount, 0);
           const payoutTotal = product.totalCommission + incentiveTotal;
@@ -1314,33 +2169,51 @@ const renderProductTotals = (
           const hasUnlockedComponent = componentBreakdown.some(
             (component) => !lockedForProduct.some((entry) => entry.componentId === component.componentId),
           );
+          const detailTable = staff ? renderProductBreakdownTable(staff, product, incentiveLookup) : null;
+          const detailCards = staff ? renderProductBreakdownCards(staff, product, incentiveLookup) : null;
+          const detailTableHeight =
+            staff && product.counterIds.length > 6 ? Math.min(360, product.counterIds.length * 42 + 60) : undefined;
           if (payoutTotal === 0) {
             return null;
           }
           return (
-            <Card key={`${product.productId ?? 'legacy'}-${index}`} withBorder padding="sm" radius="md">
-              <Stack gap="0">
-                <Text fw={600}>{product.productName}</Text>
-                <Group justify="space-between" align="center"> 
-                    <Text size="xs" c="dimmed">
-                      Total payout
-                    </Text>
-                    <Text fw={700}>{formatCurrency(payoutTotal)}</Text>
-                </Group>
-                <Group justify="space-between">
+            <Card key={`${product.productId ?? 'legacy'}-${index}`} withBorder padding="md" radius="md">
+              <Stack gap="md" align="center">
+                <Stack gap={4} align="center" ta="center">
+                  <Text fw={700} size="lg">
+                    {product.productName}
+                  </Text>
+                  <Text fw={700} size="xl">
+                    {formatCurrency(payoutTotal)}
+                  </Text>
                   <Text size="xs" c="dimmed">
-                    Commission share
+                    Total payout
                   </Text>
-                  <Text size="sm" fw={600}>
-                    {formatCurrency(product.totalCommission)}
-                  </Text>
+                </Stack>
+                <Group gap="xl" justify="center" wrap="wrap">
+                  <Stack gap={0} align="center">
+                    <Text size="xs" c="dimmed">
+                      Commission share
+                    </Text>
+                    <Text size="sm" fw={600}>
+                      {formatCurrency(product.totalCommission)}
+                    </Text>
+                  </Stack>
+                  <Stack gap={0} align="center">
+                    <Text size="xs" c="dimmed">
+                      Incentives share
+                    </Text>
+                    <Text size="sm" fw={600}>
+                      {formatCurrency(incentiveTotal)}
+                    </Text>
+                  </Stack>
                 </Group>
                 {(componentBreakdown.length > 0 || (lockedComponents && lockedComponents.length > 0)) && (
-                  <Stack gap={4}>
+                  <Stack gap="xs" style={{ width: '100%' }}>
                     {componentBreakdown.length > 0 && (
                       <>
                         {hasUnlockedComponent && (
-                          <Text size="xs" c="dimmed">
+                          <Text size="xs" c="dimmed" ta="center">
                             Incentives
                           </Text>
                         )}
@@ -1351,26 +2224,30 @@ const renderProductTotals = (
                             return null;
                           }
                           return (
-                            <Group key={`${product.productId ?? 'legacy'}-${component.componentId}`} justify="space-between">
-                              <Group gap={6}>
+                            <Box key={`${product.productId ?? 'legacy'}-${component.componentId}`} style={BREAKDOWN_ROW_STYLE}>
+                              <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+                              <Box style={BREAKDOWN_ROW_HEADER_STYLE}>
                                 {meta && (
-                                  <Badge size="xs" variant="light" color={getComponentColor(meta.category)}>
+                                  <Badge variant="light" color={getComponentColor(meta.category)} style={BREAKDOWN_ROW_BADGE_STYLE}>
                                     {meta.category}
                                   </Badge>
                                 )}
-                                <Text size="sm">{meta?.name ?? `Component #${component.componentId}`}</Text>
-                              </Group>
-                              <Text size="sm" fw={600}>
+                                <Text size="sm" fw={500} style={BREAKDOWN_ROW_TITLE_STYLE}>
+                                  {meta?.name ?? `Component #${component.componentId}`}
+                                </Text>
+                              </Box>
+                              <Text size="sm" fw={700} ta="center">
                                 {formatCurrency(component.amount)}
                               </Text>
-                            </Group>
+                              </Stack>
+                            </Box>
                           );
                         })}
                       </>
                     )}
                     {lockedForProduct.length > 0 && (
-                      <Stack gap={2} pt="xs">
-                        <Text size="xs" c="red" fw={600}>
+                      <Stack gap={4} pt="xs">
+                        <Text size="xs" c="dimmed" fw={600} ta="center">
                           Locked incentives
                         </Text>
                         {lockedForProduct.map((entry, lockedIdx) => {
@@ -1379,41 +2256,63 @@ const renderProductTotals = (
                           const performanceRequirement =
                             requirement?.type === 'performance_tier' ? requirement : null;
                           return (
-                          <Group key={`${entry.componentId}-locked-${lockedIdx}`} justify="space-between">
-                            <Group gap={6}>
-                              <Badge size="xs" variant="light" color="red">
-                                {entry.category}
-                              </Badge>
-                              <Text size="sm">
-                                {entry.name}{' '}
-                                {reviewRequirement && (
-                                  <Text component="span" size="xs" c="dimmed">
-                                    (needs {reviewRequirement.minReviews} reviews, current {reviewRequirement.actualReviews})
-                                  </Text>
-                                )}
-                                {performanceRequirement && (
-                                  <Text component="span" size="xs" c="dimmed">
-                                    (completed {performanceRequirement.progressPercent.toFixed(2)}%, multiplier{' '}
-                                    {performanceRequirement.multiplier.toFixed(2)}x)
-                                  </Text>
-                                )}
-                              </Text>
-                            </Group>
-                            <Text size="sm" fw={600} c="red">
-                              {formatCurrency(entry.amount)}
-                            </Text>
-                          </Group>
+                          <Box key={`${entry.componentId}-locked-${lockedIdx}`} style={BREAKDOWN_ROW_STYLE}>
+                            <Stack gap={4} style={BREAKDOWN_ROW_CENTER_STYLE}>
+                              <Box style={BREAKDOWN_ROW_HEADER_STYLE}>
+                                <Badge variant="light" color="red" style={BREAKDOWN_ROW_BADGE_STYLE}>
+                                  {entry.category}
+                                </Badge>
+                                <Text size="sm" fw={500} style={BREAKDOWN_ROW_TITLE_STYLE}>
+                                  {entry.name}
+                                </Text>
+                              </Box>
+                              {reviewRequirement && (
+                                <Text size="xs" c="dimmed" ta="center">
+                                  Needs {reviewRequirement.minReviews} reviews, current {reviewRequirement.actualReviews}
+                                </Text>
+                              )}
+                              {performanceRequirement && (
+                                <Text size="xs" c="dimmed" ta="center">
+                                  Completed {performanceRequirement.progressPercent.toFixed(2)}%, multiplier{' '}
+                                  {performanceRequirement.multiplier.toFixed(2)}x
+                                </Text>
+                              )}
+                              <Stack gap={0} align="center">
+                                <Text size="sm" fw={700} c="red.6" ta="center">
+                                  {formatCurrency(entry.amount)}
+                                </Text>
+                                <Text size="xs" c="dimmed" ta="center">
+                                  Not included
+                                </Text>
+                              </Stack>
+                            </Stack>
+                          </Box>
                         )})}
                       </Stack>
                     )}
+                  </Stack>
+                )}
+                {(detailCards || detailTable) && (
+                  <Stack gap="xs" pt="xs" style={{ width: '100%' }}>
+                    <Text size="xs" c="dimmed" ta="center">
+                      Details
+                    </Text>
+                    {detailCards ?? (detailTableHeight ? (
+                      <ScrollArea mah={detailTableHeight} offsetScrollbars>
+                        {detailTable}
+                      </ScrollArea>
+                    ) : (
+                      detailTable
+                    ))}
                   </Stack>
                 )}
               </Stack>
             </Card>
           );
         })}
+        {affiliateSalesCard}
       </Stack>
-    </Stack>
+    </DetailAccordionSection>
   );
 };
 
@@ -1427,6 +2326,7 @@ const Pays: React.FC = () => {
   const vendors = useAppSelector(selectFinanceVendors);
   const fullAccess = useModuleAccess(FULL_ACCESS_MODULE);
   const selfAccess = useModuleAccess(SELF_ACCESS_MODULE);
+  const [searchParams, setSearchParams] = useSearchParams();
   const categoryLookup = useMemo(() => {
     const map = new Map<string, FinanceCategory>();
     categories.data.forEach((category) => {
@@ -1436,8 +2336,19 @@ const Pays: React.FC = () => {
   }, [categories.data]);
 
   const today = dayjs();
-  const initialRange = calculatePresetRange('this_month', today);
-  const [datePreset, setDatePreset] = useState<DatePreset>('this_month');
+  const initialUrlStart = parseUrlDate(searchParams.get(URL_START_DATE_PARAM));
+  const initialUrlEnd = parseUrlDate(searchParams.get(URL_END_DATE_PARAM));
+  const initialUrlPreset = searchParams.get(URL_PRESET_PARAM);
+  const initialDatePreset: DatePreset = isDatePreset(initialUrlPreset)
+    ? initialUrlPreset
+    : initialUrlStart && initialUrlEnd
+    ? 'custom'
+    : 'this_month';
+  const initialRange =
+    initialDatePreset === 'custom' && initialUrlStart && initialUrlEnd
+      ? { start: initialUrlStart.startOf('day'), end: initialUrlEnd.endOf('day') }
+      : calculatePresetRange(initialDatePreset, today);
+  const [datePreset, setDatePreset] = useState<DatePreset>(initialDatePreset);
   const [startDate, setStartDate] = useState<Dayjs | null>(initialRange.start);
   const [endDate, setEndDate] = useState<Dayjs | null>(initialRange.end);
   const [customRangeValue, setCustomRangeValue] = useState<[Date | null, Date | null]>([
@@ -1445,14 +2356,24 @@ const Pays: React.FC = () => {
     initialRange.end.toDate(),
   ]);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [selfDetailsOpen, setSelfDetailsOpen] = useState(false);
   const [entryModal, setEntryModal] = useState<EntryModalState>(createEmptyEntryModalState());
   const [paidEntriesModal, setPaidEntriesModal] = useState<PaidEntriesModalState>(createEmptyPaidEntriesModalState());
+  const [openingBalanceDetailsOpen, setOpeningBalanceDetailsOpen] = useState(false);
   const [entryMessage, setEntryMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [entrySubmitting, setEntrySubmitting] = useState(false);
   const [paidEntriesSubmitting, setPaidEntriesSubmitting] = useState(false);
   const [paidEntriesMessage, setPaidEntriesMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [actionAlert, setActionAlert] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [baseOverridePending, setBaseOverridePending] = useState<Set<number>>(new Set());
+  const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
+  const desktopTableHeaderRef = useRef<HTMLTableSectionElement | null>(null);
+  const [fixedDesktopHeader, setFixedDesktopHeader] = useState<FixedDesktopHeaderState>({
+    visible: false,
+    left: 0,
+    width: 0,
+    columnWidths: [],
+  });
   const friendlyError = error ? humanizeErrorMessage(error) : null;
   const currencyLabel = (entryModal.currency || DEFAULT_CURRENCY).toUpperCase();
 
@@ -1469,6 +2390,28 @@ const Pays: React.FC = () => {
     setStartDate(range.start);
     setEndDate(range.end);
   }, [datePreset, customRangeValue]);
+
+  useEffect(() => {
+    if (!startDate || !endDate) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    const startParam = startDate.format(URL_DATE_FORMAT);
+    const endParam = endDate.format(URL_DATE_FORMAT);
+    const currentPreset = nextParams.get(URL_PRESET_PARAM);
+    const currentStart = nextParams.get(URL_START_DATE_PARAM);
+    const currentEnd = nextParams.get(URL_END_DATE_PARAM);
+
+    if (currentPreset === datePreset && currentStart === startParam && currentEnd === endParam) {
+      return;
+    }
+
+    nextParams.set(URL_PRESET_PARAM, datePreset);
+    nextParams.set(URL_START_DATE_PARAM, startParam);
+    nextParams.set(URL_END_DATE_PARAM, endParam);
+    setSearchParams(nextParams, { replace: true });
+  }, [datePreset, endDate, searchParams, setSearchParams, startDate]);
 
   useEffect(() => {
     if (!accounts.loading && accounts.data.length === 0) {
@@ -1567,7 +2510,20 @@ const resolveStaffCounterpartyDefaults = useCallback(
   [financeVendorsById],
 );
 
-  const summaries: Pay[] = useMemo(() => responseData?.[0]?.data ?? [], [responseData]);
+  const summaries: Pay[] = useMemo(
+    () => (responseData?.[0]?.data ?? []).filter((summary) => normalizeTotal(summary) > 0),
+    [responseData],
+  );
+  const openingBalanceDetailRows: OpeningBalanceDetailRow[] = useMemo(
+    () =>
+      summaries
+        .map((staff) => ({
+          staff,
+          openingBalance: staff.openingBalance ?? 0,
+        }))
+        .filter((row) => row.openingBalance > 0),
+    [summaries],
+  );
 
   const isCanonicalRange = useMemo(() => {
     if (summaries.length > 0) {
@@ -1723,6 +2679,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
       const newLine: EntryPaymentLine = {
         id: createLineId(),
         label: 'Manual line',
+        labelEditable: true,
         amount: 0,
         categoryId: prev.categoryId,
         accountId: prev.accountId,
@@ -1745,6 +2702,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
           ...(prev.lines[0] ?? {
             id: createLineId(),
             label: 'Manual line',
+            labelEditable: true,
             amount: 0,
             categoryId: prev.categoryId,
             accountId: prev.accountId,
@@ -1791,9 +2749,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
         staff.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? dayjs().format('YYYY-MM-DD');
       const rangeEndValue =
         staff.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? dayjs().format('YYYY-MM-DD');
-      const baseRangeStart = dayjs(rangeStartValue);
-      const baseRangeEnd = dayjs(rangeEndValue);
-      const previousRange = computePreviousRange(baseRangeStart, baseRangeEnd);
 
       const defaultLines = buildDefaultPaymentLines(
         staff,
@@ -1824,9 +2779,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
         description: `Staff payout for ${staff.firstName} (${formatRangeLabel(rangeStartValue, rangeEndValue)})`,
         rangeStart: rangeStartValue,
         rangeEnd: rangeEndValue,
-        period: 'current',
-        previousRangeStart: previousRange.start.format('YYYY-MM-DD'),
-        previousRangeEnd: previousRange.end.format('YYYY-MM-DD'),
         lines: defaultLines,
         includeReimbursements: reimbursementSummary.awaitingAmount > 0,
         reimbursementEntries: reimbursementSummary.entries ?? [],
@@ -1890,12 +2842,13 @@ const resolveStaffCounterpartyDefaults = useCallback(
     });
   }, []);
 
-  const renderRecordAction = (item: Pay) => {
+  const renderRecordAction = (item: Pay, options?: { fullWidth?: boolean }) => {
     const outstanding = item.payouts?.payableOutstanding ?? 0;
     const hasRecordedEntries = (item.paidEntries?.length ?? 0) > 0;
+    const fullWidth = options?.fullWidth ?? false;
     if (!canRecordPayments) {
       return (
-        <Text size="xs" c="dimmed">
+        <Text size="xs" c="dimmed" ta={fullWidth ? 'center' : undefined}>
           View-only range
         </Text>
       );
@@ -1903,12 +2856,12 @@ const resolveStaffCounterpartyDefaults = useCallback(
     if (outstanding > 0) {
       if (canRecordStaffPayments) {
         return (
-          <Stack gap={6} align="flex-start">
-            <Button variant="light" size="xs" onClick={() => openEntryModal(item)}>
+          <Stack gap={6} align={fullWidth ? 'stretch' : 'flex-start'} style={fullWidth ? { width: '100%' } : undefined}>
+            <Button variant="light" size="xs" fullWidth={fullWidth} onClick={() => openEntryModal(item)}>
               Record payment
             </Button>
             {hasRecordedEntries ? (
-              <Button variant="subtle" size="xs" color="red" onClick={() => openPaidEntriesModal(item)}>
+              <Button variant="subtle" size="xs" color="red" fullWidth={fullWidth} onClick={() => openPaidEntriesModal(item)}>
                 Manage paid
               </Button>
             ) : null}
@@ -1920,12 +2873,12 @@ const resolveStaffCounterpartyDefaults = useCallback(
       );
     }
     return (
-      <Stack gap={6} align="flex-start">
+      <Stack gap={6} align={fullWidth ? 'center' : 'flex-start'} style={fullWidth ? { width: '100%' } : undefined}>
         <Badge color="green" variant="light" w="fit-content">
           Settled
         </Badge>
         {canRecordStaffPayments && hasRecordedEntries ? (
-          <Button variant="subtle" size="xs" color="red" onClick={() => openPaidEntriesModal(item)}>
+          <Button variant="subtle" size="xs" color="red" fullWidth={fullWidth} onClick={() => openPaidEntriesModal(item)}>
             Manage paid
           </Button>
         ) : null}
@@ -1955,36 +2908,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
     [accounts.data],
   );
 
-  const handleEntryPeriodChange = useCallback(
-    (value: 'current' | 'previous') => {
-      setEntryModal((prev) => {
-        if (value === 'previous' && prev.previousRangeStart && prev.previousRangeEnd) {
-          return {
-            ...prev,
-            period: value,
-            rangeStart: prev.previousRangeStart,
-            rangeEnd: prev.previousRangeEnd,
-            description: `Staff payout for ${prev.staff?.firstName ?? ''} (${formatRangeLabel(
-              prev.previousRangeStart,
-              prev.previousRangeEnd,
-            )})`,
-          };
-        }
-        return {
-          ...prev,
-          period: 'current',
-          rangeStart: prev.staff?.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? prev.rangeStart,
-          rangeEnd: prev.staff?.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? prev.rangeEnd,
-          description: `Staff payout for ${prev.staff?.firstName ?? ''} (${formatRangeLabel(
-            prev.staff?.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? prev.rangeStart,
-            prev.staff?.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? prev.rangeEnd,
-          )})`,
-        };
-      });
-    },
-    [endDate, startDate],
-  );
-
   const handlePresetChange = (value: string | null) => {
     if (!value) {
       return;
@@ -1995,59 +2918,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
   const handleCustomRangeChange = (value: [Date | null, Date | null] | null) => {
     setCustomRangeValue(value ?? [null, null]);
   };
-
-  const aggregatedBucketData = useMemo(() => {
-    const map = new Map<string, number>();
-    summaries.forEach((summary) => {
-      Object.entries(summary.bucketTotals ?? {}).forEach(([bucket, amount]) => {
-        map.set(bucket, (map.get(bucket) ?? 0) + amount);
-      });
-    });
-    return Array.from(map.entries())
-      .map(([bucket, amount]) => ({ bucket, amount }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [summaries]);
-
-  const aggregatedComponentData = useMemo(() => {
-    const map = new Map<string, number>();
-    summaries.forEach((summary) => {
-      (summary.componentTotals ?? []).forEach((component) => {
-        map.set(component.name, (map.get(component.name) ?? 0) + component.amount);
-      });
-    });
-    return Array.from(map.entries())
-      .map(([name, amount]) => ({ name, amount }))
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, 6);
-  }, [summaries]);
-
-  const dailyTrendData = useMemo(() => {
-    const map = new Map<string, { commission: number; payout: number }>();
-    summaries.forEach((summary) => {
-      summary.breakdown.forEach((entry) => {
-        if (!map.has(entry.date)) {
-          map.set(entry.date, { commission: 0, payout: 0 });
-        }
-        const record = map.get(entry.date)!;
-        record.commission += entry.commission;
-        record.payout += entry.commission;
-      });
-      const difference = (summary.totalPayout ?? summary.totalCommission) - summary.totalCommission;
-      if (difference !== 0 && summary.breakdown.length > 0) {
-        const lastDate = summary.breakdown[summary.breakdown.length - 1].date;
-        const record = map.get(lastDate) ?? { commission: 0, payout: 0 };
-        record.payout += difference;
-        map.set(lastDate, record);
-      }
-    });
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, values]) => ({
-        date,
-        commission: Number(values.commission.toFixed(2)),
-        payout: Number(values.payout.toFixed(2)),
-      }));
-  }, [summaries]);
 
   const totalOpening = useMemo(
     () => summaries.reduce((sum, item) => sum + (item.openingBalance ?? 0), 0),
@@ -2077,16 +2947,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
       ),
     [summaries],
   );
-
-  const totalCommission = useMemo(
-    () => summaries.reduce((sum, item) => sum + item.totalCommission, 0),
-    [summaries],
-  );
-  const totalPayout = useMemo(
-    () => summaries.reduce((sum, item) => sum + normalizeTotal(item), 0),
-    [summaries],
-  );
-  const totalGuides = summaries.length;
 
   useEffect(() => {
     if (!permissionsReady || permissionsLoading) {
@@ -2177,11 +3037,13 @@ const resolveStaffCounterpartyDefaults = useCallback(
             const accountRecord = financeAccountsById.get(resolvedAccountId);
             return {
               label: line.label,
+              componentId: line.componentId ?? null,
               amount: line.amount,
               categoryId: Number(line.categoryId),
               accountId: resolvedAccountId,
               currency: accountRecord?.currency ?? entryModal.currency,
               description: line.description || entryModal.description || `${line.label} payout`,
+              affiliatePayout: line.affiliatePayout ?? null,
             };
           }),
           reimbursement:
@@ -2269,74 +3131,294 @@ const resolveStaffCounterpartyDefaults = useCallback(
   const theme = useMantineTheme();
   const isDesktop = useMediaQuery(`(min-width: ${theme.breakpoints.md})`);
 
-  const bucketChartColors = aggregatedBucketData.map(
-    (data) => theme.colors[getComponentColor(data.bucket) as keyof typeof theme.colors]?.[5] ?? theme.colors.blue[6],
-  );
+  useEffect(() => {
+    if (!isDesktop || expandedRow !== null) {
+      setFixedDesktopHeader((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      return;
+    }
 
-const renderSummaryBoard = () => (
+    let animationFrame: number | null = null;
+
+    const updateFixedHeader = () => {
+      if (animationFrame !== null) {
+        return;
+      }
+
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        const container = desktopTableContainerRef.current;
+        const header = desktopTableHeaderRef.current;
+
+        if (!container || !header) {
+          setFixedDesktopHeader((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+          return;
+        }
+
+        const containerRect = container.getBoundingClientRect();
+        const headerRect = header.getBoundingClientRect();
+        const visible =
+          containerRect.top < DESKTOP_FIXED_TABLE_HEADER_TOP &&
+          containerRect.bottom > DESKTOP_FIXED_TABLE_HEADER_TOP + headerRect.height;
+        const columnWidths = Array.from(header.querySelectorAll('th')).map((cell) =>
+          Math.round(cell.getBoundingClientRect().width),
+        );
+        const nextState: FixedDesktopHeaderState = {
+          visible,
+          left: Math.round(containerRect.left),
+          width: Math.round(containerRect.width),
+          columnWidths,
+        };
+
+        setFixedDesktopHeader((prev) => {
+          const sameColumns =
+            prev.columnWidths.length === nextState.columnWidths.length &&
+            prev.columnWidths.every((width, index) => width === nextState.columnWidths[index]);
+          if (
+            prev.visible === nextState.visible &&
+            prev.left === nextState.left &&
+            prev.width === nextState.width &&
+            sameColumns
+          ) {
+            return prev;
+          }
+          return nextState;
+        });
+      });
+    };
+
+    updateFixedHeader();
+    window.addEventListener('scroll', updateFixedHeader, true);
+    window.addEventListener('resize', updateFixedHeader);
+
+    return () => {
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      window.removeEventListener('scroll', updateFixedHeader, true);
+      window.removeEventListener('resize', updateFixedHeader);
+    };
+  }, [canViewFull, expandedRow, isDesktop, summaries.length]);
+
+const renderSummaryBoard = () => {
+  const kpiCardStyle: React.CSSProperties = {
+    ...KPI_CARD_STYLE,
+    flex: isDesktop ? '0 1 300px' : '1 1 100%',
+    width: isDesktop ? 300 : '100%',
+    maxWidth: isDesktop ? 320 : '100%',
+  };
+
+  return (
   <Stack gap="sm">
-      <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }}>
-        <Card withBorder>
-          <Text size="sm" c="dimmed">
-            Opening balance
-          </Text>
-          <Title order={4}>{formatCurrency(totalOpening)}</Title>
-          <Text size="xs" c="dimmed">
-            Carry-over into this period
-          </Text>
+    <Group justify="center" align="stretch" gap="md" wrap="wrap">
+      {totalOpening !== 0 && (
+        <Card withBorder p="sm" style={kpiCardStyle}>
+          <Stack gap={4} align="center" justify="center">
+            <Text size="sm" c="dimmed" ta="center">
+              Last Months Owed
+            </Text>
+            <Title order={4} ta="center">
+              {formatCurrency(totalOpening)}
+            </Title>
+            <Group justify="center">
+              <Button
+                size="xs"
+                variant="subtle"
+                disabled={openingBalanceDetailRows.length === 0}
+                onClick={() => setOpeningBalanceDetailsOpen(true)}
+              >
+                Show Detail
+              </Button>
+            </Group>
+          </Stack>
         </Card>
-        <Card withBorder>
-          <Text size="sm" c="dimmed">
-            New earnings
+      )}
+      <Card withBorder p="sm" style={kpiCardStyle}>
+        <Stack gap={4} align="center" justify="center">
+          <Text size="sm" c="dimmed" ta="center">
+            My Payment
           </Text>
-          <Title order={4}>{formatCurrency(totalEarnings)}</Title>
-          <Text size="xs" c="dimmed">
-            Guides with payouts this range
-          </Text>
-        </Card>
-        <Card withBorder>
-          <Text size="sm" c="dimmed">
-            Paid this period
-          </Text>
-          <Title order={4}>{formatCurrency(totalPaid, DEFAULT_CURRENCY)}</Title>
-          <Text size="xs" c="dimmed">
-            Finance transactions recorded
-          </Text>
-        </Card>
-        <Card withBorder>
-          <Text size="sm" c="dimmed">
-            Closing balance
-          </Text>
-          <Title order={4}>{formatCurrency(totalClosing)}</Title>
-          <Text size="xs" c="dimmed">
-            Outstanding across {totalGuides} guide{totalGuides === 1 ? '' : 's'}
-          </Text>
-        </Card>
-      </SimpleGrid>
-      <SimpleGrid cols={{ base: 1, sm: 2 }}>
-        <Card withBorder>
-          <Text size="sm" c="dimmed">
-            Total commission
-          </Text>
-          <Title order={4}>{formatCurrency(totalCommission)}</Title>
-          <Text size="xs" c="dimmed">
-            Direct commission earned
-          </Text>
-        </Card>
-        <Card withBorder>
-          <Text size="sm" c="dimmed">
-            Range
-          </Text>
-          <Title order={5}>
-            {startDate?.format('MMM D, YYYY')} - {endDate?.format('MMM D, YYYY')}
+          <Title order={4} ta="center">
+            {formatCurrency(totalEarnings)}
           </Title>
-          <Text size="xs" c="dimmed">
-            Period payout total: {formatCurrency(totalPayout)}
+        </Stack>
+      </Card>
+      <Card withBorder p="sm" style={kpiCardStyle}>
+        <Stack gap={4} align="center" justify="center">
+          <Text size="sm" c="dimmed" ta="center">
+            Already Paid
           </Text>
+          <Title order={4} ta="center">
+            {formatCurrency(totalPaid, DEFAULT_CURRENCY)}
+          </Title>
+        </Stack>
+      </Card>
+      <Card withBorder p="sm" style={kpiCardStyle}>
+        <Stack gap={4} align="center" justify="center">
+          <Text size="sm" c="dimmed" ta="center">
+            Outstanding
+          </Text>
+          <Title order={4} ta="center">
+            {formatCurrency(totalClosing)}
+          </Title>
+        </Stack>
+      </Card>
+    </Group>
+  </Stack>
+  );
+};
+
+const renderOpeningBalanceDetails = () => {
+  const sourceRows = openingBalanceDetailRows.filter((row) => row.staff.openingBalanceSource);
+  const missingSourceRows = openingBalanceDetailRows.filter((row) => !row.staff.openingBalanceSource);
+
+  return (
+    <Stack gap="lg">
+      <SimpleGrid cols={{ base: 1, sm: 3 }}>
+        <Card withBorder padding="sm" radius="md">
+          <Text size="xs" c="dimmed">
+            Opening balance total
+          </Text>
+          <Text fw={700}>{formatCurrency(totalOpening)}</Text>
+        </Card>
+        <Card withBorder padding="sm" radius="md">
+          <Text size="xs" c="dimmed">
+            Staff with carry-over
+          </Text>
+          <Text fw={700}>{openingBalanceDetailRows.length}</Text>
+        </Card>
+        <Card withBorder padding="sm" radius="md">
+          <Text size="xs" c="dimmed">
+            Source table
+          </Text>
+          <Text fw={700}>staff_payout_ledgers</Text>
         </Card>
       </SimpleGrid>
+
+      {sourceRows.length > 0 ? (
+        <ScrollArea mah={420} offsetScrollbars>
+          <Table striped withRowBorders style={{ minWidth: 980 }}>
+            <thead>
+              <tr>
+                <th style={{ padding: 8 }}>Staff</th>
+                <th style={{ padding: 8 }}>Opening balance</th>
+                <th style={{ padding: 8 }}>From period</th>
+                <th style={{ padding: 8 }}>Previous opening</th>
+                <th style={{ padding: 8 }}>Previous activity</th>
+                <th style={{ padding: 8 }}>Previous payments</th>
+                <th style={{ padding: 8 }}>Previous closing</th>
+                <th style={{ padding: 8 }}>Ledger</th>
+                <th style={{ padding: 8 }}>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sourceRows.map(({ staff, openingBalance }) => {
+                const source = staff.openingBalanceSource!;
+                return (
+                  <tr key={`${staff.userId ?? source.staffUserId}-${source.ledgerId}`}>
+                    <td style={{ padding: 8 }}>{staff.firstName}</td>
+                    <td style={{ padding: 8 }}>{formatCurrency(openingBalance, source.currency)}</td>
+                    <td style={{ padding: 8 }}>{formatRangeLabel(source.rangeStart, source.rangeEnd)}</td>
+                    <td style={{ padding: 8 }}>{formatCurrency(source.openingBalance, source.currency)}</td>
+                    <td style={{ padding: 8 }}>{formatCurrency(source.dueAmount, source.currency)}</td>
+                    <td style={{ padding: 8 }}>{formatCurrency(source.paidAmount, source.currency)}</td>
+                    <td style={{ padding: 8 }}>{formatCurrency(source.closingBalance, source.currency)}</td>
+                    <td style={{ padding: 8 }}>
+                      <Stack gap={0}>
+                        <Text size="sm">#{source.ledgerId}</Text>
+                        <Text size="xs" c="dimmed">
+                          {source.sourceTable}
+                        </Text>
+                      </Stack>
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      <Stack gap={0}>
+                        <Text size="sm">{formatDateTimeLabel(source.updatedAt ?? source.createdAt)}</Text>
+                        <Text size="xs" c="dimmed">
+                          Created {formatDateTimeLabel(source.createdAt)}
+                        </Text>
+                      </Stack>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </ScrollArea>
+      ) : (
+        <Alert color="blue" variant="light">
+          No previous ledger rows were found for the current opening balance.
+        </Alert>
+      )}
+
+      {sourceRows.some((row) => (row.staff.openingBalanceSource?.history?.length ?? 0) > 0) && (
+        <Stack gap="xs">
+          <Text size="sm" fw={600}>
+            Ledger trail
+          </Text>
+          <Accordion variant="contained" radius="md">
+            {sourceRows.map(({ staff, openingBalance }) => {
+              const source = staff.openingBalanceSource;
+              const history = source?.history ?? [];
+              if (!source || history.length === 0) {
+                return null;
+              }
+
+              return (
+                <Accordion.Item key={`opening-history-${staff.userId ?? source.staffUserId}`} value={String(staff.userId ?? source.staffUserId)}>
+                  <Accordion.Control>
+                    <Group justify="space-between" gap="sm">
+                      <Text size="sm" fw={600}>
+                        {staff.firstName}
+                      </Text>
+                      <Text size="sm">{formatCurrency(openingBalance, source.currency)}</Text>
+                    </Group>
+                  </Accordion.Control>
+                  <Accordion.Panel>
+                    <ScrollArea offsetScrollbars>
+                      <Table striped withRowBorders style={{ minWidth: 760 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ padding: 8 }}>Period</th>
+                            <th style={{ padding: 8 }}>Opening</th>
+                            <th style={{ padding: 8 }}>Activity</th>
+                            <th style={{ padding: 8 }}>Payments</th>
+                            <th style={{ padding: 8 }}>Closing</th>
+                            <th style={{ padding: 8 }}>Ledger</th>
+                            <th style={{ padding: 8 }}>Updated</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {history.map((ledger) => (
+                            <tr key={`${staff.userId ?? source.staffUserId}-${ledger.ledgerId}`}>
+                              <td style={{ padding: 8 }}>{formatRangeLabel(ledger.rangeStart, ledger.rangeEnd)}</td>
+                              <td style={{ padding: 8 }}>{formatCurrency(ledger.openingBalance, ledger.currency)}</td>
+                              <td style={{ padding: 8 }}>{formatCurrency(ledger.dueAmount, ledger.currency)}</td>
+                              <td style={{ padding: 8 }}>{formatCurrency(ledger.paidAmount, ledger.currency)}</td>
+                              <td style={{ padding: 8 }}>{formatCurrency(ledger.closingBalance, ledger.currency)}</td>
+                              <td style={{ padding: 8 }}>#{ledger.ledgerId}</td>
+                              <td style={{ padding: 8 }}>{formatDateTimeLabel(ledger.updatedAt ?? ledger.createdAt)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </Table>
+                    </ScrollArea>
+                  </Accordion.Panel>
+                </Accordion.Item>
+              );
+            })}
+          </Accordion>
+        </Stack>
+      )}
+
+      {missingSourceRows.length > 0 && (
+        <Alert color="yellow" variant="light">
+          {missingSourceRows.length} staff opening balance row{missingSourceRows.length === 1 ? '' : 's'} did not include
+          a previous ledger source.
+        </Alert>
+      )}
     </Stack>
-);
+  );
+};
 
 const getLedgerSnapshot = (staff: Pay) => ({
   opening: staff.openingBalance ?? 0,
@@ -2353,25 +3435,25 @@ const renderLedgerSnapshot = (staff: Pay) => {
     <Stack gap={2}>
       <Group justify="space-between">
         <Text size="xs" c="dimmed">
-          Opening balance
+          Last Months Owed
         </Text>
         <Text size="xs">{formatCurrency(ledger.opening, currency)}</Text>
       </Group>
       <Group justify="space-between">
         <Text size="xs" c="dimmed">
-          New activity
+          Payment
         </Text>
         <Text size="xs">{formatCurrency(ledger.due, currency)}</Text>
       </Group>
       <Group justify="space-between">
         <Text size="xs" c="dimmed">
-          Payments
+          Already Paid
         </Text>
         <Text size="xs">{formatCurrency(ledger.paid, currency)}</Text>
       </Group>
       <Group justify="space-between">
         <Text size="xs" c="dimmed">
-          Closing balance
+          Outstanding
         </Text>
         <Text size="xs">{formatCurrency(ledger.closing, currency)}</Text>
       </Group>
@@ -2379,94 +3461,79 @@ const renderLedgerSnapshot = (staff: Pay) => {
   );
 };
 
-  const renderCharts = () => {
-    if (aggregatedBucketData.length === 0 && dailyTrendData.length === 0 && aggregatedComponentData.length === 0) {
-      return null;
-    }
-    return (
-      <Suspense fallback={<Center py="xl"><Loader /></Center>}>
-        <PaysCharts
-          aggregatedBucketData={aggregatedBucketData}
-          aggregatedComponentData={aggregatedComponentData}
-          bucketChartColors={bucketChartColors}
-          dailyTrendData={dailyTrendData}
-          formatCurrency={formatCurrency}
-          totalPayout={totalPayout}
-        />
-      </Suspense>
-    );
-  };
-
   const renderMobileCards = () => (
     <Stack gap="md">
       {summaries.map((item, index) => {
         const expanded = expandedRow === index;
         const total = normalizeTotal(item);
         const hasDetails =
+          hasPositivePaymentBucket(item) ||
           (item.productTotals && item.productTotals.length > 0) ||
           item.breakdown.length > 0 ||
           hasPlatformGuestDetails(item) ||
-          (item.lockedComponents && item.lockedComponents.length > 0);
+          (item.lockedComponents && item.lockedComponents.length > 0) ||
+          Boolean(item.affiliateSales?.bookingCount);
         return (
-          <Paper key={item.userId ?? index} shadow="sm" radius="lg" p="md" withBorder>
-            <Stack gap="sm">
-              <Group justify="space-between" align="flex-start">
-                <div>
-                  <Title order={4}>{item.firstName}</Title>
-                  <Text size="sm" c="dimmed">
-                    Total payout
-                  </Text>
-                  <Title order={5}>{formatCurrency(total)}</Title>
-                </div>
-                <Badge color="blue" variant="light">
-                  {item.breakdown.length} {item.breakdown.length === 1 ? 'entry' : 'entries'}
-                </Badge>
-              </Group>
-
-              <Stack gap="xs">
-                <Stack gap={4}>
-                  <Group justify="space-between">
-                    <Text size="sm" c="dimmed">
-                      Paid
-                    </Text>
-                    <Text size="sm" fw={600}>
-                      {formatCurrency(item.payouts?.payablePaid ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
-                    </Text>
-                  </Group>
-                  <Group justify="space-between">
-                    <Text size="sm" c="dimmed">
-                      Outstanding
-                    </Text>
-                    <Text size="sm" fw={600} c={(item.payouts?.payableOutstanding ?? 0) > 0 ? undefined : 'teal'}>
-                      {formatCurrency(item.payouts?.payableOutstanding ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
-                    </Text>
-                  </Group>
-                  {renderRecordAction(item)}
-                </Stack>
-                {renderLedgerSnapshot(item)}
-                {renderComponentList(
-                  item.componentTotals,
-                  item.platformGuestBreakdowns,
-                  item.platformGuestTotals,
-                  item.lockedComponents,
-                  item,
-                  { onApproveBaseOverride: handleApproveBaseOverride, pendingUserIds: baseOverridePending },
-                )}
-                {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
-                {renderReimbursements(item)}
+          <Paper key={item.userId ?? index} shadow="sm" radius="lg" p="lg" withBorder>
+            <Stack gap="md" align="stretch">
+              <Stack gap={4} align="center" ta="center">
+                <Title order={4}>{item.firstName}</Title>
+                <Text size="sm" c="dimmed">
+                  Total payout
+                </Text>
+                <Title order={4}>{formatCurrency(total)}</Title>
               </Stack>
 
+              <SimpleGrid cols={2} spacing="xs">
+                <Stack gap={2} align="center" ta="center">
+                  <Text size="sm" c="dimmed">
+                    Paid
+                  </Text>
+                  <Text size="sm" fw={700}>
+                    {formatCurrency(item.payouts?.payablePaid ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
+                  </Text>
+                </Stack>
+                <Stack gap={2} align="center" ta="center">
+                  <Text size="sm" c="dimmed">
+                    Outstanding
+                  </Text>
+                  <Text size="sm" fw={700} c={(item.payouts?.payableOutstanding ?? 0) > 0 ? undefined : 'teal'}>
+                    {formatCurrency(item.payouts?.payableOutstanding ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
+                  </Text>
+                </Stack>
+              </SimpleGrid>
+
+              {renderRecordAction(item, { fullWidth: true })}
+
+              <Box
+                style={{
+                  padding: '10px 0',
+                  borderTop: '1px solid var(--mantine-color-gray-2)',
+                  borderBottom: '1px solid var(--mantine-color-gray-2)',
+                }}
+              >
+                {renderLedgerSnapshot(item)}
+              </Box>
+
               {hasDetails && (
-                <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
+                <Button variant="subtle" fullWidth onClick={() => toggleRow(index)}>
                   {expanded ? 'Hide details' : 'Show details'}
                 </Button>
               )}
 
               {expanded && (
                 <Stack gap="sm" pt="xs">
-                  {renderProductTotals(item.productTotals, item.componentTotals, item.lockedComponents)}
-                  {item.breakdown.length > 0 &&
-                    renderBreakdownTable(item, item.breakdown, buildIncentiveLookup(item))}
+                  {renderBucketTotals(item.bucketTotals, item.lockedComponents, item)}
+                  {renderComponentList(
+                    item.componentTotals,
+                    item.platformGuestBreakdowns,
+                    item.platformGuestTotals,
+                    item.lockedComponents,
+                    item,
+                    { onApproveBaseOverride: handleApproveBaseOverride, pendingUserIds: baseOverridePending },
+                  )}
+                  {renderProductTotals(item.productTotals, item.componentTotals, item.lockedComponents, item)}
+                  {renderReimbursements(item)}
                 </Stack>
               )}
             </Stack>
@@ -2476,10 +3543,59 @@ const renderLedgerSnapshot = (staff: Pay) => {
     </Stack>
   );
 
+  const renderSelfDetails = () => {
+    const item = summaries[0];
+    if (!item) {
+      return null;
+    }
+
+    return (
+      <Stack gap="md" align="stretch" style={{ width: '100%' }}>
+        <Button fullWidth variant="light" onClick={() => setSelfDetailsOpen((open) => !open)}>
+          {selfDetailsOpen ? 'Hide Details' : 'Show Details'}
+        </Button>
+        <Collapse in={selfDetailsOpen} style={{ width: '100%' }}>
+          <Stack gap="md">
+            {renderBucketTotals(item.bucketTotals, item.lockedComponents, item)}
+            {renderComponentList(
+              item.componentTotals,
+              item.platformGuestBreakdowns,
+              item.platformGuestTotals,
+              item.lockedComponents,
+              item,
+            )}
+            {renderProductTotals(item.productTotals, item.componentTotals, item.lockedComponents, item)}
+            {renderReimbursements(item)}
+          </Stack>
+        </Collapse>
+      </Stack>
+    );
+  };
+
   const renderDesktopTable = () => {
-    const tableCommissionTotal = summaries.reduce((sum, item) => sum + item.totalCommission, 0);
+    const desktopTableCellStyle: React.CSSProperties = {
+      padding: 12,
+      textAlign: 'center',
+      verticalAlign: 'middle',
+      borderBottom: '1px solid var(--mantine-color-gray-3)',
+    };
+    const shouldStickDesktopHeader = expandedRow === null;
+    const isFixedDesktopHeaderVisible = shouldStickDesktopHeader && fixedDesktopHeader.visible;
+    const desktopHeaderCellStyle: React.CSSProperties = {
+      ...desktopTableCellStyle,
+      padding: '14px 12px',
+      backgroundColor: 'var(--mantine-color-gray-0)',
+      borderTop: '1px solid var(--mantine-color-gray-3)',
+      borderBottom: '1px solid var(--mantine-color-gray-4)',
+      visibility: isFixedDesktopHeaderVisible ? 'hidden' : 'visible',
+    };
+    const desktopActionsCellStyle: React.CSSProperties = {
+      ...desktopTableCellStyle,
+      width: 170,
+    };
+    const tableOpeningTotal = summaries.reduce((sum, item) => sum + (item.openingBalance ?? 0), 0);
+    const showLastMonthsOwedColumn = Math.abs(roundLineAmount(tableOpeningTotal)) > 0;
     const tablePayoutTotal = summaries.reduce((sum, item) => sum + normalizeTotal(item), 0);
-    const tableIncentiveTotal = summaries.reduce((sum, item) => sum + calculateIncentiveTotal(item), 0);
     const tablePaidTotal = summaries.reduce(
       (sum, item) => sum + (item.payouts?.payablePaid ?? 0),
       0,
@@ -2488,49 +3604,93 @@ const renderLedgerSnapshot = (staff: Pay) => {
       (sum, item) => sum + (item.payouts?.payableOutstanding ?? 0),
       0,
     );
+    const desktopHeaderLabels = [
+      'Name',
+      ...(showLastMonthsOwedColumn ? ['Last Months Owed'] : []),
+      'Total payout',
+      'Paid',
+      'Outstanding',
+      'Actions',
+    ];
+    const fixedHeaderColumns =
+      fixedDesktopHeader.columnWidths.length === desktopHeaderLabels.length
+        ? fixedDesktopHeader.columnWidths.map((width) => `${width}px`).join(' ')
+        : `repeat(${desktopHeaderLabels.length}, 1fr)`;
     return (
-      <ScrollArea>
-        <Table striped highlightOnHover withRowBorders style={{ minWidth: 640 }}>
-          <thead>
+      <Box ref={desktopTableContainerRef} style={{ width: '100%' }}>
+        {isFixedDesktopHeaderVisible && (
+          <Box
+            style={{
+              position: 'fixed',
+              top: DESKTOP_FIXED_TABLE_HEADER_TOP,
+              left: fixedDesktopHeader.left,
+              width: fixedDesktopHeader.width,
+              display: 'grid',
+              gridTemplateColumns: fixedHeaderColumns,
+              zIndex: 100,
+              backgroundColor: 'var(--mantine-color-gray-0)',
+              borderTop: '1px solid var(--mantine-color-gray-3)',
+              borderBottom: '1px solid var(--mantine-color-gray-4)',
+              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)',
+              pointerEvents: 'none',
+            }}
+          >
+            {desktopHeaderLabels.map((label) => (
+              <Box
+                key={label}
+                style={{
+                  padding: '14px 12px',
+                  textAlign: 'center',
+                  fontWeight: 700,
+                }}
+              >
+                {label}
+              </Box>
+            ))}
+          </Box>
+        )}
+        <Table
+          striped
+          highlightOnHover
+          withRowBorders
+          style={{ minWidth: 640, borderCollapse: 'separate', borderSpacing: 0 }}
+        >
+          <thead ref={desktopTableHeaderRef}>
             <tr>
-              <th style={{ padding: 12 }}>Name</th>
-              <th style={{ padding: 12 }}>Commission</th>
-              <th style={{ padding: 12 }}>Incentives</th>
-              <th style={{ padding: 12 }}>Total payout</th>
-              <th style={{ padding: 12 }}>Paid</th>
-              <th style={{ padding: 12 }}>Outstanding</th>
-              {canViewFull && <th style={{ padding: 12 }}>Ledger</th>}
-              <th style={{ padding: 12 }}>Actions</th>
+              <th style={desktopHeaderCellStyle}>Name</th>
+              {showLastMonthsOwedColumn && <th style={desktopHeaderCellStyle}>Last Months Owed</th>}
+              <th style={desktopHeaderCellStyle}>Total payout</th>
+              <th style={desktopHeaderCellStyle}>Paid</th>
+              <th style={desktopHeaderCellStyle}>Outstanding</th>
+              <th style={desktopHeaderCellStyle}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {summaries.map((item, index) => {
               const rowHasDetails =
+                hasPositivePaymentBucket(item) ||
                 (item.productTotals && item.productTotals.length > 0) ||
                 item.breakdown.length > 0 ||
                 hasPlatformGuestDetails(item) ||
                 (item.lockedComponents && item.lockedComponents.length > 0) ||
-                (item.componentTotals && item.componentTotals.length > 0);
-              const incentiveAmount = calculateIncentiveTotal(item);
+                (item.componentTotals && item.componentTotals.length > 0) ||
+                Boolean(item.affiliateSales?.bookingCount);
               const paidAmount = item.payouts?.payablePaid ?? 0;
               const outstandingAmount = item.payouts?.payableOutstanding ?? 0;
+              const openingAmount = item.openingBalance ?? 0;
               const payoutCurrency = item.payouts?.currency ?? DEFAULT_CURRENCY;
               return (
                 <Fragment key={item.userId ?? index}>
                   <tr>
-                    <td style={{ padding: 12 }}>{item.firstName}</td>
-                    <td style={{ padding: 12 }}>{formatCurrency(item.totalCommission)}</td>
-                    <td style={{ padding: 12 }}>{formatCurrency(incentiveAmount)}</td>
-                    <td style={{ padding: 12 }}>{formatCurrency(normalizeTotal(item))}</td>
-                    <td style={{ padding: 12 }}>{formatCurrency(paidAmount, payoutCurrency)}</td>
-                    <td style={{ padding: 12 }}>{formatCurrency(outstandingAmount, payoutCurrency)}</td>
-                    {canViewFull && (
-                      <td style={{ padding: 12, minWidth: 200 }}>
-                        <Box>{renderLedgerSnapshot(item)}</Box>
-                      </td>
+                    <td style={desktopTableCellStyle}>{item.firstName}</td>
+                    {showLastMonthsOwedColumn && (
+                      <td style={desktopTableCellStyle}>{formatCurrency(openingAmount, payoutCurrency)}</td>
                     )}
-                    <td style={{ padding: 12, textAlign: 'right', width: 170 }}>
-                      <Stack gap={6} align="flex-end">
+                    <td style={desktopTableCellStyle}>{formatCurrency(normalizeTotal(item))}</td>
+                    <td style={desktopTableCellStyle}>{formatCurrency(paidAmount, payoutCurrency)}</td>
+                    <td style={desktopTableCellStyle}>{formatCurrency(outstandingAmount, payoutCurrency)}</td>
+                    <td style={desktopActionsCellStyle}>
+                      <Stack gap={6} align="center">
                         {renderRecordAction(item)}
                         {rowHasDetails && (
                           <Button variant="subtle" size="xs" onClick={() => toggleRow(index)}>
@@ -2542,10 +3702,16 @@ const renderLedgerSnapshot = (staff: Pay) => {
                   </tr>
                   {expandedRow === index && (
                     <tr>
-                      <td colSpan={canViewFull ? 8 : 7} style={{ backgroundColor: '#fafafa', padding: '12px 8px' }}>
+                      <td
+                        colSpan={desktopHeaderLabels.length}
+                        style={{
+                          backgroundColor: '#fafafa',
+                          padding: '12px 8px',
+                          borderBottom: '1px solid var(--mantine-color-gray-3)',
+                        }}
+                      >
                         <Stack gap="md">
-                          {renderBucketTotals(item.bucketTotals, item.lockedComponents)}
-                          {renderReimbursements(item)}
+                          {renderBucketTotals(item.bucketTotals, item.lockedComponents, item)}
                           {renderComponentList(
                             item.componentTotals,
                             item.platformGuestBreakdowns,
@@ -2554,9 +3720,8 @@ const renderLedgerSnapshot = (staff: Pay) => {
                             item,
                             { onApproveBaseOverride: handleApproveBaseOverride, pendingUserIds: baseOverridePending },
                           )}
-                          {renderProductTotals(item.productTotals, item.componentTotals, item.lockedComponents)}
-                          {item.breakdown.length > 0 &&
-                            renderBreakdownTable(item, item.breakdown, buildIncentiveLookup(item))}
+                          {renderProductTotals(item.productTotals, item.componentTotals, item.lockedComponents, item)}
+                          {renderReimbursements(item)}
                         </Stack>
                       </td>
                     </tr>
@@ -2565,30 +3730,28 @@ const renderLedgerSnapshot = (staff: Pay) => {
               );
             })}
             <tr>
-              <td style={{ padding: 12 }}>
+              <td style={desktopTableCellStyle}>
                 <strong>Total</strong>
               </td>
-              <td style={{ padding: 12 }}>
-                <strong>{formatCurrency(tableCommissionTotal)}</strong>
-              </td>
-              <td style={{ padding: 12 }}>
-                <strong>{formatCurrency(tableIncentiveTotal)}</strong>
-              </td>
-              <td style={{ padding: 12 }}>
+              {showLastMonthsOwedColumn && (
+                <td style={desktopTableCellStyle}>
+                  <strong>{formatCurrency(tableOpeningTotal, DEFAULT_CURRENCY)}</strong>
+                </td>
+              )}
+              <td style={desktopTableCellStyle}>
                 <strong>{formatCurrency(tablePayoutTotal)}</strong>
               </td>
-              <td style={{ padding: 12 }}>
+              <td style={desktopTableCellStyle}>
                 <strong>{formatCurrency(tablePaidTotal, DEFAULT_CURRENCY)}</strong>
               </td>
-              <td style={{ padding: 12 }}>
+              <td style={desktopTableCellStyle}>
                 <strong>{formatCurrency(tableOutstandingTotal, DEFAULT_CURRENCY)}</strong>
               </td>
-              {canViewFull && <td />}
-              <td />
+              <td style={desktopTableCellStyle} />
             </tr>
           </tbody>
         </Table>
-      </ScrollArea>
+      </Box>
     );
   };
 
@@ -2610,33 +3773,36 @@ const renderLedgerSnapshot = (staff: Pay) => {
     );
   } else {
     content = (
-      <Container fluid={!isDesktop} size={isDesktop ? 1280 : undefined} my={isDesktop ? 40 : 16} px={isDesktop ? 48 : 'sm'}>
-        <Paper radius={isDesktop ? 12 : 'lg'} p={isDesktop ? 'xl' : 'md'} withBorder>
+      <Container fluid my={isDesktop ? 40 : 16} px={isDesktop ? 24 : 0}>
+        <Paper
+          radius={isDesktop ? 12 : 0}
+          p={isDesktop ? 'xl' : 0}
+          withBorder={isDesktop}
+          style={!isDesktop ? { backgroundColor: 'transparent' } : undefined}
+        >
           <Stack gap="md">
-            {usingSelfScope && (
-              <Alert color="blue" title="Personal view">
-                You are viewing your own payouts only.
-              </Alert>
-            )}
-
             <Stack gap={isDesktop ? 'lg' : 'sm'}>
               <Stack gap="xs">
                 <Group
-                  justify={isDesktop ? 'space-between' : 'flex-start'}
-                  align={isDesktop ? 'end' : 'stretch'}
+                  justify="center"
+                  align="end"
                   gap={isDesktop ? 'lg' : 'sm'}
                   wrap="wrap"
                 >
-                  <Box style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}>
+                  <Box style={{ width: isDesktop ? 260 : '100%', maxWidth: 360 }}>
                     <Select
-                      label="Period"
+                      aria-label="Period"
                       data={DATE_PRESET_OPTIONS}
                       value={datePreset}
                       onChange={(value) => handlePresetChange(value)}
+                      styles={{
+                        input: { textAlign: 'center' },
+                        option: { textAlign: 'center', justifyContent: 'center' },
+                      }}
                     />
                   </Box>
                   {datePreset === 'custom' && (
-                    <Box style={{ flex: isDesktop ? 1 : 'unset', width: isDesktop ? 'auto' : '100%' }}>
+                    <Box style={{ width: isDesktop ? 320 : '100%', maxWidth: 420 }}>
                       <DatePickerInput
                         label="Custom range"
                         type="range"
@@ -2646,6 +3812,10 @@ const renderLedgerSnapshot = (staff: Pay) => {
                         allowSingleDateInRange
                         minDate={EARLIEST_DATA_DATE.toDate()}
                         maxDate={today.toDate()}
+                        styles={{
+                          label: { width: '100%', textAlign: 'center' },
+                          input: { textAlign: 'center' },
+                        }}
                       />
                     </Box>
                   )}
@@ -2687,8 +3857,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                     </Alert>
                   )}
                   {renderSummaryBoard()}
-                  {renderCharts()}
-                  {isDesktop ? renderDesktopTable() : renderMobileCards()}
+                  {usingSelfScope ? renderSelfDetails() : isDesktop ? renderDesktopTable() : renderMobileCards()}
                 </Stack>
               )}
 
@@ -2721,104 +3890,150 @@ const renderLedgerSnapshot = (staff: Pay) => {
       <>
         {content}
         <Modal
+          opened={openingBalanceDetailsOpen}
+          onClose={() => setOpeningBalanceDetailsOpen(false)}
+          title="Opening balance detail"
+          size={isDesktop ? '85vw' : '95vw'}
+          radius="lg"
+        >
+          {renderOpeningBalanceDetails()}
+        </Modal>
+        <Modal
           opened={paidEntriesModal.open}
           onClose={closePaidEntriesModal}
           title={
             paidEntriesModal.staff
-              ? `Recorded payouts for ${paidEntriesModal.staff.firstName}`
-              : 'Recorded payouts'
+              ? `Manage paid for ${paidEntriesModal.staff.firstName}`
+              : 'Manage paid'
           }
-          size={isDesktop ? '70vw' : '95vw'}
-          radius="lg"
+          size={isDesktop ? '70vw' : '100%'}
+          fullScreen={!isDesktop}
+          radius={isDesktop ? 'lg' : 0}
+          styles={{
+            content: { paddingBottom: 0 },
+            body: { padding: isDesktop ? undefined : 0 },
+            header: {
+              padding: isDesktop ? undefined : '16px 18px',
+              borderBottom: isDesktop ? undefined : '1px solid var(--mantine-color-gray-2)',
+            },
+            title: { fontWeight: 700 },
+          }}
         >
-          <Stack gap="lg" pb="sm">
-            <SimpleGrid cols={{ base: 1, sm: 3 }}>
-              <Card padding="sm" radius="md" withBorder shadow="xs">
-                <Stack gap={2}>
-                  <Text size="xs" c="dimmed">
-                    Recorded lines
-                  </Text>
-                  <Text fw={600}>{paidModalEntries.length}</Text>
-                </Stack>
-              </Card>
-              <Card padding="sm" radius="md" withBorder shadow="xs">
-                <Stack gap={2}>
-                  <Text size="xs" c="dimmed">
-                    Selected
-                  </Text>
-                  <Text fw={600}>{paidEntriesModal.selectedIds.length}</Text>
-                </Stack>
-              </Card>
-              <Card padding="sm" radius="md" withBorder shadow="xs">
-                <Stack gap={2}>
-                  <Text size="xs" c="dimmed">
-                    Selected amount
-                  </Text>
-                  <Text fw={600}>
-                    {formatCurrency(
-                      selectedPaidEntriesAmount,
-                      paidEntriesModal.staff?.payouts?.currency ?? DEFAULT_CURRENCY,
-                    )}
-                  </Text>
-                </Stack>
-              </Card>
-            </SimpleGrid>
+          <Box style={{ height: isDesktop ? 'auto' : 'calc(100dvh - 61px)', display: 'flex', flexDirection: 'column' }}>
+            <ScrollArea.Autosize mah={isDesktop ? '80vh' : undefined} style={{ flex: 1, minHeight: 0 }}>
+              <Stack gap="md" p={isDesktop ? 0 : 'md'} pb={isDesktop ? 'sm' : 96}>
+                <SimpleGrid cols={{ base: 1, sm: 3 }}>
+                  <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
+                    <Stack gap={2} align="center">
+                      <Text size="xs" c="dimmed">
+                        Recorded lines
+                      </Text>
+                      <Text fw={700}>{paidModalEntries.length}</Text>
+                    </Stack>
+                  </Card>
+                  <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
+                    <Stack gap={2} align="center">
+                      <Text size="xs" c="dimmed">
+                        Selected
+                      </Text>
+                      <Text fw={700}>{paidEntriesModal.selectedIds.length}</Text>
+                    </Stack>
+                  </Card>
+                  <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
+                    <Stack gap={2} align="center">
+                      <Text size="xs" c="dimmed">
+                        Selected amount
+                      </Text>
+                      <Text fw={700}>
+                        {formatCurrency(
+                          selectedPaidEntriesAmount,
+                          paidEntriesModal.staff?.payouts?.currency ?? DEFAULT_CURRENCY,
+                        )}
+                      </Text>
+                    </Stack>
+                  </Card>
+                </SimpleGrid>
 
-            <Group justify="space-between" align="center">
-              <Text size="sm" c="dimmed">
-                Select the recorded components you want to remove from this payout month.
-              </Text>
-              <Group gap="xs">
+                <Card withBorder radius="md" padding={isDesktop ? 'lg' : 'md'}>
+                  <Stack gap="md">
+                    <Group justify="space-between" align={isDesktop ? 'center' : 'stretch'} wrap="wrap">
+                      <Text size="sm" c="dimmed" ta={isDesktop ? undefined : 'center'} style={{ flex: 1 }}>
+                        Select the recorded components you want to remove from this payout month.
+                      </Text>
+                      <Button
+                        variant="subtle"
+                        size="xs"
+                        fullWidth={!isDesktop}
+                        onClick={() =>
+                          setPaidEntriesModal((prev) => ({
+                            ...prev,
+                            selectedIds: allPaidEntriesSelected ? [] : deletablePaidEntries.map((entry) => entry.id),
+                          }))
+                        }
+                        disabled={deletablePaidEntries.length === 0}
+                      >
+                        {allPaidEntriesSelected ? 'Clear selection' : 'Select all'}
+                      </Button>
+                    </Group>
+
+                    {paidModalEntries.length > 0 ? (
+                      isDesktop ? (
+                        <ScrollArea mah={420} offsetScrollbars>
+                          <PaidEntriesTable
+                            entries={paidModalEntries}
+                            selectedIds={paidEntriesModal.selectedIds}
+                            onToggle={handleTogglePaidEntry}
+                          />
+                        </ScrollArea>
+                      ) : (
+                        <PaidEntriesTable
+                          entries={paidModalEntries}
+                          selectedIds={paidEntriesModal.selectedIds}
+                          onToggle={handleTogglePaidEntry}
+                          compact
+                        />
+                      )
+                    ) : (
+                      <Alert color="blue" variant="light">
+                        No recorded payout components were found for this staff member in the selected month.
+                      </Alert>
+                    )}
+                  </Stack>
+                </Card>
+
+                {paidEntriesMessage ? (
+                  <Alert color={paidEntriesMessage.type === 'error' ? 'red' : 'teal'} variant="light">
+                    {paidEntriesMessage.text}
+                  </Alert>
+                ) : null}
+              </Stack>
+            </ScrollArea.Autosize>
+            <Box
+              p={isDesktop ? 0 : 'md'}
+              style={
+                isDesktop
+                  ? undefined
+                  : {
+                      borderTop: '1px solid var(--mantine-color-gray-2)',
+                      backgroundColor: 'var(--mantine-color-white)',
+                    }
+              }
+            >
+              <Group justify={isDesktop ? 'flex-end' : 'space-between'} grow={!isDesktop}>
+                <Button variant="subtle" onClick={closePaidEntriesModal}>
+                  Close
+                </Button>
                 <Button
-                  variant="subtle"
-                  size="xs"
-                  onClick={() =>
-                    setPaidEntriesModal((prev) => ({
-                      ...prev,
-                      selectedIds: allPaidEntriesSelected ? [] : deletablePaidEntries.map((entry) => entry.id),
-                    }))
-                  }
-                  disabled={deletablePaidEntries.length === 0}
+                  color="red"
+                  onClick={handleDeletePaidEntries}
+                  loading={paidEntriesSubmitting}
+                  disabled={paidEntriesModal.selectedIds.length === 0}
                 >
-                  {allPaidEntriesSelected ? 'Clear selection' : 'Select all'}
+                  Delete selected
                 </Button>
               </Group>
-            </Group>
-
-            {paidModalEntries.length > 0 ? (
-              <ScrollArea mah={420} offsetScrollbars>
-                <PaidEntriesTable
-                  entries={paidModalEntries}
-                  selectedIds={paidEntriesModal.selectedIds}
-                  onToggle={handleTogglePaidEntry}
-                />
-              </ScrollArea>
-            ) : (
-              <Alert color="blue" variant="light">
-                No recorded payout components were found for this staff member in the selected month.
-              </Alert>
-            )}
-
-            {paidEntriesMessage ? (
-              <Alert color={paidEntriesMessage.type === 'error' ? 'red' : 'teal'} variant="light">
-                {paidEntriesMessage.text}
-              </Alert>
-            ) : null}
-
-            <Group justify="flex-end">
-              <Button variant="subtle" onClick={closePaidEntriesModal}>
-                Close
-              </Button>
-              <Button
-                color="red"
-                onClick={handleDeletePaidEntries}
-                loading={paidEntriesSubmitting}
-                disabled={paidEntriesModal.selectedIds.length === 0}
-              >
-                Delete selected
-              </Button>
-            </Group>
-          </Stack>
+            </Box>
+          </Box>
         </Modal>
         <Modal
           opened={entryModal.open}
@@ -2828,41 +4043,38 @@ const renderLedgerSnapshot = (staff: Pay) => {
               ? `Record payout for ${entryModal.staff.firstName}`
               : 'Record staff payout'
           }
-          size={isDesktop ? '80vw' : '95vw'}
-          radius="lg"
-          styles={{ content: { paddingBottom: 0 } }}
+          size={isDesktop ? '80vw' : '100%'}
+          fullScreen={!isDesktop}
+          radius={isDesktop ? 'lg' : 0}
+          styles={{
+            content: { paddingBottom: 0 },
+            body: { padding: isDesktop ? undefined : 0 },
+            header: {
+              padding: isDesktop ? undefined : '16px 18px',
+              borderBottom: isDesktop ? undefined : '1px solid var(--mantine-color-gray-2)',
+            },
+            title: { fontWeight: 700 },
+          }}
         >
-          <ScrollArea.Autosize mah="80vh">
-            <Stack gap="lg" pb="lg">
-              <Card withBorder radius="md" padding="lg">
-                <Stack gap="md">
-                  <Group justify="space-between" align="flex-start">
-                    <Stack gap={2} style={{ flex: 1 }}>
-                      <Text size="sm" c="dimmed">
+          <Box style={{ height: isDesktop ? 'auto' : 'calc(100dvh - 61px)', display: 'flex', flexDirection: 'column' }}>
+            <ScrollArea.Autosize mah={isDesktop ? '80vh' : undefined} style={{ flex: 1, minHeight: 0 }}>
+              <Stack gap="md" p={isDesktop ? 0 : 'md'} pb={isDesktop ? 'lg' : 96}>
+                <Card withBorder radius="md" padding={isDesktop ? 'lg' : 'md'}>
+                  <Stack gap="md" align="stretch">
+                    <Stack gap={8} align="center" ta="center">
+                      <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
                         Payout period
                       </Text>
-                      <Text fw={600}>
-                        {entryModal.period === 'current' ? 'Current reporting range' : 'Previous reporting range'}
-                      </Text>
-                      <Text size="sm">
+                      <Text size="sm" c="dimmed">
                         {entryModal.rangeStart && entryModal.rangeEnd
                           ? formatRangeLabel(entryModal.rangeStart, entryModal.rangeEnd)
                           : reportingRangeLabel}
                       </Text>
                     </Stack>
-                    <SegmentedControl
-                      value={entryModal.period}
-                      onChange={(value) => handleEntryPeriodChange(value as 'current' | 'previous')}
-                      data={[
-                        { label: 'Current', value: 'current' },
-                        { label: 'Previous', value: 'previous' },
-                      ]}
-                    />
-                  </Group>
                   {entryModal.staff && (
                     <SimpleGrid cols={{ base: 1, sm: 3 }}>
-                      <Card padding="sm" radius="md" withBorder shadow="xs">
-                        <Stack gap={2}>
+                      <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
+                        <Stack gap={2} align="center">
                           <Text size="xs" c="dimmed">
                             Outstanding
                           </Text>
@@ -2874,16 +4086,16 @@ const renderLedgerSnapshot = (staff: Pay) => {
                           </Text>
                         </Stack>
                       </Card>
-                      <Card padding="sm" radius="md" withBorder shadow="xs">
-                        <Stack gap={2}>
+                      <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
+                        <Stack gap={2} align="center">
                           <Text size="xs" c="dimmed">
                             This payout
                           </Text>
                           <Text fw={600}>{formatCurrency(modalTotalAmount, entryModal.currency)}</Text>
                         </Stack>
                       </Card>
-                      <Card padding="sm" radius="md" withBorder shadow="xs">
-                        <Stack gap={2}>
+                      <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
+                        <Stack gap={2} align="center">
                           <Text size="xs" c="dimmed">
                             Remaining
                           </Text>
@@ -2903,7 +4115,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                 </Stack>
               </Card>
 
-              <Card withBorder radius="md" padding="lg">
+              <Card withBorder radius="md" padding={isDesktop ? 'lg' : 'md'}>
                 <Stack gap="md">
                   <SimpleGrid cols={{ base: 1, sm: 2 }}>
                     <Select
@@ -2948,15 +4160,15 @@ const renderLedgerSnapshot = (staff: Pay) => {
               </Card>
 
               {entryModal.reimbursementEntries.length > 0 && (
-                <Card withBorder radius="md" padding="lg">
+                <Card withBorder radius="md" padding={isDesktop ? 'lg' : 'md'}>
                   <Stack gap="sm">
-                    <Group justify="space-between" align="flex-start">
-                      <Stack gap={2}>
-                        <Text fw={600}>Reimbursements</Text>
+                    <Stack gap="sm" align={isDesktop ? 'stretch' : 'center'} ta={isDesktop ? undefined : 'center'}>
+                      <Stack gap={2} align={isDesktop ? 'stretch' : 'center'}>
+                        <Text fw={700}>Reimbursements</Text>
                         <Text size="xs" c="dimmed">
                           Staff-covered expenses within this payout range.
                         </Text>
-                        <Group gap="xs">
+                        <Group gap="xs" justify="center">
                           <Badge variant="light" color={entryModal.reimbursementsAwaitingAmount > 0 ? 'orange' : 'gray'}>
                             Awaiting {formatCurrency(entryModal.reimbursementsAwaitingAmount)}
                           </Badge>
@@ -2981,22 +4193,23 @@ const renderLedgerSnapshot = (staff: Pay) => {
                         }
                         disabled={entryModal.reimbursementsAwaitingAmount <= 0}
                       />
-                    </Group>
-                    <ReimbursementEntriesTable entries={entryModal.reimbursementEntries} maxHeight={240} />
+                    </Stack>
+                    <ReimbursementEntriesTable
+                      entries={entryModal.reimbursementEntries}
+                      maxHeight={isDesktop ? 240 : undefined}
+                      compact={!isDesktop}
+                    />
                   </Stack>
                 </Card>
               )}
 
-              <Card withBorder radius="md" padding="lg">
+              <Card withBorder radius="md" padding={isDesktop ? 'lg' : 'md'}>
                 <Stack gap="md">
-                  <Group justify="space-between" align="center">
-                    <div>
-                      <Text fw={600}>Compensation components</Text>
-                      <Text size="xs" c="dimmed">
-                        Each line corresponds to a single compensation component.
-                      </Text>
-                    </div>
-                    <Button variant="subtle" size="xs" onClick={handleAddManualLine}>
+                  <Group justify="space-between" align={isDesktop ? 'center' : 'stretch'} wrap="wrap">
+                    <Stack gap={2} align={isDesktop ? 'stretch' : 'center'} ta={isDesktop ? undefined : 'center'} style={{ flex: 1 }}>
+                      <Text fw={700}>Compensation Items</Text>
+                    </Stack>
+                    <Button variant="subtle" size="xs" fullWidth={!isDesktop} onClick={handleAddManualLine}>
                       Add manual line
                     </Button>
                   </Group>
@@ -3005,20 +4218,24 @@ const renderLedgerSnapshot = (staff: Pay) => {
                       const lineComponent = line.componentId
                         ? compensationComponentLookup.get(line.componentId)
                         : null;
+                      const canEditLineLabel = Boolean(line.labelEditable);
                       return (
                         <Card key={line.id} withBorder radius="md" padding="md" shadow="sm">
                           <Stack gap="sm">
-                            <Group justify="space-between" align="flex-start" gap="sm" wrap="nowrap">
+                            <Group justify="space-between" align="flex-start" gap="sm" wrap={isDesktop ? 'nowrap' : 'wrap'}>
                               <Stack gap={6} style={{ flex: 1, minWidth: 0 }}>
                                 <TextInput
-                                  label="Component"
                                   value={line.label}
+                                  readOnly={!canEditLineLabel}
+                                  variant={canEditLineLabel ? 'default' : 'filled'}
                                   onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                                    handleLineChange(line.id, { label: event.currentTarget.value })
+                                    canEditLineLabel
+                                      ? handleLineChange(line.id, { label: event.currentTarget.value })
+                                      : undefined
                                   }
                                 />
                                 {lineComponent && (
-                                  <Group gap={6} wrap="wrap">
+                                  <Group gap={6} wrap="wrap" justify={isDesktop ? 'flex-start' : 'center'}>
                                     <Badge color="blue" variant="light">
                                       {lineComponent.name}
                                     </Badge>
@@ -3027,8 +4244,18 @@ const renderLedgerSnapshot = (staff: Pay) => {
                                     </Badge>
                                   </Group>
                                 )}
+                                {line.affiliatePayout && (
+                                  <Group gap={6} wrap="wrap" justify={isDesktop ? 'flex-start' : 'center'}>
+                                    <Badge color="teal" variant="light">
+                                      Promotion Sales
+                                    </Badge>
+                                    <Badge variant="outline" color="gray">
+                                      {line.affiliatePayout.bookingIds.length} bookings
+                                    </Badge>
+                                  </Group>
+                                )}
                               </Stack>
-                              <Group gap="xs">
+                              <Group gap="xs" justify={isDesktop ? 'flex-start' : 'space-between'} style={!isDesktop ? { width: '100%' } : undefined}>
                                 <Switch
                                   label="Include"
                                   size="sm"
@@ -3118,16 +4345,29 @@ const renderLedgerSnapshot = (staff: Pay) => {
               {entryMessage && (
                 <Alert color={entryMessage.type === 'error' ? 'red' : 'green'}>{entryMessage.text}</Alert>
               )}
-              <Group justify="flex-end">
-                <Button variant="subtle" onClick={closeEntryModal}>
-                  Cancel
-                </Button>
-                <Button onClick={handleEntrySubmit} loading={entrySubmitting}>
-                  Record payout
-                </Button>
-              </Group>
             </Stack>
           </ScrollArea.Autosize>
+          <Box
+            p={isDesktop ? 0 : 'md'}
+            style={
+              isDesktop
+                ? undefined
+                : {
+                    borderTop: '1px solid var(--mantine-color-gray-2)',
+                    backgroundColor: 'var(--mantine-color-white)',
+                  }
+            }
+          >
+            <Group justify={isDesktop ? 'flex-end' : 'space-between'} grow={!isDesktop}>
+              <Button variant="subtle" onClick={closeEntryModal}>
+                Cancel
+              </Button>
+              <Button onClick={handleEntrySubmit} loading={entrySubmitting}>
+                Record payout
+              </Button>
+            </Group>
+          </Box>
+          </Box>
         </Modal>
       </>
     </PageAccessGuard>

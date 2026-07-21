@@ -5,7 +5,7 @@ import type { User } from "../types/users/User";
 
 export type UserSummary = Pick<User, "id" | "firstName" | "lastName" | "email"> & { status?: boolean };
 
-export const useActiveUsers = () =>
+export const useActiveUsers = (options?: { enabled?: boolean }) =>
   useQuery<UserSummary[]>({
     queryKey: ["users", "active"],
     queryFn: async () => {
@@ -21,5 +21,6 @@ export const useActiveUsers = () =>
           status: record.status,
         }));
     },
+    enabled: options?.enabled ?? true,
     staleTime: 30 * 1000,
   });
