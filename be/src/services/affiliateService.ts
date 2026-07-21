@@ -53,6 +53,8 @@ export type AffiliateBookingRow = {
   affiliateRuleId: string | null;
   affiliateCommissionPerPerson: number | null;
   affiliateCommissionAmount: number;
+  affiliateCommissionEligible: boolean;
+  affiliateCommissionIneligibleReason: string | null;
   affiliatePayoutLogId: number | null;
   isCommissionPaid: boolean;
 };
@@ -172,6 +174,25 @@ const normalizeAffiliateCommissionPerPerson = (value: unknown, fallback = 20): n
     return fallback;
   }
   return Math.round((numeric + Number.EPSILON) * 100) / 100;
+};
+
+const AFFILIATE_COMMISSION_CUTOFF_MINUTES = 20 * 60 + 45;
+
+const getAffiliateCommissionEligibility = (
+  sourceReceivedAt: string | null,
+): { eligible: boolean; reason: string | null } => {
+  if (!sourceReceivedAt) {
+    return { eligible: true, reason: null };
+  }
+  const parsed = dayjs(sourceReceivedAt);
+  if (!parsed.isValid()) {
+    return { eligible: true, reason: null };
+  }
+  const minutes = parsed.hour() * 60 + parsed.minute();
+  if (minutes >= AFFILIATE_COMMISSION_CUTOFF_MINUTES) {
+    return { eligible: false, reason: 'Booked after 20:45' };
+  }
+  return { eligible: true, reason: null };
 };
 
 const resolvePartySizeTotal = (booking: {
@@ -396,8 +417,24 @@ const findMatchingRule = (booking: AffiliateBookingRow, rules: AffiliateAssignme
   return null;
 };
 
-const fetchAffiliateUsers = async (): Promise<AffiliateUserSummary[]> => {
-  const users = await User.findAll({
+const toAffiliateUserSummary = (user: User): AffiliateUserSummary => {
+  const role = (user as unknown as { role?: UserType | null }).role ?? null;
+  return {
+    id: user.id,
+    fullName: parseName(user.firstName ?? null, user.lastName ?? null),
+    firstName: user.firstName ?? null,
+    lastName: user.lastName ?? null,
+    status: Boolean(user.status),
+    userTypeId: user.userTypeId ?? null,
+    userTypeSlug: role?.slug ?? null,
+    userTypeName: role?.name ?? null,
+    affiliateCommissionPerPerson: normalizeAffiliateCommissionPerPerson(user.affiliateCommissionRate),
+    financeVendorId: user.financeVendorId ?? null,
+  };
+};
+
+const fetchAffiliateUsers = async (assignedUserIds: number[] = []): Promise<AffiliateUserSummary[]> => {
+  const affiliateRoleUsers = await User.findAll({
     include: [
       {
         model: UserType,
@@ -410,21 +447,47 @@ const fetchAffiliateUsers = async (): Promise<AffiliateUserSummary[]> => {
     order: [['firstName', 'ASC'], ['lastName', 'ASC'], ['id', 'ASC']],
   });
 
-  return users.map((user) => {
-    const role = (user as unknown as { role?: UserType | null }).role ?? null;
-    return {
-      id: user.id,
-      fullName: parseName(user.firstName ?? null, user.lastName ?? null),
-      firstName: user.firstName ?? null,
-      lastName: user.lastName ?? null,
-      status: Boolean(user.status),
-      userTypeId: user.userTypeId ?? null,
-      userTypeSlug: role?.slug ?? null,
-      userTypeName: role?.name ?? null,
-      affiliateCommissionPerPerson: normalizeAffiliateCommissionPerPerson(user.affiliateCommissionRate),
-      financeVendorId: user.financeVendorId ?? null,
-    };
-  });
+  const existingIds = new Set(affiliateRoleUsers.map((user) => user.id));
+  const extraUserIds = Array.from(
+    new Set(
+      assignedUserIds.filter(
+        (userId) => Number.isInteger(userId) && userId > 0 && !existingIds.has(userId),
+      ),
+    ),
+  );
+
+  const assignedStaffUsers =
+    extraUserIds.length > 0
+      ? await User.findAll({
+          where: {
+            id: {
+              [Op.in]: extraUserIds,
+            },
+          },
+          include: [
+            {
+              model: UserType,
+              as: 'role',
+              required: false,
+              attributes: ['id', 'slug', 'name'],
+            },
+          ],
+        })
+      : [];
+
+  return [...affiliateRoleUsers, ...assignedStaffUsers]
+    .map(toAffiliateUserSummary)
+    .sort((left, right) => {
+      const firstNameCompare = (left.firstName ?? '').localeCompare(right.firstName ?? '');
+      if (firstNameCompare !== 0) {
+        return firstNameCompare;
+      }
+      const lastNameCompare = (left.lastName ?? '').localeCompare(right.lastName ?? '');
+      if (lastNameCompare !== 0) {
+        return lastNameCompare;
+      }
+      return left.id - right.id;
+    });
 };
 
 type NormalizedAffiliatePayoutLog = {
@@ -541,6 +604,8 @@ const fetchAffiliateBookings = async (startDate: string, endDate: string): Promi
     affiliateRuleId: null,
     affiliateCommissionPerPerson: null,
     affiliateCommissionAmount: 0,
+    affiliateCommissionEligible: true,
+    affiliateCommissionIneligibleReason: null,
     affiliatePayoutLogId: null,
     isCommissionPaid: false,
   }));
@@ -552,14 +617,20 @@ export const getAffiliateOverview = async (params: {
   selectedAffiliateUserId?: number | null;
   currentUserId: number;
   currentRoleSlug: string | null;
+  includeStaffAffiliateAssignments?: boolean;
 }): Promise<AffiliateOverviewResponse> => {
   const { startDate, endDate } = buildDateRange(params.startDate, params.endDate);
   const isManager = ['admin', 'administrator', 'owner', 'manager'].includes((params.currentRoleSlug ?? '').trim().toLowerCase());
   const canManageAssignments = isManager;
-  const affiliateUsers = await fetchAffiliateUsers();
   const assignments = await loadAssignments();
+  const affiliateUsers = await fetchAffiliateUsers();
+  const attributionUsers = params.includeStaffAffiliateAssignments
+    ? await fetchAffiliateUsers(assignments.rules.map((rule) => rule.userId))
+    : affiliateUsers;
   const bookings = await fetchAffiliateBookings(startDate, endDate);
   const affiliateUserMap = new Map(affiliateUsers.map((user) => [user.id, user]));
+  const attributionUserMap = new Map(attributionUsers.map((user) => [user.id, user]));
+  const affiliateRoleUserIds = new Set(affiliateUsers.map((user) => user.id));
 
   const normalizedSelectedAffiliateUserId =
     params.currentRoleSlug?.trim().toLowerCase() === 'affiliate'
@@ -587,18 +658,31 @@ export const getAffiliateOverview = async (params: {
           affiliateRuleId: null,
         };
       }
-      const affiliateUser = affiliateUserMap.get(matchedRule.userId) ?? null;
+      if (!params.includeStaffAffiliateAssignments && !affiliateRoleUserIds.has(matchedRule.userId)) {
+        return {
+          ...booking,
+          affiliateUserId: null,
+          affiliateUserName: null,
+          affiliateRuleId: null,
+        };
+      }
+      const affiliateUser = attributionUserMap.get(matchedRule.userId) ?? null;
       const affiliateCommissionPerPerson = affiliateUser
         ? normalizeAffiliateCommissionPerPerson(affiliateUser.affiliateCommissionPerPerson)
         : null;
+      const commissionEligibility = getAffiliateCommissionEligibility(booking.sourceReceivedAt);
       return {
         ...booking,
         affiliateUserId: matchedRule.userId,
         affiliateUserName: affiliateUser?.fullName ?? null,
         affiliateRuleId: matchedRule.id,
         affiliateCommissionPerPerson,
+        affiliateCommissionEligible: commissionEligibility.eligible,
+        affiliateCommissionIneligibleReason: commissionEligibility.reason,
         affiliateCommissionAmount:
-          affiliateCommissionPerPerson != null ? normalizeMoney(booking.partySizeTotal * affiliateCommissionPerPerson) : 0,
+          affiliateCommissionPerPerson != null && commissionEligibility.eligible
+            ? normalizeMoney(booking.partySizeTotal * affiliateCommissionPerPerson)
+            : 0,
       };
     })
     .filter((booking) => {
@@ -700,8 +784,8 @@ export const getAffiliateOverview = async (params: {
       commissionOutstandingTotal: normalizeMoney(
         bookingsWithPayoutState.reduce((sum, booking) => sum + (!booking.isCommissionPaid ? booking.affiliateCommissionAmount : 0), 0),
       ),
-      paidBookingCount: bookingsWithPayoutState.filter((booking) => booking.isCommissionPaid).length,
-      unpaidBookingCount: bookingsWithPayoutState.filter((booking) => !booking.isCommissionPaid).length,
+      paidBookingCount: bookingsWithPayoutState.filter((booking) => booking.isCommissionPaid && booking.affiliateCommissionAmount > 0).length,
+      unpaidBookingCount: bookingsWithPayoutState.filter((booking) => !booking.isCommissionPaid && booking.affiliateCommissionAmount > 0).length,
       payoutCount: relevantPayoutLogs.length,
       matchedAffiliateCount: matchedAffiliateIds.length,
       unassignedBookingCount: unassignedBookings.length,
@@ -711,7 +795,7 @@ export const getAffiliateOverview = async (params: {
     affiliateBreakdown: Array.from(affiliateBreakdownMap.entries())
       .map(([userId, metrics]) => ({
         userId,
-        userName: affiliateUserMap.get(userId)?.fullName ?? `Affiliate ${userId}`,
+        userName: attributionUserMap.get(userId)?.fullName ?? `Affiliate ${userId}`,
         affiliateCommissionPerPerson: metrics.affiliateCommissionPerPerson,
         bookingCount: metrics.bookingCount,
         revenue: normalizeMoney(metrics.revenue),
@@ -723,7 +807,7 @@ export const getAffiliateOverview = async (params: {
     payoutLogs: relevantPayoutLogs.map((log) => ({
       id: log.id,
       affiliateUserId: log.affiliateUserId,
-      affiliateUserName: affiliateUserMap.get(log.affiliateUserId)?.fullName ?? `Affiliate ${log.affiliateUserId}`,
+      affiliateUserName: attributionUserMap.get(log.affiliateUserId)?.fullName ?? `Affiliate ${log.affiliateUserId}`,
       currencyCode: log.currencyCode,
       amount: log.amount,
       paidDate: log.paidDate,

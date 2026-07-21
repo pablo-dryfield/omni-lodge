@@ -45,6 +45,7 @@ import type { GenericPageProps } from "../types/general/GenericPageProps";
 import type { User } from "../types/users/User";
 import type { UserType } from "../types/userTypes/UserType";
 import axiosInstance from "../utils/axiosInstance";
+import { useActiveUsers } from "../api/users";
 import {
   fetchAffiliateOverview,
   createAffiliatePayout,
@@ -316,7 +317,7 @@ const INITIAL_AFFILIATE_USER_FORM: AffiliateUserFormState = {
   email: "",
   username: "",
   password: "",
-  affiliateCommissionPerPerson: "0",
+  affiliateCommissionPerPerson: "20",
 };
 
 type AffiliatePayoutFormState = {
@@ -413,6 +414,8 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   const [userTypes, setUserTypes] = useState<Partial<UserType>[]>([]);
   const initializedDraftRulesRef = useRef(false);
   const lastLoadedOverviewKeyRef = useRef<string | null>(null);
+  const canManageAssignments = Boolean(data?.currentUser.canManageAssignments);
+  const activeUsersQuery = useActiveUsers({ enabled: canManageAssignments });
 
   useEffect(() => {
     dispatch(navigateToPage("Affiliates"));
@@ -446,7 +449,6 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     };
   }, []);
 
-  const canManageAssignments = Boolean(data?.currentUser.canManageAssignments);
   const selectedAffiliateUserId = affiliateFilter === "all" ? null : Number(affiliateFilter);
   const startDate = useMemo(() => dayjs(range[0] ?? new Date()).format("YYYY-MM-DD"), [range]);
   const endDate = useMemo(() => dayjs(range[1] ?? range[0] ?? new Date()).format("YYYY-MM-DD"), [range]);
@@ -464,6 +466,25 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     ],
     [data?.affiliateUsers],
   );
+  const assignmentUserOptions = useMemo(() => {
+    const optionMap = new Map<string, string>();
+
+    (data?.affiliateUsers ?? []).forEach((affiliate) => {
+      optionMap.set(String(affiliate.id), affiliate.fullName);
+    });
+
+    (activeUsersQuery.data ?? []).forEach((user) => {
+      const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+      const label = fullName || user.email || `User ${user.id}`;
+      if (!optionMap.has(String(user.id))) {
+        optionMap.set(String(user.id), label);
+      }
+    });
+
+    return Array.from(optionMap.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }, [activeUsersQuery.data, data?.affiliateUsers]);
   const affiliateUserTypeId = useMemo(() => {
     const affiliateType = userTypes.find((userType) => {
       const slug = normalizeText(userType.slug).toLowerCase();
@@ -980,9 +1001,17 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                             <Table.Td>{formatMoney(booking.baseAmount, booking.currency ?? revenueCurrency)}</Table.Td>
                           ) : null}
                           <Table.Td>
-                            {formatMoney(booking.affiliateCommissionAmount, booking.currency ?? revenueCurrency)}
+                            {booking.affiliateCommissionEligible
+                              ? formatMoney(booking.affiliateCommissionAmount, booking.currency ?? revenueCurrency)
+                              : "No commission"}
                           </Table.Td>
-                          <Table.Td>{booking.isCommissionPaid ? "Paid" : "Outstanding"}</Table.Td>
+                          <Table.Td>
+                            {booking.affiliateCommissionEligible
+                              ? booking.isCommissionPaid
+                                ? "Paid"
+                                : "Outstanding"
+                              : booking.affiliateCommissionIneligibleReason ?? "No commission"}
+                          </Table.Td>
                           <Table.Td>{booking.affiliateUserName ?? "-"}</Table.Td>
                           <Table.Td>
                             <Stack gap={4} align="center">
@@ -1232,11 +1261,10 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
 
                         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
                           <Select
-                            label="Affiliate user"
-                            data={data.affiliateUsers.map((affiliate) => ({
-                              value: String(affiliate.id),
-                              label: affiliate.fullName,
-                            }))}
+                            label="Affiliate or staff user"
+                            data={assignmentUserOptions}
+                            searchable
+                            nothingFoundMessage="No users found"
                             value={String(rule.userId)}
                             onChange={(value) => {
                               if (!value) {

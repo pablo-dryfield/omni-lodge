@@ -122,7 +122,9 @@ export const createAffiliatePayout = async (input: CreateAffiliatePayoutInput): 
     currentRoleSlug: 'manager',
   });
 
-  const unpaidBookings = overview.bookings.filter((booking) => !booking.isCommissionPaid);
+  const unpaidBookings = overview.bookings.filter(
+    (booking) => !booking.isCommissionPaid && booking.affiliateCommissionAmount > 0,
+  );
   if (unpaidBookings.length === 0) {
     throw new Error('There are no unpaid affiliate commissions for the selected range');
   }

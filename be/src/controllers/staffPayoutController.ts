@@ -5,12 +5,14 @@ import { Op, col, fn, where, type Transaction as SequelizeTransaction } from 'se
 import sequelize from '../config/database.js';
 import StaffPayoutCollectionLog from '../models/StaffPayoutCollectionLog.js';
 import StaffProfile from '../models/StaffProfile.js';
+import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
 import FinanceAccount from '../finance/models/FinanceAccount.js';
 import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import { createFinanceTransaction, updateFinanceTransaction } from '../finance/services/transactionService.js';
 import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getConfigValue } from '../services/configService.js';
+import { getAffiliateOverview } from '../services/affiliateService.js';
 
 const resolveDefaultCurrency = (): string =>
   String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
@@ -38,11 +40,13 @@ const requireActorId = (req: AuthenticatedRequest): number => {
 
 type StaffPayoutBatchLinePayload = {
   label?: unknown;
+  componentId?: unknown;
   amount?: unknown;
   categoryId?: unknown;
   accountId?: unknown;
   currency?: unknown;
   description?: unknown;
+  affiliatePayout?: unknown;
 };
 
 type StaffPayoutBatchReimbursementEntry = {
@@ -52,11 +56,16 @@ type StaffPayoutBatchReimbursementEntry = {
 
 type NormalizedStaffPayoutBatchLine = {
   label: string;
+  componentId: number | null;
   amountMinor: number;
   categoryId: number;
   accountId: number;
   currency: string | null;
   description: string | null;
+  affiliatePayout: {
+    affiliateUserId: number;
+    bookingIds: number[];
+  } | null;
 };
 
 type NormalizedStaffPayoutBatchReimbursement = {
@@ -81,6 +90,13 @@ const parsePositiveInteger = (value: unknown, field: string): number => {
     throw new HttpError(400, `${field} must be a positive integer.`);
   }
   return parsed;
+};
+
+const parseOptionalPositiveInteger = (value: unknown, field: string): number | null => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  return parsePositiveInteger(value, field);
 };
 
 const normalizeCurrencyCode = (value: unknown, fallback = resolveDefaultCurrency()): string => {
@@ -120,13 +136,36 @@ const normalizeBatchLines = (rawLines: unknown): NormalizedStaffPayoutBatchLine[
       const amountMinor = parseAmountToMinor(line.amount);
       const categoryId = parsePositiveInteger(line.categoryId, `lines[${index}].categoryId`);
       const accountId = parsePositiveInteger(line.accountId, `lines[${index}].accountId`);
+      const affiliatePayout =
+        line.affiliatePayout && typeof line.affiliatePayout === 'object'
+          ? (() => {
+              const input = line.affiliatePayout as { affiliateUserId?: unknown; bookingIds?: unknown };
+              const affiliateUserId = parsePositiveInteger(input.affiliateUserId, `lines[${index}].affiliatePayout.affiliateUserId`);
+              if (!Array.isArray(input.bookingIds)) {
+                throw new HttpError(400, `lines[${index}].affiliatePayout.bookingIds must be an array.`);
+              }
+              const bookingIds = Array.from(
+                new Set(
+                  input.bookingIds.map((bookingId, bookingIndex) =>
+                    parsePositiveInteger(bookingId, `lines[${index}].affiliatePayout.bookingIds[${bookingIndex}]`),
+                  ),
+                ),
+              );
+              if (bookingIds.length === 0) {
+                throw new HttpError(400, `lines[${index}].affiliatePayout.bookingIds must include at least one booking.`);
+              }
+              return { affiliateUserId, bookingIds };
+            })()
+          : null;
       return {
         label: parseOptionalString(line.label) ?? `Line ${index + 1}`,
+        componentId: parseOptionalPositiveInteger(line.componentId, `lines[${index}].componentId`),
         amountMinor,
         categoryId,
         accountId,
         currency: parseOptionalString(line.currency)?.toUpperCase() ?? null,
         description: parseOptionalString(line.description),
+        affiliatePayout,
       };
     })
     .filter((line) => line.amountMinor > 0);
@@ -185,11 +224,18 @@ const buildStaffPayoutBatchKey = (params: {
     lines: [...params.lines]
       .map((line) => ({
         label: line.label,
+        componentId: line.componentId,
         amountMinor: line.amountMinor,
         categoryId: line.categoryId,
         accountId: line.accountId,
         currency: line.currency ?? null,
         description: line.description ?? null,
+        affiliatePayout: line.affiliatePayout
+          ? {
+              affiliateUserId: line.affiliatePayout.affiliateUserId,
+              bookingIds: [...line.affiliatePayout.bookingIds].sort((a, b) => a - b),
+            }
+          : null,
       }))
       .sort((a, b) =>
         JSON.stringify([a.label, a.amountMinor, a.categoryId, a.accountId, a.currency, a.description]).localeCompare(
@@ -248,6 +294,87 @@ const createPayoutCollectionLog = async (
     },
     { transaction },
   );
+
+const createAffiliatePayoutLogForStaffLine = async (
+  params: {
+    staffProfileId: number;
+    rangeStart: string;
+    rangeEnd: string;
+    paidDate: string;
+    amountMinor: number;
+    currency: string;
+    financeTransactionId: number;
+    note: string | null;
+    actorId: number;
+    affiliatePayout: {
+      affiliateUserId: number;
+      bookingIds: number[];
+    };
+  },
+  transaction: SequelizeTransaction,
+): Promise<void> => {
+  if (params.affiliatePayout.affiliateUserId !== params.staffProfileId) {
+    throw new HttpError(400, 'Affiliate payout user must match the staff payout user.');
+  }
+
+  const overview = await getAffiliateOverview({
+    startDate: params.rangeStart,
+    endDate: params.rangeEnd,
+    selectedAffiliateUserId: params.staffProfileId,
+    currentUserId: params.actorId,
+    currentRoleSlug: 'manager',
+    includeStaffAffiliateAssignments: true,
+  });
+
+  const selectedBookingIds = new Set(params.affiliatePayout.bookingIds);
+  const selectedBookings = overview.bookings.filter((booking) => selectedBookingIds.has(booking.id));
+  if (selectedBookings.length !== selectedBookingIds.size) {
+    throw new HttpError(400, 'One or more affiliate bookings are no longer available for this staff member.');
+  }
+  const alreadyPaid = selectedBookings.filter((booking) => booking.isCommissionPaid);
+  if (alreadyPaid.length > 0) {
+    throw new HttpError(400, 'One or more affiliate bookings have already been paid.');
+  }
+
+  const currencySet = new Set(
+    selectedBookings
+      .map((booking) => booking.currency?.trim().toUpperCase())
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (currencySet.size !== 1) {
+    throw new HttpError(400, 'Affiliate payout requires all selected bookings to use the same currency.');
+  }
+  const bookingCurrency = Array.from(currencySet)[0];
+  if (bookingCurrency !== params.currency.trim().toUpperCase()) {
+    throw new HttpError(400, `Selected payout account currency must match affiliate booking currency ${bookingCurrency}.`);
+  }
+
+  const expectedAmountMinor = Math.round(
+    selectedBookings.reduce((sum, booking) => sum + booking.affiliateCommissionAmount, 0) * 100,
+  );
+  if (expectedAmountMinor <= 0) {
+    throw new HttpError(400, 'Affiliate payout amount must be positive.');
+  }
+  if (expectedAmountMinor !== params.amountMinor) {
+    throw new HttpError(400, 'Affiliate payout line amount no longer matches selected bookings.');
+  }
+
+  await AffiliatePayoutLog.create(
+    {
+      affiliateUserId: params.staffProfileId,
+      currencyCode: bookingCurrency,
+      amountMinor: params.amountMinor,
+      rangeStart: params.rangeStart,
+      rangeEnd: params.rangeEnd,
+      paidDate: params.paidDate,
+      bookingIds: Array.from(selectedBookingIds.values()),
+      financeTransactionId: params.financeTransactionId,
+      note: params.note,
+      createdBy: params.actorId,
+    },
+    { transaction },
+  );
+};
 
 const parseEntryIds = (raw: unknown): number[] => {
   if (!Array.isArray(raw)) {
@@ -465,7 +592,16 @@ export const createStaffPayoutBatch = async (
               rangeEnd: rangeEnd.format('YYYY-MM-DD'),
               staffUserId: staffProfileId,
               lineLabel: line.label,
+              ...(line.componentId ? { componentId: line.componentId } : {}),
               payoutBatchKey: batchKey,
+              ...(line.affiliatePayout
+                ? {
+                    affiliatePayout: true,
+                    affiliateUserId: line.affiliatePayout.affiliateUserId,
+                    bookingIds: line.affiliatePayout.bookingIds,
+                    bookingCount: line.affiliatePayout.bookingIds.length,
+                  }
+                : {}),
             },
           },
           actorId,
@@ -486,6 +622,24 @@ export const createStaffPayoutBatch = async (
           },
           transaction,
         );
+
+        if (line.affiliatePayout) {
+          await createAffiliatePayoutLogForStaffLine(
+            {
+              staffProfileId,
+              rangeStart: rangeStart.format('YYYY-MM-DD'),
+              rangeEnd: rangeEnd.format('YYYY-MM-DD'),
+              paidDate: payoutDate,
+              amountMinor: line.amountMinor,
+              currency,
+              financeTransactionId: financeTransaction.id,
+              note: line.description,
+              actorId,
+              affiliatePayout: line.affiliatePayout,
+            },
+            transaction,
+          );
+        }
       }
 
       if (reimbursement && reimbursement.amountMinor > 0) {
@@ -644,6 +798,11 @@ export const deleteStaffPayoutEntries = async (
       });
 
       if (financeTransactionIds.length > 0) {
+        await AffiliatePayoutLog.destroy({
+          where: { financeTransactionId: { [Op.in]: financeTransactionIds } },
+          transaction,
+        });
+
         await FinanceTransaction.destroy({
           where: { id: { [Op.in]: financeTransactionIds } },
           transaction,

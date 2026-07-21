@@ -90,16 +90,73 @@ export type PayPayouts = {
   receivableOutstanding: number;
 };
 
+export type PayOpeningBalanceLedgerEntry = {
+  ledgerId: number;
+  rangeStart: string;
+  rangeEnd: string;
+  currency: string;
+  openingBalance: number;
+  dueAmount: number;
+  paidAmount: number;
+  closingBalance: number;
+  createdAt: string;
+  updatedAt: string | null;
+};
+
+export type PayOpeningBalanceSource = PayOpeningBalanceLedgerEntry & {
+  sourceTable: string;
+  staffUserId: number;
+  history: PayOpeningBalanceLedgerEntry[];
+};
+
 export type PayRecordedEntry = {
   id: number;
   financeTransactionId: number | null;
   label: string;
+  componentId: number | null;
   amount: number;
   currency: string;
   date: string;
   note: string | null;
   createdAt: string;
   canDelete: boolean;
+};
+
+export type PayCounterIncentiveDetail = {
+  letter: string;
+  name: string;
+  amount: number;
+};
+
+export type PayAffiliateSaleBooking = {
+  id: number;
+  platformBookingId: string;
+  productName: string | null;
+  guestName: string;
+  sourceReceivedAt: string | null;
+  experienceDate: string | null;
+  partySizeTotal: number;
+  baseAmount: number;
+  currency: string | null;
+  affiliateCommissionPerPerson: number | null;
+  affiliateCommissionAmount: number;
+  affiliateCommissionEligible: boolean;
+  affiliateCommissionIneligibleReason: string | null;
+  isCommissionPaid: boolean;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+};
+
+export type PayAffiliateSalesSummary = {
+  bookingCount: number;
+  peopleCount: number;
+  revenueTotal: number;
+  commissionTotal: number;
+  commissionPaidTotal: number;
+  commissionOutstandingTotal: number;
+  currency: string | null;
+  bookings: PayAffiliateSaleBooking[];
 };
 
 export type Pay = {
@@ -120,6 +177,7 @@ export type Pay = {
   }>;
   counterIncentiveMarkers?: Record<string, string[]>;
   counterIncentiveTotals?: Record<string, number>;
+  counterIncentiveDetails?: Record<string, PayCounterIncentiveDetail[]>;
   reviewTotals?: {
     totalEligibleReviews: number;
     totalTrackedReviews?: number;
@@ -137,6 +195,7 @@ export type Pay = {
   financeClientId?: number | null;
   payouts?: PayPayouts;
   openingBalance?: number;
+  openingBalanceSource?: PayOpeningBalanceSource | null;
   closingBalance?: number;
   dueAmount?: number;
   paidAmount?: number;
@@ -147,4 +206,5 @@ export type Pay = {
   rangeIsCanonical?: boolean;
   reimbursements?: PayReimbursementSummary;
   paidEntries?: PayRecordedEntry[];
+  affiliateSales?: PayAffiliateSalesSummary;
 };

@@ -41,6 +41,8 @@ export type AffiliateBooking = {
   affiliateRuleId: string | null;
   affiliateCommissionPerPerson: number | null;
   affiliateCommissionAmount: number;
+  affiliateCommissionEligible: boolean;
+  affiliateCommissionIneligibleReason: string | null;
   affiliatePayoutLogId: number | null;
   isCommissionPaid: boolean;
 };

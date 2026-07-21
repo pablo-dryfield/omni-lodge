@@ -62,6 +62,10 @@ import FinanceTransaction, {
   type FinanceTransactionStatus,
 } from "../finance/models/FinanceTransaction.js";
 import FinanceVendor from "../finance/models/FinanceVendor.js";
+import {
+  getAffiliateOverview,
+  type AffiliateBookingRow,
+} from "../services/affiliateService.js";
 
 type CommissionBreakdownEntry = {
   date: string;
@@ -207,12 +211,69 @@ type PaidPayoutEntry = {
   id: number;
   financeTransactionId: number | null;
   label: string;
+  componentId: number | null;
   amount: number;
   currency: string;
   date: string;
   note: string | null;
   createdAt: string;
   canDelete: boolean;
+};
+
+type StaffAffiliateSaleBooking = {
+  id: number;
+  platformBookingId: string;
+  productName: string | null;
+  guestName: string;
+  sourceReceivedAt: string | null;
+  experienceDate: string | null;
+  partySizeTotal: number;
+  baseAmount: number;
+  currency: string | null;
+  affiliateCommissionPerPerson: number | null;
+  affiliateCommissionAmount: number;
+  affiliateCommissionEligible: boolean;
+  affiliateCommissionIneligibleReason: string | null;
+  isCommissionPaid: boolean;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+};
+
+type StaffAffiliateSalesSummary = {
+  bookingCount: number;
+  peopleCount: number;
+  revenueTotal: number;
+  commissionTotal: number;
+  commissionPaidTotal: number;
+  commissionOutstandingTotal: number;
+  currency: string | null;
+  bookings: StaffAffiliateSaleBooking[];
+};
+
+type CounterIncentiveDetail = {
+  letter: string;
+  name: string;
+  amount: number;
+};
+
+type OpeningBalanceLedgerEntry = {
+  ledgerId: number;
+  rangeStart: string;
+  rangeEnd: string;
+  currency: string;
+  openingBalance: number;
+  dueAmount: number;
+  paidAmount: number;
+  closingBalance: number;
+  createdAt: string;
+  updatedAt: string | null;
+};
+
+type OpeningBalanceSource = OpeningBalanceLedgerEntry & {
+  sourceTable: "staff_payout_ledgers";
+  staffUserId: number;
+  history: OpeningBalanceLedgerEntry[];
 };
 
 type CommissionSummary = {
@@ -228,6 +289,7 @@ type CommissionSummary = {
   productTotals: ProductPayoutSummary[];
   counterIncentiveMarkers: Record<string, string[]>;
   counterIncentiveTotals: Record<string, number>;
+  counterIncentiveDetails: Record<string, CounterIncentiveDetail[]>;
   reviewTotals: ReviewTotals;
   reviewPaymentOverride: boolean;
   incentiveOverride: boolean;
@@ -245,8 +307,10 @@ type CommissionSummary = {
   payouts: StaffPayoutReconciliation;
   openingBalance: number;
   closingBalance: number;
+  openingBalanceSource: OpeningBalanceSource | null;
   reimbursements: ReimbursementSummary;
   paidEntries: PaidPayoutEntry[];
+  affiliateSales: StaffAffiliateSalesSummary;
 };
 
 type GuideDailyBreakdown = {
@@ -1619,11 +1683,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       order: [["date", "ASC"]],
     });
 
-    if (counters.length === 0) {
-      res.status(404).json([{ message: "No data found for the specified date range" }]);
-      return;
-    }
-
     const counterMetaById = new Map<number, CounterMeta>();
     const legacyCounterIds: number[] = [];
     const newSystemCounterIds: number[] = [];
@@ -1749,11 +1808,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         },
       },
     });
-
-    if (staffRecords.length === 0) {
-      res.status(404).json([{ message: "No staff members found for the specified date range" }]);
-      return;
-    }
 
     const isCanonicalRange =
       start.isSame(start.startOf("month"), "day") &&
@@ -1966,7 +2020,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       summary.baseOverrideApproved = baseOverrideUsers.has(userId);
     });
 
-    const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents);
+    const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents, end);
     commissionDataByUser.forEach((summary) => {
       summary.platformGuestTotals = platformGuestTotals;
     });
@@ -2003,6 +2057,37 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       nightReportStats,
       productBucketsByUser,
     );
+
+    let affiliateSalesByUserId = new Map<number, StaffAffiliateSalesSummary>();
+    try {
+      const affiliateOverview = await getAffiliateOverview({
+        startDate: start.format("YYYY-MM-DD"),
+        endDate: end.format("YYYY-MM-DD"),
+        currentUserId: 0,
+        currentRoleSlug: "manager",
+        includeStaffAffiliateAssignments: true,
+      });
+      affiliateSalesByUserId = buildStaffAffiliateSalesByUser(affiliateOverview.bookings);
+      await ensureSummariesForUserIds(affiliateSalesByUserId.keys(), commissionDataByUser);
+      affiliateSalesByUserId.forEach((affiliateSales, userId) => {
+        const summary = commissionDataByUser.get(userId);
+        if (summary) {
+          summary.affiliateSales = affiliateSales;
+          if (affiliateSales.commissionOutstandingTotal > 0) {
+            summary.bucketTotals.affiliate_commission =
+              (summary.bucketTotals.affiliate_commission ?? 0) + affiliateSales.commissionOutstandingTotal;
+            summary.totalPayout += affiliateSales.commissionOutstandingTotal;
+          }
+        }
+      });
+    } catch (error) {
+      console.warn("Failed to attach affiliate sales to staff payout summaries", error);
+    }
+
+    if (commissionDataByUser.size === 0) {
+      res.status(404).json([{ message: "No staff members or affiliate sales found for the specified date range" }]);
+      return;
+    }
 
     const hydratedSummaryUserIds = Array.from(commissionDataByUser.keys());
 
@@ -2149,6 +2234,11 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
               : resolvePayoutCurrency();
           const amount = convertMinorUnitsToMajor(row.amountMinor ?? 0);
           const label = lineLabel ?? description ?? note ?? `Payment #${row.id}`;
+          const componentIdRaw = meta?.componentId;
+          const componentId =
+            componentIdRaw !== null && componentIdRaw !== undefined && Number.isInteger(Number(componentIdRaw))
+              ? Number(componentIdRaw)
+              : null;
           const date =
             typeof linkedTransaction?.date === "string" && linkedTransaction.date.trim().length > 0
               ? linkedTransaction.date
@@ -2162,6 +2252,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
                 ? row.financeTransactionId
                 : null,
             label,
+            componentId: componentId && componentId > 0 ? componentId : null,
             amount: roundCurrencyValue(amount),
             currency,
             date,
@@ -2334,10 +2425,14 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       const reimbursementSummary = createReimbursementSummary(rows);
       summary.reimbursements = reimbursementSummary;
 
-      if (reimbursementSummary.awaitingAmount > 0) {
+      const reimbursementPayoutAmount = roundCurrencyValue(
+        reimbursementSummary.awaitingAmount + reimbursementSummary.reimbursedAmount,
+      );
+
+      if (reimbursementPayoutAmount > 0) {
         summary.bucketTotals.reimbursement =
-          (summary.bucketTotals.reimbursement ?? 0) + reimbursementSummary.awaitingAmount;
-        summary.totalPayout += reimbursementSummary.awaitingAmount;
+          (summary.bucketTotals.reimbursement ?? 0) + reimbursementPayoutAmount;
+        summary.totalPayout += reimbursementPayoutAmount;
       }
     };
 
@@ -2361,7 +2456,8 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     });
 
     const commissionUserIds = Array.from(commissionDataByUser.keys());
-    const previousLedgerMap = new Map<number, StaffPayoutLedger>();
+    const previousLedgerHistoryMap = new Map<number, StaffPayoutLedger[]>();
+    const ledgerUserCreatedAtMap = new Map<number, Date>();
     if (isLedgerEligible && commissionUserIds.length > 0) {
       const previousLedgers = await StaffPayoutLedger.findAll({
         where: {
@@ -2380,16 +2476,108 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           ["range_end", "DESC"],
         ],
       });
+      const ledgerUsers = await User.findAll({
+        where: {
+          id: {
+            [Op.in]: commissionUserIds,
+          },
+        },
+        attributes: ["id", "createdAt"],
+      });
+      ledgerUsers.forEach((user) => {
+        ledgerUserCreatedAtMap.set(user.id, user.createdAt);
+      });
 
       previousLedgers.forEach((ledger) => {
-        if (!previousLedgerMap.has(ledger.staffUserId)) {
-          previousLedgerMap.set(ledger.staffUserId, ledger);
-        }
+        const history = previousLedgerHistoryMap.get(ledger.staffUserId) ?? [];
+        history.push(ledger);
+        previousLedgerHistoryMap.set(ledger.staffUserId, history);
       });
     }
 
     const rangeStartIso = start.format("YYYY-MM-DD");
     const rangeEndIso = end.format("YYYY-MM-DD");
+    const serializeOpeningBalanceLedger = (
+      ledger: StaffPayoutLedger,
+      amounts?: {
+        openingBalance: number;
+        closingBalance: number;
+      },
+    ): OpeningBalanceLedgerEntry => ({
+      ledgerId: ledger.id,
+      rangeStart: ledger.rangeStart,
+      rangeEnd: ledger.rangeEnd,
+      currency: ledger.currencyCode,
+      openingBalance: amounts?.openingBalance ?? roundCurrencyValue(ledger.openingBalanceMinor / 100),
+      dueAmount: roundCurrencyValue(ledger.dueAmountMinor / 100),
+      paidAmount: roundCurrencyValue(ledger.paidAmountMinor / 100),
+      closingBalance: amounts?.closingBalance ?? roundCurrencyValue(ledger.closingBalanceMinor / 100),
+      createdAt: ledger.createdAt.toISOString(),
+      updatedAt: ledger.updatedAt ? ledger.updatedAt.toISOString() : null,
+    });
+
+    const buildOpeningBalanceSource = (
+      userId: number,
+    ): { openingBalance: number; source: OpeningBalanceSource | null } => {
+      const rawHistory = previousLedgerHistoryMap.get(userId) ?? [];
+      if (rawHistory.length === 0) {
+        return { openingBalance: 0, source: null };
+      }
+
+      const userCreatedAt = ledgerUserCreatedAtMap.get(userId);
+      const latestLedgerByPeriod = new Map<string, StaffPayoutLedger>();
+      rawHistory.forEach((ledger) => {
+        const key = `${ledger.rangeStart}:${ledger.rangeEnd}`;
+        const existing = latestLedgerByPeriod.get(key);
+        if (!existing) {
+          latestLedgerByPeriod.set(key, ledger);
+          return;
+        }
+        const ledgerUpdatedAt = ledger.updatedAt ?? ledger.createdAt;
+        const existingUpdatedAt = existing.updatedAt ?? existing.createdAt;
+        if (
+          ledgerUpdatedAt > existingUpdatedAt ||
+          (ledgerUpdatedAt.getTime() === existingUpdatedAt.getTime() && ledger.id > existing.id)
+        ) {
+          latestLedgerByPeriod.set(key, ledger);
+        }
+      });
+
+      const eligibleHistory = Array.from(latestLedgerByPeriod.values())
+        .filter((ledger) => {
+          if (!userCreatedAt) {
+            return true;
+          }
+          return !dayjs(ledger.rangeEnd).endOf("day").isBefore(dayjs(userCreatedAt).startOf("day"));
+        })
+        .sort((left, right) => left.rangeEnd.localeCompare(right.rangeEnd));
+
+      if (eligibleHistory.length === 0) {
+        return { openingBalance: 0, source: null };
+      }
+
+      let runningBalance = 0;
+      const computedHistory = eligibleHistory.map((ledger) => {
+        const openingBalance = roundCurrencyValue(runningBalance);
+        const dueAmount = roundCurrencyValue(ledger.dueAmountMinor / 100);
+        const paidAmount = roundCurrencyValue(ledger.paidAmountMinor / 100);
+        const closingBalance = roundCurrencyValue(openingBalance + dueAmount - paidAmount);
+        runningBalance = closingBalance;
+        return serializeOpeningBalanceLedger(ledger, { openingBalance, closingBalance });
+      });
+      const latest = computedHistory[computedHistory.length - 1];
+      const latestLedger = eligibleHistory[eligibleHistory.length - 1];
+
+      return {
+        openingBalance: latest.closingBalance,
+        source: {
+          ...latest,
+          sourceTable: "staff_payout_ledgers",
+          staffUserId: latestLedger.staffUserId,
+          history: [...computedHistory].reverse(),
+        },
+      };
+    };
 
     const allSummaries = Array.from(commissionDataByUser.values()).map((entry) => {
       const productBuckets = productBucketsByUser.get(entry.userId);
@@ -2412,14 +2600,14 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         payablePaid: 0,
         payableOutstanding: 0,
         receivableDue: 0,
-        receivableCollected: 0,
-        receivableOutstanding: 0,
-      };
-      const existingLedger = previousLedgerMap.get(entry.userId);
-      const openingBalance =
-        isLedgerEligible && existingLedger
-          ? roundCurrencyValue(existingLedger.closingBalanceMinor / 100)
-          : 0;
+          receivableCollected: 0,
+          receivableOutstanding: 0,
+        };
+      const openingBalanceResult = isLedgerEligible
+        ? buildOpeningBalanceSource(entry.userId)
+        : { openingBalance: 0, source: null };
+      const openingBalance = openingBalanceResult.openingBalance;
+      const openingBalanceSource = openingBalanceResult.source;
       const periodDueAmount = Number(entry.totalPayout.toFixed(2));
       const periodPaidAmount = roundCurrencyValue(payouts.payablePaid ?? 0);
       const closingBalance = isLedgerEligible
@@ -2443,6 +2631,15 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         ),
         totalPayout: Number(entry.totalPayout.toFixed(2)),
         productTotals,
+        counterIncentiveDetails: Object.fromEntries(
+          Object.entries(entry.counterIncentiveDetails ?? {}).map(([counterId, details]) => [
+            counterId,
+            details.map((detail) => ({
+              ...detail,
+              amount: Number(detail.amount.toFixed(2)),
+            })),
+          ]),
+        ),
         reviewTotals: entry.reviewTotals,
         platformGuestTotals: entry.platformGuestTotals,
         platformGuestBreakdowns: Object.fromEntries(
@@ -2468,6 +2665,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           receivableOutstanding: roundCurrencyValue(payouts.receivableOutstanding ?? 0),
         },
         openingBalance,
+        openingBalanceSource,
         closingBalance,
         range: {
           startDate: rangeStartIso,
@@ -4238,6 +4436,17 @@ const allocateComponentToProduct = (
   bucket.componentTotals.set(componentId, current + amount);
 };
 
+const createEmptyAffiliateSalesSummary = (): StaffAffiliateSalesSummary => ({
+  bookingCount: 0,
+  peopleCount: 0,
+  revenueTotal: 0,
+  commissionTotal: 0,
+  commissionPaidTotal: 0,
+  commissionOutstandingTotal: 0,
+  currency: null,
+  bookings: [],
+});
+
 const createEmptySummary = (userId: number, firstName: string, lastName = ""): CommissionSummary => ({
   userId,
   firstName,
@@ -4251,6 +4460,7 @@ const createEmptySummary = (userId: number, firstName: string, lastName = ""): C
   productTotals: [],
   counterIncentiveMarkers: {},
   counterIncentiveTotals: {},
+  counterIncentiveDetails: {},
   reviewTotals: { totalEligibleReviews: 0, totalTrackedReviews: 0 },
   reviewPaymentOverride: false,
   incentiveOverride: false,
@@ -4276,27 +4486,113 @@ const createEmptySummary = (userId: number, firstName: string, lastName = ""): C
   },
   openingBalance: 0,
   closingBalance: 0,
+  openingBalanceSource: null,
   reimbursements: {
     awaitingAmount: 0,
     reimbursedAmount: 0,
     entries: [],
   },
   paidEntries: [],
+  affiliateSales: createEmptyAffiliateSalesSummary(),
 });
+
+const buildStaffAffiliateSalesByUser = (
+  bookings: AffiliateBookingRow[],
+): Map<number, StaffAffiliateSalesSummary> => {
+  const salesByUser = new Map<number, StaffAffiliateSalesSummary>();
+
+  bookings.forEach((booking) => {
+    const affiliateUserId = normalizeUserId(booking.affiliateUserId);
+    if (!affiliateUserId) {
+      return;
+    }
+
+    const current = salesByUser.get(affiliateUserId) ?? createEmptyAffiliateSalesSummary();
+    current.bookings.push({
+      id: booking.id,
+      platformBookingId: booking.platformBookingId,
+      productName: booking.productName,
+      guestName: booking.guestName,
+      sourceReceivedAt: booking.sourceReceivedAt,
+      experienceDate: booking.experienceDate,
+      partySizeTotal: booking.partySizeTotal,
+      baseAmount: booking.baseAmount,
+      currency: booking.currency,
+      affiliateCommissionPerPerson: booking.affiliateCommissionPerPerson,
+      affiliateCommissionAmount: booking.affiliateCommissionAmount,
+      affiliateCommissionEligible: booking.affiliateCommissionEligible,
+      affiliateCommissionIneligibleReason: booking.affiliateCommissionIneligibleReason,
+      isCommissionPaid: booking.isCommissionPaid,
+      utmSource: booking.utmSource,
+      utmMedium: booking.utmMedium,
+      utmCampaign: booking.utmCampaign,
+    });
+    current.bookingCount += 1;
+    current.peopleCount += booking.partySizeTotal;
+    current.revenueTotal += booking.baseAmount;
+    current.commissionTotal += booking.affiliateCommissionAmount;
+    if (booking.isCommissionPaid) {
+      current.commissionPaidTotal += booking.affiliateCommissionAmount;
+    } else {
+      current.commissionOutstandingTotal += booking.affiliateCommissionAmount;
+    }
+
+    const bookingCurrency = booking.currency?.trim().toUpperCase() || null;
+    if (current.currency === null) {
+      current.currency = bookingCurrency;
+    } else if (bookingCurrency !== current.currency) {
+      current.currency = null;
+    }
+
+    salesByUser.set(affiliateUserId, current);
+  });
+
+  salesByUser.forEach((summary) => {
+    summary.revenueTotal = roundCurrencyValue(summary.revenueTotal);
+    summary.commissionTotal = roundCurrencyValue(summary.commissionTotal);
+    summary.commissionPaidTotal = roundCurrencyValue(summary.commissionPaidTotal);
+    summary.commissionOutstandingTotal = roundCurrencyValue(summary.commissionOutstandingTotal);
+    summary.bookings = summary.bookings
+      .map((booking) => ({
+        ...booking,
+        baseAmount: roundCurrencyValue(booking.baseAmount),
+        affiliateCommissionAmount: roundCurrencyValue(booking.affiliateCommissionAmount),
+      }))
+      .sort((left, right) => {
+        const leftDate = left.sourceReceivedAt ?? left.experienceDate ?? "";
+        const rightDate = right.sourceReceivedAt ?? right.experienceDate ?? "";
+        return leftDate.localeCompare(rightDate) || left.id - right.id;
+      });
+  });
+
+  return salesByUser;
+};
 
 const recordCounterIncentiveMarker = (
   summary: CommissionSummary,
   counterId: number | null | undefined,
   componentName: string,
+  amount = 0,
 ) => {
   if (!counterId || counterId <= 0) {
     return;
   }
   const key = String(counterId);
-  const letter = componentName?.trim().charAt(0)?.toUpperCase() ?? "I";
+  const name = componentName?.trim() || "Incentive";
+  const letter = name.charAt(0)?.toUpperCase() || "I";
   const existing = summary.counterIncentiveMarkers[key] ?? [];
   if (!existing.includes(letter)) {
     summary.counterIncentiveMarkers[key] = [...existing, letter];
+  }
+  if (amount) {
+    const details = summary.counterIncentiveDetails[key] ?? [];
+    const existingDetail = details.find((detail) => detail.letter === letter && detail.name === name);
+    if (existingDetail) {
+      existingDetail.amount += amount;
+    } else {
+      details.push({ letter, name, amount });
+    }
+    summary.counterIncentiveDetails[key] = details;
   }
 };
 
@@ -6874,7 +7170,7 @@ const computeNightReportIncentive = (
     }
     const entry = productAmountMap.get(key)!;
     entry.amount += amount;
-    recordCounterIncentiveMarker(summary, report.counterId, component.name ?? component.id.toString());
+    recordCounterIncentiveMarker(summary, report.counterId, component.name ?? component.id.toString(), amount);
     recordCounterIncentiveTotal(summary, report.counterId, amount);
   };
 
@@ -6997,24 +7293,26 @@ const getNightReportBestEntry = (
 const resolveAssignmentTargets = async (
   summaries: Map<number, CommissionSummary>,
   components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
+  rangeEnd: dayjs.Dayjs,
 ): Promise<AssignmentTargetMap> => {
   const targets = new Map<number, number[]>();
   const staffTypeCache = new Map<string, number[]>();
   const shiftRoleCache = new Map<number, number[]>();
   const userTypeCache = new Map<number, number[]>();
   const missingUserIds = new Set<number>();
+  const latestUserCreatedAt = rangeEnd.endOf("day").toDate();
 
   for (const component of components) {
     for (const assignment of component.assignments ?? []) {
       let userIds: number[] = [];
       if (assignment.targetScope === "user" && assignment.userId) {
-        userIds = [assignment.userId];
+        userIds = await filterUserIdsCreatedOnOrBefore([assignment.userId], latestUserCreatedAt);
       } else if (assignment.targetScope === "staff_type" && assignment.staffType) {
-        userIds = await fetchStaffTypeUserIds(assignment.staffType, staffTypeCache);
+        userIds = await fetchStaffTypeUserIds(assignment.staffType, staffTypeCache, latestUserCreatedAt);
       } else if (assignment.targetScope === "shift_role" && assignment.shiftRoleId) {
-        userIds = await fetchShiftRoleUserIds(assignment.shiftRoleId, shiftRoleCache);
+        userIds = await fetchShiftRoleUserIds(assignment.shiftRoleId, shiftRoleCache, latestUserCreatedAt);
       } else if (assignment.targetScope === "user_type" && assignment.userTypeId) {
-        userIds = await fetchUserTypeUserIds(assignment.userTypeId, userTypeCache);
+        userIds = await fetchUserTypeUserIds(assignment.userTypeId, userTypeCache, latestUserCreatedAt);
       }
 
       if (userIds.length > 0) {
@@ -7050,6 +7348,7 @@ const resolveAssignmentTargets = async (
 const fetchStaffTypeUserIds = async (
   staffType: string,
   cache: Map<string, number[]>,
+  latestUserCreatedAt: Date,
 ): Promise<number[]> => {
   if (!staffType) {
     return [];
@@ -7058,8 +7357,23 @@ const fetchStaffTypeUserIds = async (
     return cache.get(staffType) ?? [];
   }
   const profiles = await StaffProfile.findAll({
-    where: { staffType },
+    where: {
+      staffType,
+    },
     attributes: ["userId"],
+    include: [
+      {
+        model: User,
+        as: "user",
+        attributes: [],
+        required: true,
+        where: {
+          createdAt: {
+            [Op.lte]: latestUserCreatedAt,
+          },
+        },
+      },
+    ],
   });
   const userIds = profiles.map((profile) => profile.userId);
   cache.set(staffType, userIds);
@@ -7069,6 +7383,7 @@ const fetchStaffTypeUserIds = async (
 const fetchShiftRoleUserIds = async (
   shiftRoleId: number,
   cache: Map<number, number[]>,
+  latestUserCreatedAt: Date,
 ): Promise<number[]> => {
   if (!shiftRoleId) {
     return [];
@@ -7077,8 +7392,23 @@ const fetchShiftRoleUserIds = async (
     return cache.get(shiftRoleId) ?? [];
   }
   const rows = await UserShiftRole.findAll({
-    where: { shiftRoleId },
+    where: {
+      shiftRoleId,
+    },
     attributes: ["userId"],
+    include: [
+      {
+        model: User,
+        as: "user",
+        attributes: [],
+        required: true,
+        where: {
+          createdAt: {
+            [Op.lte]: latestUserCreatedAt,
+          },
+        },
+      },
+    ],
   });
   const userIds = rows.map((row) => row.userId);
   cache.set(shiftRoleId, userIds);
@@ -7088,6 +7418,7 @@ const fetchShiftRoleUserIds = async (
 const fetchUserTypeUserIds = async (
   userTypeId: number,
   cache: Map<number, number[]>,
+  latestUserCreatedAt: Date,
 ): Promise<number[]> => {
   if (!userTypeId) {
     return [];
@@ -7096,12 +7427,36 @@ const fetchUserTypeUserIds = async (
     return cache.get(userTypeId) ?? [];
   }
   const users = await User.findAll({
-    where: { userTypeId },
+    where: {
+      userTypeId,
+      createdAt: {
+        [Op.lte]: latestUserCreatedAt,
+      },
+    },
     attributes: ["id"],
   });
   const userIds = users.map((user) => user.id);
   cache.set(userTypeId, userIds);
   return userIds;
+};
+
+const filterUserIdsCreatedOnOrBefore = async (
+  userIds: number[],
+  latestUserCreatedAt: Date,
+): Promise<number[]> => {
+  if (userIds.length === 0) {
+    return [];
+  }
+  const users = await User.findAll({
+    where: {
+      id: { [Op.in]: userIds },
+      createdAt: {
+        [Op.lte]: latestUserCreatedAt,
+      },
+    },
+    attributes: ["id"],
+  });
+  return users.map((user) => user.id);
 };
 
 function describeField(
