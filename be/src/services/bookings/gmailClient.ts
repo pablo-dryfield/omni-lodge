@@ -1,7 +1,11 @@
+import { randomUUID } from 'crypto';
+import { setDefaultResultOrder } from 'dns';
 import { google, gmail_v1 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import logger from '../../utils/logger.js';
 import { getConfigValue } from '../configService.js';
+
+setDefaultResultOrder('ipv4first');
 
 const resolveCredentials = (): { clientId: string; clientSecret: string; refreshToken: string } => {
   const clientId = getConfigValue('GOOGLE_CLIENT_ID') as string | null;
@@ -13,16 +17,26 @@ const resolveCredentials = (): { clientId: string; clientSecret: string; refresh
   return { clientId, clientSecret, refreshToken };
 };
 
-const buildOauthClient = (): OAuth2Client => {
-  const { clientId, clientSecret, refreshToken } = resolveCredentials();
+let cachedCredentialsKey: string | null = null;
+let cachedOauthClient: OAuth2Client | null = null;
+
+const getGmailAuthClient = (): OAuth2Client => {
+  const credentials = resolveCredentials();
+  const credentialsKey = `${credentials.clientId}:${credentials.clientSecret}:${credentials.refreshToken}`;
+  if (cachedOauthClient && cachedCredentialsKey === credentialsKey) {
+    return cachedOauthClient;
+  }
+
+  const { clientId, clientSecret, refreshToken } = credentials;
   const client = new google.auth.OAuth2(clientId, clientSecret);
   client.setCredentials({ refresh_token: refreshToken });
+  cachedCredentialsKey = credentialsKey;
+  cachedOauthClient = client;
   return client;
 };
 
 export const getGmailClient = (): gmail_v1.Gmail => {
-  const oauthClient = buildOauthClient();
-  return google.gmail({ version: 'v1', auth: oauthClient });
+  return google.gmail({ version: 'v1', auth: getGmailAuthClient() });
 };
 
 type ListMessagesParams = {
@@ -236,8 +250,8 @@ export type SendMessageResult = {
   labelIds: string[];
 };
 
-const encodeBase64Url = (value: string): string =>
-  Buffer.from(value, 'utf-8')
+const encodeBase64Url = (value: string | Buffer): string =>
+  (Buffer.isBuffer(value) ? value : Buffer.from(value, 'utf-8'))
     .toString('base64')
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
@@ -247,6 +261,8 @@ const encodeBase64 = (value: string | Buffer): string =>
   Buffer.isBuffer(value) ? value.toString('base64') : Buffer.from(value, 'utf-8').toString('base64');
 
 const sanitizeHeaderValue = (value: string): string => value.replace(/[\r\n]+/g, ' ').trim();
+
+const buildRfcMessageId = (): string => `<omni-lodge-${randomUUID()}@omni-lodge.local>`;
 
 const extractEmailAddress = (value: string): string | null => {
   const trimmed = sanitizeHeaderValue(value);
@@ -281,7 +297,7 @@ const assertVerifiedSendAsAlias = async (gmail: gmail_v1.Gmail, from: string | n
   }
 };
 
-const buildRawMessage = (params: SendMessageParams): string => {
+const buildMimeMessage = (params: SendMessageParams, rfcMessageId: string): string => {
   const normalizedTextBody = (params.textBody ?? params.body ?? '').replace(/\r\n/g, '\n');
   const normalizedHtmlBody = (params.htmlBody ?? '').replace(/\r\n/g, '\n').trim();
   const attachments = Array.isArray(params.attachments) ? params.attachments : [];
@@ -290,6 +306,7 @@ const buildRawMessage = (params: SendMessageParams): string => {
     `To: ${sanitizeHeaderValue(params.to)}`,
     ...(params.from ? [`From: ${sanitizeHeaderValue(params.from)}`] : []),
     `Subject: ${sanitizeHeaderValue(params.subject)}`,
+    `Message-ID: ${sanitizeHeaderValue(rfcMessageId)}`,
     'MIME-Version: 1.0',
   ];
 
@@ -365,8 +382,7 @@ const buildRawMessage = (params: SendMessageParams): string => {
     messageLines.push(normalizedTextBody);
   }
 
-  const message = messageLines.join('\r\n');
-  return encodeBase64Url(message);
+  return messageLines.join('\r\n');
 };
 
 export const fetchMessagePayload = async (messageId: string): Promise<GmailMessagePayload | null> => {
@@ -405,32 +421,212 @@ export const fetchMessagePayload = async (messageId: string): Promise<GmailMessa
   }
 };
 
-export const sendMessage = async (params: SendMessageParams): Promise<SendMessageResult> => {
-  const gmail = getGmailClient();
+const wait = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+
+const GOOGLE_API_RETRY_BASE_DELAY_MS = 750;
+const GOOGLE_API_RETRY_MAX_DELAY_MS = 5000;
+const GOOGLE_OAUTH_REFRESH_MAX_ATTEMPTS = 8;
+const GMAIL_SEND_MAX_ATTEMPTS = 4;
+const RETRYABLE_GMAIL_SEND_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
+const RETRYABLE_GMAIL_SEND_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'UND_ERR_SOCKET',
+]);
+
+const getErrorStatusCode = (error: unknown): number | null => {
+  const candidate = error as {
+    code?: unknown;
+    status?: unknown;
+    response?: { status?: unknown };
+  };
+  const status = Number(candidate.response?.status ?? candidate.status ?? candidate.code);
+  return Number.isInteger(status) ? status : null;
+};
+
+const isRetryableGmailSendError = (error: unknown): boolean => {
+  const candidate = error as { code?: unknown; message?: unknown };
+  const code = typeof candidate.code === 'string' ? candidate.code.toUpperCase() : '';
+  if (RETRYABLE_GMAIL_SEND_ERROR_CODES.has(code)) {
+    return true;
+  }
+
+  const status = getErrorStatusCode(error);
+  if (status !== null && RETRYABLE_GMAIL_SEND_STATUS_CODES.has(status)) {
+    return true;
+  }
+
+  const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : '';
+  return (
+    message.includes('econnreset') ||
+    message.includes('socket hang up') ||
+    message.includes('network socket disconnected') ||
+    message.includes('temporarily unavailable')
+  );
+};
+
+const withRetryableGoogleApi = async <T>(
+  description: string,
+  operation: () => Promise<T>,
+  maxAttempts = 3,
+): Promise<T> => {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGmailSendError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+
+      const exponentialDelay = GOOGLE_API_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+      const jitter = Math.floor(Math.random() * 250);
+      const delay = Math.min(exponentialDelay + jitter, GOOGLE_API_RETRY_MAX_DELAY_MS);
+      logger.warn(
+        `[booking-email] ${description} failed with a retryable Google API transport error on attempt ${attempt}/${maxAttempts}: ${(error as Error).message}`,
+      );
+      await wait(delay);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`${description} failed`);
+};
+
+const buildSendMessageResult = (
+  params: SendMessageParams,
+  message: gmail_v1.Schema$Message,
+  metadata?: gmail_v1.Schema$Message | null,
+): SendMessageResult => ({
+  id: message.id ?? null,
+  threadId: message.threadId ?? null,
+  from: params.from ? sanitizeHeaderValue(params.from) : null,
+  to: sanitizeHeaderValue(params.to),
+  rfcMessageId: metadata?.payload ? extractHeaderFromMetadata(metadata.payload, 'Message-ID') : null,
+  labelIds: metadata?.labelIds ?? message.labelIds ?? [],
+});
+
+const fetchSentMetadata = async (
+  gmail: gmail_v1.Gmail,
+  messageId: string | null,
+): Promise<gmail_v1.Schema$Message | null> => {
+  if (!messageId) {
+    return null;
+  }
+
   try {
-    await assertVerifiedSendAsAlias(gmail, params.from);
-    const raw = buildRawMessage(params);
-    const { data } = await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: { raw },
-    });
-    const sentMessageId = data.id ?? null;
-    const metadata = sentMessageId
-      ? await gmail.users.messages.get({
+    const { data } = await withRetryableGoogleApi('Gmail sent metadata fetch', () =>
+      gmail.users.messages.get({
+        userId: 'me',
+        id: messageId,
+        format: 'metadata',
+        metadataHeaders: ['Message-ID'],
+      }),
+    );
+    return data;
+  } catch (error) {
+    logger.warn(
+      `[booking-email] Gmail message was sent, but metadata fetch failed for ${messageId}: ${(error as Error).message}`,
+    );
+    return null;
+  }
+};
+
+const findSentMessageByRfcMessageId = async (
+  gmail: gmail_v1.Gmail,
+  params: SendMessageParams,
+  rfcMessageId: string,
+): Promise<SendMessageResult | null> => {
+  const reconciliationDelays = [750, 1500, 3000];
+
+  for (const delay of reconciliationDelays) {
+    await wait(delay);
+    try {
+      const { data } = await withRetryableGoogleApi('Gmail sent reconciliation search', () =>
+        gmail.users.messages.list({
           userId: 'me',
-          id: sentMessageId,
-          format: 'metadata',
-          metadataHeaders: ['Message-ID'],
-        })
-      : null;
-    return {
-      id: sentMessageId,
-      threadId: data.threadId ?? null,
-      from: params.from ? sanitizeHeaderValue(params.from) : null,
-      to: sanitizeHeaderValue(params.to),
-      rfcMessageId: metadata?.data.payload ? extractHeaderFromMetadata(metadata.data.payload, 'Message-ID') : null,
-      labelIds: metadata?.data.labelIds ?? data.labelIds ?? [],
-    };
+          q: `in:sent rfc822msgid:${rfcMessageId}`,
+          maxResults: 1,
+        }),
+      );
+      const sentMessage = data.messages?.[0] ?? null;
+      if (!sentMessage?.id) {
+        continue;
+      }
+
+      const metadata = await fetchSentMetadata(gmail, sentMessage.id);
+      return buildSendMessageResult(
+        params,
+        {
+          id: sentMessage.id,
+          threadId: sentMessage.threadId ?? metadata?.threadId ?? null,
+          labelIds: metadata?.labelIds ?? ['SENT'],
+        },
+        metadata,
+      );
+    } catch (error) {
+      logger.warn(
+        `[booking-email] Failed to reconcile Gmail send by Message-ID ${rfcMessageId}: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  return null;
+};
+
+export const sendMessage = async (params: SendMessageParams): Promise<SendMessageResult> => {
+  const oauthClient = getGmailAuthClient();
+  const gmail = getGmailClient();
+  const rfcMessageId = buildRfcMessageId();
+  const mimeMessage = buildMimeMessage(params, rfcMessageId);
+
+  try {
+    await withRetryableGoogleApi('Google OAuth token refresh', async () => {
+      await oauthClient.getAccessToken();
+    }, GOOGLE_OAUTH_REFRESH_MAX_ATTEMPTS);
+    await withRetryableGoogleApi('Gmail send-as alias check', () => assertVerifiedSendAsAlias(gmail, params.from));
+
+    for (let attempt = 1; attempt <= GMAIL_SEND_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const { data } = await gmail.users.messages.send({
+          userId: 'me',
+          media: {
+            mimeType: 'message/rfc822',
+            body: Buffer.from(mimeMessage, 'utf-8'),
+          },
+        });
+        const metadata = await fetchSentMetadata(gmail, data.id ?? null);
+        return buildSendMessageResult(params, data, metadata);
+      } catch (sendError) {
+        if (!isRetryableGmailSendError(sendError)) {
+          throw sendError;
+        }
+
+        logger.warn(
+          `[booking-email] Gmail send failed with a retryable transport error on attempt ${attempt}/${GMAIL_SEND_MAX_ATTEMPTS}: ${(sendError as Error).message}`,
+        );
+
+        const reconciled = await findSentMessageByRfcMessageId(gmail, params, rfcMessageId);
+        if (reconciled) {
+          logger.info(`[booking-email] Gmail send reconciled from Sent mailbox after attempt ${attempt}.`);
+          return reconciled;
+        }
+
+        if (attempt >= GMAIL_SEND_MAX_ATTEMPTS) {
+          throw sendError;
+        }
+      }
+    }
+
+    throw new Error('Failed to send Gmail message');
   } catch (error) {
     logger.error(`[booking-email] Failed to send Gmail message: ${(error as Error).message}`);
     throw error;

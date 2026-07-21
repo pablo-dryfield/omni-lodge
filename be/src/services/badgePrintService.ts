@@ -2,9 +2,12 @@ import { readFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import puppeteer from 'puppeteer';
+import type { Page } from 'puppeteer';
 import QRCode from 'qrcode';
 import { sendMessage as sendGmailMessage } from './bookings/gmailClient.js';
 import { getConfigValue } from './configService.js';
+import { sendDirectEmail } from './notificationService.js';
+import logger from '../utils/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,6 +65,8 @@ const BADGE_BACKSIDE_QR = {
   top: 340,
   size: 452,
 };
+const BADGE_PAGE_CONTENT_TIMEOUT_MS = 15000;
+const BADGE_FONT_READY_TIMEOUT_MS = 5000;
 const BADGE_CAMPAIGN_BASE_URL =
   'https://krawlthroughkrakow.com/store/Krakow-Pub-Crawl-with-Krawl-Through-Krakow-p637047413/';
 
@@ -283,6 +288,14 @@ const buildPrintEmailHtml = (): string =>
     .map((paragraph) => `<p>${escapeXml(paragraph).replace(/\r?\n/g, '<br />')}</p>`)
     .join('\n');
 
+const hasSmtpTransportConfig = (): boolean => {
+  const host = String(getConfigValue('SMTP_HOST') ?? '').trim();
+  const port = Number(getConfigValue('SMTP_PORT') ?? null);
+  const user = String(getConfigValue('SMTP_USER') ?? '').trim();
+  const pass = String(getConfigValue('SMTP_PASS') ?? '').trim();
+  return Boolean(host && Number.isInteger(port) && port > 0 && user && pass);
+};
+
 const launchBadgeBrowser = async () => {
   const headlessEnv = String(getConfigValue('PUPPETEER_HEADLESS') ?? '').toLowerCase();
   const headlessMode: boolean | 'shell' | undefined =
@@ -291,6 +304,23 @@ const launchBadgeBrowser = async () => {
     headless: headlessMode,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
+};
+
+const setBadgePageContent = async (page: Page, html: string): Promise<void> => {
+  await page.setContent(html, {
+    waitUntil: 'domcontentloaded',
+    timeout: BADGE_PAGE_CONTENT_TIMEOUT_MS,
+  });
+
+  await Promise.race([
+    page.evaluate(() => {
+      const fonts = typeof document !== 'undefined' ? document.fonts : null;
+      return fonts ? fonts.ready.then(() => true).catch(() => false) : true;
+    }),
+    new Promise((resolve) => {
+      setTimeout(resolve, BADGE_FONT_READY_TIMEOUT_MS);
+    }),
+  ]).catch(() => undefined);
 };
 
 export const renderBadgeSvg = async (options: {
@@ -333,7 +363,8 @@ export const renderBadgePdf = async (options: {
 
   try {
     const page = await browser.newPage();
-    await page.setContent(
+    await setBadgePageContent(
+      page,
       `
       <!doctype html>
       <html>
@@ -375,7 +406,6 @@ export const renderBadgePdf = async (options: {
         <body>${svg}</body>
       </html>
       `,
-      { waitUntil: 'networkidle0' },
     );
 
     const pdfBytes = await page.pdf({
@@ -508,7 +538,7 @@ export const renderBadgePrintPdf = async (options: {
       badgeName: options.badgeName.trim(),
       campaignSourceName: options.campaignSourceName?.trim() || 'Staff',
     });
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await setBadgePageContent(page, html);
 
     const pdfBytes = await page.pdf({
       width: `${BADGE_FRONT_PAGE_WIDTH_MM}mm`,
@@ -541,18 +571,40 @@ export const sendBadgeToPrint = async (options: {
   templateVariant?: BadgeTemplateVariant;
 }): Promise<void> => {
   const { pdf, fileName } = await renderBadgePrintPdf(options);
+  const to = resolveBadgePrintRecipient();
+  const subject = buildBadgePrintEmailSubject(options.userDisplayName);
+  const textBody = buildPrintEmailText();
+  const htmlBody = buildPrintEmailHtml();
+  const attachments = [
+    {
+      filename: fileName,
+      content: pdf,
+      contentType: 'application/pdf',
+    },
+  ];
 
-  await sendGmailMessage({
-    to: resolveBadgePrintRecipient(),
-    subject: buildBadgePrintEmailSubject(options.userDisplayName),
-    textBody: buildPrintEmailText(),
-    htmlBody: buildPrintEmailHtml(),
-    attachments: [
-      {
-        filename: fileName,
-        content: pdf,
-        contentType: 'application/pdf',
-      },
-    ],
-  });
+  try {
+    await sendGmailMessage({
+      to,
+      subject,
+      textBody,
+      htmlBody,
+      attachments,
+    });
+  } catch (error) {
+    if (!hasSmtpTransportConfig()) {
+      throw error;
+    }
+
+    logger.warn(
+      `[badge-print] Gmail API send failed; retrying badge print email through SMTP: ${(error as Error).message}`,
+    );
+    await sendDirectEmail({
+      to,
+      subject,
+      text: textBody,
+      html: htmlBody,
+      attachments,
+    });
+  }
 };

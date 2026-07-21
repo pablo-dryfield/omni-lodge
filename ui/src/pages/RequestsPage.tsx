@@ -10,10 +10,13 @@ import {
   JsonInput,
   Loader,
   Modal,
+  MultiSelect,
   Paper,
+  Select,
   SimpleGrid,
   Stack,
   Text,
+  TextInput,
   Textarea,
   ThemeIcon,
   Title,
@@ -23,6 +26,7 @@ import {
   IconCheck,
   IconClipboardList,
   IconCurrencyZloty,
+  IconPlus,
   IconRefresh,
   IconUserCheck,
   IconX,
@@ -37,6 +41,8 @@ import {
   useRequestsCenter,
   type UserApprovalRequest,
 } from "../api/requests";
+import { useCreateRequiredAction, type CreateRequiredActionPayload } from "../api/requiredActions";
+import { useCerebroBootstrap } from "../api/cerebro";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useAppDispatch } from "../store/hooks";
@@ -44,6 +50,33 @@ import type { FinanceManagementRequest } from "../types/finance";
 import type { ShiftAssignment, SwapRequest } from "../types/scheduling";
 
 const PAGE_SLUG = PAGE_SLUGS.requests;
+
+const REQUIRED_ACTION_TYPE_OPTIONS: Array<{ value: CreateRequiredActionPayload["type"]; label: string }> = [
+  { value: "broadcast", label: "Broadcast message" },
+  { value: "policy_consent", label: "Policy consent" },
+  { value: "profile_fields", label: "Fill user fields" },
+  { value: "quiz", label: "Quiz" },
+  { value: "custom", label: "Custom acknowledgement" },
+];
+
+const REQUIRED_PROFILE_FIELD_OPTIONS = [
+  { value: "phone", label: "Phone number" },
+  { value: "countryOfCitizenship", label: "Country" },
+  { value: "dateOfBirth", label: "Date of birth" },
+  { value: "preferredPronouns", label: "Preferred pronouns" },
+  { value: "emergencyContactName", label: "Emergency contact name" },
+  { value: "emergencyContactRelationship", label: "Emergency contact relationship" },
+  { value: "emergencyContactPhone", label: "Emergency contact phone" },
+  { value: "emergencyContactEmail", label: "Emergency contact email" },
+  { value: "arrivalDate", label: "Arrival date" },
+  { value: "departureDate", label: "Departure date" },
+  { value: "dietaryRestrictions", label: "Dietary restrictions" },
+  { value: "allergies", label: "Allergies" },
+  { value: "medicalNotes", label: "Medical notes" },
+  { value: "whatsappHandle", label: "WhatsApp number" },
+  { value: "facebookProfileUrl", label: "Facebook user" },
+  { value: "instagramProfileUrl", label: "Instagram user" },
+];
 
 const formatDateTime = (value?: string | Date | null): string => {
   if (!value) {
@@ -362,15 +395,44 @@ const RequestsPage = () => {
   const rejectUser = useRejectUserRequest();
   const decideSwap = useDecideScheduleSwapRequest();
   const decideFinance = useDecideFinanceRequest();
+  const createRequiredAction = useCreateRequiredAction();
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
   const [busySwapId, setBusySwapId] = useState<number | null>(null);
   const [financeModal, setFinanceModal] = useState<FinanceManagementRequest | null>(null);
+  const [requiredActionModalOpen, setRequiredActionModalOpen] = useState(false);
+  const cerebroQuery = useCerebroBootstrap({ enabled: requiredActionModalOpen });
+  const [requiredActionType, setRequiredActionType] = useState<CreateRequiredActionPayload["type"]>("broadcast");
+  const [requiredActionTitle, setRequiredActionTitle] = useState("");
+  const [requiredActionBody, setRequiredActionBody] = useState("");
+  const [requiredActionFields, setRequiredActionFields] = useState<string[]>([]);
+  const [requiredActionPolicyId, setRequiredActionPolicyId] = useState<string | null>(null);
+  const [requiredActionQuizId, setRequiredActionQuizId] = useState<string | null>(null);
   const [decisionNote, setDecisionNote] = useState("");
   const [pageError, setPageError] = useState<string | null>(null);
 
   useEffect(() => {
     dispatch(navigateToPage("Requests"));
   }, [dispatch]);
+
+  useEffect(() => {
+    if (requiredActionType !== "policy_consent" || requiredActionTitle.trim() || !requiredActionPolicyId) {
+      return;
+    }
+    const selected = cerebroQuery.data?.entries.find((entry) => entry.id === Number(requiredActionPolicyId));
+    if (selected) {
+      setRequiredActionTitle(selected.title);
+    }
+  }, [cerebroQuery.data?.entries, requiredActionPolicyId, requiredActionTitle, requiredActionType]);
+
+  useEffect(() => {
+    if (requiredActionType !== "quiz" || requiredActionTitle.trim() || !requiredActionQuizId) {
+      return;
+    }
+    const selected = cerebroQuery.data?.quizzes.find((quiz) => quiz.id === Number(requiredActionQuizId));
+    if (selected) {
+      setRequiredActionTitle(selected.title);
+    }
+  }, [cerebroQuery.data?.quizzes, requiredActionQuizId, requiredActionTitle, requiredActionType]);
 
   const data = requestsQuery.data;
   const summary = data?.summary ?? {
@@ -393,6 +455,22 @@ const RequestsPage = () => {
         return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       }),
     [data?.financeRequests],
+  );
+
+  const cerebroPolicyOptions = useMemo(
+    () =>
+      (cerebroQuery.data?.entries ?? [])
+        .filter((entry) => entry.requiresAcknowledgement && entry.status)
+        .map((entry) => ({ value: String(entry.id), label: entry.title })),
+    [cerebroQuery.data?.entries],
+  );
+
+  const cerebroQuizOptions = useMemo(
+    () =>
+      (cerebroQuery.data?.quizzes ?? [])
+        .filter((quiz) => quiz.status)
+        .map((quiz) => ({ value: String(quiz.id), label: quiz.title })),
+    [cerebroQuery.data?.quizzes],
   );
 
   const handleApproveUser = async (user: UserApprovalRequest) => {
@@ -449,6 +527,55 @@ const RequestsPage = () => {
     }
   };
 
+  const handleCreateRequiredAction = async () => {
+    const title = requiredActionTitle.trim();
+    if (!title) {
+      setPageError("A popup request title is required");
+      return;
+    }
+    if (requiredActionType === "profile_fields" && requiredActionFields.length === 0) {
+      setPageError("Choose at least one user field to request");
+      return;
+    }
+    if (requiredActionType === "policy_consent" && !requiredActionPolicyId) {
+      setPageError("Choose the Cerebro policy that users need to accept");
+      return;
+    }
+    if (requiredActionType === "quiz" && !requiredActionQuizId) {
+      setPageError("Choose the Cerebro quiz that users need to pass");
+      return;
+    }
+
+    setPageError(null);
+    const requiredActionPayload =
+      requiredActionType === "profile_fields"
+        ? { fields: requiredActionFields }
+        : requiredActionType === "policy_consent"
+          ? { cerebroEntryId: Number(requiredActionPolicyId) }
+          : requiredActionType === "quiz"
+            ? { cerebroQuizId: Number(requiredActionQuizId) }
+            : {};
+
+    try {
+      await createRequiredAction.mutateAsync({
+        type: requiredActionType,
+        title,
+        body: requiredActionBody.trim() || null,
+        payload: requiredActionPayload,
+        requiresCompletion: true,
+      });
+      setRequiredActionModalOpen(false);
+      setRequiredActionType("broadcast");
+      setRequiredActionTitle("");
+      setRequiredActionBody("");
+      setRequiredActionFields([]);
+      setRequiredActionPolicyId(null);
+      setRequiredActionQuizId(null);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Unable to create popup request");
+    }
+  };
+
   const content = (
     <Stack gap="xl">
       <Card withBorder radius="lg" p={{ base: "lg", md: "xl" }}>
@@ -463,14 +590,22 @@ const RequestsPage = () => {
                 <Text c="dimmed">One place for approvals that need a manager decision.</Text>
               </Stack>
             </Group>
-            <Button
-              variant="light"
-              leftSection={<IconRefresh size={16} />}
-              onClick={() => requestsQuery.refetch()}
-              loading={requestsQuery.isFetching}
-            >
-              Refresh
-            </Button>
+            <Group gap="xs">
+              <Button
+                leftSection={<IconPlus size={16} />}
+                onClick={() => setRequiredActionModalOpen(true)}
+              >
+                New popup request
+              </Button>
+              <Button
+                variant="light"
+                leftSection={<IconRefresh size={16} />}
+                onClick={() => requestsQuery.refetch()}
+                loading={requestsQuery.isFetching}
+              >
+                Refresh
+              </Button>
+            </Group>
           </Group>
 
           <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
@@ -642,6 +777,83 @@ const RequestsPage = () => {
             </Group>
           </Stack>
         ) : null}
+      </Modal>
+
+      <Modal
+        opened={requiredActionModalOpen}
+        onClose={() => setRequiredActionModalOpen(false)}
+        title="New popup request"
+        size="lg"
+        centered
+      >
+        <Stack gap="md">
+          <Select
+            label="Request type"
+            data={REQUIRED_ACTION_TYPE_OPTIONS}
+            value={requiredActionType}
+            onChange={(value) => setRequiredActionType((value as CreateRequiredActionPayload["type"] | null) ?? "broadcast")}
+            allowDeselect={false}
+          />
+          <TextInput
+            label="Title"
+            placeholder="What users need to do"
+            value={requiredActionTitle}
+            onChange={(event) => setRequiredActionTitle(event.currentTarget.value)}
+            required
+          />
+          <Textarea
+            label="Message"
+            placeholder="Add the instruction users will see in the full-screen popup"
+            value={requiredActionBody}
+            onChange={(event) => setRequiredActionBody(event.currentTarget.value)}
+            autosize
+            minRows={4}
+          />
+          {requiredActionType === "profile_fields" ? (
+            <MultiSelect
+              label="Required user fields"
+              placeholder="Choose fields"
+              data={REQUIRED_PROFILE_FIELD_OPTIONS}
+              value={requiredActionFields}
+              onChange={setRequiredActionFields}
+              searchable
+              required
+            />
+          ) : null}
+          {requiredActionType === "policy_consent" ? (
+            <Select
+              label="Cerebro policy"
+              placeholder={cerebroQuery.isLoading ? "Loading policies..." : "Choose a policy"}
+              data={cerebroPolicyOptions}
+              value={requiredActionPolicyId}
+              onChange={setRequiredActionPolicyId}
+              searchable
+              required
+            />
+          ) : null}
+          {requiredActionType === "quiz" ? (
+            <Select
+              label="Cerebro quiz"
+              placeholder={cerebroQuery.isLoading ? "Loading quizzes..." : "Choose a quiz"}
+              data={cerebroQuizOptions}
+              value={requiredActionQuizId}
+              onChange={setRequiredActionQuizId}
+              searchable
+              required
+            />
+          ) : null}
+          <Alert color="blue" variant="light">
+            This creates a blocking full-screen popup for every active user unless targets are added later through the API.
+          </Alert>
+          <Group justify="space-between">
+            <Button variant="default" onClick={() => setRequiredActionModalOpen(false)} disabled={createRequiredAction.isPending}>
+              Cancel
+            </Button>
+            <Button loading={createRequiredAction.isPending} onClick={handleCreateRequiredAction}>
+              Create popup
+            </Button>
+          </Group>
+        </Stack>
       </Modal>
     </Stack>
   );
