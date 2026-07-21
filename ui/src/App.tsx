@@ -23,6 +23,7 @@ const MainTabs = lazy(() => import("./components/main/MainTabs"));
 const Routes = lazy(() => import("./components/main/Routes"));
 const Login = lazy(() => import("./pages/Login"));
 const ServerDownOverlay = lazy(() => import("./components/offline/ServerDownOverlay"));
+const RequiredActionsOverlay = lazy(() => import("./components/requiredActions/RequiredActionsOverlay"));
 const NavBarRouter = lazy(() =>
   import("./components/main/NavBarRouter").then((module) => ({ default: module.NavBarRouter })),
 );
@@ -284,6 +285,9 @@ const AppContent = () => {
               </Suspense>
             </Stack>
           </AppShell.Main>
+          <Suspense fallback={null}>
+            <RequiredActionsOverlay enabled={authenticated && accessLoaded && !showOverlay} />
+          </Suspense>
         </AppShell>
       ) : isPublicRoute ? (
         <Suspense fallback={<SectionLoader />}>

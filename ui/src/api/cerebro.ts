@@ -108,7 +108,7 @@ export type CerebroAssetUploadResult = {
   folderSegments: string[];
 };
 
-export const useCerebroBootstrap = () =>
+export const useCerebroBootstrap = (options?: { enabled?: boolean }) =>
   useQuery<CerebroBootstrap>({
     queryKey: ["cerebro", "bootstrap"],
     queryFn: async () => {
@@ -117,6 +117,7 @@ export const useCerebroBootstrap = () =>
       });
       return response.data;
     },
+    enabled: options?.enabled ?? true,
     staleTime: 30 * 1000,
   });
 

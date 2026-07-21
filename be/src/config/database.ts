@@ -52,6 +52,8 @@ import SwapRequest from "../models/SwapRequest.js";
 import Export from "../models/Export.js";
 import Notification from "../models/Notification.js";
 import AuditLog from "../models/AuditLog.js";
+import RequiredAction from "../models/RequiredAction.js";
+import RequiredActionCompletion from "../models/RequiredActionCompletion.js";
 import ConfigKey from "../models/ConfigKey.js";
 import ConfigValue from "../models/ConfigValue.js";
 import ConfigHistory from "../models/ConfigHistory.js";
@@ -225,6 +227,8 @@ const sequelize = new Sequelize({
     Export,
     Notification,
     AuditLog,
+    RequiredAction,
+    RequiredActionCompletion,
     ConfigKey,
     ConfigValue,
     ConfigHistory,
