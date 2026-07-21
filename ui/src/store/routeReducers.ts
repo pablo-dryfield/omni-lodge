@@ -97,8 +97,11 @@ export const loadReportsReducers = async (): Promise<DynamicReducersMap> => {
 };
 
 export const loadMyAccountReducers = async (): Promise<DynamicReducersMap> => {
-  const [{ default: staffProfiles }] = await Promise.all([import("../reducers/staffProfileReducer")]);
-  return { staffProfiles };
+  const [{ default: staffProfiles }, { default: userTypes }] = await Promise.all([
+    import("../reducers/staffProfileReducer"),
+    import("../reducers/userTypeReducer"),
+  ]);
+  return { staffProfiles, userTypes };
 };
 
 export const loadFinanceReducers = async (): Promise<DynamicReducersMap> => {

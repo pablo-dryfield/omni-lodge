@@ -43,6 +43,7 @@
     "cors": "^2.8.5",
     "dayjs": "^1.11.10",
     "dompurify": "^3.4.7",
+    "emoji-picker-react": "^4.19.1",
     "gridstack": "^9.3.0",
     "heic2any": "^0.0.4",
     "jwt-decode": "^4.0.0",

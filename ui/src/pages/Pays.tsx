@@ -62,7 +62,7 @@ import {
 } from '../selectors/financeSelectors';
 import type { FinanceVendor, FinanceCategory } from '../types/finance';
 import type { ServerResponse } from '../types/general/ServerResponse';
-import { IconTrash } from '@tabler/icons-react';
+import { IconChevronLeft, IconChevronRight, IconTrash } from '@tabler/icons-react';
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
 const DEFAULT_CURRENCY = 'PLN';
@@ -2511,7 +2511,13 @@ const resolveStaffCounterpartyDefaults = useCallback(
 );
 
   const summaries: Pay[] = useMemo(
-    () => (responseData?.[0]?.data ?? []).filter((summary) => normalizeTotal(summary) > 0),
+    () =>
+      (responseData?.[0]?.data ?? []).filter((summary) => {
+        const currentPayout = normalizeTotal(summary);
+        const openingBalance = summary.openingBalance ?? 0;
+        const outstanding = summary.closingBalance ?? summary.payouts?.payableOutstanding ?? 0;
+        return currentPayout > 0 || openingBalance > 0 || outstanding > 0;
+      }),
     [responseData],
   );
   const openingBalanceDetailRows: OpeningBalanceDetailRow[] = useMemo(
@@ -2919,6 +2925,68 @@ const resolveStaffCounterpartyDefaults = useCallback(
     setCustomRangeValue(value ?? [null, null]);
   };
 
+  const applyDateRange = useCallback(
+    (rangeStart: Dayjs, rangeEnd: Dayjs) => {
+      const normalizedStart = rangeStart.startOf('day');
+      const normalizedEnd = rangeEnd.endOf('day');
+      const thisMonthRange = calculatePresetRange('this_month', today);
+      const lastMonthRange = calculatePresetRange('last_month', today);
+
+      setStartDate(normalizedStart);
+      setEndDate(normalizedEnd);
+      setCustomRangeValue([normalizedStart.toDate(), normalizedEnd.toDate()]);
+
+      if (
+        normalizedStart.isSame(thisMonthRange.start, 'day') &&
+        normalizedEnd.isSame(thisMonthRange.end, 'day')
+      ) {
+        setDatePreset('this_month');
+        return;
+      }
+
+      if (
+        normalizedStart.isSame(lastMonthRange.start, 'day') &&
+        normalizedEnd.isSame(lastMonthRange.end, 'day')
+      ) {
+        setDatePreset('last_month');
+        return;
+      }
+
+      setDatePreset('custom');
+    },
+    [today],
+  );
+
+  const handleShiftPeriod = useCallback(
+    (direction: -1 | 1) => {
+      if (!startDate || !endDate) {
+        return;
+      }
+
+      const isFullMonth =
+        startDate.isSame(startDate.startOf('month'), 'day') &&
+        endDate.isSame(endDate.endOf('month'), 'day');
+      const nextStart = isFullMonth
+        ? startDate.add(direction, 'month').startOf('month')
+        : startDate.add(direction * (endDate.diff(startDate, 'day') + 1), 'day').startOf('day');
+      const nextEnd = isFullMonth
+        ? nextStart.endOf('month')
+        : endDate.add(direction * (endDate.diff(startDate, 'day') + 1), 'day').endOf('day');
+      const clampedStart = nextStart.isBefore(EARLIEST_DATA_DATE) ? EARLIEST_DATA_DATE.startOf('day') : nextStart;
+
+      const movesIntoFuture = isFullMonth
+        ? clampedStart.isAfter(today.startOf('month'), 'day')
+        : nextEnd.isAfter(today.endOf('day'), 'day');
+
+      if (movesIntoFuture) {
+        return;
+      }
+
+      applyDateRange(clampedStart, nextEnd);
+    },
+    [applyDateRange, endDate, startDate, today],
+  );
+
   const totalOpening = useMemo(
     () => summaries.reduce((sum, item) => sum + (item.openingBalance ?? 0), 0),
     [summaries],
@@ -3235,7 +3303,7 @@ const renderSummaryBoard = () => {
       <Card withBorder p="sm" style={kpiCardStyle}>
         <Stack gap={4} align="center" justify="center">
           <Text size="sm" c="dimmed" ta="center">
-            My Payment
+            {usingSelfScope ? 'My Payment' : 'Total Payments'}
           </Text>
           <Title order={4} ta="center">
             {formatCurrency(totalEarnings)}
@@ -3479,7 +3547,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
               <Stack gap={4} align="center" ta="center">
                 <Title order={4}>{item.firstName}</Title>
                 <Text size="sm" c="dimmed">
-                  Total payout
+                  Payment
                 </Text>
                 <Title order={4}>{formatCurrency(total)}</Title>
               </Stack>
@@ -3607,7 +3675,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
     const desktopHeaderLabels = [
       'Name',
       ...(showLastMonthsOwedColumn ? ['Last Months Owed'] : []),
-      'Total payout',
+      'Payment',
       'Paid',
       'Outstanding',
       'Actions',
@@ -3659,7 +3727,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
             <tr>
               <th style={desktopHeaderCellStyle}>Name</th>
               {showLastMonthsOwedColumn && <th style={desktopHeaderCellStyle}>Last Months Owed</th>}
-              <th style={desktopHeaderCellStyle}>Total payout</th>
+              <th style={desktopHeaderCellStyle}>Payment</th>
               <th style={desktopHeaderCellStyle}>Paid</th>
               <th style={desktopHeaderCellStyle}>Outstanding</th>
               <th style={desktopHeaderCellStyle}>Actions</th>
@@ -3755,6 +3823,36 @@ const renderLedgerSnapshot = (staff: Pay) => {
     );
   };
 
+  const selectedRangeDayCount = startDate && endDate ? endDate.diff(startDate, 'day') + 1 : 0;
+  const selectedRangeIsFullMonth =
+    Boolean(startDate && endDate) &&
+    startDate!.isSame(startDate!.startOf('month'), 'day') &&
+    endDate!.isSame(endDate!.endOf('month'), 'day');
+  const nextShiftStart =
+    startDate && endDate
+      ? selectedRangeIsFullMonth
+        ? startDate.add(1, 'month').startOf('month')
+        : startDate.add(selectedRangeDayCount, 'day').startOf('day')
+      : null;
+  const nextShiftEnd =
+    startDate && endDate
+      ? selectedRangeIsFullMonth
+        ? startDate.add(1, 'month').endOf('month')
+        : endDate.add(selectedRangeDayCount, 'day').endOf('day')
+      : null;
+  const canShiftPrevious = Boolean(startDate && startDate.startOf('day').isAfter(EARLIEST_DATA_DATE, 'day'));
+  const canShiftNext = Boolean(
+    nextShiftStart &&
+      nextShiftEnd &&
+      (selectedRangeIsFullMonth
+        ? !nextShiftStart.isAfter(today.startOf('month'), 'day')
+        : !nextShiftEnd.isAfter(today.endOf('day'), 'day')),
+  );
+  const selectedRangeLabel =
+    startDate && endDate
+      ? `${startDate.format('MMM D, YYYY')} - ${endDate.format('MMM D, YYYY')}`
+      : 'Select a date range';
+
   let content: React.ReactNode;
 
   if (!permissionsReady || permissionsLoading) {
@@ -3782,29 +3880,44 @@ const renderLedgerSnapshot = (staff: Pay) => {
         >
           <Stack gap="md">
             <Stack gap={isDesktop ? 'lg' : 'sm'}>
-              <Stack gap="xs">
-                <Group
-                  justify="center"
-                  align="end"
-                  gap={isDesktop ? 'lg' : 'sm'}
-                  wrap="wrap"
-                >
-                  <Box style={{ width: isDesktop ? 260 : '100%', maxWidth: 360 }}>
-                    <Select
-                      aria-label="Period"
-                      data={DATE_PRESET_OPTIONS}
-                      value={datePreset}
-                      onChange={(value) => handlePresetChange(value)}
-                      styles={{
-                        input: { textAlign: 'center' },
-                        option: { textAlign: 'center', justifyContent: 'center' },
-                      }}
-                    />
-                  </Box>
-                  {datePreset === 'custom' && (
-                    <Box style={{ width: isDesktop ? 320 : '100%', maxWidth: 420 }}>
+              <Box
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: isDesktop ? 'minmax(220px, 320px) minmax(320px, 520px)' : '1fr',
+                  gap: isDesktop ? 24 : 10,
+                  alignItems: 'start',
+                  justifyContent: 'center',
+                  width: '100%',
+                  margin: '0 auto',
+                }}
+              >
+                <Box style={{ width: '100%' }}>
+                  <Select
+                    aria-label="Period"
+                    data={DATE_PRESET_OPTIONS}
+                    value={datePreset}
+                    onChange={(value) => handlePresetChange(value)}
+                    styles={{
+                      input: { textAlign: 'center' },
+                      option: { textAlign: 'center', justifyContent: 'center' },
+                    }}
+                  />
+                </Box>
+                <Stack gap={6} style={{ width: '100%' }}>
+                  <Group gap={8} wrap="nowrap" align="center">
+                    <ActionIcon
+                      variant="light"
+                      color="blue"
+                      size="lg"
+                      aria-label="Previous period"
+                      disabled={!canShiftPrevious}
+                      onClick={() => handleShiftPeriod(-1)}
+                    >
+                      <IconChevronLeft size={18} />
+                    </ActionIcon>
+                    {datePreset === 'custom' ? (
                       <DatePickerInput
-                        label="Custom range"
+                        aria-label="Custom range"
                         type="range"
                         value={customRangeValue}
                         onChange={handleCustomRangeChange}
@@ -3812,20 +3925,31 @@ const renderLedgerSnapshot = (staff: Pay) => {
                         allowSingleDateInRange
                         minDate={EARLIEST_DATA_DATE.toDate()}
                         maxDate={today.toDate()}
-                        styles={{
-                          label: { width: '100%', textAlign: 'center' },
-                          input: { textAlign: 'center' },
-                        }}
+                        style={{ flex: 1 }}
+                        styles={{ input: { textAlign: 'center' } }}
                       />
-                    </Box>
-                  )}
-                </Group>
-                <Text size="sm" c="dimmed" ta="center">
-                  {startDate && endDate
-                    ? `${startDate.format('MMM D, YYYY')} › ${endDate.format('MMM D, YYYY')}`
-                    : 'Select a date range'}
-                </Text>
-              </Stack>
+                    ) : (
+                      <TextInput
+                        aria-label="Selected date range"
+                        value={selectedRangeLabel}
+                        readOnly
+                        style={{ flex: 1 }}
+                        styles={{ input: { textAlign: 'center', cursor: 'default' } }}
+                      />
+                    )}
+                    <ActionIcon
+                      variant="light"
+                      color="blue"
+                      size="lg"
+                      aria-label="Next period"
+                      disabled={!canShiftNext}
+                      onClick={() => handleShiftPeriod(1)}
+                    >
+                      <IconChevronRight size={18} />
+                    </ActionIcon>
+                  </Group>
+                </Stack>
+              </Box>
 
               {loading && (
                 <Center>

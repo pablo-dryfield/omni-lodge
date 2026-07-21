@@ -5,6 +5,7 @@ import { DataType } from 'sequelize-typescript';
 import { Op, UniqueConstraintError, ValidationError } from 'sequelize';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
+import AuditLog from '../models/AuditLog.js';
 import StaffProfile from '../models/StaffProfile.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
@@ -14,7 +15,12 @@ import { Env } from '../types/Env.js';
 import logger from '../utils/logger.js';
 import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
-import { sendBadgeToPrint } from '../services/badgePrintService.js';
+import {
+  buildBadgeCampaignSourceName,
+  resolveBadgeTemplateVariant,
+  sendBadgeToPrint,
+} from '../services/badgePrintService.js';
+import { upsertBadgeAffiliateAssignment } from '../services/affiliateService.js';
 
 const NAME_TO_SLUG: Record<string, string[]> = {
   guide: ['guide', 'pub-crawl-guide'],
@@ -32,6 +38,12 @@ const NAME_TO_SLUG: Record<string, string[]> = {
 
 const SIGNUP_STAFF_TYPES: Array<StaffProfile['staffType']> = ['volunteer', 'long_term'];
 const DISALLOWED_SIGNUP_ROLE_SLUGS = new Set(['leader', 'manager']);
+const SIGNUP_USER_TYPE_SLUGS = {
+  guide: ['guide', 'pub-crawl-guide'],
+  social_media: ['social-media', 'social_media'],
+} as const;
+
+type SignupUserTypeKey = keyof typeof SIGNUP_USER_TYPE_SLUGS;
 
 const normalizeStaffType = (value: unknown): StaffProfile['staffType'] | undefined => {
   if (typeof value !== 'string') {
@@ -40,6 +52,17 @@ const normalizeStaffType = (value: unknown): StaffProfile['staffType'] | undefin
   const normalized = value.trim().toLowerCase() as StaffProfile['staffType'];
   return SIGNUP_STAFF_TYPES.find((type) => type === normalized);
 };
+
+const normalizeSignupUserType = (value: unknown): SignupUserTypeKey => {
+  if (typeof value !== 'string') {
+    return 'guide';
+  }
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return normalized === 'social_media' ? 'social_media' : 'guide';
+};
+
+const signupUserTypeToRequestedValue = (value: SignupUserTypeKey): string =>
+  value === 'social_media' ? 'social-media' : 'guide';
 
 const normalizeBoolean = (value: unknown, fallback = false): boolean => {
   if (typeof value === 'boolean') {
@@ -112,6 +135,71 @@ const buildDisplayName = (user: Pick<User, 'firstName' | 'lastName' | 'username'
   return combined || user.username || user.email;
 };
 
+export const recordUserAuditLog = async (options: {
+  actorId?: number | null;
+  action: string;
+  userId: number;
+  meta?: Record<string, unknown>;
+}): Promise<void> => {
+  await AuditLog.create({
+    actorId: options.actorId ?? null,
+    action: options.action,
+    entity: 'user',
+    entityId: String(options.userId),
+    metaJson: options.meta ?? {},
+  });
+};
+
+export const sendApprovedUserBadgeToPrint = async (options: {
+  user: User;
+  role: UserType | null;
+  actorId?: number | null;
+}): Promise<void> => {
+  const badgeName = normalizeOptionalString(options.user.badgeName) ?? normalizeOptionalString(options.user.firstName);
+  if (!badgeName) {
+    await recordUserAuditLog({
+      actorId: options.actorId,
+      action: 'user.badge_print_skipped',
+      userId: options.user.id,
+      meta: {
+        trigger: 'approval',
+        reason: 'missing_badge_name',
+      },
+    });
+    return;
+  }
+
+  const campaignSourceName = buildBadgeCampaignSourceName(options.user.firstName, options.user.id);
+  const templateVariant = resolveBadgeTemplateVariant({
+    userTypeSlug: options.role?.slug ?? options.user.requestedUserType ?? null,
+    userTypeName: options.role?.name ?? null,
+  });
+
+  await sendBadgeToPrint({
+    userDisplayName: buildDisplayName(options.user),
+    badgeName,
+    badgePrefixEmoji: options.user.badgePrefixEmoji,
+    badgeSuffixEmoji: options.user.badgeSuffixEmoji,
+    campaignSourceName,
+    templateVariant,
+  });
+  await upsertBadgeAffiliateAssignment({
+    userId: options.user.id,
+    utmSource: campaignSourceName,
+    actorId: options.actorId ?? null,
+  });
+  await recordUserAuditLog({
+    actorId: options.actorId,
+    action: 'user.badge_sent_to_print',
+    userId: options.user.id,
+    meta: {
+      trigger: 'approval',
+      campaignSourceName,
+      templateVariant,
+    },
+  });
+};
+
 declare const process: {
   env: Env;
 };
@@ -142,10 +230,24 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     const staffType = normalizeStaffType(req.body.staffType);
     const livesInAccom = normalizeBoolean(req.body.livesInAccom);
     const shiftRoleIds = normalizeRoleIds(req.body.shiftRoleIds);
+    const signupUserType = normalizeSignupUserType(req.body.signupUserType);
 
     let createdUser: User | null = null;
 
     await sequelize.transaction(async (transaction) => {
+      const signupRole = await UserType.findOne({
+        where: {
+          slug: {
+            [Op.in]: [...SIGNUP_USER_TYPE_SLUGS[signupUserType]],
+          },
+        },
+        transaction,
+      });
+
+      if (!signupRole) {
+        throw new HttpError(400, 'Selected user type is not configured.');
+      }
+
       const {
         username,
         email,
@@ -215,10 +317,29 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
         badgeName: normalizeOptionalString(badgeName),
         badgePrefixEmoji: normalizeOptionalString(badgePrefixEmoji),
         badgeSuffixEmoji: normalizeOptionalString(badgeSuffixEmoji),
+        requestedUserType: signupUserTypeToRequestedValue(signupUserType),
+        userTypeId: signupRole.id,
+        approved: false,
       };
 
       const newUser = await User.create(userPayload, { transaction });
       createdUser = newUser;
+
+      await AuditLog.create(
+        {
+          actorId: null,
+          action: 'user.signup_created',
+          entity: 'user',
+          entityId: String(newUser.id),
+          metaJson: {
+            approved: false,
+            requestedUserType: signupUserTypeToRequestedValue(signupUserType),
+            userTypeId: signupRole.id,
+            staffType: staffType ?? null,
+          },
+        },
+        { transaction },
+      );
 
       const shouldCreateStaffProfile = Boolean(staffType);
       let profilePhotoPathValue: string | null = null;
@@ -361,6 +482,11 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    if (!user.approved || !user.userTypeId) {
+      res.status(403).json([{ message: 'This account is waiting for approval. Contact an administrator for access.' }]);
+      return;
+    }
+
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
       res.status(400).json([{ message: 'Password is incorrect. Please try again.' }]);
@@ -433,6 +559,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
       const userWhere: Record<string, unknown> = {};
       if (filterActive || normalizedSlugs.length > 0) {
         userWhere.status = true;
+        userWhere.approved = true;
       }
 
       const users = await User.findAll({
@@ -476,6 +603,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
     const regularWhere: Record<string, unknown> = {};
     if (filterActive) {
       regularWhere.status = true;
+      regularWhere.approved = true;
     }
     const regularWhereOptions = Object.keys(regularWhere).length > 0 ? { where: regularWhere } : {};
     const data = await User.findAll(regularWhereOptions);
@@ -488,7 +616,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
 
 export const getAllActiveUsers = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await User.findAll({ where: { status: true } });
+    const data = await User.findAll({ where: { status: true, approved: true } });
     res.status(200).json([{ data, columns: buildUserColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -515,6 +643,7 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
+    const request = req as AuthenticatedRequest;
     const { id } = req.params;
     const profilePhotoFile = req.file;
     const existingUser = await User.findByPk(id);
@@ -525,6 +654,31 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     const data: Record<string, unknown> = { ...req.body };
+    const actorId = request.authContext?.id ?? null;
+    const previousApproved = Boolean(existingUser.approved);
+    const previousStatus = Boolean(existingUser.status);
+    const previousUserTypeId = existingUser.userTypeId ?? null;
+
+    [
+      'approvedAt',
+      'approvedBy',
+      'approvalRevokedAt',
+      'approvalRevokedBy',
+      'deactivatedAt',
+      'deactivatedBy',
+      'reactivatedAt',
+      'reactivatedBy',
+      'approved_at',
+      'approved_by',
+      'approval_revoked_at',
+      'approval_revoked_by',
+      'deactivated_at',
+      'deactivated_by',
+      'reactivated_at',
+      'reactivated_by',
+    ].forEach((field) => {
+      delete data[field];
+    });
 
     if (typeof data.password === 'string' && data.password.trim().length > 0) {
       const salt = await bcrypt.genSalt(10);
@@ -590,7 +744,117 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
       data.profilePhotoUrl = normalizedUrl;
     }
 
+    const now = new Date();
+    const hasApprovedChange = Object.prototype.hasOwnProperty.call(data, 'approved');
+    const nextApproved = hasApprovedChange ? normalizeBoolean(data.approved, previousApproved) : previousApproved;
+    const hasStatusChange = Object.prototype.hasOwnProperty.call(data, 'status');
+    const nextStatus = hasStatusChange ? normalizeBoolean(data.status, previousStatus) : previousStatus;
+    const hasUserTypeChange = Object.prototype.hasOwnProperty.call(data, 'userTypeId');
+    const nextUserTypeId = hasUserTypeChange && data.userTypeId != null ? Number(data.userTypeId) : previousUserTypeId;
+
+    if (nextApproved && !nextUserTypeId) {
+      res.status(400).json([{ message: 'A user type is required before approving the user.' }]);
+      return;
+    }
+
+    if (hasApprovedChange) {
+      data.approved = nextApproved;
+      if (!previousApproved && nextApproved) {
+        data.approvedAt = now;
+        data.approvedBy = actorId;
+      } else if (previousApproved && !nextApproved) {
+        data.approvalRevokedAt = now;
+        data.approvalRevokedBy = actorId;
+      }
+    }
+
+    if (hasStatusChange) {
+      data.status = nextStatus;
+      if (previousStatus && !nextStatus) {
+        data.deactivatedAt = now;
+        data.deactivatedBy = actorId;
+      } else if (!previousStatus && nextStatus) {
+        data.reactivatedAt = now;
+        data.reactivatedBy = actorId;
+      }
+    }
+
     await existingUser.update(data);
+
+    const auditMeta = {
+      previous: {
+        approved: previousApproved,
+        status: previousStatus,
+        userTypeId: previousUserTypeId,
+      },
+      next: {
+        approved: nextApproved,
+        status: nextStatus,
+        userTypeId: nextUserTypeId,
+      },
+    };
+
+    if (hasApprovedChange && !previousApproved && nextApproved) {
+      await recordUserAuditLog({
+        actorId,
+        action: 'user.approved',
+        userId: existingUser.id,
+        meta: auditMeta,
+      });
+      const approvedRole = nextUserTypeId
+        ? await UserType.findByPk(nextUserTypeId, { attributes: ['slug', 'name'] })
+        : null;
+      await sendApprovedUserBadgeToPrint({
+        user: existingUser,
+        role: approvedRole,
+        actorId,
+      }).catch(async (error) => {
+        const message = error instanceof Error ? error.message : 'Unable to send badge to print';
+        logger.error(`Failed to send approved user badge to print for user ${existingUser.id}: ${message}`);
+        await recordUserAuditLog({
+          actorId,
+          action: 'user.badge_print_failed',
+          userId: existingUser.id,
+          meta: {
+            trigger: 'approval',
+            error: message,
+          },
+        }).catch(() => {});
+      });
+    } else if (hasApprovedChange && previousApproved && !nextApproved) {
+      await recordUserAuditLog({
+        actorId,
+        action: 'user.approval_revoked',
+        userId: existingUser.id,
+        meta: auditMeta,
+      });
+    }
+
+    if (hasStatusChange && previousStatus && !nextStatus) {
+      await recordUserAuditLog({
+        actorId,
+        action: 'user.deactivated',
+        userId: existingUser.id,
+        meta: auditMeta,
+      });
+    } else if (hasStatusChange && !previousStatus && nextStatus) {
+      await recordUserAuditLog({
+        actorId,
+        action: 'user.reactivated',
+        userId: existingUser.id,
+        meta: auditMeta,
+      });
+    }
+
+    if (hasUserTypeChange && previousUserTypeId !== nextUserTypeId) {
+      await recordUserAuditLog({
+        actorId,
+        action: 'user.role_changed',
+        userId: existingUser.id,
+        meta: auditMeta,
+      });
+    }
+
     res.status(200).json([existingUser]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -615,17 +879,29 @@ export const sendUserBadgeToPrint = async (req: Request, res: Response): Promise
       return;
     }
 
-    const user = await User.findByPk(userId);
+    const user = await User.findByPk(userId, {
+      include: [
+        {
+          model: UserType,
+          as: 'role',
+          attributes: ['slug', 'name'],
+        },
+      ],
+    });
     if (!user) {
       res.status(404).json([{ message: 'User not found' }]);
       return;
     }
 
+    const role = (user as unknown as { role?: UserType | null }).role ?? null;
     const badgeName = normalizeOptionalString(req.body.badgeName) ?? user.badgeName ?? null;
     const badgePrefixEmoji =
       normalizeOptionalString(req.body.badgePrefixEmoji) ?? user.badgePrefixEmoji ?? null;
     const badgeSuffixEmoji =
       normalizeOptionalString(req.body.badgeSuffixEmoji) ?? user.badgeSuffixEmoji ?? null;
+    const campaignSourceName =
+      normalizeOptionalString(req.body.campaignSourceName) ??
+      buildBadgeCampaignSourceName(user.firstName, user.id);
 
     if (!badgeName) {
       res.status(400).json([{ message: 'Badge name is required before sending to print.' }]);
@@ -637,6 +913,16 @@ export const sendUserBadgeToPrint = async (req: Request, res: Response): Promise
       badgeName,
       badgePrefixEmoji,
       badgeSuffixEmoji,
+      campaignSourceName,
+      templateVariant: resolveBadgeTemplateVariant({
+        userTypeSlug: role?.slug ?? user.requestedUserType ?? null,
+        userTypeName: role?.name ?? null,
+      }),
+    });
+    await upsertBadgeAffiliateAssignment({
+      userId: user.id,
+      utmSource: campaignSourceName,
+      actorId: authenticatedUserId,
     });
 
     res.status(200).json([{ message: 'Badge sent to print.' }]);

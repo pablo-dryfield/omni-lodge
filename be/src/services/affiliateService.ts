@@ -835,3 +835,37 @@ export const updateAffiliateAssignments = async (params: {
 }): Promise<AffiliateAssignmentsConfig> => {
   return saveAssignments(params.rules, params.actorId);
 };
+
+export const upsertBadgeAffiliateAssignment = async (params: {
+  userId: number;
+  utmSource: string;
+  actorId: number | null;
+}): Promise<AffiliateAssignmentsConfig> => {
+  const userId = Number(params.userId);
+  const utmSource = normalizeText(params.utmSource);
+  if (!Number.isInteger(userId) || userId <= 0 || !utmSource) {
+    throw new Error('A valid user and badge UTM source are required.');
+  }
+
+  const config = await loadAssignments();
+  const ruleId = `badge-${userId}`;
+  const nextRule: AffiliateAssignmentRule = {
+    id: ruleId,
+    userId,
+    utmSource,
+    utmMedium: 'Badge',
+    utmCampaign: 'Staff',
+    notes: 'Auto-created from staff badge QR',
+  };
+  const existingIndex = config.rules.findIndex(
+    (rule) =>
+      rule.id === ruleId ||
+      (rule.userId === userId && rule.utmMedium === 'Badge' && rule.utmCampaign === 'Staff'),
+  );
+  const nextRules =
+    existingIndex >= 0
+      ? config.rules.map((rule, index) => (index === existingIndex ? { ...rule, ...nextRule } : rule))
+      : [...config.rules, nextRule];
+
+  return saveAssignments(nextRules, params.actorId);
+};

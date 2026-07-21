@@ -137,6 +137,47 @@ export default class User extends Model {
   @Column({ field: 'badge_suffix_emoji', type: DataType.STRING })
   declare badgeSuffixEmoji: string | null;
 
+  @AllowNull(true)
+  @Column({ field: 'requested_user_type', type: DataType.STRING })
+  declare requestedUserType: string | null;
+
+  @AllowNull(false)
+  @Default(true)
+  @Column({ field: 'approved', type: DataType.BOOLEAN })
+  declare approved: boolean;
+
+  @AllowNull(true)
+  @Column({ field: 'approved_at', type: DataType.DATE })
+  declare approvedAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'approved_by', type: DataType.INTEGER })
+  declare approvedBy: number | null;
+
+  @AllowNull(true)
+  @Column({ field: 'approval_revoked_at', type: DataType.DATE })
+  declare approvalRevokedAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'approval_revoked_by', type: DataType.INTEGER })
+  declare approvalRevokedBy: number | null;
+
+  @AllowNull(true)
+  @Column({ field: 'deactivated_at', type: DataType.DATE })
+  declare deactivatedAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'deactivated_by', type: DataType.INTEGER })
+  declare deactivatedBy: number | null;
+
+  @AllowNull(true)
+  @Column({ field: 'reactivated_at', type: DataType.DATE })
+  declare reactivatedAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'reactivated_by', type: DataType.INTEGER })
+  declare reactivatedBy: number | null;
+
   @AllowNull(false)
   @Default(20)
   @Column({ field: 'affiliate_commission_rate', type: DataType.DECIMAL(8, 4) })
