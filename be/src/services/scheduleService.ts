@@ -2509,7 +2509,7 @@ export async function listSwapsForUser(userId: number): Promise<SwapRequest[]> {
         model: ShiftAssignment,
         as: 'fromAssignment',
         include: [
-          { model: ShiftInstance, as: 'shiftInstance' },
+          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
           { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
         ],
       },
@@ -2517,7 +2517,7 @@ export async function listSwapsForUser(userId: number): Promise<SwapRequest[]> {
         model: ShiftAssignment,
         as: 'toAssignment',
         include: [
-          { model: ShiftInstance, as: 'shiftInstance' },
+          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
           { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
         ],
       },

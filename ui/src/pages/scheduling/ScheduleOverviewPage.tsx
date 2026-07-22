@@ -1,19 +1,39 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { Alert, Box, Button, Card, Center, Group, Loader, Stack, Text, Title } from "@mantine/core";
-import { IconAlertTriangle, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
+import {
+  ActionIcon,
+  Alert,
+  Avatar,
+  Badge,
+  Box,
+  Button,
+  Card,
+  Center,
+  Group,
+  Loader,
+  Modal,
+  Select,
+  Stack,
+  Text,
+  Title,
+} from "@mantine/core";
+import { IconAlertTriangle, IconArrowsExchange, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 import { useMediaQuery } from "@mantine/hooks";
 import WeekSelector from "../../components/scheduling/WeekSelector";
+import { buildUserProfilePhotoUrl } from "../../utils/profilePhoto";
 import {
   formatScheduleWeekLabel,
+  useCreateSwap,
   useEnsureWeek,
+  useMySwaps,
   useShiftInstances,
   useScheduleWeeks,
 } from "../../api/scheduling";
 import type { ShiftAssignment, ShiftInstance, ScheduleWeek } from "../../types/scheduling";
+import { useAppSelector } from "../../store/hooks";
 
 dayjs.extend(isoWeek);
 
@@ -26,6 +46,14 @@ const ROLE_PRIORITY: Record<string, number> = {
 };
 
 const ROLE_ORDER = ["Guides", "Social Media", "Leader", "Manager"] as const;
+const ROLE_EMOJI: Record<string, string> = {
+  guide: "☂️",
+  guides: "☂️",
+  "social media": "📷",
+  leader: "⭐",
+  manager: "🧭",
+  takes: "🎯",
+};
 
 const palette = {
   heroGradient: "linear-gradient(135deg, #7C4DFF 0%, #9C6CFF 45%, #FF8EC3 100%)",
@@ -39,11 +67,6 @@ const palette = {
   tableShadow: "0 18px 40px rgba(124, 77, 255, 0.18)",
   cardShadow: "0 12px 28px rgba(124, 77, 255, 0.22)",
 };
-
-const MOBILE_CARD_SHADOW = "0 20px 36px rgba(46, 52, 70, 0.12)";
-const MOBILE_SECTION_SHADOW = "0 14px 28px rgba(82, 36, 199, 0.12)";
-const MOBILE_SECTION_BACKGROUND = "#F6F1FF";
-const MOBILE_SECONDARY_SECTION_BACKGROUND = "#F8F9FD";
 
 const HEADER_FONT_STACK = "'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
 
@@ -174,9 +197,10 @@ const createUserCardStyles = (background: string) => {
       borderWidth: 1,
       boxShadow: "0 18px 28px rgba(82, 36, 199, 0.18)",
       borderRadius: 18,
-      padding: "14px 16px",
+      padding: "14px 14px 16px",
       width: "100%",
-      maxWidth: 260,
+      maxWidth: 280,
+      minHeight: 138,
       minWidth: 0,
       position: "relative",
       overflow: "hidden",
@@ -260,6 +284,54 @@ const normalizeTimeLabel = (value: string) => {
   return trimmed.length > 0 ? trimmed : "Any Time";
 };
 
+const parseTimeRangeLabel = (value: string) => {
+  const normalized = value.trim();
+  if (!normalized || normalized === "Any Time") {
+    return null;
+  }
+
+  const [start, end] = normalized.split(/\s*[–-]\s*/);
+  if (!start) {
+    return null;
+  }
+
+  return {
+    start,
+    end: end || null,
+  };
+};
+
+const isPromotionShiftName = (value: string | null | undefined) =>
+  value?.toLowerCase().includes("promotion") ?? false;
+
+const hasShiftStartPassed = (shift: ShiftInstance | null | undefined) => {
+  if (!shift?.date || !shift.timeStart) {
+    return false;
+  }
+  const start = dayjs(`${shift.date} ${shift.timeStart}`);
+  return start.isValid() ? start.isBefore(dayjs()) : false;
+};
+
+const getShiftEmoji = (value: string | null | undefined) => {
+  const normalized = value?.toLowerCase() ?? "";
+  if (normalized.includes("pub crawl")) {
+    return "🍻";
+  }
+  if (normalized.includes("promotion")) {
+    return "📣";
+  }
+  if (normalized.includes("clean")) {
+    return "🧹";
+  }
+  if (normalized.includes("boat")) {
+    return "⛵";
+  }
+  if (normalized.includes("party")) {
+    return "🎉";
+  }
+  return "✨";
+};
+
 const getShiftGroupHeading = (shiftTypeName: string) => shiftTypeName;
 
 const getShiftGroupPriority = (shiftTypeName: string) => {
@@ -295,6 +367,21 @@ const getRoleOrderValue = (assignment: ShiftAssignment, index: number) => {
   return base + index / 1000;
 };
 
+const shiftRolesMatch = (
+  source: ShiftAssignment | null | undefined,
+  target: ShiftAssignment | null | undefined,
+): boolean => {
+  if (!source || !target) {
+    return false;
+  }
+  const sourceRoleId = source.shiftRoleId ?? null;
+  const targetRoleId = target.shiftRoleId ?? null;
+  if (sourceRoleId !== null || targetRoleId !== null) {
+    return sourceRoleId !== null && targetRoleId !== null && sourceRoleId === targetRoleId;
+  }
+  return normalizeRoleName(source.roleInShift) === normalizeRoleName(target.roleInShift);
+};
+
 const getUserDisplayName = (assignment: ShiftAssignment) => {
   if (assignment.assignee) {
     const first = assignment.assignee.firstName ?? "";
@@ -309,6 +396,26 @@ const getUserDisplayName = (assignment: ShiftAssignment) => {
   }
   return "Unassigned";
 };
+
+const getRoleEmoji = (value: string | null | undefined) => {
+  const normalized = normalizeRoleName(value);
+  return ROLE_EMOJI[normalized] ?? ROLE_EMOJI[normalized.replace(/s$/, "")] ?? "•";
+};
+
+const getUserInitials = (assignment: ShiftAssignment) => {
+  if (assignment.assignee) {
+    const first = assignment.assignee.firstName?.trim();
+    const last = assignment.assignee.lastName?.trim();
+    const initials = `${first?.[0] ?? ""}${last?.[0] ?? ""}`.toUpperCase();
+    if (initials) {
+      return initials;
+    }
+  }
+  return "?";
+};
+
+const getUserProfilePhotoUrl = (assignment: ShiftAssignment) =>
+  buildUserProfilePhotoUrl({ user: assignment.assignee ?? null });
 
 const groupAssignmentsByUser = (assignments: ShiftAssignment[]) => {
   const map = new Map<number | string, ShiftAssignment[]>();
@@ -437,10 +544,17 @@ const formatWeekValue = (value: string | null | undefined) => {
 
 const ScheduleOverviewPage = () => {
   const isMobile = useMediaQuery("(max-width: 768px)");
+  const canUseSpaciousSwapLayout = useMediaQuery("(max-width: 768px) and (min-height: 620px)");
   const [selectedWeek, setSelectedWeek] = useState<string>("");
+  const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
   const todayMobileCardRef = useRef<HTMLDivElement | null>(null);
   const mobileAutoScrolledRef = useRef(false);
   const scheduleWeeksQuery = useScheduleWeeks({ limit: 120 });
+  const createSwap = useCreateSwap();
+  const mySwaps = useMySwaps();
+  const [quickSwapTarget, setQuickSwapTarget] = useState<ShiftAssignment | null>(null);
+  const [quickSwapSourceId, setQuickSwapSourceId] = useState<string | null>(null);
+  const [quickSwapError, setQuickSwapError] = useState<string | null>(null);
   const weekOptions = useMemo(() => {
     const existingWeeks = (scheduleWeeksQuery.data ?? []) as ScheduleWeek[];
     const options: { value: string; label: string }[] = existingWeeks.map((weekRecord) => ({
@@ -602,11 +716,15 @@ const ScheduleOverviewPage = () => {
       if (!instance.assignments?.length) {
         return;
       }
+      const instanceAssignments = instance.assignments.map((assignment) => ({
+        ...assignment,
+        shiftInstance: instance,
+      }));
       const existing = map.get(instance.date);
       if (existing) {
-        existing.push(...instance.assignments);
+        existing.push(...instanceAssignments);
       } else {
-        map.set(instance.date, [...instance.assignments]);
+        map.set(instance.date, instanceAssignments);
       }
     });
     return map;
@@ -648,6 +766,91 @@ const ScheduleOverviewPage = () => {
     return buildUserColorMap(userIds);
   }, [shiftInstances]);
 
+  const myAssignmentsForWeek = useMemo(() => {
+    if (!loggedUserId) {
+      return [];
+    }
+    const items: Array<ShiftAssignment & { shiftInstance: ShiftInstance }> = [];
+    shiftInstances.forEach((instance) => {
+      (instance.assignments ?? []).forEach((assignment) => {
+        if (assignment.userId === loggedUserId) {
+          items.push({
+            ...assignment,
+            shiftInstance: instance,
+          });
+        }
+      });
+    });
+    return items;
+  }, [loggedUserId, shiftInstances]);
+
+  const quickSwapLimitReachedTypes = useMemo(() => {
+    const blocked = new Set<number>();
+    if (!mySwaps.data || !weekId || !loggedUserId) {
+      return blocked;
+    }
+    mySwaps.data.forEach((swap) => {
+      if (swap.requesterId !== loggedUserId) {
+        return;
+      }
+      const shiftTypeId = swap.fromAssignment?.shiftInstance?.shiftTypeId ?? null;
+      const swapWeekId = swap.fromAssignment?.shiftInstance?.scheduleWeekId ?? null;
+      if (!shiftTypeId || swapWeekId !== weekId) {
+        return;
+      }
+      if (swap.status === "canceled" || swap.status === "denied") {
+        return;
+      }
+      blocked.add(shiftTypeId);
+    });
+    return blocked;
+  }, [loggedUserId, mySwaps.data, weekId]);
+
+  const getEligibleQuickSwapSources = useCallback(
+    (target: ShiftAssignment | null | undefined) => {
+      const targetShift = target?.shiftInstance;
+      if (!target || !targetShift || !target.assignee || !loggedUserId || target.userId === loggedUserId) {
+        return [];
+      }
+      if (hasShiftStartPassed(targetShift)) {
+        return [];
+      }
+      if (quickSwapLimitReachedTypes.has(targetShift.shiftTypeId)) {
+        return [];
+      }
+
+      return myAssignmentsForWeek.filter(
+        (source) =>
+          source.shiftInstance.shiftTypeId === targetShift.shiftTypeId &&
+          source.shiftInstanceId !== target.shiftInstanceId &&
+          !hasShiftStartPassed(source.shiftInstance) &&
+          source.id !== target.id &&
+          shiftRolesMatch(source, target),
+      );
+    },
+    [loggedUserId, myAssignmentsForWeek, quickSwapLimitReachedTypes],
+  );
+
+  const quickSwapSourceOptions = useMemo(
+    () =>
+      getEligibleQuickSwapSources(quickSwapTarget).map((assignment) => ({
+        value: assignment.id.toString(),
+        label: `${dayjs(assignment.shiftInstance.date).format("ddd, MMM D")} · ${formatShiftTimeRange(
+          assignment.shiftInstance.timeStart,
+          assignment.shiftInstance.timeEnd,
+        )} · ${formatRoleLabel(assignment.roleInShift)}`,
+      })),
+    [getEligibleQuickSwapSources, quickSwapTarget],
+  );
+
+  const selectedQuickSwapSource = useMemo(
+    () =>
+      quickSwapSourceId
+        ? myAssignmentsForWeek.find((assignment) => assignment.id.toString() === quickSwapSourceId) ?? null
+        : null,
+    [myAssignmentsForWeek, quickSwapSourceId],
+  );
+
   const loading = ensureWeekQuery.isLoading || shiftInstancesQuery.isLoading;
   const error = ensureWeekQuery.isError ? ensureWeekQuery.error : shiftInstancesQuery.error;
   const hasWeek = Boolean(weekId);
@@ -681,17 +884,231 @@ const ScheduleOverviewPage = () => {
     });
   }, [currentWeekValue, hasWeek, isMobile, loading, selectedWeek, shiftInstances.length]);
 
+  const handleOpenQuickSwap = (target: ShiftAssignment) => {
+    const sources = getEligibleQuickSwapSources(target);
+    if (sources.length === 0) {
+      return;
+    }
+    setQuickSwapTarget(target);
+    setQuickSwapSourceId(sources.length === 1 ? sources[0].id.toString() : null);
+    setQuickSwapError(null);
+  };
+
+  const handleCloseQuickSwap = () => {
+    if (createSwap.isPending) {
+      return;
+    }
+    setQuickSwapTarget(null);
+    setQuickSwapSourceId(null);
+    setQuickSwapError(null);
+  };
+
+  const handleConfirmQuickSwap = async () => {
+    if (!quickSwapTarget?.userId || !quickSwapSourceId) {
+      return;
+    }
+    setQuickSwapError(null);
+    try {
+      await createSwap.mutateAsync({
+        fromAssignmentId: Number(quickSwapSourceId),
+        toAssignmentId: quickSwapTarget.id,
+        partnerId: quickSwapTarget.userId,
+      });
+      handleCloseQuickSwap();
+    } catch (error) {
+      setQuickSwapError(error instanceof Error ? error.message : "Could not request this swap.");
+    }
+  };
+
+  const renderQuickSwapAssignmentCard = (
+    assignment: (ShiftAssignment & { shiftInstance?: ShiftInstance | null }) | null,
+    label: string,
+    tone: "offer" | "request",
+  ) => {
+    if (!assignment) {
+      return (
+        <Box
+          style={{
+            width: "100%",
+            borderRadius: 18,
+            border: "2px dashed #CBD5E1",
+            padding: 16,
+            textAlign: "center",
+            backgroundColor: "#F8FAFC",
+          }}
+        >
+          <Text fw={900} c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+            Select your shift
+          </Text>
+        </Box>
+      );
+    }
+
+    const shift = assignment.shiftInstance ?? null;
+    const accent = tone === "offer" ? "#2563EB" : "#e90183";
+    const borderColor = tone === "offer" ? "#93C5FD" : "#F9A8D4";
+    const headerBackground =
+      tone === "offer"
+        ? "linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(147, 197, 253, 0.18))"
+        : "linear-gradient(135deg, rgba(233, 1, 131, 0.16), rgba(244, 114, 182, 0.16))";
+    const softBackground =
+      tone === "offer"
+        ? "linear-gradient(180deg, rgba(239, 246, 255, 0.98), rgba(255, 255, 255, 0.98))"
+        : "linear-gradient(180deg, rgba(253, 242, 248, 0.98), rgba(255, 255, 255, 0.98))";
+    const timeRange = formatShiftTimeRange(shift?.timeStart, shift?.timeEnd);
+    const photoUrl = getUserProfilePhotoUrl(assignment);
+    const spacious = canUseSpaciousSwapLayout;
+    const desktopCompact = !isMobile;
+
+    return (
+      <Box
+        style={{
+          width: "100%",
+          minHeight: isMobile ? "clamp(166px, 25dvh, 194px)" : undefined,
+            borderRadius: isMobile ? 16 : 16,
+          border: `2px solid ${borderColor}`,
+          background: softBackground,
+          overflow: "hidden",
+            boxShadow: isMobile ? "0 8px 18px rgba(15, 23, 42, 0.08)" : "0 10px 20px rgba(15, 23, 42, 0.08)",
+        }}
+      >
+        <Box
+          style={{
+            padding: spacious ? "9px 12px" : isMobile ? "8px 10px" : "6px 9px",
+            textAlign: "center",
+            background: headerBackground,
+            borderBottom: `1px solid ${borderColor}`,
+          }}
+        >
+          <Text
+            fw={900}
+            style={{
+              fontFamily: HEADER_FONT_STACK,
+              color: accent,
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              fontSize: spacious ? 13 : isMobile ? 12 : 12,
+            }}
+          >
+            {label}
+          </Text>
+        </Box>
+
+        <Stack gap={spacious ? 8 : isMobile ? 7 : 6} align="center" justify="center" style={{ minHeight: isMobile ? "calc(100% - 34px)" : undefined, padding: spacious ? 10 : isMobile ? 9 : 8 }}>
+          <Group gap={spacious ? 10 : isMobile ? 8 : 7} align="center" justify="center" wrap="nowrap" style={{ width: "100%" }}>
+            <Avatar
+              src={photoUrl ?? undefined}
+              alt={getUserDisplayName(assignment)}
+              size={spacious ? 50 : isMobile ? 46 : 38}
+              radius="xl"
+              styles={{
+                root: {
+                  border: "2px solid #FFFFFF",
+                  outline: `2px solid ${accent}`,
+                  boxShadow: "0 8px 18px rgba(15, 23, 42, 0.14)",
+                  fontFamily: HEADER_FONT_STACK,
+                  fontWeight: 900,
+                  color: accent,
+                },
+              }}
+            >
+              {getUserInitials(assignment)}
+            </Avatar>
+            <Stack gap={2} align="center" style={{ minWidth: 0 }}>
+              <Text
+                fw={900}
+                ta="center"
+                style={{
+                  fontFamily: HEADER_FONT_STACK,
+                  color: palette.slate,
+                  fontSize: spacious ? 16 : isMobile ? 14 : 13,
+                  lineHeight: 1.1,
+                }}
+              >
+                {getUserDisplayName(assignment)}
+              </Text>
+              <Badge variant="light" color={tone === "offer" ? "blue" : "violet"} radius="xl" size={spacious ? "sm" : "xs"}>
+                {formatRoleLabel(assignment.roleInShift)}
+              </Badge>
+            </Stack>
+          </Group>
+
+          <Box style={{ width: "100%", textAlign: "center" }}>
+            <Text
+              fw={900}
+              style={{
+                fontFamily: HEADER_FONT_STACK,
+                color: accent,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                fontSize: spacious ? 19 : isMobile ? 17 : 15,
+                lineHeight: 1,
+              }}
+            >
+              {shift?.shiftType?.name ?? "Shift"}
+            </Text>
+          </Box>
+
+          <Box
+            style={{
+              width: "100%",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: spacious ? 10 : desktopCompact ? 6 : 8,
+            }}
+          >
+            <Box
+              style={{
+                borderRadius: 14,
+                backgroundColor: "#FFFFFF",
+                border: "1px solid #E2E8F0",
+                padding: spacious ? "8px 8px" : isMobile ? "7px 6px" : "6px 6px",
+                textAlign: "center",
+              }}
+            >
+              <Text size="xs" fw={900} c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+                DATE
+              </Text>
+              <Text fw={900} style={{ fontFamily: HEADER_FONT_STACK, fontSize: spacious ? 15 : isMobile ? 14 : 12 }}>
+                {shift?.date ? dayjs(shift.date).format("ddd, MMM D") : "N/A"}
+              </Text>
+            </Box>
+            <Box
+              style={{
+                borderRadius: 14,
+                backgroundColor: "#FFFFFF",
+                border: "1px solid #E2E8F0",
+                padding: spacious ? "8px 8px" : isMobile ? "7px 6px" : "6px 6px",
+                textAlign: "center",
+              }}
+            >
+              <Text size="xs" fw={900} c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+                TIME
+              </Text>
+              <Text fw={900} style={{ fontFamily: HEADER_FONT_STACK, fontSize: spacious ? 15 : isMobile ? 14 : 12 }}>
+                {timeRange || "Any time"}
+              </Text>
+            </Box>
+          </Box>
+        </Stack>
+      </Box>
+    );
+  };
+
   const renderAssignmentGroupCard = (
     groupAssignments: ShiftAssignment[],
-    options?: { showRoles?: boolean },
+    options?: { showRoles?: boolean; variant?: "default" | "mobile" },
   ) => {
     const primary = groupAssignments[0];
     const { background, text } = getUserColor(primary?.userId ?? null, userColorMap);
     const name = getUserDisplayName(primary);
+    const photoUrl = primary ? getUserProfilePhotoUrl(primary) : null;
+    const initials = primary ? getUserInitials(primary) : "?";
     const styles = createUserCardStyles(background);
     const secondaryColor =
       text.toLowerCase() === "#ffffff" ? "rgba(255, 255, 255, 0.78)" : lightenColor(text, 0.35);
     const showRoles = options?.showRoles ?? false;
+    const variant = options?.variant ?? "default";
     const roleLabels = showRoles
       ? Array.from(
           groupAssignments
@@ -720,6 +1137,104 @@ const ScheduleOverviewPage = () => {
         )
       : [];
     const showCount = groupAssignments.length > 1;
+    const quickSwapSources = primary ? getEligibleQuickSwapSources(primary) : [];
+    const canQuickSwap = quickSwapSources.length > 0;
+
+    if (variant === "mobile") {
+      return (
+        <Card
+          key={groupAssignments.map((assignment) => assignment.id).join("-")}
+          radius={18}
+          withBorder
+          padding={0}
+          style={{
+            width: "100%",
+            backgroundColor: "#FFFFFF",
+            borderColor: "rgba(148, 163, 184, 0.28)",
+            borderLeft: `6px solid ${background}`,
+            boxShadow: "0 8px 18px rgba(46, 52, 70, 0.08)",
+            overflow: "hidden",
+            position: "relative",
+          }}
+        >
+          {canQuickSwap && primary ? (
+            <ActionIcon
+              aria-label={`Request swap with ${name}`}
+              variant="light"
+              color="violet"
+              radius="xl"
+              size={30}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleOpenQuickSwap(primary);
+              }}
+              style={{
+                position: "absolute",
+                top: 8,
+                right: 8,
+                border: "1px solid rgba(124, 77, 255, 0.22)",
+                backgroundColor: "rgba(245, 243, 255, 0.94)",
+              }}
+            >
+              <IconArrowsExchange size={16} />
+            </ActionIcon>
+          ) : null}
+          <Stack gap={8} align="center" style={{ padding: "12px", width: "100%" }}>
+              <Avatar
+                src={photoUrl ?? undefined}
+                alt={name}
+                size={46}
+                radius="xl"
+                color="blue"
+                styles={{
+                  root: {
+                    border: "2px solid #FFFFFF",
+                    outline: `2px solid ${background}`,
+                    boxShadow: "0 8px 16px rgba(17, 24, 39, 0.12)",
+                    backgroundColor: photoUrl ? "#ffffff" : "#F8FAFC",
+                    color: palette.plumDark,
+                    fontFamily: HEADER_FONT_STACK,
+                    fontWeight: 900,
+                  },
+                }}
+              >
+                {initials}
+              </Avatar>
+              <Stack gap={4} align="center" style={{ width: "100%", minWidth: 0 }}>
+                <Text
+                  fw={900}
+                  truncate
+                  style={{
+                    fontFamily: HEADER_FONT_STACK,
+                    color: palette.slate,
+                    fontSize: 15,
+                    letterSpacing: "0.02em",
+                    lineHeight: 1.15,
+                    textAlign: "center",
+                    width: "100%",
+                  }}
+                >
+                  {name}
+                </Text>
+                <Group gap={6} justify="center" wrap="wrap">
+                  {showRoles && roleLabels.length > 0
+                    ? roleLabels.map((label) => (
+                        <Badge key={label} size="xs" radius="xl" variant="light" color="violet">
+                          {label}
+                        </Badge>
+                      ))
+                    : null}
+                  {showCount ? (
+                    <Badge size="xs" radius="xl" variant="light" color="gray">
+                      {groupAssignments.length} shifts
+                    </Badge>
+                  ) : null}
+                </Group>
+              </Stack>
+          </Stack>
+        </Card>
+      );
+    }
 
     return (
       <Card
@@ -730,7 +1245,50 @@ const ScheduleOverviewPage = () => {
         style={{ ...styles.container, color: text }}
       >
         <Box style={styles.overlay} />
-        <Stack gap={6} align="center" style={{ width: "100%", position: "relative", zIndex: 1 }}>
+        {canQuickSwap && primary ? (
+          <ActionIcon
+            aria-label={`Request swap with ${name}`}
+            variant="light"
+            color="violet"
+            radius="xl"
+            size={24}
+            onClick={(event) => {
+              event.stopPropagation();
+              handleOpenQuickSwap(primary);
+            }}
+            style={{
+              position: "absolute",
+              top: 8,
+              right: 8,
+              zIndex: 2,
+              border: "1px solid rgba(124, 77, 255, 0.26)",
+              backgroundColor: "rgba(255, 255, 255, 0.9)",
+              boxShadow: "0 8px 16px rgba(17, 24, 39, 0.16)",
+            }}
+          >
+            <IconArrowsExchange size={14} />
+          </ActionIcon>
+        ) : null}
+        <Stack gap={8} align="center" style={{ width: "100%", position: "relative", zIndex: 1 }}>
+          <Avatar
+            src={photoUrl ?? undefined}
+            alt={name}
+            size={54}
+            radius="xl"
+            color="blue"
+            styles={{
+              root: {
+                border: "3px solid rgba(255, 255, 255, 0.88)",
+                boxShadow: "0 10px 22px rgba(17, 24, 39, 0.22)",
+                backgroundColor: photoUrl ? "#ffffff" : "rgba(255, 255, 255, 0.82)",
+                color: text.toLowerCase() === "#ffffff" ? palette.plumDark : text,
+                fontFamily: HEADER_FONT_STACK,
+                fontWeight: 800,
+              },
+            }}
+          >
+            {initials}
+          </Avatar>
           <Text style={{ ...userCardNameStyles, color: text }}>{name}</Text>
           {showRoles && roleLabels.length > 0 ? (
             <Text size="xs" style={{ fontFamily: HEADER_FONT_STACK, color: secondaryColor }}>
@@ -747,33 +1305,63 @@ const ScheduleOverviewPage = () => {
     );
   };
 
-  const renderAssignmentsForRole = (roleLabel: string, assignments: ShiftAssignment[]): ReactNode[] => {
+  const renderAssignmentsForRole = (
+    roleLabel: string,
+    assignments: ShiftAssignment[],
+    options?: { variant?: "default" | "mobile" },
+  ): ReactNode[] => {
     const matches = filterAssignmentsForRole(roleLabel, assignments);
 
     if (matches.length === 0) {
       return [
-        <Text size="sm" c="dimmed">
-          {"\u2014"}
+        <Text
+          size={options?.variant === "mobile" ? "xs" : "sm"}
+          c="dimmed"
+          fw={options?.variant === "mobile" ? 900 : undefined}
+          style={{
+            fontFamily: HEADER_FONT_STACK,
+            letterSpacing: options?.variant === "mobile" ? "0.08em" : undefined,
+            textTransform: options?.variant === "mobile" ? "uppercase" : undefined,
+          }}
+        >
+          {options?.variant === "mobile" ? "No one assigned" : "\u2014"}
         </Text>
       ];
     }
 
     const grouped = groupAssignmentsByUser(matches);
 
-    return grouped.map((groupAssignments) => renderAssignmentGroupCard(groupAssignments));
+    return grouped.map((groupAssignments) =>
+      renderAssignmentGroupCard(groupAssignments, { variant: options?.variant }),
+    );
   };
 
   const renderInstancesForCell = (
     instances: ShiftInstance[],
-    options?: { showTime?: boolean; showRoles?: boolean; emphasizeTime?: boolean },
+    options?: {
+      showTime?: boolean;
+      showRoles?: boolean;
+      emphasizeTime?: boolean;
+      variant?: "default" | "mobile";
+    },
   ) => {
     const showTime = options?.showTime ?? true;
     const showRoles = options?.showRoles ?? true;
     const emphasizeTime = options?.emphasizeTime ?? false;
+    const variant = options?.variant ?? "default";
     if (instances.length === 0) {
       return (
-        <Text size="sm" c="dimmed">
-          {"\u2014"}
+        <Text
+          size={options?.variant === "mobile" ? "xs" : "sm"}
+          c="dimmed"
+          fw={options?.variant === "mobile" ? 900 : undefined}
+          style={{
+            fontFamily: HEADER_FONT_STACK,
+            letterSpacing: options?.variant === "mobile" ? "0.08em" : undefined,
+            textTransform: options?.variant === "mobile" ? "uppercase" : undefined,
+          }}
+        >
+          {options?.variant === "mobile" ? "No one assigned" : "\u2014"}
         </Text>
       );
     }
@@ -793,7 +1381,10 @@ const ScheduleOverviewPage = () => {
     return (
       <Stack gap={12} align="center" style={{ width: "100%" }}>
         {sorted.map((instance) => {
-          const assignments = instance.assignments ?? [];
+          const assignments = (instance.assignments ?? []).map((assignment) => ({
+            ...assignment,
+            shiftInstance: instance,
+          }));
           const grouped = groupAssignmentsByUser(assignments);
           const timeLabel = formatShiftTimeRange(instance.timeStart, instance.timeEnd);
 
@@ -814,11 +1405,20 @@ const ScheduleOverviewPage = () => {
               ) : null}
               {grouped.length > 0
                 ? grouped.map((groupAssignments) =>
-                    renderAssignmentGroupCard(groupAssignments, { showRoles }),
+                    renderAssignmentGroupCard(groupAssignments, { showRoles, variant }),
                   )
                 : (
-                    <Text size="sm" c="dimmed">
-                      {"\u2014"}
+                    <Text
+                      size={variant === "mobile" ? "xs" : "sm"}
+                      c="dimmed"
+                      fw={variant === "mobile" ? 900 : undefined}
+                      style={{
+                        fontFamily: HEADER_FONT_STACK,
+                        letterSpacing: variant === "mobile" ? "0.08em" : undefined,
+                        textTransform: variant === "mobile" ? "uppercase" : undefined,
+                      }}
+                    >
+                      {variant === "mobile" ? "No one assigned" : "\u2014"}
                     </Text>
                   )}
             </Stack>
@@ -953,10 +1553,14 @@ const ScheduleOverviewPage = () => {
         const isoDate = day.format("YYYY-MM-DD");
         const assignments = assignmentsByDate.get(isoDate) ?? [];
         const pubSections = visibleRoles
-          .map((roleLabel): { roleLabel: string; nodes: ReactNode[] } => ({
-            roleLabel,
-            nodes: renderAssignmentsForRole(roleLabel, assignments),
-          }))
+          .map((roleLabel): { roleLabel: string; nodes: ReactNode[]; assignedCount: number } => {
+            const assignedCount = filterAssignmentsForRole(roleLabel, assignments).length;
+            return {
+              roleLabel,
+              assignedCount,
+              nodes: renderAssignmentsForRole(roleLabel, assignments, { variant: "mobile" }),
+            };
+          })
           .filter((section) => section.nodes.length > 0);
 
         const otherSections = otherShiftGroups
@@ -989,71 +1593,214 @@ const ScheduleOverviewPage = () => {
           return null;
         }
 
+        const isToday = selectedWeek === currentWeekValue && isoDate === todayIsoDate;
         return (
           <Card
             key={`mobile-day-${isoDate}`}
-            ref={selectedWeek === currentWeekValue && isoDate === todayIsoDate ? todayMobileCardRef : undefined}
-            radius="lg"
+            ref={isToday ? todayMobileCardRef : undefined}
+            radius={24}
             shadow="xl"
-            padding="lg"
+            padding={0}
             withBorder
             style={{
               width: "100%",
               scrollMarginTop: 88,
-              backgroundColor: "#ffffff",
-              borderColor: palette.border,
-              boxShadow: MOBILE_CARD_SHADOW,
+              background: isToday
+                ? "linear-gradient(180deg, #F4ECFF 0%, #FFF7FC 100%)"
+                : "linear-gradient(180deg, #F3F0FF 0%, #F8FAFF 100%)",
+              borderColor: isToday ? "#8B5CF6" : "#B9C4D8",
+              borderWidth: 2,
+              boxShadow: isToday
+                ? "0 24px 46px rgba(124, 77, 255, 0.26)"
+                : "0 22px 42px rgba(46, 52, 70, 0.2)",
+              overflow: "hidden",
             }}
           >
-            <Stack gap="lg" align="center" style={{ width: "100%" }}>
-              <Stack gap={6} align="center" style={{ width: "100%" }}>
-                <Text
-                  size="lg"
-                  fw={700}
-                  style={{ fontFamily: HEADER_FONT_STACK, color: palette.slate }}
-                  ta="center"
+            <Box
+              style={{
+                height: 6,
+                background: isToday
+                  ? palette.heroGradient
+                  : "linear-gradient(90deg, rgba(124, 77, 255, 0.58), rgba(255, 142, 195, 0.5))",
+              }}
+            />
+            <Box
+              style={{
+                background: isToday
+                  ? "linear-gradient(135deg, rgba(124, 77, 255, 0.24) 0%, rgba(255, 142, 195, 0.28) 100%)"
+                  : "linear-gradient(135deg, rgba(232, 224, 255, 0.92) 0%, rgba(238, 244, 255, 0.96) 100%)",
+                borderBottom: "1px solid rgba(107, 114, 128, 0.18)",
+                padding: "16px 16px 14px",
+              }}
+            >
+              <Group align="center" justify="space-between" gap="md" wrap="nowrap">
+                <Box
+                  style={{
+                    flex: "0 0 62px",
+                    width: 62,
+                    borderRadius: 18,
+                    backgroundColor: "#ffffff",
+                    border: `1px solid ${isToday ? palette.lavenderBold : "#E1E6F0"}`,
+                    boxShadow: "0 10px 22px rgba(46, 52, 70, 0.1)",
+                    padding: "8px 6px",
+                    textAlign: "center",
+                  }}
                 >
-                  {day.format("dddd")}
-                </Text>
-                <Text size="sm" c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }} ta="center">
-                  {day.format("MMM D, YYYY")}
-                </Text>
-                <Box style={{ width: 56, height: 2, backgroundColor: palette.border }} />
-              </Stack>
-
-              {pubSections.length > 0 ? (
-                <Stack gap={12} align="center" style={{ width: "100%" }}>
-                  <Text
-                    size="sm"
-                    fw={700}
-                    style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.08em", color: palette.plumDark }}
-                  >
-                    Pub Crawl
+                  <Text size="xs" fw={800} c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+                    {day.format("MMM").toUpperCase()}
                   </Text>
-                  <Stack gap={12} style={{ width: "100%" }}>
-                    {pubSections.map((section) => (
-                      <Card
-                        key={`pub-${isoDate}-${section.roleLabel}`}
-                        withBorder
-                        radius="md"
-                        padding="md"
-                        shadow="sm"
+                  <Text fw={900} style={{ fontFamily: HEADER_FONT_STACK, fontSize: 24, lineHeight: 1 }}>
+                    {day.format("DD")}
+                  </Text>
+                </Box>
+                <Stack gap={4} align="center" style={{ flex: "1 1 auto", minWidth: 0 }}>
+                  <Group gap={6} justify="center" wrap="wrap">
+                    <Text
+                      fw={900}
+                      style={{
+                        fontFamily: HEADER_FONT_STACK,
+                        color: palette.slate,
+                        lineHeight: 1.08,
+                        fontSize: 22,
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                      }}
+                      ta="center"
+                    >
+                      {day.format("dddd")}
+                    </Text>
+                    {isToday ? (
+                      <Badge radius="xl" variant="filled" color="violet" size="sm">
+                        Today
+                      </Badge>
+                    ) : null}
+                  </Group>
+                </Stack>
+              </Group>
+            </Box>
+
+            <Stack
+              gap={14}
+              align="center"
+              style={{
+                width: "100%",
+                padding: pubSections.length > 0 ? "0 14px 14px" : 14,
+                backgroundColor: "rgba(255, 255, 255, 0.62)",
+              }}
+            >
+              {pubSections.length > 0 ? (
+                <Box
+                  style={{
+                    width: "calc(100% + 28px)",
+                    margin: "0 -14px",
+                    padding: "16px 14px",
+                    background:
+                      "linear-gradient(180deg, rgba(237, 229, 255, 0.98), rgba(255, 244, 250, 0.94))",
+                    borderTop: "2px solid rgba(124, 77, 255, 0.22)",
+                    borderBottom: "2px solid rgba(124, 77, 255, 0.22)",
+                  }}
+                >
+                  <Box
+                    style={{
+                      padding: "0 4px 14px",
+                      textAlign: "center",
+                    }}
+                  >
+                    <Box
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "48px minmax(0, 1fr) 48px",
+                        alignItems: "center",
+                        width: "100%",
+                      }}
+                    >
+                      <Text aria-hidden style={{ fontSize: 34, lineHeight: 1, textAlign: "center" }}>
+                        {getShiftEmoji("Pub Crawl")}
+                      </Text>
+                      <Text
+                        fw={900}
                         style={{
-                          width: "100%",
-                          backgroundColor: MOBILE_SECTION_BACKGROUND,
-                          borderColor: "rgba(124, 77, 255, 0.14)",
-                          boxShadow: MOBILE_SECTION_SHADOW,
+                          fontFamily: HEADER_FONT_STACK,
+                          color: "#e90183",
+                          letterSpacing: "0.1em",
+                          textTransform: "uppercase",
+                          fontSize: 25,
+                          lineHeight: 1,
+                          textAlign: "center",
+                          whiteSpace: "nowrap",
                         }}
                       >
-                        <Stack gap={10} align="center" style={{ width: "100%" }}>
-                          <Text
-                            size="xs"
-                            fw={600}
-                            style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.08em", color: palette.plumDark }}
-                          >
-                            {section.roleLabel.toUpperCase()}
-                          </Text>
-                          <Stack gap={8} align="center" style={{ width: "100%" }}>
+                        Pub Crawl
+                      </Text>
+                      <Text aria-hidden style={{ fontSize: 34, lineHeight: 1, textAlign: "center" }}>
+                        {getShiftEmoji("Pub Crawl")}
+                      </Text>
+                    </Box>
+                  </Box>
+                  <Stack gap={16} align="center" style={{ width: "100%" }}>
+                    {pubSections.map((section) => (
+                      <Box
+                        key={`pub-${isoDate}-${section.roleLabel}`}
+                        style={{
+                          width: "100%",
+                          padding: "12px",
+                          borderRadius: 18,
+                          background:
+                            "linear-gradient(180deg, rgba(232, 224, 255, 0.98), rgba(248, 243, 255, 0.94))",
+                          border: "2px solid rgba(124, 77, 255, 0.32)",
+                          boxShadow: "0 10px 22px rgba(124, 77, 255, 0.12)",
+                        }}
+                      >
+                        <Box
+                          style={{
+                            margin: "-12px -12px 0",
+                            padding: "10px 12px",
+                            borderBottom: "2px solid rgba(124, 77, 255, 0.28)",
+                            background:
+                              "linear-gradient(135deg, rgba(124, 77, 255, 0.14), rgba(255, 142, 195, 0.12))",
+                            position: "relative",
+                          }}
+                        >
+                          <Group gap={6} justify="center" wrap="nowrap" style={{ minWidth: 0 }}>
+                              <Text size="sm" aria-hidden>
+                                {getRoleEmoji(section.roleLabel)}
+                              </Text>
+                              <Text
+                                fw={800}
+                                ta="center"
+                                style={{
+                                  fontFamily: HEADER_FONT_STACK,
+                                  color: "#5B21B6",
+                                  fontSize: 14,
+                                  letterSpacing: "0.08em",
+                                  textTransform: "uppercase",
+                                  lineHeight: 1,
+                                }}
+                              >
+                                {section.roleLabel}
+                              </Text>
+                            </Group>
+                            {section.assignedCount > 0 ? (
+                              <Text
+                                size="sm"
+                                c="dimmed"
+                                ta="right"
+                                style={{
+                                  fontFamily: HEADER_FONT_STACK,
+                                  whiteSpace: "nowrap",
+                                  position: "absolute",
+                                  right: 12,
+                                  top: "50%",
+                                  transform: "translateY(-50%)",
+                                  textTransform: "none",
+                                  fontWeight: 800,
+                                }}
+                              >
+                                {section.nodes.length} {section.nodes.length === 1 ? "person" : "people"}
+                              </Text>
+                            ) : null}
+                        </Box>
+                        <Stack gap={10} align="center" style={{ width: "100%", padding: "12px 0 0" }}>
                             {section.nodes.map((node, index) => (
                               <Box
                                 key={`pub-${isoDate}-${section.roleLabel}-node-${index}`}
@@ -1062,46 +1809,151 @@ const ScheduleOverviewPage = () => {
                                 {node}
                               </Box>
                             ))}
-                          </Stack>
                         </Stack>
-                      </Card>
+                      </Box>
                     ))}
                   </Stack>
-                </Stack>
+                </Box>
               ) : null}
 
-              {otherSections.map((section) => (
-                <Card
-                  key={`other-${isoDate}-${section.key}`}
-                  withBorder
-                  radius="md"
-                  padding="md"
-                  shadow="sm"
-                  style={{
-                    width: "100%",
-                    backgroundColor: MOBILE_SECONDARY_SECTION_BACKGROUND,
-                    borderColor: "rgba(46, 52, 70, 0.1)",
-                    boxShadow: MOBILE_SECTION_SHADOW,
-                  }}
-                >
-                  <Stack gap={10} align="center" style={{ width: "100%" }}>
-                    <Text
-                      size="sm"
-                      fw={700}
-                      style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.06em", color: palette.plumDark }}
+              {otherSections.map((section) => {
+                const isPromotion = isPromotionShiftName(section.heading);
+                const timeRange = parseTimeRangeLabel(section.label);
+
+                return (
+                  <Box
+                    key={`other-${isoDate}-${section.key}`}
+                    style={{
+                      width: "100%",
+                      borderRadius: 18,
+                      padding: "12px",
+                      background: isPromotion
+                        ? "linear-gradient(180deg, rgba(255, 237, 213, 0.98), rgba(255, 247, 237, 0.98))"
+                        : "linear-gradient(180deg, rgba(226, 232, 240, 0.98), rgba(248, 250, 252, 0.98))",
+                      border: isPromotion ? "2px solid rgba(249, 115, 22, 0.36)" : "2px solid rgba(71, 85, 105, 0.34)",
+                      boxShadow: isPromotion
+                        ? "0 12px 26px rgba(234, 88, 12, 0.14)"
+                        : "0 12px 26px rgba(51, 65, 85, 0.12)",
+                    }}
+                  >
+                    <Box
+                      style={{
+                        margin: "-12px -12px 0",
+                        borderBottom: isPromotion
+                          ? "2px solid rgba(249, 115, 22, 0.26)"
+                          : "2px solid rgba(71, 85, 105, 0.22)",
+                        padding: "11px 12px",
+                        background: isPromotion
+                          ? "linear-gradient(135deg, rgba(249, 115, 22, 0.18), rgba(251, 191, 36, 0.12))"
+                          : "linear-gradient(135deg, rgba(71, 85, 105, 0.16), rgba(148, 163, 184, 0.1))",
+                      }}
                     >
-                      {section.heading}
-                    </Text>
-                    <Stack gap={8} align="center" style={{ width: "100%" }}>
+                      <Stack gap={8} align="center">
+                        <Box
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "42px minmax(0, 1fr) 42px",
+                            alignItems: "center",
+                            width: "100%",
+                          }}
+                        >
+                          <Text aria-hidden style={{ fontSize: 26, lineHeight: 1, textAlign: "center" }}>
+                            {getShiftEmoji(section.heading)}
+                          </Text>
+                          <Text
+                            fw={900}
+                            ta="center"
+                            style={{
+                              fontFamily: HEADER_FONT_STACK,
+                              color: isPromotion ? "#9A3412" : "#334155",
+                              letterSpacing: "0.14em",
+                              textTransform: "uppercase",
+                              fontSize: section.heading.length > 14 ? 18 : 24,
+                              lineHeight: 1,
+                              textAlign: "center",
+                            }}
+                          >
+                            {section.heading}
+                          </Text>
+                          <Text aria-hidden style={{ fontSize: 26, lineHeight: 1, textAlign: "center" }}>
+                            {getShiftEmoji(section.heading)}
+                          </Text>
+                        </Box>
+                        {timeRange ? (
+                          <Group gap="xs" wrap="nowrap" justify="center" style={{ width: "100%" }}>
+                            <Box
+                              style={{
+                                flex: "1 1 0",
+                                borderRadius: 12,
+                                backgroundColor: "rgba(255, 255, 255, 0.78)",
+                                border: isPromotion
+                                  ? "1px solid rgba(249, 115, 22, 0.22)"
+                                  : "1px solid rgba(71, 85, 105, 0.22)",
+                                padding: "7px 8px",
+                                textAlign: "center",
+                              }}
+                            >
+                              <Text size="xs" fw={900} c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+                                START
+                              </Text>
+                              <Text
+                                fw={900}
+                                style={{
+                                  fontFamily: HEADER_FONT_STACK,
+                                  color: isPromotion ? "#9A3412" : "#334155",
+                                  fontSize: 17,
+                                }}
+                              >
+                                {timeRange.start}
+                              </Text>
+                            </Box>
+                            {timeRange.end ? (
+                              <Box
+                                style={{
+                                  flex: "1 1 0",
+                                  borderRadius: 12,
+                                  backgroundColor: "rgba(255, 255, 255, 0.78)",
+                                  border: isPromotion
+                                    ? "1px solid rgba(249, 115, 22, 0.22)"
+                                    : "1px solid rgba(71, 85, 105, 0.22)",
+                                  padding: "7px 8px",
+                                  textAlign: "center",
+                                }}
+                              >
+                                <Text size="xs" fw={900} c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+                                  END
+                                </Text>
+                                <Text
+                                  fw={900}
+                                  style={{
+                                    fontFamily: HEADER_FONT_STACK,
+                                    color: isPromotion ? "#9A3412" : "#334155",
+                                    fontSize: 17,
+                                  }}
+                                >
+                                  {timeRange.end}
+                                </Text>
+                              </Box>
+                            ) : null}
+                          </Group>
+                        ) : (
+                          <Text size="xs" c="dimmed" fw={700} style={{ fontFamily: HEADER_FONT_STACK }}>
+                            {section.label}
+                          </Text>
+                        )}
+                      </Stack>
+                    </Box>
+                    <Stack gap={10} align="center" style={{ width: "100%", padding: "10px 0 0" }}>
                       {renderInstancesForCell(section.instances, {
-                        showTime: true,
-                        showRoles: false,
-                        emphasizeTime: true,
+                        showTime: false,
+                        showRoles: true,
+                        emphasizeTime: false,
+                        variant: "mobile",
                       })}
                     </Stack>
-                  </Stack>
-                </Card>
-              ))}
+                  </Box>
+                );
+              })}
             </Stack>
           </Card>
         );
@@ -1117,7 +1969,7 @@ const ScheduleOverviewPage = () => {
     }
 
     return (
-      <Stack gap="lg" align="center" style={{ width: "100%" }}>
+      <Stack gap={24} align="center" style={{ width: "100%" }}>
         {dayCards}
       </Stack>
     );
@@ -1219,11 +2071,10 @@ const ScheduleOverviewPage = () => {
   const pubCrawlTable = renderScheduleTable("pub-crawl", pubCrawlHeading, "Role", pubCrawlRows);
   const hasShiftContent = shiftInstances.length > 0;
   const navigationIsLoading = shiftInstancesQuery.isLoading;
-  const navButtonStyle = isMobile ? ({ flex: "1 1 140px", minWidth: "140px" } as CSSProperties) : undefined;
   const weekSelectorWrapperStyle: CSSProperties = isMobile
     ? {
-        flex: "1 1 100%",
-        minWidth: "100%",
+        flex: "1 1 auto",
+        minWidth: 0,
         padding: "6px 12px",
         backgroundColor: "rgba(255,255,255,0.18)",
         borderRadius: 14,
@@ -1249,63 +2100,128 @@ const ScheduleOverviewPage = () => {
       : null;
 
   return (
-    <Stack mt="lg" gap="lg">
-      <Card
-        radius="lg"
-        shadow="xl"
-        padding="lg"
-        style={{
-          background: palette.heroGradient,
-          color: "#fff",
-          overflowX: "hidden",
-        }}
-      >
-        <Stack gap="md" align={isMobile ? "stretch" : "center"} style={{ width: "100%" }}>
-          <Stack gap={6} align="center" style={{ width: "100%" }}>
-            <Title order={3} fw={800} style={{ fontFamily: HEADER_FONT_STACK }}>
-              Weekly Shift Schedule
-            </Title>
-          </Stack>
-          <Group justify="center" gap="sm" wrap="wrap" style={{ width: "100%" }}>
-            <Button
-              variant="white"
-              color="dark"
-              leftSection={<IconChevronLeft size={16} />}
-              onClick={() => handleNavigateWeek(-1)}
-              disabled={!canNavigateBackward || navigationIsLoading}
-              style={navButtonStyle}
-            >
-              Previous
-            </Button>
-            <Box style={weekSelectorWrapperStyle}>
-              <WeekSelector
-                value={selectedWeek || null}
-                weeks={weekOptions}
-                onChange={setSelectedWeek}
-                selectProps={{
-                  style: { width: "100%" },
-                  styles: {
-                    input: {
-                      fontWeight: 600,
-                      textAlign: "center",
-                    },
+    <Stack mt={isMobile ? "sm" : "lg"} gap="lg">
+      {isMobile ? (
+        <Group gap="xs" wrap="nowrap" style={{ width: "100%" }}>
+          <ActionIcon
+            variant="filled"
+            color="gray"
+            size={46}
+            radius="md"
+            aria-label="Previous week"
+            onClick={() => handleNavigateWeek(-1)}
+            disabled={!canNavigateBackward || navigationIsLoading}
+            style={{
+              flex: "0 0 46px",
+              backgroundColor: "#EFF6FF",
+              color: "#2563EB",
+              border: "3px solid #93C5FD",
+              boxShadow: "0 8px 18px rgba(37, 99, 235, 0.18), inset 0 0 0 1px rgba(255,255,255,0.76)",
+            }}
+          >
+            <IconChevronLeft size={18} />
+          </ActionIcon>
+          <Box style={{ flex: "1 1 auto", minWidth: 0 }}>
+            <WeekSelector
+              value={selectedWeek || null}
+              weeks={weekOptions.map((option) => ({ ...option, label: option.label.toUpperCase() }))}
+              onChange={setSelectedWeek}
+              selectProps={{
+                style: { width: "100%" },
+                styles: {
+                  input: {
+                    fontWeight: 800,
+                    textAlign: "center",
+                    minHeight: 46,
+                    borderRadius: 14,
+                    border: "3px solid #94A3B8",
+                    boxShadow: "0 8px 18px rgba(15, 23, 42, 0.14), inset 0 0 0 1px rgba(255,255,255,0.82)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
                   },
-                }}
-              />
-            </Box>
-            <Button
-              variant="white"
-              color="dark"
-              rightSection={<IconChevronRight size={16} />}
-              onClick={() => handleNavigateWeek(1)}
-              disabled={!canNavigateForward || navigationIsLoading}
-              style={navButtonStyle}
-            >
-              Next
-            </Button>
-          </Group>
-        </Stack>
-      </Card>
+                  option: {
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  },
+                },
+              }}
+            />
+          </Box>
+          <ActionIcon
+            variant="filled"
+            color="gray"
+            size={46}
+            radius="md"
+            aria-label="Next week"
+            onClick={() => handleNavigateWeek(1)}
+            disabled={!canNavigateForward || navigationIsLoading}
+            style={{
+              flex: "0 0 46px",
+              backgroundColor: "#EFF6FF",
+              color: "#2563EB",
+              border: "3px solid #93C5FD",
+              boxShadow: "0 8px 18px rgba(37, 99, 235, 0.18), inset 0 0 0 1px rgba(255,255,255,0.76)",
+            }}
+          >
+            <IconChevronRight size={18} />
+          </ActionIcon>
+        </Group>
+      ) : (
+        <Card
+          radius="lg"
+          shadow="xl"
+          padding="lg"
+          style={{
+            background: palette.heroGradient,
+            color: "#fff",
+            overflowX: "hidden",
+          }}
+        >
+          <Stack gap="md" align="center" style={{ width: "100%" }}>
+            <Stack gap={6} align="center" style={{ width: "100%" }}>
+              <Title order={3} fw={800} ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+                Weekly Shift Schedule
+              </Title>
+            </Stack>
+            <Group justify="center" gap="sm" wrap="wrap" style={{ width: "100%" }}>
+              <Button
+                variant="white"
+                color="dark"
+                leftSection={<IconChevronLeft size={16} />}
+                onClick={() => handleNavigateWeek(-1)}
+                disabled={!canNavigateBackward || navigationIsLoading}
+              >
+                Previous
+              </Button>
+              <Box style={weekSelectorWrapperStyle}>
+                <WeekSelector
+                  value={selectedWeek || null}
+                  weeks={weekOptions}
+                  onChange={setSelectedWeek}
+                  selectProps={{
+                    style: { width: "100%" },
+                    styles: {
+                      input: {
+                        fontWeight: 600,
+                        textAlign: "center",
+                      },
+                    },
+                  }}
+                />
+              </Box>
+              <Button
+                variant="white"
+                color="dark"
+                rightSection={<IconChevronRight size={16} />}
+                onClick={() => handleNavigateWeek(1)}
+                disabled={!canNavigateForward || navigationIsLoading}
+              >
+                Next
+              </Button>
+            </Group>
+          </Stack>
+        </Card>
+      )}
 
       {scheduleWeeksQuery.isError ? (
         <Alert color="red" variant="light" radius="md" title="Unable to load available weeks">
@@ -1330,6 +2246,24 @@ const ScheduleOverviewPage = () => {
             view assignments.
           </Text>
         </Alert>
+      ) : isMobile ? (
+        <Stack gap="lg" style={{ width: "100%", minWidth: 0, overflowX: "hidden" }}>
+          {scheduleContent}
+          {pubCrawlInstances.length === 0 ? (
+            <Alert
+              mb={0}
+              color="yellow"
+              variant="light"
+              radius="md"
+              icon={<IconAlertTriangle size={16} />}
+              title="No pub crawl shifts found"
+            >
+              <Text size="sm">
+                There are no assignments for the pub crawl shift during {formatWeekValue(selectedWeek)}.
+              </Text>
+            </Alert>
+          ) : null}
+        </Stack>
       ) : (
         <Card
           withBorder
@@ -1362,6 +2296,186 @@ const ScheduleOverviewPage = () => {
           </Stack>
         </Card>
       )}
+
+      <Modal
+        opened={Boolean(quickSwapTarget)}
+        onClose={handleCloseQuickSwap}
+        title={null}
+        withCloseButton={false}
+        centered
+        fullScreen={isMobile}
+        radius={isMobile ? 0 : "lg"}
+        size="lg"
+        styles={{
+          body: {
+            padding: isMobile ? "10px 12px 12px" : undefined,
+          },
+        }}
+      >
+        <Stack
+          gap={isMobile ? 10 : "lg"}
+          align="center"
+          style={{
+            minHeight: isMobile ? "calc(100dvh - 24px)" : undefined,
+          }}
+        >
+          {quickSwapTarget ? (
+            <>
+              <Title
+                order={2}
+                ta="center"
+                style={{
+                  width: "100%",
+                  fontFamily: HEADER_FONT_STACK,
+                  fontWeight: 900,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: palette.slate,
+                  fontSize: isMobile ? 24 : 28,
+                  lineHeight: 1,
+                }}
+              >
+                Swap request
+              </Title>
+
+              <Stack gap={4} align="center" style={{ display: "none" }}>
+                <Text fw={900} ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+                  Swap with {getUserDisplayName(quickSwapTarget)}
+                </Text>
+                <Text size="sm" c="dimmed" ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+                  {dayjs(quickSwapTarget.shiftInstance?.date).format("dddd, MMM D")} ·{" "}
+                  {quickSwapTarget.shiftInstance?.shiftType?.name ?? "Shift"} ·{" "}
+                  {formatShiftTimeRange(
+                    quickSwapTarget.shiftInstance?.timeStart,
+                    quickSwapTarget.shiftInstance?.timeEnd,
+                  )}
+                </Text>
+                <Badge variant="light" color="violet" radius="xl">
+                  {formatRoleLabel(quickSwapTarget.roleInShift)}
+                </Badge>
+              </Stack>
+
+              {quickSwapSourceOptions.length > 1 ? (
+                <Select
+                  label="Choose your shift to offer"
+                  placeholder="Select your shift"
+                  data={quickSwapSourceOptions}
+                  value={quickSwapSourceId}
+                  onChange={setQuickSwapSourceId}
+                  allowDeselect={false}
+                  w="100%"
+                  styles={{
+                    label: { width: "100%", textAlign: "center", fontWeight: 900, fontFamily: HEADER_FONT_STACK },
+                    input: {
+                      textAlign: "center",
+                      minHeight: 46,
+                      borderRadius: 14,
+                      border: "2px solid #CBD5E1",
+                      fontWeight: 800,
+                    },
+                    option: { justifyContent: "center", textAlign: "center", fontWeight: 700 },
+                  }}
+                />
+              ) : quickSwapSourceOptions.length === 1 ? (
+                <Box
+                  style={{
+                    display: "none",
+                    width: "100%",
+                    border: "1px solid #D8E1F0",
+                    borderRadius: 14,
+                    padding: 12,
+                    textAlign: "center",
+                    backgroundColor: "#F8FAFC",
+                  }}
+                >
+                  <Text size="xs" fw={900} c="dimmed" style={{ fontFamily: HEADER_FONT_STACK }}>
+                    YOUR SHIFT TO OFFER
+                  </Text>
+                  <Text fw={800} style={{ fontFamily: HEADER_FONT_STACK }}>
+                    {quickSwapSourceOptions[0].label}
+                  </Text>
+                </Box>
+              ) : (
+                <Alert color="yellow" radius="md" title="No matching shift">
+                  You do not have a matching shift available for this swap.
+                </Alert>
+              )}
+
+              <Box
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "stretch",
+                  gap: canUseSpaciousSwapLayout ? 14 : 8,
+                }}
+              >
+                {renderQuickSwapAssignmentCard(selectedQuickSwapSource, "You offer", "offer")}
+                <Center>
+                  <Box
+                    style={{
+                      width: canUseSpaciousSwapLayout ? 42 : isMobile ? 34 : 44,
+                      height: canUseSpaciousSwapLayout ? 42 : isMobile ? 34 : 44,
+                      borderRadius: "50%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: "#111827",
+                      color: "#FFFFFF",
+                      boxShadow: "0 12px 22px rgba(15, 23, 42, 0.18)",
+                    }}
+                  >
+                    <IconArrowsExchange size={canUseSpaciousSwapLayout ? 22 : isMobile ? 18 : 22} />
+                  </Box>
+                </Center>
+                {renderQuickSwapAssignmentCard(quickSwapTarget, "You request", "request")}
+              </Box>
+
+              {quickSwapError ? (
+                <Alert color="red" radius="md" w="100%">
+                  {quickSwapError}
+                </Alert>
+              ) : null}
+
+              <Alert
+                color="blue"
+                radius="md"
+                variant="light"
+                w="100%"
+                mt={isMobile ? "auto" : undefined}
+                py={isMobile ? 8 : undefined}
+              >
+                <Text size={isMobile ? "xs" : "sm"} fw={700} ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+                  This only sends a request. Nothing changes until both teammate and manager approvals are complete.
+                </Text>
+              </Alert>
+
+              <Group justify="space-between" w="100%" grow={isMobile}>
+                <Button
+                  variant="filled"
+                  color="red"
+                  size="md"
+                  radius="md"
+                  onClick={handleCloseQuickSwap}
+                  disabled={createSwap.isPending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="md"
+                  radius="md"
+                  leftSection={<IconArrowsExchange size={16} />}
+                  onClick={handleConfirmQuickSwap}
+                  loading={createSwap.isPending}
+                  disabled={!quickSwapSourceId || quickSwapSourceOptions.length === 0}
+                >
+                  Send request
+                </Button>
+              </Group>
+            </>
+          ) : null}
+        </Stack>
+      </Modal>
     </Stack>
   );
 };

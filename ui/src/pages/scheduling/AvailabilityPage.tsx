@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActionIcon, Alert, Box, Button, Card, Group, SimpleGrid, Stack, Switch, Text, Title } from "@mantine/core";
+import { ActionIcon, Alert, Badge, Box, Button, Card, Group, Paper, SimpleGrid, Stack, Text, ThemeIcon } from "@mantine/core";
 import { TimeInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
@@ -10,12 +10,13 @@ import { useMyStaffProfile } from "../../api/staffProfiles";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import type { AvailabilityPayload } from "../../types/scheduling";
 import { useAppSelector } from "../../store/hooks";
-import { IconX } from "@tabler/icons-react";
+import { IconCheck, IconChevronLeft, IconChevronRight, IconClock, IconDeviceFloppy, IconEdit, IconLock, IconX } from "@tabler/icons-react";
 
 dayjs.extend(isoWeek);
 dayjs.extend(weekday);
 
 const LOCK_HOUR = Number(process.env.REACT_APP_SCHED_LOCK_HOUR ?? 18);
+const HEADER_FONT_STACK = "'Arial Black', 'Inter', sans-serif";
 
 type AvailabilityEntryState = {
   status: "available" | "unavailable";
@@ -53,6 +54,22 @@ const AvailabilityPage = () => {
       .startOf("isoWeek");
   }, [selectedWeek]);
 
+  const selectedWeekIndex = weekOptions.findIndex((option) => option.value === selectedWeek);
+  const canNavigateBackward = selectedWeekIndex > 0;
+  const canNavigateForward = selectedWeekIndex >= 0 && selectedWeekIndex < weekOptions.length - 1;
+  const navigationIsLoading = ensureWeekQuery.isFetching || availabilityQuery.isFetching;
+
+  const handleNavigateWeek = useCallback(
+    (direction: -1 | 1) => {
+      const nextIndex = selectedWeekIndex + direction;
+      const nextWeek = weekOptions[nextIndex];
+      if (nextWeek) {
+        setSelectedWeek(nextWeek.value);
+      }
+    },
+    [selectedWeekIndex, weekOptions],
+  );
+
   const defaultAvailabilityStatus = useMemo(
     () => (myStaffProfileQuery.data?.livesInAccom ? "available" : "unavailable"),
     [myStaffProfileQuery.data?.livesInAccom],
@@ -70,7 +87,19 @@ const AvailabilityPage = () => {
   const cloneEntries = (source: Record<string, AvailabilityEntryState>) =>
     Object.fromEntries(Object.entries(source).map(([key, value]) => [key, { ...value }]));
 
-  const cloneTimeframes = (source: Record<string, boolean>) => ({ ...source });
+const cloneTimeframes = (source: Record<string, boolean>) => ({ ...source });
+
+const openNativeTimePicker = (input: HTMLInputElement) => {
+  const pickerInput = input as HTMLInputElement & { showPicker?: () => void };
+  if (typeof pickerInput.showPicker !== "function") {
+    return;
+  }
+  try {
+    pickerInput.showPicker();
+  } catch (error) {
+    void error;
+  }
+};
 
 
   const buildDefaultEntries = useCallback(() => {
@@ -99,6 +128,11 @@ const AvailabilityPage = () => {
   }, [buildDefaultEntries]);
 
   useEffect(() => {
+    const hasActiveDraft = isEditing && Object.keys(entries).length > 0;
+    if (hasActiveDraft) {
+      return;
+    }
+
     const hasEntries = (availabilityQuery.data?.length ?? 0) > 0;
     if (hasEntries) {
       const entryMap: Record<string, AvailabilityEntryState> = {};
@@ -134,6 +168,8 @@ const AvailabilityPage = () => {
     applyDefaultEntries,
     availabilityQuery.data,
     availabilityQuery.isFetching,
+    entries,
+    isEditing,
     myStaffProfileQuery.isSuccess,
     weekStart,
   ]);
@@ -168,6 +204,11 @@ const AvailabilityPage = () => {
         return `Time remaining: ${days}d ${hours}h ${minutes}m`;
       })()
     : "";
+
+  const weekDays = useMemo(
+    () => (weekStart ? Array.from({ length: 7 }).map((_, index) => weekStart.add(index, "day")) : []),
+    [weekStart],
+  );
 
   const handleToggle = (day: string, status: "available" | "unavailable") => {
     if (!isEditing) {
@@ -281,7 +322,7 @@ const AvailabilityPage = () => {
   };
 
   return (
-    <Stack mt="lg" gap="lg">
+    <Stack mt="lg" gap="lg" style={{ width: "100%" }}>
       {authenticated && ensureWeekQuery.isError ? (
         <Alert color="red" title="Unable to load scheduling week">
           <Text size="sm">
@@ -292,106 +333,301 @@ const AvailabilityPage = () => {
         </Alert>
       ) : null}
 
-      <Stack gap="md" align="center">
-        <Stack gap={4} align="center">
-          <Title order={3}>Availability</Title>
-          {deadline && (
-            <Text size="sm" c={deadline.isBefore(dayjs()) ? "red" : "dimmed"}>
+      <Stack gap="sm" align="center">
+        <Group gap="xs" wrap="nowrap" style={{ width: "100%", maxWidth: 680 }}>
+          <ActionIcon
+            variant="filled"
+            color="gray"
+            size={46}
+            radius="md"
+            aria-label="Previous week"
+            onClick={() => handleNavigateWeek(-1)}
+            disabled={!canNavigateBackward || navigationIsLoading}
+            style={{
+              flex: "0 0 46px",
+              backgroundColor: "#EFF6FF",
+              color: "#2563EB",
+              border: "3px solid #93C5FD",
+              boxShadow: "0 8px 18px rgba(37, 99, 235, 0.18), inset 0 0 0 1px rgba(255,255,255,0.76)",
+            }}
+          >
+            <IconChevronLeft size={18} />
+          </ActionIcon>
+          <Box style={{ flex: "1 1 auto", minWidth: 0 }}>
+            <WeekSelector
+              value={selectedWeek || null}
+              weeks={weekOptions.map((option) => ({ ...option, label: option.label.toUpperCase() }))}
+              onChange={setSelectedWeek}
+              selectProps={{
+                style: { width: "100%" },
+                styles: {
+                  input: {
+                    fontWeight: 800,
+                    textAlign: "center",
+                    minHeight: 46,
+                    borderRadius: 14,
+                    border: "3px solid #94A3B8",
+                    boxShadow: "0 8px 18px rgba(15, 23, 42, 0.14), inset 0 0 0 1px rgba(255,255,255,0.82)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  },
+                  option: {
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  },
+                },
+              }}
+            />
+          </Box>
+          <ActionIcon
+            variant="filled"
+            color="gray"
+            size={46}
+            radius="md"
+            aria-label="Next week"
+            onClick={() => handleNavigateWeek(1)}
+            disabled={!canNavigateForward || navigationIsLoading}
+            style={{
+              flex: "0 0 46px",
+              backgroundColor: "#EFF6FF",
+              color: "#2563EB",
+              border: "3px solid #93C5FD",
+              boxShadow: "0 8px 18px rgba(37, 99, 235, 0.18), inset 0 0 0 1px rgba(255,255,255,0.76)",
+            }}
+          >
+            <IconChevronRight size={18} />
+          </ActionIcon>
+        </Group>
+        {deadline ? (
+          <Alert
+            color={deadline.isBefore(dayjs()) ? "red" : "blue"}
+            radius="lg"
+            variant="light"
+            icon={deadline.isBefore(dayjs()) ? <IconLock size={18} /> : <IconClock size={18} />}
+            style={{ width: "100%", maxWidth: 680 }}
+          >
+            <Text fw={800} ta="center">
               {countdownLabel}
             </Text>
-          )}
-        </Stack>
-        <WeekSelector value={selectedWeek} onChange={setSelectedWeek} weeks={weekOptions} />
+          </Alert>
+        ) : null}
       </Stack>
 
-      <SimpleGrid spacing="md" verticalSpacing="md" cols={{ base: 1, sm: 2, lg: 3 }}>
-        {Array.from({ length: 7 }).map((_, index) => {
-          if (!weekStart) {
-            return null;
-          }
-          const date = weekStart.add(index, "day");
+      <SimpleGrid spacing="md" verticalSpacing="md" cols={{ base: 1, sm: 2, lg: 4 }}>
+        {weekDays.map((date) => {
           const dayKey = date.format("YYYY-MM-DD");
           const entry = entries[dayKey] ?? { status: "available" as const };
           const isAvailable = entry.status === "available";
           const isTimeframeVisible = timeframeVisible[dayKey] ?? Boolean(entry.startTime || entry.endTime);
+          const statusColor = isAvailable ? "green" : "red";
+          const accent = isAvailable ? "#22C55E" : "#EF4444";
+          const isToday = date.isSame(dayjs(), "day");
 
           return (
-            <Card key={dayKey} withBorder shadow="xs" radius="md">
-              <Stack gap="sm" align="center">
-                <Text fw={600}>{date.format("dddd, MMM D")}</Text>
-                <Box
-                  p={4}
-                  style={{
-                    border: isAvailable ? "1px solid transparent" : "1px solid var(--mantine-color-red-4)",
-                    borderRadius: "var(--mantine-radius-sm)",
-                    backgroundColor: isAvailable ? undefined : "var(--mantine-color-red-0)",
-                  }}
-                >
-                  <Switch
-                    checked={isAvailable}
-                    label={isAvailable ? "Available" : "Unavailable"}
-                    onChange={(event) => handleToggle(dayKey, event.currentTarget.checked ? "available" : "unavailable")}
-                    disabled={!isEditing}
-                  />
-                </Box>
-                <Group gap="xs" align="center" justify="center">
-                  <Button
-                    size="xs"
-                    variant={isTimeframeVisible ? "subtle" : "light"}
-                    color={isTimeframeVisible ? "red" : "blue"}
-                    onClick={() => handleToggleTimeframe(dayKey, !isTimeframeVisible)}
-                    disabled={!isAvailable || !isEditing}
-                  >
-                    {isTimeframeVisible ? "Remove timeframe" : "Add timeframe"}
-                  </Button>
-                  <Text size="xs" c="dimmed">
-                    (Optional)
-                  </Text>
-                </Group>
-                {isTimeframeVisible ? (
-                  <Group gap="sm" grow justify="center">
-                    <TimeInput
-                      label="From"
-                      value={entry.startTime ?? ""}
-                      onChange={(event) => handleTimeChange(dayKey, "startTime", event.currentTarget.value || null)}
-                      disabled={!isAvailable || !isEditing}
-                      rightSection={
-                        entry.startTime && isEditing ? (
-                          <ActionIcon
-                            size="sm"
-                            variant="subtle"
-                            color="gray"
-                            onClick={() => handleTimeChange(dayKey, "startTime", null)}
-                            aria-label="Clear start time"
-                          >
-                            <IconX size={12} />
-                          </ActionIcon>
-                        ) : undefined
-                      }
-                      rightSectionPointerEvents={entry.startTime && isEditing ? "auto" : "none"}
-                    />
-                    <TimeInput
-                      label="To"
-                      value={entry.endTime ?? ""}
-                      onChange={(event) => handleTimeChange(dayKey, "endTime", event.currentTarget.value || null)}
-                      disabled={!isAvailable || !isEditing}
-                      rightSection={
-                        entry.endTime && isEditing ? (
-                          <ActionIcon
-                            size="sm"
-                            variant="subtle"
-                            color="gray"
-                            onClick={() => handleTimeChange(dayKey, "endTime", null)}
-                            aria-label="Clear end time"
-                          >
-                            <IconX size={12} />
-                          </ActionIcon>
-                        ) : undefined
-                      }
-                      rightSectionPointerEvents={entry.endTime && isEditing ? "auto" : "none"}
-                    />
+            <Card
+              key={dayKey}
+              withBorder
+              shadow="sm"
+              radius={20}
+              padding={0}
+              style={{
+                overflow: "hidden",
+                borderColor: isAvailable ? "rgba(34, 197, 94, 0.34)" : "rgba(239, 68, 68, 0.34)",
+                backgroundColor: "#FFFFFF",
+              }}
+            >
+              <Box
+                style={{
+                  padding: "14px 16px",
+                  background: isAvailable
+                    ? "linear-gradient(135deg, rgba(220, 252, 231, 0.88), rgba(255, 255, 255, 0.98))"
+                    : "linear-gradient(135deg, rgba(254, 226, 226, 0.9), rgba(255, 255, 255, 0.98))",
+                  borderTop: `5px solid ${accent}`,
+                  borderBottom: "1px solid #E2E8F0",
+                }}
+              >
+                <Group justify="space-between" align="center" wrap="nowrap">
+                  <Group gap="sm" wrap="nowrap">
+                    <Paper
+                      radius={14}
+                      p="xs"
+                      shadow="xs"
+                      style={{
+                        minWidth: 58,
+                        textAlign: "center",
+                        backgroundColor: "#FFFFFF",
+                      }}
+                    >
+                      <Text size="xs" c="dimmed" fw={900} tt="uppercase" style={{ fontFamily: HEADER_FONT_STACK }}>
+                        {date.format("MMM")}
+                      </Text>
+                      <Text fw={900} size="xl" style={{ fontFamily: HEADER_FONT_STACK, lineHeight: 1 }}>
+                        {date.format("D")}
+                      </Text>
+                    </Paper>
+                    <Stack gap={2}>
+                      <Group gap={6}>
+                        <Text fw={900} style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.03em" }}>
+                          {date.format("dddd").toUpperCase()}
+                        </Text>
+                        {isToday ? (
+                          <Badge size="xs" radius="xl" variant="light" color="blue">
+                            Today
+                          </Badge>
+                        ) : null}
+                      </Group>
+                      <Text size="sm" c="dimmed" fw={700}>
+                        {date.format("MMM D, YYYY")}
+                      </Text>
+                    </Stack>
                   </Group>
-                ) : null}
+                  <Badge
+                    color={statusColor}
+                    variant="outline"
+                    radius="xl"
+                    styles={{
+                      root: {
+                        border: `2px solid ${isAvailable ? "#22C55E" : "#EF4444"}`,
+                        backgroundColor: isAvailable ? "#F0FDF4" : "#FEF2F2",
+                        color: isAvailable ? "#15803D" : "#B91C1C",
+                        fontWeight: 900,
+                      },
+                    }}
+                  >
+                    {isAvailable ? "Let's Party!" : "No"}
+                  </Badge>
+                </Group>
+              </Box>
+
+              <Stack gap="md" p="md" align="stretch">
+                <Group grow gap="xs">
+                  <Button
+                    radius="xl"
+                    color="red"
+                    variant={!isAvailable ? "filled" : "light"}
+                    leftSection={<IconX size={16} />}
+                    onClick={() => handleToggle(dayKey, "unavailable")}
+                    disabled={!isEditing}
+                    style={{
+                      border: "2px solid #EF4444",
+                      fontWeight: 900,
+                    }}
+                  >
+                    Unavailable
+                  </Button>
+                  <Button
+                    radius="xl"
+                    color="green"
+                    variant={isAvailable ? "filled" : "light"}
+                    leftSection={<IconCheck size={18} />}
+                    onClick={() => handleToggle(dayKey, "available")}
+                    disabled={!isEditing}
+                    style={{
+                      border: "2px solid #22C55E",
+                      boxShadow: isAvailable ? "0 8px 18px rgba(34, 197, 94, 0.24)" : undefined,
+                      fontWeight: 900,
+                      color: isAvailable ? undefined : "#15803D",
+                      backgroundColor: isAvailable ? undefined : "#F0FDF4",
+                    }}
+                  >
+                    Available
+                  </Button>
+                </Group>
+
+                {isAvailable ? (
+                  <Paper withBorder radius={16} p="sm" style={{ backgroundColor: "#F8FAFC" }}>
+                    <Stack gap="sm">
+                      <Group justify="space-between" align="center" wrap="nowrap">
+                        <Group gap="xs" wrap="nowrap">
+                          <ThemeIcon color="blue" variant="light" radius="xl" size={34}>
+                            <IconClock size={18} />
+                          </ThemeIcon>
+                          <Stack gap={0}>
+                            <Text fw={900}>Time window</Text>
+                            <Text size="xs" c="dimmed" fw={700}>
+                              {isTimeframeVisible ? "Specific hours" : "Optional"}
+                            </Text>
+                          </Stack>
+                        </Group>
+                        <Button
+                          size="xs"
+                          radius="xl"
+                          variant={isTimeframeVisible ? "light" : "filled"}
+                          color={isTimeframeVisible ? "red" : "blue"}
+                          onClick={() => handleToggleTimeframe(dayKey, !isTimeframeVisible)}
+                          disabled={!isEditing}
+                        >
+                          {isTimeframeVisible ? "Remove" : "Add optional"}
+                        </Button>
+                      </Group>
+
+                      {isTimeframeVisible ? (
+                        <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="xs">
+                          <TimeInput
+                            label="From"
+                            value={entry.startTime ?? ""}
+                            onChange={(event) => handleTimeChange(dayKey, "startTime", event.currentTarget.value || null)}
+                            onClick={(event) => openNativeTimePicker(event.currentTarget)}
+                            onFocus={(event) => openNativeTimePicker(event.currentTarget)}
+                            disabled={!isEditing}
+                            leftSection={<IconClock size={16} />}
+                            styles={{
+                              label: { width: "100%", textAlign: "center", fontWeight: 800 },
+                              input: { textAlign: "center", fontWeight: 800 },
+                            }}
+                            rightSection={
+                              entry.startTime && isEditing ? (
+                                <ActionIcon
+                                  size="sm"
+                                  variant="subtle"
+                                  color="gray"
+                                  onClick={() => handleTimeChange(dayKey, "startTime", null)}
+                                  aria-label="Clear start time"
+                                >
+                                  <IconX size={12} />
+                                </ActionIcon>
+                              ) : undefined
+                            }
+                            rightSectionPointerEvents={entry.startTime && isEditing ? "auto" : "none"}
+                          />
+                          <TimeInput
+                            label="To"
+                            value={entry.endTime ?? ""}
+                            onChange={(event) => handleTimeChange(dayKey, "endTime", event.currentTarget.value || null)}
+                            onClick={(event) => openNativeTimePicker(event.currentTarget)}
+                            onFocus={(event) => openNativeTimePicker(event.currentTarget)}
+                            disabled={!isEditing}
+                            leftSection={<IconClock size={16} />}
+                            styles={{
+                              label: { width: "100%", textAlign: "center", fontWeight: 800 },
+                              input: { textAlign: "center", fontWeight: 800 },
+                            }}
+                            rightSection={
+                              entry.endTime && isEditing ? (
+                                <ActionIcon
+                                  size="sm"
+                                  variant="subtle"
+                                  color="gray"
+                                  onClick={() => handleTimeChange(dayKey, "endTime", null)}
+                                  aria-label="Clear end time"
+                                >
+                                  <IconX size={12} />
+                                </ActionIcon>
+                              ) : undefined
+                            }
+                            rightSectionPointerEvents={entry.endTime && isEditing ? "auto" : "none"}
+                          />
+                        </SimpleGrid>
+                      ) : null}
+                    </Stack>
+                  </Paper>
+                ) : (
+                  <Paper withBorder radius={16} p="sm" style={{ backgroundColor: "#FEF2F2", borderColor: "#FECACA" }}>
+                    <Text c="red" fw={900} ta="center">
+                      Not available this day
+                    </Text>
+                  </Paper>
+                )}
               </Stack>
             </Card>
           );
@@ -407,17 +643,23 @@ const AvailabilityPage = () => {
       {isEditing ? (
         <Group justify="center" gap="sm">
           {isLocked ? (
-            <Button variant="subtle" color="gray" onClick={handleCancelEditing}>
+            <Button variant="light" color="red" onClick={handleCancelEditing} leftSection={<IconX size={16} />}>
               Cancel
             </Button>
           ) : null}
-          <Button onClick={handleSave} loading={saveAvailability.isPending || ensureWeekQuery.isFetching} disabled={!weekId} size="md">
+          <Button
+            onClick={handleSave}
+            loading={saveAvailability.isPending || ensureWeekQuery.isFetching}
+            disabled={!weekId}
+            size="md"
+            leftSection={<IconDeviceFloppy size={16} />}
+          >
             Save availability
           </Button>
         </Group>
       ) : (
         <Group justify="center">
-          <Button size="md" variant="light" onClick={handleStartEditing}>
+          <Button size="md" variant="light" onClick={handleStartEditing} leftSection={<IconEdit size={16} />}>
             Edit availability
           </Button>
         </Group>
@@ -427,14 +669,6 @@ const AvailabilityPage = () => {
 };
 
 export default AvailabilityPage;
-
-
-
-
-
-
-
-
 
 
 

@@ -1,9 +1,11 @@
 import { useEffect, useMemo } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Card, Container, Tabs } from "@mantine/core";
+import { Card, Container, Select, Tabs } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import {
   IconCalendarCheck,
   IconClipboardList,
+  IconChevronDown,
   IconHistory,
   IconLayoutGrid,
   IconRefresh,
@@ -37,6 +39,7 @@ const BASE_TABS: SchedulingTabDefinition[] = [
 const SchedulingLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const isMobile = useMediaQuery("(max-width: 768px)");
   const dispatch = useAppDispatch();
   const modulePermissions = useAppSelector(selectModulePermissionsMap);
   const selectCanManageTemplates = useMemo(
@@ -113,44 +116,85 @@ const SchedulingLayout = () => {
     );
   }
 
+  const selectedTab = availableTabs.find((tab) => tab.value === activeTab) ?? availableTabs[0];
+  const SelectedIcon = selectedTab?.icon ?? IconLayoutGrid;
+
   return (
-    <Container size="xl" pb="xl">
-      <Card withBorder shadow="sm" radius="md" p="md">
-        <Tabs
-          value={activeTab ?? availableTabs[0].value}
-          onChange={(value) => value && navigate(`/scheduling/${value}`)}
-          keepMounted={false}
-          variant="pills"
-          radius="md"
-          defaultValue={availableTabs[0].value}
-        >
-          <Tabs.List
-            style={{
-              justifyContent: "center",
-              gap: "0.5rem",
-              flexWrap: "wrap",
+    <Container size="xl" pb="xl" px={isMobile ? 2 : "md"}>
+      {isMobile ? (
+        <div style={{ width: "100%", marginBottom: 14 }}>
+          <Select
+            aria-label="Scheduling section"
+            value={activeTab ?? availableTabs[0].value}
+            data={availableTabs.map((tab) => ({ value: tab.value, label: tab.label.toUpperCase() }))}
+            onChange={(value) => value && navigate(`/scheduling/${value}`)}
+            leftSection={<SelectedIcon size={18} />}
+            rightSection={<IconChevronDown size={18} />}
+            allowDeselect={false}
+            checkIconPosition="right"
+            styles={{
+              input: {
+                height: 48,
+                borderRadius: 14,
+                border: "3px solid #94A3B8",
+                fontWeight: 800,
+                textAlign: "center",
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+                fontFamily: "'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+                boxShadow:
+                  "0 10px 24px rgba(15, 23, 42, 0.14), inset 0 0 0 1px rgba(255, 255, 255, 0.86)",
+              },
+              option: {
+                justifyContent: "center",
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+              },
+              dropdown: {
+                borderRadius: 14,
+              },
             }}
+          />
+        </div>
+      ) : (
+        <Card withBorder shadow="sm" radius="md" p="md">
+          <Tabs
+            value={activeTab ?? availableTabs[0].value}
+            onChange={(value) => value && navigate(`/scheduling/${value}`)}
+            keepMounted={false}
+            variant="pills"
+            radius="md"
+            defaultValue={availableTabs[0].value}
           >
-            {availableTabs.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <Tabs.Tab
-                  key={tab.value}
-                  value={tab.value}
-                  leftSection={<Icon size={16} />}
-                  style={{
-                    fontWeight: 600,
-                    textTransform: "none",
-                    paddingInline: "1.25rem",
-                  }}
-                >
-                  {tab.label}
-                </Tabs.Tab>
-              );
-            })}
-          </Tabs.List>
-        </Tabs>
-      </Card>
+            <Tabs.List
+              style={{
+                justifyContent: "center",
+                gap: "0.5rem",
+                flexWrap: "wrap",
+              }}
+            >
+              {availableTabs.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <Tabs.Tab
+                    key={tab.value}
+                    value={tab.value}
+                    leftSection={<Icon size={16} />}
+                    style={{
+                      fontWeight: 600,
+                      textTransform: "none",
+                      paddingInline: "1.25rem",
+                    }}
+                  >
+                    {tab.label}
+                  </Tabs.Tab>
+                );
+              })}
+            </Tabs.List>
+          </Tabs>
+        </Card>
+      )}
       <Outlet />
     </Container>
   );

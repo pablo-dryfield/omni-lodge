@@ -69,6 +69,9 @@ export interface ShiftAssignment {
     id: number;
     firstName: string;
     lastName: string;
+    profilePhotoPath?: string | null;
+    profilePhotoUrl?: string | null;
+    updatedAt?: string | null;
     staffProfile?: {
       staffType: string | null;
     } | null;
