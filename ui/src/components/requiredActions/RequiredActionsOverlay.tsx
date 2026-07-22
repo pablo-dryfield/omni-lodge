@@ -34,6 +34,8 @@ import {
 } from "../../api/requiredActions";
 import { CerebroRichTextContent } from "../cerebro/CerebroRichTextContent";
 
+const HEADER_FONT_STACK = "'Arial Black', 'Inter', sans-serif";
+
 const getApiErrorMessage = (error: unknown, fallback: string): string => {
   const candidate = error as {
     response?: { data?: Array<{ message?: string }> | { message?: string; error?: string } };
@@ -57,19 +59,66 @@ const formatDateTime = (value?: string | null): string | null => {
   return parsed.isValid() ? parsed.format("MMM D, YYYY HH:mm") : value;
 };
 
-const formatShift = (value: unknown): string => {
-  const assignment = value as {
-    date?: string | null;
-    timeStart?: string | null;
-    timeEnd?: string | null;
-    shiftTypeName?: string | null;
-    roleInShift?: string | null;
+const getPayloadRecord = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+};
+
+const getUserName = (value: unknown, fallback: string): string => {
+  const user = getPayloadRecord(value);
+  const name = [user.firstName, user.lastName]
+    .map((part) => (typeof part === "string" ? part.trim() : ""))
+    .filter(Boolean)
+    .join(" ");
+  return name || fallback;
+};
+
+const getInitials = (name: string): string => {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] ?? "U").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
+};
+
+const formatRoleLabel = (value: unknown): string => {
+  if (typeof value !== "string" || !value.trim()) {
+    return "Role";
+  }
+  return value
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const formatShiftTime = (value: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const match = value.match(/^(\d{1,2}):(\d{2})/);
+  return match ? `${match[1].padStart(2, "0")}:${match[2]}` : value;
+};
+
+const getSwapAssignmentSummary = (value: unknown) => {
+  const assignment = getPayloadRecord(value);
+  const shiftInstance = getPayloadRecord(assignment.shiftInstance);
+  const shiftType = getPayloadRecord(shiftInstance.shiftType ?? assignment.shiftType);
+  const dateValue = typeof assignment.date === "string" ? assignment.date : null;
+  const timeStart = typeof assignment.timeStart === "string" ? assignment.timeStart : null;
+  const timeEnd = typeof assignment.timeEnd === "string" ? assignment.timeEnd : null;
+  const shiftTypeName =
+    typeof assignment.shiftTypeName === "string" && assignment.shiftTypeName.trim()
+      ? assignment.shiftTypeName
+      : typeof shiftType.name === "string" && shiftType.name.trim()
+        ? shiftType.name
+        : typeof assignment.shiftType === "string" && assignment.shiftType.trim()
+          ? assignment.shiftType
+          : "Shift";
+  return {
+    date: dateValue && dayjs(dateValue).isValid() ? dayjs(dateValue).format("ddd, MMM D") : "Unknown date",
+    time: [formatShiftTime(timeStart), formatShiftTime(timeEnd)].filter(Boolean).join(" - ") || "Any time",
+    shiftTypeName,
+    role: formatRoleLabel(assignment.roleInShift),
   };
-  const date = assignment.date ? dayjs(assignment.date).format("ddd, MMM D") : "Unknown date";
-  const time = [assignment.timeStart, assignment.timeEnd].filter(Boolean).join(" - ");
-  const shift = assignment.shiftTypeName ?? "Shift";
-  const role = assignment.roleInShift ?? "Role";
-  return `${date} - ${shift}${time ? ` - ${time}` : ""} - ${role}`;
 };
 
 const getActionIcon = (action: RequiredActionItem) => {
@@ -168,30 +217,185 @@ const SwapAction = ({
   loading: boolean;
 }) => {
   const isManagerDecision = action.type === "schedule_swap_manager";
+  const requesterName = getUserName(action.payload.requester, "Teammate");
+  const partnerName = getUserName(action.payload.partner, "Teammate");
+  const fromAssignment = getSwapAssignmentSummary(action.payload.fromAssignment);
+  const toAssignment = getSwapAssignmentSummary(action.payload.toAssignment);
+
+  const renderSwapCard = ({
+    label,
+    name,
+    assignment,
+    tone,
+  }: {
+    label: string;
+    name: string;
+    assignment: ReturnType<typeof getSwapAssignmentSummary>;
+    tone: "offer" | "request";
+  }) => {
+    const accent = tone === "offer" ? "#2563EB" : "#e90183";
+    const borderColor = tone === "offer" ? "#93C5FD" : "#F9A8D4";
+    const headerBackground =
+      tone === "offer"
+        ? "linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(147, 197, 253, 0.18))"
+        : "linear-gradient(135deg, rgba(233, 1, 131, 0.16), rgba(244, 114, 182, 0.16))";
+    const softBackground =
+      tone === "offer"
+        ? "linear-gradient(180deg, rgba(239, 246, 255, 0.98), rgba(255, 255, 255, 0.98))"
+        : "linear-gradient(180deg, rgba(253, 242, 248, 0.98), rgba(255, 255, 255, 0.98))";
+
+    return (
+      <Paper
+        withBorder
+        radius={18}
+        style={{
+          width: "100%",
+          overflow: "hidden",
+          border: `2px solid ${borderColor}`,
+          background: softBackground,
+          boxShadow: "0 10px 24px rgba(15, 23, 42, 0.08)",
+        }}
+      >
+        <Stack gap={0}>
+          <Center
+            style={{
+              minHeight: 34,
+              background: headerBackground,
+              borderBottom: `1px solid ${borderColor}`,
+            }}
+          >
+            <Text
+              fw={900}
+              style={{
+                fontFamily: HEADER_FONT_STACK,
+                color: accent,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                fontSize: 12,
+              }}
+            >
+              {label}
+            </Text>
+          </Center>
+
+          <Stack gap={6} align="center" p={{ base: 7, sm: 9 }}>
+            <Group gap={7} justify="center" wrap="nowrap" style={{ width: "100%" }}>
+              <Center
+                style={{
+                  width: 38,
+                  height: 38,
+                  flex: "0 0 38px",
+                  borderRadius: "50%",
+                  backgroundColor: "#FFFFFF",
+                  border: "2px solid #FFFFFF",
+                  outline: `2px solid ${accent}`,
+                  boxShadow: "0 8px 18px rgba(15, 23, 42, 0.14)",
+                }}
+              >
+                <Text fw={900} size="sm" c={accent} style={{ fontFamily: HEADER_FONT_STACK }}>
+                  {getInitials(name)}
+                </Text>
+              </Center>
+              <Stack gap={2} align="center" style={{ minWidth: 0 }}>
+                <Text fw={900} size="sm" ta="center" style={{ fontFamily: HEADER_FONT_STACK, lineHeight: 1.1 }}>
+                  {name}
+                </Text>
+                <Badge variant="light" color={tone === "offer" ? "blue" : "violet"} radius="xl" size="xs">
+                  {assignment.role}
+                </Badge>
+              </Stack>
+            </Group>
+
+            <Text
+              fw={900}
+              ta="center"
+              style={{
+                fontFamily: HEADER_FONT_STACK,
+                color: accent,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                fontSize: 15,
+                lineHeight: 1,
+              }}
+            >
+              {assignment.shiftTypeName}
+            </Text>
+
+            <div
+              style={{
+                width: "100%",
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 7,
+              }}
+            >
+              <BoxInfo label="Date" value={assignment.date} />
+              <BoxInfo label="Time" value={assignment.time} />
+            </div>
+          </Stack>
+        </Stack>
+      </Paper>
+    );
+  };
+
   return (
-    <Stack gap="md">
-      <Paper withBorder radius="md" p="md">
-        <Stack gap="xs" align="center">
-          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-            {isManagerDecision ? "Requester shift" : "They give you"}
-          </Text>
-          <Text fw={700} ta="center">
-            {formatShift(action.payload.fromAssignment)}
-          </Text>
-        </Stack>
-      </Paper>
-      <Paper withBorder radius="md" p="md">
-        <Stack gap="xs" align="center">
-          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-            {isManagerDecision ? "Partner shift" : "You give them"}
-          </Text>
-          <Text fw={700} ta="center">
-            {formatShift(action.payload.toAssignment)}
-          </Text>
-        </Stack>
-      </Paper>
+    <Stack gap="sm" align="center">
+      <Stack gap={6} align="center">
+        <Title
+          order={2}
+          ta="center"
+          style={{
+            fontFamily: HEADER_FONT_STACK,
+            fontWeight: 900,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            lineHeight: 1,
+          }}
+        >
+          Swap request
+        </Title>
+        <Text c="dimmed" ta="center" fw={700}>
+          {isManagerDecision
+            ? `${requesterName} and ${partnerName} accepted this swap.`
+            : `${requesterName} wants to swap shifts with you.`}
+        </Text>
+      </Stack>
+
+      {renderSwapCard({
+        label: isManagerDecision ? "Requester offers" : "They offer",
+        name: requesterName,
+        assignment: fromAssignment,
+        tone: "offer",
+      })}
+
+      <Center
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: "50%",
+          backgroundColor: "#111827",
+          color: "#FFFFFF",
+          boxShadow: "0 12px 22px rgba(15, 23, 42, 0.18)",
+        }}
+      >
+        <IconArrowsExchange size={19} />
+      </Center>
+
+      {renderSwapCard({
+        label: isManagerDecision ? "Teammate gives" : "You give",
+        name: isManagerDecision ? partnerName : "You",
+        assignment: toAssignment,
+        tone: "request",
+      })}
+
+      <Alert color="blue" radius="md" variant="light" w="100%">
+        <Text size="sm" fw={900} ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
+          {isManagerDecision ? "Approve to update the schedule." : "Manager will receive the request."}
+        </Text>
+      </Alert>
+
       <Group grow>
-        <Button color="red" variant="light" size="lg" leftSection={<IconX size={18} />} loading={loading} onClick={() => onRespond(false)}>
+        <Button color="red" size="lg" leftSection={<IconX size={18} />} loading={loading} onClick={() => onRespond(false)}>
           {isManagerDecision ? "Decline swap" : "Decline"}
         </Button>
         <Button color="green" size="lg" leftSection={<IconCheck size={18} />} loading={loading} onClick={() => onRespond(true)}>
@@ -201,6 +405,25 @@ const SwapAction = ({
     </Stack>
   );
 };
+
+const BoxInfo = ({ label, value }: { label: string; value: string }) => (
+  <Paper
+    withBorder
+    radius={14}
+    p={7}
+    style={{
+      backgroundColor: "#FFFFFF",
+      textAlign: "center",
+    }}
+  >
+    <Text size="xs" fw={900} c="dimmed" tt="uppercase" style={{ fontFamily: HEADER_FONT_STACK }}>
+      {label}
+    </Text>
+    <Text fw={900} size="md" style={{ fontFamily: HEADER_FONT_STACK, lineHeight: 1.15 }}>
+      {value}
+    </Text>
+  </Paper>
+);
 
 const GenericAction = ({
   action,
@@ -435,6 +658,8 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     }
   };
 
+  const isSwapAction = action?.type === "schedule_swap_partner" || action?.type === "schedule_swap_manager";
+
   return (
     <Modal
       opened={enabled && actions.length > 0}
@@ -452,34 +677,47 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
       }}
     >
       <Center mih="100dvh" p={{ base: "md", sm: "xl" }}>
-        <Card withBorder radius="lg" shadow="xl" p={{ base: "lg", sm: "xl" }} w="100%" maw={760}>
+        <Card
+          withBorder={!isSwapAction}
+          radius={isSwapAction ? 0 : "lg"}
+          shadow={isSwapAction ? undefined : "xl"}
+          p={isSwapAction ? 0 : { base: "lg", sm: "xl" }}
+          w="100%"
+          maw={isSwapAction ? 420 : 760}
+          style={{
+            background: isSwapAction ? "transparent" : undefined,
+            border: isSwapAction ? 0 : undefined,
+          }}
+        >
           {!action ? (
             <Center py="xl">
               <Loader variant="dots" />
             </Center>
           ) : (
             <Stack gap="lg" align="stretch">
-              <Stack gap="sm" align="center">
-                <ThemeIcon size={64} radius="xl" color={action.type === "schedule_swap_partner" ? "orange" : "blue"} variant="light">
-                  {getActionIcon(action)}
-                </ThemeIcon>
-                <Badge color="red" variant="light" size="lg">
-                  Action required
-                </Badge>
-                <Title order={2} ta="center">
-                  {action.title}
-                </Title>
-                {action.body && action.type !== "broadcast" && action.type !== "policy_consent" ? (
-                  <Text c="dimmed" ta="center">
-                    {action.body}
-                  </Text>
-                ) : null}
-                {action.dueAt ? (
-                  <Text size="sm" c="dimmed" ta="center">
-                    Due {formatDateTime(action.dueAt)}
-                  </Text>
-                ) : null}
-              </Stack>
+              {action.type === "schedule_swap_partner" || action.type === "schedule_swap_manager" ? null : (
+                <Stack gap="sm" align="center">
+                  <ThemeIcon size={64} radius="xl" color="blue" variant="light">
+                    {getActionIcon(action)}
+                  </ThemeIcon>
+                  <Badge color="red" variant="light" size="lg">
+                    Action required
+                  </Badge>
+                  <Title order={2} ta="center">
+                    {action.title}
+                  </Title>
+                  {action.body && action.type !== "broadcast" && action.type !== "policy_consent" ? (
+                    <Text c="dimmed" ta="center">
+                      {action.body}
+                    </Text>
+                  ) : null}
+                  {action.dueAt ? (
+                    <Text size="sm" c="dimmed" ta="center">
+                      Due {formatDateTime(action.dueAt)}
+                    </Text>
+                  ) : null}
+                </Stack>
+              )}
 
               {actions.length > 1 ? (
                 <Stack gap={6}>

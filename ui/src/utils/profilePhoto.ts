@@ -1,8 +1,14 @@
 import axiosInstance from "./axiosInstance";
-import type { User } from "../types/users/User";
+
+type ProfilePhotoUser = {
+  id?: number | null;
+  profilePhotoPath?: string | null;
+  profilePhotoUrl?: string | null;
+  updatedAt?: Date | string | null;
+};
 
 type BuildProfilePhotoUrlParams = {
-  user?: Partial<User> | null;
+  user?: ProfilePhotoUser | null;
   cacheOverride?: number;
 };
 

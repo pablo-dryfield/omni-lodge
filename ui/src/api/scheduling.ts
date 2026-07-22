@@ -467,6 +467,9 @@ export const useAvailability = (weekId: number | null) =>
       return response.data as AvailabilityPayload["entries"];
     },
     enabled: weekId !== null,
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
 export const useWeekAvailability = (weekId: number | null) =>
