@@ -5,6 +5,7 @@ import {
   completeProfileFieldsAction,
   completeRequiredAction,
   createRequiredAction,
+  decideManagerSwapRequiredAction,
   listMyRequiredActions,
   respondToSwapRequiredAction,
 } from '../controllers/requiredActionController.js';
@@ -18,5 +19,6 @@ router.post('/actions', authorizeModuleAction('requests-center', 'update'), crea
 router.post('/actions/:id/complete', completeRequiredAction);
 router.post('/actions/:id/profile-fields', completeProfileFieldsAction);
 router.post('/schedule-swaps/:id/partner-response', respondToSwapRequiredAction);
+router.post('/schedule-swaps/:id/manager-decision', decideManagerSwapRequiredAction);
 
 export default router;

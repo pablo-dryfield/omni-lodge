@@ -19,7 +19,8 @@ export type RequiredActionItem = {
     | "quiz"
     | "assistant_manager_task"
     | "custom"
-    | "schedule_swap_partner";
+    | "schedule_swap_partner"
+    | "schedule_swap_manager";
   title: string;
   body?: string | null;
   blocking: boolean;
@@ -127,6 +128,22 @@ export const useRespondToRequiredSwap = () => {
       await axiosInstance.post(
         `/required-actions/schedule-swaps/${swapId}/partner-response`,
         { accept },
+        { withCredentials: true },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: requiredActionsKey });
+    },
+  });
+};
+
+export const useDecideRequiredManagerSwap = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ swapId, approve }: { swapId: number; approve: boolean }) => {
+      await axiosInstance.post(
+        `/required-actions/schedule-swaps/${swapId}/manager-decision`,
+        { approve },
         { withCredentials: true },
       );
     },
