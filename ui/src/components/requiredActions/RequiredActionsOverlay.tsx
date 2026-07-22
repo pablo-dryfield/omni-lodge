@@ -26,6 +26,7 @@ import { acknowledgeCerebroPolicy, submitCerebroQuiz } from "../../api/cerebro";
 import {
   useCompleteRequiredAction,
   useCompleteRequiredProfileFields,
+  useDecideRequiredManagerSwap,
   useMyRequiredActions,
   useRespondToRequiredSwap,
   type RequiredActionField,
@@ -72,7 +73,7 @@ const formatShift = (value: unknown): string => {
 };
 
 const getActionIcon = (action: RequiredActionItem) => {
-  if (action.type === "schedule_swap_partner") {
+  if (action.type === "schedule_swap_partner" || action.type === "schedule_swap_manager") {
     return <IconArrowsExchange size={28} />;
   }
   if (action.type === "profile_fields") {
@@ -165,38 +166,41 @@ const SwapAction = ({
   action: RequiredActionItem;
   onRespond: (accept: boolean) => void;
   loading: boolean;
-}) => (
-  <Stack gap="md">
-    <Paper withBorder radius="md" p="md">
-      <Stack gap="xs" align="center">
-        <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-          They give you
-        </Text>
-        <Text fw={700} ta="center">
-          {formatShift(action.payload.fromAssignment)}
-        </Text>
-      </Stack>
-    </Paper>
-    <Paper withBorder radius="md" p="md">
-      <Stack gap="xs" align="center">
-        <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-          You give them
-        </Text>
-        <Text fw={700} ta="center">
-          {formatShift(action.payload.toAssignment)}
-        </Text>
-      </Stack>
-    </Paper>
-    <Group grow>
-      <Button color="red" variant="light" size="lg" leftSection={<IconX size={18} />} loading={loading} onClick={() => onRespond(false)}>
-        Decline
-      </Button>
-      <Button color="green" size="lg" leftSection={<IconCheck size={18} />} loading={loading} onClick={() => onRespond(true)}>
-        Accept
-      </Button>
-    </Group>
-  </Stack>
-);
+}) => {
+  const isManagerDecision = action.type === "schedule_swap_manager";
+  return (
+    <Stack gap="md">
+      <Paper withBorder radius="md" p="md">
+        <Stack gap="xs" align="center">
+          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+            {isManagerDecision ? "Requester shift" : "They give you"}
+          </Text>
+          <Text fw={700} ta="center">
+            {formatShift(action.payload.fromAssignment)}
+          </Text>
+        </Stack>
+      </Paper>
+      <Paper withBorder radius="md" p="md">
+        <Stack gap="xs" align="center">
+          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+            {isManagerDecision ? "Partner shift" : "You give them"}
+          </Text>
+          <Text fw={700} ta="center">
+            {formatShift(action.payload.toAssignment)}
+          </Text>
+        </Stack>
+      </Paper>
+      <Group grow>
+        <Button color="red" variant="light" size="lg" leftSection={<IconX size={18} />} loading={loading} onClick={() => onRespond(false)}>
+          {isManagerDecision ? "Decline swap" : "Decline"}
+        </Button>
+        <Button color="green" size="lg" leftSection={<IconCheck size={18} />} loading={loading} onClick={() => onRespond(true)}>
+          {isManagerDecision ? "Approve swap" : "Accept"}
+        </Button>
+      </Group>
+    </Stack>
+  );
+};
 
 const GenericAction = ({
   action,
@@ -330,6 +334,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
   const completeAction = useCompleteRequiredAction();
   const completeProfileFields = useCompleteRequiredProfileFields();
   const respondToSwap = useRespondToRequiredSwap();
+  const decideManagerSwap = useDecideRequiredManagerSwap();
   const [error, setError] = useState<string | null>(null);
   const [quizResult, setQuizResult] = useState<string | null>(null);
   const [cerebroSubmitting, setCerebroSubmitting] = useState(false);
@@ -340,6 +345,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     completeAction.isPending ||
     completeProfileFields.isPending ||
     respondToSwap.isPending ||
+    decideManagerSwap.isPending ||
     cerebroSubmitting ||
     actionsQuery.isFetching;
   const progress = actions.length > 0 ? ((actionsQuery.data?.summary.total ?? actions.length) - actions.length + 1) / (actionsQuery.data?.summary.total ?? actions.length) : 0;
@@ -374,12 +380,16 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
   };
 
   const handleSwapResponse = async (accept: boolean) => {
-    if (!action || action.type !== "schedule_swap_partner") {
+    if (!action || (action.type !== "schedule_swap_partner" && action.type !== "schedule_swap_manager")) {
       return;
     }
     setError(null);
     try {
-      await respondToSwap.mutateAsync({ swapId: action.recordId, accept });
+      if (action.type === "schedule_swap_manager") {
+        await decideManagerSwap.mutateAsync({ swapId: action.recordId, approve: accept });
+      } else {
+        await respondToSwap.mutateAsync({ swapId: action.recordId, accept });
+      }
     } catch (mutationError) {
       setError(getApiErrorMessage(mutationError, "Unable to update the swap request"));
     }
@@ -491,7 +501,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
                 </Alert>
               ) : null}
 
-              {action.type === "schedule_swap_partner" ? (
+              {action.type === "schedule_swap_partner" || action.type === "schedule_swap_manager" ? (
                 <SwapAction action={action} onRespond={handleSwapResponse} loading={isBusy} />
               ) : action.type === "profile_fields" ? (
                 <ProfileFieldsForm action={action} onSubmit={handleProfileSubmit} loading={isBusy} />
