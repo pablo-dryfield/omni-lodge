@@ -54,10 +54,19 @@ export default class RequiredAction extends Model {
   @Column({ field: 'target_shift_role_ids', type: DataType.JSONB })
   declare targetShiftRoleIds: number[] | null;
 
+  @AllowNull(true)
+  @Column({ field: 'target_staff_profile_types', type: DataType.JSONB })
+  declare targetStaffProfileTypes: string[] | null;
+
   @AllowNull(false)
   @Default(true)
   @Column({ field: 'requires_completion', type: DataType.BOOLEAN })
   declare requiresCompletion: boolean;
+
+  @AllowNull(false)
+  @Default(false)
+  @Column({ field: 'requires_signature', type: DataType.BOOLEAN })
+  declare requiresSignature: boolean;
 
   @AllowNull(true)
   @Column({ field: 'starts_at', type: DataType.DATE })

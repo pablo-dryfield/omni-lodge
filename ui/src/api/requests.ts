@@ -28,12 +28,44 @@ export type RequestsSummary = {
   userApprovals: number;
   scheduleSwaps: number;
   financeRequests: number;
+  popupRequests?: number;
+};
+
+export type PopupRequestRecipientStatus = "not_opened" | "prompted" | "completed" | "dismissed";
+
+export type PopupRequestRecipient = {
+  userId: number;
+  name: string;
+  email?: string | null;
+  status: PopupRequestRecipientStatus;
+  promptedAt?: string | null;
+  lastPromptedAt?: string | null;
+  promptCount: number;
+  completedAt?: string | null;
+  response?: Record<string, unknown>;
+};
+
+export type PopupRequestAudit = {
+  id: number;
+  type: string;
+  title: string;
+  body?: string | null;
+  status: boolean;
+  requiresSignature: boolean;
+  createdAt: string;
+  sentCount: number;
+  notOpenedCount: number;
+  promptedCount: number;
+  completedCount: number;
+  dismissedCount: number;
+  recipients: PopupRequestRecipient[];
 };
 
 export type RequestsCenterResponse = {
   userApprovals: UserApprovalRequest[];
   scheduleSwaps: SwapRequest[];
   financeRequests: FinanceManagementRequest[];
+  popupRequests: PopupRequestAudit[];
   summary: RequestsSummary;
 };
 

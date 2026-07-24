@@ -12,7 +12,7 @@ import {
 import RequiredAction from './RequiredAction.js';
 import User from './User.js';
 
-export type RequiredActionCompletionStatus = 'completed' | 'dismissed';
+export type RequiredActionCompletionStatus = 'prompted' | 'completed' | 'dismissed';
 
 @Table({
   timestamps: true,
@@ -41,10 +41,22 @@ export default class RequiredActionCompletion extends Model {
   @Column(DataType.STRING)
   declare status: RequiredActionCompletionStatus;
 
-  @AllowNull(false)
-  @Default(DataType.NOW)
+  @AllowNull(true)
   @Column({ field: 'completed_at', type: DataType.DATE })
-  declare completedAt: Date;
+  declare completedAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'prompted_at', type: DataType.DATE })
+  declare promptedAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'last_prompted_at', type: DataType.DATE })
+  declare lastPromptedAt: Date | null;
+
+  @AllowNull(false)
+  @Default(0)
+  @Column({ field: 'prompt_count', type: DataType.INTEGER })
+  declare promptCount: number;
 
   @AllowNull(false)
   @Default({})

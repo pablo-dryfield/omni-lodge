@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useMediaQuery } from "@mantine/hooks";
 import {
   Alert,
   Badge,
@@ -15,6 +17,9 @@ import {
   Select,
   SimpleGrid,
   Stack,
+  ScrollArea,
+  Switch,
+  Table,
   Text,
   TextInput,
   Textarea,
@@ -39,15 +44,22 @@ import {
   useDecideScheduleSwapRequest,
   useRejectUserRequest,
   useRequestsCenter,
+  type PopupRequestAudit,
+  type PopupRequestRecipient,
   type UserApprovalRequest,
 } from "../api/requests";
 import { useCreateRequiredAction, type CreateRequiredActionPayload } from "../api/requiredActions";
 import { useCerebroBootstrap } from "../api/cerebro";
+import axiosInstance from "../utils/axiosInstance";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useAppDispatch } from "../store/hooks";
 import type { FinanceManagementRequest } from "../types/finance";
 import type { ShiftAssignment, SwapRequest } from "../types/scheduling";
+import type { User } from "../types/users/User";
+import type { UserType } from "../types/userTypes/UserType";
+import type { ShiftRole } from "../types/shiftRoles/ShiftRole";
+import type { ServerResponse } from "../types/general/ServerResponse";
 
 const PAGE_SLUG = PAGE_SLUGS.requests;
 
@@ -60,6 +72,7 @@ const REQUIRED_ACTION_TYPE_OPTIONS: Array<{ value: CreateRequiredActionPayload["
 ];
 
 const REQUIRED_PROFILE_FIELD_OPTIONS = [
+  { value: "profilePhoto", label: "Profile photo" },
   { value: "phone", label: "Phone number" },
   { value: "countryOfCitizenship", label: "Country" },
   { value: "dateOfBirth", label: "Date of birth" },
@@ -78,6 +91,36 @@ const REQUIRED_PROFILE_FIELD_OPTIONS = [
   { value: "instagramProfileUrl", label: "Instagram user" },
 ];
 
+const STAFF_PROFILE_TYPE_OPTIONS = [
+  { value: "volunteer", label: "Volunteer" },
+  { value: "long_term", label: "Long term" },
+  { value: "assistant_manager", label: "Assistant manager" },
+  { value: "manager", label: "Manager" },
+  { value: "guide", label: "Guide" },
+];
+
+const extractServerRows = <T,>(response: ServerResponse<Partial<T>>): Partial<T>[] =>
+  response?.[0]?.data ?? [];
+
+const usePopupTargetOptions = (enabled: boolean) =>
+  useQuery({
+    queryKey: ["popup-request-target-options"],
+    enabled,
+    queryFn: async () => {
+      const [usersResponse, userTypesResponse, shiftRolesResponse] = await Promise.all([
+        axiosInstance.get<ServerResponse<Partial<User>>>("/users/active", { withCredentials: true }),
+        axiosInstance.get<ServerResponse<Partial<UserType>>>("/userTypes", { withCredentials: true }),
+        axiosInstance.get<ServerResponse<Partial<ShiftRole>>>("/shiftRoles", { withCredentials: true }),
+      ]);
+
+      return {
+        users: extractServerRows<User>(usersResponse.data),
+        userTypes: extractServerRows<UserType>(userTypesResponse.data),
+        shiftRoles: extractServerRows<ShiftRole>(shiftRolesResponse.data),
+      };
+    },
+  });
+
 const formatDateTime = (value?: string | Date | null): string => {
   if (!value) {
     return "Unknown";
@@ -94,6 +137,13 @@ const formatDate = (value?: string | Date | null): string | null => {
   return parsed.isValid() ? parsed.format("MMM D, YYYY") : String(value);
 };
 
+const formatOptionalDateTime = (value?: string | Date | null): string => {
+  if (!value) {
+    return "-";
+  }
+  return formatDateTime(value);
+};
+
 const normalizeText = (value?: string | null): string => (value ?? "").trim();
 
 const formatUserName = (user: { firstName?: string | null; lastName?: string | null; username?: string | null; id?: number } | null | undefined) => {
@@ -106,6 +156,70 @@ const formatUserName = (user: { firstName?: string | null; lastName?: string | n
   }
   return user?.id ? `User #${user.id}` : "Unknown user";
 };
+
+const getPopupRecipientStatusLabel = (status: PopupRequestRecipient["status"]): string => {
+  if (status === "not_opened") {
+    return "Not opened";
+  }
+  if (status === "prompted") {
+    return "Prompted, no action";
+  }
+  if (status === "dismissed") {
+    return "Dismissed";
+  }
+  return "Completed";
+};
+
+const getPopupRecipientStatusColor = (status: PopupRequestRecipient["status"]): string => {
+  if (status === "not_opened") {
+    return "gray";
+  }
+  if (status === "prompted") {
+    return "orange";
+  }
+  if (status === "dismissed") {
+    return "red";
+  }
+  return "green";
+};
+
+const formatPopupRequestType = (value: string): string =>
+  value
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const toNumberTargets = (values: string[]): number[] | null => {
+  const ids = values
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  return ids.length > 0 ? ids : null;
+};
+
+const toStringTargets = (values: string[]): string[] | null => {
+  const normalized = values.map((value) => value.trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : null;
+};
+
+const getSignatureDataUrl = (response?: Record<string, unknown>): string | null => {
+  const signature = response?.eSignature;
+  if (!signature || typeof signature !== "object" || Array.isArray(signature)) {
+    return null;
+  }
+  const dataUrl = (signature as Record<string, unknown>).dataUrl;
+  return typeof dataUrl === "string" && dataUrl.startsWith("data:image/") ? dataUrl : null;
+};
+
+const stringifyPopupResponse = (response: Record<string, unknown>): string =>
+  JSON.stringify(
+    response,
+    (key, value) => {
+      if (key === "dataUrl" && typeof value === "string" && value.startsWith("data:image/")) {
+        return "[signature image]";
+      }
+      return value;
+    },
+    2,
+  );
 
 const formatRequestedUserType = (value?: string | null): string => {
   const normalized = normalizeText(value).replace(/[_-]+/g, " ");
@@ -175,6 +289,164 @@ const SectionHeader = ({
     </Badge>
   </Group>
 );
+
+const PopupCountBox = ({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number;
+  color: "blue" | "orange" | "green" | "gray";
+}) => (
+  <Paper withBorder radius="md" p="sm" bg={`${color}.0`} style={{ textAlign: "center" }}>
+    <Text size="xs" fw={800} c={`${color}.8`} tt="uppercase">
+      {label}
+    </Text>
+    <Text fw={900} fz="xl">
+      {value}
+    </Text>
+  </Paper>
+);
+
+const PopupRequestMobileCard = ({
+  request,
+  onDetails,
+}: {
+  request: PopupRequestAudit;
+  onDetails: (request: PopupRequestAudit) => void;
+}) => (
+  <Card withBorder radius="xl" p="md" shadow="sm">
+    <Stack gap="md" align="center" ta="center">
+      <Group gap="xs" justify="center">
+        <Badge variant="light" color={request.status ? "green" : "gray"} size="lg">
+          {request.status ? "Active" : "Inactive"}
+        </Badge>
+        <Badge variant="light" size="lg">
+          {formatPopupRequestType(request.type)}
+        </Badge>
+        {request.requiresSignature ? (
+          <Badge color="grape" variant="light" size="lg">
+            Signature
+          </Badge>
+        ) : null}
+      </Group>
+      <Stack gap={4} align="center">
+        <Title order={4}>{request.title}</Title>
+        {request.body ? (
+          <Text size="sm" c="dimmed" lineClamp={2}>
+            {request.body}
+          </Text>
+        ) : null}
+        <Text size="xs" c="dimmed">
+          Created {formatDateTime(request.createdAt)}
+        </Text>
+      </Stack>
+      <SimpleGrid cols={2} spacing="xs" w="100%">
+        <PopupCountBox label="Sent" value={request.sentCount} color="blue" />
+        <PopupCountBox label="Not opened" value={request.notOpenedCount} color={request.notOpenedCount > 0 ? "orange" : "gray"} />
+        <PopupCountBox label="Ignored" value={request.promptedCount} color={request.promptedCount > 0 ? "orange" : "gray"} />
+        <PopupCountBox label="Completed" value={request.completedCount} color={request.completedCount > 0 ? "green" : "gray"} />
+      </SimpleGrid>
+      <Button fullWidth size="md" variant="light" onClick={() => onDetails(request)}>
+        View details
+      </Button>
+    </Stack>
+  </Card>
+);
+
+const PopupRecipientMobileCard = ({
+  recipient,
+}: {
+  recipient: PopupRequestRecipient;
+}) => {
+  const signatureDataUrl = getSignatureDataUrl(recipient.response);
+  return (
+    <Card withBorder radius="lg" p="md" shadow="xs">
+      <Stack gap="sm">
+        <Group justify="space-between" align="flex-start" wrap="nowrap">
+          <Stack gap={2}>
+            <Text fw={900}>{recipient.name}</Text>
+            {recipient.email ? (
+              <Text size="xs" c="dimmed">
+                {recipient.email}
+              </Text>
+            ) : null}
+          </Stack>
+          <Badge color={getPopupRecipientStatusColor(recipient.status)} variant="light">
+            {getPopupRecipientStatusLabel(recipient.status)}
+          </Badge>
+        </Group>
+        <SimpleGrid cols={2} spacing="xs">
+          <PopupCountBox label="Prompted" value={recipient.promptCount} color={recipient.promptCount > 0 ? "orange" : "gray"} />
+          <Paper withBorder radius="md" p="sm" style={{ textAlign: "center" }}>
+            <Text size="xs" fw={800} c="dimmed" tt="uppercase">
+              Completed
+            </Text>
+            <Text fw={800} size="sm">
+              {formatOptionalDateTime(recipient.completedAt)}
+            </Text>
+          </Paper>
+        </SimpleGrid>
+        <Paper withBorder radius="md" p="sm" bg="gray.0">
+          <Stack gap={4}>
+            <Group justify="space-between">
+              <Text size="xs" c="dimmed">
+                First prompted
+              </Text>
+              <Text size="xs" fw={700}>
+                {formatOptionalDateTime(recipient.promptedAt)}
+              </Text>
+            </Group>
+            <Group justify="space-between">
+              <Text size="xs" c="dimmed">
+                Last prompted
+              </Text>
+              <Text size="xs" fw={700}>
+                {formatOptionalDateTime(recipient.lastPromptedAt)}
+              </Text>
+            </Group>
+          </Stack>
+        </Paper>
+        {recipient.response && Object.keys(recipient.response).length > 0 ? (
+          <Stack gap="xs">
+            {signatureDataUrl ? (
+              <img
+                src={signatureDataUrl}
+                alt={`${recipient.name} signature`}
+                style={{
+                  width: "100%",
+                  height: 90,
+                  objectFit: "contain",
+                  border: "1px solid #d7e0ea",
+                  borderRadius: 10,
+                  background: "#ffffff",
+                }}
+              />
+            ) : null}
+            <Text
+              component="pre"
+              size="xs"
+              style={{
+                margin: 0,
+                whiteSpace: "pre-wrap",
+                fontFamily: "Fira Code, monospace",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: 10,
+                padding: 10,
+                maxHeight: 160,
+                overflow: "auto",
+              }}
+            >
+              {stringifyPopupResponse(recipient.response)}
+            </Text>
+          </Stack>
+        ) : null}
+      </Stack>
+    </Card>
+  );
+};
 
 const UserApprovalCard = ({
   user,
@@ -390,6 +662,7 @@ const FinanceRequestCard = ({
 
 const RequestsPage = () => {
   const dispatch = useAppDispatch();
+  const isMobile = useMediaQuery("(max-width: 48em)");
   const requestsQuery = useRequestsCenter();
   const approveUser = useApproveUserRequest();
   const rejectUser = useRejectUserRequest();
@@ -405,10 +678,17 @@ const RequestsPage = () => {
   const [requiredActionTitle, setRequiredActionTitle] = useState("");
   const [requiredActionBody, setRequiredActionBody] = useState("");
   const [requiredActionFields, setRequiredActionFields] = useState<string[]>([]);
+  const [requiredActionRequiresSignature, setRequiredActionRequiresSignature] = useState(false);
+  const [targetUserIds, setTargetUserIds] = useState<string[]>([]);
+  const [targetUserTypeIds, setTargetUserTypeIds] = useState<string[]>([]);
+  const [targetShiftRoleIds, setTargetShiftRoleIds] = useState<string[]>([]);
+  const [targetStaffProfileTypes, setTargetStaffProfileTypes] = useState<string[]>([]);
   const [requiredActionPolicyId, setRequiredActionPolicyId] = useState<string | null>(null);
   const [requiredActionQuizId, setRequiredActionQuizId] = useState<string | null>(null);
   const [decisionNote, setDecisionNote] = useState("");
   const [pageError, setPageError] = useState<string | null>(null);
+  const [popupDetail, setPopupDetail] = useState<PopupRequestAudit | null>(null);
+  const targetOptionsQuery = usePopupTargetOptions(requiredActionModalOpen);
 
   useEffect(() => {
     dispatch(navigateToPage("Requests"));
@@ -471,6 +751,39 @@ const RequestsPage = () => {
         .filter((quiz) => quiz.status)
         .map((quiz) => ({ value: String(quiz.id), label: quiz.title })),
     [cerebroQuery.data?.quizzes],
+  );
+
+  const targetUserOptions = useMemo(
+    () =>
+      (targetOptionsQuery.data?.users ?? [])
+        .filter((user) => Number.isInteger(user.id))
+        .map((user) => ({
+          value: String(user.id),
+          label: formatUserName(user),
+        })),
+    [targetOptionsQuery.data?.users],
+  );
+
+  const targetUserTypeOptions = useMemo(
+    () =>
+      (targetOptionsQuery.data?.userTypes ?? [])
+        .filter((userType) => Number.isInteger(userType.id))
+        .map((userType) => ({
+          value: String(userType.id),
+          label: userType.name ?? `User type #${userType.id}`,
+        })),
+    [targetOptionsQuery.data?.userTypes],
+  );
+
+  const targetShiftRoleOptions = useMemo(
+    () =>
+      (targetOptionsQuery.data?.shiftRoles ?? [])
+        .filter((role) => Number.isInteger(role.id))
+        .map((role) => ({
+          value: String(role.id),
+          label: role.name ?? `Shift role #${role.id}`,
+        })),
+    [targetOptionsQuery.data?.shiftRoles],
   );
 
   const handleApproveUser = async (user: UserApprovalRequest) => {
@@ -562,13 +875,23 @@ const RequestsPage = () => {
         title,
         body: requiredActionBody.trim() || null,
         payload: requiredActionPayload,
+        targetUserIds: toNumberTargets(targetUserIds),
+        targetUserTypeIds: toNumberTargets(targetUserTypeIds),
+        targetShiftRoleIds: toNumberTargets(targetShiftRoleIds),
+        targetStaffProfileTypes: toStringTargets(targetStaffProfileTypes),
         requiresCompletion: true,
+        requiresSignature: requiredActionRequiresSignature,
       });
       setRequiredActionModalOpen(false);
       setRequiredActionType("broadcast");
       setRequiredActionTitle("");
       setRequiredActionBody("");
       setRequiredActionFields([]);
+      setRequiredActionRequiresSignature(false);
+      setTargetUserIds([]);
+      setTargetUserTypeIds([]);
+      setTargetShiftRoleIds([]);
+      setTargetStaffProfileTypes([]);
       setRequiredActionPolicyId(null);
       setRequiredActionQuizId(null);
     } catch (error) {
@@ -608,11 +931,12 @@ const RequestsPage = () => {
             </Group>
           </Group>
 
-          <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+          <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="md">
             <RequestMetric label="Total open" value={summary.total} tone="blue" />
             <RequestMetric label="Users" value={summary.userApprovals} tone="orange" />
             <RequestMetric label="Swaps" value={summary.scheduleSwaps} tone="green" />
             <RequestMetric label="Finance" value={summary.financeRequests} tone="blue" />
+            <RequestMetric label="Popup requests" value={summary.popupRequests ?? data?.popupRequests.length ?? 0} tone="orange" />
           </SimpleGrid>
         </Stack>
       </Card>
@@ -638,6 +962,99 @@ const RequestsPage = () => {
 
       {!requestsQuery.isLoading && data ? (
         <>
+          <Stack gap="md">
+            <SectionHeader icon={<IconClipboardList size={18} />} title="Popup Requests" count={data.popupRequests.length} />
+            {data.popupRequests.length === 0 ? (
+              <Paper withBorder radius="md" p="lg">
+                <Text ta="center" c="dimmed">
+                  No popup requests have been created yet.
+                </Text>
+              </Paper>
+            ) : (
+              isMobile ? (
+                <Stack gap="sm">
+                  {data.popupRequests.map((request) => (
+                    <PopupRequestMobileCard key={request.id} request={request} onDetails={setPopupDetail} />
+                  ))}
+                </Stack>
+              ) : (
+                <Paper withBorder radius="lg" style={{ overflow: "hidden" }}>
+                  <ScrollArea>
+                    <Table verticalSpacing="md" miw={920} highlightOnHover>
+                      <Table.Thead bg="gray.0">
+                        <Table.Tr>
+                          <Table.Th>Request</Table.Th>
+                          <Table.Th>Type</Table.Th>
+                          <Table.Th ta="center">Sent</Table.Th>
+                          <Table.Th ta="center">Not opened</Table.Th>
+                          <Table.Th ta="center">Ignored</Table.Th>
+                          <Table.Th ta="center">Completed</Table.Th>
+                          <Table.Th>Created</Table.Th>
+                          <Table.Th ta="right">Actions</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {data.popupRequests.map((request) => (
+                          <Table.Tr key={request.id}>
+                            <Table.Td>
+                              <Stack gap={4}>
+                                <Group gap="xs" wrap="nowrap">
+                                  <Text fw={800}>{request.title}</Text>
+                                  <Badge variant="light" color={request.status ? "green" : "gray"}>
+                                    {request.status ? "Active" : "Inactive"}
+                                  </Badge>
+                                  {request.requiresSignature ? (
+                                    <Badge color="grape" variant="light">
+                                      Signature
+                                    </Badge>
+                                  ) : null}
+                                </Group>
+                                {request.body ? (
+                                  <Text size="sm" c="dimmed" lineClamp={1}>
+                                    {request.body}
+                                  </Text>
+                                ) : null}
+                              </Stack>
+                            </Table.Td>
+                            <Table.Td>
+                              <Badge variant="light">{formatPopupRequestType(request.type)}</Badge>
+                            </Table.Td>
+                            <Table.Td ta="center">
+                              <Text fw={800}>{request.sentCount}</Text>
+                            </Table.Td>
+                            <Table.Td ta="center">
+                              <Text fw={800} c={request.notOpenedCount > 0 ? "orange" : undefined}>
+                                {request.notOpenedCount}
+                              </Text>
+                            </Table.Td>
+                            <Table.Td ta="center">
+                              <Text fw={800} c={request.promptedCount > 0 ? "orange" : undefined}>
+                                {request.promptedCount}
+                              </Text>
+                            </Table.Td>
+                            <Table.Td ta="center">
+                              <Text fw={800} c={request.completedCount > 0 ? "green" : undefined}>
+                                {request.completedCount}
+                              </Text>
+                            </Table.Td>
+                            <Table.Td>
+                              <Text size="sm">{formatDateTime(request.createdAt)}</Text>
+                            </Table.Td>
+                            <Table.Td ta="right">
+                              <Button variant="light" size="xs" onClick={() => setPopupDetail(request)}>
+                                Details
+                              </Button>
+                            </Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea>
+                </Paper>
+              )
+            )}
+          </Stack>
+
           <Stack gap="md">
             <SectionHeader icon={<IconUserCheck size={18} />} title="User Approvals" count={data.userApprovals.length} />
             {data.userApprovals.length === 0 ? (
@@ -701,6 +1118,135 @@ const RequestsPage = () => {
           </Stack>
         </>
       ) : null}
+
+      <Modal
+        opened={Boolean(popupDetail)}
+        onClose={() => setPopupDetail(null)}
+        title={isMobile ? "Popup request details" : popupDetail ? `Popup request: ${popupDetail.title}` : "Popup request"}
+        size={isMobile ? "100%" : "95%"}
+        fullScreen={isMobile}
+        centered={!isMobile}
+        padding={isMobile ? "md" : "lg"}
+      >
+        {popupDetail ? (
+          <Stack gap="md">
+            {isMobile ? (
+              <Stack gap="xs" align="center" ta="center">
+                <Group gap="xs" justify="center">
+                  <Badge color={popupDetail.status ? "green" : "gray"} variant="light" size="lg">
+                    {popupDetail.status ? "Active" : "Inactive"}
+                  </Badge>
+                  <Badge variant="light" size="lg">
+                    {formatPopupRequestType(popupDetail.type)}
+                  </Badge>
+                  {popupDetail.requiresSignature ? (
+                    <Badge color="grape" variant="light" size="lg">
+                      Signature
+                    </Badge>
+                  ) : null}
+                </Group>
+                <Title order={3}>{popupDetail.title}</Title>
+                {popupDetail.body ? (
+                  <Text c="dimmed" size="sm">
+                    {popupDetail.body}
+                  </Text>
+                ) : null}
+              </Stack>
+            ) : null}
+            <SimpleGrid cols={{ base: 2, md: 4 }} spacing="md">
+              <RequestMetric label="Sent" value={popupDetail.sentCount} tone="blue" />
+              <RequestMetric label="Not opened" value={popupDetail.notOpenedCount} tone="orange" />
+              <RequestMetric label="Ignored" value={popupDetail.promptedCount} tone="orange" />
+              <RequestMetric label="Completed" value={popupDetail.completedCount} tone="green" />
+            </SimpleGrid>
+            {isMobile ? (
+              <Stack gap="sm">
+                {popupDetail.recipients.map((recipient) => (
+                  <PopupRecipientMobileCard key={`${popupDetail.id}-${recipient.userId}`} recipient={recipient} />
+                ))}
+              </Stack>
+            ) : (
+              <ScrollArea>
+                <Table striped highlightOnHover verticalSpacing="md" miw={980}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>User</Table.Th>
+                      <Table.Th>Status</Table.Th>
+                      <Table.Th>Prompted</Table.Th>
+                      <Table.Th>Last prompted</Table.Th>
+                      <Table.Th>Prompt count</Table.Th>
+                      <Table.Th>Completed</Table.Th>
+                      <Table.Th>Selected / response</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {popupDetail.recipients.map((recipient) => (
+                      <Table.Tr key={`${popupDetail.id}-${recipient.userId}`}>
+                        <Table.Td>
+                          <Stack gap={0}>
+                            <Text fw={700}>{recipient.name}</Text>
+                            {recipient.email ? (
+                              <Text size="xs" c="dimmed">
+                                {recipient.email}
+                              </Text>
+                            ) : null}
+                          </Stack>
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge color={getPopupRecipientStatusColor(recipient.status)} variant="light">
+                            {getPopupRecipientStatusLabel(recipient.status)}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td>{formatOptionalDateTime(recipient.promptedAt)}</Table.Td>
+                        <Table.Td>{formatOptionalDateTime(recipient.lastPromptedAt)}</Table.Td>
+                        <Table.Td>{recipient.promptCount}</Table.Td>
+                        <Table.Td>{formatOptionalDateTime(recipient.completedAt)}</Table.Td>
+                        <Table.Td>
+                          {recipient.response && Object.keys(recipient.response).length > 0 ? (
+                            <Stack gap="xs">
+                              {getSignatureDataUrl(recipient.response) ? (
+                                <img
+                                  src={getSignatureDataUrl(recipient.response) ?? undefined}
+                                  alt={`${recipient.name} signature`}
+                                  style={{
+                                    width: 180,
+                                    maxWidth: "100%",
+                                    height: 56,
+                                    objectFit: "contain",
+                                    border: "1px solid #d7e0ea",
+                                    borderRadius: 8,
+                                    background: "#ffffff",
+                                  }}
+                                />
+                              ) : null}
+                              <Text
+                                component="pre"
+                                size="xs"
+                                style={{
+                                  margin: 0,
+                                  whiteSpace: "pre-wrap",
+                                  maxWidth: 360,
+                                  fontFamily: "Fira Code, monospace",
+                                }}
+                              >
+                                {stringifyPopupResponse(recipient.response)}
+                              </Text>
+                            </Stack>
+                          ) : (
+                            <Text size="sm" c="dimmed">
+                              -
+                            </Text>
+                          )}
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </ScrollArea>
+            )}
+          </Stack>
+        ) : null}
+      </Modal>
 
       <Modal
         opened={Boolean(financeModal)}
@@ -783,73 +1329,169 @@ const RequestsPage = () => {
         opened={requiredActionModalOpen}
         onClose={() => setRequiredActionModalOpen(false)}
         title="New popup request"
-        size="lg"
-        centered
+        size={isMobile ? "100%" : "lg"}
+        fullScreen={isMobile}
+        centered={!isMobile}
+        padding={isMobile ? "md" : "lg"}
       >
         <Stack gap="md">
-          <Select
-            label="Request type"
-            data={REQUIRED_ACTION_TYPE_OPTIONS}
-            value={requiredActionType}
-            onChange={(value) => setRequiredActionType((value as CreateRequiredActionPayload["type"] | null) ?? "broadcast")}
-            allowDeselect={false}
-          />
-          <TextInput
-            label="Title"
-            placeholder="What users need to do"
-            value={requiredActionTitle}
-            onChange={(event) => setRequiredActionTitle(event.currentTarget.value)}
-            required
-          />
-          <Textarea
-            label="Message"
-            placeholder="Add the instruction users will see in the full-screen popup"
-            value={requiredActionBody}
-            onChange={(event) => setRequiredActionBody(event.currentTarget.value)}
-            autosize
-            minRows={4}
-          />
+          {isMobile ? (
+            <Stack gap={4} align="center" ta="center">
+              <Title order={3}>Create popup request</Title>
+              <Text size="sm" c="dimmed">
+                This will appear as a blocking full-screen task for the selected audience.
+              </Text>
+            </Stack>
+          ) : null}
+          <Card withBorder radius="lg" p={isMobile ? "md" : "lg"}>
+            <Stack gap="md">
+              <Stack gap={2} align="center" ta="center">
+                <Title order={5}>Request</Title>
+                <Text size="sm" c="dimmed">
+                  Write the action users will see when they open the app.
+                </Text>
+              </Stack>
+              <Select
+                label="Request type"
+                data={REQUIRED_ACTION_TYPE_OPTIONS}
+                value={requiredActionType}
+                onChange={(value) => setRequiredActionType((value as CreateRequiredActionPayload["type"] | null) ?? "broadcast")}
+                allowDeselect={false}
+              />
+              <TextInput
+                label="Title"
+                placeholder="What users need to do"
+                value={requiredActionTitle}
+                onChange={(event) => setRequiredActionTitle(event.currentTarget.value)}
+                required
+              />
+              <Textarea
+                label="Message"
+                placeholder="Add the instruction users will see in the full-screen popup"
+                value={requiredActionBody}
+                onChange={(event) => setRequiredActionBody(event.currentTarget.value)}
+                autosize
+                minRows={4}
+              />
+              <Switch
+                label="Require e-signature"
+                description="Users must draw a signature before they can complete this popup request."
+                checked={requiredActionRequiresSignature}
+                onChange={(event) => setRequiredActionRequiresSignature(event.currentTarget.checked)}
+              />
+            </Stack>
+          </Card>
+          <Card withBorder radius="lg" p={isMobile ? "md" : "lg"}>
+            <Stack gap="md">
+              <Stack gap={2} align="center" ta="center">
+                <Title order={5}>Audience</Title>
+                <Text size="sm" c="dimmed">
+                  Leave every target empty to send this popup to all active users. If you select multiple target groups,
+                  users must match every selected group.
+                </Text>
+              </Stack>
+              {targetOptionsQuery.isError ? (
+                <Alert color="red">
+                  {targetOptionsQuery.error instanceof Error
+                    ? targetOptionsQuery.error.message
+                    : "Unable to load targeting options"}
+                </Alert>
+              ) : null}
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                <MultiSelect
+                  label="Specific users"
+                  placeholder={targetOptionsQuery.isLoading ? "Loading users..." : "Choose users"}
+                  data={targetUserOptions}
+                  value={targetUserIds}
+                  onChange={setTargetUserIds}
+                  searchable
+                  clearable
+                  disabled={targetOptionsQuery.isLoading}
+                />
+                <MultiSelect
+                  label="User types"
+                  placeholder={targetOptionsQuery.isLoading ? "Loading user types..." : "Choose user types"}
+                  data={targetUserTypeOptions}
+                  value={targetUserTypeIds}
+                  onChange={setTargetUserTypeIds}
+                  searchable
+                  clearable
+                  disabled={targetOptionsQuery.isLoading}
+                />
+                <MultiSelect
+                  label="Staff profile"
+                  placeholder="Choose staff profile types"
+                  data={STAFF_PROFILE_TYPE_OPTIONS}
+                  value={targetStaffProfileTypes}
+                  onChange={setTargetStaffProfileTypes}
+                  searchable
+                  clearable
+                />
+                <MultiSelect
+                  label="Shift roles"
+                  placeholder={targetOptionsQuery.isLoading ? "Loading shift roles..." : "Choose shift roles"}
+                  data={targetShiftRoleOptions}
+                  value={targetShiftRoleIds}
+                  onChange={setTargetShiftRoleIds}
+                  searchable
+                  clearable
+                  disabled={targetOptionsQuery.isLoading}
+                />
+              </SimpleGrid>
+            </Stack>
+          </Card>
           {requiredActionType === "profile_fields" ? (
-            <MultiSelect
-              label="Required user fields"
-              placeholder="Choose fields"
-              data={REQUIRED_PROFILE_FIELD_OPTIONS}
-              value={requiredActionFields}
-              onChange={setRequiredActionFields}
-              searchable
-              required
-            />
+            <Card withBorder radius="lg" p={isMobile ? "md" : "lg"}>
+              <MultiSelect
+                label="Required user fields"
+                placeholder="Choose fields"
+                data={REQUIRED_PROFILE_FIELD_OPTIONS}
+                value={requiredActionFields}
+                onChange={setRequiredActionFields}
+                searchable
+                required
+              />
+            </Card>
           ) : null}
           {requiredActionType === "policy_consent" ? (
-            <Select
-              label="Cerebro policy"
-              placeholder={cerebroQuery.isLoading ? "Loading policies..." : "Choose a policy"}
-              data={cerebroPolicyOptions}
-              value={requiredActionPolicyId}
-              onChange={setRequiredActionPolicyId}
-              searchable
-              required
-            />
+            <Card withBorder radius="lg" p={isMobile ? "md" : "lg"}>
+              <Select
+                label="Cerebro policy"
+                placeholder={cerebroQuery.isLoading ? "Loading policies..." : "Choose a policy"}
+                data={cerebroPolicyOptions}
+                value={requiredActionPolicyId}
+                onChange={setRequiredActionPolicyId}
+                searchable
+                required
+              />
+            </Card>
           ) : null}
           {requiredActionType === "quiz" ? (
-            <Select
-              label="Cerebro quiz"
-              placeholder={cerebroQuery.isLoading ? "Loading quizzes..." : "Choose a quiz"}
-              data={cerebroQuizOptions}
-              value={requiredActionQuizId}
-              onChange={setRequiredActionQuizId}
-              searchable
-              required
-            />
+            <Card withBorder radius="lg" p={isMobile ? "md" : "lg"}>
+              <Select
+                label="Cerebro quiz"
+                placeholder={cerebroQuery.isLoading ? "Loading quizzes..." : "Choose a quiz"}
+                data={cerebroQuizOptions}
+                value={requiredActionQuizId}
+                onChange={setRequiredActionQuizId}
+                searchable
+                required
+              />
+            </Card>
           ) : null}
           <Alert color="blue" variant="light">
-            This creates a blocking full-screen popup for every active user unless targets are added later through the API.
+            This creates a blocking full-screen popup for every active user who matches the selected targets.
           </Alert>
-          <Group justify="space-between">
-            <Button variant="default" onClick={() => setRequiredActionModalOpen(false)} disabled={createRequiredAction.isPending}>
+          <Group justify="space-between" grow={isMobile}>
+            <Button
+              variant="default"
+              onClick={() => setRequiredActionModalOpen(false)}
+              disabled={createRequiredAction.isPending}
+              fullWidth={isMobile}
+            >
               Cancel
             </Button>
-            <Button loading={createRequiredAction.isPending} onClick={handleCreateRequiredAction}>
+            <Button loading={createRequiredAction.isPending} onClick={handleCreateRequiredAction} fullWidth={isMobile}>
               Create popup
             </Button>
           </Group>

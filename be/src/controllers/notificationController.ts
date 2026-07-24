@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import type { FindOptions, OrderItem } from 'sequelize';
+import { Op } from 'sequelize';
 import Notification from '../models/Notification.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import {
@@ -19,6 +20,7 @@ type NotificationListItem = {
   body: string | null;
   url: string | null;
   sentAt: string;
+  readAt: string | null;
 };
 
 type NotificationPushTestResponse = {
@@ -217,6 +219,7 @@ const toListItem = (notification: Notification): NotificationListItem => {
     body: payloadBody,
     url: payloadUrl,
     sentAt: new Date(notification.sentAt).toISOString(),
+    readAt: notification.readAt ? new Date(notification.readAt).toISOString() : null,
   };
 };
 
@@ -252,16 +255,53 @@ export const listMyNotifications = async (
       limit,
       offset,
     });
+    const unreadCount = await Notification.count({
+      where: {
+        userId: actorId,
+        channel: 'in_app',
+        readAt: { [Op.is]: null },
+      },
+    });
 
     res.status(200).json({
       items: result.rows.map(toListItem),
       total: result.count,
+      unreadCount,
       limit,
       offset,
     });
   } catch (error) {
     console.error('Failed to list notifications', error);
     res.status(500).json([{ message: 'Failed to list notifications' }]);
+  }
+};
+
+export const markMyNotificationsRead = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = req.authContext?.id ?? null;
+    if (!actorId) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const [updatedCount] = await Notification.update(
+      { readAt: new Date() },
+      {
+        where: {
+          userId: actorId,
+          channel: 'in_app',
+          readAt: { [Op.is]: null },
+        },
+      },
+    );
+
+    res.status(200).json({ markedRead: updatedCount });
+  } catch (error) {
+    console.error('Failed to mark notifications read', error);
+    res.status(500).json([{ message: 'Failed to mark notifications read' }]);
   }
 };
 

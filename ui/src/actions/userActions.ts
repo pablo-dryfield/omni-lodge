@@ -44,6 +44,7 @@ export const logoutUser = createAsyncThunk(
     try {
       const response = await axiosInstance.post<[{ message: string }]>(
         '/users/logout',
+        {},
         {
           withCredentials: true,
         },

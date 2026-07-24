@@ -26,6 +26,7 @@ import {
 import {
   fetchNotificationPushSubscriptions,
   fetchInboxNotifications,
+  markInboxNotificationsRead,
   sendNotificationPushTest,
   type InboxNotification,
   type NotificationPushSubscriptionDebugResponse,
@@ -329,7 +330,11 @@ const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ title }) => {
       const sorted = [...response.items].sort(
         (a, b) => dayjs(b.sentAt).valueOf() - dayjs(a.sentAt).valueOf(),
       );
-      setItems(sorted);
+      const readAt = new Date().toISOString();
+      setItems(sorted.map((notification) => ({ ...notification, readAt: notification.readAt ?? readAt })));
+      if (response.unreadCount > 0) {
+        await markInboxNotificationsRead();
+      }
     } catch (requestError) {
       setError(
         requestError instanceof Error
