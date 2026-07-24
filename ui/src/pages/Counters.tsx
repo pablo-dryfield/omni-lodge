@@ -11,7 +11,7 @@ import {
   Button,
   Card,
   CardContent,
-  CardHeader,
+  Checkbox,
   Chip,
   CircularProgress,
   Collapse,
@@ -19,6 +19,7 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  FormControlLabel,
   IconButton,
   InputAdornment,
   LinearProgress,
@@ -732,7 +733,9 @@ type WalkInSnapshotCurrency = {
 };
 
 type WalkInSnapshotTicket = {
+  key?: string;
   name: string;
+  transfer?: boolean;
   currencies: WalkInSnapshotCurrency[];
 };
 
@@ -787,6 +790,7 @@ type WalkInCurrencyEntryState = {
 
 type WalkInTicketEntryState = {
   name: string;
+  transfer?: boolean;
   currencyOrder: CashCurrency[];
   currencies: Partial<Record<CashCurrency, WalkInCurrencyEntryState>>;
 };
@@ -1072,6 +1076,11 @@ const extractCashSnapshotMap = (
         if (typeof ticketNameRaw !== 'string' || ticketNameRaw.trim() === '') {
           return;
         }
+        const ticketKeyRaw = (ticketCandidate as { key?: unknown }).key;
+        const ticketKey = typeof ticketKeyRaw === 'string' && ticketKeyRaw.trim().length > 0
+          ? ticketKeyRaw.trim()
+          : undefined;
+        const ticketTransfer = (ticketCandidate as { transfer?: unknown }).transfer === true;
         const currenciesRaw = Array.isArray((ticketCandidate as { currencies?: unknown }).currencies)
           ? ((ticketCandidate as { currencies?: unknown }).currencies as unknown[])
           : [];
@@ -1115,7 +1124,9 @@ const extractCashSnapshotMap = (
           return;
         }
         tickets.push({
+          ...(ticketKey ? { key: ticketKey } : {}),
           name: ticketNameRaw,
+          ...(ticketTransfer ? { transfer: true } : {}),
           currencies,
         });
       });
@@ -1306,7 +1317,7 @@ const formatWalkInSnapshotSummary = (
     cashEntry.tickets.forEach((ticket) => {
       const ticketName = (ticket.name ?? '').toString().trim();
       if (ticketName.length > 0) {
-        ticketNames.add(ticketName);
+        ticketNames.add(ticket.transfer ? `${ticketName} (Transfer)` : ticketName);
       }
     });
   }
@@ -1613,37 +1624,22 @@ const CounterListRow = memo((props: CounterListRowProps) => {
     <Typography
       component="span"
       variant="body2"
-      color={isSelected ? 'grey.300' : 'text.secondary'}
+      color="text.secondary"
     >
       <Box
         component="span"
         sx={{
           fontWeight: 600,
-          color: isSelected ? 'grey.100' : undefined,
+          color: isSelected ? 'primary.main' : undefined,
         }}
       >
         Manager:
       </Box>{' '}
       <Box
         component="span"
-        sx={{ color: isSelected ? 'grey.200' : undefined }}
+        sx={{ color: 'text.secondary' }}
       >
         {managerDisplay || '-'}
-      </Box>
-      <Box
-        component="span"
-        sx={{
-          mx: 0.75,
-          color: isSelected ? 'grey.400' : undefined,
-        }}
-      >
-        |
-      </Box>
-      <Box
-        component="span"
-        sx={{ color: isSelected ? 'grey.200' : undefined }}
-      >
-        {productLabel}
       </Box>
     </Typography>
   );
@@ -1654,7 +1650,7 @@ const CounterListRow = memo((props: CounterListRowProps) => {
       {hasNote && (
         <Typography
           variant="caption"
-          color={isSelected ? 'grey.300' : 'text.secondary'}
+          color="text.secondary"
           sx={{
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
@@ -1671,10 +1667,15 @@ const CounterListRow = memo((props: CounterListRowProps) => {
       key={(counter.id ?? 'counter') + '-' + dateLabel}
       disablePadding
       sx={{
-        borderBottom: (theme) => `1px dashed ${theme.palette.divider}`,
-        '&:last-of-type': { borderBottom: 'none' },
+        mb: { xs: 1.25, md: 0 },
         flexDirection: 'column',
         alignItems: 'stretch',
+        border: '1px solid',
+        borderColor: isSelected ? 'primary.main' : 'divider',
+        borderRadius: 3,
+        overflow: 'hidden',
+        bgcolor: 'background.paper',
+        boxShadow: isSelected ? '0 16px 36px rgba(25, 118, 210, 0.14)' : '0 10px 30px rgba(15, 23, 42, 0.05)',
       }}
     >
       <ListItemButton
@@ -1686,13 +1687,13 @@ const CounterListRow = memo((props: CounterListRowProps) => {
           width: '100%',
           ...(isSelected
             ? {
-                backgroundColor: '#000',
-                color: theme.palette.common.white,
+                backgroundColor: 'rgba(25, 118, 210, 0.08)',
+                color: theme.palette.text.primary,
                 '&:hover': {
-                  backgroundColor: '#111',
+                  backgroundColor: 'rgba(25, 118, 210, 0.12)',
                 },
                 '& .MuiTypography-root': {
-                  color: theme.palette.common.white,
+                  color: theme.palette.text.primary,
                 },
               }
             : {
@@ -1701,24 +1702,75 @@ const CounterListRow = memo((props: CounterListRowProps) => {
                 },
               }),
           '&.Mui-selected': {
-            backgroundColor: '#000',
-            color: theme.palette.common.white,
+            backgroundColor: 'rgba(25, 118, 210, 0.08)',
+            color: theme.palette.text.primary,
           },
           '&.Mui-selected:hover': {
-            backgroundColor: '#111',
+            backgroundColor: 'rgba(25, 118, 210, 0.12)',
           },
         })}
       >
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+        <Stack direction="row" alignItems="center" spacing={1.25} sx={{ width: '100%' }}>
+          <Box
+            sx={(theme) => ({
+              width: 44,
+              height: 44,
+              borderRadius: 2,
+              display: { xs: 'none', sm: 'grid' },
+              placeItems: 'center',
+              bgcolor: isSelected ? theme.palette.primary.main : theme.palette.action.hover,
+              color: isSelected ? theme.palette.common.white : theme.palette.text.secondary,
+              fontWeight: 900,
+              flexShrink: 0,
+            })}
+          >
+            {counterIdValue ?? '-'}
+          </Box>
           <ListItemText
             primary={
-              <Typography
-                variant="body1"
-                fontWeight={600}
-                color={isSelected ? 'common.white' : 'text.primary'}
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1}
+                sx={{ flexWrap: 'nowrap', minWidth: 0, width: '100%', justifyContent: 'space-between' }}
               >
-                {dateLabel}
-              </Typography>
+                <Typography
+                  variant="body1"
+                  fontWeight={900}
+                  color="text.primary"
+                  sx={{
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {dateLabel}
+                </Typography>
+                <Chip
+                  size="small"
+                  label={productLabel}
+                  color="primary"
+                  variant="outlined"
+                  sx={{
+                    fontWeight: 700,
+                    flexShrink: 0,
+                    width: { xs: 112, sm: 180, md: 104, xl: 118 },
+                    height: 32,
+                    alignSelf: 'flex-start',
+                    '& .MuiChip-label': {
+                      px: 0.75,
+                      overflow: 'hidden',
+                      whiteSpace: 'normal',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      lineHeight: 1.05,
+                      textAlign: 'center',
+                    },
+                  }}
+                />
+              </Stack>
             }
             secondary={secondaryContent}
             secondaryTypographyProps={{ component: 'div' }}
@@ -1730,9 +1782,10 @@ const CounterListRow = memo((props: CounterListRowProps) => {
             onClick={handleExpandClick}
             disabled={counterIdValue == null}
             sx={{
+              display: { xs: 'none', sm: 'inline-flex' },
               transition: 'transform 150ms ease',
               transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-              color: isSelected ? 'inherit' : 'text.secondary',
+              color: 'text.secondary',
               ml: 0.5,
             }}
           >
@@ -1967,6 +2020,7 @@ const Counters = (props: GenericPageProps) => {
     addonLabel: string;
     bucketLabel: string;
   } | null>(null);
+  const [revealedCustomerPhoneKeys, setRevealedCustomerPhoneKeys] = useState<Set<string>>(() => new Set());
   const [syncingPendingAttendance, setSyncingPendingAttendance] = useState(false);
   const [partialCheckInEditorOrder, setPartialCheckInEditorOrder] = useState<UnifiedOrder | null>(null);
   const [partialCheckInEditorDraft, setPartialCheckInEditorDraft] = useState<StagedBookingAttendance | null>(null);
@@ -1989,6 +2043,17 @@ const Counters = (props: GenericPageProps) => {
     if (active instanceof HTMLElement) {
       active.blur();
     }
+  }, []);
+  const toggleCustomerPhoneReveal = useCallback((key: string) => {
+    setRevealedCustomerPhoneKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
   }, []);
   const applyBookingAttendanceLocally = useCallback(
     (order: UnifiedOrder, payload: BookingAttendancePatchPayload): UnifiedOrder | null => {
@@ -2711,7 +2776,7 @@ const loadCounterById = useCallback(
 
   const setFreePeopleNote = useCallback(
     (channelId: number, note: string) => {
-      const sanitizedNote = note.trim();
+      const sanitizedNote = note;
       let mutated = false;
       setFreePeopleByChannel((prev) => {
         const existing = prev[channelId];
@@ -2818,7 +2883,7 @@ const loadCounterById = useCallback(
 
   const setFreeAddonNote = useCallback(
     (channelId: number, addonId: number, note: string) => {
-      const sanitizedNote = note.trim();
+      const sanitizedNote = note;
       let mutated = false;
       setFreeAddonsByChannel((prev) => {
         const currentForChannel = prev[channelId] ?? {};
@@ -2977,15 +3042,24 @@ const loadCounterById = useCallback(
         if (!ticketSnapshot || typeof ticketSnapshot.name !== 'string') {
           return;
         }
-        const ticketName = ticketSnapshot.name;
-        if (!ticketName) {
+        const ticketDisplayName = ticketSnapshot.name.trim();
+        const rawTicketKey =
+          typeof ticketSnapshot.key === 'string' && ticketSnapshot.key.trim().length > 0
+            ? ticketSnapshot.key.trim()
+            : ticketDisplayName;
+        if (!rawTicketKey) {
           return;
         }
-        if (!configuredTicketOptionSet.has(ticketName)) {
+        const ticketKey = configuredTicketOptionSet.has(rawTicketKey)
+          ? rawTicketKey
+          : configuredTicketOptionSet.has(CUSTOM_TICKET_LABEL)
+            ? CUSTOM_TICKET_LABEL
+            : rawTicketKey;
+        if (!configuredTicketOptionSet.has(ticketKey)) {
           return;
         }
-        if (!ticketOrder.includes(ticketName)) {
-          ticketOrder.push(ticketName);
+        if (!ticketOrder.includes(ticketKey)) {
+          ticketOrder.push(ticketKey);
         }
         const currencyOrder: CashCurrency[] = [];
         const currencies: Partial<Record<CashCurrency, WalkInCurrencyEntryState>> = {};
@@ -3015,8 +3089,9 @@ const loadCounterById = useCallback(
             addons: parsedAddons,
           };
         });
-        ticketEntries[ticketName] = {
-          name: ticketName,
+        ticketEntries[ticketKey] = {
+          name: ticketKey === CUSTOM_TICKET_LABEL && ticketDisplayName ? ticketDisplayName : ticketKey,
+          ...(ticketKey === CUSTOM_TICKET_LABEL && ticketSnapshot.transfer ? { transfer: true } : {}),
           currencyOrder,
           currencies,
         };
@@ -3365,6 +3440,13 @@ const loadCounterById = useCallback(
       setSummaryAddonDialogState(null);
     }
   }, [isModalOpen]);
+
+  useEffect(() => {
+    if (summaryAttendedDialogOpen || summaryNoShowDialogOpen || summaryAddonDialogState) {
+      return;
+    }
+    setRevealedCustomerPhoneKeys((prev) => (prev.size > 0 ? new Set() : prev));
+  }, [summaryAddonDialogState, summaryAttendedDialogOpen, summaryNoShowDialogOpen]);
 
 
   const allowedAfterCutoffChannelIds = useMemo(
@@ -4282,6 +4364,45 @@ const loadCounterById = useCallback(
         };
         const nextMap = { ...prev, [channelId]: nextChannelState };
         return nextMap;
+      });
+      setWalkInNoteDirty(true);
+    },
+    [setWalkInNoteDirty],
+  );
+  const handleCustomTicketTransferChange = useCallback(
+    (channelId: number, ticketLabel: string, checked: boolean) => {
+      if (ticketLabel !== CUSTOM_TICKET_LABEL) {
+        return;
+      }
+      setWalkInTicketDataByChannel((prev) => {
+        const currentChannel = prev[channelId] ?? { ticketOrder: [], tickets: {} };
+        const ticketEntry =
+          currentChannel.tickets[ticketLabel] ?? {
+            name: ticketLabel,
+            currencyOrder: [],
+            currencies: {},
+          };
+        if (Boolean(ticketEntry.transfer) === checked) {
+          return prev;
+        }
+        const nextTicket: WalkInTicketEntryState = {
+          ...ticketEntry,
+          transfer: checked,
+        };
+        const nextTickets = {
+          ...currentChannel.tickets,
+          [ticketLabel]: nextTicket,
+        };
+        const nextOrder = currentChannel.ticketOrder.includes(ticketLabel)
+          ? currentChannel.ticketOrder
+          : [...currentChannel.ticketOrder, ticketLabel];
+        return {
+          ...prev,
+          [channelId]: {
+            ticketOrder: nextOrder,
+            tickets: nextTickets,
+          },
+        };
       });
       setWalkInNoteDirty(true);
     },
@@ -6050,7 +6171,9 @@ useEffect(() => {
               const ticketDisplayName =
                 ticketEntry?.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name : ticketLabel;
               ticketSnapshots.push({
+                key: ticketLabel,
                 name: ticketDisplayName,
+                ...(ticketLabel === CUSTOM_TICKET_LABEL && ticketEntry.transfer ? { transfer: true } : {}),
                 currencies: currencySnapshots,
               });
             }
@@ -6882,7 +7005,7 @@ useEffect(() => {
       const ensuredProductId = payload.counter.productId ?? null;
       const ensuredStaffIds = normalizeIdList(payload.staff.map((member) => member.userId));
       const ensuredChannels = Array.isArray(payload.channels) ? payload.channels : registry.channels;
-      const requestKey = `${payloadDate}|${(ensuredProductId ?? null) ?? 'null'}`;
+      const requestKey = `${payloadDate}|${ensuredProductId ?? 'null'}`;
       fetchCounterRequestRef.current = requestKey;
 
       if (shouldSendStaff) {
@@ -7107,6 +7230,30 @@ useEffect(() => {
     [managerOptions, selectedManagerId],
   );
   const effectiveStaffIds = pendingStaffIds;
+  const summaryStaffMembers = useMemo(() => {
+    const optionsById = new Map<number, StaffOption>();
+    staffOptions.forEach((option) => optionsById.set(option.id, option));
+
+    const savedStaffById = new Map((registry.counter?.staff ?? []).map((member) => [member.userId, member]));
+
+    return effectiveStaffIds.map((staffId) => {
+      const option = optionsById.get(staffId);
+      if (option) {
+        return {
+          id: option.id,
+          name: buildDisplayName(option),
+          role: option.userTypeName ?? option.userTypeSlug ?? null,
+        };
+      }
+
+      const savedStaff = savedStaffById.get(staffId);
+      return {
+        id: staffId,
+        name: savedStaff?.name || `Staff #${staffId}`,
+        role: savedStaff?.userTypeName ?? savedStaff?.userTypeSlug ?? null,
+      };
+    });
+  }, [effectiveStaffIds, registry.counter?.staff, staffOptions]);
 
   const productOptions = useMemo(() => {
     const map = new Map<number, CatalogProduct>();
@@ -7587,6 +7734,33 @@ useEffect(() => {
                                 </Stack>
                               )}
                             </Stack>
+                            {isCustomTicket && (
+                              <FormControlLabel
+                                control={
+                                  <Checkbox
+                                    size="small"
+                                    checked={Boolean(ticketEntry.transfer)}
+                                    onChange={(event) =>
+                                      handleCustomTicketTransferChange(
+                                        channel.id,
+                                        ticketLabel,
+                                        event.target.checked,
+                                      )
+                                    }
+                                    disabled={disableInputs}
+                                  />
+                                }
+                                label="Transfer"
+                                sx={{
+                                  alignSelf: 'flex-start',
+                                  m: 0,
+                                  '& .MuiFormControlLabel-label': {
+                                    fontSize: '0.875rem',
+                                    fontWeight: 600,
+                                  },
+                                }}
+                              />
+                            )}
                             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
                               {availableCurrencies.map((currencyOption) => {
                                 const selected = ticketEntry.currencyOrder.includes(currencyOption);
@@ -8989,6 +9163,7 @@ type SummaryRowOptions = {
           }
           const ticketLabel =
             ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name.trim() : ticketKey;
+          const displayTicketLabel = ticketEntry.transfer ? `${ticketLabel} (Transfer)` : ticketLabel;
           ticketEntry.currencyOrder.forEach((currency) => {
             const currencyEntry = ticketEntry.currencies[currency];
             if (!currencyEntry) {
@@ -9002,7 +9177,7 @@ type SummaryRowOptions = {
             rows.push({
               channelId,
               channelName,
-              ticketLabel,
+              ticketLabel: displayTicketLabel,
               currency,
               qty,
             });
@@ -9561,6 +9736,49 @@ type SummaryRowOptions = {
             </Stack>
           </Box>
         )}
+        <Box>
+          <Card variant="outlined">
+            <CardContent>
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1.25}
+                alignItems={{ xs: 'flex-start', sm: 'center' }}
+                justifyContent="space-between"
+                sx={{ mb: 1.5 }}
+              >
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Person fontSize="small" color="primary" />
+                  <Typography variant="subtitle1" fontWeight={700}>
+                    Staff working
+                  </Typography>
+                </Stack>
+                <Chip
+                  size="small"
+                  color={summaryStaffMembers.length > 0 ? 'primary' : 'default'}
+                  variant={summaryStaffMembers.length > 0 ? 'filled' : 'outlined'}
+                  label={`${summaryStaffMembers.length} ${summaryStaffMembers.length === 1 ? 'person' : 'people'}`}
+                  sx={{ fontWeight: 700 }}
+                />
+              </Stack>
+              {summaryStaffMembers.length > 0 ? (
+                <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                  {summaryStaffMembers.map((member) => (
+                    <Chip
+                      key={member.id}
+                      label={member.role ? `${member.name} - ${member.role}` : member.name}
+                      variant="outlined"
+                      sx={{ fontWeight: 600 }}
+                    />
+                  ))}
+                </Stack>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No staff selected for this counter yet.
+                </Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Box>
       </Stack>
     );
   };
@@ -9706,63 +9924,72 @@ type SummaryRowOptions = {
   const modalTitle =
     modalMode === 'create' ? 'Create Counter' : modalMode === 'update' ? 'Update Counter' : 'Counter';
   const pageLayoutStyles = useMemo(() => {
-    const verticalOffset = isMobileScreen ? theme.spacing(12) : theme.spacing(16);
     return {
-      pb: theme.spacing(isMobileScreen ? 1 : 1.75),
-      pt: theme.spacing(isMobileScreen ? 0.5 : 1),
-      minHeight: `calc(100vh - ${verticalOffset})`,
+      pb: theme.spacing(isMobileScreen ? 1.5 : 3),
+      pt: theme.spacing(isMobileScreen ? 1 : 2),
+      px: { xs: 0, sm: 1, md: 2 },
+      minHeight: '100%',
       display: 'flex',
       flex: 1,
       alignItems: 'stretch',
-      gap: theme.spacing(0.35),
+      gap: theme.spacing(isMobileScreen ? 1 : 2),
     };
-  }, [isMobileScreen, theme]);
-  const panelMaxHeight = useMemo(() => {
-    const offset = isMobileScreen ? theme.spacing(12) : theme.spacing(16);
-    return `calc(100vh - ${offset})`;
   }, [isMobileScreen, theme]);
 
   const counterActions = isMobileScreen ? (
-    <Tooltip title="Add Counter">
-      <IconButton color="primary" size="small" onClick={handleAddNewCounter} aria-label="Add counter">
+    <Tooltip title="Add">
+      <IconButton color="primary" size="small" onClick={handleAddNewCounter} aria-label="Add">
         <Add fontSize="small" />
       </IconButton>
     </Tooltip>
   ) : (
-    <Button variant="contained" size="small" startIcon={<Add />} onClick={handleAddNewCounter}>
-      Add New
+    <Button variant="contained" size="large" startIcon={<Add />} onClick={handleAddNewCounter} sx={{ borderRadius: 999, px: 3 }}>
+      Add
     </Button>
   );
 
   return (
     <>
-      <Stack spacing={2} sx={pageLayoutStyles}>
+      <Stack spacing={2.5} sx={pageLayoutStyles}>
         <Card
           variant="outlined"
           sx={{
             flex: 1,
+            width: '100%',
             display: 'flex',
             flexDirection: 'column',
             minHeight: 0,
-            maxHeight: panelMaxHeight,
             overflow: 'hidden',
+            borderRadius: { xs: 0, sm: 4 },
+            borderColor: 'divider',
+            borderLeft: { xs: 0, sm: '1px solid' },
+            borderRight: { xs: 0, sm: '1px solid' },
+            boxShadow: '0 18px 48px rgba(15, 23, 42, 0.08)',
           }}
         >
-          <CardHeader
-            title={
-              <Typography variant="h6" component="span">
+          <Box
+            sx={{
+              p: { xs: 2, sm: 2.5 },
+              pb: 1,
+              display: 'grid',
+              gridTemplateColumns: '1fr auto 1fr',
+              alignItems: 'center',
+              gap: 1,
+            }}
+          >
+            <Box />
+            <Stack spacing={0.25} sx={{ textAlign: 'center', minWidth: 0 }}>
+              <Typography variant="h6" component="span" sx={{ fontWeight: 900, lineHeight: 1.15 }}>
                 Counters
               </Typography>
-            }
-            action={counterActions}
-            subheader={counterListLoading ? 'Loading counters...' : null}
-            sx={{
-              alignItems: 'center',
-              '& .MuiCardHeader-action': {
-                margin: 0,
-              },
-            }}
-          />
+              {counterListLoading ? (
+                <Typography variant="caption" color="text.secondary">
+                  Loading counters...
+                </Typography>
+              ) : null}
+            </Stack>
+            <Box sx={{ justifySelf: 'end' }}>{counterActions}</Box>
+          </Box>
           <CardContent
             sx={{
               flex: 1,
@@ -9770,6 +9997,7 @@ type SummaryRowOptions = {
               flexDirection: 'column',
               minHeight: 0,
               gap: 1.5,
+              pt: 0,
             }}
           >
             {counterListLoading ? (
@@ -9804,7 +10032,24 @@ type SummaryRowOptions = {
               </Box>
             ) : (
               <Stack spacing={1} sx={{ flex: 1, minHeight: 0 }}>
-                <List dense sx={{ flex: 1, overflowY: 'auto', pr: 1 }}>
+                <List
+                  dense
+                  disablePadding
+                  sx={{
+                    flex: 1,
+                    overflowY: 'auto',
+                    pr: { xs: 0, sm: 0.5 },
+                    pb: 0.5,
+                    display: { xs: 'block', md: 'grid' },
+                    gridTemplateColumns: {
+                      md: 'repeat(2, minmax(0, 1fr))',
+                      lg: 'repeat(3, minmax(0, 1fr))',
+                    },
+                    alignContent: 'start',
+                    alignItems: 'stretch',
+                    gap: { md: 1.25, lg: 1.5 },
+                  }}
+                >
                   {pagedCounterDisplayData.map((counterItem) => {
                     const isSelected =
                       selectedCounterId != null &&
@@ -9834,7 +10079,7 @@ type SummaryRowOptions = {
                 <Box
                   sx={{
                     borderTop: (theme) => `1px solid ${theme.palette.divider}`,
-                    pt: 1,
+                    pt: 1.25,
                   }}
                 >
                   <Box
@@ -9927,15 +10172,37 @@ type SummaryRowOptions = {
         maxWidth="lg"
         fullScreen={isMobileScreen}
         aria-labelledby="counter-dialog-title"
+        PaperProps={{
+          sx: {
+            borderRadius: isMobileScreen ? 0 : 4,
+            overflow: 'hidden',
+            boxShadow: isMobileScreen ? undefined : '0 24px 70px rgba(15, 23, 42, 0.22)',
+          },
+        }}
       >
         <DialogTitle
           id="counter-dialog-title"
-          sx={{ m: 0, p: 2, pb: 2, display: 'flex', flexDirection: 'column', gap: 1 }}
+          sx={{
+            m: 0,
+            p: { xs: 1.5, sm: 2 },
+            pb: { xs: 1.5, sm: 2 },
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1,
+            bgcolor: 'background.paper',
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+          }}
         >
           <Stack direction="row" alignItems="center" spacing={1.5} sx={{ width: '100%', flexWrap: 'wrap' }}>
-            <Typography variant="h6" component="span">
-              {modalTitle}
-            </Typography>
+            <Stack spacing={0} sx={{ minWidth: 0 }}>
+              <Typography variant="h6" component="span" sx={{ fontWeight: 900, lineHeight: 1.1 }}>
+                {modalTitle}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {selectedDate ? dayjs(selectedDate).format('MMM D, YYYY') : 'Counter workflow'}
+              </Typography>
+            </Stack>
             <Box sx={{ flexGrow: 1 }} />
             {renderModalNavigation()}
             <IconButton aria-label="close" onClick={handleCloseModal} sx={{ ml: isMobileScreen ? 0 : 0.5 }}>
@@ -9946,7 +10213,8 @@ type SummaryRowOptions = {
         <DialogContent
           dividers
           sx={{
-            p: { xs: 2, sm: 3 },
+            p: { xs: 1.5, sm: 3 },
+            bgcolor: '#f7f8fb',
             overflowX: 'hidden',
           }}
         >
@@ -10360,6 +10628,9 @@ type SummaryRowOptions = {
                   const telNumber = normalizePhoneForTel(order.customerPhone);
                   const whatsappNumber = normalizePhoneForWhatsApp(order.customerPhone);
                   const customerEmail = normalizeEmailForContact(order.customerEmail);
+                  const revealKey = `attended-${order.id}-${order.platformBookingId}`;
+                  const displayPhone = telNumber;
+                  const phoneRevealed = revealedCustomerPhoneKeys.has(revealKey);
 
                   return (
                     <Stack
@@ -10375,7 +10646,36 @@ type SummaryRowOptions = {
                           <Chip size="small" label={platformChipLabel} sx={{ ...platformChipStyle, fontWeight: 600 }} />
                         )}
                         <Chip size="small" color="success" label={`Attended: ${attendedPeople}`} />
+                        <Tooltip title={displayPhone ? (phoneRevealed ? 'Hide phone number' : 'Show phone number') : 'No phone number'}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={!displayPhone}
+                              onClick={() => toggleCustomerPhoneReveal(revealKey)}
+                              aria-label={phoneRevealed ? 'Hide customer phone number' : 'Show customer phone number'}
+                              sx={{ ml: 'auto' }}
+                            >
+                              <Visibility fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                       </Stack>
+                      {phoneRevealed && displayPhone && (
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            px: 1,
+                            py: 0.75,
+                            borderRadius: 1,
+                            bgcolor: 'action.hover',
+                            fontWeight: 700,
+                            textAlign: 'center',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {displayPhone}
+                        </Typography>
+                      )}
                       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.75}>
                         <Button
                           size="small"
@@ -10472,6 +10772,9 @@ type SummaryRowOptions = {
                 const telNumber = normalizePhoneForTel(order.customerPhone);
                 const whatsappNumber = normalizePhoneForWhatsApp(order.customerPhone);
                 const customerEmail = normalizeEmailForContact(order.customerEmail);
+                const revealKey = `no-show-${order.id}-${order.platformBookingId}`;
+                const displayPhone = telNumber;
+                const phoneRevealed = revealedCustomerPhoneKeys.has(revealKey);
 
                 return (
                   <Stack
@@ -10491,7 +10794,36 @@ type SummaryRowOptions = {
                         color={isPartialNoShow ? 'info' : 'warning'}
                         label={`${isPartialNoShow ? 'Partial No-show' : 'No-show'}: ${pendingPeople}`}
                       />
+                      <Tooltip title={displayPhone ? (phoneRevealed ? 'Hide phone number' : 'Show phone number') : 'No phone number'}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            disabled={!displayPhone}
+                            onClick={() => toggleCustomerPhoneReveal(revealKey)}
+                            aria-label={phoneRevealed ? 'Hide customer phone number' : 'Show customer phone number'}
+                            sx={{ ml: 'auto' }}
+                          >
+                            <Visibility fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                     </Stack>
+                    {phoneRevealed && displayPhone && (
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          px: 1,
+                          py: 0.75,
+                          borderRadius: 1,
+                          bgcolor: 'action.hover',
+                          fontWeight: 700,
+                          textAlign: 'center',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {displayPhone}
+                      </Typography>
+                    )}
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.75}>
                       <Button
                         size="small"
@@ -10574,6 +10906,9 @@ type SummaryRowOptions = {
                   const telNumber = normalizePhoneForTel(order.customerPhone);
                   const whatsappNumber = normalizePhoneForWhatsApp(order.customerPhone);
                   const customerEmail = normalizeEmailForContact(order.customerEmail);
+                  const revealKey = `addon-booking-${order.id}-${order.platformBookingId}`;
+                  const displayPhone = telNumber;
+                  const phoneRevealed = revealedCustomerPhoneKeys.has(revealKey);
 
                   return (
                     <Stack
@@ -10589,7 +10924,36 @@ type SummaryRowOptions = {
                           <Chip size="small" label={platformChipLabel} sx={{ ...platformChipStyle, fontWeight: 600 }} />
                         )}
                         <Chip size="small" label={`Addon ${attendedQty}/${purchasedQty}`} color="info" />
+                        <Tooltip title={displayPhone ? (phoneRevealed ? 'Hide phone number' : 'Show phone number') : 'No phone number'}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={!displayPhone}
+                              onClick={() => toggleCustomerPhoneReveal(revealKey)}
+                              aria-label={phoneRevealed ? 'Hide customer phone number' : 'Show customer phone number'}
+                              sx={{ ml: 'auto' }}
+                            >
+                              <Visibility fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                       </Stack>
+                      {phoneRevealed && displayPhone && (
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            px: 1,
+                            py: 0.75,
+                            borderRadius: 1,
+                            bgcolor: 'action.hover',
+                            fontWeight: 700,
+                            textAlign: 'center',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {displayPhone}
+                        </Typography>
+                      )}
                       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.75}>
                         <Button
                           size="small"
