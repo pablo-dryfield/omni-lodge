@@ -22,6 +22,7 @@ import AuditLog from '../models/AuditLog.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
 import Product from '../models/Product.js';
+import RequiredAction from '../models/RequiredAction.js';
 import { renderScheduleHTML } from './renderSchedule.js';
 import { ensureFolderPath, uploadBuffer } from './googleDrive.js';
 import { sendSchedulingNotification } from './notificationService.js';
@@ -217,6 +218,27 @@ async function logAudit(options: { actorId?: number | null; action: string; enti
     createdAt: dayjs().tz(resolveScheduleTimezone()).toDate(),
   });
 }
+
+const formatUserName = (user?: User | null): string => {
+  const fullName = [user?.firstName, user?.lastName]
+    .map((part) => (typeof part === 'string' ? part.trim() : ''))
+    .filter(Boolean)
+    .join(' ');
+  return fullName || user?.username || user?.email || 'Your teammate';
+};
+
+const formatSwapAssignmentForPopup = (assignment?: ShiftAssignment | null): string => {
+  const shift = assignment?.shiftInstance;
+  const shiftType = shift?.shiftType?.name ?? 'Shift';
+  const date = shift?.date && dayjs(shift.date).isValid()
+    ? dayjs(shift.date).format('ddd, MMM D')
+    : 'date unavailable';
+  const start = shift?.timeStart ? String(shift.timeStart).slice(0, 5) : null;
+  const end = shift?.timeEnd ? String(shift.timeEnd).slice(0, 5) : null;
+  const time = [start, end].filter(Boolean).join(' - ') || 'time unavailable';
+  const role = assignment?.roleInShift || assignment?.shiftRole?.name || 'role not specified';
+  return `${shiftType} | ${date} | ${time} | ${role}`;
+};
 
 async function ensureWeekExists(identifier: WeekIdentifier, transaction?: Transaction): Promise<{ week: ScheduleWeek; created: boolean }> {
   const [week, created] = await ScheduleWeek.findOrCreate({
@@ -2415,8 +2437,22 @@ export async function cancelSwapRequest(swapId: number, actorId: number): Promis
 export async function swapManagerDecision(swapId: number, managerId: number, approve: boolean, reason?: string): Promise<SwapRequest> {
   const swap = await SwapRequest.findByPk(swapId, {
     include: [
-      { model: ShiftAssignment, as: 'fromAssignment' },
-      { model: ShiftAssignment, as: 'toAssignment' },
+      {
+        model: ShiftAssignment,
+        as: 'fromAssignment',
+        include: [
+          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
+          { model: ShiftRole, as: 'shiftRole' },
+        ],
+      },
+      {
+        model: ShiftAssignment,
+        as: 'toAssignment',
+        include: [
+          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
+          { model: ShiftRole, as: 'shiftRole' },
+        ],
+      },
     ],
   });
   if (!swap) {
@@ -2447,6 +2483,40 @@ export async function swapManagerDecision(swapId: number, managerId: number, app
   const participants = await User.findAll({
     where: { id: [swap.requesterId, swap.partnerId] },
   });
+  const requester = participants.find((participant) => participant.id === swap.requesterId) ?? null;
+  const partner = participants.find((participant) => participant.id === swap.partnerId) ?? null;
+  if (approve) {
+    const requesterName = formatUserName(requester);
+    const partnerName = formatUserName(partner);
+    await RequiredAction.create({
+      type: 'custom',
+      title: 'Swap approved',
+      body: [
+        `Your shift swap between ${requesterName} and ${partnerName} was approved by a manager.`,
+        '',
+        `${requesterName} offered: ${formatSwapAssignmentForPopup(swap.fromAssignment)}`,
+        `${partnerName} offered: ${formatSwapAssignmentForPopup(swap.toAssignment)}`,
+        '',
+        'The schedule has been updated.',
+      ].join('\n'),
+      payload: {
+        source: 'schedule_swap_manager_decision',
+        swapId: swap.id,
+        decision: 'approved',
+        requesterId: swap.requesterId,
+        partnerId: swap.partnerId,
+        fromAssignmentId: swap.fromAssignmentId,
+        toAssignmentId: swap.toAssignmentId,
+      },
+      targetUserIds: Array.from(new Set([swap.requesterId, swap.partnerId])),
+      requiresCompletion: true,
+      requiresSignature: false,
+      startsAt: new Date(),
+      status: true,
+      createdBy: managerId,
+      updatedBy: managerId,
+    });
+  }
   await Promise.all(
     participants.map((participant) =>
       sendSchedulingNotification({
