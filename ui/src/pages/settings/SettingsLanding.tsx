@@ -38,6 +38,7 @@ import { selectAllowedPageSlugs } from "../../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import { fetchLogFile, fetchPm2ProcessLogs, usePm2Processes, useRestartPm2Process } from "../../api/pm2";
+import { clearCachedAppFilesAndReload } from "../../utils/refreshApp";
 
 type SettingsSection = {
   label: string;
@@ -249,23 +250,7 @@ const SettingsLanding = () => {
       return;
     }
     setRefreshing(true);
-    try {
-      if ("serviceWorker" in navigator) {
-        const registrations = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(
-          registrations.map(async (registration) => {
-            registration.waiting?.postMessage({ type: "SKIP_WAITING" });
-            await registration.unregister();
-          }),
-        );
-      }
-      if ("caches" in window) {
-        const keys = await window.caches.keys();
-        await Promise.all(keys.map((key) => window.caches.delete(key)));
-      }
-    } finally {
-      window.location.reload();
-    }
+    await clearCachedAppFilesAndReload();
   };
 
   const handleRestartBackend = async () => {
