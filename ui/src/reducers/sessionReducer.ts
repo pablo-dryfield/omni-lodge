@@ -56,6 +56,15 @@ const sessionSlice = createSlice({
         state.userTypeId = null;
         state.error = null;
       })
+      .addCase(logoutUser.rejected, (state) => {
+        state.loggedUserId = 0;
+        state.authenticated = false;
+        state.user = '';
+        state.roleSlug = null;
+        state.roleName = null;
+        state.userTypeId = null;
+        state.error = null;
+      })
       .addCase(fetchSession.pending, (state) => {
         state.checkingSession = true;
       })

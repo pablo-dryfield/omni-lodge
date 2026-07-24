@@ -42,7 +42,8 @@ const accessControlSlice = createSlice({
         state.modules = {};
         state.openBarModeAccess = null;
       })
-      .addCase(logoutUser.fulfilled, () => createInitialState());
+      .addCase(logoutUser.fulfilled, () => createInitialState())
+      .addCase(logoutUser.rejected, () => createInitialState());
   },
 });
 

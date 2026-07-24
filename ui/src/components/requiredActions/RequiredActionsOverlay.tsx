@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent, ReactNode } from "react";
 import {
   Alert,
+  Avatar,
   Badge,
   Button,
   Card,
   Center,
+  FileInput,
   Group,
   Loader,
   Modal,
@@ -20,21 +22,31 @@ import {
   Title,
 } from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { IconAlertCircle, IconArrowsExchange, IconCheck, IconClipboardCheck, IconUserEdit, IconX } from "@tabler/icons-react";
+import { IconAlertCircle, IconArrowsExchange, IconCheck, IconClipboardCheck, IconSignature, IconUser, IconUserEdit, IconX } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import { acknowledgeCerebroPolicy, submitCerebroQuiz } from "../../api/cerebro";
 import {
   useCompleteRequiredAction,
   useCompleteRequiredProfileFields,
   useDecideRequiredManagerSwap,
+  useMarkRequiredActionPrompted,
   useMyRequiredActions,
   useRespondToRequiredSwap,
   type RequiredActionField,
   type RequiredActionItem,
 } from "../../api/requiredActions";
 import { CerebroRichTextContent } from "../cerebro/CerebroRichTextContent";
+import { compressImageFile } from "../../utils/imageCompression";
 
 const HEADER_FONT_STACK = "'Arial Black', 'Inter', sans-serif";
+const PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+const PROFILE_PHOTO_COMPRESSION_OPTIONS = {
+  maxWidth: 1400,
+  maxHeight: 1400,
+  maxSizeBytes: 900 * 1024,
+  quality: 0.84,
+  outputMimeType: "image/jpeg" as const,
+};
 
 const getApiErrorMessage = (error: unknown, fallback: string): string => {
   const candidate = error as {
@@ -131,26 +143,215 @@ const getActionIcon = (action: RequiredActionItem) => {
   return <IconClipboardCheck size={28} />;
 };
 
+type ESignaturePayload = {
+  dataUrl: string;
+  signedAt: string;
+  userAgent: string;
+};
+
+const ESignaturePad = ({
+  value,
+  onChange,
+  error,
+}: {
+  value: ESignaturePayload | null;
+  onChange: (value: ESignaturePayload | null) => void;
+  error?: string | null;
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.max(280, Math.floor(rect.width));
+    const height = 180;
+    canvas.width = width * ratio;
+    canvas.height = height * ratio;
+    canvas.style.height = `${height}px`;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.lineWidth = 3;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.strokeStyle = "#111827";
+
+    if (value?.dataUrl) {
+      const image = new Image();
+      image.onload = () => {
+        context.drawImage(image, 0, 0, width, height);
+      };
+      image.src = value.dataUrl;
+    }
+  }, [value?.dataUrl]);
+
+  const getPoint = (event: PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return null;
+    }
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    };
+  };
+
+  const commitSignature = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    onChange({
+      dataUrl: canvas.toDataURL("image/png"),
+      signedAt: new Date().toISOString(),
+      userAgent: window.navigator.userAgent,
+    });
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    const point = getPoint(event);
+    const canvas = canvasRef.current;
+    if (!point || !canvas) {
+      return;
+    }
+    event.preventDefault();
+    canvas.setPointerCapture(event.pointerId);
+    drawingRef.current = true;
+    lastPointRef.current = point;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+    context.beginPath();
+    context.arc(point.x, point.y, 1.5, 0, Math.PI * 2);
+    context.fillStyle = "#111827";
+    context.fill();
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingRef.current) {
+      return;
+    }
+    const point = getPoint(event);
+    const previous = lastPointRef.current;
+    const context = canvasRef.current?.getContext("2d");
+    if (!point || !previous || !context) {
+      return;
+    }
+    event.preventDefault();
+    context.beginPath();
+    context.moveTo(previous.x, previous.y);
+    context.lineTo(point.x, point.y);
+    context.stroke();
+    lastPointRef.current = point;
+  };
+
+  const handlePointerUp = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingRef.current) {
+      return;
+    }
+    event.preventDefault();
+    drawingRef.current = false;
+    lastPointRef.current = null;
+    commitSignature();
+  };
+
+  const handleClear = () => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      onChange(null);
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, rect.width, rect.height);
+    onChange(null);
+  };
+
+  return (
+    <Card withBorder radius="lg" p="md" style={{ borderColor: error ? "#ffc9c9" : value ? "#b7ebc6" : "#d7e6f8" }}>
+      <Stack gap="sm" align="center">
+        <Group gap="xs" justify="center">
+          <ThemeIcon radius="xl" variant="light" color="grape">
+            <IconSignature size={18} />
+          </ThemeIcon>
+          <Text fw={900}>E-signature required</Text>
+        </Group>
+        <Text size="sm" c={error ? "red.6" : "dimmed"} ta="center">
+          {error ?? (value ? "Signature captured." : "Draw your signature below to complete this request.")}
+        </Text>
+        <canvas
+          ref={canvasRef}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          style={{
+            width: "100%",
+            maxWidth: 620,
+            border: "1px solid #d7e0ea",
+            borderRadius: 12,
+            background: "#ffffff",
+            touchAction: "none",
+            boxShadow: "inset 0 1px 4px rgba(15, 23, 42, 0.08)",
+          }}
+        />
+        <Button variant="subtle" color="gray" size="xs" onClick={handleClear}>
+          Clear signature
+        </Button>
+      </Stack>
+    </Card>
+  );
+};
+
 const ProfileFieldsForm = ({
   action,
   onSubmit,
   loading,
+  signatureSlot,
 }: {
   action: RequiredActionItem;
-  onSubmit: (values: Record<string, string>) => void;
+  onSubmit: (values: Record<string, string>, profilePhoto?: File | null) => void;
   loading: boolean;
+  signatureSlot?: ReactNode;
 }) => {
   const fields = useMemo(() => action.payload.fields ?? [], [action.payload.fields]);
+  const photoField = useMemo(() => fields.find((field) => field.inputType === "image"), [fields]);
+  const textFields = useMemo(() => fields.filter((field) => field.inputType !== "image"), [fields]);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
+  const [profilePhotoPreview, setProfilePhotoPreview] = useState<string | null>(null);
+  const [profilePhotoError, setProfilePhotoError] = useState<string | null>(null);
 
   useEffect(() => {
     setValues(
-      fields.reduce<Record<string, string>>((acc, field) => {
+      textFields.reduce<Record<string, string>>((acc, field) => {
         acc[field.key] = field.currentValue ?? "";
         return acc;
       }, {}),
     );
-  }, [fields]);
+  }, [textFields]);
+
+  useEffect(
+    () => () => {
+      if (profilePhotoPreview) {
+        URL.revokeObjectURL(profilePhotoPreview);
+      }
+    },
+    [profilePhotoPreview],
+  );
 
   const updateValue = (field: RequiredActionField, value: string) => {
     setValues((current) => ({
@@ -159,10 +360,101 @@ const ProfileFieldsForm = ({
     }));
   };
 
+  const handleProfilePhotoChange = (file: File | null) => {
+    if (profilePhotoPreview) {
+      URL.revokeObjectURL(profilePhotoPreview);
+    }
+
+    if (!file) {
+      setProfilePhotoFile(null);
+      setProfilePhotoPreview(null);
+      setProfilePhotoError("Profile photo is required");
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setProfilePhotoFile(null);
+      setProfilePhotoPreview(null);
+      setProfilePhotoError("Upload an image file");
+      return;
+    }
+
+    if (file.size > PROFILE_PHOTO_MAX_BYTES) {
+      setProfilePhotoFile(null);
+      setProfilePhotoPreview(null);
+      setProfilePhotoError("Image must be 10 MB or less");
+      return;
+    }
+
+    setProfilePhotoFile(file);
+    setProfilePhotoPreview(URL.createObjectURL(file));
+    setProfilePhotoError(null);
+  };
+
+  const handleSubmit = async () => {
+    if (photoField && !profilePhotoFile) {
+      setProfilePhotoError("Profile photo is required");
+      return;
+    }
+
+    let uploadFile = profilePhotoFile;
+    if (uploadFile) {
+      try {
+        uploadFile = await compressImageFile(uploadFile, PROFILE_PHOTO_COMPRESSION_OPTIONS);
+      } catch (compressionError) {
+        console.error("Failed to compress profile photo before upload", compressionError);
+      }
+    }
+
+    onSubmit(values, uploadFile);
+  };
+
   return (
     <Stack gap="md">
+      {photoField ? (
+        <Card
+          withBorder
+          radius="lg"
+          p="lg"
+          style={{
+            borderColor: profilePhotoError ? "#ffc9c9" : profilePhotoFile ? "#b7ebc6" : "#d7e6f8",
+            background: profilePhotoFile ? "#f6fffb" : "#fbfdff",
+          }}
+        >
+          <Stack gap="md" align="center" ta="center">
+            <Avatar
+              size={112}
+              radius="50%"
+              src={profilePhotoPreview ?? undefined}
+              style={{
+                border: "6px solid #ffffff",
+                boxShadow: "0 16px 34px rgba(22, 31, 54, 0.12)",
+              }}
+            >
+              {!profilePhotoPreview ? <IconUser size={40} /> : null}
+            </Avatar>
+            <Stack gap={2} align="center">
+              <Text fw={900} size="lg">
+                Profile photo
+              </Text>
+              <Text size="sm" c={profilePhotoError ? "red.6" : "dimmed"}>
+                {profilePhotoError ?? (profilePhotoFile ? "Photo ready to upload." : "Required. Upload a clear profile photo.")}
+              </Text>
+            </Stack>
+            <FileInput
+              placeholder="Upload an image"
+              accept="image/*"
+              value={profilePhotoFile}
+              onChange={handleProfilePhotoChange}
+              clearable
+              required
+              style={{ width: "100%", maxWidth: 360 }}
+            />
+          </Stack>
+        </Card>
+      ) : null}
       <SimpleFieldGrid>
-        {fields.map((field) =>
+        {textFields.map((field) =>
           field.inputType === "textarea" ? (
             <Textarea
               key={field.key}
@@ -188,7 +480,8 @@ const ProfileFieldsForm = ({
           ),
         )}
       </SimpleFieldGrid>
-      <Button size="lg" fullWidth loading={loading} onClick={() => onSubmit(values)}>
+      {signatureSlot}
+      <Button size="lg" fullWidth loading={loading} onClick={handleSubmit}>
         Save and continue
       </Button>
     </Stack>
@@ -429,10 +722,12 @@ const GenericAction = ({
   action,
   onComplete,
   loading,
+  signatureSlot,
 }: {
   action: RequiredActionItem;
   onComplete: () => void;
   loading: boolean;
+  signatureSlot?: ReactNode;
 }) => (
   <Stack gap="lg">
     {action.body ? (
@@ -442,6 +737,7 @@ const GenericAction = ({
         </Text>
       </Paper>
     ) : null}
+    {signatureSlot}
     <Button size="lg" fullWidth loading={loading} onClick={onComplete}>
       {action.type === "policy_consent" ? "I agree" : "Mark complete"}
     </Button>
@@ -452,14 +748,16 @@ const PolicyAction = ({
   action,
   onAccept,
   loading,
+  signatureSlot,
 }: {
   action: RequiredActionItem;
   onAccept: () => void;
   loading: boolean;
+  signatureSlot?: ReactNode;
 }) => {
   const entry = action.payload.cerebroEntry;
   if (!entry) {
-    return <GenericAction action={action} onComplete={onAccept} loading={loading} />;
+    return <GenericAction action={action} onComplete={onAccept} loading={loading} signatureSlot={signatureSlot} />;
   }
 
   return (
@@ -473,6 +771,7 @@ const PolicyAction = ({
           <CerebroRichTextContent value={entry.body} />
         </Stack>
       </Paper>
+      {signatureSlot}
       <Button size="lg" fullWidth loading={loading} onClick={onAccept}>
         I agree
       </Button>
@@ -485,11 +784,13 @@ const QuizAction = ({
   onSubmit,
   loading,
   resultText,
+  signatureSlot,
 }: {
   action: RequiredActionItem;
   onSubmit: (answers: Record<string, string>) => void;
   loading: boolean;
   resultText: string | null;
+  signatureSlot?: ReactNode;
 }) => {
   const quiz = action.payload.cerebroQuiz;
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -499,7 +800,7 @@ const QuizAction = ({
   }, [quiz?.id]);
 
   if (!quiz) {
-    return <GenericAction action={action} onComplete={() => onSubmit({})} loading={loading} />;
+    return <GenericAction action={action} onComplete={() => onSubmit({})} loading={loading} signatureSlot={signatureSlot} />;
   }
 
   const complete = quiz.questions.every((question) => Boolean(answers[question.id]));
@@ -544,6 +845,7 @@ const QuizAction = ({
           {resultText}
         </Alert>
       ) : null}
+      {signatureSlot}
       <Button size="lg" fullWidth loading={loading} disabled={!complete} onClick={() => onSubmit(answers)}>
         Submit quiz
       </Button>
@@ -556,14 +858,19 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
   const queryClient = useQueryClient();
   const completeAction = useCompleteRequiredAction();
   const completeProfileFields = useCompleteRequiredProfileFields();
+  const markPrompted = useMarkRequiredActionPrompted();
+  const promptedActionIdsRef = useRef<Set<string>>(new Set());
   const respondToSwap = useRespondToRequiredSwap();
   const decideManagerSwap = useDecideRequiredManagerSwap();
   const [error, setError] = useState<string | null>(null);
   const [quizResult, setQuizResult] = useState<string | null>(null);
   const [cerebroSubmitting, setCerebroSubmitting] = useState(false);
+  const [signature, setSignature] = useState<ESignaturePayload | null>(null);
+  const [signatureError, setSignatureError] = useState<string | null>(null);
 
   const actions = actionsQuery.data?.actions ?? [];
   const action = actions[0] ?? null;
+  const requiresSignature = Boolean(action?.source === "required_action" && action.requiresSignature);
   const isBusy =
     completeAction.isPending ||
     completeProfileFields.isPending ||
@@ -576,27 +883,79 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
   useEffect(() => {
     setError(null);
     setQuizResult(null);
+    setSignature(null);
+    setSignatureError(null);
   }, [action?.id]);
+
+  useEffect(() => {
+    if (!enabled || !action || action.source !== "required_action") {
+      return;
+    }
+    if (promptedActionIdsRef.current.has(action.id)) {
+      return;
+    }
+    promptedActionIdsRef.current.add(action.id);
+    markPrompted.mutate({ actionId: action.recordId });
+  }, [action, enabled, markPrompted]);
+
+  const getSignatureForSubmit = (): ESignaturePayload | null | undefined => {
+    if (!requiresSignature) {
+      return null;
+    }
+    if (!signature) {
+      setSignatureError("Draw your signature before completing this request.");
+      return undefined;
+    }
+    setSignatureError(null);
+    return signature;
+  };
+
+  const signatureSlot = requiresSignature ? (
+    <ESignaturePad
+      value={signature}
+      onChange={(nextSignature) => {
+        setSignature(nextSignature);
+        if (nextSignature) {
+          setSignatureError(null);
+        }
+      }}
+      error={signatureError}
+    />
+  ) : null;
 
   const handleComplete = async () => {
     if (!action || action.source !== "required_action") {
       return;
     }
+    const eSignature = getSignatureForSubmit();
+    if (eSignature === undefined) {
+      return;
+    }
     setError(null);
     try {
-      await completeAction.mutateAsync({ actionId: action.recordId, response: { acknowledgedAt: new Date().toISOString() } });
+      await completeAction.mutateAsync({
+        actionId: action.recordId,
+        response: {
+          acknowledgedAt: new Date().toISOString(),
+          ...(eSignature ? { eSignature } : {}),
+        },
+      });
     } catch (mutationError) {
       setError(getApiErrorMessage(mutationError, "Unable to complete this required action"));
     }
   };
 
-  const handleProfileSubmit = async (values: Record<string, string>) => {
+  const handleProfileSubmit = async (values: Record<string, string>, profilePhoto?: File | null) => {
     if (!action || action.type !== "profile_fields") {
+      return;
+    }
+    const eSignature = getSignatureForSubmit();
+    if (eSignature === undefined) {
       return;
     }
     setError(null);
     try {
-      await completeProfileFields.mutateAsync({ actionId: action.recordId, values });
+      await completeProfileFields.mutateAsync({ actionId: action.recordId, values, profilePhoto, signature: eSignature });
     } catch (mutationError) {
       setError(getApiErrorMessage(mutationError, "Unable to save your details"));
     }
@@ -624,10 +983,25 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
       await handleComplete();
       return;
     }
+    const eSignature = getSignatureForSubmit();
+    if (eSignature === undefined) {
+      return;
+    }
     setError(null);
     try {
       setCerebroSubmitting(true);
       await acknowledgeCerebroPolicy(entryId);
+      if (action?.source === "required_action") {
+        await completeAction.mutateAsync({
+          actionId: action.recordId,
+          response: {
+            selectedAction: "accepted_policy",
+            cerebroEntryId: entryId,
+            acceptedAt: new Date().toISOString(),
+            ...(eSignature ? { eSignature } : {}),
+          },
+        });
+      }
       await queryClient.invalidateQueries({ queryKey: ["required-actions", "me"] });
     } catch (mutationError) {
       setError(getApiErrorMessage(mutationError, "Unable to accept this policy"));
@@ -641,6 +1015,10 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     if (!quizId) {
       return;
     }
+    const eSignature = getSignatureForSubmit();
+    if (eSignature === undefined) {
+      return;
+    }
     setError(null);
     setQuizResult(null);
     try {
@@ -649,6 +1027,20 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
       if (!result.passed) {
         setQuizResult(`You scored ${result.scorePercent.toFixed(0)}%. You need ${action.payload.cerebroQuiz?.passingScore ?? 80}% to continue.`);
         return;
+      }
+      if (action?.source === "required_action") {
+        await completeAction.mutateAsync({
+          actionId: action.recordId,
+          response: {
+            selectedAction: "submitted_quiz",
+            cerebroQuizId: quizId,
+            answers,
+            scorePercent: result.scorePercent,
+            passed: result.passed,
+            submittedAt: new Date().toISOString(),
+            ...(eSignature ? { eSignature } : {}),
+          },
+        });
       }
       await queryClient.invalidateQueries({ queryKey: ["required-actions", "me"] });
     } catch (mutationError) {
@@ -742,13 +1134,13 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
               {action.type === "schedule_swap_partner" || action.type === "schedule_swap_manager" ? (
                 <SwapAction action={action} onRespond={handleSwapResponse} loading={isBusy} />
               ) : action.type === "profile_fields" ? (
-                <ProfileFieldsForm action={action} onSubmit={handleProfileSubmit} loading={isBusy} />
+                <ProfileFieldsForm action={action} onSubmit={handleProfileSubmit} loading={isBusy} signatureSlot={signatureSlot} />
               ) : action.type === "policy_consent" ? (
-                <PolicyAction action={action} onAccept={handlePolicyAccept} loading={isBusy} />
+                <PolicyAction action={action} onAccept={handlePolicyAccept} loading={isBusy} signatureSlot={signatureSlot} />
               ) : action.type === "quiz" ? (
-                <QuizAction action={action} onSubmit={handleQuizSubmit} loading={isBusy} resultText={quizResult} />
+                <QuizAction action={action} onSubmit={handleQuizSubmit} loading={isBusy} resultText={quizResult} signatureSlot={signatureSlot} />
               ) : (
-                <GenericAction action={action} onComplete={handleComplete} loading={isBusy} />
+                <GenericAction action={action} onComplete={handleComplete} loading={isBusy} signatureSlot={signatureSlot} />
               )}
 
               {actionsQuery.isFetching ? (

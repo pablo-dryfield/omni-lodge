@@ -9,11 +9,13 @@ export type InboxNotification = {
   body: string | null;
   url: string | null;
   sentAt: string;
+  readAt: string | null;
 };
 
 export type InboxNotificationListResponse = {
   items: InboxNotification[];
   total: number;
+  unreadCount: number;
   limit: number;
   offset: number;
 };
@@ -127,7 +129,7 @@ const normalizeResponse = (
   payload: unknown,
 ): InboxNotificationListResponse => {
   if (!payload || typeof payload !== "object") {
-    return { items: [], total: 0, limit: 0, offset: 0 };
+    return { items: [], total: 0, unreadCount: 0, limit: 0, offset: 0 };
   }
 
   const source = payload as Partial<InboxNotificationListResponse>;
@@ -141,6 +143,7 @@ const normalizeResponse = (
   return {
     items,
     total: Number.isFinite(source.total) ? Number(source.total) : items.length,
+    unreadCount: Number.isFinite(source.unreadCount) ? Number(source.unreadCount) : 0,
     limit: Number.isFinite(source.limit) ? Number(source.limit) : items.length,
     offset: Number.isFinite(source.offset) ? Number(source.offset) : 0,
   };
@@ -161,6 +164,14 @@ export const fetchInboxNotifications = async (params?: {
   });
 
   return normalizeResponse(response.data);
+};
+
+export const markInboxNotificationsRead = async (): Promise<{ markedRead: number }> => {
+  const response = await axiosInstance.post("/notifications/read-all", {}, { withCredentials: true });
+  const payload = response.data as { markedRead?: unknown };
+  return {
+    markedRead: Number.isFinite(payload.markedRead) ? Number(payload.markedRead) : 0,
+  };
 };
 
 export const sendNotificationPushTest = async (params: {

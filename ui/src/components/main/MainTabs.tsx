@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ActionIcon,
   Avatar,
+  Badge,
   Box,
   Button,
   Burger,
@@ -28,6 +30,8 @@ import {
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconLogout,
+  IconRefresh,
+  IconUserCircle,
 } from "@tabler/icons-react";
 
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -37,8 +41,9 @@ import type { User } from "../../types/users/User";
 import { buildUserProfilePhotoUrl } from "../../utils/profilePhoto";
 import {
   fetchInboxNotifications,
-  type InboxNotification,
+  markInboxNotificationsRead,
 } from "../../api/notifications";
+import { clearCachedAppFilesAndReload } from "../../utils/refreshApp";
 
 const NAV_GAP = 8;
 const OVERFLOW_TRIGGER_RESERVE = 72;
@@ -55,6 +60,7 @@ const MainTabs = ({
   sidebarOpened = false,
 }: MainTabsProps) => {
   const dispatch = useAppDispatch();
+  const queryClient = useQueryClient();
   const allowedPages = useAppSelector(selectAllowedNavigationPages);
   const { currentPage } = useAppSelector((state) => state.navigation);
   const sessionUserName = useAppSelector((state) => state.session.user);
@@ -70,12 +76,14 @@ const MainTabs = ({
   const showSidebarToggle = hasSidebar && isTablet && Boolean(onSidebarToggle);
   const [visiblePages, setVisiblePages] = useState(allowedPages);
   const [overflowPages, setOverflowPages] = useState<typeof allowedPages>([]);
-  const [recentNotifications, setRecentNotifications] = useState<InboxNotification[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const [refreshingApp, setRefreshingApp] = useState(false);
   const navContainerRef = useRef<HTMLDivElement | null>(null);
   const navMeasurementRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const requestedUsersRef = useRef(false);
+  const navRafRef = useRef<number | null>(null);
 
   const userRecords = useMemo(
     () => (usersState?.[0]?.data?.[0]?.data ?? []) as Partial<User>[],
@@ -135,11 +143,8 @@ const MainTabs = ({
     setNotificationsLoading(true);
     setNotificationsError(null);
     try {
-      const response = await fetchInboxNotifications({ limit: 5, offset: 0 });
-      const sorted = [...response.items].sort(
-        (a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime(),
-      );
-      setRecentNotifications(sorted.slice(0, 5));
+      const response = await fetchInboxNotifications({ limit: 1, offset: 0 });
+      setUnreadNotificationCount(response.unreadCount);
     } catch (error) {
       setNotificationsError(
         error instanceof Error ? error.message : "Failed to load notifications",
@@ -149,10 +154,43 @@ const MainTabs = ({
     }
   }, []);
 
-  const handleSignOut = () => {
+  const openNotifications = async () => {
+    closeDrawer();
+    navigate("/notifications");
+    if (unreadNotificationCount === 0) {
+      return;
+    }
+    setUnreadNotificationCount(0);
+    try {
+      await markInboxNotificationsRead();
+    } catch {
+      loadRecentNotifications().catch(() => undefined);
+    }
+  };
+
+  const handleSignOut = async () => {
+    closeDrawer();
     document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-    dispatch(logoutUser());
-    window.location.href = "/";
+    try {
+      await dispatch(logoutUser()).unwrap();
+    } catch {
+      // Local auth state is cleared by the rejected reducer; keep sign-out resilient.
+    } finally {
+      queryClient.clear();
+      navigate("/", { replace: true });
+    }
+  };
+
+  const handleRefreshApp = async () => {
+    if (refreshingApp) {
+      return;
+    }
+    const confirmed = window.confirm("This will clear cached app files and reload. Continue?");
+    if (!confirmed) {
+      return;
+    }
+    setRefreshingApp(true);
+    await clearCachedAppFilesAndReload();
   };
 
   const handleProfileClick = () => {
@@ -188,7 +226,7 @@ const MainTabs = ({
 
   useEffect(() => {
     if (!loggedUserId) {
-      setRecentNotifications([]);
+      setUnreadNotificationCount(0);
       setNotificationsError(null);
       return;
     }
@@ -263,10 +301,40 @@ const MainTabs = ({
 
   useEffect(() => {
     updateNavVisibility();
-    const handleResize = () => updateNavVisibility();
+    const scheduleUpdate = () => {
+      if (navRafRef.current !== null) {
+        window.cancelAnimationFrame(navRafRef.current);
+      }
+      navRafRef.current = window.requestAnimationFrame(() => {
+        navRafRef.current = null;
+        updateNavVisibility();
+      });
+    };
+    const handleResize = () => scheduleUpdate();
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    const observer =
+      typeof ResizeObserver !== "undefined" && navContainerRef.current
+        ? new ResizeObserver(() => scheduleUpdate())
+        : null;
+    if (observer && navContainerRef.current) {
+      observer.observe(navContainerRef.current);
+    }
+    scheduleUpdate();
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      observer?.disconnect();
+      if (navRafRef.current !== null) {
+        window.cancelAnimationFrame(navRafRef.current);
+        navRafRef.current = null;
+      }
+    };
   }, [updateNavVisibility]);
+
+  useEffect(() => {
+    if (!isTablet) {
+      closeDrawer();
+    }
+  }, [isTablet, closeDrawer]);
 
   const shellStyle: React.CSSProperties = {
     background: `linear-gradient(135deg, ${theme.colors.dark[7]} 0%, ${theme.colors.dark[8]} 45%, ${theme.colors.dark[9]} 100%)`,
@@ -282,7 +350,7 @@ const MainTabs = ({
     margin: "0 auto",
     padding: `${rem(10)} ${isMobile ? rem(16) : rem(28)}`,
     display: "grid",
-    gridTemplateColumns: "auto 1fr auto",
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
     alignItems: "center",
     columnGap: rem(18),
     minHeight: isMobile ? rem(56) : rem(68),
@@ -295,6 +363,7 @@ const MainTabs = ({
     width: "100%",
     justifySelf: "center",
     overflow: "hidden",
+    minWidth: 0,
   };
 
   const actionsStyle: React.CSSProperties = {
@@ -312,6 +381,7 @@ const MainTabs = ({
     root: {
       background: "transparent",
       width: "100%",
+      minWidth: 0,
     },
     list: {
       background: "transparent",
@@ -445,6 +515,7 @@ const MainTabs = ({
                   alignItems: "center",
                   justifyContent: "center",
                   width: "100%",
+                  minWidth: 0,
                   gap: rem(8),
                 }}
               >
@@ -526,123 +597,113 @@ const MainTabs = ({
                 </ActionIcon>
               </Tooltip>
             )}
-            <Menu width={340} position="bottom-end" offset={8} withArrow>
+            {isMobile ? (
+              <Tooltip label="Refresh app" position="bottom" offset={4} withArrow>
+                <ActionIcon
+                  variant="transparent"
+                  size={34}
+                  onClick={handleRefreshApp}
+                  aria-label="Refresh app"
+                  radius="xl"
+                  loading={refreshingApp}
+                  style={{
+                    color: theme.white,
+                  }}
+                >
+                  <IconRefresh size={21} stroke={1.8} />
+                </ActionIcon>
+              </Tooltip>
+            ) : null}
+            <Menu width={230} position="bottom-end" offset={8} withArrow>
               <Menu.Target>
                 <ActionIcon
                   variant="subtle"
                   size={isMobile ? 34 : 36}
-                  aria-label="Open notifications inbox"
-                  radius="xl"
+                  aria-label="Open account menu"
+                radius="xl"
                   style={{
                     color: theme.white,
                     backgroundColor: "rgba(255, 255, 255, 0.08)",
+                    overflow: "visible",
                   }}
                 >
-                  <Indicator
-                    color="red"
-                    size={14}
-                    offset={4}
-                    disabled={recentNotifications.length === 0}
-                    label={
-                      recentNotifications.length > 9 ? "9+" : `${recentNotifications.length}`
-                    }
+                <Indicator
+                  color="red"
+                  size={20}
+                  offset={-3}
+                  position="top-end"
+                  disabled={unreadNotificationCount === 0}
+                  label={unreadNotificationCount > 9 ? "9+" : `${unreadNotificationCount}`}
+                  styles={{
+                    root: {
+                      overflow: "visible",
+                    },
+                    indicator: {
+                      minWidth: rem(20),
+                      height: rem(20),
+                      paddingInline: rem(5),
+                      fontSize: rem(11),
+                      fontWeight: 900,
+                      lineHeight: 1,
+                      border: "2px solid #171717",
+                    },
+                  }}
+                >
+                  <Avatar
+                    size={isMobile ? 28 : 30}
+                    radius="xl"
+                    src={userProfilePhotoUrl ?? undefined}
+                    style={{
+                      background: userProfilePhotoUrl
+                        ? "transparent"
+                        : `linear-gradient(135deg, ${theme.colors.blue[6]}, ${theme.colors.indigo[5]})`,
+                      fontWeight: 600,
+                      fontSize: rem(13),
+                      color: userProfilePhotoUrl ? theme.black : theme.white,
+                    }}
                   >
-                    <IconBell size={20} />
-                  </Indicator>
-                </ActionIcon>
+                    {!userProfilePhotoUrl && profileInitials}
+                  </Avatar>
+                </Indicator>
+              </ActionIcon>
               </Menu.Target>
               <Menu.Dropdown>
-                <Menu.Label>Recent notifications</Menu.Label>
-                {notificationsLoading ? (
-                  <Menu.Item disabled>Loading...</Menu.Item>
-                ) : notificationsError ? (
-                  <>
-                    <Menu.Item disabled>{notificationsError}</Menu.Item>
-                    <Menu.Item
-                      onClick={() => {
-                        loadRecentNotifications().catch(() => undefined);
-                      }}
-                    >
-                      Retry
-                    </Menu.Item>
-                  </>
-                ) : recentNotifications.length === 0 ? (
-                  <Menu.Item disabled>No notifications yet</Menu.Item>
-                ) : (
-                  recentNotifications.map((notification) => (
-                    <Menu.Item
-                      key={notification.id}
-                      onClick={() => {
-                        if (notification.url) {
-                          navigate(notification.url);
-                          return;
-                        }
-                        navigate("/notifications");
-                      }}
-                    >
-                      <Stack gap={0}>
-                        <Text size="sm" fw={600} lineClamp={1}>
-                          {notification.title}
-                        </Text>
-                        {notification.body && (
-                          <Text size="xs" c="dimmed" lineClamp={2}>
-                            {notification.body}
-                          </Text>
-                        )}
-                        <Text size="xs" c="dimmed">
-                          {new Date(notification.sentAt).toLocaleString()}
-                        </Text>
-                      </Stack>
-                    </Menu.Item>
-                  ))
-                )}
+                <Menu.Item leftSection={<IconUserCircle size={18} />} onClick={handleProfileClick}>
+                  My Account
+                </Menu.Item>
+                <Menu.Item
+                  leftSection={<IconBell size={18} />}
+                  rightSection={
+                    unreadNotificationCount > 0 ? (
+                      <Badge color="red" variant="filled" size="sm">
+                        {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
+                      </Badge>
+                    ) : undefined
+                  }
+                  onClick={openNotifications}
+                >
+                  Notifications
+                </Menu.Item>
+                {notificationsError ? (
+                  <Menu.Item disabled>
+                    <Text size="xs" c="red">
+                      {notificationsError}
+                    </Text>
+                  </Menu.Item>
+                ) : notificationsLoading ? (
+                  <Menu.Item disabled>Loading notifications...</Menu.Item>
+                ) : null}
                 <Menu.Divider />
-                <Menu.Item onClick={() => navigate("/notifications")}>
-                  See All
+                {!isMobile ? (
+                  <Menu.Item leftSection={<IconRefresh size={18} />} onClick={handleRefreshApp} disabled={refreshingApp}>
+                    Refresh App
+                  </Menu.Item>
+                ) : null}
+                <Menu.Item color="red" leftSection={<IconLogout size={18} />} onClick={handleSignOut}>
+                  Sign Out
                 </Menu.Item>
               </Menu.Dropdown>
             </Menu>
-            <Tooltip label="My profile" position="bottom" offset={4} withArrow>
-              <ActionIcon
-                variant="subtle"
-                size={isMobile ? 34 : 36}
-                onClick={handleProfileClick}
-                aria-label="Open profile"
-                radius="xl"
-                style={{
-                  color: theme.white,
-                  backgroundColor: "rgba(255, 255, 255, 0.08)",
-                }}
-              >
-                <Avatar
-                  size={isMobile ? 26 : 28}
-                  radius="xl"
-                  src={userProfilePhotoUrl ?? undefined}
-                  style={{
-                    background: userProfilePhotoUrl
-                      ? "transparent"
-                      : `linear-gradient(135deg, ${theme.colors.blue[6]}, ${theme.colors.indigo[5]})`,
-                    fontWeight: 600,
-                    fontSize: rem(13),
-                    color: userProfilePhotoUrl ? theme.black : theme.white,
-                  }}
-                >
-                  {!userProfilePhotoUrl && profileInitials}
-                </Avatar>
-              </ActionIcon>
-            </Tooltip>
-            <ActionIcon
-              variant="transparent"
-              size={isMobile ? 34 : 36}
-              onClick={handleSignOut}
-              aria-label="Sign out"
-              radius="xl"
-              style={{
-                color: theme.white,
-              }}
-            >
-              <IconLogout size={22} stroke={1.7} />
-            </ActionIcon>
           </div>
         </div>
       </header>

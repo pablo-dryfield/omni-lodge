@@ -47,6 +47,10 @@ export default class Notification extends Model {
   @Column({ field: 'sent_at', type: DataType.DATE })
   declare sentAt: Date;
 
+  @AllowNull(true)
+  @Column({ field: 'read_at', type: DataType.DATE })
+  declare readAt: Date | null;
+
   @BelongsTo(() => User, { foreignKey: 'user_id', as: 'user' })
   declare user?: User;
 }

@@ -4,7 +4,7 @@ import axiosInstance from "../utils/axiosInstance";
 export type RequiredActionField = {
   key: string;
   label: string;
-  inputType: "text" | "date" | "email" | "tel" | "textarea";
+  inputType: "text" | "date" | "email" | "tel" | "textarea" | "image";
   currentValue?: string | null;
 };
 
@@ -24,6 +24,7 @@ export type RequiredActionItem = {
   title: string;
   body?: string | null;
   blocking: boolean;
+  requiresSignature?: boolean;
   dueAt?: string | null;
   payload: Record<string, unknown> & {
     fields?: RequiredActionField[];
@@ -68,7 +69,9 @@ export type CreateRequiredActionPayload = {
   targetUserIds?: number[] | null;
   targetUserTypeIds?: number[] | null;
   targetShiftRoleIds?: number[] | null;
+  targetStaffProfileTypes?: string[] | null;
   requiresCompletion?: boolean;
+  requiresSignature?: boolean;
   startsAt?: string | null;
   dueAt?: string | null;
   expiresAt?: string | null;
@@ -105,15 +108,40 @@ export const useCompleteRequiredAction = () => {
   });
 };
 
+export const useMarkRequiredActionPrompted = () =>
+  useMutation({
+    mutationFn: async ({ actionId }: { actionId: number }) => {
+      await axiosInstance.post(`/required-actions/actions/${actionId}/prompted`, {}, { withCredentials: true });
+    },
+  });
+
 export const useCompleteRequiredProfileFields = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ actionId, values }: { actionId: number; values: Record<string, string> }) => {
-      await axiosInstance.post(
-        `/required-actions/actions/${actionId}/profile-fields`,
-        { values },
-        { withCredentials: true },
-      );
+    mutationFn: async ({
+      actionId,
+      values,
+      profilePhoto,
+      signature,
+    }: {
+      actionId: number;
+      values: Record<string, string>;
+      profilePhoto?: File | null;
+      signature?: Record<string, unknown> | null;
+    }) => {
+      const valuesWithSignature = signature ? { ...values, __signature: signature } : values;
+      if (profilePhoto) {
+        const formData = new FormData();
+        formData.append("values", JSON.stringify(valuesWithSignature));
+        formData.append("profilePhoto", profilePhoto);
+        await axiosInstance.post(`/required-actions/actions/${actionId}/profile-fields`, formData, {
+          withCredentials: true,
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        return;
+      }
+
+      await axiosInstance.post(`/required-actions/actions/${actionId}/profile-fields`, { values: valuesWithSignature }, { withCredentials: true });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: requiredActionsKey });

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import User from '../models/User.js';
 import ShiftRole from '../models/ShiftRole.js';
+import StaffProfile from '../models/StaffProfile.js';
 import RequiredAction from '../models/RequiredAction.js';
 import RequiredActionCompletion from '../models/RequiredActionCompletion.js';
 import CerebroAcknowledgement from '../models/CerebroAcknowledgement.js';
@@ -15,6 +16,11 @@ import {
   swapManagerDecision,
   swapPartnerResponse,
 } from '../services/scheduleService.js';
+import {
+  deleteProfilePhoto,
+  storeProfilePhoto,
+  type StoreProfilePhotoResult,
+} from '../services/profilePhotoStorageService.js';
 
 type UserFieldKey =
   | 'phone'
@@ -32,9 +38,10 @@ type UserFieldKey =
   | 'medicalNotes'
   | 'whatsappHandle'
   | 'facebookProfileUrl'
-  | 'instagramProfileUrl';
+  | 'instagramProfileUrl'
+  | 'profilePhoto';
 
-const USER_FIELD_SPECS: Record<UserFieldKey, { label: string; inputType: 'text' | 'date' | 'email' | 'tel' | 'textarea' }> = {
+const USER_FIELD_SPECS: Record<UserFieldKey, { label: string; inputType: 'text' | 'date' | 'email' | 'tel' | 'textarea' | 'image' }> = {
   phone: { label: 'Phone number', inputType: 'tel' },
   countryOfCitizenship: { label: 'Country', inputType: 'text' },
   dateOfBirth: { label: 'Date of birth', inputType: 'date' },
@@ -51,6 +58,7 @@ const USER_FIELD_SPECS: Record<UserFieldKey, { label: string; inputType: 'text' 
   whatsappHandle: { label: 'WhatsApp number', inputType: 'tel' },
   facebookProfileUrl: { label: 'Facebook user', inputType: 'text' },
   instagramProfileUrl: { label: 'Instagram user', inputType: 'text' },
+  profilePhoto: { label: 'Profile photo', inputType: 'image' },
 };
 
 const MANAGER_REQUIRED_ACTION_ROLES = new Set(['admin', 'administrator', 'manager']);
@@ -66,6 +74,69 @@ const normalizeNumberArray = (value: unknown): number[] | null => {
     .map((item) => Number(item))
     .filter((item) => Number.isInteger(item) && item > 0);
   return numbers.length > 0 ? Array.from(new Set(numbers)) : null;
+};
+
+const normalizeStringArray = (value: unknown): string[] | null => {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const strings = value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+  return strings.length > 0 ? Array.from(new Set(strings)) : null;
+};
+
+const normalizeSignaturePayload = (value: unknown): Record<string, unknown> | null => {
+  const payload = normalizeRequiredActionPayload(value);
+  const dataUrl = typeof payload.dataUrl === 'string' ? payload.dataUrl.trim() : '';
+  if (!dataUrl.startsWith('data:image/')) {
+    return null;
+  }
+  return {
+    dataUrl,
+    signedAt: typeof payload.signedAt === 'string' ? payload.signedAt : new Date().toISOString(),
+    userAgent: typeof payload.userAgent === 'string' ? payload.userAgent : null,
+  };
+};
+
+const getRequiredSignature = (action: RequiredAction, signature: unknown): Record<string, unknown> | null => {
+  const normalized = normalizeSignaturePayload(signature);
+  if (action.requiresSignature && !normalized) {
+    throw new Error('Signature is required to complete this request.');
+  }
+  return normalized;
+};
+
+const saveRequiredActionCompletion = async ({
+  requiredActionId,
+  userId,
+  responseJson,
+}: {
+  requiredActionId: number;
+  userId: number;
+  responseJson: Record<string, unknown>;
+}): Promise<void> => {
+  const now = new Date();
+  const existing = await RequiredActionCompletion.findOne({
+    where: { requiredActionId, userId },
+  });
+
+  if (existing) {
+    await existing.update({
+      status: 'completed',
+      completedAt: now,
+      responseJson,
+    });
+    return;
+  }
+
+  await RequiredActionCompletion.create({
+    requiredActionId,
+    userId,
+    status: 'completed',
+    completedAt: now,
+    responseJson,
+  });
 };
 
 const getActorId = (req: AuthenticatedRequest): number => {
@@ -98,6 +169,8 @@ const hasValue = (value: unknown): boolean => {
   return true;
 };
 
+const userHasProfilePhoto = (user: User): boolean => hasValue(user.profilePhotoPath) || hasValue(user.profilePhotoUrl);
+
 const getProfileFieldKeys = (action: RequiredAction): UserFieldKey[] => {
   const payload = normalizeRequiredActionPayload(action.payload);
   const fields = Array.isArray(payload.fields) ? payload.fields : [];
@@ -108,6 +181,8 @@ const actionTargetsUser = (action: RequiredAction, user: User, shiftRoleIds: num
   const targetUserIds = normalizeNumberArray(action.targetUserIds);
   const targetUserTypeIds = normalizeNumberArray(action.targetUserTypeIds);
   const targetShiftRoleIds = normalizeNumberArray(action.targetShiftRoleIds);
+  const targetStaffProfileTypes = normalizeStringArray(action.targetStaffProfileTypes);
+  const staffProfile = (user as User & { staffProfile?: StaffProfile | null }).staffProfile ?? null;
 
   if (targetUserIds?.length && !targetUserIds.includes(user.id)) {
     return false;
@@ -116,6 +191,9 @@ const actionTargetsUser = (action: RequiredAction, user: User, shiftRoleIds: num
     return false;
   }
   if (targetShiftRoleIds?.length && !targetShiftRoleIds.some((id) => shiftRoleIds.includes(id))) {
+    return false;
+  }
+  if (targetStaffProfileTypes?.length && (!staffProfile?.staffType || !targetStaffProfileTypes.includes(staffProfile.staffType))) {
     return false;
   }
   return true;
@@ -133,7 +211,12 @@ const serializeStoredAction = async (action: RequiredAction, user: User) => {
   const payload = normalizeRequiredActionPayload(action.payload);
   if (action.type === 'profile_fields') {
     const fieldKeys = getProfileFieldKeys(action);
-    const missingFields = fieldKeys.filter((field) => !hasValue((user as unknown as Record<string, unknown>)[field]));
+    const missingFields = fieldKeys.filter((field) => {
+      if (field === 'profilePhoto') {
+        return !userHasProfilePhoto(user);
+      }
+      return !hasValue((user as unknown as Record<string, unknown>)[field]);
+    });
     if (missingFields.length === 0) {
       return null;
     }
@@ -145,6 +228,7 @@ const serializeStoredAction = async (action: RequiredAction, user: User) => {
       title: action.title,
       body: action.body,
       blocking: action.requiresCompletion,
+      requiresSignature: action.requiresSignature,
       dueAt: action.dueAt,
       payload: {
         ...payload,
@@ -187,6 +271,7 @@ const serializeStoredAction = async (action: RequiredAction, user: User) => {
       title: action.title || entry.title,
       body: action.body ?? entry.summary,
       blocking: action.requiresCompletion,
+      requiresSignature: action.requiresSignature,
       dueAt: action.dueAt,
       payload: {
         ...payload,
@@ -232,6 +317,7 @@ const serializeStoredAction = async (action: RequiredAction, user: User) => {
       title: action.title || quiz.title,
       body: action.body ?? quiz.description,
       blocking: action.requiresCompletion,
+      requiresSignature: action.requiresSignature,
       dueAt: action.dueAt,
       payload: {
         ...payload,
@@ -260,6 +346,7 @@ const serializeStoredAction = async (action: RequiredAction, user: User) => {
     title: action.title,
     body: action.body,
     blocking: action.requiresCompletion,
+    requiresSignature: action.requiresSignature,
     dueAt: action.dueAt,
     payload,
   };
@@ -298,7 +385,10 @@ export const listMyRequiredActions = async (req: Request, res: Response): Promis
   try {
     const userId = getActorId(req as AuthenticatedRequest);
     const user = await User.findByPk(userId, {
-      include: [{ model: ShiftRole, as: 'shiftRoles', attributes: ['id'], through: { attributes: [] } }],
+      include: [
+        { model: ShiftRole, as: 'shiftRoles', attributes: ['id'], through: { attributes: [] } },
+        { model: StaffProfile, as: 'staffProfile', attributes: ['staffType'], required: false },
+      ],
     });
     if (!user) {
       res.status(404).json([{ message: 'User not found' }]);
@@ -319,7 +409,10 @@ export const listMyRequiredActions = async (req: Request, res: Response): Promis
         },
         order: [['createdAt', 'ASC']],
       }),
-      RequiredActionCompletion.findAll({ where: { userId }, attributes: ['requiredActionId'] }),
+      RequiredActionCompletion.findAll({
+        where: { userId, status: { [Op.in]: ['completed', 'dismissed'] } },
+        attributes: ['requiredActionId'],
+      }),
       listSwapsForUser(userId),
       canApproveManagerSwaps ? listSwapsByStatus('pending_manager') : Promise.resolve([]),
     ]);
@@ -391,7 +484,9 @@ export const createRequiredAction = async (req: Request, res: Response): Promise
       targetUserIds: normalizeNumberArray(req.body?.targetUserIds),
       targetUserTypeIds: normalizeNumberArray(req.body?.targetUserTypeIds),
       targetShiftRoleIds: normalizeNumberArray(req.body?.targetShiftRoleIds),
+      targetStaffProfileTypes: normalizeStringArray(req.body?.targetStaffProfileTypes),
       requiresCompletion: req.body?.requiresCompletion !== false,
+      requiresSignature: req.body?.requiresSignature === true,
       startsAt: req.body?.startsAt ? new Date(req.body.startsAt) : null,
       dueAt: req.body?.dueAt ? new Date(req.body.dueAt) : null,
       expiresAt: req.body?.expiresAt ? new Date(req.body.expiresAt) : null,
@@ -415,15 +510,68 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
       return;
     }
 
-    await RequiredActionCompletion.upsert({
+    const responseJson = normalizeRequiredActionPayload(req.body?.response);
+    const eSignature = getRequiredSignature(action, responseJson.eSignature);
+
+    await saveRequiredActionCompletion({
       requiredActionId: action.id,
       userId,
-      status: 'completed',
-      completedAt: new Date(),
-      responseJson: normalizeRequiredActionPayload(req.body?.response),
+      responseJson: {
+        ...responseJson,
+        ...(eSignature ? { eSignature } : {}),
+      },
     });
 
     res.status(200).json({ completed: true });
+  } catch (error) {
+    res.status(400).json([{ message: (error as Error).message }]);
+  }
+};
+
+export const markRequiredActionPrompted = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getActorId(req as AuthenticatedRequest);
+    const action = await RequiredAction.findByPk(req.params.id);
+    if (!action || !action.status) {
+      res.status(404).json([{ message: 'Required action not found' }]);
+      return;
+    }
+
+    const now = new Date();
+    const existing = await RequiredActionCompletion.findOne({
+      where: {
+        requiredActionId: action.id,
+        userId,
+      },
+    });
+
+    if (!existing) {
+      await RequiredActionCompletion.create({
+        requiredActionId: action.id,
+        userId,
+        status: 'prompted',
+        promptedAt: now,
+        lastPromptedAt: now,
+        promptCount: 1,
+        completedAt: null,
+        responseJson: {},
+      });
+      res.status(200).json({ prompted: true });
+      return;
+    }
+
+    if (existing.status === 'completed' || existing.status === 'dismissed') {
+      res.status(200).json({ prompted: true });
+      return;
+    }
+
+    await existing.update({
+      promptedAt: existing.promptedAt ?? now,
+      lastPromptedAt: now,
+      promptCount: (existing.promptCount ?? 0) + 1,
+    });
+
+    res.status(200).json({ prompted: true });
   } catch (error) {
     res.status(400).json([{ message: (error as Error).message }]);
   }
@@ -434,6 +582,7 @@ export const completeProfileFieldsAction = async (req: Request, res: Response): 
     const userId = getActorId(req as AuthenticatedRequest);
     const action = await RequiredAction.findByPk(req.params.id);
     const user = await User.findByPk(userId);
+    const profilePhotoFile = req.file;
     if (!action || !action.status || action.type !== 'profile_fields') {
       res.status(404).json([{ message: 'Profile field request not found' }]);
       return;
@@ -444,13 +593,41 @@ export const completeProfileFieldsAction = async (req: Request, res: Response): 
     }
 
     const fieldKeys = getProfileFieldKeys(action);
-    const values = normalizeRequiredActionPayload(req.body?.values);
+    const rawValues = req.body?.values;
+    const values =
+      typeof rawValues === 'string' && rawValues.trim()
+        ? normalizeRequiredActionPayload(JSON.parse(rawValues))
+        : normalizeRequiredActionPayload(rawValues);
+    const eSignature = getRequiredSignature(action, values.__signature);
+    const userFieldValues = { ...values };
+    delete userFieldValues.__signature;
     const updatePayload: Record<string, unknown> = {};
     const missingLabels: string[] = [];
+    let uploadResult: StoreProfilePhotoResult | null = null;
+
+    if (fieldKeys.includes('profilePhoto') && profilePhotoFile) {
+      uploadResult = await storeProfilePhoto({
+        userId: user.id,
+        originalName: profilePhotoFile.originalname,
+        mimeType: profilePhotoFile.mimetype,
+        data: profilePhotoFile.buffer,
+      });
+      if (user.profilePhotoPath) {
+        await deleteProfilePhoto(user.profilePhotoPath).catch(() => {});
+      }
+      updatePayload.profilePhotoPath = uploadResult.relativePath;
+      updatePayload.profilePhotoUrl = uploadResult.driveWebViewLink ?? null;
+    }
 
     fieldKeys.forEach((field) => {
+      if (field === 'profilePhoto') {
+        if (!uploadResult && !userHasProfilePhoto(user)) {
+          missingLabels.push(USER_FIELD_SPECS[field].label);
+        }
+        return;
+      }
       const currentValue = (user as unknown as Record<string, unknown>)[field];
-      const nextValue = values[field];
+      const nextValue = userFieldValues[field];
       const value = hasValue(nextValue) ? nextValue : currentValue;
       if (!hasValue(value)) {
         missingLabels.push(USER_FIELD_SPECS[field].label);
@@ -465,12 +642,17 @@ export const completeProfileFieldsAction = async (req: Request, res: Response): 
     }
 
     await user.update(updatePayload);
-    await RequiredActionCompletion.upsert({
+    await saveRequiredActionCompletion({
       requiredActionId: action.id,
       userId,
-      status: 'completed',
-      completedAt: new Date(),
-      responseJson: { fields: fieldKeys },
+      responseJson: {
+        fields: fieldKeys,
+        values: {
+          ...userFieldValues,
+          ...(fieldKeys.includes('profilePhoto') ? { profilePhoto: uploadResult ? 'uploaded' : 'already_present' } : {}),
+        },
+        ...(eSignature ? { eSignature } : {}),
+      },
     });
 
     res.status(200).json({ completed: true });
