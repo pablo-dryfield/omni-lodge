@@ -11,6 +11,7 @@ import '@mantine/dates/styles.css'; //if using mantine component features
 import 'mantine-react-table/styles.css'; //import MRT styles
 import { MantineProvider } from '@mantine/core';
 import type { MantineTheme } from '@mantine/core';
+import { clearCachedAppFilesAndReload } from './utils/refreshApp';
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
@@ -69,7 +70,17 @@ reportWebVitals();
 // production index/assets interfering with `craco start`.
 if (process.env.NODE_ENV === 'production') {
   import('./serviceWorkerRegistration').then((serviceWorkerRegistration) => {
-    serviceWorkerRegistration.register();
+    let refreshingForUpdate = false;
+
+    serviceWorkerRegistration.register({
+      onUpdate: () => {
+        if (refreshingForUpdate) {
+          return;
+        }
+        refreshingForUpdate = true;
+        clearCachedAppFilesAndReload();
+      },
+    });
   });
 } else {
   import('./serviceWorkerRegistration').then((serviceWorkerRegistration) => {

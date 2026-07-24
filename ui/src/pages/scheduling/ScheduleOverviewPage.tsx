@@ -28,7 +28,6 @@ import {
   formatScheduleWeekLabel,
   useCreateSwap,
   useEnsureWeek,
-  useMySwaps,
   useShiftInstances,
   useScheduleWeeks,
 } from "../../api/scheduling";
@@ -551,7 +550,6 @@ const ScheduleOverviewPage = () => {
   const mobileAutoScrolledRef = useRef(false);
   const scheduleWeeksQuery = useScheduleWeeks({ limit: 120 });
   const createSwap = useCreateSwap();
-  const mySwaps = useMySwaps();
   const [quickSwapTarget, setQuickSwapTarget] = useState<ShiftAssignment | null>(null);
   const [quickSwapSourceId, setQuickSwapSourceId] = useState<string | null>(null);
   const [quickSwapError, setQuickSwapError] = useState<string | null>(null);
@@ -784,28 +782,6 @@ const ScheduleOverviewPage = () => {
     return items;
   }, [loggedUserId, shiftInstances]);
 
-  const quickSwapLimitReachedTypes = useMemo(() => {
-    const blocked = new Set<number>();
-    if (!mySwaps.data || !weekId || !loggedUserId) {
-      return blocked;
-    }
-    mySwaps.data.forEach((swap) => {
-      if (swap.requesterId !== loggedUserId) {
-        return;
-      }
-      const shiftTypeId = swap.fromAssignment?.shiftInstance?.shiftTypeId ?? null;
-      const swapWeekId = swap.fromAssignment?.shiftInstance?.scheduleWeekId ?? null;
-      if (!shiftTypeId || swapWeekId !== weekId) {
-        return;
-      }
-      if (swap.status === "canceled" || swap.status === "denied") {
-        return;
-      }
-      blocked.add(shiftTypeId);
-    });
-    return blocked;
-  }, [loggedUserId, mySwaps.data, weekId]);
-
   const getEligibleQuickSwapSources = useCallback(
     (target: ShiftAssignment | null | undefined) => {
       const targetShift = target?.shiftInstance;
@@ -813,9 +789,6 @@ const ScheduleOverviewPage = () => {
         return [];
       }
       if (hasShiftStartPassed(targetShift)) {
-        return [];
-      }
-      if (quickSwapLimitReachedTypes.has(targetShift.shiftTypeId)) {
         return [];
       }
 
@@ -828,7 +801,7 @@ const ScheduleOverviewPage = () => {
           shiftRolesMatch(source, target),
       );
     },
-    [loggedUserId, myAssignmentsForWeek, quickSwapLimitReachedTypes],
+    [loggedUserId, myAssignmentsForWeek],
   );
 
   const quickSwapSourceOptions = useMemo(

@@ -5,6 +5,8 @@ type Config = {
   onUpdate?: (registration: ServiceWorkerRegistration) => void;
 };
 
+const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 1000;
+
 const isLocalhost = Boolean(
   window.location.hostname === 'localhost' ||
     window.location.hostname === '[::1]' ||
@@ -41,6 +43,10 @@ function registerValidSW(swUrl: string, config?: Config) {
   navigator.serviceWorker
     .register(swUrl)
     .then((registration) => {
+      scheduleUpdateChecks(registration);
+      if (registration.waiting && navigator.serviceWorker.controller) {
+        config?.onUpdate?.(registration);
+      }
       registration.onupdatefound = () => {
         const installingWorker = registration.installing;
         if (!installingWorker) return;
@@ -60,6 +66,20 @@ function registerValidSW(swUrl: string, config?: Config) {
     .catch((error) => {
       console.error('Error during service worker registration:', error);
     });
+}
+
+function scheduleUpdateChecks(registration: ServiceWorkerRegistration) {
+  const checkForUpdate = () => {
+    if (document.visibilityState !== 'visible') {
+      return;
+    }
+    registration.update().catch((error) => {
+      console.error('Error checking for app update:', error);
+    });
+  };
+
+  window.addEventListener('focus', checkForUpdate);
+  window.setInterval(checkForUpdate, APP_UPDATE_CHECK_INTERVAL_MS);
 }
 
 function checkValidServiceWorker(swUrl: string, config?: Config) {

@@ -235,28 +235,6 @@ const MyShiftsPage = () => {
     return assignments;
   }, [instancesForWeek, loggedUserId]);
 
-  const swapLimitReachedTypes = useMemo(() => {
-    if (!mySwaps.data || !weekId) {
-      return new Set<number>();
-    }
-    const blocked = new Set<number>();
-    mySwaps.data.forEach((swap) => {
-      if (swap.requesterId !== loggedUserId) {
-        return;
-      }
-      const shiftTypeId = swap.fromAssignment?.shiftInstance?.shiftTypeId ?? null;
-      const swapWeekId = swap.fromAssignment?.shiftInstance?.scheduleWeekId ?? null;
-      if (!shiftTypeId || swapWeekId !== weekId) {
-        return;
-      }
-      if (swap.status === "canceled" || swap.status === "denied") {
-        return;
-      }
-      blocked.add(shiftTypeId);
-    });
-    return blocked;
-  }, [mySwaps.data, loggedUserId, weekId]);
-
   const modalAssignments = useMemo(() => {
     if (!swapModal.shift || !swapModal.assignment) {
       return [];
@@ -284,7 +262,7 @@ const MyShiftsPage = () => {
   }, [activeSwaps.length, myAssignments]);
 
   const handleOpenSwap = (entry: { shift: ShiftInstance; assignment: ShiftAssignment }) => {
-    if (swapLimitReachedTypes.has(entry.shift.shiftTypeId) || hasShiftStartPassed(entry.shift)) {
+    if (hasShiftStartPassed(entry.shift)) {
       return;
     }
     setSwapModal({ opened: true, assignment: entry.assignment, shift: entry.shift });
@@ -389,14 +367,13 @@ const MyShiftsPage = () => {
     const shiftName = item.shift.shiftType?.name ?? "Shift";
     const timeRange = formatShiftTimeRange(item.shift.timeStart, item.shift.timeEnd);
     const isPast = hasShiftStartPassed(item.shift);
-    const swapLimitReached = swapLimitReachedTypes.has(item.shift.shiftTypeId);
     const hasEligiblePartners = potentialAssignments.some(
       (assignment) =>
         assignment.shiftInstance?.shiftTypeId === item.shift.shiftTypeId &&
         assignment.shiftInstanceId !== item.assignment.shiftInstanceId &&
         shiftRolesMatch(item.assignment, assignment),
     );
-    const disableSwap = isPast || swapLimitReached || !hasEligiblePartners;
+    const disableSwap = isPast || !hasEligiblePartners;
     const roleLabel = formatRoleLabel(item.assignment.roleInShift);
 
     return (
@@ -481,15 +458,13 @@ const MyShiftsPage = () => {
           </Paper>
         </SimpleGrid>
 
-        {swapLimitReached || (!swapLimitReached && !hasEligiblePartners) || isPast ? (
+        {!hasEligiblePartners || isPast ? (
           <Box px="md" pb="md">
-            <Alert color={isPast ? "gray" : swapLimitReached ? "red" : "blue"} radius="lg" variant="light">
+            <Alert color={isPast ? "gray" : "blue"} radius="lg" variant="light">
               <Text size="sm" fw={800} ta="center">
                 {isPast
                   ? "Swap requests are closed for this shift."
-                  : swapLimitReached
-                    ? "Swap limit reached for this shift type this week."
-                    : "No teammates available with matching shift type and role."}
+                  : "No teammates available with matching shift type and role."}
               </Text>
             </Alert>
           </Box>
