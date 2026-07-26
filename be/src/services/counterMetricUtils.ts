@@ -297,6 +297,7 @@ export function computeSummary({ metrics, channels, addons }: ComputeSummaryPara
     totals.people.bookedBefore += summary.people.bookedBefore;
     totals.people.bookedAfter += summary.people.bookedAfter;
     totals.people.attended += summary.people.attended;
+    totals.people.nonShow += summary.people.nonShow;
 
     for (const addon of addons) {
       const addonSummary = summary.addons[addon.key];
@@ -309,22 +310,10 @@ export function computeSummary({ metrics, channels, addons }: ComputeSummaryPara
       totalAddon.bookedBefore += addonSummary.bookedBefore;
       totalAddon.bookedAfter += addonSummary.bookedAfter;
       totalAddon.attended += addonSummary.attended;
+      totalAddon.nonShow += addonSummary.nonShow;
     }
 
     byChannel.push(summary);
-  }
-
-  totals.people.nonShow = Math.max(
-    totals.people.bookedBefore + totals.people.bookedAfter - totals.people.attended,
-    0,
-  );
-
-  for (const addon of addons) {
-    const totalAddon = totals.addons[addon.key];
-    totalAddon.nonShow = Math.max(
-      totalAddon.bookedBefore + totalAddon.bookedAfter - totalAddon.attended,
-      0,
-    );
   }
 
   return { byChannel, totals };

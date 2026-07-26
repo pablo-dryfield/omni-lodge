@@ -32,11 +32,33 @@ type BookingAttendanceExtras = {
   photos: number;
 };
 
+type AddonRefundDisposition = 'pending_external' | 'customer_declined' | 'already_refunded_external';
+
 type AttendanceUpdateInput = {
   bookingId: number;
   attendedTotal?: number;
   attendedExtras?: Partial<BookingAttendanceExtras>;
+  addonRefundRequests?: Partial<BookingAttendanceExtras>;
+  addonRefundDisposition?: AddonRefundDisposition;
+  addonRefundReason?: string | null;
   markNoShowWhenAbsent?: boolean;
+};
+
+type BookingAddonRefundAction = {
+  id: string;
+  status: 'pending' | 'completed' | 'declined';
+  source: 'counter_checkin';
+  platform: string;
+  addonKey: keyof BookingAttendanceExtras;
+  quantity: number;
+  reason: string;
+  counterId: number;
+  bookingId: number;
+  createdAt: string;
+  createdBy: number;
+  completedAt?: string;
+  completedSource?: string;
+  updatedAt: string;
 };
 
 const normalizeEcwidOrderId = (booking: Booking): string | null => {
@@ -246,6 +268,9 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
       bookingId?: unknown;
       attendedTotal?: unknown;
       attendedExtras?: unknown;
+      addonRefundRequests?: unknown;
+      addonRefundDisposition?: unknown;
+      addonRefundReason?: unknown;
       markNoShowWhenAbsent?: unknown;
     };
     const bookingId = Number(typed.bookingId);
@@ -291,6 +316,40 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
       update.attendedExtras = nextExtras;
     }
 
+    if (Object.prototype.hasOwnProperty.call(typed, 'addonRefundRequests')) {
+      if (!typed.addonRefundRequests || typeof typed.addonRefundRequests !== 'object') {
+        throw new HttpError(400, 'attendanceUpdates[].addonRefundRequests must be an object');
+      }
+      const refundInput = typed.addonRefundRequests as Record<string, unknown>;
+      const nextRefundRequests: Partial<BookingAttendanceExtras> = {};
+      (['tshirts', 'cocktails', 'photos'] as const).forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(refundInput, key)) {
+          return;
+        }
+        const parsed = Number(refundInput[key]);
+        if (!Number.isFinite(parsed)) {
+          throw new HttpError(400, `attendanceUpdates[].addonRefundRequests.${key} must be a number`);
+        }
+        nextRefundRequests[key] = parsed;
+      });
+      update.addonRefundRequests = nextRefundRequests;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(typed, 'addonRefundDisposition')) {
+      const disposition = String(typed.addonRefundDisposition ?? '').trim();
+      if (!['pending_external', 'customer_declined', 'already_refunded_external'].includes(disposition)) {
+        throw new HttpError(400, 'attendanceUpdates[].addonRefundDisposition is invalid');
+      }
+      update.addonRefundDisposition = disposition as AddonRefundDisposition;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(typed, 'addonRefundReason')) {
+      if (typed.addonRefundReason !== null && typed.addonRefundReason !== undefined && typeof typed.addonRefundReason !== 'string') {
+        throw new HttpError(400, 'attendanceUpdates[].addonRefundReason must be a string');
+      }
+      update.addonRefundReason = typed.addonRefundReason == null ? null : typed.addonRefundReason.trim();
+    }
+
     if (Object.prototype.hasOwnProperty.call(typed, 'markNoShowWhenAbsent')) {
       if (typeof typed.markNoShowWhenAbsent !== 'boolean') {
         throw new HttpError(400, 'attendanceUpdates[].markNoShowWhenAbsent must be a boolean');
@@ -302,10 +361,167 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
   });
 }
 
+function normalizeAddonRefundActions(value: unknown): BookingAddonRefundAction[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry): BookingAddonRefundAction | null => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const addonKey = String(record.addonKey ?? '').trim() as keyof BookingAttendanceExtras;
+      if (!(['cocktails', 'tshirts', 'photos'] as string[]).includes(addonKey)) {
+        return null;
+      }
+      const quantity = Math.max(0, Math.round(Number(record.quantity ?? 0) || 0));
+      if (quantity <= 0) {
+        return null;
+      }
+      const rawStatus = String(record.status ?? '').trim();
+      const status = rawStatus === 'completed' || rawStatus === 'declined' ? rawStatus : 'pending';
+      const counterId = Math.max(0, Math.round(Number(record.counterId ?? 0) || 0));
+      const bookingId = Math.max(0, Math.round(Number(record.bookingId ?? 0) || 0));
+      const id =
+        String(record.id ?? '').trim() ||
+        `counter-${counterId || 'unknown'}-booking-${bookingId || 'unknown'}-${addonKey}`;
+      const now = new Date().toISOString();
+      return {
+        id,
+        status,
+        source: 'counter_checkin',
+        platform: String(record.platform ?? '').trim(),
+        addonKey,
+        quantity,
+        reason: String(record.reason ?? '').trim(),
+        counterId,
+        bookingId,
+        createdAt: String(record.createdAt ?? '').trim() || now,
+        createdBy: Math.max(0, Math.round(Number(record.createdBy ?? 0) || 0)),
+        updatedAt: String(record.updatedAt ?? '').trim() || now,
+      };
+    })
+    .filter((entry): entry is BookingAddonRefundAction => entry !== null);
+}
+
+function removeRefundedAddonsFromSnapshot(
+  booking: Booking,
+  requests: Partial<BookingAttendanceExtras>,
+): Record<string, number> {
+  const snapshot =
+    booking.addonsSnapshot && typeof booking.addonsSnapshot === 'object'
+      ? { ...(booking.addonsSnapshot as Record<string, unknown>) }
+      : {};
+  const extras =
+    snapshot.extras && typeof snapshot.extras === 'object'
+      ? { ...(snapshot.extras as Record<string, unknown>) }
+      : {};
+  const consumedByKey: Record<string, number> = {};
+
+  (['tshirts', 'cocktails', 'photos'] as const).forEach((key) => {
+    const requested = Math.max(0, Math.round(Number(requests[key] ?? 0) || 0));
+    if (requested <= 0) {
+      return;
+    }
+    const current = Math.max(0, Math.round(Number(extras[key] ?? 0) || 0));
+    const consumed = Math.min(current, requested);
+    if (consumed <= 0) {
+      return;
+    }
+    extras[key] = Math.max(current - consumed, 0);
+    consumedByKey[key] = consumed;
+  });
+
+  if (Object.keys(consumedByKey).length > 0) {
+    snapshot.extras = extras;
+    booking.addonsSnapshot = snapshot;
+  }
+
+  return consumedByKey;
+}
+
+function applyExternalAddonRefundRequests(
+  booking: Booking,
+  update: AttendanceUpdateInput,
+  actorId: number,
+  counterId: number,
+): void {
+  if (booking.platform === 'ecwid' || !update.addonRefundRequests) {
+    return;
+  }
+  const purchasedExtras = normalizeBookingExtras(booking.addonsSnapshot ?? undefined);
+  const existingActions = normalizeAddonRefundActions(booking.addonRefundActions);
+  const actionById = new Map(existingActions.map((entry) => [entry.id, entry] as const));
+  const nowIso = new Date().toISOString();
+  const disposition = update.addonRefundDisposition ?? 'pending_external';
+  const actionStatus: BookingAddonRefundAction['status'] =
+    disposition === 'customer_declined'
+      ? 'declined'
+      : disposition === 'already_refunded_external'
+        ? 'completed'
+        : 'pending';
+  const completedAt =
+    disposition === 'already_refunded_external'
+      ? {
+          completedAt: nowIso,
+          completedSource: 'manual_external_refund',
+        }
+      : {};
+  let changed = false;
+
+  (['cocktails', 'tshirts', 'photos'] as const).forEach((key) => {
+    const requested = Math.max(0, Math.round(Number(update.addonRefundRequests?.[key] ?? 0) || 0));
+    if (requested <= 0) {
+      return;
+    }
+    const purchased = Math.max(0, Math.round(Number(purchasedExtras[key]) || 0));
+    const quantity = Math.min(requested, purchased);
+    if (quantity <= 0) {
+      return;
+    }
+    const actionId = `counter-${counterId}-booking-${booking.id}-${key}`;
+    const existing = actionById.get(actionId);
+    const reason =
+      update.addonRefundReason ||
+      (disposition === 'customer_declined'
+        ? 'Add-on was not served at check-in; customer declined the refund.'
+        : disposition === 'already_refunded_external'
+          ? 'Add-on was not served at check-in; refund was already handled externally.'
+          : 'Add-on was not served at check-in; refund must be handled in the external platform.');
+    actionById.set(actionId, {
+      ...(existing ?? {
+        id: actionId,
+        source: 'counter_checkin' as const,
+        platform: booking.platform,
+        addonKey: key,
+        counterId,
+        bookingId: booking.id,
+        createdAt: nowIso,
+        createdBy: actorId,
+      }),
+      status: existing?.status === 'completed' ? 'completed' : actionStatus,
+      quantity,
+      reason,
+      ...completedAt,
+      updatedAt: nowIso,
+    });
+    changed = true;
+  });
+
+  if (changed) {
+    if (disposition === 'already_refunded_external') {
+      removeRefundedAddonsFromSnapshot(booking, update.addonRefundRequests);
+    }
+    booking.addonRefundActions = Array.from(actionById.values());
+  }
+}
+
 async function applyBookingAttendanceUpdate(
   booking: Booking,
   update: AttendanceUpdateInput,
   actorId: number,
+  counterId: number,
 ): Promise<void> {
   const allowance = resolveCheckInAllowance(booking);
 
@@ -348,6 +564,7 @@ async function applyBookingAttendanceUpdate(
   booking.checkedInAt = hasAttendance ? new Date() : null;
   booking.checkedInBy = hasAttendance ? (actorId ?? booking.checkedInBy ?? null) : null;
   booking.updatedBy = actorId;
+  applyExternalAddonRefundRequests(booking, update, actorId, counterId);
 
   await booking.save();
 }
@@ -792,7 +1009,7 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
             ecwidOrdersToDeliver.add(orderId);
           }
         }
-        await applyBookingAttendanceUpdate(booking, update, actorId);
+        await applyBookingAttendanceUpdate(booking, update, actorId, counterId);
       }
     }
 

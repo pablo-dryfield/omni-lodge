@@ -207,6 +207,13 @@ function deriveBookingPartySize(booking: Booking): number {
 
 type BookingExtras = { tshirts: number; cocktails: number; photos: number };
 
+function getNormalPeopleFromTotal(totalPeople: number, cocktails: number): number {
+  return Math.max(
+    0,
+    Math.round(Number(totalPeople) || 0) - Math.max(0, Math.round(Number(cocktails) || 0)),
+  );
+}
+
 function normalizeBookingExtrasSnapshot(snapshot: unknown): BookingExtras {
   if (!snapshot || typeof snapshot !== 'object') {
     return { tshirts: 0, cocktails: 0, photos: 0 };
@@ -286,6 +293,54 @@ function normalizeAttendedExtrasSnapshot(snapshot: unknown): { tshirts: number; 
   };
 }
 
+function getUnservedAddonActionQty(booking: Booking, extraKey: keyof BookingExtras): number {
+  const actions = Array.isArray(booking.addonRefundActions) ? booking.addonRefundActions : [];
+  return actions.reduce((total, entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return total;
+    }
+    const record = entry as Record<string, unknown>;
+    const addonKey = String(record.addonKey ?? '').trim();
+    const status = String(record.status ?? '').trim().toLowerCase();
+    if (addonKey !== extraKey || (status !== 'pending' && status !== 'declined')) {
+      return total;
+    }
+    return total + Math.max(0, Math.round(Number(record.quantity ?? 0) || 0));
+  }, 0);
+}
+
+function resolveEffectiveExtrasForMetricSplit(booking: Booking, purchasedExtras: BookingExtras): BookingExtras {
+  const nextExtras: BookingExtras = { ...purchasedExtras };
+  (Object.keys(nextExtras) as Array<keyof BookingExtras>).forEach((extraKey) => {
+    const unservedQty = getUnservedAddonActionQty(booking, extraKey);
+    if (unservedQty <= 0) {
+      return;
+    }
+    nextExtras[extraKey] = Math.max(0, Math.round(Number(nextExtras[extraKey]) || 0) - unservedQty);
+  });
+  return nextExtras;
+}
+
+function resolveAttendedExtrasForMetricSplit(booking: Booking, purchasedExtras: BookingExtras): BookingExtras {
+  const attendedExtras = normalizeAttendedExtrasSnapshot(booking.attendedAddonsSnapshot ?? undefined);
+  const attendedTotal = Math.max(0, Math.round(Number(booking.attendedTotal ?? 0) || 0));
+  const attendanceStatus = String(booking.attendanceStatus ?? DEFAULT_BOOKING_ATTENDANCE_STATUS)
+    .trim()
+    .toLowerCase();
+
+  if (
+    attendedExtras.cocktails <= 0 &&
+    purchasedExtras.cocktails > 0 &&
+    attendedTotal > 0 &&
+    attendanceStatus === 'checked_in_full' &&
+    getUnservedAddonActionQty(booking, 'cocktails') <= 0
+  ) {
+    attendedExtras.cocktails = Math.min(purchasedExtras.cocktails, attendedTotal);
+  }
+
+  return attendedExtras;
+}
+
 function resolveBookingAttendanceStatusForFinalization(booking: Booking): BookingAttendanceStatus {
   const allowance = resolveCheckInAllowanceForBooking(booking);
   if (allowance <= 0) {
@@ -314,9 +369,14 @@ function resolveBookingNoShowPeopleByAttendance(booking: Booking): number {
   if (allowance <= 0) {
     return 0;
   }
+  const purchasedExtras = resolveEffectiveExtrasForMetricSplit(
+    booking,
+    normalizeBookingExtrasSnapshot(booking.addonsSnapshot ?? undefined),
+  );
+  const bookedNormal = getNormalPeopleFromTotal(allowance, purchasedExtras.cocktails);
   const status = booking.status as BookingStatus;
   if (status === 'no_show') {
-    return allowance;
+    return bookedNormal;
   }
   if (!CHECKIN_ALLOWED_BOOKING_STATUSES.has(status)) {
     return 0;
@@ -328,10 +388,12 @@ function resolveBookingNoShowPeopleByAttendance(booking: Booking): number {
     return 0;
   }
   if (attendanceStatus === 'no_show') {
-    return allowance;
+    return bookedNormal;
   }
   const attended = Math.max(0, Math.round(Number(booking.attendedTotal ?? 0) || 0));
-  return Math.max(allowance - attended, 0);
+  const attendedExtras = normalizeAttendedExtrasSnapshot(booking.attendedAddonsSnapshot ?? undefined);
+  const attendedNormal = getNormalPeopleFromTotal(attended, attendedExtras.cocktails);
+  return Math.max(bookedNormal - attendedNormal, 0);
 }
 
 export default class CounterRegistryService {
@@ -827,6 +889,8 @@ export default class CounterRegistryService {
 
     const bookedPeopleByChannelPeriod = new Map<string, number>();
     const bookedAddonByChannelPeriod = new Map<string, number>();
+    const attendedPeopleByChannel = new Map<number, number>();
+    const attendedAddonByChannel = new Map<string, number>();
     if (counter.productId && onlineChannelIdSet.size > 0) {
       const bookings = await Booking.findAll({
         where: {
@@ -841,6 +905,10 @@ export default class CounterRegistryService {
           'partySizeAdults',
           'partySizeChildren',
           'addonsSnapshot',
+          'attendedTotal',
+          'attendedAddonsSnapshot',
+          'addonRefundActions',
+          'attendanceStatus',
         ],
       });
 
@@ -855,12 +923,19 @@ export default class CounterRegistryService {
           ? 'after_cutoff'
           : 'before_cutoff';
         const partySize = deriveBookingPartySize(booking);
-        if (partySize > 0) {
+        const extras = resolveEffectiveExtrasForMetricSplit(
+          booking,
+          normalizeBookingExtrasSnapshot(booking.addonsSnapshot ?? undefined),
+        );
+        const normalPartySize = getNormalPeopleFromTotal(partySize, extras.cocktails);
+        if (normalPartySize > 0) {
           const peopleKey = `${channelId}|${bookedPeriod}`;
-          bookedPeopleByChannelPeriod.set(peopleKey, (bookedPeopleByChannelPeriod.get(peopleKey) ?? 0) + partySize);
+          bookedPeopleByChannelPeriod.set(
+            peopleKey,
+            (bookedPeopleByChannelPeriod.get(peopleKey) ?? 0) + normalPartySize,
+          );
         }
 
-        const extras = normalizeBookingExtrasSnapshot(booking.addonsSnapshot ?? undefined);
         (Object.keys(extras) as Array<keyof BookingExtras>).forEach((extraKey) => {
           const addonId = addonIdByExtraKey[extraKey];
           if (!addonId) {
@@ -872,6 +947,29 @@ export default class CounterRegistryService {
           }
           const addonKey = `${channelId}|${bookedPeriod}|${addonId}`;
           bookedAddonByChannelPeriod.set(addonKey, (bookedAddonByChannelPeriod.get(addonKey) ?? 0) + qty);
+        });
+
+        const attendedTotal = Math.max(0, Math.round(Number(booking.attendedTotal ?? 0) || 0));
+        if (attendedTotal <= 0) {
+          return;
+        }
+        const attendedExtras = resolveAttendedExtrasForMetricSplit(booking, extras);
+        const attendedNormal = getNormalPeopleFromTotal(attendedTotal, attendedExtras.cocktails);
+        if (attendedNormal > 0) {
+          attendedPeopleByChannel.set(channelId, (attendedPeopleByChannel.get(channelId) ?? 0) + attendedNormal);
+        }
+
+        (Object.keys(attendedExtras) as Array<keyof BookingExtras>).forEach((extraKey) => {
+          const addonId = addonIdByExtraKey[extraKey];
+          if (!addonId) {
+            return;
+          }
+          const qty = Math.max(0, Math.round(Number(attendedExtras[extraKey]) || 0));
+          if (qty <= 0) {
+            return;
+          }
+          const addonKey = `${channelId}|${addonId}`;
+          attendedAddonByChannel.set(addonKey, (attendedAddonByChannel.get(addonKey) ?? 0) + qty);
         });
       });
     }
@@ -953,12 +1051,41 @@ export default class CounterRegistryService {
             qty: normalizedQty,
           });
         };
+        const setAttendedMetricFromSource = (
+          channelId: number,
+          kind: MetricKind,
+          addonId: number | null,
+          qty: number,
+        ) => {
+          const normalizedQty = Math.max(0, Math.round(Number(qty) || 0));
+          const key = buildMetricKey({
+            channelId,
+            kind,
+            addonId,
+            tallyType: 'attended',
+            period: null,
+          });
+          const hasExisting = existingByKey.has(key);
+          const hasIncoming = incomingByKey.has(key);
+          if (normalizedQty <= 0 && !hasExisting && !hasIncoming) {
+            return;
+          }
+          incomingByKey.set(key, {
+            channelId,
+            kind,
+            addonId,
+            tallyType: 'attended',
+            period: null,
+            qty: normalizedQty,
+          });
+        };
 
         onlineChannelIdSet.forEach((channelId) => {
           const beforePeopleQty = bookedPeopleByChannelPeriod.get(`${channelId}|before_cutoff`) ?? 0;
           const afterPeopleQty = bookedPeopleByChannelPeriod.get(`${channelId}|after_cutoff`) ?? 0;
           setBookedMetricFromSource(channelId, 'people', null, 'before_cutoff', beforePeopleQty);
           setBookedMetricFromSource(channelId, 'people', null, 'after_cutoff', afterPeopleQty);
+          setAttendedMetricFromSource(channelId, 'people', null, attendedPeopleByChannel.get(channelId) ?? 0);
 
           const addonIds = new Set<number>();
           (Object.values(addonIdByExtraKey) as Array<number | null>).forEach((addonId) => {
@@ -992,6 +1119,7 @@ export default class CounterRegistryService {
             const afterAddonQty = bookedAddonByChannelPeriod.get(`${channelId}|after_cutoff|${addonId}`) ?? 0;
             setBookedMetricFromSource(channelId, 'addon', addonId, 'before_cutoff', beforeAddonQty);
             setBookedMetricFromSource(channelId, 'addon', addonId, 'after_cutoff', afterAddonQty);
+            setAttendedMetricFromSource(channelId, 'addon', addonId, attendedAddonByChannel.get(`${channelId}|${addonId}`) ?? 0);
           });
         });
       }
@@ -1487,9 +1615,12 @@ export default class CounterRegistryService {
         'status',
         'attendanceStatus',
         'attendedTotal',
+        'attendedAddonsSnapshot',
+        'addonRefundActions',
         'partySizeTotal',
         'partySizeAdults',
         'partySizeChildren',
+        'addonsSnapshot',
       ],
     });
 

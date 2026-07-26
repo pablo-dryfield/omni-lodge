@@ -52,6 +52,19 @@ type LegacyCounterProductRow = {
   productName: string | null;
 };
 
+const isPeopleCountAddonConfig = (addon: Pick<AddonConfig, 'key' | 'name'>): boolean => {
+  const raw = `${addon.key ?? ''} ${addon.name ?? ''}`.toLowerCase();
+  return raw.includes('cocktail');
+};
+
+const sumPeopleCountAddons = (values: Record<string, number>, peopleCountAddonKeys: Set<string>): number =>
+  Object.entries(values).reduce((sum, [key, value]) => {
+    if (!peopleCountAddonKeys.has(key)) {
+      return sum;
+    }
+    return sum + Math.max(0, Math.round(Number(value) || 0));
+  }, 0);
+
 type CashSnapshotTicketCurrency = {
   currency: string;
   people: number;
@@ -307,10 +320,7 @@ const buildLegacyMetrics = (params: {
   };
 
   buckets.forEach((bucket) => {
-    let peopleQty = bucket.peopleQty;
-    if (bucket.cocktailsQty > 0 && peopleQty === 0) {
-      peopleQty = bucket.cocktailsQty;
-    }
+    const peopleQty = bucket.peopleQty;
     if (peopleQty > 0) {
       pushMetricPair({
         counterId: bucket.counterId,
@@ -1290,6 +1300,9 @@ export async function getChannelNumbersSummary(params: {
     channels: channelConfigs,
     addons: addonConfigs,
   });
+  const peopleCountAddonKeys = new Set(
+    addonConfigs.filter(isPeopleCountAddonConfig).map((addon) => addon.key),
+  );
 
   const productSummaries = new Map<number | null, ReturnType<typeof computeSummary>>();
   metricsByProduct.forEach((productMetrics, productId) => {
@@ -1321,7 +1334,11 @@ export async function getChannelNumbersSummary(params: {
     const addonNonShow = Object.fromEntries(
       Object.entries(channel.addons).map(([key, bucket]) => [key, bucket.nonShow]),
     );
-    const total = channel.people.attended + channel.people.nonShow;
+    const total =
+      channel.people.attended +
+      channel.people.nonShow +
+      sumPeopleCountAddons(addonValues, peopleCountAddonKeys) +
+      sumPeopleCountAddons(addonNonShow, peopleCountAddonKeys);
 
     const productMetrics: Record<string, ChannelProductMetrics> = {};
     productList.forEach((product) => {
@@ -1339,7 +1356,10 @@ export async function getChannelNumbersSummary(params: {
       const productNormal = channelSummaryForProduct?.people.attended ?? 0;
       const productNonShow = channelSummaryForProduct?.people.nonShow ?? 0;
       const productTotal =
-        productNormal + Object.values(productAddonValues).reduce((sum, value) => sum + value, 0);
+        productNormal +
+        productNonShow +
+        sumPeopleCountAddons(productAddonValues, peopleCountAddonKeys) +
+        sumPeopleCountAddons(productAddonNonShow, peopleCountAddonKeys);
       productMetrics[product.id.toString()] = {
         productId: product.id,
         normal: productNormal,
@@ -1373,7 +1393,11 @@ export async function getChannelNumbersSummary(params: {
     normalNonShow: summary.totals.people.nonShow,
     addons: totalAddonValues,
     addonNonShow: totalAddonNonShow,
-    total: summary.totals.people.attended + summary.totals.people.nonShow,
+    total:
+      summary.totals.people.attended +
+      summary.totals.people.nonShow +
+      sumPeopleCountAddons(totalAddonValues, peopleCountAddonKeys) +
+      sumPeopleCountAddons(totalAddonNonShow, peopleCountAddonKeys),
   };
 
   const productTotals: Record<string, ChannelProductMetrics> = {};
@@ -1399,7 +1423,10 @@ export async function getChannelNumbersSummary(params: {
     const productNormal = productSummary.totals.people.attended;
     const productNonShow = productSummary.totals.people.nonShow;
     const productTotal =
-      productNormal + Object.values(productAddonValues).reduce((sum, value) => sum + value, 0);
+      productNormal +
+      productNonShow +
+      sumPeopleCountAddons(productAddonValues, peopleCountAddonKeys) +
+      sumPeopleCountAddons(productAddonNonShow, peopleCountAddonKeys);
     productTotals[product.id.toString()] = {
       productId: product.id,
       normal: productNormal,
@@ -1475,6 +1502,7 @@ export async function getChannelNumbersDetails(
   }
 
   const requiresAddon = metric === 'addon' || metric === 'addonNonShow';
+  const requiresPeopleTotal = metric === 'total';
   const addonKey = requiresAddon ? params.addonKey ?? null : null;
   if (requiresAddon && (!addonKey || addonKey.trim().length === 0)) {
     throw new HttpError(400, 'addonKey is required for addon metrics');
@@ -1520,7 +1548,7 @@ export async function getChannelNumbersDetails(
   >();
   let targetAddonId: number | null = null;
 
-  if (requiresAddon) {
+  if (requiresAddon || requiresPeopleTotal) {
     const productAddons = await ProductAddon.findAll({
       include: [
         {
@@ -1536,11 +1564,24 @@ export async function getChannelNumbersDetails(
       null,
     );
     addonLookup = new Map(configs.map((config) => [config.addonId, { key: config.key, name: config.name }]));
-    const matched = configs.find((config) => config.key === addonKey);
-    if (!matched) {
-      throw new HttpError(404, 'Addon not found');
+    if (requiresAddon) {
+      const matched = configs.find((config) => config.key === addonKey);
+      if (!matched) {
+        throw new HttpError(404, 'Addon not found');
+      }
+      targetAddonId = matched.addonId;
     }
-    targetAddonId = matched.addonId;
+  }
+  const peopleCountAddonIds = new Set<number>();
+  if (requiresPeopleTotal) {
+    addonLookup.forEach((addon, addonId) => {
+      if (isPeopleCountAddonConfig(addon)) {
+        peopleCountAddonIds.add(addonId);
+      }
+    });
+    if (cocktailsAddonId != null) {
+      peopleCountAddonIds.add(cocktailsAddonId);
+    }
   }
 
   const counters = await Counter.findAll({
@@ -1621,7 +1662,7 @@ export async function getChannelNumbersDetails(
 
   const metricWhere: Record<string, unknown> = {
     counterId: { [Op.in]: counterIds },
-    kind: requiresAddon ? 'addon' : 'people',
+    kind: requiresAddon ? 'addon' : requiresPeopleTotal ? { [Op.in]: ['people', 'addon'] } : 'people',
   };
   if (channelId != null) {
     metricWhere.channelId = channelId;
@@ -1641,7 +1682,7 @@ export async function getChannelNumbersDetails(
     newCounterIds.length > 0
       ? await CounterChannelMetric.findAll({
           where: { ...metricWhere, counterId: { [Op.in]: newCounterIds } },
-          attributes: ['counterId', 'channelId', 'addonId', 'tallyType', 'period', 'qty'],
+          attributes: ['counterId', 'channelId', 'kind', 'addonId', 'tallyType', 'period', 'qty'],
         })
       : [];
 
@@ -1670,6 +1711,9 @@ export async function getChannelNumbersDetails(
       : [];
 
   const filteredLegacyMetrics = legacyMetrics.filter((metric) => {
+    if (requiresPeopleTotal) {
+      return metric.kind === 'people' || (metric.kind === 'addon' && metric.addonId != null && peopleCountAddonIds.has(metric.addonId));
+    }
     if (metric.kind !== (requiresAddon ? 'addon' : 'people')) {
       return false;
     }
@@ -1693,18 +1737,25 @@ export async function getChannelNumbersDetails(
 
   const buckets = new Map<string, Bucket>();
   const combinedMetrics: MetricCell[] = [
-    ...metricRows.map((row) => ({
-      counterId: row.counterId,
-      channelId: row.channelId,
-      addonId: row.addonId ?? null,
-      kind: (requiresAddon ? 'addon' : 'people') as MetricKind,
-      tallyType: row.tallyType as MetricTallyType,
-      period:
-        row.tallyType === 'attended'
-          ? null
-          : ((row.period as MetricPeriod | null) ?? 'before_cutoff'),
-      qty: Number(row.qty ?? 0),
-    })),
+    ...metricRows
+      .map((row) => ({
+        counterId: row.counterId,
+        channelId: row.channelId,
+        addonId: row.addonId ?? null,
+        kind: (row.kind ?? (requiresAddon ? 'addon' : 'people')) as MetricKind,
+        tallyType: row.tallyType as MetricTallyType,
+        period:
+          row.tallyType === 'attended'
+            ? null
+            : ((row.period as MetricPeriod | null) ?? 'before_cutoff'),
+        qty: Number(row.qty ?? 0),
+      }))
+      .filter((row) => {
+        if (!requiresPeopleTotal) {
+          return true;
+        }
+        return row.kind === 'people' || (row.kind === 'addon' && row.addonId != null && peopleCountAddonIds.has(row.addonId));
+      }),
     ...filteredLegacyMetrics,
   ];
 
