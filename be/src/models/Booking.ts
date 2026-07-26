@@ -281,6 +281,13 @@ export default class Booking extends Model<Booking> {
 
   @AllowNull(true)
   @Column({
+    field: 'addon_refund_actions',
+    type: DataType.JSONB,
+  })
+  declare addonRefundActions: Record<string, unknown>[] | null;
+
+  @AllowNull(true)
+  @Column({
     field: 'checked_in_at',
     type: DataType.DATE,
   })

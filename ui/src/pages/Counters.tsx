@@ -142,11 +142,44 @@ type ManifestResponse = {
 type BookingAttendancePatchPayload = {
   attendedTotal?: number;
   attendedExtras?: Partial<OrderExtras>;
+  addonRefundRequests?: Partial<OrderExtras>;
+  addonRefundDisposition?: AddonRefundDisposition;
+  addonRefundReason?: string | null;
 };
+
+type AddonRefundDisposition = 'pending_external' | 'customer_declined' | 'already_refunded_external';
 
 type StagedBookingAttendance = {
   attendedTotal: number;
   attendedExtras: OrderExtras;
+  addonRefundRequests?: Partial<OrderExtras>;
+  addonRefundDisposition?: AddonRefundDisposition;
+  addonRefundReason?: string | null;
+};
+
+type CounterAttendanceUpdateRow = {
+  bookingId: number;
+  attendedTotal: number;
+  attendedExtras: OrderExtras;
+  addonRefundRequests?: Partial<OrderExtras>;
+  addonRefundDisposition?: AddonRefundDisposition;
+  addonRefundReason?: string | null;
+  markNoShowWhenAbsent: boolean;
+};
+
+type BookingAddonRefundAction = {
+  id: string;
+  status: string;
+  addonKey: keyof OrderExtras;
+  quantity: number;
+  platform: string;
+  reason: string;
+};
+
+type AddonRefundActionResponse = {
+  bookingId: number;
+  addonRefundActions: BookingAddonRefundAction[];
+  order?: UnifiedOrder | null;
 };
 
 type EmailTemplateType = 'plain_text' | 'react_email';
@@ -424,9 +457,10 @@ const isSummaryEligibleStatus = (status: BookingStatus): boolean =>
   MANIFEST_INCLUDED_STATUSES.has(status) || status === 'no_show';
 
 const getOrderNoShowPeopleByAttendance = (order: UnifiedOrder): number => {
+  const purchasedCocktails = getOrderPurchasedExtraQty(order, 'cocktails');
   if (order.status === 'no_show') {
     const quantity = Math.max(0, Math.round(Number(order.quantity) || 0));
-    return quantity;
+    return getNormalPeopleFromTotal(quantity, purchasedCocktails);
   }
   if (!MANIFEST_INCLUDED_STATUSES.has(order.status)) {
     return 0;
@@ -439,9 +473,12 @@ const getOrderNoShowPeopleByAttendance = (order: UnifiedOrder): number => {
   }
   if (attendanceStatus === 'no_show') {
     const quantity = Math.max(0, Math.round(Number(order.quantity) || 0));
-    return quantity;
+    return getNormalPeopleFromTotal(quantity, purchasedCocktails);
   }
-  return getOrderEntryAllowance(order);
+  const quantity = Math.max(0, Math.round(Number(order.quantity) || 0));
+  const attendedNormal = getNormalPeopleFromTotal(getOrderAttendedTotal(order), getOrderAttendedExtraQty(order, 'cocktails'));
+  const bookedNormal = getNormalPeopleFromTotal(quantity, purchasedCocktails);
+  return Math.max(bookedNormal - attendedNormal, 0);
 };
 
 const isOrderPartialNoShow = (order: UnifiedOrder): boolean => {
@@ -496,6 +533,12 @@ const getOrderAttendedExtras = (order: UnifiedOrder): OrderExtras => ({
   photos: Math.max(0, Math.round(Number(order.attendedExtras?.photos ?? 0) || 0)),
 });
 
+const getNormalPeopleFromTotal = (totalPeople: number, cocktails: number): number =>
+  Math.max(
+    0,
+    Math.round(Number(totalPeople) || 0) - Math.max(0, Math.round(Number(cocktails) || 0)),
+  );
+
 const getOrderPurchasedExtraQty = (order: UnifiedOrder, key: keyof OrderExtras): number =>
   Math.max(0, Math.round(Number(order.extras?.[key] ?? 0) || 0));
 
@@ -503,6 +546,62 @@ const getOrderAttendedExtraQty = (order: UnifiedOrder, key: keyof OrderExtras): 
   Math.max(0, Math.round(Number(order.attendedExtras?.[key] ?? 0) || 0));
 
 const ORDER_EXTRA_KEYS: Array<keyof OrderExtras> = ['cocktails', 'tshirts', 'photos'];
+
+const ADDON_REFUND_LABELS: Record<keyof OrderExtras, string> = {
+  cocktails: 'Cocktails',
+  tshirts: 'T-Shirts',
+  photos: 'Instant Pictures',
+};
+
+const ADDON_REFUND_STATUS_LABELS: Record<string, string> = {
+  pending: 'External refund pending',
+  declined: 'Refund declined by customer',
+  completed: 'External refund completed',
+};
+
+const ADDON_REFUND_STATUS_COLORS: Record<string, 'warning' | 'success' | 'default'> = {
+  pending: 'warning',
+  declined: 'default',
+  completed: 'success',
+};
+
+const normalizeAddonRefundActions = (value: unknown): BookingAddonRefundAction[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry): BookingAddonRefundAction | null => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const addonKey = String(record.addonKey ?? '').trim();
+      if (!ORDER_EXTRA_KEYS.includes(addonKey as keyof OrderExtras)) {
+        return null;
+      }
+      const quantity = Math.max(0, Math.round(Number(record.quantity ?? 0) || 0));
+      if (quantity <= 0) {
+        return null;
+      }
+      return {
+        id: String(record.id ?? '').trim(),
+        status: String(record.status ?? '').trim() || 'pending',
+        addonKey: addonKey as keyof OrderExtras,
+        quantity,
+        platform: String(record.platform ?? '').trim(),
+        reason: String(record.reason ?? '').trim(),
+      };
+    })
+    .filter((entry): entry is BookingAddonRefundAction => entry !== null);
+};
+
+const getOrderPendingAddonRefundActions = (order: UnifiedOrder): BookingAddonRefundAction[] =>
+  normalizeAddonRefundActions(order.rawData?.addonRefundActions).filter(
+    (entry) => {
+      const status = String(entry.status ?? '').toLowerCase();
+      return status === 'pending' || status === 'declined';
+    },
+  );
 
 const getOrderRemainingExtrasTotal = (order: UnifiedOrder): number =>
   ORDER_EXTRA_KEYS.reduce((total, key) => {
@@ -545,12 +644,68 @@ const applyAttendanceToOrder = (
   const remainingTotal = MANIFEST_INCLUDED_STATUSES.has(order.status)
     ? Math.max(quantity - nextAttended, 0)
     : 0;
+  const addonRefundDisposition = payload.addonRefundDisposition ?? 'pending_external';
+  const requestedRefundActions = payload.addonRefundRequests
+    ? ORDER_EXTRA_KEYS
+        .map((key): BookingAddonRefundAction | null => {
+          const requested = Math.max(0, Math.round(Number(payload.addonRefundRequests?.[key] ?? 0) || 0));
+          if (requested <= 0) {
+            return null;
+          }
+          return {
+            id: `pending-local-${order.id}-${key}`,
+            status:
+              addonRefundDisposition === 'customer_declined'
+                ? 'declined'
+                : addonRefundDisposition === 'already_refunded_external'
+                  ? 'completed'
+                  : 'pending',
+            addonKey: key,
+            quantity: requested,
+            platform: order.platform,
+            reason:
+              payload.addonRefundReason ||
+              (addonRefundDisposition === 'customer_declined'
+                ? 'Add-on was not served at check-in; customer declined the refund.'
+                : addonRefundDisposition === 'already_refunded_external'
+                  ? 'Add-on was not served at check-in; refund was already handled externally.'
+                  : 'Add-on was not served at check-in; refund must be handled in the external platform.'),
+          };
+        })
+        .filter((entry): entry is BookingAddonRefundAction => entry !== null)
+    : [];
+  const nextExtras =
+    requestedRefundActions.length > 0 && addonRefundDisposition === 'already_refunded_external'
+      ? {
+          ...purchasedExtras,
+          ...ORDER_EXTRA_KEYS.reduce((acc, key) => {
+            const requested = Math.max(0, Math.round(Number(payload.addonRefundRequests?.[key] ?? 0) || 0));
+            const current = Math.max(0, Math.round(Number(purchasedExtras[key] ?? 0) || 0));
+            acc[key] = Math.max(current - requested, 0);
+            return acc;
+          }, {} as OrderExtras),
+        }
+      : order.extras;
+  const rawData =
+    requestedRefundActions.length > 0
+      ? {
+          ...(order.rawData ?? {}),
+          addonRefundActions: [
+            ...normalizeAddonRefundActions(order.rawData?.addonRefundActions).filter((entry) =>
+              !requestedRefundActions.some((requested) => requested.addonKey === entry.addonKey && entry.status !== 'completed'),
+            ),
+            ...requestedRefundActions,
+          ],
+        }
+      : order.rawData;
 
   return {
     ...order,
+    extras: nextExtras,
     attendedTotal: nextAttended,
     attendedExtras: nextAttendedExtras,
     remainingTotal,
+    rawData,
   };
 };
 
@@ -677,6 +832,11 @@ const resolveAddonExtraKey = (addon: AddonConfig): keyof OrderExtras | null => {
     return 'photos';
   }
   return null;
+};
+
+const isCocktailAddonConfig = (addon: AddonConfig): boolean => {
+  const raw = `${addon.key ?? ''} ${addon.name ?? ''}`.toLowerCase();
+  return raw.includes('cocktail');
 };
 
 const WALK_IN_DISCOUNT_OPTIONS = [
@@ -2023,7 +2183,9 @@ const Counters = (props: GenericPageProps) => {
   const [onlineReservationsView, setOnlineReservationsView] = useState<'remaining' | 'checked_in'>('remaining');
   const [onlineReservationsRefreshToken, setOnlineReservationsRefreshToken] = useState(0);
   const [onlineReservationsSyncing, setOnlineReservationsSyncing] = useState(false);
+  const [addonRefundActionSavingKey, setAddonRefundActionSavingKey] = useState<string | null>(null);
   const [advancingToSummary, setAdvancingToSummary] = useState(false);
+  const [saveAndExitSubmitting, setSaveAndExitSubmitting] = useState(false);
   const [summaryAttendedDialogOpen, setSummaryAttendedDialogOpen] = useState(false);
   const [summaryNoShowDialogOpen, setSummaryNoShowDialogOpen] = useState(false);
   const [summaryAddonDialogState, setSummaryAddonDialogState] = useState<{
@@ -2048,6 +2210,7 @@ const Counters = (props: GenericPageProps) => {
     Record<number, StagedBookingAttendance>
   >({});
   const pendingBookingAttendanceRef = useRef<Record<number, StagedBookingAttendance>>({});
+  const saveAndExitSubmittingRef = useRef(false);
   const blurActiveElement = useCallback(() => {
     if (typeof document === 'undefined') {
       return;
@@ -2080,6 +2243,9 @@ const Counters = (props: GenericPageProps) => {
       const stagedAttendance: StagedBookingAttendance = {
         attendedTotal: getOrderAttendedTotal(nextOrder),
         attendedExtras: getOrderAttendedExtras(nextOrder),
+        ...(payload.addonRefundRequests ? { addonRefundRequests: payload.addonRefundRequests } : {}),
+        ...(payload.addonRefundDisposition ? { addonRefundDisposition: payload.addonRefundDisposition } : {}),
+        ...(payload.addonRefundReason !== undefined ? { addonRefundReason: payload.addonRefundReason } : {}),
       };
 
       setOnlineReservationOrders((prev) =>
@@ -2097,6 +2263,86 @@ const Counters = (props: GenericPageProps) => {
       return nextOrder;
     },
     [],
+  );
+  const applyAddonRefundActionResult = useCallback((bookingId: number, result: AddonRefundActionResponse) => {
+    setOnlineReservationOrders((prev) =>
+      prev.map((entry) => {
+        const entryBookingId = getOrderBookingId(entry);
+        if (entryBookingId !== bookingId) {
+          return entry;
+        }
+        if (result.order) {
+          return result.order;
+        }
+        return {
+          ...entry,
+          rawData: {
+            ...(entry.rawData ?? {}),
+            addonRefundActions: result.addonRefundActions ?? [],
+          },
+        };
+      }),
+    );
+    setOnlineReservationsRefreshToken((prev) => prev + 1);
+  }, []);
+
+  const handleAddonRefundActionComplete = useCallback(
+    async (order: UnifiedOrder, action: BookingAddonRefundAction) => {
+      const bookingId = getOrderBookingId(order);
+      if (!bookingId || !action.id) {
+        setOnlineReservationsError('Booking or refund action ID is missing.');
+        return;
+      }
+      const savingKey = `${bookingId}:${action.id}`;
+      setAddonRefundActionSavingKey(savingKey);
+      setOnlineReservationsError(null);
+      try {
+        const response = await axiosInstance.patch<AddonRefundActionResponse>(
+          `/bookings/${bookingId}/addon-refund-actions/${encodeURIComponent(action.id)}`,
+          { status: 'completed' },
+          { withCredentials: true },
+        );
+        applyAddonRefundActionResult(bookingId, response.data);
+        setOnlineReservationsNotice('External refund marked completed and booking add-ons updated.');
+      } catch (error) {
+        const message =
+          (error as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+          (error instanceof Error ? error.message : 'Failed to complete add-on refund action.');
+        setOnlineReservationsError(message);
+      } finally {
+        setAddonRefundActionSavingKey((current) => (current === savingKey ? null : current));
+      }
+    },
+    [applyAddonRefundActionResult],
+  );
+
+  const handleAddonRefundActionDelete = useCallback(
+    async (order: UnifiedOrder, action: BookingAddonRefundAction) => {
+      const bookingId = getOrderBookingId(order);
+      if (!bookingId || !action.id) {
+        setOnlineReservationsError('Booking or refund action ID is missing.');
+        return;
+      }
+      const savingKey = `${bookingId}:${action.id}`;
+      setAddonRefundActionSavingKey(savingKey);
+      setOnlineReservationsError(null);
+      try {
+        const response = await axiosInstance.delete<AddonRefundActionResponse>(
+          `/bookings/${bookingId}/addon-refund-actions/${encodeURIComponent(action.id)}`,
+          { withCredentials: true },
+        );
+        applyAddonRefundActionResult(bookingId, response.data);
+        setOnlineReservationsNotice('Add-on refund task deleted.');
+      } catch (error) {
+        const message =
+          (error as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+          (error instanceof Error ? error.message : 'Failed to delete add-on refund action.');
+        setOnlineReservationsError(message);
+      } finally {
+        setAddonRefundActionSavingKey((current) => (current === savingKey ? null : current));
+      }
+    },
+    [applyAddonRefundActionResult],
   );
   const computeReservationHoldActive = useCallback(() => {
     const now = dayjs();
@@ -3735,7 +3981,6 @@ const loadCounterById = useCallback(
             : period ?? null;
       const nextQty = Math.max(0, qty);
       const baseMetric = getMetric(channelId, tallyType, period, kind, addonId);
-      const previousQty = baseMetric?.qty ?? 0;
       const targetCounterId = baseMetric?.counterId ?? counterId ?? null;
       if (!baseMetric) {
         if (nextQty <= 0 || targetCounterId == null) {
@@ -3810,32 +4055,6 @@ const loadCounterById = useCallback(
           syncAfterCutoffAttendance(channelId);
         }
 
-        if (kind === 'addon' && addonId != null) {
-          const addonConfig =
-            registry.addons.find((addon) => addon.addonId === addonId) ??
-            catalog.addons.find((addon) => addon.addonId === addonId);
-          const addonKeyLower = addonConfig?.key?.toLowerCase() ?? '';
-          const addonNameLower = addonConfig?.name?.toLowerCase() ?? '';
-          const isCocktails = addonKeyLower.includes('cocktail') || addonNameLower.includes('cocktail');
-          if (isCocktails) {
-            const peopleMetric = getMetric(channelId, tallyType, period, 'people', null);
-            if (peopleMetric) {
-              const delta = nextQty - previousQty;
-              if (delta !== 0) {
-                const currentQty = peopleMetric.qty ?? 0;
-                const nextPeopleQty = Math.max(0, currentQty + delta);
-                dispatch(setMetric({ ...peopleMetric, qty: nextPeopleQty }));
-                if (normalizedPeriod === 'after_cutoff') {
-                  const attendedPeopleMetric = getMetric(channelId, 'attended', null, 'people', null);
-                  if (attendedPeopleMetric && attendedPeopleMetric.qty !== nextPeopleQty) {
-                    dispatch(setMetric({ ...attendedPeopleMetric, qty: nextPeopleQty }));
-                  }
-                }
-              }
-            }
-          }
-        }
-
         if (normalizedPeriod === 'after_cutoff' && tallyType === 'booked') {
           const attendedMetric = getMetric(channelId, 'attended', null, kind, addonId);
           if (attendedMetric) {
@@ -3860,11 +4079,9 @@ const loadCounterById = useCallback(
     },
     [
       cashOverridesByChannel,
-      catalog.addons,
       counterId,
       dispatch,
       getMetric,
-      registry.addons,
       registry.channels,
       resolveCashCurrencyForChannel,
       syncAfterCutoffAttendance,
@@ -4468,9 +4685,21 @@ const loadCounterById = useCallback(
         });
       }
 
+      const cocktailAddonTotal = registry.addons.reduce((sum, addon) => {
+        if (!isCocktailAddonConfig(addon)) {
+          return sum;
+        }
+        const numericAddonId =
+          typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
+        if (!Number.isFinite(numericAddonId)) {
+          return sum;
+        }
+        return sum + Math.max(0, addonTotals.get(numericAddonId) ?? 0);
+      }, 0);
+      const normalPeople = getNormalPeopleFromTotal(totalPeople, cocktailAddonTotal);
       const peopleMetric = getMetric(channelId, 'attended', null, 'people', null);
-      if (peopleMetric || totalPeople > 0) {
-        handleMetricChange(channelId, 'attended', null, 'people', null, totalPeople);
+      if (peopleMetric || normalPeople > 0) {
+        handleMetricChange(channelId, 'attended', null, 'people', null, normalPeople);
       }
 
       registry.addons.forEach((addon) => {
@@ -5399,7 +5628,11 @@ useEffect(() => {
     [partialCheckInEditorOrder],
   );
 
-  const applyPartialEditorDraftLocally = useCallback((): boolean => {
+  const applyPartialEditorDraftLocally = useCallback((options: {
+    addonRefundRequests?: Partial<OrderExtras>;
+    addonRefundDisposition?: AddonRefundDisposition;
+    addonRefundReason?: string | null;
+  } = {}): boolean => {
     if (!partialCheckInEditorOrder || !partialCheckInEditorDraft) {
       return false;
     }
@@ -5411,6 +5644,9 @@ useEffect(() => {
     const applied = applyBookingAttendanceLocally(sourceOrder, {
       attendedTotal: partialCheckInEditorDraft.attendedTotal,
       attendedExtras: partialCheckInEditorDraft.attendedExtras,
+      ...(options.addonRefundRequests ? { addonRefundRequests: options.addonRefundRequests } : {}),
+      ...(options.addonRefundDisposition ? { addonRefundDisposition: options.addonRefundDisposition } : {}),
+      ...(options.addonRefundReason !== undefined ? { addonRefundReason: options.addonRefundReason } : {}),
     });
     return Boolean(applied);
   }, [
@@ -5420,8 +5656,12 @@ useEffect(() => {
     partialCheckInEditorOrder,
   ]);
 
-  const completePartialCheckInApply = useCallback((): boolean => {
-    const applied = applyPartialEditorDraftLocally();
+  const completePartialCheckInApply = useCallback((options: {
+    addonRefundRequests?: Partial<OrderExtras>;
+    addonRefundDisposition?: AddonRefundDisposition;
+    addonRefundReason?: string | null;
+  } = {}): boolean => {
+    const applied = applyPartialEditorDraftLocally(options);
     if (applied) {
       closePartialCheckInEditor();
     }
@@ -5975,6 +6215,37 @@ useEffect(() => {
     completePartialCheckInApply();
   }, [completePartialCheckInApply]);
 
+  const handlePartialEditorExternalRefundDecision = useCallback(
+    (disposition: AddonRefundDisposition) => {
+      if (!partialCheckInPendingRemovedAddons) {
+        completePartialCheckInApply();
+        return;
+      }
+      const reason =
+        disposition === 'customer_declined'
+          ? `${partialEditorPlatformChipLabel} add-on was not served at check-in; customer declined the refund.`
+          : disposition === 'already_refunded_external'
+            ? `${partialEditorPlatformChipLabel} add-on was not served at check-in; refund was already handled externally.`
+            : `${partialEditorPlatformChipLabel} add-on was not served at check-in; refund must be handled in the external platform.`;
+      const applied = completePartialCheckInApply({
+        addonRefundRequests: partialCheckInPendingRemovedAddons,
+        addonRefundDisposition: disposition,
+        addonRefundReason: reason,
+      });
+      if (!applied) {
+        return;
+      }
+      const notice =
+        disposition === 'customer_declined'
+          ? 'Check-in applied and refund was marked as declined by the customer.'
+          : disposition === 'already_refunded_external'
+            ? 'Check-in applied and the external refund was marked as completed.'
+            : 'Check-in applied and an external add-on refund task was created.';
+      setOnlineReservationsNotice(notice);
+    },
+    [completePartialCheckInApply, partialCheckInPendingRemovedAddons, partialEditorPlatformChipLabel],
+  );
+
   useEffect(() => {
     if (
       !isModalOpen ||
@@ -6014,8 +6285,8 @@ useEffect(() => {
         people: 0,
         extras: { cocktails: 0, tshirts: 0, photos: 0 },
       };
-      entry.people += getOrderAttendedTotal(order);
       const attendedExtras = getOrderAttendedExtras(order);
+      entry.people += getNormalPeopleFromTotal(getOrderAttendedTotal(order), attendedExtras.cocktails);
       entry.extras.cocktails += attendedExtras.cocktails;
       entry.extras.tshirts += attendedExtras.tshirts;
       entry.extras.photos += attendedExtras.photos;
@@ -6450,6 +6721,9 @@ useEffect(() => {
           bookingId: number;
           attendedTotal: number;
           attendedExtras: OrderExtras;
+          addonRefundRequests?: Partial<OrderExtras>;
+          addonRefundDisposition?: AddonRefundDisposition;
+          addonRefundReason?: string | null;
           markNoShowWhenAbsent?: boolean;
         }>;
       } = {},
@@ -6536,6 +6810,9 @@ useEffect(() => {
                 bookingId: row.bookingId,
                 attendedTotal: row.attendedTotal,
                 attendedExtras: row.attendedExtras,
+                ...(row.addonRefundRequests ? { addonRefundRequests: row.addonRefundRequests } : {}),
+                ...(row.addonRefundDisposition ? { addonRefundDisposition: row.addonRefundDisposition } : {}),
+                ...(row.addonRefundReason !== undefined ? { addonRefundReason: row.addonRefundReason } : {}),
                 markNoShowWhenAbsent: Boolean(row.markNoShowWhenAbsent),
               })),
               metrics: dirtyMetrics.length > 0 ? dirtyMetrics : undefined,
@@ -6832,10 +7109,20 @@ useEffect(() => {
   ]);
 
   const handleSaveAndExit = useCallback(async () => {
-    const saved = await flushMetrics();
-    if (saved) {
-      await ensureNightReportFromSummary();
-      handleCloseModal();
+    if (saveAndExitSubmittingRef.current) {
+      return;
+    }
+    saveAndExitSubmittingRef.current = true;
+    setSaveAndExitSubmitting(true);
+    try {
+      const saved = await flushMetrics();
+      if (saved) {
+        await ensureNightReportFromSummary();
+        handleCloseModal();
+      }
+    } finally {
+      saveAndExitSubmittingRef.current = false;
+      setSaveAndExitSubmitting(false);
     }
   }, [ensureNightReportFromSummary, flushMetrics, handleCloseModal]);
   const renderStepper = (
@@ -7068,32 +7355,34 @@ useEffect(() => {
     setAdvancingToSummary(true);
     try {
       const attendanceUpdateRows = Object.entries(pendingBookingAttendanceById)
-        .map(([bookingIdKey, staged]) => {
+        .map(([bookingIdKey, staged]): CounterAttendanceUpdateRow | null => {
           const bookingId = Number.parseInt(bookingIdKey, 10);
           if (!Number.isFinite(bookingId) || bookingId <= 0 || !staged) {
             return null;
           }
           return {
-            bookingId,
-            attendedTotal: Math.max(0, Math.round(Number(staged.attendedTotal) || 0)),
+          bookingId,
+          attendedTotal: Math.max(0, Math.round(Number(staged.attendedTotal) || 0)),
             attendedExtras: {
               tshirts: Math.max(0, Math.round(Number(staged.attendedExtras?.tshirts ?? 0) || 0)),
               cocktails: Math.max(0, Math.round(Number(staged.attendedExtras?.cocktails ?? 0) || 0)),
               photos: Math.max(0, Math.round(Number(staged.attendedExtras?.photos ?? 0) || 0)),
             },
+            ...(staged.addonRefundRequests
+              ? {
+                  addonRefundRequests: {
+                    tshirts: Math.max(0, Math.round(Number(staged.addonRefundRequests.tshirts ?? 0) || 0)),
+                    cocktails: Math.max(0, Math.round(Number(staged.addonRefundRequests.cocktails ?? 0) || 0)),
+                    photos: Math.max(0, Math.round(Number(staged.addonRefundRequests.photos ?? 0) || 0)),
+                  },
+                }
+              : {}),
+            ...(staged.addonRefundDisposition ? { addonRefundDisposition: staged.addonRefundDisposition } : {}),
+            ...(staged.addonRefundReason !== undefined ? { addonRefundReason: staged.addonRefundReason } : {}),
             markNoShowWhenAbsent: false,
           };
         })
-        .filter(
-          (
-            row,
-          ): row is {
-            bookingId: number;
-            attendedTotal: number;
-            attendedExtras: OrderExtras;
-            markNoShowWhenAbsent: boolean;
-          } => Boolean(row),
-        );
+        .filter((row): row is CounterAttendanceUpdateRow => Boolean(row));
 
       const attendanceByBookingId = new Map(
         attendanceUpdateRows.map((row) => [row.bookingId, row] as const),
@@ -8526,6 +8815,7 @@ useEffect(() => {
                         const hasAddonCounters = (Object.keys(purchasedExtras) as Array<keyof OrderExtras>).some(
                           (key) => Math.max(0, Number(purchasedExtras[key]) || 0) > 0,
                         );
+                        const pendingAddonRefundActions = getOrderPendingAddonRefundActions(order);
                         return (
                           <Stack
                             key={`${order.id}-${order.platformBookingId}`}
@@ -8635,6 +8925,77 @@ useEffect(() => {
                                         </Typography>
                                       </Stack>
                                     )}
+                                  </Stack>
+                                )}
+                                {pendingAddonRefundActions.length > 0 && (
+                                  <Stack
+                                    spacing={0.6}
+                                    useFlexGap
+                                    sx={{
+                                      border: '1px solid',
+                                      borderColor: 'warning.light',
+                                      borderRadius: 1,
+                                      bgcolor: 'rgba(255, 152, 0, 0.08)',
+                                      px: 0.75,
+                                      py: 0.5,
+                                    }}
+                                  >
+                                    {pendingAddonRefundActions.map((action) => {
+                                      const key = action.addonKey;
+                                      const status = String(action.status ?? 'pending').toLowerCase();
+                                      const actionPersisted = !String(action.id ?? '').startsWith('pending-local-');
+                                      const actionSavingKey = bookingId ? `${bookingId}:${action.id}` : '';
+                                      const actionSaving = addonRefundActionSavingKey === actionSavingKey;
+                                      return (
+                                        <Stack
+                                          key={`pending-addon-refund-${order.id}-${action.id ?? key}`}
+                                          direction={{ xs: 'column', sm: 'row' }}
+                                          spacing={0.75}
+                                          alignItems={{ xs: 'stretch', sm: 'center' }}
+                                          justifyContent="space-between"
+                                          sx={{ width: '100%' }}
+                                        >
+                                          <Chip
+                                            size="small"
+                                            color={ADDON_REFUND_STATUS_COLORS[status] ?? 'default'}
+                                            variant="outlined"
+                                            label={`${ADDON_REFUND_STATUS_LABELS[status] ?? 'Add-on refund note'} - ${ADDON_REFUND_LABELS[key] ?? key}: ${Math.max(0, Math.round(Number(action.quantity) || 0))}`}
+                                            sx={{ maxWidth: '100%' }}
+                                          />
+                                          <Stack direction="row" spacing={0.5} justifyContent="center">
+                                            {status === 'pending' && (
+                                              <Button
+                                                size="small"
+                                                variant="contained"
+                                                color="success"
+                                                disabled={!actionPersisted || actionSaving || syncingPendingAttendance}
+                                                onClick={() => {
+                                                  void handleAddonRefundActionComplete(order, action);
+                                                }}
+                                                sx={{ minWidth: 92 }}
+                                              >
+                                                {actionSaving ? <CircularProgress size={16} color="inherit" /> : 'Complete'}
+                                              </Button>
+                                            )}
+                                            {actionPersisted ? (
+                                              <IconButton
+                                                size="small"
+                                                color="error"
+                                                disabled={actionSaving || syncingPendingAttendance}
+                                                onClick={() => {
+                                                  void handleAddonRefundActionDelete(order, action);
+                                                }}
+                                                aria-label="delete add-on refund task"
+                                              >
+                                                <Delete fontSize="small" />
+                                              </IconButton>
+                                            ) : (
+                                              <Chip size="small" variant="outlined" label="Save first" />
+                                            )}
+                                          </Stack>
+                                        </Stack>
+                                      );
+                                    })}
                                   </Stack>
                                 )}
                               </Stack>
@@ -8846,6 +9207,7 @@ useEffect(() => {
         </Button>
       );
 
+      const saveDisabled = disableNav || saveAndExitSubmitting || hasFreeNoteValidationError;
       const saveButton = (
         <Button
           variant="contained"
@@ -8853,14 +9215,14 @@ useEffect(() => {
           onClick={() => {
             void handleSaveAndExit();
           }}
-          disabled={disableNav || hasFreeNoteValidationError}
+          disabled={saveDisabled}
           sx={{
             textTransform: 'none',
             minWidth: 'auto',
             px: 1,
           }}
         >
-          Save
+          {saveAndExitSubmitting ? 'Saving...' : 'Save'}
         </Button>
       );
 
@@ -9494,6 +9856,17 @@ type SummaryRowOptions = {
     summaryChannelOrder,
   ]);
 
+  const pendingAddonRefundActionEntries = useMemo(
+    () =>
+      onlineReservationsScoped.flatMap((order) =>
+        getOrderPendingAddonRefundActions(order).map((action) => ({
+          order,
+          action,
+        })),
+      ),
+    [onlineReservationsScoped],
+  );
+
   const renderSummaryStep = () => {
     const { byChannel: summaryChannels, totals: summaryTotals } = summaryData;
     const hasSummaryActivity = (bucket: CounterSummaryBucket | CounterSummaryAddonBucket): boolean =>
@@ -9582,6 +9955,95 @@ type SummaryRowOptions = {
                 </CardContent>
               </Card>
             </Grid>
+            {pendingAddonRefundActionEntries.length > 0 && (
+              <Grid size={{ xs: 12 }}>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    borderColor: 'warning.light',
+                    backgroundColor: 'rgba(255, 152, 0, 0.08)',
+                  }}
+                >
+                  <CardContent>
+                    <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+                      Pending External Refunds
+                    </Typography>
+                    <Stack spacing={1}>
+                      {pendingAddonRefundActionEntries.map(({ order, action }) => {
+                        const bookingId = getOrderBookingId(order);
+                        const status = String(action.status ?? 'pending').toLowerCase();
+                        const actionPersisted = !String(action.id ?? '').startsWith('pending-local-');
+                        const actionSavingKey = bookingId ? `${bookingId}:${action.id}` : '';
+                        const actionSaving = addonRefundActionSavingKey === actionSavingKey;
+                        return (
+                          <Stack
+                            key={`summary-addon-refund-${order.id}-${action.id}`}
+                            direction={{ xs: 'column', sm: 'row' }}
+                            spacing={1}
+                            alignItems={{ xs: 'stretch', sm: 'center' }}
+                            justifyContent="space-between"
+                            sx={{
+                              border: '1px solid',
+                              borderColor: 'divider',
+                              borderRadius: 1,
+                              bgcolor: 'background.paper',
+                              p: 1,
+                            }}
+                          >
+                            <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+                              <Typography variant="subtitle2" fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>
+                                {order.customerName || 'Guest'}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {ADDON_REFUND_LABELS[action.addonKey] ?? action.addonKey}: {Math.max(0, Math.round(Number(action.quantity) || 0))}
+                              </Typography>
+                              <Chip
+                                size="small"
+                                color={ADDON_REFUND_STATUS_COLORS[status] ?? 'default'}
+                                variant="outlined"
+                                label={ADDON_REFUND_STATUS_LABELS[status] ?? 'Add-on refund note'}
+                                sx={{ alignSelf: { xs: 'center', sm: 'flex-start' } }}
+                              />
+                            </Stack>
+                            <Stack direction="row" spacing={0.75} justifyContent="center">
+                              {status === 'pending' && (
+                                <Button
+                                  size="small"
+                                  variant="contained"
+                                  color="success"
+                                  disabled={!actionPersisted || actionSaving || syncingPendingAttendance}
+                                  onClick={() => {
+                                    void handleAddonRefundActionComplete(order, action);
+                                  }}
+                                  sx={{ minWidth: 96 }}
+                                >
+                                  {actionSaving ? <CircularProgress size={16} color="inherit" /> : 'Complete'}
+                                </Button>
+                              )}
+                              {actionPersisted ? (
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="error"
+                                  disabled={actionSaving || syncingPendingAttendance}
+                                  onClick={() => {
+                                    void handleAddonRefundActionDelete(order, action);
+                                  }}
+                                >
+                                  Delete
+                                </Button>
+                              ) : (
+                                <Chip size="small" variant="outlined" label="Save first" />
+                              )}
+                            </Stack>
+                          </Stack>
+                        );
+                      })}
+                    </Stack>
+                  </CardContent>
+                </Card>
+              </Grid>
+            )}
             {visibleSummaryChannels.map((item) => {
               const summaryChannelConfig =
                 registry.channels.find((channel) => channel.id === item.channelId) ?? null;
@@ -10439,8 +10901,10 @@ type SummaryRowOptions = {
               )}
               {partialCheckInModalStep === 'refund_decision' && (
                 <>
-                  <Alert severity="warning">
-                    You removed add-ons from this check-in. Do you want to issue a partial refund before applying the check-in?
+                  <Alert severity={partialEditorIsEcwid ? 'warning' : 'info'}>
+                    {partialEditorIsEcwid
+                      ? 'You removed add-ons from this check-in. Do you want to issue a partial refund before applying the check-in?'
+                      : `You removed add-ons from this ${partialEditorPlatformChipLabel} check-in. Choose how the external refund should be tracked.`}
                   </Alert>
                   {partialEditorRemovedAddonSummary.length > 0 && (
                     <Stack direction="row" spacing={0.6} useFlexGap sx={{ flexWrap: 'wrap' }}>
@@ -10466,7 +10930,12 @@ type SummaryRowOptions = {
                     </Stack>
                   )}
                   <Divider />
-                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                  <Stack
+                    direction={{ xs: 'column', sm: 'row' }}
+                    spacing={1}
+                    justifyContent="flex-end"
+                    alignItems={{ xs: 'stretch', sm: 'center' }}
+                  >
                     <Button
                       onClick={() => {
                         setPartialCheckInModalStep('edit');
@@ -10476,32 +10945,66 @@ type SummaryRowOptions = {
                     >
                       Back
                     </Button>
-                    <Button
-                      variant="outlined"
-                      onClick={handlePartialEditorContinueWithoutRefund}
-                      disabled={partialCheckInRefundState.loading || partialCheckInRefundState.submitting}
-                    >
-                      Continue Without Refund
-                    </Button>
-                    <Tooltip
-                      title={partialEditorIssueRefundDisabledReason ?? ''}
-                      disableHoverListener={!partialEditorIssueRefundDisabledReason}
-                    >
-                      <span>
+                    {partialEditorIsEcwid ? (
+                      <>
+                        <Button
+                          variant="outlined"
+                          onClick={handlePartialEditorContinueWithoutRefund}
+                          disabled={partialCheckInRefundState.loading || partialCheckInRefundState.submitting}
+                        >
+                          Continue Without Refund
+                        </Button>
+                        <Tooltip
+                          title={partialEditorIssueRefundDisabledReason ?? ''}
+                          disableHoverListener={!partialEditorIssueRefundDisabledReason}
+                        >
+                          <span>
+                            <Button
+                              variant="contained"
+                              color="warning"
+                              onClick={handlePartialEditorIssueRefund}
+                              disabled={
+                                partialCheckInRefundState.loading ||
+                                partialCheckInRefundState.submitting ||
+                                Boolean(partialEditorIssueRefundDisabledReason)
+                              }
+                            >
+                              Issue a Refund
+                            </Button>
+                          </span>
+                        </Tooltip>
+                      </>
+                    ) : (
+                      <Stack
+                        direction={{ xs: 'column', sm: 'row' }}
+                        spacing={1}
+                        sx={{ width: { xs: '100%', sm: 'auto' } }}
+                      >
                         <Button
                           variant="contained"
                           color="warning"
-                          onClick={handlePartialEditorIssueRefund}
-                          disabled={
-                            partialCheckInRefundState.loading ||
-                            partialCheckInRefundState.submitting ||
-                            Boolean(partialEditorIssueRefundDisabledReason)
-                          }
+                          onClick={() => handlePartialEditorExternalRefundDecision('pending_external')}
+                          disabled={partialCheckInRefundState.loading || partialCheckInRefundState.submitting}
                         >
-                          Issue a Refund
+                          Create refund task
                         </Button>
-                      </span>
-                    </Tooltip>
+                        <Button
+                          variant="outlined"
+                          onClick={() => handlePartialEditorExternalRefundDecision('customer_declined')}
+                          disabled={partialCheckInRefundState.loading || partialCheckInRefundState.submitting}
+                        >
+                          Customer declined
+                        </Button>
+                        <Button
+                          variant="contained"
+                          color="success"
+                          onClick={() => handlePartialEditorExternalRefundDecision('already_refunded_external')}
+                          disabled={partialCheckInRefundState.loading || partialCheckInRefundState.submitting}
+                        >
+                          Already refunded
+                        </Button>
+                      </Stack>
+                    )}
                   </Stack>
                 </>
               )}

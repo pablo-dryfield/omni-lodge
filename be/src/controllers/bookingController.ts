@@ -67,6 +67,7 @@ import {
   sendInternalDirectBookingActionEmail,
   type DirectBookingActionEmailOptions,
 } from '../services/directBookingActionEmailService.js';
+import CounterRegistryService from '../services/counterRegistryService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -86,6 +87,7 @@ type QueryParams = {
   pickupTo?: string;
   productId?: string;
   productTypeId?: string;
+  productTypeIds?: string;
   time?: string;
   search?: string;
   dateField?: string;
@@ -104,6 +106,13 @@ type BookingCommissionEnrichment = {
 type UpdateBookingAttendanceBody = {
   attendedTotal?: unknown;
   attendedExtras?: Partial<Record<keyof OrderExtras, unknown>>;
+};
+
+type BookingAddonRefundActionRecord = Record<string, unknown> & {
+  id: string;
+  status: 'pending' | 'completed' | 'declined';
+  addonKey: keyof OrderExtras;
+  quantity: number;
 };
 
 type UpdateBulkBookingAttendanceBody = {
@@ -529,6 +538,15 @@ const parseOptionalInteger = (value: unknown): number | null => {
     return null;
   }
   return parsed;
+};
+
+const parseOptionalIntegerList = (value: unknown): number[] => {
+  const rawValues = Array.isArray(value) ? value : [value];
+  const parsedValues = rawValues
+    .flatMap((entry) => String(entry ?? '').split(','))
+    .map((entry) => parseOptionalInteger(entry.trim()))
+    .filter((entry): entry is number => entry != null);
+  return Array.from(new Set(parsedValues));
 };
 
 const normalizeEmailTemplateType = (value: unknown): EmailTemplateType | null => {
@@ -1329,6 +1347,84 @@ const normalizeAttendedExtras = (snapshot: unknown): OrderExtras => {
   };
 };
 
+const normalizeBookingAddonRefundActions = (value: unknown): BookingAddonRefundActionRecord[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry): BookingAddonRefundActionRecord | null => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const id = String(record.id ?? '').trim();
+      const addonKey = String(record.addonKey ?? '').trim() as keyof OrderExtras;
+      if (!id || !(['cocktails', 'tshirts', 'photos'] as string[]).includes(addonKey)) {
+        return null;
+      }
+      const quantity = Math.max(0, Math.round(Number(record.quantity ?? 0) || 0));
+      if (quantity <= 0) {
+        return null;
+      }
+      const rawStatus = String(record.status ?? '').trim().toLowerCase();
+      const status = rawStatus === 'completed' || rawStatus === 'declined' ? rawStatus : 'pending';
+      return {
+        ...record,
+        id,
+        status,
+        addonKey,
+        quantity,
+      };
+    })
+    .filter((entry): entry is BookingAddonRefundActionRecord => entry !== null);
+};
+
+const removeAddonFromBookingSnapshot = (
+  booking: Booking,
+  addonKey: keyof OrderExtras,
+  quantity: number,
+): number => {
+  const requested = Math.max(0, Math.round(Number(quantity) || 0));
+  if (requested <= 0) {
+    return 0;
+  }
+  const snapshot =
+    booking.addonsSnapshot && typeof booking.addonsSnapshot === 'object'
+      ? { ...(booking.addonsSnapshot as Record<string, unknown>) }
+      : {};
+  const extras =
+    snapshot.extras && typeof snapshot.extras === 'object'
+      ? { ...(snapshot.extras as Record<string, unknown>) }
+      : {};
+  const current = Math.max(0, Math.round(Number(extras[addonKey] ?? 0) || 0));
+  const consumed = Math.min(current, requested);
+  if (consumed <= 0) {
+    return 0;
+  }
+  extras[addonKey] = Math.max(current - consumed, 0);
+  snapshot.extras = extras;
+  booking.addonsSnapshot = snapshot;
+  return consumed;
+};
+
+const refreshCounterMetricsForAddonRefundAction = async (
+  action: BookingAddonRefundActionRecord,
+  actorId: number | null | undefined,
+): Promise<void> => {
+  if (!actorId) {
+    return;
+  }
+  const counterId = Math.max(0, Math.round(Number(action.counterId ?? 0) || 0));
+  if (counterId <= 0) {
+    return;
+  }
+  try {
+    await CounterRegistryService.upsertMetrics(counterId, [], actorId);
+  } catch (error) {
+    logger.warn(`Failed to refresh counter metrics after add-on refund action ${action.id}`, error);
+  }
+};
+
 const deriveBookingPartySize = (booking: Booking): number => {
   const fromTotal = Number(booking.partySizeTotal);
   if (Number.isFinite(fromTotal) && fromTotal > 0) {
@@ -1686,6 +1782,7 @@ const bookingToUnifiedOrder = (
       channelCommissionEffectiveDate: commissionEnrichment?.channelCommissionEffectiveDate ?? null,
       partySizeTotal: booking.partySizeTotal,
       attendedTotal: booking.attendedTotal,
+      addonRefundActions: booking.addonRefundActions ?? [],
       experienceDate: booking.experienceDate,
       experienceStartAt: booking.experienceStartAt ? dayjs(booking.experienceStartAt).toISOString() : null,
       statusChangedAt: booking.statusChangedAt ? dayjs(booking.statusChangedAt).toISOString() : null,
@@ -2062,7 +2159,11 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     const query = req.query as QueryParams;
     const { start, end } = resolveRange(query);
     const dateField = resolveBookingsDateField(query.dateField);
-    const productTypeId = parseOptionalInteger(query.productTypeId);
+    const productTypeIds = parseOptionalIntegerList(query.productTypeIds);
+    const legacyProductTypeId = parseOptionalInteger(query.productTypeId);
+    if (productTypeIds.length === 0 && legacyProductTypeId != null) {
+      productTypeIds.push(legacyProductTypeId);
+    }
 
     const where: WhereOptions = {};
     if (dateField === 'experience_date') {
@@ -2109,9 +2210,9 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
           model: Product,
           as: 'product',
           attributes: ['id', 'name'],
-          ...(productTypeId
+          ...(productTypeIds.length > 0
             ? {
-                where: { productTypeId },
+                where: { productTypeId: { [Op.in]: productTypeIds } },
                 required: true,
               }
             : { required: false }),
@@ -3274,6 +3375,127 @@ export const updateBookingAttendance = async (req: AuthenticatedRequest, res: Re
       return;
     }
     const message = error instanceof Error ? error.message : 'Failed to update booking attendance';
+    res.status(500).json({ message });
+  }
+};
+
+export const completeBookingAddonRefundAction = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const actionId = String(req.params?.actionId ?? '').trim();
+    if (!actionId) {
+      res.status(400).json({ message: 'A valid refund action ID must be provided' });
+      return;
+    }
+
+    const status = String((req.body as { status?: unknown } | undefined)?.status ?? '').trim().toLowerCase();
+    if (status !== 'completed') {
+      res.status(400).json({ message: 'Only completing an add-on refund action is supported' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam, {
+      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+    });
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    const actions = normalizeBookingAddonRefundActions(booking.addonRefundActions);
+    const actionIndex = actions.findIndex((entry) => entry.id === actionId);
+    if (actionIndex < 0) {
+      res.status(404).json({ message: 'Add-on refund action not found' });
+      return;
+    }
+
+    const action = actions[actionIndex];
+    const wasCompleted = action.status === 'completed';
+    const nowIso = new Date().toISOString();
+    if (!wasCompleted) {
+      removeAddonFromBookingSnapshot(booking, action.addonKey, action.quantity);
+    }
+
+    actions[actionIndex] = {
+      ...action,
+      status: 'completed',
+      completedAt: String(action.completedAt ?? '').trim() || nowIso,
+      completedSource: 'manual',
+      completedBy: req.authContext?.id ?? null,
+      updatedAt: nowIso,
+    };
+
+    booking.addonRefundActions = actions;
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+    await booking.save();
+    await refreshCounterMetricsForAddonRefundAction(action, req.authContext?.id);
+
+    res.status(200).json({
+      bookingId: booking.id,
+      addonRefundActions: booking.addonRefundActions ?? [],
+      order: bookingToUnifiedOrder(booking),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to complete add-on refund action';
+    res.status(500).json({ message });
+  }
+};
+
+export const deleteBookingAddonRefundAction = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
+    if (Number.isNaN(bookingIdParam)) {
+      res.status(400).json({ message: 'A valid booking ID must be provided' });
+      return;
+    }
+
+    const actionId = String(req.params?.actionId ?? '').trim();
+    if (!actionId) {
+      res.status(400).json({ message: 'A valid refund action ID must be provided' });
+      return;
+    }
+
+    const booking = await Booking.findByPk(bookingIdParam, {
+      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+    });
+    if (!booking) {
+      res.status(404).json({ message: 'Booking not found' });
+      return;
+    }
+
+    const actions = normalizeBookingAddonRefundActions(booking.addonRefundActions);
+    const action = actions.find((entry) => entry.id === actionId) ?? null;
+    const nextActions = actions.filter((entry) => entry.id !== actionId);
+    if (nextActions.length === actions.length) {
+      res.status(404).json({ message: 'Add-on refund action not found' });
+      return;
+    }
+
+    booking.addonRefundActions = nextActions;
+    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+    await booking.save();
+    if (action) {
+      await refreshCounterMetricsForAddonRefundAction(action, req.authContext?.id);
+    }
+
+    res.status(200).json({
+      bookingId: booking.id,
+      addonRefundActions: booking.addonRefundActions ?? [],
+      order: bookingToUnifiedOrder(booking),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to delete add-on refund action';
     res.status(500).json({ message });
   }
 };

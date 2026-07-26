@@ -89,6 +89,13 @@ type AttendanceUpdateInput = {
     cocktails?: number;
     photos?: number;
   };
+  addonRefundRequests?: {
+    tshirts?: number;
+    cocktails?: number;
+    photos?: number;
+  };
+  addonRefundDisposition?: 'pending_external' | 'customer_declined' | 'already_refunded_external';
+  addonRefundReason?: string | null;
   markNoShowWhenAbsent?: boolean;
 };
 

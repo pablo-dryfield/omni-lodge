@@ -1513,6 +1513,118 @@ const reconcileRefundDerivedFields = async (
   };
 };
 
+type PendingAddonRefundAction = {
+  id: string;
+  status: string;
+  addonKey: string;
+  quantity: number;
+};
+
+const normalizePendingAddonRefundActions = (value: unknown): PendingAddonRefundAction[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry): PendingAddonRefundAction | null => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const addonKey = String(record.addonKey ?? '').trim();
+      if (!['cocktails', 'tshirts', 'photos'].includes(addonKey)) {
+        return null;
+      }
+      const quantity = Math.max(0, Math.round(Number(record.quantity ?? 0) || 0));
+      if (quantity <= 0) {
+        return null;
+      }
+      return {
+        id: String(record.id ?? '').trim(),
+        status: String(record.status ?? '').trim() || 'pending',
+        addonKey,
+        quantity,
+      };
+    })
+    .filter((entry): entry is PendingAddonRefundAction => entry !== null);
+};
+
+const consumePendingAddonRefundActionsFromExternalRefund = (
+  booking: Booking,
+  event: ParsedBookingEvent,
+  patch: Record<string, unknown>,
+  eventOccurredAt: Date,
+): Record<string, unknown> | null => {
+  if (event.platform !== 'viator') {
+    return null;
+  }
+  if (event.paymentStatus !== 'partial' && event.paymentStatus !== 'refunded' && patch.refundedAmount === undefined) {
+    return null;
+  }
+  if (event.status === 'cancelled' || event.paymentStatus === 'refunded') {
+    return null;
+  }
+
+  const existingActionsRaw = Array.isArray(booking.addonRefundActions)
+    ? (booking.addonRefundActions as Record<string, unknown>[])
+    : [];
+  const pendingActions = normalizePendingAddonRefundActions(existingActionsRaw).filter(
+    (entry) => entry.status === 'pending',
+  );
+  if (pendingActions.length === 0) {
+    return null;
+  }
+
+  const snapshot =
+    booking.addonsSnapshot && typeof booking.addonsSnapshot === 'object'
+      ? { ...(booking.addonsSnapshot as Record<string, unknown>) }
+      : {};
+  const extras =
+    snapshot.extras && typeof snapshot.extras === 'object'
+      ? { ...(snapshot.extras as Record<string, unknown>) }
+      : {};
+  const consumedByKey: Record<string, number> = {};
+  pendingActions.forEach((action) => {
+    const current = Math.max(0, Math.round(Number(extras[action.addonKey] ?? 0) || 0));
+    const consumed = Math.min(current, action.quantity);
+    if (consumed <= 0) {
+      return;
+    }
+    extras[action.addonKey] = Math.max(current - consumed, 0);
+    consumedByKey[action.addonKey] = (consumedByKey[action.addonKey] ?? 0) + consumed;
+  });
+
+  if (Object.keys(consumedByKey).length === 0) {
+    return null;
+  }
+
+  snapshot.extras = extras;
+  booking.addonsSnapshot = snapshot;
+
+  const consumedAt = eventOccurredAt.toISOString();
+  const nextActions = existingActionsRaw.map((entry) => {
+    const match = pendingActions.find((candidate) => candidate.id && candidate.id === String(entry.id ?? ''));
+    if (!match || !consumedByKey[match.addonKey]) {
+      return entry;
+    }
+    return {
+      ...entry,
+      status: 'completed',
+      completedAt: consumedAt,
+      completedSource: 'viator_refund_email',
+      refundedAmount: patch.refundedAmount ?? null,
+      updatedAt: consumedAt,
+    };
+  });
+  booking.addonRefundActions = nextActions;
+
+  return {
+    platform: event.platform,
+    consumedByKey,
+    refundedAmount: patch.refundedAmount ?? null,
+    completedAt: consumedAt,
+  };
+};
+
 const deriveViatorAmendedStartAt = (
   booking: Booking,
   patch: Record<string, unknown>,
@@ -2384,6 +2496,11 @@ const applyParsedEvent = async (
       }
     }
 
+    const externalAddonRefundOutcome =
+      !isScopedReprocess
+        ? consumePendingAddonRefundActionsFromExternalRefund(bookingRecord, event, patch, eventOccurredAt)
+        : null;
+
     let addonsForSync: ParsedBookingEvent['addons'] = event.addons;
     if (
       !isScopedReprocess &&
@@ -2451,6 +2568,9 @@ const applyParsedEvent = async (
       }
       if (refundReconciliationOutcome) {
         basePayload.refundConversion = refundReconciliationOutcome;
+      }
+      if (externalAddonRefundOutcome) {
+        basePayload.externalAddonRefund = externalAddonRefundOutcome;
       }
       if (options.isReprocess) {
         basePayload.reprocessed = true;

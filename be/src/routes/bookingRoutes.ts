@@ -41,6 +41,8 @@ import {
   importEcwidBooking,
   updateBulkBookingAttendance,
   updateBookingAttendance,
+  completeBookingAddonRefundAction,
+  deleteBookingAddonRefundAction,
 } from '../controllers/bookingController.js';
 
 const router = Router();
@@ -68,6 +70,8 @@ router.post('/ingest-emails', authMiddleware, ingestBookingEmails);
 router.post('/import-ecwid', authMiddleware, importEcwidBooking);
 router.patch('/attendance/bulk', authMiddleware, updateBulkBookingAttendance);
 router.patch('/:bookingId/attendance', authMiddleware, updateBookingAttendance);
+router.patch('/:bookingId/addon-refund-actions/:actionId', authMiddleware, completeBookingAddonRefundAction);
+router.delete('/:bookingId/addon-refund-actions/:actionId', authMiddleware, deleteBookingAddonRefundAction);
 router.get('/:bookingId/details', authMiddleware, getBookingDetails);
 router.get('/:bookingId/amend-ecwid-preview', authMiddleware, getEcwidAmendPreview);
 router.post('/:bookingId/reconcile-ecwid', authMiddleware, reconcileEcwidBooking);

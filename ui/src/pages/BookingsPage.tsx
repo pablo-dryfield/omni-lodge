@@ -12,6 +12,7 @@ import {
   HoverCard,
   Loader,
   Modal,
+  MultiSelect,
   Paper,
   ScrollArea,
   SegmentedControl,
@@ -211,6 +212,14 @@ const parseSummaryProductTypeParam = (value?: string | null): string => {
     return "all";
   }
   return String(parsed);
+};
+
+const parseSummaryProductTypesParam = (...values: Array<string | null | undefined>): string[] => {
+  const parsed = values
+    .flatMap((value) => String(value ?? "").split(","))
+    .map((entry) => parseSummaryProductTypeParam(entry.trim()))
+    .filter((entry) => entry !== "all");
+  return Array.from(new Set(parsed));
 };
 
 const SUMMARY_DATE_PRESET_OPTIONS: Array<{ value: SummaryDatePreset; label: string }> = [
@@ -609,10 +618,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [summaryMetricMode, setSummaryMetricMode] = useState<SummaryMetricMode>("revenue");
   const [summaryDatePreset, setSummaryDatePreset] = useState<SummaryDatePreset>("this_month");
   const [summaryCustomDateRange, setSummaryCustomDateRange] = useState<[Date | null, Date | null]>([null, null]);
-  const [summaryProductTypeFilter, setSummaryProductTypeFilter] = useState<string>("all");
-  const [summaryProductTypeOptions, setSummaryProductTypeOptions] = useState<ProductTypeOption[]>([
-    { value: "all", label: "All Product Types" },
-  ]);
+  const [summaryProductTypeFilters, setSummaryProductTypeFilters] = useState<string[]>([]);
+  const [summaryProductTypeOptions, setSummaryProductTypeOptions] = useState<ProductTypeOption[]>([]);
   const [rangeAnchor, setRangeAnchor] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [calendarScrollDate, setCalendarScrollDate] = useState<string | null>(null);
@@ -681,8 +688,29 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   );
   const emailIncludeTotal = emailHasDateRange || emailHasSearchFilters;
 
+  const summaryProductTypesParam = searchParams.get("summaryProductTypes");
+  const summaryProductTypeParam = searchParams.get("summaryProductType");
   const emailPreviewParam = searchParams.get("emailPreview")?.trim() ?? "";
   const emailHasUrlPreview = Boolean(emailPreviewParam);
+
+  const summaryProductTypeValues = useMemo(
+    () => summaryProductTypeOptions.map((option) => option.value),
+    [summaryProductTypeOptions],
+  );
+  const summaryProductTypeFilterActive = useMemo(() => {
+    if (summaryProductTypeValues.length === 0 || summaryProductTypeFilters.length === 0) {
+      return false;
+    }
+    const selected = new Set(summaryProductTypeFilters);
+    return summaryProductTypeValues.some((value) => !selected.has(value));
+  }, [summaryProductTypeFilters, summaryProductTypeValues]);
+  const summaryProductTypeIdsParam = useMemo(
+    () =>
+      summaryProductTypeFilterActive
+        ? [...summaryProductTypeFilters].sort((a, b) => Number(a) - Number(b)).join(",")
+        : undefined,
+    [summaryProductTypeFilterActive, summaryProductTypeFilters],
+  );
 
   const openManifestForCurrentDate = useCallback(() => {
     const params = new URLSearchParams();
@@ -755,9 +783,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [searchParams]);
 
   useEffect(() => {
-    const nextProductType = parseSummaryProductTypeParam(searchParams.get("summaryProductType"));
-    setSummaryProductTypeFilter((prev) => (prev === nextProductType ? prev : nextProductType));
-  }, [searchParams]);
+    const nextProductTypes = parseSummaryProductTypesParam(
+      summaryProductTypesParam,
+      summaryProductTypeParam,
+    );
+    setSummaryProductTypeFilters((prev) => {
+      const prevKey = [...prev].sort().join(",");
+      const nextKey = [...nextProductTypes].sort().join(",");
+      return prevKey === nextKey ? prev : nextProductTypes;
+    });
+  }, [summaryProductTypeParam, summaryProductTypesParam]);
 
   useEffect(() => {
     const nextPreset = parseSummaryDatePresetParam(searchParams.get("summaryPreset"));
@@ -879,10 +914,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       "summaryDateField",
       summaryDateField !== "experience_date" ? summaryDateField : null,
     );
-    setOptionalParam(
-      "summaryProductType",
-      summaryProductTypeFilter !== "all" ? summaryProductTypeFilter : null,
-    );
+    nextParams.delete("summaryProductType");
+    setOptionalParam("summaryProductTypes", summaryProductTypeIdsParam ?? null);
     setOptionalParam(
       "summaryPreset",
       summaryDatePreset !== "this_month" ? summaryDatePreset : null,
@@ -946,7 +979,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     summaryDatePreset,
     summaryMetricMode,
     summaryCustomDateRange,
-    summaryProductTypeFilter,
+    summaryProductTypeIdsParam,
     emailDateRange,
     emailFilters,
     emailPage,
@@ -1309,10 +1342,18 @@ const BookingsPage = ({ title }: GenericPageProps) => {
           })
           .filter((row): row is ProductTypeOption => row !== null)
           .sort((a: ProductTypeOption, b: ProductTypeOption) => a.label.localeCompare(b.label));
-        setSummaryProductTypeOptions([{ value: "all", label: "All Product Types" }, ...options]);
+        setSummaryProductTypeOptions(options);
+        const selectedFromUrl = parseSummaryProductTypesParam(
+          summaryProductTypesParam,
+          summaryProductTypeParam,
+        );
+        const optionValues = new Set(options.map((option) => option.value));
+        const validUrlSelection = selectedFromUrl.filter((value) => optionValues.has(value));
+        setSummaryProductTypeFilters(validUrlSelection.length > 0 ? validUrlSelection : options.map((option) => option.value));
       } catch {
         if (!controller.signal.aborted) {
-          setSummaryProductTypeOptions([{ value: "all", label: "All Product Types" }]);
+          setSummaryProductTypeOptions([]);
+          setSummaryProductTypeFilters([]);
         }
       }
     };
@@ -1322,7 +1363,13 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     return () => {
       controller.abort();
     };
-  }, [modulePermissions.ready, modulePermissions.canView, activeTab]);
+  }, [
+    modulePermissions.ready,
+    modulePermissions.canView,
+    activeTab,
+    summaryProductTypeParam,
+    summaryProductTypesParam,
+  ]);
 
   useEffect(() => {
     if (!modulePermissions.ready || !modulePermissions.canView) {
@@ -1379,10 +1426,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
             pickupFrom: startIso,
             pickupTo: endIso,
             dateField: bookingsDateField,
-            productTypeId:
-              activeTab === "summary" && summaryProductTypeFilter !== "all"
-                ? summaryProductTypeFilter
-                : undefined,
+            productTypeIds: activeTab === "summary" ? summaryProductTypeIdsParam : undefined,
             limit: 200,
           },
           signal: controller.signal,
@@ -1540,7 +1584,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     effectiveRangeEnd,
     bookingsDateField,
     activeTab,
-    summaryProductTypeFilter,
+    summaryProductTypeIdsParam,
     reloadToken,
   ]);
 
@@ -1898,15 +1942,14 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   />
                 )}
                 {activeTab === "summary" && (
-                  <Select
-                    value={summaryProductTypeFilter}
-                    onChange={(value) =>
-                      setSummaryProductTypeFilter(parseSummaryProductTypeParam(value))
-                    }
+                  <MultiSelect
+                    value={summaryProductTypeFilters}
+                    onChange={setSummaryProductTypeFilters}
                     data={summaryProductTypeOptions}
-                    placeholder="All Product Types"
+                    placeholder="Select product types"
+                    clearable
                     size={isMobile ? "xs" : "sm"}
-                    w={isMobile ? "100%" : 260}
+                    w={isMobile ? "100%" : 320}
                     checkIconPosition="right"
                   />
                 )}
