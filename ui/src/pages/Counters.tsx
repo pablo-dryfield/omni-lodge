@@ -6775,10 +6775,14 @@ useEffect(() => {
               };
             })
         : [];
+      const shouldRefreshSourceMetrics = Boolean(registry.counter?.counter.productId);
+      const metricsPayload =
+        dirtyMetrics.length > 0 ? dirtyMetrics : shouldRefreshSourceMetrics ? [] : undefined;
 
       const shouldSendNotes = noteUpdateNeeded && computedCounterNotes !== currentCounterNotes;
       const shouldCommit =
         dirtyMetrics.length > 0 ||
+        shouldRefreshSourceMetrics ||
         shouldSendNotes ||
         Boolean(statusToCommit) ||
         attendanceUpdates.length > 0;
@@ -6815,7 +6819,7 @@ useEffect(() => {
                 ...(row.addonRefundReason !== undefined ? { addonRefundReason: row.addonRefundReason } : {}),
                 markNoShowWhenAbsent: Boolean(row.markNoShowWhenAbsent),
               })),
-              metrics: dirtyMetrics.length > 0 ? dirtyMetrics : undefined,
+              metrics: metricsPayload,
               status: statusToCommit,
               notes: shouldSendNotes ? computedCounterNotes : undefined,
             }),
@@ -6829,7 +6833,7 @@ useEffect(() => {
           await dispatch(
             commitCounterRegistry({
               counterId: activeCounterId,
-              metrics: dirtyMetrics.length > 0 ? dirtyMetrics : undefined,
+              metrics: metricsPayload,
               status: statusToCommit,
               notes: shouldSendNotes ? computedCounterNotes : undefined,
             }),
@@ -6863,6 +6867,7 @@ useEffect(() => {
       hasDirtyMetrics,
       noteNeedsUpdate,
       registry.dirtyMetricKeys,
+      registry.counter,
       registry.metricsByKey,
       registry.persistedMetricsByKey,
       walkInNoteDirty,
