@@ -1351,14 +1351,40 @@ const normalizeAttendanceStatus = (value: unknown): BookingAttendanceStatus => {
   return DEFAULT_ATTENDANCE_STATUS;
 };
 
+const sumExtras = (extras: OrderExtras | null | undefined): number =>
+  Math.max(0, Math.round(Number(extras?.tshirts ?? 0) || 0)) +
+  Math.max(0, Math.round(Number(extras?.cocktails ?? 0) || 0)) +
+  Math.max(0, Math.round(Number(extras?.photos ?? 0) || 0));
+
+const areExtrasFullyAttended = (
+  purchasedExtras: OrderExtras | null | undefined,
+  attendedExtras: OrderExtras | null | undefined,
+): boolean =>
+  (['tshirts', 'cocktails', 'photos'] as const).every((key) => {
+    const purchased = Math.max(0, Math.round(Number(purchasedExtras?.[key] ?? 0) || 0));
+    const attended = Math.max(0, Math.round(Number(attendedExtras?.[key] ?? 0) || 0));
+    return attended >= purchased;
+  });
+
 const resolveAttendanceStatus = (
   booking: Booking,
   attendedTotal: number,
   hasAttendedExtrasValue: boolean,
   options: { markNoShowWhenAbsent?: boolean } = {},
+  extrasState: { purchasedExtras?: OrderExtras; attendedExtras?: OrderExtras } = {},
 ): BookingAttendanceStatus => {
   const allowance = resolveCheckInAllowance(booking);
+  const purchasedExtrasTotal = sumExtras(extrasState.purchasedExtras);
+  const attendedExtrasTotal = sumExtras(extrasState.attendedExtras);
   if (allowance <= 0) {
+    if (purchasedExtrasTotal > 0 && attendedExtrasTotal > 0) {
+      return areExtrasFullyAttended(extrasState.purchasedExtras, extrasState.attendedExtras)
+        ? 'checked_in_full'
+        : 'checked_in_partial';
+    }
+    if (options.markNoShowWhenAbsent) {
+      return 'no_show';
+    }
     return DEFAULT_ATTENDANCE_STATUS;
   }
   const normalizedAttendedTotal = clampInt(attendedTotal, 0, allowance);
@@ -1435,7 +1461,13 @@ const applyBookingAttendanceUpdate = async (
     nextAttendedExtras.cocktails > 0 ||
     nextAttendedExtras.photos > 0;
   booking.attendedAddonsSnapshot = hasAttendedExtrasValue ? nextAttendedExtras : null;
-  const nextAttendanceStatus = resolveAttendanceStatus(booking, nextAttendedTotal, hasAttendedExtrasValue);
+  const nextAttendanceStatus = resolveAttendanceStatus(
+    booking,
+    nextAttendedTotal,
+    hasAttendedExtrasValue,
+    {},
+    { purchasedExtras, attendedExtras: nextAttendedExtras },
+  );
   booking.attendanceStatus = nextAttendanceStatus;
 
   const hasAttendance = nextAttendanceStatus === 'checked_in_full' || nextAttendanceStatus === 'checked_in_partial';
