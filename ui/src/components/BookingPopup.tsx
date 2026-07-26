@@ -21,6 +21,26 @@ const formatPeopleSummary = (cell: BookingCell): string => {
   return `${cell.totalPeople} people (Men: ${cell.menCount}, Women: ${cell.womenCount})`;
 };
 
+const isAddonOnlyOrder = (order: BookingCell["orders"][number]): boolean =>
+  Boolean(order.isAddonOnly || order.bookingKind === "addon_only");
+
+const isCountableOrder = (order: BookingCell["orders"][number]): boolean =>
+  order.status === "confirmed" || order.status === "amended";
+
+const formatBookingAndUpgradeCount = (cell: BookingCell): string => {
+  const activeOrders = cell.orders.filter(isCountableOrder);
+  const reservationCount = activeOrders.filter((order) => !isAddonOnlyOrder(order)).length;
+  const upgradeCount = activeOrders.filter(isAddonOnlyOrder).length;
+  const parts: string[] = [];
+  if (reservationCount > 0) {
+    parts.push(reservationCount === 1 ? "1 booking" : `${reservationCount} bookings`);
+  }
+  if (upgradeCount > 0) {
+    parts.push(upgradeCount === 1 ? "1 upgrade" : `${upgradeCount} upgrades`);
+  }
+  return parts.length > 0 ? parts.join(" + ") : "No bookings";
+};
+
 export const BookingPopup = ({ cell, onClose, onViewManifest }: BookingPopupProps) => {
   const popupRef = useRef<HTMLDivElement>(null);
 
@@ -63,7 +83,7 @@ export const BookingPopup = ({ cell, onClose, onViewManifest }: BookingPopupProp
             {formatPeopleSummary(cell)}
           </Text>
           <Text size="xs" c="dimmed">
-            {cell.orders.length} booking{cell.orders.length === 1 ? "" : "s"}
+            {formatBookingAndUpgradeCount(cell)}
           </Text>
         </Stack>
         {onViewManifest && (

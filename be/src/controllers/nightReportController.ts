@@ -133,6 +133,7 @@ type NightReportPayload = {
   venues: Array<{
     id: number;
     orderIndex: number;
+    routeIndex: number;
     venueName: string;
     venueId: number | null;
     totalPeople: number;
@@ -654,6 +655,7 @@ const NIGHT_REPORT_COLUMNS = [
 
 type VenueInput = {
   orderIndex?: number;
+  routeIndex?: number;
   venueName?: string;
   venueId?: number;
   totalPeople?: number;
@@ -1214,6 +1216,7 @@ async function serializeNightReport(report: NightReport, req: AuthenticatedReque
     .map((venue) => ({
       id: venue.id,
       orderIndex: venue.orderIndex,
+      routeIndex: venue.routeIndex ?? 1,
       venueName: venue.venueName,
        venueId: venue.venueId ?? null,
       totalPeople: venue.totalPeople,
@@ -1495,6 +1498,7 @@ function normalizeVenueInput(raw: unknown): VenueInput[] {
     const venue = (item ?? {}) as VenueInput;
     return {
       orderIndex: typeof venue.orderIndex === 'number' ? venue.orderIndex : undefined,
+      routeIndex: typeof venue.routeIndex === 'number' ? venue.routeIndex : undefined,
       venueName: typeof venue.venueName === 'string' ? venue.venueName.trim() : undefined,
       venueId: typeof venue.venueId === 'number' ? venue.venueId : undefined,
       totalPeople: typeof venue.totalPeople === 'number' ? venue.totalPeople : undefined,
@@ -1511,6 +1515,7 @@ function normalizeVenueInput(raw: unknown): VenueInput[] {
 
 type NormalizedVenue = {
   orderIndex: number;
+  routeIndex: number;
   venueName: string;
   venueId: number | null;
   totalPeople: number;
@@ -1528,6 +1533,7 @@ function validateAndArrangeVenues(raw: VenueInput[]): NormalizedVenue[] {
   const sorted = raw
     .map((venue, index) => ({
       orderIndex: venue.orderIndex && venue.orderIndex > 0 ? Math.floor(venue.orderIndex) : index + 1,
+      routeIndex: venue.routeIndex && venue.routeIndex > 0 ? Math.floor(venue.routeIndex) : 1,
       venueName: venue.venueName ?? '',
       venueId: venue.venueId ?? null,
       totalPeople: venue.totalPeople ?? 0,
@@ -1551,23 +1557,21 @@ function validateAndArrangeVenues(raw: VenueInput[]): NormalizedVenue[] {
   }
 
   const openBarEntries = sorted.filter((venue) => venue.isOpenBar);
-  if (openBarEntries.length !== 1) {
-    throw new HttpError(400, 'Exactly one venue must be marked as the open bar');
-  }
-  if (sorted[0].isOpenBar !== true) {
-    throw new HttpError(400, 'The first venue (order 1) must be marked as the open bar');
+  if (openBarEntries.length < 1) {
+    throw new HttpError(400, 'At least one venue must be marked as the open bar');
   }
 
-  const [openBar] = openBarEntries;
-  if (
-    openBar.normalCount == null ||
-    openBar.cocktailsCount == null ||
-    openBar.brunchCount == null ||
-    openBar.normalCount < 0 ||
-    openBar.cocktailsCount < 0 ||
-    openBar.brunchCount < 0
-  ) {
-    throw new HttpError(400, 'Open bar venue must include non-negative Normal, Cocktails, and Brunch counts');
+  const invalidOpenBar = openBarEntries.find(
+    (openBar) =>
+      openBar.normalCount == null ||
+      openBar.cocktailsCount == null ||
+      openBar.brunchCount == null ||
+      openBar.normalCount < 0 ||
+      openBar.cocktailsCount < 0 ||
+      openBar.brunchCount < 0,
+  );
+  if (invalidOpenBar) {
+    throw new HttpError(400, 'Each open bar venue must include non-negative Normal, Cocktails, and Brunch counts');
   }
 
   return sorted;
@@ -1575,6 +1579,7 @@ function validateAndArrangeVenues(raw: VenueInput[]): NormalizedVenue[] {
 
 type PreparedVenueRow = {
   orderIndex: number;
+  routeIndex: number;
   venueId: number;
   venueName: string;
   totalPeople: number;
@@ -1737,6 +1742,7 @@ async function resolveNightReportVenueRows(
 
     return {
       orderIndex: entry.orderIndex,
+      routeIndex: entry.routeIndex,
       venueId: venue.id,
       venueName: venue.name ?? entry.venueName,
       totalPeople: entry.totalPeople,
@@ -1761,6 +1767,7 @@ function mapReportVenuesToNormalized(venues: NightReportVenue[]): NormalizedVenu
     .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0))
     .map((venue, index) => ({
       orderIndex: venue.orderIndex ?? index + 1,
+      routeIndex: venue.routeIndex ?? 1,
       venueName: venue.venueName ?? '',
       venueId: venue.venueId ?? null,
       totalPeople: venue.totalPeople ?? 0,
@@ -2274,20 +2281,21 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
     const hasRecordedVenues = !didNotOperate && venues.length > 0;
     if (hasRecordedVenues) {
       const openBarVenues = venues.filter((venue) => venue.isOpenBar);
-      if (openBarVenues.length !== 1 || venues[0].isOpenBar !== true) {
-        throw new HttpError(400, 'Ensure the first venue is marked as the open bar with required counts');
+      if (openBarVenues.length < 1) {
+        throw new HttpError(400, 'Ensure at least one venue is marked as the open bar with required counts');
       }
 
-      const [openBar] = openBarVenues;
-      if (
-        openBar.normalCount == null ||
-        openBar.cocktailsCount == null ||
-        openBar.brunchCount == null ||
-        openBar.normalCount < 0 ||
-        openBar.cocktailsCount < 0 ||
-        openBar.brunchCount < 0
-      ) {
-        throw new HttpError(400, 'Open bar counts must be provided before submission');
+      const invalidOpenBar = openBarVenues.find(
+        (openBar) =>
+          openBar.normalCount == null ||
+          openBar.cocktailsCount == null ||
+          openBar.brunchCount == null ||
+          openBar.normalCount < 0 ||
+          openBar.cocktailsCount < 0 ||
+          openBar.brunchCount < 0,
+      );
+      if (invalidOpenBar) {
+        throw new HttpError(400, 'Open bar counts must be provided for every open bar before submission');
       }
     }
 

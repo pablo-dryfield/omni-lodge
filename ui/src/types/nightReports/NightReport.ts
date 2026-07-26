@@ -38,6 +38,7 @@ export type NightReportCounterRef = {
 export type NightReportVenue = {
   id: number;
   orderIndex: number;
+  routeIndex: number;
   venueName: string;
   venueId: number | null;
   totalPeople: number;
@@ -224,6 +225,7 @@ export type NightReport = {
 
 export type NightReportVenueInput = {
   orderIndex?: number;
+  routeIndex?: number;
   venueName: string;
   venueId?: number;
   totalPeople: number;

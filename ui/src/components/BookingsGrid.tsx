@@ -67,6 +67,23 @@ const isCountableStatus = (status?: string | null): boolean => {
   return COUNTABLE_STATUS_SET.has(status);
 };
 
+const isAddonOnlyOrder = (order: BookingCell["orders"][number]): boolean =>
+  Boolean(order.isAddonOnly || order.bookingKind === "addon_only");
+
+const formatBookingAndUpgradeCount = (orders: BookingCell["orders"]): string => {
+  const activeOrders = orders.filter((order) => isCountableStatus(order.status));
+  const reservationCount = activeOrders.filter((order) => !isAddonOnlyOrder(order)).length;
+  const upgradeCount = activeOrders.filter(isAddonOnlyOrder).length;
+  const parts: string[] = [];
+  if (reservationCount > 0) {
+    parts.push(reservationCount === 1 ? "1 booking" : `${reservationCount} bookings`);
+  }
+  if (upgradeCount > 0) {
+    parts.push(upgradeCount === 1 ? "1 upgrade" : `${upgradeCount} upgrades`);
+  }
+  return parts.length > 0 ? parts.join(" + ") : "No bookings";
+};
+
 const getRowKey = (name: string): string => {
   const lowered = name.toLowerCase();
   if (lowered.includes("pub crawl")) return "pub";
@@ -294,16 +311,8 @@ const MonthlyCalendar: React.FC<{
                       </div>
                       <Text size="xs" c="dimmed" fw={600}>
                         {(() => {
-                          const countableBookings = daySlots.reduce(
-                            (acc, entry) =>
-                              acc +
-                              entry.cell.orders.filter((order) => isCountableStatus(order.status)).length,
-                            0,
-                          );
-                          if (countableBookings === 0) {
-                            return "No bookings";
-                          }
-                          return countableBookings === 1 ? "1 booking" : `${countableBookings} bookings`;
+                          const orders = daySlots.flatMap((entry) => entry.cell.orders);
+                          return formatBookingAndUpgradeCount(orders);
                         })()}
                       </Text>
                     </div>
@@ -574,7 +583,12 @@ export const BookingsGrid: React.FC<BookingsGridProps> = ({
 
 const TimeslotRect: React.FC<TimeslotRectProps> = ({ rowKey, cell, onClick, productName, variant = "grid" }) => {
   const [hovered, setHovered] = useState(false);
-  const totalLabel = useMemo(() => `${cell.totalPeople} booked`, [cell.totalPeople]);
+  const totalLabel = useMemo(() => {
+    if (cell.totalPeople > 0) {
+      return `${cell.totalPeople} booked`;
+    }
+    return formatBookingAndUpgradeCount(cell.orders);
+  }, [cell.orders, cell.totalPeople]);
   const genderLabel = useMemo(
     () => {
       const undefinedLabel =

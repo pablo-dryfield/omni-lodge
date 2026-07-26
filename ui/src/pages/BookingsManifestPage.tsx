@@ -693,7 +693,12 @@ const filterOrdersByStatus = (orders: UnifiedOrder[], filter: BookingFilter): Un
   }
   return orders.filter((order) => {
     const quantity = Number.isFinite(order.quantity) ? order.quantity : 0;
-    return order.status !== "cancelled" && quantity > 0;
+    const extras = order.extras ?? { tshirts: 0, cocktails: 0, photos: 0 };
+    const extrasQuantity =
+      (Number.isFinite(extras.tshirts) ? extras.tshirts : 0) +
+      (Number.isFinite(extras.cocktails) ? extras.cocktails : 0) +
+      (Number.isFinite(extras.photos) ? extras.photos : 0);
+    return order.status !== "cancelled" && (quantity > 0 || extrasQuantity > 0);
   });
 };
 

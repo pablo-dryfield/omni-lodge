@@ -43,6 +43,8 @@ export type UnifiedOrder = {
   remainingTotal?: number;
   sourceReceivedAt?: string | null;
   isAfterCutoff?: boolean;
+  isAddonOnly?: boolean;
+  bookingKind?: 'reservation' | 'addon_only';
   status: BookingStatus;
   attendanceStatus?: BookingAttendanceStatus;
   rawData?: unknown;
