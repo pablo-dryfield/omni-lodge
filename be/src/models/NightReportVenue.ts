@@ -34,6 +34,11 @@ export default class NightReportVenue extends Model {
   declare orderIndex: number;
 
   @AllowNull(false)
+  @Default(1)
+  @Column({ field: 'route_index', type: DataType.INTEGER })
+  declare routeIndex: number;
+
+  @AllowNull(false)
   @Column({ field: 'venue_name', type: DataType.STRING(255) })
   declare venueName: string;
 

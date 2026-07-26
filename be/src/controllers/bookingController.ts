@@ -1272,13 +1272,49 @@ const normalizeExtras = (snapshot: unknown): OrderExtras => {
     return { tshirts: 0, cocktails: 0, photos: 0 };
   }
   const extras = (snapshot as { extras?: Partial<OrderExtras> }).extras;
-  if (!extras) {
-    return { tshirts: 0, cocktails: 0, photos: 0 };
+  if (extras) {
+    return {
+      tshirts: Number(extras.tshirts) || 0,
+      cocktails: Number(extras.cocktails) || 0,
+      photos: Number(extras.photos) || 0,
+    };
   }
+
+  const normalized: OrderExtras = { tshirts: 0, cocktails: 0, photos: 0 };
+  const addons = (snapshot as { addons?: unknown }).addons;
+  if (!Array.isArray(addons)) {
+    return normalized;
+  }
+
+  addons.forEach((addon) => {
+    if (!addon || typeof addon !== 'object') {
+      return;
+    }
+    const record = addon as Record<string, unknown>;
+    const quantity = Math.max(0, Math.round(Number(record.quantity) || 0));
+    if (quantity <= 0) {
+      return;
+    }
+    const keyParts = [record.category, record.label, record.name, record.key]
+      .map((value) => String(value ?? '').toLowerCase())
+      .join(' ');
+    if (keyParts.includes('cocktail') || keyParts.includes('drink')) {
+      normalized.cocktails += quantity;
+      return;
+    }
+    if (keyParts.includes('shirt')) {
+      normalized.tshirts += quantity;
+      return;
+    }
+    if (keyParts.includes('photo')) {
+      normalized.photos += quantity;
+    }
+  });
+
   return {
-    tshirts: Number(extras.tshirts) || 0,
-    cocktails: Number(extras.cocktails) || 0,
-    photos: Number(extras.photos) || 0,
+    tshirts: normalized.tshirts,
+    cocktails: normalized.cocktails,
+    photos: normalized.photos,
   };
 };
 
@@ -1561,6 +1597,8 @@ const bookingToUnifiedOrder = (
   const attendedExtras = normalizeAttendedExtras(booking.attendedAddonsSnapshot ?? undefined);
   const sourceReceivedAtIso = booking.sourceReceivedAt ? dayjs(booking.sourceReceivedAt).toISOString() : null;
   const isAfterCutoff = isAfterCutoffBySourceReceivedAt(experienceDate, booking.sourceReceivedAt ?? null);
+  const hasPurchasedExtras = extras.tshirts > 0 || extras.cocktails > 0 || extras.photos > 0;
+  const isAddonOnly = normalizedQuantity === 0 && hasPurchasedExtras;
 
   return {
     id: String(booking.id),
@@ -1584,6 +1622,8 @@ const bookingToUnifiedOrder = (
     remainingTotal,
     sourceReceivedAt: sourceReceivedAtIso,
     isAfterCutoff,
+    isAddonOnly,
+    bookingKind: isAddonOnly ? 'addon_only' : 'reservation',
     status: booking.status,
     attendanceStatus: normalizeAttendanceStatus(booking.attendanceStatus),
     rawData: {

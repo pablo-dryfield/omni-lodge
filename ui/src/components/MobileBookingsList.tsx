@@ -61,6 +61,23 @@ const mergeExtras = (target: OrderExtras, payload: OrderExtras) => {
   target.photos += payload.photos;
 };
 
+const isAddonOnlyOrder = (order: BookingCell["orders"][number]): boolean =>
+  Boolean(order.isAddonOnly || order.bookingKind === "addon_only");
+
+const formatBookingAndUpgradeCount = (orders: BookingCell["orders"]) => {
+  const activeOrders = orders.filter((order) => order.status === "confirmed" || order.status === "amended");
+  const reservationCount = activeOrders.filter((order) => !isAddonOnlyOrder(order)).length;
+  const upgradeCount = activeOrders.filter(isAddonOnlyOrder).length;
+  const parts: string[] = [];
+  if (reservationCount > 0) {
+    parts.push(reservationCount === 1 ? "1 booking" : `${reservationCount} bookings`);
+  }
+  if (upgradeCount > 0) {
+    parts.push(upgradeCount === 1 ? "1 upgrade" : `${upgradeCount} upgrades`);
+  }
+  return parts.length > 0 ? parts.join(" + ") : "No bookings";
+};
+
 const formatDateLabel = (date: string) => {
   const formatted = new Date(date);
   return {
@@ -290,7 +307,7 @@ export const MobileBookingsList: React.FC<MobileBookingsListProps> = ({
               entryHasBookings ? (
                 <Stack gap="sm" px="xs">
                   {entry.slots.map(({ product, cell, extras }) => {
-                    const bookingLabel = cell.orders.length === 1 ? '1 booking' : `${cell.orders.length} bookings`;
+                    const bookingLabel = formatBookingAndUpgradeCount(cell.orders);
                     return (
                       <Paper
                         key={`${product.id}-${cell.time}`}

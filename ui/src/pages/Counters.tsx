@@ -504,6 +504,19 @@ const getOrderAttendedExtraQty = (order: UnifiedOrder, key: keyof OrderExtras): 
 
 const ORDER_EXTRA_KEYS: Array<keyof OrderExtras> = ['cocktails', 'tshirts', 'photos'];
 
+const getOrderRemainingExtrasTotal = (order: UnifiedOrder): number =>
+  ORDER_EXTRA_KEYS.reduce((total, key) => {
+    const purchased = getOrderPurchasedExtraQty(order, key);
+    const attended = getOrderAttendedExtraQty(order, key);
+    return total + Math.max(purchased - attended, 0);
+  }, 0);
+
+const hasOrderRemainingCheckIn = (order: UnifiedOrder): boolean =>
+  getOrderEntryAllowance(order) > 0 || getOrderRemainingExtrasTotal(order) > 0;
+
+const hasOrderAnyAttendance = (order: UnifiedOrder): boolean =>
+  getOrderAttendedTotal(order) > 0 || ORDER_EXTRA_KEYS.some((key) => getOrderAttendedExtraQty(order, key) > 0);
+
 const applyAttendanceToOrder = (
   order: UnifiedOrder,
   payload: BookingAttendancePatchPayload,
@@ -5223,10 +5236,10 @@ useEffect(() => {
   const onlineReservationsByAttendanceView = useMemo(() => {
     if (onlineReservationsView === 'checked_in') {
       return onlineReservationsScoped.filter(
-        (order) => getOrderAttendedTotal(order) > 0 && getOrderEntryAllowance(order) <= 0,
+        (order) => hasOrderAnyAttendance(order) && !hasOrderRemainingCheckIn(order),
       );
     }
-    return onlineReservationsScoped.filter((order) => getOrderEntryAllowance(order) > 0);
+    return onlineReservationsScoped.filter((order) => hasOrderRemainingCheckIn(order));
   }, [onlineReservationsScoped, onlineReservationsView]);
 
   const onlineReservationsFiltered = useMemo(() => {
@@ -7094,7 +7107,7 @@ useEffect(() => {
         if (!bookingId || attendanceByBookingId.has(bookingId)) {
           return;
         }
-        if (getOrderEntryAllowance(order) <= 0) {
+        if (!hasOrderRemainingCheckIn(order)) {
           return;
         }
 
@@ -8494,6 +8507,7 @@ useEffect(() => {
                     <Stack spacing={1.1}>
                       {onlineReservationsFiltered.map((order) => {
                         const bookingId = getOrderBookingId(order);
+                        const isAddonOnlyOrder = order.isAddonOnly || order.bookingKind === 'addon_only';
                         const currentAttended = getOrderAttendedTotal(order);
                         const remaining = getOrderEntryAllowance(order);
                         const maxAttended = currentAttended + remaining;
@@ -8565,7 +8579,7 @@ useEffect(() => {
                                   )}
                                   <Stack direction="row" spacing={0.5} alignItems="center" sx={{ justifySelf: 'end' }}>
                                     <Person fontSize="small" sx={{ color: 'text.secondary' }} />
-                                    <Chip size="small" label={`${currentAttended}/${maxAttended}`} />
+                                    <Chip size="small" label={isAddonOnlyOrder ? 'Add-on upgrade' : `${currentAttended}/${maxAttended}`} />
                                   </Stack>
                                 </Box>
                                 {hasAddonCounters && (
@@ -8663,7 +8677,7 @@ useEffect(() => {
                                     onClick={() => {
                                       void handleBookingFullCheckIn(order);
                                     }}
-                                    disabled={isSaving || remaining <= 0 || bookingId == null}
+                                    disabled={isSaving || !hasOrderRemainingCheckIn(order) || bookingId == null}
                                     sx={{ flex: 1 }}
                                   >
                                     Full
@@ -9053,7 +9067,7 @@ type SummaryRowOptions = {
   const summaryAttendedOrders = useMemo(
     () =>
       onlineReservationsScoped.filter(
-        (order) => MANIFEST_INCLUDED_STATUSES.has(order.status) && getOrderAttendedTotal(order) > 0,
+        (order) => MANIFEST_INCLUDED_STATUSES.has(order.status) && hasOrderAnyAttendance(order),
       ),
     [onlineReservationsScoped],
   );

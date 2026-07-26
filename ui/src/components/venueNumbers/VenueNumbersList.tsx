@@ -105,8 +105,10 @@ import {
 type EditableVenue = {
   tempKey: string;
   id?: number;
+  routeIndex: number;
   venueId: number | null;
   venueName: string;
+  isOpenBar: boolean;
   totalPeople: string;
   normalCount: string;
   cocktailsCount: string;
@@ -188,11 +190,13 @@ const DATE_FORMAT = "YYYY-MM-DD";
 
 const generateTempKey = (): string => `tmp-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
 
-const createEmptyVenue = (): EditableVenue => ({
+const createEmptyVenue = (isOpenBar = true, routeIndex = 1): EditableVenue => ({
   tempKey: generateTempKey(),
   id: undefined,
+  routeIndex,
   venueId: null,
   venueName: "",
+  isOpenBar,
   totalPeople: "",
   normalCount: "",
   cocktailsCount: "",
@@ -355,6 +359,22 @@ const computeOpenBarTotal = (normal: number, cocktails: number, brunch: number, 
   }
 };
 
+const normalizeRouteIndex = (value: unknown, fallback = 1): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.max(1, Math.floor(parsed));
+};
+
+const getNextRouteIndex = (venues: EditableVenue[]): number => {
+  const maxRoute = venues.reduce((max, venue) => Math.max(max, normalizeRouteIndex(venue.routeIndex, 1)), 0);
+  return maxRoute + 1;
+};
+
+const getLastRouteIndex = (venues: EditableVenue[]): number =>
+  venues.reduce((max, venue) => Math.max(max, normalizeRouteIndex(venue.routeIndex, 1)), 1);
+
 const toEditableReport = (report: NightReport | null, directory?: Map<string, Venue>): EditableReport => {
   const resolveVenueId = (name: string, fallbackId?: number | null): number | null => {
     if (fallbackId != null) {
@@ -381,19 +401,31 @@ const toEditableReport = (report: NightReport | null, directory?: Map<string, Ve
     };
   }
 
+  let inferredRouteIndex = 0;
   const sorted = (report.venues ?? [])
     .slice()
     .sort((a, b) => a.orderIndex - b.orderIndex)
-    .map((venue, index) => ({
-      tempKey: generateTempKey(),
-      id: venue.id,
-      venueId: resolveVenueId(venue.venueName ?? "", venue.venueId ?? null),
-      venueName: venue.venueName ?? "",
-      totalPeople: venue.totalPeople != null ? String(venue.totalPeople) : "",
-      normalCount: index === OPEN_BAR_INDEX && venue.normalCount != null ? String(venue.normalCount) : "",
-      cocktailsCount: index === OPEN_BAR_INDEX && venue.cocktailsCount != null ? String(venue.cocktailsCount) : "",
-      brunchCount: index === OPEN_BAR_INDEX && venue.brunchCount != null ? String(venue.brunchCount) : "",
-    }));
+    .map((venue, index) => {
+      const rawIsOpenBar = (venue as { isOpenBar?: boolean | null }).isOpenBar;
+      const isOpenBar = rawIsOpenBar === true || (rawIsOpenBar == null && index === OPEN_BAR_INDEX);
+      const rawRouteIndex = (venue as { routeIndex?: number | null }).routeIndex;
+      if (rawRouteIndex == null && isOpenBar) {
+        inferredRouteIndex += 1;
+      }
+      const routeIndex = normalizeRouteIndex(rawRouteIndex, inferredRouteIndex || 1);
+      return {
+        tempKey: generateTempKey(),
+        id: venue.id,
+        routeIndex,
+        venueId: resolveVenueId(venue.venueName ?? "", venue.venueId ?? null),
+        venueName: venue.venueName ?? "",
+        isOpenBar,
+        totalPeople: venue.totalPeople != null ? String(venue.totalPeople) : "",
+        normalCount: isOpenBar && venue.normalCount != null ? String(venue.normalCount) : "",
+        cocktailsCount: isOpenBar && venue.cocktailsCount != null ? String(venue.cocktailsCount) : "",
+        brunchCount: isOpenBar && venue.brunchCount != null ? String(venue.brunchCount) : "",
+      };
+    });
 
   return {
     activityDate: report.activityDate ?? dayjs().format(DATE_FORMAT),
@@ -437,13 +469,15 @@ const buildVenuePayload = (
   directory?: Map<string, Venue>,
 ): NightReportVenueInput[] =>
   report.venues.map((venue, index) => {
+    const isOpenBar = venue.isOpenBar === true;
     const payload: NightReportVenueInput = {
       orderIndex: index + 1,
+      routeIndex: normalizeRouteIndex(venue.routeIndex, 1),
       venueName: venue.venueName.trim(),
-      isOpenBar: index === OPEN_BAR_INDEX,
+      isOpenBar,
       totalPeople: 0,
     };
-    if (index === OPEN_BAR_INDEX) {
+    if (isOpenBar) {
       const normalValue = normalizeNumber(venue.normalCount, 0) ?? 0;
       const cocktailsValue = normalizeNumber(venue.cocktailsCount, 0) ?? 0;
       const brunchValue = normalizeNumber(venue.brunchCount, 0) ?? 0;
@@ -783,14 +817,16 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       return;
     }
 
-    const openBar = formState.venues[OPEN_BAR_INDEX];
-    if (!openBar) {
+    const openBarVenues = formState.venues.filter((venue) => venue.isOpenBar);
+    if (openBarVenues.length === 0) {
       return;
     }
-    const normalValue = normalizeNumber(openBar.normalCount, 0) ?? 0;
-    const cocktailsValue = normalizeNumber(openBar.cocktailsCount, 0) ?? 0;
-    const brunchValue = normalizeNumber(openBar.brunchCount, 0) ?? 0;
-    const totalForMode = computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, openBarMode);
+    const totalForMode = openBarVenues.reduce((sum, openBar) => {
+      const normalValue = normalizeNumber(openBar.normalCount, 0) ?? 0;
+      const cocktailsValue = normalizeNumber(openBar.cocktailsCount, 0) ?? 0;
+      const brunchValue = normalizeNumber(openBar.brunchCount, 0) ?? 0;
+      return sum + computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, openBarMode);
+    }, 0);
     setReportDisplayTotals((prev) => {
       if (prev[selectedReportId] === totalForMode) {
         return prev;
@@ -806,25 +842,24 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     [costs],
   );
   const openBarPayoutSummary = useMemo(() => {
-    const openBarVenue = (nightReportDetail.data?.venues ?? []).find(
+    const openBarVenues = (nightReportDetail.data?.venues ?? []).filter(
       (venue) =>
         venue.isOpenBar === true &&
         venue.compensationType === "open_bar" &&
         venue.payoutAmount != null &&
         Number.isFinite(Number(venue.payoutAmount)),
     );
-    if (!openBarVenue) {
+    if (openBarVenues.length === 0) {
       return null;
     }
+    const payoutAmount = openBarVenues.reduce((sum, venue) => sum + Number(venue.payoutAmount ?? 0), 0);
+    const firstOpenBarVenue = openBarVenues[0];
     return {
-      venueName: openBarVenue.venueName || "Open Bar",
-      payoutAmount: Number(openBarVenue.payoutAmount),
-      currencyCode: openBarVenue.currencyCode ?? "PLN",
-      rateApplied:
-        openBarVenue.rateApplied != null && Number.isFinite(Number(openBarVenue.rateApplied))
-          ? Number(openBarVenue.rateApplied)
-          : null,
-      rateUnit: openBarVenue.rateUnit ?? null,
+      venueName: openBarVenues.length === 1 ? firstOpenBarVenue.venueName || "Open Bar" : `${openBarVenues.length} Open Bars`,
+      payoutAmount,
+      currencyCode: firstOpenBarVenue.currencyCode ?? "PLN",
+      rateApplied: null,
+      rateUnit: null,
     };
   }, [nightReportDetail.data?.venues]);
   const fallbackFinanceSummary = useMemo(() => {
@@ -1131,7 +1166,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     const adjustedForm: EditableReport = {
       ...normalizedForm,
       venues: normalizedForm.venues.map((venue, idx) => {
-        if (idx !== OPEN_BAR_INDEX) {
+        if (!venue.isOpenBar) {
           return venue;
         }
         const normalValue = normalizeNumber(venue.normalCount, 0) ?? 0;
@@ -1205,12 +1240,12 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       if (prev.venues.length === 0) {
         return prev;
       }
-      const first = prev.venues[OPEN_BAR_INDEX];
-      if (!first || first.venueName) {
+      const openBarBlankIndex = prev.venues.findIndex((venue) => venue.isOpenBar && !venue.venueName);
+      if (openBarBlankIndex === -1) {
         return prev;
       }
       const updated = [...prev.venues];
-      updated[OPEN_BAR_INDEX] = { ...first, venueName: openBarVenueOptions[0] };
+      updated[openBarBlankIndex] = { ...updated[openBarBlankIndex], venueName: openBarVenueOptions[0] };
       return { ...prev, venues: updated };
     });
   }, [openBarVenueOptions, didNotOperate]);
@@ -1375,6 +1410,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     if (report.venues.length === 0) {
       return "Add at least one venue.";
     }
+    if (!report.venues.some((venue) => venue.isOpenBar)) {
+      return "Add at least one open bar.";
+    }
 
     const venueSet = new Set(venuesOptions.map((name) => name.toLowerCase()));
     const openBarAllowedSet = new Set(openBarVenueOptions.map((name) => name.toLowerCase()));
@@ -1389,7 +1427,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         return `"${venue.venueName}" is not part of the venues directory.`;
       }
 
-      if (index === OPEN_BAR_INDEX) {
+      if (venue.isOpenBar) {
         if (trimmed.toLowerCase() === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase()) {
           return "Select the open-bar venue.";
         }
@@ -1440,13 +1478,13 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         }
         return updated;
       });
-      if (index === OPEN_BAR_INDEX) {
-        const openBar = nextVenues[OPEN_BAR_INDEX];
+      if (nextVenues[index]?.isOpenBar) {
+        const openBar = nextVenues[index];
         const normalValue = normalizeNumber(openBar.normalCount, 0) ?? 0;
         const cocktailsValue = normalizeNumber(openBar.cocktailsCount, 0) ?? 0;
         const brunchValue = normalizeNumber(openBar.brunchCount, 0) ?? 0;
         const totalForMode = computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, openBarMode);
-        nextVenues[OPEN_BAR_INDEX] = {
+        nextVenues[index] = {
           ...openBar,
           totalPeople: String(totalForMode),
         };
@@ -1458,15 +1496,29 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     });
   };
 
-  const handleAddVenue = () => {
+  const handleAddVenue = (routeIndex?: number) => {
     setValidationError(null);
     setPendingChanges(true);
-    const newVenue = { ...createEmptyVenue(), venueName: "" };
+    const targetRouteIndex = normalizeRouteIndex(routeIndex, getLastRouteIndex(formState.venues));
+    const newVenue = { ...createEmptyVenue(false, targetRouteIndex), venueName: "" };
     const newKey = getVenueKey(newVenue, formState.venues.length);
     setFormState((prev) => {
+      const insertAfterIndex = prev.venues.reduce(
+        (lastIndex, venue, index) =>
+          normalizeRouteIndex(venue.routeIndex, 1) === targetRouteIndex ? index : lastIndex,
+        -1,
+      );
+      const nextVenues =
+        insertAfterIndex >= 0
+          ? [
+              ...prev.venues.slice(0, insertAfterIndex + 1),
+              newVenue,
+              ...prev.venues.slice(insertAfterIndex + 1),
+            ]
+          : [...prev.venues, newVenue];
       return {
         ...prev,
-        venues: [...prev.venues, newVenue],
+        venues: nextVenues,
       };
     });
     setEditableVenueKeys((prev) => {
@@ -1476,8 +1528,25 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     });
   };
 
+  const handleAddSplitRoute = () => {
+    setValidationError(null);
+    setPendingChanges(true);
+    const newVenue = { ...createEmptyVenue(true, getNextRouteIndex(formState.venues)), venueName: openBarVenueOptions[0] ?? "" };
+    const newKey = getVenueKey(newVenue, formState.venues.length);
+    setFormState((prev) => ({
+      ...prev,
+      venues: [...prev.venues, newVenue],
+    }));
+    setEditableVenueKeys((prev) => {
+      const next = new Set(prev);
+      next.add(newKey);
+      return next;
+    });
+  };
+
   const handleRemoveVenue = (index: number) => {
-    if (index === OPEN_BAR_INDEX) {
+    const openBarCount = formState.venues.filter((venue) => venue.isOpenBar).length;
+    if (formState.venues[index]?.isOpenBar && openBarCount <= 1) {
       return;
     }
     const venueToRemove = formState.venues[index];
@@ -1837,6 +1906,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     if (formState.venues.length === 0) {
       return true;
     }
+    if (!formState.venues.some((venue) => venue.isOpenBar)) {
+      return true;
+    }
     const venueSet = new Set(venuesOptions.map((name) => name.toLowerCase()));
     const openBarAllowedSet = new Set(openBarVenueOptions.map((name) => name.toLowerCase()));
 
@@ -1845,7 +1917,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       if (!trimmed) {
         return true;
       }
-      if (index === OPEN_BAR_INDEX) {
+      if (venue.isOpenBar) {
         const lowerTrimmed = trimmed.toLowerCase();
         if (
           lowerTrimmed === SELECT_OPEN_BAR_PLACEHOLDER.toLowerCase() ||
@@ -3383,6 +3455,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
     if (readOnly) {
       type DisplayVenue = {
         key: string;
+        routeIndex: number;
         name: string;
         totalPeople: number | null;
         isOpenBar: boolean;
@@ -3394,6 +3467,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       const detailVenues = nightReportDetail.data?.venues ?? [];
       const detailVenuesForDisplay: DisplayVenue[] = detailVenues.map((venue, index) => ({
         key: `detail-${venue.id ?? index}`,
+        routeIndex: normalizeRouteIndex((venue as { routeIndex?: number | null }).routeIndex, 1),
         name: venue.venueName || (venue.isOpenBar ? "Open Bar" : `Venue ${index + 1}`),
         totalPeople: typeof venue.totalPeople === "number" ? venue.totalPeople : null,
         isOpenBar: Boolean(venue.isOpenBar),
@@ -3403,7 +3477,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       }));
 
       const fallbackVenues: DisplayVenue[] = formState.venues.map((venue, index) => {
-        const isOpenBar = index === OPEN_BAR_INDEX;
+        const isOpenBar = venue.isOpenBar;
         const venueName = venue.venueName?.trim() || (isOpenBar ? "Open Bar" : `Venue ${index + 1}`);
         const totalValue = normalizeNumber(venue.totalPeople, isOpenBar ? 0 : null);
         const normalValue = normalizeNumber(venue.normalCount);
@@ -3411,6 +3485,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         const brunchValue = normalizeNumber(venue.brunchCount);
         return {
           key: `fallback-${index}`,
+          routeIndex: normalizeRouteIndex(venue.routeIndex, 1),
           name: venueName,
           totalPeople: typeof totalValue === "number" ? totalValue : null,
           isOpenBar,
@@ -3427,46 +3502,68 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         (sum, venue) => sum + (typeof venue.totalPeople === "number" ? venue.totalPeople : 0),
         0,
       );
-      const openBarSummary = venuesForDisplay.find((venue) => venue.isOpenBar) ?? null;
+      const openBarSummaries = venuesForDisplay.filter((venue) => venue.isOpenBar);
       const totalGuests = (() => {
-        if (!openBarSummary) {
+        if (openBarSummaries.length === 0) {
           return defaultTotalGuests;
         }
-        const normalValue =
-          typeof openBarSummary.normalCount === "number" && Number.isFinite(openBarSummary.normalCount)
-            ? openBarSummary.normalCount
-            : null;
-        const cocktailsValue =
-          typeof openBarSummary.cocktailsCount === "number" && Number.isFinite(openBarSummary.cocktailsCount)
-            ? openBarSummary.cocktailsCount
-            : null;
-        const brunchValue =
-          typeof openBarSummary.brunchCount === "number" && Number.isFinite(openBarSummary.brunchCount)
-            ? openBarSummary.brunchCount
-            : null;
-        const hasBreakdown =
-          normalValue != null || cocktailsValue != null || brunchValue != null;
-        if (hasBreakdown) {
-          return computeOpenBarTotal(normalValue ?? 0, cocktailsValue ?? 0, brunchValue ?? 0, openBarMode);
-        }
-        if (typeof openBarSummary.totalPeople === "number" && Number.isFinite(openBarSummary.totalPeople)) {
-          return openBarSummary.totalPeople;
-        }
-        return defaultTotalGuests;
+        return openBarSummaries.reduce((sum, openBarSummary) => {
+          const normalValue =
+            typeof openBarSummary.normalCount === "number" && Number.isFinite(openBarSummary.normalCount)
+              ? openBarSummary.normalCount
+              : null;
+          const cocktailsValue =
+            typeof openBarSummary.cocktailsCount === "number" && Number.isFinite(openBarSummary.cocktailsCount)
+              ? openBarSummary.cocktailsCount
+              : null;
+          const brunchValue =
+            typeof openBarSummary.brunchCount === "number" && Number.isFinite(openBarSummary.brunchCount)
+              ? openBarSummary.brunchCount
+              : null;
+          const hasBreakdown =
+            normalValue != null || cocktailsValue != null || brunchValue != null;
+          if (hasBreakdown) {
+            return sum + computeOpenBarTotal(normalValue ?? 0, cocktailsValue ?? 0, brunchValue ?? 0, openBarMode);
+          }
+          if (typeof openBarSummary.totalPeople === "number" && Number.isFinite(openBarSummary.totalPeople)) {
+            return sum + openBarSummary.totalPeople;
+          }
+          return sum;
+        }, 0);
       })();
 
-      const openBarIndex = venuesForDisplay.findIndex((venue) => venue.isOpenBar);
-      const firstPostOpenBarIndex = openBarIndex >= 0 ? openBarIndex + 1 : 1;
-      const venuesAfterOpenBar =
-        firstPostOpenBarIndex < venuesForDisplay.length ? venuesForDisplay.slice(firstPostOpenBarIndex) : [];
-      const secondVenueForTargets =
-        firstPostOpenBarIndex < venuesForDisplay.length ? venuesForDisplay[firstPostOpenBarIndex] : null;
-      const secondVenueTotal =
-        secondVenueForTargets &&
-        typeof secondVenueForTargets.totalPeople === "number" &&
-        Number.isFinite(secondVenueForTargets.totalPeople)
-          ? secondVenueForTargets.totalPeople
-          : null;
+      const routeGroups = Array.from(
+        venuesForDisplay.reduce<Map<number, DisplayVenue[]>>((map, venue) => {
+          const routeIndex = normalizeRouteIndex(venue.routeIndex, 1);
+          if (!map.has(routeIndex)) {
+            map.set(routeIndex, []);
+          }
+          map.get(routeIndex)!.push(venue);
+          return map;
+        }, new Map()),
+      )
+        .map(([routeIndex, venues]) => ({ routeIndex, venues }))
+        .sort((left, right) => left.routeIndex - right.routeIndex);
+      const venuesAfterOpenBar = routeGroups.flatMap((group) => {
+        const openBarIndex = group.venues.findIndex((venue) => venue.isOpenBar);
+        return openBarIndex >= 0 ? group.venues.slice(openBarIndex + 1) : group.venues;
+      });
+      const targetBase = routeGroups.reduce((sum, group) => {
+        const openBarIndex = group.venues.findIndex((venue) => venue.isOpenBar);
+        if (openBarIndex === -1) {
+          return sum;
+        }
+        const nextVenue = group.venues.slice(openBarIndex + 1).find((venue) => !venue.isOpenBar);
+        const value =
+          nextVenue && typeof nextVenue.totalPeople === "number" && Number.isFinite(nextVenue.totalPeople)
+            ? nextVenue.totalPeople
+            : 0;
+        return sum + value;
+      }, 0);
+      const hasTargetBase = routeGroups.some((group) => {
+        const openBarIndex = group.venues.findIndex((venue) => venue.isOpenBar);
+        return openBarIndex >= 0 && group.venues.slice(openBarIndex + 1).some((venue) => !venue.isOpenBar);
+      });
       const totalAfterOpenBar =
         venuesAfterOpenBar.length > 0
           ? venuesAfterOpenBar.reduce((sum, venue) => {
@@ -3477,8 +3574,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               return sum + value;
             }, 0)
           : null;
-      const minimumTarget = secondVenueTotal != null ? secondVenueTotal * 4 : null;
-      const retentionTarget = secondVenueTotal != null ? secondVenueTotal * 5 : null;
+      const minimumTarget = hasTargetBase ? targetBase * 4 : null;
+      const retentionTarget = hasTargetBase ? targetBase * 5 : null;
 
       const formatNumberValue = (value: number | null | undefined): string =>
         typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "-";
@@ -3595,7 +3692,23 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               </Typography>
             ) : (
               <Stack spacing={1.25}>
-                {venuesForDisplay.map((venue, index) => {
+                {routeGroups.map((group) => (
+                  <Box
+                    key={`route-${group.routeIndex}`}
+                    sx={(theme) => ({
+                      borderRadius: 2,
+                      border: "1px solid",
+                      borderColor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.35 : 0.18),
+                      backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.08 : 0.04),
+                      p: { xs: 1.25, sm: 1.5 },
+                    })}
+                  >
+                    <Stack spacing={1.25}>
+                      <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
+                        <Chip label={`Route ${group.routeIndex}`} size="small" color="primary" variant="outlined" />
+                      </Stack>
+                      {group.venues.map((venue) => {
+                  const index = venuesForDisplay.findIndex((item) => item.key === venue.key);
                   const normalValue =
                     typeof venue.normalCount === "number" && Number.isFinite(venue.normalCount)
                       ? venue.normalCount
@@ -3755,6 +3868,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                     </Box>
                   );
                 })}
+                    </Stack>
+                  </Box>
+                ))}
               </Stack>
             )}
           </CardContent>
@@ -3943,7 +4059,11 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
         <Divider />
         <Stack spacing={2}>
           {formState.venues.map((venue, index) => {
-            const isOpenBar = index === OPEN_BAR_INDEX;
+            const isOpenBar = venue.isOpenBar;
+            const routeIndex = normalizeRouteIndex(venue.routeIndex, 1);
+            const previousRouteIndex =
+              index > 0 ? normalizeRouteIndex(formState.venues[index - 1]?.routeIndex, 1) : null;
+            const showRouteHeader = index === 0 || routeIndex !== previousRouteIndex;
             const compensationSnapshot = compensationByOrder.get(index + 1);
             const availableOptions = (() => {
               const baseOptions = isOpenBar ? openBarVenueOptions : venuesOptions;
@@ -3968,7 +4088,31 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
               !fieldsDisabled && !isOpenBar && (venue.totalPeople == null || venue.totalPeople.trim().length === 0);
 
             return (
-              <Stack key={getVenueKey(venue, index)} spacing={1}>
+              <Fragment key={getVenueKey(venue, index)}>
+              {showRouteHeader && (
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                  justifyContent="center"
+                  flexWrap="wrap"
+                  useFlexGap
+                  sx={(theme) => ({
+                    mt: index === 0 ? 0 : 1,
+                    px: 1.5,
+                    py: 1,
+                    borderRadius: 2,
+                    border: "1px solid",
+                    borderColor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.35 : 0.18),
+                    backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.12 : 0.06),
+                  })}
+                >
+                  <Typography variant="subtitle1" fontWeight={800} textAlign="center">
+                    Route {routeIndex}
+                  </Typography>
+                </Stack>
+              )}
+              <Stack spacing={1}>
                 <Card variant="outlined">
                   <CardContent>
                     <Stack spacing={2}>
@@ -3984,7 +4128,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                             </IconButton>
                           </Tooltip>
                         )}
-                        {!readOnly && !isOpenBar && (
+                        {!readOnly && (!isOpenBar || formState.venues.filter((item) => item.isOpenBar).length > 1) && (
                           <Tooltip title="Remove venue">
                             <IconButton size="small" onClick={() => handleRemoveVenue(index)}>
                               <Delete fontSize="small" />
@@ -4139,13 +4283,24 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                     </Stack>
                   </CardContent>
                 </Card>
+                {!readOnly &&
+                  !didNotOperate &&
+                  (index === formState.venues.length - 1 ||
+                    normalizeRouteIndex(formState.venues[index + 1]?.routeIndex, 1) !== routeIndex) && (
+                    <Box display="flex" justifyContent="center">
+                      <Button size="small" startIcon={<Add />} variant="text" onClick={() => handleAddVenue(routeIndex)}>
+                        Add Venue
+                      </Button>
+                    </Box>
+                  )}
               </Stack>
+              </Fragment>
             );
           })}
           {!readOnly && !didNotOperate ? (
-            <Stack direction="row" spacing={1} justifyContent="center" alignItems="center">
-              <Button startIcon={<Add />} variant="outlined" onClick={handleAddVenue} sx={{ minWidth: 160 }}>
-                Add Venue
+            <Stack direction="row" spacing={1} justifyContent="center" alignItems="center" flexWrap="wrap" useFlexGap>
+              <Button startIcon={<Add />} variant="outlined" color="info" onClick={handleAddSplitRoute} sx={{ minWidth: 180 }}>
+                Add Split Route
               </Button>
               <Button
                 startIcon={<Save />}
