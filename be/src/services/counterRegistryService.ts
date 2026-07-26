@@ -341,6 +341,82 @@ function resolveAttendedExtrasForMetricSplit(booking: Booking, purchasedExtras: 
   return attendedExtras;
 }
 
+function buildBookingCustomerGroupKey(booking: Booking): string {
+  const email = String(booking.guestEmail ?? '').trim().toLowerCase();
+  if (email) {
+    return `email:${email}`;
+  }
+  const name = [booking.guestFirstName, booking.guestLastName]
+    .map((value) => String(value ?? '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+  if (name) {
+    return `name:${name}`;
+  }
+  return `booking:${booking.id}`;
+}
+
+type BookingMetricSnapshot = {
+  booking: Booking;
+  channelId: number;
+  bookedPeriod: Extract<MetricPeriod, 'before_cutoff' | 'after_cutoff'>;
+  partySize: number;
+  extras: BookingExtras;
+  attendedTotal: number;
+  attendedExtras: BookingExtras;
+  customerGroupKey: string;
+};
+
+type NormalGroupAccumulator = {
+  baseBookedPartyByPeriod: Record<Extract<MetricPeriod, 'before_cutoff' | 'after_cutoff'>, number>;
+  baseBookedCocktailsByPeriod: Record<Extract<MetricPeriod, 'before_cutoff' | 'after_cutoff'>, number>;
+  totalBookedCocktails: number;
+  baseAttendedTotal: number;
+  baseAttendedCocktails: number;
+  totalAttendedCocktails: number;
+};
+
+function createNormalGroupAccumulator(): NormalGroupAccumulator {
+  return {
+    baseBookedPartyByPeriod: { before_cutoff: 0, after_cutoff: 0 },
+    baseBookedCocktailsByPeriod: { before_cutoff: 0, after_cutoff: 0 },
+    totalBookedCocktails: 0,
+    baseAttendedTotal: 0,
+    baseAttendedCocktails: 0,
+    totalAttendedCocktails: 0,
+  };
+}
+
+function distributeNormalByPeriod(group: NormalGroupAccumulator): Record<Extract<MetricPeriod, 'before_cutoff' | 'after_cutoff'>, number> {
+  const periods: Array<Extract<MetricPeriod, 'before_cutoff' | 'after_cutoff'>> = ['before_cutoff', 'after_cutoff'];
+  const normalByPeriod = {
+    before_cutoff: getNormalPeopleFromTotal(
+      group.baseBookedPartyByPeriod.before_cutoff,
+      group.baseBookedCocktailsByPeriod.before_cutoff,
+    ),
+    after_cutoff: getNormalPeopleFromTotal(
+      group.baseBookedPartyByPeriod.after_cutoff,
+      group.baseBookedCocktailsByPeriod.after_cutoff,
+    ),
+  };
+  let upgradeCocktailsToSubtract = Math.max(
+    0,
+    Math.round(Number(group.totalBookedCocktails) || 0) -
+      Math.max(0, Math.round(Number(group.baseBookedCocktailsByPeriod.before_cutoff + group.baseBookedCocktailsByPeriod.after_cutoff) || 0)),
+  );
+
+  periods.forEach((period) => {
+    if (upgradeCocktailsToSubtract <= 0) {
+      return;
+    }
+    const consumed = Math.min(normalByPeriod[period], upgradeCocktailsToSubtract);
+    normalByPeriod[period] -= consumed;
+    upgradeCocktailsToSubtract -= consumed;
+  });
+
+  return normalByPeriod;
+}
+
 function resolveBookingAttendanceStatusForFinalization(booking: Booking): BookingAttendanceStatus {
   const allowance = resolveCheckInAllowanceForBooking(booking);
   if (allowance <= 0) {
@@ -899,7 +975,11 @@ export default class CounterRegistryService {
           status: { [Op.in]: Array.from(SUMMARY_BOOKED_METRIC_BOOKING_STATUSES) },
         },
         attributes: [
+          'id',
           'platform',
+          'guestEmail',
+          'guestFirstName',
+          'guestLastName',
           'sourceReceivedAt',
           'partySizeTotal',
           'partySizeAdults',
@@ -911,6 +991,7 @@ export default class CounterRegistryService {
           'attendanceStatus',
         ],
       });
+      const bookingSnapshots: BookingMetricSnapshot[] = [];
 
       bookings.forEach((booking) => {
         const platformKey = normalizeChannelSlug(booking.platform);
@@ -927,14 +1008,6 @@ export default class CounterRegistryService {
           booking,
           normalizeBookingExtrasSnapshot(booking.addonsSnapshot ?? undefined),
         );
-        const normalPartySize = getNormalPeopleFromTotal(partySize, extras.cocktails);
-        if (normalPartySize > 0) {
-          const peopleKey = `${channelId}|${bookedPeriod}`;
-          bookedPeopleByChannelPeriod.set(
-            peopleKey,
-            (bookedPeopleByChannelPeriod.get(peopleKey) ?? 0) + normalPartySize,
-          );
-        }
 
         (Object.keys(extras) as Array<keyof BookingExtras>).forEach((extraKey) => {
           const addonId = addonIdByExtraKey[extraKey];
@@ -950,14 +1023,7 @@ export default class CounterRegistryService {
         });
 
         const attendedTotal = Math.max(0, Math.round(Number(booking.attendedTotal ?? 0) || 0));
-        if (attendedTotal <= 0) {
-          return;
-        }
         const attendedExtras = resolveAttendedExtrasForMetricSplit(booking, extras);
-        const attendedNormal = getNormalPeopleFromTotal(attendedTotal, attendedExtras.cocktails);
-        if (attendedNormal > 0) {
-          attendedPeopleByChannel.set(channelId, (attendedPeopleByChannel.get(channelId) ?? 0) + attendedNormal);
-        }
 
         (Object.keys(attendedExtras) as Array<keyof BookingExtras>).forEach((extraKey) => {
           const addonId = addonIdByExtraKey[extraKey];
@@ -971,6 +1037,73 @@ export default class CounterRegistryService {
           const addonKey = `${channelId}|${addonId}`;
           attendedAddonByChannel.set(addonKey, (attendedAddonByChannel.get(addonKey) ?? 0) + qty);
         });
+
+        bookingSnapshots.push({
+          booking,
+          channelId,
+          bookedPeriod,
+          partySize,
+          extras,
+          attendedTotal,
+          attendedExtras,
+          customerGroupKey: buildBookingCustomerGroupKey(booking),
+        });
+      });
+
+      const normalGroupByKey = new Map<string, NormalGroupAccumulator>();
+      bookingSnapshots.forEach((snapshot) => {
+        const groupKey = `${snapshot.channelId}|${snapshot.customerGroupKey}`;
+        const group = normalGroupByKey.get(groupKey) ?? createNormalGroupAccumulator();
+        normalGroupByKey.set(groupKey, group);
+
+        group.totalBookedCocktails += Math.max(0, Math.round(Number(snapshot.extras.cocktails) || 0));
+        group.totalAttendedCocktails += Math.max(0, Math.round(Number(snapshot.attendedExtras.cocktails) || 0));
+
+        if (snapshot.partySize > 0) {
+          group.baseBookedPartyByPeriod[snapshot.bookedPeriod] += snapshot.partySize;
+          group.baseBookedCocktailsByPeriod[snapshot.bookedPeriod] += Math.max(
+            0,
+            Math.round(Number(snapshot.extras.cocktails) || 0),
+          );
+        }
+
+        if (snapshot.attendedTotal > 0) {
+          group.baseAttendedTotal += snapshot.attendedTotal;
+          group.baseAttendedCocktails += Math.max(0, Math.round(Number(snapshot.attendedExtras.cocktails) || 0));
+        }
+      });
+
+      normalGroupByKey.forEach((group, groupKey) => {
+        const [channelIdRaw] = groupKey.split('|');
+        const channelId = Number(channelIdRaw);
+        if (!Number.isInteger(channelId) || channelId <= 0) {
+          return;
+        }
+
+        const normalByPeriod = distributeNormalByPeriod(group);
+        (Object.keys(normalByPeriod) as Array<Extract<MetricPeriod, 'before_cutoff' | 'after_cutoff'>>).forEach(
+          (period) => {
+            const qty = Math.max(0, Math.round(Number(normalByPeriod[period]) || 0));
+            if (qty <= 0) {
+              return;
+            }
+            const peopleKey = `${channelId}|${period}`;
+            bookedPeopleByChannelPeriod.set(peopleKey, (bookedPeopleByChannelPeriod.get(peopleKey) ?? 0) + qty);
+          },
+        );
+
+        const attendedUpgradeCocktails = Math.max(
+          0,
+          Math.round(Number(group.totalAttendedCocktails) || 0) -
+            Math.max(0, Math.round(Number(group.baseAttendedCocktails) || 0)),
+        );
+        const attendedNormal = Math.max(
+          getNormalPeopleFromTotal(group.baseAttendedTotal, group.baseAttendedCocktails) - attendedUpgradeCocktails,
+          0,
+        );
+        if (attendedNormal > 0) {
+          attendedPeopleByChannel.set(channelId, (attendedPeopleByChannel.get(channelId) ?? 0) + attendedNormal);
+        }
       });
     }
 
