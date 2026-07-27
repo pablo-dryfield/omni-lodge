@@ -17,8 +17,6 @@ import {
 import {
   IconCash,
   IconChartBar,
-  IconChartPie,
-  IconClockHour4,
   IconCreditCardRefund,
   IconInfoCircle,
   IconReceipt2,
@@ -28,13 +26,10 @@ import {
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   Cell,
   Legend,
   Line,
-  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -329,12 +324,14 @@ const SectionInfo = ({ title, formula, variables, notes }: SectionInfoProps) => 
 
 const ChartShell = ({ title, info, children }: { title: string; info?: ReactNode; children: ReactNode }) => (
   <Paper withBorder radius="lg" p="md" shadow="sm" style={{ height: "100%" }}>
-    <Stack gap="sm" style={{ height: "100%" }}>
-      <Group gap={6} align="center" wrap="nowrap">
-        <Text fw={700}>{title}</Text>
+    <Stack gap="sm" align="center" style={{ height: "100%" }}>
+      <Group gap={6} align="center" justify="center" wrap="nowrap" style={{ width: "100%" }}>
+        <Text fw={700} ta="center">
+          {title}
+        </Text>
         {info}
       </Group>
-      <Box style={{ flex: 1, minHeight: 240 }}>{children}</Box>
+      <Box style={{ flex: 1, minHeight: 240, width: "100%" }}>{children}</Box>
     </Stack>
   </Paper>
 );
@@ -381,10 +378,14 @@ const KpiCard = ({
         </Text>
         {info}
       </Group>
-      <Group gap={6} justify="center" wrap="nowrap" style={{ width: "100%" }}>
-        <Text fw={800} size="xl" ta="center">
-          {value}
-        </Text>
+      <Group gap={6} justify="center" wrap="wrap" style={{ width: "100%" }}>
+        {typeof value === "string" || typeof value === "number" ? (
+          <Text fw={800} size="xl" ta="center" style={{ overflowWrap: "anywhere", lineHeight: 1.2 }}>
+            {value}
+          </Text>
+        ) : (
+          <Box style={{ width: "100%" }}>{value}</Box>
+        )}
       </Group>
       {subtitle ? <Box>{subtitle}</Box> : null}
     </Stack>
@@ -536,13 +537,75 @@ const BookingsExecutiveDashboard = ({
 
   const defaultCurrency = currencies[0] ?? "PLN";
 
+  const cashTypeBreakdown = useMemo(() => {
+    const walkInRaw = counterInsights?.walkInTicketBreakdown;
+    const walkInRows = Array.isArray(walkInRaw) ? walkInRaw : [];
+    if (walkInRows.length > 0) {
+      return walkInRows
+        .map((row) => ({
+          name: String(row.ticketType ?? "").trim() || "Walk-in",
+          currency: String(row.currency ?? "PLN").toUpperCase(),
+          amount: roundMoney(Number(row.amount ?? 0)),
+          guests: Math.max(0, Math.round(Number(row.guests ?? 0))),
+        }))
+        .filter((row) => row.amount > 0)
+        .sort(
+          (a, b) => b.amount - a.amount || a.name.localeCompare(b.name) || a.currency.localeCompare(b.currency),
+        );
+    }
+
+    return [...(counterInsights?.cashByChannel ?? [])]
+      .map((row) => ({
+        name: String(row.channelName ?? "").trim() || "Unknown",
+        currency: String(counterInsights?.currency ?? "PLN").toUpperCase(),
+        amount: roundMoney(Number(row.amount ?? 0)),
+        guests: null as number | null,
+      }))
+      .filter((row) => row.amount > 0)
+      .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
+  }, [counterInsights]);
+
+  const cashTotalsByCurrency = useMemo(() => {
+    const map = new Map<string, { currency: string; amount: number; guests: number | null }>();
+    cashTypeBreakdown.forEach((row) => {
+      const currency = String(row.currency || counterInsights?.currency || "PLN").toUpperCase();
+      const current = map.get(currency) ?? { currency, amount: 0, guests: 0 };
+      current.amount = roundMoney(current.amount + row.amount);
+      current.guests =
+        current.guests === null || row.guests === null
+          ? null
+          : Math.max(0, current.guests + row.guests);
+      map.set(currency, current);
+    });
+
+    if (map.size === 0 && (counterInsights?.cashPaymentsTotal ?? 0) > 0) {
+      const currency = String(counterInsights?.currency ?? defaultCurrency).toUpperCase();
+      map.set(currency, {
+        currency,
+        amount: roundMoney(counterInsights?.cashPaymentsTotal ?? 0),
+        guests: Math.max(0, Math.round(counterInsights?.cashGuestsTotal ?? 0)),
+      });
+    }
+
+    const primaryCurrency = String(counterInsights?.currency ?? defaultCurrency).toUpperCase();
+    return Array.from(map.values()).sort(
+      (a, b) =>
+        Number(b.currency === primaryCurrency) - Number(a.currency === primaryCurrency) ||
+        b.amount - a.amount ||
+        a.currency.localeCompare(b.currency),
+      );
+  }, [cashTypeBreakdown, counterInsights, defaultCurrency]);
+  const cashBreakdownGuests = cashTotalsByCurrency.reduce((acc, row) => acc + (row.guests ?? 0), 0);
+  const cashGuestsForDisplay =
+    (counterInsights?.cashGuestsTotal ?? 0) > 0 ? counterInsights?.cashGuestsTotal ?? 0 : cashBreakdownGuests;
+
   const totalRevenueAfterChannelCommission = useMemo(
     () => roundMoney(bookingFinancialRows.reduce((acc, row) => acc + row.netRevenue, 0)),
     [bookingFinancialRows],
   );
   const totalCashPayments = useMemo(
-    () => roundMoney(counterInsights?.cashPaymentsTotal ?? 0),
-    [counterInsights],
+    () => roundMoney(cashTotalsByCurrency.find((row) => row.currency === defaultCurrency)?.amount ?? 0),
+    [cashTotalsByCurrency, defaultCurrency],
   );
   const totalProcessingFees = useMemo(
     () =>
@@ -766,33 +829,6 @@ const BookingsExecutiveDashboard = ({
     () => roundMoney(totalOnlineRevenue + venueCommissionTotal + totalCashPayments),
     [totalOnlineRevenue, venueCommissionTotal, totalCashPayments],
   );
-  const cashTypeBreakdown = useMemo(() => {
-    const walkInRaw = counterInsights?.walkInTicketBreakdown;
-    const walkInRows = Array.isArray(walkInRaw) ? walkInRaw : [];
-    if (walkInRows.length > 0) {
-      return walkInRows
-        .map((row) => ({
-          name: String(row.ticketType ?? "").trim() || "Walk-in",
-          currency: String(row.currency ?? "PLN").toUpperCase(),
-          amount: roundMoney(Number(row.amount ?? 0)),
-          guests: Math.max(0, Math.round(Number(row.guests ?? 0))),
-        }))
-        .filter((row) => row.amount > 0)
-        .sort(
-          (a, b) => b.amount - a.amount || a.name.localeCompare(b.name) || a.currency.localeCompare(b.currency),
-        );
-    }
-
-    return [...(counterInsights?.cashByChannel ?? [])]
-      .map((row) => ({
-        name: String(row.channelName ?? "").trim() || "Unknown",
-        currency: counterInsights?.currency ?? "PLN",
-        amount: roundMoney(Number(row.amount ?? 0)),
-        guests: null as number | null,
-      }))
-      .filter((row) => row.amount > 0)
-      .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
-  }, [counterInsights]);
   const totalRevenueMixData = useMemo(
     () => [
       { key: "online", name: "Online", value: roundMoney(totalOnlineRevenue), color: "#214A66" },
@@ -839,19 +875,17 @@ const BookingsExecutiveDashboard = ({
   const dailyTrend = useMemo(() => {
     const map = new Map<
       string,
-      { date: string; revenue: number; gross: number; refunds: number; bookings: number; people: number }
+      { date: string; revenue: number; refunds: number; bookings: number; people: number }
     >();
     bookingFinancialRows.forEach((row) => {
       const bucket = map.get(row.date) ?? {
         date: row.date,
         revenue: 0,
-        gross: 0,
         refunds: 0,
         bookings: 0,
         people: 0,
       };
-      bucket.revenue += row.netRevenue;
-      bucket.gross += row.grossRevenue;
+      bucket.revenue += row.netRevenue - Math.max(0, Number(row.processingFee) || 0);
       bucket.refunds += row.refundedAmount;
       bucket.bookings += 1;
       bucket.people += row.people;
@@ -862,7 +896,6 @@ const BookingsExecutiveDashboard = ({
       .map((row) => ({
         ...row,
         revenue: roundMoney(row.revenue),
-        gross: roundMoney(row.gross),
         refunds: roundMoney(row.refunds),
         label: row.date.slice(5),
       }))
@@ -870,64 +903,34 @@ const BookingsExecutiveDashboard = ({
   }, [bookingFinancialRows]);
 
   const platformRevenue = useMemo(() => {
-    const map = new Map<string, { platform: string; revenue: number; bookings: number; people: number; gross: number }>();
+    const map = new Map<string, { platform: string; revenue: number; bookings: number; people: number }>();
     bookingFinancialRows.forEach((row) => {
       const key = row.platformLabel;
-      const bucket = map.get(key) ?? { platform: key, revenue: 0, bookings: 0, people: 0, gross: 0 };
-      bucket.revenue += row.netRevenue;
-      bucket.gross += row.grossRevenue;
+      const bucket = map.get(key) ?? { platform: key, revenue: 0, bookings: 0, people: 0 };
+      bucket.revenue += row.netRevenue - Math.max(0, Number(row.processingFee) || 0);
       bucket.bookings += 1;
       bucket.people += row.people;
       map.set(key, bucket);
     });
     return Array.from(map.values())
-      .map((row) => ({ ...row, revenue: roundMoney(row.revenue), gross: roundMoney(row.gross) }))
+      .map((row) => ({ ...row, revenue: roundMoney(row.revenue) }))
       .sort((a, b) => b.revenue - a.revenue);
   }, [bookingFinancialRows]);
 
-  const statusDistribution = useMemo(() => {
-    const map = new Map<string, number>();
-    bookingFinancialRows.forEach((row) => map.set(row.status, (map.get(row.status) ?? 0) + 1));
-    return Array.from(map.entries())
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value);
-  }, [bookingFinancialRows]);
-
-  const paymentDistribution = useMemo(() => {
-    const map = new Map<string, number>();
-    bookingFinancialRows.forEach((row) => map.set(row.paymentStatus, (map.get(row.paymentStatus) ?? 0) + 1));
-    return Array.from(map.entries())
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value);
-  }, [bookingFinancialRows]);
-
-  const hourlyBookings = useMemo(() => {
-    const map = new Map<string, { hour: string; bookings: number; revenue: number; people: number }>();
-    bookingFinancialRows.forEach((row) => {
-      const hour = String(row.time ?? "--:--").slice(0, 2).padStart(2, "0");
-      const key = `${hour}:00`;
-      const bucket = map.get(key) ?? { hour: key, bookings: 0, revenue: 0, people: 0 };
-      bucket.bookings += 1;
-      bucket.revenue += row.netRevenue;
-      bucket.people += row.people;
-      map.set(key, bucket);
-    });
-    return Array.from(map.values()).sort((a, b) => a.hour.localeCompare(b.hour));
-  }, [bookingFinancialRows]);
+  const platformRevenueTotal = totalOnlineRevenue;
 
   const productPerformance = useMemo(() => {
     const map = new Map<
       string,
-      { productName: string; bookings: number; people: number; revenue: number; gross: number; refunds: number }
+      { productName: string; bookings: number; people: number; revenue: number; refunds: number }
     >();
     bookingFinancialRows.forEach((row) => {
       const key = row.productName || "Unknown";
       const bucket =
-        map.get(key) ?? { productName: key, bookings: 0, people: 0, revenue: 0, gross: 0, refunds: 0 };
+        map.get(key) ?? { productName: key, bookings: 0, people: 0, revenue: 0, refunds: 0 };
       bucket.bookings += 1;
       bucket.people += row.people;
-      bucket.revenue += row.netRevenue;
-      bucket.gross += row.grossRevenue;
+      bucket.revenue += row.netRevenue - Math.max(0, Number(row.processingFee) || 0);
       bucket.refunds += row.refundedAmount;
       map.set(key, bucket);
     });
@@ -935,51 +938,17 @@ const BookingsExecutiveDashboard = ({
       .map((row) => ({
         ...row,
         revenue: roundMoney(row.revenue),
-        gross: roundMoney(row.gross),
         refunds: roundMoney(row.refunds),
       }))
       .sort((a, b) => b.revenue - a.revenue);
   }, [bookingFinancialRows]);
 
-  const addonPerformance = useMemo(() => {
-    const map = new Map<string, { addonName: string; quantity: number; revenue: number; bookings: Set<number> }>();
-    scopedAddonRows.forEach((row) => {
-      const addonId = Number(row.addonId);
-      const hasMappedAddon = Number.isFinite(addonId) && addonId > 0;
-      const normalizedAddonName = String(row.addonName ?? "").trim();
-      const addonName = hasMappedAddon ? normalizedAddonName || `Add-on #${addonId}` : "Unmapped add-on";
-      const key = hasMappedAddon ? `addon:${addonId}` : `unmapped:${normalizedAddonName || "unknown"}`;
-      const bucket = map.get(key) ?? { addonName, quantity: 0, revenue: 0, bookings: new Set<number>() };
-      bucket.quantity += Math.max(0, Number(row.quantity) || 0);
-      bucket.revenue += Math.max(0, Number(row.totalPrice) || 0);
-      bucket.bookings.add(Number(row.bookingId));
-      map.set(key, bucket);
-    });
-    return Array.from(map.values())
-      .map((row) => ({
-        addonName: row.addonName,
-        quantity: row.quantity,
-        revenue: roundMoney(row.revenue),
-        bookings: row.bookings.size,
-      }))
-      .sort((a, b) => b.revenue - a.revenue || b.quantity - a.quantity);
-  }, [scopedAddonRows]);
-
-  const topBookingsTable = useMemo(
-    () => [...bookingFinancialRows].sort((a, b) => b.netRevenue - a.netRevenue).slice(0, 20),
-    [bookingFinancialRows],
-  );
-
-  const topAddonsTable = useMemo(
-    () => [...scopedAddonRows].sort((a, b) => b.totalPrice - a.totalPrice).slice(0, 24),
-    [scopedAddonRows],
-  );
-
-  const topPlatform = platformRevenue[0] ?? null;
   const bestDay = dailyTrend.reduce<{ date: string; revenue: number } | null>((best, row) => {
     if (!best || row.revenue > best.revenue) return { date: row.date, revenue: row.revenue };
     return best;
   }, null);
+  const topPlatform = platformRevenue[0] ?? null;
+  const topProduct = productPerformance[0] ?? null;
 
   if (orders.length === 0) {
     return (
@@ -1236,7 +1205,7 @@ const BookingsExecutiveDashboard = ({
                           </Popover.Target>
                           <Popover.Dropdown>
                             <Text size="xs" ta="center" fw={700}>
-                              {`${Math.max(0, Number(row.totalPeople ?? 0)).toLocaleString()} guests`}
+                              {`${Math.max(0, Number(row.totalPeople ?? 0)).toLocaleString()} Guests`}
                             </Text>
                           </Popover.Dropdown>
                         </Popover>
@@ -1276,9 +1245,36 @@ const BookingsExecutiveDashboard = ({
         <KpiCard
           icon={<IconCash size={20} />}
           label="Cash Tickets"
-          value={`${(counterInsights?.cashGuestsTotal ?? 0).toLocaleString()} guests: ${formatMoney(counterInsights?.cashPaymentsTotal ?? 0, counterInsights?.currency ?? "PLN")}`}
+          value={
+            <Stack gap={4} align="center" style={{ width: "100%" }}>
+              <Text fw={800} size="xl" ta="center" style={{ lineHeight: 1.15 }}>
+                {`${cashGuestsForDisplay.toLocaleString()} Guests`}
+              </Text>
+              {cashTotalsByCurrency.length > 0 ? (
+                cashTotalsByCurrency.map((row) => (
+                  <Group key={`cash-total-${row.currency}`} gap={6} justify="center" wrap="nowrap">
+                    <Text size="xs" c="dimmed" fw={800} tt="uppercase">
+                      {row.currency}
+                    </Text>
+                    <Text fw={800} size="md" ta="center" style={{ lineHeight: 1.15 }}>
+                      {formatMoney(row.amount, row.currency)}
+                    </Text>
+                  </Group>
+                ))
+              ) : (
+                <Group gap={6} justify="center" wrap="nowrap">
+                  <Text size="xs" c="dimmed" fw={800} tt="uppercase">
+                    {counterInsights?.currency ?? defaultCurrency}
+                  </Text>
+                  <Text fw={800} size="md" ta="center" style={{ lineHeight: 1.15 }}>
+                    {formatMoney(0, counterInsights?.currency ?? defaultCurrency)}
+                  </Text>
+                </Group>
+              )}
+            </Stack>
+          }
           subtitle={
-            <Stack gap={4}>
+            <Stack gap={6} mt={4}>
               <Text size="xs" fw={700} td="underline" ta="center">
                 Breakdown
               </Text>
@@ -1291,7 +1287,7 @@ const BookingsExecutiveDashboard = ({
                   <Group key={`cash-breakdown-${row.name}`} justify="space-between" gap="xs" wrap="nowrap">
                     <Text size="xs" c="dimmed" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {row.guests !== null
-                        ? `${row.name} (${row.currency}): ${row.guests.toLocaleString()} guests`
+                        ? `${row.name} (${row.currency}): ${row.guests.toLocaleString()} Guests`
                         : row.name}
                     </Text>
                     <Text size="xs" fw={700}>
@@ -1302,7 +1298,7 @@ const BookingsExecutiveDashboard = ({
               )}
               <Group justify="space-between" gap="xs" wrap="nowrap">
                 <Text size="xs" c="dimmed">
-                  {`Free Tickets: ${(counterInsights?.freeTicketsTotal ?? 0).toLocaleString()} guests`}
+                  {`Free Tickets: ${(counterInsights?.freeTicketsTotal ?? 0).toLocaleString()} Guests`}
                 </Text>
                 <Text size="xs" fw={700}>
                   {formatMoney(0, counterInsights?.currency ?? "PLN")}
@@ -1318,7 +1314,7 @@ const BookingsExecutiveDashboard = ({
           value={
             <Group gap={4} justify="center" wrap="nowrap">
               <Text span fw={800} size="xl">
-                {`${totalPeople.toLocaleString()} guests`}
+                {`${totalPeople.toLocaleString()} Guests`}
               </Text>
               <Popover withArrow width={210} shadow="md" position="bottom">
                 <Popover.Target>
@@ -1374,7 +1370,7 @@ const BookingsExecutiveDashboard = ({
                   </Popover>
                 </Group>
                 <Text size="xs" fw={700}>
-                  {`${noShowSummary.fullGuests.toLocaleString()} guests (${noShowSummary.fullBookings.toLocaleString()} bookings)`}
+                  {`${noShowSummary.fullGuests.toLocaleString()} Guests (${noShowSummary.fullBookings.toLocaleString()} bookings)`}
                 </Text>
               </Group>
               <Group justify="space-between" gap="xs" wrap="nowrap">
@@ -1396,7 +1392,7 @@ const BookingsExecutiveDashboard = ({
                   </Popover>
                 </Group>
                 <Text size="xs" fw={700}>
-                  {`${noShowSummary.partialGuests.toLocaleString()} guests (${noShowSummary.partialBookings.toLocaleString()} bookings)`}
+                  {`${noShowSummary.partialGuests.toLocaleString()} Guests (${noShowSummary.partialBookings.toLocaleString()} bookings)`}
                 </Text>
               </Group>
               <Group justify="space-between" gap="xs" wrap="nowrap">
@@ -1404,7 +1400,7 @@ const BookingsExecutiveDashboard = ({
                   Total No-Show
                 </Text>
                 <Text size="xs" fw={700}>
-                  {`${(noShowSummary.fullGuests + noShowSummary.partialGuests).toLocaleString()} guests (${(noShowSummary.fullBookings + noShowSummary.partialBookings).toLocaleString()} bookings)`}
+                  {`${(noShowSummary.fullGuests + noShowSummary.partialGuests).toLocaleString()} Guests (${(noShowSummary.fullBookings + noShowSummary.partialBookings).toLocaleString()} bookings)`}
                 </Text>
               </Group>
             </Stack>
@@ -1445,15 +1441,15 @@ const BookingsExecutiveDashboard = ({
       <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">
         <Box style={{ gridColumn: "span 2" }}>
           <ChartShell
-            title="Revenue trend (after commission + tip vs gross, bookings/day)"
+            title="Revenue trend (online revenue, bookings/day)"
             info={
               <SectionInfo
                 title="Revenue Trend"
-                formula="Daily Revenue = Sum(Base + Tip), Daily Gross = Sum(Price Gross)"
+                formula="Daily Revenue = Sum(Base + Tip - Processing Fees)"
                 variables={[
                   { name: "Base", description: "Per-booking base amount." },
                   { name: "Tip", description: "Per-booking tip amount." },
-                  { name: "Price Gross", description: "Per-booking gross booked value." },
+                  { name: "Processing Fees", description: "Payment processing fees captured per booking." },
                 ]}
               />
             }
@@ -1474,17 +1470,9 @@ const BookingsExecutiveDashboard = ({
                   yAxisId="money"
                   type="monotone"
                   dataKey="revenue"
-                  name="Revenue (after commission + tip)"
+                  name="Revenue"
                   stroke="#214A66"
                   fill="#214A6633"
-                />
-                <Area
-                  yAxisId="money"
-                  type="monotone"
-                  dataKey="gross"
-                  name="Gross booked"
-                  stroke="#2B7A78"
-                  fill="#2B7A7833"
                 />
                 <Line yAxisId="count" type="monotone" dataKey="bookings" name="bookings" stroke="#EF8354" strokeWidth={2} />
               </AreaChart>
@@ -1493,215 +1481,135 @@ const BookingsExecutiveDashboard = ({
         </Box>
 
         <ChartShell
-          title="Platform revenue share"
+          title="Platform Revenue Share"
           info={
             <SectionInfo
               title="Platform Revenue Share"
-              formula="Platform Revenue = Sum(Base + Tip) grouped by platform"
+              formula="Platform Revenue = Sum(Base + Tip - Processing Fees) grouped by platform"
               variables={[
                 { name: "Platform", description: "Normalized booking platform label." },
-                { name: "Revenue", description: "Base plus tip summed per platform." },
+                { name: "Revenue", description: "Base plus tip minus processing fees summed per platform." },
               ]}
             />
           }
         >
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={platformRevenue} dataKey="revenue" nameKey="platform" outerRadius={82} label>
-                {platformRevenue.map((entry, index) => (
-                  <Cell key={`platform-pie-${entry.platform}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                ))}
-              </Pie>
-              <RechartsTooltip
-                formatter={(_value: number, _name: string, item: { payload?: { gross?: number; revenue?: number } }) => [
-                  formatMoney(Number(item?.payload?.revenue ?? 0), defaultCurrency),
-                  "Revenue (after channel commission)",
-                ]}
-              />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartShell>
-      </SimpleGrid>
-
-      <SimpleGrid cols={{ base: 1, md: 2, lg: 3 }} spacing="md">
-        <ChartShell
-          title="Platform revenue leaderboard"
-          info={
-            <SectionInfo
-              title="Platform Revenue Leaderboard"
-              formula="Platform Revenue = Sum(Base + Tip) grouped by platform"
-              variables={[
-                { name: "Platform", description: "Normalized platform name." },
-                { name: "Revenue", description: "Base plus tip total for that platform." },
-              ]}
-            />
-          }
-        >
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={platformRevenue.slice(0, 8)} layout="vertical" margin={{ left: 20 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" />
-              <YAxis type="category" dataKey="platform" width={110} />
-              <RechartsTooltip
-                formatter={(_value: number, _name: string, item: { payload?: { gross?: number; revenue?: number } }) => [
-                  formatMoney(Number(item?.payload?.revenue ?? 0), defaultCurrency),
-                  "Revenue (after channel commission)",
-                ]}
-              />
-              <Bar dataKey="revenue" fill="#214A66" radius={[0, 6, 6, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartShell>
-
-        <ChartShell
-          title="Booking status distribution"
-          info={
-            <SectionInfo
-              title="Booking Status Distribution"
-              formula="Status Count = Count(bookings) grouped by booking status"
-              variables={[
-                { name: "Booking status", description: "Current booking lifecycle status." },
-                { name: "Count", description: "Number of bookings in each status." },
-              ]}
-            />
-          }
-        >
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={statusDistribution} dataKey="value" nameKey="name" outerRadius={80} label>
-                {statusDistribution.map((entry, index) => (
-                  <Cell key={`status-pie-${entry.name}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                ))}
-              </Pie>
-              <RechartsTooltip />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartShell>
-
-        <ChartShell
-          title="Payment status distribution"
-          info={
-            <SectionInfo
-              title="Payment Status Distribution"
-              formula="Payment Status Count = Count(bookings) grouped by payment status"
-              variables={[
-                { name: "Payment status", description: "Current payment state for booking." },
-                { name: "Count", description: "Number of bookings in each payment state." },
-              ]}
-            />
-          }
-        >
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={paymentDistribution}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <RechartsTooltip />
-              <Bar dataKey="value" fill="#345995" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <Stack gap="sm" h="100%" align="center">
+            <Stack gap={4} align="center" style={{ width: "100%" }}>
+              <Stack gap={0} align="center">
+                <Text size="xs" c="dimmed" tt="uppercase" fw={800}>
+                  TOTAL
+                </Text>
+                <Text fw={900} fz="xl" ta="center">
+                  {formatMoney(platformRevenueTotal, defaultCurrency)}
+                </Text>
+              </Stack>
+            </Stack>
+            <ScrollArea h={230} w="100%">
+              <Stack gap="xs" align="center">
+                {platformRevenue.map((row, index) => {
+                  const share = platformRevenueTotal > 0 ? (row.revenue / platformRevenueTotal) * 100 : 0;
+                  const color = CHART_COLORS[index % CHART_COLORS.length];
+                  return (
+                    <Paper key={`platform-share-${row.platform}`} withBorder radius="md" p="sm" style={{ width: "100%" }}>
+                      <Stack gap={6} align="center">
+                        <Stack gap={4} align="center" style={{ width: "100%" }}>
+                          <Group gap="xs" justify="center" wrap="nowrap">
+                            <Box
+                              style={{
+                                width: 10,
+                                height: 10,
+                                borderRadius: 999,
+                                background: color,
+                                flexShrink: 0,
+                              }}
+                            />
+                            <Text fw={800} ta="center" lineClamp={1}>
+                              {row.platform}
+                            </Text>
+                          </Group>
+                          <Stack gap={0} align="center">
+                            <Text fw={900} ta="center">
+                              {formatMoney(row.revenue, defaultCurrency)}
+                            </Text>
+                            <Text size="xs" c="dimmed" fw={800}>
+                              {`${share.toFixed(1)}%`}
+                            </Text>
+                          </Stack>
+                        </Stack>
+                        <Box
+                          aria-hidden
+                          style={{
+                            height: 8,
+                            width: "100%",
+                            borderRadius: 999,
+                            overflow: "hidden",
+                            background: "#edf2f7",
+                          }}
+                        >
+                          <Box
+                            style={{
+                              width: `${Math.min(100, Math.max(0, share))}%`,
+                              height: "100%",
+                              borderRadius: 999,
+                              background: color,
+                            }}
+                          />
+                        </Box>
+                        <Group justify="center" gap="lg" wrap="wrap">
+                          <Text size="xs" c="dimmed">
+                            {`${row.bookings.toLocaleString()} Bookings`}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            {`${row.people.toLocaleString()} Guests`}
+                          </Text>
+                        </Group>
+                      </Stack>
+                    </Paper>
+                  );
+                })}
+              </Stack>
+            </ScrollArea>
+          </Stack>
         </ChartShell>
       </SimpleGrid>
 
       <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-        <ChartShell
-          title="Add-on revenue by item (booking_addons)"
-          info={
-            <SectionInfo
-              title="Add-on Revenue"
-              formula="Add-on Revenue = Sum(booking_addons.total_price) grouped by add-on name"
-              variables={[
-                { name: "total_price", description: "Stored monetary value for each add-on row." },
-                { name: "Add-on name", description: "Resolved name from addon or platform addon fields." },
-              ]}
-            />
-          }
-        >
-          {addonPerformance.length === 0 ? (
-            <Alert color="gray" variant="light">
-              No add-on records found in booking_addons for this range.
-            </Alert>
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={addonPerformance.slice(0, 10)} layout="vertical" margin={{ left: 28 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis type="number" />
-                <YAxis type="category" dataKey="addonName" width={130} />
-                <RechartsTooltip formatter={(value: number) => formatMoney(Number(value), defaultCurrency)} />
-                <Bar dataKey="revenue" fill="#B56576" radius={[0, 6, 6, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </ChartShell>
-
-        <ChartShell
-          title="Pickup-hour demand curve"
-          info={
-            <SectionInfo
-              title="Pickup-Hour Demand"
-              formula="Bookings/People per hour = Sum(bookings/people) grouped by booking hour"
-              variables={[
-                { name: "Booking hour", description: "Hour derived from booking time (HH:00 buckets)." },
-                { name: "Bookings", description: "Booking count in the hour bucket." },
-                { name: "People", description: "Participant total in the hour bucket." },
-              ]}
-            />
-          }
-        >
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={hourlyBookings}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="hour" />
-              <YAxis />
-              <RechartsTooltip />
-              <Legend />
-              <Line type="monotone" dataKey="bookings" stroke="#2B7A78" name="Bookings" strokeWidth={2} />
-              <Line type="monotone" dataKey="people" stroke="#EF8354" name="People" strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartShell>
-      </SimpleGrid>
-
-      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-        <Paper withBorder radius="lg" p="md" shadow="sm">
-          <Group justify="space-between" mb="xs">
-            <Group gap={6} align="center" wrap="nowrap">
-              <Text fw={700}>Top products by revenue</Text>
+        <Paper withBorder radius="lg" p="md" shadow="sm" style={{ position: "relative" }}>
+          <ThemeIcon variant="light" color="dark" style={{ position: "absolute", top: 16, right: 16 }}>
+            <IconChartBar size={18} />
+          </ThemeIcon>
+          <Stack gap="xs" align="center" mb="xs" style={{ paddingRight: 40, paddingLeft: 40 }}>
+            <Group gap={6} align="center" justify="center" wrap="nowrap">
+              <Text fw={700} ta="center">
+                Top Products By Revenue
+              </Text>
               <SectionInfo
                 title="Top Products by Revenue"
-                formula="Product Revenue = Sum(Base + Tip) grouped by product"
+                formula="Product Revenue = Sum(Base + Tip - Processing Fees) grouped by product"
                 variables={[
                   { name: "Product", description: "Booking product name." },
-                  { name: "Revenue", description: "Base plus tip total for product." },
-                  { name: "Gross", description: "Gross booked value total for product." },
+                  { name: "Revenue", description: "Base plus tip minus processing fees total for product." },
                 ]}
               />
             </Group>
-            <ThemeIcon variant="light" color="dark">
-              <IconChartBar size={18} />
-            </ThemeIcon>
-          </Group>
+          </Stack>
           <ScrollArea h={320}>
             <Table striped highlightOnHover withColumnBorders>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>Product</Table.Th>
-                  <Table.Th ta="right">Bookings</Table.Th>
-                  <Table.Th ta="right">People</Table.Th>
-                  <Table.Th ta="right">Revenue</Table.Th>
-                  <Table.Th ta="right">Gross</Table.Th>
+                  <Table.Th ta="center">Product</Table.Th>
+                  <Table.Th ta="center">Bookings</Table.Th>
+                  <Table.Th ta="center">People</Table.Th>
+                  <Table.Th ta="center">Revenue</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
                 {productPerformance.slice(0, 16).map((row) => (
                   <Table.Tr key={`product-row-${row.productName}`}>
-                    <Table.Td>{row.productName}</Table.Td>
-                    <Table.Td ta="right">{row.bookings}</Table.Td>
-                    <Table.Td ta="right">{row.people}</Table.Td>
-                    <Table.Td ta="right">{formatMoney(row.revenue, defaultCurrency)}</Table.Td>
-                    <Table.Td ta="right">{formatMoney(row.gross, defaultCurrency)}</Table.Td>
+                    <Table.Td ta="center">{row.productName}</Table.Td>
+                    <Table.Td ta="center">{row.bookings}</Table.Td>
+                    <Table.Td ta="center">{row.people}</Table.Td>
+                    <Table.Td ta="center">{formatMoney(row.revenue, defaultCurrency)}</Table.Td>
                   </Table.Tr>
                 ))}
               </Table.Tbody>
@@ -1709,10 +1617,15 @@ const BookingsExecutiveDashboard = ({
           </ScrollArea>
         </Paper>
 
-        <Paper withBorder radius="lg" p="md" shadow="sm">
-          <Group justify="space-between" mb="xs">
-            <Group gap={6} align="center" wrap="nowrap">
-              <Text fw={700}>Ecwid Demography</Text>
+        <Paper withBorder radius="lg" p="md" shadow="sm" style={{ position: "relative" }}>
+          <ThemeIcon variant="light" color="dark" style={{ position: "absolute", top: 16, right: 16 }}>
+            <IconUsersGroup size={18} />
+          </ThemeIcon>
+          <Stack gap="xs" align="center" mb="xs" style={{ paddingRight: 40, paddingLeft: 40 }}>
+            <Group gap={6} align="center" justify="center" wrap="nowrap">
+              <Text fw={700} ta="center">
+                Ecwid Demography
+              </Text>
               <SectionInfo
                 title="Ecwid Demography"
                 formula="Payment Country Metrics = Count(bookings), Sum(guests), Sum(revenue) grouped by payment_method_country"
@@ -1720,22 +1633,19 @@ const BookingsExecutiveDashboard = ({
                   { name: "payment_method_country", description: "Country code from payment method data." },
                   { name: "Bookings", description: "Number of bookings for each country." },
                   { name: "Guests", description: "Total guests from party_size_total grouping." },
-                  { name: "Revenue", description: "Sum of booking revenue (base + tip after adjustments)." },
+                  { name: "Revenue", description: "Sum of booking revenue (base + tip minus processing fees)." },
                 ]}
               />
             </Group>
-            <ThemeIcon variant="light" color="dark">
-              <IconUsersGroup size={18} />
-            </ThemeIcon>
-          </Group>
-          <Stack gap="xs" mb="sm">
-            <Text size="sm">
+          </Stack>
+          <Stack gap="xs" align="center" mb="sm">
+            <Text size="sm" ta="center">
               Countries tracked:{" "}
               <Text span fw={700}>
                 {paymentCountryKnownCount.toLocaleString()}
               </Text>
             </Text>
-            <Text size="sm">
+            <Text size="sm" ta="center">
               Bookings with known country:{" "}
               <Text span fw={700}>
                 {paymentCountryKnownBookings.toLocaleString()}
@@ -1746,19 +1656,19 @@ const BookingsExecutiveDashboard = ({
             <Table striped highlightOnHover withColumnBorders>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>Country</Table.Th>
-                  <Table.Th ta="right">Bookings</Table.Th>
-                  <Table.Th ta="right">Guests</Table.Th>
-                  <Table.Th ta="right">Revenue</Table.Th>
+                  <Table.Th ta="center">Country</Table.Th>
+                  <Table.Th ta="center">Bookings</Table.Th>
+                  <Table.Th ta="center">Guests</Table.Th>
+                  <Table.Th ta="center">Revenue</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
                 {visiblePaymentCountryBreakdown.map((row) => (
                   <Table.Tr key={`payment-country-${row.country}`}>
-                    <Table.Td>{formatCountryDisplay(row.country)}</Table.Td>
-                    <Table.Td ta="right">{row.bookings.toLocaleString()}</Table.Td>
-                    <Table.Td ta="right">{row.guests.toLocaleString()}</Table.Td>
-                    <Table.Td ta="right">{formatMoney(row.revenue, defaultCurrency)}</Table.Td>
+                    <Table.Td ta="center">{formatCountryDisplay(row.country)}</Table.Td>
+                    <Table.Td ta="center">{row.bookings.toLocaleString()}</Table.Td>
+                    <Table.Td ta="center">{row.guests.toLocaleString()}</Table.Td>
+                    <Table.Td ta="center">{formatMoney(row.revenue, defaultCurrency)}</Table.Td>
                   </Table.Tr>
                 ))}
               </Table.Tbody>
@@ -1771,31 +1681,31 @@ const BookingsExecutiveDashboard = ({
             <Accordion variant="separated" radius="sm">
               <Accordion.Item value="eu">
                 <Accordion.Control>
-                  <Group justify="space-between" gap="xs" wrap="nowrap">
-                    <Text size="xs" fw={700}>
+                  <Stack gap={2} align="center">
+                    <Text size="xs" fw={700} ta="center">
                       EU
                     </Text>
-                    <Text size="xs" fw={700}>
+                    <Text size="xs" fw={700} ta="center">
                       {formatMoney(taxationAreaBreakdown.euRevenue, defaultCurrency)}
                     </Text>
-                  </Group>
+                  </Stack>
                 </Accordion.Control>
                 <Accordion.Panel>
                   {taxationAreaBreakdown.euRows.length === 0 ? (
-                    <Text size="xs" c="dimmed">
+                    <Text size="xs" c="dimmed" ta="center">
                       No EU country revenue
                     </Text>
                   ) : (
-                    <Stack gap={4}>
+                    <Stack gap={4} align="center">
                       {taxationAreaBreakdown.euRows.map((row) => (
-                        <Group key={`taxation-eu-${row.country}`} justify="space-between" gap="xs" wrap="nowrap">
-                          <Text size="xs" c="dimmed">
+                        <Stack key={`taxation-eu-${row.country}`} gap={0} align="center">
+                          <Text size="xs" c="dimmed" ta="center">
                             {formatCountryDisplay(row.country)}
                           </Text>
-                          <Text size="xs" fw={700}>
+                          <Text size="xs" fw={700} ta="center">
                             {formatMoney(row.revenue, defaultCurrency)}
                           </Text>
-                        </Group>
+                        </Stack>
                       ))}
                     </Stack>
                   )}
@@ -1803,31 +1713,31 @@ const BookingsExecutiveDashboard = ({
               </Accordion.Item>
               <Accordion.Item value="non_eu">
                 <Accordion.Control>
-                  <Group justify="space-between" gap="xs" wrap="nowrap">
-                    <Text size="xs" fw={700}>
+                  <Stack gap={2} align="center">
+                    <Text size="xs" fw={700} ta="center">
                       Non-EU
                     </Text>
-                    <Text size="xs" fw={700}>
+                    <Text size="xs" fw={700} ta="center">
                       {formatMoney(taxationAreaBreakdown.nonEuRevenue, defaultCurrency)}
                     </Text>
-                  </Group>
+                  </Stack>
                 </Accordion.Control>
                 <Accordion.Panel>
                   {taxationAreaBreakdown.nonEuRows.length === 0 ? (
-                    <Text size="xs" c="dimmed">
+                    <Text size="xs" c="dimmed" ta="center">
                       No Non-EU country revenue
                     </Text>
                   ) : (
-                    <Stack gap={4}>
+                    <Stack gap={4} align="center">
                       {taxationAreaBreakdown.nonEuRows.map((row) => (
-                        <Group key={`taxation-noneu-${row.country}`} justify="space-between" gap="xs" wrap="nowrap">
-                          <Text size="xs" c="dimmed">
+                        <Stack key={`taxation-noneu-${row.country}`} gap={0} align="center">
+                          <Text size="xs" c="dimmed" ta="center">
                             {formatCountryDisplay(row.country)}
                           </Text>
-                          <Text size="xs" fw={700}>
+                          <Text size="xs" fw={700} ta="center">
                             {formatMoney(row.revenue, defaultCurrency)}
                           </Text>
-                        </Group>
+                        </Stack>
                       ))}
                     </Stack>
                   )}
@@ -1838,133 +1748,57 @@ const BookingsExecutiveDashboard = ({
         </Paper>
       </SimpleGrid>
 
-      <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="md">
-        <Paper withBorder radius="lg" p="md" shadow="sm">
-          <Group justify="space-between" mb="xs">
-            <Group gap={6} align="center" wrap="nowrap">
-              <Text fw={700}>Bookings table (top by revenue)</Text>
-              <SectionInfo
-                title="Top Bookings by Revenue"
-                formula="Row Revenue = Base + Tip, then sorted descending"
-                variables={[
-                  { name: "Base", description: "Recognized base amount per booking." },
-                  { name: "Tip", description: "Tip amount per booking." },
-                  { name: "Refund", description: "Stored refunded amount for context." },
-                ]}
-              />
-            </Group>
-            <ThemeIcon variant="light" color="dark">
-              <IconChartPie size={18} />
-            </ThemeIcon>
-          </Group>
-          <ScrollArea h={360}>
-            <Table striped highlightOnHover withColumnBorders>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Booking</Table.Th>
-                  <Table.Th>Platform</Table.Th>
-                  <Table.Th>Date</Table.Th>
-                  <Table.Th ta="right">People</Table.Th>
-                  <Table.Th ta="right">Revenue</Table.Th>
-                  <Table.Th ta="right">Refund</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {topBookingsTable.map((row) => (
-                  <Table.Tr key={`booking-fin-${row.bookingId}-${row.productName}-${row.date}-${row.time}`}>
-                    <Table.Td>
-                      <Text fw={600}>{row.bookingId}</Text>
-                      <Text size="xs" c="dimmed">
-                        {row.productName}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>{row.platformLabel}</Table.Td>
-                    <Table.Td>{`${row.date} ${row.time}`}</Table.Td>
-                    <Table.Td ta="right">{row.people}</Table.Td>
-                    <Table.Td ta="right">{formatMoney(row.netRevenue, row.currency || defaultCurrency)}</Table.Td>
-                    <Table.Td ta="right">{formatMoney(row.refundedAmount, row.currency || defaultCurrency)}</Table.Td>
-                    <Table.Td>{row.status}</Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </ScrollArea>
-        </Paper>
-
-        <Paper withBorder radius="lg" p="md" shadow="sm">
-          <Group justify="space-between" mb="xs">
-            <Group gap={6} align="center" wrap="nowrap">
-              <Text fw={700}>Booking add-ons table (booking_addons)</Text>
-              <SectionInfo
-                title="Booking Add-ons Table"
-                formula="Rows sorted by add-on total price descending"
-                variables={[
-                  { name: "Qty", description: "Add-on quantity on booking_addons row." },
-                  { name: "Unit", description: "Unit price on booking_addons row." },
-                  { name: "Total", description: "Total price on booking_addons row." },
-                ]}
-              />
-            </Group>
-            <ThemeIcon variant="light" color="dark">
-              <IconClockHour4 size={18} />
-            </ThemeIcon>
-          </Group>
-          <ScrollArea h={360}>
-            <Table striped highlightOnHover withColumnBorders>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Booking</Table.Th>
-                  <Table.Th>Add-on</Table.Th>
-                  <Table.Th ta="right">Qty</Table.Th>
-                  <Table.Th ta="right">Unit</Table.Th>
-                  <Table.Th ta="right">Total</Table.Th>
-                  <Table.Th>Included</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {topAddonsTable.map((row) => (
-                  <Table.Tr key={`addon-row-${row.id}`}>
-                    <Table.Td>{row.bookingId}</Table.Td>
-                    <Table.Td>{row.addonName}</Table.Td>
-                    <Table.Td ta="right">{row.quantity}</Table.Td>
-                    <Table.Td ta="right">{formatMoney(row.unitPrice, row.currency ?? defaultCurrency)}</Table.Td>
-                    <Table.Td ta="right">{formatMoney(row.totalPrice, row.currency ?? defaultCurrency)}</Table.Td>
-                    <Table.Td>{row.isIncluded ? "Yes" : "No"}</Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </ScrollArea>
-        </Paper>
-      </SimpleGrid>
-
       <Paper withBorder radius="lg" p="md" shadow="sm">
-        <Group gap={6} align="center" mb="xs">
-          <Text fw={700}>Executive highlights</Text>
+        <Group gap={6} align="center" justify="center" mb="xs">
+          <Text fw={700} ta="center">
+            Executive highlights
+          </Text>
           <SectionInfo
             title="Executive Highlights"
             formula="Highlights are derived from previously aggregated sections"
             variables={[
               { name: "Top platform", description: "Highest platform revenue (base + tip)." },
-              { name: "Best day", description: "Highest daily revenue (base + tip)." },
-              { name: "Add-ons impact", description: "Total add-on revenue from booking_addons rows." },
+              { name: "Best day", description: "Highest daily revenue (base + tip minus processing fees)." },
+              { name: "Top product", description: "Highest product revenue (base + tip minus processing fees)." },
             ]}
           />
         </Group>
         <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
-          <Alert color="blue" variant="light" title="Top platform">
-            {topPlatform
-              ? `${topPlatform.platform} generated ${formatMoney(topPlatform.revenue, defaultCurrency)} from ${topPlatform.bookings} bookings.`
-              : "No platform data available."}
+          <Alert color="blue" variant="light">
+            <Stack gap={6} align="center">
+              <Text fw={800} c="blue" ta="center">
+                Top platform
+              </Text>
+              <Text ta="center">
+                {topPlatform
+                  ? `${topPlatform.platform} generated ${formatMoney(topPlatform.revenue, defaultCurrency)} from ${topPlatform.bookings} bookings.`
+                  : "No platform data available."}
+              </Text>
+            </Stack>
           </Alert>
-          <Alert color="teal" variant="light" title="Best day">
-            {bestDay
-              ? `${bestDay.date} delivered ${formatMoney(bestDay.revenue, defaultCurrency)} in revenue (after commission + tip).`
-              : "No daily trend data available."}
+          <Alert color="teal" variant="light">
+            <Stack gap={6} align="center">
+              <Text fw={800} c="teal" ta="center">
+                Best day
+              </Text>
+              <Text ta="center">
+                {bestDay
+                  ? `${bestDay.date} delivered ${formatMoney(bestDay.revenue, defaultCurrency)} in revenue after processing fees.`
+                  : "No daily trend data available."}
+              </Text>
+            </Stack>
           </Alert>
-          <Alert color="grape" variant="light" title="Add-ons impact">
-            Add-ons generated {formatMoney(totalAddonsRevenue, defaultCurrency)} across {scopedAddonRows.length} rows.
+          <Alert color="grape" variant="light">
+            <Stack gap={6} align="center">
+              <Text fw={800} c="grape" ta="center">
+                Top product
+              </Text>
+              <Text ta="center">
+                {topProduct
+                  ? `${topProduct.productName} generated ${formatMoney(topProduct.revenue, defaultCurrency)} from ${topProduct.bookings} bookings and ${topProduct.people} people.`
+                  : "No product data available."}
+              </Text>
+            </Stack>
           </Alert>
         </SimpleGrid>
       </Paper>

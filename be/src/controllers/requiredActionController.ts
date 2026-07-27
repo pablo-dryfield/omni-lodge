@@ -501,6 +501,31 @@ export const createRequiredAction = async (req: Request, res: Response): Promise
   }
 };
 
+export const updateRequiredActionStatus = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actorId = getActorId(req as AuthenticatedRequest);
+    const action = await RequiredAction.findByPk(req.params.id);
+    if (!action) {
+      res.status(404).json([{ message: 'Required action not found' }]);
+      return;
+    }
+
+    if (typeof req.body?.status !== 'boolean') {
+      res.status(400).json([{ message: 'status must be true or false' }]);
+      return;
+    }
+
+    await action.update({
+      status: req.body.status,
+      updatedBy: actorId,
+    });
+
+    res.status(200).json(action);
+  } catch (error) {
+    res.status(400).json([{ message: (error as Error).message }]);
+  }
+};
+
 export const completeRequiredAction = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = getActorId(req as AuthenticatedRequest);
