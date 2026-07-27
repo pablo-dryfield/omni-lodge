@@ -157,3 +157,21 @@ export const useDecideFinanceRequest = () => {
     },
   });
 };
+
+export const useUpdatePopupRequestStatus = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ requestId, status }: { requestId: number; status: boolean }) => {
+      const response = await axiosInstance.patch(
+        `/required-actions/actions/${requestId}/status`,
+        { status },
+        { withCredentials: true },
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: requestsKey });
+      queryClient.invalidateQueries({ queryKey: ["required-actions", "me"] });
+    },
+  });
+};

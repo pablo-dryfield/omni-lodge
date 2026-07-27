@@ -44,6 +44,7 @@ import {
   useDecideScheduleSwapRequest,
   useRejectUserRequest,
   useRequestsCenter,
+  useUpdatePopupRequestStatus,
   type PopupRequestAudit,
   type PopupRequestRecipient,
   type UserApprovalRequest,
@@ -312,9 +313,13 @@ const PopupCountBox = ({
 const PopupRequestMobileCard = ({
   request,
   onDetails,
+  onToggleStatus,
+  isStatusBusy,
 }: {
   request: PopupRequestAudit;
   onDetails: (request: PopupRequestAudit) => void;
+  onToggleStatus: (request: PopupRequestAudit) => void;
+  isStatusBusy: boolean;
 }) => (
   <Card withBorder radius="xl" p="md" shadow="sm">
     <Stack gap="md" align="center" ta="center">
@@ -350,6 +355,16 @@ const PopupRequestMobileCard = ({
       </SimpleGrid>
       <Button fullWidth size="md" variant="light" onClick={() => onDetails(request)}>
         View details
+      </Button>
+      <Button
+        fullWidth
+        size="md"
+        color={request.status ? "red" : "green"}
+        variant={request.status ? "light" : "filled"}
+        loading={isStatusBusy}
+        onClick={() => onToggleStatus(request)}
+      >
+        {request.status ? "Deactivate request" : "Reactivate request"}
       </Button>
     </Stack>
   </Card>
@@ -668,6 +683,7 @@ const RequestsPage = () => {
   const rejectUser = useRejectUserRequest();
   const decideSwap = useDecideScheduleSwapRequest();
   const decideFinance = useDecideFinanceRequest();
+  const updatePopupRequestStatus = useUpdatePopupRequestStatus();
   const createRequiredAction = useCreateRequiredAction();
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
   const [busySwapId, setBusySwapId] = useState<number | null>(null);
@@ -688,6 +704,7 @@ const RequestsPage = () => {
   const [decisionNote, setDecisionNote] = useState("");
   const [pageError, setPageError] = useState<string | null>(null);
   const [popupDetail, setPopupDetail] = useState<PopupRequestAudit | null>(null);
+  const [busyPopupRequestId, setBusyPopupRequestId] = useState<number | null>(null);
   const targetOptionsQuery = usePopupTargetOptions(requiredActionModalOpen);
 
   useEffect(() => {
@@ -899,6 +916,19 @@ const RequestsPage = () => {
     }
   };
 
+  const handleTogglePopupRequestStatus = async (request: PopupRequestAudit) => {
+    setBusyPopupRequestId(request.id);
+    setPageError(null);
+    try {
+      await updatePopupRequestStatus.mutateAsync({ requestId: request.id, status: !request.status });
+      setPopupDetail((current) => (current?.id === request.id ? { ...current, status: !request.status } : current));
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Unable to update popup request");
+    } finally {
+      setBusyPopupRequestId(null);
+    }
+  };
+
   const content = (
     <Stack gap="xl">
       <Card withBorder radius="lg" p={{ base: "lg", md: "xl" }}>
@@ -974,7 +1004,13 @@ const RequestsPage = () => {
               isMobile ? (
                 <Stack gap="sm">
                   {data.popupRequests.map((request) => (
-                    <PopupRequestMobileCard key={request.id} request={request} onDetails={setPopupDetail} />
+                    <PopupRequestMobileCard
+                      key={request.id}
+                      request={request}
+                      onDetails={setPopupDetail}
+                      onToggleStatus={handleTogglePopupRequestStatus}
+                      isStatusBusy={busyPopupRequestId === request.id}
+                    />
                   ))}
                 </Stack>
               ) : (
@@ -1041,9 +1077,20 @@ const RequestsPage = () => {
                               <Text size="sm">{formatDateTime(request.createdAt)}</Text>
                             </Table.Td>
                             <Table.Td ta="right">
-                              <Button variant="light" size="xs" onClick={() => setPopupDetail(request)}>
-                                Details
-                              </Button>
+                              <Group justify="flex-end" gap="xs" wrap="nowrap">
+                                <Button variant="light" size="xs" onClick={() => setPopupDetail(request)}>
+                                  Details
+                                </Button>
+                                <Button
+                                  variant={request.status ? "light" : "filled"}
+                                  color={request.status ? "red" : "green"}
+                                  size="xs"
+                                  loading={busyPopupRequestId === request.id}
+                                  onClick={() => handleTogglePopupRequestStatus(request)}
+                                >
+                                  {request.status ? "Deactivate" : "Reactivate"}
+                                </Button>
+                              </Group>
                             </Table.Td>
                           </Table.Tr>
                         ))}
@@ -1130,6 +1177,17 @@ const RequestsPage = () => {
       >
         {popupDetail ? (
           <Stack gap="md">
+            <Group justify="flex-end">
+              <Button
+                color={popupDetail.status ? "red" : "green"}
+                variant={popupDetail.status ? "light" : "filled"}
+                loading={busyPopupRequestId === popupDetail.id}
+                onClick={() => handleTogglePopupRequestStatus(popupDetail)}
+                fullWidth={isMobile}
+              >
+                {popupDetail.status ? "Deactivate request" : "Reactivate request"}
+              </Button>
+            </Group>
             {isMobile ? (
               <Stack gap="xs" align="center" ta="center">
                 <Group gap="xs" justify="center">

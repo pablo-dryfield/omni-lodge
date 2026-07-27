@@ -10,6 +10,7 @@ import {
   listMyRequiredActions,
   markRequiredActionPrompted,
   respondToSwapRequiredAction,
+  updateRequiredActionStatus,
 } from '../controllers/requiredActionController.js';
 
 const router = Router();
@@ -24,6 +25,7 @@ router.use(authMiddleware);
 
 router.get('/me', listMyRequiredActions);
 router.post('/actions', authorizeModuleAction('requests-center', 'update'), createRequiredAction);
+router.patch('/actions/:id/status', authorizeModuleAction('requests-center', 'update'), updateRequiredActionStatus);
 router.post('/actions/:id/complete', completeRequiredAction);
 router.post('/actions/:id/prompted', markRequiredActionPrompted);
 router.post('/actions/:id/profile-fields', upload.single('profilePhoto'), completeProfileFieldsAction);
