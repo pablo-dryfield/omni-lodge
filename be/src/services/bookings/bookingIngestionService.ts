@@ -62,6 +62,7 @@ const DEFAULT_PLATFORM_CHANNEL_NAMES: Record<KnownBookingPlatform, string> = {
   ecwid: 'Ecwid',
   airbnb: 'Airbnb',
   xperiencepoland: 'XperiencePoland',
+  omnilodge: 'OmniLodge',
   manual: 'Manual',
   unknown: 'Unknown',
 };

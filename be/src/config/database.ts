@@ -24,6 +24,9 @@ import RolePagePermission from "../models/RolePagePermission.js";
 import RoleModulePermission from "../models/RoleModulePermission.js";
 import Addon from "../models/Addon.js";
 import ProductAddon from "../models/ProductAddon.js";
+import StorefrontOrder from "../models/StorefrontOrder.js";
+import StorefrontOrderItem from "../models/StorefrontOrderItem.js";
+import StorefrontPromotion from "../models/StorefrontPromotion.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import PaymentMethod from "../models/PaymentMethod.js";
 import ProductPrice from "../models/ProductPrice.js";
@@ -195,6 +198,9 @@ const sequelize = new Sequelize({
     ProductAddon,
     ProductType,
     Addon,
+    StorefrontOrder,
+    StorefrontOrderItem,
+    StorefrontPromotion,
     Venue,
     VenueCompensationTerm,
     VenueCompensationTermRate,
