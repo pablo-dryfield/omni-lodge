@@ -58,6 +58,7 @@ import channelNumbersRoutes from './routes/channelNumbersRoutes.js';
 import venueNumbersRoutes from './routes/venueNumbersRoutes.js';
 import catalogRoutes from './routes/catalogRoutes.js';
 import storefrontRoutes from './routes/storefrontRoutes.js';
+import { storefrontStripeWebhook } from './controllers/storefrontWebhookController.js';
 import getYourGuideRoutes from './routes/getYourGuideRoutes.js';
 import getYourGuideOutboundRoutes from './routes/getYourGuideOutboundRoutes.js';
 import googleApiRoutes from './routes/googleApiRoutes.js';
@@ -163,6 +164,12 @@ if (process.env.NODE_ENV !== 'production') {
   );
   app.options('*', cors()); // handle preflight
 }
+
+app.post(
+  '/api/storefront/webhooks/stripe',
+  express.raw({ type: 'application/json' }),
+  storefrontStripeWebhook,
+);
 
 app.use(express.json());
 

@@ -2,12 +2,15 @@ import type { Request, Response } from 'express';
 import dayjs from 'dayjs';
 import { Op, type Includeable } from 'sequelize';
 import Addon from '../models/Addon.js';
+import Channel from '../models/Channel.js';
+import ChannelProductPrice from '../models/ChannelProductPrice.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
 import ProductPrice from '../models/ProductPrice.js';
 import ProductType from '../models/ProductType.js';
 
 const STOREFRONT_CURRENCY = 'PLN';
+const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
 
 type StorefrontProduct = {
   id: number;
@@ -100,13 +103,60 @@ const loadEffectiveProductPrices = async (productIds: number[]): Promise<Map<num
   return effectivePrices;
 };
 
+const loadStorefrontChannelPrices = async (
+  productIds: number[],
+): Promise<Map<number, number>> => {
+  if (productIds.length === 0) {
+    return new Map();
+  }
+
+  const channel = await Channel.findOne({
+    where: { name: STOREFRONT_PRICE_CHANNEL },
+    attributes: ['id'],
+  });
+  if (!channel) {
+    return new Map();
+  }
+
+  const today = dayjs().format('YYYY-MM-DD');
+  const prices = await ChannelProductPrice.findAll({
+    where: {
+      channelId: channel.id,
+      productId: { [Op.in]: productIds },
+      ticketType: 'normal',
+      currencyCode: STOREFRONT_CURRENCY,
+      validFrom: { [Op.lte]: today },
+      [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: today } }],
+    },
+    attributes: ['id', 'productId', 'price', 'validFrom'],
+    order: [
+      ['productId', 'ASC'],
+      ['validFrom', 'DESC'],
+      ['id', 'DESC'],
+    ],
+  });
+
+  const channelPrices = new Map<number, number>();
+  for (const price of prices) {
+    if (!channelPrices.has(price.productId)) {
+      channelPrices.set(price.productId, toMoneyAmount(price.price));
+    }
+  }
+
+  return channelPrices;
+};
+
 const serializeProduct = (
   product: Product,
   effectivePrices: ReadonlyMap<number, number>,
+  channelPrices: ReadonlyMap<number, number>,
 ): StorefrontProduct => {
   const productType = product.get('ProductType') as ProductType | undefined;
   const productAddons = product.productAddons ?? [];
-  const effectivePrice = effectivePrices.get(product.id) ?? product.price;
+  const scheduledPrice = effectivePrices.get(product.id);
+  const basePrice = toMoneyAmount(product.price);
+  const effectivePrice =
+    scheduledPrice ?? (basePrice > 0 ? basePrice : channelPrices.get(product.id) ?? basePrice);
 
   return {
     id: product.id,
@@ -167,11 +217,17 @@ export const listStorefrontProducts = async (_req: Request, res: Response): Prom
       include: productIncludes,
       order: [['name', 'ASC']],
     });
-    const effectivePrices = await loadEffectiveProductPrices(products.map((product) => product.id));
+    const productIds = products.map((product) => product.id);
+    const [effectivePrices, channelPrices] = await Promise.all([
+      loadEffectiveProductPrices(productIds),
+      loadStorefrontChannelPrices(productIds),
+    ]);
 
     res.status(200).json({
       version: 1,
-      products: products.map((product) => serializeProduct(product, effectivePrices)),
+      products: products.map((product) =>
+        serializeProduct(product, effectivePrices, channelPrices),
+      ),
     });
   } catch (error) {
     console.error('Unable to load storefront products:', error);
@@ -202,11 +258,14 @@ export const getStorefrontProduct = async (req: Request, res: Response): Promise
       res.status(404).json({ message: 'Product not found.' });
       return;
     }
-    const effectivePrices = await loadEffectiveProductPrices([product.id]);
+    const [effectivePrices, channelPrices] = await Promise.all([
+      loadEffectiveProductPrices([product.id]),
+      loadStorefrontChannelPrices([product.id]),
+    ]);
 
     res.status(200).json({
       version: 1,
-      product: serializeProduct(product, effectivePrices),
+      product: serializeProduct(product, effectivePrices, channelPrices),
     });
   } catch (error) {
     console.error(`Unable to load storefront product ${requestedSlug}:`, error);

@@ -6,6 +6,7 @@ export const BOOKING_PLATFORMS = [
   'freetour',
   'xperiencepoland',
   'airbnb',
+  'omnilodge',
   'manual',
   'unknown',
 ] as const;
