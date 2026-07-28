@@ -11,6 +11,7 @@ import {
   Table,
   UpdatedAt,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 
 import Product from './Product.js';
 import StorefrontOrder from './StorefrontOrder.js';
@@ -81,10 +82,10 @@ export default class StorefrontOrderItem extends Model {
   declare options: Record<string, unknown>;
 
   @BelongsTo(() => StorefrontOrder, { foreignKey: 'order_id', as: 'order' })
-  declare order?: StorefrontOrder;
+  declare order?: NonAttribute<StorefrontOrder>;
 
   @BelongsTo(() => Product, { foreignKey: 'product_id', as: 'product' })
-  declare product?: Product;
+  declare product?: NonAttribute<Product>;
 
   @CreatedAt
   @Column({ field: 'created_at', type: DataType.DATE })
