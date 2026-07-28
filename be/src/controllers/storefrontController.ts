@@ -1,8 +1,10 @@
 import type { Request, Response } from 'express';
+import dayjs from 'dayjs';
 import { Op, type Includeable } from 'sequelize';
 import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
+import ProductPrice from '../models/ProductPrice.js';
 import ProductType from '../models/ProductType.js';
 
 const STOREFRONT_CURRENCY = 'PLN';
@@ -68,9 +70,43 @@ const createProductSlug = (product: Pick<Product, 'id' | 'name'>): string =>
 const toMoneyAmount = (value: number | string | null | undefined): number =>
   Number(Number(value ?? 0).toFixed(2));
 
-const serializeProduct = (product: Product): StorefrontProduct => {
+const loadEffectiveProductPrices = async (productIds: number[]): Promise<Map<number, number>> => {
+  if (productIds.length === 0) {
+    return new Map();
+  }
+
+  const today = dayjs().format('YYYY-MM-DD');
+  const prices = await ProductPrice.findAll({
+    where: {
+      productId: { [Op.in]: productIds },
+      validFrom: { [Op.lte]: today },
+      [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: today } }],
+    },
+    attributes: ['id', 'productId', 'price', 'validFrom'],
+    order: [
+      ['productId', 'ASC'],
+      ['validFrom', 'DESC'],
+      ['id', 'DESC'],
+    ],
+  });
+
+  const effectivePrices = new Map<number, number>();
+  for (const price of prices) {
+    if (!effectivePrices.has(price.productId)) {
+      effectivePrices.set(price.productId, toMoneyAmount(price.price));
+    }
+  }
+
+  return effectivePrices;
+};
+
+const serializeProduct = (
+  product: Product,
+  effectivePrices: ReadonlyMap<number, number>,
+): StorefrontProduct => {
   const productType = product.get('ProductType') as ProductType | undefined;
   const productAddons = product.productAddons ?? [];
+  const effectivePrice = effectivePrices.get(product.id) ?? product.price;
 
   return {
     id: product.id,
@@ -83,7 +119,7 @@ const serializeProduct = (product: Product): StorefrontProduct => {
         }
       : null,
     price: {
-      amount: toMoneyAmount(product.price),
+      amount: toMoneyAmount(effectivePrice),
       currency: STOREFRONT_CURRENCY,
     },
     addons: productAddons
@@ -131,10 +167,11 @@ export const listStorefrontProducts = async (_req: Request, res: Response): Prom
       include: productIncludes,
       order: [['name', 'ASC']],
     });
+    const effectivePrices = await loadEffectiveProductPrices(products.map((product) => product.id));
 
     res.status(200).json({
       version: 1,
-      products: products.map(serializeProduct),
+      products: products.map((product) => serializeProduct(product, effectivePrices)),
     });
   } catch (error) {
     console.error('Unable to load storefront products:', error);
@@ -165,10 +202,11 @@ export const getStorefrontProduct = async (req: Request, res: Response): Promise
       res.status(404).json({ message: 'Product not found.' });
       return;
     }
+    const effectivePrices = await loadEffectiveProductPrices([product.id]);
 
     res.status(200).json({
       version: 1,
-      product: serializeProduct(product),
+      product: serializeProduct(product, effectivePrices),
     });
   } catch (error) {
     console.error(`Unable to load storefront product ${requestedSlug}:`, error);
