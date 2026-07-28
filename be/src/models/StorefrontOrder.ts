@@ -12,6 +12,7 @@ import {
   Unique,
   UpdatedAt,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 
 import StorefrontOrderItem from './StorefrontOrderItem.js';
 
@@ -113,7 +114,7 @@ export default class StorefrontOrder extends Model {
   declare paidAt: Date | null;
 
   @HasMany(() => StorefrontOrderItem, { foreignKey: 'order_id', as: 'items' })
-  declare items?: StorefrontOrderItem[];
+  declare items?: NonAttribute<StorefrontOrderItem[]>;
 
   @CreatedAt
   @Column({ field: 'created_at', type: DataType.DATE })
