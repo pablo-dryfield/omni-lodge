@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
+import { UniqueConstraintError, ValidationError } from 'sequelize';
 import StorefrontPromotion from '../models/StorefrontPromotion.js';
 import {
   createEcwidDiscountCoupon,
@@ -58,6 +59,21 @@ const normalizePayload = (body: PromotionPayload, existing?: StorefrontPromotion
   const productIds = body.productIds ?? (
     Array.isArray(existing?.metadata?.productIds) ? existing.metadata.productIds as number[] : []
   );
+  const validFrom = body.validFrom === undefined
+    ? existing?.validFrom ?? null
+    : body.validFrom
+      ? new Date(body.validFrom)
+      : null;
+  const validTo = body.validTo === undefined
+    ? existing?.validTo ?? null
+    : body.validTo
+      ? new Date(body.validTo)
+      : null;
+  if (validFrom && Number.isNaN(validFrom.getTime())) throw new Error('Valid from contains an invalid date.');
+  if (validTo && Number.isNaN(validTo.getTime())) throw new Error('Valid until contains an invalid date.');
+  if (validFrom && validTo && validTo <= validFrom) {
+    throw new Error('Valid until must be later than valid from.');
+  }
   return {
     code,
     name,
@@ -69,11 +85,27 @@ const normalizePayload = (body: PromotionPayload, existing?: StorefrontPromotion
       body.maxRedemptions === null || body.maxRedemptions === undefined
         ? body.maxRedemptions === null ? null : existing?.maxRedemptions ?? null
         : Math.max(1, Math.floor(Number(body.maxRedemptions))),
-    validFrom: body.validFrom === undefined ? existing?.validFrom ?? null : body.validFrom ? new Date(body.validFrom) : null,
-    validTo: body.validTo === undefined ? existing?.validTo ?? null : body.validTo ? new Date(body.validTo) : null,
+    validFrom,
+    validTo,
     isActive: body.isActive ?? existing?.isActive ?? true,
     metadata: { ...(existing?.metadata ?? {}), productIds },
   };
+};
+
+const promotionErrorMessage = (error: unknown): string => {
+  if (error instanceof UniqueConstraintError) {
+    return 'A promotion with this discount code already exists.';
+  }
+  if (error instanceof ValidationError) {
+    const details = error.errors
+      .map((item) => {
+        const field = item.path ? String(item.path).replace(/([A-Z])/g, ' $1').toLowerCase() : 'field';
+        return `${field}: ${item.message}`;
+      })
+      .filter(Boolean);
+    return details.length > 0 ? details.join(' ') : 'Promotion data is invalid.';
+  }
+  return error instanceof Error ? error.message : 'Promotion data is invalid.';
 };
 
 const ecwidPayload = (promotion: StorefrontPromotion): EcwidDiscountCouponPayload => ({
@@ -140,11 +172,17 @@ export const listPromotions = async (_req: Request, res: Response): Promise<void
 
 export const createPromotion = async (req: Request, res: Response): Promise<void> => {
   try {
-    const promotion = await StorefrontPromotion.create(normalizePayload(req.body));
+    const payload = normalizePayload(req.body);
+    const duplicate = await StorefrontPromotion.findOne({ where: { code: payload.code } });
+    if (duplicate) {
+      res.status(409).json({ message: 'A promotion with this discount code already exists.' });
+      return;
+    }
+    const promotion = await StorefrontPromotion.create(payload);
     if (req.body.syncToEcwid === true) await syncOneToEcwid(promotion);
     res.status(201).json({ data: serialize(promotion) });
   } catch (error) {
-    res.status(400).json({ message: error instanceof Error ? error.message : 'Failed to create promotion' });
+    res.status(error instanceof UniqueConstraintError ? 409 : 400).json({ message: promotionErrorMessage(error) });
   }
 };
 
@@ -152,11 +190,19 @@ export const updatePromotion = async (req: Request, res: Response): Promise<void
   try {
     const promotion = await StorefrontPromotion.findByPk(req.params.id);
     if (!promotion) { res.status(404).json({ message: 'Promotion not found' }); return; }
-    await promotion.update(normalizePayload(req.body, promotion));
+    const payload = normalizePayload(req.body, promotion);
+    const duplicate = await StorefrontPromotion.findOne({
+      where: { code: payload.code, id: { [Op.ne]: promotion.id } },
+    });
+    if (duplicate) {
+      res.status(409).json({ message: 'A promotion with this discount code already exists.' });
+      return;
+    }
+    await promotion.update(payload);
     if (req.body.syncToEcwid === true) await syncOneToEcwid(promotion);
     res.json({ data: serialize(promotion) });
   } catch (error) {
-    res.status(400).json({ message: error instanceof Error ? error.message : 'Failed to update promotion' });
+    res.status(error instanceof UniqueConstraintError ? 409 : 400).json({ message: promotionErrorMessage(error) });
   }
 };
 
