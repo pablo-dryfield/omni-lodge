@@ -15,6 +15,7 @@ import {
   type StorefrontCartInput,
   type StorefrontQuote,
 } from '../services/storefrontCommerceService.js';
+import { getConfigValueRaw } from '../services/configService.js';
 
 type CheckoutCustomer = {
   firstName: string;
@@ -72,7 +73,7 @@ const getReturnBaseUrl = (request: Request): string => {
     }
   }
 
-  const configured = process.env.STOREFRONT_PUBLIC_URL?.trim();
+  const configured = getConfigValueRaw('STOREFRONT_PUBLIC_URL')?.trim();
   if (configured) return configured.replace(/\/+$/, '');
 
   const origin = request.get('origin');

@@ -1,11 +1,12 @@
 import type { NextFunction, Request, Response } from 'express';
 import Stripe from 'stripe';
 import { getStripeClient } from '../finance/services/stripeClient.js';
+import { getConfigValueRaw } from '../services/configService.js';
 import { fulfillPaidOrder } from './storefrontCommerceController.js';
 
 const webhookSecret = (): string | null =>
-  process.env.STOREFRONT_STRIPE_WEBHOOK_SECRET
-  || process.env.STRIPE_WEBHOOK_SECRET
+  getConfigValueRaw('STOREFRONT_STRIPE_WEBHOOK_SECRET')?.trim()
+  || process.env.STRIPE_WEBHOOK_SECRET?.trim()
   || null;
 
 export const storefrontStripeWebhook = async (
