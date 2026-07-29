@@ -4,6 +4,9 @@ This document is the working inventory for replacing Ecwid commerce while keepin
 `/store` available during the transition. The custom WordPress storefront remains
 at `/store2` until the launch checklist is complete.
 
+Product and add-on setup rules are documented in
+[`storefront-product-configuration.md`](./storefront-product-configuration.md).
+
 ## Implemented foundation
 
 | Capability | OmniLodge implementation | Status |
