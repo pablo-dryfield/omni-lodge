@@ -1,5 +1,6 @@
 import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType, HasMany } from 'sequelize-typescript';
 import ProductAddon from './ProductAddon.js';
+import type { StorefrontProductConfig } from '../types/storefront.js';
 
 @Table({
   timestamps: true,
@@ -51,6 +52,11 @@ export default class Product extends Model {
   @Default(false)
   @Column({ field: 'requires_night_report_cost_reconciliation', type: DataType.BOOLEAN })
   declare requiresNightReportCostReconciliation: boolean;
+
+  @AllowNull(false)
+  @Default({})
+  @Column({ field: 'storefront_config', type: DataType.JSONB })
+  declare storefrontConfig: StorefrontProductConfig;
 
   @HasMany(() => ProductAddon, { foreignKey: 'product_id', as: 'productAddons' })
   declare productAddons?: ProductAddon[] | undefined;

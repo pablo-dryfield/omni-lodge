@@ -14,6 +14,7 @@ import {
 
 import Addon from './Addon.js';
 import Product from './Product.js';
+import type { StorefrontAddonConfig } from '../types/storefront.js';
 
 @Table({
   timestamps: true,
@@ -50,6 +51,11 @@ export default class ProductAddon extends Model {
   @Default(0)
   @Column({ field: 'sort_order', type: DataType.INTEGER })
   declare sortOrder: number;
+
+  @AllowNull(false)
+  @Default({})
+  @Column({ field: 'storefront_config', type: DataType.JSONB })
+  declare storefrontConfig: StorefrontAddonConfig;
 
   @AllowNull(false)
   @Default(DataType.NOW)
