@@ -12,10 +12,10 @@ const SettingsProductAddons = () => {
         <div>
           <Title order={3}>Product Add-Ons</Title>
           <Text size="sm" c="dimmed">
-            Control which add-ons are available for each product.
+            Link add-ons to products and control pricing and storefront selection.
           </Text>
         </div>
-        <ProductAddonsList pageTitle="Product Add-Ons" />
+        <ProductAddonsList />
       </Stack>
     </PageAccessGuard>
   );
