@@ -435,7 +435,7 @@ export const quoteStorefrontCart = async (
         throw new HttpError(400, `An add-on selected for ${product.name} is unavailable.`);
       }
       const addonConfig: StorefrontAddonConfig = productAddon.storefrontConfig ?? {};
-      const selectionMode = addonConfig.selectionMode ?? 'quantity';
+      const selectionMode = String(addonConfig.selectionMode ?? 'quantity').toLowerCase();
       const maxQuantity =
         productAddon.maxPerAttendee === null
           ? Math.max(50, quantity)
@@ -464,7 +464,17 @@ export const quoteStorefrontCart = async (
         addonLineTotal = addonUnitPrice;
       } else {
         addonQuantity = asPositiveInteger(addonInput.quantity, `${addon.name} quantity`, maxQuantity);
-        const allowedQuantities = addonConfig.allowedQuantities ?? [];
+        if (selectionMode === 'range') {
+          const minimum = Math.max(1, Math.floor(Number(addonConfig.minQuantity ?? 1)));
+          const maximum = Math.max(minimum, Math.floor(Number(addonConfig.maxQuantity ?? minimum)));
+          if (addonQuantity < minimum || addonQuantity > maximum) {
+            throw new HttpError(
+              400,
+              `${addon.name} quantity must be between ${minimum} and ${maximum}.`,
+            );
+          }
+        }
+        const allowedQuantities = selectionMode === 'quantity' ? addonConfig.allowedQuantities ?? [] : [];
         if (allowedQuantities.length > 0 && !allowedQuantities.includes(addonQuantity)) {
           throw new HttpError(
             400,

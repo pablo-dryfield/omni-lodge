@@ -14,7 +14,7 @@ export type StorefrontProductConfig = {
   phoneRequired?: boolean;
 };
 
-export type StorefrontAddonSelectionMode = 'boolean' | 'quantity' | 'options';
+export type StorefrontAddonSelectionMode = 'boolean' | 'quantity' | 'range' | 'options';
 
 export type StorefrontAddonOption = {
   value: string;
@@ -25,6 +25,8 @@ export type StorefrontAddonOption = {
 export type StorefrontAddonConfig = {
   selectionMode?: StorefrontAddonSelectionMode;
   allowedQuantities?: number[];
+  minQuantity?: number;
+  maxQuantity?: number;
   /**
    * Maps a permitted quantity to the total bundle price. For example,
    * `{ "3": 50 }` means three units cost 50 in total, not 50 each.

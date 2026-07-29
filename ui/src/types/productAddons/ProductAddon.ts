@@ -1,4 +1,4 @@
-export type StorefrontAddonSelectionMode = "boolean" | "quantity" | "options";
+export type StorefrontAddonSelectionMode = "boolean" | "quantity" | "range" | "options";
 
 export type StorefrontAddonOption = {
   value: string;
@@ -9,6 +9,8 @@ export type StorefrontAddonOption = {
 export type StorefrontAddonConfig = {
   selectionMode?: StorefrontAddonSelectionMode;
   allowedQuantities?: number[];
+  minQuantity?: number;
+  maxQuantity?: number;
   quantityPrices?: Record<string, number>;
   options?: StorefrontAddonOption[];
 };
