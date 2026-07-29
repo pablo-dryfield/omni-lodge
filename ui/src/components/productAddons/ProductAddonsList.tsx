@@ -223,6 +223,16 @@ const ProductAddonsList = (_props: ProductAddonsListProps) => {
       return "Add at least one allowed quantity.";
     }
     if (
+      selectionMode === "range" &&
+      (!Number.isInteger(form.storefrontConfig.minQuantity) ||
+        !Number.isInteger(form.storefrontConfig.maxQuantity) ||
+        Number(form.storefrontConfig.minQuantity) < 1 ||
+        Number(form.storefrontConfig.maxQuantity) <
+          Number(form.storefrontConfig.minQuantity))
+    ) {
+      return "Set a valid minimum and maximum quantity.";
+    }
+    if (
       selectionMode === "options" &&
       (options.length === 0 ||
         options.some((option) => !option.label.trim() || !option.value.trim()))
@@ -485,8 +495,10 @@ const ProductAddonsList = (_props: ProductAddonsListProps) => {
                         {selectionMode === "boolean"
                           ? "Yes / no"
                           : selectionMode === "quantity"
-                            ? "Quantity"
-                            : "Options"}
+                            ? "Specific quantities"
+                            : selectionMode === "range"
+                              ? "Quantity range"
+                              : "Options"}
                       </Badge>
                       {record.maxPerAttendee && (
                         <Badge color="gray" variant="light">Max {record.maxPerAttendee} per guest</Badge>

@@ -176,24 +176,35 @@ export const AddonStorefrontRulesEditor = ({ value, onChange }: AddonRulesProps)
           label="Selection style"
           data={[
             { value: "boolean", label: "Simple yes / no" },
-            { value: "quantity", label: "Choose a quantity" },
+            { value: "quantity", label: "Choose specific quantities" },
+            { value: "range", label: "Quantity range" },
             { value: "options", label: "Choose from named options" },
           ]}
           value={mode}
           allowDeselect={false}
-          onChange={(next) =>
+          onChange={(next) => {
+            const nextMode = next as StorefrontAddonConfig["selectionMode"];
             onChange({
               ...value,
-              selectionMode: next as StorefrontAddonConfig["selectionMode"],
-            })
-          }
+              selectionMode: nextMode,
+              ...(nextMode === "quantity" && quantities.length === 0
+                ? { allowedQuantities: [1] }
+                : {}),
+              ...(nextMode === "range"
+                ? {
+                    minQuantity: value.minQuantity ?? 1,
+                    maxQuantity: value.maxQuantity ?? Math.max(value.minQuantity ?? 1, 1),
+                  }
+                : {}),
+            });
+          }}
         />
 
         {mode === "quantity" && (
           <>
             <TagsInput
               label="Allowed quantities"
-              description="Enter each quantity guests may select, for example 1, 2, 3."
+              description="Enter each permitted quantity and press Enter, for example 1, 3, 5."
               placeholder="Add quantity"
               value={quantities.map(String)}
               onChange={(items) => {
@@ -244,6 +255,42 @@ export const AddonStorefrontRulesEditor = ({ value, onChange }: AddonRulesProps)
               </Stack>
             )}
           </>
+        )}
+
+        {mode === "range" && (
+          <SimpleGrid cols={{ base: 1, sm: 2 }}>
+            <NumberInput
+              label="Minimum quantity"
+              description="Smallest quantity a guest can select."
+              min={1}
+              allowDecimal={false}
+              value={value.minQuantity ?? 1}
+              onChange={(next) => {
+                const minimum = next === "" ? 1 : Math.max(1, Number(next));
+                onChange({
+                  ...value,
+                  minQuantity: minimum,
+                  maxQuantity: Math.max(minimum, value.maxQuantity ?? minimum),
+                });
+              }}
+            />
+            <NumberInput
+              label="Maximum quantity"
+              description="Largest quantity a guest can select."
+              min={value.minQuantity ?? 1}
+              allowDecimal={false}
+              value={value.maxQuantity ?? value.minQuantity ?? 1}
+              onChange={(next) =>
+                onChange({
+                  ...value,
+                  maxQuantity: Math.max(
+                    value.minQuantity ?? 1,
+                    next === "" ? value.minQuantity ?? 1 : Number(next),
+                  ),
+                })
+              }
+            />
+          </SimpleGrid>
         )}
 
         {mode === "options" && (
