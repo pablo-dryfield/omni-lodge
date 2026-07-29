@@ -197,6 +197,67 @@ export const updateEcwidOrder = async (
   return response.data;
 };
 
+export type EcwidDiscountCoupon = {
+  id: number;
+  name: string;
+  code: string;
+  discountType: 'ABS' | 'PERCENT' | 'SHIPPING' | 'ABS_AND_SHIPPING' | 'PERCENT_AND_SHIPPING';
+  status: 'ACTIVE' | 'PAUSED' | 'EXPIRED' | 'USEDUP';
+  discount: number;
+  launchDate?: string;
+  expirationDate?: string;
+  totalLimit?: number;
+  usesLimit?: 'UNLIMITED' | 'ONCEPERCUSTOMER' | 'SINGLE';
+  applicationLimit?: 'UNLIMITED' | 'NEW_CUSTOMER_ONLY' | 'REPEAT_CUSTOMER_ONLY';
+  orderCount?: number;
+  catalogLimit?: { products?: number[]; categories?: number[] };
+};
+
+export type EcwidDiscountCouponPayload = {
+  name: string;
+  code: string;
+  discountType: 'ABS' | 'PERCENT';
+  status: 'ACTIVE' | 'PAUSED';
+  discount: number;
+  launchDate?: string;
+  expirationDate?: string;
+  totalLimit?: number;
+  usesLimit: 'UNLIMITED' | 'SINGLE';
+  applicationLimit: 'UNLIMITED';
+};
+
+export const fetchAllEcwidDiscountCoupons = async (): Promise<EcwidDiscountCoupon[]> => {
+  const ecwidClient = getEcwidClient();
+  const items: EcwidDiscountCoupon[] = [];
+  let offset = 0;
+  do {
+    const response = await ecwidClient.get<{
+      total: number;
+      count: number;
+      items: EcwidDiscountCoupon[];
+    }>('/discount_coupons', { params: { limit: 100, offset } });
+    items.push(...(response.data.items ?? []));
+    offset += response.data.count ?? 0;
+    if (!response.data.count || items.length >= (response.data.total ?? 0)) break;
+  } while (true);
+  return items;
+};
+
+export const createEcwidDiscountCoupon = async (
+  payload: EcwidDiscountCouponPayload,
+): Promise<{ id: number; code: string }> => {
+  const response = await getEcwidClient().post<{ id: number; code: string }>('/discount_coupons', payload);
+  return response.data;
+};
+
+export const updateEcwidDiscountCoupon = async (
+  couponId: number,
+  payload: EcwidDiscountCouponPayload,
+): Promise<unknown> => {
+  const response = await getEcwidClient().put(`/discount_coupons/${couponId}`, payload);
+  return response.data;
+};
+
 export const createEcwidBatchRequest = async (
   requests: EcwidBatchRequestItem[],
   options: { allowParallelMode?: boolean; stopOnFirstFailure?: boolean } = {},

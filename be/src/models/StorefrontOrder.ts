@@ -113,6 +113,14 @@ export default class StorefrontOrder extends Model {
   @Column({ field: 'paid_at', type: DataType.DATE })
   declare paidAt: Date | null;
 
+  @AllowNull(true)
+  @Column({ field: 'customer_email_sent_at', type: DataType.DATE })
+  declare customerEmailSentAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'internal_email_sent_at', type: DataType.DATE })
+  declare internalEmailSentAt: Date | null;
+
   @HasMany(() => StorefrontOrderItem, { foreignKey: 'order_id', as: 'items' })
   declare items?: NonAttribute<StorefrontOrderItem[]>;
 
