@@ -12,10 +12,10 @@ const SettingsProducts = () => {
         <div>
           <Title order={3}>Products</Title>
           <Text size="sm" c="dimmed">
-            Configure sellable experiences and their core details.
+            Manage sellable experiences, pricing, availability, and storefront rules.
           </Text>
         </div>
-        <ProductsList pageTitle="Products" />
+        <ProductsList />
       </Stack>
     </PageAccessGuard>
   );
