@@ -67,6 +67,14 @@ const coerceProductAddonPayload = (
     next.sortOrder = 0;
   }
 
+  if (typeof payload.storefrontConfig === "string") {
+    next.storefrontConfig = JSON.parse(payload.storefrontConfig);
+  } else if (payload.storefrontConfig !== undefined) {
+    next.storefrontConfig = payload.storefrontConfig;
+  } else if (forCreate) {
+    next.storefrontConfig = {};
+  }
+
   delete (next as Record<string, unknown>).id;
   delete (next as Record<string, unknown>).productName;
   delete (next as Record<string, unknown>).addonName;

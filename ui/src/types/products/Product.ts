@@ -1,3 +1,19 @@
+export type StorefrontParticipantMode = "quantity" | "gender_split";
+export type StorefrontTimeMode = "fixed" | "select" | "manual";
+
+export type StorefrontProductConfig = {
+    participantMode?: StorefrontParticipantMode;
+    minParticipants?: number;
+    maxParticipants?: number;
+    dateRequired?: boolean;
+    timeMode?: StorefrontTimeMode;
+    defaultStartTime?: string;
+    startTimes?: string[];
+    fullNameRequired?: boolean;
+    emailRequired?: boolean;
+    phoneRequired?: boolean;
+};
+
 export type Product = {
     id: number;
     name: string;
@@ -9,4 +25,5 @@ export type Product = {
     updatedBy: number;
     status: boolean;
     requiresNightReportCostReconciliation: boolean;
+    storefrontConfig: StorefrontProductConfig;
 };

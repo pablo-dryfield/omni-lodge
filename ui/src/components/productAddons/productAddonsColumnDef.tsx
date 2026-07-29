@@ -2,6 +2,7 @@ import dayjs from "dayjs";
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { ProductAddon } from "../../types/productAddons/ProductAddon";
 import CustomEditSelect, { EditSelectOption } from "../../utils/CustomEditSelect";
+import CustomEditJson from "../../utils/CustomEditJson";
 
 export type ProductAddonColumnParams = {
   productLabelById: Map<number, string>;
@@ -118,6 +119,22 @@ export const productAddonsColumnDef = ({
         min: 0,
         step: 1,
       },
+    },
+  },
+  {
+    accessorKey: "storefrontConfig",
+    modifications: {
+      id: "storefrontConfig",
+      header: "Storefront Rules",
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ cell }) => (
+        <pre style={{ margin: 0, whiteSpace: "pre-wrap", minWidth: 260 }}>
+          {JSON.stringify(cell.getValue() ?? {}, null, 2)}
+        </pre>
+      ),
+      Edit: ({ cell, row }) => <CustomEditJson cell={cell} row={row} />,
+      enableColumnFilterModes: false,
+      enableGrouping: false,
     },
   },
   {
