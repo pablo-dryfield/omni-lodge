@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import type Stripe from 'stripe';
+import { Op } from 'sequelize';
 import sequelize from '../config/database.js';
 import HttpError from '../errors/HttpError.js';
 import { getStripeClient, isStripeConfigured } from '../finance/services/stripeClient.js';
@@ -254,11 +255,20 @@ export const fulfillPaidOrder = async (
       }
     }
 
-    const promotionId = Number(order.metadata?.promotionId);
-    if (Number.isInteger(promotionId) && promotionId > 0) {
+    const promotionIds = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(order.metadata?.promotionIds) ? order.metadata.promotionIds : []),
+          order.metadata?.promotionId,
+        ]
+          .map(Number)
+          .filter((promotionId) => Number.isInteger(promotionId) && promotionId > 0),
+      ),
+    );
+    if (promotionIds.length > 0) {
       await StorefrontPromotion.increment('redemptionCount', {
         by: 1,
-        where: { id: promotionId },
+        where: { id: { [Op.in]: promotionIds } },
         transaction,
       });
     }
@@ -311,7 +321,12 @@ export const createCheckout = async (request: Request, response: Response, next:
           customerCountryCode: customer.countryCode,
           discountCode: quote.discountCode,
           attribution,
-          metadata: { promotionId: quote.promotionId },
+          metadata: {
+            promotionId: quote.promotionId,
+            promotionIds: quote.discounts.map((discount) => discount.promotionId),
+            discountCodes: quote.discountCodes,
+            discounts: quote.discounts,
+          },
         } as never,
         { transaction },
       );

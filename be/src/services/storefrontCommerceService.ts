@@ -8,6 +8,10 @@ import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
 import ProductPrice from '../models/ProductPrice.js';
 import StorefrontPromotion from '../models/StorefrontPromotion.js';
+import type {
+  StorefrontAddonConfig,
+  StorefrontProductConfig,
+} from '../types/storefront.js';
 
 export const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -15,7 +19,8 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export type StorefrontCartAddonInput = {
   addonId: number;
-  quantity: number;
+  quantity?: number;
+  value?: string | null;
 };
 
 export type StorefrontCartItemInput = {
@@ -30,6 +35,7 @@ export type StorefrontCartItemInput = {
 export type StorefrontCartInput = {
   items: StorefrontCartItemInput[];
   discountCode?: string | null;
+  discountCodes?: string[];
 };
 
 export type StorefrontQuoteItem = {
@@ -47,6 +53,7 @@ export type StorefrontQuoteItem = {
     addonId: number;
     name: string;
     quantity: number;
+    value: string | null;
     unitPrice: number;
     total: number;
   }>;
@@ -60,7 +67,15 @@ export type StorefrontQuote = {
   discountTotal: number;
   total: number;
   discountCode: string | null;
+  discountCodes: string[];
   promotionId: number | null;
+  discounts: Array<{
+    promotionId: number;
+    code: string;
+    name: string;
+    amount: number;
+    productIds: number[] | null;
+  }>;
   items: StorefrontQuoteItem[];
 };
 
@@ -86,13 +101,97 @@ const asPositiveInteger = (value: unknown, label: string, max = 50): number => {
 const normalizeDate = (value: unknown): string | null => {
   if (value === null || value === undefined || value === '') return null;
   const normalized = String(value).trim();
-  if (!DATE_PATTERN.test(normalized) || !dayjs(normalized, 'YYYY-MM-DD', true).isValid()) {
+  const parsed = dayjs(normalized);
+  if (!DATE_PATTERN.test(normalized) || !parsed.isValid() || parsed.format('YYYY-MM-DD') !== normalized) {
     throw new HttpError(400, 'Experience date must use YYYY-MM-DD.');
   }
   if (dayjs(normalized).isBefore(dayjs().startOf('day'))) {
     throw new HttpError(400, 'Experience date cannot be in the past.');
   }
   return normalized;
+};
+
+const normalizeText = (value: unknown, maxLength = 255): string =>
+  value === null || value === undefined ? '' : String(value).trim().slice(0, maxLength);
+
+const normalizeParticipantCount = (
+  rawQuantity: unknown,
+  options: Record<string, unknown>,
+  config: StorefrontProductConfig,
+  itemIndex: number,
+): { quantity: number; options: Record<string, unknown> } => {
+  const min = Math.max(1, Number(config.minParticipants) || 1);
+  const max = Math.max(min, Number(config.maxParticipants) || 50);
+  if (config.participantMode !== 'gender_split') {
+    const quantity = asPositiveInteger(rawQuantity, `items[${itemIndex}].quantity`, max);
+    if (quantity < min) throw new HttpError(400, `At least ${min} participants are required.`);
+    return { quantity, options };
+  }
+
+  const participantInput =
+    options.participants && typeof options.participants === 'object'
+      ? (options.participants as Record<string, unknown>)
+      : {};
+  const men = Number(participantInput.men ?? options.men ?? 0);
+  const women = Number(participantInput.women ?? options.women ?? 0);
+  if (![men, women].every((value) => Number.isInteger(value) && value >= 0 && value <= max)) {
+    throw new HttpError(400, 'Men and women participant counts must be whole positive numbers.');
+  }
+  const quantity = men + women;
+  if (quantity < min || quantity > max) {
+    throw new HttpError(400, `Participant total must be between ${min} and ${max}.`);
+  }
+  return {
+    quantity,
+    options: { ...options, participants: { men, women } },
+  };
+};
+
+const validateCustomerOptions = (
+  options: Record<string, unknown>,
+  config: StorefrontProductConfig,
+): Record<string, unknown> => {
+  const normalized = { ...options };
+  const fullName = normalizeText(options.fullName);
+  const email = normalizeText(options.email).toLowerCase();
+  const phone = normalizeText(options.phone, 32);
+
+  if (config.fullNameRequired && fullName.length < 2) {
+    throw new HttpError(400, 'Full name is required.');
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpError(400, 'Email address is invalid.');
+  }
+  if (config.emailRequired && !email) throw new HttpError(400, 'Email address is required.');
+  if (phone && !/^\+[1-9]\d{6,14}$/.test(phone)) {
+    throw new HttpError(400, 'Phone number must include a country code followed by digits only.');
+  }
+  if (config.phoneRequired && !phone) throw new HttpError(400, 'Phone number is required.');
+
+  if (fullName) normalized.fullName = fullName;
+  if (email) normalized.email = email;
+  if (phone) normalized.phone = phone;
+  return normalized;
+};
+
+const normalizeExperienceTime = (
+  value: unknown,
+  config: StorefrontProductConfig,
+): string | null => {
+  const supplied = normalizeText(value, 64);
+  const configuredTimes = (config.startTimes ?? []).map((time) => normalizeText(time, 64)).filter(Boolean);
+  if (config.timeMode === 'fixed') {
+    const fixed = normalizeText(config.defaultStartTime, 64);
+    if (!fixed) throw new HttpError(409, 'This product does not have a configured start time.');
+    return fixed;
+  }
+  if (config.timeMode === 'select') {
+    if (!supplied || !configuredTimes.includes(supplied)) {
+      throw new HttpError(400, 'Please select an available start time.');
+    }
+    return supplied;
+  }
+  return supplied || null;
 };
 
 const productIncludes: Includeable[] = [
@@ -155,16 +254,29 @@ const resolveProductPrices = async (
   return prices;
 };
 
-const resolvePromotion = async (
-  code: string | null,
+const normalizeDiscountCodes = (input: StorefrontCartInput): string[] => {
+  const values = [...(Array.isArray(input.discountCodes) ? input.discountCodes : []), input.discountCode];
+  return [...new Set(values.map((value) => normalizeText(value, 64).toUpperCase()).filter(Boolean))].slice(0, 10);
+};
+
+const promotionProductIds = (promotion: StorefrontPromotion): number[] | null => {
+  const raw = promotion.metadata?.productIds;
+  if (!Array.isArray(raw)) return null;
+  const ids = [...new Set(raw.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  return ids.length > 0 ? ids : null;
+};
+
+const resolvePromotions = async (
+  codes: string[],
   merchandiseSubtotal: number,
+  quoteItems: StorefrontQuoteItem[],
   transaction?: Transaction,
-): Promise<{ promotion: StorefrontPromotion | null; discount: number }> => {
-  if (!code) return { promotion: null, discount: 0 };
+): Promise<StorefrontQuote['discounts']> => {
+  if (codes.length === 0) return [];
   const now = new Date();
-  const promotion = await StorefrontPromotion.findOne({
+  const promotions = await StorefrontPromotion.findAll({
     where: {
-      code,
+      code: { [Op.in]: codes },
       isActive: true,
       [Op.and]: [
         { [Op.or]: [{ validFrom: null }, { validFrom: { [Op.lte]: now } }] },
@@ -173,24 +285,80 @@ const resolvePromotion = async (
     },
     transaction,
   });
-  if (!promotion) throw new HttpError(400, 'This discount code is invalid or expired.');
-  if (promotion.currency && promotion.currency !== STOREFRONT_CURRENCY) {
-    throw new HttpError(400, 'This discount code is not available for this currency.');
-  }
-  if (promotion.maxRedemptions !== null && promotion.redemptionCount >= promotion.maxRedemptions) {
-    throw new HttpError(400, 'This discount code has reached its redemption limit.');
-  }
-  if (promotion.minSubtotal !== null && merchandiseSubtotal < Number(promotion.minSubtotal)) {
-    throw new HttpError(400, `This discount code requires a minimum subtotal of ${promotion.minSubtotal}.`);
-  }
-  const rawDiscount =
-    promotion.type === 'percentage'
-      ? merchandiseSubtotal * (Number(promotion.value) / 100)
-      : Number(promotion.value);
-  return {
-    promotion,
-    discount: roundMoney(Math.min(merchandiseSubtotal, Math.max(0, rawDiscount))),
-  };
+  const byCode = new Map(promotions.map((promotion) => [promotion.code.toUpperCase(), promotion]));
+  const missing = codes.find((code) => !byCode.has(code));
+  if (missing) throw new HttpError(400, `Discount code ${missing} is invalid or expired.`);
+
+  const remainingByProduct = new Map<number, number>();
+  quoteItems.forEach((item) => {
+    remainingByProduct.set(
+      item.productId,
+      roundMoney((remainingByProduct.get(item.productId) ?? 0) + item.total),
+    );
+  });
+  const discounts: StorefrontQuote['discounts'] = [];
+
+  codes.forEach((code) => {
+    const promotion = byCode.get(code);
+    if (!promotion) return;
+    if (promotion.currency && promotion.currency !== STOREFRONT_CURRENCY) {
+      throw new HttpError(400, `Discount code ${code} is not available for this currency.`);
+    }
+    if (promotion.maxRedemptions !== null && promotion.redemptionCount >= promotion.maxRedemptions) {
+      throw new HttpError(400, `Discount code ${code} has reached its redemption limit.`);
+    }
+    if (promotion.minSubtotal !== null && merchandiseSubtotal < Number(promotion.minSubtotal)) {
+      throw new HttpError(400, `Discount code ${code} requires a minimum subtotal of ${promotion.minSubtotal}.`);
+    }
+
+    const scopedProductIds = promotionProductIds(promotion);
+    const eligibleIds = scopedProductIds ?? [...remainingByProduct.keys()];
+    const eligibleRemaining = roundMoney(
+      eligibleIds.reduce((sum, productId) => sum + (remainingByProduct.get(productId) ?? 0), 0),
+    );
+    if (eligibleRemaining <= 0) {
+      throw new HttpError(400, `Discount code ${code} does not apply to the products in this cart.`);
+    }
+    const rawDiscount =
+      promotion.type === 'percentage'
+        ? eligibleRemaining * (Number(promotion.value) / 100)
+        : Number(promotion.value);
+    const amount = roundMoney(Math.min(eligibleRemaining, Math.max(0, rawDiscount)));
+    if (amount <= 0) throw new HttpError(400, `Discount code ${code} has no applicable value.`);
+
+    let undistributed = amount;
+    eligibleIds.forEach((productId, index) => {
+      const remaining = remainingByProduct.get(productId) ?? 0;
+      if (remaining <= 0) return;
+      const reduction =
+        index === eligibleIds.length - 1
+          ? undistributed
+          : roundMoney(amount * (remaining / eligibleRemaining));
+      const applied = Math.min(remaining, undistributed, reduction);
+      remainingByProduct.set(productId, roundMoney(remaining - applied));
+      undistributed = roundMoney(undistributed - applied);
+    });
+    if (undistributed > 0) {
+      for (const productId of eligibleIds) {
+        const remaining = remainingByProduct.get(productId) ?? 0;
+        if (remaining <= 0) continue;
+        const applied = Math.min(remaining, undistributed);
+        remainingByProduct.set(productId, roundMoney(remaining - applied));
+        undistributed = roundMoney(undistributed - applied);
+        if (undistributed <= 0) break;
+      }
+    }
+
+    discounts.push({
+      promotionId: promotion.id,
+      code: promotion.code,
+      name: promotion.name,
+      amount,
+      productIds: scopedProductIds,
+    });
+  });
+
+  return discounts;
 };
 
 export const quoteStorefrontCart = async (
@@ -204,11 +372,15 @@ export const quoteStorefrontCart = async (
 
   const normalizedItems = input.items.map((item, index) => ({
     productId: asPositiveInteger(item.productId, `items[${index}].productId`, Number.MAX_SAFE_INTEGER),
-    quantity: asPositiveInteger(item.quantity, `items[${index}].quantity`),
+    quantity: item.quantity,
     experienceDate: normalizeDate(item.experienceDate),
-    experienceTime: item.experienceTime ? String(item.experienceTime).trim().slice(0, 64) : null,
+    experienceTime: item.experienceTime,
     addons: Array.isArray(item.addons) ? item.addons : [],
-    options: item.options && typeof item.options === 'object' ? item.options : {},
+    options:
+      item.options && typeof item.options === 'object' && !Array.isArray(item.options)
+        ? { ...item.options }
+        : {},
+    index,
   }));
 
   const uniqueProductIds = [...new Set(normalizedItems.map((item) => item.productId))];
@@ -230,6 +402,20 @@ export const quoteStorefrontCart = async (
     if (unitPrice === undefined || !Number.isFinite(unitPrice) || unitPrice < 0) {
       throw new HttpError(409, `${product.name} does not have a valid storefront price.`);
     }
+    const productConfig = product.storefrontConfig ?? {};
+    const participantSelection = normalizeParticipantCount(
+      item.quantity,
+      item.options,
+      productConfig,
+      item.index,
+    );
+    const quantity = participantSelection.quantity;
+    const experienceDate = item.experienceDate;
+    if (productConfig.dateRequired && !experienceDate) {
+      throw new HttpError(400, `Please select an activity date for ${product.name}.`);
+    }
+    const experienceTime = normalizeExperienceTime(item.experienceTime, productConfig);
+    const options = validateCustomerOptions(participantSelection.options, productConfig);
 
     const availableProductAddons = new Map(
       (product.productAddons ?? []).map((productAddon) => [productAddon.addonId, productAddon]),
@@ -248,57 +434,99 @@ export const quoteStorefrontCart = async (
       if (!productAddon || !addon || !addon.isActive) {
         throw new HttpError(400, `An add-on selected for ${product.name} is unavailable.`);
       }
+      const addonConfig: StorefrontAddonConfig = productAddon.storefrontConfig ?? {};
+      const selectionMode = addonConfig.selectionMode ?? 'quantity';
       const maxQuantity =
         productAddon.maxPerAttendee === null
-          ? Math.max(50, item.quantity)
-          : Math.max(1, productAddon.maxPerAttendee * item.quantity);
-      const quantity = asPositiveInteger(addonInput.quantity, `${addon.name} quantity`, maxQuantity);
-      const addonUnitPrice =
+          ? Math.max(50, quantity)
+          : Math.max(1, productAddon.maxPerAttendee * quantity);
+      const baseUnitPrice =
         productAddon.priceOverride === null ? Number(addon.basePrice ?? 0) : Number(productAddon.priceOverride);
-      if (!Number.isFinite(addonUnitPrice) || addonUnitPrice < 0) {
+      if (!Number.isFinite(baseUnitPrice) || baseUnitPrice < 0) {
         throw new HttpError(409, `${addon.name} does not have a valid price.`);
+      }
+
+      let addonQuantity = 1;
+      let value = normalizeText(addonInput.value, 128) || null;
+      let addonUnitPrice = baseUnitPrice;
+      let addonLineTotal = baseUnitPrice;
+      if (selectionMode === 'boolean') {
+        const selected =
+          addonInput.quantity === undefined
+            ? ['true', 'yes', '1', 'on'].includes((value ?? '').toLowerCase())
+            : Number(addonInput.quantity) > 0;
+        if (!selected) throw new HttpError(400, `${addon.name} was not selected.`);
+        value = 'true';
+      } else if (selectionMode === 'options') {
+        const selectedOption = (addonConfig.options ?? []).find((option) => option.value === value);
+        if (!selectedOption) throw new HttpError(400, `Please select a valid option for ${addon.name}.`);
+        addonUnitPrice = Number(selectedOption.price ?? baseUnitPrice);
+        addonLineTotal = addonUnitPrice;
+      } else {
+        addonQuantity = asPositiveInteger(addonInput.quantity, `${addon.name} quantity`, maxQuantity);
+        const allowedQuantities = addonConfig.allowedQuantities ?? [];
+        if (allowedQuantities.length > 0 && !allowedQuantities.includes(addonQuantity)) {
+          throw new HttpError(
+            400,
+            `${addon.name} quantity must be one of: ${allowedQuantities.join(', ')}.`,
+          );
+        }
+        const configuredTotal = addonConfig.quantityPrices?.[String(addonQuantity)];
+        if (configuredTotal !== undefined) {
+          addonLineTotal = Number(configuredTotal);
+          addonUnitPrice = addonLineTotal / addonQuantity;
+        } else {
+          addonLineTotal = baseUnitPrice * addonQuantity;
+        }
+      }
+      if (![addonUnitPrice, addonLineTotal].every((price) => Number.isFinite(price) && price >= 0)) {
+        throw new HttpError(409, `${addon.name} does not have a valid configured price.`);
       }
       return {
         addonId,
         name: addon.name,
-        quantity,
+        quantity: addonQuantity,
+        value,
         unitPrice: roundMoney(addonUnitPrice),
-        total: roundMoney(addonUnitPrice * quantity),
+        total: roundMoney(addonLineTotal),
       };
     });
 
-    const baseTotal = roundMoney(unitPrice * item.quantity);
+    const baseTotal = roundMoney(unitPrice * quantity);
     const addonTotal = roundMoney(addons.reduce((sum, addon) => sum + addon.total, 0));
     return {
       productId: product.id,
       productName: product.name,
       productSlug: `${slugify(product.name) || 'experience'}-${product.id}`,
-      quantity: item.quantity,
-      experienceDate: item.experienceDate,
-      experienceTime: item.experienceTime,
+      quantity,
+      experienceDate,
+      experienceTime,
       unitPrice: roundMoney(unitPrice),
       baseTotal,
       addonTotal,
       total: roundMoney(baseTotal + addonTotal),
       addons,
-      options: item.options,
+      options,
     };
   });
 
   const subtotal = roundMoney(quoteItems.reduce((sum, item) => sum + item.baseTotal, 0));
   const addonTotal = roundMoney(quoteItems.reduce((sum, item) => sum + item.addonTotal, 0));
   const merchandiseSubtotal = roundMoney(subtotal + addonTotal);
-  const normalizedCode = input.discountCode?.trim().toUpperCase() || null;
-  const { promotion, discount } = await resolvePromotion(normalizedCode, merchandiseSubtotal, transaction);
+  const requestedCodes = normalizeDiscountCodes(input);
+  const discounts = await resolvePromotions(requestedCodes, merchandiseSubtotal, quoteItems, transaction);
+  const discountTotal = roundMoney(discounts.reduce((sum, discount) => sum + discount.amount, 0));
 
   return {
     currency: STOREFRONT_CURRENCY,
     subtotal,
     addonTotal,
-    discountTotal: discount,
-    total: roundMoney(merchandiseSubtotal - discount),
-    discountCode: promotion?.code ?? null,
-    promotionId: promotion?.id ?? null,
+    discountTotal,
+    total: roundMoney(merchandiseSubtotal - discountTotal),
+    discountCode: discounts[0]?.code ?? null,
+    discountCodes: discounts.map((discount) => discount.code),
+    promotionId: discounts[0]?.promotionId ?? null,
+    discounts,
     items: quoteItems,
   };
 };

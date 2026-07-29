@@ -8,6 +8,7 @@ import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
 import ProductPrice from '../models/ProductPrice.js';
 import ProductType from '../models/ProductType.js';
+import type { StorefrontAddonConfig, StorefrontProductConfig } from '../types/storefront.js';
 
 const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -24,6 +25,7 @@ type StorefrontProduct = {
     amount: number;
     currency: typeof STOREFRONT_CURRENCY;
   };
+  config: StorefrontProductConfig;
   addons: Array<{
     id: number;
     name: string;
@@ -33,6 +35,7 @@ type StorefrontProduct = {
     } | null;
     maxPerAttendee: number | null;
     sortOrder: number;
+    config: StorefrontAddonConfig;
   }>;
 };
 
@@ -45,7 +48,7 @@ const productIncludes: Includeable[] = [
   {
     model: ProductAddon,
     as: 'productAddons',
-    attributes: ['addonId', 'maxPerAttendee', 'priceOverride', 'sortOrder'],
+    attributes: ['addonId', 'maxPerAttendee', 'priceOverride', 'sortOrder', 'storefrontConfig'],
     required: false,
     include: [
       {
@@ -172,6 +175,7 @@ const serializeProduct = (
       amount: toMoneyAmount(effectivePrice),
       currency: STOREFRONT_CURRENCY,
     },
+    config: product.storefrontConfig ?? {},
     addons: productAddons
       .map((record) => {
         const addon = record.addon as Addon | undefined;
@@ -192,6 +196,7 @@ const serializeProduct = (
                 },
           maxPerAttendee: record.maxPerAttendee ?? null,
           sortOrder: record.sortOrder ?? 0,
+          config: record.storefrontConfig ?? {},
         };
       })
       .filter((addon): addon is NonNullable<typeof addon> => addon !== null)
@@ -213,7 +218,7 @@ export const listStorefrontProducts = async (_req: Request, res: Response): Prom
   try {
     const products = await Product.findAll({
       where: { status: { [Op.ne]: false } },
-      attributes: ['id', 'name', 'price', 'productTypeId'],
+      attributes: ['id', 'name', 'price', 'productTypeId', 'storefrontConfig'],
       include: productIncludes,
       order: [['name', 'ASC']],
     });
@@ -224,7 +229,7 @@ export const listStorefrontProducts = async (_req: Request, res: Response): Prom
     ]);
 
     res.status(200).json({
-      version: 1,
+      version: 2,
       products: products.map((product) =>
         serializeProduct(product, effectivePrices, channelPrices),
       ),
@@ -250,7 +255,7 @@ export const getStorefrontProduct = async (req: Request, res: Response): Promise
         id: productId,
         status: { [Op.ne]: false },
       },
-      attributes: ['id', 'name', 'price', 'productTypeId'],
+      attributes: ['id', 'name', 'price', 'productTypeId', 'storefrontConfig'],
       include: productIncludes,
     });
 
@@ -264,7 +269,7 @@ export const getStorefrontProduct = async (req: Request, res: Response): Promise
     ]);
 
     res.status(200).json({
-      version: 1,
+      version: 2,
       product: serializeProduct(product, effectivePrices, channelPrices),
     });
   } catch (error) {

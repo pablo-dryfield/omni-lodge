@@ -39,6 +39,12 @@ const coerceProductPayload = (payload: Partial<Product>) => {
     next.requiresNightReportCostReconciliation = Boolean(next.requiresNightReportCostReconciliation);
   }
 
+  if (typeof next.storefrontConfig === "string") {
+    next.storefrontConfig = JSON.parse(next.storefrontConfig);
+  } else if (next.storefrontConfig === undefined) {
+    next.storefrontConfig = {};
+  }
+
   return next;
 };
 

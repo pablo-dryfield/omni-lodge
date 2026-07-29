@@ -34,6 +34,7 @@ const decorateRecord = (record: ProductAddonWithAssociations) => ({
   maxPerAttendee: record.maxPerAttendee ?? null,
   priceOverride: record.priceOverride ?? null,
   sortOrder: record.sortOrder,
+  storefrontConfig: record.storefrontConfig ?? {},
   createdAt: record.createdAt,
   updatedAt: record.updatedAt,
 });
@@ -100,6 +101,18 @@ const normalizePayload = (payload: Partial<ProductAddon>, { forCreate = false } 
     next.sortOrder = Number(payload.sortOrder);
   } else if (forCreate) {
     next.sortOrder = 0;
+  }
+  if (payload.storefrontConfig !== undefined) {
+    if (
+      payload.storefrontConfig === null ||
+      Array.isArray(payload.storefrontConfig) ||
+      typeof payload.storefrontConfig !== 'object'
+    ) {
+      throw new Error('storefrontConfig must be a JSON object');
+    }
+    next.storefrontConfig = payload.storefrontConfig;
+  } else if (forCreate) {
+    next.storefrontConfig = {};
   }
 
   return next;

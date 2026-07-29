@@ -4,6 +4,7 @@ import { Product } from "../../types/products/Product";
 import dayjs from "dayjs";
 import CustomEditSwitch from "../../utils/CustomEditSwitch";
 import CustomEditSelect, { EditSelectOption } from "../../utils/CustomEditSelect";
+import CustomEditJson from "../../utils/CustomEditJson";
 import { resolveHeaderLabel } from "../../utils/resolveHeaderLabel";
 
 export type ProductColumnParams = {
@@ -76,6 +77,22 @@ export const productsColumnDef = (
           min: 0,
           step: 0.01,
         },
+      },
+    },
+    {
+      accessorKey: "storefrontConfig",
+      modifications: {
+        id: "storefrontConfig",
+        header: "Storefront Rules",
+        Header: ({ column }) => <div>{column.columnDef.header}</div>,
+        Cell: ({ cell }) => (
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap", minWidth: 260 }}>
+            {JSON.stringify(cell.getValue() ?? {}, null, 2)}
+          </pre>
+        ),
+        Edit: ({ cell, row }) => <CustomEditJson cell={cell} row={row} />,
+        enableColumnFilterModes: false,
+        enableGrouping: false,
       },
     },
     {

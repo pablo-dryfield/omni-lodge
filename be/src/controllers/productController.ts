@@ -16,6 +16,24 @@ function buildProductColumns() {
   }));
 }
 
+function normalizeProductPayload(
+  payload: Record<string, unknown>,
+  options: { isCreate?: boolean } = {},
+) {
+  const normalized = { ...payload };
+
+  if ('storefrontConfig' in normalized) {
+    const config = normalized.storefrontConfig;
+    if (config === null || Array.isArray(config) || typeof config !== 'object') {
+      throw new Error('storefrontConfig must be a JSON object');
+    }
+  } else if (options.isCreate) {
+    normalized.storefrontConfig = {};
+  }
+
+  return normalized;
+}
+
 export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
   try {
     const format = (req.query.format ?? req.query.view ?? '').toString().toLowerCase();
@@ -58,6 +76,7 @@ export const getAllProducts = async (req: Request, res: Response): Promise<void>
                 sortOrder: record.sortOrder ?? index,
               }),
               priceOverride: record.priceOverride ?? null,
+              storefrontConfig: record.storefrontConfig ?? {},
             };
           });
 
@@ -67,6 +86,7 @@ export const getAllProducts = async (req: Request, res: Response): Promise<void>
           status: product.status,
           productTypeId: product.productTypeId,
           price: product.price,
+          storefrontConfig: product.storefrontConfig ?? {},
           allowedAddOns,
         };
       });
@@ -112,7 +132,7 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
 
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
-    const newProduct = await Product.create(req.body);
+    const newProduct = await Product.create(normalizeProductPayload(req.body, { isCreate: true }));
     res.status(201).json([newProduct]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -123,7 +143,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
 export const updateProduct = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const [updated] = await Product.update(req.body, { where: { id } });
+    const [updated] = await Product.update(normalizeProductPayload(req.body), { where: { id } });
 
     if (!updated) {
       res.status(404).json([{ message: 'Product not found' }]);
