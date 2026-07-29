@@ -16,7 +16,9 @@ import {
   type StorefrontCartInput,
   type StorefrontQuote,
 } from '../services/storefrontCommerceService.js';
+import { deliverStorefrontOrderEmails } from '../services/storefrontOrderEmailService.js';
 import { getConfigValueRaw } from '../services/configService.js';
+import logger from '../utils/logger.js';
 
 type CheckoutCustomer = {
   firstName: string;
@@ -125,7 +127,7 @@ const paymentIntentId = (session: Stripe.Checkout.Session): string | null =>
     ? session.payment_intent
     : session.payment_intent?.id || null;
 
-export const fulfillPaidOrder = async (
+const persistPaidOrder = async (
   publicId: string,
   stripeSession: Stripe.Checkout.Session | null,
 ): Promise<StorefrontOrder> =>
@@ -276,6 +278,21 @@ export const fulfillPaidOrder = async (
     return order;
   });
 
+export const fulfillPaidOrder = async (
+  publicId: string,
+  stripeSession: Stripe.Checkout.Session | null,
+): Promise<StorefrontOrder> => {
+  const order = await persistPaidOrder(publicId, stripeSession);
+  try {
+    await deliverStorefrontOrderEmails(publicId);
+  } catch (error) {
+    // Payment fulfillment must remain successful even when Gmail is temporarily unavailable.
+    // A later Stripe retry/browser confirmation will resume only the unsent recipient.
+    logger.error(`[storefront-email] Delivery failed for paid order ${publicId}: ${(error as Error).message}`);
+  }
+  return order;
+};
+
 export const getStorefrontConfig = async (_request: Request, response: Response, next: NextFunction) => {
   try {
     response.json({
@@ -411,6 +428,9 @@ export const confirmCheckout = async (request: Request, response: Response, next
     if (!order) throw new HttpError(404, 'Storefront order not found.');
 
     if (order.paymentStatus === 'paid') {
+      // The webhook may have committed the booking before its email attempt completed.
+      // Re-entering fulfillment is idempotent and resumes only unsent messages.
+      await fulfillPaidOrder(publicId, null);
       const hydrated = await StorefrontOrder.findOne({
         where: { publicId },
         include: [{ model: StorefrontOrderItem, as: 'items' }],

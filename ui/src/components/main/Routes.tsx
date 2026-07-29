@@ -53,6 +53,7 @@ const SettingsProductAliases = lazy(() => import("../../pages/settings/SettingsP
 const SettingsAddons = lazy(() => import("../../pages/settings/SettingsAddons"));
 const SettingsVenues = lazy(() => import("../../pages/settings/SettingsVenues"));
 const SettingsProductAddons = lazy(() => import("../../pages/settings/SettingsProductAddons"));
+const SettingsStorefrontPromotions = lazy(() => import("../../pages/settings/SettingsStorefrontPromotions"));
 const SettingsPaymentMethods = lazy(() => import("../../pages/settings/SettingsPaymentMethods"));
 const SettingsChannelProductPrices = lazy(() => import("../../pages/settings/SettingsChannelProductPrices"));
 const SettingsChannelCommissions = lazy(() => import("../../pages/settings/SettingsChannelCommissions"));
@@ -178,6 +179,7 @@ const Routes = () => {
           <Route path="addons" element={<SettingsAddons />} />
           <Route path="venues" element={<SettingsVenues />} />
           <Route path="product-addons" element={<SettingsProductAddons />} />
+          <Route path="storefront-promotions" element={<SettingsStorefrontPromotions />} />
           <Route path="payment-methods" element={<SettingsPaymentMethods />} />
           <Route path="channel-product-prices" element={<SettingsChannelProductPrices />} />
           <Route path="channel-commissions" element={<SettingsChannelCommissions />} />

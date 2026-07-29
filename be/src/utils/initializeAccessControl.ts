@@ -61,6 +61,7 @@ const defaultPages = [
   { slug: 'settings-venues', name: 'Venues', description: 'Maintain the partner venue directory', sortOrder: 10 },
   { slug: 'settings-addons', name: 'Add-Ons', description: 'Manage catalog add-ons', sortOrder: 11 },
   { slug: 'settings-product-addons', name: 'Product Add-Ons', description: 'Map add-ons to products', sortOrder: 12 },
+  { slug: 'settings-storefront-promotions', name: 'Storefront Promotions', description: 'Manage storefront discount codes and Ecwid sync', sortOrder: 13 },
   { slug: 'settings-payment-methods', name: 'Payment Methods', description: 'Manage accepted payment methods', sortOrder: 13 },
   { slug: 'settings-channel-product-prices', name: 'Channel Product Prices', description: 'Override per-channel pricing', sortOrder: 14 },
   { slug: 'settings-channel-commissions', name: 'Channel Commissions', description: 'Track commission rates by channel', sortOrder: 15 },
@@ -121,6 +122,7 @@ const defaultModules = [
   { slug: 'venue-directory', name: 'Venue Directory', pageSlug: 'settings-venues', description: 'Maintain the partner venue directory', componentRef: 'VenueDirectory', sortOrder: 1 },
   { slug: 'addon-management', name: 'Add-On Management', pageSlug: 'settings-addons', description: 'Create and maintain add-ons', componentRef: 'AddonManagement', sortOrder: 1 },
   { slug: 'product-addon-management', name: 'Product Add-On Mapping', pageSlug: 'settings-product-addons', description: 'Assign add-ons to products', componentRef: 'ProductAddonManagement', sortOrder: 1 },
+  { slug: 'storefront-promotion-management', name: 'Storefront Promotions', pageSlug: 'settings-storefront-promotions', description: 'Manage discount codes and Ecwid synchronization', componentRef: 'StorefrontPromotionManagement', sortOrder: 1 },
   { slug: 'payment-method-management', name: 'Payment Method Management', pageSlug: 'settings-payment-methods', description: 'Manage accepted payment methods', componentRef: 'PaymentMethodManagement', sortOrder: 1 },
   { slug: 'channel-product-price-management', name: 'Channel Product Prices', pageSlug: 'settings-channel-product-prices', description: 'Override per-channel pricing', componentRef: 'ChannelProductPriceManagement', sortOrder: 1 },
   { slug: 'channel-commission-management', name: 'Channel Commissions', pageSlug: 'settings-channel-commissions', description: 'Maintain commission agreements', componentRef: 'ChannelCommissionManagement', sortOrder: 1 },
@@ -138,7 +140,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'search-console', 'requests', 'performance', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'search-console', 'requests', 'performance', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-storefront-promotions', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -220,6 +222,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'payment-method-management': ['view', 'create', 'update', 'delete'],
     'action-registry': ['view', 'create', 'update', 'delete'],
     'product-addon-management': ['view', 'create', 'update', 'delete'],
+    'storefront-promotion-management': ['view', 'create', 'update', 'delete'],
     'channel-product-price-management': ['view', 'create', 'update', 'delete'],
     'channel-commission-management': ['view', 'create', 'update', 'delete'],
     'review-platform-management': ['view', 'create', 'update', 'delete'],

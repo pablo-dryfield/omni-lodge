@@ -26,6 +26,7 @@ import {
   IconCoin,
   IconSettings,
   IconBrandGoogle,
+  IconDiscount2,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -144,6 +145,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/product-addons",
         slug: PAGE_SLUGS.settingsProductAddons,
         icon: <IconHierarchy2 size={20} />,
+      },
+      {
+        label: "Storefront Promotions",
+        to: "/settings/storefront-promotions",
+        slug: PAGE_SLUGS.settingsStorefrontPromotions,
+        icon: <IconDiscount2 size={20} />,
       },
     ],
   },
