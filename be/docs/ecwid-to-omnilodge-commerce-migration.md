@@ -10,10 +10,10 @@ at `/store2` until the launch checklist is complete.
 | --- | --- | --- |
 | Public catalog | Storefront product list and product-detail APIs | Implemented |
 | Product pricing | Scheduled `ProductPrice`, product base price, then channel-price fallback | Implemented |
-| Product options | Selected options are accepted, validated, priced, and stored with the order item | Implemented |
-| Add-ons | Active product add-ons are validated and priced server-side | Implemented |
-| Cart | Persistent browser cart with quantities, removal, and authoritative server quote | Implemented |
-| Promotions | Promotion model, date/use limits, fixed/percentage discounts, and server validation | Implemented |
+| Product options | Quantity or gender-split participants, activity date, fixed/select/manual time, and required customer details | Implemented |
+| Add-ons | Boolean, quantity, fixed-choice, allowed-bundle quantities, and tier prices validated server-side | Implemented |
+| Cart | Persistent editable line items with options, add-ons, quantities, removal, and authoritative server quote | Implemented |
+| Promotions | Stacked global/product promotions with date/use limits and removable codes | Implemented |
 | Checkout customer | Name, email, phone, country, consent, and attribution capture | Implemented |
 | Payments | Stripe Checkout session created from the server-calculated order total | Implemented |
 | Orders | Immutable order and order-item price snapshots with public order UUID | Implemented |
