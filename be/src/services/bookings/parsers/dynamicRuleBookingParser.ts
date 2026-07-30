@@ -339,8 +339,16 @@ const normalizeDateLexicon = (value: string): string => {
   return normalized;
 };
 
+const stripEnglishOrdinalSuffixes = (value: string): string =>
+  value.replace(/\b(\d{1,2})(?:st|nd|rd|th)\b/gi, '$1');
+
 const sanitizeDateToken = (value: string): string =>
-  normalizeDateLexicon(value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim());
+  normalizeDateLexicon(
+    stripEnglishOrdinalSuffixes(value)
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  );
 
 const stripWeekdayPrefix = (value: string): string => value.replace(WEEKDAY_PREFIX_REGEX, '').trim();
 
@@ -796,6 +804,11 @@ class DynamicRuleBookingParser implements BookingEmailParser {
       const normalized = normalizeDateTime(experienceStartAt, fallbackDate);
       if (normalized) {
         fields.experienceStartAt = normalized;
+        if (!fields.experienceDate) {
+          fields.experienceDate = dayjs(normalized)
+            .tz(resolveDynamicRuleTimezone())
+            .format('YYYY-MM-DD');
+        }
       }
     }
 
