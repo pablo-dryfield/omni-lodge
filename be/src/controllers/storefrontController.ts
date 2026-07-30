@@ -9,6 +9,7 @@ import ProductAddon from '../models/ProductAddon.js';
 import ProductPrice from '../models/ProductPrice.js';
 import ProductType from '../models/ProductType.js';
 import type { StorefrontAddonConfig, StorefrontProductConfig } from '../types/storefront.js';
+import type { ProductImage } from '../types/productMedia.js';
 
 const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -17,6 +18,8 @@ type StorefrontProduct = {
   id: number;
   slug: string;
   name: string;
+  imageUrl: string | null;
+  images: ProductImage[];
   productType: {
     id: number;
     name: string;
@@ -165,6 +168,8 @@ const serializeProduct = (
     id: product.id,
     slug: createProductSlug(product),
     name: product.name,
+    imageUrl: product.imageUrl ?? null,
+    images: [...(product.images ?? [])].sort((left, right) => left.order - right.order),
     productType: productType
       ? {
           id: productType.id,
@@ -218,7 +223,7 @@ export const listStorefrontProducts = async (_req: Request, res: Response): Prom
   try {
     const products = await Product.findAll({
       where: { status: { [Op.ne]: false } },
-      attributes: ['id', 'name', 'price', 'productTypeId', 'storefrontConfig'],
+      attributes: ['id', 'name', 'price', 'productTypeId', 'storefrontConfig', 'imageUrl', 'images'],
       include: productIncludes,
       order: [['name', 'ASC']],
     });
@@ -255,7 +260,7 @@ export const getStorefrontProduct = async (req: Request, res: Response): Promise
         id: productId,
         status: { [Op.ne]: false },
       },
-      attributes: ['id', 'name', 'price', 'productTypeId', 'storefrontConfig'],
+      attributes: ['id', 'name', 'price', 'productTypeId', 'storefrontConfig', 'imageUrl', 'images'],
       include: productIncludes,
     });
 

@@ -1,6 +1,7 @@
 import { Model, Table, Column, PrimaryKey, AutoIncrement, AllowNull, Default, DataType, HasMany } from 'sequelize-typescript';
 import ProductAddon from './ProductAddon.js';
 import type { StorefrontProductConfig } from '../types/storefront.js';
+import type { ProductImage } from '../types/productMedia.js';
 
 @Table({
   timestamps: true,
@@ -57,6 +58,15 @@ export default class Product extends Model {
   @Default({})
   @Column({ field: 'storefront_config', type: DataType.JSONB })
   declare storefrontConfig: StorefrontProductConfig;
+
+  @AllowNull(true)
+  @Column({ field: 'image_url', type: DataType.TEXT })
+  declare imageUrl: string | null;
+
+  @AllowNull(false)
+  @Default([])
+  @Column({ type: DataType.JSONB })
+  declare images: ProductImage[];
 
   @HasMany(() => ProductAddon, { foreignKey: 'product_id', as: 'productAddons' })
   declare productAddons?: ProductAddon[] | undefined;

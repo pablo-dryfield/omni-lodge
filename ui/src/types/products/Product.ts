@@ -14,6 +14,12 @@ export type StorefrontProductConfig = {
     phoneRequired?: boolean;
 };
 
+export type ProductImage = {
+    url: string;
+    alt: string;
+    order: number;
+};
+
 export type Product = {
     id: number;
     name: string;
@@ -26,4 +32,6 @@ export type Product = {
     status: boolean;
     requiresNightReportCostReconciliation: boolean;
     storefrontConfig: StorefrontProductConfig;
+    imageUrl: string | null;
+    images: ProductImage[];
 };

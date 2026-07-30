@@ -1919,7 +1919,10 @@ const applyParsedEvent = async (
         const inferredProductId = await resolveProductIdForCanonical(canonicalProductName);
         if (inferredProductId != null) {
           bookingFields.productId = inferredProductId;
-          if (!bookingFields.productName && canonicalProductName) {
+          const inferredProductName = await resolveProductNameById(inferredProductId, transaction);
+          if (inferredProductName) {
+            bookingFields.productName = inferredProductName;
+          } else if (!bookingFields.productName && canonicalProductName) {
             bookingFields.productName = canonicalProductName;
           }
         } else if (aliasMatch.matchedLabel) {

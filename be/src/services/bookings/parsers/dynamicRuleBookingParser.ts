@@ -237,6 +237,20 @@ const getContextValue = (context: BookingParserContext, source: DynamicSourceFie
   return typeof value === 'string' ? value : '';
 };
 
+const getExtractionSourceValues = (
+  context: BookingParserContext,
+  source: DynamicSourceField,
+): string[] => {
+  const normalizedValue = getContextValue(context, source);
+  if (source !== 'textBody') {
+    return [normalizedValue];
+  }
+  const rawValue = typeof context.rawTextBody === 'string' ? context.rawTextBody : '';
+  return rawValue && rawValue !== normalizedValue
+    ? [rawValue, normalizedValue]
+    : [normalizedValue];
+};
+
 const truncate = (value: string, max = 140): string => (value.length > max ? `${value.slice(0, max)}...` : value);
 
 const clausePasses = (
@@ -262,25 +276,30 @@ const extractClauseValue = (
     return { value: null };
   }
 
-  const sourceText = getContextValue(context, clause.source);
   const { regex, error } = compileRegex(clause);
   if (!regex) {
     return { value: null, error };
   }
 
-  const match = regex.exec(sourceText);
-  if (!match) {
-    return { value: null };
-  }
+  for (const sourceText of getExtractionSourceValues(context, clause.source)) {
+    regex.lastIndex = 0;
+    const match = regex.exec(sourceText);
+    if (!match) {
+      continue;
+    }
 
-  const targetGroup = clause.group ?? (match.length > 1 ? 1 : 0);
-  const candidate = match[targetGroup];
-  if (typeof candidate !== 'string') {
-    return { value: null };
-  }
+    const targetGroup = clause.group ?? (match.length > 1 ? 1 : 0);
+    const candidate = match[targetGroup];
+    if (typeof candidate !== 'string') {
+      continue;
+    }
 
-  const trimmed = candidate.trim();
-  return { value: trimmed.length > 0 ? trimmed : null };
+    const trimmed = candidate.trim();
+    if (trimmed.length > 0) {
+      return { value: trimmed };
+    }
+  }
+  return { value: null };
 };
 
 const inferStatusFromContext = (context: BookingParserContext): BookingStatus => {
