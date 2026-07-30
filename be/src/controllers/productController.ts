@@ -6,6 +6,7 @@ import ProductAddon from '../models/ProductAddon.js';
 import Addon from '../models/Addon.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { toAddonConfig } from '../services/counterMetricUtils.js';
+import type { ProductImage } from '../types/productMedia.js';
 
 function buildProductColumns() {
   const attributes = Product.getAttributes();
@@ -29,6 +30,43 @@ function normalizeProductPayload(
     }
   } else if (options.isCreate) {
     normalized.storefrontConfig = {};
+  }
+
+  if ('imageUrl' in normalized) {
+    if (normalized.imageUrl !== null && typeof normalized.imageUrl !== 'string') {
+      throw new Error('imageUrl must be a string or null');
+    }
+    if (typeof normalized.imageUrl === 'string') {
+      normalized.imageUrl = normalized.imageUrl.trim() || null;
+    }
+  } else if (options.isCreate) {
+    normalized.imageUrl = null;
+  }
+
+  if ('images' in normalized) {
+    if (!Array.isArray(normalized.images)) {
+      throw new Error('images must be an array');
+    }
+    normalized.images = normalized.images
+      .map((image, index): ProductImage => {
+        if (!image || typeof image !== 'object' || Array.isArray(image)) {
+          throw new Error(`images[${index}] must be an object`);
+        }
+        const entry = image as Record<string, unknown>;
+        const url = typeof entry.url === 'string' ? entry.url.trim() : '';
+        const alt = typeof entry.alt === 'string' ? entry.alt.trim() : '';
+        const order = Number(entry.order);
+        if (!url) {
+          throw new Error(`images[${index}].url is required`);
+        }
+        if (!Number.isInteger(order) || order < 1) {
+          throw new Error(`images[${index}].order must be a positive integer`);
+        }
+        return { url, alt, order };
+      })
+      .sort((left, right) => left.order - right.order);
+  } else if (options.isCreate) {
+    normalized.images = [];
   }
 
   return normalized;
