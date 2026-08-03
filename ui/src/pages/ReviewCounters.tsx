@@ -6,6 +6,7 @@ import { PAGE_SLUGS } from "../constants/pageSlugs";
 import GetYourGuideReviews from "../components/reports/GetYourGuideReviews";
 import ReviewArchivePanel from "../components/reviews/ReviewArchivePanel";
 import ReviewOverviewDashboard from "../components/reviews/ReviewOverviewDashboard";
+import DailyReviewTrend from "../components/reviews/DailyReviewTrend";
 import ReviewCounterList from "../components/reviewCounters/ReviewCounterList";
 import ReviewAnalyticsPanel from "../components/reviewCounters/ReviewAnalyticsPanel";
 import ReviewMonthlySummary from "../components/reviewCounters/ReviewMonthlySummary";
@@ -80,6 +81,7 @@ const ReviewCounters = () => {
            <Tabs.Panel value="overview" pt="md">
             <Stack gap="lg">
               <ReviewOverviewDashboard />
+              <DailyReviewTrend />
               <Accordion variant="separated" radius="lg">
                 <Accordion.Item value="legacy-review-history">
                   <Accordion.Control>

@@ -83,6 +83,7 @@ import ReviewArchive from "../models/ReviewArchive.js";
 import ReviewAssignment from "../models/ReviewAssignment.js";
 import ReviewSyncRun from "../models/ReviewSyncRun.js";
 import ReviewManualCredit from "../models/ReviewManualCredit.js";
+import ReviewDailySnapshot from "../models/ReviewDailySnapshot.js";
 import CompensationComponent from "../models/CompensationComponent.js";
 import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
 import AssistantManagerTaskTemplate from "../models/AssistantManagerTaskTemplate.js";
@@ -179,6 +180,7 @@ const sequelize = new Sequelize({
     ReviewAssignment,
     ReviewSyncRun,
     ReviewManualCredit,
+    ReviewDailySnapshot,
     CompensationComponent,
     CompensationComponentAssignment,
     AssistantManagerTaskTemplate,
