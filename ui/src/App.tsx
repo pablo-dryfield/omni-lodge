@@ -65,6 +65,7 @@ const AppContent = () => {
   const serverDownStatusRef = useRef<number | undefined>(undefined);
   const retryTimerRef = useRef<number | null>(null);
   const checkInFlightRef = useRef(false);
+  const recoverySuccessCountRef = useRef(0);
   const isPublicRoute = PUBLIC_ROUTE_PATHS.has(location.pathname);
 
   const rawNavbarSettings = useMemo(
@@ -92,20 +93,35 @@ const AppContent = () => {
     checkInFlightRef.current = true;
     setCheckingServer(true);
     try {
-      await axiosInstance.get("/session", {
+      const response = await axiosInstance.get("/session", {
         withCredentials: true,
         timeout: 4000,
         validateStatus: () => true,
       });
+      if (response.status >= 500) {
+        throw new Error(`Server health check returned ${response.status}`);
+      }
       if (retryTimerRef.current) {
         window.clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;
       }
       if (serverDownRef.current) {
-        setServerDown(false);
-        setServerDownStatus(undefined);
+        recoverySuccessCountRef.current += 1;
+        if (recoverySuccessCountRef.current >= 2) {
+          recoverySuccessCountRef.current = 0;
+          setServerDown(false);
+          setServerDownStatus(undefined);
+        } else {
+          // Keep the outage screen latched until the server answers twice in a row.
+          // A restarting proxy can briefly return one successful response before
+          // the application and database are actually ready.
+          retryTimerRef.current = window.setTimeout(() => {
+            void checkServer();
+          }, 1500);
+        }
       }
     } catch {
+      recoverySuccessCountRef.current = 0;
       if (serverDownRef.current) {
         if (retryTimerRef.current) {
           window.clearTimeout(retryTimerRef.current);
@@ -143,6 +159,7 @@ const AppContent = () => {
       retryTimerRef.current = null;
     }
     if (serverDown) {
+      recoverySuccessCountRef.current = 0;
       checkServer();
     }
   }, [serverDown, checkServer]);
@@ -155,6 +172,7 @@ const AppContent = () => {
     const handleServerDown = (event: Event) => {
       const detail = (event as CustomEvent).detail as { status?: number };
       if (!serverDownRef.current) {
+        recoverySuccessCountRef.current = 0;
         setServerDown(true);
         setServerDownStatus(detail?.status);
         return;
