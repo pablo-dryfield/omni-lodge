@@ -58,9 +58,49 @@ export type MaintenanceCommandResult = {
   durationMs: number;
 };
 
+type MaintenanceCommandJob = {
+  id: string;
+  action: MaintenanceCommandAction;
+  status: 'running' | 'success' | 'failed';
+  result: MaintenanceCommandResult | null;
+  error: string | null;
+};
+
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+
 export const runMaintenanceCommand = async (
   action: MaintenanceCommandAction,
 ): Promise<MaintenanceCommandResult> => {
-  const response = await axiosInstance.post('/maintenance/commands', { action });
-  return response.data?.result as MaintenanceCommandResult;
+  const response = await axiosInstance.post<{ job: MaintenanceCommandJob }>('/maintenance/commands', { action });
+  const jobId = response.data.job.id;
+
+  // The command runs at the origin. Polling keeps every HTTP request short so
+  // neither the local reverse proxy nor Cloudflare has to hold a migration
+  // connection open for its entire duration.
+  for (;;) {
+    await wait(2000);
+    try {
+      const statusResponse = await axiosInstance.get<{ job: MaintenanceCommandJob }>(
+        `/maintenance/commands/${jobId}`,
+      );
+      const job = statusResponse.data.job;
+      if (job.status === 'success' && job.result) {
+        return job.result;
+      }
+      if (job.status === 'failed') {
+        if (job.result) {
+          return job.result;
+        }
+        throw new Error(job.error ?? 'Maintenance command failed');
+      }
+    } catch (error: any) {
+      // A deploy/restart can briefly make polling unavailable. Keep retrying
+      // network and 5xx failures; surface durable client/authorization errors.
+      const status = error?.response?.status as number | undefined;
+      if (status != null && status < 500) {
+        throw error;
+      }
+    }
+  }
 };
