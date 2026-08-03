@@ -162,7 +162,10 @@ export async function updateReviewFlags(req: AuthenticatedRequest, res: Response
 
 export async function createManualReviewCredit(req: AuthenticatedRequest, res: Response) {
   try {
-    const row = await ReviewManualCredit.create({ userId: Number(req.body.userId), platform: String(req.body.platform ?? 'manual'), date: String(req.body.date), credit: Number(req.body.credit ?? 1), notes: req.body.notes ?? null, createdBy: actor(req) });
+    const category = ['staff', 'no_name', 'bad'].includes(String(req.body.category)) ? String(req.body.category) : 'staff';
+    const userId = category === 'staff' ? Number(req.body.userId) : null;
+    if (category === 'staff' && (!Number.isInteger(userId) || !await User.count({ where: { id: userId } }))) throw new Error('A valid user is required for staff credit');
+    const row = await ReviewManualCredit.create({ userId, category, platform: String(req.body.platform ?? 'manual'), date: String(req.body.date), credit: Number(req.body.credit ?? 1), notes: req.body.notes ?? null, createdBy: actor(req) });
     res.status(201).json({ credit: row });
   } catch (error) { fail(res, error); }
 }
@@ -183,10 +186,12 @@ export async function getReviewCreditSummary(req: AuthenticatedRequest, res: Res
       }
     }
     for (const credit of manual) {
-      const current = totals.get(credit.userId) ?? { assigned: 0, manual: 0, reviewCount: 0 };
-      current.manual += Number(credit.credit); totals.set(credit.userId, current);
+      const userId = credit.userId;
+      if (credit.category !== 'staff' || userId == null) continue;
+      const current = totals.get(userId) ?? { assigned: 0, manual: 0, reviewCount: 0 };
+      current.manual += Number(credit.credit); totals.set(userId, current);
     }
     const users = totals.size ? await User.findAll({ where: { id: Array.from(totals.keys()) }, attributes: ['id', 'firstName', 'lastName', 'username'] }) : [];
-    res.json({ staff: users.map(user => ({ userId: user.id, name: `${user.firstName} ${user.lastName}`.trim() || user.username, ...totals.get(user.id)!, total: (totals.get(user.id)?.assigned ?? 0) + (totals.get(user.id)?.manual ?? 0) })), reviewCount: reviews.length, deletedCount: reviews.filter(review => review.isDeleted).length, unassignedCount: reviews.filter(review => !assignments.some(assignment => assignment.reviewId === review.id)).length });
+    res.json({ staff: users.map(user => ({ userId: user.id, name: `${user.firstName} ${user.lastName}`.trim() || user.username, ...totals.get(user.id)!, total: (totals.get(user.id)?.assigned ?? 0) + (totals.get(user.id)?.manual ?? 0) })), reviewCount: reviews.length, deletedCount: reviews.filter(review => review.isDeleted).length, unassignedCount: reviews.filter(review => !assignments.some(assignment => assignment.reviewId === review.id)).length, manualCategoryTotals: { noName: manual.filter(row => row.category === 'no_name').reduce((sum, row) => sum + Number(row.credit), 0), bad: manual.filter(row => row.category === 'bad').reduce((sum, row) => sum + Number(row.credit), 0) } });
   } catch (error) { fail(res, error); }
 }
