@@ -10,6 +10,7 @@ import DailyReviewTrend from "../components/reviews/DailyReviewTrend";
 import ReviewCounterList from "../components/reviewCounters/ReviewCounterList";
 import ReviewAnalyticsPanel from "../components/reviewCounters/ReviewAnalyticsPanel";
 import ReviewMonthlySummary from "../components/reviewCounters/ReviewMonthlySummary";
+import { useAppSelector } from "../store/hooks";
 
 const REVIEW_TABS = ["google", "tripadvisor", "airbnb", "getyourguide", "overview"] as const;
 type ReviewTab = (typeof REVIEW_TABS)[number];
@@ -19,6 +20,8 @@ const isReviewTab = (value: string | null): value is ReviewTab =>
   value != null && REVIEW_TABS.includes(value as ReviewTab);
 
 const ReviewCounters = () => {
+  const roleSlug = useAppSelector((state) => state.session.roleSlug);
+  const canManage = ["owner", "manager", "admin", "administrator"].includes(String(roleSlug ?? "").trim().toLowerCase());
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = useMemo(() => searchParams.get("tab"), [searchParams]);
   const activeTab: ReviewTab = isReviewTab(tabParam) ? tabParam : DEFAULT_REVIEW_TAB;
@@ -65,13 +68,13 @@ const ReviewCounters = () => {
             <Tabs.Tab value="getyourguide">GetYourGuide Reviews</Tabs.Tab>
           </Tabs.List>
           <Tabs.Panel value="google" pt="md">
-            <ReviewArchivePanel platform="google" />
+            <ReviewArchivePanel platform="google" canManage={canManage} />
           </Tabs.Panel>
           <Tabs.Panel value="tripadvisor" pt="md">
-            <ReviewArchivePanel platform="tripadvisor" />
+            <ReviewArchivePanel platform="tripadvisor" canManage={canManage} />
           </Tabs.Panel>
           <Tabs.Panel value="airbnb" pt="md">
-            <ReviewArchivePanel platform="airbnb" />
+            <ReviewArchivePanel platform="airbnb" canManage={canManage} />
           </Tabs.Panel>
           <Tabs.Panel value="getyourguide" pt="md">
             <Paper radius="md" withBorder shadow="xs" p="md">
@@ -80,7 +83,7 @@ const ReviewCounters = () => {
           </Tabs.Panel>
            <Tabs.Panel value="overview" pt="md">
             <Stack gap="lg">
-              <ReviewOverviewDashboard />
+              <ReviewOverviewDashboard canManage={canManage} />
               <DailyReviewTrend />
               <Accordion variant="separated" radius="lg">
                 <Accordion.Item value="legacy-review-history">

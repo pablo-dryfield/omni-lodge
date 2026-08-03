@@ -86,6 +86,8 @@ const buildFormStateFromCounter = (counter: ReviewCounter): CounterFormState => 
 const ReviewCounterList = () => {
   const dispatch = useAppDispatch();
   const reviewCounterState = useAppSelector((state) => state.reviewCounters)[0];
+  const roleSlug = useAppSelector((state) => state.session.roleSlug);
+  const canManage = ['owner', 'manager', 'admin', 'administrator'].includes(String(roleSlug ?? '').trim().toLowerCase());
   const [platformOptions, setPlatformOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [platformLabelMap, setPlatformLabelMap] = useState<Map<string, string>>(new Map());
   const [expandedCounters, setExpandedCounters] = useState<Set<number>>(new Set());
@@ -286,9 +288,9 @@ const ReviewCounterList = () => {
               <IconRefresh size={16} />
             </ActionIcon>
           </Tooltip>
-          <Button leftSection={<IconPlus size={16} />} onClick={openCreateForm}>
+          {canManage && <Button leftSection={<IconPlus size={16} />} onClick={openCreateForm}>
             Add Counter
-          </Button>
+          </Button>}
         </Group>
       </Group>
 
@@ -298,9 +300,9 @@ const ReviewCounterList = () => {
             <Text size="sm" c="dimmed">
               No review counters recorded yet. Create your first entry to get started.
             </Text>
-            <Button onClick={openCreateForm} leftSection={<IconPlus size={16} />}>
+            {canManage && <Button onClick={openCreateForm} leftSection={<IconPlus size={16} />}>
               Create Counter
-            </Button>
+            </Button>}
           </Stack>
         </Card>
       ) : (
@@ -355,21 +357,21 @@ const ReviewCounterList = () => {
                                 {isExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
                               </ActionIcon>
                             </Tooltip>
-                            <Tooltip label="Edit counter">
+                            {canManage && <Tooltip label="Edit counter">
                               <ActionIcon variant="light" onClick={() => openEditForm(counter)}>
                                 <IconPencil size={16} />
                               </ActionIcon>
-                            </Tooltip>
-                            <Tooltip label="Delete counter">
+                            </Tooltip>}
+                            {canManage && <Tooltip label="Delete counter">
                               <ActionIcon color="red" variant="light" onClick={() => handleDelete(counter.id)}>
                                 <IconTrash size={16} />
                               </ActionIcon>
-                            </Tooltip>
+                            </Tooltip>}
                           </Group>
                         </Group>
 
                         <Collapse in={isExpanded} transitionDuration={150}>
-                          <ReviewCounterEntriesPanel counter={counter} onRefresh={refreshCounters} />
+                          <ReviewCounterEntriesPanel counter={counter} onRefresh={refreshCounters} canManage={canManage} />
                         </Collapse>
                       </Stack>
                     </Card>

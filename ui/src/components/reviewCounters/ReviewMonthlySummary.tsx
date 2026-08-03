@@ -17,6 +17,7 @@ import { DatePickerInput } from '@mantine/dates';
 import { IconInfoCircle, IconRefresh } from '@tabler/icons-react';
 import type { ReviewCounterStaffSummary, ReviewCounterStaffRow } from '../../types/reviewCounters/ReviewCounterStaffSummary';
 import { fetchReviewStaffSummary, updateReviewMonthlyApproval } from '../../api/reviewCounters';
+import { useAppSelector } from '../../store/hooks';
 
 type Preset = 'thisMonth' | 'lastMonth' | 'custom';
 
@@ -51,6 +52,8 @@ const extractErrorMessage = (error: unknown): string => {
 };
 
 const ReviewMonthlySummary = () => {
+  const roleSlug = useAppSelector((state) => state.session.roleSlug);
+  const canManage = ['owner', 'manager', 'admin', 'administrator'].includes(String(roleSlug ?? '').trim().toLowerCase());
   const [preset, setPreset] = useState<Preset>('thisMonth');
   const [range, setRange] = useState<[Date | null, Date | null]>(getPresetRange('thisMonth'));
   const [summary, setSummary] = useState<ReviewCounterStaffSummary | null>(null);
@@ -225,6 +228,7 @@ const ReviewMonthlySummary = () => {
         </Stack>
       );
     }
+    if (!canManage) return <Text size="xs" c="dimmed">Awaiting manager approval</Text>;
     return (
       <Stack gap={4}>
         <Button
@@ -271,6 +275,7 @@ const ReviewMonthlySummary = () => {
         </Stack>
       );
     }
+    if (!canManage) return <Text size="xs" c="dimmed">Awaiting manager approval</Text>;
     return (
       <Stack gap="xs">
         {row.reviewComponents.map((component) => {
