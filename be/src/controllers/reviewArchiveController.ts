@@ -141,6 +141,19 @@ export async function replaceReviewAssignments(req: AuthenticatedRequest, res: R
   } catch (error) { fail(res, error); }
 }
 
+export async function updateReviewFlags(req: AuthenticatedRequest, res: Response) {
+  try {
+    const review = await ReviewArchive.findByPk(Number(req.params.id));
+    if (!review) throw new Error('Review not found');
+    const changes: { isNoName?: boolean; isBadReview?: boolean } = {};
+    if (typeof req.body.isNoName === 'boolean') changes.isNoName = req.body.isNoName;
+    if (typeof req.body.isBadReview === 'boolean') changes.isBadReview = req.body.isBadReview;
+    if (!Object.keys(changes).length) throw new Error('Provide isNoName or isBadReview');
+    await review.update(changes);
+    res.json({ review });
+  } catch (error) { fail(res, error); }
+}
+
 export async function createManualReviewCredit(req: AuthenticatedRequest, res: Response) {
   try {
     const row = await ReviewManualCredit.create({ userId: Number(req.body.userId), platform: String(req.body.platform ?? 'manual'), date: String(req.body.date), credit: Number(req.body.credit ?? 1), notes: req.body.notes ?? null, createdBy: actor(req) });

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Avatar, Badge, Button, Group, MultiSelect, Pagination, Paper, SegmentedControl, SimpleGrid, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Avatar, Badge, Button, Checkbox, Group, MultiSelect, Pagination, Paper, SegmentedControl, SimpleGrid, Stack, Text, TextInput, Title } from '@mantine/core';
 import { IconAlertTriangle, IconEdit, IconRefresh, IconSearch, IconStarFilled, IconTrash } from '@tabler/icons-react';
 import axiosInstance from '../../utils/axiosInstance';
 
 type Platform = 'google' | 'tripadvisor' | 'airbnb';
 type User = { id: number; firstName: string; lastName: string; username: string };
-type Review = { id: number; sourceReviewId: string; reviewerName: string; reviewerPhotoUrl: string | null; comment: string | null; rating: number | string; reviewCreatedAt: string; reviewUpdatedAt: string | null; isDeleted: boolean; deletedDetectedAt: string | null; assignedUserIds: number[]; credit: number };
+type Review = { id: number; sourceReviewId: string; reviewerName: string; reviewerPhotoUrl: string | null; comment: string | null; rating: number | string; reviewCreatedAt: string; reviewUpdatedAt: string | null; isDeleted: boolean; isNoName: boolean; isBadReview: boolean; deletedDetectedAt: string | null; assignedUserIds: number[]; credit: number };
 type GoogleMeta = { nextPageToken?: string | null; totalCount?: number; averageRating?: number };
 const labels = { google: 'Google', tripadvisor: 'TripAdvisor', airbnb: 'Airbnb' };
 
@@ -69,6 +69,10 @@ export default function ReviewArchivePanel({ platform }: { platform: Platform })
   const assign = async (id: number, values: string[]) => {
     await axiosInstance.put(`/reviews/archive/${id}/assignments`, { userIds: values.map(Number) }); await load();
   };
+  const setFlags = async (id: number, flags: { isNoName?: boolean; isBadReview?: boolean }) => {
+    setReviews(current => current.map(review => review.id === id ? { ...review, ...flags } : review));
+    try { await axiosInstance.put(`/reviews/archive/${id}/flags`, flags); } catch { await load(); }
+  };
   const options = users.map(user => ({ value: String(user.id), label: `${user.firstName} ${user.lastName}`.trim() || user.username }));
 
   return <Stack gap="lg">
@@ -84,10 +88,11 @@ export default function ReviewArchivePanel({ platform }: { platform: Platform })
     <SimpleGrid cols={{ base: 1, xl: 2 }}>{reviews.map(review => {
       const created = new Date(review.reviewCreatedAt), updated = review.reviewUpdatedAt ? new Date(review.reviewUpdatedAt) : null;
       const wasUpdated = !!updated && updated.getTime() - created.getTime() > 60_000;
-      const suspicious = wasUpdated && (created.getUTCFullYear() !== updated!.getUTCFullYear() || created.getUTCMonth() !== updated!.getUTCMonth());
+      const suspicious = wasUpdated && (created.getFullYear() !== updated!.getFullYear() || created.getMonth() !== updated!.getMonth());
       return <Paper key={review.id} p="lg" radius="lg" withBorder style={{ opacity: review.isDeleted ? .72 : 1 }}>
         <Group justify="space-between" align="flex-start"><Group><Avatar src={review.reviewerPhotoUrl} radius="xl"/><div><Text fw={700}>{review.reviewerName}</Text><Text size="xs" c="dimmed">Created {created.toLocaleDateString()} {created.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}{wasUpdated && ` · Updated ${updated!.toLocaleDateString()} ${updated!.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}`}</Text></div></Group><Group gap="xs"><Badge color="yellow" leftSection={<IconStarFilled size={12}/>}>{Number(review.rating).toFixed(1)}</Badge>{wasUpdated && <Badge color="blue" leftSection={<IconEdit size={12}/>}>Updated</Badge>}{suspicious && <Badge color="orange" leftSection={<IconAlertTriangle size={12}/>}>Suspicious</Badge>}{review.isDeleted && <Badge color="red" leftSection={<IconTrash size={12}/>}>Deleted at source</Badge>}</Group></Group>
         <Text my="md" size="sm" lineClamp={5}>{review.comment || 'No written comment'}</Text>
+        <Group mb="md"><Checkbox color="gray" label="No name" checked={review.isNoName} onChange={event => void setFlags(review.id, { isNoName: event.currentTarget.checked })}/><Checkbox color="red" label="Bad review" checked={review.isBadReview} onChange={event => void setFlags(review.id, { isBadReview: event.currentTarget.checked })}/></Group>
         <MultiSelect searchable clearable label="Credit this review to" description={review.assignedUserIds.length ? `${(1 / review.assignedUserIds.length).toFixed(3)} credit per person` : 'Unassigned — not counted for staff'} data={options} value={review.assignedUserIds.map(String)} onChange={values => void assign(review.id, values)}/>
       </Paper>;
     })}</SimpleGrid>
