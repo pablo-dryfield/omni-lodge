@@ -96,6 +96,14 @@ export const restoreConfigDefaults = async (
   return response.data as { seededCount: number; seededKeys: string[] };
 };
 
+export const discoverTripAdvisorQueryId = async (): Promise<{
+  config: ConfigEntry;
+  discovery: { queryId: string; source: string; totalCount: number; sampleCount: number };
+}> => {
+  const response = await axiosInstance.post('/config/tripadvisor/discover-query-id');
+  return response.data;
+};
+
 export const runConfigSeed = async (
   seedKey: string,
   force = false,

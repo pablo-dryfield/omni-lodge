@@ -26,6 +26,7 @@ import {
   useUpdateConfigEntry,
   type ConfigEntry,
   restoreConfigDefaults,
+  discoverTripAdvisorQueryId,
 } from "../../api/config";
 
 const PAGE_SLUG = PAGE_SLUGS.settingsControlPanel;
@@ -113,6 +114,8 @@ const SettingsControlPanel = () => {
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreResult, setRestoreResult] = useState<{ seededCount: number; seededKeys: string[] } | null>(null);
   const [restoreLoading, setRestoreLoading] = useState(false);
+  const [queryDiscoveryLoading, setQueryDiscoveryLoading] = useState(false);
+  const [queryDiscoveryMessage, setQueryDiscoveryMessage] = useState<string | null>(null);
 
   const entries = useMemo(() => data ?? [], [data]);
 
@@ -145,6 +148,25 @@ const SettingsControlPanel = () => {
     setReason("");
     setModalError(null);
     setClearRequested(false);
+    setQueryDiscoveryMessage(null);
+  };
+
+  const handleDiscoverTripAdvisorQueryId = async () => {
+    setModalError(null);
+    setQueryDiscoveryMessage(null);
+    setQueryDiscoveryLoading(true);
+    try {
+      const result = await discoverTripAdvisorQueryId();
+      setEditValue(result.discovery.queryId);
+      setQueryDiscoveryMessage(
+        `Saved and validated ${result.discovery.queryId}; TripAdvisor returned ${result.discovery.sampleCount} of ${result.discovery.totalCount.toLocaleString()} reviews.`,
+      );
+      await refetch();
+    } catch (err) {
+      setModalError(extractErrorMessage(err));
+    } finally {
+      setQueryDiscoveryLoading(false);
+    }
   };
 
   const closeEditor = () => {
@@ -563,6 +585,25 @@ const SettingsControlPanel = () => {
             </Text>
 
             {renderEditorInput()}
+
+            {activeEntry.key === "TRIP_ADVISOR_QUERY_ID" ? (
+              <Stack gap="xs">
+                <Button
+                  variant="light"
+                  color="teal"
+                  leftSection={<IconRefresh size={16} />}
+                  onClick={handleDiscoverTripAdvisorQueryId}
+                  loading={queryDiscoveryLoading}
+                >
+                  Find, validate, and save latest query ID
+                </Button>
+                <Text size="xs" c="dimmed">
+                  Checks discoverable TripAdvisor query registries, tests candidates against your configured location,
+                  and saves only an ID that returns reviews.
+                </Text>
+                {queryDiscoveryMessage ? <Alert color="teal">{queryDiscoveryMessage}</Alert> : null}
+              </Stack>
+            ) : null}
 
             {activeEntry.isSecret ? (
               <TextInput
