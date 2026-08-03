@@ -97,6 +97,7 @@ const FinanceReports = lazy(() => import("../../pages/Finance/FinanceReports"));
 const FinanceFiles = lazy(() => import("../../pages/Finance/FinanceFiles"));
 const FinanceSettings = lazy(() => import("../../pages/Finance/FinanceSettings"));
 const FinanceRefunds = lazy(() => import("../../pages/Finance/FinanceRefunds"));
+const FinanceInventory = lazy(() => import("../../pages/Finance/FinanceInventory"));
 const NotificationsCenter = lazy(() => import("../../pages/NotificationsCenter"));
 
 const RouteFallback = () => (
@@ -159,6 +160,7 @@ const Routes = () => {
           <Route path="budgets" element={<FinanceBudgets />} />
           <Route path="management-requests" element={<FinanceManagementRequests />} />
           <Route path="files" element={<FinanceFiles />} />
+          <Route path="inventory" element={<FinanceInventory />} />
           <Route path="reports" element={<FinanceReports />} />
           <Route path="settings" element={<FinanceSettings />} />
         </Route>
