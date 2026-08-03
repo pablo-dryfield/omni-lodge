@@ -50,7 +50,7 @@ dayjs.extend(timezone);
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
-const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-20';
+const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-26';
 const STORE_TIMEZONE = 'Europe/Warsaw';
 const AFTER_CUTOFF_TIME = '21:00:00';
 
@@ -950,6 +950,8 @@ export default class CounterRegistryService {
       }
     });
     const onlineChannelIdSet = new Set<number>(Array.from(onlineChannelIdByPlatform.values()));
+    const preservesManualAttendance =
+      counter.date >= '2025-10-01' && counter.date < COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE;
 
     const addonConfigs = addonRecords.map((addon, index) =>
       toAddonConfig({
@@ -1220,7 +1222,9 @@ export default class CounterRegistryService {
           const afterPeopleQty = bookedPeopleByChannelPeriod.get(`${channelId}|after_cutoff`) ?? 0;
           setBookedMetricFromSource(channelId, 'people', null, 'before_cutoff', beforePeopleQty);
           setBookedMetricFromSource(channelId, 'people', null, 'after_cutoff', afterPeopleQty);
-          setAttendedMetricFromSource(channelId, 'people', null, attendedPeopleByChannel.get(channelId) ?? 0);
+          if (!preservesManualAttendance) {
+            setAttendedMetricFromSource(channelId, 'people', null, attendedPeopleByChannel.get(channelId) ?? 0);
+          }
 
           const addonIds = new Set<number>();
           (Object.values(addonIdByExtraKey) as Array<number | null>).forEach((addonId) => {
@@ -1254,7 +1258,9 @@ export default class CounterRegistryService {
             const afterAddonQty = bookedAddonByChannelPeriod.get(`${channelId}|after_cutoff|${addonId}`) ?? 0;
             setBookedMetricFromSource(channelId, 'addon', addonId, 'before_cutoff', beforeAddonQty);
             setBookedMetricFromSource(channelId, 'addon', addonId, 'after_cutoff', afterAddonQty);
-            setAttendedMetricFromSource(channelId, 'addon', addonId, attendedAddonByChannel.get(`${channelId}|${addonId}`) ?? 0);
+            if (!preservesManualAttendance) {
+              setAttendedMetricFromSource(channelId, 'addon', addonId, attendedAddonByChannel.get(`${channelId}|${addonId}`) ?? 0);
+            }
           });
         });
       }

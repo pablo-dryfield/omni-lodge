@@ -419,6 +419,10 @@ const resolveCounterManagerId = (
 // Default commission is zero unless overridden via compensation components.
 const COMMISSION_RATE_PER_ATTENDEE = 0;
 const NEW_COUNTER_SYSTEM_START = dayjs("2025-10-01");
+const MANUAL_ATTENDANCE_START = dayjs("2025-10-01");
+// From Oct 1 through Feb 25, attended counter metrics are the manually counted
+// attendance (booked minus inferred no-shows). Booking-level check-ins take over here.
+const PAYOUT_ATTENDANCE_START = dayjs("2026-02-26");
 const REVIEW_MINIMUM_THRESHOLD = 15;
 const isExcludedNoShowAddonName = (value?: string | null): boolean => {
   const normalized = value?.toLowerCase() ?? "";
@@ -1743,27 +1747,31 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       });
     }
 
-    const newSystemTotalsByCounter = new Map<number, number>();
+    const newSystemBookedTotalsByCounter = new Map<number, number>();
+    const newSystemAttendedTotalsByCounter = new Map<number, number>();
     if (newSystemCounterIds.length > 0) {
       const metricRows = await CounterChannelMetric.findAll({
         attributes: [
           "counterId",
-          [Sequelize.fn("SUM", Sequelize.col("qty")), "attendedQty"],
+          "tallyType",
+          [Sequelize.fn("SUM", Sequelize.col("qty")), "totalQty"],
         ],
         where: {
           counterId: {
             [Op.in]: newSystemCounterIds,
           },
           kind: "people",
-          tallyType: "attended",
+          tallyType: { [Op.in]: ["booked", "attended"] },
         },
-        group: ["counterId"],
+        group: ["counterId", "tallyType"],
       });
 
       metricRows.forEach((row) => {
         const counterId = row.getDataValue("counterId");
-        const attendedQty = Number(row.get("attendedQty") ?? 0);
-        newSystemTotalsByCounter.set(counterId, attendedQty);
+        const tallyType = String(row.getDataValue("tallyType") ?? "");
+        const totalQty = Number(row.get("totalQty") ?? 0);
+        if (tallyType === "booked") newSystemBookedTotalsByCounter.set(counterId, totalQty);
+        if (tallyType === "attended") newSystemAttendedTotalsByCounter.set(counterId, totalQty);
       });
     }
 
@@ -1902,8 +1910,15 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       }
       const staffForCounter = staffByCounter.get(counter.id) ?? [];
 
+      const counterDate = dayjs(meta.dateKey);
+      const usesManualAttendance =
+        !counterDate.isBefore(MANUAL_ATTENDANCE_START, "day") && counterDate.isBefore(PAYOUT_ATTENDANCE_START, "day");
+      const usesBookingCheckIns = !counterDate.isBefore(PAYOUT_ATTENDANCE_START, "day");
+      const useAttendance = meta.isNewSystem && (usesManualAttendance || usesBookingCheckIns);
       const customers = meta.isNewSystem
-        ? newSystemTotalsByCounter.get(counter.id) ?? 0
+        ? useAttendance
+          ? newSystemAttendedTotalsByCounter.get(counter.id) ?? 0
+          : newSystemBookedTotalsByCounter.get(counter.id) ?? 0
         : legacyTotalsByCounter.get(counter.id) ?? 0;
 
       const managerId = resolveCounterManagerId(meta, staffForCounter);
