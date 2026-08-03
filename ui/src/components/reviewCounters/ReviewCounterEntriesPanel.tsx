@@ -28,9 +28,10 @@ const CATEGORY_COLOR: Record<ReviewCounterEntry['category'], string> = {
 type ReviewCounterEntriesPanelProps = {
   counter: ReviewCounter;
   onRefresh: () => Promise<void>;
+  canManage: boolean;
 };
 
-const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesPanelProps) => {
+const ReviewCounterEntriesPanel = ({ counter, onRefresh, canManage }: ReviewCounterEntriesPanelProps) => {
   const dispatch = useAppDispatch();
 
   const [pendingValues, setPendingValues] = useState<Map<number, number>>(new Map());
@@ -162,12 +163,12 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
             <IconRefresh size={16} />
           </ActionIcon>
         </Tooltip>
-        <Button size="xs" onClick={handleSave} disabled={!hasChanges || saving} loading={saving}>
+        {canManage && <Button size="xs" onClick={handleSave} disabled={!hasChanges || saving} loading={saving}>
           Save changes
-        </Button>
-        <Button size="xs" variant="default" onClick={handleReset} disabled={!hasChanges || saving}>
+        </Button>}
+        {canManage && <Button size="xs" variant="default" onClick={handleReset} disabled={!hasChanges || saving}>
           Reset
-        </Button>
+        </Button>}
       </Group>
       {error && (
         <Alert color="red" title="Entries">
@@ -204,7 +205,7 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
                         variant="light"
                         color="gray"
                         onClick={() => handleAdjustAmount(entry, -AMOUNT_STEP)}
-                        disabled={saving}
+                        disabled={saving || !canManage}
                       >
                         <IconMinus size={16} />
                       </ActionIcon>
@@ -215,14 +216,14 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh }: ReviewCounterEntriesP
                       min={0}
                       step={AMOUNT_STEP}
                       style={{ width: 110 }}
-                      disabled={saving}
+                      disabled={saving || !canManage}
                     />
                     <Tooltip label="Increase amount">
                       <ActionIcon
                         variant="light"
                         color="blue"
                         onClick={() => handleAdjustAmount(entry, AMOUNT_STEP)}
-                        disabled={saving}
+                        disabled={saving || !canManage}
                       >
                         <IconPlus size={16} />
                       </ActionIcon>

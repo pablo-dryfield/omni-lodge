@@ -84,6 +84,7 @@ import { startDbBackupJob } from './jobs/dbBackup.cron.js';
 import { startBookingEmailIngestionJob } from './jobs/bookingEmailIngestion.cron.js';
 import { startAmTaskPushNotificationsJob } from './jobs/amTaskPushNotifications.cron.js';
 import { startDailyMidnightClosureJob } from './jobs/dailyMidnightClosure.cron.js';
+import { startReviewFullSyncJob } from './jobs/reviewFullSync.cron.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -344,6 +345,7 @@ async function bootstrap(): Promise<void> {
           startAmTaskPushNotificationsJob();
         }
         startDailyMidnightClosureJob();
+        startReviewFullSyncJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
@@ -358,6 +360,7 @@ async function bootstrap(): Promise<void> {
           startAmTaskPushNotificationsJob();
         }
         startDailyMidnightClosureJob();
+        startReviewFullSyncJob();
       });
     }
   } catch (err) {

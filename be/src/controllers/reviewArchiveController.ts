@@ -66,7 +66,8 @@ export async function completeReviewSync(req: AuthenticatedRequest, res: Respons
     const run = await ReviewSyncRun.findByPk(Number(req.params.runId));
     if (!run || run.status !== 'running') throw new Error('Active sync run not found');
     const now = new Date();
-    const deleted = await ReviewArchive.update(
+    const partial = req.body.partial === true;
+    const deleted = partial ? [0] : await ReviewArchive.update(
       { isDeleted: true, deletedDetectedAt: now },
       { where: { platform: run.platform, [Op.or]: [{ lastSeenRunId: { [Op.ne]: run.id } }, { lastSeenRunId: null }], isDeleted: false } },
     );
@@ -83,8 +84,13 @@ export async function completeReviewSync(req: AuthenticatedRequest, res: Respons
       averageRating: req.body.averageRating == null ? null : Number(req.body.averageRating),
       archivedCount, activeCount, deletedCount: archivedCount - activeCount, newReviewsCount, syncRunId: run.id,
     });
-    res.json({ run, snapshotDate, archivedCount, activeCount });
+    res.json({ run, snapshotDate, archivedCount, activeCount, partial });
   } catch (error) { fail(res, error); }
+}
+
+export async function completeFastReviewSync(req: AuthenticatedRequest, res: Response) {
+  req.body = { ...req.body, partial: true };
+  await completeReviewSync(req, res);
 }
 
 export async function listArchivedReviews(req: AuthenticatedRequest, res: Response) {

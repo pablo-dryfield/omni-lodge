@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar, Badge, Button, Checkbox, Group, MultiSelect, Pagination, Paper, SegmentedControl, SimpleGrid, Stack, Text, TextInput, Title } from '@mantine/core';
 import { IconAlertTriangle, IconEdit, IconRefresh, IconSearch, IconStarFilled, IconTrash } from '@tabler/icons-react';
 import axiosInstance from '../../utils/axiosInstance';
@@ -9,7 +9,7 @@ type Review = { id: number; sourceReviewId: string; reviewerName: string; review
 type GoogleMeta = { nextPageToken?: string | null; totalCount?: number; averageRating?: number };
 const labels = { google: 'Google', tripadvisor: 'TripAdvisor', airbnb: 'Airbnb' };
 
-export default function ReviewArchivePanel({ platform }: { platform: Platform }) {
+export default function ReviewArchivePanel({ platform, canManage = false }: { platform: Platform; canManage?: boolean }) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
@@ -20,6 +20,7 @@ export default function ReviewArchivePanel({ platform }: { platform: Platform })
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [sourceStats, setSourceStats] = useState<{ totalCount?: number; averageRating?: number }>({});
+  const fastSyncedPlatform = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     const deleted = filter === 'all' ? 'all' : String(filter === 'deleted');
@@ -28,21 +29,22 @@ export default function ReviewArchivePanel({ platform }: { platform: Platform })
     setTotal(response.data.pagination.total); setTotalPages(response.data.pagination.totalPages);
   }, [filter, page, platform, search]);
 
-  const sync = useCallback(async () => {
+  const sync = useCallback(async (full: boolean) => {
     setLoading(true); setError('');
     try {
-      const started = await axiosInstance.post('/reviews/archive/sync/start', { platform });
+      const syncBase = full ? '/reviews/archive/sync' : '/reviews/archive/sync/fast';
+      const started = await axiosInstance.post(`${syncBase}/start`, { platform });
       const runId = started.data.run.id;
       let token: string | undefined, cursor: string | undefined, offset = 0;
       let sourceTotalCount: number | undefined, averageRating: number | undefined;
-      for (let current = 0; current < 250; current++) {
+      for (let current = 0; current < (full ? 250 : 2); current++) {
         const response = platform === 'google'
           ? await axiosInstance.get('/reviews/googleReviews', { params: token ? { pageToken: token } : undefined })
           : platform === 'tripadvisor'
             ? await axiosInstance.get('/reviews/tripadvisorReviews', { params: offset ? { offset } : undefined })
             : await axiosInstance.get('/reviews/airbnbReviews', { params: cursor ? { cursor } : undefined });
         const payload = response.data[0], rows = payload.data ?? [], meta = payload.columns?.[0];
-        await axiosInstance.post(`/reviews/archive/sync/${runId}/page`, { reviews: rows });
+        await axiosInstance.post(`${syncBase}/${runId}/page`, { reviews: rows });
         if (platform === 'google') {
           const googleMeta = (typeof meta === 'object' ? meta : { nextPageToken: meta }) as GoogleMeta;
           sourceTotalCount = googleMeta.totalCount; averageRating = googleMeta.averageRating;
@@ -56,14 +58,14 @@ export default function ReviewArchivePanel({ platform }: { platform: Platform })
           if (!meta?.hasMore || !meta?.endCursor) break; cursor = meta.endCursor;
         }
       }
-      await axiosInstance.post(`/reviews/archive/sync/${runId}/complete`, { sourceTotalCount, averageRating });
+      await axiosInstance.post(`${syncBase}/${runId}/complete`, { sourceTotalCount, averageRating });
       setSourceStats({ totalCount: sourceTotalCount, averageRating }); setPage(1);
     } catch (caught: any) {
       setError(caught.response?.data?.error ?? caught.response?.data?.[0]?.message ?? caught.message);
     } finally { setLoading(false); }
   }, [platform]);
 
-  useEffect(() => { void sync(); }, [sync]);
+  useEffect(() => { if (fastSyncedPlatform.current !== platform) { fastSyncedPlatform.current = platform; void sync(false); } }, [platform, sync]);
   useEffect(() => { const timer = window.setTimeout(() => void load(), 250); return () => window.clearTimeout(timer); }, [load, loading]);
 
   const assign = async (id: number, values: string[]) => {
@@ -79,7 +81,7 @@ export default function ReviewArchivePanel({ platform }: { platform: Platform })
     <Paper p="lg" radius="lg" withBorder>
       <Group justify="space-between" align="flex-start">
         <div><Title order={3}>{labels[platform]} review archive</Title><Text c="dimmed" size="sm">Persistent history, deletion monitoring, edits, and shared staff credit.</Text></div>
-        <Button leftSection={<IconRefresh size={17}/>} loading={loading} onClick={sync}>Sync reviews</Button>
+        {canManage && <Button leftSection={<IconRefresh size={17}/>} loading={loading} onClick={() => void sync(true)}>Full sync</Button>}
       </Group>
       <Group mt="lg" gap="xl"><div><Text size="xs" c="dimmed">Reviews in this view</Text><Text fw={800} fz="xl">{total.toLocaleString()}</Text></div>{sourceStats.totalCount != null && <div><Text size="xs" c="dimmed">Google total</Text><Text fw={800} fz="xl">{sourceStats.totalCount.toLocaleString()}</Text></div>}{sourceStats.averageRating != null && <div><Text size="xs" c="dimmed">Average rating</Text><Text fw={800} fz="xl">{sourceStats.averageRating.toFixed(2)}</Text></div>}</Group>
       <Group mt="lg" justify="space-between"><TextInput leftSection={<IconSearch size={16}/>} placeholder="Search archived reviews" value={search} onChange={event => { setSearch(event.currentTarget.value); setPage(1); }} style={{ flex: 1, maxWidth: 420 }}/><SegmentedControl value={filter} onChange={value => { setFilter(value); setPage(1); }} data={[{ value: 'active', label: 'Active' }, { value: 'deleted', label: 'Deleted' }, { value: 'all', label: 'All' }]}/></Group>
@@ -92,8 +94,8 @@ export default function ReviewArchivePanel({ platform }: { platform: Platform })
       return <Paper key={review.id} p="lg" radius="lg" withBorder style={{ opacity: review.isDeleted ? .72 : 1 }}>
         <Group justify="space-between" align="flex-start"><Group><Avatar src={review.reviewerPhotoUrl} radius="xl"/><div><Text fw={700}>{review.reviewerName}</Text><Text size="xs" c="dimmed">Created {created.toLocaleDateString()} {created.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}{wasUpdated && ` · Updated ${updated!.toLocaleDateString()} ${updated!.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}`}</Text></div></Group><Group gap="xs"><Badge color="yellow" leftSection={<IconStarFilled size={12}/>}>{Number(review.rating).toFixed(1)}</Badge>{wasUpdated && <Badge color="blue" leftSection={<IconEdit size={12}/>}>Updated</Badge>}{suspicious && <Badge color="orange" leftSection={<IconAlertTriangle size={12}/>}>Suspicious</Badge>}{review.isDeleted && <Badge color="red" leftSection={<IconTrash size={12}/>}>Deleted at source</Badge>}</Group></Group>
         <Text my="md" size="sm" lineClamp={5}>{review.comment || 'No written comment'}</Text>
-        <Group mb="md"><Checkbox color="gray" label="No name" checked={review.isNoName} onChange={event => void setFlags(review.id, { isNoName: event.currentTarget.checked })}/><Checkbox color="red" label="Bad review" checked={review.isBadReview} onChange={event => void setFlags(review.id, { isBadReview: event.currentTarget.checked })}/></Group>
-        <MultiSelect searchable clearable label="Credit this review to" description={review.assignedUserIds.length ? `${(1 / review.assignedUserIds.length).toFixed(3)} credit per person` : 'Unassigned — not counted for staff'} data={options} value={review.assignedUserIds.map(String)} onChange={values => void assign(review.id, values)}/>
+        <Group mb="md"><Checkbox color="gray" label="No name" checked={review.isNoName} disabled={!canManage} onChange={event => void setFlags(review.id, { isNoName: event.currentTarget.checked })}/><Checkbox color="red" label="Bad review" checked={review.isBadReview} disabled={!canManage} onChange={event => void setFlags(review.id, { isBadReview: event.currentTarget.checked })}/></Group>
+        <MultiSelect searchable clearable disabled={!canManage} label="Credit this review to" description={review.assignedUserIds.length ? `${(1 / review.assignedUserIds.length).toFixed(3)} credit per person` : 'Unassigned — not counted for staff'} data={options} value={review.assignedUserIds.map(String)} onChange={values => void assign(review.id, values)}/>
       </Paper>;
     })}</SimpleGrid>
     {!reviews.length && !loading && <Paper p="xl" withBorder><Text ta="center" c="dimmed">No reviews match this view.</Text></Paper>}
