@@ -79,7 +79,12 @@ export const fetchGetYourGuideReviews = async (offset = 0) => {
   try {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36');
-    const navigation = await page.goto(activityUrl.toString(), { waitUntil: 'networkidle2', timeout: 60_000 });
+    const navigation = await page.goto(activityUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
+    const navigationStatus = navigation?.status() ?? 0;
+    const initialTitle = await page.title();
+    if (navigationStatus >= 400 || /just a moment|error/i.test(initialTitle)) {
+      throw new Error(`GetYourGuide blocked the review request (HTTP ${navigationStatus || 'unknown'}, title: ${initialTitle})`);
+    }
     await page.evaluate(async () => {
       for (let y = 0; y <= document.body.scrollHeight; y += 800) {
         window.scrollTo(0, y);
@@ -87,7 +92,7 @@ export const fetchGetYourGuideReviews = async (offset = 0) => {
       }
     });
     try {
-      await page.waitForSelector('button[data-test-id="see-more-reviews-button"], .show-more__label', { timeout: 45_000 });
+      await page.waitForSelector('button[data-test-id="see-more-reviews-button"], .show-more__label', { timeout: 20_000 });
     } catch {
       throw new Error(
         `GetYourGuide reviews did not render (HTTP ${navigation?.status() ?? 'unknown'}, title: ${await page.title()}, URL: ${page.url()})`,
@@ -136,7 +141,7 @@ export const fetchGetYourGuideReviews = async (offset = 0) => {
     });
 
     const responsePayload = new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Timed out waiting for GetYourGuide reviews')), 30_000);
+      const timer = setTimeout(() => reject(new Error('Timed out waiting for GetYourGuide reviews')), 20_000);
       page.on('response', async response => {
         if (!response.url().includes('/user-interface/activity-details-page/blocks') || response.request().method() !== 'POST') return;
         clearTimeout(timer);
