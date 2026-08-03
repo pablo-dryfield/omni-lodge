@@ -177,25 +177,44 @@ export async function createManualReviewCredit(req: AuthenticatedRequest, res: R
 export async function getReviewCreditSummary(req: AuthenticatedRequest, res: Response) {
   try {
     const start = String(req.query.start ?? '0001-01-01'), end = String(req.query.end ?? '9999-12-31');
-    const reviews = await ReviewArchive.findAll({ where: { reviewCreatedAt: { [Op.between]: [new Date(start), new Date(`${end}T23:59:59Z`)] } } });
+    const reviews = await ReviewArchive.findAll({ where: { reviewCreatedAt: { [Op.between]: [new Date(start), new Date(`${end}T23:59:59Z`)] } }, order: [['reviewCreatedAt', 'DESC']] });
     const ids = reviews.map(review => review.id);
     const assignments = ids.length ? await ReviewAssignment.findAll({ where: { reviewId: ids } }) : [];
-    const manual = await ReviewManualCredit.findAll({ where: { date: { [Op.between]: [start, end] } } });
-    const totals = new Map<number, { assigned: number; manual: number; reviewCount: number }>();
+    const manual = await ReviewManualCredit.findAll({ where: { date: { [Op.between]: [start, end] } }, order: [['date', 'DESC']] });
+    type ReviewDetail = { id: number; platform: string; reviewerName: string; comment: string | null; rating: number; reviewCreatedAt: Date; isDeleted: boolean; credit: number };
+    type ManualDetail = { id: number; platform: string; date: string; credit: number; notes: string | null };
+    type PlatformTotal = { assigned: number; manual: number; reviewCount: number; total: number; reviews: ReviewDetail[]; manualEntries: ManualDetail[] };
+    type StaffTotal = { assigned: number; manual: number; reviewCount: number; platforms: Map<string, PlatformTotal> };
+    const totals = new Map<number, StaffTotal>();
+    const platformFor = (current: StaffTotal, platform: string): PlatformTotal => {
+      const existing = current.platforms.get(platform);
+      if (existing) return existing;
+      const created = { assigned: 0, manual: 0, reviewCount: 0, total: 0, reviews: [], manualEntries: [] };
+      current.platforms.set(platform, created); return created;
+    };
+    const assignmentsByReview = new Map<number, ReviewAssignment[]>();
+    for (const assignment of assignments) assignmentsByReview.set(assignment.reviewId, [...(assignmentsByReview.get(assignment.reviewId) ?? []), assignment]);
     for (const review of reviews) {
-      const rows = assignments.filter(assignment => assignment.reviewId === review.id);
+      const rows = assignmentsByReview.get(review.id) ?? [];
       for (const assignment of rows) {
-        const current = totals.get(assignment.userId) ?? { assigned: 0, manual: 0, reviewCount: 0 };
-        current.assigned += 1 / rows.length; current.reviewCount++; totals.set(assignment.userId, current);
+        const current = totals.get(assignment.userId) ?? { assigned: 0, manual: 0, reviewCount: 0, platforms: new Map() };
+        const credit = 1 / rows.length, platform = platformFor(current, review.platform);
+        current.assigned += credit; current.reviewCount++;
+        platform.assigned += credit; platform.reviewCount++; platform.total += credit;
+        platform.reviews.push({ id: review.id, platform: review.platform, reviewerName: review.reviewerName, comment: review.comment, rating: Number(review.rating), reviewCreatedAt: review.reviewCreatedAt, isDeleted: review.isDeleted, credit });
+        totals.set(assignment.userId, current);
       }
     }
     for (const credit of manual) {
       const userId = credit.userId;
       if (credit.category !== 'staff' || userId == null) continue;
-      const current = totals.get(userId) ?? { assigned: 0, manual: 0, reviewCount: 0 };
-      current.manual += Number(credit.credit); totals.set(userId, current);
+      const current = totals.get(userId) ?? { assigned: 0, manual: 0, reviewCount: 0, platforms: new Map() };
+      const amount = Number(credit.credit), platform = platformFor(current, credit.platform);
+      current.manual += amount; platform.manual += amount; platform.total += amount;
+      platform.manualEntries.push({ id: credit.id, platform: credit.platform, date: credit.date, credit: amount, notes: credit.notes });
+      totals.set(userId, current);
     }
     const users = totals.size ? await User.findAll({ where: { id: Array.from(totals.keys()) }, attributes: ['id', 'firstName', 'lastName', 'username'] }) : [];
-    res.json({ staff: users.map(user => ({ userId: user.id, name: `${user.firstName} ${user.lastName}`.trim() || user.username, ...totals.get(user.id)!, total: (totals.get(user.id)?.assigned ?? 0) + (totals.get(user.id)?.manual ?? 0) })), reviewCount: reviews.length, deletedCount: reviews.filter(review => review.isDeleted).length, unassignedCount: reviews.filter(review => !assignments.some(assignment => assignment.reviewId === review.id)).length, manualCategoryTotals: { noName: manual.filter(row => row.category === 'no_name').reduce((sum, row) => sum + Number(row.credit), 0), bad: manual.filter(row => row.category === 'bad').reduce((sum, row) => sum + Number(row.credit), 0) } });
+    res.json({ staff: users.map(user => { const total = totals.get(user.id)!; return { userId: user.id, name: `${user.firstName} ${user.lastName}`.trim() || user.username, assigned: total.assigned, manual: total.manual, reviewCount: total.reviewCount, total: total.assigned + total.manual, platforms: Array.from(total.platforms.entries()).map(([platform, value]) => ({ platform, ...value })).sort((a, b) => a.platform.localeCompare(b.platform)) }; }).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name)), reviewCount: reviews.length, deletedCount: reviews.filter(review => review.isDeleted).length, unassignedCount: reviews.filter(review => !assignmentsByReview.has(review.id)).length, manualCategoryTotals: { noName: manual.filter(row => row.category === 'no_name').reduce((sum, row) => sum + Number(row.credit), 0), bad: manual.filter(row => row.category === 'bad').reduce((sum, row) => sum + Number(row.credit), 0) } });
   } catch (error) { fail(res, error); }
 }
