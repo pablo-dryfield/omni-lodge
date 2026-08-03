@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Badge,
   Button,
+  Checkbox,
   Group,
   NumberInput,
   Paper,
@@ -43,15 +44,17 @@ export default function ReviewOverviewDashboard({ canManage = false }: { canMana
     reviewCount: number;
     deletedCount: number;
     unassignedCount: number;
-  }>({ staff: [], reviewCount: 0, deletedCount: 0, unassignedCount: 0 });
+    manualCategoryTotals?: { noName: number; bad: number };
+  }>({ staff: [], reviewCount: 0, deletedCount: 0, unassignedCount: 0, manualCategoryTotals: { noName: 0, bad: 0 } });
   const [users, setUsers] = useState<User[]>([]);
   const [form, setForm] = useState({
     userId: "",
+    category: "staff" as "staff" | "no_name" | "bad",
     platform: "manual",
     credit: 1,
     notes: "",
   });
-  const load = async () => {
+  const load = useCallback(async () => {
     const start = dayjs(`${month}-01`),
       end = start.endOf("month");
     const [s, a] = await Promise.all([
@@ -65,14 +68,14 @@ export default function ReviewOverviewDashboard({ canManage = false }: { canMana
     ]);
     setSummary(s.data);
     setUsers(a.data.users);
-  };
+  }, [month]);
   useEffect(() => {
     void load();
-  }, [month]);
+  }, [load]);
   const add = async () => {
     await axiosInstance.post("/reviews/archive/manual-credits", {
       ...form,
-      userId: Number(form.userId),
+      userId: form.category === "staff" ? Number(form.userId) : null,
       date: `${month}-01`,
     });
     setForm({ ...form, credit: 1, notes: "" });
@@ -146,13 +149,16 @@ export default function ReviewOverviewDashboard({ canManage = false }: { canMana
       {canManage && <Paper p="lg" withBorder radius="lg">
         <Title order={4}>Manual counter addition</Title>
         <Text size="sm" c="dimmed" mb="md">
-          Only assigned users appear automatically. Use this for an additional
-          person or a justified manual adjustment.
+          Add staff credit or record a No name or Bad review counter adjustment.
         </Text>
+        <Group mb="md"><Badge color="gray" variant="light">Manual no name: {summary.manualCategoryTotals?.noName ?? 0}</Badge><Badge color="red" variant="light">Manual bad reviews: {summary.manualCategoryTotals?.bad ?? 0}</Badge></Group>
+        <Group mb="md"><Checkbox label="No name" color="gray" checked={form.category === "no_name"} onChange={(event) => setForm({ ...form, category: event.currentTarget.checked ? "no_name" : "staff" })}/><Checkbox label="Bad review" color="red" checked={form.category === "bad"} onChange={(event) => setForm({ ...form, category: event.currentTarget.checked ? "bad" : "staff" })}/></Group>
         <SimpleGrid cols={{ base: 1, sm: 3 }}>
           <Select
             searchable
             label="User"
+            description={form.category === "staff" ? "Required for staff credit" : "Not used for No name or Bad review"}
+            disabled={form.category !== "staff"}
             data={users.map((u) => ({
               value: String(u.id),
               label: `${u.firstName} ${u.lastName}`.trim() || u.username,
@@ -180,8 +186,8 @@ export default function ReviewOverviewDashboard({ canManage = false }: { canMana
           value={form.notes}
           onChange={(e) => setForm({ ...form, notes: e.currentTarget.value })}
         />
-        <Button mt="md" onClick={add} disabled={!form.userId}>
-          Add credit
+        <Button mt="md" onClick={add} disabled={form.category === "staff" && !form.userId}>
+          Add counter entry
         </Button>
       </Paper>}
     </Stack>
