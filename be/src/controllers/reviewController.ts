@@ -43,15 +43,16 @@ export const getAllGoogleReviews = async (req: Request, res: Response) => {
     const accessToken = tokenResponse.data.access_token;
     // Step 2: Fetch reviews
     const reviewsResponse = await axios.get(
-      `https://mybusiness.googleapis.com/v4/accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}/reviews${req.query.pageToken ? `?pageToken=${req.query.pageToken}` : ''}`,
+      `https://mybusiness.googleapis.com/v4/accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}/reviews`,
       {
+        params: { pageSize: 50, orderBy: 'updateTime desc', ...(req.query.pageToken ? { pageToken: req.query.pageToken } : {}) },
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
       }
     );
     
-    res.status(200).json([{ data: reviewsResponse.data.reviews || [], columns: [reviewsResponse.data.nextPageToken] }]);
+    res.status(200).json([{ data: reviewsResponse.data.reviews || [], columns: [{ nextPageToken: reviewsResponse.data.nextPageToken ?? null, totalCount: Number(reviewsResponse.data.totalReviewCount ?? 0), averageRating: Number(reviewsResponse.data.averageRating ?? 0), pageSize: 50 }] }]);
   } catch (error: any) {
     console.error('Error fetching reviews:', error.response?.data || error.message);
     res.status(500).json({ error: 'Failed to fetch reviews from Google' });
