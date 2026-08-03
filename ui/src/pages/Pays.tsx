@@ -2360,6 +2360,11 @@ const Pays: React.FC = () => {
   const [entryModal, setEntryModal] = useState<EntryModalState>(createEmptyEntryModalState());
   const [paidEntriesModal, setPaidEntriesModal] = useState<PaidEntriesModalState>(createEmptyPaidEntriesModalState());
   const [openingBalanceDetailsOpen, setOpeningBalanceDetailsOpen] = useState(false);
+  const [ledgerRecalculating, setLedgerRecalculating] = useState(false);
+  const [ledgerRecalculationMessage, setLedgerRecalculationMessage] = useState<{
+    type: 'error' | 'success';
+    text: string;
+  } | null>(null);
   const [entryMessage, setEntryMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [entrySubmitting, setEntrySubmitting] = useState(false);
   const [paidEntriesSubmitting, setPaidEntriesSubmitting] = useState(false);
@@ -2516,7 +2521,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
         const currentPayout = normalizeTotal(summary);
         const openingBalance = summary.openingBalance ?? 0;
         const outstanding = summary.closingBalance ?? summary.payouts?.payableOutstanding ?? 0;
-        return currentPayout > 0 || openingBalance > 0 || outstanding > 0;
+        return currentPayout > 0 || openingBalance !== 0 || outstanding !== 0;
       }),
     [responseData],
   );
@@ -2527,7 +2532,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
           staff,
           openingBalance: staff.openingBalance ?? 0,
         }))
-        .filter((row) => row.openingBalance > 0),
+        .filter((row) => row.openingBalance !== 0),
     [summaries],
   );
 
@@ -2582,6 +2587,46 @@ const resolveStaffCounterpartyDefaults = useCallback(
     },
     [dispatch, endDate, scopeParam, startDate],
   );
+
+  const handleRecalculateLedger = useCallback(async () => {
+    if (!startDate || !endDate || ledgerRecalculating) {
+      return;
+    }
+    if (!window.confirm('Recalculate all monthly staff ledgers through the previous month? Recorded payments will not be changed.')) {
+      return;
+    }
+    setLedgerRecalculating(true);
+    setLedgerRecalculationMessage(null);
+    try {
+      const firstLedgerMonth = dayjs('2025-10-01').startOf('month');
+      const lastPreviousMonth = startDate.subtract(1, 'month').startOf('month');
+      let month = firstLedgerMonth;
+      let recalculatedMonths = 0;
+      while (!month.isAfter(lastPreviousMonth, 'month')) {
+        await axiosInstance.get('/reports/getCommissionByDateRange', {
+          params: {
+            startDate: month.format('YYYY-MM-DD'),
+            endDate: month.endOf('month').format('YYYY-MM-DD'),
+          },
+          withCredentials: true,
+        });
+        recalculatedMonths += 1;
+        month = month.add(1, 'month');
+      }
+      await refetchPaysForRange(startDate.format('YYYY-MM-DD'), endDate.format('YYYY-MM-DD'));
+      setLedgerRecalculationMessage({
+        type: 'success',
+        text: `Recalculated ${recalculatedMonths} previous month${recalculatedMonths === 1 ? '' : 's'} and refreshed the current balance.`,
+      });
+    } catch (recalculationError) {
+      setLedgerRecalculationMessage({
+        type: 'error',
+        text: recalculationError instanceof Error ? recalculationError.message : 'Unable to recalculate the ledger.',
+      });
+    } finally {
+      setLedgerRecalculating(false);
+    }
+  }, [endDate, ledgerRecalculating, refetchPaysForRange, startDate]);
 
   const handleCounterpartyChange = useCallback(
     (value: string | null) => {
@@ -3282,7 +3327,7 @@ const renderSummaryBoard = () => {
         <Card withBorder p="sm" style={kpiCardStyle}>
           <Stack gap={4} align="center" justify="center">
             <Text size="sm" c="dimmed" ta="center">
-              Last Months Owed
+              Last Month Balance
             </Text>
             <Title order={4} ta="center">
               {formatCurrency(totalOpening)}
@@ -3341,6 +3386,18 @@ const renderOpeningBalanceDetails = () => {
 
   return (
     <Stack gap="lg">
+      {canViewFull && (
+        <Group justify="flex-end">
+          <Button loading={ledgerRecalculating} onClick={() => void handleRecalculateLedger()}>
+            Recalculate ledger
+          </Button>
+        </Group>
+      )}
+      {ledgerRecalculationMessage && (
+        <Alert color={ledgerRecalculationMessage.type === 'success' ? 'green' : 'red'} variant="light">
+          {ledgerRecalculationMessage.text}
+        </Alert>
+      )}
       <SimpleGrid cols={{ base: 1, sm: 3 }}>
         <Card withBorder padding="sm" radius="md">
           <Text size="xs" c="dimmed">

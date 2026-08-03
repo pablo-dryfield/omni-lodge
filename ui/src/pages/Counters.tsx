@@ -109,7 +109,7 @@ import type {
 import { WALK_IN_TICKET_LABEL_TO_KEY, WALK_IN_TICKET_TYPE_LABELS } from '../constants/walkInTicketTypes';
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
-const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-20';
+const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-26';
 const WALK_IN_CHANNEL_SLUG = 'walk-in';
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
 const REACT_EMAIL_SOURCE_MARKER = '/* @react-email-template-source */';
