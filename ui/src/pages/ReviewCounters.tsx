@@ -1,4 +1,4 @@
-import { Paper, Stack, Tabs, Text, Title } from "@mantine/core";
+import { Accordion, Paper, Stack, Tabs, Text, Title } from "@mantine/core";
 import { useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
@@ -6,6 +6,9 @@ import { PAGE_SLUGS } from "../constants/pageSlugs";
 import GetYourGuideReviews from "../components/reports/GetYourGuideReviews";
 import ReviewArchivePanel from "../components/reviews/ReviewArchivePanel";
 import ReviewOverviewDashboard from "../components/reviews/ReviewOverviewDashboard";
+import ReviewCounterList from "../components/reviewCounters/ReviewCounterList";
+import ReviewAnalyticsPanel from "../components/reviewCounters/ReviewAnalyticsPanel";
+import ReviewMonthlySummary from "../components/reviewCounters/ReviewMonthlySummary";
 
 const REVIEW_TABS = ["google", "tripadvisor", "airbnb", "getyourguide", "overview"] as const;
 type ReviewTab = (typeof REVIEW_TABS)[number];
@@ -75,7 +78,26 @@ const ReviewCounters = () => {
             </Paper>
           </Tabs.Panel>
            <Tabs.Panel value="overview" pt="md">
-            <ReviewOverviewDashboard />
+            <Stack gap="lg">
+              <ReviewOverviewDashboard />
+              <Accordion variant="separated" radius="lg">
+                <Accordion.Item value="legacy-review-history">
+                  <Accordion.Control>
+                    <div>
+                      <Text fw={700}>Previous review-counter history</Text>
+                      <Text size="sm" c="dimmed">Original counters, monthly summaries, approvals, and analytics remain available here.</Text>
+                    </div>
+                  </Accordion.Control>
+                  <Accordion.Panel>
+                    <Stack gap="md">
+                      <ReviewAnalyticsPanel />
+                      <ReviewMonthlySummary />
+                      <ReviewCounterList />
+                    </Stack>
+                  </Accordion.Panel>
+                </Accordion.Item>
+              </Accordion>
+            </Stack>
           </Tabs.Panel>
         </Tabs>
       </Stack>
