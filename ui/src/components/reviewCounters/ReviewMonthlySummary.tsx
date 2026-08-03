@@ -51,11 +51,12 @@ const extractErrorMessage = (error: unknown): string => {
   return 'Something went wrong';
 };
 
-const ReviewMonthlySummary = () => {
+const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: string; hideDateControls?: boolean }) => {
   const roleSlug = useAppSelector((state) => state.session.roleSlug);
   const canManage = ['owner', 'manager', 'admin', 'administrator'].includes(String(roleSlug ?? '').trim().toLowerCase());
-  const [preset, setPreset] = useState<Preset>('thisMonth');
-  const [range, setRange] = useState<[Date | null, Date | null]>(getPresetRange('thisMonth'));
+  const initialRange = month ? [dayjs(`${month}-01`).startOf('month').toDate(), dayjs(`${month}-01`).endOf('month').toDate()] as [Date, Date] : getPresetRange('lastMonth');
+  const [preset, setPreset] = useState<Preset>(month ? 'custom' : 'lastMonth');
+  const [range, setRange] = useState<[Date | null, Date | null]>(initialRange);
   const [summary, setSummary] = useState<ReviewCounterStaffSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +86,13 @@ const ReviewMonthlySummary = () => {
   useEffect(() => {
     loadSummary(range).catch(() => {});
   }, [loadSummary, range]);
+
+  useEffect(() => {
+    if (!month) return;
+    const selected = dayjs(`${month}-01`);
+    setPreset('custom');
+    setRange([selected.startOf('month').toDate(), selected.endOf('month').toDate()]);
+  }, [month]);
 
   const handlePresetChange = (value: Preset) => {
     setPreset(value);
@@ -315,6 +323,7 @@ const ReviewMonthlySummary = () => {
             </ActionIcon>
           </Tooltip>
         </Group>
+        {!hideDateControls && (
         <Stack gap={4}>
           <Text size="sm" fw={500}>
             Date range
@@ -345,6 +354,7 @@ const ReviewMonthlySummary = () => {
             </Text>
           )}
         </Stack>
+        )}
         {error && (
           <Alert color="red" title="Approvals">
             {error}
