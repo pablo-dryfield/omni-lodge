@@ -1749,29 +1749,56 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     const newSystemBookedTotalsByCounter = new Map<number, number>();
     const newSystemAttendedTotalsByCounter = new Map<number, number>();
+    const newSystemAttendedPeopleCountAddonTotalsByCounter = new Map<number, number>();
     if (newSystemCounterIds.length > 0) {
+      const peopleCountAddons = await Addon.findAll({
+        attributes: ["id", "name"],
+        where: {
+          name: {
+            [Op.iLike]: "%cocktail%",
+          },
+        },
+      });
+      const peopleCountAddonIds = peopleCountAddons.map((addon) => addon.id);
       const metricRows = await CounterChannelMetric.findAll({
         attributes: [
           "counterId",
           "tallyType",
+          "kind",
           [Sequelize.fn("SUM", Sequelize.col("qty")), "totalQty"],
         ],
         where: {
           counterId: {
             [Op.in]: newSystemCounterIds,
           },
-          kind: "people",
+          [Op.or]: [
+            { kind: "people" },
+            ...(peopleCountAddonIds.length > 0
+              ? [{ kind: "addon", addonId: { [Op.in]: peopleCountAddonIds } }]
+              : []),
+          ],
           tallyType: { [Op.in]: ["booked", "attended"] },
         },
-        group: ["counterId", "tallyType"],
+        group: ["counterId", "tallyType", "kind"],
       });
 
       metricRows.forEach((row) => {
         const counterId = row.getDataValue("counterId");
         const tallyType = String(row.getDataValue("tallyType") ?? "");
+        const kind = String(row.getDataValue("kind") ?? "");
         const totalQty = Number(row.get("totalQty") ?? 0);
-        if (tallyType === "booked") newSystemBookedTotalsByCounter.set(counterId, totalQty);
-        if (tallyType === "attended") newSystemAttendedTotalsByCounter.set(counterId, totalQty);
+        if (tallyType === "booked") {
+          newSystemBookedTotalsByCounter.set(
+            counterId,
+            (newSystemBookedTotalsByCounter.get(counterId) ?? 0) + totalQty,
+          );
+        }
+        if (tallyType === "attended" && kind === "people") {
+          newSystemAttendedTotalsByCounter.set(counterId, totalQty);
+        }
+        if (tallyType === "attended" && kind === "addon") {
+          newSystemAttendedPeopleCountAddonTotalsByCounter.set(counterId, totalQty);
+        }
       });
     }
 
@@ -1917,7 +1944,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       const useAttendance = meta.isNewSystem && (usesManualAttendance || usesBookingCheckIns);
       const customers = meta.isNewSystem
         ? useAttendance
-          ? newSystemAttendedTotalsByCounter.get(counter.id) ?? 0
+          ? (newSystemAttendedTotalsByCounter.get(counter.id) ?? 0) +
+            (usesBookingCheckIns
+              ? (newSystemAttendedPeopleCountAddonTotalsByCounter.get(counter.id) ?? 0)
+              : 0)
           : newSystemBookedTotalsByCounter.get(counter.id) ?? 0
         : legacyTotalsByCounter.get(counter.id) ?? 0;
 
