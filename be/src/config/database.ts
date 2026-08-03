@@ -79,6 +79,10 @@ import ReviewCounter from "../models/ReviewCounter.js";
 import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
 import ReviewPlatform from "../models/ReviewPlatform.js";
 import ReviewCounterMonthlyApproval from "../models/ReviewCounterMonthlyApproval.js";
+import ReviewArchive from "../models/ReviewArchive.js";
+import ReviewAssignment from "../models/ReviewAssignment.js";
+import ReviewSyncRun from "../models/ReviewSyncRun.js";
+import ReviewManualCredit from "../models/ReviewManualCredit.js";
 import CompensationComponent from "../models/CompensationComponent.js";
 import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
 import AssistantManagerTaskTemplate from "../models/AssistantManagerTaskTemplate.js";
@@ -98,6 +102,12 @@ import OpenBarDrinkIssue from "../models/OpenBarDrinkIssue.js";
 import OpenBarDelivery from "../models/OpenBarDelivery.js";
 import OpenBarDeliveryItem from "../models/OpenBarDeliveryItem.js";
 import OpenBarInventoryMovement from "../models/OpenBarInventoryMovement.js";
+import InventoryItem from "../models/InventoryItem.js";
+import AddonInventoryMapping from "../models/AddonInventoryMapping.js";
+import InventoryPurchase from "../models/InventoryPurchase.js";
+import InventoryPurchaseItem from "../models/InventoryPurchaseItem.js";
+import InventoryMovement from "../models/InventoryMovement.js";
+import InventoryFulfillment from "../models/InventoryFulfillment.js";
 import CerebroSection from "../models/CerebroSection.js";
 import CerebroEntry from "../models/CerebroEntry.js";
 import CerebroQuiz from "../models/CerebroQuiz.js";
@@ -165,6 +175,10 @@ const sequelize = new Sequelize({
     ReviewCounterEntry,
     ReviewCounterMonthlyApproval,
     ReviewPlatform,
+    ReviewArchive,
+    ReviewAssignment,
+    ReviewSyncRun,
+    ReviewManualCredit,
     CompensationComponent,
     CompensationComponentAssignment,
     AssistantManagerTaskTemplate,
@@ -184,6 +198,12 @@ const sequelize = new Sequelize({
     OpenBarDelivery,
     OpenBarDeliveryItem,
     OpenBarInventoryMovement,
+    InventoryItem,
+    AddonInventoryMapping,
+    InventoryPurchase,
+    InventoryPurchaseItem,
+    InventoryMovement,
+    InventoryFulfillment,
     CerebroSection,
     CerebroEntry,
     CerebroQuiz,

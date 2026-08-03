@@ -6,6 +6,7 @@ import { Op, type Transaction, type WhereOptions } from 'sequelize';
 import sequelize from '../config/database.js';
 import Counter, { type CounterStatus } from '../models/Counter.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
+import { reconcileCounterInventory } from './inventoryService.js';
 import CounterUser, { type CounterStaffRole } from '../models/CounterUser.js';
 import Channel from '../models/Channel.js';
 import PaymentMethod from '../models/PaymentMethod.js';
@@ -744,6 +745,7 @@ export default class CounterRegistryService {
 
       if (shouldFinalizeBookingAttendance) {
         await this.finalizeBookingAttendanceForCounter(counter, actorUserId, transaction);
+        await reconcileCounterInventory(counter, actorUserId, transaction);
       }
     });
 

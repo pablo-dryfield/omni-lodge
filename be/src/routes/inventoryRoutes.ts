@@ -1,0 +1,11 @@
+import { Router } from 'express';
+import authMiddleware from '../middleware/authMiddleware.js';
+import type { NextFunction, Response } from 'express';
+import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { createInventoryAdjustment, createInventoryFulfillment, createInventoryItem, createInventoryMapping, createInventoryPurchase, createInventoryUsageIncident, getInventoryFinanceOptions, getInventoryOverview, listInventoryFulfillments, listInventoryPurchases, updateInventoryFulfillment } from '../controllers/inventoryController.js';
+const router=Router(); router.use(authMiddleware);
+router.use((req: AuthenticatedRequest,res: Response,next: NextFunction)=>{ const role=String(req.authContext?.roleSlug ?? req.authContext?.userTypeSlug ?? '').toLowerCase().replace(/[ _]/g,'-'); if (!['admin','administrator','owner','manager','assistant-manager'].includes(role)) { res.status(403).json([{message:'Manager access required for inventory.'}]); return; } next(); });
+router.get('/overview',getInventoryOverview); router.post('/items',createInventoryItem); router.post('/mappings',createInventoryMapping); router.post('/adjustments',createInventoryAdjustment); router.get('/purchases',listInventoryPurchases); router.post('/purchases',createInventoryPurchase); router.get('/finance-options',getInventoryFinanceOptions);
+router.get('/fulfillments',listInventoryFulfillments);router.post('/fulfillments',createInventoryFulfillment);router.patch('/fulfillments/:id',updateInventoryFulfillment);
+router.post('/usage-incidents',createInventoryUsageIncident);
+export default router;

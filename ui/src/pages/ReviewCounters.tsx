@@ -1,15 +1,11 @@
-import { Paper, Stack, Tabs, Title } from "@mantine/core";
+import { Paper, Stack, Tabs, Text, Title } from "@mantine/core";
 import { useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
-import ReviewCounterList from "../components/reviewCounters/ReviewCounterList";
-import ReviewAnalyticsPanel from "../components/reviewCounters/ReviewAnalyticsPanel";
-import ReviewMonthlySummary from "../components/reviewCounters/ReviewMonthlySummary";
-import GoogleReviews from "../components/reports/GoogleReviews";
-import TripAdvisorReviews from "../components/reports/TripAdvisorReviews";
-import AirbnbReviews from "../components/reports/AirbnbReviews";
 import GetYourGuideReviews from "../components/reports/GetYourGuideReviews";
+import ReviewArchivePanel from "../components/reviews/ReviewArchivePanel";
+import ReviewOverviewDashboard from "../components/reviews/ReviewOverviewDashboard";
 
 const REVIEW_TABS = ["google", "tripadvisor", "airbnb", "getyourguide", "overview"] as const;
 type ReviewTab = (typeof REVIEW_TABS)[number];
@@ -46,9 +42,10 @@ const ReviewCounters = () => {
   return (
     <PageAccessGuard pageSlug={PAGE_SLUGS.reviews}>
       <Stack gap="md">
-        <div>
-          <Title order={2}>Reviews</Title>
-        </div>
+        <Paper radius="lg" p="lg" withBorder>
+          <Title order={2}>Review intelligence</Title>
+          <Text c="dimmed" mt={4}>Archive every review, detect removals, and share staff credit fairly.</Text>
+        </Paper>
         <Tabs
           value={activeTab}
           onChange={handleTabChange}
@@ -57,26 +54,20 @@ const ReviewCounters = () => {
           keepMounted={false}
         >
           <Tabs.List>  
-            <Tabs.Tab value="google">Google Reviews</Tabs.Tab>
-            <Tabs.Tab value="tripadvisor">TripAdvisor Reviews</Tabs.Tab>
-            <Tabs.Tab value="airbnb">Airbnb Reviews</Tabs.Tab>
+            <Tabs.Tab value="overview">Overview</Tabs.Tab>
+            <Tabs.Tab value="google">Google</Tabs.Tab>
+            <Tabs.Tab value="tripadvisor">TripAdvisor</Tabs.Tab>
+            <Tabs.Tab value="airbnb">Airbnb</Tabs.Tab>
             <Tabs.Tab value="getyourguide">GetYourGuide Reviews</Tabs.Tab>
-            <Tabs.Tab value="overview">Review Performance</Tabs.Tab>
           </Tabs.List>
           <Tabs.Panel value="google" pt="md">
-            <Paper radius="md" withBorder shadow="xs" p="md">
-              <GoogleReviews />
-            </Paper>
+            <ReviewArchivePanel platform="google" />
           </Tabs.Panel>
           <Tabs.Panel value="tripadvisor" pt="md">
-            <Paper radius="md" withBorder shadow="xs" p="md">
-              <TripAdvisorReviews />
-            </Paper>
+            <ReviewArchivePanel platform="tripadvisor" />
           </Tabs.Panel>
           <Tabs.Panel value="airbnb" pt="md">
-            <Paper radius="md" withBorder shadow="xs" p="md">
-              <AirbnbReviews />
-            </Paper>
+            <ReviewArchivePanel platform="airbnb" />
           </Tabs.Panel>
           <Tabs.Panel value="getyourguide" pt="md">
             <Paper radius="md" withBorder shadow="xs" p="md">
@@ -84,11 +75,7 @@ const ReviewCounters = () => {
             </Paper>
           </Tabs.Panel>
            <Tabs.Panel value="overview" pt="md">
-            <Stack gap="md">
-              <ReviewAnalyticsPanel />
-              <ReviewMonthlySummary />
-              <ReviewCounterList />
-            </Stack>
+            <ReviewOverviewDashboard />
           </Tabs.Panel>
         </Tabs>
       </Stack>

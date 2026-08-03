@@ -12,6 +12,7 @@ const quickLinks = [
   { label: "Refunds", path: "/finance/refunds" },
   { label: "Accounts", path: "/finance/accounts" },
   { label: "Vendors", path: "/finance/vendors" },
+  { label: "Inventory", path: "/finance/inventory" },
   { label: "Clients", path: "/finance/clients" },
   { label: "Recurring Rules", path: "/finance/recurring" },
   { label: "Management Requests", path: "/finance/management-requests" },
