@@ -4,6 +4,9 @@ import dayjs from 'dayjs';
 import ReviewCounter from '../models/ReviewCounter.js';
 import ReviewCounterEntry, { type ReviewCounterEntryCategory } from '../models/ReviewCounterEntry.js';
 import ReviewCounterMonthlyApproval from '../models/ReviewCounterMonthlyApproval.js';
+import ReviewArchive from '../models/ReviewArchive.js';
+import ReviewAssignment from '../models/ReviewAssignment.js';
+import ReviewManualCredit from '../models/ReviewManualCredit.js';
 import CompensationComponentAssignment, { type CompensationTargetScope } from '../models/CompensationComponentAssignment.js';
 import CompensationComponent from '../models/CompensationComponent.js';
 import StaffProfile from '../models/StaffProfile.js';
@@ -1028,6 +1031,88 @@ type StaffBucket = {
         roundedCount: roundedAmount,
       });
     });
+  });
+
+  // New review archive credits feed the same payroll/approval pipeline as the
+  // legacy counters. A review contributes exactly 1 / assignee count to each
+  // assigned person, regardless of whether the source later deletes it.
+  const archivedReviews = await ReviewArchive.findAll({
+    where: {
+      reviewCreatedAt: { [Op.between]: [start.toDate(), end.toDate()] },
+    },
+    attributes: ['id', 'platform'],
+  });
+  const archivedReviewIds = archivedReviews.map((review) => review.id);
+  const archivedAssignments = archivedReviewIds.length
+    ? await ReviewAssignment.findAll({
+        where: { reviewId: { [Op.in]: archivedReviewIds } },
+        attributes: ['reviewId', 'userId'],
+      })
+    : [];
+
+  // Backfilled manual credits mirror legacy counter entries and are excluded
+  // here to avoid counting the same historical amount twice.
+  const manualCredits = await ReviewManualCredit.findAll({
+    where: {
+      date: { [Op.between]: [startValue, endValue] },
+      [Op.or]: [
+        { notes: null },
+        { notes: { [Op.notLike]: 'Backfilled from legacy review counter #%'} },
+      ],
+    },
+    attributes: ['userId', 'platform', 'credit'],
+  });
+
+  const archiveCreditByUserPlatform = new Map<string, number>();
+  archivedReviews.forEach((review) => {
+    const assignments = archivedAssignments.filter((assignment) => assignment.reviewId === review.id);
+    if (assignments.length === 0) {
+      return;
+    }
+    const credit = 1 / assignments.length;
+    assignments.forEach((assignment) => {
+      const key = `${assignment.userId}|${review.platform}`;
+      archiveCreditByUserPlatform.set(key, (archiveCreditByUserPlatform.get(key) ?? 0) + credit);
+    });
+  });
+  manualCredits.forEach((manual) => {
+    const key = `${manual.userId}|${manual.platform}`;
+    archiveCreditByUserPlatform.set(key, (archiveCreditByUserPlatform.get(key) ?? 0) + toNumber(manual.credit));
+  });
+
+  const archiveUserIds = Array.from(
+    new Set(Array.from(archiveCreditByUserPlatform.keys()).map((key) => Number(key.split('|')[0]))),
+  );
+  const archiveUsers = archiveUserIds.length
+    ? await User.findAll({
+        where: { id: { [Op.in]: archiveUserIds } },
+        attributes: ['id', 'firstName', 'lastName', 'userTypeId'],
+      })
+    : [];
+  const archiveUserById = new Map(archiveUsers.map((user) => [user.id, user]));
+  let syntheticCounterId = -1;
+  archiveCreditByUserPlatform.forEach((amount, key) => {
+    const [userIdValue, platform] = key.split('|');
+    const userId = Number(userIdValue);
+    const user = archiveUserById.get(userId);
+    if (!user || amount === 0) {
+      return;
+    }
+    const bucket = staffMap.get(userId) ?? {
+      userId,
+      displayName: formatUserDisplayName(user),
+      userTypeId: user.userTypeId ?? null,
+      totalReviews: 0,
+      platforms: [],
+    };
+    bucket.totalReviews += amount;
+    bucket.platforms.push({
+      counterId: syntheticCounterId--,
+      platform,
+      rawCount: amount,
+      roundedCount: roundReviewCredit(amount),
+    });
+    staffMap.set(userId, bucket);
   });
 
   const userIds = Array.from(staffMap.keys());
