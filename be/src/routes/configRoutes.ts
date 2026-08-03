@@ -13,6 +13,7 @@ import {
   getConfigSeedCatalog,
   getConfigSeedPreview,
   markConfigSeedRun,
+  discoverAndSaveTripAdvisorQueryId,
 } from '../controllers/configController.js';
 
 const router = Router();
@@ -26,6 +27,7 @@ router.get('/seed/preview', getConfigSeedPreview);
 router.post('/seed/restore', restoreConfigDefaults);
 router.post('/seed/run', runConfigSeed);
 router.post('/seed/mark', markConfigSeedRun);
+router.post('/tripadvisor/discover-query-id', discoverAndSaveTripAdvisorQueryId);
 router.get('/:key', getConfigByKey);
 router.post('/:key', updateConfigKey);
 router.post('/:key/reveal', revealConfigKey);

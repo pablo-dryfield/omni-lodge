@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { randomUUID } from 'node:crypto';
 import { getConfigValue } from '../services/configService.js';
 
 export type TripAdvisorReview = {
@@ -67,11 +68,19 @@ type TripAdvisorApiPage = {
   reviews?: TripAdvisorApiReview[];
 };
 
+type TripAdvisorApiResponse = {
+  data?: {
+    ReviewsProxy_getReviewListPageForLocation?: TripAdvisorApiPage[];
+    locations?: Array<{ reviewListPage?: TripAdvisorApiPage }>;
+  };
+};
+
 const GRAPHQL_ENDPOINT = 'https://www.tripadvisor.com/data/graphql/ids';
 
 const LOCATION_ID = Number(getConfigValue('TRIP_ADVISOR_LOCATION_ID') ?? 2725527);
 export const TRIP_ADVISOR_PAGE_SIZE = Number(getConfigValue('TRIP_ADVISOR_PAGE_SIZE') ?? 20);
 const LANGUAGE = (getConfigValue('TRIP_ADVISOR_LANGUAGE') as string | null) ?? 'en';
+const DEFAULT_QUERY_ID = 'ef1a9f94012220d3';
 
 const GRAPHQL_HEADERS = {
   accept: '*/*',
@@ -88,9 +97,6 @@ const GRAPHQL_HEADERS = {
   'sec-fetch-dest': 'empty',
   'sec-fetch-mode': 'same-origin',
   'sec-fetch-site': 'same-origin',
-  cookie:
-    (getConfigValue('TRIP_ADVISOR_COOKIE') as string | null) ??
-    'TAUnique=%1%enc%3AfP3UWefxDLGshPonIpy3mbk%2FIgjcWHKTsHpRcTPjgwDrPpCRcPmdOp0gqPK3zLEENox8JbUSTxk%3D',
   Referer:
     (getConfigValue('TRIP_ADVISOR_REFERER') as string | null) ??
     'https://www.tripadvisor.com/Attraction_Review-g274772-d2725527-Reviews-Krawl_Through_Krakow_Pub_Crawl-Krakow_Lesser_Poland_Province_Southern_Poland.html',
@@ -110,18 +116,95 @@ const GRAPHQL_BODY_TEMPLATE = [
       photosPerReviewLimit: 7,
     },
     extensions: {
-      preRegisteredQueryId: '00005812efce572c',
+      preRegisteredQueryId: DEFAULT_QUERY_ID,
     },
   },
 ];
 
 const clonePayload = () => JSON.parse(JSON.stringify(GRAPHQL_BODY_TEMPLATE)) as typeof GRAPHQL_BODY_TEMPLATE;
 
-const requestTripAdvisorData = async (offset: number) => {
+const requestTripAdvisorData = async (offset: number, queryId?: string) => {
   const body = clonePayload();
   body[0].variables.offset = offset;
   body[0].variables.limit = TRIP_ADVISOR_PAGE_SIZE;
-  return axios.post(GRAPHQL_ENDPOINT, body, { headers: GRAPHQL_HEADERS, timeout: 15000 });
+  body[0].extensions.preRegisteredQueryId =
+    queryId ?? (getConfigValue('TRIP_ADVISOR_QUERY_ID') as string | null) ?? DEFAULT_QUERY_ID;
+  const requestedBy = randomUUID();
+  return axios.post(GRAPHQL_ENDPOINT, body, {
+    headers: {
+      ...GRAPHQL_HEADERS,
+      origin: 'https://www.tripadvisor.com',
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36',
+      'x-requested-by': requestedBy,
+      cookie: (getConfigValue('TRIP_ADVISOR_COOKIE') as string | null) ?? `TAUnique=${requestedBy}`,
+    },
+    timeout: 15000,
+  });
+};
+
+const extractQueryIds = (content: string): string[] => {
+  const ids = new Set<string>();
+  for (const match of content.matchAll(/preRegisteredQueryId["']?\s*[:=]\s*["']([a-f0-9]{16})["']/gi)) {
+    ids.add(match[1]);
+  }
+  for (const match of content.matchAll(/(?:AttractionQueryID|HotelQueryID)\s+(?:string\s+)?=\s*["']([a-f0-9]{16})["']/gi)) {
+    ids.add(match[1]);
+  }
+  return [...ids];
+};
+
+export const discoverTripAdvisorQueryId = async (): Promise<{
+  queryId: string;
+  source: string;
+  totalCount: number;
+  sampleCount: number;
+}> => {
+  const candidates: Array<{ queryId: string; source: string }> = [];
+  const seen = new Set<string>();
+  const addCandidates = (content: string, source: string) => {
+    for (const queryId of extractQueryIds(content)) {
+      if (!seen.has(queryId)) {
+        seen.add(queryId);
+        candidates.push({ queryId, source });
+      }
+    }
+  };
+
+  const referer = (getConfigValue('TRIP_ADVISOR_REFERER') as string | null) ?? GRAPHQL_HEADERS.Referer;
+  try {
+    const page = await axios.get<string>(referer, {
+      headers: { 'user-agent': GRAPHQL_HEADERS['sec-ch-ua'], accept: 'text/html' },
+      timeout: 15000,
+    });
+    addCandidates(String(page.data), 'TripAdvisor listing page');
+  } catch {
+    // TripAdvisor frequently challenges server-side page requests; continue to the maintained public fallback.
+  }
+
+  try {
+    const publicSource = await axios.get<string>(
+      'https://raw.githubusercontent.com/algo7/TripAdvisor-Review-Scraper/main/scraper/pkg/tripadvisor/models.go',
+      { timeout: 15000 },
+    );
+    addCandidates(String(publicSource.data), 'TripAdvisor Review Scraper public query registry');
+  } catch {
+    // Validation below will provide a useful error if no candidates were discoverable.
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const response = await requestTripAdvisorData(0, candidate.queryId);
+      const page = extractPage(response.data);
+      const sampleCount = page.reviews?.length ?? 0;
+      if (sampleCount > 0 && (page.totalCount ?? 0) > 0) {
+        return { ...candidate, totalCount: page.totalCount ?? sampleCount, sampleCount };
+      }
+    } catch {
+      // Try every discovered candidate and never save one that cannot return reviews.
+    }
+  }
+
+  throw new Error('No working TripAdvisor reviews query ID could be discovered and validated.');
 };
 
 const extractPhotoUrl = (template?: string): string | undefined => {
@@ -131,8 +214,8 @@ const extractPhotoUrl = (template?: string): string | undefined => {
 
 const normalizeDate = (date?: string): string | undefined => {
   if (!date) return undefined;
-  const iso = new Date(`${date}T00:00:00Z`).toISOString();
-  return iso;
+  const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T00:00:00Z` : date);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 };
 
 const normalizeReview = (review: TripAdvisorApiReview): TripAdvisorReview => {
@@ -171,9 +254,10 @@ const normalizeReview = (review: TripAdvisorApiReview): TripAdvisorReview => {
 
 const extractPage = (response: unknown): TripAdvisorApiPage => {
   if (!Array.isArray(response)) return { totalCount: 0, reviews: [] };
-  const page =
-    response[0]?.data?.ReviewsProxy_getReviewListPageForLocation?.[0] ??
-    ({} as TripAdvisorApiPage);
+  const page = (response as TripAdvisorApiResponse[]).map(item =>
+    item?.data?.ReviewsProxy_getReviewListPageForLocation?.[0] ??
+    item?.data?.locations?.[0]?.reviewListPage,
+  ).find(Boolean) ?? ({} as TripAdvisorApiPage);
   return {
     totalCount: page?.totalCount ?? 0,
     reviews: page?.reviews ?? [],

@@ -15,6 +15,7 @@ import {
 } from '../services/configService.js';
 import { ACCESS_CONTROL_SEED_KEYS, listSeedCatalog, previewSeedChanges, runAccessControlSeedByKey } from '../utils/initializeAccessControl.js';
 import { recordSeedRun } from '../services/seedRunService.js';
+import { discoverTripAdvisorQueryId } from '../scrapers/tripAdvisorScraper.js';
 
 const handleError = (res: Response, error: unknown): void => {
   if (error instanceof HttpError) {
@@ -142,6 +143,25 @@ export const updateConfigKey = async (req: AuthenticatedRequest, res: Response):
     const value = req.body?.value;
     const updated = await updateConfigValue({ key, value, actorId, reason });
     res.json({ config: updated });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const discoverAndSaveTripAdvisorQueryId = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const discovered = await discoverTripAdvisorQueryId();
+    const actorId = req.authContext?.id ?? null;
+    const config = await updateConfigValue({
+      key: 'TRIP_ADVISOR_QUERY_ID',
+      value: discovered.queryId,
+      actorId,
+      reason: `Automatically discovered and validated via ${discovered.source}`,
+    });
+    res.json({ config, discovery: discovered });
   } catch (error) {
     handleError(res, error);
   }
