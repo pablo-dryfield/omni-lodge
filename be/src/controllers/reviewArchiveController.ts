@@ -64,27 +64,31 @@ export async function ingestReviewSyncPage(req: AuthenticatedRequest, res: Respo
 export async function completeReviewSync(req: AuthenticatedRequest, res: Response) {
   try {
     const run = await ReviewSyncRun.findByPk(Number(req.params.runId));
-    if (!run || run.status !== 'running') throw new Error('Active sync run not found');
+    if (!run || !['running', 'completed'].includes(run.status)) throw new Error('Active sync run not found');
     const now = new Date();
     const partial = req.body.partial === true;
-    const deleted = partial ? [0] : await ReviewArchive.update(
-      { isDeleted: true, deletedDetectedAt: now },
-      { where: { platform: run.platform, [Op.or]: [{ lastSeenRunId: { [Op.ne]: run.id } }, { lastSeenRunId: null }], isDeleted: false } },
-    );
-    await run.update({ status: 'completed', deletedCount: deleted[0], completedAt: now });
-    const [archivedCount, activeCount, newReviewsCount] = await Promise.all([
-      ReviewArchive.count({ where: { platform: run.platform } }),
-      ReviewArchive.count({ where: { platform: run.platform, isDeleted: false } }),
-      ReviewArchive.count({ where: { platform: run.platform, firstSeenAt: { [Op.gte]: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) } } }),
-    ]);
-    const snapshotDate = now.toISOString().slice(0, 10);
-    await ReviewDailySnapshot.upsert({
-      platform: run.platform, snapshotDate,
-      sourceTotalCount: req.body.sourceTotalCount == null ? null : Number(req.body.sourceTotalCount),
-      averageRating: req.body.averageRating == null ? null : Number(req.body.averageRating),
-      archivedCount, activeCount, deletedCount: archivedCount - activeCount, newReviewsCount, syncRunId: run.id,
+    const snapshotAt = run.completedAt ?? now;
+    const snapshotDate = snapshotAt.toISOString().slice(0, 10);
+    const result = await sequelize.transaction(async transaction => {
+      const deleted = partial || run.status === 'completed' ? [run.deletedCount] : await ReviewArchive.update(
+        { isDeleted: true, deletedDetectedAt: now },
+        { where: { platform: run.platform, [Op.or]: [{ lastSeenRunId: { [Op.ne]: run.id } }, { lastSeenRunId: null }], isDeleted: false }, transaction },
+      );
+      const [archivedCount, activeCount, newReviewsCount] = await Promise.all([
+        ReviewArchive.count({ where: { platform: run.platform }, transaction }),
+        ReviewArchive.count({ where: { platform: run.platform, isDeleted: false }, transaction }),
+        ReviewArchive.count({ where: { platform: run.platform, firstSeenAt: { [Op.gte]: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) } }, transaction }),
+      ]);
+      await ReviewDailySnapshot.upsert({
+        platform: run.platform, snapshotDate,
+        sourceTotalCount: req.body.sourceTotalCount == null ? null : Number(req.body.sourceTotalCount),
+        averageRating: req.body.averageRating == null ? null : Number(req.body.averageRating),
+        archivedCount, activeCount, deletedCount: archivedCount - activeCount, newReviewsCount, syncRunId: run.id,
+      }, { conflictFields: ['platform', 'snapshot_date'], transaction });
+      await run.update({ status: 'completed', deletedCount: deleted[0], completedAt: run.completedAt ?? now }, { transaction });
+      return { archivedCount, activeCount };
     });
-    res.json({ run, snapshotDate, archivedCount, activeCount, partial });
+    res.json({ run, snapshotDate, ...result, partial });
   } catch (error) { fail(res, error); }
 }
 

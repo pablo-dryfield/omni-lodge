@@ -3,11 +3,11 @@ import { Avatar, Badge, Button, Checkbox, Group, MultiSelect, Pagination, Paper,
 import { IconAlertTriangle, IconEdit, IconRefresh, IconSearch, IconStarFilled, IconTrash } from '@tabler/icons-react';
 import axiosInstance from '../../utils/axiosInstance';
 
-type Platform = 'google' | 'tripadvisor' | 'airbnb';
+type Platform = 'google' | 'tripadvisor' | 'airbnb' | 'getyourguide';
 type User = { id: number; firstName: string; lastName: string; username: string };
 type Review = { id: number; sourceReviewId: string; reviewerName: string; reviewerPhotoUrl: string | null; comment: string | null; rating: number | string; reviewCreatedAt: string; reviewUpdatedAt: string | null; isDeleted: boolean; isNoName: boolean; isBadReview: boolean; deletedDetectedAt: string | null; assignedUserIds: number[]; credit: number };
 type GoogleMeta = { nextPageToken?: string | null; totalCount?: number; averageRating?: number };
-const labels = { google: 'Google', tripadvisor: 'TripAdvisor', airbnb: 'Airbnb' };
+const labels = { google: 'Google', tripadvisor: 'TripAdvisor', airbnb: 'Airbnb', getyourguide: 'GetYourGuide' };
 
 export default function ReviewArchivePanel({ platform, canManage = false }: { platform: Platform; canManage?: boolean }) {
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -42,7 +42,9 @@ export default function ReviewArchivePanel({ platform, canManage = false }: { pl
           ? await axiosInstance.get('/reviews/googleReviews', { params: token ? { pageToken: token } : undefined })
           : platform === 'tripadvisor'
             ? await axiosInstance.get('/reviews/tripadvisorReviews', { params: offset ? { offset } : undefined })
-            : await axiosInstance.get('/reviews/airbnbReviews', { params: cursor ? { cursor } : undefined });
+            : platform === 'getyourguide'
+              ? await axiosInstance.get('/reviews/getyourguideReviews', { params: offset ? { offset } : undefined })
+              : await axiosInstance.get('/reviews/airbnbReviews', { params: cursor ? { cursor } : undefined });
         const payload = response.data[0], rows = payload.data ?? [], meta = payload.columns?.[0];
         await axiosInstance.post(`${syncBase}/${runId}/page`, { reviews: rows });
         if (platform === 'google') {
@@ -50,7 +52,7 @@ export default function ReviewArchivePanel({ platform, canManage = false }: { pl
           sourceTotalCount = googleMeta.totalCount; averageRating = googleMeta.averageRating;
           token = googleMeta.nextPageToken || undefined;
           if (!token) break;
-        } else if (platform === 'tripadvisor') {
+        } else if (platform === 'tripadvisor' || platform === 'getyourguide') {
           sourceTotalCount = meta?.totalCount ?? sourceTotalCount;
           if (!meta?.hasMore) break; offset = meta.nextOffset;
         } else {
@@ -84,7 +86,7 @@ export default function ReviewArchivePanel({ platform, canManage = false }: { pl
         <div><Title order={3}>{labels[platform]} review archive</Title><Text c="dimmed" size="sm">Persistent history, deletion monitoring, edits, and shared staff credit.</Text></div>
         {canManage && <Button leftSection={<IconRefresh size={17}/>} loading={loading} onClick={() => void sync(true)}>Full sync</Button>}
       </Group>
-      <Group mt="lg" gap="xl"><div><Text size="xs" c="dimmed">Reviews in this view</Text><Text fw={800} fz="xl">{total.toLocaleString()}</Text></div>{sourceStats.totalCount != null && <div><Text size="xs" c="dimmed">Google total</Text><Text fw={800} fz="xl">{sourceStats.totalCount.toLocaleString()}</Text></div>}{sourceStats.averageRating != null && <div><Text size="xs" c="dimmed">Average rating</Text><Text fw={800} fz="xl">{sourceStats.averageRating.toFixed(2)}</Text></div>}</Group>
+      <Group mt="lg" gap="xl"><div><Text size="xs" c="dimmed">Reviews in this view</Text><Text fw={800} fz="xl">{total.toLocaleString()}</Text></div>{sourceStats.totalCount != null && <div><Text size="xs" c="dimmed">Source total</Text><Text fw={800} fz="xl">{sourceStats.totalCount.toLocaleString()}</Text></div>}{sourceStats.averageRating != null && <div><Text size="xs" c="dimmed">Average rating</Text><Text fw={800} fz="xl">{sourceStats.averageRating.toFixed(2)}</Text></div>}</Group>
       <Group mt="lg" justify="space-between"><TextInput leftSection={<IconSearch size={16}/>} placeholder="Search archived reviews" value={search} onChange={event => { setSearch(event.currentTarget.value); setPage(1); }} style={{ flex: 1, maxWidth: 420 }}/><SegmentedControl value={filter} onChange={value => { setFilter(value); setPage(1); }} data={[{ value: 'active', label: 'Active' }, { value: 'deleted', label: 'Deleted' }, { value: 'all', label: 'All' }]}/></Group>
       {error && <Text c="red" mt="sm">{error}</Text>}
     </Paper>

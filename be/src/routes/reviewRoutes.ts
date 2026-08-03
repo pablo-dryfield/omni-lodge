@@ -25,6 +25,7 @@ router.get('/airbnbReviews', authMiddleware, reviewController.getAirbnbReviews);
 // Google revies
 router.get('/googleReviews', authMiddleware, reviewController.getAllGoogleReviews);
 router.get('/getyourguideLink', authMiddleware, reviewController.getGetYourGuideReviewLink);
+router.get('/getyourguideReviews', authMiddleware, reviewController.getGetYourGuideReviews);
 router.get('/archive',authMiddleware,archiveView,listArchivedReviews);
 router.get('/archive/trends',authMiddleware,archiveView,getReviewTrends);
 router.post('/archive/sync/fast/start',authMiddleware,archiveView,startReviewSync);

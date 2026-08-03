@@ -3,7 +3,6 @@ import { useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
-import GetYourGuideReviews from "../components/reports/GetYourGuideReviews";
 import ReviewArchivePanel from "../components/reviews/ReviewArchivePanel";
 import ReviewOverviewDashboard from "../components/reviews/ReviewOverviewDashboard";
 import DailyReviewTrend from "../components/reviews/DailyReviewTrend";
@@ -77,9 +76,7 @@ const ReviewCounters = () => {
             <ReviewArchivePanel platform="airbnb" canManage={canManage} />
           </Tabs.Panel>
           <Tabs.Panel value="getyourguide" pt="md">
-            <Paper radius="md" withBorder shadow="xs" p="md">
-              <GetYourGuideReviews />
-            </Paper>
+            <ReviewArchivePanel platform="getyourguide" canManage={canManage} />
           </Tabs.Panel>
            <Tabs.Panel value="overview" pt="md">
             <Stack gap="lg">
