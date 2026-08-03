@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { fetchTripAdvisorRaw, TRIP_ADVISOR_PAGE_SIZE } from '../scrapers/tripAdvisorScraper.js';
+import { fetchGetYourGuideReviews, GET_YOUR_GUIDE_PAGE_SIZE } from '../scrapers/getYourGuideScraper.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { getConfigValue } from '../services/configService.js';
@@ -304,5 +305,19 @@ export const getGetYourGuideReviewLink = async (_req: Request, res: Response) =>
   } catch (error) {
     console.error('Error resolving GetYourGuide review link:', error);
     res.status(200).json({ url: DEFAULT_GYG_ACTIVITY_URL });
+  }
+};
+
+export const getGetYourGuideReviews = async (req: Request, res: Response) => {
+  try {
+    const offset = typeof req.query.offset === 'string' && Number.isFinite(Number(req.query.offset))
+      ? Math.max(0, Number(req.query.offset))
+      : 0;
+    const page = await fetchGetYourGuideReviews(offset);
+    res.status(200).json([{ data: page.reviews, columns: [{ offset, nextOffset: page.nextOffset,
+      pageSize: GET_YOUR_GUIDE_PAGE_SIZE, totalCount: page.totalCount, hasMore: page.hasMore }] }]);
+  } catch (error) {
+    console.error('Error fetching GetYourGuide reviews:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to fetch GetYourGuide reviews' });
   }
 };
