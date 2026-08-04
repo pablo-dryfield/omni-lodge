@@ -22,6 +22,9 @@ import StaffPayoutLedger from "../models/StaffPayoutLedger.js";
 import UserShiftRole from "../models/UserShiftRole.js";
 import ReviewCounter from "../models/ReviewCounter.js";
 import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
+import ReviewArchive from "../models/ReviewArchive.js";
+import ReviewAssignment from "../models/ReviewAssignment.js";
+import ReviewManualCredit from "../models/ReviewManualCredit.js";
 import ReportTemplate, {
   ReportTemplateFieldSelection,
   ReportTemplateOptions,
@@ -423,6 +426,7 @@ const MANUAL_ATTENDANCE_START = dayjs("2025-10-01");
 // From Oct 1 through Feb 25, attended counter metrics are the manually counted
 // attendance (booked minus inferred no-shows). Booking-level check-ins take over here.
 const PAYOUT_ATTENDANCE_START = dayjs("2026-02-26");
+const REVIEW_ARCHIVE_PAYOUT_START = dayjs("2026-07-01");
 const REVIEW_MINIMUM_THRESHOLD = 15;
 const isExcludedNoShowAddonName = (value?: string | null): boolean => {
   const normalized = value?.toLowerCase() ?? "";
@@ -4751,19 +4755,23 @@ const fetchReviewStats = async (
 ): Promise<Map<number, ReviewTotals>> => {
   const startIso = rangeStart.format("YYYY-MM-DD");
   const endIso = rangeEnd.format("YYYY-MM-DD");
+  const legacyReviewEnd = dayjs.min(rangeEnd, REVIEW_ARCHIVE_PAYOUT_START.subtract(1, "day"));
+  const archiveReviewStart = dayjs.max(rangeStart, REVIEW_ARCHIVE_PAYOUT_START);
+  const includesLegacyReviews = !legacyReviewEnd.isBefore(rangeStart, "day");
+  const includesArchiveReviews = !archiveReviewStart.isAfter(rangeEnd, "day");
 
-  const counters = await ReviewCounter.findAll({
+  const counters = includesLegacyReviews ? await ReviewCounter.findAll({
     attributes: ["id", "periodStart", "periodEnd"],
     where: {
       [Op.or]: [
         {
           periodStart: {
-            [Op.between]: [startIso, endIso],
+            [Op.between]: [startIso, legacyReviewEnd.format("YYYY-MM-DD")],
           },
         },
         {
           periodEnd: {
-            [Op.between]: [startIso, endIso],
+            [Op.between]: [startIso, legacyReviewEnd.format("YYYY-MM-DD")],
           },
         },
         {
@@ -4771,7 +4779,7 @@ const fetchReviewStats = async (
             { periodStart: { [Op.lte]: startIso } },
             {
               [Op.or]: [
-                { periodEnd: { [Op.gte]: endIso } },
+                { periodEnd: { [Op.gte]: legacyReviewEnd.format("YYYY-MM-DD") } },
                 { periodEnd: null },
               ],
             },
@@ -4781,20 +4789,18 @@ const fetchReviewStats = async (
     },
   });
 
-  if (counters.length === 0) {
-    return new Map();
-  }
-
   const counterIds = counters.map((counter) => counter.id);
 
-  const entries = await ReviewCounterEntry.findAll({
-    attributes: ["counterId", "userId", "roundedCount", "underMinimumApproved"],
-    where: {
-      counterId: { [Op.in]: counterIds },
-      category: "staff",
-      userId: { [Op.ne]: null },
-    },
-  });
+  const entries = counterIds.length > 0
+    ? await ReviewCounterEntry.findAll({
+        attributes: ["counterId", "userId", "roundedCount", "underMinimumApproved"],
+        where: {
+          counterId: { [Op.in]: counterIds },
+          category: "staff",
+          userId: { [Op.ne]: null },
+        },
+      })
+    : [];
 
   const stats = new Map<number, ReviewTotals>();
   entries.forEach((entry) => {
@@ -4811,6 +4817,69 @@ const fetchReviewStats = async (
     current.totalTrackedReviews += roundedCount;
     current.totalEligibleReviews += roundedCount;
     stats.set(userId, current);
+  }) : [];
+
+  const archivedReviews = includesArchiveReviews ? await ReviewArchive.findAll({
+    attributes: ["id"],
+    where: {
+      reviewCreatedAt: {
+        [Op.between]: [
+          new Date(`${archiveReviewStart.format("YYYY-MM-DD")}T00:00:00.000Z`),
+          new Date(`${endIso}T23:59:59.999Z`),
+        ],
+      },
+    },
+  }) : [];
+  const archivedReviewIds = archivedReviews.map((review) => review.id);
+  if (archivedReviewIds.length > 0) {
+    const archiveAssignments = await ReviewAssignment.findAll({
+      attributes: ["reviewId", "userId"],
+      where: { reviewId: { [Op.in]: archivedReviewIds } },
+    });
+    const assignmentCountByReviewId = new Map<number, number>();
+    archiveAssignments.forEach((assignment) => {
+      assignmentCountByReviewId.set(
+        assignment.reviewId,
+        (assignmentCountByReviewId.get(assignment.reviewId) ?? 0) + 1,
+      );
+    });
+    archiveAssignments.forEach((assignment) => {
+      const assignmentCount = assignmentCountByReviewId.get(assignment.reviewId) ?? 0;
+      if (assignmentCount <= 0) {
+        return;
+      }
+      const credit = 1 / assignmentCount;
+      const current = stats.get(assignment.userId) ?? { totalEligibleReviews: 0, totalTrackedReviews: 0 };
+      current.totalTrackedReviews += credit;
+      current.totalEligibleReviews += credit;
+      stats.set(assignment.userId, current);
+    });
+  }
+
+  const manualCredits = includesArchiveReviews ? await ReviewManualCredit.findAll({
+    attributes: ["userId", "credit"],
+    where: {
+      date: { [Op.between]: [archiveReviewStart.format("YYYY-MM-DD"), endIso] },
+      category: "staff",
+      userId: { [Op.ne]: null },
+      [Op.or]: [
+        { notes: null },
+        { notes: { [Op.notLike]: "Backfilled from legacy review counter #%" } },
+      ],
+    },
+  }) : [];
+  manualCredits.forEach((entry) => {
+    if (entry.userId == null) {
+      return;
+    }
+    const credit = Number(entry.credit ?? 0);
+    if (!Number.isFinite(credit) || credit <= 0) {
+      return;
+    }
+    const current = stats.get(entry.userId) ?? { totalEligibleReviews: 0, totalTrackedReviews: 0 };
+    current.totalTrackedReviews += credit;
+    current.totalEligibleReviews += credit;
+    stats.set(entry.userId, current);
   });
 
   return stats;
