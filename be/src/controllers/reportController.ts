@@ -4787,7 +4787,7 @@ const fetchReviewStats = async (
         },
       ],
     },
-  });
+  }) : [];
 
   const counterIds = counters.map((counter) => counter.id);
 
@@ -4817,7 +4817,7 @@ const fetchReviewStats = async (
     current.totalTrackedReviews += roundedCount;
     current.totalEligibleReviews += roundedCount;
     stats.set(userId, current);
-  }) : [];
+  });
 
   const archivedReviews = includesArchiveReviews ? await ReviewArchive.findAll({
     attributes: ["id"],
