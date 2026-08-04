@@ -4755,8 +4755,11 @@ const fetchReviewStats = async (
 ): Promise<Map<number, ReviewTotals>> => {
   const startIso = rangeStart.format("YYYY-MM-DD");
   const endIso = rangeEnd.format("YYYY-MM-DD");
-  const legacyReviewEnd = dayjs.min(rangeEnd, REVIEW_ARCHIVE_PAYOUT_START.subtract(1, "day"));
-  const archiveReviewStart = dayjs.max(rangeStart, REVIEW_ARCHIVE_PAYOUT_START);
+  const lastLegacyReviewDay = REVIEW_ARCHIVE_PAYOUT_START.subtract(1, "day");
+  const legacyReviewEnd = rangeEnd.isBefore(lastLegacyReviewDay, "day") ? rangeEnd : lastLegacyReviewDay;
+  const archiveReviewStart = rangeStart.isAfter(REVIEW_ARCHIVE_PAYOUT_START, "day")
+    ? rangeStart
+    : REVIEW_ARCHIVE_PAYOUT_START;
   const includesLegacyReviews = !legacyReviewEnd.isBefore(rangeStart, "day");
   const includesArchiveReviews = !archiveReviewStart.isAfter(rangeEnd, "day");
 
