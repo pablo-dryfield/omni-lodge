@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { Op, type WhereOptions } from 'sequelize';
 import { DataType } from 'sequelize-typescript';
 import Product from '../models/Product.js';
@@ -7,6 +7,9 @@ import Addon from '../models/Addon.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { toAddonConfig } from '../services/counterMetricUtils.js';
 import type { ProductImage } from '../types/productMedia.js';
+import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import HttpError from '../errors/HttpError.js';
+import { getAllowedProductTypeIds, requireProductAccess, requireProductTypeAccess, scopeProductWhere } from '../services/productScopeService.js';
 
 function buildProductColumns() {
   const attributes = Product.getAttributes();
@@ -72,15 +75,17 @@ function normalizeProductPayload(
   return normalized;
 }
 
-export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
+export const getAllProducts = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const allowedProductTypeIds = await getAllowedProductTypeIds(req);
     const format = (req.query.format ?? req.query.view ?? '').toString().toLowerCase();
 
     if (format === 'compact') {
-      const where: WhereOptions = {};
+      let where: WhereOptions = {};
       if ((req.query.active ?? '').toString().toLowerCase() === 'true') {
         where.status = { [Op.ne]: false };
       }
+      where = scopeProductWhere(allowedProductTypeIds, where);
 
       const products = await Product.findAll({
         where,
@@ -133,28 +138,29 @@ export const getAllProducts = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const data = await Product.findAll();
+    const data = await Product.findAll({ where: scopeProductWhere(allowedProductTypeIds) });
     res.status(200).json([{ data, columns: buildProductColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
-export const getAllActiveProducts = async (req: Request, res: Response): Promise<void> => {
+export const getAllActiveProducts = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const data = await Product.findAll({ where: { status: true } });
+    const allowed = await getAllowedProductTypeIds(req);
+    const data = await Product.findAll({ where: scopeProductWhere(allowed, { status: true }) });
     res.status(200).json([{ data, columns: buildProductColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
-export const getProductById = async (req: Request, res: Response): Promise<void> => {
+export const getProductById = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const data = await Product.findByPk(id);
+    const data = await requireProductAccess(req, Number(id));
 
     if (!data) {
       res.status(404).json([{ message: 'Product not found' }]);
@@ -164,24 +170,29 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
     res.status(200).json([{ data, columns: buildProductColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
-export const createProduct = async (req: Request, res: Response): Promise<void> => {
+export const createProduct = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const newProduct = await Product.create(normalizeProductPayload(req.body, { isCreate: true }));
+    const payload = normalizeProductPayload(req.body, { isCreate: true });
+    await requireProductTypeAccess(req, Number(payload.productTypeId));
+    const newProduct = await Product.create(payload);
     res.status(201).json([newProduct]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
-export const updateProduct = async (req: Request, res: Response): Promise<void> => {
+export const updateProduct = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const [updated] = await Product.update(normalizeProductPayload(req.body), { where: { id } });
+    await requireProductAccess(req, Number(id));
+    const payload = normalizeProductPayload(req.body);
+    if (payload.productTypeId !== undefined) await requireProductTypeAccess(req, Number(payload.productTypeId));
+    const [updated] = await Product.update(payload, { where: { id } });
 
     if (!updated) {
       res.status(404).json([{ message: 'Product not found' }]);
@@ -192,13 +203,14 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     res.status(200).json([updatedProduct]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
-export const deleteProduct = async (req: Request, res: Response): Promise<void> => {
+export const deleteProduct = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    await requireProductAccess(req, Number(id));
     const deleted = await Product.destroy({ where: { id } });
 
     if (!deleted) {
@@ -209,6 +221,6 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
     res.status(204).send();
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };

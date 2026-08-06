@@ -15,6 +15,7 @@ import CounterUser from "../models/CounterUser.js";
 import Product from "../models/Product.js";
 import ProductType from "../models/ProductType.js";
 import UserType from "../models/UserType.js";
+import UserTypeProductType from "../models/UserTypeProductType.js";
 import ProductAlias from "../models/ProductAlias.js";
 import Page from "../models/Page.js";
 import Module from "../models/Module.js";
@@ -267,6 +268,7 @@ const sequelize = new Sequelize({
     ShiftRole,
     UserShiftRole,
     UserType,
+    UserTypeProductType,
     Page,
     Module,
     Action,

@@ -17,6 +17,8 @@ import { removeEmptyKeys } from "../../utils/removeEmptyKeys";
 import { getChangedValues } from "../../utils/getChangedValues";
 import { applyUserTypePermissions, type UserTypePermissionAction } from "../../api/userTypes";
 import { useModuleAccess } from "../../hooks/useModuleAccess";
+import { fetchProductTypes } from "../../actions/productTypeActions";
+import type { ProductType } from "../../types/productTypes/ProductType";
 
 const DEFAULT_MODULE_SLUG = "settings-user-types-admin";
 
@@ -28,6 +30,7 @@ type UserTypeListProps = {
 const UserTypeList = ({ pageTitle, moduleSlug = DEFAULT_MODULE_SLUG }: UserTypeListProps) => {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((state) => state.userTypes)[0];
+  const productTypeState = useAppSelector((state) => state.productTypes)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
   const { loggedUserId } = useAppSelector((state) => state.session);
   const moduleAccess = useModuleAccess(moduleSlug);
@@ -50,7 +53,14 @@ const UserTypeList = ({ pageTitle, moduleSlug = DEFAULT_MODULE_SLUG }: UserTypeL
 
   useEffect(() => {
     dispatch(fetchUserTypes());
+    dispatch(fetchProductTypes());
   }, [dispatch]);
+
+  const productTypeOptions = useMemo(() =>
+    ((productTypeState.data[0]?.data ?? []) as Partial<ProductType>[])
+      .filter((record): record is Partial<ProductType> & { id: number; name: string } => typeof record.id === 'number' && Boolean(record.name))
+      .map((record) => ({ value: String(record.id), label: record.name })),
+  [productTypeState.data]);
 
   const userTypeRecords = useMemo(() => data[0]?.data || [], [data]);
 
@@ -174,8 +184,8 @@ const UserTypeList = ({ pageTitle, moduleSlug = DEFAULT_MODULE_SLUG }: UserTypeL
   };
 
   const modifiedColumns = useMemo<MRT_ColumnDef<Partial<UserType>>[]>(
-    () => modifyColumn(data[0]?.columns || [], userTypesColumnDef),
-    [data]
+    () => modifyColumn(data[0]?.columns || [], userTypesColumnDef(productTypeOptions)),
+    [data, productTypeOptions]
   );
 
   const headerTitle = pageTitle ?? currentPage;

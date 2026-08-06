@@ -148,6 +148,20 @@ export const venueCompensationColumnDef = ({
     },
   },
   {
+    accessorKey: "minDurationMinutes",
+    modifications: {
+      header: "Min Stay (min)",
+      mantineEditTextInputProps: { type: "number", min: 1, step: 1 },
+    },
+  },
+  {
+    accessorKey: "maxDurationMinutes",
+    modifications: {
+      header: "Max Stay (min)",
+      mantineEditTextInputProps: { type: "number", min: 1, step: 1 },
+    },
+  },
+  {
     accessorKey: "validFrom",
     modifications: {
       header: "Valid From",

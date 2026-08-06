@@ -15,6 +15,7 @@ import ReviewCounterEntry from './ReviewCounterEntry.js';
 import ReviewCounterMonthlyApproval from './ReviewCounterMonthlyApproval.js';
 import User from './User.js';
 import UserType from './UserType.js';
+import UserTypeProductType from './UserTypeProductType.js';
 import Page from './Page.js';
 import Module from './Module.js';
 import Action from './Action.js';
@@ -123,6 +124,12 @@ export function defineAssociations() {
   UserType.belongsTo(User, { foreignKey: 'updatedBy', as: 'updatedByUser' });
   UserType.hasMany(RolePagePermission, { foreignKey: 'userTypeId', as: 'pagePermissions' });
   UserType.hasMany(RoleModulePermission, { foreignKey: 'userTypeId', as: 'modulePermissions' });
+  UserType.belongsToMany(ProductType, {
+    through: UserTypeProductType,
+    as: 'allowedProductTypes',
+    foreignKey: 'user_type_id',
+    otherKey: 'product_type_id',
+  });
 
   // Access Control Associations
   Page.belongsTo(User, { foreignKey: 'createdBy', as: 'createdByUser' });
@@ -221,6 +228,12 @@ export function defineAssociations() {
 
   // ProductType Associations
   ProductType.hasMany(Product, { foreignKey: 'productTypeId' });
+  ProductType.belongsToMany(UserType, {
+    through: UserTypeProductType,
+    as: 'scopedUserTypes',
+    foreignKey: 'product_type_id',
+    otherKey: 'user_type_id',
+  });
   ProductType.belongsTo(User, { foreignKey: 'createdBy' });
   ProductType.belongsTo(User, { foreignKey: 'updatedBy' });
 

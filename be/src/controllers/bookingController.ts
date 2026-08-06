@@ -22,6 +22,7 @@ import HttpError from '../errors/HttpError.js';
 import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
 import type Stripe from 'stripe';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { getAllowedProductTypeIds } from '../services/productScopeService.js';
 import {
   canonicalizeProductKeyFromLabel,
   canonicalizeProductKeyFromSources,
@@ -2154,7 +2155,7 @@ const resolveCounterDateWhere = (start: string | null, end: string | null): Wher
   return dateWhere;
 };
 
-export const listBookings = async (req: Request, res: Response): Promise<void> => {
+export const listBookings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const query = req.query as QueryParams;
     const { start, end } = resolveRange(query);
@@ -2164,6 +2165,12 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
     if (productTypeIds.length === 0 && legacyProductTypeId != null) {
       productTypeIds.push(legacyProductTypeId);
     }
+    const allowedProductTypeIds = await getAllowedProductTypeIds(req);
+    const effectiveProductTypeIds = allowedProductTypeIds === null
+      ? productTypeIds
+      : productTypeIds.length > 0
+        ? productTypeIds.filter((id) => allowedProductTypeIds.includes(id))
+        : allowedProductTypeIds;
 
     const where: WhereOptions = {};
     if (dateField === 'experience_date') {
@@ -2210,9 +2217,9 @@ export const listBookings = async (req: Request, res: Response): Promise<void> =
           model: Product,
           as: 'product',
           attributes: ['id', 'name'],
-          ...(productTypeIds.length > 0
+          ...(allowedProductTypeIds !== null || effectiveProductTypeIds.length > 0
             ? {
-                where: { productTypeId: { [Op.in]: productTypeIds } },
+                where: { productTypeId: { [Op.in]: effectiveProductTypeIds } },
                 required: true,
               }
             : { required: false }),
@@ -3205,8 +3212,9 @@ export const importEcwidBooking = async (req: AuthenticatedRequest, res: Respons
   }
 };
 
-export const getManifest = async (req: Request, res: Response): Promise<void> => {
+export const getManifest = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const allowedProductTypeIds = await getAllowedProductTypeIds(req);
     const { date, productId, time, search } = req.query as QueryParams;
     const searchTerm = typeof search === 'string' ? search.trim() : '';
     const hasSearch = searchTerm.length > 0;
@@ -3221,6 +3229,9 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
     const numericProductId = normalizedProductId ? Number.parseInt(normalizedProductId, 10) : NaN;
     const hasNumericProductId = Number.isFinite(numericProductId);
     const productRecord = hasNumericProductId ? await Product.findByPk(numericProductId) : null;
+    if (productRecord && allowedProductTypeIds !== null && !allowedProductTypeIds.includes(productRecord.productTypeId)) {
+      throw new HttpError(403, 'This product is outside your assigned product scope');
+    }
     const canonicalProductKey = productRecord
       ? canonicalizeProductKeyFromLabel(productRecord.name ?? null)
       : null;
@@ -3242,7 +3253,14 @@ export const getManifest = async (req: Request, res: Response): Promise<void> =>
             experienceDate: targetDate,
             ...(hasNumericProductId ? { productId: numericProductId } : {}),
           },
-      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+      include: [{
+        model: Product,
+        as: 'product',
+        attributes: ['id', 'name'],
+        ...(allowedProductTypeIds === null
+          ? {}
+          : { where: { productTypeId: { [Op.in]: allowedProductTypeIds } }, required: true }),
+      }],
       order: [
         ['experienceStartAt', 'ASC'],
         ['id', 'ASC'],
@@ -3365,6 +3383,13 @@ export const updateBookingAttendance = async (req: AuthenticatedRequest, res: Re
     if (!booking) {
       res.status(404).json({ message: 'Booking not found' });
       return;
+    }
+    const allowedProductTypeIds = await getAllowedProductTypeIds(req);
+    if (allowedProductTypeIds !== null) {
+      const product = booking.product as Product | null | undefined;
+      if (!product || !allowedProductTypeIds.includes(product.productTypeId)) {
+        throw new HttpError(403, 'This booking is outside your assigned product scope');
+      }
     }
 
     const result = await applyBookingAttendanceUpdate(booking, payload, req.authContext?.id ?? null);
@@ -3860,7 +3885,7 @@ export const getBookingDetails = async (req: AuthenticatedRequest, res: Response
 
     const booking = await Booking.findByPk(bookingIdParam, {
       include: [
-        { model: Product, as: 'product', attributes: ['id', 'name'] },
+        { model: Product, as: 'product', attributes: ['id', 'name', 'productTypeId'] },
         { model: Guest, as: 'guest', attributes: ['id', 'name', 'email', 'phoneNumber'] },
       ],
     });

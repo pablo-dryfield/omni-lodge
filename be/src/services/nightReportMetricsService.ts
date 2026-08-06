@@ -30,6 +30,7 @@ export type NightReportStatsMap = Map<number, NightReportLeaderSummary>;
 export const fetchLeaderNightReportStats = async (
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
+  allowedProductTypeIds: number[] | null = null,
 ): Promise<NightReportStatsMap> => {
   const reports = await NightReport.findAll({
     where: {
@@ -42,7 +43,7 @@ export const fetchLeaderNightReportStats = async (
       {
         model: NightReportVenue,
         as: "venues",
-        required: false,
+        required: allowedProductTypeIds !== null,
       },
       {
         model: Counter,
@@ -53,8 +54,9 @@ export const fetchLeaderNightReportStats = async (
           {
             model: Product,
             as: "product",
-            required: false,
+            required: allowedProductTypeIds !== null,
             attributes: ["id", "name"],
+            ...(allowedProductTypeIds === null ? {} : { where: { productTypeId: { [Op.in]: allowedProductTypeIds } } }),
           },
         ],
       },

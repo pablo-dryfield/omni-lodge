@@ -12,19 +12,20 @@ import {
   finalizeCounterReservations,
   upsertCounterMetrics,
 } from '../controllers/counterController.js';
+import { requireCounterProductScope } from '../services/productScopeService.js';
 
 const router: Router = express.Router();
 
 router.post('/', authMiddleware, createOrLoadCounter);
 router.post('/setup', authMiddleware, upsertCounterSetup);
 router.get('/', authMiddleware, getCounterByDate);
-router.get('/:id', authMiddleware, getCounterById);
-router.put('/:id', authMiddleware, updateCounter);
-router.patch('/:id', authMiddleware, updateCounter);
-router.delete('/:id', authMiddleware, deleteCounter);
-router.patch('/:id/staff', authMiddleware, updateCounterStaff);
-router.post('/:id/commit', authMiddleware, commitCounterRegistry);
-router.post('/:id/finalize-reservations', authMiddleware, finalizeCounterReservations);
-router.put('/:id/metrics', authMiddleware, upsertCounterMetrics);
+router.get('/:id', authMiddleware, requireCounterProductScope, getCounterById);
+router.put('/:id', authMiddleware, requireCounterProductScope, updateCounter);
+router.patch('/:id', authMiddleware, requireCounterProductScope, updateCounter);
+router.delete('/:id', authMiddleware, requireCounterProductScope, deleteCounter);
+router.patch('/:id/staff', authMiddleware, requireCounterProductScope, updateCounterStaff);
+router.post('/:id/commit', authMiddleware, requireCounterProductScope, commitCounterRegistry);
+router.post('/:id/finalize-reservations', authMiddleware, requireCounterProductScope, finalizeCounterReservations);
+router.put('/:id/metrics', authMiddleware, requireCounterProductScope, upsertCounterMetrics);
 
 export default router;

@@ -1,8 +1,10 @@
 import { ResponseModifications } from "../../types/general/ResponseModifications";
 import { UserType } from '../../types/userTypes/UserType';
 import dayjs from 'dayjs';
+import CustomEditMultiSelect from '../../utils/CustomEditMultiSelect';
+import type { EditSelectOption } from '../../utils/CustomEditSelect';
 
-export const userTypesColumnDef: ResponseModifications<Partial<UserType>>[] = [
+export const userTypesColumnDef = (productTypeOptions: EditSelectOption[]): ResponseModifications<Partial<UserType>>[] => [
   {
     accessorKey: 'id',
     modifications: {
@@ -23,6 +25,22 @@ export const userTypesColumnDef: ResponseModifications<Partial<UserType>>[] = [
         required: true,
       },
     }
+  },
+  {
+    accessorKey: 'productTypeIds',
+    modifications: {
+      id: 'productTypeIds',
+      header: 'Allowed Product Types',
+      Cell: ({ cell }) => {
+        const ids = cell.getValue<number[]>() ?? [];
+        if (ids.length === 0) return 'All product types';
+        const names = new Map(productTypeOptions.map((option) => [Number(option.value), option.label]));
+        return ids.map((id) => names.get(id) ?? `#${id}`).join(', ');
+      },
+      Edit: ({ cell, row }) => (
+        <CustomEditMultiSelect cell={cell} row={row} options={productTypeOptions} placeholder="Empty means all product types" />
+      ),
+    },
   },
   {
     accessorKey: 'createdAt',

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>OmniLodge Google Ads API Tool Design</title>
+  <style>
+    @page { size: A4; margin: 13mm 15mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #111827; font: 9.4pt/1.34 Arial, sans-serif; }
+    p { margin: 0 0 8px; }
+    .field { margin-bottom: 9px; }
+    .label { font-weight: 700; }
+    .note { color: #c5221f; margin-bottom: 13px; }
+    ul { margin: 4px 0 10px 20px; padding: 0; }
+    li { margin: 2px 0; }
+    a { color: #065fd4; text-decoration: underline; }
+    code { font: 8.6pt Consolas, monospace; }
+    .mockups { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 7px; }
+    .mock { border: 1px solid #263748; background: #f8fafc; }
+    .bar { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; color: white; background: #174f7c; font-weight: 700; }
+    .brand { padding: 3px 8px; color: #17324d; background: white; border-radius: 4px; font-weight: 400; }
+    .panel { padding: 9px; }
+    .panel-title { display: flex; justify-content: space-between; align-items: center; font-size: 10pt; font-weight: 700; margin-bottom: 8px; }
+    .select { padding: 3px 6px; border: 1px solid #8b98a5; border-radius: 3px; background: white; font-size: 8pt; font-weight: 400; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+    .metric { padding: 7px 3px; text-align: center; border: 1px solid #9aa9b7; background: #dbeafe; }
+    .metric b { display: block; margin-bottom: 5px; font-size: 8pt; }
+    .metric span { font-size: 10pt; }
+    .link { margin-top: 7px; color: #065fd4; text-decoration: underline; font-size: 8pt; }
+    .campaign { padding: 7px; border: 1px solid #c4cdd6; background: white; margin-bottom: 5px; }
+    .campaign strong { display: block; color: #17324d; }
+    .tags { margin-top: 4px; }
+    .tag { display: inline-block; margin-right: 3px; padding: 2px 5px; border-radius: 8px; color: #245b37; background: #dcfce7; font-size: 7.5pt; }
+    .tag.paused { color: #7c4a03; background: #fef3c7; }
+    .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 7px; }
+    .button { padding: 5px 8px; color: white; background: #1a73e8; border-radius: 4px; font-size: 8pt; font-weight: 700; }
+    .small { color: #566574; font-size: 7.7pt; }
+    .footer { margin-top: 9px; color: #64748b; font-size: 7.5pt; }
+  </style>
+</head>
+<body>
+  <p class="note"><strong>Note:</strong> This tool is available only to authorized internal users. Mockups are included to show the reporting and campaign-management workflows.</p>
+
+  <p class="field"><span class="label">Company Name:</span> Krawl Through Krakow / Krakow Food Tour</p>
+
+  <p class="field"><span class="label">Business Model:</span> Our company operates guided tourism experiences in Krakow and sells tickets directly to consumers through websites owned by our business: <a href="https://krawlthroughkrakow.com/">krawlthroughkrakow.com</a> and <a href="https://www.krakowfoodtour.com/">krakowfoodtour.com</a>. We advertise only our own tour brands and do not manage advertising for unrelated clients.</p>
+
+  <p class="field"><span class="label">Tool Access/Use:</span> OmniLodge is an internal operations, reporting and campaign-management tool used only by authorized employees and contractors. The public and tour customers cannot access it. Internal administrators use the tool to review Google Ads performance together with booking and revenue data. The planned campaign-management workflow will let administrators prepare and manage campaigns for our owned accounts. New campaigns are created paused and require human review of creative content, URLs, conversion tracking and budgets before activation.</p>
+
+  <div class="field"><span class="label">Tool Design:</span> The Node.js/Express backend authenticates to the Google Ads API using OAuth 2.0, the developer token and our manager-account context. The backend retrieves account, campaign, ad-group and performance data for the internal React interface. Reporting data is combined with internal booking data stored in PostgreSQL. For campaign management, an administrator selects an approved source structure, reviews a food-tour-specific proposal, validates the operations and creates the destination resources in a paused state. OAuth credentials and the developer token remain server-side and are not exposed to users.</div>
+
+  <div class="field"><span class="label">API Services Called:</span>
+    <ul>
+      <li>Retrieve account structure and performance using <strong>GoogleAdsService Search/SearchStream</strong> and the Customer/CustomerClient resources.</li>
+      <li>Create and manage budgets and campaigns using <strong>CampaignBudgetService</strong> and <strong>CampaignService</strong>.</li>
+      <li>Create and manage ad groups, responsive search ads and Demand Gen ads using <strong>AdGroupService</strong> and <strong>AdGroupAdService</strong>.</li>
+      <li>Create and manage keywords, negative keywords and targeting using <strong>AdGroupCriterionService</strong> and <strong>CampaignCriterionService</strong>.</li>
+      <li>Create and associate supported creative assets using <strong>AssetService</strong> and campaign/ad-group asset services.</li>
+    </ul>
+  </div>
+
+  <div class="field"><span class="label">Tool Mockups:</span> The reporting screen summarizes account performance. The campaign-preparation screen shows the approved reference campaigns and makes the paused status explicit before creation.</div>
+
+  <div class="mockups">
+    <div class="mock">
+      <div class="bar">Google Ads Performance <span class="brand">Krakow Food Tour</span></div>
+      <div class="panel">
+        <div class="panel-title">Account-level performance <span class="select">Last 30 days ▾</span></div>
+        <div class="metrics">
+          <div class="metric"><b>Impressions</b><span>24,810</span></div>
+          <div class="metric"><b>Clicks</b><span>1,246</span></div>
+          <div class="metric"><b>Conversions</b><span>82</span></div>
+          <div class="metric"><b>Cost</b><span>PLN 4,930</span></div>
+        </div>
+        <div class="link">View campaign-level performance</div>
+      </div>
+    </div>
+
+    <div class="mock">
+      <div class="bar">Prepare Campaigns <span class="brand">Krakow Food Tour</span></div>
+      <div class="panel">
+        <div class="panel-title">Reference structures <span class="select">5 selected</span></div>
+        <div class="campaign"><strong>Main Campaign — Target ROAS</strong><div class="tags"><span class="tag">Search</span><span class="tag paused">Create paused</span></div></div>
+        <div class="campaign"><strong>Max Conversions — Target CPA</strong><div class="tags"><span class="tag">Search</span><span class="tag paused">Create paused</span></div></div>
+        <div class="campaign"><strong>Google Maps Campaign</strong><div class="tags"><span class="tag">Demand Gen</span><span class="tag paused">Create paused</span></div></div>
+        <div class="actions"><span class="small">Content, URLs and budgets require review</span><span class="button">Validate proposal</span></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="footer">Google Ads manager account: 824-738-9398 · Google Cloud project number: 306087693282 · Internal tool design documentation · 4 August 2026</p>
+</body>
+</html>

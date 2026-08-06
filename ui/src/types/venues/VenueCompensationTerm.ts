@@ -10,6 +10,8 @@ export type VenueCompensationTerm = {
   direction: VenueCompensationDirection;
   rateAmount: number | string;
   rateUnit: VenueCompensationRateUnit;
+  minDurationMinutes: number | null;
+  maxDurationMinutes: number | null;
   currencyCode: string;
   validFrom: string;
   validTo: string | null;
@@ -22,4 +24,3 @@ export type VenueCompensationTerm = {
   createdByName?: string | null;
   updatedByName?: string | null;
 };
-

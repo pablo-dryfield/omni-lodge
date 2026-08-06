@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import authMiddleware from '../middleware/authMiddleware.js';
+import { requireNightReportProductScope } from '../services/productScopeService.js';
 import {
   listNightReports,
   createNightReport,
@@ -43,24 +44,25 @@ router.get('/metrics/venue-summary', authMiddleware, getNightReportVenueSummary)
 router.post('/venue-collections', authMiddleware, createVenueCompensationCollectionLog);
 router.delete('/venue-collections/:id', authMiddleware, deleteVenueCompensationCollectionLog);
 router.post('/', authMiddleware, createNightReport);
-router.get('/:id', authMiddleware, getNightReport);
-router.patch('/:id', authMiddleware, updateNightReport);
-router.delete('/:id', authMiddleware, deleteNightReport);
-router.post('/:id/submit', authMiddleware, submitNightReport);
-router.post('/:id/costs/no-extra-cost', authMiddleware, confirmNightReportNoExtraCost);
-router.delete('/:id/costs/no-extra-cost', authMiddleware, clearNightReportNoExtraCost);
-router.get('/:id/costs/available', authMiddleware, getNightReportAvailableCosts);
-router.post('/:id/costs', authMiddleware, createNightReportCost);
-router.post('/:id/costs/receipt-allocations', authMiddleware, createNightReportReceiptAllocations);
-router.get('/:id/costs/receipt-groups/:receiptGroupKey', authMiddleware, getNightReportReceiptGroupCosts);
-router.patch('/:id/costs/receipt-groups/:receiptGroupKey', authMiddleware, updateNightReportReceiptAllocations);
-router.delete('/:id/costs/receipt-groups/:receiptGroupKey', authMiddleware, deleteNightReportReceiptAllocations);
-router.delete('/:id/costs/receipt-groups/:receiptGroupKey/reports/:targetReportId', authMiddleware, deleteNightReportReceiptAllocationsForReport);
-router.post('/:id/costs/:transactionId/link', authMiddleware, linkNightReportCost);
-router.delete('/:id/costs/:transactionId/link', authMiddleware, unlinkNightReportCost);
-router.delete('/:id/costs/:transactionId', authMiddleware, deleteNightReportCost);
-router.post('/:id/photos', authMiddleware, upload.single('file'), uploadNightReportPhoto);
-router.delete('/:id/photos/:photoId', authMiddleware, deleteNightReportPhoto);
-router.get('/:id/photos/:photoId/download', authMiddleware, downloadNightReportPhoto);
+router.get('/:id', authMiddleware, requireNightReportProductScope, getNightReport);
+router.patch('/:id', authMiddleware, requireNightReportProductScope, updateNightReport);
+router.delete('/:id', authMiddleware, requireNightReportProductScope, deleteNightReport);
+router.post('/:id/submit', authMiddleware, requireNightReportProductScope, submitNightReport);
+router.post('/:id/costs/no-extra-cost', authMiddleware, requireNightReportProductScope, confirmNightReportNoExtraCost);
+router.delete('/:id/costs/no-extra-cost', authMiddleware, requireNightReportProductScope, clearNightReportNoExtraCost);
+router.get('/:id/costs/available', authMiddleware, requireNightReportProductScope, getNightReportAvailableCosts);
+router.post('/:id/costs', authMiddleware, requireNightReportProductScope, createNightReportCost);
+router.post('/:id/costs/receipt-allocations', authMiddleware, requireNightReportProductScope, createNightReportReceiptAllocations);
+router.get('/:id/costs/receipt-groups/:receiptGroupKey', authMiddleware, requireNightReportProductScope, getNightReportReceiptGroupCosts);
+router.patch('/:id/costs/receipt-groups/:receiptGroupKey', authMiddleware, requireNightReportProductScope, updateNightReportReceiptAllocations);
+router.delete('/:id/costs/receipt-groups/:receiptGroupKey', authMiddleware, requireNightReportProductScope, deleteNightReportReceiptAllocations);
+router.delete('/:id/costs/receipt-groups/:receiptGroupKey/reports/:targetReportId', authMiddleware, requireNightReportProductScope, deleteNightReportReceiptAllocationsForReport);
+router.post('/:id/costs/:transactionId/link', authMiddleware, requireNightReportProductScope, linkNightReportCost);
+router.delete('/:id/costs/:transactionId/link', authMiddleware, requireNightReportProductScope, unlinkNightReportCost);
+router.delete('/:id/costs/:transactionId', authMiddleware, requireNightReportProductScope, deleteNightReportCost);
+router.post('/:id/photos', authMiddleware, requireNightReportProductScope, upload.single('file'), uploadNightReportPhoto);
+router.delete('/:id/photos/:photoId', authMiddleware, requireNightReportProductScope, deleteNightReportPhoto);
+router.get('/:id/photos/:photoId/download', authMiddleware, requireNightReportProductScope, downloadNightReportPhoto);
 
 export default router;
+

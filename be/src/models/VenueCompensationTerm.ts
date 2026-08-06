@@ -53,6 +53,14 @@ export class VenueCompensationTerm extends Model {
   @Column({ field: 'rate_unit', type: DataType.ENUM('per_person', 'flat') })
   declare rateUnit: VenueCompensationRateUnit;
 
+  @AllowNull(true)
+  @Column({ field: 'min_duration_minutes', type: DataType.INTEGER })
+  declare minDurationMinutes: number | null;
+
+  @AllowNull(true)
+  @Column({ field: 'max_duration_minutes', type: DataType.INTEGER })
+  declare maxDurationMinutes: number | null;
+
   @AllowNull(false)
   @Default('USD')
   @Column({ field: 'currency_code', type: DataType.STRING(3) })

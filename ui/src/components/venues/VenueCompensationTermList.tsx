@@ -43,6 +43,13 @@ const normalizeTermPayload = (payload: Partial<VenueCompensationTerm>) => {
     next.rateUnit = payload.rateUnit;
   }
 
+  for (const field of ["minDurationMinutes", "maxDurationMinutes"] as const) {
+    const value = payload[field];
+    if (value !== undefined) {
+      next[field] = value == null || String(value).trim() === "" ? null : Number(value);
+    }
+  }
+
   if (payload.currencyCode !== undefined && payload.currencyCode !== null) {
     const currencyText = String(payload.currencyCode).trim().toUpperCase();
     next.currencyCode = currencyText || "USD";
