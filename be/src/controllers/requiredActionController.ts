@@ -561,7 +561,16 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
   try {
     const userId = getActorId(req as AuthenticatedRequest);
     const action = await RequiredAction.findByPk(req.params.id);
-    if (!action || !action.status) {
+    if (!action) {
+      res.status(404).json([{ message: 'Required action not found' }]);
+      return;
+    }
+    const responseJson = normalizeRequiredActionPayload(req.body?.response);
+    const isAlreadyResolvedReply =
+      action.type === 'customer_email' &&
+      !action.status &&
+      responseJson.selectedAction === 'replied';
+    if (!action.status && !isAlreadyResolvedReply) {
       res.status(404).json([{ message: 'Required action not found' }]);
       return;
     }
@@ -570,7 +579,6 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
       return;
     }
 
-    const responseJson = normalizeRequiredActionPayload(req.body?.response);
     const eSignature = getRequiredSignature(action, responseJson.eSignature);
 
     await saveRequiredActionCompletion({
@@ -582,10 +590,10 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
       },
     });
 
-    let resolvedForAll = false;
+    let resolvedForAll = isAlreadyResolvedReply;
     if (action.type === 'customer_email') {
       const selectedAction = responseJson.selectedAction;
-      if (selectedAction === 'replied') {
+      if (isAlreadyResolvedReply || selectedAction === 'replied') {
         resolvedForAll = true;
       } else {
         const recipientUserIds = await listActiveCustomerEmailRecipientUserIds(action);
@@ -606,7 +614,7 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
         });
       }
 
-      if (resolvedForAll) {
+      if (resolvedForAll && action.status) {
         action.status = false;
         action.updatedBy = userId;
         await action.save();

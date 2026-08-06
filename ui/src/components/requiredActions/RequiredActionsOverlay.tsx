@@ -1073,6 +1073,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
   const completeProfileFields = useCompleteRequiredProfileFields();
   const markPrompted = useMarkRequiredActionPrompted();
   const promptedActionIdsRef = useRef<Set<string>>(new Set());
+  const customerEmailActionSignatureRef = useRef<string | null>(null);
   const respondToSwap = useRespondToRequiredSwap();
   const decideManagerSwap = useDecideRequiredManagerSwap();
   const [error, setError] = useState<string | null>(null);
@@ -1083,6 +1084,11 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
 
   const actions = actionsQuery.data?.actions ?? [];
   const action = actions[0] ?? null;
+  const customerEmailActionSignature = actions
+    .filter((item) => item.type === "customer_email")
+    .map((item) => item.id)
+    .sort()
+    .join("|");
   const requiresSignature = Boolean(action?.source === "required_action" && action.requiresSignature);
   const isBusy =
     completeAction.isPending ||
@@ -1099,6 +1105,14 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     setSignature(null);
     setSignatureError(null);
   }, [action?.id]);
+
+  useEffect(() => {
+    if (!actionsQuery.data || customerEmailActionSignatureRef.current === customerEmailActionSignature) {
+      return;
+    }
+    customerEmailActionSignatureRef.current = customerEmailActionSignature;
+    window.dispatchEvent(new CustomEvent("customer-email-actions-changed"));
+  }, [actionsQuery.data, customerEmailActionSignature]);
 
   useEffect(() => {
     if (!enabled || !action || action.source !== "required_action") {

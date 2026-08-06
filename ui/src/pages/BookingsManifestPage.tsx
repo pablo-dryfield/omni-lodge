@@ -4740,6 +4740,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         },
         { withCredentials: true },
       );
+      if (mailComposerState.replyToMessageId) {
+        window.dispatchEvent(new CustomEvent("customer-email-actions-changed"));
+      }
       setMailComposerState((prev) => ({
         ...prev,
         sending: false,
@@ -5474,6 +5477,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                 order.womenCount,
                               );
                               const whatsappLink = toWhatsAppLink(order.customerPhone);
+                              const pendingCustomerEmailCount = Math.max(
+                                0,
+                                Number(order.pendingCustomerEmailCount) || 0,
+                              );
+                              const hasPendingCustomerEmail = pendingCustomerEmailCount > 0;
                               const guessedNationality = guessNationalityFromPhone(order.customerPhone);
                               const isUnknownNationality = guessedNationality.trim().toLowerCase() === "unknown";
                               const orderStatusDisplayKey = resolveOrderStatusDisplayKey(
@@ -5800,8 +5808,16 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                           component="button"
                                           type="button"
                                           onClick={() => openMailboxModal(order)}
-                                          title={order.customerEmail}
-                                          aria-label={`Open mailbox for ${order.customerEmail}`}
+                                          title={
+                                            hasPendingCustomerEmail
+                                              ? `${pendingCustomerEmailCount} customer email${pendingCustomerEmailCount === 1 ? "" : "s"} awaiting reply`
+                                              : order.customerEmail
+                                          }
+                                          aria-label={
+                                            hasPendingCustomerEmail
+                                              ? `Open mailbox for ${order.customerEmail}; ${pendingCustomerEmailCount} awaiting reply`
+                                              : `Open mailbox for ${order.customerEmail}`
+                                          }
                                           style={{
                                             display: "block",
                                             width: "100%",
@@ -5822,16 +5838,20 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                               display: "flex",
                                               alignItems: "center",
                                               justifyContent: "center",
-                                              backgroundColor: "#f4f7fa",
-                                              borderColor: "#d9e1ea",
+                                              backgroundColor: hasPendingCustomerEmail ? "#fff1e6" : "#f4f7fa",
+                                              borderColor: hasPendingCustomerEmail ? "#f97316" : "#d9e1ea",
+                                              color: hasPendingCustomerEmail ? "#c2410c" : "inherit",
+                                              boxShadow: hasPendingCustomerEmail
+                                                ? "0 0 0 2px rgba(249, 115, 22, 0.18)"
+                                                : "none",
                                               minWidth: 0,
                                               cursor: "pointer",
                                             }}
                                           >
                                             <MailOutline fontSize="small" />
-                                            {(order.pendingCustomerEmailCount ?? 0) > 0 ? (
-                                              <Badge size="xs" color="red" variant="filled" ml={4} circle>
-                                                {order.pendingCustomerEmailCount}
+                                            {hasPendingCustomerEmail ? (
+                                              <Badge size="xs" color="red" variant="filled" ml={6}>
+                                                {`${pendingCustomerEmailCount} pending`}
                                               </Badge>
                                             ) : null}
                                           </Paper>
