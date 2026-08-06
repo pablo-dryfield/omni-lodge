@@ -28,6 +28,7 @@ import {
 import { createFinanceTransaction, updateFinanceTransaction } from '../finance/services/transactionService.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { getAllowedProductTypeIds, requireProductAccess } from '../services/productScopeService.js';
 import logger from '../utils/logger.js';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports.js';
 import {
@@ -89,6 +90,7 @@ type VenueDetailAggregate = {
   normalCount: number | null;
   cocktailsCount: number | null;
   brunchCount: number | null;
+  stayDurationMinutes: number | null;
   activityDate: string | null;
   reportId: number | null;
   allowsOpenBar?: boolean | null;
@@ -141,6 +143,7 @@ type NightReportPayload = {
     normalCount: number | null;
     cocktailsCount: number | null;
     brunchCount: number | null;
+    stayDurationMinutes: number | null;
     compensationTermId: number | null;
     compensationType: 'open_bar' | 'commission' | null;
     compensationDirection: 'payable' | 'receivable' | null;
@@ -663,6 +666,7 @@ type VenueInput = {
   normalCount?: number | null;
   cocktailsCount?: number | null;
   brunchCount?: number | null;
+  stayDurationMinutes?: number | null;
 };
 
 function requireActorId(req: AuthenticatedRequest): number {
@@ -1224,6 +1228,7 @@ async function serializeNightReport(report: NightReport, req: AuthenticatedReque
       normalCount: venue.normalCount,
       cocktailsCount: venue.cocktailsCount,
       brunchCount: venue.brunchCount,
+      stayDurationMinutes: venue.stayDurationMinutes ?? null,
       compensationTermId: venue.compensationTermId ?? null,
       compensationType: venue.compensationType ?? null,
       compensationDirection: venue.direction ?? null,
@@ -1509,6 +1514,12 @@ function normalizeVenueInput(raw: unknown): VenueInput[] {
         venue.cocktailsCount == null ? null : typeof venue.cocktailsCount === 'number' ? venue.cocktailsCount : undefined,
       brunchCount:
         venue.brunchCount == null ? null : typeof venue.brunchCount === 'number' ? venue.brunchCount : undefined,
+      stayDurationMinutes:
+        venue.stayDurationMinutes == null
+          ? null
+          : typeof venue.stayDurationMinutes === 'number'
+            ? venue.stayDurationMinutes
+            : undefined,
     };
   });
 }
@@ -1523,6 +1534,7 @@ type NormalizedVenue = {
   normalCount: number | null;
   cocktailsCount: number | null;
   brunchCount: number | null;
+  stayDurationMinutes: number | null;
 };
 
 function validateAndArrangeVenues(raw: VenueInput[]): NormalizedVenue[] {
@@ -1541,6 +1553,7 @@ function validateAndArrangeVenues(raw: VenueInput[]): NormalizedVenue[] {
       normalCount: venue.normalCount ?? null,
       cocktailsCount: venue.cocktailsCount ?? null,
       brunchCount: venue.brunchCount ?? null,
+      stayDurationMinutes: venue.stayDurationMinutes ?? null,
     }))
     .sort((a, b) => a.orderIndex - b.orderIndex)
     .map((venue, index) => ({
@@ -1554,6 +1567,10 @@ function validateAndArrangeVenues(raw: VenueInput[]): NormalizedVenue[] {
 
   if (sorted.some((venue) => venue.totalPeople < 0)) {
     throw new HttpError(400, 'Venue headcount cannot be negative');
+  }
+
+  if (sorted.some((venue) => venue.stayDurationMinutes != null && (!Number.isInteger(venue.stayDurationMinutes) || venue.stayDurationMinutes <= 0))) {
+    throw new HttpError(400, 'Stay duration must be a positive whole number of minutes');
   }
 
   const openBarEntries = sorted.filter((venue) => venue.isOpenBar);
@@ -1587,6 +1604,7 @@ type PreparedVenueRow = {
   normalCount: number | null;
   cocktailsCount: number | null;
   brunchCount: number | null;
+  stayDurationMinutes: number | null;
   compensationTermId: number;
   compensationType: 'open_bar' | 'commission';
   direction: 'payable' | 'receivable';
@@ -1662,7 +1680,7 @@ async function resolveNightReportVenueRows(
     transaction,
   });
 
-  const termMap = new Map<string, VenueCompensationTerm>();
+  const termsByVenueAndType = new Map<string, VenueCompensationTerm[]>();
   const termIds = terms.map((term) => term.id);
   const rates = termIds.length
     ? await VenueCompensationTermRate.findAll({
@@ -1691,14 +1709,30 @@ async function resolveNightReportVenueRows(
 
   terms.forEach((term) => {
     const key = `${term.venueId}:${term.compensationType}`;
-    termMap.set(key, term);
+    const bucket = termsByVenueAndType.get(key) ?? [];
+    bucket.push(term);
+    termsByVenueAndType.set(key, bucket);
   });
 
   return resolved.map(({ entry, venue }) => {
     const compensationType: 'open_bar' | 'commission' = entry.isOpenBar ? 'open_bar' : 'commission';
     const direction: 'payable' | 'receivable' = entry.isOpenBar ? 'payable' : 'receivable';
     const termKey = `${venue.id}:${compensationType}`;
-    const term = termMap.get(termKey);
+    const candidates = termsByVenueAndType.get(termKey) ?? [];
+    const duration = entry.isOpenBar ? null : entry.stayDurationMinutes;
+    const durationMatches = (candidate: VenueCompensationTerm) => {
+      if (duration == null) {
+        return candidate.minDurationMinutes == null && candidate.maxDurationMinutes == null;
+      }
+      return (
+        (candidate.minDurationMinutes == null || duration >= candidate.minDurationMinutes) &&
+        (candidate.maxDurationMinutes == null || duration <= candidate.maxDurationMinutes)
+      );
+    };
+    const matchingCandidates = candidates.filter(durationMatches);
+    const term = matchingCandidates.find(
+      (candidate) => candidate.minDurationMinutes != null || candidate.maxDurationMinutes != null,
+    ) ?? matchingCandidates[0];
     if (!term) {
       const hasAnyActive = terms.some(
         (candidate) => candidate.venueId === venue.id && candidate.isActive && candidate.compensationType === compensationType,
@@ -1706,6 +1740,14 @@ async function resolveNightReportVenueRows(
       const label = entry.isOpenBar ? 'open bar payout' : 'commission';
       if (!hasAnyActive) {
         throw new HttpError(400, `No active ${label} term is configured for ${venue.name} on ${trimmedDate}`);
+      }
+      if (candidates.length > 0 && duration == null && candidates.some(
+        (candidate) => candidate.minDurationMinutes != null || candidate.maxDurationMinutes != null,
+      )) {
+        throw new HttpError(400, `Stay duration is required to select the ${label} rate for ${venue.name}`);
+      }
+      if (candidates.length > 0 && duration != null) {
+        throw new HttpError(400, `No ${label} rate for ${venue.name} covers a ${duration}-minute stay`);
       }
       throw new HttpError(
         400,
@@ -1750,6 +1792,7 @@ async function resolveNightReportVenueRows(
       normalCount: entry.normalCount,
       cocktailsCount: entry.cocktailsCount,
       brunchCount: entry.brunchCount,
+      stayDurationMinutes: entry.stayDurationMinutes,
       compensationTermId: term.id,
       compensationType,
       direction,
@@ -1775,6 +1818,7 @@ function mapReportVenuesToNormalized(venues: NightReportVenue[]): NormalizedVenu
       normalCount: venue.normalCount ?? null,
       cocktailsCount: venue.cocktailsCount ?? null,
       brunchCount: venue.brunchCount ?? null,
+      stayDurationMinutes: venue.stayDurationMinutes ?? null,
     }));
 }
 
@@ -1927,6 +1971,7 @@ async function getNightReportById(reportId: number): Promise<NightReport | null>
 
 export const listNightReports = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const allowedProductTypeIds = await getAllowedProductTypeIds(req);
     const where: Record<string, unknown> = {};
 
     const { status, counterId, leaderId, from, to } = req.query;
@@ -1964,7 +2009,15 @@ export const listNightReports = async (req: AuthenticatedRequest, res: Response)
           model: Counter,
           as: 'counter',
           attributes: ['id', 'date', 'productId'],
-          include: [{ model: Product, as: 'product', attributes: ['id', 'name', 'requiresNightReportCostReconciliation'] }],
+          include: [{
+            model: Product,
+            as: 'product',
+            attributes: ['id', 'name', 'requiresNightReportCostReconciliation'],
+            ...(allowedProductTypeIds === null
+              ? {}
+              : { where: { productTypeId: { [Op.in]: allowedProductTypeIds } }, required: true }),
+          }],
+          ...(allowedProductTypeIds === null ? {} : { required: true }),
         },
         {
           model: NightReportVenue,
@@ -2014,6 +2067,7 @@ export const createNightReport = async (req: AuthenticatedRequest, res: Response
     if (!counter) {
       throw new HttpError(404, 'Counter not found');
     }
+    if (counter.productId != null) await requireProductAccess(req, counter.productId);
 
     const leaderId = body.leaderId ? Number(body.leaderId) : counter.userId;
     if (!Number.isInteger(leaderId) || leaderId <= 0) {
@@ -2096,6 +2150,7 @@ export const getNightReport = async (req: AuthenticatedRequest, res: Response): 
       res.status(404).json([{ message: 'Night report not found' }]);
       return;
     }
+    if (report.counter?.productId != null) await requireProductAccess(req, report.counter.productId);
 
     res.status(200).json([await serializeNightReport(report, req)]);
   } catch (error) {
@@ -2127,6 +2182,7 @@ export const updateNightReport = async (req: AuthenticatedRequest, res: Response
       res.status(404).json([{ message: 'Night report not found' }]);
       return;
     }
+    if (report.counter?.productId != null) await requireProductAccess(req, report.counter.productId);
 
     if (!canManageReport(report, actorId, req.authContext?.roleSlug)) {
       throw new HttpError(403, 'You do not have permission to edit this report');
@@ -2524,7 +2580,7 @@ export const getNightReportLeaderMetrics = async (req: AuthenticatedRequest, res
       ? Math.min(Math.max(retentionThresholdRaw, 0), 1)
       : 0;
 
-    const stats = await fetchLeaderNightReportStats(start, end);
+    const stats = await fetchLeaderNightReportStats(start, end, await getAllowedProductTypeIds(req));
     if (stats.size === 0) {
       res.status(200).json([
         {
@@ -2782,6 +2838,7 @@ export const deleteVenueCompensationCollectionLog = async (
 
 export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const allowedProductTypeIds = await getAllowedProductTypeIds(req);
     const periodParam = typeof req.query.period === 'string' ? req.query.period : undefined;
     const startDateParam = typeof req.query.startDate === 'string' ? req.query.startDate : undefined;
     const endDateParam = typeof req.query.endDate === 'string' ? req.query.endDate : undefined;
@@ -2823,6 +2880,19 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
               [Op.between]: [startIso, endIso],
             },
           },
+          include: allowedProductTypeIds === null ? [] : [{
+            model: Counter,
+            as: 'counter',
+            attributes: [],
+            required: true,
+            include: [{
+              model: Product,
+              as: 'product',
+              attributes: [],
+              required: true,
+              where: { productTypeId: { [Op.in]: allowedProductTypeIds } },
+            }],
+          }],
         },
         {
           model: Venue,
@@ -2834,7 +2904,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       raw: true,
     })) as unknown as VenueDetailAggregate[];
 
-    const collectionRows = (await VenueCompensationCollectionLog.findAll({
+    const collectionRows = allowedProductTypeIds === null ? (await VenueCompensationCollectionLog.findAll({
       attributes: [
         'id',
         'venueId',
@@ -2856,7 +2926,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         ['id', 'ASC'],
       ],
       raw: true,
-    })) as unknown as CollectionLogAggregate[];
+    })) as unknown as CollectionLogAggregate[] : [];
 
     const collectionMap = new Map<string, { receivable: number; payable: number }>();
     const currencyCollectionMap = new Map<string, { receivable: number; payable: number }>();

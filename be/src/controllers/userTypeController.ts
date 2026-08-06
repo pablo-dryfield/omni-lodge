@@ -10,6 +10,8 @@ import RoleModulePermission from '../models/RoleModulePermission.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import type { Transaction } from 'sequelize';
+import ProductType from '../models/ProductType.js';
+import UserTypeProductType from '../models/UserTypeProductType.js';
 
 const buildColumns = () => {
   const attributes = UserType.getAttributes();
@@ -18,7 +20,8 @@ const buildColumns = () => {
       header: key.charAt(0).toUpperCase() + key.slice(1),
       accessorKey: key,
       type: attribute.type instanceof DataType.DATE ? 'date' : 'text',
-    }));
+    }))
+    .concat([{ header: 'Allowed Product Types', accessorKey: 'productTypeIds', type: 'text' }]);
 };
 
 const normalizeSlug = (input: string) => input.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -31,6 +34,35 @@ const ensurePayload = (payload: Record<string, unknown>) => {
     body.slug = normalizeSlug(body.name);
   }
   return body;
+};
+
+const parseProductTypeIds = (value: unknown): number[] | undefined => {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('productTypeIds must be an array');
+  const ids = [...new Set(value.map(Number))];
+  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+    throw new Error('productTypeIds must contain positive integers');
+  }
+  return ids;
+};
+
+const syncProductTypeScope = async (userTypeId: number, ids: number[], transaction: Transaction) => {
+  if (ids.length > 0) {
+    const count = await ProductType.count({ where: { id: ids }, transaction });
+    if (count !== ids.length) throw new Error('One or more product types do not exist');
+  }
+  await UserTypeProductType.destroy({ where: { userTypeId }, transaction });
+  if (ids.length > 0) {
+    await UserTypeProductType.bulkCreate(ids.map((productTypeId) => ({ userTypeId, productTypeId })), { transaction });
+  }
+};
+
+const serializeUserTypes = async (records: UserType[]) => {
+  const ids = records.map((record) => record.id);
+  const links = ids.length ? await UserTypeProductType.findAll({ where: { userTypeId: ids } }) : [];
+  const byRole = new Map<number, number[]>();
+  links.forEach((link) => byRole.set(link.userTypeId, [...(byRole.get(link.userTypeId) ?? []), link.productTypeId]));
+  return records.map((record) => ({ ...record.get({ plain: true }), productTypeIds: byRole.get(record.id) ?? [] }));
 };
 
 const PERMISSION_ACTIONS = new Set(['add_all', 'remove_all', 'copy_from'] as const);
@@ -115,7 +147,8 @@ const upsertModulePermission = async (params: {
 
 export const getAllUserTypes = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await UserType.findAll();
+    const records = await UserType.findAll();
+    const data = await serializeUserTypes(records);
     res.status(200).json([{ data, columns: buildColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
@@ -133,7 +166,8 @@ export const getUserTypeById = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    res.status(200).json([{ data, columns: buildColumns() }]);
+    const [serialized] = await serializeUserTypes([data]);
+    res.status(200).json([{ data: serialized, columns: buildColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
@@ -142,9 +176,16 @@ export const getUserTypeById = async (req: Request, res: Response): Promise<void
 
 export const createUserType = async (req: Request, res: Response): Promise<void> => {
   try {
+    const productTypeIds = parseProductTypeIds(req.body?.productTypeIds) ?? [];
     const payload = ensurePayload(req.body);
-    const newUserType = await UserType.create(payload);
-    res.status(201).json([newUserType]);
+    delete payload.productTypeIds;
+    const newUserType = await sequelize.transaction(async (transaction) => {
+      const created = await UserType.create(payload, { transaction });
+      await syncProductTypeScope(created.id, productTypeIds, transaction);
+      return created;
+    });
+    const [serialized] = await serializeUserTypes([newUserType]);
+    res.status(201).json([serialized]);
   } catch (error) {
     const e = error as ErrorWithMessage;
     res.status(500).json([{ message: e.message }]);
@@ -154,8 +195,14 @@ export const createUserType = async (req: Request, res: Response): Promise<void>
 export const updateUserType = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const productTypeIds = parseProductTypeIds(req.body?.productTypeIds);
     const payload = ensurePayload(req.body);
-    const [updated] = await UserType.update(payload, { where: { id } });
+    delete payload.productTypeIds;
+    const updated = await sequelize.transaction(async (transaction) => {
+      const [count] = await UserType.update(payload, { where: { id }, transaction });
+      if (count && productTypeIds !== undefined) await syncProductTypeScope(Number(id), productTypeIds, transaction);
+      return count;
+    });
 
     if (!updated) {
       res.status(404).json([{ message: 'UserType not found' }]);
@@ -163,7 +210,8 @@ export const updateUserType = async (req: Request, res: Response): Promise<void>
     }
 
     const updatedUserType = await UserType.findByPk(id);
-    res.status(200).json([updatedUserType]);
+    const [serialized] = updatedUserType ? await serializeUserTypes([updatedUserType]) : [];
+    res.status(200).json([serialized]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);

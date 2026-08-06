@@ -113,8 +113,9 @@ type EditableVenue = {
   normalCount: string;
   cocktailsCount: string;
   brunchCount: string;
+  stayDurationMinutes: string;
 };
-type EditableVenueField = "venueName" | "totalPeople" | "normalCount" | "cocktailsCount" | "brunchCount";
+type EditableVenueField = "venueName" | "totalPeople" | "normalCount" | "cocktailsCount" | "brunchCount" | "stayDurationMinutes";
 
 type EditableReport = {
   activityDate: string;
@@ -201,6 +202,7 @@ const createEmptyVenue = (isOpenBar = true, routeIndex = 1): EditableVenue => ({
   normalCount: "",
   cocktailsCount: "",
   brunchCount: "",
+  stayDurationMinutes: "",
 });
 
 const createEmptyCostDraft = (activityDate?: string | null): NightReportCostDraft => ({
@@ -424,6 +426,7 @@ const toEditableReport = (report: NightReport | null, directory?: Map<string, Ve
         normalCount: isOpenBar && venue.normalCount != null ? String(venue.normalCount) : "",
         cocktailsCount: isOpenBar && venue.cocktailsCount != null ? String(venue.cocktailsCount) : "",
         brunchCount: isOpenBar && venue.brunchCount != null ? String(venue.brunchCount) : "",
+        stayDurationMinutes: !isOpenBar && venue.stayDurationMinutes != null ? String(venue.stayDurationMinutes) : "",
       };
     });
 
@@ -487,6 +490,7 @@ const buildVenuePayload = (
       payload.totalPeople = computeOpenBarTotal(normalValue, cocktailsValue, brunchValue, mode);
     } else {
       payload.totalPeople = normalizeNumber(venue.totalPeople, 0) ?? 0;
+      payload.stayDurationMinutes = normalizeNumber(venue.stayDurationMinutes);
     }
     const normalizedName = payload.venueName.toLowerCase();
     const directoryMatch = directory?.get(normalizedName);
@@ -4241,11 +4245,12 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                             )}
                           </>
                         ) : (
-                          <Grid size={{ xs: 12, md: 6 }}>
-                            <TextField
-                              label="Total People"
-                              value={venue.totalPeople}
-                              onChange={(event) => handleVenueChange(index, "totalPeople", event.target.value)}
+                          <>
+                            <Grid size={{ xs: 12, md: 6 }}>
+                              <TextField
+                                label="Total People"
+                                value={venue.totalPeople}
+                                onChange={(event) => handleVenueChange(index, "totalPeople", event.target.value)}
                                 type="number"
                                 inputProps={{ min: 0 }}
                                 fullWidth
@@ -4254,7 +4259,20 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                                 error={showTotalError}
                                 helperText={showTotalError ? "Total people is required." : undefined}
                               />
-                          </Grid>
+                            </Grid>
+                            <Grid size={{ xs: 12, md: 6 }}>
+                              <TextField
+                                label="Stay Duration (minutes)"
+                                value={venue.stayDurationMinutes}
+                                onChange={(event) => handleVenueChange(index, "stayDurationMinutes", event.target.value)}
+                                type="number"
+                                inputProps={{ min: 1, step: 1 }}
+                                fullWidth
+                                disabled={fieldsDisabled}
+                                helperText="Required when this venue has duration-based commission rates."
+                              />
+                            </Grid>
+                          </>
                         )}
                       </Grid>
                       {compensationSnapshot && (

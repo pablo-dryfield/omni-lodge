@@ -71,6 +71,10 @@ export default class NightReportVenue extends Model {
   @Column({ field: 'brunch_count', type: DataType.INTEGER })
   declare brunchCount: number | null;
 
+  @AllowNull(true)
+  @Column({ field: 'stay_duration_minutes', type: DataType.INTEGER })
+  declare stayDurationMinutes: number | null;
+
   @AllowNull(false)
   @Default(DataType.NOW)
   @Column({ field: 'created_at', type: DataType.DATE })

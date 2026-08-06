@@ -46,6 +46,7 @@ export type NightReportVenue = {
   normalCount: number | null;
   cocktailsCount: number | null;
   brunchCount: number | null;
+  stayDurationMinutes: number | null;
   compensationTermId: number | null;
   compensationType: 'open_bar' | 'commission' | null;
   compensationDirection: 'payable' | 'receivable' | null;
@@ -233,6 +234,7 @@ export type NightReportVenueInput = {
   normalCount?: number | null;
   cocktailsCount?: number | null;
   brunchCount?: number | null;
+  stayDurationMinutes?: number | null;
 };
 
 export type NightReportCreatePayload = {

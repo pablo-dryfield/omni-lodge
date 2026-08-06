@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import authMiddleware from '../middleware/authMiddleware.js';
+import { requireBookingProductScope } from '../services/productScopeService.js';
 import {
   backfillEcwidPaymentMetadata,
   fixEcwidOrderFromSource,
@@ -69,23 +70,23 @@ router.post('/sanity-check/ecwid/backfill-payment-metadata', authMiddleware, bac
 router.post('/ingest-emails', authMiddleware, ingestBookingEmails);
 router.post('/import-ecwid', authMiddleware, importEcwidBooking);
 router.patch('/attendance/bulk', authMiddleware, updateBulkBookingAttendance);
-router.patch('/:bookingId/attendance', authMiddleware, updateBookingAttendance);
-router.patch('/:bookingId/addon-refund-actions/:actionId', authMiddleware, completeBookingAddonRefundAction);
-router.delete('/:bookingId/addon-refund-actions/:actionId', authMiddleware, deleteBookingAddonRefundAction);
-router.get('/:bookingId/details', authMiddleware, getBookingDetails);
-router.get('/:bookingId/amend-ecwid-preview', authMiddleware, getEcwidAmendPreview);
-router.post('/:bookingId/reconcile-ecwid', authMiddleware, reconcileEcwidBooking);
-router.post('/:bookingId/amend-ecwid', authMiddleware, amendEcwidBooking);
-router.post('/:bookingId/amend-xperience', authMiddleware, amendXperiencePolandBooking);
-router.post('/:bookingId/direct-actions/confirmation', authMiddleware, resendDirectFoodTourConfirmation);
-router.post('/:bookingId/direct-actions/amend', authMiddleware, amendDirectFoodTourBooking);
-router.post('/:bookingId/direct-actions/cancellation', authMiddleware, cancelDirectFoodTourBooking);
-router.post('/:bookingId/direct-actions/partial-refund', authMiddleware, partialRefundDirectFoodTourBooking);
-router.get('/:bookingId/refund-preview', authMiddleware, getEcwidRefundPreview);
-router.get('/:bookingId/partial-refund-preview', authMiddleware, getPartialRefundPreview);
-router.post('/:bookingId/partial-refund', authMiddleware, partialRefundEcwidBooking);
-router.post('/:bookingId/cancel-ecwid', authMiddleware, cancelEcwidBooking);
-router.post('/:bookingId/cancel-civitatis', authMiddleware, cancelCivitatisBooking);
-router.post('/:bookingId/cancel-xperience', authMiddleware, cancelXperiencePolandBooking);
+router.patch('/:bookingId/attendance', authMiddleware, requireBookingProductScope, updateBookingAttendance);
+router.patch('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, completeBookingAddonRefundAction);
+router.delete('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, deleteBookingAddonRefundAction);
+router.get('/:bookingId/details', authMiddleware, requireBookingProductScope, getBookingDetails);
+router.get('/:bookingId/amend-ecwid-preview', authMiddleware, requireBookingProductScope, getEcwidAmendPreview);
+router.post('/:bookingId/reconcile-ecwid', authMiddleware, requireBookingProductScope, reconcileEcwidBooking);
+router.post('/:bookingId/amend-ecwid', authMiddleware, requireBookingProductScope, amendEcwidBooking);
+router.post('/:bookingId/amend-xperience', authMiddleware, requireBookingProductScope, amendXperiencePolandBooking);
+router.post('/:bookingId/direct-actions/confirmation', authMiddleware, requireBookingProductScope, resendDirectFoodTourConfirmation);
+router.post('/:bookingId/direct-actions/amend', authMiddleware, requireBookingProductScope, amendDirectFoodTourBooking);
+router.post('/:bookingId/direct-actions/cancellation', authMiddleware, requireBookingProductScope, cancelDirectFoodTourBooking);
+router.post('/:bookingId/direct-actions/partial-refund', authMiddleware, requireBookingProductScope, partialRefundDirectFoodTourBooking);
+router.get('/:bookingId/refund-preview', authMiddleware, requireBookingProductScope, getEcwidRefundPreview);
+router.get('/:bookingId/partial-refund-preview', authMiddleware, requireBookingProductScope, getPartialRefundPreview);
+router.post('/:bookingId/partial-refund', authMiddleware, requireBookingProductScope, partialRefundEcwidBooking);
+router.post('/:bookingId/cancel-ecwid', authMiddleware, requireBookingProductScope, cancelEcwidBooking);
+router.post('/:bookingId/cancel-civitatis', authMiddleware, requireBookingProductScope, cancelCivitatisBooking);
+router.post('/:bookingId/cancel-xperience', authMiddleware, requireBookingProductScope, cancelXperiencePolandBooking);
 
 export default router;

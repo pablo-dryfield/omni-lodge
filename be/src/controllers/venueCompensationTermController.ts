@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import dayjs from 'dayjs';
-import type { Includeable } from 'sequelize';
+import { Op, type Includeable } from 'sequelize';
 import { DataType } from 'sequelize-typescript';
 import VenueCompensationTerm, { type VenueCompensationTermWithRelations } from '../models/VenueCompensationTerm.js';
 import Venue from '../models/Venue.js';
@@ -97,6 +97,21 @@ const sanitizeTermPayload = (raw: Record<string, unknown> | undefined, options: 
     next.rateUnit = rawUnit === 'flat' ? 'flat' : 'per_person';
   }
 
+  for (const field of ['minDurationMinutes', 'maxDurationMinutes'] as const) {
+    if (!partial || payload[field] !== undefined) {
+      const value = payload[field];
+      if (value == null || value === '') {
+        next[field] = null;
+      } else {
+        const minutes = Number(value);
+        if (!Number.isInteger(minutes) || minutes <= 0) {
+          throw new HttpError(400, `${field} must be a positive whole number or null`);
+        }
+        next[field] = minutes;
+      }
+    }
+  }
+
   if (!partial || payload.currencyCode !== undefined) {
     next.currencyCode = normalizeCurrencyCode(payload.currencyCode);
   }
@@ -180,6 +195,62 @@ const ensureValidDateRange = (payload: Record<string, unknown>, fallback?: DateR
   }
 };
 
+const ensureValidDurationRange = (
+  payload: Record<string, unknown>,
+  fallback?: { minDurationMinutes?: number | null; maxDurationMinutes?: number | null },
+) => {
+  const min = payload.minDurationMinutes !== undefined ? payload.minDurationMinutes : fallback?.minDurationMinutes;
+  const max = payload.maxDurationMinutes !== undefined ? payload.maxDurationMinutes : fallback?.maxDurationMinutes;
+  if (min != null && max != null && Number(max) < Number(min)) {
+    throw new HttpError(400, 'maxDurationMinutes must be greater than or equal to minDurationMinutes');
+  }
+};
+
+type TermRuleValues = {
+  venueId: number;
+  compensationType: string;
+  validFrom: string;
+  validTo: string | null;
+  minDurationMinutes: number | null;
+  maxDurationMinutes: number | null;
+  isActive: boolean;
+};
+
+const rangesOverlap = (leftStart: number, leftEnd: number, rightStart: number, rightEnd: number) =>
+  leftStart <= rightEnd && rightStart <= leftEnd;
+
+const ensureNoOverlappingDurationRule = async (values: TermRuleValues, excludeId?: number) => {
+  if (!values.isActive || (values.minDurationMinutes == null && values.maxDurationMinutes == null)) {
+    return;
+  }
+  const candidates = await VenueCompensationTerm.findAll({
+    where: {
+      venueId: values.venueId,
+      compensationType: values.compensationType,
+      isActive: true,
+      ...(excludeId ? { id: { [Op.ne]: excludeId } } : {}),
+    },
+  });
+  const nextDateStart = dayjs(values.validFrom).valueOf();
+  const nextDateEnd = values.validTo ? dayjs(values.validTo).valueOf() : Number.POSITIVE_INFINITY;
+  const nextDurationStart = values.minDurationMinutes ?? 0;
+  const nextDurationEnd = values.maxDurationMinutes ?? Number.POSITIVE_INFINITY;
+  const conflict = candidates.find((candidate) => {
+    if (candidate.minDurationMinutes == null && candidate.maxDurationMinutes == null) {
+      return false;
+    }
+    const dateStart = dayjs(candidate.validFrom).valueOf();
+    const dateEnd = candidate.validTo ? dayjs(candidate.validTo).valueOf() : Number.POSITIVE_INFINITY;
+    const durationStart = candidate.minDurationMinutes ?? 0;
+    const durationEnd = candidate.maxDurationMinutes ?? Number.POSITIVE_INFINITY;
+    return rangesOverlap(nextDateStart, nextDateEnd, dateStart, dateEnd) &&
+      rangesOverlap(nextDurationStart, nextDurationEnd, durationStart, durationEnd);
+  });
+  if (conflict) {
+    throw new HttpError(400, `Duration range overlaps active compensation term #${conflict.id}`);
+  }
+};
+
 export const listVenueCompensationTerms = async (req: Request, res: Response): Promise<void> => {
   try {
     const where: Record<string, unknown> = {};
@@ -222,7 +293,9 @@ export const createVenueCompensationTerm = async (req: AuthenticatedRequest, res
     const actorId = req.authContext?.id ?? null;
     const payload = sanitizeTermPayload(req.body, { partial: false });
     ensureValidDateRange(payload);
+    ensureValidDurationRange(payload);
     await ensureVenueCompatibility(Number(payload.venueId), payload.compensationType as string | undefined);
+    await ensureNoOverlappingDurationRule(payload as unknown as TermRuleValues);
 
     const record = await VenueCompensationTerm.create({
       ...payload,
@@ -262,6 +335,10 @@ export const updateVenueCompensationTerm = async (req: AuthenticatedRequest, res
     }
     const payload = sanitizeTermPayload(req.body, { partial: true });
     ensureValidDateRange(payload, { validFrom: existing.validFrom, validTo: existing.validTo });
+    ensureValidDurationRange(payload, {
+      minDurationMinutes: existing.minDurationMinutes,
+      maxDurationMinutes: existing.maxDurationMinutes,
+    });
 
     const venueIdForValidation =
       (typeof payload.venueId === 'number' ? payload.venueId : null) ?? existing.venueId ?? null;
@@ -269,6 +346,21 @@ export const updateVenueCompensationTerm = async (req: AuthenticatedRequest, res
       (typeof payload.compensationType === 'string' ? (payload.compensationType as string) : undefined) ??
       existing.compensationType;
     await ensureVenueCompatibility(venueIdForValidation, typeForValidation);
+
+    const merged = {
+      venueId: venueIdForValidation,
+      compensationType: typeForValidation,
+      validFrom: String(payload.validFrom ?? existing.validFrom),
+      validTo: (payload.validTo !== undefined ? payload.validTo : existing.validTo) as string | null,
+      minDurationMinutes: (payload.minDurationMinutes !== undefined
+        ? payload.minDurationMinutes
+        : existing.minDurationMinutes) as number | null,
+      maxDurationMinutes: (payload.maxDurationMinutes !== undefined
+        ? payload.maxDurationMinutes
+        : existing.maxDurationMinutes) as number | null,
+      isActive: Boolean(payload.isActive ?? existing.isActive),
+    } as TermRuleValues;
+    await ensureNoOverlappingDurationRule(merged, existing.id);
 
     if (Object.keys(payload).length === 0) {
       res.status(200).json([{ message: 'No changes applied' }]);

@@ -15,6 +15,7 @@ import FinanceVendor from '../finance/models/FinanceVendor.js';
 import logger from '../utils/logger.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getNightReportVenueSummary } from './nightReportController.js';
+import { getAllowedProductTypeIds } from '../services/productScopeService.js';
 
 type TableColumn = {
   header: string;
@@ -97,6 +98,13 @@ export const getVenueNumbersEntriesBootstrap = async (
   res: Response,
 ): Promise<void> => {
   try {
+    const allowedProductTypeIds = await getAllowedProductTypeIds(req);
+    const scopedProductIds = allowedProductTypeIds === null
+      ? null
+      : (await Product.findAll({
+          where: { productTypeId: { [Op.in]: allowedProductTypeIds } },
+          attributes: ['id'],
+        })).map((product) => product.id);
     const where: Record<string, unknown> = {};
     const { status, counterId, leaderId, from, to } = req.query;
 
@@ -124,6 +132,7 @@ export const getVenueNumbersEntriesBootstrap = async (
 
     const [counters, venues, reports, users, accounts, categories, vendors, clients] = await Promise.all([
       Counter.findAll({
+        where: scopedProductIds === null ? {} : { productId: { [Op.in]: scopedProductIds } },
         include: [
           { model: User, as: 'manager', attributes: ['id', 'firstName', 'lastName'] },
           { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName'] },
@@ -148,7 +157,13 @@ export const getVenueNumbersEntriesBootstrap = async (
             model: Counter,
             as: 'counter',
             attributes: ['id', 'productId'],
-            include: [{ model: Product, as: 'product', attributes: ['id', 'name', 'requiresNightReportCostReconciliation'] }],
+            include: [{
+              model: Product,
+              as: 'product',
+              attributes: ['id', 'name', 'requiresNightReportCostReconciliation'],
+              ...(allowedProductTypeIds === null ? {} : { where: { productTypeId: { [Op.in]: allowedProductTypeIds } }, required: true }),
+            }],
+            ...(allowedProductTypeIds === null ? {} : { required: true }),
           },
         ],
         order: [

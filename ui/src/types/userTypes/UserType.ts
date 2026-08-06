@@ -9,4 +9,5 @@ export type UserType = {
     updatedAt: Date;
     createdBy: number;
     updatedBy: number;
+    productTypeIds?: number[];
 };

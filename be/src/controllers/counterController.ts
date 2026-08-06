@@ -7,6 +7,7 @@ import CounterRegistryService, {
 } from '../services/counterRegistryService.js';
 import HttpError from '../errors/HttpError.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { getAllowedProductTypeIds, requireProductAccess } from '../services/productScopeService.js';
 import logger from '../utils/logger.js';
 import Counter from '../models/Counter.js';
 import CounterProduct from '../models/CounterProduct.js';
@@ -135,14 +136,21 @@ function buildCounterColumns() {
   }));
 }
 
-async function fetchTableCounters(where: Record<string, unknown> = {}) {
+async function fetchTableCounters(where: Record<string, unknown> = {}, allowedProductTypeIds: number[] | null = null) {
   return Counter.findAll({
     where,
     include: [
       { model: User, as: 'manager', attributes: ['id', 'firstName', 'lastName'] },
       { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName'] },
       { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName'] },
-      { model: Product, as: 'product', attributes: ['id', 'name'] },
+      {
+        model: Product,
+        as: 'product',
+        attributes: ['id', 'name'],
+        ...(allowedProductTypeIds === null
+          ? {}
+          : { where: { productTypeId: { [Op.in]: allowedProductTypeIds } }, required: true }),
+      },
     ],
     order: [['date', 'DESC']],
   });
@@ -588,6 +596,7 @@ export const createOrLoadCounter = async (req: AuthenticatedRequest, res: Respon
 
   if (format !== REGISTRY_FORMAT) {
     try {
+      if (req.body?.productId != null) await requireProductAccess(req, Number(req.body.productId));
       const newCounter = await Counter.create(req.body);
       res.status(201).json([newCounter]);
     } catch (error) {
@@ -631,7 +640,7 @@ export const getCounterByDate = async (req: AuthenticatedRequest, res: Response)
       if (typeof req.query.date === 'string' && req.query.date.trim()) {
         where.date = req.query.date;
       }
-      const data = await fetchTableCounters(where);
+      const data = await fetchTableCounters(where, await getAllowedProductTypeIds(req));
       res.status(200).json([{ data, columns: buildCounterColumns() }]);
     } catch (error) {
       const message = (error as { message?: string }).message ?? 'Failed to fetch counters';
@@ -667,6 +676,7 @@ export const getCounterByDate = async (req: AuthenticatedRequest, res: Response)
       }
     }
 
+    if (productId != null) await requireProductAccess(req, productId);
     const payload = await CounterRegistryService.getCounterByDate(date, productId);
     res.status(200).json(payload);
   } catch (error) {
@@ -693,6 +703,8 @@ export const getCounterById = async (req: AuthenticatedRequest, res: Response): 
         return;
       }
 
+      if (data.productId != null) await requireProductAccess(req, data.productId);
+
       res.status(200).json([{ data, columns: buildCounterColumns() }]);
     } catch (error) {
       const message = (error as { message?: string }).message ?? 'Failed to fetch counter';
@@ -707,6 +719,10 @@ export const getCounterById = async (req: AuthenticatedRequest, res: Response): 
       throw new HttpError(400, 'Invalid counter id');
     }
 
+    const scopedCounter = await Counter.findByPk(counterId, { attributes: ['id', 'productId'] });
+    if (!scopedCounter) throw new HttpError(404, 'Counter not found');
+    if (scopedCounter.productId != null) await requireProductAccess(req, scopedCounter.productId);
+
     const payload = await CounterRegistryService.getCounterById(counterId);
     res.status(200).json(payload);
   } catch (error) {
@@ -720,6 +736,10 @@ export const updateCounter = async (req: AuthenticatedRequest, res: Response): P
   if (format !== REGISTRY_FORMAT) {
     try {
       const { id } = req.params;
+      const existing = await Counter.findByPk(id, { attributes: ['id', 'productId'] });
+      if (!existing) throw new HttpError(404, 'Counter not found');
+      if (existing.productId != null) await requireProductAccess(req, existing.productId);
+      if (req.body?.productId != null) await requireProductAccess(req, Number(req.body.productId));
       const [updated] = await Counter.update(req.body, { where: { id } });
 
       if (!updated) {
@@ -759,6 +779,11 @@ export const deleteCounter = async (req: AuthenticatedRequest, res: Response): P
     if (!Number.isInteger(counterId) || counterId <= 0) {
       throw new HttpError(400, 'Invalid counter id');
     }
+
+    const scopedCounter = await Counter.findByPk(counterId, { attributes: ['id', 'productId'] });
+    if (!scopedCounter) throw new HttpError(404, 'Counter not found');
+    if (scopedCounter.productId != null) await requireProductAccess(req, scopedCounter.productId);
+
     const actorId = req.authContext?.id ?? null;
 
     const counter = await Counter.findByPk(counterId, {
@@ -768,6 +793,7 @@ export const deleteCounter = async (req: AuthenticatedRequest, res: Response): P
       res.status(404).json([{ message: 'Counter not found' }]);
       return;
     }
+    if (counter.productId != null) await requireProductAccess(req, counter.productId);
 
     const sequelize = Counter.sequelize;
     if (!sequelize) {
@@ -853,6 +879,8 @@ export const upsertCounterSetup = async (req: AuthenticatedRequest, res: Respons
     if (!body.date || typeof body.date !== 'string') {
       throw new HttpError(400, 'date is required');
     }
+
+    if (body.productId != null) await requireProductAccess(req, body.productId);
 
     const userId = Number(body.userId ?? actorId);
     if (!Number.isInteger(userId) || userId <= 0) {
