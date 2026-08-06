@@ -1,10 +1,12 @@
 import {
   buildCustomerEmailGmailQuery,
   buildCustomerEmailRequiredAction,
+  customerEmailActionTargetsUser,
   currentAndNextYearRange,
   resolveCustomerEmailActionStartAt,
   resolveCustomerEmailActionTargets,
   resolveCustomerEmailReceivedAt,
+  shouldCloseCustomerEmailActionForAll,
 } from './customerEmailActionRules';
 
 describe('customer email action rules', () => {
@@ -95,5 +97,51 @@ describe('customer email action rules', () => {
       targetUserIds: null,
       targetUserTypeIds: [1, 2, 3, 4],
     });
+  });
+
+  it('keeps a broadcast email open until every targeted user completes it', () => {
+    expect(
+      shouldCloseCustomerEmailActionForAll({
+        selectedAction: 'completed',
+        recipientUserIds: [17, 22],
+        completedUserIds: [17],
+      }),
+    ).toBe(false);
+    expect(
+      shouldCloseCustomerEmailActionForAll({
+        selectedAction: 'completed',
+        recipientUserIds: [17, 22],
+        completedUserIds: [17, 22],
+      }),
+    ).toBe(true);
+  });
+
+  it('closes a customer email for everyone immediately after a reply', () => {
+    expect(
+      shouldCloseCustomerEmailActionForAll({
+        selectedAction: 'replied',
+        recipientUserIds: [17, 22],
+        completedUserIds: [17],
+      }),
+    ).toBe(true);
+  });
+
+  it('matches customer email actions to their exact user or user type targets', () => {
+    expect(
+      customerEmailActionTargetsUser({
+        targetUserIds: null,
+        targetUserTypeIds: [3, 4],
+        userId: 17,
+        userTypeId: 3,
+      }),
+    ).toBe(true);
+    expect(
+      customerEmailActionTargetsUser({
+        targetUserIds: [22],
+        targetUserTypeIds: null,
+        userId: 17,
+        userTypeId: 3,
+      }),
+    ).toBe(false);
   });
 });

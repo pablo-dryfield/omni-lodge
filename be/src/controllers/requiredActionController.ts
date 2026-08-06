@@ -21,6 +21,10 @@ import {
   storeProfilePhoto,
   type StoreProfilePhotoResult,
 } from '../services/profilePhotoStorageService.js';
+import {
+  customerEmailActionTargetsUser,
+  shouldCloseCustomerEmailActionForAll,
+} from '../services/bookings/customerEmailActionRules.js';
 
 type UserFieldKey =
   | 'phone'
@@ -383,22 +387,29 @@ const isManagerRequiredActionUser = (req: AuthenticatedRequest): boolean => {
 const customerEmailActionTargetsActor = (
   action: RequiredAction,
   req: AuthenticatedRequest,
-): boolean => {
+): boolean =>
+  customerEmailActionTargetsUser({
+    targetUserIds: action.targetUserIds,
+    targetUserTypeIds: action.targetUserTypeIds,
+    userId: req.authContext?.id,
+    userTypeId: req.authContext?.userTypeId,
+  });
+
+const listActiveCustomerEmailRecipientUserIds = async (action: RequiredAction): Promise<number[]> => {
   const targetUserIds = normalizeNumberArray(action.targetUserIds);
   const targetUserTypeIds = normalizeNumberArray(action.targetUserTypeIds);
   if (!targetUserIds?.length && !targetUserTypeIds?.length) {
-    return false;
+    return [];
   }
-  if (targetUserIds?.length && !targetUserIds.includes(Number(req.authContext?.id))) {
-    return false;
-  }
-  if (
-    targetUserTypeIds?.length &&
-    (!req.authContext?.userTypeId || !targetUserTypeIds.includes(Number(req.authContext.userTypeId)))
-  ) {
-    return false;
-  }
-  return true;
+  const recipients = await User.findAll({
+    where: {
+      status: true,
+      ...(targetUserIds?.length ? { id: { [Op.in]: targetUserIds } } : {}),
+      ...(targetUserTypeIds?.length ? { userTypeId: { [Op.in]: targetUserTypeIds } } : {}),
+    },
+    attributes: ['id'],
+  });
+  return recipients.map((recipient) => Number(recipient.id));
 };
 
 export const listMyRequiredActions = async (req: Request, res: Response): Promise<void> => {
@@ -571,13 +582,38 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
       },
     });
 
+    let resolvedForAll = false;
     if (action.type === 'customer_email') {
-      action.status = false;
-      action.updatedBy = userId;
-      await action.save();
+      const selectedAction = responseJson.selectedAction;
+      if (selectedAction === 'replied') {
+        resolvedForAll = true;
+      } else {
+        const recipientUserIds = await listActiveCustomerEmailRecipientUserIds(action);
+        const completions = recipientUserIds.length
+          ? await RequiredActionCompletion.findAll({
+              where: {
+                requiredActionId: action.id,
+                userId: { [Op.in]: recipientUserIds },
+                status: { [Op.in]: ['completed', 'dismissed'] },
+              },
+              attributes: ['userId'],
+            })
+          : [];
+        resolvedForAll = shouldCloseCustomerEmailActionForAll({
+          selectedAction,
+          recipientUserIds,
+          completedUserIds: completions.map((completion) => Number(completion.userId)),
+        });
+      }
+
+      if (resolvedForAll) {
+        action.status = false;
+        action.updatedBy = userId;
+        await action.save();
+      }
     }
 
-    res.status(200).json({ completed: true });
+    res.status(200).json({ completed: true, resolvedForAll });
   } catch (error) {
     res.status(400).json([{ message: (error as Error).message }]);
   }

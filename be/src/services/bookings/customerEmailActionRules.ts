@@ -10,6 +10,52 @@ export const DEFAULT_CUSTOMER_EMAIL_ACTION_START_AT = '2026-08-06T00:00:00+02:00
 const uniquePositiveIntegers = (values: number[]): number[] =>
   Array.from(new Set(values.filter((value) => Number.isInteger(value) && value > 0)));
 
+export const customerEmailActionTargetsUser = ({
+  targetUserIds,
+  targetUserTypeIds,
+  userId,
+  userTypeId,
+}: {
+  targetUserIds: unknown;
+  targetUserTypeIds: unknown;
+  userId: number | null | undefined;
+  userTypeId: number | null | undefined;
+}): boolean => {
+  const users = Array.isArray(targetUserIds)
+    ? uniquePositiveIntegers(targetUserIds.map(Number))
+    : [];
+  const userTypes = Array.isArray(targetUserTypeIds)
+    ? uniquePositiveIntegers(targetUserTypeIds.map(Number))
+    : [];
+  if (users.length === 0 && userTypes.length === 0) {
+    return false;
+  }
+  if (users.length > 0 && (!userId || !users.includes(userId))) {
+    return false;
+  }
+  if (userTypes.length > 0 && (!userTypeId || !userTypes.includes(userTypeId))) {
+    return false;
+  }
+  return true;
+};
+
+export const shouldCloseCustomerEmailActionForAll = ({
+  selectedAction,
+  recipientUserIds,
+  completedUserIds,
+}: {
+  selectedAction: unknown;
+  recipientUserIds: number[];
+  completedUserIds: number[];
+}): boolean => {
+  if (selectedAction === 'replied') {
+    return true;
+  }
+  const recipients = uniquePositiveIntegers(recipientUserIds);
+  const completed = new Set(uniquePositiveIntegers(completedUserIds));
+  return recipients.length > 0 && recipients.every((userId) => completed.has(userId));
+};
+
 export const resolveCustomerEmailActionTargets = (
   participantUserIds: number[],
   operationsUserTypeIds: number[],
