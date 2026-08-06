@@ -614,10 +614,9 @@ export const sendMessage = async (params: SendMessageParams): Promise<SendMessag
       try {
         const { data } = await gmail.users.messages.send({
           userId: 'me',
-          requestBody: params.threadId ? { threadId: sanitizeHeaderValue(params.threadId) } : undefined,
-          media: {
-            mimeType: 'message/rfc822',
-            body: Buffer.from(mimeMessage, 'utf-8'),
+          requestBody: {
+            raw: encodeBase64Url(mimeMessage),
+            ...(params.threadId ? { threadId: sanitizeHeaderValue(params.threadId) } : {}),
           },
         });
         const metadata = await fetchSentMetadata(gmail, data.id ?? null);

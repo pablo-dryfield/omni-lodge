@@ -62,9 +62,13 @@ describe('Gmail threaded replies', () => {
 
     expect(mockGmailSend).toHaveBeenCalledTimes(1);
     const request = mockGmailSend.mock.calls[0][0];
-    expect(request.requestBody).toEqual({ threadId: 'gmail-thread-id' });
+    expect(request.requestBody).toEqual({
+      raw: expect.any(String),
+      threadId: 'gmail-thread-id',
+    });
+    expect(request.media).toBeUndefined();
 
-    const rawMessage = (request.media.body as Buffer).toString('utf-8');
+    const rawMessage = Buffer.from(request.requestBody.raw, 'base64url').toString('utf-8');
     expect(rawMessage).toContain('In-Reply-To: <customer-reply@example.com>');
     expect(rawMessage).toContain(
       'References: <original-message@example.com> <customer-reply@example.com>',

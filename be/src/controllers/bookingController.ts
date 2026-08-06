@@ -19,6 +19,7 @@ import Product from '../models/Product.js';
 import ProductAlias from '../models/ProductAlias.js';
 import ProductAddon from '../models/ProductAddon.js';
 import RequiredAction from '../models/RequiredAction.js';
+import RequiredActionCompletion from '../models/RequiredActionCompletion.js';
 import HttpError from '../errors/HttpError.js';
 import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
 import type Stripe from 'stripe';
@@ -63,6 +64,7 @@ import {
 } from '../constants/bookings.js';
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
 import { getConfigValue } from '../services/configService.js';
+import { customerEmailActionTargetsUser } from '../services/bookings/customerEmailActionRules.js';
 import type { EmailTemplateType } from '../models/EmailTemplate.js';
 import {
   sendDirectBookingActionEmail,
@@ -3350,9 +3352,36 @@ export const getManifest = async (req: AuthenticatedRequest, res: Response): Pro
       const customerEmailSet = new Set(customerEmails);
       const pendingEmailActions = await RequiredAction.findAll({
         where: { type: 'customer_email', status: true },
-        attributes: ['payload'],
+        attributes: ['id', 'payload', 'targetUserIds', 'targetUserTypeIds'],
       });
-      pendingEmailActions.forEach((action) => {
+      const actorId = Number(req.authContext?.id);
+      const actorUserTypeId = Number(req.authContext?.userTypeId);
+      const targetedEmailActions = pendingEmailActions.filter((action) =>
+        customerEmailActionTargetsUser({
+          targetUserIds: action.targetUserIds,
+          targetUserTypeIds: action.targetUserTypeIds,
+          userId: Number.isInteger(actorId) && actorId > 0 ? actorId : null,
+          userTypeId: Number.isInteger(actorUserTypeId) && actorUserTypeId > 0 ? actorUserTypeId : null,
+        }),
+      );
+      const targetedActionIds = targetedEmailActions.map((action) => Number(action.id));
+      const completions = targetedActionIds.length
+        ? await RequiredActionCompletion.findAll({
+            where: {
+              userId: actorId,
+              requiredActionId: { [Op.in]: targetedActionIds },
+              status: { [Op.in]: ['completed', 'dismissed'] },
+            },
+            attributes: ['requiredActionId'],
+          })
+        : [];
+      const completedActionIds = new Set(
+        completions.map((completion) => Number(completion.requiredActionId)),
+      );
+      targetedEmailActions.forEach((action) => {
+        if (completedActionIds.has(Number(action.id))) {
+          return;
+        }
         const email = String(action.payload?.customerEmail ?? '').trim().toLowerCase();
         if (!email || !customerEmailSet.has(email)) {
           return;
