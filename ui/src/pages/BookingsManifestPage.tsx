@@ -1369,6 +1369,7 @@ type ReconcileState = {
 type BookingDetailsEmail = {
   id: number;
   messageId: string;
+  threadId?: string | null;
   fromAddress?: string | null;
   toAddresses?: string | null;
   ccAddresses?: string | null;
@@ -1581,6 +1582,8 @@ const createDefaultCancelState = (): CancelRefundState => ({
 type MailComposerState = {
   opened: boolean;
   sourceOrder: UnifiedOrder | null;
+  replyToMessageId: string | null;
+  replyThreadId: string | null;
   to: string;
   subject: string;
   body: string;
@@ -1672,6 +1675,8 @@ type AmendEmailPreviewState = {
 const createDefaultMailComposerState = (): MailComposerState => ({
   opened: false,
   sourceOrder: null,
+  replyToMessageId: null,
+  replyThreadId: null,
   to: "",
   subject: "",
   body: "",
@@ -2030,6 +2035,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   useEffect(() => {
     setSearchInput(searchParam);
   }, [searchParam]);
+
+  useEffect(() => {
+    const refreshEmailCounts = () => setReloadToken((token) => token + 1);
+    window.addEventListener("customer-email-actions-changed", refreshEmailCounts);
+    return () => window.removeEventListener("customer-email-actions-changed", refreshEmailCounts);
+  }, []);
 
 
 
@@ -3876,7 +3887,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           : "";
       return {
         ...prev,
-        subject,
+        subject: prev.replyToMessageId ? prev.subject : subject,
         body,
         reactLiveSource,
         error: null,
@@ -3904,6 +3915,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     setMailComposerState({
       opened: true,
       sourceOrder: order,
+      replyToMessageId: null,
+      replyThreadId: null,
       to,
       subject,
       body,
@@ -3915,6 +3928,58 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     setMailVariableDropdown({ field: null, tokenStart: -1, tokenEnd: -1, query: "" });
 
     void loadMailTemplates();
+  };
+
+  const openMailReplyComposerModal = (order: UnifiedOrder, message: MailboxMessage) => {
+    const to = String(order.customerEmail ?? "").trim();
+    const subject = String(message.subject ?? "").trim();
+    const customerName = String(order.customerName ?? "").trim() || "Guest";
+    if (!to || !subject || !message.messageId || !message.threadId) {
+      return;
+    }
+
+    setMailboxState(createDefaultMailboxState());
+    setMailTemplateState(createDefaultMailTemplateState());
+    setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+    setMailComposerState({
+      opened: true,
+      sourceOrder: order,
+      replyToMessageId: message.messageId,
+      replyThreadId: message.threadId,
+      to,
+      subject,
+      body: `Hi ${customerName},\n\n\n\nBest regards,`,
+      reactLiveSource: "",
+      sending: false,
+      error: null,
+      success: null,
+    });
+    setMailVariableDropdown({ field: null, tokenStart: -1, tokenEnd: -1, query: "" });
+  };
+
+  const handleMailboxReply = (message: MailboxMessage) => {
+    const sourceOrder = mailboxState.sourceOrder;
+    if (!sourceOrder) {
+      return;
+    }
+    openMailReplyComposerModal(sourceOrder, message);
+  };
+
+  const handleMailboxPreviewReply = () => {
+    const preview = mailboxState.previewData;
+    if (!preview) {
+      return;
+    }
+    handleMailboxReply({
+      messageId: preview.messageId,
+      threadId: preview.threadId ?? null,
+      fromAddress: preview.fromAddress ?? null,
+      toAddresses: preview.toAddresses ?? null,
+      subject: preview.subject ?? null,
+      snippet: preview.snippet ?? null,
+      internalDate: preview.internalDate ?? preview.receivedAt ?? null,
+      direction: preview.ingestionStatus === "sent" ? "sent" : "received",
+    });
   };
 
   const closeMailComposerModal = () => {
@@ -4669,6 +4734,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           to,
           subject,
           body: isReactTemplateSelected ? undefined : body,
+          replyToMessageId: mailComposerState.replyToMessageId ?? undefined,
           templateId: templateId ?? undefined,
           templateContext: buildMailTemplateContextForRequest(to),
         },
@@ -4859,6 +4925,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     mailboxState.previewData?.htmlText ??
     mailboxState.previewData?.snippet ??
     null;
+  const isMailReply = Boolean(mailComposerState.replyToMessageId && mailComposerState.replyThreadId);
   const mailComposerPreviewHtml = mailComposerPreviewState.data?.htmlBody ?? null;
   const mailComposerDisplayHtml = mailComposerPreviewHtml;
   const mailComposerPreviewBody = mailComposerPreviewState.data?.textBody ?? null;
@@ -5762,6 +5829,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                             }}
                                           >
                                             <MailOutline fontSize="small" />
+                                            {(order.pendingCustomerEmailCount ?? 0) > 0 ? (
+                                              <Badge size="xs" color="red" variant="filled" ml={4} circle>
+                                                {order.pendingCustomerEmailCount}
+                                              </Badge>
+                                            ) : null}
                                           </Paper>
                                         </Box>
                                       ) : (
@@ -7267,13 +7339,23 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                         {message.snippet || "No snippet available."}
                       </Text>
                     </Stack>
-                    <Button
-                      size="xs"
-                      variant="light"
-                      onClick={() => handleMailboxPreview(message.messageId)}
-                    >
-                      Preview
-                    </Button>
+                    <Group gap="xs" wrap="nowrap">
+                      <Button
+                        size="xs"
+                        variant="default"
+                        onClick={() => handleMailboxPreview(message.messageId)}
+                      >
+                        Preview
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        onClick={() => handleMailboxReply(message)}
+                        disabled={!mailboxState.sourceOrder || !message.threadId || !message.subject?.trim()}
+                      >
+                        Reply
+                      </Button>
+                    </Group>
                   </Group>
                 </Paper>
               ))}
@@ -7330,6 +7412,19 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                   {(mailboxState.previewData.ingestionStatus ?? "unknown").toUpperCase()}
                 </Badge>
               </Stack>
+              <Group justify="flex-end">
+                <Button
+                  variant="light"
+                  onClick={handleMailboxPreviewReply}
+                  disabled={
+                    !mailboxState.sourceOrder ||
+                    !mailboxState.previewData.threadId ||
+                    !mailboxState.previewData.subject?.trim()
+                  }
+                >
+                  Reply in this thread
+                </Button>
+              </Group>
               {mailboxPreviewHtml ? (
                 <Box style={{ height: "calc(100vh - 240px)" }}>
                   <iframe
@@ -7362,7 +7457,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       <Modal
         opened={mailComposerState.opened}
         onClose={closeMailComposerModal}
-        title="Mail sender"
+        title={isMailReply ? "Reply in email thread" : "Mail sender"}
         fullScreen
         centered
       >
@@ -7380,6 +7475,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           {mailComposerState.success ? (
             <Alert color="green" title="Success">
               {mailComposerState.success}
+            </Alert>
+          ) : null}
+
+          {isMailReply ? (
+            <Alert color="blue" title="Replying in the existing Gmail thread">
+              The subject is locked so Gmail can keep this response in the same conversation.
             </Alert>
           ) : null}
 
@@ -7465,6 +7566,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             onClick={closeMailVariableDropdown}
             placeholder="recipient@example.com"
             required
+            disabled={isMailReply || mailComposerState.sending}
           />
           <TextInput
             ref={mailSubjectInputRef}
@@ -7481,6 +7583,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             }}
             placeholder="Email subject"
             required
+            disabled={isMailReply || mailComposerState.sending}
           />
           {renderMailVariableDropdown("subject")}
           {isReactTemplateSelected ? (
@@ -7548,6 +7651,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           {mailComposerState.success ? (
             <Alert color="green" title="Success">
               {mailComposerState.success}
+            </Alert>
+          ) : null}
+
+          {isMailReply ? (
+            <Alert color="blue" title="Replying in the existing Gmail thread">
+              The subject is locked so Gmail can keep this response in the same conversation.
             </Alert>
           ) : null}
           {mailComposerPreviewState.error ? (

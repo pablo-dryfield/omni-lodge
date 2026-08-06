@@ -18,6 +18,7 @@ import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
 import ProductAlias from '../models/ProductAlias.js';
 import ProductAddon from '../models/ProductAddon.js';
+import RequiredAction from '../models/RequiredAction.js';
 import HttpError from '../errors/HttpError.js';
 import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
 import type Stripe from 'stripe';
@@ -69,6 +70,7 @@ import {
   type DirectBookingActionEmailOptions,
 } from '../services/directBookingActionEmailService.js';
 import CounterRegistryService from '../services/counterRegistryService.js';
+import { recordCustomerEmailThreadParticipant } from '../services/bookings/customerEmailThreadService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -438,6 +440,7 @@ type SendBookingEmailBody = {
   to?: unknown;
   subject?: unknown;
   body?: unknown;
+  replyToMessageId?: unknown;
   templateId?: unknown;
   templateContext?: Record<string, unknown> | null;
   htmlBodyOverride?: unknown;
@@ -2783,6 +2786,7 @@ export const getMailboxEmailPreview = async (req: AuthenticatedRequest, res: Res
     res.status(200).json({
       id: 0,
       messageId,
+      threadId: payload.message.threadId ?? null,
       fromAddress: payload.headers['from'] ?? null,
       toAddresses: payload.headers['to'] ?? null,
       ccAddresses: payload.headers['cc'] ?? null,
@@ -2998,17 +3002,64 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
     }
 
     const rendered = await resolveRenderedEmailFromPayload(payload);
+    const replyToMessageId = String(payload?.replyToMessageId ?? '').trim();
+    let replyContext: {
+      threadId: string;
+      inReplyTo: string;
+      references: string | null;
+    } | null = null;
+
+    if (replyToMessageId) {
+      const replyTarget = await fetchGmailMessagePayload(replyToMessageId);
+      const threadId = String(replyTarget?.message.threadId ?? '').trim();
+      const inReplyTo = String(replyTarget?.headers['message-id'] ?? '').trim();
+      const replySubject = sanitizeHeaderValue(String(replyTarget?.headers['subject'] ?? ''));
+
+      if (!replyTarget || !threadId || !inReplyTo) {
+        throw new HttpError(400, 'The selected Gmail message cannot be used as a reply target');
+      }
+      if (rendered.subject !== replySubject) {
+        throw new HttpError(400, 'Reply subject must match the existing Gmail thread');
+      }
+
+      replyContext = {
+        threadId,
+        inReplyTo,
+        references: replyTarget.headers['references'] ?? null,
+      };
+    }
 
     const sendResult = await sendGmailMessage({
       to,
       subject: rendered.subject,
       textBody: rendered.textBody,
       htmlBody: rendered.htmlBody,
+      threadId: replyContext?.threadId,
+      inReplyTo: replyContext?.inReplyTo,
+      references: replyContext?.references,
     });
+    const actorId = req.authContext?.id ?? null;
+    let threadOwnershipRecorded = false;
+    if (actorId && sendResult.threadId) {
+      try {
+        await recordCustomerEmailThreadParticipant({
+          threadId: sendResult.threadId,
+          userId: actorId,
+          messageId: sendResult.id,
+        });
+        threadOwnershipRecorded = true;
+      } catch (ownershipError) {
+        logger.error(
+          `[customer-email-thread] Email sent but thread ownership could not be recorded for Gmail thread ${sendResult.threadId}: ${(ownershipError as Error).message}`,
+        );
+      }
+    }
     res.status(200).json({
       status: 'sent',
       id: sendResult.id,
       threadId: sendResult.threadId,
+      replyToMessageId: replyToMessageId || null,
+      threadOwnershipRecorded,
       templateType: rendered.templateType,
     });
   } catch (error) {
@@ -3287,7 +3338,35 @@ export const getManifest = async (req: AuthenticatedRequest, res: Response): Pro
           return true;
         });
 
-    const manifest = groupOrdersForManifest(filteredOrders);
+    const customerEmails = Array.from(
+      new Set(
+        filteredOrders
+          .map((order) => String(order.customerEmail ?? '').trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+    const pendingEmailCountByCustomer = new Map<string, number>();
+    if (customerEmails.length > 0) {
+      const customerEmailSet = new Set(customerEmails);
+      const pendingEmailActions = await RequiredAction.findAll({
+        where: { type: 'customer_email', status: true },
+        attributes: ['payload'],
+      });
+      pendingEmailActions.forEach((action) => {
+        const email = String(action.payload?.customerEmail ?? '').trim().toLowerCase();
+        if (!email || !customerEmailSet.has(email)) {
+          return;
+        }
+        pendingEmailCountByCustomer.set(email, (pendingEmailCountByCustomer.get(email) ?? 0) + 1);
+      });
+    }
+
+    const ordersWithEmailCounts = filteredOrders.map((order) => ({
+      ...order,
+      pendingCustomerEmailCount:
+        pendingEmailCountByCustomer.get(String(order.customerEmail ?? '').trim().toLowerCase()) ?? 0,
+    }));
+    const manifest = groupOrdersForManifest(ordersWithEmailCounts);
 
     const summary = manifest.reduce<{
       totalPeople: number;
@@ -3357,7 +3436,7 @@ export const getManifest = async (req: AuthenticatedRequest, res: Response): Pro
         time: hasSearch ? null : time ?? null,
         search: hasSearch ? searchTerm : null,
       },
-      orders: filteredOrders,
+      orders: ordersWithEmailCounts,
       manifest,
       summary,
     });

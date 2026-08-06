@@ -62,7 +62,6 @@ const USER_FIELD_SPECS: Record<UserFieldKey, { label: string; inputType: 'text' 
 };
 
 const MANAGER_REQUIRED_ACTION_ROLES = new Set(['admin', 'administrator', 'manager']);
-
 const isUserFieldKey = (value: unknown): value is UserFieldKey =>
   typeof value === 'string' && Object.prototype.hasOwnProperty.call(USER_FIELD_SPECS, value);
 
@@ -381,6 +380,27 @@ const isManagerRequiredActionUser = (req: AuthenticatedRequest): boolean => {
   return slugs.some((slug) => MANAGER_REQUIRED_ACTION_ROLES.has(slug));
 };
 
+const customerEmailActionTargetsActor = (
+  action: RequiredAction,
+  req: AuthenticatedRequest,
+): boolean => {
+  const targetUserIds = normalizeNumberArray(action.targetUserIds);
+  const targetUserTypeIds = normalizeNumberArray(action.targetUserTypeIds);
+  if (!targetUserIds?.length && !targetUserTypeIds?.length) {
+    return false;
+  }
+  if (targetUserIds?.length && !targetUserIds.includes(Number(req.authContext?.id))) {
+    return false;
+  }
+  if (
+    targetUserTypeIds?.length &&
+    (!req.authContext?.userTypeId || !targetUserTypeIds.includes(Number(req.authContext.userTypeId)))
+  ) {
+    return false;
+  }
+  return true;
+};
+
 export const listMyRequiredActions = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = getActorId(req as AuthenticatedRequest);
@@ -534,6 +554,10 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
       res.status(404).json([{ message: 'Required action not found' }]);
       return;
     }
+    if (action.type === 'customer_email' && !customerEmailActionTargetsActor(action, req as AuthenticatedRequest)) {
+      res.status(403).json([{ message: 'You do not have access to customer email requests.' }]);
+      return;
+    }
 
     const responseJson = normalizeRequiredActionPayload(req.body?.response);
     const eSignature = getRequiredSignature(action, responseJson.eSignature);
@@ -546,6 +570,12 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
         ...(eSignature ? { eSignature } : {}),
       },
     });
+
+    if (action.type === 'customer_email') {
+      action.status = false;
+      action.updatedBy = userId;
+      await action.save();
+    }
 
     res.status(200).json({ completed: true });
   } catch (error) {

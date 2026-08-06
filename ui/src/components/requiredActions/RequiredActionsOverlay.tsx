@@ -4,9 +4,11 @@ import {
   Alert,
   Avatar,
   Badge,
+  Box,
   Button,
   Card,
   Center,
+  Divider,
   FileInput,
   Group,
   Loader,
@@ -22,7 +24,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { IconAlertCircle, IconArrowsExchange, IconCheck, IconClipboardCheck, IconSignature, IconUser, IconUserEdit, IconX } from "@tabler/icons-react";
+import { IconAlertCircle, IconArrowsExchange, IconCheck, IconClipboardCheck, IconEye, IconMail, IconSend, IconSignature, IconUser, IconUserEdit, IconX } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import { acknowledgeCerebroPolicy, submitCerebroQuiz } from "../../api/cerebro";
 import {
@@ -37,6 +39,7 @@ import {
 } from "../../api/requiredActions";
 import { CerebroRichTextContent } from "../cerebro/CerebroRichTextContent";
 import { compressImageFile } from "../../utils/imageCompression";
+import axiosInstance from "../../utils/axiosInstance";
 
 const HEADER_FONT_STACK = "'Arial Black', 'Inter', sans-serif";
 const PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
@@ -139,6 +142,9 @@ const getActionIcon = (action: RequiredActionItem) => {
   }
   if (action.type === "profile_fields") {
     return <IconUserEdit size={28} />;
+  }
+  if (action.type === "customer_email") {
+    return <IconMail size={28} />;
   }
   return <IconClipboardCheck size={28} />;
 };
@@ -718,6 +724,213 @@ const BoxInfo = ({ label, value }: { label: string; value: string }) => (
   </Paper>
 );
 
+type CustomerEmailPreview = {
+  messageId: string;
+  threadId?: string | null;
+  fromAddress?: string | null;
+  toAddresses?: string | null;
+  subject?: string | null;
+  receivedAt?: string | null;
+  internalDate?: string | null;
+  previewText?: string | null;
+  textBody?: string | null;
+  htmlBody?: string | null;
+  htmlText?: string | null;
+};
+
+const payloadString = (payload: Record<string, unknown>, key: string): string =>
+  typeof payload[key] === "string" ? String(payload[key]).trim() : "";
+
+const CustomerEmailAction = ({
+  action,
+  onComplete,
+  loading,
+}: {
+  action: RequiredActionItem;
+  onComplete: (response: Record<string, unknown>) => Promise<void>;
+  loading: boolean;
+}) => {
+  const gmailMessageId = payloadString(action.payload, "gmailMessageId");
+  const customerEmail = payloadString(action.payload, "customerEmail");
+  const customerName = payloadString(action.payload, "customerName");
+  const subject = payloadString(action.payload, "subject");
+  const snippet = payloadString(action.payload, "snippet");
+  const receivedAt = payloadString(action.payload, "receivedAt");
+  const [previewOpened, setPreviewOpened] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<CustomerEmailPreview | null>(null);
+  const [replying, setReplying] = useState(false);
+  const [replyBody, setReplyBody] = useState(`Hi ${customerName || "Guest"},\n\n\n\nBest regards,`);
+  const [replySending, setReplySending] = useState(false);
+
+  useEffect(() => {
+    setPreviewOpened(false);
+    setPreview(null);
+    setPreviewError(null);
+    setReplying(false);
+    setReplyBody(`Hi ${customerName || "Guest"},\n\n\n\nBest regards,`);
+  }, [action.id, customerName]);
+
+  const openEmail = async (replyMode: boolean) => {
+    setPreviewOpened(true);
+    setReplying(replyMode);
+    if (preview || previewLoading || !gmailMessageId) {
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const response = await axiosInstance.get<CustomerEmailPreview>(
+        `/bookings/emails/gmail/${encodeURIComponent(gmailMessageId)}/preview`,
+        { withCredentials: true },
+      );
+      setPreview(response.data);
+    } catch (requestError) {
+      setPreviewError(getApiErrorMessage(requestError, "Unable to load this email"));
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const complete = async (selectedAction: "completed" | "replied") => {
+    await onComplete({
+      selectedAction,
+      gmailMessageId,
+      customerEmail,
+      completedAt: new Date().toISOString(),
+    });
+  };
+
+  const sendReply = async () => {
+    const body = replyBody.trim();
+    if (!body || !gmailMessageId || !customerEmail || !subject) {
+      setPreviewError("Recipient, subject, and reply body are required.");
+      return;
+    }
+    setReplySending(true);
+    setPreviewError(null);
+    try {
+      await axiosInstance.post(
+        "/bookings/emails/send",
+        { to: customerEmail, subject, body, replyToMessageId: gmailMessageId },
+        { withCredentials: true },
+      );
+      await complete("replied");
+    } catch (requestError) {
+      setPreviewError(getApiErrorMessage(requestError, "Unable to send this reply"));
+    } finally {
+      setReplySending(false);
+    }
+  };
+
+  const previewBody = preview?.previewText ?? preview?.textBody ?? preview?.htmlText ?? snippet;
+
+  return (
+    <Stack gap="md">
+      <Paper withBorder radius="md" p="md">
+        <Stack gap={6}>
+          <Group justify="space-between" align="flex-start">
+            <Text fw={800}>{subject || "(No subject)"}</Text>
+            {receivedAt ? <Badge variant="light">{formatDateTime(receivedAt)}</Badge> : null}
+          </Group>
+          <Text size="sm" c="dimmed">From: {customerName ? `${customerName} <${customerEmail}>` : customerEmail}</Text>
+          {snippet ? <Text size="sm" lineClamp={3}>{snippet}</Text> : null}
+        </Stack>
+      </Paper>
+      <Group grow>
+        <Button
+          variant="default"
+          leftSection={<IconEye size={18} />}
+          onClick={() => void openEmail(false)}
+          disabled={!gmailMessageId}
+        >
+          Read
+        </Button>
+        <Button
+          variant="light"
+          leftSection={<IconSend size={18} />}
+          onClick={() => void openEmail(true)}
+          disabled={!gmailMessageId || !customerEmail || !subject}
+        >
+          Reply
+        </Button>
+        <Button color="green" leftSection={<IconCheck size={18} />} loading={loading} onClick={() => void complete("completed").catch(() => undefined)}>
+          Complete
+        </Button>
+      </Group>
+
+      <Modal
+        opened={previewOpened}
+        onClose={() => {
+          if (!replySending) {
+            setPreviewOpened(false);
+          }
+        }}
+        title={replying ? "Reply to customer" : "Customer email"}
+        fullScreen
+        centered
+        zIndex={5200}
+      >
+        <Stack gap="md">
+          {previewError ? <Alert color="red" icon={<IconAlertCircle size={16} />}>{previewError}</Alert> : null}
+          {previewLoading ? <Center mih={160}><Loader variant="dots" /></Center> : null}
+          {preview ? (
+            <>
+              <Stack gap={4}>
+                <Title order={3}>{preview.subject || "(No subject)"}</Title>
+                <Text size="sm" c="dimmed">From: {preview.fromAddress || customerEmail}</Text>
+                <Text size="sm" c="dimmed">To: {preview.toAddresses || "-"}</Text>
+                <Text size="sm">{formatDateTime(preview.receivedAt ?? preview.internalDate) || ""}</Text>
+              </Stack>
+              <Divider />
+              {preview.htmlBody ? (
+                <Box style={{ height: replying ? "42vh" : "calc(100vh - 260px)" }}>
+                  <iframe
+                    title="Customer email preview"
+                    srcDoc={preview.htmlBody}
+                    sandbox=""
+                    style={{ width: "100%", height: "100%", border: "1px solid #e2e8f0", borderRadius: 8 }}
+                  />
+                </Box>
+              ) : previewBody ? (
+                <Paper withBorder radius="md" p="md">
+                  <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>{previewBody}</Text>
+                </Paper>
+              ) : (
+                <Alert color="yellow">No email content is available.</Alert>
+              )}
+              {replying ? (
+                <Stack gap="sm">
+                  <TextInput label="To" value={customerEmail} disabled />
+                  <TextInput label="Subject" value={subject} disabled />
+                  <Textarea
+                    label="Reply"
+                    value={replyBody}
+                    onChange={(event) => setReplyBody(event.currentTarget.value)}
+                    autosize
+                    minRows={8}
+                    disabled={replySending || loading}
+                  />
+                  <Group justify="flex-end">
+                    <Button variant="default" onClick={() => setReplying(false)} disabled={replySending}>Back to email</Button>
+                    <Button leftSection={<IconSend size={18} />} onClick={() => void sendReply()} loading={replySending || loading}>Send reply</Button>
+                  </Group>
+                </Stack>
+              ) : (
+                <Group justify="flex-end">
+                  <Button variant="light" leftSection={<IconSend size={18} />} onClick={() => setReplying(true)} disabled={!subject}>Reply</Button>
+                  <Button color="green" leftSection={<IconCheck size={18} />} loading={loading} onClick={() => void complete("completed").catch(() => undefined)}>Complete</Button>
+                </Group>
+              )}
+            </>
+          ) : null}
+        </Stack>
+      </Modal>
+    </Stack>
+  );
+};
+
 const GenericAction = ({
   action,
   onComplete,
@@ -945,6 +1158,21 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     }
   };
 
+  const handleCustomerEmailComplete = async (response: Record<string, unknown>) => {
+    if (!action || action.source !== "required_action" || action.type !== "customer_email") {
+      return;
+    }
+    setError(null);
+    try {
+      await completeAction.mutateAsync({ actionId: action.recordId, response });
+      window.dispatchEvent(new CustomEvent("customer-email-actions-changed"));
+    } catch (mutationError) {
+      const message = getApiErrorMessage(mutationError, "Unable to complete this email request");
+      setError(message);
+      throw mutationError;
+    }
+  };
+
   const handleProfileSubmit = async (values: Record<string, string>, profilePhoto?: File | null) => {
     if (!action || action.type !== "profile_fields") {
       return;
@@ -1098,7 +1326,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
                   <Title order={2} ta="center">
                     {action.title}
                   </Title>
-                  {action.body && action.type !== "broadcast" && action.type !== "policy_consent" ? (
+                  {action.body && action.type !== "broadcast" && action.type !== "policy_consent" && action.type !== "customer_email" ? (
                     <Text c="dimmed" ta="center">
                       {action.body}
                     </Text>
@@ -1139,6 +1367,8 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
                 <PolicyAction action={action} onAccept={handlePolicyAccept} loading={isBusy} signatureSlot={signatureSlot} />
               ) : action.type === "quiz" ? (
                 <QuizAction action={action} onSubmit={handleQuizSubmit} loading={isBusy} resultText={quizResult} signatureSlot={signatureSlot} />
+              ) : action.type === "customer_email" ? (
+                <CustomerEmailAction action={action} onComplete={handleCustomerEmailComplete} loading={isBusy} />
               ) : (
                 <GenericAction action={action} onComplete={handleComplete} loading={isBusy} signatureSlot={signatureSlot} />
               )}

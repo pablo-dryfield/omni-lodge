@@ -35,6 +35,7 @@ export type UnifiedOrder = {
   customerName: string;
   customerPhone?: string;
   customerEmail?: string;
+  pendingCustomerEmailCount?: number;
   platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;

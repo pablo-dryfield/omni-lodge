@@ -50,6 +50,7 @@ export interface UnifiedOrder {
   customerName: string;
   customerPhone?: string;
   customerEmail?: string;
+  pendingCustomerEmailCount?: number;
   platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;

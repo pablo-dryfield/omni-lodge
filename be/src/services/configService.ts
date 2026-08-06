@@ -187,6 +187,14 @@ const validateValue = (definition: ConfigDefinition, raw: string | null): void =
         throw new HttpError(400, `${definition.key} must be a valid calendar date`);
       }
     }
+    if (rules.format === 'iso-datetime') {
+      const parsed = new Date(raw);
+      const hasExplicitTimezone =
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(raw);
+      if (!hasExplicitTimezone || Number.isNaN(parsed.getTime())) {
+        throw new HttpError(400, `${definition.key} must be a valid ISO date and time`);
+      }
+    }
   }
 };
 

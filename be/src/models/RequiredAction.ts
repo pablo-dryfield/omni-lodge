@@ -11,7 +11,14 @@ import {
 } from 'sequelize-typescript';
 import User from './User.js';
 
-export type RequiredActionType = 'broadcast' | 'policy_consent' | 'profile_fields' | 'quiz' | 'assistant_manager_task' | 'custom';
+export type RequiredActionType =
+  | 'broadcast'
+  | 'policy_consent'
+  | 'profile_fields'
+  | 'quiz'
+  | 'assistant_manager_task'
+  | 'customer_email'
+  | 'custom';
 
 @Table({
   timestamps: true,
