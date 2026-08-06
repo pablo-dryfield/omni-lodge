@@ -1,6 +1,7 @@
 import { col, fn, literal, Op, UniqueConstraintError, where as sequelizeWhere } from 'sequelize';
 import Booking from '../../models/Booking.js';
 import RequiredAction from '../../models/RequiredAction.js';
+import RequiredActionCompletion from '../../models/RequiredActionCompletion.js';
 import UserType from '../../models/UserType.js';
 import { getConfigValue } from '../configService.js';
 import logger from '../../utils/logger.js';
@@ -32,6 +33,95 @@ const findExistingAction = (gmailMessageId: string): Promise<RequiredAction | nu
     },
     attributes: ['id'],
   });
+
+export const resolveCustomerEmailActionsForReply = async ({
+  gmailThreadId,
+  replyToMessageId,
+  sentMessageId,
+  actorId,
+  repliedAt = new Date(),
+}: {
+  gmailThreadId: string;
+  replyToMessageId?: string | null;
+  sentMessageId?: string | null;
+  actorId: number;
+  repliedAt?: Date;
+}): Promise<number[]> => {
+  const threadId = gmailThreadId.trim();
+  const repliedToId = String(replyToMessageId ?? '').trim();
+  if (!threadId || !Number.isInteger(actorId) || actorId <= 0) {
+    return [];
+  }
+
+  const matchingActions = await RequiredAction.findAll({
+    where: {
+      type: 'customer_email',
+      status: true,
+      [Op.or]: [
+        sequelizeWhere(literal(`payload->>'gmailThreadId'`), threadId),
+        ...(repliedToId
+          ? [sequelizeWhere(literal(`payload->>'gmailMessageId'`), repliedToId)]
+          : []),
+      ],
+    },
+    order: [['id', 'ASC']],
+  });
+
+  const replyTimestamp = repliedAt.getTime();
+  const actionsToResolve = matchingActions.filter((action) => {
+    const gmailMessageId = String(action.payload?.gmailMessageId ?? '').trim();
+    if (repliedToId && gmailMessageId === repliedToId) {
+      return true;
+    }
+    const receivedTimestamp = new Date(String(action.payload?.receivedAt ?? '')).getTime();
+    return Number.isFinite(receivedTimestamp) && receivedTimestamp <= replyTimestamp;
+  });
+
+  const responseJson = {
+    selectedAction: 'replied',
+    repliedAt: repliedAt.toISOString(),
+    replyToMessageId: repliedToId || null,
+    sentMessageId: sentMessageId ?? null,
+    gmailThreadId: threadId,
+  };
+
+  await Promise.all(
+    actionsToResolve.map(async (action) => {
+      await action.update({
+        status: false,
+        updatedBy: actorId,
+        payload: {
+          ...action.payload,
+          resolvedAt: repliedAt.toISOString(),
+          resolvedByUserId: actorId,
+          resolution: 'replied',
+          replyMessageId: sentMessageId ?? null,
+        },
+      });
+
+      const existingCompletion = await RequiredActionCompletion.findOne({
+        where: { requiredActionId: action.id, userId: actorId },
+      });
+      if (existingCompletion) {
+        await existingCompletion.update({
+          status: 'completed',
+          completedAt: repliedAt,
+          responseJson,
+        });
+      } else {
+        await RequiredActionCompletion.create({
+          requiredActionId: action.id,
+          userId: actorId,
+          status: 'completed',
+          completedAt: repliedAt,
+          responseJson,
+        });
+      }
+    }),
+  );
+
+  return actionsToResolve.map((action) => Number(action.id));
+};
 
 export const createCustomerEmailActionForMessage = async (
   gmailMessageId: string,

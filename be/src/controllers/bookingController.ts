@@ -19,7 +19,6 @@ import Product from '../models/Product.js';
 import ProductAlias from '../models/ProductAlias.js';
 import ProductAddon from '../models/ProductAddon.js';
 import RequiredAction from '../models/RequiredAction.js';
-import RequiredActionCompletion from '../models/RequiredActionCompletion.js';
 import HttpError from '../errors/HttpError.js';
 import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
 import type Stripe from 'stripe';
@@ -73,6 +72,7 @@ import {
 } from '../services/directBookingActionEmailService.js';
 import CounterRegistryService from '../services/counterRegistryService.js';
 import { recordCustomerEmailThreadParticipant } from '../services/bookings/customerEmailThreadService.js';
+import { resolveCustomerEmailActionsForReply } from '../services/bookings/customerEmailActionService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -3056,12 +3056,29 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
         );
       }
     }
+    let resolvedCustomerEmailActionIds: number[] = [];
+    if (actorId && replyContext?.threadId) {
+      try {
+        resolvedCustomerEmailActionIds = await resolveCustomerEmailActionsForReply({
+          gmailThreadId: replyContext.threadId,
+          replyToMessageId,
+          sentMessageId: sendResult.id,
+          actorId,
+        });
+      } catch (resolutionError) {
+        logger.error(
+          `[customer-email-action] Email sent but pending actions could not be resolved for Gmail thread ${replyContext.threadId}: ${(resolutionError as Error).message}`,
+        );
+      }
+    }
     res.status(200).json({
       status: 'sent',
       id: sendResult.id,
       threadId: sendResult.threadId,
       replyToMessageId: replyToMessageId || null,
       threadOwnershipRecorded,
+      resolvedCustomerEmailActionIds,
+      resolvedCustomerEmailActionCount: resolvedCustomerEmailActionIds.length,
       templateType: rendered.templateType,
     });
   } catch (error) {
@@ -3364,24 +3381,7 @@ export const getManifest = async (req: AuthenticatedRequest, res: Response): Pro
           userTypeId: Number.isInteger(actorUserTypeId) && actorUserTypeId > 0 ? actorUserTypeId : null,
         }),
       );
-      const targetedActionIds = targetedEmailActions.map((action) => Number(action.id));
-      const completions = targetedActionIds.length
-        ? await RequiredActionCompletion.findAll({
-            where: {
-              userId: actorId,
-              requiredActionId: { [Op.in]: targetedActionIds },
-              status: { [Op.in]: ['completed', 'dismissed'] },
-            },
-            attributes: ['requiredActionId'],
-          })
-        : [];
-      const completedActionIds = new Set(
-        completions.map((completion) => Number(completion.requiredActionId)),
-      );
       targetedEmailActions.forEach((action) => {
-        if (completedActionIds.has(Number(action.id))) {
-          return;
-        }
         const email = String(action.payload?.customerEmail ?? '').trim().toLowerCase();
         if (!email || !customerEmailSet.has(email)) {
           return;
