@@ -18,6 +18,7 @@ export type RequiredActionItem = {
     | "profile_fields"
     | "quiz"
     | "assistant_manager_task"
+    | "customer_email"
     | "custom"
     | "schedule_swap_partner"
     | "schedule_swap_manager";

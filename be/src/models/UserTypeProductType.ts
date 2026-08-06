@@ -2,7 +2,12 @@ import { AllowNull, AutoIncrement, Column, DataType, ForeignKey, Model, PrimaryK
 import UserType from './UserType.js';
 import ProductType from './ProductType.js';
 
-@Table({ timestamps: true, modelName: 'UserTypeProductType', tableName: 'user_type_product_types' })
+@Table({
+  timestamps: true,
+  underscored: true,
+  modelName: 'UserTypeProductType',
+  tableName: 'user_type_product_types',
+})
 export default class UserTypeProductType extends Model {
   @PrimaryKey
   @AutoIncrement

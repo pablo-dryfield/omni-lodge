@@ -58,6 +58,7 @@ import Notification from "../models/Notification.js";
 import AuditLog from "../models/AuditLog.js";
 import RequiredAction from "../models/RequiredAction.js";
 import RequiredActionCompletion from "../models/RequiredActionCompletion.js";
+import CustomerEmailThreadParticipant from "../models/CustomerEmailThreadParticipant.js";
 import ConfigKey from "../models/ConfigKey.js";
 import ConfigValue from "../models/ConfigValue.js";
 import ConfigHistory from "../models/ConfigHistory.js";
@@ -258,6 +259,7 @@ const sequelize = new Sequelize({
     AuditLog,
     RequiredAction,
     RequiredActionCompletion,
+    CustomerEmailThreadParticipant,
     ConfigKey,
     ConfigValue,
     ConfigHistory,

@@ -234,6 +234,9 @@ type SendMessageParams = {
   body?: string;
   textBody?: string;
   htmlBody?: string | null;
+  threadId?: string | null;
+  inReplyTo?: string | null;
+  references?: string | null;
   attachments?: Array<{
     filename: string;
     content: string | Buffer;
@@ -262,9 +265,18 @@ const encodeBase64 = (value: string | Buffer): string =>
 
 const sanitizeHeaderValue = (value: string): string => value.replace(/[\r\n]+/g, ' ').trim();
 
+const extractRfcMessageIds = (value: string | null | undefined): string[] =>
+  sanitizeHeaderValue(value ?? '').match(/<[^<>\s]+>/g) ?? [];
+
+const buildReferencesHeader = (params: SendMessageParams): string | null => {
+  const messageIds = [...extractRfcMessageIds(params.references), ...extractRfcMessageIds(params.inReplyTo)];
+  const uniqueMessageIds = Array.from(new Set(messageIds));
+  return uniqueMessageIds.length > 0 ? uniqueMessageIds.join(' ') : null;
+};
+
 const buildRfcMessageId = (): string => `<omni-lodge-${randomUUID()}@omni-lodge.local>`;
 
-const extractEmailAddress = (value: string): string | null => {
+export const extractEmailAddress = (value: string): string | null => {
   const trimmed = sanitizeHeaderValue(value);
   const angleMatch = trimmed.match(/<([^<>@\s]+@[^<>\s]+)>/);
   const address = angleMatch?.[1] ?? trimmed;
@@ -301,12 +313,16 @@ const buildMimeMessage = (params: SendMessageParams, rfcMessageId: string): stri
   const normalizedTextBody = (params.textBody ?? params.body ?? '').replace(/\r\n/g, '\n');
   const normalizedHtmlBody = (params.htmlBody ?? '').replace(/\r\n/g, '\n').trim();
   const attachments = Array.isArray(params.attachments) ? params.attachments : [];
+  const inReplyTo = extractRfcMessageIds(params.inReplyTo)[0] ?? null;
+  const references = buildReferencesHeader(params);
 
   const messageLines: string[] = [
     `To: ${sanitizeHeaderValue(params.to)}`,
     ...(params.from ? [`From: ${sanitizeHeaderValue(params.from)}`] : []),
     `Subject: ${sanitizeHeaderValue(params.subject)}`,
     `Message-ID: ${sanitizeHeaderValue(rfcMessageId)}`,
+    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+    ...(references ? [`References: ${references}`] : []),
     'MIME-Version: 1.0',
   ];
 
@@ -598,6 +614,7 @@ export const sendMessage = async (params: SendMessageParams): Promise<SendMessag
       try {
         const { data } = await gmail.users.messages.send({
           userId: 'me',
+          requestBody: params.threadId ? { threadId: sanitizeHeaderValue(params.threadId) } : undefined,
           media: {
             mimeType: 'message/rfc822',
             body: Buffer.from(mimeMessage, 'utf-8'),
