@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  Accordion,
   ActionIcon,
   Alert,
   Anchor,
@@ -33,7 +34,7 @@ import { IconArrowLeft, IconArrowRight, IconEye, IconEyeOff, IconKey, IconRefres
 
 import dayjs, { Dayjs } from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAppDispatch } from "../store/hooks";
 
@@ -66,6 +67,13 @@ const DATE_FORMAT = "YYYY-MM-DD";
 
 const MANIFEST_MODULE = "booking-manifest";
 const REACT_EMAIL_SOURCE_MARKER = "/* @react-email-template-source */";
+const BOOKING_NAV_OPTIONS = [
+  { value: "calendar", label: "Calendar" },
+  { value: "manifest", label: "Manifest" },
+  { value: "summary", label: "Summary" },
+  { value: "emails", label: "Emails" },
+  { value: "sanity", label: "Sanity Check" },
+] as const;
 
 type MailVariableScope = "base" | "refund" | "supply" | "react";
 
@@ -1731,6 +1739,7 @@ const createDefaultAmendEmailPreviewState = (): AmendEmailPreviewState => ({
 });
 
 type MailboxMessageDirection = "sent" | "received";
+type MailboxMessageResponseStatus = "awaiting_reply" | "answered" | "completed";
 
 type MailboxMessage = {
   messageId: string;
@@ -1742,11 +1751,14 @@ type MailboxMessage = {
   internalDate?: string | null;
   labelIds?: string[];
   direction: MailboxMessageDirection;
+  responseStatus?: MailboxMessageResponseStatus | null;
+  requiredActionId?: number | null;
 };
 
 type MailboxResponse = {
   email: string;
   count: number;
+  awaitingReplyCount: number;
   nextPageToken: string | null;
   messages: MailboxMessage[];
 };
@@ -1760,7 +1772,8 @@ type MailboxState = {
   customerName: string;
   sourceOrder: UnifiedOrder | null;
   messages: MailboxMessage[];
-  filter: "all" | "received" | "sent";
+  filter: "all" | "awaiting_reply" | "received" | "sent";
+  awaitingReplyCount: number;
   nextPageToken: string | null;
   previewOpen: boolean;
   previewLoading: boolean;
@@ -1778,6 +1791,7 @@ const createDefaultMailboxState = (): MailboxState => ({
   sourceOrder: null,
   messages: [],
   filter: "all",
+  awaitingReplyCount: 0,
   nextPageToken: null,
   previewOpen: false,
   previewLoading: false,
@@ -1918,10 +1932,21 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
 
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [mobileBookingsNavOpen, setMobileBookingsNavOpen] = useState<string | null>(null);
 
   const modulePermissions = useModuleAccess(MANIFEST_MODULE);
 
   const isMobile = useMediaQuery("(max-width: 900px)");
+
+  const handleBookingsNavigation = (value: string | null) => {
+    if (!value || value === "manifest") {
+      setMobileBookingsNavOpen(null);
+      return;
+    }
+    const destination = value === "calendar" ? "/bookings" : `/bookings?tab=${value}`;
+    navigate(destination);
+  };
 
   const dateParam = searchParams.get("date");
 
@@ -3763,6 +3788,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         loadingMore: false,
         error: null,
         messages: append ? mergeMailboxMessages(prev.messages, incoming) : incoming,
+        awaitingReplyCount: Math.max(0, Number(payload.awaitingReplyCount) || 0),
         nextPageToken: payload.nextPageToken ?? null,
       }));
     } catch (error) {
@@ -3790,6 +3816,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       sourceOrder: order,
       messages: [],
       filter: "all",
+      awaitingReplyCount: 0,
       nextPageToken: null,
       previewOpen: false,
       previewLoading: false,
@@ -3800,7 +3827,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const handleMailboxFilterChange = (value: string) => {
-    if (value !== "all" && value !== "received" && value !== "sent") {
+    if (value !== "all" && value !== "awaiting_reply" && value !== "received" && value !== "sent") {
       return;
     }
     setMailboxState((prev) => ({ ...prev, filter: value }));
@@ -4915,10 +4942,15 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     detailsState.previewData?.snippet ??
     null;
   const mailboxMessages = useMemo(
-    () =>
-      mailboxState.filter === "all"
-        ? mailboxState.messages
-        : mailboxState.messages.filter((message) => message.direction === mailboxState.filter),
+    () => {
+      if (mailboxState.filter === "all") {
+        return mailboxState.messages;
+      }
+      if (mailboxState.filter === "awaiting_reply") {
+        return mailboxState.messages.filter((message) => message.responseStatus === "awaiting_reply");
+      }
+      return mailboxState.messages.filter((message) => message.direction === mailboxState.filter);
+    },
     [mailboxState.filter, mailboxState.messages],
   );
   const mailboxPreviewHtml = mailboxState.previewData?.htmlBody ?? null;
@@ -5196,6 +5228,45 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
           <Stack gap="md">
 
+            {isMobile ? (
+              <Accordion
+                value={mobileBookingsNavOpen}
+                onChange={setMobileBookingsNavOpen}
+                variant="separated"
+                radius="md"
+              >
+                <Accordion.Item value="bookings-nav">
+                  <Accordion.Control styles={{ label: { textAlign: "center", flex: 1 } }}>
+                    Manifest
+                  </Accordion.Control>
+                  <Accordion.Panel>
+                    <Stack gap="xs">
+                      {BOOKING_NAV_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          variant={option.value === "manifest" ? "light" : "subtle"}
+                          justify="center"
+                          onClick={() => handleBookingsNavigation(option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </Stack>
+                  </Accordion.Panel>
+                </Accordion.Item>
+              </Accordion>
+            ) : (
+              <Tabs value="manifest" onChange={handleBookingsNavigation}>
+                <Tabs.List>
+                  {BOOKING_NAV_OPTIONS.map((option) => (
+                    <Tabs.Tab key={option.value} value={option.value}>
+                      {option.label}
+                    </Tabs.Tab>
+                  ))}
+                </Tabs.List>
+              </Tabs>
+            )}
+
             <Stack gap="sm">
               <Group gap="sm" justify="center" wrap="nowrap" style={{ width: "100%" }}>
                 <Button
@@ -5445,7 +5516,15 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             >
                               {group.productName}
                             </Text>
-                            <Box style={{ display: "flex", justifyContent: "center" }}>
+                            <Stack gap={3} align="center" style={{ minWidth: 0 }}>
+                              <Text
+                                size="xs"
+                                fw={600}
+                                c="dimmed"
+                                style={{ textAlign: "center", lineHeight: 1.1 }}
+                              >
+                                {formatManifestDateLabel(group.date)}
+                              </Text>
                               <Badge
                                 color="orange"
                                 variant="filled"
@@ -5454,7 +5533,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                               >
                                 {group.time}
                               </Badge>
-                            </Box>
+                            </Stack>
                           </Box>
                           <ProductSummaryPanels group={group} undefinedGroupCount={undefinedGroupCount} />
                           <Divider />
@@ -7278,7 +7357,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         <Stack gap="md" style={{ minHeight: "calc(100vh - 120px)" }}>
           <Group justify="space-between" align="center">
             <Stack gap={2}>
-              <Text fw={600}>{mailboxState.customerName || "Customer mailbox"}</Text>
+              <Group gap="xs">
+                <Text fw={600}>{mailboxState.customerName || "Customer mailbox"}</Text>
+                {mailboxState.awaitingReplyCount > 0 ? (
+                  <Badge color="red" variant="filled" size="sm">
+                    {`${mailboxState.awaitingReplyCount} awaiting reply`}
+                  </Badge>
+                ) : null}
+              </Group>
               <Text size="sm" c="dimmed">
                 {mailboxState.customerEmail || "-"}
               </Text>
@@ -7308,6 +7394,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             onChange={handleMailboxFilterChange}
             data={[
               { label: "All", value: "all" },
+              { label: `Awaiting (${mailboxState.awaitingReplyCount})`, value: "awaiting_reply" },
               { label: "Received", value: "received" },
               { label: "Sent", value: "sent" },
             ]}
@@ -7331,7 +7418,21 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           ) : (
             <Stack gap="xs">
               {mailboxMessages.map((message) => (
-                <Paper key={`mailbox-message-${message.messageId}`} withBorder radius="md" p="sm">
+                <Paper
+                  key={`mailbox-message-${message.messageId}`}
+                  withBorder
+                  radius="md"
+                  p="sm"
+                  style={
+                    message.responseStatus === "awaiting_reply"
+                      ? {
+                          backgroundColor: "#fff7ed",
+                          borderColor: "#f97316",
+                          boxShadow: "0 0 0 2px rgba(249, 115, 22, 0.12)",
+                        }
+                      : undefined
+                  }
+                >
                   <Group justify="space-between" align="flex-start" wrap="nowrap">
                     <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
                       <Group gap={6}>
@@ -7342,6 +7443,19 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                         >
                           {message.direction === "sent" ? "Sent" : "Received"}
                         </Badge>
+                        {message.responseStatus === "awaiting_reply" ? (
+                          <Badge size="xs" color="red" variant="filled">
+                            Awaiting reply
+                          </Badge>
+                        ) : message.responseStatus === "answered" ? (
+                          <Badge size="xs" color="green" variant="light">
+                            Answered
+                          </Badge>
+                        ) : message.responseStatus === "completed" ? (
+                          <Badge size="xs" color="gray" variant="light">
+                            Completed
+                          </Badge>
+                        ) : null}
                         <Text size="xs" c="dimmed">
                           {formatDateTime(message.internalDate ?? null)}
                         </Text>

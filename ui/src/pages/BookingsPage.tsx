@@ -22,14 +22,30 @@ import {
   Table,
   Tabs,
   TextInput,
+  Textarea,
   Text,
+  ThemeIcon,
   Title,
   Tooltip,
   useMantineTheme,
 } from "@mantine/core";
 import { DatePickerInput } from "@mantine/dates";
 import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
-import { IconArrowLeft, IconArrowRight, IconCalendar, IconRefresh } from "@tabler/icons-react";
+import {
+  IconArrowLeft,
+  IconArrowRight,
+  IconCalendar,
+  IconCheck,
+  IconChevronDown,
+  IconChevronUp,
+  IconFilter,
+  IconInbox,
+  IconMail,
+  IconPlus,
+  IconRefresh,
+  IconSearch,
+  IconSend,
+} from "@tabler/icons-react";
 import dayjs, { Dayjs } from "dayjs";
 import { useAppDispatch } from "../store/hooks";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -136,7 +152,57 @@ const DEFAULT_EMAIL_FILTERS = {
   platformOrderId: "",
 };
 
+type CreateEmailForm = {
+  to: string;
+  subject: string;
+  body: string;
+};
+
+type EmailTemplateType = "plain_text" | "react_email";
+
+type EmailTemplate = {
+  id: number;
+  name: string;
+  description: string | null;
+  templateType: EmailTemplateType;
+  subjectTemplate: string;
+  bodyTemplate: string;
+  isActive: boolean;
+};
+
+type EmailTemplateListResponse = {
+  templates: EmailTemplate[];
+};
+
+type CreateEmailTemplateState = {
+  loading: boolean;
+  saving: boolean;
+  error: string | null;
+  success: string | null;
+  templates: EmailTemplate[];
+  selectedTemplateId: string | null;
+  name: string;
+  description: string;
+  templateType: EmailTemplateType;
+};
+
 const DEFAULT_EMAIL_DATE_RANGE: [Date | null, Date | null] = [null, null];
+const DEFAULT_CREATE_EMAIL_FORM: CreateEmailForm = {
+  to: "",
+  subject: "",
+  body: "",
+};
+const createDefaultEmailTemplateState = (): CreateEmailTemplateState => ({
+  loading: false,
+  saving: false,
+  error: null,
+  success: null,
+  templates: [],
+  selectedTemplateId: null,
+  name: "",
+  description: "",
+  templateType: "plain_text",
+});
 const BOOKING_TAB_OPTIONS: BookingTabOption[] = [
   { value: "calendar", label: "Calendar" },
   { value: "manifest", label: "Manifest" },
@@ -660,6 +726,17 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [backfillConfirmOpen, setBackfillConfirmOpen] = useState(false);
   const [backfillLoading, setBackfillLoading] = useState(false);
   const [backfillError, setBackfillError] = useState<string | null>(null);
+  const [emailAdvancedFiltersOpen, setEmailAdvancedFiltersOpen] = useState(false);
+  const [createEmailOpen, setCreateEmailOpen] = useState(false);
+  const [createEmailForm, setCreateEmailForm] = useState<CreateEmailForm>(() => ({
+    ...DEFAULT_CREATE_EMAIL_FORM,
+  }));
+  const [createEmailSending, setCreateEmailSending] = useState(false);
+  const [createEmailError, setCreateEmailError] = useState<string | null>(null);
+  const [createEmailSuccess, setCreateEmailSuccess] = useState<string | null>(null);
+  const [createEmailTemplateState, setCreateEmailTemplateState] = useState<CreateEmailTemplateState>(
+    createDefaultEmailTemplateState,
+  );
   const [isFilterPanelVisible, setIsFilterPanelVisible] = useState(false);
 
   const suppressEmailUrlSyncRef = useRef(false);
@@ -1171,6 +1248,280 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     setEmailFilters({ ...DEFAULT_EMAIL_FILTERS });
     setEmailDateRange([...DEFAULT_EMAIL_DATE_RANGE]);
     setEmailPage(1);
+  };
+
+  const loadCreateEmailTemplates = async () => {
+    setCreateEmailTemplateState((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      const response = await axiosInstance.get<EmailTemplateListResponse>("/email-templates", {
+        withCredentials: true,
+      });
+      const templates = Array.isArray(response.data?.templates) ? response.data.templates : [];
+      setCreateEmailTemplateState((prev) => {
+        const selectedTemplate = prev.selectedTemplateId
+          ? templates.find((template) => String(template.id) === prev.selectedTemplateId) ?? null
+          : null;
+        return {
+          ...prev,
+          loading: false,
+          templates,
+          selectedTemplateId: selectedTemplate ? String(selectedTemplate.id) : null,
+          name: selectedTemplate?.name ?? "",
+          description: selectedTemplate?.description ?? "",
+          templateType: selectedTemplate?.templateType ?? "plain_text",
+        };
+      });
+    } catch (error) {
+      setCreateEmailTemplateState((prev) => ({
+        ...prev,
+        loading: false,
+        error: deriveErrorMessage(error),
+      }));
+    }
+  };
+
+  const handleOpenCreateEmail = () => {
+    setCreateEmailForm({ ...DEFAULT_CREATE_EMAIL_FORM });
+    setCreateEmailError(null);
+    setCreateEmailSuccess(null);
+    setCreateEmailTemplateState(createDefaultEmailTemplateState());
+    setCreateEmailOpen(true);
+    void loadCreateEmailTemplates();
+  };
+
+  const handleCloseCreateEmail = () => {
+    if (createEmailSending) {
+      return;
+    }
+    setCreateEmailOpen(false);
+  };
+
+  const handleCreateEmailField = (field: keyof CreateEmailForm, value: string) => {
+    setCreateEmailForm((prev) => ({ ...prev, [field]: value }));
+    setCreateEmailError(null);
+    setCreateEmailSuccess(null);
+  };
+
+  const handleCreateEmailTemplateSelection = (value: string | null) => {
+    if (!value) {
+      setCreateEmailTemplateState((prev) => ({
+        ...prev,
+        selectedTemplateId: null,
+        name: "",
+        description: "",
+        templateType: "plain_text",
+        error: null,
+        success: null,
+      }));
+      return;
+    }
+
+    const template = createEmailTemplateState.templates.find((entry) => String(entry.id) === value);
+    if (!template) {
+      return;
+    }
+    setCreateEmailForm((prev) => ({
+      ...prev,
+      subject: template.subjectTemplate,
+      body: template.bodyTemplate,
+    }));
+    setCreateEmailTemplateState((prev) => ({
+      ...prev,
+      selectedTemplateId: String(template.id),
+      name: template.name,
+      description: template.description ?? "",
+      templateType: template.templateType,
+      error: null,
+      success: null,
+    }));
+    setCreateEmailError(null);
+  };
+
+  const handleCreateEmailTemplateMetadata = (
+    field: "name" | "description",
+    value: string,
+  ) => {
+    setCreateEmailTemplateState((prev) => ({
+      ...prev,
+      [field]: value,
+      error: null,
+      success: null,
+    }));
+  };
+
+  const handleCreateEmailTemplateType = (value: string | null) => {
+    if (value !== "plain_text" && value !== "react_email") {
+      return;
+    }
+    setCreateEmailTemplateState((prev) => ({
+      ...prev,
+      templateType: value,
+      error: null,
+      success: null,
+    }));
+  };
+
+  const validateCreateEmailTemplate = (): {
+    name: string;
+    description: string | null;
+    subjectTemplate: string;
+    bodyTemplate: string;
+  } | null => {
+    const name = createEmailTemplateState.name.trim();
+    const subjectTemplate = createEmailForm.subject.trim();
+    const bodyTemplate = createEmailForm.body.trim();
+    if (!name) {
+      setCreateEmailTemplateState((prev) => ({ ...prev, error: "Template name is required." }));
+      return null;
+    }
+    if (!subjectTemplate) {
+      setCreateEmailTemplateState((prev) => ({ ...prev, error: "Subject is required to save a template." }));
+      return null;
+    }
+    if (!bodyTemplate) {
+      setCreateEmailTemplateState((prev) => ({ ...prev, error: "Message content is required to save a template." }));
+      return null;
+    }
+    return {
+      name,
+      description: createEmailTemplateState.description.trim() || null,
+      subjectTemplate,
+      bodyTemplate,
+    };
+  };
+
+  const handleSaveCreateEmailTemplate = async () => {
+    if (createEmailTemplateState.saving) {
+      return;
+    }
+    const fields = validateCreateEmailTemplate();
+    if (!fields) {
+      return;
+    }
+    setCreateEmailTemplateState((prev) => ({ ...prev, saving: true, error: null, success: null }));
+    try {
+      const response = await axiosInstance.post<EmailTemplate>(
+        "/email-templates",
+        {
+          ...fields,
+          templateType: createEmailTemplateState.templateType,
+          isActive: true,
+        },
+        { withCredentials: true },
+      );
+      const created = response.data;
+      setCreateEmailTemplateState((prev) => ({
+        ...prev,
+        saving: false,
+        templates: [created, ...prev.templates.filter((template) => template.id !== created.id)],
+        selectedTemplateId: String(created.id),
+        name: created.name,
+        description: created.description ?? "",
+        templateType: created.templateType,
+        success: `Template "${created.name}" saved.`,
+      }));
+    } catch (error) {
+      setCreateEmailTemplateState((prev) => ({
+        ...prev,
+        saving: false,
+        error: deriveErrorMessage(error),
+      }));
+    }
+  };
+
+  const handleUpdateCreateEmailTemplate = async () => {
+    if (!createEmailTemplateState.selectedTemplateId || createEmailTemplateState.saving) {
+      return;
+    }
+    const fields = validateCreateEmailTemplate();
+    if (!fields) {
+      return;
+    }
+    setCreateEmailTemplateState((prev) => ({ ...prev, saving: true, error: null, success: null }));
+    try {
+      const response = await axiosInstance.patch<EmailTemplate>(
+        `/email-templates/${encodeURIComponent(createEmailTemplateState.selectedTemplateId)}`,
+        {
+          ...fields,
+          templateType: createEmailTemplateState.templateType,
+          isActive: true,
+        },
+        { withCredentials: true },
+      );
+      const updated = response.data;
+      setCreateEmailTemplateState((prev) => ({
+        ...prev,
+        saving: false,
+        templates: prev.templates.map((template) => template.id === updated.id ? updated : template),
+        name: updated.name,
+        description: updated.description ?? "",
+        templateType: updated.templateType,
+        success: `Template "${updated.name}" updated.`,
+      }));
+    } catch (error) {
+      setCreateEmailTemplateState((prev) => ({
+        ...prev,
+        saving: false,
+        error: deriveErrorMessage(error),
+      }));
+    }
+  };
+
+  const handleSendCreatedEmail = async () => {
+    if (createEmailSending) {
+      return;
+    }
+
+    const to = createEmailForm.to.trim();
+    const subject = createEmailForm.subject.trim();
+    const body = createEmailForm.body.trim();
+    if (!to) {
+      setCreateEmailError("Enter the customer's email address.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      setCreateEmailError("Enter a valid email address.");
+      return;
+    }
+    if (!subject) {
+      setCreateEmailError("Enter a subject.");
+      return;
+    }
+    if (!body) {
+      setCreateEmailError("Write a message before sending.");
+      return;
+    }
+
+    setCreateEmailSending(true);
+    setCreateEmailError(null);
+    setCreateEmailSuccess(null);
+    try {
+      const selectedTemplateId = createEmailTemplateState.selectedTemplateId
+        ? Number.parseInt(createEmailTemplateState.selectedTemplateId, 10)
+        : Number.NaN;
+      await axiosInstance.post(
+        "/bookings/emails/send",
+        {
+          to,
+          subject,
+          body,
+          templateId: Number.isFinite(selectedTemplateId) ? selectedTemplateId : undefined,
+          templateContext: {
+            customerEmail: to,
+            recipientEmail: to,
+            email: to,
+          },
+        },
+        { withCredentials: true },
+      );
+      setCreateEmailSuccess(`Email sent to ${to}.`);
+      setCreateEmailForm({ ...DEFAULT_CREATE_EMAIL_FORM });
+      window.dispatchEvent(new CustomEvent("customer-email-actions-changed"));
+    } catch (error) {
+      setCreateEmailError(deriveErrorMessage(error));
+    } finally {
+      setCreateEmailSending(false);
+    }
   };
 
   const handleEmailPageSizeChange = (value: string | null) => {
@@ -1742,7 +2093,15 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       emailDateRange[0] ||
       emailDateRange[1],
   );
-
+  const emailAdvancedFilterCount = [
+    emailFilters.subject,
+    emailFilters.from,
+    emailFilters.to,
+    emailFilters.messageId,
+    emailFilters.threadId,
+    emailFilters.platformOrderId,
+    emailDateRange[0] || emailDateRange[1],
+  ].filter(Boolean).length;
   const handleEmailPrevPage = () => {
     setEmailPage((prev) => Math.max(1, prev - 1));
   };
@@ -1843,34 +2202,38 @@ const BookingsPage = ({ title }: GenericPageProps) => {
           <Stack gap="md">
             <Box style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center" }}>
               <Group justify="flex-start">
-                <ActionIcon
-                  variant={isFilterPanelVisible ? "filled" : "subtle"}
-                  size="lg"
-                  aria-label={isFilterPanelVisible ? "Hide filters panel" : "Show filters panel"}
-                  onClick={() => setIsFilterPanelVisible((prev) => !prev)}
-                >
-                  <Text fw={700}>F</Text>
-                </ActionIcon>
+                {(activeTab === "calendar" || activeTab === "summary") && (
+                  <ActionIcon
+                    variant={isFilterPanelVisible ? "filled" : "subtle"}
+                    size="lg"
+                    aria-label={isFilterPanelVisible ? "Hide filters panel" : "Show filters panel"}
+                    onClick={() => setIsFilterPanelVisible((prev) => !prev)}
+                  >
+                    <IconFilter size={18} />
+                  </ActionIcon>
+                )}
               </Group>
               <Title order={2} ta="center">
                 Bookings
               </Title>
               <Group justify="flex-end">
-                <Tooltip label="Refresh bookings" withArrow>
-                  <Button
-                    variant="subtle"
-                    size="sm"
-                    aria-label="Refresh bookings"
-                    onClick={handleReload}
-                    loading={ingestStatus === "loading" || fetchStatus === "loading"}
-                  >
-                    <IconRefresh size={16} />
-                  </Button>
-                </Tooltip>
+                {activeTab !== "emails" && (
+                  <Tooltip label="Refresh bookings" withArrow>
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      aria-label="Refresh bookings"
+                      onClick={handleReload}
+                      loading={ingestStatus === "loading" || fetchStatus === "loading"}
+                    >
+                      <IconRefresh size={16} />
+                    </Button>
+                  </Tooltip>
+                )}
               </Group>
             </Box>
 
-            {activeTab !== "summary" && (
+            {activeTab === "calendar" && (
               <Group gap="sm" justify="center" wrap="nowrap" style={{ width: "100%" }}>
                 <Button
                   size="sm"
@@ -1903,9 +2266,9 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                 </Button>
               </Group>
             )}
-            {isFilterPanelVisible && (
+            {isFilterPanelVisible && (activeTab === "calendar" || activeTab === "summary") && (
               <Group gap="sm" wrap="wrap" align="center" justify="center">
-                {activeTab !== "summary" && (
+                {activeTab === "calendar" && (
                   <SegmentedControl
                     value={viewMode}
                     onChange={(value) => handleViewModeChange(value as ViewMode)}
@@ -1916,7 +2279,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     size="sm"
                   />
                 )}
-                {activeTab !== "summary" && (
+                {activeTab === "calendar" && (
                   <SegmentedControl
                     value={activeStatusFilter}
                     onChange={(value) => setCalendarStatusFilter(value as BookingFilter)}
@@ -1953,7 +2316,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     checkIconPosition="right"
                   />
                 )}
-                {activeTab !== "summary" && (
+                {activeTab === "calendar" && (
                   <Button
                     size="sm"
                     variant="light"
@@ -2128,12 +2491,21 @@ const BookingsPage = ({ title }: GenericPageProps) => {
               </Tabs.Panel>
 
               <Tabs.Panel value="emails" pt="md">
-                {emailIsLoading ? (
-                  <Box style={{ minHeight: 320 }}>
-                    <Loader variant="bars" />
-                  </Box>
-                ) : (
-                  <Stack gap="md">
+                <Stack gap="md">
+                  <Group justify="flex-end" gap="sm" wrap="wrap" grow={isMobile}>
+                    <Button
+                      variant="default"
+                      leftSection={<IconRefresh size={17} />}
+                      onClick={handleReload}
+                      loading={ingestStatus === "loading"}
+                    >
+                      Sync inbox
+                    </Button>
+                    <Button leftSection={<IconPlus size={17} />} onClick={handleOpenCreateEmail}>
+                      Create email
+                    </Button>
+                  </Group>
+
                     {emailError && (
                       <Alert color="red" title="Failed to load booking emails">
                         {emailError}
@@ -2154,173 +2526,178 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                         {backfillError}
                       </Alert>
                     )}
-                    <Paper withBorder radius="lg" shadow="sm" p="md">
-                      <Stack gap="sm">
-                        <Group justify="space-between" align="center" wrap="wrap">
-                          <Group gap="xs" wrap="wrap">
-                            <Text fw={600}>Email filters</Text>
-                            <Button
-                              size="xs"
-                              variant="default"
-                              onClick={handleClearEmailFilters}
-                              disabled={!hasEmailFilters}
-                            >
-                              Clear filters
-                            </Button>
-                          </Group>
-                          <Group gap="xs" wrap="wrap">
-                            {selectedEmailCount > 0 && (
-                              <Text size="xs" c="dimmed">
-                                {`${selectedEmailCount} selected`}
-                              </Text>
-                            )}
-                            {selectedEmailCount > 0 && (
-                              <Button size="xs" variant="subtle" onClick={handleClearEmailSelection}>
-                                Clear selection
-                              </Button>
-                            )}
-                            <Button
-                              size="xs"
-                              variant="light"
-                              onClick={() => handleOpenBulkReprocess("selected")}
-                              disabled={selectedEmailCount === 0 || bulkReprocessLoading}
-                            >
-                              Reprocess selected
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="light"
-                              onClick={() => handleOpenBulkReprocess("range")}
-                              disabled={emailDateRange[0] === null && emailDateRange[1] === null}
-                            >
-                              Reprocess date range
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="light"
-                              color="orange"
-                              onClick={handleOpenBackfill}
-                              disabled={
-                                (emailDateRange[0] === null && emailDateRange[1] === null) || backfillLoading
-                              }
-                            >
-                              Backfill date range
-                            </Button>
-                          </Group>
-                        </Group>
-                        <SimpleGrid cols={isMobile ? 1 : isTablet ? 2 : 4} spacing="sm">
-                          <DatePickerInput
-                            type="range"
-                            label="Received date range"
-                            description="Leave empty to show all dates."
-                            placeholder="All time"
-                            value={emailDateRange}
-                            onChange={setEmailDateRange}
-                            valueFormat="YYYY-MM-DD"
-                            clearable
-                            size="sm"
-                          />
-                          <TextInput
-                            size="sm"
-                            label="Search"
-                            placeholder="Subject, from, to, snippet..."
-                            value={emailFilters.search}
-                            onChange={(event) => handleEmailFilterValue("search", event.currentTarget.value)}
-                          />
-                          <TextInput
-                            size="sm"
-                            label="Subject"
-                            placeholder="Subject contains..."
-                            value={emailFilters.subject}
-                            onChange={(event) => handleEmailFilterValue("subject", event.currentTarget.value)}
-                          />
-                          <TextInput
-                            size="sm"
-                            label="From"
-                            placeholder="sender@domain.com"
-                            value={emailFilters.from}
-                            onChange={(event) => handleEmailFilterValue("from", event.currentTarget.value)}
-                          />
-                          <TextInput
-                            size="sm"
-                            label="To"
-                            placeholder="recipient@domain.com"
-                            value={emailFilters.to}
-                            onChange={(event) => handleEmailFilterValue("to", event.currentTarget.value)}
-                          />
-                          <TextInput
-                            size="sm"
-                            label="Message ID"
-                            placeholder="Message id..."
-                            value={emailFilters.messageId}
-                            onChange={(event) => handleEmailFilterValue("messageId", event.currentTarget.value)}
-                          />
-                          <TextInput
-                            size="sm"
-                            label="Thread ID"
-                            placeholder="Thread id..."
-                            value={emailFilters.threadId}
-                            onChange={(event) => handleEmailFilterValue("threadId", event.currentTarget.value)}
-                          />
-                          <TextInput
-                            size="sm"
-                            label="Platform Order ID(s)"
-                            placeholder="e.g. ABC123, XYZ789"
-                            value={emailFilters.platformOrderId}
-                            onChange={(event) =>
-                              handleEmailFilterValue("platformOrderId", event.currentTarget.value)
-                            }
-                            description="Use commas for bulk search."
-                          />
-                          <Select
-                            size="sm"
-                            label="Status"
-                            data={EMAIL_STATUS_OPTIONS}
-                            value={emailFilters.status}
-                            onChange={(value) => handleEmailFilterValue("status", value ?? "all")}
-                            allowDeselect={false}
-                          />
-                        </SimpleGrid>
-                        <Group justify="space-between" align="center" wrap="wrap">
-                          <Group gap="xs" wrap="wrap">
-                            <Text size="sm" c="dimmed">
-                              Rows per page
-                            </Text>
-                            <Select
-                              size="sm"
-                              data={EMAIL_PAGE_SIZES.map((size) => ({ value: String(size), label: String(size) }))}
-                              value={String(emailPageSize)}
-                              onChange={handleEmailPageSizeChange}
-                              allowDeselect={false}
+
+                  <Paper withBorder radius="lg" p="md">
+                    <Stack gap="md">
+                      <Group align="flex-end" gap="sm" wrap="wrap">
+                        <TextInput
+                          label="Search inbox"
+                          placeholder="Customer, subject, message or booking..."
+                          leftSection={<IconSearch size={17} />}
+                          value={emailFilters.search}
+                          onChange={(event) => handleEmailFilterValue("search", event.currentTarget.value)}
+                          style={{ flex: "1 1 360px" }}
+                        />
+                        <Select
+                          label="Status"
+                          data={EMAIL_STATUS_OPTIONS}
+                          value={emailFilters.status}
+                          onChange={(value) => handleEmailFilterValue("status", value ?? "all")}
+                          allowDeselect={false}
+                          w={isMobile ? "100%" : 190}
+                        />
+                        <Button
+                          variant="default"
+                          leftSection={<IconFilter size={17} />}
+                          rightSection={emailAdvancedFiltersOpen ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
+                          onClick={() => setEmailAdvancedFiltersOpen((prev) => !prev)}
+                        >
+                          Advanced filters
+                          {emailAdvancedFilterCount > 0 && (
+                            <Badge ml="xs" size="sm" variant="filled">{emailAdvancedFilterCount}</Badge>
+                          )}
+                        </Button>
+                        {hasEmailFilters && (
+                          <Button variant="subtle" color="gray" onClick={handleClearEmailFilters}>
+                            Clear all
+                          </Button>
+                        )}
+                      </Group>
+
+                      {emailAdvancedFiltersOpen && (
+                        <>
+                          <Divider />
+                          <SimpleGrid cols={isMobile ? 1 : isTablet ? 2 : 4} spacing="sm">
+                            <DatePickerInput
+                              type="range"
+                              label="Received date"
+                              placeholder="All time"
+                              value={emailDateRange}
+                              onChange={(value) => {
+                                setEmailDateRange(value);
+                                setEmailPage(1);
+                              }}
+                              valueFormat="YYYY-MM-DD"
+                              clearable
                             />
-                          </Group>
-                          <Group gap="xs" wrap="wrap">
-                            <Text size="sm" c="dimmed">
-                              {emailTotal !== null
-                                ? `Showing ${emailRangeStart}-${emailRangeEnd} of ${emailTotal}`
-                                : `Showing ${emailRangeStart}-${emailRangeEnd}`}
+                            <TextInput
+                              label="Subject"
+                              placeholder="Subject contains..."
+                              value={emailFilters.subject}
+                              onChange={(event) => handleEmailFilterValue("subject", event.currentTarget.value)}
+                            />
+                            <TextInput
+                              label="From"
+                              placeholder="sender@domain.com"
+                              value={emailFilters.from}
+                              onChange={(event) => handleEmailFilterValue("from", event.currentTarget.value)}
+                            />
+                            <TextInput
+                              label="To"
+                              placeholder="recipient@domain.com"
+                              value={emailFilters.to}
+                              onChange={(event) => handleEmailFilterValue("to", event.currentTarget.value)}
+                            />
+                            <TextInput
+                              label="Booking / order ID"
+                              placeholder="ABC123, XYZ789"
+                              value={emailFilters.platformOrderId}
+                              onChange={(event) => handleEmailFilterValue("platformOrderId", event.currentTarget.value)}
+                            />
+                            <TextInput
+                              label="Message ID"
+                              placeholder="Gmail message ID"
+                              value={emailFilters.messageId}
+                              onChange={(event) => handleEmailFilterValue("messageId", event.currentTarget.value)}
+                            />
+                            <TextInput
+                              label="Thread ID"
+                              placeholder="Gmail thread ID"
+                              value={emailFilters.threadId}
+                              onChange={(event) => handleEmailFilterValue("threadId", event.currentTarget.value)}
+                            />
+                          </SimpleGrid>
+                          <Group justify="space-between" align="center" wrap="wrap">
+                            <Text size="xs" c="dimmed">
+                              Reprocessing and backfill are administrative recovery tools.
                             </Text>
-                            <Button
-                              size="xs"
-                              variant="default"
-                              onClick={handleEmailPrevPage}
-                              disabled={!emailHasPrev || emailIsLoading}
-                            >
-                              Prev
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="default"
-                              onClick={handleEmailNextPage}
-                              disabled={!emailHasMore || emailIsLoading}
-                            >
-                              Next
-                            </Button>
+                            <Group gap="xs" wrap="wrap">
+                              <Button
+                                size="xs"
+                                variant="light"
+                                onClick={() => handleOpenBulkReprocess("range")}
+                                disabled={emailDateRange[0] === null && emailDateRange[1] === null}
+                              >
+                                Reprocess date range
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color="orange"
+                                onClick={handleOpenBackfill}
+                                disabled={(emailDateRange[0] === null && emailDateRange[1] === null) || backfillLoading}
+                              >
+                                Backfill date range
+                              </Button>
+                            </Group>
                           </Group>
+                        </>
+                      )}
+                    </Stack>
+                  </Paper>
+
+                  {selectedEmailCount > 0 && (
+                    <Paper withBorder radius="lg" p="sm" bg="blue.0">
+                      <Group justify="space-between" align="center" wrap="wrap">
+                        <Group gap="xs">
+                          <Checkbox checked readOnly aria-label={`${selectedEmailCount} emails selected`} />
+                          <Text size="sm" fw={600}>{selectedEmailCount} selected</Text>
+                          <Button size="xs" variant="subtle" onClick={handleClearEmailSelection}>Clear</Button>
                         </Group>
-                      </Stack>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          onClick={() => handleOpenBulkReprocess("selected")}
+                          disabled={bulkReprocessLoading}
+                        >
+                          Reprocess selected
+                        </Button>
+                      </Group>
                     </Paper>
-                    {emailRecords.length === 0 ? (
+                  )}
+
+                  <Group justify="space-between" align="center" wrap="wrap">
+                    <Group gap="xs" wrap="nowrap">
+                      <Text size="sm" c="dimmed">Rows</Text>
+                      <Select
+                        size="xs"
+                        data={EMAIL_PAGE_SIZES.map((size) => ({ value: String(size), label: String(size) }))}
+                        value={String(emailPageSize)}
+                        onChange={handleEmailPageSizeChange}
+                        allowDeselect={false}
+                        w={90}
+                      />
+                    </Group>
+                    <Group gap="xs" wrap="nowrap">
+                      <Text size="sm" c="dimmed">
+                        {emailTotal !== null
+                          ? `${emailRangeStart}-${emailRangeEnd} of ${emailTotal}`
+                          : `${emailRangeStart}-${emailRangeEnd}`}
+                      </Text>
+                      <ActionIcon variant="default" onClick={handleEmailPrevPage} disabled={!emailHasPrev || emailIsLoading} aria-label="Previous email page">
+                        <IconArrowLeft size={16} />
+                      </ActionIcon>
+                      <ActionIcon variant="default" onClick={handleEmailNextPage} disabled={!emailHasMore || emailIsLoading} aria-label="Next email page">
+                        <IconArrowRight size={16} />
+                      </ActionIcon>
+                    </Group>
+                  </Group>
+
+                  {emailIsLoading ? (
+                    <Paper withBorder radius="lg" p="xl">
+                      <Group justify="center" mih={220}><Loader variant="bars" /></Group>
+                    </Paper>
+                  ) : emailRecords.length === 0 ? (
                       <Alert color="blue" title="No booking emails">
                         {hasEmailFilters
                           ? "No booking emails match the current filters."
@@ -2580,13 +2957,274 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                       </Paper>
                     )}
                   </Stack>
-                )}
               </Tabs.Panel>
 
               <Tabs.Panel value="sanity" pt="md">
                 <BookingsSanityCheck />
               </Tabs.Panel>
             </Tabs>
+            <Modal
+              opened={createEmailOpen}
+              onClose={handleCloseCreateEmail}
+              title={
+                <Group gap="sm">
+                  <ThemeIcon variant="light" radius="xl"><IconMail size={18} /></ThemeIcon>
+                  <Box>
+                    <Text fw={700}>Create email</Text>
+                    <Text size="xs" c="dimmed">Start a new customer conversation</Text>
+                  </Box>
+                </Group>
+              }
+              size="xl"
+              centered
+              closeOnClickOutside={!createEmailSending}
+              closeOnEscape={!createEmailSending}
+            >
+              {createEmailSuccess ? (
+                <Stack gap="lg" align="center" py="xl">
+                  <ThemeIcon size={64} radius="xl" color="teal" variant="light">
+                    <IconCheck size={32} />
+                  </ThemeIcon>
+                  <Box ta="center">
+                    <Title order={3}>Email sent</Title>
+                    <Text c="dimmed" mt={4}>{createEmailSuccess}</Text>
+                  </Box>
+                  <Group>
+                    <Button variant="default" onClick={handleCloseCreateEmail}>Close</Button>
+                    <Button
+                      leftSection={<IconPlus size={16} />}
+                      onClick={() => {
+                        setCreateEmailSuccess(null);
+                        setCreateEmailForm({ ...DEFAULT_CREATE_EMAIL_FORM });
+                        setCreateEmailTemplateState(createDefaultEmailTemplateState());
+                        void loadCreateEmailTemplates();
+                      }}
+                    >
+                      Write another
+                    </Button>
+                  </Group>
+                </Stack>
+              ) : (
+                <Stack gap="md">
+                  <Alert color="blue" variant="light" icon={<IconInbox size={18} />}>
+                    This starts a new email thread. Continue an existing customer conversation from its pending email request so the reply stays in the same thread.
+                  </Alert>
+                  {createEmailError && (
+                    <Alert color="red" title="Email could not be sent">
+                      {createEmailError}
+                    </Alert>
+                  )}
+                  {createEmailTemplateState.error && (
+                    <Alert color="red" title="Template error">
+                      {createEmailTemplateState.error}
+                    </Alert>
+                  )}
+                  {createEmailTemplateState.success && (
+                    <Alert color="teal" title="Template saved">
+                      {createEmailTemplateState.success}
+                    </Alert>
+                  )}
+
+                  <Paper withBorder radius="lg" p="md">
+                    <Stack gap="sm">
+                      <Group align="flex-end" gap="sm" wrap="wrap">
+                        <Select
+                          label="Email template (optional)"
+                          placeholder={
+                            createEmailTemplateState.loading
+                              ? "Loading templates..."
+                              : "Write without a template"
+                          }
+                          data={createEmailTemplateState.templates.map((template) => ({
+                            value: String(template.id),
+                            label: `${template.name}${template.isActive ? "" : " (inactive)"}`,
+                            disabled: !template.isActive,
+                          }))}
+                          value={createEmailTemplateState.selectedTemplateId}
+                          onChange={handleCreateEmailTemplateSelection}
+                          clearable
+                          searchable
+                          disabled={
+                            createEmailTemplateState.loading ||
+                            createEmailTemplateState.saving ||
+                            createEmailSending
+                          }
+                          style={{ flex: "1 1 320px" }}
+                        />
+                        <Button
+                          variant="default"
+                          leftSection={<IconRefresh size={16} />}
+                          onClick={() => void loadCreateEmailTemplates()}
+                          loading={createEmailTemplateState.loading}
+                          disabled={createEmailTemplateState.saving || createEmailSending}
+                        >
+                          Reload
+                        </Button>
+                      </Group>
+                      {createEmailTemplateState.selectedTemplateId && createEmailTemplateState.description && (
+                        <Text size="xs" c="dimmed">
+                          {createEmailTemplateState.description}
+                        </Text>
+                      )}
+
+                      <Accordion variant="contained" radius="md">
+                        <Accordion.Item value="template-manager">
+                          <Accordion.Control>Save or update a template</Accordion.Control>
+                          <Accordion.Panel>
+                            <Stack gap="sm">
+                              <SimpleGrid cols={isMobile ? 1 : 2} spacing="sm">
+                                <TextInput
+                                  label="Template name"
+                                  placeholder="Example: Customer follow-up"
+                                  value={createEmailTemplateState.name}
+                                  onChange={(event) =>
+                                    handleCreateEmailTemplateMetadata("name", event.currentTarget.value)
+                                  }
+                                  disabled={createEmailTemplateState.saving || createEmailSending}
+                                />
+                                <Select
+                                  label="Template format"
+                                  data={[
+                                    { value: "plain_text", label: "Plain text" },
+                                    { value: "react_email", label: "React Email" },
+                                  ]}
+                                  value={createEmailTemplateState.templateType}
+                                  onChange={handleCreateEmailTemplateType}
+                                  allowDeselect={false}
+                                  disabled={createEmailTemplateState.saving || createEmailSending}
+                                />
+                              </SimpleGrid>
+                              <TextInput
+                                label="Template description"
+                                placeholder="Optional description"
+                                value={createEmailTemplateState.description}
+                                onChange={(event) =>
+                                  handleCreateEmailTemplateMetadata("description", event.currentTarget.value)
+                                }
+                                disabled={createEmailTemplateState.saving || createEmailSending}
+                              />
+                              <Text size="xs" c="dimmed">
+                                The current subject and message below will be saved as the template content.
+                              </Text>
+                              <Group justify="flex-end" wrap="wrap">
+                                <Button
+                                  variant="default"
+                                  onClick={() => void handleSaveCreateEmailTemplate()}
+                                  loading={createEmailTemplateState.saving}
+                                  disabled={createEmailSending}
+                                >
+                                  Save as new template
+                                </Button>
+                                <Button
+                                  variant="light"
+                                  onClick={() => void handleUpdateCreateEmailTemplate()}
+                                  loading={createEmailTemplateState.saving}
+                                  disabled={
+                                    !createEmailTemplateState.selectedTemplateId || createEmailSending
+                                  }
+                                >
+                                  Update selected template
+                                </Button>
+                              </Group>
+                            </Stack>
+                          </Accordion.Panel>
+                        </Accordion.Item>
+                      </Accordion>
+                    </Stack>
+                  </Paper>
+
+                  <SimpleGrid cols={isMobile ? 1 : 2} spacing="lg">
+                    <Stack gap="md">
+                      <TextInput
+                        label="To"
+                        placeholder="customer@example.com"
+                        leftSection={<IconMail size={16} />}
+                        value={createEmailForm.to}
+                        onChange={(event) => handleCreateEmailField("to", event.currentTarget.value)}
+                        required
+                        autoFocus
+                      />
+                      <TextInput
+                        label="Subject"
+                        placeholder="What is this email about?"
+                        value={createEmailForm.subject}
+                        onChange={(event) => handleCreateEmailField("subject", event.currentTarget.value)}
+                        required
+                      />
+                      <Textarea
+                        label={
+                          createEmailTemplateState.templateType === "react_email"
+                            ? "React Email source"
+                            : "Message"
+                        }
+                        placeholder={
+                          createEmailTemplateState.templateType === "react_email"
+                            ? "Paste or edit the React Email template source..."
+                            : "Write a clear, helpful message to the customer..."
+                        }
+                        value={createEmailForm.body}
+                        onChange={(event) => handleCreateEmailField("body", event.currentTarget.value)}
+                        minRows={10}
+                        autosize
+                        required
+                      />
+                    </Stack>
+                    <Paper withBorder radius="lg" p="md" bg="gray.0" mih={330}>
+                      <Stack gap="sm">
+                        <Group gap="xs">
+                          <IconMail size={16} />
+                          <Text size="sm" fw={700}>Preview</Text>
+                        </Group>
+                        <Divider />
+                        <Box>
+                          <Text size="xs" c="dimmed">To</Text>
+                          <Text size="sm" fw={500} style={{ wordBreak: "break-word" }}>
+                            {createEmailForm.to.trim() || "Customer email"}
+                          </Text>
+                        </Box>
+                        <Box>
+                          <Text size="xs" c="dimmed">Subject</Text>
+                          <Text fw={700} style={{ wordBreak: "break-word" }}>
+                            {createEmailForm.subject.trim() || "Email subject"}
+                          </Text>
+                        </Box>
+                        <Divider />
+                        {createEmailTemplateState.templateType === "react_email" ? (
+                          <Alert color="blue" variant="light">
+                            The React Email template will be rendered by the email service when it is sent.
+                          </Alert>
+                        ) : (
+                          <Text
+                            size="sm"
+                            c={createEmailForm.body.trim() ? undefined : "dimmed"}
+                            style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+                          >
+                            {createEmailForm.body.trim() || "Your message will appear here as you type."}
+                          </Text>
+                        )}
+                      </Stack>
+                    </Paper>
+                  </SimpleGrid>
+                  <Group justify="flex-end">
+                    <Button variant="default" onClick={handleCloseCreateEmail} disabled={createEmailSending}>
+                      Cancel
+                    </Button>
+                    <Button
+                      leftSection={<IconSend size={17} />}
+                      onClick={handleSendCreatedEmail}
+                      loading={createEmailSending}
+                      disabled={
+                        !createEmailForm.to.trim() ||
+                        !createEmailForm.subject.trim() ||
+                        !createEmailForm.body.trim()
+                      }
+                    >
+                      Send email
+                    </Button>
+                  </Group>
+                </Stack>
+              )}
+            </Modal>
             <Modal
               opened={bulkReprocessMode !== null}
               onClose={handleCloseBulkReprocess}

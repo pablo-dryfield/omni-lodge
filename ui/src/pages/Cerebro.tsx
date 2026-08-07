@@ -25,6 +25,7 @@ import {
 } from "@mantine/core";
 import { IconChecklist, IconFileText, IconPlus, IconShieldCheck } from "@tabler/icons-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMediaQuery } from "@mantine/hooks";
 import {
   acknowledgeCerebroPolicy,
   createCerebroEntry,
@@ -45,6 +46,7 @@ import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { CerebroRichTextContent } from "../components/cerebro/CerebroRichTextContent";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { richTextToSearchableText } from "../utils/cerebroRichText";
+import "./Cerebro.css";
 
 const CerebroRichTextEditor = lazy(() =>
   import("../components/cerebro/CerebroRichTextEditor").then((module) => ({
@@ -191,6 +193,7 @@ const formatMediaLines = (media: CerebroEntry["media"]) =>
 
 const Cerebro = () => {
   const queryClient = useQueryClient();
+  const isMobile = useMediaQuery("(max-width: 47.99em)");
   const { data, isLoading, isError, error } = useCerebroBootstrap();
   const [view, setView] = useState<ViewMode>("knowledge");
   const [searchQuery, setSearchQuery] = useState("");
@@ -457,16 +460,16 @@ const Cerebro = () => {
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
-      <Stack gap="lg">
-        <Card withBorder radius="md" p="lg">
-          <Group justify="space-between" align="start">
-            <div>
+      <Stack gap="lg" className="cerebro-page">
+        <Card withBorder radius="md" p={{ base: "md", sm: "lg" }}>
+          <Group justify="space-between" align="start" className="cerebro-header">
+            <div className="cerebro-header-copy">
               <Title order={2}>Cerebro</Title>
               <Text c="dimmed">
                 OmniLodge operational knowledge, onboarding quizzes, and policy acknowledgements.
               </Text>
             </div>
-            <Group gap="sm">
+            <Group gap="sm" className="cerebro-badges">
               <Badge variant="light">Articles {data.entries.length}</Badge>
               <Badge variant="light" color="orange">Quizzes {data.quizzes.length}</Badge>
               <Badge variant="light" color="teal">Policies {policyEntries.length}</Badge>
@@ -477,27 +480,34 @@ const Cerebro = () => {
         {feedback ? <Alert color="green">{feedback}</Alert> : null}
         {errorMessage ? <Alert color="red">{errorMessage}</Alert> : null}
 
-        <Card withBorder radius="md" p="lg">
-          <Group justify="space-between" align="end">
-            <SegmentedControl value={view} onChange={(value) => setView(value as ViewMode)} data={availableViews} />
+        <Card withBorder radius="md" p={{ base: "sm", sm: "lg" }}>
+          <Group justify="space-between" align="end" className="cerebro-toolbar">
+            <SegmentedControl
+              value={view}
+              onChange={(value) => setView(value as ViewMode)}
+              data={availableViews}
+              orientation={isMobile ? "vertical" : "horizontal"}
+              fullWidth={Boolean(isMobile)}
+              className="cerebro-view-tabs"
+            />
             {view === "knowledge" ? (
-              <Group gap="sm">
-                <TextInput placeholder="Search articles" value={searchQuery} onChange={(event) => setSearchQuery(event.currentTarget.value)} />
-                <Select data={sectionOptions} value={sectionFilter} onChange={setSectionFilter} allowDeselect={false} />
+              <Group gap="sm" className="cerebro-filters">
+                <TextInput className="cerebro-filter" placeholder="Search articles" value={searchQuery} onChange={(event) => setSearchQuery(event.currentTarget.value)} />
+                <Select className="cerebro-filter" data={sectionOptions} value={sectionFilter} onChange={setSectionFilter} allowDeselect={false} />
               </Group>
             ) : null}
           </Group>
         </Card>
 
         {view === "knowledge" ? (
-          <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">
+          <SimpleGrid cols={{ base: 1, md: 3 }} spacing="md">
             <Card withBorder radius="md" p="md">
               <Stack gap="sm">
                 <Group gap="xs">
                   <IconFileText size={16} />
                   <Text fw={600}>Articles</Text>
                 </Group>
-                <ScrollArea h={600}>
+                <ScrollArea h={isMobile ? 300 : 600}>
                   <Stack gap="xs">
                     {filteredEntries.length === 0 ? <Text c="dimmed" size="sm">No matching articles.</Text> : null}
                     {filteredEntries.map((entry) => (
@@ -509,8 +519,8 @@ const Cerebro = () => {
                         style={{ cursor: "pointer", borderColor: entry.id === selectedEntryId ? "var(--mantine-color-blue-5)" : undefined }}
                         onClick={() => setSelectedEntryId(entry.id)}
                       >
-                        <Group justify="space-between" align="start">
-                          <div>
+                        <Group justify="space-between" align="start" wrap="nowrap">
+                          <div className="cerebro-item-copy">
                             <Text fw={600}>{entry.title}</Text>
                             {entry.summary ? <Text size="sm" c="dimmed" lineClamp={2}>{entry.summary}</Text> : null}
                           </div>
@@ -523,11 +533,11 @@ const Cerebro = () => {
               </Stack>
             </Card>
 
-            <Card withBorder radius="md" p="lg" style={{ gridColumn: "span 2" }}>
+            <Card withBorder radius="md" p={{ base: "md", sm: "lg" }} className="cerebro-entry-detail">
               {selectedEntry ? (
                 <Stack gap="md">
-                  <Group justify="space-between" align="start">
-                    <div>
+                  <Group justify="space-between" align="start" className="cerebro-content-header">
+                    <div className="cerebro-item-copy">
                       <Title order={3}>{selectedEntry.title}</Title>
                       <Group gap="xs" mt={4}>
                         <Badge variant="light">{selectedEntry.kind}</Badge>
@@ -572,10 +582,10 @@ const Cerebro = () => {
               const latestAttempt = latestAttemptByQuizId.get(quiz.id);
               const answers = quizDrafts[quiz.id] ?? {};
               return (
-                <Card key={quiz.id} withBorder radius="md" p="lg">
+                <Card key={quiz.id} withBorder radius="md" p={{ base: "md", sm: "lg" }}>
                   <Stack gap="md">
-                    <Group justify="space-between" align="start">
-                      <div>
+                    <Group justify="space-between" align="start" className="cerebro-content-header">
+                      <div className="cerebro-item-copy">
                         <Title order={4}>{quiz.title}</Title>
                         {quiz.description ? <Text c="dimmed">{quiz.description}</Text> : null}
                       </div>
@@ -598,7 +608,7 @@ const Cerebro = () => {
                         </Radio.Group>
                       </Card>
                     ))}
-                    <Group justify="space-between">
+                    <Group justify="space-between" className="cerebro-footer-actions">
                       <Text size="sm" c="dimmed">
                         {latestAttempt ? `Last submitted ${new Date(latestAttempt.submittedAt).toLocaleString()}` : "Not submitted yet"}
                       </Text>
@@ -621,10 +631,10 @@ const Cerebro = () => {
               const requiredVersion = entry.policyVersion ?? "";
               const accepted = acknowledgement != null && (requiredVersion.length === 0 || acknowledgement.versionAccepted === requiredVersion);
               return (
-                <Card key={entry.id} withBorder radius="md" p="lg">
+                <Card key={entry.id} withBorder radius="md" p={{ base: "md", sm: "lg" }}>
                   <Stack gap="md">
-                    <Group justify="space-between" align="start">
-                      <div>
+                    <Group justify="space-between" align="start" className="cerebro-content-header">
+                      <div className="cerebro-item-copy">
                         <Group gap="xs">
                           <IconShieldCheck size={16} />
                           <Title order={4}>{entry.title}</Title>
@@ -634,7 +644,7 @@ const Cerebro = () => {
                       <Badge color={accepted ? "teal" : "orange"} variant="light">{accepted ? "Accepted" : "Pending"}</Badge>
                     </Group>
                     <CerebroRichTextContent value={entry.body} />
-                    <Group justify="space-between">
+                    <Group justify="space-between" className="cerebro-footer-actions">
                       <Text size="sm" c="dimmed">
                         {accepted && acknowledgement ? `Accepted ${new Date(acknowledgement.acceptedAt).toLocaleString()}` : `Version ${entry.policyVersion ?? "current"}`}
                       </Text>
@@ -651,17 +661,17 @@ const Cerebro = () => {
         ) : null}
         {view === "admin" && data.canManage ? (
           <Stack gap="md">
-            <Card withBorder radius="md" p="lg">
-              <Group justify="space-between">
+            <Card withBorder radius="md" p={{ base: "md", sm: "lg" }}>
+              <Group justify="space-between" className="cerebro-admin-header">
                 <Text fw={600}>Admin</Text>
-                <Group gap="sm">
+                <Group gap="sm" className="cerebro-admin-actions">
                   <Button leftSection={<IconPlus size={16} />} variant="light" onClick={() => openSectionEditor()}>Section</Button>
                   <Button leftSection={<IconPlus size={16} />} variant="light" onClick={() => openEntryEditor()}>Article</Button>
                   <Button leftSection={<IconPlus size={16} />} variant="light" onClick={() => openQuizEditor()}>Quiz</Button>
                 </Group>
               </Group>
             </Card>
-            <SimpleGrid cols={{ base: 1, xl: 3 }} spacing="md">
+            <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }} spacing="md">
               <Card withBorder radius="md" p="md">
                 <Title order={4}>Sections</Title>
                 <Divider my="sm" />
@@ -717,20 +727,20 @@ const Cerebro = () => {
           </Stack>
         ) : null}
       </Stack>
-      <Modal opened={sectionModalOpen} onClose={() => setSectionModalOpen(false)} title={sectionForm.id ? "Edit section" : "Create section"} centered>
+      <Modal opened={sectionModalOpen} onClose={() => setSectionModalOpen(false)} title={sectionForm.id ? "Edit section" : "Create section"} centered fullScreen={Boolean(isMobile)}>
         <Stack gap="sm">
           <TextInput label="Name" value={sectionForm.name} onChange={(event) => setSectionForm((prev) => ({ ...prev, name: event.currentTarget.value }))} />
           <TextInput label="Slug" value={sectionForm.slug} onChange={(event) => setSectionForm((prev) => ({ ...prev, slug: event.currentTarget.value }))} />
           <TextInput label="Description" value={sectionForm.description} onChange={(event) => setSectionForm((prev) => ({ ...prev, description: event.currentTarget.value }))} />
           <TextInput label="Sort order" value={sectionForm.sortOrder} onChange={(event) => setSectionForm((prev) => ({ ...prev, sortOrder: event.currentTarget.value }))} />
           <Switch label="Active" checked={sectionForm.status} onChange={(event) => setSectionForm((prev) => ({ ...prev, status: event.currentTarget.checked }))} />
-          <Group justify="flex-end">
+          <Group justify="flex-end" className="cerebro-modal-actions">
             <Button variant="default" onClick={() => setSectionModalOpen(false)}>Cancel</Button>
             <Button onClick={() => sectionMutation.mutate()} loading={sectionMutation.isPending}>Save</Button>
           </Group>
         </Stack>
       </Modal>
-      <Modal opened={entryModalOpen} onClose={() => setEntryModalOpen(false)} title={entryForm.id ? "Edit article" : "Create article"} centered size="lg">
+      <Modal opened={entryModalOpen} onClose={() => setEntryModalOpen(false)} title={entryForm.id ? "Edit article" : "Create article"} centered size="lg" fullScreen={Boolean(isMobile)}>
         <Stack gap="sm">
           <Select label="Section" data={sectionOptions.filter((item) => item.value !== "all")} value={entryForm.sectionId} onChange={(value) => setEntryForm((prev) => ({ ...prev, sectionId: value }))} />
           <TextInput label="Title" value={entryForm.title} onChange={(event) => setEntryForm((prev) => ({ ...prev, title: event.currentTarget.value }))} />
@@ -752,35 +762,35 @@ const Cerebro = () => {
           <Textarea label="Media lines" description="One per line: image|https://...|Caption" minRows={3} value={entryForm.mediaLines} onChange={(event) => setEntryForm((prev) => ({ ...prev, mediaLines: event.currentTarget.value }))} />
           <Textarea label="Checklist lines" description="One item per line" minRows={3} value={entryForm.checklistLines} onChange={(event) => setEntryForm((prev) => ({ ...prev, checklistLines: event.currentTarget.value }))} />
           <MultiSelect label="Target roles" data={roleOptions} value={entryForm.targetUserTypeIds} onChange={(value) => setEntryForm((prev) => ({ ...prev, targetUserTypeIds: value }))} searchable clearable />
-          <SimpleGrid cols={2}>
+          <SimpleGrid cols={{ base: 1, sm: 2 }}>
             <TextInput label="Policy version" value={entryForm.policyVersion} onChange={(event) => setEntryForm((prev) => ({ ...prev, policyVersion: event.currentTarget.value }))} />
             <TextInput label="Read minutes" value={entryForm.estimatedReadMinutes} onChange={(event) => setEntryForm((prev) => ({ ...prev, estimatedReadMinutes: event.currentTarget.value }))} />
           </SimpleGrid>
-          <SimpleGrid cols={2}>
+          <SimpleGrid cols={{ base: 1, sm: 2 }}>
             <TextInput label="Sort order" value={entryForm.sortOrder} onChange={(event) => setEntryForm((prev) => ({ ...prev, sortOrder: event.currentTarget.value }))} />
             <Switch label="Requires acknowledgement" checked={entryForm.requiresAcknowledgement} onChange={(event) => setEntryForm((prev) => ({ ...prev, requiresAcknowledgement: event.currentTarget.checked }))} mt="xl" />
           </SimpleGrid>
           <Switch label="Active" checked={entryForm.status} onChange={(event) => setEntryForm((prev) => ({ ...prev, status: event.currentTarget.checked }))} />
-          <Group justify="flex-end">
+          <Group justify="flex-end" className="cerebro-modal-actions">
             <Button variant="default" onClick={() => setEntryModalOpen(false)}>Cancel</Button>
             <Button onClick={() => entryMutation.mutate()} loading={entryMutation.isPending}>Save</Button>
           </Group>
         </Stack>
       </Modal>
-      <Modal opened={quizModalOpen} onClose={() => setQuizModalOpen(false)} title={quizForm.id ? "Edit quiz" : "Create quiz"} centered size="lg">
+      <Modal opened={quizModalOpen} onClose={() => setQuizModalOpen(false)} title={quizForm.id ? "Edit quiz" : "Create quiz"} centered size="lg" fullScreen={Boolean(isMobile)}>
         <Stack gap="sm">
           <Select label="Linked article" data={entryOptions} value={quizForm.entryId} onChange={(value) => setQuizForm((prev) => ({ ...prev, entryId: value }))} searchable clearable />
           <TextInput label="Title" value={quizForm.title} onChange={(event) => setQuizForm((prev) => ({ ...prev, title: event.currentTarget.value }))} />
           <TextInput label="Slug" value={quizForm.slug} onChange={(event) => setQuizForm((prev) => ({ ...prev, slug: event.currentTarget.value }))} />
           <Textarea label="Description" minRows={2} value={quizForm.description} onChange={(event) => setQuizForm((prev) => ({ ...prev, description: event.currentTarget.value }))} />
           <MultiSelect label="Target roles" data={roleOptions} value={quizForm.targetUserTypeIds} onChange={(value) => setQuizForm((prev) => ({ ...prev, targetUserTypeIds: value }))} searchable clearable />
-          <SimpleGrid cols={2}>
+          <SimpleGrid cols={{ base: 1, sm: 2 }}>
             <TextInput label="Passing score" value={quizForm.passingScore} onChange={(event) => setQuizForm((prev) => ({ ...prev, passingScore: event.currentTarget.value }))} />
             <TextInput label="Sort order" value={quizForm.sortOrder} onChange={(event) => setQuizForm((prev) => ({ ...prev, sortOrder: event.currentTarget.value }))} />
           </SimpleGrid>
           <Textarea label="Questions JSON" minRows={10} value={quizForm.questionsJson} onChange={(event) => setQuizForm((prev) => ({ ...prev, questionsJson: event.currentTarget.value }))} />
           <Switch label="Active" checked={quizForm.status} onChange={(event) => setQuizForm((prev) => ({ ...prev, status: event.currentTarget.checked }))} />
-          <Group justify="flex-end">
+          <Group justify="flex-end" className="cerebro-modal-actions">
             <Button variant="default" onClick={() => setQuizModalOpen(false)}>Cancel</Button>
             <Button onClick={() => quizMutation.mutate()} loading={quizMutation.isPending}>Save</Button>
           </Group>

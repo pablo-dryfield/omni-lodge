@@ -120,7 +120,24 @@ const mapScoreToStarRating = (score?: number): "ONE" | "TWO" | "THREE" | "FOUR" 
 const parseLocalizedAirbnbDate = (value?: string | null): string => {
   const normalized = typeof value === 'string' ? value.trim() : '';
   if (!normalized) return new Date().toISOString();
-  const parsed = new Date(`${normalized} 1, 00:00:00 UTC`);
+
+  // Airbnb review results normally expose only a localized month and year
+  // (for example, "August 2026"), not an exact publication day. Build that
+  // value explicitly so it does not depend on the runtime's Date string
+  // parser. The previous string ("August 2026 1") is invalid in Node and
+  // caused every review to fall back to the time at which the sync ran.
+  const monthYear = normalized.match(
+    /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})$/i,
+  );
+  if (monthYear) {
+    const month = [
+      'january', 'february', 'march', 'april', 'may', 'june',
+      'july', 'august', 'september', 'october', 'november', 'december',
+    ].indexOf(monthYear[1].toLowerCase());
+    return new Date(Date.UTC(Number(monthYear[2]), month, 1)).toISOString();
+  }
+
+  const parsed = new Date(normalized);
   if (Number.isNaN(parsed.getTime())) {
     return new Date().toISOString();
   }
