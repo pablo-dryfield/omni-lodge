@@ -4,10 +4,25 @@
   overflow-x: clip;
 }
 
+.cerebro-page :is(.mantine-Card-root, .mantine-Paper-root, .mantine-SimpleGrid-root) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cerebro-page :is(.mantine-Title-root, .mantine-Text-root, .mantine-Radio-label) {
+  overflow-wrap: anywhere;
+}
+
 .cerebro-header-copy,
 .cerebro-item-copy,
 .cerebro-entry-detail {
   min-width: 0;
+}
+
+.cerebro-entry-detail,
+.cerebro-entry-detail > *,
+.cerebro-entry-detail .mantine-Stack-root {
+  max-width: 100%;
 }
 
 .cerebro-header-copy {
@@ -90,6 +105,15 @@
   .cerebro-footer-actions > button,
   .cerebro-admin-actions > button {
     width: 100%;
+  }
+
+  .cerebro-page .mantine-Button-root {
+    height: auto;
+    min-height: 2.25rem;
+  }
+
+  .cerebro-page .mantine-Button-label {
+    white-space: normal;
   }
 
   .cerebro-admin-actions {
