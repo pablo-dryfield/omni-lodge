@@ -1,0 +1,127 @@
+.cerebro-page {
+  width: 100%;
+  min-width: 0;
+  overflow-x: clip;
+}
+
+.cerebro-header-copy,
+.cerebro-item-copy,
+.cerebro-entry-detail {
+  min-width: 0;
+}
+
+.cerebro-header-copy {
+  flex: 1;
+}
+
+.cerebro-badges,
+.cerebro-content-header,
+.cerebro-footer-actions,
+.cerebro-admin-header,
+.cerebro-admin-actions {
+  flex-wrap: wrap;
+}
+
+.cerebro-toolbar {
+  flex-wrap: wrap;
+}
+
+.cerebro-view-tabs {
+  max-width: 100%;
+}
+
+.cerebro-filters {
+  flex: 1 1 22rem;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.cerebro-filter {
+  flex: 1 1 12rem;
+  max-width: 19rem;
+}
+
+.cerebro-entry-detail {
+  grid-column: span 2;
+}
+
+@media (max-width: 61.99em) {
+  .cerebro-toolbar {
+    align-items: stretch;
+  }
+
+  .cerebro-view-tabs,
+  .cerebro-filters {
+    width: 100%;
+  }
+
+  .cerebro-filters {
+    justify-content: stretch;
+  }
+
+  .cerebro-filter {
+    max-width: none;
+  }
+}
+
+@media (max-width: 47.99em) {
+  .cerebro-page {
+    gap: var(--mantine-spacing-sm);
+  }
+
+  .cerebro-header,
+  .cerebro-content-header,
+  .cerebro-footer-actions,
+  .cerebro-admin-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cerebro-badges {
+    width: 100%;
+  }
+
+  .cerebro-filters {
+    flex-basis: auto;
+    flex-direction: column;
+  }
+
+  .cerebro-filter,
+  .cerebro-footer-actions > button,
+  .cerebro-admin-actions > button {
+    width: 100%;
+  }
+
+  .cerebro-admin-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .cerebro-entry-detail {
+    grid-column: auto;
+  }
+
+  .cerebro-modal-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cerebro-editor-toolbar {
+    align-items: stretch;
+  }
+
+  .cerebro-toolbar-select {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .cerebro-editor-content {
+    min-height: 220px;
+    padding: 0.75rem;
+  }
+
+  .cerebro-editor-content .ProseMirror {
+    min-height: 190px;
+  }
+}

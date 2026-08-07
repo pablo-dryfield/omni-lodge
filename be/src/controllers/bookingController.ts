@@ -2738,12 +2738,47 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
       maxResults: limit,
       pageToken,
     });
+    const customerEmailActions = await RequiredAction.findAll({
+      where: {
+        type: 'customer_email',
+        [Op.and]: [
+          sequelizeWhere(fn('lower', literal(`payload->>'customerEmail'`)), email),
+        ],
+      },
+      attributes: ['id', 'status', 'payload'],
+      order: [['id', 'DESC']],
+    });
+    const actionByGmailMessageId = new Map<string, RequiredAction>();
+    customerEmailActions.forEach((action) => {
+      const gmailMessageId = String(action.payload?.gmailMessageId ?? '').trim();
+      if (gmailMessageId && !actionByGmailMessageId.has(gmailMessageId)) {
+        actionByGmailMessageId.set(gmailMessageId, action);
+      }
+    });
+    const messages = result.messages.map((message) => {
+      const action = actionByGmailMessageId.get(message.messageId) ?? null;
+      const resolution = String(action?.payload?.resolution ?? '').trim().toLowerCase();
+      const responseStatus = action
+        ? action.status
+          ? 'awaiting_reply'
+          : resolution === 'replied'
+            ? 'answered'
+            : 'completed'
+        : null;
+      return {
+        ...message,
+        responseStatus,
+        requiredActionId: action ? Number(action.id) : null,
+      };
+    });
+    const awaitingReplyCount = customerEmailActions.filter((action) => action.status).length;
 
     res.status(200).json({
       email,
-      count: result.messages.length,
+      count: messages.length,
+      awaitingReplyCount,
       nextPageToken: result.nextPageToken,
-      messages: result.messages,
+      messages,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load mailbox emails';
