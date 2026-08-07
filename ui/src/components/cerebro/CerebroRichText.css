@@ -1,7 +1,11 @@
 .cerebro-rich-text {
   color: inherit;
   line-height: 1.65;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
   overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .cerebro-rich-text > :first-child {
@@ -38,24 +42,65 @@
 .cerebro-rich-text a {
   color: var(--mantine-color-blue-6);
   text-decoration: underline;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-.cerebro-rich-text img {
+.cerebro-rich-text img,
+.cerebro-rich-text video,
+.cerebro-rich-text canvas,
+.cerebro-rich-text svg {
   display: block;
-  max-width: 100%;
+  max-width: 100% !important;
   height: auto;
   border-radius: 12px;
   margin: 1rem 0;
 }
 
-.cerebro-rich-text .tableWrapper {
+.cerebro-rich-text iframe,
+.cerebro-rich-text embed,
+.cerebro-rich-text object {
+  display: block;
+  max-width: 100% !important;
+  width: 100%;
+}
+
+.cerebro-rich-text figure {
+  max-width: 100%;
+  margin: 1rem 0;
+}
+
+.cerebro-rich-text figcaption {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.cerebro-rich-text .tableWrapper,
+.cerebro-rich-text .cerebro-table-scroll {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   margin: 1rem 0;
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cerebro-rich-text .cerebro-table-scroll:focus-visible {
+  outline: 2px solid var(--mantine-color-blue-5);
+  outline-offset: 2px;
 }
 
 .cerebro-rich-text table {
   border-collapse: collapse;
-  width: 100%;
+  width: max-content;
+  max-width: none;
+  min-width: 100%;
+}
+
+.cerebro-editor-content .ProseMirror table {
   min-width: 360px;
 }
 
@@ -64,6 +109,10 @@
   border: 1px solid var(--mantine-color-gray-3);
   padding: 0.65rem 0.8rem;
   vertical-align: top;
+  min-width: 8rem;
+  max-width: min(70vw, 28rem);
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .cerebro-rich-text th {
@@ -72,7 +121,10 @@
 }
 
 .cerebro-rich-text pre {
+  max-width: 100%;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   padding: 0.875rem 1rem;
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.92);
@@ -82,6 +134,11 @@
 
 .cerebro-rich-text code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  overflow-wrap: anywhere;
+}
+
+.cerebro-rich-text hr {
+  max-width: 100%;
 }
 
 .cerebro-editor-shell {
@@ -89,6 +146,8 @@
   border-radius: 12px;
   overflow: hidden;
   background: var(--mantine-color-body);
+  max-width: 100%;
+  min-width: 0;
 }
 
 .cerebro-editor-toolbar {
@@ -107,17 +166,27 @@
 
 .cerebro-editor-content {
   min-height: 280px;
+  max-width: 100%;
+  min-width: 0;
   padding: 1rem;
 }
 
 .cerebro-editor-content .ProseMirror {
   min-height: 248px;
+  max-width: 100%;
+  min-width: 0;
   outline: none;
 }
 
 .cerebro-editor-content .ProseMirror .tableWrapper {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   margin: 1rem 0;
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
 }
 
 .cerebro-editor-content .ProseMirror table {
@@ -169,4 +238,34 @@
   float: left;
   height: 0;
   pointer-events: none;
+}
+
+@media (max-width: 47.99em) {
+  .cerebro-rich-text h1 {
+    font-size: clamp(1.55rem, 8vw, 2rem);
+  }
+
+  .cerebro-rich-text h2 {
+    font-size: clamp(1.35rem, 7vw, 1.75rem);
+  }
+
+  .cerebro-rich-text h3 {
+    font-size: clamp(1.15rem, 6vw, 1.45rem);
+  }
+
+  .cerebro-rich-text ul,
+  .cerebro-rich-text ol {
+    padding-left: 1.15rem;
+  }
+
+  .cerebro-rich-text blockquote {
+    margin-inline: 0;
+    padding-left: 0.75rem;
+  }
+
+  .cerebro-rich-text th,
+  .cerebro-rich-text td {
+    min-width: 7.5rem;
+    padding: 0.5rem 0.625rem;
+  }
 }
