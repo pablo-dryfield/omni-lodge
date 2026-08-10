@@ -18,6 +18,11 @@ import {
 } from '../services/storefrontCommerceService.js';
 import { deliverStorefrontOrderEmails } from '../services/storefrontOrderEmailService.js';
 import { findLockedStorefrontOrderWithItems } from '../services/storefrontOrderPersistenceService.js';
+import {
+  buildStorefrontAddonsSnapshot,
+  getStorefrontExperienceStartAt,
+  mergeStorefrontAddonsSnapshot,
+} from '../services/storefrontBookingProjectionService.js';
 import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
 import { getConfigValueRaw } from '../services/configService.js';
 import logger from '../utils/logger.js';
@@ -32,6 +37,7 @@ type CheckoutCustomer = {
 
 const SYSTEM_USER_ID = Number(process.env.STOREFRONT_SYSTEM_USER_ID || 1);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SETTLED_PAYMENT_STATUSES = new Set(['paid', 'partial', 'refunded']);
 
 const roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -137,13 +143,35 @@ const persistPaidOrder = async (
     const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
     if (!order) throw new HttpError(404, 'Storefront order not found.');
 
-    const existingBooking = await Booking.findOne({
+    const existingBookings = await Booking.findAll({
       where: { platform: 'omnilodge', platformOrderId: order.publicId },
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
-    if (existingBooking) {
-      if (order.paymentStatus !== 'paid') {
+    if (existingBookings.length > 0) {
+      for (const booking of existingBookings) {
+        const item = (order.items || []).find(
+          (candidate) => `${order.publicId}-${candidate.id}` === booking.platformBookingId,
+        );
+        if (!item) continue;
+
+        const updates: Record<string, unknown> = {};
+        if (!booking.experienceStartAt) {
+          const experienceStartAt = getStorefrontExperienceStartAt(item.experienceDate, item.experienceTime);
+          if (experienceStartAt) updates.experienceStartAt = experienceStartAt;
+        }
+        const nextSnapshot = mergeStorefrontAddonsSnapshot(
+          booking.addonsSnapshot,
+          Array.isArray(item.addons) ? item.addons : [],
+          item.options,
+          item.quantity,
+        );
+        if (JSON.stringify(nextSnapshot) !== JSON.stringify(booking.addonsSnapshot)) {
+          updates.addonsSnapshot = nextSnapshot;
+        }
+        if (Object.keys(updates).length > 0) await booking.update(updates, { transaction });
+      }
+      if (!SETTLED_PAYMENT_STATUSES.has(order.paymentStatus)) {
         await order.update(
           {
             status: 'confirmed',
@@ -192,6 +220,13 @@ const persistPaidOrder = async (
         grossBeforeDiscount > 0 ? roundMoney(orderDiscount * (itemGross / grossBeforeDiscount)) : 0;
       const itemNet = Math.max(0, roundMoney(itemGross - allocatedDiscount));
       const addons = Array.isArray(item.addons) ? item.addons : [];
+      const stripePaymentIntentId = stripeSession ? paymentIntentId(stripeSession) : null;
+      const bookingNotes = [
+        `Storefront order ${order.publicId}`,
+        stripePaymentIntentId ? `Stripe payment_intent: ${stripePaymentIntentId}` : null,
+        stripeSession ? `Stripe livemode: ${stripeSession.livemode}` : null,
+        'Checkout source: storefront',
+      ].filter((value): value is string => Boolean(value));
 
       const booking = await Booking.create(
         {
@@ -208,6 +243,7 @@ const persistPaidOrder = async (
           utmMedium: order.attribution?.utm_medium || null,
           utmCampaign: order.attribution?.utm_campaign || null,
           experienceDate: item.experienceDate,
+          experienceStartAt: getStorefrontExperienceStartAt(item.experienceDate, item.experienceTime),
           productId: item.productId,
           productName: item.productName,
           guestFirstName: order.customerFirstName,
@@ -218,7 +254,7 @@ const persistPaidOrder = async (
           partySizeAdults: item.quantity,
           partySizeChildren: 0,
           currency: order.currency,
-          baseAmount: Number(item.baseTotal),
+          baseAmount: itemNet,
           addonsAmount: Number(item.addonTotal),
           discountAmount: allocatedDiscount,
           discountCode: order.discountCode,
@@ -226,7 +262,8 @@ const persistPaidOrder = async (
           priceNet: itemNet,
           commissionAmount: 0,
           commissionRate: 0,
-          addonsSnapshot: addons,
+          addonsSnapshot: buildStorefrontAddonsSnapshot(addons, item.options, item.quantity),
+          notes: bookingNotes.join(' | '),
           sourceReceivedAt: now,
           processedAt: now,
           createdBy: SYSTEM_USER_ID,

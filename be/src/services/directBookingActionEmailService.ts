@@ -54,18 +54,30 @@ const sanitizeEmailHeaderPart = (value: string): string => value.replace(/[\r\n]
 const quoteEmailDisplayName = (value: string): string =>
   `"${sanitizeEmailHeaderPart(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
-const resolveDirectBookingEmailFrom = (): string | null => {
-  const address = sanitizeEmailHeaderPart(String(getConfigValue('DIRECT_BOOKINGS_EMAIL_FROM_ADDRESS') ?? ''));
+const isStorefrontBooking = (booking: Booking): boolean =>
+  String(booking.platform ?? '').trim().toLowerCase() === 'omnilodge';
+
+const resolveDirectBookingEmailFrom = (booking: Booking): string | null => {
+  const addressKey = isStorefrontBooking(booking)
+    ? 'STOREFRONT_EMAIL_FROM_ADDRESS'
+    : 'DIRECT_BOOKINGS_EMAIL_FROM_ADDRESS';
+  const nameKey = isStorefrontBooking(booking)
+    ? 'STOREFRONT_EMAIL_FROM_NAME'
+    : 'DIRECT_BOOKINGS_EMAIL_FROM_NAME';
+  const address = sanitizeEmailHeaderPart(String(getConfigValue(addressKey) ?? ''));
   if (!address) {
     return null;
   }
 
-  const name = sanitizeEmailHeaderPart(String(getConfigValue('DIRECT_BOOKINGS_EMAIL_FROM_NAME') ?? 'Food Tour Krakow'));
+  const name = sanitizeEmailHeaderPart(String(getConfigValue(nameKey) ?? 'Krawl Through Krakow'));
   return name ? `${quoteEmailDisplayName(name)} <${address}>` : address;
 };
 
-const resolveDirectBookingNotificationEmail = (): string | null => {
-  const email = sanitizeEmailHeaderPart(String(getConfigValue('DIRECT_BOOKINGS_NOTIFICATION_EMAIL') ?? ''));
+const resolveDirectBookingNotificationEmail = (booking: Booking): string | null => {
+  const key = isStorefrontBooking(booking)
+    ? 'STOREFRONT_NOTIFICATION_EMAIL'
+    : 'DIRECT_BOOKINGS_NOTIFICATION_EMAIL';
+  const email = sanitizeEmailHeaderPart(String(getConfigValue(key) ?? ''));
   return email || null;
 };
 
@@ -187,7 +199,7 @@ const getEmailCopy = (
       return {
         eyebrow: 'Booking confirmed',
         headline: 'You are booked',
-        body: `Hi ${guestName}, your ${tourName} is confirmed. Bring your appetite.`,
+        body: `Hi ${guestName}, your ${tourName} is confirmed.`,
         subject: `Your ${tourName} booking is confirmed`,
       };
   }
@@ -254,6 +266,7 @@ export const buildDirectBookingActionEmail = (
     options.previousPartySizeTotal !== options.currentPartySizeTotal;
   const notes = extractCustomerNotes(booking.notes);
   const copy = getEmailCopy(booking, options);
+  const includeFoodTourMeetingPoint = !isStorefrontBooking(booking);
 
   const htmlBody = `
 <!doctype html>
@@ -291,11 +304,15 @@ export const buildDirectBookingActionEmail = (
             : ''
         }
 
-        <div style="margin:24px 0 0;background:#2f2128;color:#fff;border-radius:20px;padding:20px;font-size:15px;line-height:1.6;">
+        ${
+          includeFoodTourMeetingPoint
+            ? `<div style="margin:24px 0 0;background:#2f2128;color:#fff;border-radius:20px;padding:20px;font-size:15px;line-height:1.6;">
           <strong>Meeting point</strong><br>
           ${escapeHtml(MEETING_POINT)}<br>
           ${escapeHtml(GUIDE_NOTE)}
-        </div>
+        </div>`
+            : ''
+        }
 
         <p style="margin:24px 0 0;color:#7d6b70;font-size:13px;line-height:1.5;">If you have questions, reply to this email.</p>
       </div>
@@ -321,8 +338,8 @@ export const buildDirectBookingActionEmail = (
     `Customer phone: ${booking.guestPhone ?? ''}`,
     notes ? `Dietary notes or requests: ${notes}` : null,
     '',
-    `Meeting point: ${MEETING_POINT}`,
-    GUIDE_NOTE,
+    includeFoodTourMeetingPoint ? `Meeting point: ${MEETING_POINT}` : null,
+    includeFoodTourMeetingPoint ? GUIDE_NOTE : null,
   ]
     .filter((line): line is string => line !== null)
     .join('\n');
@@ -347,7 +364,7 @@ export const sendDirectBookingActionEmail = async (
   const email = buildDirectBookingActionEmail(booking, options);
   const result = await sendGmailMessage({
     to,
-    from: resolveDirectBookingEmailFrom(),
+    from: resolveDirectBookingEmailFrom(booking),
     subject: email.subject,
     textBody: email.textBody,
     htmlBody: email.htmlBody,
@@ -466,7 +483,7 @@ export const sendInternalDirectBookingActionEmail = async (
   booking: Booking,
   options: DirectBookingActionEmailOptions,
 ): Promise<SendMessageResult | null> => {
-  const to = resolveDirectBookingNotificationEmail();
+  const to = resolveDirectBookingNotificationEmail(booking);
   if (!to) {
     logger.warn(`[direct-bookings] Skipping internal ${options.kind} notification for booking ${booking.id}: missing notification email`);
     return null;
@@ -475,7 +492,7 @@ export const sendInternalDirectBookingActionEmail = async (
   const email = buildInternalDirectBookingActionEmail(booking, options);
   const result = await sendGmailMessage({
     to,
-    from: resolveDirectBookingEmailFrom(),
+    from: resolveDirectBookingEmailFrom(booking),
     subject: email.subject,
     textBody: email.textBody,
     htmlBody: email.htmlBody,

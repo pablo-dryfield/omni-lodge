@@ -18,6 +18,8 @@ import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
 import ProductAlias from '../models/ProductAlias.js';
 import ProductAddon from '../models/ProductAddon.js';
+import StorefrontOrder from '../models/StorefrontOrder.js';
+import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
 import RequiredAction from '../models/RequiredAction.js';
 import HttpError from '../errors/HttpError.js';
 import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
@@ -4533,17 +4535,62 @@ const isDirectFoodTourBooking = (booking: Booking): boolean => {
   return platform === 'direct' && productName.includes('food tour');
 };
 
-const requireDirectFoodTourBooking = async (bookingId: number): Promise<Booking> => {
+const isStorefrontBooking = (booking: Booking): boolean =>
+  String(booking.platform ?? '').trim().toLowerCase() === 'omnilodge' &&
+  Boolean(String(booking.platformOrderId ?? '').trim());
+
+const isDirectManifestActionBooking = (booking: Booking): boolean =>
+  isDirectFoodTourBooking(booking) || isStorefrontBooking(booking);
+
+const requireDirectManifestActionBooking = async (bookingId: number): Promise<Booking> => {
   const booking = await Booking.findByPk(bookingId, {
     include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
   });
   if (!booking) {
     throw new HttpError(404, 'Booking not found');
   }
-  if (!isDirectFoodTourBooking(booking)) {
-    throw new HttpError(400, 'Only direct Food Tour bookings support this manifest action.');
+  if (!isDirectManifestActionBooking(booking)) {
+    throw new HttpError(400, 'This booking platform does not support this manifest action.');
   }
   return booking;
+};
+
+const findStorefrontOrderForBooking = async (
+  booking: Booking,
+  transaction?: Transaction,
+): Promise<StorefrontOrder> => {
+  const publicId = String(booking.platformOrderId ?? '').trim();
+  const order = publicId
+    ? await StorefrontOrder.findOne({ where: { publicId }, transaction })
+    : null;
+  if (!order) throw new HttpError(404, 'Storefront order not found for this booking.');
+  return order;
+};
+
+const findStorefrontOrderItemForBooking = async (
+  booking: Booking,
+  order: StorefrontOrder,
+  transaction?: Transaction,
+): Promise<StorefrontOrderItem> => {
+  const itemIdMatch = String(booking.platformBookingId ?? '').match(/-(\d+)$/);
+  const itemId = itemIdMatch?.[1] ? Number.parseInt(itemIdMatch[1], 10) : null;
+  const item = itemId
+    ? await StorefrontOrderItem.findOne({ where: { id: itemId, orderId: order.id }, transaction })
+    : null;
+  if (!item) throw new HttpError(404, 'Storefront order item not found for this booking.');
+  return item;
+};
+
+const syncStorefrontBookingSchedule = async (
+  booking: Booking,
+  experienceDate: string,
+  experienceTime: string,
+  transaction: Transaction,
+): Promise<void> => {
+  if (!isStorefrontBooking(booking)) return;
+  const order = await findStorefrontOrderForBooking(booking, transaction);
+  const item = await findStorefrontOrderItemForBooking(booking, order, transaction);
+  await item.update({ experienceDate, experienceTime }, { transaction });
 };
 
 const extractDirectStripeTransactionId = (booking: Booking): string | null => {
@@ -4612,6 +4659,15 @@ const resolveDirectStripeTransaction = async (booking: Booking): Promise<{
   stripeClient: Stripe;
   stripeMode: DirectStripeMode;
 }> => {
+  if (isStorefrontBooking(booking)) {
+    const order = await findStorefrontOrderForBooking(booking);
+    const externalTransactionId = String(order.stripePaymentIntentId ?? '').trim();
+    if (!externalTransactionId) {
+      throw new HttpError(400, 'Storefront order is missing its Stripe payment intent ID.');
+    }
+    return resolveDirectStripeTransactionForMode(externalTransactionId, 'live');
+  }
+
   const externalTransactionId = extractDirectStripeTransactionId(booking);
   if (!externalTransactionId) {
     throw new HttpError(400, 'Direct booking is missing the Stripe payment intent or charge ID in notes.');
@@ -5100,6 +5156,7 @@ const createStripeRefundFromSummary = async (
   metadata: { bookingId: number; orderId: string },
   amount?: number,
   stripeClient?: Stripe,
+  idempotencyKey?: string,
 ): Promise<Stripe.Refund | null> => {
   const stripe = stripeClient ?? getStripeClient();
 
@@ -5117,9 +5174,15 @@ const createStripeRefundFromSummary = async (
     basePayload.amount = Math.max(0, Math.floor(amount));
   }
   if (summary.type === 'payment_intent') {
-    return stripe.refunds.create({ ...basePayload, payment_intent: summary.id });
+    return stripe.refunds.create(
+      { ...basePayload, payment_intent: summary.id },
+      idempotencyKey ? { idempotencyKey } : undefined,
+    );
   }
-  return stripe.refunds.create({ ...basePayload, charge: summary.id });
+  return stripe.refunds.create(
+    { ...basePayload, charge: summary.id },
+    idempotencyKey ? { idempotencyKey } : undefined,
+  );
 };
 
 const recordManualCancellationEvent = async (
@@ -5408,7 +5471,7 @@ export const resendDirectFoodTourConfirmation = async (req: AuthenticatedRequest
       return;
     }
 
-    const booking = await requireDirectFoodTourBooking(bookingIdParam);
+    const booking = await requireDirectManifestActionBooking(bookingIdParam);
     const emailOptions: DirectBookingActionEmailOptions = { kind: 'confirmation' };
     const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
     const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
@@ -5463,7 +5526,7 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
     }
     const normalizedTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
 
-    const booking = await requireDirectFoodTourBooking(bookingIdParam);
+    const booking = await requireDirectManifestActionBooking(bookingIdParam);
     if (booking.status === 'cancelled') {
       res.status(400).json({ message: 'Cancelled bookings cannot be amended' });
       return;
@@ -5485,8 +5548,14 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
 
     await sequelizeClient.transaction(async (transaction) => {
       await booking.save({ transaction });
+      await syncStorefrontBookingSchedule(
+        booking,
+        nextDate.format(DATE_FORMAT),
+        normalizedTime,
+        transaction,
+      );
       await saveDirectBookingEvent(booking, 'amended', req.authContext?.id ?? null, {
-        action: 'amend-direct-food-tour',
+        action: isStorefrontBooking(booking) ? 'amend-storefront-booking' : 'amend-direct-food-tour',
         previousExperienceStartAt: previousExperienceStartAt ? previousExperienceStartAt.toISOString() : null,
         nextExperienceStartAt: booking.experienceStartAt ? booking.experienceStartAt.toISOString() : null,
       }, transaction);
@@ -5528,22 +5597,38 @@ export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res
       return;
     }
 
-    const booking = await requireDirectFoodTourBooking(bookingIdParam);
+    const booking = await requireDirectManifestActionBooking(bookingIdParam);
     if (booking.status === 'cancelled') {
       res.status(400).json({ message: 'Booking is already cancelled' });
       return;
     }
 
     const { externalTransactionId, stripe, stripeClient, stripeMode } = await resolveDirectStripeTransaction(booking);
-    const refund = await createStripeRefundFromSummary(
-      stripe,
-      { bookingId: booking.id, orderId: booking.platformOrderId ?? booking.platformBookingId },
-      undefined,
-      stripeClient,
+    const storefrontBooking = isStorefrontBooking(booking);
+    const refundedBefore = parseMoneyValue(booking.refundedAmount) ?? 0;
+    const storefrontOutstandingMajor = Math.max(
+      (parseMoneyValue(booking.priceNet) ??
+        parseMoneyValue(booking.priceGross) ??
+        parseMoneyValue(booking.baseAmount) ??
+        0) - refundedBefore,
+      0,
     );
+    const stripeRemainingMinor = Math.max(stripe.amount - stripe.amountRefunded, 0);
+    const refundAmountMinor = storefrontBooking
+      ? Math.min(Math.round(storefrontOutstandingMajor * 100), stripeRemainingMinor)
+      : undefined;
+    const refund = storefrontBooking && (!refundAmountMinor || refundAmountMinor <= 0)
+      ? null
+      : await createStripeRefundFromSummary(
+          stripe,
+          { bookingId: booking.id, orderId: booking.platformOrderId ?? booking.platformBookingId },
+          refundAmountMinor,
+          stripeClient,
+          `booking-${booking.id}-cancel-${refundedBefore}-${refundAmountMinor ?? stripeRemainingMinor}`,
+        );
 
     const refundAmount = refund?.amount ? roundMoney(refund.amount / 100) : 0;
-    const refundedBefore = parseMoneyValue(booking.refundedAmount) ?? 0;
+    const totalStripeRefundedMinor = stripe.amountRefunded + (refund?.amount ?? 0);
     const now = new Date();
     booking.status = 'cancelled';
     booking.statusChangedAt = now;
@@ -5561,8 +5646,27 @@ export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res
 
     await sequelizeClient.transaction(async (transaction) => {
       await booking.save({ transaction });
+      if (storefrontBooking) {
+        const storefrontOrder = await findStorefrontOrderForBooking(booking, transaction);
+        const remainingActiveBookings = await Booking.count({
+          where: {
+            platform: 'omnilodge',
+            platformOrderId: booking.platformOrderId,
+            id: { [Op.ne]: booking.id },
+            status: { [Op.ne]: 'cancelled' },
+          },
+          transaction,
+        });
+        await storefrontOrder.update(
+          {
+            paymentStatus: totalStripeRefundedMinor >= stripe.amount ? 'refunded' : 'partial',
+            status: remainingActiveBookings === 0 ? 'cancelled' : storefrontOrder.status,
+          },
+          { transaction },
+        );
+      }
       await saveDirectBookingEvent(booking, 'cancelled', req.authContext?.id ?? null, {
-        action: 'cancel-direct-food-tour',
+        action: storefrontBooking ? 'cancel-storefront-booking' : 'cancel-direct-food-tour',
         externalTransactionId,
         stripeTransactionId: stripe.id,
         stripeTransactionType: stripe.type,
@@ -5612,7 +5716,7 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
       return;
     }
 
-    const booking = await requireDirectFoodTourBooking(bookingIdParam);
+    const booking = await requireDirectManifestActionBooking(bookingIdParam);
     if (booking.status === 'cancelled') {
       res.status(400).json({ message: 'Cancelled bookings cannot be partially refunded' });
       return;
@@ -5685,15 +5789,24 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
       return;
     }
 
+    const refundedBefore = parseMoneyValue(booking.refundedAmount) ?? 0;
     const refund = await createStripeRefundFromSummary(
       stripe,
       { bookingId: booking.id, orderId: booking.platformOrderId ?? booking.platformBookingId },
       amountInMinor,
       stripeClient,
+      `booking-${booking.id}-partial-${refundedBefore}-${amountInMinor}`,
     );
     const refundedAmount = refund?.amount ? roundMoney(refund.amount / 100) : roundMoney(amountMajor);
-    const refundedBefore = parseMoneyValue(booking.refundedAmount) ?? 0;
-    const currentBase = parseMoneyValue(booking.baseAmount) ?? parseMoneyValue(booking.priceGross) ?? 0;
+    const currentBase = isStorefrontBooking(booking)
+      ? Math.max(
+          (parseMoneyValue(booking.priceNet) ??
+            parseMoneyValue(booking.priceGross) ??
+            parseMoneyValue(booking.baseAmount) ??
+            0) - refundedBefore,
+          0,
+        )
+      : parseMoneyValue(booking.baseAmount) ?? parseMoneyValue(booking.priceGross) ?? 0;
     const previousPartySizeTotal = Number.isFinite(Number(booking.partySizeTotal))
       ? Math.max(0, Math.round(Number(booking.partySizeTotal)))
       : people.quantity;
@@ -5717,8 +5830,14 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
 
     await sequelizeClient.transaction(async (transaction) => {
       await booking.save({ transaction });
+      if (isStorefrontBooking(booking)) {
+        const storefrontOrder = await findStorefrontOrderForBooking(booking, transaction);
+        await storefrontOrder.update({ paymentStatus: 'partial' }, { transaction });
+      }
       await saveDirectBookingEvent(booking, 'note', req.authContext?.id ?? null, {
-        action: 'partial-refund-direct-food-tour',
+        action: isStorefrontBooking(booking)
+          ? 'partial-refund-storefront-booking'
+          : 'partial-refund-direct-food-tour',
         externalTransactionId,
         stripeTransactionId: stripe.id,
         stripeTransactionType: stripe.type,
@@ -5813,12 +5932,12 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    if (booking.platform !== 'ecwid' && !isDirectFoodTourBooking(booking)) {
-      res.status(400).json({ message: 'Only Ecwid and direct Food Tour bookings can be refunded through this endpoint' });
+    if (booking.platform !== 'ecwid' && !isDirectManifestActionBooking(booking)) {
+      res.status(400).json({ message: 'This booking platform does not support refunds through this endpoint' });
       return;
     }
 
-    const preview = isDirectFoodTourBooking(booking)
+    const preview = isDirectManifestActionBooking(booking)
       ? await (async () => {
           const direct = await resolveDirectStripeTransaction(booking);
           return {
