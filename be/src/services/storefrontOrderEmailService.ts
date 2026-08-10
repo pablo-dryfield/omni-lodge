@@ -4,6 +4,7 @@ import StorefrontOrder from '../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
 import { sendMessage } from './bookings/gmailClient.js';
 import { getConfigValue } from './configService.js';
+import { findLockedStorefrontOrderWithItems } from './storefrontOrderPersistenceService.js';
 import logger from '../utils/logger.js';
 
 const escapeHtml = (value: unknown): string =>
@@ -155,12 +156,7 @@ export const buildInternalStorefrontEmail = (order: StorefrontOrder) => {
 
 export const deliverStorefrontOrderEmails = async (publicId: string): Promise<void> => {
   await sequelize.transaction(async (transaction) => {
-    const order = await StorefrontOrder.findOne({
-      where: { publicId },
-      include: [{ model: StorefrontOrderItem, as: 'items' }],
-      transaction,
-      lock: transaction.LOCK.UPDATE,
-    });
+    const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
     if (!order || order.paymentStatus !== 'paid') return;
 
     const from = fromAddress();
