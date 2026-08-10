@@ -2,7 +2,7 @@ import express, { Router } from 'express';
 import * as reviewController from '../controllers/reviewController.js'; // Adjust import path as necessary
 import authMiddleware from '../middleware/authMiddleware.js';
 import { authorizeModuleAction, requireRoles } from '../middleware/authorizationMiddleware.js';
-import {completeFastReviewSync,completeReviewSync,createManualReviewCredit,getReviewCreditSummary,getReviewTrends,ingestReviewSyncPage,listArchivedReviews,replaceReviewAssignments,startReviewSync,updateReviewFlags} from '../controllers/reviewArchiveController.js';
+import {completeFastReviewSync,completeReviewSync,createManualReviewCredit,getReviewCreditSummary,getReviewMonthLock,getReviewTrends,ingestReviewSyncPage,listArchivedReviews,lockReviewMonth,replaceReviewAssignments,startReviewSync,unlockReviewMonth,updateReviewCreditMonth,updateReviewFlags} from '../controllers/reviewArchiveController.js';
 
 const router: Router = express.Router();
 const archiveView=authorizeModuleAction('review-counter-management','view');
@@ -36,7 +36,11 @@ router.post('/archive/sync/:runId/page',authMiddleware,reviewManager,archiveCrea
 router.post('/archive/sync/:runId/complete',authMiddleware,reviewManager,archiveCreate,completeReviewSync);
 router.put('/archive/:id/assignments',authMiddleware,reviewManager,archiveUpdate,replaceReviewAssignments);
 router.put('/archive/:id/flags',authMiddleware,reviewManager,archiveUpdate,updateReviewFlags);
+router.put('/archive/:id/credit-month',authMiddleware,reviewManager,archiveUpdate,updateReviewCreditMonth);
 router.post('/archive/manual-credits',authMiddleware,reviewManager,archiveCreate,createManualReviewCredit);
+router.get('/archive/month-lock',authMiddleware,archiveView,getReviewMonthLock);
+router.put('/archive/month-lock',authMiddleware,reviewManager,archiveUpdate,lockReviewMonth);
+router.delete('/archive/month-lock',authMiddleware,reviewManager,archiveUpdate,unlockReviewMonth);
 router.get('/archive/summary',authMiddleware,archiveView,getReviewCreditSummary);
 
 export default router;

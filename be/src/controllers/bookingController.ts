@@ -362,6 +362,11 @@ const resolveAliasProductId = (aliases: ProductAlias[], value: string): number |
 
 const stripEcwidItemSuffix = (value: string): string => value.replace(/-\d+$/, '');
 
+const resolveEcwidOrderId = (booking: Booking): string | null => {
+  const rawOrderId = booking.platformOrderId?.trim() || booking.platformBookingId?.trim() || '';
+  return rawOrderId ? stripEcwidItemSuffix(rawOrderId) : null;
+};
+
 const extractEcwidItemOptions = (item: EcwidOrder['items'][number] | undefined): string[] => {
   if (!item) {
     return [];
@@ -4435,7 +4440,7 @@ const buildEcwidRefundPreview = async (
   booking: Booking,
   options?: { allowMissingTransactionId?: boolean },
 ): Promise<EcwidRefundPreview> => {
-  const orderId = booking.platformBookingId?.trim();
+  const orderId = resolveEcwidOrderId(booking);
   if (!orderId) {
     throw new Error('Booking is missing Ecwid platform reference');
   }

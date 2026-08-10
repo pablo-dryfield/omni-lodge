@@ -4,6 +4,7 @@ import { fetchGetYourGuideReviews, GET_YOUR_GUIDE_PAGE_SIZE } from '../scrapers/
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { getConfigValue } from '../services/configService.js';
+import { parseAirbnbReviewDate } from '../utils/airbnbReviewDate.js';
 
 const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
@@ -19,6 +20,15 @@ const DEFAULT_AIRBNB_ACTIVITY_LISTING_ID = 'QWN0aXZpdHlMaXN0aW5nOjY4MDk5OTI=';
 const DEFAULT_AIRBNB_API_KEY = 'd306zoyjsyarp7ifhu67rjxn52tv0t20';
 const DEFAULT_AIRBNB_LOCALE = 'en';
 const DEFAULT_AIRBNB_CURRENCY = 'PLN';
+
+const resolveGetYourGuideActivityUrl = (): string => {
+  try {
+    const configuredUrl = (getConfigValue('GYG_ACTIVITY_URL') as string | null)?.trim();
+    return configuredUrl && /^https?:\/\//i.test(configuredUrl) ? configuredUrl : DEFAULT_GYG_ACTIVITY_URL;
+  } catch {
+    return DEFAULT_GYG_ACTIVITY_URL;
+  }
+};
 
 export const getAllGoogleReviews = async (req: Request, res: Response) => {
   try {
@@ -115,33 +125,6 @@ const mapScoreToStarRating = (score?: number): "ONE" | "TWO" | "THREE" | "FOUR" 
   if (score <= 3) return "THREE";
   if (score <= 4) return "FOUR";
   return "FIVE";
-};
-
-const parseLocalizedAirbnbDate = (value?: string | null): string => {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  if (!normalized) return new Date().toISOString();
-
-  // Airbnb review results normally expose only a localized month and year
-  // (for example, "August 2026"), not an exact publication day. Build that
-  // value explicitly so it does not depend on the runtime's Date string
-  // parser. The previous string ("August 2026 1") is invalid in Node and
-  // caused every review to fall back to the time at which the sync ran.
-  const monthYear = normalized.match(
-    /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})$/i,
-  );
-  if (monthYear) {
-    const month = [
-      'january', 'february', 'march', 'april', 'may', 'june',
-      'july', 'august', 'september', 'october', 'november', 'december',
-    ].indexOf(monthYear[1].toLowerCase());
-    return new Date(Date.UTC(Number(monthYear[2]), month, 1)).toISOString();
-  }
-
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) {
-    return new Date().toISOString();
-  }
-  return parsed.toISOString();
 };
 
 const resolveStringConfig = (key: string, fallback: string): string => {
@@ -249,6 +232,7 @@ export const getAirbnbReviews = async (req: Request, res: Response) => {
     const reviewsSearch = response.data?.data?.node?.reviewsSearch;
     const pageInfo = reviewsSearch?.pageInfo;
     const edges = Array.isArray(reviewsSearch?.edges) ? reviewsSearch.edges : [];
+    const fetchedAt = new Date();
 
     const normalized = edges.map((edge: any, index: number) => {
       const review = edge?.node?.review ?? {};
@@ -270,13 +254,15 @@ export const getAirbnbReviews = async (req: Request, res: Response) => {
         edge?.node?.highlightedComment ??
         '';
 
-      const createdAt = parseLocalizedAirbnbDate(review?.localizedCreatedAtDate);
+      const parsedCreatedAt = parseAirbnbReviewDate(review?.localizedCreatedAtDate, fetchedAt);
 
       return {
-        reviewId: review?.id ?? `airbnb-${cursor ?? 'first'}-${index}-${createdAt}`,
+        reviewId: review?.id ?? `airbnb-${cursor ?? 'first'}-${index}-${parsedCreatedAt.iso}`,
         comment,
-        createTime: createdAt,
-        updateTime: createdAt,
+        createTime: parsedCreatedAt.iso,
+        updateTime: parsedCreatedAt.iso,
+        sourceCreatedAtLabel: parsedCreatedAt.sourceLabel,
+        sourceDatePrecision: parsedCreatedAt.precision,
         starRating: mapScoreToStarRating(Number(review?.rating ?? 0)),
         reviewer: {
           displayName,
@@ -314,11 +300,7 @@ export const getAirbnbReviews = async (req: Request, res: Response) => {
 
 export const getGetYourGuideReviewLink = async (_req: Request, res: Response) => {
   try {
-    const configuredUrl = (getConfigValue('GYG_ACTIVITY_URL') as string | null) ?? DEFAULT_GYG_ACTIVITY_URL;
-    const url = typeof configuredUrl === 'string' && configuredUrl.trim().length > 0
-      ? configuredUrl.trim()
-      : DEFAULT_GYG_ACTIVITY_URL;
-    res.status(200).json({ url });
+    res.status(200).json({ url: resolveGetYourGuideActivityUrl() });
   } catch (error) {
     console.error('Error resolving GetYourGuide review link:', error);
     res.status(200).json({ url: DEFAULT_GYG_ACTIVITY_URL });
@@ -335,6 +317,9 @@ export const getGetYourGuideReviews = async (req: Request, res: Response) => {
       pageSize: GET_YOUR_GUIDE_PAGE_SIZE, totalCount: page.totalCount, hasMore: page.hasMore }] }]);
   } catch (error) {
     console.error('Error fetching GetYourGuide reviews:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to fetch GetYourGuide reviews' });
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to fetch GetYourGuide reviews',
+      reviewsUrl: resolveGetYourGuideActivityUrl(),
+    });
   }
 };
