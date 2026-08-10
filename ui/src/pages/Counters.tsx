@@ -145,6 +145,8 @@ type BookingAttendancePatchPayload = {
   addonRefundRequests?: Partial<OrderExtras>;
   addonRefundDisposition?: AddonRefundDisposition;
   addonRefundReason?: string | null;
+  attendedTshirtSizes?: Record<string, number>;
+  markNoShowWhenAbsent?: boolean;
 };
 
 type AddonRefundDisposition = 'pending_external' | 'customer_declined' | 'already_refunded_external';
@@ -155,6 +157,8 @@ type StagedBookingAttendance = {
   addonRefundRequests?: Partial<OrderExtras>;
   addonRefundDisposition?: AddonRefundDisposition;
   addonRefundReason?: string | null;
+  attendedTshirtSizes: Record<string, number>;
+  markNoShowWhenAbsent?: boolean;
 };
 
 type CounterAttendanceUpdateRow = {
@@ -165,7 +169,10 @@ type CounterAttendanceUpdateRow = {
   addonRefundDisposition?: AddonRefundDisposition;
   addonRefundReason?: string | null;
   markNoShowWhenAbsent: boolean;
+  attendedTshirtSizes: Record<string, number>;
 };
+
+const TSHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL'] as const;
 
 type BookingAddonRefundAction = {
   id: string;
@@ -532,6 +539,10 @@ const getOrderAttendedExtras = (order: UnifiedOrder): OrderExtras => ({
   tshirts: Math.max(0, Math.round(Number(order.attendedExtras?.tshirts ?? 0) || 0)),
   photos: Math.max(0, Math.round(Number(order.attendedExtras?.photos ?? 0) || 0)),
 });
+const getOrderAttendedTshirtSizes = (order: UnifiedOrder): Record<string, number> => {
+  const source = order.attendedTshirtSizes ?? order.rawData?.attendedTshirtSizes ?? {};
+  return Object.fromEntries(TSHIRT_SIZES.map(size => [size, Math.max(0, Math.round(Number(source[size] ?? 0) || 0))]));
+};
 
 const getNormalPeopleFromTotal = (totalPeople: number, cocktails: number): number =>
   Math.max(
@@ -699,13 +710,16 @@ const applyAttendanceToOrder = (
         }
       : order.rawData;
 
+  const attendedTshirtSizes = payload.attendedTshirtSizes ?? getOrderAttendedTshirtSizes(order);
+
   return {
     ...order,
     extras: nextExtras,
     attendedTotal: nextAttended,
     attendedExtras: nextAttendedExtras,
+    attendedTshirtSizes,
     remainingTotal,
-    rawData,
+    rawData: { ...(rawData ?? {}), attendedTshirtSizes },
   };
 };
 
@@ -2243,6 +2257,8 @@ const Counters = (props: GenericPageProps) => {
       const stagedAttendance: StagedBookingAttendance = {
         attendedTotal: getOrderAttendedTotal(nextOrder),
         attendedExtras: getOrderAttendedExtras(nextOrder),
+        attendedTshirtSizes: payload.attendedTshirtSizes ?? getOrderAttendedTshirtSizes(nextOrder),
+        markNoShowWhenAbsent: Boolean(payload.markNoShowWhenAbsent),
         ...(payload.addonRefundRequests ? { addonRefundRequests: payload.addonRefundRequests } : {}),
         ...(payload.addonRefundDisposition ? { addonRefundDisposition: payload.addonRefundDisposition } : {}),
         ...(payload.addonRefundReason !== undefined ? { addonRefundReason: payload.addonRefundReason } : {}),
@@ -5380,6 +5396,7 @@ useEffect(() => {
           return applyAttendanceToOrder(order, {
             attendedTotal: staged.attendedTotal,
             attendedExtras: staged.attendedExtras,
+            attendedTshirtSizes: staged.attendedTshirtSizes,
           });
         });
         setOnlineReservationOrders(mergedOrders);
@@ -5566,7 +5583,10 @@ useEffect(() => {
               ),
             }
           : purchasedExtras,
+        attendedTshirtSizes: getOrderAttendedTshirtSizes(order),
+        markNoShowWhenAbsent: false,
       };
+      nextDraft.attendedExtras.tshirts = Math.min(Object.values(nextDraft.attendedTshirtSizes).reduce((sum, quantity) => sum + quantity, 0), purchasedExtras.tshirts);
       setPartialCheckInEditorOrder(order);
       setPartialCheckInEditorDraft(nextDraft);
       setPartialCheckInEditorInitialDraft(nextDraft);
@@ -5628,6 +5648,19 @@ useEffect(() => {
     [partialCheckInEditorOrder],
   );
 
+  const handleTshirtSizeAdjust = useCallback((size: string, delta: number) => {
+    setPartialCheckInEditorDraft((prev) => {
+      if (!prev || !partialCheckInEditorOrder) return prev;
+      const max = Math.max(0, Math.round(Number(partialCheckInEditorOrder.extras?.tshirts ?? 0) || 0));
+      const currentTotal = Object.values(prev.attendedTshirtSizes).reduce((sum, quantity) => sum + quantity, 0);
+      const current = prev.attendedTshirtSizes[size] ?? 0;
+      const next = Math.max(0, current + delta);
+      if (next === current || currentTotal - current + next > max) return prev;
+      const attendedTshirtSizes = { ...prev.attendedTshirtSizes, [size]: next };
+      return { ...prev, attendedTshirtSizes, attendedExtras: { ...prev.attendedExtras, tshirts: Object.values(attendedTshirtSizes).reduce((sum, quantity) => sum + quantity, 0) } };
+    });
+  }, [partialCheckInEditorOrder]);
+
   const applyPartialEditorDraftLocally = useCallback((options: {
     addonRefundRequests?: Partial<OrderExtras>;
     addonRefundDisposition?: AddonRefundDisposition;
@@ -5644,6 +5677,8 @@ useEffect(() => {
     const applied = applyBookingAttendanceLocally(sourceOrder, {
       attendedTotal: partialCheckInEditorDraft.attendedTotal,
       attendedExtras: partialCheckInEditorDraft.attendedExtras,
+      attendedTshirtSizes: partialCheckInEditorDraft.attendedTshirtSizes,
+      markNoShowWhenAbsent: partialCheckInEditorDraft.markNoShowWhenAbsent,
       ...(options.addonRefundRequests ? { addonRefundRequests: options.addonRefundRequests } : {}),
       ...(options.addonRefundDisposition ? { addonRefundDisposition: options.addonRefundDisposition } : {}),
       ...(options.addonRefundReason !== undefined ? { addonRefundReason: options.addonRefundReason } : {}),
@@ -5673,9 +5708,10 @@ useEffect(() => {
       return;
     }
     const baselineDraft = partialCheckInEditorInitialDraft ?? partialCheckInEditorDraft;
+    const purchasedTshirts = Math.max(0, Math.round(Number(partialCheckInEditorOrder?.extras?.tshirts ?? 0) || 0));
     const removedAddons: OrderExtras = {
       cocktails: Math.max(0, baselineDraft.attendedExtras.cocktails - partialCheckInEditorDraft.attendedExtras.cocktails),
-      tshirts: Math.max(0, baselineDraft.attendedExtras.tshirts - partialCheckInEditorDraft.attendedExtras.tshirts),
+      tshirts: Math.max(0, purchasedTshirts - partialCheckInEditorDraft.attendedExtras.tshirts),
       photos: Math.max(0, baselineDraft.attendedExtras.photos - partialCheckInEditorDraft.attendedExtras.photos),
     };
     const hasRemovedAddons = ORDER_EXTRA_KEYS.some((key) => removedAddons[key] > 0);
@@ -5686,7 +5722,7 @@ useEffect(() => {
       return;
     }
     completePartialCheckInApply();
-  }, [completePartialCheckInApply, partialCheckInEditorDraft, partialCheckInEditorInitialDraft]);
+  }, [completePartialCheckInApply, partialCheckInEditorDraft, partialCheckInEditorInitialDraft, partialCheckInEditorOrder]);
 
   const partialEditorPeopleMax = useMemo(() => {
     if (!partialCheckInEditorOrder) {
@@ -6725,6 +6761,7 @@ useEffect(() => {
           addonRefundDisposition?: AddonRefundDisposition;
           addonRefundReason?: string | null;
           markNoShowWhenAbsent?: boolean;
+          attendedTshirtSizes: Record<string, number>;
         }>;
       } = {},
     ): Promise<boolean> => {
@@ -6814,6 +6851,7 @@ useEffect(() => {
                 bookingId: row.bookingId,
                 attendedTotal: row.attendedTotal,
                 attendedExtras: row.attendedExtras,
+                attendedTshirtSizes: row.attendedTshirtSizes,
                 ...(row.addonRefundRequests ? { addonRefundRequests: row.addonRefundRequests } : {}),
                 ...(row.addonRefundDisposition ? { addonRefundDisposition: row.addonRefundDisposition } : {}),
                 ...(row.addonRefundReason !== undefined ? { addonRefundReason: row.addonRefundReason } : {}),
@@ -7373,6 +7411,7 @@ useEffect(() => {
               cocktails: Math.max(0, Math.round(Number(staged.attendedExtras?.cocktails ?? 0) || 0)),
               photos: Math.max(0, Math.round(Number(staged.attendedExtras?.photos ?? 0) || 0)),
             },
+            attendedTshirtSizes: staged.attendedTshirtSizes,
             ...(staged.addonRefundRequests
               ? {
                   addonRefundRequests: {
@@ -7384,7 +7423,7 @@ useEffect(() => {
               : {}),
             ...(staged.addonRefundDisposition ? { addonRefundDisposition: staged.addonRefundDisposition } : {}),
             ...(staged.addonRefundReason !== undefined ? { addonRefundReason: staged.addonRefundReason } : {}),
-            markNoShowWhenAbsent: false,
+            markNoShowWhenAbsent: Boolean(staged.markNoShowWhenAbsent),
           };
         })
         .filter((row): row is CounterAttendanceUpdateRow => Boolean(row));
@@ -7409,6 +7448,7 @@ useEffect(() => {
           bookingId,
           attendedTotal: getOrderAttendedTotal(order),
           attendedExtras: getOrderAttendedExtras(order),
+          attendedTshirtSizes: getOrderAttendedTshirtSizes(order),
           markNoShowWhenAbsent: true,
         });
       });
@@ -9041,7 +9081,8 @@ useEffect(() => {
                                     size="small"
                                     variant="contained"
                                     onClick={() => {
-                                      void handleBookingFullCheckIn(order);
+                                      if (getOrderPurchasedExtraQty(order, 'tshirts') > 0) void openPartialCheckInEditor(order);
+                                      else void handleBookingFullCheckIn(order);
                                     }}
                                     disabled={isSaving || !hasOrderRemainingCheckIn(order) || bookingId == null}
                                     sx={{ flex: 1 }}
@@ -10714,7 +10755,7 @@ type SummaryRowOptions = {
           sx={{ m: 0, p: 2, pb: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
         >
           <Typography variant="h6" component="span">
-            Partial Check-In
+            Check-In & Add-on Allocation
           </Typography>
           <IconButton onClick={closePartialCheckInEditor} aria-label="close partial check-in">
             <Close />
@@ -10818,39 +10859,10 @@ type SummaryRowOptions = {
                   )}
 
                   {partialEditorAddonMax.tshirts > 0 && (
-                    <Stack direction="row" justifyContent="space-between" alignItems="center">
-                      <Stack direction="row" spacing={0.75} alignItems="center">
-                        <Checkroom fontSize="small" />
-                        <Typography variant="body2">T-Shirts</Typography>
-                      </Stack>
-                      <Stack direction="row" spacing={0.5} alignItems="center">
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={() => {
-                            handlePartialEditorAddonAdjust('tshirts', -1);
-                          }}
-                          disabled={partialCheckInEditorDraft.attendedExtras.tshirts <= 0 || syncingPendingAttendance}
-                          sx={{ minWidth: 36, px: 1 }}
-                        >
-                          <Remove fontSize="small" />
-                        </Button>
-                        <Chip size="small" label={`${partialCheckInEditorDraft.attendedExtras.tshirts}/${partialEditorAddonMax.tshirts}`} />
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={() => {
-                            handlePartialEditorAddonAdjust('tshirts', 1);
-                          }}
-                          disabled={
-                            partialCheckInEditorDraft.attendedExtras.tshirts >= partialEditorAddonMax.tshirts ||
-                            syncingPendingAttendance
-                          }
-                          sx={{ minWidth: 36, px: 1 }}
-                        >
-                          <Add fontSize="small" />
-                        </Button>
-                      </Stack>
+                    <Stack spacing={1} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
+                      <Stack direction="row" justifyContent="space-between"><Stack direction="row" spacing={0.75} alignItems="center"><Checkroom fontSize="small"/><Typography variant="body2" fontWeight={700}>T-Shirt sizes</Typography></Stack><Chip size="small" color={partialCheckInEditorDraft.attendedExtras.tshirts < partialEditorAddonMax.tshirts ? 'warning' : 'success'} label={`${partialCheckInEditorDraft.attendedExtras.tshirts}/${partialEditorAddonMax.tshirts} allocated`}/></Stack>
+                      <Typography variant="caption" color="text.secondary">Allocate each handed-out T-shirt. The total cannot exceed the booking quantity; any remainder continues to refund options.</Typography>
+                      {TSHIRT_SIZES.map(size => <Stack key={size} direction="row" justifyContent="space-between" alignItems="center"><Typography variant="body2">Size {size}</Typography><Stack direction="row" spacing={0.5} alignItems="center"><Button size="small" variant="outlined" onClick={() => handleTshirtSizeAdjust(size, -1)} disabled={(partialCheckInEditorDraft.attendedTshirtSizes[size] ?? 0) <= 0 || syncingPendingAttendance} sx={{minWidth:36,px:1}}><Remove fontSize="small"/></Button><Chip size="small" label={partialCheckInEditorDraft.attendedTshirtSizes[size] ?? 0}/><Button size="small" variant="outlined" onClick={() => handleTshirtSizeAdjust(size, 1)} disabled={partialCheckInEditorDraft.attendedExtras.tshirts >= partialEditorAddonMax.tshirts || syncingPendingAttendance} sx={{minWidth:36,px:1}}><Add fontSize="small"/></Button></Stack></Stack>)}
                     </Stack>
                   )}
 

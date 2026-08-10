@@ -280,6 +280,10 @@ export default class Booking extends Model<Booking> {
   declare attendedAddonsSnapshot: Record<string, unknown> | null;
 
   @AllowNull(true)
+  @Column({ field: 'attended_tshirt_sizes', type: DataType.JSONB })
+  declare attendedTshirtSizes: Record<string, number> | null;
+
+  @AllowNull(true)
   @Column({
     field: 'addon_refund_actions',
     type: DataType.JSONB,

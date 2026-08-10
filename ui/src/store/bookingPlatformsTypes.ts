@@ -55,7 +55,8 @@ export interface UnifiedOrder {
   pickupDateTime?: string;
   extras?: OrderExtras;
   attendedTotal?: number | null;
-  attendedExtras?: OrderExtras;
+    attendedExtras?: OrderExtras;
+    attendedTshirtSizes?: Record<string, number>;
   remainingTotal?: number;
   sourceReceivedAt?: string | null;
   isAfterCutoff?: boolean;
