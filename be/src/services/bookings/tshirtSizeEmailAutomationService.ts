@@ -1,4 +1,6 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import { Op } from 'sequelize';
 import Booking from '../../models/Booking.js';
 import BookingAddon from '../../models/BookingAddon.js';
@@ -10,6 +12,9 @@ import { renderStoredEmailTemplate, type EmailTemplateContext } from '../emailTe
 import { sendMessage as sendGmailMessage } from './gmailClient.js';
 import logger from '../../utils/logger.js';
 
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
 export type TshirtSizeEmailAutomationOutcome =
   | 'disabled'
   | 'ineligible'
@@ -20,6 +25,7 @@ export type TshirtSizeEmailAutomationOutcome =
 
 const EMAIL_ADDRESS_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
+const DISPLAY_TIMEZONE = 'Europe/Warsaw';
 
 const formatVariantList = (variants: string[]): string => {
   if (variants.length <= 1) return variants[0] ?? '';
@@ -161,7 +167,7 @@ export const maybeSendTshirtSizeSelectionEmail = async (
     bookingDate,
     bookingDateDisplay: bookingDate && dayjs(bookingDate).isValid() ? dayjs(bookingDate).format('ddd, MMM D YYYY') : bookingDate,
     bookingTime: booking.experienceStartAt && dayjs(booking.experienceStartAt).isValid()
-      ? dayjs(booking.experienceStartAt).format('HH:mm')
+      ? dayjs(booking.experienceStartAt).tz(DISPLAY_TIMEZONE).format('HH:mm')
       : '',
     bookingId: booking.id,
     bookingReference: booking.platformBookingId || String(booking.id),
