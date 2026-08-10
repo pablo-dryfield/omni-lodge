@@ -149,8 +149,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     description: 'Exact name of the active email template used by the automatic T-shirt size request.',
     category: 'Booking Email Automation',
     valueType: 'string',
-    defaultValue: 'T-Shirt Size Selection',
-    validation: { required: true, maxLength: 160 },
+    defaultValue: '',
+    validation: { maxLength: 160 },
   },
   {
     key: 'BOOKING_GMAIL_BATCH_SIZE',

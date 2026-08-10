@@ -108,7 +108,12 @@ export const maybeSendTshirtSizeSelectionEmail = async (
     ? await EmailTemplate.findOne({ where: { name: { [Op.iLike]: templateName }, isActive: true } })
     : null;
   if (!template) {
-    await markFailed(booking.id, `Active email template "${templateName || 'T-Shirt Size Selection'}" was not found.`);
+    await markFailed(
+      booking.id,
+      templateName
+        ? `Active email template "${templateName}" was not found.`
+        : 'No T-shirt size-selection email template is configured in the Control Panel.',
+    );
     return 'failed';
   }
 
