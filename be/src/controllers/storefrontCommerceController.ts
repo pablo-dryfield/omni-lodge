@@ -17,6 +17,7 @@ import {
   type StorefrontQuote,
 } from '../services/storefrontCommerceService.js';
 import { deliverStorefrontOrderEmails } from '../services/storefrontOrderEmailService.js';
+import { findLockedStorefrontOrderWithItems } from '../services/storefrontOrderPersistenceService.js';
 import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
 import { getConfigValueRaw } from '../services/configService.js';
 import logger from '../utils/logger.js';
@@ -133,12 +134,7 @@ const persistPaidOrder = async (
   stripeSession: Stripe.Checkout.Session | null,
 ): Promise<StorefrontOrder> =>
   sequelize.transaction(async (transaction) => {
-    const order = await StorefrontOrder.findOne({
-      where: { publicId },
-      include: [{ model: StorefrontOrderItem, as: 'items' }],
-      transaction,
-      lock: transaction.LOCK.UPDATE,
-    });
+    const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
     if (!order) throw new HttpError(404, 'Storefront order not found.');
 
     const existingBooking = await Booking.findOne({
@@ -283,7 +279,20 @@ export const fulfillPaidOrder = async (
   publicId: string,
   stripeSession: Stripe.Checkout.Session | null,
 ): Promise<StorefrontOrder> => {
-  const order = await persistPaidOrder(publicId, stripeSession);
+  const sessionId = stripeSession?.id || 'none';
+  logger.info(`[storefront-fulfillment] Started order=${publicId} session=${sessionId}`);
+
+  let order: StorefrontOrder;
+  try {
+    order = await persistPaidOrder(publicId, stripeSession);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(
+      `[storefront-fulfillment] Failed order=${publicId} session=${sessionId} error=${message}`,
+    );
+    throw error;
+  }
+
   try {
     await deliverStorefrontOrderEmails(publicId);
   } catch (error) {
@@ -299,6 +308,7 @@ export const fulfillPaidOrder = async (
   } catch (error) {
     logger.error(`[storefront-email] T-shirt size automation failed for paid order ${publicId}: ${(error as Error).message}`);
   }
+  logger.info(`[storefront-fulfillment] Completed order=${publicId} session=${sessionId}`);
   return order;
 };
 
