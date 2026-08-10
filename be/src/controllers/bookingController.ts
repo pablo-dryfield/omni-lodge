@@ -73,6 +73,7 @@ import {
 import CounterRegistryService from '../services/counterRegistryService.js';
 import { recordCustomerEmailThreadParticipant } from '../services/bookings/customerEmailThreadService.js';
 import { resolveCustomerEmailActionsForReply } from '../services/bookings/customerEmailActionService.js';
+import { getTshirtVariantAvailability } from '../services/inventoryService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -815,6 +816,36 @@ const enrichTemplateContextAliases = (context: EmailTemplateContext): EmailTempl
   return normalized;
 };
 
+const formatVariantList = (variants: string[]): string => {
+  if (variants.length <= 1) return variants[0] ?? '';
+  if (variants.length === 2) return `${variants[0]} and ${variants[1]}`;
+  return `${variants.slice(0, -1).join(', ')}, and ${variants[variants.length - 1]}`;
+};
+
+const buildTshirtAvailabilityTemplateContext = async (): Promise<EmailTemplateContext> => {
+  try {
+    const tshirtVariants = await getTshirtVariantAvailability();
+    const availableTshirtVariants = tshirtVariants.filter((variant) => variant.inStock);
+    const availableTshirtSizes = availableTshirtVariants.map((variant) => variant.variant);
+    return {
+      tshirtVariants,
+      availableTshirtVariants,
+      availableTshirtSizes,
+      availableTshirtSizesText: formatVariantList(availableTshirtSizes),
+      hasAvailableTshirtSizes: availableTshirtSizes.length > 0,
+    };
+  } catch (error) {
+    logger.error(`[booking-email] Failed to load T-shirt availability: ${(error as Error).message}`);
+    return {
+      tshirtVariants: [],
+      availableTshirtVariants: [],
+      availableTshirtSizes: [],
+      availableTshirtSizesText: '',
+      hasAvailableTshirtSizes: false,
+    };
+  }
+};
+
 const toEmailTemplateResponse = (template: EmailTemplate) => ({
   id: template.id,
   name: template.name,
@@ -833,7 +864,10 @@ const resolveRenderedEmailFromPayload = async (payload: SendBookingEmailBody): P
   const htmlBodyOverrideInput = normalizeOptionalString(payload?.htmlBodyOverride);
   const textBodyOverrideInput = normalizeOptionalString(payload?.textBodyOverride);
   const templateId = parseOptionalInteger(payload?.templateId);
-  const normalizedContext = enrichTemplateContextAliases(normalizeTemplateContext(payload?.templateContext));
+  const normalizedContext = {
+    ...enrichTemplateContextAliases(normalizeTemplateContext(payload?.templateContext)),
+    ...(await buildTshirtAvailabilityTemplateContext()),
+  };
   const reactTemplateSourceRaw = normalizedContext.reactTemplateSource;
   const reactTemplateSource =
     typeof reactTemplateSourceRaw === 'string' && reactTemplateSourceRaw.trim().length > 0
@@ -1784,6 +1818,9 @@ const bookingToUnifiedOrder = (
       commissionRate: booking.commissionRate,
       processingFee: booking.processingFee,
       processingFeeCurrency: booking.processingFeeCurrency ?? null,
+      tshirtSizeEmailStatus: booking.tshirtSizeEmailStatus ?? null,
+      tshirtSizeEmailSentAt: booking.tshirtSizeEmailSentAt ? booking.tshirtSizeEmailSentAt.toISOString() : null,
+      tshirtSizeEmailError: booking.tshirtSizeEmailError ?? null,
       paymentMethodCountry: booking.paymentMethodCountry ?? null,
       ipAddress: booking.ipAddress ?? null,
       channelCommissionRate: commissionEnrichment?.channelCommissionRate ?? null,
@@ -3006,6 +3043,16 @@ export const updateEmailTemplate = async (req: AuthenticatedRequest, res: Respon
     const message = error instanceof Error ? error.message : 'Failed to update email template';
     res.status(500).json({ message });
   }
+};
+
+export const getBookingEmailTshirtAvailability = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const context = await buildTshirtAvailabilityTemplateContext();
+  res.status(200).json({
+    variants: context.tshirtVariants,
+    availableVariants: context.availableTshirtVariants,
+    availableSizes: context.availableTshirtSizes,
+    availableSizesText: context.availableTshirtSizesText,
+  });
 };
 
 export const renderBookingEmailPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

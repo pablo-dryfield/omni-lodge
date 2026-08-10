@@ -237,6 +237,7 @@ type SendMessageParams = {
   threadId?: string | null;
   inReplyTo?: string | null;
   references?: string | null;
+  rfcMessageId?: string | null;
   attachments?: Array<{
     filename: string;
     content: string | Buffer;
@@ -601,7 +602,8 @@ const findSentMessageByRfcMessageId = async (
 export const sendMessage = async (params: SendMessageParams): Promise<SendMessageResult> => {
   const oauthClient = getGmailAuthClient();
   const gmail = getGmailClient();
-  const rfcMessageId = buildRfcMessageId();
+  const requestedRfcMessageId = extractRfcMessageIds(params.rfcMessageId)[0] ?? null;
+  const rfcMessageId = requestedRfcMessageId ?? buildRfcMessageId();
   const mimeMessage = buildMimeMessage(params, rfcMessageId);
 
   try {
@@ -609,6 +611,14 @@ export const sendMessage = async (params: SendMessageParams): Promise<SendMessag
       await oauthClient.getAccessToken();
     }, GOOGLE_OAUTH_REFRESH_MAX_ATTEMPTS);
     await withRetryableGoogleApi('Gmail send-as alias check', () => assertVerifiedSendAsAlias(gmail, params.from));
+
+    if (requestedRfcMessageId) {
+      const existing = await findSentMessageByRfcMessageId(gmail, params, rfcMessageId);
+      if (existing) {
+        logger.info(`[booking-email] Reused existing sent message with Message-ID ${rfcMessageId}.`);
+        return existing;
+      }
+    }
 
     for (let attempt = 1; attempt <= GMAIL_SEND_MAX_ATTEMPTS; attempt += 1) {
       try {

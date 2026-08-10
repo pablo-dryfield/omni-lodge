@@ -134,6 +134,25 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     validation: { maxLength: 2000 },
   },
   {
+    key: 'BOOKING_TSHIRT_SIZE_EMAIL_AUTO_SEND',
+    label: 'Automatically request T-shirt sizes',
+    description:
+      'Automatically sends one size-selection email when an incoming booking includes T-shirts. Disable this when customers select sizes directly in the storefront.',
+    category: 'Booking Email Automation',
+    valueType: 'boolean',
+    defaultValue: false,
+    impact: 'high',
+  },
+  {
+    key: 'BOOKING_TSHIRT_SIZE_EMAIL_TEMPLATE_NAME',
+    label: 'T-shirt size-selection template',
+    description: 'Exact name of the active email template used by the automatic T-shirt size request.',
+    category: 'Booking Email Automation',
+    valueType: 'string',
+    defaultValue: 'T-Shirt Size Selection',
+    validation: { required: true, maxLength: 160 },
+  },
+  {
     key: 'BOOKING_GMAIL_BATCH_SIZE',
     label: 'Booking Gmail batch size',
     description: 'Maximum number of messages to fetch per poll.',

@@ -59,7 +59,7 @@ import {
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { deleteCounter, fetchCounters } from '../actions/counterActions';
 import { createNightReport, fetchNightReports, submitNightReport, updateNightReport } from '../actions/nightReportActions';
@@ -125,6 +125,15 @@ type BucketDescriptor = {
   label: string;
 };
 type CashCurrency = 'PLN' | 'EUR';
+type CounterUrlMode = 'view' | 'edit';
+
+const parseCounterIdParam = (value: string | null): number | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
 
 const BUCKETS: BucketDescriptor[] = [
   { tallyType: 'attended', period: null, label: bucketLabels.attended },
@@ -986,6 +995,94 @@ type WalkInChannelTicketState = {
   ticketOrder: string[];
   tickets: Record<string, WalkInTicketEntryState>;
 };
+
+type CounterReservationDraft = {
+  version: 1;
+  counterId: number;
+  userId: number;
+  updatedAt: string;
+  dirtyMetrics: MetricCell[];
+  selectedChannelIds: number[];
+  selectedAfterCutoffChannelIds: number[];
+  selectedCashReservationChannelIds: number[];
+  walkInCashByChannel: Record<number, string>;
+  walkInDiscountsByChannel: Record<number, string[]>;
+  walkInTicketDataByChannel: Record<number, WalkInChannelTicketState>;
+  walkInNoteDirty: boolean;
+  freePeopleByChannel: Record<number, FreeSnapshotPeopleEntry>;
+  freeAddonsByChannel: Record<number, Record<number, FreeSnapshotAddonEntry>>;
+  cashOverridesByChannel: Record<number, string>;
+  cashCurrencyByChannel: Record<number, CashCurrency>;
+  pendingBookingAttendanceById: Record<number, StagedBookingAttendance>;
+  editingCustomTicket: {
+    channelId: number;
+    ticketLabel: string;
+    value: string;
+  } | null;
+  cashEditingChannelId: number | null;
+  cashEditingValue: string;
+};
+
+const COUNTER_RESERVATION_DRAFT_VERSION = 1 as const;
+const COUNTER_RESERVATION_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const COUNTER_RESERVATION_DRAFT_STORAGE_PREFIX = 'omni-lodge:counters:reservation-draft';
+
+const buildCounterReservationDraftKey = (userId: number, counterId: number): string =>
+  `${COUNTER_RESERVATION_DRAFT_STORAGE_PREFIX}:v${COUNTER_RESERVATION_DRAFT_VERSION}:${userId}:${counterId}`;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const readCounterReservationDraft = (
+  storageKey: string,
+  userId: number,
+  counterId: number,
+): CounterReservationDraft | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      window.localStorage.removeItem(storageKey);
+      return null;
+    }
+    const updatedAtMs = Date.parse(String(parsed.updatedAt ?? ''));
+    const validEnvelope =
+      parsed.version === COUNTER_RESERVATION_DRAFT_VERSION &&
+      parsed.userId === userId &&
+      parsed.counterId === counterId &&
+      Number.isFinite(updatedAtMs) &&
+      Date.now() - updatedAtMs <= COUNTER_RESERVATION_DRAFT_MAX_AGE_MS;
+    if (!validEnvelope) {
+      window.localStorage.removeItem(storageKey);
+      return null;
+    }
+    return parsed as unknown as CounterReservationDraft;
+  } catch (_error) {
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch (_removeError) {
+      // Storage can be unavailable in privacy modes; recovery remains best-effort.
+    }
+    return null;
+  }
+};
+
+const removeCounterReservationDraft = (storageKey: string | null): void => {
+  if (!storageKey || typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(storageKey);
+  } catch (_error) {
+    // Draft recovery must never block the counter workflow.
+  }
+};
 const CASH_CURRENCY_PRICE_OVERRIDES: Record<string, Partial<Record<CashCurrency, number>>> = {
   topdeck: {
     EUR: 17,
@@ -1653,6 +1750,26 @@ const formatCounterNotePreview = (
 };
 type RegistryStep = 'details' | 'reservations' | 'summary';
 
+const COUNTER_STEP_PARAM: Record<RegistryStep, string> = {
+  details: 'setup',
+  reservations: 'reservations',
+  summary: 'summary',
+};
+
+const parseCounterStepParam = (value: string | null): RegistryStep | null => {
+  switch (value) {
+    case 'setup':
+    case 'details':
+      return 'details';
+    case 'reservations':
+      return 'reservations';
+    case 'summary':
+      return 'summary';
+    default:
+      return null;
+  }
+};
+
 const STEP_CONFIGS: Array<{ key: RegistryStep; label: string; description: string }> = [
   {
     key: 'details',
@@ -1724,20 +1841,6 @@ const idListsEqual = (a: number[], b: number[]): boolean => {
   return normalizedA.every((value, index) => value === normalizedB[index]);
 };
 
-const mapStatusToStep = (status: CounterStatus | null | undefined): RegistryStep => {
-  switch (status) {
-    case 'platforms':
-      return 'reservations';
-    case 'reservations':
-      return 'reservations';
-    case 'final':
-      return 'summary';
-    case 'draft':
-    default:
-      return 'details';
-  }
-};
-
 type CounterListItemDisplay = {
   counter: Partial<Counter>;
   counterIdValue: number | null;
@@ -1756,8 +1859,12 @@ type CounterListRowProps = {
   canModifyCounter: boolean;
   onSelect: (counter: Partial<Counter>) => void;
   onToggleExpand: (counterId: number | null) => void;
-  onViewSummary: (counter: Partial<Counter>) => void;
-  onOpenModal: (mode: 'create' | 'update', targetCounter?: Partial<Counter>) => void;
+  onViewSummary: (counter: Partial<Counter>, options?: { syncUrl?: boolean }) => void;
+  onOpenModal: (
+    mode: 'create' | 'update',
+    targetCounter?: Partial<Counter>,
+    options?: { syncUrl?: boolean },
+  ) => void;
   onDeleteCounter: () => void;
   venueStatusForCounter: (counterId: number | null) => {
     label: string;
@@ -1868,6 +1975,7 @@ const CounterListRow = memo((props: CounterListRowProps) => {
       <ListItemButton
         disableRipple
         disableTouchRipple
+        aria-expanded={isExpanded}
         onClick={handleRowClick}
         selected={Boolean(isSelected)}
         sx={(theme) => ({
@@ -2059,6 +2167,19 @@ const Counters = (props: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const theme = useTheme();
   const isMobileScreen = useMediaQuery(theme.breakpoints.down('sm'));
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedCounterId = useMemo(
+    () => parseCounterIdParam(searchParams.get('counterId')),
+    [searchParams],
+  );
+  const requestedMode = useMemo<CounterUrlMode | null>(() => {
+    const mode = searchParams.get('mode');
+    return mode === 'view' || mode === 'edit' ? mode : null;
+  }, [searchParams]);
+  const requestedStep = useMemo(
+    () => parseCounterStepParam(searchParams.get('step')),
+    [searchParams],
+  );
   const catalog = useAppSelector(selectCatalog);
   const registry = useAppSelector(selectCounterRegistry);
   const session = useAppSelector((state) => state.session);
@@ -2151,14 +2272,16 @@ const Counters = (props: GenericPageProps) => {
   const [counterPage, setCounterPage] = useState(1);
   const [counterPageSize, setCounterPageSize] = useState(10);
   const [modalMode, setModalMode] = useState<'create' | 'update' | null>(null);
-  const [activeRegistryStep, setActiveRegistryStep] = useState<RegistryStep>('details');
+  const [activeRegistryStep, setActiveRegistryStep] = useState<RegistryStep>(
+    requestedStep ?? 'details',
+  );
   const [confirmingMetrics, setConfirmingMetrics] = useState(false);
   const [ensuringCounter, setEnsuringCounter] = useState(false);
   const [pendingProductId, setPendingProductId] = useState<number | null>(null);
   const [pendingStaffIds, setPendingStaffIds] = useState<number[]>([]);
   const [pendingStaffDirty, setPendingStaffDirty] = useState(false);
   const [selectedCounterId, setSelectedCounterId] = useState<number | null>(
-    registry.counter?.counter.id ?? null,
+    requestedCounterId ?? registry.counter?.counter.id ?? null,
   );
   const fetchCounterRequestRef = useRef<string | null>(null);
   const lastPersistedStaffIdsRef = useRef<number[]>([]);
@@ -2184,7 +2307,8 @@ const Counters = (props: GenericPageProps) => {
   const [cashEditingValue, setCashEditingValue] = useState<string>('');
   const [cashCurrencyByChannel, setCashCurrencyByChannel] = useState<Record<number, CashCurrency>>({});
   const [, setShouldRefreshCounterList] = useState(false);
-  const [expandedCounterId, setExpandedCounterId] = useState<number | null>(null);
+  const [expandedCounterId, setExpandedCounterId] = useState<number | null>(requestedCounterId);
+  const urlOverlayModeRef = useRef<CounterUrlMode | null>(null);
   const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
   const [summaryPreviewLoading, setSummaryPreviewLoading] = useState(false);
   const [summaryPreviewTitle, setSummaryPreviewTitle] = useState<string>('');
@@ -2223,6 +2347,8 @@ const Counters = (props: GenericPageProps) => {
   const [pendingBookingAttendanceById, setPendingBookingAttendanceById] = useState<
     Record<number, StagedBookingAttendance>
   >({});
+  const hydratedReservationDraftKeyRef = useRef<string | null>(null);
+  const skipReservationDraftPersistRef = useRef(false);
   const pendingBookingAttendanceRef = useRef<Record<number, StagedBookingAttendance>>({});
   const saveAndExitSubmittingRef = useRef(false);
   const blurActiveElement = useCallback(() => {
@@ -2517,6 +2643,28 @@ const Counters = (props: GenericPageProps) => {
   const counterStatus = (registry.counter?.counter.status as CounterStatus | undefined) ?? 'draft';
   const counterProductId = registry.counter?.counter.productId ?? null;
   const counterNotes = registry.counter?.counter.notes ?? '';
+  const reservationDraftStorageKey = useMemo(
+    () =>
+      loggedUserId != null && counterId != null
+        ? buildCounterReservationDraftKey(loggedUserId, counterId)
+        : null,
+    [counterId, loggedUserId],
+  );
+  const reservationDraftHydrationKey = useMemo(() => {
+    if (!reservationDraftStorageKey || !registry.counter) {
+      return null;
+    }
+    return [
+      reservationDraftStorageKey,
+      registry.counter.counter.updatedAt,
+      registry.channels.map((channel) => channel.id).join(','),
+      registry.addons.map((addon) => addon.addonId).join(','),
+      catalog.addons.map((addon) => addon.addonId).join(','),
+    ].join('|');
+  }, [catalog.addons, registry.addons, registry.channels, registry.counter, reservationDraftStorageKey]);
+  const clearReservationDraft = useCallback(() => {
+    removeCounterReservationDraft(reservationDraftStorageKey);
+  }, [reservationDraftStorageKey]);
   const nightReportSummaries = useMemo(
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
@@ -2548,9 +2696,72 @@ const Counters = (props: GenericPageProps) => {
     },
     [nightReportSummaries],
   );
-  const toggleCounterExpansion = useCallback((counterIdValue: number | null) => {
-    setExpandedCounterId((prev) => (counterIdValue == null ? null : prev === counterIdValue ? null : counterIdValue));
-  }, []);
+  const updateCounterUrl = useCallback(
+    (
+      counterIdValue: number | null,
+      mode: CounterUrlMode | null = null,
+      options?: { replace?: boolean; step?: RegistryStep | null },
+    ) => {
+      setSearchParams((previous) => {
+        const next = new URLSearchParams(previous);
+        if (counterIdValue == null) {
+          next.delete('counterId');
+          next.delete('mode');
+          next.delete('step');
+        } else {
+          next.set('counterId', String(counterIdValue));
+          if (mode) {
+            next.set('mode', mode);
+          } else {
+            next.delete('mode');
+          }
+          if (options?.step) {
+            next.set('step', COUNTER_STEP_PARAM[options.step]);
+          } else {
+            next.delete('step');
+          }
+        }
+        return next;
+      }, options);
+    },
+    [setSearchParams],
+  );
+
+  const setAndPersistCounterStep = useCallback(
+    (step: RegistryStep) => {
+      if (activeRegistryStep === 'reservations' && step !== 'reservations') {
+        clearReservationDraft();
+        hydratedReservationDraftKeyRef.current = null;
+      }
+      setActiveRegistryStep(step);
+      const focusedCounterId = selectedCounterId ?? requestedCounterId;
+      if (isModalOpen && modalMode === 'update' && focusedCounterId != null) {
+        urlOverlayModeRef.current = 'edit';
+        updateCounterUrl(focusedCounterId, 'edit', { replace: true, step });
+      }
+    },
+    [
+      activeRegistryStep,
+      clearReservationDraft,
+      isModalOpen,
+      modalMode,
+      requestedCounterId,
+      selectedCounterId,
+      updateCounterUrl,
+    ],
+  );
+
+  const toggleCounterExpansion = useCallback(
+    (counterIdValue: number | null) => {
+      const nextCounterId =
+        counterIdValue == null || expandedCounterId === counterIdValue ? null : counterIdValue;
+      setExpandedCounterId(nextCounterId);
+      setSelectedCounterId(nextCounterId);
+      urlOverlayModeRef.current = null;
+      updateCounterUrl(nextCounterId);
+    },
+    [expandedCounterId, updateCounterUrl],
+  );
 
   const currentProductId = pendingProductId ?? counterProductId ?? null;
   const selectedDateString = selectedDate.format(COUNTER_DATE_FORMAT);
@@ -2680,6 +2891,11 @@ const Counters = (props: GenericPageProps) => {
   }, [counterPage, totalPages]);
 
   useEffect(() => {
+    setSelectedCounterId(requestedCounterId);
+    setExpandedCounterId(requestedCounterId);
+  }, [requestedCounterId]);
+
+  useEffect(() => {
     if (selectedCounterId == null) {
       return;
     }
@@ -2690,10 +2906,8 @@ const Counters = (props: GenericPageProps) => {
       return;
     }
     const desiredPage = Math.floor(selectedIndex / counterPageSize) + 1;
-    if (desiredPage !== counterPage) {
-      setCounterPage(desiredPage);
-    }
-  }, [counterListDisplayData, counterPage, counterPageSize, selectedCounterId]);
+    setCounterPage((currentPage) => (desiredPage === currentPage ? currentPage : desiredPage));
+  }, [counterListDisplayData, counterPageSize, selectedCounterId]);
 
   useEffect(() => {
     if (registry.counter) {
@@ -2833,13 +3047,33 @@ const Counters = (props: GenericPageProps) => {
     if (!counterRecord) {
       return;
     }
+    const focusedCounterId = selectedCounterId ?? requestedCounterId;
+    if (focusedCounterId != null && counterRecord.id !== focusedCounterId) {
+      return;
+    }
+    if (requestedStep != null) {
+      setActiveRegistryStep((currentStep) =>
+        currentStep === requestedStep ? currentStep : requestedStep,
+      );
+      return;
+    }
     const key = `${counterRecord.id}:${counterRecord.status}`;
     if (lastInitializedCounterRef.current === key) {
       return;
     }
     lastInitializedCounterRef.current = key;
-    setActiveRegistryStep(mapStatusToStep(counterRecord.status as CounterStatus | null | undefined));
-  }, [isModalOpen, modalMode, registry.counter]);
+    const resolvedStep: RegistryStep = 'reservations';
+    setActiveRegistryStep(resolvedStep);
+    updateCounterUrl(counterRecord.id, 'edit', { replace: true, step: resolvedStep });
+  }, [
+    isModalOpen,
+    modalMode,
+    registry.counter,
+    requestedCounterId,
+    requestedStep,
+    selectedCounterId,
+    updateCounterUrl,
+  ]);
 
   useEffect(() => {
     if (!isModalOpen) {
@@ -4965,7 +5199,11 @@ const loadCounterById = useCallback(
   }, [loadCountersList]);
 
   const handleOpenModal = useCallback(
-    (mode: 'create' | 'update', targetCounter?: Partial<Counter>) => {
+    (
+      mode: 'create' | 'update',
+      targetCounter?: Partial<Counter>,
+      options?: { syncUrl?: boolean },
+    ) => {
       const targetCounterId =
         mode === 'update' ? targetCounter?.id ?? selectedCounterId : null;
       if (mode === 'update' && targetCounterId == null) {
@@ -4974,10 +5212,21 @@ const loadCounterById = useCallback(
       blurActiveElement();
       setModalMode(mode);
       if (mode === 'create') {
+        urlOverlayModeRef.current = null;
+        if (options?.syncUrl !== false) {
+          updateCounterUrl(null);
+        }
         setActiveRegistryStep('details');
       } else if (mode === 'update') {
+        const initialStep = requestedStep ?? 'reservations';
+        urlOverlayModeRef.current = 'edit';
+        if (options?.syncUrl !== false) {
+          updateCounterUrl(targetCounterId, 'edit', { step: initialStep });
+        }
+        setActiveRegistryStep(initialStep);
         if (targetCounter) {
           setSelectedCounterId(targetCounterId ?? null);
+          setExpandedCounterId(targetCounterId ?? null);
           const parsed = targetCounter.date ? dayjs(targetCounter.date) : null;
           if (parsed?.isValid()) {
             setSelectedDate(parsed);
@@ -5001,8 +5250,10 @@ const loadCounterById = useCallback(
       blurActiveElement,
       loadCounterById,
       registry.counter,
+      requestedStep,
       selectedCounterId,
       setActiveRegistryStep,
+      updateCounterUrl,
     ],
   );
 
@@ -5010,8 +5261,10 @@ const loadCounterById = useCallback(
     setIsModalOpen(false);
     setModalMode(null);
     setActiveRegistryStep('details');
+    urlOverlayModeRef.current = null;
+    updateCounterUrl(selectedCounterId);
     void loadCountersList();
-  }, [loadCountersList, setActiveRegistryStep]);
+  }, [loadCountersList, selectedCounterId, setActiveRegistryStep, updateCounterUrl]);
 
   useEffect(() => {
     if (isModalOpen && !catalog.loaded && !catalog.loading) {
@@ -5053,13 +5306,17 @@ const handleCounterListSelect = useCallback(
 );
 
   const handleViewSummary = useCallback(
-    async (counterSummary: Partial<Counter>) => {
+    async (counterSummary: Partial<Counter>, options?: { syncUrl?: boolean }) => {
       const counterIdValue = counterSummary.id ?? null;
       const counterDateValue = counterSummary.date ? dayjs(counterSummary.date) : null;
       if (!counterIdValue) {
         return;
       }
       blurActiveElement();
+      urlOverlayModeRef.current = 'view';
+      if (options?.syncUrl !== false) {
+        updateCounterUrl(counterIdValue, 'view');
+      }
       setCounterListError(null);
       fetchCounterRequestRef.current = null;
       const nextUserId = counterSummary.userId ?? null;
@@ -5073,6 +5330,7 @@ const handleCounterListSelect = useCallback(
         setSummaryPreviewTitle('');
       }
       setSelectedCounterId(counterIdValue);
+      setExpandedCounterId(counterIdValue);
       setActiveRegistryStep('details');
       setSummaryPreviewOpen(true);
       setSummaryPreviewLoading(true);
@@ -5084,8 +5342,78 @@ const handleCounterListSelect = useCallback(
         setSummaryPreviewLoading(false);
       }
     },
-    [blurActiveElement, loadCounterById, setActiveRegistryStep],
+    [blurActiveElement, loadCounterById, setActiveRegistryStep, updateCounterUrl],
   );
+
+  const handleCloseSummaryPreview = useCallback(() => {
+    setSummaryPreviewOpen(false);
+    urlOverlayModeRef.current = null;
+    updateCounterUrl(selectedCounterId);
+  }, [selectedCounterId, updateCounterUrl]);
+
+  useEffect(() => {
+    if (requestedMode == null) {
+      if (urlOverlayModeRef.current === 'edit') {
+        setIsModalOpen(false);
+        setModalMode(null);
+        setActiveRegistryStep('details');
+        void loadCountersList();
+      } else if (urlOverlayModeRef.current === 'view') {
+        setSummaryPreviewOpen(false);
+      }
+      urlOverlayModeRef.current = null;
+      return;
+    }
+
+    if (requestedCounterId == null || counterListLoading) {
+      return;
+    }
+    const targetCounter = counterList.find((item) => item.id === requestedCounterId);
+    if (!targetCounter) {
+      return;
+    }
+
+    if (requestedMode === 'edit') {
+      if (
+        urlOverlayModeRef.current === 'edit' &&
+        isModalOpen &&
+        modalMode === 'update' &&
+        selectedCounterId === requestedCounterId
+      ) {
+        return;
+      }
+      setSummaryPreviewOpen(false);
+      urlOverlayModeRef.current = 'edit';
+      handleOpenModal('update', targetCounter, { syncUrl: false });
+      return;
+    }
+
+    if (
+      urlOverlayModeRef.current === 'view' &&
+      summaryPreviewOpen &&
+      selectedCounterId === requestedCounterId
+    ) {
+      return;
+    }
+    setIsModalOpen(false);
+    setModalMode(null);
+    urlOverlayModeRef.current = 'view';
+    void handleViewSummary(targetCounter, { syncUrl: false });
+  }, [
+    counterList,
+    counterListLoading,
+    handleOpenModal,
+    handleViewSummary,
+    isModalOpen,
+    loadCountersList,
+    modalMode,
+    requestedCounterId,
+    requestedMode,
+    requestedStep,
+    selectedCounterId,
+    setActiveRegistryStep,
+    summaryPreviewOpen,
+  ]);
 
 useEffect(() => {
   if (nightReportsRequestedRef.current) {
@@ -5114,14 +5442,17 @@ useEffect(() => {
     dispatch(deleteCounter(targetCounterId))
       .unwrap()
       .then(() => {
+        clearReservationDraft();
         setSelectedCounterId(null);
+        setExpandedCounterId(null);
         handleCloseModal();
+        updateCounterUrl(null);
       })
       .catch((error) => {
         const message = typeof error === 'string' ? error : 'Failed to delete counter';
         setCounterListError(message);
       });
-  }, [counterId, dispatch, handleCloseModal, selectedCounterId]);
+  }, [clearReservationDraft, counterId, dispatch, handleCloseModal, selectedCounterId, updateCounterUrl]);
 
   const handleAddNewCounter = useCallback(() => {
     const managerId = resolvedManagerId;
@@ -5149,6 +5480,7 @@ useEffect(() => {
     setSelectedCashReservationChannelIds([]);
     fetchCounterRequestRef.current = null;
     setSelectedCounterId(null);
+    setExpandedCounterId(null);
 
     dispatch(clearCounter());
     dispatch(clearDirtyMetrics());
@@ -5344,6 +5676,237 @@ useEffect(() => {
 
   useEffect(() => {
     if (
+      activeRegistryStep !== 'reservations' ||
+      counterId == null ||
+      loggedUserId == null ||
+      reservationDraftStorageKey == null ||
+      reservationDraftHydrationKey == null ||
+      registry.counter?.counter.id !== counterId
+    ) {
+      hydratedReservationDraftKeyRef.current = null;
+      return;
+    }
+    if (hydratedReservationDraftKeyRef.current === reservationDraftHydrationKey) {
+      return;
+    }
+
+    hydratedReservationDraftKeyRef.current = reservationDraftHydrationKey;
+    skipReservationDraftPersistRef.current = true;
+
+    const storedDraft = readCounterReservationDraft(
+      reservationDraftStorageKey,
+      loggedUserId,
+      counterId,
+    );
+    const serverUpdatedAtMs = Date.parse(String(registry.counter.counter.updatedAt ?? ''));
+    const draftUpdatedAtMs = storedDraft ? Date.parse(storedDraft.updatedAt) : Number.NaN;
+    const draft =
+      storedDraft &&
+      (!Number.isFinite(serverUpdatedAtMs) || draftUpdatedAtMs > serverUpdatedAtMs)
+        ? storedDraft
+        : null;
+    if (storedDraft && !draft) {
+      removeCounterReservationDraft(reservationDraftStorageKey);
+    }
+    if (draft) {
+      const restoredMetrics = Array.isArray(draft.dirtyMetrics)
+        ? draft.dirtyMetrics.filter(
+            (metric) =>
+              isRecord(metric) &&
+              metric.counterId === counterId &&
+              typeof metric.channelId === 'number' &&
+              typeof metric.qty === 'number' &&
+              (metric.kind === 'people' || metric.kind === 'addon' || metric.kind === 'cash_payment') &&
+              (metric.tallyType === 'booked' || metric.tallyType === 'attended') &&
+              (metric.period === null ||
+                metric.period === 'before_cutoff' ||
+                metric.period === 'after_cutoff'),
+          )
+        : [];
+      restoredMetrics.forEach((metric) => dispatch(setMetric(metric)));
+
+      const restoreIdList = (value: unknown): number[] =>
+        Array.isArray(value)
+          ? Array.from(
+              new Set(
+                value.filter(
+                  (item): item is number =>
+                    typeof item === 'number' && Number.isInteger(item) && item > 0,
+                ),
+              ),
+            )
+          : [];
+
+      setSelectedChannelIds(restoreIdList(draft.selectedChannelIds));
+      setSelectedAfterCutoffChannelIds(restoreIdList(draft.selectedAfterCutoffChannelIds));
+      setSelectedCashReservationChannelIds(
+        restoreIdList(draft.selectedCashReservationChannelIds),
+      );
+      setWalkInCashByChannel(
+        isRecord(draft.walkInCashByChannel)
+          ? (draft.walkInCashByChannel as Record<number, string>)
+          : {},
+      );
+      setWalkInDiscountsByChannel(
+        isRecord(draft.walkInDiscountsByChannel)
+          ? (draft.walkInDiscountsByChannel as Record<number, string[]>)
+          : {},
+      );
+      setWalkInTicketDataByChannel(
+        isRecord(draft.walkInTicketDataByChannel)
+          ? (draft.walkInTicketDataByChannel as Record<number, WalkInChannelTicketState>)
+          : {},
+      );
+      setWalkInNoteDirty(draft.walkInNoteDirty === true);
+      setFreePeopleByChannel(
+        isRecord(draft.freePeopleByChannel)
+          ? (draft.freePeopleByChannel as Record<number, FreeSnapshotPeopleEntry>)
+          : {},
+      );
+      setFreeAddonsByChannel(
+        isRecord(draft.freeAddonsByChannel)
+          ? (draft.freeAddonsByChannel as Record<
+              number,
+              Record<number, FreeSnapshotAddonEntry>
+            >)
+          : {},
+      );
+      setCashOverridesByChannel(
+        isRecord(draft.cashOverridesByChannel)
+          ? (draft.cashOverridesByChannel as Record<number, string>)
+          : {},
+      );
+      setCashCurrencyByChannel(
+        isRecord(draft.cashCurrencyByChannel)
+          ? Object.fromEntries(
+              Object.entries(draft.cashCurrencyByChannel).filter(([, currency]) =>
+                isCashCurrency(currency),
+              ),
+            )
+          : {},
+      );
+      setPendingBookingAttendanceById(
+        isRecord(draft.pendingBookingAttendanceById)
+          ? (draft.pendingBookingAttendanceById as Record<number, StagedBookingAttendance>)
+          : {},
+      );
+      setEditingCustomTicket(
+        isRecord(draft.editingCustomTicket) &&
+          typeof draft.editingCustomTicket.channelId === 'number' &&
+          typeof draft.editingCustomTicket.ticketLabel === 'string' &&
+          typeof draft.editingCustomTicket.value === 'string'
+          ? {
+              channelId: draft.editingCustomTicket.channelId,
+              ticketLabel: draft.editingCustomTicket.ticketLabel,
+              value: draft.editingCustomTicket.value,
+            }
+          : null,
+      );
+      setCashEditingChannelId(
+        typeof draft.cashEditingChannelId === 'number' ? draft.cashEditingChannelId : null,
+      );
+      setCashEditingValue(
+        typeof draft.cashEditingValue === 'string' ? draft.cashEditingValue : '',
+      );
+      setOnlineReservationsNotice('Recovered unsaved Reservation Check changes from this browser.');
+    }
+  }, [
+    activeRegistryStep,
+    counterId,
+    dispatch,
+    loggedUserId,
+    registry.counter,
+    reservationDraftHydrationKey,
+    reservationDraftStorageKey,
+  ]);
+
+  const hasRecoverableReservationChanges =
+    registry.dirtyMetricKeys.length > 0 ||
+    walkInNoteDirty ||
+    Object.keys(pendingBookingAttendanceById).length > 0 ||
+    editingCustomTicket != null ||
+    cashEditingChannelId != null;
+
+  useEffect(() => {
+    if (
+      activeRegistryStep !== 'reservations' ||
+      counterId == null ||
+      loggedUserId == null ||
+      reservationDraftStorageKey == null ||
+      reservationDraftHydrationKey == null ||
+      hydratedReservationDraftKeyRef.current !== reservationDraftHydrationKey
+    ) {
+      return;
+    }
+
+    if (skipReservationDraftPersistRef.current) {
+      skipReservationDraftPersistRef.current = false;
+      return;
+    }
+
+    if (!hasRecoverableReservationChanges) {
+      removeCounterReservationDraft(reservationDraftStorageKey);
+      return;
+    }
+
+    const dirtyMetrics = registry.dirtyMetricKeys
+      .map((key) => registry.metricsByKey[key])
+      .filter((metric): metric is MetricCell => Boolean(metric));
+    const draft: CounterReservationDraft = {
+      version: COUNTER_RESERVATION_DRAFT_VERSION,
+      counterId,
+      userId: loggedUserId,
+      updatedAt: new Date().toISOString(),
+      dirtyMetrics,
+      selectedChannelIds,
+      selectedAfterCutoffChannelIds,
+      selectedCashReservationChannelIds,
+      walkInCashByChannel,
+      walkInDiscountsByChannel,
+      walkInTicketDataByChannel,
+      walkInNoteDirty,
+      freePeopleByChannel,
+      freeAddonsByChannel,
+      cashOverridesByChannel,
+      cashCurrencyByChannel,
+      pendingBookingAttendanceById,
+      editingCustomTicket,
+      cashEditingChannelId,
+      cashEditingValue,
+    };
+    try {
+      window.localStorage.setItem(reservationDraftStorageKey, JSON.stringify(draft));
+    } catch (_error) {
+      // Saving the server-backed workflow must continue when storage is unavailable.
+    }
+  }, [
+    activeRegistryStep,
+    cashCurrencyByChannel,
+    cashEditingChannelId,
+    cashEditingValue,
+    cashOverridesByChannel,
+    counterId,
+    editingCustomTicket,
+    freeAddonsByChannel,
+    freePeopleByChannel,
+    hasRecoverableReservationChanges,
+    loggedUserId,
+    pendingBookingAttendanceById,
+    registry.dirtyMetricKeys,
+    registry.metricsByKey,
+    reservationDraftHydrationKey,
+    reservationDraftStorageKey,
+    selectedAfterCutoffChannelIds,
+    selectedCashReservationChannelIds,
+    selectedChannelIds,
+    walkInCashByChannel,
+    walkInDiscountsByChannel,
+    walkInNoteDirty,
+    walkInTicketDataByChannel,
+  ]);
+
+  useEffect(() => {
+    if (
       (!isModalOpen && !summaryPreviewOpen) ||
       (activeRegistryStep !== 'reservations' && !isSummaryContext)
     ) {
@@ -5397,6 +5960,16 @@ useEffect(() => {
             attendedTotal: staged.attendedTotal,
             attendedExtras: staged.attendedExtras,
             attendedTshirtSizes: staged.attendedTshirtSizes,
+            ...(staged.addonRefundRequests
+              ? { addonRefundRequests: staged.addonRefundRequests }
+              : {}),
+            ...(staged.addonRefundDisposition
+              ? { addonRefundDisposition: staged.addonRefundDisposition }
+              : {}),
+            ...(staged.addonRefundReason !== undefined
+              ? { addonRefundReason: staged.addonRefundReason }
+              : {}),
+            markNoShowWhenAbsent: Boolean(staged.markNoShowWhenAbsent),
           });
         });
         setOnlineReservationOrders(mergedOrders);
@@ -6827,6 +7400,7 @@ useEffect(() => {
         if (noteUpdateNeeded) {
           setWalkInNoteDirty(false);
         }
+        clearReservationDraft();
         return true;
       }
 
@@ -6886,6 +7460,7 @@ useEffect(() => {
           setShouldRefreshCounterList(true);
         }
 
+        clearReservationDraft();
         return true;
       } catch (_error) {
         return false;
@@ -6898,6 +7473,7 @@ useEffect(() => {
     },
     [
       computedCounterNotes,
+      clearReservationDraft,
       counterId,
       counterStatus,
       currentCounterNotes,
@@ -7367,7 +7943,7 @@ useEffect(() => {
           .map((channel) => channel.id);
         return defaultIds.length > 0 ? Array.from(new Set(defaultIds)) : prev;
       });
-      setActiveRegistryStep('reservations');
+      setAndPersistCounterStep('reservations');
     } catch (_error) {
       fetchCounterRequestRef.current = null;
     } finally {
@@ -7385,6 +7961,7 @@ useEffect(() => {
     pendingStaffIds,
     registry.counter,
     registry.channels,
+    setAndPersistCounterStep,
   ]);
 
   const handleProceedToReservations = useCallback(async () => {
@@ -7392,8 +7969,8 @@ useEffect(() => {
     if (!saved) {
       return;
     }
-    setActiveRegistryStep('reservations');
-  }, [flushMetrics]);
+    setAndPersistCounterStep('reservations');
+  }, [flushMetrics, setAndPersistCounterStep]);
   const handleProceedToSummary = useCallback(async () => {
     setAdvancingToSummary(true);
     try {
@@ -7459,18 +8036,18 @@ useEffect(() => {
       if (!saved) {
         return;
       }
-      setActiveRegistryStep('summary');
+      setAndPersistCounterStep('summary');
     } finally {
       setAdvancingToSummary(false);
     }
-  }, [flushMetrics, onlineReservationsScoped, pendingBookingAttendanceById]);
+  }, [flushMetrics, onlineReservationsScoped, pendingBookingAttendanceById, setAndPersistCounterStep]);
   const handleReturnToSetup = useCallback(async () => {
     const saved = await flushMetrics({ status: 'draft' });
     if (!saved) {
       return;
     }
-    setActiveRegistryStep('details');
-  }, [flushMetrics]);
+    setAndPersistCounterStep('details');
+  }, [flushMetrics, setAndPersistCounterStep]);
 
   const hasCounter = Boolean(registry.counter);
   const isLoading =
@@ -7511,7 +8088,7 @@ useEffect(() => {
           return;
         }
 
-        setActiveRegistryStep(nextStep);
+        setAndPersistCounterStep(nextStep);
       })();
     },
     [
@@ -7521,6 +8098,7 @@ useEffect(() => {
       handleProceedToReservations,
       handleProceedToSummary,
       hasCounter,
+      setAndPersistCounterStep,
     ],
   );
 
@@ -9241,7 +9819,7 @@ useEffect(() => {
         <Button
           variant="outlined"
           size="small"
-          onClick={() => setActiveRegistryStep('reservations')}
+          onClick={() => setAndPersistCounterStep('reservations')}
           disabled={disableNav}
           sx={{
             textTransform: 'none',
@@ -10668,7 +11246,13 @@ type SummaryRowOptions = {
                       <Pagination
                         count={totalPages}
                         page={counterPage}
-                        onChange={(_event, value) => setCounterPage(value)}
+                        onChange={(_event, value) => {
+                          setCounterPage(value);
+                          setSelectedCounterId(null);
+                          setExpandedCounterId(null);
+                          urlOverlayModeRef.current = null;
+                          updateCounterUrl(null, null, { replace: true });
+                        }}
                         size="small"
                         color="primary"
                         shape="rounded"
@@ -11532,7 +12116,7 @@ type SummaryRowOptions = {
       </Dialog>
       <Dialog
         open={summaryPreviewOpen}
-        onClose={() => setSummaryPreviewOpen(false)}
+        onClose={handleCloseSummaryPreview}
         fullScreen
         aria-labelledby="counter-summary-preview"
       >
@@ -11543,7 +12127,7 @@ type SummaryRowOptions = {
           <Typography variant="h6" component="span">
             Counter Summary {summaryPreviewTitle ? `- ${summaryPreviewTitle}` : ""}
           </Typography>
-          <IconButton onClick={() => setSummaryPreviewOpen(false)}>
+          <IconButton onClick={handleCloseSummaryPreview}>
             <Close />
           </IconButton>
         </DialogTitle>

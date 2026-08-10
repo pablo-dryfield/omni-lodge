@@ -5,12 +5,81 @@ import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import InventoryMovement from '../models/InventoryMovement.js';
 import InventoryFulfillment from '../models/InventoryFulfillment.js';
 import Booking from '../models/Booking.js';
+import Addon from '../models/Addon.js';
+import InventoryItem from '../models/InventoryItem.js';
 import { Op } from 'sequelize';
+
+export type TshirtVariantAvailability = {
+  variant: string;
+  availableQuantity: number;
+  inStock: boolean;
+};
+
+const TSHIRT_VARIANT_ORDER = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
+
+const compareTshirtVariants = (left: string, right: string): number => {
+  const leftIndex = TSHIRT_VARIANT_ORDER.indexOf(left);
+  const rightIndex = TSHIRT_VARIANT_ORDER.indexOf(right);
+  if (leftIndex >= 0 || rightIndex >= 0) {
+    if (leftIndex < 0) return 1;
+    if (rightIndex < 0) return -1;
+    return leftIndex - rightIndex;
+  }
+  return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
+};
 
 export async function getAvailableStock(inventoryItemId:number, transaction?:Transaction):Promise<number>{
   const onHand=Number(await InventoryMovement.sum('quantityDelta',{where:{inventoryItemId},transaction})??0);
   const reserved=Number(await InventoryFulfillment.sum('quantity',{where:{inventoryItemId,status:{[Op.in]:['ready','packed']}},transaction})??0);
   return onHand-reserved;
+}
+
+export async function getTshirtVariantAvailability(transaction?: Transaction): Promise<TshirtVariantAvailability[]> {
+  const tshirtAddons = await Addon.findAll({
+    attributes: ['id'],
+    where: { isActive: true, name: { [Op.iLike]: '%shirt%' } },
+    transaction,
+  });
+  const addonIds = tshirtAddons.map((addon) => addon.id);
+  if (!addonIds.length) return [];
+
+  const mappings = (await AddonInventoryMapping.findAll({
+    where: { addonId: { [Op.in]: addonIds }, isActive: true },
+    transaction,
+  })).filter((mapping) => Boolean(mapping.variant?.trim()));
+  if (!mappings.length) return [];
+
+  const inventoryItemIds = Array.from(new Set(mappings.map((mapping) => mapping.inventoryItemId)));
+  const activeItems = await InventoryItem.findAll({
+    attributes: ['id'],
+    where: { id: { [Op.in]: inventoryItemIds }, isActive: true },
+    transaction,
+  });
+  const activeItemIds = new Set(activeItems.map((item) => item.id));
+  const stockEntries = await Promise.all(
+    inventoryItemIds
+      .filter((inventoryItemId) => activeItemIds.has(inventoryItemId))
+      .map(async (inventoryItemId) => [inventoryItemId, await getAvailableStock(inventoryItemId, transaction)] as const),
+  );
+  const stockByItem = new Map(stockEntries);
+  const quantityByVariant = new Map<string, number>();
+  const countedMappings = new Set<string>();
+
+  for (const mapping of mappings) {
+    if (!activeItemIds.has(mapping.inventoryItemId)) continue;
+    const variant = String(mapping.variant).trim().toUpperCase();
+    const mappingKey = `${variant}:${mapping.inventoryItemId}`;
+    if (!variant || countedMappings.has(mappingKey)) continue;
+    countedMappings.add(mappingKey);
+
+    const unitsPerAddon = Math.max(0.001, Number(mapping.quantityPerAddon) || 1);
+    const availableQuantity = Math.max(0, Math.floor((stockByItem.get(mapping.inventoryItemId) ?? 0) / unitsPerAddon));
+    quantityByVariant.set(variant, (quantityByVariant.get(variant) ?? 0) + availableQuantity);
+  }
+
+  return Array.from(quantityByVariant.entries())
+    .map(([variant, availableQuantity]) => ({ variant, availableQuantity, inStock: availableQuantity > 0 }))
+    .sort((left, right) => compareTshirtVariants(left.variant, right.variant));
 }
 
 export async function allocateWaitingFulfillments(inventoryItemId:number, actorId:number, transaction:Transaction):Promise<void>{
