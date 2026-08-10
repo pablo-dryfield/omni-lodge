@@ -17,6 +17,7 @@ import {
   Paper,
   Select,
   SegmentedControl,
+  SimpleGrid,
   Stack,
   Table,
   Tabs,
@@ -24,13 +25,27 @@ import {
   Textarea,
   Title,
   TextInput,
+  ThemeIcon,
+  UnstyledButton,
 } from "@mantine/core";
 
 import { DatePicker, DatePickerInput, TimeInput } from "@mantine/dates";
 import { useMediaQuery } from '@mantine/hooks';
 import { Checkroom, LocalBar, MailOutline, PhotoCamera, WhatsApp } from "@mui/icons-material";
 
-import { IconArrowLeft, IconArrowRight, IconEye, IconEyeOff, IconKey, IconRefresh, IconSearch } from "@tabler/icons-react";
+import {
+  IconArrowLeft,
+  IconArrowRight,
+  IconCheck,
+  IconCode,
+  IconEye,
+  IconEyeOff,
+  IconFileText,
+  IconKey,
+  IconRefresh,
+  IconSearch,
+  IconTemplate,
+} from "@tabler/icons-react";
 
 import dayjs, { Dayjs } from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
@@ -118,6 +133,8 @@ const BASE_MAIL_VARIABLES: MailVariableDefinition[] = [
   { key: "menCount", scope: "base", description: "Men count" },
   { key: "womenCount", scope: "base", description: "Women count" },
   { key: "currency", scope: "base", description: "Currency code" },
+  { key: "availableTshirtSizesText", scope: "base", description: "Current in-stock T-shirt sizes as text" },
+  { key: "hasAvailableTshirtSizes", scope: "base", description: "Whether any T-shirt size is currently in stock" },
 ];
 
 const REFUND_MAIL_VARIABLES: MailVariableDefinition[] = [
@@ -150,6 +167,8 @@ const SUPPLY_MAIL_VARIABLES: MailVariableDefinition[] = [
 const REACT_MAIL_VARIABLES: MailVariableDefinition[] = [
   { key: "templateKey", scope: "react", description: "Forces React renderer variant key" },
   { key: "reactPlainText", scope: "react", description: "Text fallback for rendered HTML" },
+  { key: "availableTshirtSizes", scope: "react", description: "Array containing only in-stock T-shirt size names" },
+  { key: "availableTshirtVariants", scope: "react", description: "In-stock T-shirt variants with available quantities" },
 ];
 
 const resolveMailVariableTokenContext = (
@@ -1671,6 +1690,20 @@ type PartialRefundEmailPreviewState = {
   templateName: string | null;
 };
 
+type MailComposerMode = "template" | "plain";
+
+type TshirtAvailabilityVariant = {
+  variant: string;
+  availableQuantity: number;
+  inStock: boolean;
+};
+
+type TshirtAvailabilityState = {
+  loading: boolean;
+  error: string | null;
+  variants: TshirtAvailabilityVariant[];
+};
+
 type AmendEmailPreviewState = {
   opened: boolean;
   loading: boolean;
@@ -1727,6 +1760,12 @@ const createDefaultPartialRefundEmailPreviewState = (): PartialRefundEmailPrevie
   error: null,
   data: null,
   templateName: null,
+});
+
+const createDefaultTshirtAvailabilityState = (): TshirtAvailabilityState => ({
+  loading: false,
+  error: null,
+  variants: [],
 });
 
 const createDefaultAmendEmailPreviewState = (): AmendEmailPreviewState => ({
@@ -2037,9 +2076,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const [expandedMobileCustomerDetails, setExpandedMobileCustomerDetails] = useState<Record<string, boolean>>({});
   const [mailboxState, setMailboxState] = useState<MailboxState>(createDefaultMailboxState());
   const [mailComposerState, setMailComposerState] = useState<MailComposerState>(createDefaultMailComposerState());
+  const [mailComposerMode, setMailComposerMode] = useState<MailComposerMode | null>(null);
   const [mailTemplateState, setMailTemplateState] = useState<MailTemplateState>(createDefaultMailTemplateState());
   const [mailComposerPreviewState, setMailComposerPreviewState] =
     useState<MailComposerPreviewState>(createDefaultMailComposerPreviewState());
+  const [showMailPreviewSource, setShowMailPreviewSource] = useState(false);
+  const [tshirtAvailabilityState, setTshirtAvailabilityState] =
+    useState<TshirtAvailabilityState>(createDefaultTshirtAvailabilityState());
   const [cancelRefundEmailPreviewState, setCancelRefundEmailPreviewState] =
     useState<CancelRefundEmailPreviewState>(createDefaultCancelRefundEmailPreviewState());
   const [partialRefundEmailPreviewState, setPartialRefundEmailPreviewState] =
@@ -2056,6 +2099,33 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const mailSubjectInputRef = useRef<HTMLInputElement | null>(null);
   const mailBodyInputRef = useRef<HTMLTextAreaElement | null>(null);
   const mailReactSourceInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const loadTshirtAvailability = useCallback(async (): Promise<void> => {
+    setTshirtAvailabilityState((current) => ({ ...current, loading: true, error: null }));
+    try {
+      const response = await axiosInstance.get<{
+        variants: TshirtAvailabilityVariant[];
+      }>("/bookings/emails/tshirt-availability", { withCredentials: true });
+      setTshirtAvailabilityState({
+        loading: false,
+        error: null,
+        variants: Array.isArray(response.data.variants) ? response.data.variants : [],
+      });
+    } catch (error) {
+      setTshirtAvailabilityState({
+        loading: false,
+        error: extractErrorMessage(error),
+        variants: [],
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!mailComposerState.opened) {
+      return;
+    }
+    void loadTshirtAvailability();
+  }, [mailComposerState.opened, loadTshirtAvailability]);
 
   useEffect(() => {
     setSearchInput(searchParam);
@@ -3939,6 +4009,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
 
     setMailTemplateState(createDefaultMailTemplateState());
+    setMailComposerMode(null);
+    setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+    setShowMailPreviewSource(false);
     setMailComposerState({
       opened: true,
       sourceOrder: order,
@@ -3953,8 +4026,6 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       success: null,
     });
     setMailVariableDropdown({ field: null, tokenStart: -1, tokenEnd: -1, query: "" });
-
-    void loadMailTemplates();
   };
 
   const openMailReplyComposerModal = (order: UnifiedOrder, message: MailboxMessage) => {
@@ -3967,7 +4038,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
     setMailboxState(createDefaultMailboxState());
     setMailTemplateState(createDefaultMailTemplateState());
+    setMailComposerMode(null);
     setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+    setShowMailPreviewSource(false);
     setMailComposerState({
       opened: true,
       sourceOrder: order,
@@ -4014,9 +4087,60 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       return;
     }
     setMailComposerState(createDefaultMailComposerState());
+    setMailComposerMode(null);
     setMailTemplateState(createDefaultMailTemplateState());
     setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+    setShowMailPreviewSource(false);
     setMailVariableDropdown({ field: null, tokenStart: -1, tokenEnd: -1, query: "" });
+  };
+
+  const handleMailComposerModeSelection = (mode: MailComposerMode) => {
+    setMailComposerMode(mode);
+    setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+    setShowMailPreviewSource(false);
+    setMailVariableDropdown({ field: null, tokenStart: -1, tokenEnd: -1, query: "" });
+
+    if (mode === "template") {
+      setMailComposerState((prev) => ({ ...prev, error: null, success: null }));
+      if (!mailTemplateState.loading && mailTemplateState.templates.length === 0) {
+        void loadMailTemplates();
+      }
+      return;
+    }
+
+    setMailTemplateState((prev) => ({
+      ...prev,
+      selectedTemplateId: null,
+      editorName: "",
+      editorDescription: "",
+      editorType: "plain_text",
+      error: null,
+    }));
+    setMailComposerState((prev) => {
+      const sourceOrder = prev.sourceOrder;
+      if (!sourceOrder) {
+        return { ...prev, reactLiveSource: "", error: null, success: null };
+      }
+      if (prev.replyToMessageId) {
+        const customerName = String(sourceOrder.customerName ?? "").trim() || "Guest";
+        return {
+          ...prev,
+          body: `Hi ${customerName},\n\n\n\nBest regards,`,
+          reactLiveSource: "",
+          error: null,
+          success: null,
+        };
+      }
+      const draft = buildMailDraftFromOrder(sourceOrder);
+      return {
+        ...prev,
+        subject: draft.subject,
+        body: draft.body,
+        reactLiveSource: "",
+        error: null,
+        success: null,
+      };
+    });
   };
 
   const handleMailToChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -4327,7 +4451,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     [mailTemplateState.selectedTemplateId, mailTemplateState.templates],
   );
   const isReactTemplateSelected =
-    (selectedMailTemplate?.templateType ?? mailTemplateState.editorType) === "react_email";
+    mailComposerMode === "template" && selectedMailTemplate?.templateType === "react_email";
 
   const mailTemplateVariableDefinitions = useMemo(() => {
     const normalizedTemplateHint = `${selectedMailTemplate?.name ?? ""} ${mailTemplateState.editorName ?? ""}`
@@ -4490,11 +4614,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const resolveSelectedTemplateId = useCallback((): number | null => {
+    if (mailComposerMode !== "template") {
+      return null;
+    }
     const selectedTemplateId = mailTemplateState.selectedTemplateId;
     const parsedTemplateId =
       selectedTemplateId !== null ? Number.parseInt(selectedTemplateId, 10) : Number.NaN;
     return Number.isFinite(parsedTemplateId) && parsedTemplateId > 0 ? parsedTemplateId : null;
-  }, [mailTemplateState.selectedTemplateId]);
+  }, [mailComposerMode, mailTemplateState.selectedTemplateId]);
 
   const withSafeRefundTemplateContext = useCallback(
     (baseContext: Record<string, unknown>): Record<string, unknown> => {
@@ -4630,6 +4757,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     closeMailVariableDropdown();
     setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+    setShowMailPreviewSource(false);
   };
 
   const handlePreviewMail = useCallback(async (options?: { silentValidation?: boolean; background?: boolean }) => {
@@ -4639,6 +4767,19 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const subject = mailComposerState.subject.trim();
     const body = mailComposerState.body.trim();
     const templateId = resolveSelectedTemplateId();
+
+    if (!mailComposerMode) {
+      if (!silentValidation) {
+        setMailComposerState((prev) => ({ ...prev, error: "Choose an email type first." }));
+      }
+      return;
+    }
+    if (mailComposerMode === "template" && !templateId) {
+      if (!silentValidation) {
+        setMailComposerState((prev) => ({ ...prev, error: "Select a template before continuing." }));
+      }
+      return;
+    }
 
     if (!subject) {
       if (!silentValidation) {
@@ -4711,6 +4852,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     mailComposerState.subject,
     mailComposerState.body,
     mailComposerState.reactLiveSource,
+    mailComposerMode,
     isReactTemplateSelected,
     resolveSelectedTemplateId,
     buildMailTemplateContextForRequest,
@@ -4721,6 +4863,15 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const subject = mailComposerState.subject.trim();
     const body = mailComposerState.body.trim();
     const templateId = resolveSelectedTemplateId();
+
+    if (!mailComposerMode) {
+      setMailComposerState((prev) => ({ ...prev, error: "Choose an email type first." }));
+      return;
+    }
+    if (mailComposerMode === "template" && !templateId) {
+      setMailComposerState((prev) => ({ ...prev, error: "Select a template before continuing." }));
+      return;
+    }
 
     if (!mailComposerPreviewState.data || mailComposerPreviewState.loading || mailComposerPreviewState.refreshing) {
       setMailComposerState((prev) => ({
@@ -4785,16 +4936,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   useEffect(() => {
-    const isReactSelected =
-      (
-        mailTemplateState.selectedTemplateId
-          ? mailTemplateState.templates.find(
-              (template) => String(template.id) === mailTemplateState.selectedTemplateId,
-            )?.templateType
-          : mailTemplateState.editorType
-      ) === "react_email";
-
-    if (!mailComposerPreviewState.opened || !isReactSelected) {
+    if (!mailComposerPreviewState.opened || !isReactTemplateSelected) {
       return;
     }
     const source = mailComposerState.reactLiveSource.trim();
@@ -4811,9 +4953,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     };
   }, [
     mailComposerPreviewState.opened,
-    mailTemplateState.selectedTemplateId,
-    mailTemplateState.templates,
-    mailTemplateState.editorType,
+    isReactTemplateSelected,
     mailComposerState.reactLiveSource,
     handlePreviewMail,
   ]);
@@ -5017,11 +5157,23 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     () =>
       mailTemplateState.templates.map((template) => ({
         value: String(template.id),
-        label: template.name,
+        label: `${template.name} · ${template.templateType === "react_email" ? "React Email" : "Plain text"}`,
       })),
     [mailTemplateState.templates],
   );
   const hasSelectedMailTemplate = Boolean(selectedMailTemplate);
+  const mailComposerReady =
+    mailComposerMode === "plain" || (mailComposerMode === "template" && hasSelectedMailTemplate);
+  const availableTshirtVariants = tshirtAvailabilityState.variants.filter((variant) => variant.inStock);
+  const mailSourceRawData =
+    mailComposerState.sourceOrder?.rawData &&
+    typeof mailComposerState.sourceOrder.rawData === "object" &&
+    !Array.isArray(mailComposerState.sourceOrder.rawData)
+      ? (mailComposerState.sourceOrder.rawData as Record<string, unknown>)
+      : null;
+  const tshirtSizeEmailStatus = String(mailSourceRawData?.tshirtSizeEmailStatus ?? "").trim();
+  const tshirtSizeEmailSentAt = String(mailSourceRawData?.tshirtSizeEmailSentAt ?? "").trim();
+  const tshirtSizeEmailError = String(mailSourceRawData?.tshirtSizeEmailError ?? "").trim();
   const mobileActionsBookingId = mobileActionsOrder ? getBookingIdFromOrder(mobileActionsOrder) : null;
   const mobileActionsCanDirectConfirmation = Boolean(
     mobileActionsOrder &&
@@ -6504,7 +6656,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         fullScreen
         centered
       >
-        <Stack gap="sm">
+        <Stack gap="md" style={{ width: "100%", maxWidth: 1180, marginInline: "auto" }}>
           {amendEmailPreviewState.error ? (
             <Alert color="red" title="Failed to process amend action">
               {amendEmailPreviewState.error}
@@ -7595,177 +7747,447 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         fullScreen
         centered
       >
-        <Stack gap="md" style={{ minHeight: "calc(100vh - 120px)" }}>
-          {mailTemplateState.error ? (
-            <Alert color="red" title="Template error">
-              {mailTemplateState.error}
-            </Alert>
-          ) : null}
-          {mailComposerState.error ? (
-            <Alert color="red" title="Failed to send email">
-              {mailComposerState.error}
-            </Alert>
-          ) : null}
-          {mailComposerState.success ? (
-            <Alert color="green" title="Success">
-              {mailComposerState.success}
-            </Alert>
-          ) : null}
+        <Stack
+          gap="lg"
+          style={{
+            width: "100%",
+            maxWidth: 1180,
+            minHeight: "calc(100vh - 120px)",
+            marginInline: "auto",
+          }}
+        >
+          {mailComposerMode === null ? (
+            <Stack gap="xl" justify="center" style={{ flex: 1, paddingBlock: isMobile ? 16 : 48 }}>
+              <Stack gap={6} align="center" ta="center">
+                <ThemeIcon size={54} radius="xl" variant="light" color="blue">
+                  <MailOutline fontSize="medium" />
+                </ThemeIcon>
+                <Title order={2}>How would you like to write this email?</Title>
+                <Text c="dimmed" maw={620}>
+                  Choose a reusable template for a consistent message, or start with a simple plain email.
+                </Text>
+              </Stack>
 
-          {isMailReply ? (
-            <Alert color="blue" title="Replying in the existing Gmail thread">
-              The subject is locked so Gmail can keep this response in the same conversation.
-            </Alert>
-          ) : null}
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="lg" maw={820} w="100%" mx="auto">
+                <UnstyledButton
+                  onClick={() => handleMailComposerModeSelection("template")}
+                  disabled={mailComposerState.sending}
+                  style={{ height: "100%" }}
+                >
+                  <Paper
+                    withBorder
+                    radius="lg"
+                    p={isMobile ? "lg" : 32}
+                    h="100%"
+                    style={{ cursor: "pointer", transition: "border-color 150ms ease, box-shadow 150ms ease" }}
+                  >
+                    <Stack gap="md" align="flex-start">
+                      <ThemeIcon size={48} radius="md" variant="light" color="blue">
+                        <IconTemplate size={26} />
+                      </ThemeIcon>
+                      <Box>
+                        <Text fw={700} size="lg">Use a template</Text>
+                        <Text size="sm" c="dimmed" mt={4}>
+                          Pick an approved plain-text or React Email template and personalize it for this booking.
+                        </Text>
+                      </Box>
+                      <Group gap={6} c="blue" mt="auto">
+                        <Text size="sm" fw={600}>Choose a template</Text>
+                        <IconArrowRight size={16} />
+                      </Group>
+                    </Stack>
+                  </Paper>
+                </UnstyledButton>
 
-          <Group align="flex-end">
-            <Select
-              label="Email template"
-              placeholder={mailTemplateState.loading ? "Loading templates..." : "Select a template"}
-              data={mailTemplateOptions}
-              value={mailTemplateState.selectedTemplateId}
-              onChange={handleMailTemplateSelection}
-              clearable
-              searchable
-              style={{ flex: 1 }}
-              disabled={mailTemplateState.loading || mailComposerState.sending || mailTemplateState.saving}
-            />
-            <Button
-              variant="default"
-              onClick={loadMailTemplates}
-              loading={mailTemplateState.loading}
-              disabled={mailComposerState.sending || mailTemplateState.saving}
-            >
-              Reload templates
-            </Button>
-          </Group>
+                <UnstyledButton
+                  onClick={() => handleMailComposerModeSelection("plain")}
+                  disabled={mailComposerState.sending}
+                  style={{ height: "100%" }}
+                >
+                  <Paper
+                    withBorder
+                    radius="lg"
+                    p={isMobile ? "lg" : 32}
+                    h="100%"
+                    style={{ cursor: "pointer", transition: "border-color 150ms ease, box-shadow 150ms ease" }}
+                  >
+                    <Stack gap="md" align="flex-start">
+                      <ThemeIcon size={48} radius="md" variant="light" color="gray">
+                        <IconFileText size={26} />
+                      </ThemeIcon>
+                      <Box>
+                        <Text fw={700} size="lg">Write a plain email</Text>
+                        <Text size="sm" c="dimmed" mt={4}>
+                          Start from a clean, familiar message and write directly to the customer.
+                        </Text>
+                      </Box>
+                      <Group gap={6} c="blue" mt="auto">
+                        <Text size="sm" fw={600}>Start writing</Text>
+                        <IconArrowRight size={16} />
+                      </Group>
+                    </Stack>
+                  </Paper>
+                </UnstyledButton>
+              </SimpleGrid>
 
-          <Group grow>
-            <TextInput
-              label="Template name"
-              value={mailTemplateState.editorName}
-              onChange={handleTemplateNameChange}
-              placeholder="Example: Supply order follow-up"
-              disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
-            />
-            <Select
-              label="Template format"
-              data={[
-                { value: "plain_text", label: "Plain text" },
-                { value: "react_email", label: "React Email" },
-              ]}
-              value={mailTemplateState.editorType}
-              onChange={handleTemplateTypeChange}
-              disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
-            />
-          </Group>
-
-          <TextInput
-            label="Template description"
-            value={mailTemplateState.editorDescription}
-            onChange={handleTemplateDescriptionChange}
-            placeholder="Optional description for this template"
-            disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
-          />
-
-          <Group justify="flex-end">
-            <Button
-              variant="default"
-              onClick={handleCreateTemplate}
-              loading={mailTemplateState.saving}
-              disabled={mailComposerState.sending || mailTemplateState.loading}
-            >
-              Save as new template
-            </Button>
-            <Button
-              variant="light"
-              onClick={handleUpdateTemplate}
-              loading={mailTemplateState.saving}
-              disabled={!hasSelectedMailTemplate || mailComposerState.sending || mailTemplateState.loading}
-            >
-              Update template
-            </Button>
-          </Group>
-
-          <Text size="xs" c="dimmed">
-            Type {"{{"} in Subject, Body, or React source to open variable suggestions.
-          </Text>
-
-          <Divider />
-
-          <TextInput
-            label="To"
-            value={mailComposerState.to}
-            onChange={handleMailToChange}
-            onClick={closeMailVariableDropdown}
-            placeholder="recipient@example.com"
-            required
-            disabled={isMailReply || mailComposerState.sending}
-          />
-          <TextInput
-            ref={mailSubjectInputRef}
-            label="Subject"
-            value={mailComposerState.subject}
-            onChange={handleMailSubjectChange}
-            onClick={(event) => {
-              const target = event.currentTarget;
-              updateMailVariableDropdownForField("subject", target.value, target.selectionStart ?? target.value.length);
-            }}
-            onKeyUp={(event) => {
-              const target = event.currentTarget;
-              updateMailVariableDropdownForField("subject", target.value, target.selectionStart ?? target.value.length);
-            }}
-            placeholder="Email subject"
-            required
-            disabled={isMailReply || mailComposerState.sending}
-          />
-          {renderMailVariableDropdown("subject")}
-          {isReactTemplateSelected ? (
-            <Alert color="blue" title="React Email Live Editor">
-              Use the Preview modal to live edit the React Email source and components.
-            </Alert>
+              <Group justify="center">
+                <Button variant="subtle" color="gray" onClick={closeMailComposerModal}>
+                  Cancel
+                </Button>
+              </Group>
+            </Stack>
           ) : (
-            <Textarea
-              ref={mailBodyInputRef}
-              label="Body"
-              value={mailComposerState.body}
-              onChange={handleMailBodyChange}
-              onClick={(event) => {
-                const target = event.currentTarget;
-                updateMailVariableDropdownForField("body", target.value, target.selectionStart ?? target.value.length);
-              }}
-              onKeyUp={(event) => {
-                const target = event.currentTarget;
-                updateMailVariableDropdownForField("body", target.value, target.selectionStart ?? target.value.length);
-              }}
-              placeholder="Write your message..."
-              autosize
-              minRows={14}
-              maxRows={24}
-              required
-            />
-          )}
-          {!isReactTemplateSelected ? renderMailVariableDropdown("body") : null}
+            <>
+              <Paper withBorder radius="lg" p={{ base: "sm", sm: "md" }}>
+                <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                  <Group gap="sm">
+                    <ThemeIcon
+                      size={42}
+                      radius="md"
+                      variant="light"
+                      color={mailComposerMode === "template" ? "blue" : "gray"}
+                    >
+                      {mailComposerMode === "template" ? <IconTemplate size={22} /> : <IconFileText size={22} />}
+                    </ThemeIcon>
+                    <Box>
+                      <Text fw={700}>
+                        {mailComposerMode === "template" ? "Template email" : "Plain email"}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {mailComposerMode === "template"
+                          ? selectedMailTemplate?.name ?? "Select a template to continue"
+                          : "Write a one-off message for this booking"}
+                      </Text>
+                    </Box>
+                  </Group>
+                  <Button
+                    variant="subtle"
+                    color="gray"
+                    leftSection={<IconArrowLeft size={16} />}
+                    onClick={() => {
+                      setMailComposerMode(null);
+                      setMailComposerPreviewState(createDefaultMailComposerPreviewState());
+                      setShowMailPreviewSource(false);
+                      closeMailVariableDropdown();
+                    }}
+                    disabled={mailComposerState.sending || mailTemplateState.saving}
+                    fullWidth={isMobile}
+                  >
+                    Change email type
+                  </Button>
+                </Group>
+              </Paper>
 
-          <Group justify="flex-end" mt="auto">
-            <Button
-              variant="default"
-              onClick={closeMailComposerModal}
-              disabled={mailComposerState.sending}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="light"
-              onClick={() => {
-                void handlePreviewMail();
-              }}
-              loading={mailComposerPreviewState.loading}
-              disabled={mailComposerState.sending}
-            >
-              Preview email
-            </Button>
-          </Group>
+              {mailTemplateState.error ? (
+                <Alert color="red" title="Template error">{mailTemplateState.error}</Alert>
+              ) : null}
+              {mailComposerState.error ? (
+                <Alert color="red" title="Email needs attention">{mailComposerState.error}</Alert>
+              ) : null}
+              {mailComposerState.success ? (
+                <Alert color="green" title="Success">{mailComposerState.success}</Alert>
+              ) : null}
+              {isMailReply ? (
+                <Alert color="blue" title="Replying in the existing Gmail thread">
+                  The recipient and subject stay locked so Gmail can keep this response in the same conversation.
+                </Alert>
+              ) : null}
+
+              {mailComposerMode === "template" ? (
+                <Paper withBorder radius="lg" p={{ base: "md", sm: "lg" }}>
+                  <Stack gap="md">
+                    <Group justify="space-between" align="flex-start" wrap="wrap">
+                      <Box>
+                        <Text fw={700}>Choose your template</Text>
+                        <Text size="sm" c="dimmed">The email editor appears after a template is selected.</Text>
+                      </Box>
+                      <Button
+                        variant="subtle"
+                        size="xs"
+                        leftSection={<IconRefresh size={15} />}
+                        onClick={loadMailTemplates}
+                        loading={mailTemplateState.loading}
+                        disabled={mailComposerState.sending || mailTemplateState.saving}
+                      >
+                        Reload
+                      </Button>
+                    </Group>
+                    <Select
+                      label="Email template"
+                      placeholder={mailTemplateState.loading ? "Loading templates..." : "Search and select a template"}
+                      data={mailTemplateOptions}
+                      value={mailTemplateState.selectedTemplateId}
+                      onChange={handleMailTemplateSelection}
+                      searchable
+                      nothingFoundMessage="No templates found"
+                      disabled={mailTemplateState.loading || mailComposerState.sending || mailTemplateState.saving}
+                      size="md"
+                    />
+                    {mailTemplateState.loading ? (
+                      <Group gap="xs"><Loader size="sm" /><Text size="sm" c="dimmed">Loading templates…</Text></Group>
+                    ) : !hasSelectedMailTemplate ? (
+                      <Alert color="blue" variant="light">Select a template above to continue.</Alert>
+                    ) : null}
+                  </Stack>
+                </Paper>
+              ) : null}
+
+              {mailComposerReady ? (
+                <Box
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 2fr) minmax(280px, 1fr)",
+                    gap: "var(--mantine-spacing-lg)",
+                    alignItems: "start",
+                  }}
+                >
+                  <Paper withBorder radius="lg" p={{ base: "md", sm: "lg" }}>
+                    <Stack gap="md">
+                      <Group justify="space-between" align="center">
+                        <Box>
+                          <Text fw={700} size="lg">Compose message</Text>
+                          <Text size="sm" c="dimmed">Review the recipient, subject, and content before previewing.</Text>
+                        </Box>
+                        <Badge variant="light" color={mailComposerMode === "template" ? "blue" : "gray"}>
+                          {mailComposerMode === "template" ? "Template" : "Plain text"}
+                        </Badge>
+                      </Group>
+
+                      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                        <TextInput
+                          label="To"
+                          value={mailComposerState.to}
+                          onChange={handleMailToChange}
+                          onClick={closeMailVariableDropdown}
+                          placeholder="recipient@example.com"
+                          required
+                          disabled={isMailReply || mailComposerState.sending}
+                          size="md"
+                        />
+                        <TextInput
+                          ref={mailSubjectInputRef}
+                          label="Subject"
+                          value={mailComposerState.subject}
+                          onChange={handleMailSubjectChange}
+                          onClick={(event) => {
+                            const target = event.currentTarget;
+                            updateMailVariableDropdownForField("subject", target.value, target.selectionStart ?? target.value.length);
+                          }}
+                          onKeyUp={(event) => {
+                            const target = event.currentTarget;
+                            updateMailVariableDropdownForField("subject", target.value, target.selectionStart ?? target.value.length);
+                          }}
+                          placeholder="Email subject"
+                          required
+                          disabled={isMailReply || mailComposerState.sending}
+                          size="md"
+                        />
+                      </SimpleGrid>
+                      {renderMailVariableDropdown("subject")}
+
+                      {isReactTemplateSelected ? (
+                        <Alert color="blue" title="React Email template">
+                          Preview the email to see the rendered design and edit its React Email source live.
+                        </Alert>
+                      ) : (
+                        <Textarea
+                          ref={mailBodyInputRef}
+                          label="Message"
+                          value={mailComposerState.body}
+                          onChange={handleMailBodyChange}
+                          onClick={(event) => {
+                            const target = event.currentTarget;
+                            updateMailVariableDropdownForField("body", target.value, target.selectionStart ?? target.value.length);
+                          }}
+                          onKeyUp={(event) => {
+                            const target = event.currentTarget;
+                            updateMailVariableDropdownForField("body", target.value, target.selectionStart ?? target.value.length);
+                          }}
+                          placeholder="Write your message..."
+                          autosize
+                          minRows={isMobile ? 10 : 16}
+                          maxRows={28}
+                          required
+                          disabled={mailComposerState.sending}
+                          size="md"
+                        />
+                      )}
+                      {!isReactTemplateSelected ? renderMailVariableDropdown("body") : null}
+                      <Text size="xs" c="dimmed">
+                        Type {"{{"} in the subject or message to insert booking information.
+                      </Text>
+                    </Stack>
+                  </Paper>
+
+                  <Stack gap="md">
+                    <Paper withBorder radius="lg" p="md">
+                      <Stack gap="sm">
+                        <Group justify="space-between" align="center" wrap="nowrap">
+                          <Group gap="xs" wrap="nowrap">
+                            <ThemeIcon size={34} radius="md" color="blue" variant="light">
+                              <Checkroom fontSize="small" />
+                            </ThemeIcon>
+                            <Box>
+                              <Text fw={700}>T-shirt sizes in stock</Text>
+                              <Text size="xs" c="dimmed">Live from inventory</Text>
+                            </Box>
+                          </Group>
+                          <ActionIcon
+                            variant="subtle"
+                            aria-label="Refresh T-shirt availability"
+                            onClick={() => { void loadTshirtAvailability(); }}
+                            loading={tshirtAvailabilityState.loading}
+                          >
+                            <IconRefresh size={17} />
+                          </ActionIcon>
+                        </Group>
+
+                        {tshirtSizeEmailStatus === "sent" ? (
+                          <Alert color="green" variant="light" title="Size request sent automatically">
+                            {tshirtSizeEmailSentAt && dayjs(tshirtSizeEmailSentAt).isValid()
+                              ? `Sent ${dayjs(tshirtSizeEmailSentAt).format("MMM D, YYYY [at] HH:mm")}.`
+                              : "The customer has already received the automatic size-selection email."}
+                          </Alert>
+                        ) : tshirtSizeEmailStatus === "failed" ? (
+                          <Alert color="red" variant="light" title="Automatic size request failed">
+                            {tshirtSizeEmailError || "The email could not be sent. It will be eligible for a later retry."}
+                          </Alert>
+                        ) : tshirtSizeEmailStatus === "sending" ? (
+                          <Alert color="blue" variant="light">The automatic size-selection email is being sent.</Alert>
+                        ) : null}
+
+                        {tshirtAvailabilityState.error ? (
+                          <Alert color="red" variant="light" title="Stock unavailable">
+                            {tshirtAvailabilityState.error}
+                          </Alert>
+                        ) : tshirtAvailabilityState.loading && tshirtAvailabilityState.variants.length === 0 ? (
+                          <Group gap="xs"><Loader size="sm" /><Text size="sm" c="dimmed">Checking stock...</Text></Group>
+                        ) : tshirtAvailabilityState.variants.length === 0 ? (
+                          <Alert color="yellow" variant="light">
+                            No size-controlled T-shirt inventory mappings were found.
+                          </Alert>
+                        ) : availableTshirtVariants.length === 0 ? (
+                          <Alert color="red" variant="light">All mapped T-shirt sizes are currently out of stock.</Alert>
+                        ) : (
+                          <Group gap="xs">
+                            {availableTshirtVariants.map((variant) => (
+                              <Badge key={variant.variant} color="green" variant="light" size="lg">
+                                {variant.variant} · {variant.availableQuantity}
+                              </Badge>
+                            ))}
+                          </Group>
+                        )}
+
+                        <Text size="xs" c="dimmed">
+                          Templates receive only the in-stock sizes automatically. Quantities shown here are internal.
+                        </Text>
+                      </Stack>
+                    </Paper>
+
+                    <Paper withBorder radius="lg" p="md">
+                      <Stack gap="sm">
+                        <Text fw={700}>Before sending</Text>
+                        <Group gap="xs" align="flex-start" wrap="nowrap">
+                          <ThemeIcon size={24} radius="xl" color="green" variant="light"><IconCheck size={14} /></ThemeIcon>
+                          <Text size="sm">Confirm the customer email and subject.</Text>
+                        </Group>
+                        <Group gap="xs" align="flex-start" wrap="nowrap">
+                          <ThemeIcon size={24} radius="xl" color="green" variant="light"><IconCheck size={14} /></ThemeIcon>
+                          <Text size="sm">Open Preview to verify the final rendered message.</Text>
+                        </Group>
+                        <Group gap="xs" align="flex-start" wrap="nowrap">
+                          <ThemeIcon size={24} radius="xl" color="green" variant="light"><IconCheck size={14} /></ThemeIcon>
+                          <Text size="sm">The Send button is available from the preview.</Text>
+                        </Group>
+                      </Stack>
+                    </Paper>
+
+                    <Accordion variant="contained" radius="lg">
+                      <Accordion.Item value="template-settings">
+                        <Accordion.Control>
+                          {mailComposerMode === "template" ? "Template settings" : "Save as a template"}
+                        </Accordion.Control>
+                        <Accordion.Panel>
+                          <Stack gap="sm">
+                            <TextInput
+                              label="Template name"
+                              value={mailTemplateState.editorName}
+                              onChange={handleTemplateNameChange}
+                              placeholder="Example: Booking follow-up"
+                              disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
+                            />
+                            {mailComposerMode === "template" ? (
+                              <Select
+                                label="Template format"
+                                data={[
+                                  { value: "plain_text", label: "Plain text" },
+                                  { value: "react_email", label: "React Email" },
+                                ]}
+                                value={mailTemplateState.editorType}
+                                onChange={handleTemplateTypeChange}
+                                disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
+                              />
+                            ) : null}
+                            <TextInput
+                              label="Description"
+                              value={mailTemplateState.editorDescription}
+                              onChange={handleTemplateDescriptionChange}
+                              placeholder="Optional internal description"
+                              disabled={mailComposerState.sending || mailTemplateState.loading || mailTemplateState.saving}
+                            />
+                            <Button
+                              variant="default"
+                              onClick={handleCreateTemplate}
+                              loading={mailTemplateState.saving}
+                              disabled={mailComposerState.sending || mailTemplateState.loading}
+                              fullWidth
+                            >
+                              Save as new template
+                            </Button>
+                            {mailComposerMode === "template" ? (
+                              <Button
+                                variant="light"
+                                onClick={handleUpdateTemplate}
+                                loading={mailTemplateState.saving}
+                                disabled={!hasSelectedMailTemplate || mailComposerState.sending || mailTemplateState.loading}
+                                fullWidth
+                              >
+                                Update selected template
+                              </Button>
+                            ) : null}
+                          </Stack>
+                        </Accordion.Panel>
+                      </Accordion.Item>
+                    </Accordion>
+                  </Stack>
+                </Box>
+              ) : null}
+
+              <Paper
+                withBorder
+                radius="lg"
+                p="sm"
+                mt="auto"
+                style={{ position: "sticky", bottom: 8, zIndex: 2, background: "var(--mantine-color-body)" }}
+              >
+                <Group justify="flex-end" gap="sm" grow={isMobile}>
+                  <Button variant="default" onClick={closeMailComposerModal} disabled={mailComposerState.sending}>
+                    Cancel
+                  </Button>
+                  {mailComposerReady ? (
+                    <Button
+                      onClick={() => { void handlePreviewMail(); }}
+                      loading={mailComposerPreviewState.loading}
+                      disabled={mailComposerState.sending || mailTemplateState.saving}
+                      leftSection={<IconEye size={17} />}
+                    >
+                      Preview email
+                    </Button>
+                  ) : null}
+                </Group>
+              </Paper>
+            </>
+          )}
         </Stack>
       </Modal>
 
@@ -7813,47 +8235,51 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               <Stack gap={4}>
                 <Text fw={600}>{mailComposerPreviewState.data.subject || "No subject"}</Text>
                 <Text size="sm" c="dimmed">
+                  To: {mailComposerState.to || "No recipient"}
+                </Text>
+                <Text size="sm" c="dimmed">
                   {mailComposerPreviewState.data.templateType
                     ? `Template type: ${mailComposerPreviewState.data.templateType}`
                     : "Template type: plain_text"}
                 </Text>
               </Stack>
-              {isReactTemplateSelected ? (
-                <Stack gap="xs">
-                  <Textarea
-                    ref={mailReactSourceInputRef}
-                    label="React Email source (live)"
-                    value={mailComposerState.reactLiveSource}
-                    onChange={handleMailPreviewBodyChange}
-                    onClick={(event) => {
-                      const target = event.currentTarget;
-                      updateMailVariableDropdownForField("react", target.value, target.selectionStart ?? target.value.length);
-                    }}
-                    onKeyUp={(event) => {
-                      const target = event.currentTarget;
-                      updateMailVariableDropdownForField("react", target.value, target.selectionStart ?? target.value.length);
-                    }}
-                    autosize
-                    minRows={16}
-                    maxRows={28}
-                    disabled={mailComposerState.sending || mailTemplateState.saving}
-                  />
-                  {renderMailVariableDropdown("react")}
-                  <Text size="xs" c="dimmed">
-                    You can use React Email components directly (for example `Section`, `Text`, `Button`, `Row`, `Column`, `Img`, `Link`).
-                    The source should return JSX.
-                  </Text>
-                  <Group justify="flex-end">
-                    {hasSelectedMailTemplate ? (
-                      <Button
-                        variant="default"
-                        onClick={handleUpdateTemplate}
-                        loading={mailTemplateState.saving}
-                        disabled={mailComposerPreviewState.loading || mailComposerState.sending}
-                      >
-                        Save template changes
-                      </Button>
-                    ) : null}
+              <Group justify="space-between" align="center" wrap="wrap">
+                <Button
+                  variant="default"
+                  onClick={closeMailComposerPreview}
+                  disabled={mailComposerState.sending || mailTemplateState.saving}
+                  fullWidth={isMobile}
+                >
+                  Back to editor
+                </Button>
+                <Group justify="flex-end" grow={isMobile} wrap="wrap" style={{ flex: isMobile ? "1 1 100%" : undefined }}>
+                  {isReactTemplateSelected ? (
+                    <Button
+                      variant={showMailPreviewSource ? "filled" : "light"}
+                      color="gray"
+                      leftSection={<IconCode size={16} />}
+                      onClick={() => {
+                        if (showMailPreviewSource) {
+                          closeMailVariableDropdown();
+                        }
+                        setShowMailPreviewSource(!showMailPreviewSource);
+                      }}
+                      disabled={mailComposerState.sending || mailTemplateState.saving}
+                    >
+                      {showMailPreviewSource ? "Hide template code" : "Edit template code"}
+                    </Button>
+                  ) : null}
+                  {isReactTemplateSelected && showMailPreviewSource && hasSelectedMailTemplate ? (
+                    <Button
+                      variant="default"
+                      onClick={handleUpdateTemplate}
+                      loading={mailTemplateState.saving}
+                      disabled={mailComposerPreviewState.loading || mailComposerState.sending}
+                    >
+                      Save template changes
+                    </Button>
+                  ) : null}
+                  {isReactTemplateSelected && showMailPreviewSource ? (
                     <Button
                       variant="light"
                       onClick={() => {
@@ -7864,30 +8290,47 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                     >
                       Refresh now
                     </Button>
-                    <Button
-                      color="blue"
-                      onClick={handleSendMail}
-                      loading={mailComposerState.sending}
-                      disabled={mailComposerPreviewState.loading || mailComposerPreviewState.refreshing}
-                    >
-                      Send email
-                    </Button>
-                  </Group>
-                </Stack>
-              ) : (
-                <Group justify="flex-end">
-                  <Button
-                    color="blue"
-                    onClick={handleSendMail}
-                    loading={mailComposerState.sending}
-                    disabled={mailComposerPreviewState.loading || mailComposerPreviewState.refreshing}
-                  >
-                    Send email
-                  </Button>
+                  ) : null}
                 </Group>
-              )}
+              </Group>
+              {isReactTemplateSelected && showMailPreviewSource ? (
+                <Paper withBorder radius="md" p={isMobile ? "sm" : "md"}>
+                  <Stack gap="xs">
+                    <Box>
+                      <Text fw={600}>Template code</Text>
+                      <Text size="xs" c="dimmed">
+                        Changes update the rendered preview automatically.
+                      </Text>
+                    </Box>
+                    <Textarea
+                      ref={mailReactSourceInputRef}
+                      aria-label="React Email template code"
+                      value={mailComposerState.reactLiveSource}
+                      onChange={handleMailPreviewBodyChange}
+                      onClick={(event) => {
+                        const target = event.currentTarget;
+                        updateMailVariableDropdownForField("react", target.value, target.selectionStart ?? target.value.length);
+                      }}
+                      onKeyUp={(event) => {
+                        const target = event.currentTarget;
+                        updateMailVariableDropdownForField("react", target.value, target.selectionStart ?? target.value.length);
+                      }}
+                      autosize
+                      minRows={14}
+                      maxRows={28}
+                      disabled={mailComposerState.sending || mailTemplateState.saving}
+                      styles={{ input: { fontFamily: "monospace", fontSize: 13 } }}
+                    />
+                    {renderMailVariableDropdown("react")}
+                    <Text size="xs" c="dimmed">
+                      React Email components such as `Section`, `Text`, `Button`, `Row`, `Column`, `Img`, and `Link` are supported.
+                      The source should return JSX.
+                    </Text>
+                  </Stack>
+                </Paper>
+              ) : null}
               {mailComposerDisplayHtml ? (
-                <Box style={{ height: "calc(100vh - 240px)" }}>
+                <Box style={{ height: isMobile ? "calc(100vh - 360px)" : "calc(100vh - 280px)", minHeight: 320 }}>
                   <iframe
                     title="Mail composer preview"
                     srcDoc={mailComposerDisplayHtml}
@@ -7910,6 +8353,18 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                   No email preview content available.
                 </Alert>
               )}
+              <Group justify="flex-end">
+                <Button
+                  color="blue"
+                  onClick={handleSendMail}
+                  loading={mailComposerState.sending}
+                  disabled={mailComposerPreviewState.loading || mailComposerPreviewState.refreshing}
+                  fullWidth={isMobile}
+                  size="md"
+                >
+                  Send email
+                </Button>
+              </Group>
             </>
           ) : null}
         </Stack>

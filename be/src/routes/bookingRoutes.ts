@@ -17,6 +17,7 @@ import {
   listBookingMailboxEmails,
   getBookingEmailPreview,
   getMailboxEmailPreview,
+  getBookingEmailTshirtAvailability,
   renderBookingEmailPreview,
   sendBookingEmail,
   reprocessBookingEmail,
@@ -51,6 +52,7 @@ const router = Router();
 router.get(['/', ''], authMiddleware, listBookings);
 router.get('/emails', authMiddleware, listBookingEmails);
 router.get('/emails/mailbox', authMiddleware, listBookingMailboxEmails);
+router.get('/emails/tshirt-availability', authMiddleware, getBookingEmailTshirtAvailability);
 router.get('/emails/:messageId/preview', authMiddleware, getBookingEmailPreview);
 router.get('/emails/gmail/:messageId/preview', authMiddleware, getMailboxEmailPreview);
 router.post('/emails/render-preview', authMiddleware, renderBookingEmailPreview);

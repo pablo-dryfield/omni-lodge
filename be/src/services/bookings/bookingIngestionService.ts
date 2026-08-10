@@ -33,6 +33,7 @@ import { getConfigValue } from '../configService.js';
 import { syncEcwidBookingUtmByBookingId } from './ecwidUtmSyncService.js';
 import { syncEcwidBookingProcessingFeeByBookingId } from './ecwidProcessingFeeSyncService.js';
 import { syncEcwidBookingAddonPricingByBookingId } from './ecwidAddonPricingSyncService.js';
+import { maybeSendTshirtSizeSelectionEmail } from './tshirtSizeEmailAutomationService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -2686,6 +2687,18 @@ export const processBookingEmail = async (
         await syncEcwidBookingUtmByBookingId(bookingId);
         await syncEcwidBookingProcessingFeeByBookingId(bookingId);
         await syncEcwidBookingAddonPricingByBookingId(bookingId);
+      }
+    }
+
+    if (!isScopedReprocess && !options.force) {
+      for (const bookingId of processedBookingIds) {
+        try {
+          await maybeSendTshirtSizeSelectionEmail(bookingId);
+        } catch (error) {
+          logger.error(
+            `[booking-email] T-shirt size email automation crashed for booking ${bookingId}: ${(error as Error).message}`,
+          );
+        }
       }
     }
 

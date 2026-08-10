@@ -284,6 +284,26 @@ export default class Booking extends Model<Booking> {
   declare attendedTshirtSizes: Record<string, number> | null;
 
   @AllowNull(true)
+  @Column({ field: 'tshirt_size_email_status', type: DataType.STRING(20) })
+  declare tshirtSizeEmailStatus: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'tshirt_size_email_attempted_at', type: DataType.DATE })
+  declare tshirtSizeEmailAttemptedAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'tshirt_size_email_sent_at', type: DataType.DATE })
+  declare tshirtSizeEmailSentAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'tshirt_size_email_message_id', type: DataType.STRING(256) })
+  declare tshirtSizeEmailMessageId: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'tshirt_size_email_error', type: DataType.TEXT })
+  declare tshirtSizeEmailError: string | null;
+
+  @AllowNull(true)
   @Column({
     field: 'addon_refund_actions',
     type: DataType.JSONB,

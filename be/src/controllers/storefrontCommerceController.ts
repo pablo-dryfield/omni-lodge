@@ -17,6 +17,7 @@ import {
   type StorefrontQuote,
 } from '../services/storefrontCommerceService.js';
 import { deliverStorefrontOrderEmails } from '../services/storefrontOrderEmailService.js';
+import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
 import { getConfigValueRaw } from '../services/configService.js';
 import logger from '../utils/logger.js';
 
@@ -289,6 +290,14 @@ export const fulfillPaidOrder = async (
     // Payment fulfillment must remain successful even when Gmail is temporarily unavailable.
     // A later Stripe retry/browser confirmation will resume only the unsent recipient.
     logger.error(`[storefront-email] Delivery failed for paid order ${publicId}: ${(error as Error).message}`);
+  }
+  try {
+    const bookings = await Booking.findAll({ where: { platformOrderId: publicId }, attributes: ['id'] });
+    for (const booking of bookings) {
+      await maybeSendTshirtSizeSelectionEmail(booking.id);
+    }
+  } catch (error) {
+    logger.error(`[storefront-email] T-shirt size automation failed for paid order ${publicId}: ${(error as Error).message}`);
   }
   return order;
 };
