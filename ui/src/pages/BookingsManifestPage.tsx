@@ -1351,7 +1351,7 @@ type AmendModalState = {
   opened: boolean;
   order: UnifiedOrder | null;
   bookingId: number | null;
-  mode: "ecwid" | "xperience" | "direct" | null;
+  mode: "ecwid" | "xperience" | "storefront" | "direct" | null;
   formDate: Date | null;
   formTime: string;
   submitting: boolean;
@@ -1594,7 +1594,7 @@ type CancelRefundState = {
   opened: boolean;
   order: UnifiedOrder | null;
   bookingId: number | null;
-  mode: "ecwid_refund" | "xperience_cancel" | "civitatis_cancel" | null;
+  mode: "ecwid_refund" | "storefront_refund" | "xperience_cancel" | "civitatis_cancel" | null;
   loading: boolean;
   submitting: boolean;
   error: string | null;
@@ -1695,6 +1695,9 @@ type PartialRefundEmailPreviewState = {
   data: MailComposerPreviewResponse | null;
   templateName: string | null;
 };
+
+const isTemplateRefundCancellationMode = (mode: CancelRefundState["mode"]): boolean =>
+  mode === "ecwid_refund" || mode === "storefront_refund";
 
 type MailComposerMode = "template" | "plain";
 
@@ -2242,11 +2245,20 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const baseState = createDefaultAmendState();
     const ecwidOrder = isEcwidOrder(order);
     const xperienceOrder = isXperiencePolandOrder(order);
+    const storefrontOrder = isStorefrontOrder(order);
     const directActionOrder = isDirectManifestActionOrder(order);
     baseState.opened = true;
     baseState.order = order;
     baseState.bookingId = getBookingIdFromOrder(order);
-    baseState.mode = ecwidOrder ? "ecwid" : xperienceOrder ? "xperience" : directActionOrder ? "direct" : null;
+    baseState.mode = ecwidOrder
+      ? "ecwid"
+      : xperienceOrder
+        ? "xperience"
+        : storefrontOrder
+          ? "storefront"
+          : directActionOrder
+            ? "direct"
+            : null;
     baseState.formDate = order.date && dayjs(order.date, DATE_FORMAT, true).isValid()
       ? dayjs(order.date, DATE_FORMAT).toDate()
       : null;
@@ -2708,6 +2720,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const remainingMajor = getPartialRefundRemainingAmountMajor(partialRefundState.preview);
     const shouldProceedToCancel = remainingMajor > 0 && partialRefundState.amount + 0.0001 >= remainingMajor;
     const isDirectRefund = Boolean(partialRefundState.order && isDirectManifestActionOrder(partialRefundState.order));
+    const isStorefrontRefund = Boolean(partialRefundState.order && isStorefrontOrder(partialRefundState.order));
     if (shouldProceedToCancel) {
       if (!partialRefundState.order) {
         setPartialRefundState((prev) => ({ ...prev, error: "Missing booking details for cancellation." }));
@@ -2715,7 +2728,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       }
       const order = partialRefundState.order;
       closePartialRefundModal();
-      if (isDirectRefund) {
+      if (isDirectRefund && !isStorefrontRefund) {
         await handleDirectCancellation(order);
       } else {
         await openCancelModal(order);
@@ -2745,7 +2758,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
 
     let preparedEmail: { payload: EmailTemplateRenderRequestPayload; templateName: string | null } | null = null;
-    if (!isDirectRefund) {
+    if (!isDirectRefund || isStorefrontRefund) {
       try {
         preparedEmail = await buildPartialRefundEmailPayload();
       } catch (error) {
@@ -2767,9 +2780,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         peopleQuantity: partialRefundState.peopleQuantity,
         addonQuantities: addonQuantitiesPayload,
         manualAmountUnlocked: partialRefundState.manualAmountUnlocked,
+        ...(isStorefrontRefund ? { sendCustomerEmail: false } : {}),
       });
       let successMessage = isDirectRefund
-        ? "Partial refund submitted and booking emails sent."
+        ? isStorefrontRefund
+          ? "Partial refund submitted and email sent."
+          : "Partial refund submitted and booking emails sent."
         : "Partial refund submitted and email sent.";
       if (preparedEmail) {
         try {
@@ -2812,6 +2828,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const openCancelModal = async (order: UnifiedOrder) => {
     const bookingId = getBookingIdFromOrder(order);
     const ecwidOrder = isEcwidOrder(order);
+    const storefrontOrder = isStorefrontOrder(order);
     const civitatisOrder = isCivitatisOrder(order);
     const xperienceOrder = isXperiencePolandOrder(order);
     const civitatisAllowed =
@@ -2825,16 +2842,18 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     baseState.bookingId = bookingId;
     baseState.mode = ecwidOrder
       ? "ecwid_refund"
+      : storefrontOrder
+        ? "storefront_refund"
       : xperienceOrder
         ? "xperience_cancel"
         : civitatisOrder
           ? "civitatis_cancel"
           : null;
-    baseState.loading = Boolean(bookingId && ecwidOrder);
+    baseState.loading = Boolean(bookingId && (ecwidOrder || storefrontOrder));
     if (!bookingId) {
       baseState.error = "Unable to locate OmniLodge booking reference for this order.";
       baseState.loading = false;
-    } else if (!ecwidOrder && !xperienceOrder && !civitatisOrder) {
+    } else if (!ecwidOrder && !storefrontOrder && !xperienceOrder && !civitatisOrder) {
       baseState.error = "Cancellation is not supported for this platform from the manifest.";
       baseState.loading = false;
     } else if (civitatisOrder && !civitatisAllowed) {
@@ -2843,11 +2862,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       baseState.loading = false;
     }
     setCancelState(baseState);
-    if (!bookingId || !ecwidOrder) {
+    if (!bookingId || (!ecwidOrder && !storefrontOrder)) {
       return;
     }
     try {
-      const response = await axiosInstance.get<RefundPreviewResponse>(`/bookings/${bookingId}/refund-preview`);
+      const previewEndpoint = ecwidOrder
+        ? `/bookings/${bookingId}/refund-preview`
+        : `/bookings/${bookingId}/partial-refund-preview`;
+      const response = await axiosInstance.get<RefundPreviewResponse>(previewEndpoint);
       setCancelState((prev) => {
         if (!prev.opened) {
           return prev;
@@ -2957,6 +2979,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     await axiosInstance.post(endpoint, {
       pickupDate,
       pickupTime: normalizedTime,
+      ...(amendState.mode === "storefront" ? { sendCustomerEmail: false } : {}),
     });
     return { pickupDate, pickupTime: normalizedTime };
   };
@@ -3302,8 +3325,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     payload: EmailTemplateRenderRequestPayload;
     templateName: string | null;
   }> => {
-    if (!cancelState.order || cancelState.mode !== "ecwid_refund" || !cancelState.preview?.stripe) {
-      throw new Error("Refund email is available only for Ecwid refund cancellations.");
+    if (!cancelState.order || !isTemplateRefundCancellationMode(cancelState.mode) || !cancelState.preview?.stripe) {
+      throw new Error("Refund email requires an Ecwid or storefront cancellation preview.");
     }
 
     const customerEmail = String(cancelState.order.customerEmail ?? "").trim();
@@ -3370,7 +3393,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const handlePreviewCancelRefundEmail = async () => {
-    if (cancelState.mode !== "ecwid_refund" || cancelState.loading) {
+    if (!isTemplateRefundCancellationMode(cancelState.mode) || cancelState.loading) {
       return;
     }
 
@@ -3570,7 +3593,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
 
     let preparedEmail: { payload: EmailTemplateRenderRequestPayload; templateName: string | null } | null = null;
-    if (cancelState.mode === "ecwid_refund" && cancelState.preview?.stripe) {
+    if (isTemplateRefundCancellationMode(cancelState.mode) && cancelState.preview?.stripe) {
       try {
         preparedEmail = await buildCancelRefundEmailPayload();
       } catch (error) {
@@ -3586,6 +3609,15 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     try {
       if (cancelState.mode === "ecwid_refund") {
         await axiosInstance.post(`/bookings/${cancelState.bookingId}/cancel-ecwid`);
+        if (preparedEmail) {
+          await axiosInstance.post("/bookings/emails/send", preparedEmail.payload, {
+            withCredentials: true,
+          });
+        }
+      } else if (cancelState.mode === "storefront_refund") {
+        await axiosInstance.post(`/bookings/${cancelState.bookingId}/direct-actions/cancellation`, {
+          sendCustomerEmail: false,
+        });
         if (preparedEmail) {
           await axiosInstance.post("/bookings/emails/send", preparedEmail.payload, {
             withCredentials: true,
@@ -3643,7 +3675,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     const order = mobileActionsOrder;
     closeMobileActionsModal();
-    if (isDirectManifestActionOrder(order)) {
+    if (isDirectFoodTourOrder(order)) {
       await handleDirectCancellation(order);
       return;
     }
@@ -5125,10 +5157,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     partialRefundHasPositiveAmount &&
     partialRefundAmountValue + 0.0001 >= partialRefundRemainingMajor;
   const partialRefundIsDirect = Boolean(partialRefundState.order && isDirectManifestActionOrder(partialRefundState.order));
+  const partialRefundUsesTemplateEmail = Boolean(
+    partialRefundState.order && (!partialRefundIsDirect || isStorefrontOrder(partialRefundState.order)),
+  );
   const partialRefundHasCustomerEmail = Boolean(String(partialRefundState.order?.customerEmail ?? "").trim());
   const partialRefundCanPreviewEmail =
     Boolean(partialRefundState.preview) &&
-    !partialRefundIsDirect &&
+    partialRefundUsesTemplateEmail &&
     !partialRefundState.submitting &&
     !partialRefundState.loading &&
     partialRefundHasCustomerEmail &&
@@ -6424,6 +6459,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               ? "Amend XperiencePoland booking"
               : amendState.mode === "ecwid"
                 ? "Amend Ecwid booking"
+                : amendState.mode === "storefront"
+                  ? "Amend storefront booking"
                 : "Amend booking"
         }
         size="md"
@@ -6435,6 +6472,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               ? "Updating the pickup details will sync the change to Ecwid first and then to OmniLodge."
               : amendState.mode === "xperience"
                 ? "Updating the pickup details will update this XperiencePoland booking in OmniLodge."
+                : amendState.mode === "storefront"
+                  ? "Updating the booking will show the same date-change email preview used for Ecwid before anything is saved."
                 : amendState.mode === "direct"
                   ? "Updating the pickup details will update this Food Tour booking and email the customer."
                 : "Updating the pickup details will update this booking in OmniLodge."}
@@ -6746,7 +6785,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               {partialRefundState.error}
             </Alert>
           )}
-          {partialRefundState.preview && !partialRefundIsDirect && !partialRefundHasCustomerEmail && !partialRefundShouldProceedToCancel && (
+          {partialRefundState.preview && partialRefundUsesTemplateEmail && !partialRefundHasCustomerEmail && !partialRefundShouldProceedToCancel && (
             <Alert color="yellow" title="Missing customer email" style={{ width: "100%", textAlign: "center" }}>
               Partial refund confirmation email cannot be sent because this booking has no customer email.
             </Alert>
@@ -7038,19 +7077,19 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       >
         <Stack gap="md">
           <Text size="sm" c="dimmed">
-            {cancelState.mode === "ecwid_refund"
+            {isTemplateRefundCancellationMode(cancelState.mode)
               ? "We will verify the Stripe transaction before issuing the refund and cancelling the booking."
               : cancelState.mode === "civitatis_cancel"
                 ? "This only cancels the booking internally in OmniLodge. Any customer refund must be handled directly in Civitatis."
               : "This will cancel the booking in OmniLodge and record a cancellation event."}
           </Text>
-          {cancelState.loading && cancelState.mode === "ecwid_refund" && (
+          {cancelState.loading && isTemplateRefundCancellationMode(cancelState.mode) && (
             <Group gap="sm">
               <Loader size="sm" />
               <Text size="sm">Loading Stripe transaction details...</Text>
             </Group>
           )}
-          {cancelState.preview && cancelState.mode === "ecwid_refund" && (
+          {cancelState.preview && isTemplateRefundCancellationMode(cancelState.mode) && (
             <Stack gap="sm">
               {cancelState.preview.stripe ? (
                 <>
@@ -7127,7 +7166,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               This action only marks the booking as cancelled in OmniLodge. Refunds must be processed externally in Civitatis.
             </Alert>
           )}
-          {cancelState.mode === "ecwid_refund" &&
+          {isTemplateRefundCancellationMode(cancelState.mode) &&
             cancelState.preview?.stripe &&
             !String(cancelState.order?.customerEmail ?? "").trim() && (
             <Alert color="yellow" title="Missing customer email">
@@ -7137,7 +7176,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           {cancelState.error && (
             <Alert
               color="red"
-              title={cancelState.mode === "ecwid_refund" ? "Unable to load refund details" : "Unable to cancel booking"}
+              title={isTemplateRefundCancellationMode(cancelState.mode) ? "Unable to load refund details" : "Unable to cancel booking"}
             >
               {cancelState.error}
             </Alert>
@@ -7159,7 +7198,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               disabled={
                 cancelState.loading ||
                 cancelState.submitting ||
-                cancelState.mode !== "ecwid_refund" ||
+                !isTemplateRefundCancellationMode(cancelState.mode) ||
                 !cancelState.preview?.stripe
               }
             >
@@ -7174,13 +7213,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 cancelState.loading ||
                 cancelState.submitting ||
                 !cancelState.mode ||
-                (cancelState.mode === "ecwid_refund" &&
+                (isTemplateRefundCancellationMode(cancelState.mode) &&
                   (cancelState.preview?.stripe
                     ? (!cancelState.preview || !String(cancelState.order?.customerEmail ?? "").trim())
                     : false))
               }
             >
-              {cancelState.mode === "ecwid_refund"
+              {isTemplateRefundCancellationMode(cancelState.mode)
                 ? cancelState.preview?.stripe
                   ? cancelState.preview.stripe.fullyRefunded
                     ? "Confirm Cancel"

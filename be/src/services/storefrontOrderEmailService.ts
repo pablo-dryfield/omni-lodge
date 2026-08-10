@@ -7,6 +7,9 @@ import { getConfigValue } from './configService.js';
 import { findLockedStorefrontOrderWithItems } from './storefrontOrderPersistenceService.js';
 import logger from '../utils/logger.js';
 
+const SUPPORT_PHONE = '+48791847981';
+const SUPPORT_EMAIL = 'pubthroughkrakow@gmail.com';
+
 const escapeHtml = (value: unknown): string =>
   String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -35,89 +38,139 @@ const dateLabel = (value: string | null): string => {
 
 const timeLabel = (value: string | null): string => value || 'To be confirmed';
 
-const row = (label: string, value: unknown): string => `
+const detailRow = (label: string, value: unknown): string => `
   <tr>
-    <td style="padding:11px 0;color:#766a66;font:14px Arial,sans-serif;vertical-align:top">${escapeHtml(label)}</td>
-    <td style="padding:11px 0 11px 16px;color:#211b19;font:bold 14px Arial,sans-serif;text-align:right;vertical-align:top">${escapeHtml(value)}</td>
+    <td style="padding:11px 0;color:#746762;font-family:Arial,sans-serif;font-size:14px;line-height:1.4;vertical-align:top">${escapeHtml(label)}</td>
+    <td style="padding:11px 0 11px 16px;color:#241c19;font-family:Arial,sans-serif;font-size:14px;font-weight:700;line-height:1.4;text-align:right;vertical-align:top">${escapeHtml(value)}</td>
   </tr>`;
 
 const itemCard = (item: StorefrontOrderItem, currency: string): string => {
   const addons = Array.isArray(item.addons) ? item.addons : [];
   const addonCopy = addons
-    .map((addon) => `${addon.name ?? 'Add-on'} × ${addon.quantity ?? 1}`)
+    .map((addon) => `${addon.name ?? 'Add-on'} x ${addon.quantity ?? 1}`)
     .join(', ');
   return `
-    <div style="margin:0 0 12px;padding:18px;background:#fff;border:1px solid #eadfd8;border-radius:16px">
-      <div style="font:bold 18px Georgia,serif;color:#211b19">${escapeHtml(item.productName)}</div>
-      <div style="margin-top:7px;color:#675b56;font:14px/1.5 Arial,sans-serif">
-        ${escapeHtml(dateLabel(item.experienceDate))} · ${escapeHtml(timeLabel(item.experienceTime))}<br>
-        ${escapeHtml(`${item.quantity} guest${item.quantity === 1 ? '' : 's'}`)}
-        ${addonCopy ? `<br><span style="color:#8d4c30">${escapeHtml(addonCopy)}</span>` : ''}
-      </div>
-      <div style="margin-top:8px;color:#211b19;font:bold 15px Arial,sans-serif">${escapeHtml(money(item.total, currency))}</div>
-    </div>`;
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px;background:#ffffff;border:1px solid #eadfd8;border-radius:16px">
+      <tr><td style="padding:20px">
+        <div style="color:#241c19;font-family:Georgia,'Times New Roman',serif;font-size:20px;font-weight:700;line-height:1.3">${escapeHtml(item.productName)}</div>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:9px">
+          ${detailRow('Date', dateLabel(item.experienceDate))}
+          ${detailRow('Start time', timeLabel(item.experienceTime))}
+          ${detailRow('Guests', `${item.quantity} guest${item.quantity === 1 ? '' : 's'}`)}
+          ${addonCopy ? detailRow('Add-ons', addonCopy) : ''}
+          ${detailRow('Item total', money(item.total, currency))}
+        </table>
+      </td></tr>
+    </table>`;
 };
 
-const shell = (eyebrow: string, title: string, intro: string, body: string, footer: string): string => `
+const shell = (preheader: string, content: string): string => `
 <!doctype html>
 <html lang="en">
-  <head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-  <body style="margin:0;padding:0;background:#201a18">
-    <div style="display:none;max-height:0;overflow:hidden">${escapeHtml(intro)}</div>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#201a18">
-      <tr><td style="padding:24px 12px">
-        <div style="max-width:620px;margin:auto;background:#f4a261;border-radius:28px;padding:10px">
-          <div style="background:#fffaf6;border-radius:21px;padding:32px 24px">
-            <div style="text-align:center;color:#9b4d2d;font:bold 12px Arial,sans-serif;letter-spacing:3px;text-transform:uppercase">${escapeHtml(eyebrow)}</div>
-            <h1 style="margin:12px 0 10px;text-align:center;color:#211b19;font:42px/1.05 Georgia,serif">${escapeHtml(title)}</h1>
-            <p style="margin:0 auto 26px;max-width:480px;text-align:center;color:#675b56;font:16px/1.6 Arial,sans-serif">${escapeHtml(intro)}</p>
-            ${body}
-            <p style="margin:26px 0 0;text-align:center;color:#766a66;font:13px/1.6 Arial,sans-serif">${escapeHtml(footer)}</p>
-          </div>
-        </div>
-      </td></tr>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="x-apple-disable-message-reformatting">
+    <title>${escapeHtml(preheader)}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#211a18">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${escapeHtml(preheader)}</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:#211a18">
+      <tr>
+        <td align="center" style="padding:24px 12px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:#fffaf6;border:8px solid #f4a261;border-radius:28px">
+            <tr><td style="padding:34px 26px 28px">${content}</td></tr>
+          </table>
+        </td>
+      </tr>
     </table>
   </body>
 </html>`;
 
+const policyHtml = `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;background:#fff1e6;border:1px solid #f3d1b8;border-radius:16px">
+    <tr><td style="padding:20px;color:#4f403a;font-family:Arial,sans-serif;font-size:14px;line-height:1.65">
+      <div style="margin-bottom:8px;color:#241c19;font-size:17px;font-weight:700">Cancellation policy</div>
+      <div style="margin-bottom:8px"><strong>24 hours or more before the start time:</strong> you can receive a full refund or credit.</div>
+      <div style="margin-bottom:8px"><strong>If we cancel:</strong> you will receive a full refund or credit if the operator cancels because of weather or another unforeseen circumstance.</div>
+      <div><strong>Within 24 hours or for a no-show:</strong> cancellation requests will be rejected and no-shows will be charged the full price.</div>
+    </td></tr>
+  </table>`;
+
+const contactHtml = `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;background:#ffffff;border:1px solid #eadfd8;border-radius:16px">
+    <tr><td align="center" style="padding:20px;color:#5f514c;font-family:Arial,sans-serif;font-size:14px;line-height:1.7">
+      <div style="color:#241c19;font-size:17px;font-weight:700">Need to change something?</div>
+      <div style="margin-top:5px">Reply to this email, call <a href="tel:${SUPPORT_PHONE}" style="color:#9b4d2d;font-weight:700;text-decoration:none">${SUPPORT_PHONE}</a>, or email <a href="mailto:${SUPPORT_EMAIL}" style="color:#9b4d2d;font-weight:700;text-decoration:none">${SUPPORT_EMAIL}</a>.</div>
+    </td></tr>
+  </table>`;
+
 export const buildCustomerStorefrontEmail = (order: StorefrontOrder) => {
   const firstName = order.customerFirstName || 'there';
   const items = order.items || [];
-  const intro = `Hi ${firstName}, your payment went through and your Kraków experience is confirmed. Here is everything you need in one place.`;
-  const body = `
-    <div style="margin:0 0 22px;padding:18px;text-align:center;background:#211b19;border-radius:16px;color:#fff">
-      <div style="color:#f4a261;font:bold 11px Arial,sans-serif;letter-spacing:2px;text-transform:uppercase">Booking reference</div>
-      <div style="margin-top:6px;font:bold 18px Arial,sans-serif;word-break:break-all">${escapeHtml(order.publicId)}</div>
-    </div>
-    ${items.map((item) => itemCard(item, order.currency)).join('')}
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;border-top:1px solid #eadfd8;border-bottom:1px solid #eadfd8">
-      ${row('Subtotal', money(order.subtotal, order.currency))}
-      ${Number(order.addonTotal) ? row('Add-ons', money(order.addonTotal, order.currency)) : ''}
-      ${Number(order.discountTotal) ? row('Discount', `−${money(order.discountTotal, order.currency)}`) : ''}
-      ${row('Total paid', money(order.total, order.currency))}
+  const firstItem = items[0];
+  const preheader = `Payment received. Your ${firstItem?.productName ?? 'Krakow experience'} is confirmed.`;
+  const content = `
+    <div style="text-align:center;color:#9b4d2d;font-family:Arial,sans-serif;font-size:12px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase">Payment confirmed</div>
+    <h1 style="margin:12px 0 10px;text-align:center;color:#241c19;font-family:Georgia,'Times New Roman',serif;font-size:40px;line-height:1.08">You're booked, ${escapeHtml(firstName)}!</h1>
+    <p style="margin:0 auto 24px;max-width:500px;text-align:center;color:#675b56;font-family:Arial,sans-serif;font-size:16px;line-height:1.6">Your payment was successful and your Krakow experience is confirmed. Everything you need is below.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;background:#241c19;border-radius:16px">
+      <tr><td align="center" style="padding:18px;color:#ffffff;font-family:Arial,sans-serif">
+        <div style="color:#f4a261;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase">Booking reference</div>
+        <div style="margin-top:7px;font-size:18px;font-weight:700;line-height:1.4;word-break:break-all">${escapeHtml(order.publicId)}</div>
+      </td></tr>
     </table>
-    <div style="margin-top:22px;padding:18px;background:#fff1e6;border-radius:16px;color:#4f403a;font:14px/1.6 Arial,sans-serif">
-      <strong style="color:#211b19">What happens next?</strong><br>
-      Save this email and bring your booking reference. If anything changes or you have a question, simply reply to this message and our Kraków team will help.
-    </div>`;
+    ${items.map((item) => itemCard(item, order.currency)).join('')}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;border-top:1px solid #eadfd8;border-bottom:1px solid #eadfd8">
+      ${detailRow('Subtotal', money(order.subtotal, order.currency))}
+      ${Number(order.addonTotal) ? detailRow('Add-ons', money(order.addonTotal, order.currency)) : ''}
+      ${Number(order.discountTotal) ? detailRow('Discount', `-${money(order.discountTotal, order.currency)}`) : ''}
+      ${detailRow('Total paid', money(order.total, order.currency))}
+    </table>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;background:#241c19;border-radius:16px">
+      <tr><td style="padding:20px;color:#ffffff;font-family:Arial,sans-serif;font-size:14px;line-height:1.65">
+        <div style="color:#f4a261;font-size:17px;font-weight:700">Keep this email handy</div>
+        <div style="margin-top:5px">Save your booking reference and show it to the team if requested. If any booking detail looks incorrect, contact us as soon as possible.</div>
+      </td></tr>
+    </table>
+    ${policyHtml}
+    ${contactHtml}
+    <p style="margin:24px 0 0;text-align:center;color:#766a66;font-family:Arial,sans-serif;font-size:13px;line-height:1.6">Krawl Through Krakow<br>We cannot wait to welcome you.</p>`;
+
   const text = [
-    `You're booked, ${firstName}!`,
-    intro,
+    `YOU'RE BOOKED, ${firstName}!`,
+    '',
+    preheader,
     `Booking reference: ${order.publicId}`,
     '',
     ...items.flatMap((item) => [
       item.productName,
-      `${dateLabel(item.experienceDate)} · ${timeLabel(item.experienceTime)}`,
-      `${item.quantity} guest${item.quantity === 1 ? '' : 's'} · ${money(item.total, order.currency)}`,
+      `Date: ${dateLabel(item.experienceDate)}`,
+      `Start time: ${timeLabel(item.experienceTime)}`,
+      `Guests: ${item.quantity}`,
+      ...(Array.isArray(item.addons) && item.addons.length > 0
+        ? [`Add-ons: ${item.addons.map((addon) => `${addon.name ?? 'Add-on'} x ${addon.quantity ?? 1}`).join(', ')}`]
+        : []),
+      `Item total: ${money(item.total, order.currency)}`,
       '',
     ]),
     `Total paid: ${money(order.total, order.currency)}`,
     '',
-    'Save this email and bring your booking reference. Reply to this email if you need help.',
+    'CANCELLATION POLICY',
+    'Customers receive a full refund or credit when cancelling at least 24 hours before the experience start time.',
+    'Customers also receive a full refund or credit if the operator cancels because of weather or another unforeseen circumstance.',
+    'No-shows are charged the full price. Cancellation requests made within 24 hours of the pub crawl date and time will be rejected.',
+    '',
+    `To cancel or ask about a cancellation, call ${SUPPORT_PHONE} or email ${SUPPORT_EMAIL}.`,
+    '',
+    'Krawl Through Krakow',
   ].join('\n');
+
+  const subjectExperience = header(firstItem?.productName ?? 'Krakow experience');
+  const subjectDate = firstItem?.experienceDate ? ` - ${dateLabel(firstItem.experienceDate)}` : '';
   return {
-    subject: `You're booked! Kraków confirmation ${order.publicId.slice(0, 8).toUpperCase()}`,
-    htmlBody: shell('Payment confirmed', `You're booked, ${firstName}!`, intro, body, 'Krawl Through Krakow · See you soon'),
+    subject: `Booking confirmed - ${subjectExperience}${subjectDate}`,
+    htmlBody: shell(preheader, content),
     textBody: text,
   };
 };
@@ -125,29 +178,33 @@ export const buildCustomerStorefrontEmail = (order: StorefrontOrder) => {
 export const buildInternalStorefrontEmail = (order: StorefrontOrder) => {
   const items = order.items || [];
   const guest = `${order.customerFirstName} ${order.customerLastName}`.trim();
-  const intro = `${guest} completed a paid storefront checkout.`;
-  const body = `
-    <div style="margin-bottom:18px;padding:18px;background:#211b19;border-radius:16px;color:#fff;font:14px/1.6 Arial,sans-serif">
+  const preheader = `${guest} completed a paid storefront checkout.`;
+  const content = `
+    <div style="text-align:center;color:#9b4d2d;font-family:Arial,sans-serif;font-size:12px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase">New storefront booking</div>
+    <h1 style="margin:12px 0 22px;text-align:center;color:#241c19;font-family:Georgia,'Times New Roman',serif;font-size:36px;line-height:1.1">Payment received</h1>
+    <div style="margin-bottom:18px;padding:18px;background:#241c19;border-radius:16px;color:#ffffff;font-family:Arial,sans-serif;font-size:14px;line-height:1.6">
       <strong style="color:#f4a261">Order ${escapeHtml(order.publicId)}</strong><br>
-      ${escapeHtml(guest)} · ${escapeHtml(order.customerEmail)}${order.customerPhone ? `<br>${escapeHtml(order.customerPhone)}` : ''}
+      ${escapeHtml(guest)} - ${escapeHtml(order.customerEmail)}${order.customerPhone ? `<br>${escapeHtml(order.customerPhone)}` : ''}
     </div>
     ${items.map((item) => itemCard(item, order.currency)).join('')}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eadfd8;border-bottom:1px solid #eadfd8">
-      ${row('Payment', 'Paid')}
-      ${row('Total', money(order.total, order.currency))}
-      ${order.discountCode ? row('Discount code', order.discountCode) : ''}
-      ${row('Customer country', order.customerCountryCode || 'Not provided')}
-    </table>`;
+      ${detailRow('Payment', 'Paid')}
+      ${detailRow('Total', money(order.total, order.currency))}
+      ${order.discountCode ? detailRow('Discount code', order.discountCode) : ''}
+      ${detailRow('Customer country', order.customerCountryCode || 'Not provided')}
+    </table>
+    <p style="margin:24px 0 0;text-align:center;color:#766a66;font-family:Arial,sans-serif;font-size:13px;line-height:1.6">Automatic Omni-Lodge notification</p>`;
+
   return {
-    subject: `New paid storefront order · ${guest} · ${money(order.total, order.currency)}`,
-    htmlBody: shell('New storefront booking', 'Payment received', intro, body, 'This is an automatic Omni-Lodge notification.'),
+    subject: `New paid storefront order - ${guest} - ${money(order.total, order.currency)}`,
+    htmlBody: shell(preheader, content),
     textBody: [
       'NEW PAID STOREFRONT ORDER',
       `Order: ${order.publicId}`,
       `Guest: ${guest}`,
       `Email: ${order.customerEmail}`,
       `Phone: ${order.customerPhone || '-'}`,
-      ...items.map((item) => `${item.productName} — ${dateLabel(item.experienceDate)} ${timeLabel(item.experienceTime)} — ${item.quantity} guests`),
+      ...items.map((item) => `${item.productName} - ${dateLabel(item.experienceDate)} ${timeLabel(item.experienceTime)} - ${item.quantity} guests`),
       `Total: ${money(order.total, order.currency)}`,
       order.discountCode ? `Discount code: ${order.discountCode}` : '',
     ].join('\n'),

@@ -40,12 +40,17 @@ describe('storefront paid-order emails', () => {
   it('builds a useful customer confirmation in HTML and plain text', () => {
     const email = buildCustomerStorefrontEmail(order);
 
-    expect(email.subject).toContain("You're booked");
+    expect(email.subject).toContain('Booking confirmed');
     expect(email.htmlBody).toContain('Krawl Through Krakow Pub Crawl');
     expect(email.htmlBody).toContain('Saturday, 15 August 2026');
     expect(email.htmlBody).toContain('Instant photos');
     expect(email.textBody).toContain(order.publicId);
     expect(email.textBody).toContain('Total paid');
+    expect(email.htmlBody).toContain('Cancellation policy');
+    expect(email.htmlBody).toContain('24 hours or more before the start time');
+    expect(email.textBody).toContain('+48791847981');
+    expect(email.textBody).toContain('pubthroughkrakow@gmail.com');
+    expect(`${email.subject}${email.htmlBody}${email.textBody}`).not.toMatch(/Ã|Â|â|Ä|Ĺ/);
   });
 
   it('builds an operator notification with contact and payment details', () => {
