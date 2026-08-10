@@ -151,6 +151,7 @@ type BookingAttendanceBulkUpdateResult =
 type AmendPickupRequestBody = {
   pickupDate?: string;
   pickupTime?: string;
+  sendCustomerEmail?: boolean;
 };
 
 type ReconcileEcwidRequestBody = {
@@ -4730,6 +4731,7 @@ const saveDirectBookingEvent = async (
 const sendDirectActionEmailWithStatus = async (
   booking: Booking,
   options: DirectBookingActionEmailOptions,
+  enabled = true,
 ): Promise<{
   customerEmailStatus: 'sent' | 'skipped' | 'failed';
   customerEmailMessageId: string | null;
@@ -4738,6 +4740,17 @@ const sendDirectActionEmailWithStatus = async (
   customerEmailRfcMessageId: string | null;
   customerEmailLabelIds: string[];
 }> => {
+  if (!enabled) {
+    return {
+      customerEmailStatus: 'skipped',
+      customerEmailMessageId: null,
+      customerEmailFrom: null,
+      customerEmailTo: booking.guestEmail ?? null,
+      customerEmailRfcMessageId: null,
+      customerEmailLabelIds: [],
+    };
+  }
+
   try {
     const emailResult = await sendDirectBookingActionEmail(booking, options);
     return {
@@ -5565,7 +5578,8 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
       kind: 'amend',
       previousExperienceStartAt,
     };
-    const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
+    const sendCustomerEmail = !isStorefrontBooking(booking) || req.body?.sendCustomerEmail !== false;
+    const email = await sendDirectActionEmailWithStatus(booking, emailOptions, sendCustomerEmail);
     const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
 
     res.status(200).json({
@@ -5682,7 +5696,8 @@ export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res
       refundedAmount: refundAmount,
       refundCurrency: booking.refundedCurrency,
     };
-    const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
+    const sendCustomerEmail = !isStorefrontBooking(booking) || req.body?.sendCustomerEmail !== false;
+    const email = await sendDirectActionEmailWithStatus(booking, emailOptions, sendCustomerEmail);
     const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
 
     res.status(200).json({
@@ -5732,6 +5747,7 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
       peopleQuantity?: unknown;
       addonQuantities?: Record<string, unknown>;
       manualAmountUnlocked?: unknown;
+      sendCustomerEmail?: boolean;
     };
     const peopleQuantityRaw = Number(body.peopleQuantity ?? 0);
     const requestedPeopleQuantity = Number.isFinite(peopleQuantityRaw)
@@ -5860,7 +5876,8 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
       previousPartySizeTotal: currentPartySizeTotal !== previousPartySizeTotal ? previousPartySizeTotal : null,
       currentPartySizeTotal: currentPartySizeTotal !== previousPartySizeTotal ? currentPartySizeTotal : null,
     };
-    const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
+    const sendCustomerEmail = !isStorefrontBooking(booking) || body.sendCustomerEmail !== false;
+    const email = await sendDirectActionEmailWithStatus(booking, emailOptions, sendCustomerEmail);
     const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
 
     res.status(200).json({
