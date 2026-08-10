@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -28,6 +28,7 @@ import {
   restoreConfigDefaults,
   discoverTripAdvisorQueryId,
 } from "../../api/config";
+import axiosInstance from "../../utils/axiosInstance";
 
 const PAGE_SLUG = PAGE_SLUGS.settingsControlPanel;
 
@@ -116,6 +117,8 @@ const SettingsControlPanel = () => {
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [queryDiscoveryLoading, setQueryDiscoveryLoading] = useState(false);
   const [queryDiscoveryMessage, setQueryDiscoveryMessage] = useState<string | null>(null);
+  const [emailTemplateOptions, setEmailTemplateOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [emailTemplatesLoading, setEmailTemplatesLoading] = useState(false);
 
   const entries = useMemo(() => data ?? [], [data]);
 
@@ -140,6 +143,38 @@ const SettingsControlPanel = () => {
       );
     });
   }, [entries, search, selectedCategory]);
+
+  useEffect(() => {
+    if (activeEntry?.key !== "BOOKING_TSHIRT_SIZE_EMAIL_TEMPLATE_NAME") {
+      return;
+    }
+    let cancelled = false;
+    setEmailTemplatesLoading(true);
+    axiosInstance
+      .get<{
+        templates: Array<{ name: string; templateType: string; isActive: boolean }>;
+      }>("/email-templates", { withCredentials: true })
+      .then((response) => {
+        if (cancelled) return;
+        setEmailTemplateOptions(
+          response.data.templates
+            .filter((template) => template.isActive)
+            .map((template) => ({
+              value: template.name,
+              label: `${template.name} · ${template.templateType === "react_email" ? "React Email" : "Plain text"}`,
+            })),
+        );
+      })
+      .catch((error) => {
+        if (!cancelled) setModalError(extractErrorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) setEmailTemplatesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeEntry?.key]);
 
   const openEditor = (entry: ConfigEntry) => {
     setActiveEntry(entry);
@@ -306,6 +341,23 @@ const SettingsControlPanel = () => {
           value={typeof editValue === "string" ? editValue : editValue ? JSON.stringify(editValue, null, 2) : ""}
           onChange={(event) => setEditValue(event.currentTarget.value)}
           minRows={4}
+        />
+      );
+    }
+
+    if (activeEntry.key === "BOOKING_TSHIRT_SIZE_EMAIL_TEMPLATE_NAME") {
+      return (
+        <Select
+          label="Existing active email template"
+          description="The selected template is referenced as-is. Automation will never rewrite its subject or design."
+          placeholder={emailTemplatesLoading ? "Loading templates..." : "Select a template"}
+          data={emailTemplateOptions}
+          value={typeof editValue === "string" && editValue ? editValue : null}
+          onChange={(value) => setEditValue(value ?? "")}
+          searchable
+          clearable
+          disabled={emailTemplatesLoading}
+          nothingFoundMessage="No active templates found"
         />
       );
     }
