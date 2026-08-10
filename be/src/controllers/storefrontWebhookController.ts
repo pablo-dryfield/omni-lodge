@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import Stripe from 'stripe';
 import { getStripeClient } from '../finance/services/stripeClient.js';
 import { getConfigValueRaw } from '../services/configService.js';
+import logger from '../utils/logger.js';
 import { fulfillPaidOrder } from './storefrontCommerceController.js';
 
 const webhookSecret = (): string | null =>
@@ -35,6 +36,9 @@ export const storefrontStripeWebhook = async (
       const session = event.data.object as Stripe.Checkout.Session;
       const publicId = session.metadata?.orderPublicId;
       if (session.payment_status === 'paid' && publicId) {
+        logger.info(
+          `[storefront-webhook] Processing event=${event.id} type=${event.type} order=${publicId} session=${session.id}`,
+        );
         await fulfillPaidOrder(publicId, session);
       }
     }
