@@ -6,9 +6,10 @@ import { AppNavbarFinance } from "../navbars/AppNavbarFinance";
 
 interface NavBarRouterProps {
   currentPage: string;
+  onNavigate?: () => void;
 }
 
-export function NavBarRouter({ currentPage }: NavBarRouterProps) {
+export function NavBarRouter({ currentPage, onNavigate }: NavBarRouterProps) {
   const location = useLocation();
 
   if (currentPage.startsWith("Reports") || location.pathname.startsWith("/reports")) {
@@ -16,11 +17,11 @@ export function NavBarRouter({ currentPage }: NavBarRouterProps) {
   }
 
   if (currentPage.startsWith("Finance") || location.pathname.startsWith("/finance")) {
-    return <AppNavbarFinance />;
+    return <AppNavbarFinance onNavigate={onNavigate} />;
   }
 
   if (currentPage === "Settings" || location.pathname.startsWith("/settings")) {
-    return <AppNavbarSettings />;
+    return <AppNavbarSettings onNavigate={onNavigate} />;
   }
 
   // Default: no navbar

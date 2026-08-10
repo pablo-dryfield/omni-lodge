@@ -275,7 +275,7 @@ const AppContent = () => {
             >
               <ScrollArea style={{ height: "100%" }} type="hover" offsetScrollbars>
                 <Suspense fallback={<SectionLoader />}>
-                  <NavBarRouter currentPage={currentPage} />
+                  <NavBarRouter currentPage={currentPage} onNavigate={closeSidebar} />
                 </Suspense>
               </ScrollArea>
             </AppShell.Navbar>
