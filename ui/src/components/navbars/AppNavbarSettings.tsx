@@ -231,7 +231,11 @@ const settingsNav: SettingsNavSection[] = [
   },
 ];
 
-export const AppNavbarSettings = () => {
+type AppNavbarSettingsProps = {
+  onNavigate?: () => void;
+};
+
+export const AppNavbarSettings = ({ onNavigate }: AppNavbarSettingsProps) => {
   const location = useLocation();
   const navigate = useNavigate();
   const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
@@ -247,6 +251,7 @@ export const AppNavbarSettings = () => {
 
   const handleNavigate = (to: string) => {
     navigate(to);
+    onNavigate?.();
   };
 
   if (visibleSections.length === 0) {

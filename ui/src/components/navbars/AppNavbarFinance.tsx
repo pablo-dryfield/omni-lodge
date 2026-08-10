@@ -17,7 +17,11 @@ const financeLinks = [
   { label: "Settings", path: "/finance/settings" },
 ];
 
-export const AppNavbarFinance = () => {
+type AppNavbarFinanceProps = {
+  onNavigate?: () => void;
+};
+
+export const AppNavbarFinance = ({ onNavigate }: AppNavbarFinanceProps) => {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -29,7 +33,10 @@ export const AppNavbarFinance = () => {
           key={link.path}
           label={link.label}
           active={location.pathname === link.path || (link.path !== "/finance" && location.pathname.startsWith(link.path))}
-          onClick={() => navigate(link.path)}
+          onClick={() => {
+            navigate(link.path);
+            onNavigate?.();
+          }}
         />
       ))}
     </Stack>
