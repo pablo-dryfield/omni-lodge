@@ -7,12 +7,14 @@ import ReviewCounterMonthlyApproval from '../models/ReviewCounterMonthlyApproval
 import ReviewArchive from '../models/ReviewArchive.js';
 import ReviewAssignment from '../models/ReviewAssignment.js';
 import ReviewManualCredit from '../models/ReviewManualCredit.js';
+import ReviewMonthLock from '../models/ReviewMonthLock.js';
 import CompensationComponentAssignment, { type CompensationTargetScope } from '../models/CompensationComponentAssignment.js';
 import CompensationComponent from '../models/CompensationComponent.js';
 import StaffProfile from '../models/StaffProfile.js';
 import User from '../models/User.js';
 import UserShiftRole from '../models/UserShiftRole.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { reviewDateRangeInWarsaw, reviewMonthInWarsaw } from '../utils/reviewCreditMonth.js';
 
 const REVIEW_COUNTER_COLUMNS = [
   { header: 'ID', accessorKey: 'id', type: 'number' },
@@ -1034,14 +1036,27 @@ type StaffBucket = {
   });
 
   // New review archive credits feed the same payroll/approval pipeline as the
-  // legacy counters. A review contributes exactly 1 / assignee count to each
-  // assigned person, regardless of whether the source later deletes it.
-  const archivedReviews = await ReviewArchive.findAll({
-    where: {
-      reviewCreatedAt: { [Op.between]: [start.toDate(), end.toDate()] },
-    },
-    attributes: ['id', 'platform'],
-  });
+  // legacy counters. Unlocked months exclude deleted reviews; a locked month
+  // uses its exact final-count snapshot, including reviews deleted afterward.
+  const monthLock = await ReviewMonthLock.findOne({ where: { periodStart: startValue, isLocked: true } });
+  const lockedReviewIds = Array.isArray(monthLock?.reviewIds)
+    ? monthLock.reviewIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+    : [];
+  const reviewRange = reviewDateRangeInWarsaw(startValue, endValue);
+  const archivedReviews = monthLock
+    ? (lockedReviewIds.length
+        ? await ReviewArchive.findAll({ where: { id: { [Op.in]: lockedReviewIds } }, attributes: ['id', 'platform'] })
+        : [])
+    : await ReviewArchive.findAll({
+        where: {
+          [Op.or]: [
+            { creditMonth: { [Op.between]: [startValue, endValue] } },
+            { creditMonth: null, reviewCreatedAt: { [Op.between]: [reviewRange.start, reviewRange.end] } },
+          ],
+          isDeleted: false,
+        },
+        attributes: ['id', 'platform'],
+      });
   const archivedReviewIds = archivedReviews.map((review) => review.id);
   const archivedAssignments = archivedReviewIds.length
     ? await ReviewAssignment.findAll({
@@ -1469,7 +1484,7 @@ export const getReviewCounterStaffSummary = async (req: Request, res: Response):
       parsePeriodInput(req.query.periodStart) ??
       parsePeriodInput(req.query.period) ??
       parsePeriodInput(req.query.startDate) ??
-      dayjs().startOf('month');
+      dayjs(`${reviewMonthInWarsaw(new Date())}-01`);
     const payload = await buildStaffSummaryForPeriod(period.startOf('month'));
     res.status(200).json([{ data: [payload], columns: [] }]);
   } catch (error) {

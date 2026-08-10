@@ -25,6 +25,8 @@ import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
 import ReviewArchive from "../models/ReviewArchive.js";
 import ReviewAssignment from "../models/ReviewAssignment.js";
 import ReviewManualCredit from "../models/ReviewManualCredit.js";
+import ReviewMonthLock from "../models/ReviewMonthLock.js";
+import { reviewDateRangeInWarsaw, reviewPeriodStartInWarsaw } from "../utils/reviewCreditMonth.js";
 import ReportTemplate, {
   ReportTemplateFieldSelection,
   ReportTemplateOptions,
@@ -4822,18 +4824,45 @@ const fetchReviewStats = async (
     stats.set(userId, current);
   });
 
-  const archivedReviews = includesArchiveReviews ? await ReviewArchive.findAll({
-    attributes: ["id"],
+  const applicableReviewLocks = includesArchiveReviews ? (await ReviewMonthLock.findAll({
     where: {
-      reviewCreatedAt: {
-        [Op.between]: [
-          new Date(`${archiveReviewStart.format("YYYY-MM-DD")}T00:00:00.000Z`),
-          new Date(`${endIso}T23:59:59.999Z`),
-        ],
+      isLocked: true,
+      periodStart: {
+        [Op.between]: [archiveReviewStart.startOf("month").format("YYYY-MM-DD"), rangeEnd.startOf("month").format("YYYY-MM-DD")],
       },
     },
+  })).filter((lock) => {
+    const lockStart = dayjs(lock.periodStart);
+    return !lockStart.isBefore(archiveReviewStart, "day") && !lockStart.endOf("month").isAfter(rangeEnd, "day");
   }) : [];
-  const archivedReviewIds = archivedReviews.map((review) => review.id);
+  const lockedReviewIds = new Set(
+    applicableReviewLocks.flatMap((lock) => Array.isArray(lock.reviewIds) ? lock.reviewIds.map(Number) : []),
+  );
+  const lockedPeriods = new Map(applicableReviewLocks.map((lock) => [lock.periodStart, new Set(Array.isArray(lock.reviewIds) ? lock.reviewIds.map(Number) : [])]));
+  const archiveReviewRange = reviewDateRangeInWarsaw(archiveReviewStart.format("YYYY-MM-DD"), endIso);
+  const archivedReviews = includesArchiveReviews ? await ReviewArchive.findAll({
+    attributes: ["id", "reviewCreatedAt", "creditMonth", "isDeleted"],
+    where: {
+      [Op.or]: [
+        {
+          creditMonth: { [Op.between]: [archiveReviewStart.format("YYYY-MM-DD"), endIso] },
+        },
+        {
+          creditMonth: null,
+          reviewCreatedAt: {
+            [Op.between]: [archiveReviewRange.start, archiveReviewRange.end],
+          },
+        },
+        ...(lockedReviewIds.size ? [{ id: { [Op.in]: Array.from(lockedReviewIds) } }] : []),
+      ],
+    },
+  }) : [];
+  const archivedReviewIds = archivedReviews.filter((review) => {
+    if (lockedReviewIds.has(review.id)) return true;
+    const periodStart = review.creditMonth ?? reviewPeriodStartInWarsaw(review.reviewCreatedAt);
+    if (lockedPeriods.has(periodStart)) return false;
+    return !review.isDeleted;
+  }).map((review) => review.id);
   if (archivedReviewIds.length > 0) {
     const archiveAssignments = await ReviewAssignment.findAll({
       attributes: ["reviewId", "userId"],

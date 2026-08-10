@@ -9,6 +9,7 @@ export default class ReviewArchive extends Model{
  @AllowNull(true) @Column(DataType.TEXT) declare comment:string|null;
  @AllowNull(false) @Column(DataType.DECIMAL(3,2)) declare rating:string;
  @AllowNull(false) @Column({field:'review_created_at',type:DataType.DATE}) declare reviewCreatedAt:Date;
+ @AllowNull(true) @Column({field:'credit_month',type:DataType.DATEONLY}) declare creditMonth:string|null;
  @AllowNull(true) @Column({field:'review_updated_at',type:DataType.DATE}) declare reviewUpdatedAt:Date|null;
  @AllowNull(false) @Default(false) @Column({field:'is_deleted',type:DataType.BOOLEAN}) declare isDeleted:boolean;
  @AllowNull(false) @Default(false) @Column({field:'is_no_name',type:DataType.BOOLEAN}) declare isNoName:boolean;
