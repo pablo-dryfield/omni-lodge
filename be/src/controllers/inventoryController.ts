@@ -38,7 +38,7 @@ export async function createInventoryItem(req: AuthenticatedRequest, res: Respon
 }
 
 export async function createInventoryMapping(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try { const addonId = positive(req.body.addonId,'addonId'); const inventoryItemId = positive(req.body.inventoryItemId,'inventoryItemId'); const quantityPerAddon = positive(req.body.quantityPerAddon ?? 1,'quantityPerAddon'); const mapping = await AddonInventoryMapping.create({ addonId, inventoryItemId, quantityPerAddon, isActive: true }); res.status(201).json({ mapping }); } catch(e) { fail(res,e); }
+  try { const addonId = positive(req.body.addonId,'addonId'); const inventoryItemId = positive(req.body.inventoryItemId,'inventoryItemId'); const quantityPerAddon = positive(req.body.quantityPerAddon ?? 1,'quantityPerAddon'); const variant = String(req.body.variant ?? '').trim().toUpperCase() || null; const mapping = await AddonInventoryMapping.create({ addonId, inventoryItemId, quantityPerAddon, variant, isActive: true }); res.status(201).json({ mapping }); } catch(e) { fail(res,e); }
 }
 
 export async function createInventoryAdjustment(req: AuthenticatedRequest, res: Response): Promise<void> {

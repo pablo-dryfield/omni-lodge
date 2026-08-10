@@ -1793,6 +1793,7 @@ const bookingToUnifiedOrder = (
       channelCommissionEffectiveDate: commissionEnrichment?.channelCommissionEffectiveDate ?? null,
       partySizeTotal: booking.partySizeTotal,
       attendedTotal: booking.attendedTotal,
+      attendedTshirtSizes: booking.attendedTshirtSizes ?? {},
       addonRefundActions: booking.addonRefundActions ?? [],
       experienceDate: booking.experienceDate,
       experienceStartAt: booking.experienceStartAt ? dayjs(booking.experienceStartAt).toISOString() : null,

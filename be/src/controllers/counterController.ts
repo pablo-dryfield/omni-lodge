@@ -22,6 +22,7 @@ import NightReportVenue from '../models/NightReportVenue.js';
 import { deleteNightReportPhoto as removeNightReportFile } from '../services/nightReportStorageService.js';
 import { createEcwidBatchRequest, type EcwidBatchRequestItem } from '../services/ecwidService.js';
 import { type BookingAttendanceStatus, type BookingStatus } from '../constants/bookings.js';
+import { reconcileCounterInventory } from '../services/inventoryService.js';
 
 const REGISTRY_FORMAT = 'registry';
 const DEFAULT_ATTENDANCE_STATUS: BookingAttendanceStatus = 'pending';
@@ -43,6 +44,7 @@ type AttendanceUpdateInput = {
   addonRefundDisposition?: AddonRefundDisposition;
   addonRefundReason?: string | null;
   markNoShowWhenAbsent?: boolean;
+  attendedTshirtSizes?: Record<string, number>;
 };
 
 type BookingAddonRefundAction = {
@@ -280,6 +282,7 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
       addonRefundDisposition?: unknown;
       addonRefundReason?: unknown;
       markNoShowWhenAbsent?: unknown;
+      attendedTshirtSizes?: unknown;
     };
     const bookingId = Number(typed.bookingId);
     if (!Number.isInteger(bookingId) || bookingId <= 0) {
@@ -363,6 +366,17 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
         throw new HttpError(400, 'attendanceUpdates[].markNoShowWhenAbsent must be a boolean');
       }
       update.markNoShowWhenAbsent = typed.markNoShowWhenAbsent;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(typed, 'attendedTshirtSizes')) {
+      if (!typed.attendedTshirtSizes || typeof typed.attendedTshirtSizes !== 'object' || Array.isArray(typed.attendedTshirtSizes)) throw new HttpError(400, 'attendanceUpdates[].attendedTshirtSizes must be an object');
+      const sizes: Record<string, number> = {};
+      for (const [rawSize, rawQuantity] of Object.entries(typed.attendedTshirtSizes as Record<string, unknown>)) {
+        const size = rawSize.trim().toUpperCase(); const quantity = Number(rawQuantity);
+        if (!size || !Number.isFinite(quantity) || quantity < 0) throw new HttpError(400, 'T-shirt size quantities must be non-negative numbers');
+        sizes[size] = Math.round(quantity);
+      }
+      update.attendedTshirtSizes = sizes;
     }
 
     return update;
@@ -555,6 +569,13 @@ async function applyBookingAttendanceUpdate(
       const purchased = Math.max(0, Math.round(Number(purchasedExtras[key]) || 0));
       nextAttendedExtras[key] = clampInt(parsed, 0, purchased);
     });
+  }
+  if (update.attendedTshirtSizes) {
+    const allocated = Object.values(update.attendedTshirtSizes).reduce((sum, quantity) => sum + quantity, 0);
+    const purchased = Math.max(0, Math.round(Number(purchasedExtras.tshirts) || 0));
+    if (allocated > purchased) throw new HttpError(400, 'Allocated T-shirt sizes cannot exceed purchased T-shirts');
+    nextAttendedExtras.tshirts = allocated;
+    booking.attendedTshirtSizes = allocated > 0 ? update.attendedTshirtSizes : null;
   }
 
   booking.attendedTotal = nextAttendedTotal;
@@ -1058,6 +1079,12 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
       Object.keys(metadataUpdates).length > 0
         ? await CounterRegistryService.updateCounterMetadata(counterId, metadataUpdates, actorId)
         : await CounterRegistryService.getCounterById(counterId);
+
+    if (attendanceUpdates.length > 0) {
+      const counter = await Counter.findByPk(counterId);
+      const database = Counter.sequelize;
+      if (counter?.status === 'final' && database) await database.transaction(transaction => reconcileCounterInventory(counter, actorId, transaction));
+    }
 
     if (shouldSyncEcwidDelivered) {
       scheduleEcwidDeliveredSync(Array.from(ecwidOrdersToDeliver));
