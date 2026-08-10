@@ -1171,6 +1171,12 @@ const isDirectFoodTourOrder = (order: UnifiedOrder): boolean => {
   );
 };
 
+const isStorefrontOrder = (order: UnifiedOrder): boolean =>
+  (order.platform ?? '').toLowerCase() === 'omnilodge';
+
+const isDirectManifestActionOrder = (order: UnifiedOrder): boolean =>
+  isDirectFoodTourOrder(order) || isStorefrontOrder(order);
+
 const isOrderExperienceDateOnOrBeforeToday = (order: UnifiedOrder): boolean => {
   const rawDate = String(order.date ?? "").trim();
   if (!rawDate) {
@@ -2236,11 +2242,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const baseState = createDefaultAmendState();
     const ecwidOrder = isEcwidOrder(order);
     const xperienceOrder = isXperiencePolandOrder(order);
-    const directFoodTourOrder = isDirectFoodTourOrder(order);
+    const directActionOrder = isDirectManifestActionOrder(order);
     baseState.opened = true;
     baseState.order = order;
     baseState.bookingId = getBookingIdFromOrder(order);
-    baseState.mode = ecwidOrder ? "ecwid" : xperienceOrder ? "xperience" : directFoodTourOrder ? "direct" : null;
+    baseState.mode = ecwidOrder ? "ecwid" : xperienceOrder ? "xperience" : directActionOrder ? "direct" : null;
     baseState.formDate = order.date && dayjs(order.date, DATE_FORMAT, true).isValid()
       ? dayjs(order.date, DATE_FORMAT).toDate()
       : null;
@@ -2651,7 +2657,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       }
       const nextUnlocked = !prev.manualAmountUnlocked;
       if (nextUnlocked) {
-        if (prev.order && isDirectFoodTourOrder(prev.order)) {
+        if (prev.order && isDirectManifestActionOrder(prev.order)) {
           const resetAddonQuantities = Object.keys(prev.addonQuantities).reduce<Record<number, number>>((acc, key) => {
             const parsedKey = Number.parseInt(key, 10);
             if (Number.isFinite(parsedKey)) {
@@ -2701,7 +2707,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     const remainingMajor = getPartialRefundRemainingAmountMajor(partialRefundState.preview);
     const shouldProceedToCancel = remainingMajor > 0 && partialRefundState.amount + 0.0001 >= remainingMajor;
-    const isDirectRefund = Boolean(partialRefundState.order && isDirectFoodTourOrder(partialRefundState.order));
+    const isDirectRefund = Boolean(partialRefundState.order && isDirectManifestActionOrder(partialRefundState.order));
     if (shouldProceedToCancel) {
       if (!partialRefundState.order) {
         setPartialRefundState((prev) => ({ ...prev, error: "Missing booking details for cancellation." }));
@@ -2763,7 +2769,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         manualAmountUnlocked: partialRefundState.manualAmountUnlocked,
       });
       let successMessage = isDirectRefund
-        ? "Partial refund submitted and direct booking emails sent."
+        ? "Partial refund submitted and booking emails sent."
         : "Partial refund submitted and email sent.";
       if (preparedEmail) {
         try {
@@ -3637,7 +3643,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     const order = mobileActionsOrder;
     closeMobileActionsModal();
-    if (isDirectFoodTourOrder(order)) {
+    if (isDirectManifestActionOrder(order)) {
       await handleDirectCancellation(order);
       return;
     }
@@ -3669,7 +3675,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       window.alert("Unable to locate OmniLodge booking reference for this order.");
       return;
     }
-    if (!window.confirm("Cancel this Food Tour booking, issue the Stripe test refund, and email the customer?")) {
+    if (!window.confirm("Cancel this booking, issue the applicable Stripe refund, and email the customer?")) {
       return;
     }
     const loadingKey = `${bookingId}:cancellation`;
@@ -5118,7 +5124,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     partialRefundRemainingMajor > 0 &&
     partialRefundHasPositiveAmount &&
     partialRefundAmountValue + 0.0001 >= partialRefundRemainingMajor;
-  const partialRefundIsDirect = Boolean(partialRefundState.order && isDirectFoodTourOrder(partialRefundState.order));
+  const partialRefundIsDirect = Boolean(partialRefundState.order && isDirectManifestActionOrder(partialRefundState.order));
   const partialRefundHasCustomerEmail = Boolean(String(partialRefundState.order?.customerEmail ?? "").trim());
   const partialRefundCanPreviewEmail =
     Boolean(partialRefundState.preview) &&
@@ -5182,7 +5188,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   );
   const mobileActionsCanAmend = Boolean(
     mobileActionsOrder &&
-      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder) || isDirectFoodTourOrder(mobileActionsOrder)) &&
+      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder)) &&
       mobileActionsBookingId,
   );
   const mobileActionsCanCancel = Boolean(
@@ -5190,7 +5196,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       (
         isEcwidOrder(mobileActionsOrder) ||
         isXperiencePolandOrder(mobileActionsOrder) ||
-        isDirectFoodTourOrder(mobileActionsOrder) ||
+        isDirectManifestActionOrder(mobileActionsOrder) ||
         (
           isCivitatisOrder(mobileActionsOrder) &&
           isOrderExperienceDateOnOrBeforeToday(mobileActionsOrder) &&
@@ -5202,7 +5208,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   );
   const mobileActionsCanPartialRefund = Boolean(
     mobileActionsOrder &&
-      (isEcwidOrder(mobileActionsOrder) || isDirectFoodTourOrder(mobileActionsOrder)) &&
+      (isEcwidOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder)) &&
       mobileActionsBookingId &&
       mobileActionsOrder.status !== "cancelled",
   );
