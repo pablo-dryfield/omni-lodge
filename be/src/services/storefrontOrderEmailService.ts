@@ -5,7 +5,9 @@ import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
 import { sendMessage } from './bookings/gmailClient.js';
 import { getConfigValue } from './configService.js';
 import { findLockedStorefrontOrderWithItems } from './storefrontOrderPersistenceService.js';
+import { getStorefrontCancellationPolicy } from './storefrontPublicConfigService.js';
 import logger from '../utils/logger.js';
+import type { StorefrontCancellationPolicy } from '../types/storefront.js';
 
 const SUPPORT_PHONE = '+48791847981';
 const SUPPORT_EMAIL = 'pubthroughkrakow@gmail.com';
@@ -103,15 +105,21 @@ const shell = (preheader: string, content: string): string => `
   </body>
 </html>`;
 
-const policyHtml = `
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;background:#fff1e6;border:1px solid #f3d1b8;border-radius:16px">
-    <tr><td style="padding:20px;color:#4f403a;font-family:Arial,sans-serif;font-size:14px;line-height:1.65">
-      <div style="margin-bottom:8px;color:#241c19;font-size:17px;font-weight:700">Cancellation policy</div>
-      <div style="margin-bottom:8px"><strong>24 hours or more before the start time:</strong> you can receive a full refund or credit.</div>
-      <div style="margin-bottom:8px"><strong>If we cancel:</strong> you will receive a full refund or credit if the operator cancels because of weather or another unforeseen circumstance.</div>
-      <div><strong>Within 24 hours or for a no-show:</strong> cancellation requests will be rejected and no-shows will be charged the full price.</div>
-    </td></tr>
-  </table>`;
+const policyHtml = (policy: StorefrontCancellationPolicy): string => {
+  return `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;background:#fff1e6;border:1px solid #f3d1b8;border-radius:16px">
+      <tr><td style="padding:20px;color:#4f403a;font-family:Arial,sans-serif;font-size:14px;line-height:1.65">
+        <div style="margin-bottom:8px;color:#241c19;font-size:17px;font-weight:700">${escapeHtml(policy.title)}</div>
+        <div style="margin-bottom:8px">${escapeHtml(policy.summary)}</div>
+        ${policy.items
+          .map(
+            (item) =>
+              `<div style="margin-bottom:8px"><strong>${escapeHtml(item.title)}:</strong> ${escapeHtml(item.description)}</div>`,
+          )
+          .join('')}
+      </td></tr>
+    </table>`;
+};
 
 const contactHtml = `
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;background:#ffffff;border:1px solid #eadfd8;border-radius:16px">
@@ -124,6 +132,7 @@ const contactHtml = `
 export const buildCustomerStorefrontEmail = (order: StorefrontOrder) => {
   const firstName = order.customerFirstName || 'there';
   const items = order.items || [];
+  const cancellationPolicy = getStorefrontCancellationPolicy();
   const firstItem = items[0];
   const preheader = `Payment received. Your ${firstItem?.productName ?? 'Krakow experience'} is confirmed.`;
   const content = `
@@ -149,7 +158,7 @@ export const buildCustomerStorefrontEmail = (order: StorefrontOrder) => {
         <div style="margin-top:5px">Save your booking reference and show it to the team if requested. If any booking detail looks incorrect, contact us as soon as possible.</div>
       </td></tr>
     </table>
-    ${policyHtml}
+    ${policyHtml(cancellationPolicy)}
     ${contactHtml}
     <p style="margin:24px 0 0;text-align:center;color:#766a66;font-family:Arial,sans-serif;font-size:13px;line-height:1.6">Krawl Through Krakow<br>We cannot wait to welcome you.</p>`;
 
@@ -172,10 +181,11 @@ export const buildCustomerStorefrontEmail = (order: StorefrontOrder) => {
     ]),
     `Total paid: ${money(order.total, order.currency)}`,
     '',
-    'CANCELLATION POLICY',
-    'Customers receive a full refund or credit when cancelling at least 24 hours before the experience start time.',
-    'Customers also receive a full refund or credit if the operator cancels because of weather or another unforeseen circumstance.',
-    'No-shows are charged the full price. Cancellation requests made within 24 hours of the pub crawl date and time will be rejected.',
+    cancellationPolicy.title.toUpperCase(),
+    cancellationPolicy.summary,
+    ...cancellationPolicy.items.map(
+      (item) => `${item.title}: ${item.description}`,
+    ),
     '',
     `To cancel or ask about a cancellation, call ${SUPPORT_PHONE} or email ${SUPPORT_EMAIL}.`,
     '',

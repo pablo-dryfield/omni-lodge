@@ -24,6 +24,7 @@ import {
   mergeStorefrontAddonsSnapshot,
 } from '../services/storefrontBookingProjectionService.js';
 import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
+import { getStorefrontCancellationPolicy } from '../services/storefrontPublicConfigService.js';
 import { getConfigValueRaw } from '../services/configService.js';
 import logger from '../utils/logger.js';
 
@@ -358,6 +359,7 @@ export const getStorefrontConfig = async (_request: Request, response: Response,
       currency: STOREFRONT_CURRENCY,
       stripeConfigured: isStripeConfigured(),
       checkoutEnabled: isStripeConfigured(),
+      cancellationPolicy: getStorefrontCancellationPolicy(),
     });
   } catch (error) {
     next(error);

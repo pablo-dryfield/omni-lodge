@@ -17,6 +17,7 @@ always validates and prices submitted selections.
 | `fullNameRequired` | boolean | Requires the lead guest's full name. |
 | `emailRequired` | boolean | Requires a syntactically valid email address. |
 | `phoneRequired` | boolean | Requires a valid international phone number. |
+| `content` | object | Storefront copy, highlights, important information, and meeting-point details. |
 
 Participant pricing uses the total participant count. For `gender_split`, that is
 `man + woman`; customers do not enter an additional quantity.
@@ -33,9 +34,52 @@ Participant pricing uses the total participant count. For `gender_split`, that i
   "defaultStartTime": "21:00",
   "fullNameRequired": true,
   "emailRequired": true,
-  "phoneRequired": true
+  "phoneRequired": true,
+  "content": {
+    "summary": "A social night out through Krakow's best bars and clubs.",
+    "description": "Meet the local team and experience Krakow nightlife with an organised group.",
+    "highlights": ["Local party guides", "Multiple venues"],
+    "importantInformation": ["Bring valid photo identification", "Wear comfortable shoes"],
+    "meetingPoint": {
+      "name": "Adam Mickiewicz Monument",
+      "address": "Rynek Glowny, Krakow",
+      "instructions": "Look for the Krawl Through Krakow team.",
+      "mapUrl": "https://maps.google.com/..."
+    }
+  }
 }
 ```
+
+Edit these fields in **Settings > Products > Storefront product information**.
+The product endpoints return this object unchanged under `config.content`.
+Clients should hide an information section when its corresponding value is empty.
+
+## Global cancellation policy
+
+`GET /api/storefront/config` returns one global `cancellationPolicy` for every
+product:
+
+```json
+{
+  "currency": "PLN",
+  "checkoutEnabled": true,
+  "cancellationPolicy": {
+    "title": "Cancellation policy",
+    "summary": "Cancel at least 24 hours before the experience start time for a full refund or credit.",
+    "items": [
+      {
+        "title": "24 hours or more before the start time",
+        "description": "You can receive a full refund or credit."
+      }
+    ]
+  }
+}
+```
+
+Manage it in **Settings > Control Panel > Storefront cancellation policy**. The
+same policy is used in storefront customer confirmation emails, keeping the
+website and email wording aligned. If product-specific policies are introduced
+later, products can reference a policy key without duplicating policy text.
 
 The browser presents a country selector containing supported ISO countries and a
 digits-only local-number field. It submits one compact E.164 value such as

@@ -1,6 +1,21 @@
 export type StorefrontParticipantMode = "quantity" | "gender_split";
 export type StorefrontTimeMode = "fixed" | "select" | "manual";
 
+export type StorefrontMeetingPoint = {
+    name?: string;
+    address?: string;
+    instructions?: string;
+    mapUrl?: string;
+};
+
+export type StorefrontProductContent = {
+    summary?: string;
+    description?: string;
+    highlights?: string[];
+    importantInformation?: string[];
+    meetingPoint?: StorefrontMeetingPoint;
+};
+
 export type StorefrontProductConfig = {
     participantMode?: StorefrontParticipantMode;
     minParticipants?: number;
@@ -12,6 +27,7 @@ export type StorefrontProductConfig = {
     fullNameRequired?: boolean;
     emailRequired?: boolean;
     phoneRequired?: boolean;
+    content?: StorefrontProductContent;
 };
 
 export type ProductImage = {
