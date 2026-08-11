@@ -4,8 +4,10 @@ import {
 } from '../storefrontOrderEmailService';
 import { getConfigValue } from '../configService';
 import type StorefrontOrder from '../../models/StorefrontOrder';
+import type StorefrontOrderItem from '../../models/StorefrontOrderItem';
 
 jest.mock('../../config/database.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/Booking.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/StorefrontOrder.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/StorefrontOrderItem.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../bookings/gmailClient.js', () => ({ sendMessage: jest.fn() }));
@@ -29,15 +31,33 @@ const order = {
   discountCode: 'KRAKOW10',
   items: [
     {
+      id: 501,
       productName: 'Krawl Through Krakow Pub Crawl',
       quantity: 2,
       experienceDate: '2026-08-15',
       experienceTime: '21:00',
+      unitPrice: 100,
+      baseTotal: 200,
+      addonTotal: 30,
       total: 230,
-      addons: [{ name: 'Instant photos', quantity: 1 }],
+      addons: [
+        { name: 'Cocktails', quantity: 1, total: 10 },
+        {
+          name: 'T-Shirts',
+          quantity: 3,
+          total: 20,
+          variants: [
+            { value: 'S', quantity: 2 },
+            { value: 'M', quantity: 1 },
+          ],
+        },
+      ],
+      options: { participants: { men: 1, women: 1 } },
     },
   ],
 } as unknown as StorefrontOrder;
+
+const bookingIds = new Map([[501, 41001]]);
 
 describe('storefront paid-order emails', () => {
   beforeEach(() => {
@@ -49,14 +69,26 @@ describe('storefront paid-order emails', () => {
   });
 
   it('builds a useful customer confirmation in HTML and plain text', () => {
-    const email = buildCustomerStorefrontEmail(order);
+    const email = buildCustomerStorefrontEmail(order, bookingIds);
 
     expect(email.subject).toContain('Booking confirmed');
     expect(email.htmlBody).toContain('Krawl Through Krakow Pub Crawl');
     expect(email.htmlBody).toContain('Saturday, 15 August 2026');
-    expect(email.htmlBody).toContain('Instant photos');
-    expect(email.textBody).toContain(order.publicId);
+    expect(email.htmlBody).toContain('Booking reference');
+    expect(email.htmlBody).toContain('41001');
+    expect(email.textBody).not.toContain(order.publicId);
+    expect(email.htmlBody).toContain('1 man · 1 woman');
+    expect(email.htmlBody).toContain('Experience (2 ×');
+    expect(email.htmlBody).toContain('Cocktails: 1');
+    expect(email.htmlBody).toContain('T-Shirts: S × 2 · M × 1');
+    expect(email.htmlBody).toContain('Experience total');
+    expect(email.htmlBody).toContain('Experiences');
+    expect(email.htmlBody).toContain('Add-ons');
+    expect(email.htmlBody).toContain('Discount');
     expect(email.textBody).toContain('Total paid');
+    expect(email.htmlBody).toContain('Customer details');
+    expect(email.htmlBody).toContain('Alex Smith');
+    expect(email.htmlBody).toContain('United Kingdom (+44)');
     expect(email.htmlBody).toContain('Cancellation policy');
     expect(email.htmlBody).toContain('Custom cancellation terms.');
     expect(email.htmlBody).not.toContain('24 hours or more before the start time');
@@ -75,12 +107,37 @@ describe('storefront paid-order emails', () => {
   });
 
   it('builds an operator notification with contact and payment details', () => {
-    const email = buildInternalStorefrontEmail(order);
+    const email = buildInternalStorefrontEmail(order, bookingIds);
 
     expect(email.subject).toContain('New paid storefront order');
     expect(email.htmlBody).toContain('alex@example.com');
+    expect(email.htmlBody).toContain('41001');
+    expect(email.htmlBody).toContain('1 man · 1 woman');
+    expect(email.htmlBody).toContain('T-Shirts: S × 2 · M × 1');
+    expect(email.htmlBody).toContain('Experiences');
+    expect(email.htmlBody).toContain('Customer details');
     expect(email.textBody).toContain('+48123456789');
     expect(email.textBody).toContain('KRAKOW10');
+  });
+
+  it('uses the order reference and shows each OmniLodge ID for multiple experiences', () => {
+    const firstItem = order.items![0];
+    const secondItem = {
+      ...firstItem,
+      id: 502,
+      productName: 'Krakow Boat Party',
+    } as StorefrontOrderItem;
+    const multiOrder = {
+      ...order,
+      items: [firstItem, secondItem],
+    } as StorefrontOrder;
+    const email = buildCustomerStorefrontEmail(multiOrder, new Map([[501, 41001], [502, 41002]]));
+
+    expect(email.htmlBody).toContain('Order reference');
+    expect(email.htmlBody).toContain(order.publicId);
+    expect(email.htmlBody).toContain('OmniLodge booking ID');
+    expect(email.htmlBody).toContain('41001');
+    expect(email.htmlBody).toContain('41002');
   });
 
   it('escapes customer-controlled values in HTML', () => {
@@ -89,7 +146,7 @@ describe('storefront paid-order emails', () => {
       customerFirstName: '<img src=x onerror=alert(1)>',
     } as unknown as StorefrontOrder;
 
-    const email = buildCustomerStorefrontEmail(unsafe);
+    const email = buildCustomerStorefrontEmail(unsafe, bookingIds);
     expect(email.htmlBody).not.toContain('<img src=x');
     expect(email.htmlBody).toContain('&lt;img src=x');
   });
