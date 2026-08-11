@@ -32,6 +32,7 @@ jest.mock('../../configService.js', () => ({
 }));
 
 import {
+  describeGmailApiError,
   isGmailRateLimitError,
   resolveGmailRetryAfterAt,
   sendMessage,
@@ -62,6 +63,22 @@ describe('Gmail quota errors', () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it('summarizes the HTTP status and Google reason without logging the response body', () => {
+    expect(
+      describeGmailApiError({
+        response: {
+          status: 429,
+          data: {
+            error: {
+              status: 'RESOURCE_EXHAUSTED',
+              errors: [{ reason: 'userRateLimitExceeded' }],
+            },
+          },
+        },
+      }),
+    ).toBe('httpStatus=429 reason=userRateLimitExceeded apiStatus=RESOURCE_EXHAUSTED');
   });
 
   it('honors the absolute retry timestamp returned in a Gmail error message', () => {

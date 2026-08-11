@@ -79,6 +79,8 @@ export type ListMailboxMessagesResult = {
 };
 
 let gmailApiCooldownUntil = 0;
+const GMAIL_RATE_LIMIT_FALLBACK_COOLDOWN_MS = 15 * 60 * 1000;
+const GMAIL_RATE_LIMIT_RETRY_SAFETY_MS = 60 * 1000;
 
 type GmailCooldownError = Error & {
   code: 429;
@@ -618,6 +620,34 @@ export const isGmailRateLimitError = (error: unknown): boolean => {
   return status === 429 || (status === 403 && (hasRateReason || hasRateMessage));
 };
 
+export const describeGmailApiError = (error: unknown): string => {
+  const candidate = error as {
+    response?: {
+      data?: {
+        error?: {
+          errors?: Array<{ reason?: unknown }>;
+          status?: unknown;
+        };
+      };
+    };
+  };
+  const apiError = candidate.response?.data?.error;
+  const reasons = Array.from(
+    new Set(
+      (apiError?.errors ?? [])
+        .map((entry) => String(entry.reason ?? '').trim())
+        .filter(Boolean),
+    ),
+  );
+  const parts = [
+    `httpStatus=${getErrorStatusCode(error) ?? 'unknown'}`,
+    `reason=${reasons.join(',') || 'unknown'}`,
+  ];
+  const apiStatus = String(apiError?.status ?? '').trim();
+  if (apiStatus) parts.push(`apiStatus=${apiStatus}`);
+  return parts.join(' ');
+};
+
 const isRetryableGmailSendError = (error: unknown): boolean => {
   const candidate = error as { code?: unknown; message?: unknown };
   const code = typeof candidate.code === 'string' ? candidate.code.toUpperCase() : '';
@@ -661,14 +691,15 @@ const withRetryableGoogleApi = async <T>(
         throw error;
       }
 
-      const retryAfterAt = resolveGmailRetryAfterAt(error);
-      if (retryAfterAt !== null && retryAfterAt > Date.now()) {
-        gmailApiCooldownUntil = Math.max(gmailApiCooldownUntil, retryAfterAt);
-      }
-      const serverDelay = retryAfterAt === null ? null : Math.max(0, retryAfterAt - Date.now());
-      if (serverDelay !== null && serverDelay > GOOGLE_API_RETRY_MAX_DELAY_MS) {
+      const now = Date.now();
+      const retryAfterAt = resolveGmailRetryAfterAt(error, now);
+      const serverDelay = retryAfterAt === null ? null : Math.max(0, retryAfterAt - now);
+      if (isGmailRateLimitError(error)) {
+        const requestedRetryAt = retryAfterAt ?? now + GMAIL_RATE_LIMIT_FALLBACK_COOLDOWN_MS;
+        const safeRetryAt = requestedRetryAt + GMAIL_RATE_LIMIT_RETRY_SAFETY_MS;
+        gmailApiCooldownUntil = Math.max(gmailApiCooldownUntil, safeRetryAt);
         logger.warn(
-          `[booking-email] ${description} was rate limited; Gmail requested a cooldown until ${new Date(retryAfterAt!).toISOString()}. No early retries will be attempted.`,
+          `[booking-email] ${description} was rate limited (${describeGmailApiError(error)}). Gmail polling is paused until ${new Date(safeRetryAt).toISOString()}.`,
         );
         throw error;
       }
