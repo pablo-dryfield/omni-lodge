@@ -12,6 +12,7 @@ import {
   TagsInput,
   Text,
   TextInput,
+  Textarea,
 } from "@mantine/core";
 import { IconPlus, IconTrash } from "@tabler/icons-react";
 import type { StorefrontProductConfig } from "../../types/products/Product";
@@ -30,6 +31,23 @@ export const ProductStorefrontRulesEditor = ({ value, onChange }: ProductRulesPr
     key: K,
     nextValue: StorefrontProductConfig[K],
   ) => onChange({ ...value, [key]: nextValue });
+  const content = value.content ?? {};
+  const meetingPoint = content.meetingPoint ?? {};
+  const updateContent = <K extends keyof typeof content>(
+    key: K,
+    nextValue: (typeof content)[K],
+  ) => onChange({ ...value, content: { ...content, [key]: nextValue } });
+  const updateMeetingPoint = <K extends keyof typeof meetingPoint>(
+    key: K,
+    nextValue: (typeof meetingPoint)[K],
+  ) =>
+    onChange({
+      ...value,
+      content: {
+        ...content,
+        meetingPoint: { ...meetingPoint, [key]: nextValue },
+      },
+    });
 
   return (
     <Paper withBorder radius="md" p="md">
@@ -135,6 +153,69 @@ export const ProductStorefrontRulesEditor = ({ value, onChange }: ProductRulesPr
             onChange={(event) => update("phoneRequired", event.currentTarget.checked)}
           />
         </SimpleGrid>
+        <Divider label="Product information" labelPosition="left" />
+        <Text size="sm" c="dimmed">
+          This content is returned by the storefront product API. Empty sections stay hidden on the website.
+        </Text>
+        <Textarea
+          label="Summary"
+          description="A short introduction shown near the product title."
+          minRows={2}
+          autosize
+          value={content.summary ?? ""}
+          onChange={(event) => updateContent("summary", event.currentTarget.value)}
+        />
+        <Textarea
+          label="Description"
+          description="The full description of the experience."
+          minRows={4}
+          autosize
+          value={content.description ?? ""}
+          onChange={(event) => updateContent("description", event.currentTarget.value)}
+        />
+        <TagsInput
+          label="Highlights"
+          description="Enter each highlight separately and press Enter."
+          placeholder="Add a highlight"
+          value={content.highlights ?? []}
+          onChange={(items) => updateContent("highlights", items)}
+        />
+        <TagsInput
+          label="Important information"
+          description="Enter each instruction or requirement separately and press Enter."
+          placeholder="Add important information"
+          value={content.importantInformation ?? []}
+          onChange={(items) => updateContent("importantInformation", items)}
+        />
+        <Divider label="Meeting point" labelPosition="left" />
+        <SimpleGrid cols={{ base: 1, sm: 2 }}>
+          <TextInput
+            label="Meeting point name"
+            placeholder="e.g. Adam Mickiewicz Monument"
+            value={meetingPoint.name ?? ""}
+            onChange={(event) => updateMeetingPoint("name", event.currentTarget.value)}
+          />
+          <TextInput
+            label="Address"
+            placeholder="Street address or square"
+            value={meetingPoint.address ?? ""}
+            onChange={(event) => updateMeetingPoint("address", event.currentTarget.value)}
+          />
+        </SimpleGrid>
+        <Textarea
+          label="Meeting instructions"
+          description="Explain how guests can identify the guide or exact meeting location."
+          minRows={2}
+          autosize
+          value={meetingPoint.instructions ?? ""}
+          onChange={(event) => updateMeetingPoint("instructions", event.currentTarget.value)}
+        />
+        <TextInput
+          label="Google Maps URL"
+          placeholder="https://maps.google.com/..."
+          value={meetingPoint.mapUrl ?? ""}
+          onChange={(event) => updateMeetingPoint("mapUrl", event.currentTarget.value)}
+        />
       </Stack>
     </Paper>
   );

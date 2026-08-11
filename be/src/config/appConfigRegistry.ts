@@ -631,6 +631,36 @@ Best,
     validation: { maxLength: 500 },
   },
   {
+    key: 'STOREFRONT_CANCELLATION_POLICY',
+    label: 'Storefront cancellation policy',
+    description:
+      'Global cancellation policy returned by the public storefront config API and displayed for every product.',
+    category: 'Storefront',
+    valueType: 'json',
+    defaultValue: JSON.stringify({
+      title: 'Cancellation policy',
+      summary: 'Cancel at least 24 hours before the experience start time for a full refund or credit.',
+      items: [
+        {
+          title: '24 hours or more before the start time',
+          description: 'You can receive a full refund or credit.',
+        },
+        {
+          title: 'If we cancel',
+          description:
+            'You will receive a full refund or credit if the operator cancels because of weather or another unforeseen circumstance.',
+        },
+        {
+          title: 'Within 24 hours or for a no-show',
+          description:
+            'Cancellation requests will be rejected and no-shows will be charged the full price.',
+        },
+      ],
+    }),
+    impact: 'high',
+    validation: { required: true, maxLength: 10000 },
+  },
+  {
     key: 'STOREFRONT_STRIPE_WEBHOOK_SECRET',
     label: 'Storefront Stripe webhook signing secret',
     description: 'Stripe webhook signing secret (whsec_...) used to verify storefront checkout events.',
