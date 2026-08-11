@@ -48,14 +48,20 @@ dayjs.extend(timezone);
 
 const FALLBACK_QUERY =
   'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR civitatis.com OR airbnb.com OR airbnbmail.com))';
+const ALL_INCOMING_GMAIL_QUERY = 'in:anywhere -in:sent -in:drafts';
 
 const DEFAULT_BOOKING_TIMEZONE =
   (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
 const VIATOR_TIMEZONE =
   (getConfigValue('VIATOR_TIMEZONE') as string | null) ?? DEFAULT_BOOKING_TIMEZONE;
 
+const shouldProcessAllIncomingMessages = (): boolean =>
+  getConfigValue('BOOKING_GMAIL_PROCESS_ALL_MESSAGES') !== false;
+
 const resolveDefaultQuery = (): string =>
-  (getConfigValue('BOOKING_GMAIL_QUERY') as string) ?? FALLBACK_QUERY;
+  shouldProcessAllIncomingMessages()
+    ? ALL_INCOMING_GMAIL_QUERY
+    : (getConfigValue('BOOKING_GMAIL_QUERY') as string) ?? FALLBACK_QUERY;
 
 const resolveBackupBackfillQuery = (query: string): string => {
   const forwarderAddress = String(
@@ -2835,9 +2841,12 @@ const rebuildBookingTimeline = async (
 
 export const ingestLatestBookingEmails = async (): Promise<void> => {
   try {
+    const processAllIncomingMessages = shouldProcessAllIncomingMessages();
     const listParams = {
       query: resolveDefaultQuery(),
-      maxResults: resolveDefaultBatch(),
+      maxResults: processAllIncomingMessages
+        ? Math.max(resolveDefaultBatch(), 100)
+        : resolveDefaultBatch(),
     };
     let messages;
     try {
@@ -2849,21 +2858,39 @@ export const ingestLatestBookingEmails = async (): Promise<void> => {
         throw primaryError;
       }
       logger.warn(
-        '[booking-email] Gmail primary account is rate limited; checking the backup mailbox for forwarded booking emails.',
+        '[booking-email] Gmail primary account is rate limited; checking the backup mailbox for incoming messages.',
       );
       ({ messages } = await listMessages(listParams, 'backup'));
     }
 
     if (messages.length === 0) {
-      logger.debug('[booking-email] No new Gmail messages matching booking query');
+      logger.debug('[booking-email] No Gmail messages matched the ingestion query');
       return;
     }
 
-    for (const message of messages) {
-      if (!message.id) {
-        continue;
-      }
-      await processBookingEmail(message.id);
+    const messageIds = messages
+      .map((message) => String(message.id ?? '').trim())
+      .filter(Boolean);
+    const terminalEmails = messageIds.length > 0
+      ? await BookingEmail.findAll({
+          where: {
+            messageId: { [Op.in]: messageIds },
+            ingestionStatus: { [Op.in]: ['processed', 'ignored'] },
+          },
+          attributes: ['messageId'],
+        })
+      : [];
+    const terminalMessageIds = new Set(terminalEmails.map((email) => email.messageId));
+    const newMessageIds = messageIds.filter((messageId) => !terminalMessageIds.has(messageId));
+
+    if (newMessageIds.length === 0) {
+      logger.debug(`[booking-email] Latest ${messageIds.length} Gmail messages were already inspected`);
+      return;
+    }
+
+    logger.info(`[booking-email] Inspecting ${newMessageIds.length} new incoming Gmail message(s)`);
+    for (const messageId of newMessageIds) {
+      await processBookingEmail(messageId);
     }
   } catch (error) {
     if (isGmailCooldownError(error)) {
