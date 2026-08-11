@@ -31,7 +31,58 @@ jest.mock('../../configService.js', () => ({
   getConfigValue: jest.fn((key: string) => `${key.toLowerCase()}-value`),
 }));
 
-import { sendMessage } from '../gmailClient';
+import {
+  isGmailRateLimitError,
+  resolveGmailRetryAfterAt,
+  sendMessage,
+} from '../gmailClient';
+
+describe('Gmail quota errors', () => {
+  it('recognizes a Gmail 403 user-rate error as retryable quota pressure', () => {
+    expect(
+      isGmailRateLimitError({
+        response: {
+          status: 403,
+          data: {
+            error: {
+              errors: [{ reason: 'userRateLimitExceeded', message: 'User-rate limit exceeded.' }],
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('does not retry unrelated Gmail permission errors as quota pressure', () => {
+    expect(
+      isGmailRateLimitError({
+        response: {
+          status: 403,
+          data: { error: { errors: [{ reason: 'domainPolicy' }] } },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it('honors the absolute retry timestamp returned in a Gmail error message', () => {
+    expect(
+      resolveGmailRetryAfterAt({
+        message:
+          'User-rate limit exceeded. Retry after 2026-08-11T11:38:10.449Z',
+      }),
+    ).toBe(Date.parse('2026-08-11T11:38:10.449Z'));
+  });
+
+  it('honors a Retry-After header expressed in seconds', () => {
+    const now = Date.parse('2026-08-11T11:23:10.000Z');
+    expect(
+      resolveGmailRetryAfterAt(
+        { response: { headers: { 'retry-after': '900' } } },
+        now,
+      ),
+    ).toBe(now + 900_000);
+  });
+});
 
 describe('Gmail threaded replies', () => {
   beforeEach(() => {

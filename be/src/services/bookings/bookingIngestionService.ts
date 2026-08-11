@@ -14,7 +14,7 @@ import Channel from '../../models/Channel.js';
 import Product from '../../models/Product.js';
 import ProductAlias from '../../models/ProductAlias.js';
 import logger from '../../utils/logger.js';
-import { fetchMessagePayload, listMessages } from './gmailClient.js';
+import { fetchMessagePayload, isGmailRateLimitError, listMessages } from './gmailClient.js';
 import { getBookingParsers } from './parsers/index.js';
 import type {
   BookingFieldPatch,
@@ -2619,6 +2619,18 @@ export const processBookingEmail = async (
 ): Promise<ProcessResult> => {
   const scopedHints = normalizeScopedReprocessHints(options.scopedHints);
   const isScopedReprocess = scopedHints.length > 0;
+  if (!options.force && !isScopedReprocess) {
+    const existing = await BookingEmail.findOne({
+      where: { messageId },
+      attributes: ['ingestionStatus'],
+    });
+    if (existing && ['processed', 'ignored'].includes(existing.ingestionStatus)) {
+      logger.debug(
+        `[booking-email] Message ${messageId} already has terminal status ${existing.ingestionStatus}, skipping Gmail fetch`,
+      );
+      return 'ignored';
+    }
+  }
   let payload: GmailMessagePayload | null = null;
   try {
     payload = await fetchMessagePayload(messageId);
@@ -2627,6 +2639,9 @@ export const processBookingEmail = async (
       return 'ignored';
     }
   } catch (error) {
+    if (isGmailRateLimitError(error)) {
+      throw error;
+    }
     logger.error(`[booking-email] Unable to fetch message ${messageId}: ${(error as Error).message}`);
     return 'failed';
   }

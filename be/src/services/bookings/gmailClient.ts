@@ -78,16 +78,48 @@ export type ListMailboxMessagesResult = {
   nextPageToken: string | null;
 };
 
+let gmailApiCooldownUntil = 0;
+
+type GmailCooldownError = Error & {
+  code: 429;
+  gmailCooldown: true;
+  retryAfter: string;
+};
+
+const buildGmailCooldownError = (retryAt: number): GmailCooldownError => {
+  const retryAfter = new Date(retryAt).toISOString();
+  const error = new Error(
+    `Gmail API cooldown is active. Retry after ${retryAfter}`,
+  ) as GmailCooldownError;
+  error.code = 429;
+  error.gmailCooldown = true;
+  error.retryAfter = retryAfter;
+  return error;
+};
+
+const assertGmailApiCooldownElapsed = (): void => {
+  if (gmailApiCooldownUntil > Date.now()) {
+    throw buildGmailCooldownError(gmailApiCooldownUntil);
+  }
+};
+
 export const listMessages = async (
   params: ListMessagesParams,
 ): Promise<ListMessagesResult> => {
   const gmail = getGmailClient();
-  const response = await gmail.users.messages.list({
-    userId: 'me',
-    q: params.query,
-    maxResults: params.maxResults ?? 25,
-    pageToken: params.pageToken ?? undefined,
-  });
+  const response = await withRetryableGoogleApi(
+    'Gmail message list',
+    () => {
+      assertGmailApiCooldownElapsed();
+      return gmail.users.messages.list({
+        userId: 'me',
+        q: params.query,
+        maxResults: params.maxResults ?? 25,
+        pageToken: params.pageToken ?? undefined,
+      });
+    },
+    GMAIL_READ_MAX_ATTEMPTS,
+  );
   return {
     messages: response.data.messages ?? [],
     nextPageToken: response.data.nextPageToken ?? null,
@@ -133,49 +165,72 @@ export const listMailboxMessages = async (
 ): Promise<ListMailboxMessagesResult> => {
   const gmail = getGmailClient();
   const query = `(from:"${params.email}" OR to:"${params.email}")`;
-  const response = await gmail.users.messages.list({
-    userId: 'me',
-    q: query,
-    maxResults: params.maxResults ?? 25,
-    pageToken: params.pageToken ?? undefined,
-  });
+  const response = await withRetryableGoogleApi(
+    'Gmail mailbox message list',
+    () => {
+      assertGmailApiCooldownElapsed();
+      return gmail.users.messages.list({
+        userId: 'me',
+        q: query,
+        maxResults: params.maxResults ?? 25,
+        pageToken: params.pageToken ?? undefined,
+      });
+    },
+    GMAIL_READ_MAX_ATTEMPTS,
+  );
 
   const listedMessages = response.data.messages ?? [];
-  const summaries = await Promise.all(
-    listedMessages.map(async (message): Promise<MailboxMessageSummary | null> => {
-      if (!message.id) {
-        return null;
-      }
-      try {
-        const { data } = await gmail.users.messages.get({
-          userId: 'me',
-          id: message.id,
-          format: 'metadata',
-          metadataHeaders: ['From', 'To', 'Subject', 'Date'],
-        });
-        if (!data.id) {
+  const summaries: Array<MailboxMessageSummary | null> = [];
+  for (let offset = 0; offset < listedMessages.length; offset += 3) {
+    const batch = listedMessages.slice(offset, offset + 3);
+    const batchSummaries = await Promise.all(
+      batch.map(async (message): Promise<MailboxMessageSummary | null> => {
+        if (!message.id) {
           return null;
         }
-        const labels = data.labelIds ?? [];
-        return {
-          messageId: data.id,
-          threadId: data.threadId ?? null,
-          fromAddress: extractHeaderFromMetadata(data.payload, 'From'),
-          toAddresses: extractHeaderFromMetadata(data.payload, 'To'),
-          subject: extractHeaderFromMetadata(data.payload, 'Subject'),
-          snippet: data.snippet ?? null,
-          internalDate: normalizeInternalDate(data.internalDate),
-          labelIds: labels,
-          direction: resolveDirection(labels),
-        };
-      } catch (error) {
-        logger.warn(
-          `[booking-email] Failed to read Gmail message metadata ${message.id}: ${(error as Error).message}`,
-        );
-        return null;
-      }
-    }),
-  );
+        const messageId = message.id;
+        try {
+          const { data } = await withRetryableGoogleApi(
+            `Gmail mailbox metadata fetch ${messageId}`,
+            () => {
+              assertGmailApiCooldownElapsed();
+              return gmail.users.messages.get({
+                userId: 'me',
+                id: messageId,
+                format: 'metadata',
+                metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+              });
+            },
+            GMAIL_READ_MAX_ATTEMPTS,
+          );
+          if (!data.id) {
+            return null;
+          }
+          const labels = data.labelIds ?? [];
+          return {
+            messageId: data.id,
+            threadId: data.threadId ?? null,
+            fromAddress: extractHeaderFromMetadata(data.payload, 'From'),
+            toAddresses: extractHeaderFromMetadata(data.payload, 'To'),
+            subject: extractHeaderFromMetadata(data.payload, 'Subject'),
+            snippet: data.snippet ?? null,
+            internalDate: normalizeInternalDate(data.internalDate),
+            labelIds: labels,
+            direction: resolveDirection(labels),
+          };
+        } catch (error) {
+          if (isGmailRateLimitError(error)) {
+            throw error;
+          }
+          logger.warn(
+            `[booking-email] Failed to read Gmail message metadata ${messageId}: ${(error as Error).message}`,
+          );
+          return null;
+        }
+      }),
+    );
+    summaries.push(...batchSummaries);
+  }
 
   return {
     messages: summaries.filter((entry): entry is MailboxMessageSummary => entry !== null),
@@ -405,11 +460,18 @@ const buildMimeMessage = (params: SendMessageParams, rfcMessageId: string): stri
 export const fetchMessagePayload = async (messageId: string): Promise<GmailMessagePayload | null> => {
   const gmail = getGmailClient();
   try {
-    const { data } = await gmail.users.messages.get({
-      userId: 'me',
-      id: messageId,
-      format: 'full',
-    });
+    const { data } = await withRetryableGoogleApi(
+      `Gmail message fetch ${messageId}`,
+      () => {
+        assertGmailApiCooldownElapsed();
+        return gmail.users.messages.get({
+          userId: 'me',
+          id: messageId,
+          format: 'full',
+        });
+      },
+      GMAIL_READ_MAX_ATTEMPTS,
+    );
 
     if (!data) {
       return null;
@@ -443,9 +505,10 @@ const wait = (milliseconds: number): Promise<void> =>
     setTimeout(resolve, milliseconds);
   });
 
-const GOOGLE_API_RETRY_BASE_DELAY_MS = 750;
-const GOOGLE_API_RETRY_MAX_DELAY_MS = 5000;
+const GOOGLE_API_RETRY_BASE_DELAY_MS = 1000;
+const GOOGLE_API_RETRY_MAX_DELAY_MS = 32000;
 const GOOGLE_OAUTH_REFRESH_MAX_ATTEMPTS = 8;
+const GMAIL_READ_MAX_ATTEMPTS = 6;
 const GMAIL_SEND_MAX_ATTEMPTS = 4;
 const RETRYABLE_GMAIL_SEND_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const RETRYABLE_GMAIL_SEND_ERROR_CODES = new Set([
@@ -468,10 +531,94 @@ const getErrorStatusCode = (error: unknown): number | null => {
   return Number.isInteger(status) ? status : null;
 };
 
+export const resolveGmailRetryAfterAt = (
+  error: unknown,
+  now = Date.now(),
+): number | null => {
+  const candidate = error as {
+    message?: unknown;
+    response?: {
+      headers?: Record<string, unknown> & { get?: (name: string) => unknown };
+      data?: {
+        error?: {
+          message?: unknown;
+          details?: Array<{ retryDelay?: unknown }>;
+        };
+      };
+    };
+  };
+  const headers = candidate.response?.headers;
+  const rawHeader =
+    (typeof headers?.get === 'function' ? headers.get('retry-after') : undefined) ??
+    headers?.['retry-after'] ??
+    headers?.['Retry-After'];
+  if (rawHeader !== null && rawHeader !== undefined && String(rawHeader).trim()) {
+    const normalized = String(rawHeader).trim();
+    const seconds = Number(normalized);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return now + seconds * 1000;
+    }
+    const timestamp = Date.parse(normalized);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+
+  const retryDelay = candidate.response?.data?.error?.details
+    ?.map((detail) => String(detail.retryDelay ?? '').trim())
+    .find(Boolean);
+  const retryDelayMatch = retryDelay?.match(/^(\d+(?:\.\d+)?)s$/i);
+  if (retryDelayMatch) {
+    return now + Number(retryDelayMatch[1]) * 1000;
+  }
+
+  const message = [candidate.message, candidate.response?.data?.error?.message]
+    .map((value) => String(value ?? ''))
+    .join(' ');
+  const timestampMatch = message.match(
+    /retry\s+after\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)/i,
+  );
+  if (!timestampMatch) return null;
+  const timestamp = Date.parse(timestampMatch[1]);
+  return Number.isFinite(timestamp) ? timestamp : null;
+};
+
+export const isGmailRateLimitError = (error: unknown): boolean => {
+  const candidate = error as {
+    message?: unknown;
+    response?: {
+      data?: {
+        error?: {
+          errors?: Array<{ reason?: unknown; message?: unknown }>;
+          message?: unknown;
+        };
+      };
+    };
+  };
+  const status = getErrorStatusCode(error);
+  const apiError = candidate.response?.data?.error;
+  const reasons = (apiError?.errors ?? [])
+    .map((entry) => String(entry.reason ?? '').toLowerCase())
+    .filter(Boolean);
+  const message = [candidate.message, apiError?.message, ...(apiError?.errors ?? []).map((entry) => entry.message)]
+    .map((value) => String(value ?? '').toLowerCase())
+    .join(' ');
+  const hasRateReason = reasons.some((reason) =>
+    ['userratelimitexceeded', 'ratelimitexceeded', 'quotaexceeded'].includes(reason),
+  );
+  const hasRateMessage =
+    message.includes('user-rate limit exceeded') ||
+    message.includes('user rate limit exceeded') ||
+    message.includes('rate limit exceeded') ||
+    message.includes('too many requests');
+  return status === 429 || (status === 403 && (hasRateReason || hasRateMessage));
+};
+
 const isRetryableGmailSendError = (error: unknown): boolean => {
   const candidate = error as { code?: unknown; message?: unknown };
   const code = typeof candidate.code === 'string' ? candidate.code.toUpperCase() : '';
   if (RETRYABLE_GMAIL_SEND_ERROR_CODES.has(code)) {
+    return true;
+  }
+  if (isGmailRateLimitError(error)) {
     return true;
   }
 
@@ -501,15 +648,34 @@ const withRetryableGoogleApi = async <T>(
       return await operation();
     } catch (error) {
       lastError = error;
+      const cooldownError = error as Partial<GmailCooldownError>;
+      if (cooldownError.gmailCooldown === true) {
+        throw error;
+      }
       if (!isRetryableGmailSendError(error) || attempt >= maxAttempts) {
         throw error;
       }
 
+      const retryAfterAt = resolveGmailRetryAfterAt(error);
+      if (retryAfterAt !== null && retryAfterAt > Date.now()) {
+        gmailApiCooldownUntil = Math.max(gmailApiCooldownUntil, retryAfterAt);
+      }
+      const serverDelay = retryAfterAt === null ? null : Math.max(0, retryAfterAt - Date.now());
+      if (serverDelay !== null && serverDelay > GOOGLE_API_RETRY_MAX_DELAY_MS) {
+        logger.warn(
+          `[booking-email] ${description} was rate limited; Gmail requested a cooldown until ${new Date(retryAfterAt!).toISOString()}. No early retries will be attempted.`,
+        );
+        throw error;
+      }
+
       const exponentialDelay = GOOGLE_API_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
-      const jitter = Math.floor(Math.random() * 250);
-      const delay = Math.min(exponentialDelay + jitter, GOOGLE_API_RETRY_MAX_DELAY_MS);
+      const jitter = Math.floor(Math.random() * 1000);
+      const delay =
+        serverDelay === null
+          ? Math.min(exponentialDelay + jitter, GOOGLE_API_RETRY_MAX_DELAY_MS)
+          : Math.max(serverDelay, 1000) + jitter;
       logger.warn(
-        `[booking-email] ${description} failed with a retryable Google API transport error on attempt ${attempt}/${maxAttempts}: ${(error as Error).message}`,
+        `[booking-email] ${description} failed with a retryable Google API error on attempt ${attempt}/${maxAttempts}: ${(error as Error).message}`,
       );
       await wait(delay);
     }
