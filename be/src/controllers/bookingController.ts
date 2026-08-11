@@ -3060,7 +3060,14 @@ export const getBookingEmailTemplateGallery = async (
           experienceTime: '21:00',
           total: 330,
           addons: [
-            { name: 'T-Shirts', quantity: 2 },
+            {
+              name: 'T-Shirts',
+              quantity: 2,
+              variants: [
+                { value: 'S', quantity: 1 },
+                { value: 'M', quantity: 1 },
+              ],
+            },
             { name: 'Instant photos', quantity: 1 },
           ],
         },
