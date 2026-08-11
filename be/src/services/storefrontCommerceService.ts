@@ -191,6 +191,27 @@ export const normalizeStorefrontAddonVariants = (
     .map(({ value, quantity }) => ({ value, quantity }));
 };
 
+export const resolveStorefrontAddonMaxQuantity = (
+  participantQuantity: number,
+  maxPerAttendee: number | null,
+  config: StorefrontAddonConfig,
+): number => {
+  const rawConfiguredMaximum = Number(config.maxQuantity);
+  const configuredMaximum =
+    Number.isInteger(rawConfiguredMaximum) && rawConfiguredMaximum > 0
+      ? rawConfiguredMaximum
+      : null;
+  const perAttendeeMaximum =
+    maxPerAttendee === null
+      ? null
+      : Math.max(1, Math.floor(Number(maxPerAttendee) || 0) * participantQuantity);
+
+  if (configuredMaximum !== null && perAttendeeMaximum !== null) {
+    return Math.min(configuredMaximum, perAttendeeMaximum);
+  }
+  return configuredMaximum ?? perAttendeeMaximum ?? Math.max(50, participantQuantity);
+};
+
 const normalizeParticipantCount = (
   rawQuantity: unknown,
   options: Record<string, unknown>,
@@ -523,10 +544,11 @@ export const quoteStorefrontCart = async (
       }
       const addonConfig: StorefrontAddonConfig = productAddon.storefrontConfig ?? {};
       const selectionMode = String(addonConfig.selectionMode ?? 'quantity').toLowerCase();
-      const maxQuantity =
-        productAddon.maxPerAttendee === null
-          ? Math.max(50, quantity)
-          : Math.max(1, productAddon.maxPerAttendee * quantity);
+      const maxQuantity = resolveStorefrontAddonMaxQuantity(
+        quantity,
+        productAddon.maxPerAttendee,
+        addonConfig,
+      );
       const baseUnitPrice =
         productAddon.priceOverride === null ? Number(addon.basePrice ?? 0) : Number(productAddon.priceOverride);
       if (!Number.isFinite(baseUnitPrice) || baseUnitPrice < 0) {

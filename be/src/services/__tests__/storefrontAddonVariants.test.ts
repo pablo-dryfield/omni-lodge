@@ -1,4 +1,7 @@
-import { normalizeStorefrontAddonVariants } from '../storefrontCommerceService';
+import {
+  normalizeStorefrontAddonVariants,
+  resolveStorefrontAddonMaxQuantity,
+} from '../storefrontCommerceService';
 
 jest.mock('../../models/Addon.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/Channel.js', () => ({ __esModule: true, default: {} }));
@@ -73,5 +76,19 @@ describe('normalizeStorefrontAddonVariants', () => {
         inventory,
       ),
     ).toThrow('T-Shirts size XXL only has 20 available.');
+  });
+});
+
+describe('resolveStorefrontAddonMaxQuantity', () => {
+  it('uses the configured global maximum for a small booking', () => {
+    expect(resolveStorefrontAddonMaxQuantity(2, null, { maxQuantity: 100 })).toBe(100);
+  });
+
+  it('keeps a per-attendee limit when it is lower than the configured maximum', () => {
+    expect(resolveStorefrontAddonMaxQuantity(2, 3, { maxQuantity: 100 })).toBe(6);
+  });
+
+  it('retains the legacy fallback when no maximum is configured', () => {
+    expect(resolveStorefrontAddonMaxQuantity(60, null, {})).toBe(60);
   });
 });
