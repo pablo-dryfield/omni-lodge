@@ -40,6 +40,7 @@ import {
 import {
   fetchMessagePayload as fetchGmailMessagePayload,
   getGmailApiCooldownUntil,
+  hasBackupGmailAccount,
   isGmailCooldownError,
   listMailboxMessages,
   sendMessage as sendGmailMessage,
@@ -457,6 +458,7 @@ type BackfillEmailRequestBody = {
   pickupTo?: string;
   batchSize?: number;
   query?: string;
+  mailbox?: 'primary' | 'backup';
 };
 
 type SendBookingEmailBody = {
@@ -3655,12 +3657,26 @@ export const backfillBookingEmails = async (req: AuthenticatedRequest, res: Resp
       res.status(400).json({ message: 'pickupFrom or pickupTo is required' });
       return;
     }
+    const mailbox = body?.mailbox ?? 'primary';
+    if (!['primary', 'backup'].includes(mailbox)) {
+      res.status(400).json({ message: 'mailbox must be primary or backup' });
+      return;
+    }
+    if (mailbox === 'backup' && !hasBackupGmailAccount()) {
+      res.status(400).json({ message: 'The backup Gmail account is not configured.' });
+      return;
+    }
+
+    logger.warn(
+      `[booking-email] ${req.authContext?.id ?? 'unknown'} confirmed a ${mailbox} mailbox backfill.`,
+    );
 
     void ingestAllBookingEmails({
       receivedAfter: start ?? undefined,
       receivedBefore: end ?? undefined,
       batchSize: body?.batchSize,
       query: body?.query,
+      mailbox,
     }).catch((error) => {
       const message = error instanceof Error ? error.message : 'Unknown error';
       logger.error(`[booking-email] Backfill failed: ${message}`);
