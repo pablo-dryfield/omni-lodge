@@ -134,6 +134,16 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     validation: { maxLength: 2000 },
   },
   {
+    key: 'BOOKING_GMAIL_FORWARDER_ADDRESS',
+    label: 'Primary Gmail forwarding address',
+    description:
+      'Primary inbox address used to find manually forwarded messages during a backup-mailbox backfill.',
+    category: 'Booking Email Ingestion',
+    valueType: 'string',
+    defaultValue: 'pubthroughkrakow@gmail.com',
+    validation: { maxLength: 320 },
+  },
+  {
     key: 'BOOKING_TSHIRT_SIZE_EMAIL_AUTO_SEND',
     label: 'Automatically request T-shirt sizes',
     description:

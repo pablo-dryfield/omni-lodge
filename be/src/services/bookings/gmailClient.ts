@@ -328,6 +328,7 @@ const buildHeaders = (payload?: gmail_v1.Schema$MessagePart | null): Record<stri
 };
 
 export type GmailMessagePayload = {
+  sourceAccount: GmailAccount;
   message: gmail_v1.Schema$Message;
   textBody: string;
   htmlBody: string | null;
@@ -543,6 +544,7 @@ export const fetchMessagePayload = async (messageId: string): Promise<GmailMessa
     }
 
     return {
+      sourceAccount: account,
       message: { ...data, id: buildMessageReference(account, data.id ?? gmailMessageId) },
       textBody: buckets.text.join('\n').trim(),
       htmlBody: buckets.html.length > 0 ? buckets.html.join('\n') : null,
