@@ -126,12 +126,21 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'BOOKING_GMAIL_QUERY',
     label: 'Booking Gmail query',
-    description: 'Query used to fetch booking-related emails.',
+    description: 'Fallback provider query used only when processing every incoming Gmail message is disabled.',
     category: 'Booking Email Ingestion',
     valueType: 'string',
     defaultValue:
       'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR civitatis.com OR airbnb.com OR airbnbmail.com))',
     validation: { maxLength: 2000 },
+  },
+  {
+    key: 'BOOKING_GMAIL_PROCESS_ALL_MESSAGES',
+    label: 'Process every incoming Gmail message',
+    description:
+      'When enabled, automatic ingestion stores every received message and marks non-booking messages as ignored. Sent mail and drafts are excluded.',
+    category: 'Booking Email Ingestion',
+    valueType: 'boolean',
+    defaultValue: true,
   },
   {
     key: 'BOOKING_GMAIL_FORWARDER_ADDRESS',
@@ -527,6 +536,25 @@ Best,
     defaultValue: null,
     isSecret: true,
     impact: 'high',
+  },
+  {
+    key: 'GMAIL_DEFAULT_FROM_ADDRESS',
+    label: 'Default Gmail From address',
+    description:
+      'Public sender address used when an email workflow does not specify another From address. This alias must be verified on both the primary and backup Gmail accounts.',
+    category: 'Google API',
+    valueType: 'string',
+    defaultValue: 'pubthroughkrakow@gmail.com',
+    validation: { maxLength: 320 },
+  },
+  {
+    key: 'GMAIL_DEFAULT_FROM_NAME',
+    label: 'Default Gmail From name',
+    description: 'Friendly sender name paired with the default Gmail From address.',
+    category: 'Google API',
+    valueType: 'string',
+    defaultValue: 'Krawl Through Krakow',
+    validation: { maxLength: 120 },
   },
   {
     key: 'GOOGLE_ADS_DEVELOPER_TOKEN',

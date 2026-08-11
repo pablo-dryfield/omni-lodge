@@ -515,11 +515,27 @@ const MAILBOX_DEFAULT_LIMIT = 25;
 const MAILBOX_MAX_LIMIT = 100;
 const EMAIL_ADDRESS_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EMAIL_TEMPLATE_TYPES: EmailTemplateType[] = ['plain_text', 'react_email'];
+const UNRESOLVED_EMAIL_PLACEHOLDER_REGEX = /\{\{\s*([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)\s*\}\}/g;
+const ALL_INCOMING_GMAIL_QUERY = 'in:anywhere -in:sent -in:drafts';
 const FALLBACK_BOOKING_QUERY =
   'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR civitatis.com OR airbnb.com OR airbnbmail.com))';
 
 const resolveBookingQuery = (): string =>
-  (getConfigValue('BOOKING_GMAIL_QUERY') as string) ?? FALLBACK_BOOKING_QUERY;
+  getConfigValue('BOOKING_GMAIL_PROCESS_ALL_MESSAGES') !== false
+    ? ALL_INCOMING_GMAIL_QUERY
+    : (getConfigValue('BOOKING_GMAIL_QUERY') as string) ?? FALLBACK_BOOKING_QUERY;
+
+const findUnresolvedEmailPlaceholders = (...values: Array<string | null | undefined>): string[] => {
+  const unresolved = new Set<string>();
+  for (const value of values) {
+    for (const match of String(value ?? '').matchAll(UNRESOLVED_EMAIL_PLACEHOLDER_REGEX)) {
+      if (match[1]) {
+        unresolved.add(match[1]);
+      }
+    }
+  }
+  return Array.from(unresolved).sort((left, right) => left.localeCompare(right));
+};
 
 const clampEmailLimit = (value: unknown): number => {
   const parsed = Number.parseInt(String(value ?? ''), 10);
@@ -3481,6 +3497,17 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
     }
 
     const rendered = await resolveRenderedEmailFromPayload(payload);
+    const unresolvedPlaceholders = findUnresolvedEmailPlaceholders(
+      rendered.subject,
+      rendered.textBody,
+      rendered.htmlBody,
+    );
+    if (unresolvedPlaceholders.length > 0) {
+      throw new HttpError(
+        400,
+        `Email template is missing values for: ${unresolvedPlaceholders.join(', ')}. Open the email from a booking with the required information, or remove those placeholders before sending.`,
+      );
+    }
     const replyToMessageId = String(payload?.replyToMessageId ?? '').trim();
     let replyContext: {
       threadId: string;

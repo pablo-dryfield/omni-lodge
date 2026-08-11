@@ -2,17 +2,11 @@ import cron, { ScheduledTask } from 'node-cron';
 import logger from '../utils/logger.js';
 import { ingestLatestBookingEmails } from '../services/bookings/bookingIngestionService.js';
 import { getConfigValue } from '../services/configService.js';
-import { getGmailApiCooldownUntil } from '../services/bookings/gmailClient.js';
 
 let scheduledTask: ScheduledTask | null = null;
 let bookingEmailPolling = false;
 
 const shouldSkipGmailPolling = (): boolean => {
-  const cooldownUntil = getGmailApiCooldownUntil();
-  if (cooldownUntil) {
-    logger.debug(`[booking-email] Skipping Gmail polling during cooldown until ${cooldownUntil.toISOString()}`);
-    return true;
-  }
   if (bookingEmailPolling) {
     logger.debug('[booking-email] Skipping overlapping Gmail ingestion run');
     return true;

@@ -1,6 +1,7 @@
 const mockGmailSend = jest.fn();
 const mockGmailGet = jest.fn();
 const mockGmailList = jest.fn();
+const mockGmailSendAsList = jest.fn();
 const mockGetAccessToken = jest.fn();
 const mockConfigValues = new Map<string, unknown>();
 
@@ -21,7 +22,7 @@ jest.mock('googleapis', () => ({
         },
         settings: {
           sendAs: {
-            list: jest.fn(),
+            list: mockGmailSendAsList,
           },
         },
       },
@@ -127,6 +128,16 @@ describe('Gmail threaded replies', () => {
         payload: { headers: [{ name: 'Message-ID', value: '<sent-message@example.com>' }] },
       },
     });
+    mockGmailSendAsList.mockResolvedValue({
+      data: {
+        sendAs: [
+          {
+            sendAsEmail: 'pubthroughkrakow@gmail.com',
+            verificationStatus: 'accepted',
+          },
+        ],
+      },
+    });
   });
 
   it('uses persistent backup message references when reading the forwarded mailbox', async () => {
@@ -163,6 +174,7 @@ describe('Gmail threaded replies', () => {
     expect(request.media).toBeUndefined();
 
     const rawMessage = Buffer.from(request.requestBody.raw, 'base64url').toString('utf-8');
+    expect(rawMessage).toContain('From: "Krawl Through Krakow" <pubthroughkrakow@gmail.com>');
     expect(rawMessage).toContain('In-Reply-To: <customer-reply@example.com>');
     expect(rawMessage).toContain(
       'References: <original-message@example.com> <customer-reply@example.com>',
@@ -200,6 +212,7 @@ describe('Gmail threaded replies', () => {
     const request = mockGmailSend.mock.calls[1][0];
     expect(request.requestBody).toEqual({ raw: expect.any(String) });
     const rawMessage = Buffer.from(request.requestBody.raw, 'base64url').toString('utf-8');
+    expect(rawMessage).toContain('From: "Krawl Through Krakow" <pubthroughkrakow@gmail.com>');
     expect(rawMessage).toContain('In-Reply-To: <customer-reply@example.com>');
   });
 });

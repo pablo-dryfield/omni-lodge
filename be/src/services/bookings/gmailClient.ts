@@ -374,6 +374,25 @@ const encodeBase64 = (value: string | Buffer): string =>
 
 const sanitizeHeaderValue = (value: string): string => value.replace(/[\r\n]+/g, ' ').trim();
 
+const resolveDefaultFrom = (): string | null => {
+  const address = sanitizeHeaderValue(
+    String(getConfigValue('GMAIL_DEFAULT_FROM_ADDRESS') ?? 'pubthroughkrakow@gmail.com'),
+  );
+  if (!address) {
+    return null;
+  }
+
+  const name = sanitizeHeaderValue(
+    String(getConfigValue('GMAIL_DEFAULT_FROM_NAME') ?? 'Krawl Through Krakow'),
+  );
+  if (!name) {
+    return address;
+  }
+
+  const quotedName = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `"${quotedName}" <${address}>`;
+};
+
 const extractRfcMessageIds = (value: string | null | undefined): string[] =>
   sanitizeHeaderValue(value ?? '').match(/<[^<>\s]+>/g) ?? [];
 
@@ -950,14 +969,17 @@ const sendMessageWithAccount = async (
 };
 
 export const sendMessage = async (params: SendMessageParams): Promise<SendMessageResult> => {
-  const requestedRfcMessageId = extractRfcMessageIds(params.rfcMessageId)[0] ?? null;
+  const resolvedParams: SendMessageParams = params.from
+    ? params
+    : { ...params, from: resolveDefaultFrom() };
+  const requestedRfcMessageId = extractRfcMessageIds(resolvedParams.rfcMessageId)[0] ?? null;
   const rfcMessageId = requestedRfcMessageId ?? buildRfcMessageId();
-  const mimeMessage = buildMimeMessage(params, rfcMessageId);
+  const mimeMessage = buildMimeMessage(resolvedParams, rfcMessageId);
 
   try {
     return await sendMessageWithAccount(
       'primary',
-      params,
+      resolvedParams,
       requestedRfcMessageId,
       rfcMessageId,
       mimeMessage,
@@ -976,7 +998,7 @@ export const sendMessage = async (params: SendMessageParams): Promise<SendMessag
     try {
       return await sendMessageWithAccount(
         'backup',
-        params,
+        resolvedParams,
         requestedRfcMessageId,
         rfcMessageId,
         mimeMessage,
