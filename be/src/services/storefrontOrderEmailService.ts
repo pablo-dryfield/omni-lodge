@@ -158,7 +158,7 @@ export const buildCustomerStorefrontEmail = (order: StorefrontOrder) => {
         <div style="margin-top:5px">Save your booking reference and show it to the team if requested. If any booking detail looks incorrect, contact us as soon as possible.</div>
       </td></tr>
     </table>
-    ${policyHtml(cancellationPolicy)}
+    ${cancellationPolicy ? policyHtml(cancellationPolicy) : ''}
     ${contactHtml}
     <p style="margin:24px 0 0;text-align:center;color:#766a66;font-family:Arial,sans-serif;font-size:13px;line-height:1.6">Krawl Through Krakow<br>We cannot wait to welcome you.</p>`;
 
@@ -181,12 +181,14 @@ export const buildCustomerStorefrontEmail = (order: StorefrontOrder) => {
     ]),
     `Total paid: ${money(order.total, order.currency)}`,
     '',
-    cancellationPolicy.title.toUpperCase(),
-    cancellationPolicy.summary,
-    ...cancellationPolicy.items.map(
-      (item) => `${item.title}: ${item.description}`,
-    ),
-    '',
+    ...(cancellationPolicy
+      ? [
+          cancellationPolicy.title.toUpperCase(),
+          cancellationPolicy.summary,
+          ...cancellationPolicy.items.map((item) => `${item.title}: ${item.description}`),
+          '',
+        ]
+      : []),
     `To cancel or ask about a cancellation, call ${SUPPORT_PHONE} or email ${SUPPORT_EMAIL}.`,
     '',
     'Krawl Through Krakow',

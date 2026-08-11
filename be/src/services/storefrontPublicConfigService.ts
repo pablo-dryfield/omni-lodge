@@ -1,37 +1,20 @@
 import type { StorefrontCancellationPolicy } from '../types/storefront.js';
 import { getConfigValue } from './configService.js';
 
-export const DEFAULT_STOREFRONT_CANCELLATION_POLICY: StorefrontCancellationPolicy = {
-  title: 'Cancellation policy',
-  summary: 'Cancel at least 24 hours before the experience start time for a full refund or credit.',
-  items: [
-    {
-      title: '24 hours or more before the start time',
-      description: 'You can receive a full refund or credit.',
-    },
-    {
-      title: 'If we cancel',
-      description:
-        'You will receive a full refund or credit if the operator cancels because of weather or another unforeseen circumstance.',
-    },
-    {
-      title: 'Within 24 hours or for a no-show',
-      description:
-        'Cancellation requests will be rejected and no-shows will be charged the full price.',
-    },
-  ],
-};
-
-const text = (value: unknown, fallback = ''): string =>
-  typeof value === 'string' && value.trim() ? value.trim() : fallback;
+const text = (value: unknown): string =>
+  typeof value === 'string' ? value.trim() : '';
 
 export const normalizeStorefrontCancellationPolicy = (
   value: unknown,
-): StorefrontCancellationPolicy => {
+): StorefrontCancellationPolicy | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return DEFAULT_STOREFRONT_CANCELLATION_POLICY;
+    return null;
   }
   const record = value as Record<string, unknown>;
+  const title = text(record.title);
+  const summary = text(record.summary);
+  if (!title || !summary) return null;
+
   const items = Array.isArray(record.items)
     ? record.items.flatMap((rawItem) => {
         if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) return [];
@@ -43,11 +26,11 @@ export const normalizeStorefrontCancellationPolicy = (
     : [];
 
   return {
-    title: text(record.title, DEFAULT_STOREFRONT_CANCELLATION_POLICY.title),
-    summary: text(record.summary, DEFAULT_STOREFRONT_CANCELLATION_POLICY.summary),
-    items: items.length > 0 ? items : DEFAULT_STOREFRONT_CANCELLATION_POLICY.items,
+    title,
+    summary,
+    items,
   };
 };
 
-export const getStorefrontCancellationPolicy = (): StorefrontCancellationPolicy =>
+export const getStorefrontCancellationPolicy = (): StorefrontCancellationPolicy | null =>
   normalizeStorefrontCancellationPolicy(getConfigValue('STOREFRONT_CANCELLATION_POLICY'));
