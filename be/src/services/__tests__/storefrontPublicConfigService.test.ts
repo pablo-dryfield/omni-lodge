@@ -1,15 +1,14 @@
-import {
-  DEFAULT_STOREFRONT_CANCELLATION_POLICY,
-  normalizeStorefrontCancellationPolicy,
-} from '../storefrontPublicConfigService';
+import { normalizeStorefrontCancellationPolicy } from '../storefrontPublicConfigService';
 
 jest.mock('../configService.js', () => ({ getConfigValue: jest.fn() }));
 
 describe('normalizeStorefrontCancellationPolicy', () => {
-  it('returns the global default for missing configuration', () => {
-    expect(normalizeStorefrontCancellationPolicy(null)).toEqual(
-      DEFAULT_STOREFRONT_CANCELLATION_POLICY,
-    );
+  it('returns no policy for missing configuration', () => {
+    expect(normalizeStorefrontCancellationPolicy(null)).toBeNull();
+  });
+
+  it('returns no policy when required content is missing', () => {
+    expect(normalizeStorefrontCancellationPolicy({ title: 'Cancellation policy' })).toBeNull();
   });
 
   it('normalizes an editable cancellation policy', () => {
@@ -32,6 +31,14 @@ describe('normalizeStorefrontCancellationPolicy', () => {
       summary: 'Our terms.',
       items: [{ title: 'Incomplete' }, null],
     });
-    expect(policy.items).toEqual(DEFAULT_STOREFRONT_CANCELLATION_POLICY.items);
+    expect(policy.items).toEqual([]);
+  });
+
+  it('keeps an edited policy without items summary-only', () => {
+    const policy = normalizeStorefrontCancellationPolicy({
+      title: 'Cancellation policy',
+      summary: 'Our complete cancellation terms.',
+    });
+    expect(policy.items).toEqual([]);
   });
 });

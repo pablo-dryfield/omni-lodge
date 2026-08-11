@@ -2,6 +2,7 @@ import {
   buildCustomerStorefrontEmail,
   buildInternalStorefrontEmail,
 } from '../storefrontOrderEmailService';
+import { getConfigValue } from '../configService';
 import type StorefrontOrder from '../../models/StorefrontOrder';
 
 jest.mock('../../config/database.js', () => ({ __esModule: true, default: {} }));
@@ -9,6 +10,8 @@ jest.mock('../../models/StorefrontOrder.js', () => ({ __esModule: true, default:
 jest.mock('../../models/StorefrontOrderItem.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../bookings/gmailClient.js', () => ({ sendMessage: jest.fn() }));
 jest.mock('../configService.js', () => ({ getConfigValue: jest.fn() }));
+
+const mockedGetConfigValue = getConfigValue as jest.MockedFunction<typeof getConfigValue>;
 
 const order = {
   publicId: '799dd50e-12d7-4c81-b202-e68186480ed6',
@@ -37,6 +40,14 @@ const order = {
 } as unknown as StorefrontOrder;
 
 describe('storefront paid-order emails', () => {
+  beforeEach(() => {
+    mockedGetConfigValue.mockReturnValue({
+      title: 'Cancellation policy',
+      summary: 'Custom cancellation terms.',
+      items: [],
+    });
+  });
+
   it('builds a useful customer confirmation in HTML and plain text', () => {
     const email = buildCustomerStorefrontEmail(order);
 
@@ -47,10 +58,20 @@ describe('storefront paid-order emails', () => {
     expect(email.textBody).toContain(order.publicId);
     expect(email.textBody).toContain('Total paid');
     expect(email.htmlBody).toContain('Cancellation policy');
-    expect(email.htmlBody).toContain('24 hours or more before the start time');
+    expect(email.htmlBody).toContain('Custom cancellation terms.');
+    expect(email.htmlBody).not.toContain('24 hours or more before the start time');
     expect(email.textBody).toContain('+48791847981');
     expect(email.textBody).toContain('pubthroughkrakow@gmail.com');
     expect(`${email.subject}${email.htmlBody}${email.textBody}`).not.toMatch(/Ã|Â|â|Ä|Ĺ/);
+  });
+
+  it('omits the cancellation policy when none is configured', () => {
+    mockedGetConfigValue.mockReturnValue(null);
+
+    const email = buildCustomerStorefrontEmail(order);
+
+    expect(email.htmlBody).not.toContain('Cancellation policy');
+    expect(email.textBody).not.toContain('CANCELLATION POLICY');
   });
 
   it('builds an operator notification with contact and payment details', () => {
