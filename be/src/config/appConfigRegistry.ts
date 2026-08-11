@@ -130,7 +130,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     category: 'Booking Email Ingestion',
     valueType: 'string',
     defaultValue:
-      'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com))',
+      'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR civitatis.com OR airbnb.com OR airbnbmail.com))',
     validation: { maxLength: 2000 },
   },
   {
@@ -473,6 +473,50 @@ Best,
     valueType: 'string',
     defaultValue: null,
     isSecret: true,
+  },
+  {
+    key: 'GMAIL_INGEST_REFRESH_TOKEN',
+    label: 'Gmail ingestion refresh token',
+    description:
+      'Optional refresh token for the Gmail user that receives booking emails. Falls back to the general Google refresh token.',
+    category: 'Google API',
+    valueType: 'string',
+    defaultValue: null,
+    isSecret: true,
+    impact: 'high',
+  },
+  {
+    key: 'GMAIL_SEND_REFRESH_TOKEN',
+    label: 'Gmail backup refresh token',
+    description:
+      'Optional refresh token for a backup Gmail user. During a primary rate limit, outbound email switches to this account and booking ingestion checks it for forwarded copies. Requires Gmail read and send scopes.',
+    category: 'Google API',
+    valueType: 'string',
+    defaultValue: null,
+    isSecret: true,
+    impact: 'high',
+  },
+  {
+    key: 'GMAIL_SEND_CLIENT_ID',
+    label: 'Gmail backup client ID',
+    description:
+      'Optional OAuth client ID used by the backup Gmail user. Leave empty to reuse the general Google client ID.',
+    category: 'Google API',
+    valueType: 'string',
+    defaultValue: null,
+    isSecret: true,
+    impact: 'high',
+  },
+  {
+    key: 'GMAIL_SEND_CLIENT_SECRET',
+    label: 'Gmail backup client secret',
+    description:
+      'Optional OAuth client secret paired with the Gmail backup client ID. Both backup client fields must be configured together.',
+    category: 'Google API',
+    valueType: 'string',
+    defaultValue: null,
+    isSecret: true,
+    impact: 'high',
   },
   {
     key: 'GOOGLE_ADS_DEVELOPER_TOKEN',

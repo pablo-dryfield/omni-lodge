@@ -1,5 +1,5 @@
 import type { Transaction } from 'sequelize';
-import { Op } from 'sequelize';
+import { literal, Op, where as sequelizeWhere } from 'sequelize';
 import axios, { isAxiosError } from 'axios';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
@@ -16,6 +16,7 @@ import ProductAlias from '../../models/ProductAlias.js';
 import logger from '../../utils/logger.js';
 import {
   fetchMessagePayload,
+  hasBackupGmailAccount,
   isGmailCooldownError,
   isGmailRateLimitError,
   listMessages,
@@ -45,7 +46,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const FALLBACK_QUERY =
-  '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR airbnb.com OR airbnbmail.com))';
+  'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR civitatis.com OR airbnb.com OR airbnbmail.com))';
 
 const DEFAULT_BOOKING_TIMEZONE =
   (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
@@ -1101,11 +1102,28 @@ const buildParserContext = (email: BookingEmail, payload: GmailMessagePayload): 
 
 const saveEmailRecord = async (payload: GmailMessagePayload): Promise<BookingEmail> => {
   const { message, textBody } = payload;
-  const existing = await BookingEmail.findOne({ where: { messageId: message.id ?? '' } });
+  const messageId = message.id ?? '';
+  const existing = await BookingEmail.findOne({ where: { messageId } });
+  const rfcMessageId = String(payload.headers['message-id'] ?? '').trim();
+  const forwardedDuplicate = !existing && rfcMessageId
+    ? await BookingEmail.findOne({
+        where: sequelizeWhere(literal(`headers->>'message-id'`), rfcMessageId),
+        order: [['id', 'ASC']],
+      })
+    : null;
+  if (
+    forwardedDuplicate
+    && ['processed', 'ignored'].includes(forwardedDuplicate.ingestionStatus)
+  ) {
+    logger.info(
+      `[booking-email] Skipping forwarded duplicate ${messageId}; RFC Message-ID ${rfcMessageId} was already stored as ${forwardedDuplicate.messageId}.`,
+    );
+    return forwardedDuplicate;
+  }
   const record =
     existing ??
     BookingEmail.build({
-      messageId: message.id ?? '',
+      messageId,
       ingestionStatus: 'pending',
     } as BookingEmail);
 
@@ -2653,8 +2671,10 @@ export const processBookingEmail = async (
 
   const emailRecord = await saveEmailRecord(payload);
 
-  if (emailRecord.ingestionStatus === 'processed' && !options.force) {
-    logger.debug(`[booking-email] Message ${messageId} already processed, skipping`);
+  if (['processed', 'ignored'].includes(emailRecord.ingestionStatus) && !options.force) {
+    logger.debug(
+      `[booking-email] Message ${messageId} maps to an email with terminal status ${emailRecord.ingestionStatus}, skipping`,
+    );
     return 'ignored';
   }
 
@@ -2794,10 +2814,24 @@ const rebuildBookingTimeline = async (
 
 export const ingestLatestBookingEmails = async (): Promise<void> => {
   try {
-    const { messages } = await listMessages({
+    const listParams = {
       query: resolveDefaultQuery(),
       maxResults: resolveDefaultBatch(),
-    });
+    };
+    let messages;
+    try {
+      ({ messages } = await listMessages(listParams));
+    } catch (primaryError) {
+      const canFailOver = hasBackupGmailAccount()
+        && (isGmailCooldownError(primaryError) || isGmailRateLimitError(primaryError));
+      if (!canFailOver) {
+        throw primaryError;
+      }
+      logger.warn(
+        '[booking-email] Gmail primary account is rate limited; checking the backup mailbox for forwarded booking emails.',
+      );
+      ({ messages } = await listMessages(listParams, 'backup'));
+    }
 
     if (messages.length === 0) {
       logger.debug('[booking-email] No new Gmail messages matching booking query');
