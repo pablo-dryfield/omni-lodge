@@ -514,7 +514,7 @@ const MAILBOX_MAX_LIMIT = 100;
 const EMAIL_ADDRESS_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EMAIL_TEMPLATE_TYPES: EmailTemplateType[] = ['plain_text', 'react_email'];
 const FALLBACK_BOOKING_QUERY =
-  '(subject:(booking OR reservation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR airbnb.com OR airbnbmail.com))';
+  'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR civitatis.com OR airbnb.com OR airbnbmail.com))';
 
 const resolveBookingQuery = (): string =>
   (getConfigValue('BOOKING_GMAIL_QUERY') as string) ?? FALLBACK_BOOKING_QUERY;

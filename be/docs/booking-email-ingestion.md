@@ -9,7 +9,7 @@ GetYourGuide also has a direct supplier API integration now documented in `be/do
 | Variable | Description |
 | --- | --- |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` | OAuth credentials with the `gmail.readonly` scope. |
-| `BOOKING_GMAIL_QUERY` | Gmail search query limiting which messages are processed. Defaults to `(subject:(booking OR reservation))`. |
+| `BOOKING_GMAIL_QUERY` | Gmail search query limiting which messages are processed. The default includes the supported booking-provider domains and booking/cancellation subject terms. |
 | `BOOKING_GMAIL_BATCH_SIZE` | Maximum number of Gmail messages to pull per cron execution (default `20`). |
 | `BOOKING_EMAIL_POLL_CRON` / `BOOKING_EMAIL_POLL_TZ` | Cron frequency (default every 5 minutes, UTC) used by the background ingestion job. |
 
