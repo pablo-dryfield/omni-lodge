@@ -99,37 +99,50 @@ const serializeQuote = (quote: StorefrontQuote) => ({
   itemCount: quote.items.reduce((total, item) => total + item.quantity, 0),
 });
 
-const serializeOrder = (order: StorefrontOrder) => ({
-  publicId: order.publicId,
-  status: order.status,
-  paymentStatus: order.paymentStatus,
-  currency: order.currency,
-  subtotal: Number(order.subtotal),
-  addonTotal: Number(order.addonTotal),
-  discountTotal: Number(order.discountTotal),
-  total: Number(order.total),
-  customer: {
-    firstName: order.customerFirstName,
-    lastName: order.customerLastName,
-    email: order.customerEmail,
-  },
-  items: (order.items || []).map((item) => ({
-    productId: item.productId,
-    productName: item.productName,
-    productSlug: item.productSlug,
-    quantity: item.quantity,
-    experienceDate: item.experienceDate,
-    experienceTime: item.experienceTime,
-    unitPrice: Number(item.unitPrice),
-    baseTotal: Number(item.baseTotal),
-    addonTotal: Number(item.addonTotal),
-    total: Number(item.total),
-    addons: item.addons,
-    options: item.options,
-  })),
-  paidAt: order.paidAt,
-  createdAt: order.createdAt,
-});
+const serializeOrder = async (order: StorefrontOrder) => {
+  const bookings = await Booking.findAll({
+    where: { platform: 'omnilodge', platformOrderId: order.publicId },
+    attributes: ['id', 'platformBookingId'],
+  });
+  const bookingIdByPlatformId = new Map(
+    bookings.map((booking) => [booking.platformBookingId, Number(booking.id)]),
+  );
+
+  return {
+    publicId: order.publicId,
+    status: order.status,
+    paymentStatus: order.paymentStatus,
+    currency: order.currency,
+    subtotal: Number(order.subtotal),
+    addonTotal: Number(order.addonTotal),
+    discountTotal: Number(order.discountTotal),
+    total: Number(order.total),
+    customer: {
+      firstName: order.customerFirstName,
+      lastName: order.customerLastName,
+      email: order.customerEmail,
+      phone: order.customerPhone,
+      countryCode: order.customerCountryCode,
+    },
+    items: (order.items || []).map((item) => ({
+      bookingId: bookingIdByPlatformId.get(`${order.publicId}-${item.id}`) ?? null,
+      productId: item.productId,
+      productName: item.productName,
+      productSlug: item.productSlug,
+      quantity: item.quantity,
+      experienceDate: item.experienceDate,
+      experienceTime: item.experienceTime,
+      unitPrice: Number(item.unitPrice),
+      baseTotal: Number(item.baseTotal),
+      addonTotal: Number(item.addonTotal),
+      total: Number(item.total),
+      addons: item.addons,
+      options: item.options,
+    })),
+    paidAt: order.paidAt,
+    createdAt: order.createdAt,
+  };
+};
 
 const paymentIntentId = (session: Stripe.Checkout.Session): string | null =>
   typeof session.payment_intent === 'string'
@@ -496,7 +509,7 @@ export const confirmCheckout = async (request: Request, response: Response, next
         where: { publicId },
         include: [{ model: StorefrontOrderItem, as: 'items' }],
       });
-      response.json(serializeOrder(hydrated!));
+      response.json(await serializeOrder(hydrated!));
       return;
     }
     if (!sessionId || sessionId !== order.stripeCheckoutSessionId) {
@@ -513,7 +526,7 @@ export const confirmCheckout = async (request: Request, response: Response, next
       where: { publicId },
       include: [{ model: StorefrontOrderItem, as: 'items' }],
     });
-    response.json(serializeOrder(hydrated!));
+    response.json(await serializeOrder(hydrated!));
   } catch (error) {
     next(error);
   }
@@ -526,7 +539,7 @@ export const getOrder = async (request: Request, response: Response, next: NextF
       include: [{ model: StorefrontOrderItem, as: 'items' }],
     });
     if (!order) throw new HttpError(404, 'Storefront order not found.');
-    response.json(serializeOrder(order));
+    response.json(await serializeOrder(order));
   } catch (error) {
     next(error);
   }
