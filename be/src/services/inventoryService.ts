@@ -15,6 +15,14 @@ export type TshirtVariantAvailability = {
   inStock: boolean;
 };
 
+export type AddonInventoryAvailability = {
+  addonId: number;
+  availableQuantity: number;
+  inStock: boolean;
+  variantSelectionRequired: boolean;
+  variants: TshirtVariantAvailability[];
+};
+
 const TSHIRT_VARIANT_ORDER = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
 
 const compareTshirtVariants = (left: string, right: string): number => {
@@ -34,20 +42,20 @@ export async function getAvailableStock(inventoryItemId:number, transaction?:Tra
   return onHand-reserved;
 }
 
-export async function getTshirtVariantAvailability(transaction?: Transaction): Promise<TshirtVariantAvailability[]> {
-  const tshirtAddons = await Addon.findAll({
-    attributes: ['id'],
-    where: { isActive: true, name: { [Op.iLike]: '%shirt%' } },
+export async function getAddonInventoryAvailability(
+  addonIds: number[],
+  transaction?: Transaction,
+): Promise<Map<number, AddonInventoryAvailability>> {
+  const normalizedAddonIds = Array.from(
+    new Set(addonIds.map(Number).filter((addonId) => Number.isInteger(addonId) && addonId > 0)),
+  );
+  if (!normalizedAddonIds.length) return new Map();
+
+  const mappings = await AddonInventoryMapping.findAll({
+    where: { addonId: { [Op.in]: normalizedAddonIds }, isActive: true },
     transaction,
   });
-  const addonIds = tshirtAddons.map((addon) => addon.id);
-  if (!addonIds.length) return [];
-
-  const mappings = (await AddonInventoryMapping.findAll({
-    where: { addonId: { [Op.in]: addonIds }, isActive: true },
-    transaction,
-  })).filter((mapping) => Boolean(mapping.variant?.trim()));
-  if (!mappings.length) return [];
+  if (!mappings.length) return new Map();
 
   const inventoryItemIds = Array.from(new Set(mappings.map((mapping) => mapping.inventoryItemId)));
   const activeItems = await InventoryItem.findAll({
@@ -59,22 +67,89 @@ export async function getTshirtVariantAvailability(transaction?: Transaction): P
   const stockEntries = await Promise.all(
     inventoryItemIds
       .filter((inventoryItemId) => activeItemIds.has(inventoryItemId))
-      .map(async (inventoryItemId) => [inventoryItemId, await getAvailableStock(inventoryItemId, transaction)] as const),
+      .map(async (inventoryItemId) => [
+        inventoryItemId,
+        await getAvailableStock(inventoryItemId, transaction),
+      ] as const),
   );
   const stockByItem = new Map(stockEntries);
-  const quantityByVariant = new Map<string, number>();
+  const quantitiesByAddonVariant = new Map<number, Map<string, number>>();
+  const ungroupedQuantityByAddon = new Map<number, number>();
   const countedMappings = new Set<string>();
 
   for (const mapping of mappings) {
     if (!activeItemIds.has(mapping.inventoryItemId)) continue;
-    const variant = String(mapping.variant).trim().toUpperCase();
-    const mappingKey = `${variant}:${mapping.inventoryItemId}`;
-    if (!variant || countedMappings.has(mappingKey)) continue;
+    const variant = String(mapping.variant ?? '').trim().toUpperCase();
+    const mappingKey = `${mapping.addonId}:${variant || 'ALL'}:${mapping.inventoryItemId}`;
+    if (countedMappings.has(mappingKey)) continue;
     countedMappings.add(mappingKey);
 
     const unitsPerAddon = Math.max(0.001, Number(mapping.quantityPerAddon) || 1);
-    const availableQuantity = Math.max(0, Math.floor((stockByItem.get(mapping.inventoryItemId) ?? 0) / unitsPerAddon));
-    quantityByVariant.set(variant, (quantityByVariant.get(variant) ?? 0) + availableQuantity);
+    const availableQuantity = Math.max(
+      0,
+      Math.floor((stockByItem.get(mapping.inventoryItemId) ?? 0) / unitsPerAddon),
+    );
+    if (variant) {
+      const variantQuantities = quantitiesByAddonVariant.get(mapping.addonId) ?? new Map<string, number>();
+      variantQuantities.set(variant, (variantQuantities.get(variant) ?? 0) + availableQuantity);
+      quantitiesByAddonVariant.set(mapping.addonId, variantQuantities);
+    } else {
+      ungroupedQuantityByAddon.set(
+        mapping.addonId,
+        (ungroupedQuantityByAddon.get(mapping.addonId) ?? 0) + availableQuantity,
+      );
+    }
+  }
+
+  const availabilityByAddon = new Map<number, AddonInventoryAvailability>();
+  for (const addonId of normalizedAddonIds) {
+    const variantQuantities = quantitiesByAddonVariant.get(addonId);
+    const variants = variantQuantities
+      ? Array.from(variantQuantities.entries())
+          .map(([variant, availableQuantity]) => ({
+            variant,
+            availableQuantity,
+            inStock: availableQuantity > 0,
+          }))
+          .sort((left, right) => compareTshirtVariants(left.variant, right.variant))
+      : [];
+    const ungroupedQuantity = ungroupedQuantityByAddon.get(addonId) ?? 0;
+    const availableQuantity = variants.length > 0
+      ? variants.reduce((total, variant) => total + variant.availableQuantity, 0)
+      : ungroupedQuantity;
+    if (variants.length > 0 || ungroupedQuantityByAddon.has(addonId)) {
+      availabilityByAddon.set(addonId, {
+        addonId,
+        availableQuantity,
+        inStock: availableQuantity > 0,
+        variantSelectionRequired: variants.length > 0,
+        variants,
+      });
+    }
+  }
+
+  return availabilityByAddon;
+}
+
+export async function getTshirtVariantAvailability(transaction?: Transaction): Promise<TshirtVariantAvailability[]> {
+  const tshirtAddons = await Addon.findAll({
+    attributes: ['id'],
+    where: { isActive: true, name: { [Op.iLike]: '%shirt%' } },
+    transaction,
+  });
+  const addonIds = tshirtAddons.map((addon) => addon.id);
+  if (!addonIds.length) return [];
+
+  const availabilityByAddon = await getAddonInventoryAvailability(addonIds, transaction);
+  const quantityByVariant = new Map<string, number>();
+
+  for (const availability of availabilityByAddon.values()) {
+    for (const variant of availability.variants) {
+      quantityByVariant.set(
+        variant.variant,
+        (quantityByVariant.get(variant.variant) ?? 0) + variant.availableQuantity,
+      );
+    }
   }
 
   return Array.from(quantityByVariant.entries())

@@ -18,6 +18,7 @@ import {
   getBookingEmailPreview,
   getMailboxEmailPreview,
   getBookingEmailTshirtAvailability,
+  getBookingEmailTemplateGallery,
   renderBookingEmailPreview,
   sendBookingEmail,
   reprocessBookingEmail,
@@ -53,6 +54,7 @@ router.get(['/', ''], authMiddleware, listBookings);
 router.get('/emails', authMiddleware, listBookingEmails);
 router.get('/emails/mailbox', authMiddleware, listBookingMailboxEmails);
 router.get('/emails/tshirt-availability', authMiddleware, getBookingEmailTshirtAvailability);
+router.get('/emails/template-gallery', authMiddleware, getBookingEmailTemplateGallery);
 router.get('/emails/:messageId/preview', authMiddleware, getBookingEmailPreview);
 router.get('/emails/gmail/:messageId/preview', authMiddleware, getMailboxEmailPreview);
 router.post('/emails/render-preview', authMiddleware, renderBookingEmailPreview);

@@ -91,6 +91,7 @@ export const maybeSendTshirtSizeSelectionEmail = async (
 
   const booking = await Booking.findByPk(bookingId);
   if (!booking || booking.status === 'cancelled') return 'ineligible';
+  if (String(booking.platform ?? '').trim().toLowerCase() === 'omnilodge') return 'ineligible';
   if (booking.tshirtSizeEmailStatus === 'sent') return 'already_sent';
   if (
     booking.tshirtSizeEmailStatus === 'sending' &&

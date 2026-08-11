@@ -137,7 +137,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     key: 'BOOKING_TSHIRT_SIZE_EMAIL_AUTO_SEND',
     label: 'Automatically request T-shirt sizes',
     description:
-      'Automatically sends one size-selection email when an incoming booking includes T-shirts. Disable this when customers select sizes directly in the storefront.',
+      'Automatically sends one size-selection email when an incoming booking includes T-shirts. OmniLodge storefront bookings are excluded because customers select their sizes during checkout.',
     category: 'Booking Email Automation',
     valueType: 'boolean',
     defaultValue: false,

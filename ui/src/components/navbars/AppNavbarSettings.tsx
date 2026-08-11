@@ -27,6 +27,7 @@ import {
   IconSettings,
   IconBrandGoogle,
   IconDiscount2,
+  IconMail,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -62,6 +63,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/control-panel",
         slug: PAGE_SLUGS.settingsControlPanel,
         icon: <IconSettings size={20} />,
+      },
+      {
+        label: "Email Previews",
+        to: "/settings/email-previews",
+        slug: PAGE_SLUGS.settingsControlPanel,
+        icon: <IconMail size={20} />,
       },
     ],
   },

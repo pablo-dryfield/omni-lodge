@@ -674,7 +674,7 @@ const bookingInfoRow = (label: string, value: unknown): string => {
 `;
 };
 
-const buildDirectBookingConfirmationEmail = (booking: Booking): { subject: string; htmlBody: string; textBody: string } => {
+export const buildDirectBookingConfirmationEmail = (booking: Booking): { subject: string; htmlBody: string; textBody: string } => {
   const guestName = buildGuestName(booking);
   const tourName = booking.productName ?? 'Krakow Food Tour';
   const orderNumber = booking.id;
@@ -755,7 +755,7 @@ const buildDirectBookingConfirmationEmail = (booking: Booking): { subject: strin
   };
 };
 
-const buildInternalDirectBookingNotificationEmail = (
+export const buildInternalDirectBookingNotificationEmail = (
   booking: Booking,
 ): { subject: string; htmlBody: string; textBody: string } => {
   const guestName = buildGuestName(booking);

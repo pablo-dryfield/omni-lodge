@@ -67,6 +67,7 @@ const SettingsSqlHelper = lazy(() => import("../../pages/settings/SettingsSqlHel
 const SettingsDbBackups = lazy(() => import("../../pages/settings/SettingsDbBackups"));
 const SettingsHomeExperience = lazy(() => import("../../pages/settings/SettingsHomeExperience"));
 const SettingsControlPanel = lazy(() => import("../../pages/settings/SettingsControlPanel"));
+const SettingsEmailPreviews = lazy(() => import("../../pages/settings/SettingsEmailPreviews"));
 const SettingsGoogleApi = lazy(() => import("../../pages/settings/SettingsGoogleApi"));
 const SettingsMaintenance = lazy(() => import("../../pages/settings/SettingsMaintenance"));
 const SettingsReviewPlatforms = lazy(() => import("../../pages/settings/SettingsReviewPlatforms"));
@@ -197,6 +198,7 @@ const Routes = () => {
           <Route path="compensation-components" element={<SettingsCompensationComponents />} />
           <Route path="home-experience" element={<SettingsHomeExperience />} />
           <Route path="control-panel" element={<SettingsControlPanel />} />
+          <Route path="email-previews" element={<SettingsEmailPreviews />} />
           <Route path="google-api" element={<SettingsGoogleApi />} />
           <Route path="maintenance" element={<SettingsMaintenance />} />
         </Route>

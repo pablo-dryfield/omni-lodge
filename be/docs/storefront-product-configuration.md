@@ -87,3 +87,37 @@ Replace the zero placeholders with approved total bundle prices in OmniLodge.
 - Test editing and removing every cart-line type.
 - Test valid, invalid, stacked, scoped, and removed discount codes.
 - Verify availability and capacity enforcement before enabling production checkout.
+
+## Live add-on inventory
+
+Storefront catalog responses (`GET /storefront/products` and
+`GET /storefront/products/:slug`) use response version `3`. Every add-on now
+contains an `inventory` object sourced from active OmniLodge inventory mappings
+and live available stock.
+
+```json
+{
+  "id": 2,
+  "name": "T-Shirts",
+  "inventory": {
+    "tracked": true,
+    "availableQuantity": 83,
+    "inStock": true,
+    "variantSelectionRequired": true,
+    "variants": [
+      { "value": "S", "label": "S", "availableQuantity": 14, "inStock": true },
+      { "value": "M", "label": "M", "availableQuantity": 22, "inStock": true },
+      { "value": "L", "label": "L", "availableQuantity": 20, "inStock": true },
+      { "value": "XL", "label": "XL", "availableQuantity": 17, "inStock": true },
+      { "value": "XXL", "label": "XXL", "availableQuantity": 10, "inStock": true }
+    ]
+  }
+}
+```
+
+- Show only variants where `inStock` is `true`, or show sold-out variants as disabled.
+- Refresh the catalog before checkout so customers see recent availability.
+- `availableQuantity` is expressed in sellable add-on units after applying each
+  inventory mapping's `quantityPerAddon` value and subtracting allocated mail-later fulfillments.
+- Untracked add-ons return `tracked: false`, `availableQuantity: null`,
+  `inStock: null`, and an empty `variants` array. They must not be treated as sold out.

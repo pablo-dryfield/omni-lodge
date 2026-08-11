@@ -68,10 +68,20 @@ import { getConfigValue } from '../services/configService.js';
 import { customerEmailActionTargetsUser } from '../services/bookings/customerEmailActionRules.js';
 import type { EmailTemplateType } from '../models/EmailTemplate.js';
 import {
+  buildDirectBookingActionEmail,
+  buildInternalDirectBookingActionEmail,
   sendDirectBookingActionEmail,
   sendInternalDirectBookingActionEmail,
   type DirectBookingActionEmailOptions,
 } from '../services/directBookingActionEmailService.js';
+import {
+  buildCustomerStorefrontEmail,
+  buildInternalStorefrontEmail,
+} from '../services/storefrontOrderEmailService.js';
+import {
+  buildDirectBookingConfirmationEmail,
+  buildInternalDirectBookingNotificationEmail,
+} from './directBookingIntegrationController.js';
 import CounterRegistryService from '../services/counterRegistryService.js';
 import { recordCustomerEmailThreadParticipant } from '../services/bookings/customerEmailThreadService.js';
 import { resolveCustomerEmailActionsForReply } from '../services/bookings/customerEmailActionService.js';
@@ -859,6 +869,103 @@ const toEmailTemplateResponse = (template: EmailTemplate) => ({
   isActive: template.isActive,
   createdBy: template.createdBy,
   updatedBy: template.updatedBy,
+});
+
+type EmailGalleryPreview = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  audience: string;
+  source: 'system' | 'stored';
+  isActive: boolean;
+  subject: string;
+  htmlBody: string | null;
+  textBody: string;
+  error: string | null;
+};
+
+type BuiltEmail = {
+  subject: string;
+  htmlBody: string | null;
+  textBody: string;
+};
+
+const toEmailGalleryPreview = (
+  metadata: Omit<EmailGalleryPreview, 'subject' | 'htmlBody' | 'textBody' | 'error'>,
+  email: BuiltEmail,
+): EmailGalleryPreview => ({
+  ...metadata,
+  subject: email.subject,
+  htmlBody: email.htmlBody,
+  textBody: email.textBody,
+  error: null,
+});
+
+const buildEmailGalleryMockContext = (): EmailTemplateContext => ({
+  customerName: 'Alex Morgan',
+  customerEmail: 'alex.morgan@example.com',
+  customerPhone: '+48 555 123 456',
+  guestName: 'Alex Morgan',
+  greeting: 'Hi Alex,',
+  productName: 'Krawl Through Krakow Pub Crawl',
+  tourName: 'Krawl Through Krakow Pub Crawl',
+  bookingReference: 'MOCK-BOOKING-41001',
+  bookingId: '41001',
+  platformBookingId: 'MOCK-BOOKING-41001',
+  reservationId: 'MOCK-BOOKING-41001',
+  bookingDate: '2026-08-29',
+  bookingDateDisplay: 'Saturday, 29 August 2026',
+  experienceDate: 'Saturday, 29 August 2026',
+  experienceDateTime: 'Saturday, 29 August 2026 at 21:00',
+  bookingTime: '21:00',
+  peopleCount: 3,
+  quantity: 3,
+  currency: 'PLN',
+  totalPaidAmount: 330,
+  refundedAmount: 110,
+  refundAmount: 110,
+  partialReason: 'One participant and one T-shirt were removed from the booking.',
+  refundReason: 'Booking adjustment requested by the customer.',
+  isFullRefund: false,
+  peopleChange: { from: 4, to: 3, amount: 80 },
+  peopleRefund: { name: 'Participants', qty: 4, quantity: 1, bookedQty: 4, refundQty: 1, amount: 80 },
+  refundedAddons: [
+    { name: 'T-Shirt Add-On', quantity: 1, bookedQty: 2, refundQty: 1, amount: 30 },
+  ],
+  extrasTshirts: 2,
+  tshirtsCount: 2,
+  availableTshirtSizes: ['S', 'M', 'L', 'XL'],
+  availableTshirtSizesText: 'S, M, L, and XL',
+  availableTshirtVariants: [
+    { variant: 'S', available: 12, inStock: true },
+    { variant: 'M', available: 18, inStock: true },
+    { variant: 'L', available: 15, inStock: true },
+    { variant: 'XL', available: 7, inStock: true },
+  ],
+  tshirtVariants: [
+    { variant: 'S', available: 12, inStock: true },
+    { variant: 'M', available: 18, inStock: true },
+    { variant: 'L', available: 15, inStock: true },
+    { variant: 'XL', available: 7, inStock: true },
+  ],
+  hasAvailableTshirtSizes: true,
+  supplierName: 'Krakow Supplies',
+  requestedBy: 'OmniLodge Operations',
+  deliveryDate: '2 September 2026',
+  location: 'Krakow office',
+  items: [
+    { name: 'Black T-shirts, size M', quantity: 25, unit: 'pcs', priority: 'Normal' },
+    { name: 'Photo paper packs', quantity: 6, unit: 'packs', priority: 'High', note: 'Glossy finish' },
+  ],
+  messageLines: [
+    'This is a mocked preview of the configured email template.',
+    'No customer information is being used and no email will be sent.',
+  ],
+  message: 'This is a mocked preview of the configured email template.',
+  notes: 'Vegetarian meal requested. Mock information only.',
+  footerNote: 'This preview uses mock information and cannot send email.',
+  signature: 'The Krawl Through Krakow team',
 });
 
 const resolveRenderedEmailFromPayload = async (payload: SendBookingEmailBody): Promise<RenderedEmailResult> => {
@@ -2888,6 +2995,252 @@ export const getMailboxEmailPreview = async (req: AuthenticatedRequest, res: Res
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load mailbox email preview';
+    res.status(500).json({ message });
+  }
+};
+
+export const getBookingEmailTemplateGallery = async (
+  _req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const directBooking = {
+      id: 41001,
+      platform: 'direct',
+      platformBookingId: 'MOCK-DIRECT-41001',
+      status: 'confirmed',
+      paymentStatus: 'paid',
+      paymentMethod: 'Card',
+      currency: 'PLN',
+      baseAmount: '300.00',
+      addonsAmount: '60.00',
+      priceGross: '360.00',
+      experienceDate: '2026-08-29',
+      experienceStartAt: new Date('2026-08-29T19:00:00.000Z'),
+      productName: 'Krakow Food Tour',
+      guestFirstName: 'Alex',
+      guestLastName: 'Morgan',
+      guestEmail: 'alex.morgan@example.com',
+      guestPhone: '+48 555 123 456',
+      partySizeTotal: 4,
+      notes: 'Vegetarian meal requested. Mock information only.',
+      refundedCurrency: 'PLN',
+    } as unknown as Booking;
+    const omniBooking = {
+      ...directBooking,
+      id: 41002,
+      platform: 'omnilodge',
+      platformBookingId: 'MOCK-OMNI-41002',
+      productName: 'Krawl Through Krakow Pub Crawl',
+      partySizeTotal: 3,
+      baseAmount: '270.00',
+      addonsAmount: '60.00',
+      priceGross: '330.00',
+      notes: 'Two T-shirts and instant photos. Mock information only.',
+    } as unknown as Booking;
+    const storefrontOrder = {
+      publicId: 'MOCK-OMNI-ORDER-7D2A9C',
+      paymentStatus: 'paid',
+      currency: 'PLN',
+      subtotal: 270,
+      addonTotal: 60,
+      discountTotal: 0,
+      total: 330,
+      customerFirstName: 'Alex',
+      customerLastName: 'Morgan',
+      customerEmail: 'alex.morgan@example.com',
+      customerPhone: '+48 555 123 456',
+      customerCountryCode: 'GB',
+      discountCode: null,
+      items: [
+        {
+          productName: 'Krawl Through Krakow Pub Crawl',
+          quantity: 3,
+          experienceDate: '2026-08-29',
+          experienceTime: '21:00',
+          total: 330,
+          addons: [
+            { name: 'T-Shirts', quantity: 2 },
+            { name: 'Instant photos', quantity: 1 },
+          ],
+        },
+      ],
+    } as unknown as StorefrontOrder;
+    const previousExperienceStartAt = new Date('2026-08-27T19:00:00.000Z');
+    const actionOptions: Array<{
+      kind: DirectBookingActionEmailOptions['kind'];
+      label: string;
+      description: string;
+      options: DirectBookingActionEmailOptions;
+    }> = [
+      {
+        kind: 'confirmation',
+        label: 'Confirmation action',
+        description: 'Customer confirmation used by the booking action workflow and manual resend.',
+        options: { kind: 'confirmation' },
+      },
+      {
+        kind: 'amend',
+        label: 'Amendment',
+        description: 'Customer notice showing the previous and updated experience time.',
+        options: { kind: 'amend', previousExperienceStartAt },
+      },
+      {
+        kind: 'partial_refund',
+        label: 'Partial refund',
+        description: 'Customer notice for a participant reduction and related refund.',
+        options: {
+          kind: 'partial_refund',
+          refundedAmount: 110,
+          refundCurrency: 'PLN',
+          previousPartySizeTotal: 4,
+          currentPartySizeTotal: 3,
+        },
+      },
+      {
+        kind: 'cancellation',
+        label: 'Cancellation',
+        description: 'Customer notice sent when the booking is cancelled.',
+        options: { kind: 'cancellation', refundedAmount: 360, refundCurrency: 'PLN' },
+      },
+    ];
+
+    const previews: EmailGalleryPreview[] = [
+      toEmailGalleryPreview(
+        {
+          id: 'system-direct-initial-confirmation',
+          name: 'Direct booking confirmation',
+          description: 'Initial customer confirmation sent when a direct booking is created.',
+          category: 'Direct bookings',
+          audience: 'Customer',
+          source: 'system',
+          isActive: true,
+        },
+        buildDirectBookingConfirmationEmail(directBooking),
+      ),
+      toEmailGalleryPreview(
+        {
+          id: 'system-direct-initial-internal',
+          name: 'New direct booking notification',
+          description: 'Initial internal notification for a newly created direct booking.',
+          category: 'Internal notifications',
+          audience: 'Operations',
+          source: 'system',
+          isActive: true,
+        },
+        buildInternalDirectBookingNotificationEmail(directBooking),
+      ),
+      toEmailGalleryPreview(
+        {
+          id: 'system-omni-storefront-confirmation',
+          name: 'OmniLodge checkout confirmation',
+          description: 'Special paid-order confirmation sent after an OmniLodge storefront checkout.',
+          category: 'OmniLodge storefront',
+          audience: 'Customer',
+          source: 'system',
+          isActive: true,
+        },
+        buildCustomerStorefrontEmail(storefrontOrder),
+      ),
+      toEmailGalleryPreview(
+        {
+          id: 'system-omni-storefront-internal',
+          name: 'OmniLodge paid-order notification',
+          description: 'Internal notification generated after a successful OmniLodge storefront payment.',
+          category: 'Internal notifications',
+          audience: 'Operations',
+          source: 'system',
+          isActive: true,
+        },
+        buildInternalStorefrontEmail(storefrontOrder),
+      ),
+    ];
+
+    for (const action of actionOptions) {
+      previews.push(
+        toEmailGalleryPreview(
+          {
+            id: `system-direct-customer-${action.kind}`,
+            name: `Direct booking - ${action.label}`,
+            description: action.description,
+            category: 'Direct bookings',
+            audience: 'Customer',
+            source: 'system',
+            isActive: true,
+          },
+          buildDirectBookingActionEmail(directBooking, action.options),
+        ),
+        toEmailGalleryPreview(
+          {
+            id: `system-direct-internal-${action.kind}`,
+            name: `Internal - ${action.label}`,
+            description: `Operations copy of the ${action.label.toLowerCase()} booking action.`,
+            category: 'Internal notifications',
+            audience: 'Operations',
+            source: 'system',
+            isActive: true,
+          },
+          buildInternalDirectBookingActionEmail(directBooking, action.options),
+        ),
+      );
+    }
+
+    for (const action of actionOptions) {
+      previews.push(
+        toEmailGalleryPreview(
+          {
+            id: `system-omni-customer-${action.kind}`,
+            name: `OmniLodge - ${action.label}`,
+            description: `${action.description} Uses the OmniLodge variant without the Food Tour meeting point.`,
+            category: 'OmniLodge storefront',
+            audience: 'Customer',
+            source: 'system',
+            isActive: true,
+          },
+          buildDirectBookingActionEmail(omniBooking, action.options),
+        ),
+      );
+    }
+
+    const storedTemplates = await EmailTemplate.findAll({
+      order: [
+        ['isActive', 'DESC'],
+        ['name', 'ASC'],
+      ],
+    });
+    const mockContext = enrichTemplateContextAliases(buildEmailGalleryMockContext());
+    for (const template of storedTemplates) {
+      const metadata = {
+        id: `stored-${template.id}`,
+        name: template.name,
+        description: template.description ?? 'Database-managed booking email template.',
+        category: 'Saved templates',
+        audience: 'Configured recipient',
+        source: 'stored' as const,
+        isActive: template.isActive,
+      };
+      try {
+        const rendered = await renderStoredEmailTemplate({ template, context: mockContext });
+        previews.push(toEmailGalleryPreview(metadata, rendered));
+      } catch (error) {
+        previews.push({
+          ...metadata,
+          subject: template.subjectTemplate,
+          htmlBody: null,
+          textBody: '',
+          error: error instanceof Error ? error.message : 'Failed to render this saved template.',
+        });
+      }
+    }
+
+    res.status(200).json({
+      generatedAt: new Date().toISOString(),
+      mocked: true,
+      count: previews.length,
+      previews,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to build email template gallery';
     res.status(500).json({ message });
   }
 };
