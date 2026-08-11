@@ -6067,7 +6067,12 @@ useEffect(() => {
       return onlineReservationsByAttendanceView;
     }
     return onlineReservationsByAttendanceView.filter((order) => {
+      const bookingId = getOrderBookingId(order);
       const haystack = [
+        bookingId,
+        bookingId == null ? null : `#${bookingId}`,
+        bookingId == null ? null : `booking ${bookingId}`,
+        order.id,
         order.customerName,
         order.platformBookingId,
         order.customerPhone,
@@ -9331,7 +9336,7 @@ useEffect(() => {
                     size="small"
                     value={onlineReservationsSearch}
                     onChange={(event) => setOnlineReservationsSearch(event.target.value)}
-                    placeholder="Search booking, customer, phone..."
+                    placeholder="Search booking ID, reference, customer, phone..."
                     fullWidth
                     disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
                   />
