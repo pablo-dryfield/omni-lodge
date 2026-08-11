@@ -9,6 +9,7 @@ import logger from '../../utils/logger.js';
 import {
   extractEmailAddress,
   fetchMessagePayload,
+  isGmailCooldownError,
   isGmailRateLimitError,
   listMessages,
 } from './gmailClient.js';
@@ -314,7 +315,11 @@ export const ingestCustomerEmailActions = async (): Promise<number> => {
       logger.info(`[customer-email-action] Created ${created} customer email request(s).`);
     }
   } catch (error) {
-    logger.error(`[customer-email-action] Gmail polling failed: ${(error as Error).message}`);
+    if (isGmailCooldownError(error)) {
+      logger.debug(`[customer-email-action] Gmail polling skipped: ${(error as Error).message}`);
+    } else {
+      logger.error(`[customer-email-action] Gmail polling failed: ${(error as Error).message}`);
+    }
   }
   return created;
 };

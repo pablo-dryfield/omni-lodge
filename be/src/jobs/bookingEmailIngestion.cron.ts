@@ -3,11 +3,25 @@ import logger from '../utils/logger.js';
 import { ingestLatestBookingEmails } from '../services/bookings/bookingIngestionService.js';
 import { ingestCustomerEmailActions } from '../services/bookings/customerEmailActionService.js';
 import { getConfigValue } from '../services/configService.js';
+import { getGmailApiCooldownUntil } from '../services/bookings/gmailClient.js';
 
 let scheduledTask: ScheduledTask | null = null;
 let customerEmailScheduledTask: ScheduledTask | null = null;
-let bookingIngestionRunning = false;
-let customerEmailIngestionRunning = false;
+let gmailPollingOwner: 'booking-email' | 'customer-email-action' | null = null;
+
+const shouldSkipGmailPolling = (owner: 'booking-email' | 'customer-email-action'): boolean => {
+  const cooldownUntil = getGmailApiCooldownUntil();
+  if (cooldownUntil) {
+    logger.debug(`[${owner}] Skipping Gmail polling during cooldown until ${cooldownUntil.toISOString()}`);
+    return true;
+  }
+  if (gmailPollingOwner) {
+    logger.debug(`[${owner}] Skipping Gmail polling while ${gmailPollingOwner} is running`);
+    return true;
+  }
+  gmailPollingOwner = owner;
+  return false;
+};
 
 export const startBookingEmailIngestionJob = (): void => {
   if (scheduledTask) {
@@ -23,16 +37,12 @@ export const startBookingEmailIngestionJob = (): void => {
   scheduledTask = cron.schedule(
     cronExpression,
     async () => {
-      if (bookingIngestionRunning) {
-        logger.warn('[booking-email] Skipping overlapping Gmail ingestion tick');
-        return;
-      }
-      bookingIngestionRunning = true;
+      if (shouldSkipGmailPolling('booking-email')) return;
       logger.debug('[booking-email] Cron tick triggered ingestion');
       try {
         await ingestLatestBookingEmails();
       } finally {
-        bookingIngestionRunning = false;
+        gmailPollingOwner = null;
       }
     },
     { timezone: cronTimezone },
@@ -45,15 +55,11 @@ export const startBookingEmailIngestionJob = (): void => {
   customerEmailScheduledTask = cron.schedule(
     customerEmailCronExpression,
     async () => {
-      if (customerEmailIngestionRunning) {
-        logger.warn('[customer-email-action] Skipping overlapping Gmail polling tick');
-        return;
-      }
-      customerEmailIngestionRunning = true;
+      if (shouldSkipGmailPolling('customer-email-action')) return;
       try {
         await ingestCustomerEmailActions();
       } finally {
-        customerEmailIngestionRunning = false;
+        gmailPollingOwner = null;
       }
     },
     { timezone: cronTimezone },

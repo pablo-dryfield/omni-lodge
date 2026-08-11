@@ -39,6 +39,8 @@ import {
 } from '../services/bookings/bookingIngestionService.js';
 import {
   fetchMessagePayload as fetchGmailMessagePayload,
+  getGmailApiCooldownUntil,
+  isGmailCooldownError,
   listMailboxMessages,
   sendMessage as sendGmailMessage,
 } from '../services/bookings/gmailClient.js';
@@ -2934,6 +2936,17 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
       messages,
     });
   } catch (error) {
+    if (isGmailCooldownError(error)) {
+      const retryAfter = getGmailApiCooldownUntil();
+      if (retryAfter) {
+        res.setHeader('Retry-After', Math.max(1, Math.ceil((retryAfter.getTime() - Date.now()) / 1000)));
+      }
+      res.status(429).json({
+        message: 'Gmail is temporarily rate limited. Please retry after the cooldown.',
+        retryAfter: retryAfter?.toISOString() ?? null,
+      });
+      return;
+    }
     const message = error instanceof Error ? error.message : 'Failed to load mailbox emails';
     res.status(500).json({ message });
   }
@@ -2994,6 +3007,17 @@ export const getMailboxEmailPreview = async (req: AuthenticatedRequest, res: Res
       labelIds: labels,
     });
   } catch (error) {
+    if (isGmailCooldownError(error)) {
+      const retryAfter = getGmailApiCooldownUntil();
+      if (retryAfter) {
+        res.setHeader('Retry-After', Math.max(1, Math.ceil((retryAfter.getTime() - Date.now()) / 1000)));
+      }
+      res.status(429).json({
+        message: 'Gmail is temporarily rate limited. Please retry after the cooldown.',
+        retryAfter: retryAfter?.toISOString() ?? null,
+      });
+      return;
+    }
     const message = error instanceof Error ? error.message : 'Failed to load mailbox email preview';
     res.status(500).json({ message });
   }

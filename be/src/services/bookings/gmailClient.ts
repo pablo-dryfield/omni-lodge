@@ -103,6 +103,12 @@ const assertGmailApiCooldownElapsed = (): void => {
   }
 };
 
+export const getGmailApiCooldownUntil = (): Date | null =>
+  gmailApiCooldownUntil > Date.now() ? new Date(gmailApiCooldownUntil) : null;
+
+export const isGmailCooldownError = (error: unknown): boolean =>
+  (error as Partial<GmailCooldownError>)?.gmailCooldown === true;
+
 export const listMessages = async (
   params: ListMessagesParams,
 ): Promise<ListMessagesResult> => {
@@ -648,8 +654,7 @@ const withRetryableGoogleApi = async <T>(
       return await operation();
     } catch (error) {
       lastError = error;
-      const cooldownError = error as Partial<GmailCooldownError>;
-      if (cooldownError.gmailCooldown === true) {
+      if (isGmailCooldownError(error)) {
         throw error;
       }
       if (!isRetryableGmailSendError(error) || attempt >= maxAttempts) {
