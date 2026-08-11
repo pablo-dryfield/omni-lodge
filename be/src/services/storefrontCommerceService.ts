@@ -12,6 +12,10 @@ import type {
   StorefrontAddonConfig,
   StorefrontProductConfig,
 } from '../types/storefront.js';
+import {
+  getAddonInventoryAvailability,
+  type AddonInventoryAvailability,
+} from './inventoryService.js';
 
 export const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -21,6 +25,10 @@ export type StorefrontCartAddonInput = {
   addonId: number;
   quantity?: number;
   value?: string | null;
+  variants?: Array<{
+    value: string;
+    quantity: number;
+  }>;
 };
 
 export type StorefrontCartItemInput = {
@@ -54,6 +62,10 @@ export type StorefrontQuoteItem = {
     name: string;
     quantity: number;
     value: string | null;
+    variants: Array<{
+      value: string;
+      quantity: number;
+    }>;
     unitPrice: number;
     total: number;
   }>;
@@ -113,6 +125,71 @@ const normalizeDate = (value: unknown): string | null => {
 
 const normalizeText = (value: unknown, maxLength = 255): string =>
   value === null || value === undefined ? '' : String(value).trim().slice(0, maxLength);
+
+export const normalizeStorefrontAddonVariants = (
+  input: unknown,
+  addonName: string,
+  addonQuantity: number,
+  inventory?: AddonInventoryAvailability,
+): Array<{ value: string; quantity: number }> => {
+  const rawVariants = Array.isArray(input) ? input : [];
+  if (!inventory?.variantSelectionRequired) {
+    if (rawVariants.length > 0) {
+      throw new HttpError(400, `${addonName} does not support inventory variants.`);
+    }
+    return [];
+  }
+  if (rawVariants.length === 0) {
+    throw new HttpError(400, `Please select sizes for all ${addonQuantity} ${addonName} items.`);
+  }
+
+  const availabilityByValue = new Map(
+    inventory.variants.map((variant, index) => [
+      variant.variant.toUpperCase(),
+      { ...variant, index },
+    ]),
+  );
+  const seen = new Set<string>();
+  const normalized = rawVariants.map((rawVariant, index) => {
+    if (!rawVariant || typeof rawVariant !== 'object' || Array.isArray(rawVariant)) {
+      throw new HttpError(400, `${addonName} size selection ${index + 1} is invalid.`);
+    }
+    const record = rawVariant as Record<string, unknown>;
+    const value = normalizeText(record.value, 40).toUpperCase();
+    const available = availabilityByValue.get(value);
+    if (!available) {
+      throw new HttpError(400, `${value || 'Selected size'} is not an available size for ${addonName}.`);
+    }
+    if (seen.has(value)) {
+      throw new HttpError(400, `${addonName} size ${value} was selected more than once.`);
+    }
+    seen.add(value);
+
+    const quantity = Number(record.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new HttpError(400, `${addonName} size ${value} quantity must be a positive whole number.`);
+    }
+    if (quantity > available.availableQuantity) {
+      throw new HttpError(
+        409,
+        `${addonName} size ${value} only has ${available.availableQuantity} available.`,
+      );
+    }
+    return { value, quantity, sortOrder: available.index };
+  });
+
+  const selectedTotal = normalized.reduce((total, variant) => total + variant.quantity, 0);
+  if (selectedTotal !== addonQuantity) {
+    throw new HttpError(
+      400,
+      `${addonName} size quantities must add up to ${addonQuantity}; received ${selectedTotal}.`,
+    );
+  }
+
+  return normalized
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map(({ value, quantity }) => ({ value, quantity }));
+};
 
 const normalizeParticipantCount = (
   rawQuantity: unknown,
@@ -393,7 +470,17 @@ export const quoteStorefrontCart = async (
     throw new HttpError(400, 'One or more products are unavailable.');
   }
   const productsById = new Map(products.map((product) => [product.id, product]));
-  const prices = await resolveProductPrices(products, transaction);
+  const availableAddonIds = Array.from(
+    new Set(
+      products.flatMap((product) =>
+        (product.productAddons ?? []).map((productAddon) => productAddon.addonId),
+      ),
+    ),
+  );
+  const [prices, inventoryByAddon] = await Promise.all([
+    resolveProductPrices(products, transaction),
+    getAddonInventoryAvailability(availableAddonIds, transaction),
+  ]);
 
   const quoteItems: StorefrontQuoteItem[] = normalizedItems.map((item) => {
     const product = productsById.get(item.productId);
@@ -492,11 +579,18 @@ export const quoteStorefrontCart = async (
       if (![addonUnitPrice, addonLineTotal].every((price) => Number.isFinite(price) && price >= 0)) {
         throw new HttpError(409, `${addon.name} does not have a valid configured price.`);
       }
+      const variants = normalizeStorefrontAddonVariants(
+        addonInput.variants,
+        addon.name,
+        addonQuantity,
+        inventoryByAddon.get(addonId),
+      );
       return {
         addonId,
         name: addon.name,
         quantity: addonQuantity,
         value,
+        variants,
         unitPrice: roundMoney(addonUnitPrice),
         total: roundMoney(addonLineTotal),
       };

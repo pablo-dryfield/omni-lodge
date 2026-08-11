@@ -284,7 +284,10 @@ const persistPaidOrder = async (
             totalPrice: String(addon.total || 0),
             currency: order.currency,
             isIncluded: false,
-            metadata: { source: 'storefront' },
+            metadata: {
+              source: 'storefront',
+              variants: Array.isArray(addon.variants) ? addon.variants : [],
+            },
           } as never,
           { transaction },
         );

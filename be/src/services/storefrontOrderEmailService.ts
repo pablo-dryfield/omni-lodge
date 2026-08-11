@@ -44,10 +44,26 @@ const detailRow = (label: string, value: unknown): string => `
     <td style="padding:11px 0 11px 16px;color:#241c19;font-family:Arial,sans-serif;font-size:14px;font-weight:700;line-height:1.4;text-align:right;vertical-align:top">${escapeHtml(value)}</td>
   </tr>`;
 
+const addonLabel = (addon: Record<string, unknown>): string => {
+  const variants = Array.isArray(addon.variants)
+    ? addon.variants
+        .map((rawVariant) => {
+          if (!rawVariant || typeof rawVariant !== 'object' || Array.isArray(rawVariant)) return null;
+          const variant = rawVariant as Record<string, unknown>;
+          const value = String(variant.value ?? '').trim();
+          const quantity = Number(variant.quantity);
+          return value && Number.isInteger(quantity) && quantity > 0 ? `${quantity} ${value}` : null;
+        })
+        .filter((value): value is string => value !== null)
+    : [];
+  const sizeBreakdown = variants.length > 0 ? ` (${variants.join(', ')})` : '';
+  return `${addon.name ?? 'Add-on'} x ${addon.quantity ?? 1}${sizeBreakdown}`;
+};
+
 const itemCard = (item: StorefrontOrderItem, currency: string): string => {
   const addons = Array.isArray(item.addons) ? item.addons : [];
   const addonCopy = addons
-    .map((addon) => `${addon.name ?? 'Add-on'} x ${addon.quantity ?? 1}`)
+    .map(addonLabel)
     .join(', ');
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px;background:#ffffff;border:1px solid #eadfd8;border-radius:16px">
@@ -149,7 +165,7 @@ export const buildCustomerStorefrontEmail = (order: StorefrontOrder) => {
       `Start time: ${timeLabel(item.experienceTime)}`,
       `Guests: ${item.quantity}`,
       ...(Array.isArray(item.addons) && item.addons.length > 0
-        ? [`Add-ons: ${item.addons.map((addon) => `${addon.name ?? 'Add-on'} x ${addon.quantity ?? 1}`).join(', ')}`]
+        ? [`Add-ons: ${item.addons.map(addonLabel).join(', ')}`]
         : []),
       `Item total: ${money(item.total, order.currency)}`,
       '',

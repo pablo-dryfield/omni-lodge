@@ -121,3 +121,26 @@ and live available stock.
   inventory mapping's `quantityPerAddon` value and subtracting allocated mail-later fulfillments.
 - Untracked add-ons return `tracked: false`, `availableQuantity: null`,
   `inStock: null`, and an empty `variants` array. They must not be treated as sold out.
+
+For an inventory-tracked add-on where `variantSelectionRequired` is true, send
+the complete variant breakdown on the cart add-on. The sum of variant
+quantities must equal the add-on `quantity`.
+
+```json
+{
+  "addonId": 2,
+  "quantity": 7,
+  "variants": [
+    { "value": "S", "quantity": 2 },
+    { "value": "M", "quantity": 2 },
+    { "value": "L", "quantity": 1 },
+    { "value": "XL", "quantity": 1 },
+    { "value": "XXL", "quantity": 1 }
+  ]
+}
+```
+
+The quote and checkout endpoints reject unknown sizes, duplicate size rows,
+out-of-stock quantities, or a breakdown that does not equal the requested
+add-on quantity. The normalized breakdown is returned in the quote and stored
+on the storefront order, booking add-on snapshot, and `BookingAddon.metadata`.
