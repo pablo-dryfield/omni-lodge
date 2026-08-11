@@ -14,7 +14,12 @@ import Channel from '../../models/Channel.js';
 import Product from '../../models/Product.js';
 import ProductAlias from '../../models/ProductAlias.js';
 import logger from '../../utils/logger.js';
-import { fetchMessagePayload, isGmailRateLimitError, listMessages } from './gmailClient.js';
+import {
+  fetchMessagePayload,
+  isGmailCooldownError,
+  isGmailRateLimitError,
+  listMessages,
+} from './gmailClient.js';
 import { getBookingParsers } from './parsers/index.js';
 import type {
   BookingFieldPatch,
@@ -2806,7 +2811,11 @@ export const ingestLatestBookingEmails = async (): Promise<void> => {
       await processBookingEmail(message.id);
     }
   } catch (error) {
-    logger.error(`[booking-email] Failed to ingest booking emails: ${(error as Error).message}`);
+    if (isGmailCooldownError(error)) {
+      logger.debug(`[booking-email] Gmail ingestion skipped: ${(error as Error).message}`);
+    } else {
+      logger.error(`[booking-email] Failed to ingest booking emails: ${(error as Error).message}`);
+    }
   }
 };
 
