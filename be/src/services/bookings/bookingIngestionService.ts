@@ -40,6 +40,7 @@ import { syncEcwidBookingUtmByBookingId } from './ecwidUtmSyncService.js';
 import { syncEcwidBookingProcessingFeeByBookingId } from './ecwidProcessingFeeSyncService.js';
 import { syncEcwidBookingAddonPricingByBookingId } from './ecwidAddonPricingSyncService.js';
 import { maybeSendTshirtSizeSelectionEmail } from './tshirtSizeEmailAutomationService.js';
+import { normalizeForwardedBackupPayload } from './forwardedEmailNormalizer.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -55,6 +56,18 @@ const VIATOR_TIMEZONE =
 
 const resolveDefaultQuery = (): string =>
   (getConfigValue('BOOKING_GMAIL_QUERY') as string) ?? FALLBACK_QUERY;
+
+const resolveBackupBackfillQuery = (query: string): string => {
+  const forwarderAddress = String(
+    getConfigValue('BOOKING_GMAIL_FORWARDER_ADDRESS') ?? 'pubthroughkrakow@gmail.com',
+  ).trim();
+  if (!forwarderAddress) {
+    return query;
+  }
+
+  const queryWithoutMailboxScope = query.replace(/^\s*in:anywhere\s*/i, '').trim();
+  return `in:anywhere (${queryWithoutMailboxScope} OR from:(${forwarderAddress}))`;
+};
 
 const resolveDefaultBatch = (): number => {
   const value = Number(getConfigValue('BOOKING_GMAIL_BATCH_SIZE') ?? 20);
@@ -1133,8 +1146,10 @@ const saveEmailRecord = async (payload: GmailMessagePayload): Promise<BookingEma
   record.toAddresses = payload.headers.to ?? record.toAddresses ?? null;
   record.ccAddresses = payload.headers.cc ?? record.ccAddresses ?? null;
   const subjectHeader = message.payload?.headers?.find((h) => h.name?.toLowerCase() === 'subject')?.value;
-  record.subject = clampNullableString(subjectHeader ?? record.subject ?? null, 512);
-  record.snippet = message.snippet ?? textBody.slice(0, 240);
+  record.subject = clampNullableString(payload.headers.subject ?? subjectHeader ?? record.subject ?? null, 512);
+  record.snippet = payload.headers['x-omnilodge-forwarded-manual'] === 'true'
+    ? textBody.slice(0, 240)
+    : message.snippet ?? textBody.slice(0, 240);
   record.receivedAt = parseDateHeader(payload.headers.date) ?? record.receivedAt ?? null;
   record.internalDate = message.internalDate ? new Date(Number.parseInt(message.internalDate, 10)) : record.internalDate ?? null;
   record.labelIds = message.labelIds ?? record.labelIds ?? null;
@@ -2661,6 +2676,12 @@ export const processBookingEmail = async (
       logger.warn(`[booking-email] Gmail message ${messageId} returned no payload`);
       return 'ignored';
     }
+    payload = normalizeForwardedBackupPayload(payload);
+    if (payload.headers['x-omnilodge-forwarded-manual'] === 'true') {
+      logger.info(
+        `[booking-email] Unwrapped manually forwarded backup message ${messageId} as "${payload.headers.subject ?? '(no subject)'}" from ${payload.headers.from ?? '(unknown sender)'}.`,
+      );
+    }
   } catch (error) {
     if (isGmailRateLimitError(error)) {
       throw error;
@@ -2889,11 +2910,12 @@ const toDateOrNull = (value?: Date | string): Date | null => {
 };
 
 export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Promise<void> => {
-  const query = options.query ?? resolveDefaultQuery();
+  const requestedQuery = options.query ?? resolveDefaultQuery();
   const batchSize = options.batchSize ?? Math.max(resolveDefaultBatch(), 100);
   const receivedAfter = toDateOrNull(options.receivedAfter);
   const receivedBefore = toDateOrNull(options.receivedBefore);
   const mailbox = options.mailbox ?? 'primary';
+  const query = mailbox === 'backup' ? resolveBackupBackfillQuery(requestedQuery) : requestedQuery;
   let pageToken: string | null = null;
   let scanned = 0;
   let totalEstimate: number | null = null;
