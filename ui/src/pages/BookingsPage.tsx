@@ -726,6 +726,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [backfillConfirmOpen, setBackfillConfirmOpen] = useState(false);
   const [backfillLoading, setBackfillLoading] = useState(false);
   const [backfillError, setBackfillError] = useState<string | null>(null);
+  const [backfillMailbox, setBackfillMailbox] = useState<"primary" | "backup">("primary");
   const [emailAdvancedFiltersOpen, setEmailAdvancedFiltersOpen] = useState(false);
   const [createEmailOpen, setCreateEmailOpen] = useState(false);
   const [createEmailForm, setCreateEmailForm] = useState<CreateEmailForm>(() => ({
@@ -1626,6 +1627,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const handleOpenBackfill = () => {
     setBackfillConfirmOpen(true);
     setBackfillError(null);
+    setBackfillMailbox("primary");
   };
 
   const handleCloseBackfill = () => {
@@ -1644,6 +1646,14 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       setBackfillError("Select a received date range first.");
       return;
     }
+    if (
+      backfillMailbox === "backup"
+      && !window.confirm(
+        "Use the backup Gmail mailbox for this backfill? Only messages that already exist in the backup mailbox can be recovered.",
+      )
+    ) {
+      return;
+    }
     setBackfillLoading(true);
     setBackfillError(null);
     try {
@@ -1652,6 +1662,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         {
           pickupFrom: startDate ? dayjs(startDate).format("YYYY-MM-DD") : undefined,
           pickupTo: endDate ? dayjs(endDate).format("YYYY-MM-DD") : undefined,
+          mailbox: backfillMailbox,
         },
         { withCredentials: true },
       );
@@ -3269,8 +3280,24 @@ const BookingsPage = ({ title }: GenericPageProps) => {
             >
               <Stack gap="sm">
                 <Text size="sm">
-                  {`Backfill all emails received between ${bulkRangeStartLabel} and ${bulkRangeEndLabel}?`}
+                  {`Backfill booking emails received between ${bulkRangeStartLabel} and ${bulkRangeEndLabel}?`}
                 </Text>
+                <Select
+                  label="Gmail mailbox"
+                  data={[
+                    { value: "primary", label: "Primary mailbox" },
+                    { value: "backup", label: "Backup mailbox" },
+                  ]}
+                  value={backfillMailbox}
+                  onChange={(value) => setBackfillMailbox(value === "backup" ? "backup" : "primary")}
+                  allowDeselect={false}
+                />
+                {backfillMailbox === "backup" ? (
+                  <Alert color="orange" title="Backup mailbox selected">
+                    This queries the backup Gmail account and can recover only messages already present there.
+                    You will be asked to confirm again before it starts.
+                  </Alert>
+                ) : null}
                 {backfillError && (
                   <Alert color="red" title="Backfill failed">
                     {backfillError}

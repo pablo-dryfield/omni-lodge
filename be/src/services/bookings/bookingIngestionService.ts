@@ -28,7 +28,7 @@ import type {
   BookingParserDiagnostics,
   ParsedBookingEvent,
 } from './types.js';
-import type { GmailMessagePayload } from './gmailClient.js';
+import type { GmailAccount, GmailMessagePayload } from './gmailClient.js';
 import type {
   BookingPlatform,
   KnownBookingPlatform,
@@ -2874,6 +2874,7 @@ type IngestAllOptions = {
   batchSize?: number;
   receivedAfter?: Date | string;
   receivedBefore?: Date | string;
+  mailbox?: GmailAccount;
 };
 
 const toDateOrNull = (value?: Date | string): Date | null => {
@@ -2892,6 +2893,7 @@ export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Pr
   const batchSize = options.batchSize ?? Math.max(resolveDefaultBatch(), 100);
   const receivedAfter = toDateOrNull(options.receivedAfter);
   const receivedBefore = toDateOrNull(options.receivedBefore);
+  const mailbox = options.mailbox ?? 'primary';
   let pageToken: string | null = null;
   let scanned = 0;
   let totalEstimate: number | null = null;
@@ -2903,12 +2905,12 @@ export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Pr
         query,
         maxResults: batchSize,
         pageToken,
-      });
+      }, mailbox);
 
       if (totalEstimate === null && totalSizeEstimate !== null) {
         totalEstimate = totalSizeEstimate;
         logger.info(
-          `[booking-email] Gmail reports approximately ${totalEstimate} messages matching query "${query}"`,
+          `[booking-email] Gmail ${mailbox} mailbox reports approximately ${totalEstimate} messages matching query "${query}"`,
         );
       }
 
@@ -2961,7 +2963,9 @@ export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Pr
     if (exactTotal === null) {
       exactTotal = scanned;
     }
-    logger.info(`[booking-email] Completed full mailbox ingestion. Messages scanned: ${scanned}, total=${exactTotal}`);
+    logger.info(
+      `[booking-email] Completed ${mailbox} mailbox ingestion. Messages scanned: ${scanned}, total=${exactTotal}`,
+    );
   } catch (error) {
     logger.error(`[booking-email] Failed full mailbox ingestion: ${(error as Error).message}`);
   }
