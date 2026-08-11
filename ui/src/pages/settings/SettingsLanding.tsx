@@ -30,6 +30,7 @@ import {
   IconCalendarEvent,
   IconTag,
   IconBrandGoogle,
+  IconMail,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import axiosInstance from "../../utils/axiosInstance";
@@ -61,6 +62,13 @@ const sections: SettingsSection[] = [
     description: "Manage dynamic configuration values and secrets.",
     icon: IconSettings,
     to: "/settings/control-panel",
+    pageSlug: PAGE_SLUGS.settingsControlPanel,
+  },
+  {
+    label: "Email Previews",
+    description: "Review every booking email layout with safe mocked information.",
+    icon: IconMail,
+    to: "/settings/email-previews",
     pageSlug: PAGE_SLUGS.settingsControlPanel,
   },
   {

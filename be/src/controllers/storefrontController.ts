@@ -10,6 +10,10 @@ import ProductPrice from '../models/ProductPrice.js';
 import ProductType from '../models/ProductType.js';
 import type { StorefrontAddonConfig, StorefrontProductConfig } from '../types/storefront.js';
 import type { ProductImage } from '../types/productMedia.js';
+import {
+  getAddonInventoryAvailability,
+  type AddonInventoryAvailability,
+} from '../services/inventoryService.js';
 
 const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -39,6 +43,18 @@ type StorefrontProduct = {
     maxPerAttendee: number | null;
     sortOrder: number;
     config: StorefrontAddonConfig;
+    inventory: {
+      tracked: boolean;
+      availableQuantity: number | null;
+      inStock: boolean | null;
+      variantSelectionRequired: boolean;
+      variants: Array<{
+        value: string;
+        label: string;
+        availableQuantity: number;
+        inStock: boolean;
+      }>;
+    };
   }>;
 };
 
@@ -156,6 +172,7 @@ const serializeProduct = (
   product: Product,
   effectivePrices: ReadonlyMap<number, number>,
   channelPrices: ReadonlyMap<number, number>,
+  inventoryByAddon: ReadonlyMap<number, AddonInventoryAvailability>,
 ): StorefrontProduct => {
   const productType = product.get('ProductType') as ProductType | undefined;
   const productAddons = product.productAddons ?? [];
@@ -189,6 +206,7 @@ const serializeProduct = (
         }
 
         const effectivePrice = record.priceOverride ?? addon.basePrice;
+        const inventory = inventoryByAddon.get(addon.id);
         return {
           id: addon.id,
           name: addon.name,
@@ -202,6 +220,26 @@ const serializeProduct = (
           maxPerAttendee: record.maxPerAttendee ?? null,
           sortOrder: record.sortOrder ?? 0,
           config: record.storefrontConfig ?? {},
+          inventory: inventory
+            ? {
+                tracked: true,
+                availableQuantity: inventory.availableQuantity,
+                inStock: inventory.inStock,
+                variantSelectionRequired: inventory.variantSelectionRequired,
+                variants: inventory.variants.map((variant) => ({
+                  value: variant.variant,
+                  label: variant.variant,
+                  availableQuantity: variant.availableQuantity,
+                  inStock: variant.inStock,
+                })),
+              }
+            : {
+                tracked: false,
+                availableQuantity: null,
+                inStock: null,
+                variantSelectionRequired: false,
+                variants: [],
+              },
         };
       })
       .filter((addon): addon is NonNullable<typeof addon> => addon !== null)
@@ -228,15 +266,23 @@ export const listStorefrontProducts = async (_req: Request, res: Response): Prom
       order: [['name', 'ASC']],
     });
     const productIds = products.map((product) => product.id);
-    const [effectivePrices, channelPrices] = await Promise.all([
+    const addonIds = Array.from(
+      new Set(
+        products.flatMap((product) =>
+          (product.productAddons ?? []).map((productAddon) => productAddon.addonId),
+        ),
+      ),
+    );
+    const [effectivePrices, channelPrices, inventoryByAddon] = await Promise.all([
       loadEffectiveProductPrices(productIds),
       loadStorefrontChannelPrices(productIds),
+      getAddonInventoryAvailability(addonIds),
     ]);
 
     res.status(200).json({
-      version: 2,
+      version: 3,
       products: products.map((product) =>
-        serializeProduct(product, effectivePrices, channelPrices),
+        serializeProduct(product, effectivePrices, channelPrices, inventoryByAddon),
       ),
     });
   } catch (error) {
@@ -268,14 +314,18 @@ export const getStorefrontProduct = async (req: Request, res: Response): Promise
       res.status(404).json({ message: 'Product not found.' });
       return;
     }
-    const [effectivePrices, channelPrices] = await Promise.all([
+    const addonIds = Array.from(
+      new Set((product.productAddons ?? []).map((productAddon) => productAddon.addonId)),
+    );
+    const [effectivePrices, channelPrices, inventoryByAddon] = await Promise.all([
       loadEffectiveProductPrices([product.id]),
       loadStorefrontChannelPrices([product.id]),
+      getAddonInventoryAvailability(addonIds),
     ]);
 
     res.status(200).json({
-      version: 2,
-      product: serializeProduct(product, effectivePrices, channelPrices),
+      version: 3,
+      product: serializeProduct(product, effectivePrices, channelPrices, inventoryByAddon),
     });
   } catch (error) {
     console.error(`Unable to load storefront product ${requestedSlug}:`, error);
