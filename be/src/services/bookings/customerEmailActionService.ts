@@ -2,10 +2,16 @@ import { col, fn, literal, Op, UniqueConstraintError, where as sequelizeWhere } 
 import Booking from '../../models/Booking.js';
 import RequiredAction from '../../models/RequiredAction.js';
 import RequiredActionCompletion from '../../models/RequiredActionCompletion.js';
+import CustomerEmailInspection from '../../models/CustomerEmailInspection.js';
 import UserType from '../../models/UserType.js';
 import { getConfigValue } from '../configService.js';
 import logger from '../../utils/logger.js';
-import { extractEmailAddress, fetchMessagePayload, listMessages } from './gmailClient.js';
+import {
+  extractEmailAddress,
+  fetchMessagePayload,
+  isGmailRateLimitError,
+  listMessages,
+} from './gmailClient.js';
 import {
   buildCustomerEmailGmailQuery,
   buildCustomerEmailRequiredAction,
@@ -16,7 +22,8 @@ import {
 } from './customerEmailActionRules.js';
 import { listCustomerEmailThreadParticipantUserIds } from './customerEmailThreadService.js';
 
-const CUSTOMER_EMAIL_BATCH_SIZE = 100;
+const CUSTOMER_EMAIL_LIST_SIZE = 100;
+const DEFAULT_CUSTOMER_EMAIL_INSPECTION_BATCH_SIZE = 10;
 const UNSOLICITED_EMAIL_USER_TYPE_SLUGS = [
   'admin',
   'administrator',
@@ -33,6 +40,12 @@ const findExistingAction = (gmailMessageId: string): Promise<RequiredAction | nu
     },
     attributes: ['id'],
   });
+
+const resolveInspectionBatchSize = (): number => {
+  const configured = Number(getConfigValue('CUSTOMER_EMAIL_ACTION_BATCH_SIZE'));
+  if (!Number.isInteger(configured)) return DEFAULT_CUSTOMER_EMAIL_INSPECTION_BATCH_SIZE;
+  return Math.min(25, Math.max(1, configured));
+};
 
 export const resolveCustomerEmailActionsForReply = async ({
   gmailThreadId,
@@ -241,19 +254,59 @@ export const ingestCustomerEmailActions = async (): Promise<number> => {
     const startAt = resolveCustomerEmailActionStartAt(getConfigValue('CUSTOMER_EMAIL_ACTION_START_AT'));
     const { messages } = await listMessages({
       query: buildCustomerEmailGmailQuery(startAt),
-      maxResults: CUSTOMER_EMAIL_BATCH_SIZE,
+      maxResults: CUSTOMER_EMAIL_LIST_SIZE,
     });
-    for (const message of messages) {
-      if (!message.id) {
-        continue;
-      }
+    const messageIds = messages
+      .map((message) => String(message.id ?? '').trim())
+      .filter(Boolean);
+    await CustomerEmailInspection.destroy({
+      where: {
+        status: 'processing',
+        updatedAt: { [Op.lt]: new Date(Date.now() - 10 * 60 * 1000) },
+      },
+    });
+    const completedInspections = await CustomerEmailInspection.findAll({
+      where: {
+        gmailMessageId: { [Op.in]: messageIds },
+        status: 'completed',
+      },
+      attributes: ['gmailMessageId'],
+    });
+    const completedIds = new Set(completedInspections.map((entry) => entry.gmailMessageId));
+    const candidates = messages
+      .filter((message) => Boolean(message.id) && !completedIds.has(String(message.id)))
+      .slice(0, resolveInspectionBatchSize());
+
+    for (const message of candidates) {
+      const gmailMessageId = String(message.id);
+      const [inspection, claimed] = await CustomerEmailInspection.findOrCreate({
+        where: { gmailMessageId },
+        defaults: {
+          gmailMessageId,
+          status: 'processing',
+          actionCreated: false,
+          inspectedAt: null,
+        },
+      });
+      if (!claimed) continue;
+
       try {
-        if (await createCustomerEmailActionForMessage(message.id, startAt)) {
+        const actionCreated = await createCustomerEmailActionForMessage(gmailMessageId, startAt);
+        if (actionCreated) {
           created += 1;
         }
+        await inspection.update({
+          status: 'completed',
+          actionCreated,
+          inspectedAt: new Date(),
+        });
       } catch (error) {
+        await inspection.destroy().catch(() => undefined);
+        if (isGmailRateLimitError(error)) {
+          throw error;
+        }
         logger.warn(
-          `[customer-email-action] Failed to inspect Gmail message ${message.id}: ${(error as Error).message}`,
+          `[customer-email-action] Failed to inspect Gmail message ${gmailMessageId}: ${(error as Error).message}`,
         );
       }
     }

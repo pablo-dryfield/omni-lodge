@@ -158,7 +158,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     description: 'Maximum number of messages to fetch per poll.',
     category: 'Booking Email Ingestion',
     valueType: 'number',
-    defaultValue: 20,
+    defaultValue: 10,
     validation: { min: 1, max: 200 },
   },
   {
@@ -250,6 +250,16 @@ Best,
     valueType: 'string',
     defaultValue: '* * * * *',
     validation: { format: 'cron' },
+  },
+  {
+    key: 'CUSTOMER_EMAIL_ACTION_BATCH_SIZE',
+    label: 'Customer email inspection batch size',
+    description:
+      'Maximum number of previously unseen Gmail messages inspected per poll. Keep this small to protect the per-user Gmail quota.',
+    category: 'Booking Email Ingestion',
+    valueType: 'number',
+    defaultValue: 20,
+    validation: { min: 1, max: 25 },
   },
   {
     key: 'CUSTOMER_EMAIL_ACTION_START_AT',
