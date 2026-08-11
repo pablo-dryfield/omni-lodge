@@ -258,7 +258,7 @@ Best,
       'Maximum number of previously unseen Gmail messages inspected per poll. Keep this small to protect the per-user Gmail quota.',
     category: 'Booking Email Ingestion',
     valueType: 'number',
-    defaultValue: 20,
+    defaultValue: 10,
     validation: { min: 1, max: 25 },
   },
   {
