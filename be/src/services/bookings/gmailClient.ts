@@ -103,9 +103,11 @@ type ListMailboxMessagesParams = {
   email: string;
   maxResults?: number;
   pageToken?: string | null;
+  direction?: MailboxDirection | 'all';
 };
 
 export type ListMailboxMessagesResult = {
+  account: GmailAccount;
   messages: MailboxMessageSummary[];
   nextPageToken: string | null;
 };
@@ -212,14 +214,19 @@ const resolveDirection = (labelIds?: string[] | null): MailboxDirection =>
 
 export const listMailboxMessages = async (
   params: ListMailboxMessagesParams,
+  account: GmailAccount = 'primary',
 ): Promise<ListMailboxMessagesResult> => {
-  const gmail = getGmailClient('primary');
-  const query = `(from:"${params.email}" OR to:"${params.email}")`;
+  const gmail = getGmailClient(account);
+  const query = params.direction === 'sent'
+    ? `in:sent to:"${params.email}"`
+    : params.direction === 'received'
+      ? `-in:sent from:"${params.email}"`
+      : `(from:"${params.email}" OR to:"${params.email}")`;
   const response = await withRetryableGoogleApi(
-    'Gmail mailbox message list',
-    'primary',
+    `Gmail ${account} mailbox message list`,
+    account,
     () => {
-      assertGmailApiCooldownElapsed('primary');
+      assertGmailApiCooldownElapsed(account);
       return gmail.users.messages.list({
         userId: 'me',
         q: query,
@@ -242,10 +249,10 @@ export const listMailboxMessages = async (
         const messageId = message.id;
         try {
           const { data } = await withRetryableGoogleApi(
-            `Gmail mailbox metadata fetch ${messageId}`,
-            'primary',
+            `Gmail ${account} mailbox metadata fetch ${messageId}`,
+            account,
             () => {
-              assertGmailApiCooldownElapsed('primary');
+              assertGmailApiCooldownElapsed(account);
               return gmail.users.messages.get({
                 userId: 'me',
                 id: messageId,
@@ -260,7 +267,7 @@ export const listMailboxMessages = async (
           }
           const labels = data.labelIds ?? [];
           return {
-            messageId: data.id,
+            messageId: buildMessageReference(account, data.id),
             threadId: data.threadId ?? null,
             fromAddress: extractHeaderFromMetadata(data.payload, 'From'),
             toAddresses: extractHeaderFromMetadata(data.payload, 'To'),
@@ -285,6 +292,7 @@ export const listMailboxMessages = async (
   }
 
   return {
+    account,
     messages: summaries.filter((entry): entry is MailboxMessageSummary => entry !== null),
     nextPageToken: response.data.nextPageToken ?? null,
   };
@@ -343,6 +351,7 @@ type SendMessageParams = {
   textBody?: string;
   htmlBody?: string | null;
   threadId?: string | null;
+  threadAccount?: GmailAccount | null;
   inReplyTo?: string | null;
   references?: string | null;
   rfcMessageId?: string | null;
@@ -916,7 +925,7 @@ const sendMessageWithAccount = async (
         userId: 'me',
         requestBody: {
           raw: encodeBase64Url(mimeMessage),
-          ...(params.threadId && account === 'primary'
+          ...(params.threadId && (params.threadAccount ?? 'primary') === account
             ? { threadId: sanitizeHeaderValue(params.threadId) }
             : {}),
         },

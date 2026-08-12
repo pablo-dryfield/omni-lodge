@@ -1801,6 +1801,7 @@ type MailboxMessage = {
   direction: MailboxMessageDirection;
   responseStatus?: MailboxMessageResponseStatus | null;
   requiredActionId?: number | null;
+  source: "database" | "gmail";
 };
 
 type MailboxResponse = {
@@ -1808,6 +1809,8 @@ type MailboxResponse = {
   count: number;
   awaitingReplyCount: number;
   nextPageToken: string | null;
+  sentMailbox: "primary" | "backup" | null;
+  sentWarning: string | null;
   messages: MailboxMessage[];
 };
 
@@ -1823,6 +1826,8 @@ type MailboxState = {
   filter: "all" | "awaiting_reply" | "received" | "sent";
   awaitingReplyCount: number;
   nextPageToken: string | null;
+  sentMailbox: "primary" | "backup" | null;
+  sentWarning: string | null;
   previewOpen: boolean;
   previewLoading: boolean;
   previewError: string | null;
@@ -1841,6 +1846,8 @@ const createDefaultMailboxState = (): MailboxState => ({
   filter: "all",
   awaitingReplyCount: 0,
   nextPageToken: null,
+  sentMailbox: null,
+  sentWarning: null,
   previewOpen: false,
   previewLoading: false,
   previewError: null,
@@ -3828,7 +3835,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }));
   };
 
-  const handleMailboxPreview = async (messageId: string) => {
+  const handleMailboxPreview = async (messageId: string, source: MailboxMessage["source"]) => {
     setMailboxState((prev) => ({
       ...prev,
       previewOpen: true,
@@ -3838,7 +3845,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }));
 
     try {
-      const response = await axiosInstance.get(`/bookings/emails/gmail/${encodeURIComponent(messageId)}/preview`, {
+      const previewPath = source === "database"
+        ? `/bookings/emails/${encodeURIComponent(messageId)}/preview`
+        : `/bookings/emails/gmail/${encodeURIComponent(messageId)}/preview`;
+      const response = await axiosInstance.get(previewPath, {
         withCredentials: true,
       });
       setMailboxState((prev) => ({
@@ -3898,6 +3908,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         messages: append ? mergeMailboxMessages(prev.messages, incoming) : incoming,
         awaitingReplyCount: Math.max(0, Number(payload.awaitingReplyCount) || 0),
         nextPageToken: payload.nextPageToken ?? null,
+        sentMailbox: append ? prev.sentMailbox : payload.sentMailbox ?? null,
+        sentWarning: append ? prev.sentWarning : payload.sentWarning ?? null,
       }));
     } catch (error) {
       setMailboxState((prev) => ({
@@ -3926,6 +3938,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       filter: "all",
       awaitingReplyCount: 0,
       nextPageToken: null,
+      sentMailbox: null,
+      sentWarning: null,
       previewOpen: false,
       previewLoading: false,
       previewError: null,
@@ -4117,6 +4131,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       snippet: preview.snippet ?? null,
       internalDate: preview.internalDate ?? preview.receivedAt ?? null,
       direction: preview.ingestionStatus === "sent" ? "sent" : "received",
+      source:
+        mailboxState.messages.find((message) => message.messageId === preview.messageId)?.source
+        ?? (preview.ingestionStatus === "sent" ? "gmail" : "database"),
     });
   };
 
@@ -7565,6 +7582,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
               <Text size="sm" c="dimmed">
                 {mailboxState.customerEmail || "-"}
               </Text>
+              {mailboxState.sentMailbox === "backup" ? (
+                <Badge size="xs" color="orange" variant="light">
+                  Sent mail from backup Gmail
+                </Badge>
+              ) : null}
             </Stack>
             <Group gap="xs">
               <Button
@@ -7601,6 +7623,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           {mailboxState.error ? (
             <Alert color="red" title="Failed to load mailbox">
               {mailboxState.error}
+            </Alert>
+          ) : null}
+
+          {mailboxState.sentWarning ? (
+            <Alert color="yellow" title="Sent emails unavailable">
+              {mailboxState.sentWarning} Received emails below are loaded from the database.
             </Alert>
           ) : null}
 
@@ -7674,7 +7702,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                       <Button
                         size="xs"
                         variant="default"
-                        onClick={() => handleMailboxPreview(message.messageId)}
+                        onClick={() => handleMailboxPreview(message.messageId, message.source)}
                       >
                         Preview
                       </Button>

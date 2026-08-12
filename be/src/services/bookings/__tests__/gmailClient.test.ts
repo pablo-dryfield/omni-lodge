@@ -45,6 +45,7 @@ import {
   isGmailRateLimitError,
   resolveGmailRetryAfterAt,
   listMessages,
+  listMailboxMessages,
   fetchMessagePayload,
   sendMessage,
 } from '../gmailClient';
@@ -153,6 +154,33 @@ describe('Gmail threaded replies', () => {
     expect(mockGmailGet).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: 'gmail-backup-id', userId: 'me' }),
     );
+  });
+
+  it('uses persistent backup message references in customer mailbox results', async () => {
+    mockConfigValues.set('GMAIL_SEND_REFRESH_TOKEN', 'backup-user-token');
+    mockGmailList.mockResolvedValueOnce({
+      data: { messages: [{ id: 'backup-customer-message', threadId: 'backup-thread' }] },
+    });
+    mockGmailGet.mockResolvedValueOnce({
+      data: {
+        id: 'backup-customer-message',
+        threadId: 'backup-thread',
+        internalDate: '1786464552128',
+        labelIds: ['INBOX'],
+        payload: {
+          headers: [
+            { name: 'From', value: 'Customer <customer@example.com>' },
+            { name: 'To', value: 'pubthroughkrakow@gmail.com' },
+            { name: 'Subject', value: 'Booking question' },
+          ],
+        },
+      },
+    });
+
+    const result = await listMailboxMessages({ email: 'customer@example.com' }, 'backup');
+
+    expect(result.account).toBe('backup');
+    expect(result.messages[0]?.messageId).toBe('backup:backup-customer-message');
   });
 
   it('supplies Gmail thread metadata and RFC reply headers', async () => {
