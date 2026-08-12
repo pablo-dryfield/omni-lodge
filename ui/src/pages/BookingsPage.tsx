@@ -92,7 +92,7 @@ type SummaryDatePreset =
   | "all_time"
   | "custom";
 type BookingsTab = "calendar" | "summary" | "emails" | "sanity";
-type BookingsTabOption = BookingsTab | "manifest";
+type BookingsTabOption = BookingsTab | "manifest" | "payment-links";
 type ProductTypeOption = { value: string; label: string };
 type BookingTabOption = { value: BookingsTabOption; label: string };
 
@@ -206,6 +206,7 @@ const createDefaultEmailTemplateState = (): CreateEmailTemplateState => ({
 const BOOKING_TAB_OPTIONS: BookingTabOption[] = [
   { value: "calendar", label: "Calendar" },
   { value: "manifest", label: "Manifest" },
+  { value: "payment-links", label: "Payment Links" },
   { value: "summary", label: "Summary" },
   { value: "emails", label: "Emails" },
   { value: "sanity", label: "Sanity Check" },
@@ -253,7 +254,8 @@ const parseTabParam = (value?: string | null): BookingsTabOption | null => {
     normalized === "summary" ||
     normalized === "emails" ||
     normalized === "sanity" ||
-    normalized === "manifest"
+    normalized === "manifest" ||
+    normalized === "payment-links"
   ) {
     return normalized as BookingsTabOption;
   }
@@ -802,9 +804,13 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         openManifestForCurrentDate();
         return;
       }
+      if (value === "payment-links") {
+        navigate("/bookings/payment-links");
+        return;
+      }
       setActiveTab((value as BookingsTab) ?? "calendar");
     },
-    [openManifestForCurrentDate],
+    [navigate, openManifestForCurrentDate],
   );
 
   const handleCloseEmailPreview = useCallback(() => {
@@ -852,8 +858,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       openManifestForCurrentDate();
       return;
     }
+    if (nextTab === "payment-links") {
+      navigate("/bookings/payment-links");
+      return;
+    }
     setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
-  }, [emailPreviewParam, openManifestForCurrentDate, searchParams]);
+  }, [emailPreviewParam, navigate, openManifestForCurrentDate, searchParams]);
 
   useEffect(() => {
     const nextDateField = parseSummaryDateFieldParam(searchParams.get("summaryDateField"));
@@ -2389,6 +2399,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                 <Tabs.List>
                   <Tabs.Tab value="calendar">Calendar</Tabs.Tab>
                   <Tabs.Tab value="manifest">Manifest</Tabs.Tab>
+                  <Tabs.Tab value="payment-links">Payment Links</Tabs.Tab>
                   <Tabs.Tab value="summary">Summary</Tabs.Tab>
                   <Tabs.Tab value="emails">Emails</Tabs.Tab>
                   <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>

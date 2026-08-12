@@ -21,6 +21,7 @@ const Home = lazy(() => import("../../pages/Home"));
 const Guests = lazyRoute(() => import("../../pages/Guests"), loadGuestsReducers);
 const BookingsPage = lazyRoute(() => import("../../pages/BookingsPage"), loadBookingsReducers);
 const BookingsManifestPage = lazyRoute(() => import("../../pages/BookingsManifestPage"), loadBookingsReducers);
+const PaymentLinksPage = lazy(() => import("../../pages/PaymentLinksPage"));
 const AvailabilityCalendar = lazy(() => import("../../pages/AvailabilityCalendar"));
 const Counters = lazyRoute(() => import("../../pages/Counters"), loadCountersReducers);
 const VenueNumbers = lazyRoute(() => import("../../pages/VenueNumbers"), loadVenueNumbersReducers);
@@ -115,6 +116,7 @@ const Routes = () => {
         <Route path="/guests" element={<Guests title="Guests" />} />
         <Route path="/bookings" element={<BookingsPage title="Bookings" />} />
         <Route path="/bookings/manifest" element={<BookingsManifestPage title="Bookings Manifest" />} />
+        <Route path="/bookings/payment-links" element={<PaymentLinksPage />} />
         <Route path="/calendar" element={<AvailabilityCalendar />} />
         <Route path="/counters" element={<Counters title="Counters" />} />
         <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />

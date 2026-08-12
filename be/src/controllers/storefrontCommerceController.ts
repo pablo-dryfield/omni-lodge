@@ -10,6 +10,7 @@ import Guest from '../models/Guest.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
 import StorefrontPromotion from '../models/StorefrontPromotion.js';
+import StorefrontSavedCart from '../models/StorefrontSavedCart.js';
 import {
   quoteStorefrontCart,
   STOREFRONT_CURRENCY,
@@ -26,6 +27,10 @@ import {
 import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
 import { getStorefrontCancellationPolicy } from '../services/storefrontPublicConfigService.js';
 import { getConfigValueRaw } from '../services/configService.js';
+import {
+  addCustomerToSavedCart,
+  getUsableSavedCart,
+} from '../services/storefrontSavedCartService.js';
 import logger from '../utils/logger.js';
 
 type CheckoutCustomer = {
@@ -196,6 +201,10 @@ const persistPaidOrder = async (
           { transaction },
         );
       }
+      await StorefrontSavedCart.update(
+        { status: 'paid', paidAt: order.paidAt || new Date() },
+        { where: { orderId: order.id }, transaction },
+      );
       return order;
     }
 
@@ -208,6 +217,10 @@ const persistPaidOrder = async (
         paidAt: order.paidAt || now,
       },
       { transaction },
+    );
+    await StorefrontSavedCart.update(
+      { status: 'paid', paidAt: order.paidAt || now },
+      { where: { orderId: order.id }, transaction },
     );
 
     const guest = await Guest.create(
@@ -381,7 +394,15 @@ export const getStorefrontConfig = async (_request: Request, response: Response,
 
 export const quoteCart = async (request: Request, response: Response, next: NextFunction) => {
   try {
-    const quote = await quoteStorefrontCart(request.body as StorefrontCartInput);
+    const sharedCartPublicId = text(request.body?.sharedCartPublicId, 36);
+    const cart = sharedCartPublicId
+      ? (await getUsableSavedCart(sharedCartPublicId)).cart
+      : request.body as StorefrontCartInput;
+    const quote = await quoteStorefrontCart(
+      cart,
+      undefined,
+      sharedCartPublicId ? { allowMissingCustomerDetails: true } : {},
+    );
     response.json(serializeQuote(quote));
   } catch (error) {
     next(error);
@@ -392,39 +413,93 @@ export const createCheckout = async (request: Request, response: Response, next:
   try {
     const customer = parseCustomer(request.body?.customer);
     const attribution = optionalRecord(request.body?.attribution);
-    const cart = request.body?.cart as StorefrontCartInput;
+    const sharedCartPublicId = text(request.body?.sharedCartPublicId, 36);
+    const savedCart = sharedCartPublicId
+      ? await getUsableSavedCart(sharedCartPublicId)
+      : null;
+    const cart = savedCart
+      ? addCustomerToSavedCart(savedCart.cart, customer)
+      : request.body?.cart as StorefrontCartInput;
     const quote = await quoteStorefrontCart(cart);
 
+    let existingOrder = savedCart?.orderId
+      ? await StorefrontOrder.findByPk(savedCart.orderId)
+      : null;
+    if (existingOrder?.paymentStatus === 'paid') {
+      await savedCart?.update({ status: 'paid', paidAt: existingOrder.paidAt || new Date() });
+      throw new HttpError(409, 'This prepared cart has already been paid.');
+    }
+
+    if (existingOrder?.stripeCheckoutSessionId && isStripeConfigured()) {
+      const existingSession = await getStripeClient().checkout.sessions.retrieve(
+        existingOrder.stripeCheckoutSessionId,
+      );
+      const totalsMatch = roundMoney(Number(existingOrder.total)) === roundMoney(quote.total);
+      if (existingSession.status === 'open' && existingSession.url && totalsMatch) {
+        response.status(200).json({
+          publicId: existingOrder.publicId,
+          checkoutUrl: existingSession.url,
+          quote: serializeQuote(quote),
+        });
+        return;
+      }
+      if (existingSession.status === 'complete') {
+        throw new HttpError(409, 'Payment has already been submitted and is being confirmed.');
+      }
+      if (existingSession.status === 'open') {
+        await getStripeClient().checkout.sessions.expire(existingSession.id);
+      }
+    }
+
     const order = await sequelize.transaction(async (transaction) => {
-      const created = await StorefrontOrder.create(
+      const lockedSavedCart = savedCart
+        ? await getUsableSavedCart(savedCart.publicId, transaction, true)
+        : null;
+      if (lockedSavedCart?.orderId && lockedSavedCart.orderId !== existingOrder?.id) {
+        throw new HttpError(409, 'Checkout is already being prepared. Please try the link again.');
+      }
+
+      const orderValues = {
+        status: 'pending_payment',
+        paymentStatus: 'unpaid',
+        stripeCheckoutSessionId: null,
+        currency: quote.currency,
+        subtotal: quote.subtotal,
+        addonTotal: quote.addonTotal,
+        discountTotal: quote.discountTotal,
+        total: quote.total,
+        customerFirstName: customer.firstName,
+        customerLastName: customer.lastName,
+        customerEmail: customer.email,
+        customerPhone: customer.phone,
+        customerCountryCode: customer.countryCode,
+        discountCode: quote.discountCode,
+        attribution,
+        metadata: {
+          promotionId: quote.promotionId,
+          promotionIds: quote.discounts.map((discount) => discount.promotionId),
+          discountCodes: quote.discountCodes,
+          discounts: quote.discounts,
+          ...(lockedSavedCart ? { savedCartPublicId: lockedSavedCart.publicId } : {}),
+        },
+      };
+
+      let pendingOrder = existingOrder;
+      if (pendingOrder) {
+        await pendingOrder.update(orderValues, { transaction });
+        await StorefrontOrderItem.destroy({ where: { orderId: pendingOrder.id }, transaction });
+      } else {
+        pendingOrder = await StorefrontOrder.create(
         {
-          status: 'pending_payment',
-          paymentStatus: 'unpaid',
-          currency: quote.currency,
-          subtotal: quote.subtotal,
-          addonTotal: quote.addonTotal,
-          discountTotal: quote.discountTotal,
-          total: quote.total,
-          customerFirstName: customer.firstName,
-          customerLastName: customer.lastName,
-          customerEmail: customer.email,
-          customerPhone: customer.phone,
-          customerCountryCode: customer.countryCode,
-          discountCode: quote.discountCode,
-          attribution,
-          metadata: {
-            promotionId: quote.promotionId,
-            promotionIds: quote.discounts.map((discount) => discount.promotionId),
-            discountCodes: quote.discountCodes,
-            discounts: quote.discounts,
-          },
+          ...orderValues,
         } as never,
         { transaction },
       );
+      }
 
       await StorefrontOrderItem.bulkCreate(
         quote.items.map((item) => ({
-          orderId: created.id,
+          orderId: pendingOrder!.id,
           productId: item.productId,
           productName: item.productName,
           productSlug: item.productSlug,
@@ -441,7 +516,22 @@ export const createCheckout = async (request: Request, response: Response, next:
         { transaction },
       );
 
-      return created;
+      if (lockedSavedCart) {
+        await lockedSavedCart.update(
+          {
+            status: 'checkout_started',
+            checkoutStartedAt: lockedSavedCart.checkoutStartedAt || new Date(),
+            orderId: pendingOrder.id,
+            quoteSnapshot: quote,
+            currency: quote.currency,
+            total: quote.total,
+          },
+          { transaction },
+        );
+      }
+
+      existingOrder = pendingOrder;
+      return pendingOrder;
     });
 
     const returnBaseUrl = getReturnBaseUrl(request);
@@ -480,7 +570,7 @@ export const createCheckout = async (request: Request, response: Response, next:
         orderId: String(order.id),
       },
       success_url: `${returnBaseUrl}/checkout/success?order=${order.publicId}&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${returnBaseUrl}/cart?checkout=cancelled`,
+      cancel_url: `${returnBaseUrl}/cart?checkout=cancelled${savedCart ? `&shared=${savedCart.publicId}` : ''}`,
     });
 
     await order.update({ stripeCheckoutSessionId: session.id });

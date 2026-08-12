@@ -47,6 +47,7 @@
     "gridstack": "^9.3.0",
     "heic2any": "^0.0.4",
     "jwt-decode": "^4.0.0",
+    "libphonenumber-js": "^1.13.9",
     "lucide-react": "^0.511.0",
     "mantine-react-table": "^2.0.0-beta.9",
     "mdb-react-ui-kit": "^7.0.0",
