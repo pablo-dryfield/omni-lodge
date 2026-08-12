@@ -31,6 +31,7 @@ import {
   addCustomerToSavedCart,
   getUsableSavedCart,
 } from '../services/storefrontSavedCartService.js';
+import { normalizeStorefrontPhone } from '../services/storefrontPhoneService.js';
 import logger from '../utils/logger.js';
 
 type CheckoutCustomer = {
@@ -64,15 +65,20 @@ const parseCustomer = (value: unknown): CheckoutCustomer => {
   const firstName = text(customer.firstName, 100);
   const lastName = text(customer.lastName, 100);
   const email = text(customer.email, 254).toLowerCase();
-  const phone = text(customer.phone, 40) || null;
-  const countryCode = text(customer.countryCode, 2).toUpperCase() || null;
+  const submittedPhone = text(customer.phone, 40) || null;
+  const submittedCountryCode = text(customer.countryCode, 2).toUpperCase() || null;
 
   if (!firstName || !lastName || !EMAIL_PATTERN.test(email)) {
     throw new HttpError(400, 'A valid first name, last name, and email are required.');
   }
-  if (countryCode && !/^[A-Z]{2}$/.test(countryCode)) {
+  if (submittedCountryCode && !/^[A-Z]{2}$/.test(submittedCountryCode)) {
     throw new HttpError(400, 'Country code must be an ISO two-letter code.');
   }
+
+  const { phone, countryCode } = normalizeStorefrontPhone(
+    submittedPhone,
+    submittedCountryCode,
+  );
 
   return { firstName, lastName, email, phone, countryCode };
 };
