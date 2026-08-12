@@ -42,6 +42,7 @@ import {
   getGmailApiCooldownUntil,
   hasBackupGmailAccount,
   isGmailCooldownError,
+  isGmailRateLimitError,
   listMailboxMessages,
   sendMessage as sendGmailMessage,
 } from '../services/bookings/gmailClient.js';
@@ -2904,12 +2905,99 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
 
     const limit = parseMailboxLimitParam(query?.limit);
     const pageTokenRaw = String(query?.pageToken ?? '').trim();
-    const pageToken = pageTokenRaw.length > 0 ? pageTokenRaw : null;
+    const offsetMatch = pageTokenRaw.match(/^db:(\d+)$/);
+    const databaseOffset = offsetMatch ? Number.parseInt(offsetMatch[1], 10) : 0;
+    if (pageTokenRaw && !offsetMatch) {
+      res.status(400).json({ message: 'Invalid mailbox page token.' });
+      return;
+    }
 
-    const result = await listMailboxMessages({
-      email,
-      maxResults: limit,
-      pageToken,
+    const emailPattern = `%${email}%`;
+    const databaseRows = await BookingEmail.findAll({
+      where: {
+        [Op.or]: [
+          { fromAddress: { [Op.iLike]: emailPattern } },
+          { toAddresses: { [Op.iLike]: emailPattern } },
+          { ccAddresses: { [Op.iLike]: emailPattern } },
+        ],
+      },
+      attributes: [
+        'messageId',
+        'threadId',
+        'fromAddress',
+        'toAddresses',
+        'subject',
+        'snippet',
+        'receivedAt',
+        'internalDate',
+        'labelIds',
+      ],
+      order: [
+        [literal('COALESCE("received_at", "internal_date")'), 'DESC'],
+        ['id', 'DESC'],
+      ],
+      limit: limit + 1,
+      offset: databaseOffset,
+    });
+    const databaseHasMore = databaseRows.length > limit;
+    const receivedMessages = databaseRows
+      .slice(0, limit)
+      .filter((row) => !row.labelIds?.includes('SENT'))
+      .map((row) => ({
+        messageId: row.messageId,
+        threadId: row.threadId,
+        fromAddress: row.fromAddress,
+        toAddresses: row.toAddresses,
+        subject: row.subject,
+        snippet: row.snippet,
+        internalDate: (row.receivedAt ?? row.internalDate)?.toISOString() ?? null,
+        labelIds: row.labelIds ?? [],
+        direction: 'received' as const,
+        source: 'database' as const,
+      }));
+
+    let sentMessages: Array<Awaited<ReturnType<typeof listMailboxMessages>>['messages'][number] & {
+      source: 'gmail';
+    }> = [];
+    let sentWarning: string | null = null;
+    let sentMailbox: 'primary' | 'backup' | null = null;
+    if (databaseOffset === 0) {
+      try {
+        let sentResult;
+        try {
+          sentResult = await listMailboxMessages({
+            email,
+            maxResults: limit,
+            direction: 'sent',
+          }, 'primary');
+        } catch (primaryError) {
+          const canFailOver = hasBackupGmailAccount()
+            && (isGmailCooldownError(primaryError) || isGmailRateLimitError(primaryError));
+          if (!canFailOver) {
+            throw primaryError;
+          }
+          sentResult = await listMailboxMessages({
+            email,
+            maxResults: limit,
+            direction: 'sent',
+          }, 'backup');
+        }
+        sentMailbox = sentResult.account;
+        sentMessages = sentResult.messages
+          .filter((message) => message.direction === 'sent')
+          .map((message) => ({ ...message, source: 'gmail' as const }));
+      } catch (sentError) {
+        sentWarning = 'Sent emails are temporarily unavailable because Gmail is rate limited.';
+        logger.warn(
+          `[booking-email] Live sent-mail lookup failed for ${email}: ${(sentError as Error).message}`,
+        );
+      }
+    }
+
+    const resultMessages = [...receivedMessages, ...sentMessages].sort((left, right) => {
+      const leftTime = left.internalDate ? Date.parse(left.internalDate) : 0;
+      const rightTime = right.internalDate ? Date.parse(right.internalDate) : 0;
+      return rightTime - leftTime;
     });
     const customerEmailActions = await RequiredAction.findAll({
       where: {
@@ -2928,7 +3016,7 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
         actionByGmailMessageId.set(gmailMessageId, action);
       }
     });
-    const messages = result.messages.map((message) => {
+    const messages = resultMessages.map((message) => {
       const action = actionByGmailMessageId.get(message.messageId) ?? null;
       const resolution = String(action?.payload?.resolution ?? '').trim().toLowerCase();
       const responseStatus = action
@@ -2950,7 +3038,9 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
       email,
       count: messages.length,
       awaitingReplyCount,
-      nextPageToken: result.nextPageToken,
+      nextPageToken: databaseHasMore ? `db:${databaseOffset + limit}` : null,
+      sentMailbox,
+      sentWarning,
       messages,
     });
   } catch (error) {
@@ -3511,6 +3601,7 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
     const replyToMessageId = String(payload?.replyToMessageId ?? '').trim();
     let replyContext: {
       threadId: string;
+      threadAccount: 'primary' | 'backup';
       inReplyTo: string;
       references: string | null;
     } | null = null;
@@ -3530,6 +3621,7 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
 
       replyContext = {
         threadId,
+        threadAccount: replyTarget.sourceAccount,
         inReplyTo,
         references: replyTarget.headers['references'] ?? null,
       };
@@ -3541,6 +3633,7 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
       textBody: rendered.textBody,
       htmlBody: rendered.htmlBody,
       threadId: replyContext?.threadId,
+      threadAccount: replyContext?.threadAccount,
       inReplyTo: replyContext?.inReplyTo,
       references: replyContext?.references,
     });
