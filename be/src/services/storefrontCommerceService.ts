@@ -248,23 +248,28 @@ const normalizeParticipantCount = (
 const validateCustomerOptions = (
   options: Record<string, unknown>,
   config: StorefrontProductConfig,
+  allowMissingCustomerDetails = false,
 ): Record<string, unknown> => {
   const normalized = { ...options };
   const fullName = normalizeText(options.fullName);
   const email = normalizeText(options.email).toLowerCase();
   const phone = normalizeText(options.phone, 32);
 
-  if (config.fullNameRequired && fullName.length < 2) {
+  if (!allowMissingCustomerDetails && config.fullNameRequired && fullName.length < 2) {
     throw new HttpError(400, 'Full name is required.');
   }
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new HttpError(400, 'Email address is invalid.');
   }
-  if (config.emailRequired && !email) throw new HttpError(400, 'Email address is required.');
+  if (!allowMissingCustomerDetails && config.emailRequired && !email) {
+    throw new HttpError(400, 'Email address is required.');
+  }
   if (phone && !/^\+[1-9]\d{6,14}$/.test(phone)) {
     throw new HttpError(400, 'Phone number must include a country code followed by digits only.');
   }
-  if (config.phoneRequired && !phone) throw new HttpError(400, 'Phone number is required.');
+  if (!allowMissingCustomerDetails && config.phoneRequired && !phone) {
+    throw new HttpError(400, 'Phone number is required.');
+  }
 
   if (fullName) normalized.fullName = fullName;
   if (email) normalized.email = email;
@@ -462,6 +467,7 @@ const resolvePromotions = async (
 export const quoteStorefrontCart = async (
   input: StorefrontCartInput,
   transaction?: Transaction,
+  options: { allowMissingCustomerDetails?: boolean } = {},
 ): Promise<StorefrontQuote> => {
   if (!input || !Array.isArray(input.items) || input.items.length === 0) {
     throw new HttpError(400, 'The cart must contain at least one item.');
@@ -523,7 +529,11 @@ export const quoteStorefrontCart = async (
       throw new HttpError(400, `Please select an activity date for ${product.name}.`);
     }
     const experienceTime = normalizeExperienceTime(item.experienceTime, productConfig);
-    const options = validateCustomerOptions(participantSelection.options, productConfig);
+    const normalizedOptions = validateCustomerOptions(
+      participantSelection.options,
+      productConfig,
+      options.allowMissingCustomerDetails === true,
+    );
 
     const availableProductAddons = new Map(
       (product.productAddons ?? []).map((productAddon) => [productAddon.addonId, productAddon]),
@@ -632,7 +642,7 @@ export const quoteStorefrontCart = async (
       addonTotal,
       total: roundMoney(baseTotal + addonTotal),
       addons,
-      options,
+      options: normalizedOptions,
     };
   });
 

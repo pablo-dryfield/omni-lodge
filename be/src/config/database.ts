@@ -28,6 +28,7 @@ import ProductAddon from "../models/ProductAddon.js";
 import StorefrontOrder from "../models/StorefrontOrder.js";
 import StorefrontOrderItem from "../models/StorefrontOrderItem.js";
 import StorefrontPromotion from "../models/StorefrontPromotion.js";
+import StorefrontSavedCart from "../models/StorefrontSavedCart.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import PaymentMethod from "../models/PaymentMethod.js";
 import ProductPrice from "../models/ProductPrice.js";
@@ -228,6 +229,7 @@ const sequelize = new Sequelize({
     StorefrontOrder,
     StorefrontOrderItem,
     StorefrontPromotion,
+    StorefrontSavedCart,
     Venue,
     VenueCompensationTerm,
     VenueCompensationTermRate,
