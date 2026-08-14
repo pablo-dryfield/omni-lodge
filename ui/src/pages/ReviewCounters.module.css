@@ -1,0 +1,51 @@
+.page {
+  width: 100%;
+  max-width: 1440px;
+  min-width: 0;
+  margin-inline: auto;
+}
+
+.tabsList {
+  justify-content: center;
+  gap: var(--mantine-spacing-xs);
+  border-bottom: 0;
+}
+
+.tabsList::before {
+  display: none;
+}
+
+.tab {
+  justify-content: center;
+  white-space: normal;
+  text-align: center;
+}
+
+@media (max-width: 47.99em) {
+  .tabsList {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .tab {
+    width: 100%;
+    min-width: 0;
+    padding-inline: var(--mantine-spacing-xs);
+    border: 1px solid var(--mantine-color-gray-4) !important;
+    border-radius: var(--mantine-radius-md) !important;
+  }
+
+  .tab[data-active] {
+    border-color: var(--tabs-color) !important;
+    background: var(--mantine-primary-color-light);
+  }
+
+  .tab:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .accordionContent {
+    padding-inline: var(--mantine-spacing-xs);
+  }
+}

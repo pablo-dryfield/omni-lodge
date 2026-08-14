@@ -32,8 +32,9 @@ import ReviewCounterEntriesPanel from './ReviewCounterEntriesPanel';
 import axiosInstance from '../../utils/axiosInstance';
 import type { ServerResponse } from '../../types/general/ServerResponse';
 import type { ReviewPlatform as ReviewPlatformDto } from '../../types/reviewPlatforms/ReviewPlatform';
+import { currentReviewMonthInWarsaw } from '../../utils/reviewCreditMonth';
 
-const CURRENT_MONTH_START = dayjs().startOf('month').format('YYYY-MM-DD');
+const CURRENT_MONTH_START = `${currentReviewMonthInWarsaw()}-01`;
 const summarizeEntries = (entries?: ReviewCounterEntry[]) => {
   return (entries ?? []).reduce(
     (acc, entry) => {
@@ -276,15 +277,15 @@ const ReviewCounterList = () => {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between" align="center">
-        <div>
-          <Text size="sm" c="dimmed">
+      <Group justify="center" align="center" gap="sm" wrap="wrap">
+        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+          <Text size="sm" c="dimmed" ta="center">
             Manage counters per platform and expand rows to log staff credits.
           </Text>
         </div>
-        <Group gap="xs">
+        <Group gap="xs" justify="center" wrap="wrap">
           <Tooltip label="Refresh data">
-            <ActionIcon variant="light" onClick={() => refreshCounters()}>
+            <ActionIcon variant="light" onClick={() => refreshCounters()} aria-label="Refresh review counters">
               <IconRefresh size={16} />
             </ActionIcon>
           </Tooltip>
@@ -295,9 +296,9 @@ const ReviewCounterList = () => {
       </Group>
 
       {counters.length === 0 ? (
-        <Card withBorder radius="md" p="xl">
+        <Card withBorder radius="md" p={{ base: 'lg', sm: 'xl' }}>
           <Stack gap="xs" align="center">
-            <Text size="sm" c="dimmed">
+            <Text size="sm" c="dimmed" ta="center">
               No review counters recorded yet. Create your first entry to get started.
             </Text>
             {canManage && <Button onClick={openCreateForm} leftSection={<IconPlus size={16} />}>
@@ -309,8 +310,8 @@ const ReviewCounterList = () => {
         <Stack gap="xl">
           {countersByMonth.map((group) => (
             <Stack key={group.monthStart} gap="sm">
-              <Group justify="space-between" align="center">
-                <Text fw={600}>{group.label}</Text>
+              <Group justify="center" align="center" gap="xs" wrap="wrap">
+                <Text fw={600} ta="center">{group.label}</Text>
                 <Badge color="gray" variant="light">
                   {group.counters.length} platform{group.counters.length === 1 ? '' : 's'}
                 </Badge>
@@ -324,17 +325,17 @@ const ReviewCounterList = () => {
                   const isExpanded = expandedCounters.has(counter.id);
                   const entryTotals = summarizeEntries(counter.entries);
                   return (
-                    <Card key={counter.id} withBorder radius="md" padding="md">
+                    <Card key={counter.id} withBorder radius="md" p={{ base: 'sm', sm: 'md' }}>
                       <Stack gap="sm">
-                        <Group justify="space-between" align="flex-start">
-                          <div>
-                            <Group gap="xs">
-                              <Text fw={600}>{platformLabel}</Text>
-                              <Badge color="blue" variant="light">
+                        <Group justify="center" align="center" gap="sm" wrap="wrap">
+                          <Stack gap="xs" align="center" style={{ flex: '1 1 240px', minWidth: 0 }}>
+                            <Group gap="xs" justify="center" wrap="wrap">
+                              <Text fw={600} ta="center" style={{ overflowWrap: 'anywhere' }}>{platformLabel}</Text>
+                              <Badge color="blue" variant="light" style={{ maxWidth: '100%' }}>
                                 Period {periodLabel}
                               </Badge>
                             </Group>
-                            <Group gap="xs" mt={4}>
+                            <Group gap="xs" justify="center" wrap="wrap">
                               <Badge color="teal" variant="light">
                                 {entryTotals.total.toFixed(2)} reviews
                               </Badge>
@@ -346,24 +347,33 @@ const ReviewCounterList = () => {
                               </Badge>
                             </Group>
                             {counter.notes && (
-                              <Text size="sm" mt={6}>
+                              <Text size="sm" ta="center" style={{ overflowWrap: 'anywhere' }}>
                                 {counter.notes}
                               </Text>
                             )}
-                          </div>
-                          <Group gap="xs">
+                          </Stack>
+                          <Group gap="xs" justify="center" wrap="wrap">
                             <Tooltip label="Manage entries">
-                              <ActionIcon variant="light" onClick={() => toggleExpanded(counter.id)}>
+                              <ActionIcon
+                                variant="light"
+                                onClick={() => toggleExpanded(counter.id)}
+                                aria-label={isExpanded ? 'Hide counter entries' : 'Manage counter entries'}
+                              >
                                 {isExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}
                               </ActionIcon>
                             </Tooltip>
                             {canManage && <Tooltip label="Edit counter">
-                              <ActionIcon variant="light" onClick={() => openEditForm(counter)}>
+                              <ActionIcon variant="light" onClick={() => openEditForm(counter)} aria-label="Edit counter">
                                 <IconPencil size={16} />
                               </ActionIcon>
                             </Tooltip>}
                             {canManage && <Tooltip label="Delete counter">
-                              <ActionIcon color="red" variant="light" onClick={() => handleDelete(counter.id)}>
+                              <ActionIcon
+                                color="red"
+                                variant="light"
+                                onClick={() => handleDelete(counter.id)}
+                                aria-label="Delete counter"
+                              >
                                 <IconTrash size={16} />
                               </ActionIcon>
                             </Tooltip>}
@@ -402,7 +412,7 @@ const ReviewCounterList = () => {
             onChange={(value) => setFormState((prev) => ({ ...prev, platform: value ?? '' }))}
             nothingFoundMessage="Configure platforms under Settings › Review Platforms"
           />
-          <Group grow>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
             <TextInput
               label="Period Start"
               type="date"
@@ -418,8 +428,8 @@ const ReviewCounterList = () => {
                 setFormState((prev) => ({ ...prev, periodEnd: event.currentTarget.value || null }))
               }
             />
-          </Group>
-          <Group grow>
+          </SimpleGrid>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
             <TextInput
               label="First Review"
               value={formState.firstReviewAuthor}
@@ -430,8 +440,8 @@ const ReviewCounterList = () => {
               value={formState.secondReviewAuthor}
               onChange={(event) => setFormState((prev) => ({ ...prev, secondReviewAuthor: event.currentTarget.value }))}
             />
-          </Group>
-          <Group grow>
+          </SimpleGrid>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
             <TextInput
               label="Before Last Review"
               value={formState.beforeLastReviewAuthor}
@@ -444,7 +454,7 @@ const ReviewCounterList = () => {
               value={formState.lastReviewAuthor}
               onChange={(event) => setFormState((prev) => ({ ...prev, lastReviewAuthor: event.currentTarget.value }))}
             />
-          </Group>
+          </SimpleGrid>
           <Textarea
             label="Notes"
             minRows={3}
@@ -456,11 +466,16 @@ const ReviewCounterList = () => {
               {formError}
             </Alert>
           )}
-          <Group justify="flex-end">
-            <Button variant="default" onClick={closeForm} disabled={submitting}>
+          <Group justify="center" wrap="wrap">
+            <Button
+              variant="default"
+              onClick={closeForm}
+              disabled={submitting}
+              style={{ flex: '1 1 140px', maxWidth: 220 }}
+            >
               Cancel
             </Button>
-            <Button loading={submitting} onClick={handleFormSubmit}>
+            <Button loading={submitting} onClick={handleFormSubmit} style={{ flex: '1 1 140px', maxWidth: 220 }}>
               {editingCounter ? 'Save Changes' : 'Create Counter'}
             </Button>
           </Group>

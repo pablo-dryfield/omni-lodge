@@ -13,5 +13,8 @@ export const reviewMonthInWarsaw = (value: string | Date): string => {
   return year && month ? `${year}-${month}` : new Date(value).toISOString().slice(0, 7);
 };
 
+export const currentReviewMonthInWarsaw = (now: Date = new Date()): string =>
+  reviewMonthInWarsaw(now);
+
 export const effectiveReviewMonth = (reviewCreatedAt: string | Date, creditMonth?: string | null): string =>
   creditMonth?.slice(0, 7) ?? reviewMonthInWarsaw(reviewCreatedAt);
