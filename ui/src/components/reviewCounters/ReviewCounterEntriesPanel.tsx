@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActionIcon, Alert, Badge, Button, Card, Group, NumberInput, Stack, Text, Tooltip } from '@mantine/core';
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Group,
+  NumberInput,
+  Stack,
+  Text,
+  Tooltip,
+} from '@mantine/core';
 import { IconMinus, IconPlus, IconRefresh } from '@tabler/icons-react';
 import { useAppDispatch } from '../../store/hooks';
 import { updateReviewCounterEntry } from '../../actions/reviewCounterActions';
@@ -156,61 +167,70 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh, canManage }: ReviewCoun
 
   return (
     <Stack gap="sm">
-      <Group gap="xs" align="center">
-        <Text fw={600}>{counter.platform} entries</Text>
-        <Tooltip label="Refresh entries">
-          <ActionIcon variant="subtle" onClick={onRefresh} disabled={saving}>
-            <IconRefresh size={16} />
-          </ActionIcon>
-        </Tooltip>
-        {canManage && <Button size="xs" onClick={handleSave} disabled={!hasChanges || saving} loading={saving}>
-          Save changes
-        </Button>}
-        {canManage && <Button size="xs" variant="default" onClick={handleReset} disabled={!hasChanges || saving}>
-          Reset
-        </Button>}
-      </Group>
+      <Stack gap="xs" align="center">
+        <Text fw={600} ta="center" style={{ overflowWrap: 'anywhere' }}>{counter.platform} entries</Text>
+        <Group gap="xs" justify="center" wrap="wrap">
+          <Tooltip label="Refresh entries">
+            <ActionIcon
+              variant="subtle"
+              onClick={onRefresh}
+              disabled={saving}
+              aria-label="Refresh counter entries"
+            >
+              <IconRefresh size={16} />
+            </ActionIcon>
+          </Tooltip>
+          {canManage && <Button size="xs" onClick={handleSave} disabled={!hasChanges || saving} loading={saving}>
+            Save changes
+          </Button>}
+          {canManage && <Button size="xs" variant="default" onClick={handleReset} disabled={!hasChanges || saving}>
+            Reset
+          </Button>}
+        </Group>
+      </Stack>
       {error && (
         <Alert color="red" title="Entries">
           {error}
         </Alert>
       )}
       {sortedEntries.length === 0 ? (
-        <Text size="sm" c="dimmed">
+        <Text size="sm" c="dimmed" ta="center">
           No entries available.
         </Text>
       ) : (
         sortedEntries.map((entry) => {
           const amount = pendingValues.get(entry.id) ?? (Number(entry.rawCount) || 0);
           return (
-            <Card key={entry.id} withBorder radius="md" padding="sm">
+            <Card key={entry.id} withBorder radius="md" p="sm">
               <Stack gap="xs">
-                <Group justify="space-between" align="center">
-                  <Stack gap={2}>
-                    <Group gap="xs">
-                      <Text fw={600}>{entry.displayName}</Text>
+                <Group justify="center" align="center" gap="sm" wrap="wrap">
+                  <Stack gap={2} align="center" style={{ flex: '1 1 180px', minWidth: 0 }}>
+                    <Group gap="xs" justify="center" wrap="wrap">
+                      <Text fw={600} ta="center" style={{ overflowWrap: 'anywhere' }}>{entry.displayName}</Text>
                       <Badge size="xs" color={CATEGORY_COLOR[entry.category] ?? 'gray'}>
                         {CATEGORY_LABEL[entry.category] ?? 'Entry'}
                       </Badge>
                     </Group>
                     {entry.userName && entry.category === 'staff' && (
-                      <Text size="xs" c="dimmed">
+                      <Text size="xs" c="dimmed" ta="center" style={{ overflowWrap: 'anywhere' }}>
                         Linked user: {entry.userName}
                       </Text>
                     )}
                   </Stack>
-                  <Group gap="xs" align="center">
+                  <Group gap="xs" align="center" justify="center" wrap="nowrap" style={{ maxWidth: '100%' }}>
                     <Tooltip label="Decrease amount">
                       <ActionIcon
                         variant="light"
                         color="gray"
                         onClick={() => handleAdjustAmount(entry, -AMOUNT_STEP)}
                         disabled={saving || !canManage}
+                        aria-label={`Decrease ${entry.displayName} amount`}
                       >
                         <IconMinus size={16} />
                       </ActionIcon>
                     </Tooltip>
                     <NumberInput
+                      aria-label={`${entry.displayName} amount`}
                       value={amount}
                       onChange={(value) => handleAmountChange(entry, value)}
                       min={0}
@@ -224,6 +244,7 @@ const ReviewCounterEntriesPanel = ({ counter, onRefresh, canManage }: ReviewCoun
                         color="blue"
                         onClick={() => handleAdjustAmount(entry, AMOUNT_STEP)}
                         disabled={saving || !canManage}
+                        aria-label={`Increase ${entry.displayName} amount`}
                       >
                         <IconPlus size={16} />
                       </ActionIcon>

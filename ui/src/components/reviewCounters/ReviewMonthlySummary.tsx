@@ -4,29 +4,33 @@ import {
   ActionIcon,
   Alert,
   Badge,
+  Box,
   Button,
   Card,
+  Collapse,
+  Divider,
   Group,
   LoadingOverlay,
+  SimpleGrid,
   Stack,
   Table,
   Text,
   Tooltip,
+  UnstyledButton,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
-import { IconInfoCircle, IconRefresh } from '@tabler/icons-react';
+import { IconChevronDown, IconChevronRight, IconInfoCircle, IconRefresh } from '@tabler/icons-react';
 import type { ReviewCounterStaffSummary, ReviewCounterStaffRow } from '../../types/reviewCounters/ReviewCounterStaffSummary';
 import { fetchReviewStaffSummary, updateReviewMonthlyApproval } from '../../api/reviewCounters';
 import { useAppSelector } from '../../store/hooks';
+import { reviewMonthInWarsaw } from '../../utils/reviewCreditMonth';
 
 type Preset = 'thisMonth' | 'lastMonth' | 'custom';
 
 const getPresetRange = (preset: Exclude<Preset, 'custom'>): [Date, Date] => {
-  if (preset === 'thisMonth') {
-    return [dayjs().startOf('month').toDate(), dayjs().endOf('month').toDate()];
-  }
-  const lastMonthEnd = dayjs().startOf('month').subtract(1, 'day');
-  return [lastMonthEnd.startOf('month').toDate(), lastMonthEnd.endOf('month').toDate()];
+  const currentWarsawMonth = dayjs(`${reviewMonthInWarsaw(new Date())}-01`);
+  const selectedMonth = preset === 'thisMonth' ? currentWarsawMonth : currentWarsawMonth.subtract(1, 'month');
+  return [selectedMonth.startOf('month').toDate(), selectedMonth.endOf('month').toDate()];
 };
 
 const formatDisplayRange = (range: [Date | null, Date | null]) => {
@@ -51,16 +55,25 @@ const extractErrorMessage = (error: unknown): string => {
   return 'Something went wrong';
 };
 
-const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: string; hideDateControls?: boolean }) => {
+const ReviewMonthlySummary = ({
+  month,
+  hideDateControls = false,
+  collapsible = false,
+}: {
+  month?: string;
+  hideDateControls?: boolean;
+  collapsible?: boolean;
+}) => {
   const roleSlug = useAppSelector((state) => state.session.roleSlug);
   const canManage = ['owner', 'manager', 'admin', 'administrator'].includes(String(roleSlug ?? '').trim().toLowerCase());
-  const initialRange = month ? [dayjs(`${month}-01`).startOf('month').toDate(), dayjs(`${month}-01`).endOf('month').toDate()] as [Date, Date] : getPresetRange('lastMonth');
-  const [preset, setPreset] = useState<Preset>(month ? 'custom' : 'lastMonth');
+  const initialRange = month ? [dayjs(`${month}-01`).startOf('month').toDate(), dayjs(`${month}-01`).endOf('month').toDate()] as [Date, Date] : getPresetRange('thisMonth');
+  const [preset, setPreset] = useState<Preset>(month ? 'custom' : 'thisMonth');
   const [range, setRange] = useState<[Date | null, Date | null]>(initialRange);
   const [summary, setSummary] = useState<ReviewCounterStaffSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
+  const [opened, setOpened] = useState(!collapsible);
 
   const loadSummary = useCallback(
     async (nextRange: [Date | null, Date | null]) => {
@@ -84,8 +97,11 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
   );
 
   useEffect(() => {
+    if (collapsible && !opened) {
+      return;
+    }
     loadSummary(range).catch(() => {});
-  }, [loadSummary, range]);
+  }, [collapsible, loadSummary, opened, range]);
 
   useEffect(() => {
     if (!month) return;
@@ -188,21 +204,21 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
   }, [loading]);
 
   const renderPlatformBadges = (row: ReviewCounterStaffRow) => (
-    <Stack gap={4}>
+    <Stack gap="xs" align="center" w="100%">
       {row.platforms.map((platform) => (
-        <Group key={`${row.userId}-${platform.counterId}`} justify="space-between">
-          <Text size="sm" fw={500}>
+        <Stack key={`${row.userId}-${platform.counterId}`} gap={4} align="center">
+          <Text size="sm" fw={500} ta="center">
             {platform.platform}
           </Text>
-          <Stack gap={0} align="flex-end">
+          <Stack gap={0} align="center">
             <Badge color="teal" variant="light">
               {platform.rawCount.toFixed(2)} reviews
             </Badge>
-            <Text size="xs" c="dimmed">
+            <Text size="xs" c="dimmed" ta="center">
               Rounded: {platform.roundedCount.toFixed(0)}
             </Text>
           </Stack>
-        </Group>
+        </Stack>
       ))}
     </Stack>
   );
@@ -212,12 +228,12 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
     const actionKey = `${row.userId}:payment`;
     if (row.paymentApproval.approved) {
       return (
-        <Stack gap={4}>
+        <Stack gap={4} align="center">
           <Badge color="teal" variant="light">
             Approved
           </Badge>
           {row.paymentApproval.approvedByName && (
-            <Text size="xs" c="dimmed">
+            <Text size="xs" c="dimmed" ta="center">
               by {row.paymentApproval.approvedByName}
             </Text>
           )}
@@ -226,28 +242,30 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
     }
     if (row.totalReviews >= minimumReviews) {
       return (
-        <Stack gap={4}>
+        <Stack gap={4} align="center">
           <Badge color="teal" variant="light">
             Hit review target
           </Badge>
-          <Text size="xs" c="dimmed">
+          <Text size="xs" c="dimmed" ta="center">
             Reviews will be paid automatically.
           </Text>
         </Stack>
       );
     }
-    if (!canManage) return <Text size="xs" c="dimmed">Awaiting manager approval</Text>;
+    if (!canManage) return <Text size="xs" c="dimmed" ta="center">Awaiting manager approval</Text>;
     return (
-      <Stack gap={4}>
+      <Stack gap={4} align="center" w="100%">
         <Button
           size="xs"
+          w="100%"
+          maw={300}
           onClick={() => handleApprovalClick(row, 'payment')}
           disabled={pendingActions.has(actionKey)}
           loading={pendingActions.has(actionKey)}
         >
           Approve for Review Payment
         </Button>
-        <Text size="xs" c="dimmed">
+        <Text size="xs" c="dimmed" ta="center">
           Marks all platforms under 15 as approved.
         </Text>
       </Stack>
@@ -257,25 +275,25 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
   const renderCompensationComponentsCell = (row: ReviewCounterStaffRow) => {
     if (row.reviewComponents.length === 0) {
       return (
-        <Text size="xs" c="dimmed">
+        <Text size="xs" c="dimmed" ta="center">
           No review-based compensation components
         </Text>
       );
     }
     if (row.incentiveApproval.approved) {
       return (
-        <Stack gap={4}>
+        <Stack gap={4} align="center">
           <Badge color="blue" variant="light">
             Compensation approved
           </Badge>
           {row.incentiveApproval.approvedByName && (
-            <Text size="xs" c="dimmed">
+            <Text size="xs" c="dimmed" ta="center">
               by {row.incentiveApproval.approvedByName}
             </Text>
           )}
-          <Stack gap={2}>
+          <Stack gap={2} align="center">
             {row.reviewComponents.map((component) => (
-              <Text key={`${row.userId}-${component.componentId}`} size="xs" c="dimmed">
+              <Text key={`${row.userId}-${component.componentId}`} size="xs" c="dimmed" ta="center">
                 {component.name}
               </Text>
             ))}
@@ -283,9 +301,9 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
         </Stack>
       );
     }
-    if (!canManage) return <Text size="xs" c="dimmed">Awaiting manager approval</Text>;
+    if (!canManage) return <Text size="xs" c="dimmed" ta="center">Awaiting manager approval</Text>;
     return (
-      <Stack gap="xs">
+      <Stack gap="xs" align="center" w="100%">
         {row.reviewComponents.map((component) => {
           const actionKey = `${row.userId}:component:${component.componentId}`;
           const isPending = pendingActions.has(actionKey);
@@ -294,6 +312,8 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
               key={`${row.userId}-${component.componentId}`}
               size="xs"
               variant="light"
+              w="100%"
+              maw={300}
               onClick={() => handleComponentApprovalClick(row, component)}
               disabled={isPending}
               loading={isPending}
@@ -307,53 +327,66 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
   };
 
   return (
-    <Card withBorder padding="md" radius="md" pos="relative">
+    <Card withBorder p={{ base: 'sm', sm: 'md' }} radius="md" pos="relative">
       <LoadingOverlay visible={loading} zIndex={5} />
       <Stack gap="md">
-        <Group justify="space-between" align="flex-start">
-          <Stack gap={2}>
-            <Text fw={600}>Monthly Review Approvals</Text>
-            <Text size="sm" c="dimmed">
-              Combine review counters across platforms to approve payroll and incentive payouts.
-            </Text>
-          </Stack>
+        <Group justify="center" gap="xs" wrap="wrap">
+          {collapsible ? (
+            <UnstyledButton
+              onClick={() => setOpened((current) => !current)}
+              aria-expanded={opened}
+              aria-controls="monthly-review-approvals-content"
+            >
+              <Group gap="xs" wrap="nowrap">
+                {opened ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
+                <Text fw={600} ta="center">Monthly Review Approvals</Text>
+              </Group>
+            </UnstyledButton>
+          ) : (
+            <Text fw={600} ta="center">Monthly Review Approvals</Text>
+          )}
           <Tooltip label="Refresh summary">
-            <ActionIcon variant="light" onClick={handleRefresh}>
+            <ActionIcon variant="light" onClick={handleRefresh} aria-label="Refresh monthly review approvals">
               <IconRefresh size={16} />
             </ActionIcon>
           </Tooltip>
         </Group>
-        {!hideDateControls && (
-        <Stack gap={4}>
-          <Text size="sm" fw={500}>
-            Date range
-          </Text>
-          <Group gap="xs">
-            <Button size="xs" variant={preset === 'thisMonth' ? 'filled' : 'light'} onClick={() => handlePresetChange('thisMonth')}>
-              This Month
-            </Button>
-            <Button size="xs" variant={preset === 'lastMonth' ? 'filled' : 'light'} onClick={() => handlePresetChange('lastMonth')}>
-              Last Month
-            </Button>
-            <Button size="xs" variant={preset === 'custom' ? 'filled' : 'light'} onClick={() => handlePresetChange('custom')}>
-              Custom
-            </Button>
-          </Group>
-          {preset === 'custom' ? (
-            <DatePickerInput
-              type="range"
-              value={range}
-              onChange={handleCustomRangeChange}
-              allowSingleDateInRange={false}
-              valueFormat="MMM D, YYYY"
-              maxDate={dayjs().endOf('day').toDate()}
-            />
-          ) : (
-            <Text size="sm" c="dimmed">
-              {formatDisplayRange(range)}
+        <Collapse in={opened} id="monthly-review-approvals-content">
+          <Stack gap="md">
+          {!hideDateControls && (
+          <Stack gap="xs" align="center">
+            <Text size="sm" fw={500} ta="center">
+              Date range
             </Text>
-          )}
-        </Stack>
+            <Group gap="xs" justify="center" wrap="wrap">
+              <Button size="xs" variant={preset === 'thisMonth' ? 'filled' : 'light'} onClick={() => handlePresetChange('thisMonth')}>
+                This Month
+              </Button>
+              <Button size="xs" variant={preset === 'lastMonth' ? 'filled' : 'light'} onClick={() => handlePresetChange('lastMonth')}>
+                Last Month
+              </Button>
+              <Button size="xs" variant={preset === 'custom' ? 'filled' : 'light'} onClick={() => handlePresetChange('custom')}>
+                Custom
+              </Button>
+            </Group>
+            {preset === 'custom' ? (
+              <DatePickerInput
+                type="range"
+                value={range}
+                onChange={handleCustomRangeChange}
+                allowSingleDateInRange={false}
+                valueFormat="MMM D, YYYY"
+                maxDate={dayjs().endOf('day').toDate()}
+                w="100%"
+                maw={420}
+                styles={{ input: { textAlign: 'center' } }}
+              />
+            ) : (
+              <Text size="sm" c="dimmed" ta="center">
+                {formatDisplayRange(range)}
+              </Text>
+            )}
+          </Stack>
         )}
         {error && (
           <Alert color="red" title="Approvals">
@@ -361,22 +394,59 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
           </Alert>
         )}
         {summary && summary.staff.length > 0 ? (
-          <Table striped highlightOnHover>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Staff</Table.Th>
-                <Table.Th>Total Reviews</Table.Th>
-                <Table.Th>Platforms</Table.Th>
-                <Table.Th>Review Payment</Table.Th>
-                <Table.Th>Compensation Components</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
+          <>
+            <Box visibleFrom="sm">
+              <Table.ScrollContainer minWidth={900}>
+                <Table striped highlightOnHover verticalSpacing="sm">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th ta="center">Staff</Table.Th>
+                      <Table.Th ta="center">Total Reviews</Table.Th>
+                      <Table.Th ta="center">Platforms</Table.Th>
+                      <Table.Th ta="center">Review Payment</Table.Th>
+                      <Table.Th ta="center">Compensation Components</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {summary.staff.map((row) => (
+                      <Table.Tr key={row.userId}>
+                        <Table.Td ta="center">
+                          <Stack gap={4} align="center">
+                            <Text fw={600} ta="center">{row.displayName}</Text>
+                            {row.needsMinimum ? (
+                              <Badge color="red" variant="light">
+                                Needs {summary.minimumReviews} reviews
+                              </Badge>
+                            ) : (
+                              <Badge color="teal" variant="light">
+                                Meets minimum
+                              </Badge>
+                            )}
+                          </Stack>
+                        </Table.Td>
+                        <Table.Td ta="center">
+                          <Stack gap={4} align="center">
+                            <Text fw={600}>{row.totalReviews.toFixed(2)}</Text>
+                            <Text size="xs" c="dimmed" ta="center">
+                              Rounded credit: {row.totalRoundedReviews.toFixed(0)}
+                            </Text>
+                          </Stack>
+                        </Table.Td>
+                        <Table.Td ta="center">{renderPlatformBadges(row)}</Table.Td>
+                        <Table.Td ta="center">{renderPaymentCell(row)}</Table.Td>
+                        <Table.Td ta="center">{renderCompensationComponentsCell(row)}</Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            </Box>
+            <Stack hiddenFrom="sm" gap="sm">
               {summary.staff.map((row) => (
-                <Table.Tr key={row.userId}>
-                  <Table.Td>
-                    <Stack gap={2}>
-                      <Text fw={600}>{row.displayName}</Text>
+                <Card key={row.userId} withBorder radius="md" p="md">
+                  <Stack align="center" gap="md">
+                    <Stack align="center" gap={4}>
+                      <Text fw={700} ta="center">{row.displayName}</Text>
                       {row.needsMinimum ? (
                         <Badge color="red" variant="light">
                           Needs {summary.minimumReviews} reviews
@@ -387,25 +457,41 @@ const ReviewMonthlySummary = ({ month, hideDateControls = false }: { month?: str
                         </Badge>
                       )}
                     </Stack>
-                  </Table.Td>
-                  <Table.Td>
-                    <Stack gap={4}>
-                      <Text fw={600}>{row.totalReviews.toFixed(2)}</Text>
-                      <Text size="xs" c="dimmed">
-                        Rounded credit: {row.totalRoundedReviews.toFixed(0)}
-                      </Text>
+                    <SimpleGrid cols={2} spacing="sm" w="100%">
+                      <Stack gap={2} align="center">
+                        <Text size="xs" c="dimmed" ta="center">Total reviews</Text>
+                        <Text fw={700}>{row.totalReviews.toFixed(2)}</Text>
+                      </Stack>
+                      <Stack gap={2} align="center">
+                        <Text size="xs" c="dimmed" ta="center">Rounded credit</Text>
+                        <Text fw={700}>{row.totalRoundedReviews.toFixed(0)}</Text>
+                      </Stack>
+                    </SimpleGrid>
+                    <Divider w="100%" />
+                    <Stack align="center" gap="xs" w="100%">
+                      <Text fw={600} ta="center">Platforms</Text>
+                      {renderPlatformBadges(row)}
                     </Stack>
-                  </Table.Td>
-                  <Table.Td>{renderPlatformBadges(row)}</Table.Td>
-                  <Table.Td>{renderPaymentCell(row)}</Table.Td>
-                  <Table.Td>{renderCompensationComponentsCell(row)}</Table.Td>
-                </Table.Tr>
+                    <Divider w="100%" />
+                    <Stack align="center" gap="xs" w="100%">
+                      <Text fw={600} ta="center">Review payment</Text>
+                      {renderPaymentCell(row)}
+                    </Stack>
+                    <Divider w="100%" />
+                    <Stack align="center" gap="xs" w="100%">
+                      <Text fw={600} ta="center">Compensation components</Text>
+                      {renderCompensationComponentsCell(row)}
+                    </Stack>
+                  </Stack>
+                </Card>
               ))}
-            </Table.Tbody>
-          </Table>
+            </Stack>
+          </>
         ) : (
           emptyState
-        )}
+          )}
+          </Stack>
+        </Collapse>
       </Stack>
     </Card>
   );

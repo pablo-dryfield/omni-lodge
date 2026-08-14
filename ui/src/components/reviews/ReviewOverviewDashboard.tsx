@@ -1,14 +1,18 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   Badge,
+  Box,
   Button,
   ActionIcon,
-  Checkbox,
   Collapse,
+  Flex,
   Group,
+  Modal,
   NumberInput,
   Paper,
+  ScrollArea,
   Select,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Table,
@@ -16,6 +20,8 @@ import {
   TextInput,
   Textarea,
   Title,
+  Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   IconAlertTriangle,
@@ -24,6 +30,7 @@ import {
   IconChevronLeft,
   IconLock,
   IconLockOpen,
+  IconPlus,
   IconStar,
   IconTrash,
   IconUsers,
@@ -32,6 +39,7 @@ import dayjs from "dayjs";
 import axiosInstance from "../../utils/axiosInstance";
 import { effectiveReviewMonth } from "../../utils/reviewCreditMonth";
 import ReviewMonthlySummary from "../reviewCounters/ReviewMonthlySummary";
+import DailyReviewTrend, { type TrendSnapshot } from "./DailyReviewTrend";
 type Staff = {
   userId: number;
   name: string;
@@ -58,21 +66,68 @@ type MonthLock = {
   lockedAt: string | null;
   lockedByName: string | null;
 };
-export default function ReviewOverviewDashboard({ canManage = false }: { canManage?: boolean }) {
-  const [month, setMonth] = useState(dayjs().subtract(1, "month").format("YYYY-MM"));
+type UnassignedReview = {
+  id: number;
+  platform: string;
+  reviewerName: string;
+  comment: string | null;
+  rating: number;
+  reviewCreatedAt: string;
+  creditMonth: string | null;
+  isDeleted: boolean;
+};
+type OverviewSummary = {
+  staff: Staff[];
+  reviewCount: number;
+  deletedCount: number;
+  unassignedCount: number;
+  unassignedReviews?: UnassignedReview[];
+  users?: User[];
+  trendSnapshots?: TrendSnapshot[];
+  manualCategoryTotals?: { noName: number; bad: number };
+  lock: MonthLock | null;
+};
+type ReviewOverviewDashboardProps = {
+  canManage?: boolean;
+  currentUserId?: number;
+  month: string;
+  onMonthChange: (month: string) => void;
+};
+
+const overviewRequests = new Map<string, Promise<{ data: OverviewSummary }>>();
+
+const fetchReviewOverview = (month: string): Promise<{ data: OverviewSummary }> => {
+  const pending = overviewRequests.get(month);
+  if (pending) {
+    return pending;
+  }
+  const start = dayjs(`${month}-01`);
+  const request = axiosInstance.get<OverviewSummary>("/reviews/archive/summary", {
+    params: {
+      start: start.format("YYYY-MM-DD"),
+      end: start.endOf("month").format("YYYY-MM-DD"),
+    },
+  }).finally(() => overviewRequests.delete(month));
+  overviewRequests.set(month, request);
+  return request;
+};
+
+export default function ReviewOverviewDashboard({
+  canManage = false,
+  currentUserId = 0,
+  month,
+  onMonthChange,
+}: ReviewOverviewDashboardProps) {
   const [expandedUsers, setExpandedUsers] = useState<Set<number>>(new Set());
   const [expandedPlatforms, setExpandedPlatforms] = useState<Set<string>>(new Set());
-  const [summary, setSummary] = useState<{
-    staff: Staff[];
-    reviewCount: number;
-    deletedCount: number;
-    unassignedCount: number;
-    manualCategoryTotals?: { noName: number; bad: number };
-    lock: MonthLock | null;
-  }>({ staff: [], reviewCount: 0, deletedCount: 0, unassignedCount: 0, manualCategoryTotals: { noName: 0, bad: 0 }, lock: null });
+  const [summary, setSummary] = useState<OverviewSummary>({ staff: [], reviewCount: 0, deletedCount: 0, unassignedCount: 0, unassignedReviews: [], users: [], trendSnapshots: [], manualCategoryTotals: { noName: 0, bad: 0 }, lock: null });
   const [users, setUsers] = useState<User[]>([]);
   const [lockBusy, setLockBusy] = useState(false);
   const [lockError, setLockError] = useState("");
+  const [manualModalOpened, setManualModalOpened] = useState(false);
+  const [unassignedModalOpened, setUnassignedModalOpened] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualError, setManualError] = useState("");
   const [form, setForm] = useState({
     userId: "",
     category: "staff" as "staff" | "no_name" | "bad",
@@ -81,31 +136,30 @@ export default function ReviewOverviewDashboard({ canManage = false }: { canMana
     notes: "",
   });
   const load = useCallback(async () => {
-    const start = dayjs(`${month}-01`),
-      end = start.endOf("month");
-    const [s, a] = await Promise.all([
-      axiosInstance.get("/reviews/archive/summary", {
-        params: {
-          start: start.format("YYYY-MM-DD"),
-          end: end.format("YYYY-MM-DD"),
-        },
-      }),
-      axiosInstance.get("/reviews/archive", { params: { deleted: "all" } }),
-    ]);
+    const s = await fetchReviewOverview(month);
     setSummary(s.data);
-    setUsers(a.data.users);
+    setUsers(s.data.users ?? []);
   }, [month]);
   useEffect(() => {
     void load();
   }, [load]);
   const add = async () => {
-    await axiosInstance.post("/reviews/archive/manual-credits", {
-      ...form,
-      userId: form.category === "staff" ? Number(form.userId) : null,
-      date: `${month}-01`,
-    });
-    setForm({ ...form, credit: 1, notes: "" });
-    await load();
+    setManualBusy(true);
+    setManualError("");
+    try {
+      await axiosInstance.post("/reviews/archive/manual-credits", {
+        ...form,
+        userId: form.category === "staff" ? Number(form.userId) : null,
+        date: `${month}-01`,
+      });
+      setForm((current) => ({ ...current, credit: 1, notes: "" }));
+      await load();
+      setManualModalOpened(false);
+    } catch (error: any) {
+      setManualError(error.response?.data?.[0]?.message ?? error.message ?? "Unable to add the manual counter entry.");
+    } finally {
+      setManualBusy(false);
+    }
   };
   const toggleMonthLock = async () => {
     setLockBusy(true);
@@ -129,173 +183,546 @@ export default function ReviewOverviewDashboard({ canManage = false }: { canMana
     ["Needs assignment", summary.unassignedCount, IconAlertTriangle, "orange"],
     ["Deleted in archive", summary.deletedCount, IconTrash, "red"],
   ] as const;
-  const moveMonth = (amount: number) => setMonth(dayjs(`${month}-01`).add(amount, "month").format("YYYY-MM"));
+  const currentUserTotal = summary.staff.find((staff) => staff.userId === currentUserId)?.total ?? 0;
+  const unassignedReviews = summary.unassignedReviews ?? [];
+  const moveMonth = (amount: number) =>
+    onMonthChange(dayjs(`${month}-01`).add(amount, "month").format("YYYY-MM"));
   const toggleUser = (userId: number) => setExpandedUsers(current => { const next = new Set(current); next.has(userId) ? next.delete(userId) : next.add(userId); return next; });
   const togglePlatform = (key: string) => setExpandedPlatforms(current => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next; });
   const platformLabel = (platform: string) => ({ google: "Google", tripadvisor: "TripAdvisor", airbnb: "Airbnb", getyourguide: "GetYourGuide", manual: "Manual" }[platform] ?? platform);
+
+  const renderStaffDetails = (staff: Staff) => (
+    <Stack p={{ base: "xs", sm: "md" }} gap="xs" bg="var(--mantine-color-gray-0)">
+      {staff.platforms.length === 0 && (
+        <Text size="sm" c="dimmed" ta="center" py="sm">
+          No platform details are available for this person.
+        </Text>
+      )}
+      {staff.platforms.map((platform) => {
+        const platformKey = `${staff.userId}:${platform.platform}`;
+        const platformOpen = expandedPlatforms.has(platformKey);
+        return (
+          <Paper key={platform.platform} withBorder radius="md" style={{ overflow: "hidden" }}>
+            <UnstyledButton
+              w="100%"
+              p="sm"
+              onClick={() => togglePlatform(platformKey)}
+              aria-expanded={platformOpen}
+            >
+              <Flex
+                direction={{ base: "column", sm: "row" }}
+                align="center"
+                justify="space-between"
+                gap="sm"
+              >
+                <Group gap="xs" justify="center" wrap="wrap">
+                  {platformOpen ? <IconChevronDown size={15} /> : <IconChevronRight size={15} />}
+                  <Text fw={700} ta="center">{platformLabel(platform.platform)}</Text>
+                  <Badge variant="light">{platform.reviewCount} reviews</Badge>
+                  {platform.deletedReviewCount > 0 && (
+                    <Badge color="red" variant="light">
+                      {platform.deletedReviewCount} deleted ref{platform.deletedReviewCount === 1 ? "" : "s"}
+                    </Badge>
+                  )}
+                </Group>
+                <Group gap="md" justify="center" wrap="wrap">
+                  <Text size="sm">Assigned {platform.assigned.toFixed(3)}</Text>
+                  {platform.manual > 0 && <Text size="sm">Manual {platform.manual.toFixed(3)}</Text>}
+                  <Badge>{platform.total.toFixed(3)}</Badge>
+                </Group>
+              </Flex>
+            </UnstyledButton>
+            <Collapse in={platformOpen}>
+              <Stack p="sm" pt={0} gap="xs">
+                {platform.reviews.map((review) => (
+                  <Paper key={review.id} p="sm" bg="white" withBorder>
+                    <Flex
+                      direction={{ base: "column", sm: "row" }}
+                      justify="space-between"
+                      align="center"
+                      gap="xs"
+                    >
+                      <Stack gap={0} align="center">
+                        <Text fw={600} ta="center">{review.reviewerName}</Text>
+                        <Text size="xs" c="dimmed" ta="center">
+                          Counted in {dayjs(`${effectiveReviewMonth(review.reviewCreatedAt, review.creditMonth)}-01`).format("MMMM YYYY")} · Credit {review.credit.toFixed(3)}
+                        </Text>
+                      </Stack>
+                      <Group gap="xs" justify="center" wrap="wrap">
+                        <Badge color="yellow">★ {review.rating.toFixed(1)}</Badge>
+                        {review.isDeleted && <Badge color="red">Deleted later · Still counted</Badge>}
+                      </Group>
+                    </Flex>
+                    <Text size="sm" mt="xs" ta="center" style={{ overflowWrap: "anywhere" }}>
+                      {review.comment || "No written comment"}
+                    </Text>
+                  </Paper>
+                ))}
+                {(platform.deletedReviews ?? []).length > 0 && (
+                  <>
+                    <Text size="xs" fw={700} c="red" mt="xs" ta="center">
+                      Deleted references — excluded from counts, targets, and payments
+                    </Text>
+                    {(platform.deletedReviews ?? []).map((review) => (
+                      <Paper key={`deleted-${review.id}`} p="sm" bg="var(--mantine-color-red-0)" withBorder>
+                        <Flex
+                          direction={{ base: "column", sm: "row" }}
+                          justify="space-between"
+                          align="center"
+                          gap="xs"
+                        >
+                          <Stack gap={0} align="center">
+                            <Text fw={600} ta="center">{review.reviewerName}</Text>
+                            <Text size="xs" c="dimmed" ta="center">
+                              Originally assigned to {dayjs(`${effectiveReviewMonth(review.reviewCreatedAt, review.creditMonth)}-01`).format("MMMM YYYY")}
+                            </Text>
+                          </Stack>
+                          <Group gap="xs" justify="center" wrap="wrap">
+                            <Badge color="yellow">★ {review.rating.toFixed(1)}</Badge>
+                            <Badge color="red">Deleted · Not counted</Badge>
+                          </Group>
+                        </Flex>
+                        <Text size="sm" mt="xs" ta="center" style={{ overflowWrap: "anywhere" }}>
+                          {review.comment || "No written comment"}
+                        </Text>
+                      </Paper>
+                    ))}
+                  </>
+                )}
+                {platform.manualEntries.map((entry) => (
+                  <Paper key={`manual-${entry.id}`} p="sm" bg="white" withBorder>
+                    <Stack gap="xs" align="center">
+                      <Text fw={600}>Manual addition</Text>
+                      <Text size="xs" c="dimmed">{dayjs(entry.date).format("D MMM YYYY")}</Text>
+                      <Badge>{entry.credit.toFixed(3)}</Badge>
+                      {entry.notes && <Text size="sm" ta="center">{entry.notes}</Text>}
+                    </Stack>
+                  </Paper>
+                ))}
+              </Stack>
+            </Collapse>
+          </Paper>
+        );
+      })}
+    </Stack>
+  );
+
   return (
     <Stack gap="lg">
-      <Group justify="space-between">
-        <div>
-          <Title order={2}>Review performance</Title>
-          <Text c="dimmed">
-            Credits are calculated directly from archived review assignments.
-          </Text>
-        </div>
-        <Group gap="xs" wrap="wrap">
-          <ActionIcon variant="default" size="lg" aria-label="Previous month" onClick={() => moveMonth(-1)}><IconChevronLeft size={18}/></ActionIcon>
-          <TextInput type="month" value={month} onChange={(e) => setMonth(e.currentTarget.value)} />
-          <ActionIcon variant="default" size="lg" aria-label="Next month" onClick={() => moveMonth(1)}><IconChevronRight size={18}/></ActionIcon>
-          {canManage && <Button
-            color={summary.lock?.isLocked ? "orange" : "blue"}
-            variant={summary.lock?.isLocked ? "light" : "filled"}
-            leftSection={summary.lock?.isLocked ? <IconLockOpen size={17}/> : <IconLock size={17}/>}
-            loading={lockBusy}
-            onClick={() => void toggleMonthLock()}
-          >
-            {summary.lock?.isLocked ? "Unlock final count" : "Lock final count"}
-          </Button>}
-        </Group>
-      </Group>
-      <Paper p="md" withBorder radius="lg" bg={summary.lock?.isLocked ? "var(--mantine-color-green-light)" : "var(--mantine-color-blue-light)"}>
-        <Group justify="space-between" align="flex-start">
-          <Group gap="sm" wrap="nowrap">
-            {summary.lock?.isLocked ? <IconLock size={20}/> : <IconLockOpen size={20}/>}
-            <div>
-              <Text fw={700}>{summary.lock?.isLocked ? `Final count locked at ${summary.reviewCount}` : "Live review count"}</Text>
-              <Text size="sm" c="dimmed">
-                {summary.lock?.isLocked
-                  ? `Locked${summary.lock.lockedByName ? ` by ${summary.lock.lockedByName}` : ""}${summary.lock.lockedAt ? ` on ${dayjs(summary.lock.lockedAt).format("D MMM YYYY HH:mm")}` : ""}. Reviews deleted after this remain counted until you unlock.`
-                  : "Deleted reviews are excluded. Lock this month after your review-checking period to freeze its final count."}
-              </Text>
-            </div>
+      <Stack gap="md" align="center">
+        <Stack gap={2} align="center">
+          <Title order={2} ta="center">Review performance</Title>
+        </Stack>
+        <Flex
+          direction={{ base: "column", sm: "row" }}
+          justify="center"
+          align="center"
+          gap="sm"
+          w="100%"
+        >
+          <Group gap="xs" wrap="nowrap" w="100%" maw={280} justify="center">
+            <ActionIcon variant="default" size="lg" aria-label="Previous month" onClick={() => moveMonth(-1)}>
+              <IconChevronLeft size={18} />
+            </ActionIcon>
+            <TextInput
+              aria-label="Review month"
+              type="month"
+              value={month}
+              onChange={(event) => onMonthChange(event.currentTarget.value)}
+              style={{ flex: 1 }}
+              styles={{ input: { textAlign: "center" } }}
+            />
+            <ActionIcon variant="default" size="lg" aria-label="Next month" onClick={() => moveMonth(1)}>
+              <IconChevronRight size={18} />
+            </ActionIcon>
           </Group>
-        </Group>
-        {lockError && <Text c="red" size="sm" mt="xs">{lockError}</Text>}
-      </Paper>
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
-        {cards.map(([label, value, Icon, color]) => (
-          <Paper key={label} p="lg" withBorder radius="lg">
-            <Group justify="space-between">
-              <Text c="dimmed" size="sm">
-                {label}
+          {canManage && (
+            <Button
+              w={{ base: "100%", sm: "auto" }}
+              maw={280}
+              color={summary.lock?.isLocked ? "orange" : "blue"}
+              variant={summary.lock?.isLocked ? "light" : "filled"}
+              leftSection={summary.lock?.isLocked ? <IconLockOpen size={17} /> : <IconLock size={17} />}
+              loading={lockBusy}
+              onClick={() => void toggleMonthLock()}
+            >
+              {summary.lock?.isLocked ? "Unlock final count" : "Lock final count"}
+            </Button>
+          )}
+        </Flex>
+        {lockError && <Text c="red" size="sm" ta="center">{lockError}</Text>}
+      </Stack>
+      {canManage ? (
+        <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
+          {cards.map(([label, value, Icon, color]) => {
+          const content = (
+            <Stack align="center" gap={4}>
+              <Icon size={22} />
+              <Text c="dimmed" size="sm" ta="center">{label}</Text>
+              <Text fz={32} fw={800} c={color} ta="center">
+                {value}
               </Text>
-              <Icon size={20} />
-            </Group>
-            <Text fz={32} fw={800} c={color}>
-              {value}
-            </Text>
-          </Paper>
-        ))}
-      </SimpleGrid>
-      <ReviewMonthlySummary month={month} hideDateControls />
-      <Paper p="lg" withBorder radius="lg">
-        <Title order={4} mb="md">
-          Staff credit ledger
-        </Title>
-        <Table striped>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Person</Table.Th>
-              <Table.Th>Reviews</Table.Th>
-              <Table.Th>Assignment credit</Table.Th>
-              <Table.Th>Manual additions</Table.Th>
-              <Table.Th>Total</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {summary.staff.map((s) => {
-              const userOpen = expandedUsers.has(s.userId);
-              return <Fragment key={s.userId}>
-                <Table.Tr onClick={() => toggleUser(s.userId)} style={{ cursor: "pointer" }}>
-                  <Table.Td fw={600}><Group gap="xs" wrap="wrap">{userOpen ? <IconChevronDown size={16}/> : <IconChevronRight size={16}/>}<span>{s.name}</span>{s.deletedReviewCount > 0 && <Badge color="red" variant="light" size="sm">{s.deletedReviewCount} deleted ref{s.deletedReviewCount === 1 ? "" : "s"}</Badge>}</Group></Table.Td>
-                  <Table.Td>{s.reviewCount}</Table.Td>
-                  <Table.Td>{s.assigned.toFixed(3)}</Table.Td>
-                  <Table.Td>{s.manual.toFixed(3)}</Table.Td>
-                  <Table.Td><Badge size="lg">{s.total.toFixed(3)}</Badge></Table.Td>
-                </Table.Tr>
-                <Table.Tr>
-                  <Table.Td colSpan={5} p={0}>
-                    <Collapse in={userOpen}>
-                      <Stack p="md" gap="xs" bg="var(--mantine-color-gray-0)">
-                        {s.platforms.map(platform => {
-                          const platformKey = `${s.userId}:${platform.platform}`, platformOpen = expandedPlatforms.has(platformKey);
-                          return <Paper key={platform.platform} withBorder radius="md">
-                            <Group p="sm" justify="space-between" onClick={() => togglePlatform(platformKey)} style={{ cursor: "pointer" }}>
-                              <Group gap="xs">{platformOpen ? <IconChevronDown size={15}/> : <IconChevronRight size={15}/>}<Text fw={700}>{platformLabel(platform.platform)}</Text><Badge variant="light">{platform.reviewCount} reviews</Badge>{platform.deletedReviewCount > 0 && <Badge color="red" variant="light">{platform.deletedReviewCount} deleted ref{platform.deletedReviewCount === 1 ? "" : "s"}</Badge>}</Group>
-                              <Group gap="lg"><Text size="sm">Assigned {platform.assigned.toFixed(3)}</Text>{platform.manual > 0 && <Text size="sm">Manual {platform.manual.toFixed(3)}</Text>}<Badge>{platform.total.toFixed(3)}</Badge></Group>
-                            </Group>
-                            <Collapse in={platformOpen}>
-                              <Stack p="sm" pt={0} gap="xs">
-                                {platform.reviews.map(review => <Paper key={review.id} p="sm" bg="white" withBorder>
-                                  <Group justify="space-between" align="flex-start"><div><Text fw={600}>{review.reviewerName}</Text><Text size="xs" c="dimmed">Counted in {dayjs(`${effectiveReviewMonth(review.reviewCreatedAt, review.creditMonth)}-01`).format("MMMM YYYY")} · Credit {review.credit.toFixed(3)}</Text></div><Group gap="xs"><Badge color="yellow">★ {review.rating.toFixed(1)}</Badge>{review.isDeleted && <Badge color="red">Deleted later · Still counted</Badge>}</Group></Group>
-                                  <Text size="sm" mt="xs">{review.comment || "No written comment"}</Text>
-                                </Paper>)}
-                                {(platform.deletedReviews ?? []).length > 0 && <>
-                                  <Text size="xs" fw={700} c="red" mt="xs">Deleted references — excluded from counts, targets, and payments</Text>
-                                  {(platform.deletedReviews ?? []).map(review => <Paper key={`deleted-${review.id}`} p="sm" bg="var(--mantine-color-red-0)" withBorder>
-                                    <Group justify="space-between" align="flex-start"><div><Text fw={600}>{review.reviewerName}</Text><Text size="xs" c="dimmed">Originally assigned to {dayjs(`${effectiveReviewMonth(review.reviewCreatedAt, review.creditMonth)}-01`).format("MMMM YYYY")}</Text></div><Group gap="xs"><Badge color="yellow">★ {review.rating.toFixed(1)}</Badge><Badge color="red">Deleted · Not counted</Badge></Group></Group>
-                                    <Text size="sm" mt="xs">{review.comment || "No written comment"}</Text>
-                                  </Paper>)}
-                                </>}
-                                {platform.manualEntries.map(entry => <Paper key={`manual-${entry.id}`} p="sm" bg="white" withBorder><Group justify="space-between"><div><Text fw={600}>Manual addition</Text><Text size="xs" c="dimmed">{dayjs(entry.date).format("D MMM YYYY")}</Text></div><Badge>{entry.credit.toFixed(3)}</Badge></Group>{entry.notes && <Text size="sm" mt="xs">{entry.notes}</Text>}</Paper>)}
-                              </Stack>
-                            </Collapse>
-                          </Paper>;
-                        })}
-                      </Stack>
-                    </Collapse>
-                  </Table.Td>
-                </Table.Tr>
-              </Fragment>;
-            })}
-          </Table.Tbody>
-        </Table>
-      </Paper>
-      {canManage && <Paper p="lg" withBorder radius="lg">
-        <Title order={4}>Manual counter addition</Title>
-        <Text size="sm" c="dimmed" mb="md">
-          Add staff credit or record a No name or Bad review counter adjustment.
-        </Text>
-        <Group mb="md"><Badge color="gray" variant="light">Manual no name: {summary.manualCategoryTotals?.noName ?? 0}</Badge><Badge color="red" variant="light">Manual bad reviews: {summary.manualCategoryTotals?.bad ?? 0}</Badge></Group>
-        <Group mb="md"><Checkbox label="No name" color="gray" checked={form.category === "no_name"} onChange={(event) => setForm({ ...form, category: event.currentTarget.checked ? "no_name" : "staff" })}/><Checkbox label="Bad review" color="red" checked={form.category === "bad"} onChange={(event) => setForm({ ...form, category: event.currentTarget.checked ? "bad" : "staff" })}/></Group>
-        <SimpleGrid cols={{ base: 1, sm: 3 }}>
-          <Select
-            searchable
-            label="User"
-            description={form.category === "staff" ? "Required for staff credit" : "Not used for No name or Bad review"}
-            disabled={form.category !== "staff"}
-            data={users.map((u) => ({
-              value: String(u.id),
-              label: `${u.firstName} ${u.lastName}`.trim() || u.username,
-            }))}
-            value={form.userId}
-            onChange={(v) => setForm({ ...form, userId: v ?? "" })}
-          />
-          <Select
-            label="Platform"
-            data={["google", "tripadvisor", "airbnb", "getyourguide", "manual"]}
-            value={form.platform}
-            onChange={(v) => setForm({ ...form, platform: v ?? "manual" })}
-          />
-          <NumberInput
-            label="Credit"
-            decimalScale={3}
-            min={0.001}
-            value={form.credit}
-            onChange={(v) => setForm({ ...form, credit: Number(v) })}
-          />
+              {label === "Needs assignment" && (
+                <Text size="xs" c="blue" fw={600} ta="center">View reviews</Text>
+              )}
+            </Stack>
+          );
+
+          return label === "Needs assignment" ? (
+            <Paper key={label} p={0} withBorder radius="lg" style={{ overflow: "hidden" }}>
+              <UnstyledButton
+                w="100%"
+                h="100%"
+                p={{ base: "md", sm: "lg" }}
+                aria-label={`View ${value} reviews needing assignment`}
+                onClick={() => setUnassignedModalOpened(true)}
+              >
+                {content}
+              </UnstyledButton>
+            </Paper>
+          ) : (
+            <Paper key={label} p={{ base: "md", sm: "lg" }} withBorder radius="lg">
+              {content}
+            </Paper>
+          );
+          })}
         </SimpleGrid>
-        <Textarea
-          mt="sm"
-          label="Reason"
-          value={form.notes}
-          onChange={(e) => setForm({ ...form, notes: e.currentTarget.value })}
-        />
-        <Button mt="md" onClick={add} disabled={form.category === "staff" && !form.userId}>
-          Add counter entry
-        </Button>
-      </Paper>}
+      ) : (
+        <Paper
+          p={{ base: "md", sm: "lg" }}
+          withBorder
+          radius="lg"
+          maw={420}
+          w="100%"
+          mx="auto"
+          role="group"
+          aria-label="Your reviews total"
+        >
+          <Stack align="center" gap={4}>
+            <IconStar size={22} />
+            <Text c="dimmed" size="sm" ta="center">Reviews</Text>
+            <Text fz={32} fw={800} c="blue" ta="center">
+              {currentUserTotal.toFixed(3)}
+            </Text>
+          </Stack>
+        </Paper>
+      )}
+      {canManage && <Modal
+        opened={unassignedModalOpened}
+        onClose={() => setUnassignedModalOpened(false)}
+        title="Reviews needing assignment"
+        size="xl"
+        centered
+        radius="lg"
+        styles={{ title: { fontWeight: 700 } }}
+      >
+        <Stack gap="md">
+          <Stack gap={4} align="center">
+            <Badge color="orange" variant="light" size="lg">
+              {summary.unassignedCount} unassigned
+            </Badge>
+            <Text size="sm" c="dimmed" ta="center" maw={720}>
+              These reviews are counted in {dayjs(`${month}-01`).format("MMMM YYYY")}, but no team member has been assigned credit yet.
+            </Text>
+          </Stack>
+
+          {unassignedReviews.length === 0 ? (
+            <Paper withBorder radius="md" p="xl">
+              <Text c="dimmed" ta="center">
+                {summary.unassignedCount === 0
+                  ? "Every counted review for this month has an assignment."
+                  : "The review details are not available in the current response. Refresh the page and try again."}
+              </Text>
+            </Paper>
+          ) : (
+            <ScrollArea.Autosize mah="65vh" type="auto" offsetScrollbars>
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
+                {unassignedReviews.map((review) => (
+                  <Paper key={review.id} withBorder radius="md" p={{ base: "sm", sm: "md" }}>
+                    <Stack gap="sm" align="center">
+                      <Group gap="xs" justify="center" wrap="wrap">
+                        <Badge variant="light">{platformLabel(review.platform)}</Badge>
+                        <Badge color="yellow" variant="light">★ {review.rating.toFixed(1)}</Badge>
+                        {review.isDeleted && <Badge color="red" variant="light">Deleted after lock</Badge>}
+                      </Group>
+                      <Stack gap={2} align="center">
+                        <Text fw={700} ta="center" style={{ overflowWrap: "anywhere" }}>
+                          {review.reviewerName || "Unknown reviewer"}
+                        </Text>
+                        <Text size="xs" c="dimmed" ta="center">
+                          {dayjs(review.reviewCreatedAt).format("D MMM YYYY")} · Counted in {dayjs(`${effectiveReviewMonth(review.reviewCreatedAt, review.creditMonth)}-01`).format("MMMM YYYY")}
+                        </Text>
+                      </Stack>
+                      <Text size="sm" ta="center" style={{ overflowWrap: "anywhere" }}>
+                        {review.comment || "No written comment"}
+                      </Text>
+                    </Stack>
+                  </Paper>
+                ))}
+              </SimpleGrid>
+            </ScrollArea.Autosize>
+          )}
+        </Stack>
+      </Modal>}
+      <Paper p={{ base: "md", sm: "lg" }} withBorder radius="lg">
+        <Box pos="relative" mb="md" mih={36}>
+          <Title order={4} ta="center" px={canManage ? 44 : 0}>
+            Staff Credit Ledger
+          </Title>
+          {canManage && (
+            <Tooltip label="Add manual counter entry">
+              <ActionIcon
+                pos="absolute"
+                top={0}
+                right={0}
+                size="lg"
+                variant="filled"
+                aria-label="Add manual counter entry"
+                onClick={() => {
+                  setManualError("");
+                  setManualModalOpened(true);
+                }}
+              >
+                <IconPlus size={20} />
+              </ActionIcon>
+            </Tooltip>
+          )}
+        </Box>
+        {summary.staff.length === 0 ? (
+          <Text c="dimmed" ta="center" py="lg">No staff credits are recorded for this month.</Text>
+        ) : (
+          <>
+            <Box visibleFrom="sm">
+              <Table.ScrollContainer minWidth={760}>
+                <Table striped verticalSpacing="sm">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th ta="center">Person</Table.Th>
+                      <Table.Th ta="center">Reviews</Table.Th>
+                      <Table.Th ta="center">Assignment credit</Table.Th>
+                      <Table.Th ta="center">Manual additions</Table.Th>
+                      <Table.Th ta="center">Total</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {summary.staff.map((staff) => {
+                      const userOpen = expandedUsers.has(staff.userId);
+                      return (
+                        <Fragment key={staff.userId}>
+                          <Table.Tr onClick={() => toggleUser(staff.userId)} style={{ cursor: "pointer" }}>
+                            <Table.Td fw={600} ta="center">
+                              <Group gap="xs" justify="center" wrap="wrap">
+                                {userOpen ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
+                                <span>{staff.name}</span>
+                                {staff.deletedReviewCount > 0 && (
+                                  <Badge color="red" variant="light" size="sm">
+                                    {staff.deletedReviewCount} deleted ref{staff.deletedReviewCount === 1 ? "" : "s"}
+                                  </Badge>
+                                )}
+                              </Group>
+                            </Table.Td>
+                            <Table.Td ta="center">{staff.reviewCount}</Table.Td>
+                            <Table.Td ta="center">{staff.assigned.toFixed(3)}</Table.Td>
+                            <Table.Td ta="center">{staff.manual.toFixed(3)}</Table.Td>
+                            <Table.Td ta="center"><Badge size="lg">{staff.total.toFixed(3)}</Badge></Table.Td>
+                          </Table.Tr>
+                          <Table.Tr>
+                            <Table.Td colSpan={5} p={0}>
+                              <Collapse in={userOpen}>{renderStaffDetails(staff)}</Collapse>
+                            </Table.Td>
+                          </Table.Tr>
+                        </Fragment>
+                      );
+                    })}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            </Box>
+            <Stack hiddenFrom="sm" gap="sm">
+              {summary.staff.map((staff) => {
+                const userOpen = expandedUsers.has(staff.userId);
+                return (
+                  <Paper key={staff.userId} withBorder radius="md" style={{ overflow: "hidden" }}>
+                    <UnstyledButton
+                      w="100%"
+                      p="md"
+                      onClick={() => toggleUser(staff.userId)}
+                      aria-expanded={userOpen}
+                    >
+                      <Stack align="center" gap="sm">
+                        <Group gap="xs" justify="center" wrap="wrap">
+                          {userOpen ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
+                          <Text fw={700} ta="center">{staff.name}</Text>
+                          {staff.deletedReviewCount > 0 && (
+                            <Badge color="red" variant="light" size="sm">
+                              {staff.deletedReviewCount} deleted ref{staff.deletedReviewCount === 1 ? "" : "s"}
+                            </Badge>
+                          )}
+                        </Group>
+                        <SimpleGrid cols={2} spacing="sm" w="100%">
+                          <Stack gap={0} align="center">
+                            <Text size="xs" c="dimmed">Reviews</Text>
+                            <Text fw={700}>{staff.reviewCount}</Text>
+                          </Stack>
+                          <Stack gap={0} align="center">
+                            <Text size="xs" c="dimmed">Assignment credit</Text>
+                            <Text fw={700}>{staff.assigned.toFixed(3)}</Text>
+                          </Stack>
+                          <Stack gap={0} align="center">
+                            <Text size="xs" c="dimmed">Manual additions</Text>
+                            <Text fw={700}>{staff.manual.toFixed(3)}</Text>
+                          </Stack>
+                          <Stack gap={0} align="center">
+                            <Text size="xs" c="dimmed">Total</Text>
+                            <Badge size="lg">{staff.total.toFixed(3)}</Badge>
+                          </Stack>
+                        </SimpleGrid>
+                      </Stack>
+                    </UnstyledButton>
+                    <Collapse in={userOpen}>{renderStaffDetails(staff)}</Collapse>
+                  </Paper>
+                );
+              })}
+            </Stack>
+          </>
+        )}
+      </Paper>
+      {canManage && <ReviewMonthlySummary month={month} hideDateControls collapsible />}
+      {canManage && <DailyReviewTrend snapshots={summary.trendSnapshots ?? []} />}
+      {canManage && (
+        <Modal
+          opened={manualModalOpened}
+          onClose={() => {
+            if (!manualBusy) {
+              setManualModalOpened(false);
+              setManualError("");
+            }
+          }}
+          title="Add manual counter entry"
+          size="lg"
+          centered
+          radius="lg"
+          closeOnClickOutside={!manualBusy}
+          closeOnEscape={!manualBusy}
+          styles={{ title: { fontWeight: 700 } }}
+        >
+          <Stack gap="lg">
+            <Stack gap={4} align="center">
+              <Text size="sm" c="dimmed" ta="center">
+                Add an adjustment to the staff ledger for {dayjs(`${month}-01`).format("MMMM YYYY")}.
+              </Text>
+              <Group gap="xs" justify="center" wrap="wrap">
+                <Badge color="gray" variant="light">
+                  No name: {summary.manualCategoryTotals?.noName ?? 0}
+                </Badge>
+                <Badge color="red" variant="light">
+                  Bad reviews: {summary.manualCategoryTotals?.bad ?? 0}
+                </Badge>
+              </Group>
+            </Stack>
+
+            <Stack gap="xs">
+              <Text size="sm" fw={600} ta="center">Entry type</Text>
+              <SegmentedControl
+                fullWidth
+                value={form.category}
+                onChange={(value) => setForm({ ...form, category: value as typeof form.category })}
+                data={[
+                  { label: "Staff credit", value: "staff" },
+                  { label: "No name", value: "no_name" },
+                  { label: "Bad review", value: "bad" },
+                ]}
+              />
+              <Text size="xs" c="dimmed" ta="center">
+                {form.category === "staff"
+                  ? "Assign credit to a specific team member."
+                  : form.category === "no_name"
+                    ? "Record a review that does not name a team member."
+                    : "Record a negative-review adjustment."}
+              </Text>
+            </Stack>
+
+            <SimpleGrid cols={{ base: 1, sm: form.category === "staff" ? 3 : 2 }} spacing="md">
+              {form.category === "staff" && (
+                <Select
+                  searchable
+                  required
+                  label="Team member"
+                  placeholder="Search for a team member"
+                  nothingFoundMessage="No team member found"
+                  data={users.map((u) => ({
+                    value: String(u.id),
+                    label: `${u.firstName} ${u.lastName}`.trim() || u.username,
+                  }))}
+                  value={form.userId}
+                  onChange={(value) => setForm({ ...form, userId: value ?? "" })}
+                />
+              )}
+              <Select
+                label="Platform"
+                data={[
+                  { value: "google", label: "Google" },
+                  { value: "tripadvisor", label: "TripAdvisor" },
+                  { value: "airbnb", label: "Airbnb" },
+                  { value: "getyourguide", label: "GetYourGuide" },
+                  { value: "manual", label: "Manual / Other" },
+                ]}
+                value={form.platform}
+                onChange={(value) => setForm({ ...form, platform: value ?? "manual" })}
+              />
+              <NumberInput
+                required
+                label="Credit amount"
+                decimalScale={3}
+                min={0.001}
+                step={0.25}
+                value={form.credit}
+                onChange={(value) => setForm({ ...form, credit: Number(value) })}
+              />
+            </SimpleGrid>
+
+            <Textarea
+              label="Reason or note"
+              description="Optional context for payroll and future audits"
+              placeholder="Why is this manual adjustment needed?"
+              autosize
+              minRows={3}
+              maxRows={6}
+              value={form.notes}
+              onChange={(event) => setForm({ ...form, notes: event.currentTarget.value })}
+            />
+
+            {manualError && <Text c="red" size="sm" ta="center">{manualError}</Text>}
+
+            <Flex direction={{ base: "column-reverse", sm: "row" }} justify="flex-end" gap="sm">
+              <Button
+                variant="default"
+                w={{ base: "100%", sm: "auto" }}
+                disabled={manualBusy}
+                onClick={() => {
+                  setManualModalOpened(false);
+                  setManualError("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                w={{ base: "100%", sm: "auto" }}
+                leftSection={<IconPlus size={17} />}
+                loading={manualBusy}
+                onClick={() => void add()}
+                disabled={
+                  !Number.isFinite(form.credit)
+                  || form.credit < 0.001
+                  || (form.category === "staff" && !form.userId)
+                }
+              >
+                Add entry
+              </Button>
+            </Flex>
+          </Stack>
+        </Modal>
+      )}
     </Stack>
   );
 }

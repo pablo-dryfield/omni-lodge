@@ -373,7 +373,57 @@ export async function getReviewCreditSummary(req: AuthenticatedRequest, res: Res
       platform.manualEntries.push({ id: credit.id, platform: credit.platform, date: credit.date, credit: amount, notes: credit.notes });
       totals.set(userId, current);
     }
-    const users = totals.size ? await User.findAll({ where: { id: Array.from(totals.keys()) }, attributes: ['id', 'firstName', 'lastName', 'username'] }) : [];
-    res.json({ staff: users.map(user => { const total = totals.get(user.id)!; return { userId: user.id, name: `${user.firstName} ${user.lastName}`.trim() || user.username, assigned: total.assigned, manual: total.manual, reviewCount: total.reviewCount, total: total.assigned + total.manual, platforms: Array.from(total.platforms.entries()).map(([platform, value]) => ({ platform, ...value })).sort((a, b) => a.platform.localeCompare(b.platform)) }; }).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name)), reviewCount: reviews.length, deletedCount: allPeriodReviews.filter(review => review.isDeleted).length, unassignedCount: reviews.filter(review => !assignmentsByReview.has(review.id)).length, manualCategoryTotals: { noName: manual.filter(row => row.category === 'no_name').reduce((sum, row) => sum + Number(row.credit), 0), bad: manual.filter(row => row.category === 'bad').reduce((sum, row) => sum + Number(row.credit), 0) }, lock: requestedMonth ? await serializeMonthLock(monthLock, requestedMonth) : null });
+    const trendSince = new Date();
+    trendSince.setUTCDate(trendSince.getUTCDate() - 89);
+    const [allUsers, trendSnapshots] = await Promise.all([
+      User.findAll({
+        attributes: ['id', 'firstName', 'lastName', 'username'],
+        order: [['firstName', 'ASC'], ['lastName', 'ASC']],
+      }),
+      ReviewDailySnapshot.findAll({
+        where: { snapshotDate: { [Op.gte]: trendSince.toISOString().slice(0, 10) } },
+        order: [['snapshotDate', 'ASC'], ['platform', 'ASC']],
+      }),
+    ]);
+    const users = totals.size ? allUsers.filter(user => totals.has(user.id)) : [];
+    const unassignedReviews = reviews
+      .filter(review => !assignmentsByReview.has(review.id))
+      .map(review => ({
+        id: review.id,
+        platform: review.platform,
+        reviewerName: review.reviewerName,
+        comment: review.comment,
+        rating: Number(review.rating),
+        reviewCreatedAt: review.reviewCreatedAt,
+        creditMonth: review.creditMonth,
+        isDeleted: review.isDeleted,
+      }));
+    res.json({
+      staff: users.map(user => {
+        const total = totals.get(user.id)!;
+        return {
+          userId: user.id,
+          name: `${user.firstName} ${user.lastName}`.trim() || user.username,
+          assigned: total.assigned,
+          manual: total.manual,
+          reviewCount: total.reviewCount,
+          total: total.assigned + total.manual,
+          platforms: Array.from(total.platforms.entries())
+            .map(([platform, value]) => ({ platform, ...value }))
+            .sort((a, b) => a.platform.localeCompare(b.platform)),
+        };
+      }).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name)),
+      reviewCount: reviews.length,
+      deletedCount: allPeriodReviews.filter(review => review.isDeleted).length,
+      unassignedCount: unassignedReviews.length,
+      unassignedReviews,
+      users: allUsers,
+      trendSnapshots,
+      manualCategoryTotals: {
+        noName: manual.filter(row => row.category === 'no_name').reduce((sum, row) => sum + Number(row.credit), 0),
+        bad: manual.filter(row => row.category === 'bad').reduce((sum, row) => sum + Number(row.credit), 0),
+      },
+      lock: requestedMonth ? await serializeMonthLock(monthLock, requestedMonth) : null,
+    });
   } catch (error) { fail(res, error); }
 }
