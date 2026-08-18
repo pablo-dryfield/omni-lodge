@@ -383,6 +383,35 @@ const encodeBase64 = (value: string | Buffer): string =>
 
 const sanitizeHeaderValue = (value: string): string => value.replace(/[\r\n]+/g, ' ').trim();
 
+const encodeMimeHeaderValue = (value: string): string => {
+  const sanitized = sanitizeHeaderValue(value);
+  if (/^[\x20-\x7e]*$/.test(sanitized)) {
+    return sanitized;
+  }
+
+  const chunks: string[] = [];
+  let chunk = '';
+  let chunkBytes = 0;
+
+  for (const character of sanitized) {
+    const characterBytes = Buffer.byteLength(character, 'utf-8');
+    if (chunk && chunkBytes + characterBytes > 42) {
+      chunks.push(chunk);
+      chunk = '';
+      chunkBytes = 0;
+    }
+    chunk += character;
+    chunkBytes += characterBytes;
+  }
+  if (chunk) {
+    chunks.push(chunk);
+  }
+
+  return chunks
+    .map((entry) => `=?UTF-8?B?${Buffer.from(entry, 'utf-8').toString('base64')}?=`)
+    .join('\r\n ');
+};
+
 const resolveDefaultFrom = (): string | null => {
   const address = sanitizeHeaderValue(
     String(getConfigValue('GMAIL_DEFAULT_FROM_ADDRESS') ?? 'pubthroughkrakow@gmail.com'),
@@ -456,7 +485,7 @@ const buildMimeMessage = (params: SendMessageParams, rfcMessageId: string): stri
   const messageLines: string[] = [
     `To: ${sanitizeHeaderValue(params.to)}`,
     ...(params.from ? [`From: ${sanitizeHeaderValue(params.from)}`] : []),
-    `Subject: ${sanitizeHeaderValue(params.subject)}`,
+    `Subject: ${encodeMimeHeaderValue(params.subject)}`,
     `Message-ID: ${sanitizeHeaderValue(rfcMessageId)}`,
     ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
     ...(references ? [`References: ${references}`] : []),

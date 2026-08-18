@@ -203,10 +203,46 @@ describe('Gmail threaded replies', () => {
 
     const rawMessage = Buffer.from(request.requestBody.raw, 'base64url').toString('utf-8');
     expect(rawMessage).toContain('From: "Krawl Through Krakow" <pubthroughkrakow@gmail.com>');
+    expect(rawMessage).toContain('Subject: Booking information\r\n');
+    expect(rawMessage).not.toContain('Subject: =?UTF-8?');
     expect(rawMessage).toContain('In-Reply-To: <customer-reply@example.com>');
     expect(rawMessage).toContain(
       'References: <original-message@example.com> <customer-reply@example.com>',
     );
+  });
+
+  it('RFC 2047-encodes non-ASCII subjects without changing their text', async () => {
+    const subject = 'New paid storefront order - Lina Račiūnaitė - PLN\u00a0240.00';
+
+    await sendMessage({
+      to: 'team@example.com',
+      subject,
+      textBody: 'A paid storefront order was confirmed.',
+    });
+
+    const request = mockGmailSend.mock.calls[0][0];
+    const rawMessage = Buffer.from(request.requestBody.raw, 'base64url').toString('utf-8');
+    const foldedSubject = rawMessage.match(/^Subject: ([^\r\n]*(?:\r\n[ \t]+[^\r\n]*)*)/m)?.[1];
+    const encodedSubject = foldedSubject?.replace(/\r\n[ \t]+/g, ' ');
+
+    expect(foldedSubject).toBeDefined();
+    expect(encodedSubject).toBeDefined();
+    expect(encodedSubject).toMatch(
+      /^(?:=\?UTF-8\?B\?[A-Za-z0-9+/]+={0,2}\?=)(?: (?:=\?UTF-8\?B\?[A-Za-z0-9+/]+={0,2}\?=))*$/i,
+    );
+    const encodedWordMatches = Array.from(encodedSubject!.matchAll(/=\?UTF-8\?B\?([^?]+)\?=/gi));
+    expect(encodedWordMatches.length).toBeGreaterThan(1);
+    expect(encodedWordMatches.every((match) => match[0].length <= 75)).toBe(true);
+    expect(
+      `Subject: ${foldedSubject}`
+        .split('\r\n')
+        .every((line) => Buffer.byteLength(line, 'ascii') <= 78),
+    ).toBe(true);
+    expect(
+      encodedWordMatches
+        .map((match) => Buffer.from(match[1], 'base64').toString('utf-8'))
+        .join(''),
+    ).toBe(subject);
   });
 
   it('fails over to the backup Gmail user on a primary-account quota error', async () => {
