@@ -551,7 +551,10 @@ const extractStayDates = (text: string): { checkIn: dayjs.Dayjs | null; checkOut
 };
 
 const extractEarningsTotal = (text: string): { amount: number | null; currency: string | null } => {
-  const totalWithCurrencyMatch = text.match(/Total\s*\(([^)]+)\)\s*([\d.,]+)/i);
+  // Airbnb has placed the currency marker on either side of the amount across template versions.
+  const totalWithCurrencyMatch = text.match(
+    /\bTotal\s*\(\s*([A-Z]{3})\s*\)\s*(?:(?:\1|z[\u0141\u0142l]|[A-Z]{0,2}[$\u20ac\u00a3])\s*)?([\d.,]+)/i,
+  );
   if (totalWithCurrencyMatch) {
     const amount = Number.parseFloat(totalWithCurrencyMatch[2].replace(/,/g, ''));
     const currencyToken = totalWithCurrencyMatch[1].trim();
@@ -564,7 +567,7 @@ const extractEarningsTotal = (text: string): { amount: number | null; currency: 
     };
   }
 
-  const totalMatch = text.match(/Total\s*[:\s]+\s*([\d.,]+)\s*([A-Za-z\u0142$€£]{1,5})/i);
+  const totalMatch = text.match(/\bTotal\s*[:\s]+\s*([\d.,]+)\s*([A-Za-z\u0142$€£]{1,5})/i);
   if (totalMatch) {
     const amount = Number.parseFloat(totalMatch[1].replace(/,/g, ''));
     const money = parseMoney(`${totalMatch[2]} ${totalMatch[1]}`);

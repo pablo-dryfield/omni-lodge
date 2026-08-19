@@ -28,7 +28,87 @@ const MONEY_SYMBOLS: Record<string, string> = {
   '\u00a3': 'GBP',
 };
 
-const FREETOUR_DATE_FORMATS = ['h:mm A MMMM D, YYYY', 'h:mm A MMM D, YYYY', 'h:mm A MMMM D YYYY'];
+const FREETOUR_DATE_FORMATS = [
+  'MMMM D, YYYY',
+  'MMMM DD, YYYY',
+  'MMM D, YYYY',
+  'MMM DD, YYYY',
+  'MMMM D YYYY',
+  'MMMM DD YYYY',
+  'MMM D YYYY',
+  'MMM DD YYYY',
+  'D MMMM YYYY',
+  'DD MMMM YYYY',
+  'D MMM YYYY',
+  'DD MMM YYYY',
+  'D MMMM, YYYY',
+  'DD MMMM, YYYY',
+  'D MMM, YYYY',
+  'DD MMM, YYYY',
+];
+
+const FREETOUR_WEEKDAY_NUMBERS: Record<string, number> = {
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+  sat: 6,
+};
+
+const parseFreeTourExperienceDate = (value: string): dayjs.Dayjs | null => {
+  const normalized = value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  const match = normalized.match(
+    /^(\d{1,2}):(\d{2})\s*(am|pm)\s*,?\s*(?:(Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)\s*,?\s*)?(.+)$/i,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const hour12 = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2], 10);
+  if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) {
+    return null;
+  }
+
+  const dateText = match[5].trim();
+  let parsedCalendarDate: dayjs.Dayjs | null = null;
+  for (const format of FREETOUR_DATE_FORMATS) {
+    const candidate = dayjs(dateText, format, true);
+    if (candidate.isValid()) {
+      parsedCalendarDate = candidate;
+      break;
+    }
+  }
+  if (!parsedCalendarDate) {
+    return null;
+  }
+
+  const weekday = match[4];
+  if (weekday) {
+    const expectedWeekday = FREETOUR_WEEKDAY_NUMBERS[weekday.slice(0, 3).toLowerCase()];
+    if (parsedCalendarDate.day() !== expectedWeekday) {
+      return null;
+    }
+  }
+
+  const marker = match[3].toLowerCase();
+  const hour24 = marker === 'pm' ? (hour12 % 12) + 12 : hour12 % 12;
+  const canonicalDateTime =
+    `${parsedCalendarDate.format('YYYY-MM-DD')} ` +
+    `${String(hour24).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+  try {
+    const zoned = dayjs.tz(canonicalDateTime, 'YYYY-MM-DD HH:mm', FREETOUR_TIMEZONE);
+    if (!zoned.isValid() || zoned.format('YYYY-MM-DD HH:mm') !== canonicalDateTime) {
+      return null;
+    }
+    return zoned;
+  } catch {
+    return null;
+  }
+};
 
 const isPaidReservationSubject = (subject: string): boolean =>
   /paid reservation from freetour\.com/i.test(subject);
@@ -289,25 +369,7 @@ export class FreeTourBookingParser implements BookingEmailParser {
     const size = parsePartySize(adultsRaw);
     const money = parseMoney(paidValue ?? totalCost);
 
-    let normalizedDate = dateRaw ?? null;
-    if (normalizedDate?.includes(',')) {
-      const firstComma = normalizedDate.indexOf(',');
-      normalizedDate = `${normalizedDate.slice(0, firstComma)} ${normalizedDate.slice(firstComma + 1).trim()}`;
-    }
-    let parsedDate: dayjs.Dayjs | null = null;
-    if (normalizedDate) {
-      for (const format of FREETOUR_DATE_FORMATS) {
-        try {
-          const candidate = dayjs.tz(normalizedDate, format, FREETOUR_TIMEZONE);
-          if (candidate.isValid()) {
-            parsedDate = candidate;
-            break;
-          }
-        } catch {
-          // Ignore parse errors for non-standard date tokens and keep trying next format.
-        }
-      }
-    }
+    const parsedDate = dateRaw ? parseFreeTourExperienceDate(dateRaw) : null;
     const nameParts = parseName(bookingName);
     const totalMoney = totalCost ? parseMoney(totalCost) : null;
 
@@ -325,8 +387,8 @@ export class FreeTourBookingParser implements BookingEmailParser {
       priceNet: money.amount ?? totalMoney?.amount ?? null,
       paymentMethod: null,
       notes: language ? `Language: ${language}` : null,
-      experienceDate: parsedDate?.isValid() ? parsedDate.format('YYYY-MM-DD') : null,
-      experienceStartAt: parsedDate?.isValid() ? parsedDate.toDate() : null,
+      experienceDate: parsedDate ? parsedDate.format('YYYY-MM-DD') : null,
+      experienceStartAt: parsedDate ? parsedDate.toDate() : null,
     };
 
     const status = deriveStatusFromContext(context, text);
