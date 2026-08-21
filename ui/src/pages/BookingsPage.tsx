@@ -66,6 +66,7 @@ import { prepareBookingGrid, BookingGrid } from "../utils/prepareBookingGrid";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
+import { serializeProductTypeSelection } from "../utils/productTypeQuery";
 
 const DATE_FORMAT = "YYYY-MM-DD";
 const BookingsExecutiveDashboard = lazy(() => import("../components/bookings/BookingsExecutiveDashboard"));
@@ -688,6 +689,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [summaryCustomDateRange, setSummaryCustomDateRange] = useState<[Date | null, Date | null]>([null, null]);
   const [summaryProductTypeFilters, setSummaryProductTypeFilters] = useState<string[]>([]);
   const [summaryProductTypeOptions, setSummaryProductTypeOptions] = useState<ProductTypeOption[]>([]);
+  const [summaryProductTypeCatalogLoaded, setSummaryProductTypeCatalogLoaded] = useState(false);
   const [rangeAnchor, setRangeAnchor] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [calendarScrollDate, setCalendarScrollDate] = useState<string | null>(null);
@@ -742,7 +744,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   );
   const [isFilterPanelVisible, setIsFilterPanelVisible] = useState(false);
 
-  const suppressEmailUrlSyncRef = useRef(false);
+  const suppressUrlStateSyncRef = useRef(false);
   const suppressEmailPreviewSyncRef = useRef(false);
   const didInitialCalendarTodayScrollRef = useRef(false);
 
@@ -777,19 +779,13 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     () => summaryProductTypeOptions.map((option) => option.value),
     [summaryProductTypeOptions],
   );
-  const summaryProductTypeFilterActive = useMemo(() => {
-    if (summaryProductTypeValues.length === 0 || summaryProductTypeFilters.length === 0) {
-      return false;
-    }
-    const selected = new Set(summaryProductTypeFilters);
-    return summaryProductTypeValues.some((value) => !selected.has(value));
-  }, [summaryProductTypeFilters, summaryProductTypeValues]);
   const summaryProductTypeIdsParam = useMemo(
     () =>
-      summaryProductTypeFilterActive
-        ? [...summaryProductTypeFilters].sort((a, b) => Number(a) - Number(b)).join(",")
-        : undefined,
-    [summaryProductTypeFilterActive, summaryProductTypeFilters],
+      serializeProductTypeSelection(
+        summaryProductTypeFilters,
+        summaryProductTypeCatalogLoaded ? summaryProductTypeValues : [],
+      ),
+    [summaryProductTypeCatalogLoaded, summaryProductTypeFilters, summaryProductTypeValues],
   );
 
   const openManifestForCurrentDate = useCallback(() => {
@@ -847,6 +843,11 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   useEffect(() => {
     dispatch(navigateToPage(title));
   }, [dispatch, title]);
+
+  useEffect(() => {
+    // Hydrate component state from the new location before any state-to-URL writer runs.
+    suppressUrlStateSyncRef.current = true;
+  }, [searchParams]);
 
   useEffect(() => {
     const urlTab = parseTabParam(searchParams.get("tab"));
@@ -916,7 +917,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       threadId: searchParams.get("emailThreadId") ?? "",
       platformOrderId: searchParams.get("emailPlatformOrderId") ?? "",
     };
-    suppressEmailUrlSyncRef.current = true;
     setEmailFilters((prev) => {
       const filtersMatch = (Object.keys(nextFilters) as Array<keyof typeof nextFilters>).every(
         (key) => nextFilters[key] === prev[key],
@@ -978,8 +978,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [activeTab, emailPreviewOpen, handleCloseEmailPreview]);
 
   useEffect(() => {
-    if (suppressEmailUrlSyncRef.current) {
-      suppressEmailUrlSyncRef.current = false;
+    if (suppressUrlStateSyncRef.current) {
+      suppressUrlStateSyncRef.current = false;
       return;
     }
     const nextParams = new URLSearchParams(searchParams);
@@ -1695,6 +1695,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     const controller = new AbortController();
 
     const fetchProductTypes = async () => {
+      const selectedFromUrl = parseSummaryProductTypesParam(
+        summaryProductTypesParam,
+        summaryProductTypeParam,
+      );
       try {
         const response = await axiosInstance.get("/productTypes", {
           signal: controller.signal,
@@ -1715,17 +1719,21 @@ const BookingsPage = ({ title }: GenericPageProps) => {
           .filter((row): row is ProductTypeOption => row !== null)
           .sort((a: ProductTypeOption, b: ProductTypeOption) => a.label.localeCompare(b.label));
         setSummaryProductTypeOptions(options);
-        const selectedFromUrl = parseSummaryProductTypesParam(
-          summaryProductTypesParam,
-          summaryProductTypeParam,
-        );
+        setSummaryProductTypeCatalogLoaded(true);
         const optionValues = new Set(options.map((option) => option.value));
         const validUrlSelection = selectedFromUrl.filter((value) => optionValues.has(value));
         setSummaryProductTypeFilters(validUrlSelection.length > 0 ? validUrlSelection : options.map((option) => option.value));
       } catch {
         if (!controller.signal.aborted) {
-          setSummaryProductTypeOptions([]);
-          setSummaryProductTypeFilters([]);
+          setSummaryProductTypeOptions((currentOptions) => {
+            const knownValues = new Set(currentOptions.map((option) => option.value));
+            const fallbackOptions = selectedFromUrl
+              .filter((value) => !knownValues.has(value))
+              .map((value) => ({ value, label: `Product type ${value}` }));
+            return fallbackOptions.length > 0
+              ? [...currentOptions, ...fallbackOptions]
+              : currentOptions;
+          });
         }
       }
     };
@@ -2429,6 +2437,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     {summaryDatePreset === "custom" && (
                       <DatePickerInput
                         type="range"
+                        allowSingleDateInRange
                         value={summaryCustomDateRange}
                         onChange={setSummaryCustomDateRange}
                         placeholder="Select custom range"

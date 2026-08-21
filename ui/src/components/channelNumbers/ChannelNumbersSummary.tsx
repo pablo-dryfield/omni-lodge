@@ -50,15 +50,19 @@ import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { selectFinanceAccounts, selectFinanceCategories, selectFinanceClients } from '../../selectors/financeSelectors';
 import { createFinanceTransaction } from '../../actions/financeActions';
 import { setFinanceBasics } from '../../reducers/financeReducer';
-
-type Preset = 'thisMonth' | 'lastMonth' | 'custom';
+import {
+  type ChannelNumbersPreset,
+  type ChannelNumbersUrlSelection,
+  parseChannelNumbersSearchParams,
+  resolveChannelNumbersPresetRange,
+  serializeChannelNumbersSearchParams,
+} from '../../utils/channelNumbersUrlState';
+import { serializeProductTypeSelection } from '../../utils/productTypeQuery';
 
 const DATE_FORMAT = 'YYYY-MM-DD';
 const MAIN_PRODUCT_TYPE_SLUG = 'main product';
 const MAIN_PRODUCT_LABEL = 'Main Product';
 const ACTIVITY_PRODUCT_LABEL = 'Activities';
-const START_DATE_PARAM = 'startDate';
-const END_DATE_PARAM = 'endDate';
 const LEGACY_CUTOFF_DATE = '2025-10-01';
 
 const DETAIL_METRIC_META: Record<
@@ -73,6 +77,8 @@ const DETAIL_METRIC_META: Record<
 };
 
 const normalizeTypeName = (value?: string | null) => (value ?? 'Other').trim().toLowerCase();
+const getProductTypeFilterValue = (typeId: number | string | null, typeName?: string | null) =>
+  typeId != null ? String(typeId) : `name:${normalizeTypeName(typeName ?? 'Other')}`;
 
 const formatDisplayRange = (value: [Date | null, Date | null]) => {
   const [start, end] = value;
@@ -93,6 +99,7 @@ type ProductTypeGroup = {
   id: number | string;
   name: string;
   slug: string;
+  filterValue: string;
   products: ProductGroup[];
 };
 
@@ -182,18 +189,18 @@ const buildProductTypeLookup = (summary: ChannelNumbersSummaryType | null): Prod
   }
 
   summary.products.forEach((product) => {
-    const typeSlug = normalizeTypeName(product.productTypeName ?? 'Other');
-    byId.set(product.id, typeSlug);
-    byName.set(normalizeProductName(product.name), typeSlug);
+    const typeKey = getProductTypeFilterValue(product.productTypeId, product.productTypeName);
+    byId.set(product.id, typeKey);
+    byName.set(normalizeProductName(product.name), typeKey);
   });
 
   summary.addons.forEach((addon) => {
-    const typeSlug = normalizeTypeName(addon.productTypeName ?? 'Other');
+    const typeKey = getProductTypeFilterValue(addon.productTypeId, addon.productTypeName);
     if (addon.productId != null && !byId.has(addon.productId)) {
-      byId.set(addon.productId, typeSlug);
+      byId.set(addon.productId, typeKey);
     }
     if (addon.productName && !byName.has(normalizeProductName(addon.productName))) {
-      byName.set(normalizeProductName(addon.productName), typeSlug);
+      byName.set(normalizeProductName(addon.productName), typeKey);
     }
   });
 
@@ -202,20 +209,20 @@ const buildProductTypeLookup = (summary: ChannelNumbersSummaryType | null): Prod
 
 const filterEntriesBySelectedTypes = (
   entries: ChannelNumbersDetailEntry[],
-  selectedTypeSlugs: Set<string>,
+  selectedTypeKeys: Set<string>,
   lookup: ProductTypeLookup,
 ) => {
-  if (selectedTypeSlugs.size === 0) {
+  if (selectedTypeKeys.size === 0) {
     return entries;
   }
   return entries.filter((entry) => {
     if (entry.productId != null) {
-      const slug = lookup.byId.get(entry.productId);
-      return slug ? selectedTypeSlugs.has(slug) : false;
+      const typeKey = lookup.byId.get(entry.productId);
+      return typeKey ? selectedTypeKeys.has(typeKey) : false;
     }
     if (entry.productName) {
-      const slug = lookup.byName.get(normalizeProductName(entry.productName));
-      return slug ? selectedTypeSlugs.has(slug) : false;
+      const typeKey = lookup.byName.get(normalizeProductName(entry.productName));
+      return typeKey ? selectedTypeKeys.has(typeKey) : false;
     }
     return false;
   });
@@ -238,18 +245,24 @@ const getWeekIndexWithinYear = (date: dayjs.Dayjs, year: number) => {
   return Math.floor(diffDays / 7) + 1;
 };
 
-const buildProductTypeSlugLookup = (summary: ChannelNumbersSummaryType) => {
+const buildProductTypeFilterLookup = (summary: ChannelNumbersSummaryType) => {
   const lookup = new Map<string, string>();
 
   summary.products.forEach((product) => {
-    lookup.set(String(product.id), normalizeTypeName(product.productTypeName ?? 'Other'));
+    lookup.set(
+      String(product.id),
+      getProductTypeFilterValue(product.productTypeId, product.productTypeName),
+    );
   });
 
   summary.addons.forEach((addon) => {
     if (addon.productId != null) {
       const productKey = String(addon.productId);
       if (!lookup.has(productKey)) {
-        lookup.set(productKey, normalizeTypeName(addon.productTypeName ?? 'Other'));
+        lookup.set(
+          productKey,
+          getProductTypeFilterValue(addon.productTypeId, addon.productTypeName),
+        );
       }
     }
   });
@@ -259,7 +272,7 @@ const buildProductTypeSlugLookup = (summary: ChannelNumbersSummaryType) => {
 
 const aggregateMetricsByProductType = (
   summary: ChannelNumbersSummaryType | null,
-  selectedTypeSlugs: Set<string> | null,
+  selectedTypeKeys: Set<string> | null,
 ): AggregatedChannelMetrics => {
   if (!summary) {
     return {
@@ -271,7 +284,7 @@ const aggregateMetricsByProductType = (
     };
   }
 
-  const productTypeByProductKey = buildProductTypeSlugLookup(summary);
+  const productTypeByProductKey = buildProductTypeFilterLookup(summary);
   const excludedNoShowAddonKeys = new Set(
     (summary.addons ?? [])
       .filter((addon) => isExcludedNoShowAddonName(addon.name))
@@ -287,8 +300,9 @@ const aggregateMetricsByProductType = (
     let channelAttendees = 0;
     let channelNoShow = 0;
     Object.entries(channel.products ?? {}).forEach(([productKey, metrics]) => {
-      const productTypeSlug = productTypeByProductKey.get(productKey) ?? normalizeTypeName('Other');
-      if (selectedTypeSlugs && !selectedTypeSlugs.has(productTypeSlug)) {
+      const productTypeKey =
+        productTypeByProductKey.get(productKey) ?? getProductTypeFilterValue(null, 'Other');
+      if (selectedTypeKeys && !selectedTypeKeys.has(productTypeKey)) {
         return;
       }
 
@@ -362,26 +376,12 @@ const ChannelNumbersSummary = () => {
   const accountsState = useAppSelector(selectFinanceAccounts);
   const categoriesState = useAppSelector(selectFinanceCategories);
   const clientsState = useAppSelector(selectFinanceClients);
-  const initialRange = useMemo<[Date | null, Date | null]>(() => {
-    const startParam = searchParams.get(START_DATE_PARAM);
-    const endParam = searchParams.get(END_DATE_PARAM);
-    const parsedStart = startParam ? dayjs(startParam, DATE_FORMAT, true) : null;
-    const parsedEnd = endParam ? dayjs(endParam, DATE_FORMAT, true) : null;
-    if (parsedStart?.isValid() && parsedEnd?.isValid()) {
-      return [parsedStart.toDate(), parsedEnd.toDate()];
-    }
-    return [dayjs().startOf('month').toDate(), dayjs().endOf('month').toDate()];
-  }, [searchParams]);
-  const initialPreset = useMemo<Preset>(() => {
-    const startParam = searchParams.get(START_DATE_PARAM);
-    const endParam = searchParams.get(END_DATE_PARAM);
-    if (startParam && endParam) {
-      return 'custom';
-    }
-    return 'thisMonth';
-  }, [searchParams]);
-  const [preset, setPreset] = useState<Preset>(initialPreset);
-  const [range, setRange] = useState<[Date | null, Date | null]>(initialRange);
+  const channelUrlState = useMemo(
+    () => parseChannelNumbersSearchParams(searchParams),
+    [searchParams],
+  );
+  const { preset, range } = channelUrlState;
+  const [customRangeDraft, setCustomRangeDraft] = useState<[Date | null, Date | null] | null>(null);
   const [summary, setSummary] = useState<ChannelNumbersSummaryType | null>(null);
   const [previousYearSummary, setPreviousYearSummary] = useState<ChannelNumbersSummaryType | null>(null);
   const [previousYearLoading, setPreviousYearLoading] = useState(false);
@@ -402,7 +402,6 @@ const ChannelNumbersSummary = () => {
   const fullscreenTrendChartAreaRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedProductTypes, setSelectedProductTypes] = useState<string[]>([]);
   const [cashModal, setCashModal] = useState<CashModalState>({
     open: false,
     channel: null,
@@ -428,11 +427,8 @@ const ChannelNumbersSummary = () => {
     if (summary?.endDate) {
       return dayjs(summary.endDate).year();
     }
-    if (range[1]) {
-      return dayjs(range[1]).year();
-    }
-    return dayjs().year();
-  }, [summary?.endDate, range]);
+    return dayjs(channelUrlState.endDate).year();
+  }, [channelUrlState.endDate, summary?.endDate]);
   const trendAddonKeys = useMemo(
     () =>
       (summary?.addons ?? [])
@@ -441,27 +437,62 @@ const ChannelNumbersSummary = () => {
     [summary?.addons],
   );
 
-  const handlePresetChange = useCallback((value: Preset) => {
-    setPreset(value);
-    if (value === 'thisMonth') {
-      setRange([dayjs().startOf('month').toDate(), dayjs().endOf('month').toDate()]);
-      return;
+  const commitUrlState = useCallback(
+    (selection: ChannelNumbersUrlSelection) => {
+      setSearchParams(
+        (currentParams) => serializeChannelNumbersSearchParams(currentParams, selection),
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  useEffect(() => {
+    const canonicalParams = serializeChannelNumbersSearchParams(searchParams, channelUrlState);
+    if (canonicalParams.toString() !== searchParams.toString()) {
+      setSearchParams(canonicalParams, { replace: true });
     }
-    if (value === 'lastMonth') {
-      const lastMonthEnd = dayjs().startOf('month').subtract(1, 'day');
-      setRange([lastMonthEnd.startOf('month').toDate(), lastMonthEnd.endOf('month').toDate()]);
-      return;
-    }
-  }, []);
+  }, [channelUrlState, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    setCustomRangeDraft(null);
+  }, [searchParams]);
+
+  const handlePresetChange = useCallback(
+    (value: ChannelNumbersPreset) => {
+      const nextRange =
+        value === 'custom' ? range : resolveChannelNumbersPresetRange(value);
+      setCustomRangeDraft(null);
+      commitUrlState({
+        preset: value,
+        range: nextRange,
+        productTypeIds: channelUrlState.productTypeIds,
+      });
+    },
+    [channelUrlState.productTypeIds, commitUrlState, range],
+  );
+
+  const handleCustomRangeChange = useCallback(
+    (nextRange: [Date | null, Date | null]) => {
+      setCustomRangeDraft(nextRange);
+      const [start, end] = nextRange;
+      if (!start || !end || end.getTime() < start.getTime()) {
+        return;
+      }
+      commitUrlState({
+        preset: 'custom',
+        range: [start, end],
+        productTypeIds: channelUrlState.productTypeIds,
+      });
+      setCustomRangeDraft(null);
+    },
+    [channelUrlState.productTypeIds, commitUrlState],
+  );
 
   const fetchSummary = useCallback(async (): Promise<ChannelNumbersSummaryType | null> => {
-    const [start, end] = range;
-    if (!start || !end) {
-      return null;
-    }
     const response = await fetchChannelNumbersBootstrap({
-      startDate: dayjs(start).format(DATE_FORMAT),
-      endDate: dayjs(end).format(DATE_FORMAT),
+      startDate: channelUrlState.startDate,
+      endDate: channelUrlState.endDate,
     });
     if (response?.finance) {
       dispatch(
@@ -474,7 +505,7 @@ const ChannelNumbersSummary = () => {
       );
     }
     return response.summary ?? null;
-  }, [dispatch, range]);
+  }, [channelUrlState.endDate, channelUrlState.startDate, dispatch]);
 
   useEffect(() => {
     let isMounted = true;
@@ -645,24 +676,6 @@ const ChannelNumbersSummary = () => {
     };
   }, [chartYear, trendAddonKeys]);
 
-  useEffect(() => {
-    const [start, end] = range;
-    if (!start || !end) {
-      return;
-    }
-    const startValue = dayjs(start).format(DATE_FORMAT);
-    const endValue = dayjs(end).format(DATE_FORMAT);
-    const currentStart = searchParams.get(START_DATE_PARAM);
-    const currentEnd = searchParams.get(END_DATE_PARAM);
-    if (currentStart === startValue && currentEnd === endValue) {
-      return;
-    }
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set(START_DATE_PARAM, startValue);
-    nextParams.set(END_DATE_PARAM, endValue);
-    setSearchParams(nextParams, { replace: true });
-  }, [range, searchParams, setSearchParams]);
-
   const productTypeGroups = useMemo<ProductTypeGroup[]>(() => {
     if (!summary) {
       return [];
@@ -706,19 +719,21 @@ const ChannelNumbersSummary = () => {
     const groups = new Map<string, ProductTypeGroup>();
     const ensureGroup = (typeId: number | string | null, typeName: string | null): ProductTypeGroup => {
       const slug = normalizeTypeName(typeName ?? 'Other');
-      if (!groups.has(slug)) {
-        groups.set(slug, {
+      const filterValue = getProductTypeFilterValue(typeId, typeName);
+      if (!groups.has(filterValue)) {
+        groups.set(filterValue, {
           id: typeId ?? slug,
           name: typeName ?? 'Other',
           slug,
+          filterValue,
           products: [],
         });
       }
-      return groups.get(slug)!;
+      return groups.get(filterValue)!;
     };
 
     rawProducts.forEach((product) => {
-      const group = ensureGroup(product.productTypeId ?? `type-${product.id}`, product.productTypeName ?? null);
+      const group = ensureGroup(product.productTypeId, product.productTypeName ?? null);
       const addons =
         (product.addonKeys ?? [])
           .map((key) => addonLookup.get(key))
@@ -732,10 +747,12 @@ const ChannelNumbersSummary = () => {
     });
 
     if (groups.size === 0) {
-      groups.set(MAIN_PRODUCT_TYPE_SLUG, {
+      const defaultFilterValue = getProductTypeFilterValue(null, MAIN_PRODUCT_LABEL);
+      groups.set(defaultFilterValue, {
         id: MAIN_PRODUCT_TYPE_SLUG,
         name: MAIN_PRODUCT_LABEL,
         slug: MAIN_PRODUCT_TYPE_SLUG,
+        filterValue: defaultFilterValue,
         products: [
           {
             id: 'default-main',
@@ -779,10 +796,43 @@ const ChannelNumbersSummary = () => {
       });
   }, [summary]);
 
-  const selectableProductTypes = useMemo(() => {
-    const names = new Set(productTypeGroups.map((group) => group.name));
-    return Array.from(names);
-  }, [productTypeGroups]);
+  const productTypeOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    productTypeGroups.forEach((group) => options.set(group.filterValue, group.name));
+    (summary?.productTypes ?? []).forEach((productType) => {
+      const value = getProductTypeFilterValue(productType.id, productType.name);
+      if (!options.has(value)) {
+        options.set(value, productType.name);
+      }
+    });
+    return Array.from(options, ([value, label]) => ({ value, label }));
+  }, [productTypeGroups, summary?.productTypes]);
+
+  const availableProductTypeIds = useMemo(
+    () => productTypeOptions.map((option) => option.value),
+    [productTypeOptions],
+  );
+
+  const selectedProductTypeIds = useMemo(() => {
+    if (!channelUrlState.productTypeIds || availableProductTypeIds.length === 0) {
+      return availableProductTypeIds;
+    }
+    const requested = new Set(channelUrlState.productTypeIds);
+    const validSelection = availableProductTypeIds.filter((value) => requested.has(value));
+    return validSelection.length > 0 ? validSelection : availableProductTypeIds;
+  }, [availableProductTypeIds, channelUrlState.productTypeIds]);
+
+  const handleProductTypeChange = useCallback(
+    (values: string[]) => {
+      const productTypeParam = serializeProductTypeSelection(values, availableProductTypeIds);
+      commitUrlState({
+        preset,
+        range,
+        productTypeIds: productTypeParam ? productTypeParam.split(',') : null,
+      });
+    },
+    [availableProductTypeIds, commitUrlState, preset, range],
+  );
 
   const accountOptions = useMemo(
     () =>
@@ -836,46 +886,31 @@ const ChannelNumbersSummary = () => {
     return incomeCategoryOptions[0].value;
   }, [incomeCategoryOptions]);
 
-  useEffect(() => {
-    if (selectableProductTypes.length === 0) {
-      setSelectedProductTypes([]);
-      return;
-    }
-    setSelectedProductTypes((prev) => {
-      const prevKey = [...prev].sort().join('|');
-      const nextKey = [...selectableProductTypes].sort().join('|');
-      if (prevKey === nextKey) {
-        return prev;
-      }
-      return selectableProductTypes;
-    });
-  }, [selectableProductTypes]);
-
   const visibleTypeGroups = useMemo(() => {
-    if (selectedProductTypes.length === 0) {
+    if (selectedProductTypeIds.length === 0) {
       return productTypeGroups;
     }
-    const selected = new Set(selectedProductTypes);
-    return productTypeGroups.filter((group) => selected.has(group.name));
-  }, [productTypeGroups, selectedProductTypes]);
+    const selected = new Set(selectedProductTypeIds);
+    return productTypeGroups.filter((group) => selected.has(group.filterValue));
+  }, [productTypeGroups, selectedProductTypeIds]);
 
   const totalTypeColumns = useMemo(
     () => visibleTypeGroups.reduce((sum, group) => sum + getTypeColumnCount(group), 0),
     [visibleTypeGroups],
   );
-  const selectedTypeSlugs = useMemo(
-    () => new Set(selectedProductTypes.map((name) => normalizeTypeName(name))),
-    [selectedProductTypes],
+  const selectedTypeKeys = useMemo(
+    () => new Set(selectedProductTypeIds),
+    [selectedProductTypeIds],
   );
   const isProductTypeFilterActive = useMemo(() => {
-    if (selectedTypeSlugs.size === 0 || selectableProductTypes.length === 0) {
+    if (!channelUrlState.productTypeIds || availableProductTypeIds.length === 0) {
       return false;
     }
-    return selectableProductTypes.some((typeName) => !selectedTypeSlugs.has(normalizeTypeName(typeName)));
-  }, [selectableProductTypes, selectedTypeSlugs]);
+    return availableProductTypeIds.some((value) => !selectedTypeKeys.has(value));
+  }, [availableProductTypeIds, channelUrlState.productTypeIds, selectedTypeKeys]);
   const currentAggregates = useMemo(
-    () => aggregateMetricsByProductType(summary, selectedTypeSlugs.size > 0 ? selectedTypeSlugs : null),
-    [summary, selectedTypeSlugs],
+    () => aggregateMetricsByProductType(summary, isProductTypeFilterActive ? selectedTypeKeys : null),
+    [isProductTypeFilterActive, selectedTypeKeys, summary],
   );
   const currentProductTypeLookup = useMemo(() => buildProductTypeLookup(summary), [summary]);
   const previousProductTypeLookup = useMemo(
@@ -885,74 +920,74 @@ const ChannelNumbersSummary = () => {
   const filteredAttendeesCurrent = useMemo(
     () =>
       isProductTypeFilterActive
-        ? filterEntriesBySelectedTypes(attendeesEntriesCurrent, selectedTypeSlugs, currentProductTypeLookup)
+        ? filterEntriesBySelectedTypes(attendeesEntriesCurrent, selectedTypeKeys, currentProductTypeLookup)
         : attendeesEntriesCurrent,
-    [attendeesEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeSlugs],
+    [attendeesEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeKeys],
   );
   const filteredAttendeesPrevious = useMemo(
     () =>
       isProductTypeFilterActive
-        ? filterEntriesBySelectedTypes(attendeesEntriesPrevious, selectedTypeSlugs, previousProductTypeLookup)
+        ? filterEntriesBySelectedTypes(attendeesEntriesPrevious, selectedTypeKeys, previousProductTypeLookup)
         : attendeesEntriesPrevious,
-    [attendeesEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeSlugs],
+    [attendeesEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeKeys],
   );
   const filteredNoShowCurrent = useMemo(
     () =>
       isProductTypeFilterActive
-        ? filterEntriesBySelectedTypes(noShowEntriesCurrent, selectedTypeSlugs, currentProductTypeLookup)
+        ? filterEntriesBySelectedTypes(noShowEntriesCurrent, selectedTypeKeys, currentProductTypeLookup)
         : noShowEntriesCurrent,
-    [currentProductTypeLookup, isProductTypeFilterActive, noShowEntriesCurrent, selectedTypeSlugs],
+    [currentProductTypeLookup, isProductTypeFilterActive, noShowEntriesCurrent, selectedTypeKeys],
   );
   const filteredNoShowPrevious = useMemo(
     () =>
       isProductTypeFilterActive
-        ? filterEntriesBySelectedTypes(noShowEntriesPrevious, selectedTypeSlugs, previousProductTypeLookup)
+        ? filterEntriesBySelectedTypes(noShowEntriesPrevious, selectedTypeKeys, previousProductTypeLookup)
         : noShowEntriesPrevious,
-    [isProductTypeFilterActive, noShowEntriesPrevious, previousProductTypeLookup, selectedTypeSlugs],
+    [isProductTypeFilterActive, noShowEntriesPrevious, previousProductTypeLookup, selectedTypeKeys],
   );
   const filteredAddonAttendeesCurrent = useMemo(
     () =>
       isProductTypeFilterActive
         ? filterEntriesBySelectedTypes(
             addonAttendeesEntriesCurrent,
-            selectedTypeSlugs,
+            selectedTypeKeys,
             currentProductTypeLookup,
           )
         : addonAttendeesEntriesCurrent,
-    [addonAttendeesEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeSlugs],
+    [addonAttendeesEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeKeys],
   );
   const filteredAddonAttendeesPrevious = useMemo(
     () =>
       isProductTypeFilterActive
         ? filterEntriesBySelectedTypes(
             addonAttendeesEntriesPrevious,
-            selectedTypeSlugs,
+            selectedTypeKeys,
             previousProductTypeLookup,
           )
         : addonAttendeesEntriesPrevious,
-    [addonAttendeesEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeSlugs],
+    [addonAttendeesEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeKeys],
   );
   const filteredAddonNoShowCurrent = useMemo(
     () =>
       isProductTypeFilterActive
         ? filterEntriesBySelectedTypes(
             addonNoShowEntriesCurrent,
-            selectedTypeSlugs,
+            selectedTypeKeys,
             currentProductTypeLookup,
           )
         : addonNoShowEntriesCurrent,
-    [addonNoShowEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeSlugs],
+    [addonNoShowEntriesCurrent, currentProductTypeLookup, isProductTypeFilterActive, selectedTypeKeys],
   );
   const filteredAddonNoShowPrevious = useMemo(
     () =>
       isProductTypeFilterActive
         ? filterEntriesBySelectedTypes(
             addonNoShowEntriesPrevious,
-            selectedTypeSlugs,
+            selectedTypeKeys,
             previousProductTypeLookup,
           )
         : addonNoShowEntriesPrevious,
-    [addonNoShowEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeSlugs],
+    [addonNoShowEntriesPrevious, isProductTypeFilterActive, previousProductTypeLookup, selectedTypeKeys],
   );
   const filteredTotalNoShowCurrent = useMemo(
     () => [...filteredNoShowCurrent, ...filteredAddonNoShowCurrent],
@@ -1709,7 +1744,7 @@ const ChannelNumbersSummary = () => {
                 <Button
                   size={isMobile ? 'sm' : 'xs'}
                   variant={preset === 'custom' ? 'filled' : 'light'}
-                  onClick={() => setPreset('custom')}
+                  onClick={() => handlePresetChange('custom')}
                 >
                   Custom
                 </Button>
@@ -1722,8 +1757,8 @@ const ChannelNumbersSummary = () => {
               {preset === 'custom' ? (
                 <DatePickerInput
                   type="range"
-                  value={range}
-                  onChange={setRange}
+                  value={customRangeDraft ?? range}
+                  onChange={handleCustomRangeChange}
                   maxDate={dayjs().endOf('day').toDate()}
                   placeholder="Select range"
                   allowSingleDateInRange
@@ -1736,12 +1771,12 @@ const ChannelNumbersSummary = () => {
               )}
             </Box>
           </Group>
-          {selectableProductTypes.length > 0 && (
+          {productTypeOptions.length > 0 && (
             <MultiSelect
               label="Product types"
-              data={selectableProductTypes.map((type) => ({ label: type, value: type }))}
-              value={selectedProductTypes}
-              onChange={setSelectedProductTypes}
+              data={productTypeOptions}
+              value={selectedProductTypeIds}
+              onChange={handleProductTypeChange}
               placeholder="Select product types"
               clearable
               size={isMobile ? 'sm' : 'md'}
@@ -1994,7 +2029,7 @@ const ChannelNumbersSummary = () => {
                     </th>
                     {visibleTypeGroups.map((group, groupIndex) => (
                       <th
-                        key={`type-${group.slug}`}
+                        key={`type-${group.filterValue}`}
                         colSpan={getTypeColumnCount(group)}
                         style={{
                           ...mergeCellStyles({
@@ -2025,7 +2060,7 @@ const ChannelNumbersSummary = () => {
                     {visibleTypeGroups.flatMap((group, groupIndex) =>
                       group.products.map((product, productIndex) => (
                         <th
-                          key={`product-${group.slug}-${product.slug}`}
+                          key={`product-${group.filterValue}-${product.slug}`}
                           colSpan={getProductColumnCount(product)}
                           style={{
                             ...mergeCellStyles({
@@ -2053,7 +2088,7 @@ const ChannelNumbersSummary = () => {
                         product.addons.length > 0
                           ? [
                               <th
-                                key={`label-normal-${group.slug}-${product.slug}`}
+                                key={`label-normal-${group.filterValue}-${product.slug}`}
                                 style={{
                                   ...mergeCellStyles({ textAlign: 'center', fontWeight: 600 }),
                                   borderLeft: EMPHASIS_BORDER,
@@ -2063,7 +2098,7 @@ const ChannelNumbersSummary = () => {
                                 Normal
                               </th>,
                               <th
-                                key={`label-nonshow-${group.slug}-${product.slug}`}
+                                key={`label-nonshow-${group.filterValue}-${product.slug}`}
                                 style={mergeCellStyles(
                                   { textAlign: 'center', fontWeight: 600, borderBottom: EMPHASIS_BORDER },
                                   NO_LEFT_BORDER,
@@ -2073,7 +2108,7 @@ const ChannelNumbersSummary = () => {
                               </th>,
                               ...product.addons.flatMap((addon, addonIndex) => [
                                 <th
-                                  key={`label-addon-${group.slug}-${product.slug}-${addon.key}`}
+                                  key={`label-addon-${group.filterValue}-${product.slug}-${addon.key}`}
                                   style={mergeCellStyles({
                                     textAlign: 'center',
                                     fontWeight: 600,
@@ -2083,7 +2118,7 @@ const ChannelNumbersSummary = () => {
                                   {addon.name}
                                 </th>,
                                 <th
-                                  key={`label-addon-nonshow-${group.slug}-${product.slug}-${addon.key}`}
+                                  key={`label-addon-nonshow-${group.filterValue}-${product.slug}-${addon.key}`}
                                   style={mergeCellStyles(
                                     {
                                       textAlign: 'center',
@@ -2104,7 +2139,7 @@ const ChannelNumbersSummary = () => {
                             ]
                           : [
                                 <th
-                                  key={`label-quantity-${group.slug}-${product.slug}`}
+                                  key={`label-quantity-${group.filterValue}-${product.slug}`}
                                   style={{
                                     ...mergeCellStyles({ textAlign: 'center', fontWeight: 600 }),
                                     borderLeft: EMPHASIS_BORDER,
@@ -2114,7 +2149,7 @@ const ChannelNumbersSummary = () => {
                                   Quantity
                                 </th>,
                                 <th
-                                  key={`label-quantity-nonshow-${group.slug}-${product.slug}`}
+                                  key={`label-quantity-nonshow-${group.filterValue}-${product.slug}`}
                                   style={mergeCellStyles(
                                     {
                                       textAlign: 'center',
@@ -2169,7 +2204,7 @@ const ChannelNumbersSummary = () => {
                                     });
                                     return [
                                       <td
-                                        key={`normal-${group.slug}-${product.slug}-${channel.channelId}`}
+                                        key={`normal-${group.filterValue}-${product.slug}-${channel.channelId}`}
                                         style={mergeCellStyles({
                                           fontWeight:
                                             group.slug === MAIN_PRODUCT_TYPE_SLUG && normalValue > 0 ? 600 : undefined,
@@ -2179,14 +2214,14 @@ const ChannelNumbersSummary = () => {
                                         {renderValue(normalValue, normalContext)}
                                       </td>,
                                       <td
-                                        key={`nonshow-${group.slug}-${product.slug}-${channel.channelId}`}
+                                        key={`nonshow-${group.filterValue}-${product.slug}-${channel.channelId}`}
                                         style={mergeCellStyles(NO_LEFT_BORDER)}
                                       >
                                         {renderValue(nonShowValue, nonShowContext)}
                                       </td>,
                                       ...product.addons.flatMap((addon, addonIndex) => [
                                         <td
-                                          key={`addon-${group.slug}-${product.slug}-${addon.key}-${channel.channelId}`}
+                                          key={`addon-${group.filterValue}-${product.slug}-${addon.key}-${channel.channelId}`}
                                           style={mergeCellStyles()}
                                         >
                                           {renderValue(
@@ -2199,7 +2234,7 @@ const ChannelNumbersSummary = () => {
                                           )}
                                         </td>,
                                         <td
-                                          key={`addon-nonshow-${group.slug}-${product.slug}-${addon.key}-${channel.channelId}`}
+                                          key={`addon-nonshow-${group.filterValue}-${product.slug}-${addon.key}-${channel.channelId}`}
                                           style={mergeCellStyles(
                                             NO_LEFT_BORDER,
                                             isLastProductInGroup &&
@@ -2232,7 +2267,7 @@ const ChannelNumbersSummary = () => {
                                   });
                                   return [
                                     <td
-                                      key={`quantity-${group.slug}-${product.slug}-${channel.channelId}`}
+                                      key={`quantity-${group.filterValue}-${product.slug}-${channel.channelId}`}
                                       style={mergeCellStyles(
                                         { borderLeft: EMPHASIS_BORDER },
                                       )}
@@ -2240,7 +2275,7 @@ const ChannelNumbersSummary = () => {
                                       {renderValue(getQuantityForProduct(product, productMetrics), quantityContext)}
                                     </td>,
                                     <td
-                                      key={`quantity-nonshow-${group.slug}-${product.slug}-${channel.channelId}`}
+                                      key={`quantity-nonshow-${group.filterValue}-${product.slug}-${channel.channelId}`}
                                       style={mergeCellStyles(
                                         NO_LEFT_BORDER,
                                         isLastProductInGroup && groupIndex !== visibleTypeGroups.length - 1
@@ -2306,7 +2341,7 @@ const ChannelNumbersSummary = () => {
                             const nonShowTotal = productTotals?.nonShow ?? 0;
                             return [
                               <td
-                                key={`total-normal-${group.slug}-${product.slug}`}
+                                key={`total-normal-${group.filterValue}-${product.slug}`}
                                 style={mergeCellStyles({ borderTop: EMPHASIS_BORDER, borderLeft: EMPHASIS_BORDER })}
                               >
                                 {renderValue(
@@ -2318,7 +2353,7 @@ const ChannelNumbersSummary = () => {
                                 )}
                               </td>,
                               <td
-                                key={`total-nonshow-${group.slug}-${product.slug}`}
+                                key={`total-nonshow-${group.filterValue}-${product.slug}`}
                                 style={mergeCellStyles({ borderTop: EMPHASIS_BORDER }, NO_LEFT_BORDER)}
                               >
                                 {renderValue(
@@ -2331,7 +2366,7 @@ const ChannelNumbersSummary = () => {
                               </td>,
                               ...product.addons.flatMap((addon, addonIndex) => [
                                 <td
-                                  key={`total-addon-${group.slug}-${product.slug}-${addon.key}`}
+                                  key={`total-addon-${group.filterValue}-${product.slug}-${addon.key}`}
                                   style={mergeCellStyles({ borderTop: EMPHASIS_BORDER })}
                                 >
                                   {renderValue(
@@ -2344,7 +2379,7 @@ const ChannelNumbersSummary = () => {
                                   )}
                                 </td>,
                                 <td
-                                  key={`total-addon-nonshow-${group.slug}-${product.slug}-${addon.key}`}
+                                  key={`total-addon-nonshow-${group.filterValue}-${product.slug}-${addon.key}`}
                                   style={mergeCellStyles(
                                     { borderTop: EMPHASIS_BORDER },
                                     NO_LEFT_BORDER,
@@ -2370,7 +2405,7 @@ const ChannelNumbersSummary = () => {
                           }
                           return [
                             <td
-                              key={`total-quantity-${group.slug}-${product.slug}`}
+                              key={`total-quantity-${group.filterValue}-${product.slug}`}
                               style={mergeCellStyles(
                                 { borderTop: EMPHASIS_BORDER, borderLeft: EMPHASIS_BORDER },
                               )}
@@ -2384,7 +2419,7 @@ const ChannelNumbersSummary = () => {
                                 )}
                             </td>,
                             <td
-                              key={`total-quantity-nonshow-${group.slug}-${product.slug}`}
+                              key={`total-quantity-nonshow-${group.filterValue}-${product.slug}`}
                               style={mergeCellStyles(
                                 { borderTop: EMPHASIS_BORDER },
                                 NO_LEFT_BORDER,
