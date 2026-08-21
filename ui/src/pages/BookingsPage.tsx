@@ -66,7 +66,10 @@ import { prepareBookingGrid, BookingGrid } from "../utils/prepareBookingGrid";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
-import { serializeProductTypeSelection } from "../utils/productTypeQuery";
+import {
+  resolveBookingsSummaryProductTypeValues,
+  serializeProductTypeSelection,
+} from "../utils/productTypeQuery";
 
 const DATE_FORMAT = "YYYY-MM-DD";
 const BookingsExecutiveDashboard = lazy(() => import("../components/bookings/BookingsExecutiveDashboard"));
@@ -784,6 +787,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       serializeProductTypeSelection(
         summaryProductTypeFilters,
         summaryProductTypeCatalogLoaded ? summaryProductTypeValues : [],
+        { omitWhenAllSelected: false },
       ),
     [summaryProductTypeCatalogLoaded, summaryProductTypeFilters, summaryProductTypeValues],
   );
@@ -1693,6 +1697,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     }
 
     const controller = new AbortController();
+    setFetchStatus("loading");
+    setErrorMessage(null);
 
     const fetchProductTypes = async () => {
       const selectedFromUrl = parseSummaryProductTypesParam(
@@ -1719,10 +1725,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
           .filter((row): row is ProductTypeOption => row !== null)
           .sort((a: ProductTypeOption, b: ProductTypeOption) => a.label.localeCompare(b.label));
         setSummaryProductTypeOptions(options);
+        const hasExplicitUrlSelection =
+          summaryProductTypesParam !== null || summaryProductTypeParam !== null;
+        setSummaryProductTypeFilters(
+          resolveBookingsSummaryProductTypeValues(
+            options,
+            selectedFromUrl,
+            hasExplicitUrlSelection,
+          ),
+        );
         setSummaryProductTypeCatalogLoaded(true);
-        const optionValues = new Set(options.map((option) => option.value));
-        const validUrlSelection = selectedFromUrl.filter((value) => optionValues.has(value));
-        setSummaryProductTypeFilters(validUrlSelection.length > 0 ? validUrlSelection : options.map((option) => option.value));
       } catch {
         if (!controller.signal.aborted) {
           setSummaryProductTypeOptions((currentOptions) => {
@@ -1734,6 +1746,13 @@ const BookingsPage = ({ title }: GenericPageProps) => {
               ? [...currentOptions, ...fallbackOptions]
               : currentOptions;
           });
+          if (selectedFromUrl.length > 0) {
+            setSummaryProductTypeFilters(selectedFromUrl);
+            setSummaryProductTypeCatalogLoaded(true);
+          } else {
+            setFetchStatus("error");
+            setErrorMessage("Failed to load product types for the Summary filter.");
+          }
         }
       }
     };
@@ -1756,6 +1775,9 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       return;
     }
     if (activeTab !== "calendar" && activeTab !== "summary") {
+      return;
+    }
+    if (activeTab === "summary" && !summaryProductTypeCatalogLoaded) {
       return;
     }
 
@@ -1964,6 +1986,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     effectiveRangeEnd,
     bookingsDateField,
     activeTab,
+    summaryProductTypeCatalogLoaded,
     summaryProductTypeIdsParam,
     reloadToken,
   ]);
