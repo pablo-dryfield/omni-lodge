@@ -61,6 +61,7 @@ import type {
   PlatformBreakdownEntry,
 } from '../types/booking.js';
 import { groupOrdersForManifest, transformEcwidOrders } from '../utils/ecwidAdapter.js';
+import { normalizeBookingExtrasSnapshot as normalizeExtras } from '../utils/bookingExtras.js';
 import {
   BOOKING_ATTENDANCE_STATUSES,
   BOOKING_STATUSES,
@@ -1461,57 +1462,6 @@ const pickPrimaryEcwidOrder = (orders: UnifiedOrder[]): UnifiedOrder | null => {
   return withMoment[0]?.order ?? orders[0];
 };
 
-const normalizeExtras = (snapshot: unknown): OrderExtras => {
-  if (!snapshot || typeof snapshot !== 'object') {
-    return { tshirts: 0, cocktails: 0, photos: 0 };
-  }
-  const extras = (snapshot as { extras?: Partial<OrderExtras> }).extras;
-  if (extras) {
-    return {
-      tshirts: Number(extras.tshirts) || 0,
-      cocktails: Number(extras.cocktails) || 0,
-      photos: Number(extras.photos) || 0,
-    };
-  }
-
-  const normalized: OrderExtras = { tshirts: 0, cocktails: 0, photos: 0 };
-  const addons = (snapshot as { addons?: unknown }).addons;
-  if (!Array.isArray(addons)) {
-    return normalized;
-  }
-
-  addons.forEach((addon) => {
-    if (!addon || typeof addon !== 'object') {
-      return;
-    }
-    const record = addon as Record<string, unknown>;
-    const quantity = Math.max(0, Math.round(Number(record.quantity) || 0));
-    if (quantity <= 0) {
-      return;
-    }
-    const keyParts = [record.category, record.label, record.name, record.key]
-      .map((value) => String(value ?? '').toLowerCase())
-      .join(' ');
-    if (keyParts.includes('cocktail') || keyParts.includes('drink')) {
-      normalized.cocktails += quantity;
-      return;
-    }
-    if (keyParts.includes('shirt')) {
-      normalized.tshirts += quantity;
-      return;
-    }
-    if (keyParts.includes('photo')) {
-      normalized.photos += quantity;
-    }
-  });
-
-  return {
-    tshirts: normalized.tshirts,
-    cocktails: normalized.cocktails,
-    photos: normalized.photos,
-  };
-};
-
 const normalizeAttendedExtras = (snapshot: unknown): OrderExtras => {
   if (!snapshot || typeof snapshot !== 'object') {
     return { tshirts: 0, cocktails: 0, photos: 0 };
@@ -1568,11 +1518,8 @@ const removeAddonFromBookingSnapshot = (
     booking.addonsSnapshot && typeof booking.addonsSnapshot === 'object'
       ? { ...(booking.addonsSnapshot as Record<string, unknown>) }
       : {};
-  const extras =
-    snapshot.extras && typeof snapshot.extras === 'object'
-      ? { ...(snapshot.extras as Record<string, unknown>) }
-      : {};
-  const current = Math.max(0, Math.round(Number(extras[addonKey] ?? 0) || 0));
+  const extras = normalizeExtras(snapshot);
+  const current = Math.max(0, Math.round(Number(extras[addonKey]) || 0));
   const consumed = Math.min(current, requested);
   if (consumed <= 0) {
     return 0;

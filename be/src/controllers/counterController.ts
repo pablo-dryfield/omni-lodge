@@ -23,6 +23,7 @@ import { deleteNightReportPhoto as removeNightReportFile } from '../services/nig
 import { createEcwidBatchRequest, type EcwidBatchRequestItem } from '../services/ecwidService.js';
 import { type BookingAttendanceStatus, type BookingStatus } from '../constants/bookings.js';
 import { reconcileCounterInventory } from '../services/inventoryService.js';
+import { normalizeBookingExtrasSnapshot as normalizeBookingExtras } from '../utils/bookingExtras.js';
 
 const REGISTRY_FORMAT = 'registry';
 const DEFAULT_ATTENDANCE_STATUS: BookingAttendanceStatus = 'pending';
@@ -187,21 +188,6 @@ function parseBodyAsArray(payload: unknown): MetricInput[] {
       qty: Number(typed.qty),
     } satisfies MetricInput;
   });
-}
-
-function normalizeBookingExtras(snapshot: unknown): BookingAttendanceExtras {
-  if (!snapshot || typeof snapshot !== 'object') {
-    return { tshirts: 0, cocktails: 0, photos: 0 };
-  }
-  const extras = (snapshot as { extras?: Partial<BookingAttendanceExtras> }).extras;
-  if (!extras) {
-    return { tshirts: 0, cocktails: 0, photos: 0 };
-  }
-  return {
-    tshirts: Number(extras.tshirts) || 0,
-    cocktails: Number(extras.cocktails) || 0,
-    photos: Number(extras.photos) || 0,
-  };
 }
 
 function normalizeAttendedExtras(snapshot: unknown): BookingAttendanceExtras {
@@ -435,10 +421,7 @@ function removeRefundedAddonsFromSnapshot(
     booking.addonsSnapshot && typeof booking.addonsSnapshot === 'object'
       ? { ...(booking.addonsSnapshot as Record<string, unknown>) }
       : {};
-  const extras =
-    snapshot.extras && typeof snapshot.extras === 'object'
-      ? { ...(snapshot.extras as Record<string, unknown>) }
-      : {};
+  const extras = normalizeBookingExtras(snapshot);
   const consumedByKey: Record<string, number> = {};
 
   (['tshirts', 'cocktails', 'photos'] as const).forEach((key) => {
@@ -446,7 +429,7 @@ function removeRefundedAddonsFromSnapshot(
     if (requested <= 0) {
       return;
     }
-    const current = Math.max(0, Math.round(Number(extras[key] ?? 0) || 0));
+    const current = Math.max(0, Math.round(Number(extras[key]) || 0));
     const consumed = Math.min(current, requested);
     if (consumed <= 0) {
       return;

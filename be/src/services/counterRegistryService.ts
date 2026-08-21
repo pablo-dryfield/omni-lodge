@@ -44,6 +44,7 @@ import {
   type WalkInTicketPriceConfig,
   toAddonConfig,
 } from './counterMetricUtils.js';
+import { normalizeBookingExtrasSnapshot } from '../utils/bookingExtras.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -213,21 +214,6 @@ function getNormalPeopleFromTotal(totalPeople: number, cocktails: number): numbe
     0,
     Math.round(Number(totalPeople) || 0) - Math.max(0, Math.round(Number(cocktails) || 0)),
   );
-}
-
-function normalizeBookingExtrasSnapshot(snapshot: unknown): BookingExtras {
-  if (!snapshot || typeof snapshot !== 'object') {
-    return { tshirts: 0, cocktails: 0, photos: 0 };
-  }
-  const extras = (snapshot as { extras?: Partial<BookingExtras> }).extras;
-  if (!extras || typeof extras !== 'object') {
-    return { tshirts: 0, cocktails: 0, photos: 0 };
-  }
-  return {
-    tshirts: Math.max(0, Math.round(Number(extras.tshirts) || 0)),
-    cocktails: Math.max(0, Math.round(Number(extras.cocktails) || 0)),
-    photos: Math.max(0, Math.round(Number(extras.photos) || 0)),
-  };
 }
 
 function isAfterCutoffBySourceReceivedAt(
