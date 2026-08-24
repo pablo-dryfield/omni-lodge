@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { Op, type Transaction, type WhereOptions } from 'sequelize';
+import { Op, UniqueConstraintError, type Transaction, type WhereOptions } from 'sequelize';
 import type { Response } from 'express';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
@@ -13,6 +13,7 @@ import User from '../models/User.js';
 import UserType from '../models/UserType.js';
 import ShiftAssignment from '../models/ShiftAssignment.js';
 import ShiftInstance from '../models/ShiftInstance.js';
+import ShiftTemplate from '../models/ShiftTemplate.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
 import CerebroEntry from '../models/CerebroEntry.js';
@@ -30,6 +31,31 @@ import { getConfigValue } from '../services/configService.js';
 import {
   reconcileNightReportTaskWaiversForRange,
 } from '../services/assistantManagerTaskWaiverService.js';
+import {
+  buildTaskDateGenerationCandidates,
+  normalizeRequiredShiftTemplateIds,
+  normalizeScheduledWorkdayPlacement,
+  resolveAssigneeShiftRequirement,
+  selectScheduledCandidatesForWeek,
+  taskDateMatchesRequiredShiftTemplates,
+  type TaskDateGenerationCandidate,
+} from '../services/assistantManagerTaskScheduleRuleService.js';
+import {
+  mergeAssistantManagerTaskBulkOptions,
+  parseAssistantManagerTaskBulkOptionsPayload,
+} from '../services/assistantManagerTaskBulkOptionsService.js';
+import {
+  MANAGER_TASK_OVERRIDE_META_KEY,
+  applyManagerTaskOverride,
+  buildAssistantManagerTaskGenerationSourceKey,
+  getManagerTaskOverrideSourceKey,
+  isSelfServiceAssistantManagerTaskLogMetaPayload,
+  parseManagedAssistantManagerTaskLogPatch,
+} from '../services/assistantManagerTaskLogManagementService.js';
+import {
+  filterExpectedEvidenceItemsForCurrentShiftSources,
+  retainEvidenceSubjectForConfiguredShiftRule,
+} from '../services/assistantManagerTaskEvidenceSubjectService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -138,6 +164,10 @@ type ScheduledShiftCandidate = {
   shiftInfo: ShiftDayInfo;
 };
 
+type GeneratedTaskCandidate = TaskDateGenerationCandidate<ShiftDayInfo> & {
+  taskDate: string;
+};
+
 type ShiftEvidenceSourceConfig = {
   key: string;
   label: string;
@@ -159,13 +189,12 @@ type AssistantManagerTaskExpectedEvidenceItem = {
 type PlannedGeneratedLog = {
   template: AssistantManagerTaskTemplate;
   assignment: AssistantManagerTaskAssignment;
-  candidate: ScheduledShiftCandidate;
+  candidate: GeneratedTaskCandidate;
   taskDate: string;
   expectedEvidenceItems: AssistantManagerTaskExpectedEvidenceItem[];
 };
 
-const buildTaskLogKey = (templateId: number, userId: number, taskDate: string) =>
-  `${templateId}:${userId}:${taskDate}`;
+const buildTaskLogKey = buildAssistantManagerTaskGenerationSourceKey;
 
 type ManualTaskPayload = {
   templateId: number | null;
@@ -595,6 +624,27 @@ const sanitizeTemplatePayload = (body: Record<string, unknown>) => {
         next.scheduleConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY],
       );
     }
+    if ('requiredShiftTemplateIds' in next.scheduleConfig) {
+      const requiredShiftTemplateIds = normalizeRequiredShiftTemplateIds(
+        next.scheduleConfig.requiredShiftTemplateIds,
+      );
+      if (requiredShiftTemplateIds.length > 0) {
+        next.scheduleConfig.requiredShiftTemplateIds = requiredShiftTemplateIds;
+      } else {
+        delete next.scheduleConfig.requiredShiftTemplateIds;
+      }
+    }
+    if ('scheduledWorkdayPlacement' in next.scheduleConfig) {
+      const rawPlacement = next.scheduleConfig.scheduledWorkdayPlacement;
+      const scheduledWorkdayPlacement = normalizeScheduledWorkdayPlacement(rawPlacement);
+      if (
+        typeof rawPlacement !== 'string' ||
+        !['start', 'middle', 'end'].includes(rawPlacement.trim().toLowerCase())
+      ) {
+        throw new HttpError(400, 'scheduleConfig.scheduledWorkdayPlacement is invalid');
+      }
+      next.scheduleConfig.scheduledWorkdayPlacement = scheduledWorkdayPlacement;
+    }
   }
   if (body.isActive != null) {
     next.isActive = Boolean(body.isActive);
@@ -984,11 +1034,7 @@ const sanitizeScheduleConfigMeta = (config: Record<string, unknown>, shiftTime?:
 };
 
 const getRequireShiftFlag = (template: AssistantManagerTaskTemplate): boolean => {
-  const config = template.scheduleConfig ?? {};
-  if (config.requireShift === false || config.allowOffDays === true || config.requireScheduledShift === false) {
-    return false;
-  }
-  return true;
+  return resolveAssigneeShiftRequirement(template.scheduleConfig);
 };
 
 const getTimesPerWeekPerAssignedUser = (template: AssistantManagerTaskTemplate): number | null => {
@@ -1005,6 +1051,28 @@ const getTimesPerWeekPerAssignedUser = (template: AssistantManagerTaskTemplate):
   }
 
   return raw;
+};
+
+const getRequiredShiftTemplateIds = (template: AssistantManagerTaskTemplate): number[] =>
+  normalizeRequiredShiftTemplateIds(template.scheduleConfig?.requiredShiftTemplateIds);
+
+const ensureRequiredShiftTemplatesExist = async (
+  scheduleConfig?: Record<string, unknown>,
+  transaction?: Transaction,
+) => {
+  const requiredShiftTemplateIds = normalizeRequiredShiftTemplateIds(
+    scheduleConfig?.requiredShiftTemplateIds,
+  );
+  if (requiredShiftTemplateIds.length === 0) {
+    return;
+  }
+  const existingCount = await ShiftTemplate.count({
+    where: { id: { [Op.in]: requiredShiftTemplateIds } },
+    transaction,
+  });
+  if (existingCount !== requiredShiftTemplateIds.length) {
+    throw new HttpError(400, 'One or more required shift templates were not found');
+  }
 };
 
 const buildShiftMeta = (shiftInfo: ShiftDayInfo | null, requireShift: boolean) => {
@@ -1026,7 +1094,7 @@ const buildShiftAvailabilityMap = async (
   userId: number,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-  timezoneName = resolveTaskPlannerTimezone(),
+  _timezoneName = resolveTaskPlannerTimezone(),
 ) => {
   const assignments = await ShiftAssignment.findAll({
     where: { userId },
@@ -1048,7 +1116,7 @@ const buildShiftAvailabilityMap = async (
   assignments.forEach((assignment) => {
     const instance = assignment.shiftInstance;
     if (instance?.date) {
-      const dateKey = dayjs(instance.date).tz(timezoneName).format('YYYY-MM-DD');
+      const dateKey = String(instance.date).slice(0, 10);
       map.set(dateKey, {
         shiftInstanceId: instance.id,
         shiftAssignmentId: assignment.id,
@@ -1081,7 +1149,7 @@ const getShiftInfoForUserOnDate = async (
 const buildScheduledShiftCandidateMap = async (
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-  timezoneName = resolveTaskPlannerTimezone(),
+  _timezoneName = resolveTaskPlannerTimezone(),
 ) => {
   const assignments = await ShiftAssignment.findAll({
     include: [
@@ -1120,7 +1188,7 @@ const buildScheduledShiftCandidateMap = async (
       return;
     }
 
-    const dateKey = dayjs(instance.date).tz(timezoneName).format('YYYY-MM-DD');
+    const dateKey = String(instance.date).slice(0, 10);
     const userName =
       `${assignee.firstName ?? ''} ${assignee.lastName ?? ''}`.trim() ||
       `User #${assignee.id}`;
@@ -1143,6 +1211,35 @@ const buildScheduledShiftCandidateMap = async (
       },
     });
     map.set(dateKey, candidates);
+  });
+
+  return map;
+};
+
+const buildScheduledShiftTemplateIdsByDate = async (
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+  _timezoneName = resolveTaskPlannerTimezone(),
+) => {
+  const shiftInstances = await ShiftInstance.findAll({
+    attributes: ['date', 'shiftTemplateId'],
+    where: {
+      date: {
+        [Op.between]: [rangeStart.format('YYYY-MM-DD'), rangeEnd.format('YYYY-MM-DD')],
+      },
+      shiftTemplateId: { [Op.ne]: null },
+    },
+  });
+  const map = new Map<string, Set<number>>();
+
+  shiftInstances.forEach((instance) => {
+    if (!instance.date || !instance.shiftTemplateId) {
+      return;
+    }
+    const dateKey = String(instance.date).slice(0, 10);
+    const templateIds = map.get(dateKey) ?? new Set<number>();
+    templateIds.add(instance.shiftTemplateId);
+    map.set(dateKey, templateIds);
   });
 
   return map;
@@ -1454,11 +1551,15 @@ const resolveLogExpectedEvidenceItems = (
   log: AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null },
   scheduledShiftCandidatesByDate?: Map<string, ScheduledShiftCandidate[]>,
 ) => {
-  const storedExpected = getNormalizedExpectedEvidenceItems((log.meta ?? {})['expectedEvidenceItems']);
+  const shiftEvidenceSources = getShiftEvidenceSources(log.template);
+  const storedExpected = filterExpectedEvidenceItemsForCurrentShiftSources(
+    getNormalizedExpectedEvidenceItems((log.meta ?? {})['expectedEvidenceItems']),
+    shiftEvidenceSources,
+  );
   if (storedExpected.length > 0) {
     return storedExpected;
   }
-  if (!log.template) {
+  if (!log.template || shiftEvidenceSources.length === 0) {
     return [];
   }
 
@@ -2012,10 +2113,57 @@ const planGeneratedLogsForAssignments = async (
   rangeEnd: dayjs.Dayjs,
 ) => {
   const plannedEntries = new Map<string, PlannedGeneratedLog>();
-  const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
-    rangeStart,
-    rangeEnd,
+  const scheduleLookupStart = startOfPlannerWeek(rangeStart).startOf('day');
+  const scheduleLookupEnd = startOfPlannerWeek(rangeEnd).add(6, 'day').endOf('day');
+  const needsOffShiftAudience = assignments.some(
+    (assignment) =>
+      assignment.isActive !== false &&
+      assignment.template?.isActive !== false &&
+      assignment.template != null &&
+      !getRequireShiftFlag(assignment.template),
   );
+  const [
+    scheduledShiftCandidatesByDate,
+    scheduledShiftTemplateIdsByDate,
+    activeAudienceUsers,
+  ] = await Promise.all([
+    buildScheduledShiftCandidateMap(scheduleLookupStart, scheduleLookupEnd),
+    buildScheduledShiftTemplateIdsByDate(scheduleLookupStart, scheduleLookupEnd),
+    needsOffShiftAudience
+      ? User.findAll({ where: { status: true }, attributes: ['id'] })
+      : Promise.resolve([] as User[]),
+  ]);
+  const activeAudienceUserIds = new Set(activeAudienceUsers.map((user) => user.id));
+  const audienceCaches = {
+    staffTypeCache: new Map<string, number[]>(),
+    userTypeCache: new Map<number, number[]>(),
+    shiftRoleCache: new Map<number, number[]>(),
+  };
+
+  const getTaskDateCandidates = ({
+    assignment,
+    taskDate,
+    requireShift,
+    audienceUserIds,
+  }: {
+    assignment: AssistantManagerTaskAssignment;
+    taskDate: string;
+    requireShift: boolean;
+    audienceUserIds: number[];
+  }): GeneratedTaskCandidate[] => {
+    const scheduledCandidates = scheduledShiftCandidatesByDate.get(taskDate) ?? [];
+    const eligibleScheduledCandidates = requireShift
+      ? scheduledCandidates.filter((candidate) =>
+          matchesScheduledShiftCandidate(assignment, candidate),
+        )
+      : scheduledCandidates;
+
+    return buildTaskDateGenerationCandidates({
+      requireShift,
+      scheduledCandidates: eligibleScheduledCandidates,
+      audienceUserIds,
+    }).map((candidate) => ({ ...candidate, taskDate }));
+  };
 
   const queueGeneratedLog = ({
     template,
@@ -2025,7 +2173,7 @@ const planGeneratedLogsForAssignments = async (
   }: {
     template: AssistantManagerTaskTemplate;
     assignment: AssistantManagerTaskAssignment;
-    candidate: ScheduledShiftCandidate;
+    candidate: GeneratedTaskCandidate;
     taskDate: string;
   }) => {
     const key = buildTaskLogKey(template.id, candidate.userId, taskDate);
@@ -2048,12 +2196,27 @@ const planGeneratedLogsForAssignments = async (
       continue;
     }
     const weeklyQuota = getTimesPerWeekPerAssignedUser(template);
+    const requiredShiftTemplateIds = getRequiredShiftTemplateIds(template);
+    const requireShift = getRequireShiftFlag(template);
+    const audienceUserIds = requireShift
+      ? []
+      : (await resolveAssignmentUsers(assignment, audienceCaches)).filter((userId) =>
+          activeAudienceUserIds.has(userId),
+        );
+
+    if (!requireShift && audienceUserIds.length === 0) {
+      continue;
+    }
 
     if (
       weeklyQuota &&
       (template.cadence === 'weekly' || template.cadence === 'biweekly')
     ) {
-      const assignmentWindow = getAssignmentWindow(assignment, rangeStart, rangeEnd);
+      const assignmentWindow = getAssignmentWindow(
+        assignment,
+        scheduleLookupStart,
+        scheduleLookupEnd,
+      );
       if (!assignmentWindow) {
         continue;
       }
@@ -2071,19 +2234,24 @@ const planGeneratedLogsForAssignments = async (
           ? assignmentWindow.end
           : weekEnd;
 
-        const candidatesByUser = new Map<number, ScheduledShiftCandidate[]>();
+        const candidatesByUser = new Map<number, GeneratedTaskCandidate[]>();
         let dateCursor = boundedWeekStart.clone();
 
         while (!dateCursor.isAfter(boundedWeekEnd, 'day')) {
           const taskDate = dateCursor.format('YYYY-MM-DD');
-          const matchingCandidates = (scheduledShiftCandidatesByDate.get(taskDate) ?? []).filter(
-            (candidate) => matchesScheduledShiftCandidate(assignment, candidate),
-          );
-          const uniqueMatchingCandidates = Array.from(
-            new Map(matchingCandidates.map((candidate) => [candidate.userId, candidate])).values(),
-          );
+          const taskDateCandidates = taskDateMatchesRequiredShiftTemplates(
+            requiredShiftTemplateIds,
+            scheduledShiftTemplateIdsByDate.get(taskDate),
+          )
+            ? getTaskDateCandidates({
+                assignment,
+                taskDate,
+                requireShift,
+                audienceUserIds,
+              })
+            : [];
 
-          uniqueMatchingCandidates.forEach((candidate) => {
+          taskDateCandidates.forEach((candidate) => {
             const entries = candidatesByUser.get(candidate.userId) ?? [];
             entries.push(candidate);
             candidatesByUser.set(candidate.userId, entries);
@@ -2093,21 +2261,33 @@ const planGeneratedLogsForAssignments = async (
         }
 
         for (const candidates of candidatesByUser.values()) {
-          const selectedCandidates = Array.from(
+          const uniqueCandidates = Array.from(
             new Map(
               candidates
-                .sort((left, right) => left.shiftInfo.date.localeCompare(right.shiftInfo.date))
-                .map((candidate) => [candidate.shiftInfo.date, candidate]),
+                .sort((left, right) => left.taskDate.localeCompare(right.taskDate))
+                .map((candidate) => [candidate.taskDate, candidate]),
             ).values(),
-          )
-            .slice(0, weeklyQuota);
+          );
+          const selectedCandidates = selectScheduledCandidatesForWeek(
+            uniqueCandidates,
+            weeklyQuota,
+            normalizeScheduledWorkdayPlacement(template.scheduleConfig?.scheduledWorkdayPlacement),
+            (candidate) => candidate.taskDate,
+          );
 
           for (const candidate of selectedCandidates) {
+            const selectedTaskDate = dayjs(candidate.taskDate);
+            if (
+              selectedTaskDate.isBefore(rangeStart, 'day') ||
+              selectedTaskDate.isAfter(rangeEnd, 'day')
+            ) {
+              continue;
+            }
             queueGeneratedLog({
               template,
               assignment,
               candidate,
-              taskDate: candidate.shiftInfo.date,
+              taskDate: candidate.taskDate,
             });
           }
         }
@@ -2124,12 +2304,18 @@ const planGeneratedLogsForAssignments = async (
     }
 
     for (const taskDate of dates) {
-      const candidatesForDate = (scheduledShiftCandidatesByDate.get(taskDate) ?? []).filter(
-        (candidate) => matchesScheduledShiftCandidate(assignment, candidate),
-      );
-      const uniqueCandidatesForDate = Array.from(
-        new Map(candidatesForDate.map((candidate) => [candidate.userId, candidate])).values(),
-      );
+      if (!taskDateMatchesRequiredShiftTemplates(
+        requiredShiftTemplateIds,
+        scheduledShiftTemplateIdsByDate.get(taskDate),
+      )) {
+        continue;
+      }
+      const uniqueCandidatesForDate = getTaskDateCandidates({
+        assignment,
+        taskDate,
+        requireShift,
+        audienceUserIds,
+      });
 
       if (uniqueCandidatesForDate.length === 0) {
         continue;
@@ -2157,6 +2343,35 @@ const planGeneratedLogsForAssignments = async (
   });
 };
 
+const loadManagerOverrideGenerationKeys = async (templateIds: number[]) => {
+  const sourceKeys = new Set<string>();
+  const currentKeys = new Set<string>();
+  if (templateIds.length === 0) {
+    return { sourceKeys, currentKeys };
+  }
+
+  const overrideLogs = await AssistantManagerTaskLog.findAll({
+    where: {
+      templateId: { [Op.in]: templateIds },
+      meta: {
+        [Op.contains]: { [MANAGER_TASK_OVERRIDE_META_KEY]: {} },
+      },
+    },
+    attributes: ['templateId', 'userId', 'taskDate', 'meta'],
+  });
+
+  overrideLogs.forEach((log) => {
+    const sourceKey = getManagerTaskOverrideSourceKey(log.meta);
+    if (!sourceKey) {
+      return;
+    }
+    sourceKeys.add(sourceKey);
+    currentKeys.add(buildTaskLogKey(log.templateId, log.userId, log.taskDate));
+  });
+
+  return { sourceKeys, currentKeys };
+};
+
 const summarizePlannedLogsForRange = async (
   plannedEntries: PlannedGeneratedLog[],
   rangeStart: dayjs.Dayjs,
@@ -2179,19 +2394,24 @@ const summarizePlannedLogsForRange = async (
 
   let existingKeySet = new Set<string>();
   if (templateIds.length > 0) {
-    const existingLogs = await AssistantManagerTaskLog.findAll({
-      where: {
-        templateId: { [Op.in]: templateIds },
-        taskDate: {
-          [Op.between]: [rangeStart.format('YYYY-MM-DD'), rangeEnd.format('YYYY-MM-DD')],
+    const [existingLogs, managerOverrideKeys] = await Promise.all([
+      AssistantManagerTaskLog.findAll({
+        where: {
+          templateId: { [Op.in]: templateIds },
+          taskDate: {
+            [Op.between]: [rangeStart.format('YYYY-MM-DD'), rangeEnd.format('YYYY-MM-DD')],
+          },
         },
-      },
-      attributes: ['templateId', 'userId', 'taskDate'],
-    });
+        attributes: ['templateId', 'userId', 'taskDate'],
+      }),
+      loadManagerOverrideGenerationKeys(templateIds),
+    ]);
 
     existingKeySet = new Set(
       existingLogs.map((log) => buildTaskLogKey(log.templateId, log.userId, log.taskDate)),
     );
+    managerOverrideKeys.sourceKeys.forEach((key) => existingKeySet.add(key));
+    managerOverrideKeys.currentKeys.forEach((key) => existingKeySet.add(key));
   }
 
   plannedEntries.forEach((entry) => {
@@ -2240,12 +2460,23 @@ const generateLogsForAssignments = async (
       buildTaskLogKey(entry.template.id, entry.candidate.userId, entry.taskDate),
     ),
   );
+  const managerOverrideKeys = await loadManagerOverrideGenerationKeys(
+    Array.from(new Set(plannedEntries.map((entry) => entry.template.id))),
+  );
   let createdCount = 0;
   let updatedCount = 0;
   let unchangedCount = 0;
 
   for (const entry of plannedEntries) {
     const { template, assignment, candidate, taskDate, expectedEvidenceItems } = entry;
+    const generationSourceKey = buildTaskLogKey(template.id, candidate.userId, taskDate);
+    if (
+      managerOverrideKeys.sourceKeys.has(generationSourceKey) ||
+      managerOverrideKeys.currentKeys.has(generationSourceKey)
+    ) {
+      unchangedCount += 1;
+      continue;
+    }
     const requireShift = getRequireShiftFlag(template);
     const shiftInfo = candidate.shiftInfo;
     const shiftTime = shiftInfo?.timeStart ? normalizeTimeValue(shiftInfo.timeStart) : null;
@@ -2291,6 +2522,10 @@ const generateLogsForAssignments = async (
     }
 
     const existingMeta = (log.meta ?? {}) as Record<string, unknown>;
+    if (getManagerTaskOverrideSourceKey(existingMeta)) {
+      unchangedCount += 1;
+      continue;
+    }
     let shouldUpdateMeta = false;
     Object.entries(shiftMeta).forEach(([key, value]) => {
       if (existingMeta[key] !== value) {
@@ -2515,6 +2750,7 @@ export const createTaskTemplate = async (req: AuthenticatedRequest, res: Respons
       return;
     }
     const payload = sanitizeTemplatePayload(req.body ?? {});
+    await ensureRequiredShiftTemplatesExist(payload.scheduleConfig);
     if (!payload.name) {
       res.status(400).json([{ message: 'name is required' }]);
       return;
@@ -2543,8 +2779,128 @@ export const createTaskTemplate = async (req: AuthenticatedRequest, res: Respons
     });
     res.status(201).json([{ data: refreshed ? [formatTemplate(refreshed as AssistantManagerTaskTemplate & { assignments?: AssistantManagerTaskAssignment[] })] : [] }]);
   } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
     console.error('Failed to create assistant manager task template', error);
     res.status(500).json([{ message: 'Failed to create task template' }]);
+  }
+};
+
+export const bulkUpdateTaskTemplateOptions = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const { templateIds, options } = parseAssistantManagerTaskBulkOptionsPayload(req.body);
+    const sequelize = AssistantManagerTaskTemplate.sequelize;
+    if (!sequelize) {
+      res.status(500).json([{ message: 'Database connection is not available' }]);
+      return;
+    }
+
+    const actorId = getActorId(req);
+    const refreshedTemplates = await sequelize.transaction(async (transaction) => {
+      const templates = await AssistantManagerTaskTemplate.findAll({
+        where: { id: { [Op.in]: templateIds } },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+
+      if (templates.length !== templateIds.length) {
+        throw new HttpError(404, 'One or more task templates were not found');
+      }
+
+      if (options.scheduledWorkdayPlacement !== undefined) {
+        const incompatibleTemplate = templates.find(
+          (template) =>
+            (template.cadence !== 'weekly' && template.cadence !== 'biweekly') ||
+            getTimesPerWeekPerAssignedUser(template) == null,
+        );
+        if (incompatibleTemplate) {
+          throw new HttpError(
+            400,
+            `"${incompatibleTemplate.name}" must be weekly or twice weekly and have a weekly limit before eligible-day placement can be changed`,
+          );
+        }
+      }
+
+      if (options.completionWindowMode === 'strict') {
+        const incompatibleTemplate = templates.find(
+          (template) => getScheduleWindow(template) == null,
+        );
+        if (incompatibleTemplate) {
+          throw new HttpError(
+            400,
+            `"${incompatibleTemplate.name}" needs a valid start time and duration before strict completion can be enabled`,
+          );
+        }
+      }
+
+      if (options.requiredShiftTemplateIds !== undefined) {
+        await ensureRequiredShiftTemplatesExist(
+          { requiredShiftTemplateIds: options.requiredShiftTemplateIds },
+          transaction,
+        );
+      }
+
+      for (const template of templates) {
+        await template.update(
+          {
+            scheduleConfig: mergeAssistantManagerTaskBulkOptions(
+              template.scheduleConfig,
+              options,
+            ),
+            updatedBy: actorId,
+          },
+          { transaction },
+        );
+      }
+
+      const refreshed = await AssistantManagerTaskTemplate.findAll({
+        where: { id: { [Op.in]: templateIds } },
+        include: [
+          {
+            model: AssistantManagerTaskAssignment,
+            as: 'assignments',
+            include: taskAssignmentInclude,
+          },
+        ],
+        transaction,
+      });
+      if (refreshed.length !== templateIds.length) {
+        throw new Error('Failed to refresh every updated task template');
+      }
+
+      const refreshedById = new Map(refreshed.map((template) => [template.id, template]));
+      return templateIds.map((templateId) => refreshedById.get(templateId)!);
+    });
+
+    res.status(200).json([
+      {
+        data: refreshedTemplates.map((template) =>
+          formatTemplate(
+            template as AssistantManagerTaskTemplate & {
+              assignments?: AssistantManagerTaskAssignment[];
+            },
+          ),
+        ),
+        columns: [],
+      },
+    ]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    console.error('Failed to bulk update assistant manager task template options', error);
+    res.status(500).json([{ message: 'Failed to bulk update task template options' }]);
   }
 };
 
@@ -2567,6 +2923,7 @@ export const updateTaskTemplate = async (req: AuthenticatedRequest, res: Respons
       return;
     }
     const payload = sanitizeTemplatePayload(req.body ?? {});
+    await ensureRequiredShiftTemplatesExist(payload.scheduleConfig);
     const actorId = getActorId(req);
     payload.updatedBy = actorId;
     const candidateTemplate = AssistantManagerTaskTemplate.build(
@@ -2603,6 +2960,10 @@ export const updateTaskTemplate = async (req: AuthenticatedRequest, res: Respons
     });
     res.status(200).json([{ data: refreshed ? [formatTemplate(refreshed as AssistantManagerTaskTemplate & { assignments?: AssistantManagerTaskAssignment[] })] : [] }]);
   } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
     console.error('Failed to update assistant manager task template', error);
     res.status(500).json([{ message: 'Failed to update task template' }]);
   }
@@ -2672,6 +3033,7 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
             updatedCount: 0,
             unchangedCount: 0,
             skippedManualCount: 0,
+            skippedManagerOverrideCount: 0,
             skippedMissingTemplateCount: 0,
             skippedInvalidDateCount: 0,
           },
@@ -2716,11 +3078,16 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
     let updatedCount = 0;
     let unchangedCount = 0;
     let skippedManualCount = 0;
+    let skippedManagerOverrideCount = 0;
     let skippedMissingTemplateCount = 0;
     let skippedInvalidDateCount = 0;
 
     for (const log of logs) {
       const existingMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
+      if (getManagerTaskOverrideSourceKey(existingMeta)) {
+        skippedManagerOverrideCount += 1;
+        continue;
+      }
       if (Boolean(existingMeta.manual)) {
         skippedManualCount += 1;
         continue;
@@ -2815,6 +3182,7 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
           updatedCount,
           unchangedCount,
           skippedManualCount,
+          skippedManagerOverrideCount,
           skippedMissingTemplateCount,
           skippedInvalidDateCount,
         },
@@ -3783,15 +4151,18 @@ export const uploadTaskLogEvidenceImage = async (
       throw new HttpError(400, 'ruleKey is required');
     }
     const subjectUserIdRaw = req.body?.subjectUserId;
-    const subjectUserId =
+    const requestedSubjectUserId =
       subjectUserIdRaw == null || subjectUserIdRaw === ''
         ? null
         : Number(subjectUserIdRaw);
-    const subjectName =
+    const requestedSubjectName =
       typeof req.body?.subjectName === 'string' && req.body.subjectName.trim()
         ? req.body.subjectName.trim()
         : null;
-    if (subjectUserId != null && (!Number.isInteger(subjectUserId) || subjectUserId <= 0)) {
+    if (
+      requestedSubjectUserId != null &&
+      (!Number.isInteger(requestedSubjectUserId) || requestedSubjectUserId <= 0)
+    ) {
       throw new HttpError(400, 'subjectUserId must be a positive integer');
     }
 
@@ -3802,6 +4173,12 @@ export const uploadTaskLogEvidenceImage = async (
     if (rule.type !== 'image') {
       throw new HttpError(400, 'Selected evidence rule does not accept images');
     }
+    const { subjectUserId, subjectName } = retainEvidenceSubjectForConfiguredShiftRule({
+      ruleKey,
+      shiftEvidenceSources: getShiftEvidenceSources(log.template),
+      subjectUserId: requestedSubjectUserId,
+      subjectName: requestedSubjectName,
+    });
 
     await ensureAssistantManagerTaskEvidenceStorage();
     const stored = await storeAssistantManagerTaskEvidenceImage({
@@ -3987,6 +4364,183 @@ export const downloadTaskLogEvidenceImage = async (
   }
 };
 
+export const manageTaskLog = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+
+    const logId = Number(req.params.id);
+    if (!Number.isInteger(logId) || logId <= 0) {
+      throw new HttpError(400, 'Invalid task log id');
+    }
+    const payload = parseManagedAssistantManagerTaskLogPatch(req.body);
+    const sequelize = AssistantManagerTaskLog.sequelize;
+    if (!sequelize) {
+      throw new HttpError(500, 'Database connection is not available');
+    }
+
+    const actorId = getActorId(req);
+    const formattedLog = await sequelize.transaction(async (transaction) => {
+      const log = await AssistantManagerTaskLog.findByPk(logId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!log) {
+        throw new HttpError(404, 'Task log not found');
+      }
+
+      const nextUserId = payload.userId ?? log.userId;
+      const nextTaskDate = payload.taskDate ?? log.taskDate;
+      const userChanged = nextUserId !== log.userId;
+      const taskDateChanged = nextTaskDate !== log.taskDate;
+
+      const targetUser = await User.findOne({
+        where: { id: nextUserId, status: true, approved: true },
+        attributes: ['id'],
+        transaction,
+      });
+      if (!targetUser) {
+        throw new HttpError(400, 'Target user must be active and approved');
+      }
+
+      if (userChanged || taskDateChanged) {
+        const collision = await AssistantManagerTaskLog.findOne({
+          where: {
+            id: { [Op.ne]: log.id },
+            templateId: log.templateId,
+            userId: nextUserId,
+            taskDate: nextTaskDate,
+          },
+          attributes: ['id'],
+          transaction,
+        });
+        if (collision) {
+          throw new HttpError(409, 'A task for this template, user, and date already exists');
+        }
+      }
+
+      const template = await AssistantManagerTaskTemplate.findByPk(log.templateId, {
+        attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'],
+        transaction,
+      });
+      if (!template) {
+        throw new HttpError(404, 'Task template not found');
+      }
+
+      const taskDay = dayjs(nextTaskDate);
+      const [shiftInfo, scheduledShiftCandidatesByDate] = await Promise.all([
+        getShiftInfoForUserOnDate(
+          nextUserId,
+          nextTaskDate,
+          taskDay.startOf('day'),
+          taskDay.endOf('day'),
+        ),
+        buildScheduledShiftCandidateMap(taskDay.startOf('day'), taskDay.endOf('day')),
+      ]);
+
+      let meta = { ...(log.meta ?? {}) } as Record<string, unknown>;
+      const previousTime = normalizeTimeValue(meta.time);
+      if (payload.time !== undefined) {
+        meta.time = payload.time;
+      }
+      if (payload.durationHours !== undefined) {
+        meta.durationHours = payload.durationHours;
+      }
+      if (payload.priority !== undefined) {
+        meta.priority = payload.priority;
+      }
+      if (payload.points !== undefined) {
+        meta.points = payload.points;
+      }
+      if (payload.tags !== undefined) {
+        meta.tags = [...payload.tags];
+      }
+
+      const effectiveRequireShift =
+        payload.requireShift ??
+        (typeof meta.requireShift === 'boolean'
+          ? meta.requireShift
+          : getRequireShiftFlag(template));
+      const expectedEvidenceItems = buildExpectedEvidenceItemsForDate(
+        template,
+        nextTaskDate,
+        scheduledShiftCandidatesByDate,
+      );
+      if (expectedEvidenceItems.length > 0) {
+        meta.expectedEvidenceItems = expectedEvidenceItems;
+      } else {
+        delete meta.expectedEvidenceItems;
+      }
+      Object.assign(meta, buildShiftMeta(shiftInfo, effectiveRequireShift));
+
+      const nextTime = normalizeTimeValue(meta.time);
+      if (userChanged || taskDateChanged || previousTime !== nextTime) {
+        delete meta.pushNotificationEvents;
+      }
+      if (!Boolean(meta.manual)) {
+        meta = applyManagerTaskOverride(
+          meta,
+          buildTaskLogKey(log.templateId, log.userId, log.taskDate),
+          actorId,
+        );
+      }
+
+      const updatePayload: Partial<AssistantManagerTaskLog> = {
+        userId: nextUserId,
+        taskDate: nextTaskDate,
+        assignmentId: userChanged ? null : log.assignmentId,
+        meta,
+        updatedBy: actorId,
+      };
+      if (payload.notes !== undefined) {
+        updatePayload.notes = payload.notes;
+      }
+      await log.update(updatePayload, { transaction });
+
+      const refreshed = await AssistantManagerTaskLog.findByPk(log.id, {
+        include: [
+          {
+            model: AssistantManagerTaskTemplate,
+            as: 'template',
+            attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'],
+          },
+          { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+        ],
+        transaction,
+      });
+      if (!refreshed) {
+        throw new Error('Failed to refresh updated task log');
+      }
+
+      return formatLogWithLiveExpectedEvidenceItems(
+        refreshed as AssistantManagerTaskLog & {
+          template?: AssistantManagerTaskTemplate | null;
+          user?: User | null;
+        },
+        scheduledShiftCandidatesByDate,
+      );
+    });
+
+    res.status(200).json([{ data: [formattedLog], columns: [] }]);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    if (error instanceof UniqueConstraintError) {
+      res.status(409).json([{ message: 'A task for this template, user, and date already exists' }]);
+      return;
+    }
+    console.error('Failed to manage assistant manager task log', error);
+    res.status(500).json([{ message: 'Failed to edit task log' }]);
+  }
+};
+
 export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const logId = Number(req.params.id);
@@ -4005,8 +4559,15 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
       return;
     }
     const actorId = getActorId(req);
-    if (!canViewAllTaskLogs(req) && actorId !== log.userId) {
+    const allowGlobalEdit = canViewAllTaskLogs(req);
+    if (!allowGlobalEdit && actorId !== log.userId) {
       res.status(403).json([{ message: 'Forbidden' }]);
+      return;
+    }
+    if (!allowGlobalEdit && !isSelfServiceAssistantManagerTaskLogMetaPayload(req.body)) {
+      res.status(403).json([{
+        message: 'Only comments and evidence can be edited on your own task',
+      }]);
       return;
     }
     let payload: MetaUpdatePayload;
@@ -4016,7 +4577,9 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
       res.status(400).json([{ message: error instanceof Error ? error.message : 'Invalid payload' }]);
       return;
     }
-    const isEvidenceUpdate = Object.prototype.hasOwnProperty.call(payload.metaPatch, 'evidenceItems');
+    const isEvidenceUpdate =
+      Object.prototype.hasOwnProperty.call(payload.metaPatch, 'evidenceItems') ||
+      Object.prototype.hasOwnProperty.call(payload.metaPatch, 'evidence');
     if (isEvidenceUpdate && !canEditTaskLogEvidence(log)) {
       res.status(400).json([{ message: 'Evidence can only be edited for pending tasks on the current day' }]);
       return;
@@ -4062,45 +4625,47 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
     if (payload.taskDate) {
       nextTaskDate = payload.taskDate;
     }
-    const day = dayjs(nextTaskDate);
-    const baseRequireShift =
-      typeof meta['requireShift'] === 'boolean'
-        ? Boolean(meta['requireShift'])
-        : log.template
-          ? getRequireShiftFlag(log.template)
-          : false;
-    const effectiveRequireShift =
-      payload.requireShift != null ? Boolean(payload.requireShift) : baseRequireShift;
-    const shiftInfo = await getShiftInfoForUserOnDate(
-      log.userId,
-      nextTaskDate,
-      day.startOf('day'),
-      day.endOf('day'),
-    );
-    const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
-      day.startOf('day'),
-      day.endOf('day'),
-    );
-    if (log.template) {
-      const expectedEvidenceItems = buildExpectedEvidenceItemsForDate(
-        log.template,
+    if (allowGlobalEdit) {
+      const day = dayjs(nextTaskDate);
+      const baseRequireShift =
+        typeof meta['requireShift'] === 'boolean'
+          ? Boolean(meta['requireShift'])
+          : log.template
+            ? getRequireShiftFlag(log.template)
+            : false;
+      const effectiveRequireShift =
+        payload.requireShift != null ? Boolean(payload.requireShift) : baseRequireShift;
+      const shiftInfo = await getShiftInfoForUserOnDate(
+        log.userId,
         nextTaskDate,
-        scheduledShiftCandidatesByDate,
+        day.startOf('day'),
+        day.endOf('day'),
       );
-      if (expectedEvidenceItems.length > 0) {
-        meta['expectedEvidenceItems'] = expectedEvidenceItems;
+      const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
+        day.startOf('day'),
+        day.endOf('day'),
+      );
+      if (log.template) {
+        const expectedEvidenceItems = buildExpectedEvidenceItemsForDate(
+          log.template,
+          nextTaskDate,
+          scheduledShiftCandidatesByDate,
+        );
+        if (expectedEvidenceItems.length > 0) {
+          meta['expectedEvidenceItems'] = expectedEvidenceItems;
+        } else {
+          delete meta['expectedEvidenceItems'];
+        }
       } else {
         delete meta['expectedEvidenceItems'];
       }
-    } else {
-      delete meta['expectedEvidenceItems'];
-    }
-    Object.assign(meta, buildShiftMeta(shiftInfo, effectiveRequireShift));
-    if (
-      (!Object.prototype.hasOwnProperty.call(meta, 'time') || meta['time'] == null) &&
-      shiftInfo?.timeStart
-    ) {
-      meta['time'] = normalizeTimeValue(shiftInfo.timeStart);
+      Object.assign(meta, buildShiftMeta(shiftInfo, effectiveRequireShift));
+      if (
+        (!Object.prototype.hasOwnProperty.call(meta, 'time') || meta['time'] == null) &&
+        shiftInfo?.timeStart
+      ) {
+        meta['time'] = normalizeTimeValue(shiftInfo.timeStart);
+      }
     }
     if (payload.comment) {
       const actorName = await getActorIdentity(actorId);
@@ -4134,8 +4699,8 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
       ],
     });
     const refreshedCandidates = await buildScheduledShiftCandidateMap(
-      dayjs(log.taskDate).startOf('day'),
-      dayjs(log.taskDate).endOf('day'),
+      dayjs(nextTaskDate).startOf('day'),
+      dayjs(nextTaskDate).endOf('day'),
     );
     res.status(200).json([
       {

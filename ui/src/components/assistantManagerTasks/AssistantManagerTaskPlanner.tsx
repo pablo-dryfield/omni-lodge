@@ -58,11 +58,14 @@ import {
   IconPencil,
   IconPlus,
   IconRefresh,
+  IconSearch,
   IconTrash,
   IconX,
 } from '@tabler/icons-react';
 import {
   bulkCreateAmTaskAssignments,
+  bulkUpdateAmTaskTemplateOptions,
+  type BulkAmTaskTemplateOptions,
   clearAmTaskLogsForRange,
   createAmTaskAssignment,
   fetchAmTaskCerebroLinkOptions,
@@ -90,19 +93,24 @@ import {
   updateAmTaskAssignment,
   updateAmTaskLogMeta,
   updateAmTaskLogStatus,
+  updateManagedAmTaskLog,
   updateAmTaskTemplate,
 } from '../../actions/assistantManagerTaskActions';
 import { fetchUserTypes } from '../../actions/userTypeActions';
 import { useShiftRoles } from '../../api/shiftRoles';
-import { useShiftTypes } from '../../api/scheduling';
+import { useShiftTemplates, useShiftTypes } from '../../api/scheduling';
 import { useActiveUsers } from '../../api/users';
 import { CerebroRichTextContent } from '../cerebro/CerebroRichTextContent';
 import { useConfigEntry } from '../../api/config';
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { compressImageFile } from '../../utils/imageCompression';
+import {
+  getShiftEvidenceRuleKeys,
+  resolveImageEvidenceSubject,
+} from './assistantManagerTaskEvidenceUtils';
 import type { ShiftRole } from '../../types/shiftRoles/ShiftRole';
-import type { ShiftType } from '../../types/scheduling';
+import type { ShiftTemplate, ShiftType } from '../../types/scheduling';
 import type { ServerResponse } from '../../types/general/ServerResponse';
 import type {
   AssistantManagerTaskAssignment,
@@ -112,6 +120,7 @@ import type {
   AssistantManagerTaskEvidenceRule,
   AssistantManagerTaskLog,
   AssistantManagerTaskLogMeta,
+  ManagedAssistantManagerTaskLogPayload,
   AssistantManagerTaskTemplate,
   ManualAssistantManagerTaskPayload,
   TaskLogMetaUpdatePayload,
@@ -122,6 +131,11 @@ import type { UserType } from '../../types/userTypes/UserType';
 type PlannerPriority = 'high' | 'medium' | 'low';
 type PlannerDateWindowMode = 'day' | 'week' | 'custom';
 type TaskCompletionWindowMode = 'day' | 'strict';
+type ScheduledWorkdayPlacement = 'start' | 'middle' | 'end';
+
+type BulkTemplateOptionMode = 'unchanged' | 'scheduled_only' | 'off_days_allowed';
+type BulkRequiredShiftMode = 'unchanged' | 'replace' | 'remove';
+type BulkScheduledWorkdayPlacement = 'unchanged' | ScheduledWorkdayPlacement;
 
 type TemplateFormState = {
   name: string;
@@ -134,6 +148,8 @@ type TemplateFormState = {
   cadence: AssistantManagerTaskCadence;
   scheduleConfigText: string;
   timesPerWeekPerAssignedUser: string;
+  requiredShiftTemplateIds: string[];
+  scheduledWorkdayPlacement: ScheduledWorkdayPlacement;
   defaultTime: string;
   defaultDuration: string;
   defaultPriority: PlannerPriority;
@@ -159,6 +175,13 @@ type AssignmentFormState = {
   effectiveEnd: string;
 };
 
+type BulkTemplateOptionsFormState = {
+  assigneeSchedule: BulkTemplateOptionMode;
+  requiredShiftMode: BulkRequiredShiftMode;
+  requiredShiftTemplateIds: string[];
+  scheduledWorkdayPlacement: BulkScheduledWorkdayPlacement;
+};
+
 type ManualTaskFormState = {
   templateId: number | null;
   userId: string;
@@ -181,6 +204,18 @@ type LogDetailFormState = {
   priority: PlannerPriority;
   points: string;
   evidenceItems: AssistantManagerTaskEvidenceItem[];
+};
+
+type DashboardTaskEditFormState = {
+  userId: string;
+  taskDate: Date | null;
+  time: string;
+  durationHours: string;
+  priority: PlannerPriority;
+  points: string;
+  tags: string;
+  notes: string;
+  requireShift: boolean;
 };
 
 type EvidenceRuleDraft = {
@@ -275,12 +310,14 @@ const defaultTemplateFormState: TemplateFormState = {
   cadence: 'daily',
   scheduleConfigText: '{}',
   timesPerWeekPerAssignedUser: '',
+  requiredShiftTemplateIds: [],
+  scheduledWorkdayPlacement: 'start',
   defaultTime: '',
   defaultDuration: '',
   defaultPriority: 'medium',
   completionWindowMode: 'day',
   defaultPoints: '',
-  requireShift: false,
+  requireShift: true,
   reminderMinutesBeforeStart: '',
   notifyAtStart: true,
   evidenceRules: [],
@@ -298,6 +335,13 @@ const defaultAssignmentFormState: AssignmentFormState = {
   shiftRoleId: '',
   effectiveStart: '',
   effectiveEnd: '',
+};
+
+const defaultBulkTemplateOptionsFormState: BulkTemplateOptionsFormState = {
+  assigneeSchedule: 'unchanged',
+  requiredShiftMode: 'unchanged',
+  requiredShiftTemplateIds: [],
+  scheduledWorkdayPlacement: 'unchanged',
 };
 
 const STAFF_PROFILE_OPTIONS = [
@@ -403,6 +447,18 @@ const defaultLogDetailFormState: LogDetailFormState = {
   evidenceItems: [],
 };
 
+const defaultDashboardTaskEditFormState: DashboardTaskEditFormState = {
+  userId: '',
+  taskDate: null,
+  time: '',
+  durationHours: '1',
+  priority: 'medium',
+  points: '1',
+  tags: '',
+  notes: '',
+  requireShift: true,
+};
+
 const TASK_STATUS_OPTIONS: { value: AssistantManagerTaskLog['status']; label: string }[] = [
   { value: 'pending', label: 'Pending' },
   { value: 'completed', label: 'Completed' },
@@ -420,9 +476,23 @@ const STATUS_FILTER_OPTIONS: { value: TaskStatusFilterValue; label: string }[] =
 const CADENCE_LABELS: Record<AssistantManagerTaskCadence, string> = {
   daily: 'Daily',
   weekly: 'Weekly',
-  biweekly: 'Biweekly',
+  biweekly: 'Twice weekly',
   every_two_weeks: 'Every 2 Weeks',
   monthly: 'Monthly',
+};
+
+const SCHEDULED_WORKDAY_PLACEMENT_OPTIONS: Array<{
+  value: ScheduledWorkdayPlacement;
+  label: string;
+}> = [
+  { value: 'start', label: 'Beginning - first eligible day(s)' },
+  { value: 'middle', label: 'Middle - centered eligible day(s)' },
+  { value: 'end', label: 'End - last eligible day(s)' },
+];
+const SCHEDULED_WORKDAY_PLACEMENT_LABELS: Record<ScheduledWorkdayPlacement, string> = {
+  start: 'Beginning',
+  middle: 'Middle',
+  end: 'End',
 };
 
 const PRIORITY_META: Record<
@@ -816,10 +886,17 @@ const normalizeNumberIdArray = (value: unknown): number[] => {
     return [];
   }
 
-  return value
-    .map((entry) => Number(entry))
-    .filter((entry) => Number.isInteger(entry) && entry > 0);
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => Number(entry))
+        .filter((entry) => Number.isInteger(entry) && entry > 0),
+    ),
+  );
 };
+
+const normalizeScheduledWorkdayPlacement = (value: unknown): ScheduledWorkdayPlacement =>
+  value === 'middle' || value === 'end' ? value : 'start';
 
 const getTemplateCerebroLinks = (
   template?: AssistantManagerTaskTemplate | null,
@@ -851,8 +928,11 @@ const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate |
   delete nextConfig.points;
   delete nextConfig.requireShift;
   delete nextConfig.requireScheduledShift;
+  delete nextConfig.allowOffDays;
   delete nextConfig.completionWindowMode;
   delete nextConfig.timesPerWeekPerAssignedUser;
+  delete nextConfig.requiredShiftTemplateIds;
+  delete nextConfig.scheduledWorkdayPlacement;
   delete nextConfig.evidenceRules;
   delete nextConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY];
   delete nextConfig[NIGHT_REPORT_RULES_CONFIG_KEY];
@@ -1380,9 +1460,12 @@ const resolveTemplateDefaults = (template?: AssistantManagerTaskTemplate | null)
   const pointsValue =
     typeof config.points === 'number' ? config.points : Number(config.points ?? NaN);
   const timesPerWeekPerAssignedUserValue =
-    typeof config.timesPerWeekPerAssignedUser === 'number'
-      ? config.timesPerWeekPerAssignedUser
-      : Number(config.timesPerWeekPerAssignedUser ?? NaN);
+    Number(
+      config.timesPerWeekPerAssignedUser ??
+        config.times_per_week_per_assigned_user ??
+        config.perWeekPerAssignedUser ??
+        NaN,
+    );
   const reminderMinutesBeforeStartValue =
     typeof config.reminderMinutesBeforeStart === 'number'
       ? config.reminderMinutesBeforeStart
@@ -1397,6 +1480,10 @@ const resolveTemplateDefaults = (template?: AssistantManagerTaskTemplate | null)
       timesPerWeekPerAssignedUserValue > 0
       ? timesPerWeekPerAssignedUserValue
       : null,
+    requiredShiftTemplateIds: normalizeNumberIdArray(config.requiredShiftTemplateIds),
+    scheduledWorkdayPlacement: normalizeScheduledWorkdayPlacement(
+      config.scheduledWorkdayPlacement,
+    ),
     reminderMinutesBeforeStart:
       Number.isInteger(reminderMinutesBeforeStartValue) &&
       reminderMinutesBeforeStartValue > 0
@@ -1404,9 +1491,37 @@ const resolveTemplateDefaults = (template?: AssistantManagerTaskTemplate | null)
         : null,
     notifyAtStart: config.notifyAtStart !== false,
     priority: normalizePriority(config.priority),
-    requireShift:
-      config.requireShift === true || config.requireScheduledShift === true,
+    requireShift: !(
+      config.requireShift === false ||
+      config.requireScheduledShift === false ||
+      config.allowOffDays === true
+    ),
     tags: normalizeTags(config.tags),
+  };
+};
+
+const buildDashboardTaskEditFormState = (
+  log: AssistantManagerTaskLog,
+  template?: AssistantManagerTaskTemplate | null,
+): DashboardTaskEditFormState => {
+  const meta = log.meta ?? {};
+  const defaults = resolveTemplateDefaults(template);
+  const durationValue = Number(meta.durationHours ?? defaults.durationHours ?? 1);
+  const pointsValue = Number(meta.points ?? defaults.points ?? 1);
+  const tags = Array.isArray(meta.tags) ? normalizeTags(meta.tags) : defaults.tags;
+
+  return {
+    userId: String(log.userId),
+    taskDate: log.taskDate ? dayjs(log.taskDate).toDate() : null,
+    time: typeof meta.time === 'string' ? meta.time : defaults.time ?? '',
+    durationHours:
+      Number.isFinite(durationValue) && durationValue > 0 ? String(durationValue) : '1',
+    priority: normalizePriority(meta.priority ?? defaults.priority),
+    points: Number.isFinite(pointsValue) && pointsValue >= 0 ? String(pointsValue) : '1',
+    tags: tags.join(', '),
+    notes: log.notes ?? '',
+    requireShift:
+      typeof meta.requireShift === 'boolean' ? meta.requireShift : defaults.requireShift,
   };
 };
 
@@ -1676,10 +1791,9 @@ const buildPlannerTasks = ({
       typeof meta.points === 'number'
         ? meta.points
         : Number(meta.points ?? scheduleConfig.points ?? 1);
-    const tagList =
-      Array.isArray(meta.tags) && meta.tags.length > 0
-        ? meta.tags
-        : normalizeTags(scheduleConfig.tags);
+    const tagList = Array.isArray(meta.tags)
+      ? normalizeTags(meta.tags)
+      : normalizeTags(scheduleConfig.tags);
     const commentCount = Array.isArray(meta.comments)
       ? meta.comments.length
       : Number((meta as Record<string, unknown>).commentCount ?? 0);
@@ -2108,13 +2222,21 @@ const SetupTemplateCard = ({
               </Badge>
               {defaults.requireShift && (
                 <Badge color="orange" variant="light">
-                  Shift-aware
+                  Scheduled staff only
                 </Badge>
               )}
+              {defaults.requiredShiftTemplateIds.length > 0 && (
+                <Badge color="grape" variant="light">
+                  Needs selected shift
+                </Badge>
+              )}
+              {defaults.timesPerWeekPerAssignedUser != null &&
+                defaults.scheduledWorkdayPlacement !== 'start' && (
+                  <Badge color="teal" variant="light">
+                    {SCHEDULED_WORKDAY_PLACEMENT_LABELS[defaults.scheduledWorkdayPlacement]} eligible days
+                  </Badge>
+                )}
             </Group>
-            <Text size="sm" c="dimmed">
-              {template.description?.trim() || 'No description added yet.'}
-            </Text>
           </Stack>
           {canManage && (
             <Group gap={6}>
@@ -3174,6 +3296,7 @@ const AssistantManagerTaskPlanner = () => {
   const dispatch = useAppDispatch();
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
+  const isTemplateModalNarrow = useMediaQuery(`(max-width: ${theme.breakpoints.lg})`);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const sessionRoleSlug = useAppSelector((state) => state.session.roleSlug);
@@ -3188,6 +3311,7 @@ const AssistantManagerTaskPlanner = () => {
   const userTypesState = useAppSelector((state) => state.userTypes[0]);
   const { data: shiftRolesResponse, isLoading: shiftRolesLoading, error: shiftRolesError } = useShiftRoles();
   const { data: shiftTypesResponse, isLoading: shiftTypesLoading } = useShiftTypes();
+  const { data: shiftTemplatesResponse = [], isLoading: shiftTemplatesLoading } = useShiftTemplates();
   const { data: activeUsers = [], isLoading: activeUsersLoading, error: activeUsersError } = useActiveUsers();
   const { data: plannerStartConfig } = useConfigEntry(
     canReadControlPanelConfig ? 'AM_TASK_PLANNER_START_DATE' : null,
@@ -3285,6 +3409,28 @@ const AssistantManagerTaskPlanner = () => {
     },
     [shiftTypesResponse],
   );
+  const shiftTemplateOptions = useMemo(() => {
+    const shiftTypeNameById = new Map(
+      ((shiftTypesResponse ?? []) as ShiftType[]).map((shiftType) => [shiftType.id, shiftType.name]),
+    );
+    const grouped = new Map<string, Array<{ value: string; label: string }>>();
+
+    ([...shiftTemplatesResponse] as ShiftTemplate[])
+      .sort((left, right) => left.name.localeCompare(right.name, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }))
+      .forEach((shiftTemplate) => {
+        const group = shiftTypeNameById.get(shiftTemplate.shiftTypeId) ?? 'Other shifts';
+        const items = grouped.get(group) ?? [];
+        items.push({ value: String(shiftTemplate.id), label: shiftTemplate.name });
+        grouped.set(group, items);
+      });
+
+    return Array.from(grouped.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([group, items]) => ({ group, items }));
+  }, [shiftTemplatesResponse, shiftTypesResponse]);
   const activeUserOptions = useMemo(
     () =>
       [...activeUsers]
@@ -3346,6 +3492,8 @@ const AssistantManagerTaskPlanner = () => {
     return normalizedSessionRole != null && GLOBAL_TASK_VIEWER_ROLES.has(normalizedSessionRole);
   }, [normalizedSessionRole]);
   const canManage = canViewAllTasks && (access.canCreate || access.canUpdate || access.canDelete);
+  const canBulkUpdateTemplates = canViewAllTasks && access.canUpdate;
+  const canEditTaskLogs = canViewAllTasks && access.canUpdate;
   const canDeleteTaskLogs = canViewAllTasks && access.canDelete;
   const canCreateManualTasks = canViewAllTasks && access.canCreate;
   const requestedSectionParam = searchParams.get('section');
@@ -3386,8 +3534,8 @@ const AssistantManagerTaskPlanner = () => {
   const [templateReorderBusyKey, setTemplateReorderBusyKey] = useState<string | null>(null);
   const [templateReorderDirection, setTemplateReorderDirection] = useState<'up' | 'down' | null>(null);
   const [templateAccordionValue, setTemplateAccordionValue] = useState<string[]>([]);
-  const templateAccordionLastValueRef = useRef<string[]>([]);
   const [templateModalTab, setTemplateModalTab] = useState<'core' | 'rules'>('core');
+  const [templateSearchQuery, setTemplateSearchQuery] = useState('');
 
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
@@ -3401,6 +3549,13 @@ const AssistantManagerTaskPlanner = () => {
   const [bulkAssignmentModalOpen, setBulkAssignmentModalOpen] = useState(false);
   const [bulkAssignmentSubmitting, setBulkAssignmentSubmitting] = useState(false);
   const [bulkAssignmentError, setBulkAssignmentError] = useState<string | null>(null);
+  const [bulkTemplateOptionsModalOpen, setBulkTemplateOptionsModalOpen] = useState(false);
+  const [bulkTemplateOptionsTargetIds, setBulkTemplateOptionsTargetIds] = useState<number[]>([]);
+  const [bulkTemplateOptionsFormState, setBulkTemplateOptionsFormState] =
+    useState<BulkTemplateOptionsFormState>(defaultBulkTemplateOptionsFormState);
+  const [bulkTemplateOptionsSubmitting, setBulkTemplateOptionsSubmitting] = useState(false);
+  const [bulkTemplateOptionsError, setBulkTemplateOptionsError] = useState<string | null>(null);
+  const [bulkTemplateOptionsSuccess, setBulkTemplateOptionsSuccess] = useState<string | null>(null);
   const [syncExistingTasksModalOpen, setSyncExistingTasksModalOpen] = useState(false);
   const [syncExistingTasksDateRange, setSyncExistingTasksDateRange] = useState<
     [Date | null, Date | null]
@@ -3411,6 +3566,7 @@ const AssistantManagerTaskPlanner = () => {
     useState<SyncAmTaskLogsWithTemplateConfigResponse | null>(null);
   const [syncExistingTasksTemplate, setSyncExistingTasksTemplate] =
     useState<AssistantManagerTaskTemplate | null>(null);
+  const templateModalScrollViewportRef = useRef<HTMLDivElement | null>(null);
   const templateSectionRefs = useRef<{
     evidence: HTMLDivElement | null;
     shiftEvidence: HTMLDivElement | null;
@@ -3428,19 +3584,22 @@ const AssistantManagerTaskPlanner = () => {
   const scrollToTemplateSection = useCallback(
     (section: keyof typeof templateSectionRefs.current) => {
       setTemplateAccordionValue((prev) => {
-        const nextValue = prev.includes(section) ? prev : [...prev, section];
-        templateAccordionLastValueRef.current = templateAccordionLastValueRef.current.includes(section)
-          ? templateAccordionLastValueRef.current
-          : [...templateAccordionLastValueRef.current, section];
-        return nextValue;
+        return prev.includes(section) ? prev : [...prev, section];
       });
       setTemplateModalTab(
         ['evidence', 'shiftEvidence', 'waivers', 'cerebro', 'advanced'].includes(section) ? 'rules' : 'core',
       );
       window.setTimeout(() => {
-        templateSectionRefs.current[section]?.scrollIntoView({
+        const viewport = templateModalScrollViewportRef.current;
+        const target = templateSectionRefs.current[section];
+        if (!viewport || !target) {
+          return;
+        }
+        const viewportRect = viewport.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        viewport.scrollTo({
+          top: viewport.scrollTop + targetRect.top - viewportRect.top - 12,
           behavior: 'smooth',
-          block: 'start',
         });
       }, 50);
     },
@@ -3456,8 +3615,15 @@ const AssistantManagerTaskPlanner = () => {
     });
 
     summary.push({
-      label: 'Shift tie',
-      value: templateFormState.requireShift ? 'Requires scheduled shift' : 'No shift requirement',
+      label: 'Assignee schedule',
+      value: templateFormState.requireShift ? 'Scheduled workdays only' : 'Off days allowed',
+    });
+
+    summary.push({
+      label: 'Operational shift gate',
+      value: templateFormState.requiredShiftTemplateIds.length > 0
+        ? `${templateFormState.requiredShiftTemplateIds.length} selected`
+        : 'None',
     });
 
     if (templateFormState.timesPerWeekPerAssignedUser.trim()) {
@@ -3465,6 +3631,12 @@ const AssistantManagerTaskPlanner = () => {
         label: 'Cadence cap',
         value: `${templateFormState.timesPerWeekPerAssignedUser.trim()} per assigned user`,
       });
+      if (templateFormState.cadence === 'weekly' || templateFormState.cadence === 'biweekly') {
+        summary.push({
+          label: 'Workday placement',
+          value: SCHEDULED_WORKDAY_PLACEMENT_LABELS[templateFormState.scheduledWorkdayPlacement],
+        });
+      }
     }
 
     summary.push({
@@ -3494,6 +3666,7 @@ const AssistantManagerTaskPlanner = () => {
     return summary;
   }, [
     templateFormState.completionWindowMode,
+    templateFormState.cadence,
     templateFormState.evidenceRules.length,
     templateFormState.shiftEvidenceSources.length,
     templateFormState.linkedKnowledgeEntryIds.length,
@@ -3501,30 +3674,30 @@ const AssistantManagerTaskPlanner = () => {
     templateFormState.linkedQuizIds.length,
     templateFormState.nightReportWaiverRules.length,
     templateFormState.requireShift,
+    templateFormState.requiredShiftTemplateIds.length,
+    templateFormState.scheduledWorkdayPlacement,
     templateFormState.timesPerWeekPerAssignedUser,
   ]);
 
-  const hasExpandedTemplateSections = templateAccordionValue.length > 0;
-
-  const templateSummaryPanel = (compact: boolean) => (
+  const templateSummaryPanel = (compact: boolean, showHeading = true) => (
     <Paper
-      withBorder
+      withBorder={showHeading}
       radius="lg"
       p={compact ? 'xs' : 'sm'}
       style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 5,
+        background: 'rgba(255, 255, 255, 0.96)',
         backdropFilter: 'blur(12px)',
       }}
     >
       <Stack gap={compact ? 2 : 6}>
         <Group justify="space-between" align="center" wrap="wrap" gap="xs">
-          <Box>
-            <Text fw={700} size={compact ? 'sm' : 'md'}>
-              Task Rule Summary
-            </Text>
-          </Box>
+          {showHeading && (
+            <Box>
+              <Text fw={700} size={compact ? 'sm' : 'md'}>
+                Task Rule Summary
+              </Text>
+            </Box>
+          )}
           <Group gap={compact ? 4 : 6} wrap="wrap">
             {templateRuleSummary.map((item) => (
               <Badge key={item.label} variant="light" color="gray" size={compact ? 'xs' : 'md'}>
@@ -3621,6 +3794,11 @@ const AssistantManagerTaskPlanner = () => {
   const [logDetailCompleting, setLogDetailCompleting] = useState(false);
   const [logDetailReopening, setLogDetailReopening] = useState(false);
   const [logDetailError, setLogDetailError] = useState<string | null>(null);
+  const [dashboardTaskEditOpen, setDashboardTaskEditOpen] = useState(false);
+  const [dashboardTaskEditFormState, setDashboardTaskEditFormState] =
+    useState<DashboardTaskEditFormState>(defaultDashboardTaskEditFormState);
+  const [dashboardTaskEditError, setDashboardTaskEditError] = useState<string | null>(null);
+  const [dashboardTaskEditSubmitting, setDashboardTaskEditSubmitting] = useState(false);
   const [evidenceUploadingRuleKey, setEvidenceUploadingRuleKey] = useState<string | null>(null);
   const [evidencePreviewLoadingItemId, setEvidencePreviewLoadingItemId] = useState<string | null>(null);
   const [activeEvidenceImagePreview, setActiveEvidenceImagePreview] =
@@ -3719,6 +3897,45 @@ const AssistantManagerTaskPlanner = () => {
     () => (selectedLog ? templateMap.get(selectedLog.templateId) ?? null : null),
     [selectedLog, templateMap],
   );
+  const selectedLogShiftEvidenceRuleKeys = useMemo(
+    () => getShiftEvidenceRuleKeys(selectedLogTemplate?.scheduleConfig),
+    [selectedLogTemplate],
+  );
+  const dashboardTaskEditUserOptions = useMemo(() => {
+    if (!selectedLog || activeUserOptions.some((option) => option.value === String(selectedLog.userId))) {
+      return activeUserOptions;
+    }
+    return [
+      ...activeUserOptions,
+      {
+        value: String(selectedLog.userId),
+        label: `${selectedLog.userName ?? `User #${selectedLog.userId}`} (currently assigned)`,
+      },
+    ];
+  }, [activeUserOptions, selectedLog]);
+  const dashboardTaskEditBaseline = useMemo(
+    () =>
+      selectedLog
+        ? buildDashboardTaskEditFormState(selectedLog, selectedLogTemplate)
+        : defaultDashboardTaskEditFormState,
+    [selectedLog, selectedLogTemplate],
+  );
+  const dashboardTaskEditDirty = useMemo(
+    () =>
+      JSON.stringify({
+        ...dashboardTaskEditFormState,
+        taskDate: dashboardTaskEditFormState.taskDate
+          ? dayjs(dashboardTaskEditFormState.taskDate).format('YYYY-MM-DD')
+          : null,
+      }) !==
+      JSON.stringify({
+        ...dashboardTaskEditBaseline,
+        taskDate: dashboardTaskEditBaseline.taskDate
+          ? dayjs(dashboardTaskEditBaseline.taskDate).format('YYYY-MM-DD')
+          : null,
+      }),
+    [dashboardTaskEditBaseline, dashboardTaskEditFormState],
+  );
   const selectedLogCerebroLinks = useMemo(() => {
     const templateLinks = getTemplateCerebroLinks(selectedLogTemplate);
     const knowledgeById = new Map(cerebroLinkOptions.knowledgeEntries.map((entry) => [entry.id, entry]));
@@ -3789,7 +4006,10 @@ const AssistantManagerTaskPlanner = () => {
     return isTaskCompletionWindowExpired(selectedLog, templateMap);
   }, [selectedLog, templateMap]);
   const selectedLogEvidenceReadOnly = Boolean(
-    !selectedLog || selectedLog.status === 'completed' || !selectedLogIsCurrentDay,
+    !selectedLog ||
+      selectedLog.status === 'completed' ||
+      !selectedLogIsCurrentDay ||
+      dashboardTaskEditOpen,
   );
   const selectedLogCanComplete = Boolean(
     selectedLog &&
@@ -3845,6 +4065,100 @@ const AssistantManagerTaskPlanner = () => {
     () => templates.filter((template) => selectedTemplateIds.includes(template.id)),
     [selectedTemplateIds, templates],
   );
+  const bulkTemplateOptionsTargetTemplates = useMemo(
+    () => templates.filter((template) => bulkTemplateOptionsTargetIds.includes(template.id)),
+    [bulkTemplateOptionsTargetIds, templates],
+  );
+  const bulkPlacementCompatibleTemplateCount = useMemo(
+    () =>
+      bulkTemplateOptionsTargetTemplates.filter((template) => {
+        const defaults = resolveTemplateDefaults(template);
+        return (
+          (template.cadence === 'weekly' || template.cadence === 'biweekly') &&
+          defaults.timesPerWeekPerAssignedUser != null
+        );
+      }).length,
+    [bulkTemplateOptionsTargetTemplates],
+  );
+  const allBulkTargetsSupportPlacement =
+    bulkTemplateOptionsTargetTemplates.length > 0 &&
+    bulkPlacementCompatibleTemplateCount === bulkTemplateOptionsTargetTemplates.length;
+  const bulkTemplateOptionsCurrentSummary = useMemo(() => {
+    const scheduleValues = new Set(
+      bulkTemplateOptionsTargetTemplates.map(
+        (template) => resolveTemplateDefaults(template).requireShift,
+      ),
+    );
+    const shiftGateValues = new Set(
+      bulkTemplateOptionsTargetTemplates.map((template) =>
+        [...resolveTemplateDefaults(template).requiredShiftTemplateIds]
+          .sort((left, right) => left - right)
+          .join(','),
+      ),
+    );
+    const placementValues = new Set(
+      bulkTemplateOptionsTargetTemplates.map(
+        (template) => resolveTemplateDefaults(template).scheduledWorkdayPlacement,
+      ),
+    );
+
+    const onlyScheduleValue = Array.from(scheduleValues)[0];
+    const onlyShiftGateValue = Array.from(shiftGateValues)[0] ?? '';
+    const onlyPlacementValue = Array.from(placementValues)[0];
+    const shiftTemplateNameById = new Map(
+      shiftTemplateOptions.flatMap((group) =>
+        group.items.map((item) => [Number(item.value), item.label] as const),
+      ),
+    );
+    const sharedShiftGateIds = onlyShiftGateValue
+      ? onlyShiftGateValue.split(',').map((value) => Number(value))
+      : [];
+    const sharedShiftGateLabels = sharedShiftGateIds.map(
+      (shiftTemplateId) => shiftTemplateNameById.get(shiftTemplateId) ?? `#${shiftTemplateId}`,
+    );
+    const sharedShiftGateSummary = sharedShiftGateLabels.length > 0
+      ? `${sharedShiftGateLabels.slice(0, 3).join(', ')}${
+          sharedShiftGateLabels.length > 3
+            ? ` +${sharedShiftGateLabels.length - 3} more`
+            : ''
+        }`
+      : 'None';
+
+    return {
+      assigneeSchedule:
+        scheduleValues.size === 1
+          ? onlyScheduleValue
+            ? 'Scheduled workdays only'
+            : 'Off days allowed'
+          : 'Mixed',
+      requiredShiftGate:
+        shiftGateValues.size === 1
+          ? sharedShiftGateSummary
+          : 'Mixed',
+      placement:
+        placementValues.size === 1 && onlyPlacementValue
+          ? SCHEDULED_WORKDAY_PLACEMENT_LABELS[onlyPlacementValue]
+          : 'Mixed',
+    };
+  }, [bulkTemplateOptionsTargetTemplates, shiftTemplateOptions]);
+  const normalizedTemplateSearchQuery = templateSearchQuery.trim().toLocaleLowerCase();
+  const templateSearchActive = normalizedTemplateSearchQuery.length > 0;
+  const visibleTemplates = useMemo(
+    () =>
+      templateSearchActive
+        ? templates.filter((template) =>
+            template.name.toLocaleLowerCase().includes(normalizedTemplateSearchQuery),
+          )
+        : templates,
+    [normalizedTemplateSearchQuery, templateSearchActive, templates],
+  );
+  const visibleTemplateIds = useMemo(
+    () => visibleTemplates.map((template) => template.id),
+    [visibleTemplates],
+  );
+  const allVisibleTemplatesSelected =
+    visibleTemplateIds.length > 0 &&
+    visibleTemplateIds.every((templateId) => selectedTemplateIds.includes(templateId));
 
   useEffect(() => {
     dispatch(fetchAmTaskTemplates());
@@ -3991,6 +4305,9 @@ const AssistantManagerTaskPlanner = () => {
         setLogDetailModalOpen(false);
         setLogDetailFormState(defaultLogDetailFormState);
         setLogDetailError(null);
+        setDashboardTaskEditOpen(false);
+        setDashboardTaskEditFormState(defaultDashboardTaskEditFormState);
+        setDashboardTaskEditError(null);
         setEvidenceUploadingRuleKey(null);
         setEvidencePreviewLoadingItemId(null);
         setLinkInputCounts({});
@@ -4027,6 +4344,9 @@ const AssistantManagerTaskPlanner = () => {
     setSelectedLog(matchingLog);
     setLogDetailFormState(buildLogDetailFormStateFromLog(matchingLog));
     setLogDetailError(null);
+    setDashboardTaskEditOpen(false);
+    setDashboardTaskEditFormState(defaultDashboardTaskEditFormState);
+    setDashboardTaskEditError(null);
     setEvidenceUploadingRuleKey(null);
     setEvidencePreviewLoadingItemId(null);
     setLinkInputCounts({});
@@ -4085,7 +4405,7 @@ const AssistantManagerTaskPlanner = () => {
 
     const nextSelections: Record<string, string> = {};
     selectedLogEvidenceRules.forEach((rule) => {
-      if (rule.type !== 'image') {
+      if (rule.type !== 'image' || !selectedLogShiftEvidenceRuleKeys.has(rule.key)) {
         return;
       }
       const savedItem = getRuleItems(getNormalizedEvidenceItems(selectedLog.meta), rule).find(
@@ -4094,7 +4414,7 @@ const AssistantManagerTaskPlanner = () => {
       nextSelections[rule.key] = String(savedItem?.subjectUserId ?? selectedLog.userId);
     });
     setEvidenceImageSubjectSelections(nextSelections);
-  }, [selectedLog, selectedLogEvidenceRules]);
+  }, [selectedLog, selectedLogEvidenceRules, selectedLogShiftEvidenceRuleKeys]);
 
   useEffect(
     () => () => {
@@ -4554,6 +4874,8 @@ const AssistantManagerTaskPlanner = () => {
           defaults.timesPerWeekPerAssignedUser != null
             ? String(defaults.timesPerWeekPerAssignedUser)
             : '',
+        requiredShiftTemplateIds: defaults.requiredShiftTemplateIds.map(String),
+        scheduledWorkdayPlacement: defaults.scheduledWorkdayPlacement,
         defaultTime: defaults.time ?? '',
         defaultDuration:
           defaults.durationHours != null ? String(defaults.durationHours) : '',
@@ -4578,7 +4900,7 @@ const AssistantManagerTaskPlanner = () => {
       setTemplateFormState(defaultTemplateFormState);
     }
     setTemplateModalTab('core');
-    setTemplateAccordionValue(templateAccordionLastValueRef.current);
+    setTemplateAccordionValue(['basics']);
 
     setTemplateFormError(null);
     setTemplateModalOpen(true);
@@ -4617,6 +4939,11 @@ const AssistantManagerTaskPlanner = () => {
       const categoryOrderNumeric = Number(templateFormState.categoryOrder);
       const subgroupOrderNumeric = Number(templateFormState.subgroupOrder);
       const templateOrderNumeric = Number(templateFormState.templateOrder);
+      const requiredShiftTemplateIds = Array.from(new Set(
+        templateFormState.requiredShiftTemplateIds
+          .map((value) => Number(value))
+          .filter((value) => Number.isInteger(value) && value > 0),
+      ));
       const linkedKnowledgeEntryIds = templateFormState.linkedKnowledgeEntryIds
         .map((value) => Number(value))
         .filter((value) => Number.isInteger(value) && value > 0);
@@ -4661,6 +4988,8 @@ const AssistantManagerTaskPlanner = () => {
       }
 
       nextScheduleConfig.priority = templateFormState.defaultPriority;
+      delete nextScheduleConfig.requireScheduledShift;
+      delete nextScheduleConfig.allowOffDays;
       nextScheduleConfig.requireShift = templateFormState.requireShift;
       nextScheduleConfig.notifyAtStart = templateFormState.notifyAtStart;
       nextScheduleConfig.completionWindowMode = templateFormState.completionWindowMode;
@@ -4691,6 +5020,22 @@ const AssistantManagerTaskPlanner = () => {
         nextScheduleConfig.timesPerWeekPerAssignedUser = timesPerWeekNumeric;
       } else {
         delete nextScheduleConfig.timesPerWeekPerAssignedUser;
+      }
+
+      if (requiredShiftTemplateIds.length > 0) {
+        nextScheduleConfig.requiredShiftTemplateIds = requiredShiftTemplateIds;
+      } else {
+        delete nextScheduleConfig.requiredShiftTemplateIds;
+      }
+
+      if (
+        templateFormState.timesPerWeekPerAssignedUser.trim() &&
+        (templateFormState.cadence === 'weekly' || templateFormState.cadence === 'biweekly')
+      ) {
+        nextScheduleConfig.scheduledWorkdayPlacement =
+          templateFormState.scheduledWorkdayPlacement;
+      } else {
+        delete nextScheduleConfig.scheduledWorkdayPlacement;
       }
 
       if (templateFormState.reminderMinutesBeforeStart.trim()) {
@@ -5068,9 +5413,11 @@ const AssistantManagerTaskPlanner = () => {
     setSelectedTemplateIds([]);
   }, []);
 
-  const selectAllTemplates = useCallback(() => {
-    setSelectedTemplateIds(templates.map((template) => template.id));
-  }, [templates]);
+  const selectAllVisibleTemplates = useCallback(() => {
+    setSelectedTemplateIds((current) =>
+      Array.from(new Set([...current, ...visibleTemplateIds])),
+    );
+  }, [visibleTemplateIds]);
 
   const toggleCategorySelection = useCallback(
     (templateIds: number[], checked: boolean) => {
@@ -5087,7 +5434,7 @@ const AssistantManagerTaskPlanner = () => {
   );
 
   const openBulkAssignmentModal = useCallback(() => {
-    if (selectedTemplateIds.length === 0) {
+    if (selectedTemplates.length === 0) {
       return;
     }
     setEditingAssignment(null);
@@ -5098,7 +5445,7 @@ const AssistantManagerTaskPlanner = () => {
     });
     setBulkAssignmentError(null);
     setBulkAssignmentModalOpen(true);
-  }, [defaultAssistantManagerUserTypeId, defaultManagerShiftRoleId, selectedTemplateIds.length]);
+  }, [defaultAssistantManagerUserTypeId, defaultManagerShiftRoleId, selectedTemplates.length]);
 
   const closeBulkAssignmentModal = useCallback(() => {
     if (bulkAssignmentSubmitting) {
@@ -5108,6 +5455,31 @@ const AssistantManagerTaskPlanner = () => {
     setBulkAssignmentModalOpen(false);
     setBulkAssignmentError(null);
   }, [bulkAssignmentSubmitting]);
+
+  const openBulkTemplateOptionsModal = useCallback(() => {
+    if (!canBulkUpdateTemplates) {
+      return;
+    }
+    const targetIds = selectedTemplates.map((template) => template.id);
+    if (targetIds.length === 0) {
+      return;
+    }
+
+    setBulkTemplateOptionsTargetIds(targetIds);
+    setBulkTemplateOptionsFormState(defaultBulkTemplateOptionsFormState);
+    setBulkTemplateOptionsError(null);
+    setBulkTemplateOptionsSuccess(null);
+    setBulkTemplateOptionsModalOpen(true);
+  }, [canBulkUpdateTemplates, selectedTemplates]);
+
+  const closeBulkTemplateOptionsModal = useCallback(() => {
+    if (bulkTemplateOptionsSubmitting) {
+      return;
+    }
+
+    setBulkTemplateOptionsModalOpen(false);
+    setBulkTemplateOptionsError(null);
+  }, [bulkTemplateOptionsSubmitting]);
 
   const openSyncExistingTasksModal = useCallback((template?: AssistantManagerTaskTemplate) => {
     const [currentStart, currentEnd] = logDateRange;
@@ -5249,7 +5621,7 @@ const AssistantManagerTaskPlanner = () => {
   ]);
 
   const handleBulkAssignmentSubmit = useCallback(async () => {
-    if (selectedTemplateIds.length === 0) {
+    if (selectedTemplates.length === 0) {
       setBulkAssignmentError('Select at least one template');
       return;
     }
@@ -5266,7 +5638,7 @@ const AssistantManagerTaskPlanner = () => {
     try {
       await dispatch(
         bulkCreateAmTaskAssignments({
-          templateIds: selectedTemplateIds,
+          templateIds: selectedTemplates.map((template) => template.id),
           payload: result.payload,
         }),
       ).unwrap();
@@ -5285,7 +5657,111 @@ const AssistantManagerTaskPlanner = () => {
     buildAssignmentPayloadFromForm,
     closeBulkAssignmentModal,
     dispatch,
-    selectedTemplateIds,
+    selectedTemplates,
+  ]);
+
+  const handleBulkTemplateOptionsSubmit = useCallback(async () => {
+    if (!canBulkUpdateTemplates) {
+      setBulkTemplateOptionsError('You no longer have permission to update task templates');
+      return;
+    }
+    if (bulkTemplateOptionsTargetIds.length === 0) {
+      setBulkTemplateOptionsError('Select at least one template');
+      return;
+    }
+    if (bulkTemplateOptionsTargetIds.length > 500) {
+      setBulkTemplateOptionsError('Bulk edits are limited to 500 templates at a time');
+      return;
+    }
+    if (bulkTemplateOptionsTargetTemplates.length !== bulkTemplateOptionsTargetIds.length) {
+      setBulkTemplateOptionsError(
+        'The template library changed after this editor opened. Close it, select the templates again, and retry',
+      );
+      return;
+    }
+
+    const options: BulkAmTaskTemplateOptions = {};
+
+    if (bulkTemplateOptionsFormState.assigneeSchedule !== 'unchanged') {
+      options.requireShift =
+        bulkTemplateOptionsFormState.assigneeSchedule === 'scheduled_only';
+    }
+
+    if (bulkTemplateOptionsFormState.requiredShiftMode === 'replace') {
+      const requiredShiftTemplateIds = bulkTemplateOptionsFormState.requiredShiftTemplateIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0);
+      if (requiredShiftTemplateIds.length === 0) {
+        setBulkTemplateOptionsError(
+          'Select at least one operational shift template, or choose Remove from all',
+        );
+        return;
+      }
+      options.requiredShiftTemplateIds = Array.from(new Set(requiredShiftTemplateIds));
+    } else if (bulkTemplateOptionsFormState.requiredShiftMode === 'remove') {
+      options.requiredShiftTemplateIds = [];
+    }
+
+    if (bulkTemplateOptionsFormState.scheduledWorkdayPlacement !== 'unchanged') {
+      if (!allBulkTargetsSupportPlacement) {
+        setBulkTemplateOptionsError(
+          'Eligible-day placement can only be changed when every selected template is weekly or twice weekly and has a weekly limit',
+        );
+        return;
+      }
+      options.scheduledWorkdayPlacement =
+        bulkTemplateOptionsFormState.scheduledWorkdayPlacement;
+    }
+
+    if (Object.keys(options).length === 0) {
+      setBulkTemplateOptionsError('Choose at least one option to change');
+      return;
+    }
+
+    setBulkTemplateOptionsSubmitting(true);
+    setBulkTemplateOptionsError(null);
+
+    try {
+      await dispatch(
+        bulkUpdateAmTaskTemplateOptions({
+          templateIds: bulkTemplateOptionsTargetIds,
+          options,
+        }),
+      ).unwrap();
+      setBulkTemplateOptionsSuccess(
+        `Updated ${bulkTemplateOptionsTargetIds.length} template${
+          bulkTemplateOptionsTargetIds.length === 1 ? '' : 's'
+        }`,
+      );
+      setSelectedTemplateIds([]);
+      closeBulkTemplateOptionsModal();
+      const refreshResult = await dispatch(fetchAmTaskTemplates());
+      if (fetchAmTaskTemplates.rejected.match(refreshResult)) {
+        setBulkTemplateOptionsSuccess(
+          `Updated ${bulkTemplateOptionsTargetIds.length} template${
+            bulkTemplateOptionsTargetIds.length === 1 ? '' : 's'
+          }, but the library could not refresh. Reload the page to see the saved values`,
+        );
+      }
+    } catch (error) {
+      setBulkTemplateOptionsError(
+        typeof error === 'string'
+          ? error
+          : error instanceof Error
+            ? error.message
+            : 'Failed to update the selected template options',
+      );
+    } finally {
+      setBulkTemplateOptionsSubmitting(false);
+    }
+  }, [
+    allBulkTargetsSupportPlacement,
+    bulkTemplateOptionsFormState,
+    bulkTemplateOptionsTargetIds,
+    bulkTemplateOptionsTargetTemplates,
+    canBulkUpdateTemplates,
+    closeBulkTemplateOptionsModal,
+    dispatch,
   ]);
 
   const handleSyncExistingTasksSubmit = useCallback(async () => {
@@ -5589,6 +6065,113 @@ const AssistantManagerTaskPlanner = () => {
     setSearchParams(nextParams, { replace: false });
   }, [searchParams, setSearchParams]);
 
+  const openDashboardTaskEdit = useCallback(() => {
+    if (!canEditTaskLogs || !selectedLog) {
+      return;
+    }
+    setDashboardTaskEditFormState(
+      buildDashboardTaskEditFormState(selectedLog, selectedLogTemplate),
+    );
+    setDashboardTaskEditError(null);
+    setDashboardTaskEditOpen(true);
+  }, [canEditTaskLogs, selectedLog, selectedLogTemplate]);
+
+  const cancelDashboardTaskEdit = useCallback(() => {
+    if (dashboardTaskEditSubmitting) {
+      return;
+    }
+    setDashboardTaskEditOpen(false);
+    setDashboardTaskEditFormState(defaultDashboardTaskEditFormState);
+    setDashboardTaskEditError(null);
+  }, [dashboardTaskEditSubmitting]);
+
+  const handleDashboardTaskEditSubmit = useCallback(async () => {
+    if (!canEditTaskLogs || !selectedLog) {
+      setDashboardTaskEditError('You do not have permission to edit this task');
+      return;
+    }
+
+    const userId = Number(dashboardTaskEditFormState.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      setDashboardTaskEditError('Select a valid assignee');
+      return;
+    }
+    if (!dashboardTaskEditFormState.taskDate) {
+      setDashboardTaskEditError('Task date is required');
+      return;
+    }
+    const taskDate = dayjs(dashboardTaskEditFormState.taskDate);
+    if (!taskDate.isValid()) {
+      setDashboardTaskEditError('Select a valid task date');
+      return;
+    }
+
+    const normalizedTime = dashboardTaskEditFormState.time.trim();
+    if (normalizedTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(normalizedTime)) {
+      setDashboardTaskEditError('Start time must use 24-hour HH:mm format');
+      return;
+    }
+
+    const durationHours = Number(dashboardTaskEditFormState.durationHours);
+    if (!Number.isFinite(durationHours) || durationHours < 0.25) {
+      setDashboardTaskEditError('Duration must be at least 0.25 hours');
+      return;
+    }
+
+    const points = Number(dashboardTaskEditFormState.points);
+    if (!Number.isFinite(points) || points < 0) {
+      setDashboardTaskEditError('Points must be zero or greater');
+      return;
+    }
+
+    const tags = Array.from(
+      new Set(
+        dashboardTaskEditFormState.tags
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      ),
+    );
+    const payload: ManagedAssistantManagerTaskLogPayload = {
+      userId,
+      taskDate: taskDate.format('YYYY-MM-DD'),
+      time: normalizedTime || null,
+      durationHours,
+      priority: dashboardTaskEditFormState.priority,
+      points,
+      tags,
+      notes: dashboardTaskEditFormState.notes.trim() || null,
+      requireShift: dashboardTaskEditFormState.requireShift,
+    };
+
+    setDashboardTaskEditSubmitting(true);
+    setDashboardTaskEditError(null);
+
+    try {
+      const response = (await dispatch(
+        updateManagedAmTaskLog({ logId: selectedLog.id, payload }),
+      ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
+      const updatedLog = (response?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
+      if (updatedLog) {
+        setSelectedLog(updatedLog);
+        setLogDetailFormState(buildLogDetailFormStateFromLog(updatedLog));
+      }
+      setDashboardTaskEditOpen(false);
+      setDashboardTaskEditFormState(defaultDashboardTaskEditFormState);
+      await refreshLogs();
+    } catch (error) {
+      setDashboardTaskEditError(getErrorMessage(error, 'Failed to edit task'));
+    } finally {
+      setDashboardTaskEditSubmitting(false);
+    }
+  }, [
+    canEditTaskLogs,
+    dashboardTaskEditFormState,
+    dispatch,
+    refreshLogs,
+    selectedLog,
+  ]);
+
   const handleCloseEvidenceImagePreview = useCallback(() => {
     setActiveEvidenceImagePreview(null);
     setEvidenceImageZoom(1);
@@ -5693,7 +6276,7 @@ const AssistantManagerTaskPlanner = () => {
   );
 
   const closeLogDetailModal = useCallback(() => {
-    if (logDetailSubmitting || commentSubmitting) {
+    if (logDetailSubmitting || commentSubmitting || dashboardTaskEditSubmitting) {
       return;
     }
 
@@ -5704,6 +6287,9 @@ const AssistantManagerTaskPlanner = () => {
     setSelectedLog(null);
     setLogDetailFormState(defaultLogDetailFormState);
     setLogDetailError(null);
+    setDashboardTaskEditOpen(false);
+    setDashboardTaskEditFormState(defaultDashboardTaskEditFormState);
+    setDashboardTaskEditError(null);
     setEvidenceUploadingRuleKey(null);
     setLinkInputCounts({});
     setEvidenceRuleEditModes({});
@@ -5714,6 +6300,7 @@ const AssistantManagerTaskPlanner = () => {
   }, [
     commentSubmitting,
     closeCameraCaptureModal,
+    dashboardTaskEditSubmitting,
     handleCloseCerebroItemModal,
     handleCloseEvidenceImagePreview,
     logDetailSubmitting,
@@ -5922,19 +6509,15 @@ const AssistantManagerTaskPlanner = () => {
         return;
       }
 
-      const selectedSubjectIdRaw = evidenceImageSubjectSelections[rule.key] ?? String(selectedLog.userId);
-      const selectedSubjectId = Number(selectedSubjectIdRaw);
-      const fallbackSubjectUserId =
-        Number.isInteger(selectedSubjectId) && selectedSubjectId > 0 ? selectedSubjectId : selectedLog.userId;
-      const subjectUserId =
-        subjectOverride?.subjectUserId != null && subjectOverride.subjectUserId > 0
-          ? subjectOverride.subjectUserId
-          : fallbackSubjectUserId;
-      const subjectName =
-        subjectOverride?.subjectName?.trim() ||
-        activeUserNameById.get(String(subjectUserId)) ||
-        selectedLog.userName ||
-        `User #${subjectUserId}`;
+      const { subjectUserId, subjectName } = resolveImageEvidenceSubject({
+        ruleKey: rule.key,
+        shiftEvidenceRuleKeys: selectedLogShiftEvidenceRuleKeys,
+        subjectOverride,
+        selectedSubjectUserId: evidenceImageSubjectSelections[rule.key],
+        assignedUserId: selectedLog.userId,
+        assignedUserName: selectedLog.userName,
+        userNameById: activeUserNameById,
+      });
 
       setEvidenceUploadingRuleKey(rule.key);
       setLogDetailError(null);
@@ -5989,7 +6572,14 @@ const AssistantManagerTaskPlanner = () => {
         setEvidenceUploadingRuleKey(null);
       }
     },
-    [activeUserNameById, dispatch, evidenceImageSubjectSelections, refreshLogs, selectedLog],
+    [
+      activeUserNameById,
+      dispatch,
+      evidenceImageSubjectSelections,
+      refreshLogs,
+      selectedLog,
+      selectedLogShiftEvidenceRuleKeys,
+    ],
   );
 
   const handleNativeCameraFileSelected = useCallback(
@@ -6432,6 +7022,9 @@ const AssistantManagerTaskPlanner = () => {
       const downloadHref = `/assistantManagerTasks/logs/${selectedLog.id}/evidence-files/${encodeURIComponent(
         item.id,
       )}/download`;
+      const previewSubjectName = selectedLogShiftEvidenceRuleKeys.has(item.ruleKey)
+        ? item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`
+        : null;
       const cachedThumb = evidenceImageThumbs[item.id];
       if (cachedThumb) {
         setActiveEvidenceImagePreview({
@@ -6439,7 +7032,7 @@ const AssistantManagerTaskPlanner = () => {
           name: item.fileName ?? 'Uploaded image',
           capturedAt: item.uploadedAt ?? null,
           downloadHref: item.driveWebViewLink ?? downloadHref,
-          subjectName: item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`,
+          subjectName: previewSubjectName,
         });
         setEvidenceImageZoom(1);
         return;
@@ -6464,7 +7057,7 @@ const AssistantManagerTaskPlanner = () => {
           name: item.fileName ?? 'Uploaded image',
           capturedAt: item.uploadedAt ?? null,
           downloadHref: item.driveWebViewLink ?? downloadHref,
-          subjectName: item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`,
+          subjectName: previewSubjectName,
         });
         setEvidenceImageZoom(1);
       } catch (error) {
@@ -6474,7 +7067,7 @@ const AssistantManagerTaskPlanner = () => {
             name: item.fileName ?? 'Uploaded image',
             capturedAt: item.uploadedAt ?? null,
             downloadHref: item.driveWebViewLink,
-            subjectName: item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`,
+            subjectName: previewSubjectName,
           });
           setEvidenceImageZoom(1);
         } else {
@@ -6484,7 +7077,7 @@ const AssistantManagerTaskPlanner = () => {
         setEvidencePreviewLoadingItemId(null);
       }
     },
-    [evidenceImageThumbs, selectedLog],
+    [evidenceImageThumbs, selectedLog, selectedLogShiftEvidenceRuleKeys],
   );
 
   const handleEvidenceZoomIn = useCallback(() => {
@@ -6639,6 +7232,27 @@ const AssistantManagerTaskPlanner = () => {
           })),
       }));
   }, [templates]);
+
+  const visibleGroupedTemplates = useMemo(() => {
+    if (!templateSearchActive) {
+      return groupedTemplates;
+    }
+
+    const visibleTemplateIdSet = new Set(visibleTemplateIds);
+    return groupedTemplates
+      .map((group) => ({
+        ...group,
+        subgroups: group.subgroups
+          .map((subgroup) => ({
+            ...subgroup,
+            templates: subgroup.templates.filter((template) =>
+              visibleTemplateIdSet.has(template.id),
+            ),
+          }))
+          .filter((subgroup) => subgroup.templates.length > 0),
+      }))
+      .filter((group) => group.subgroups.length > 0);
+  }, [groupedTemplates, templateSearchActive, visibleTemplateIds]);
 
   const handleCategoryMove = useCallback(
     async (category: string, direction: 'up' | 'down') => {
@@ -7054,23 +7668,33 @@ const AssistantManagerTaskPlanner = () => {
                 )}
                 {canManage && activeSection === 'setup' && (
                   <Group gap="sm" wrap="wrap">
-                    {templates.length > 0 && selectedTemplateIds.length < templates.length && (
+                    {visibleTemplateIds.length > 0 && !allVisibleTemplatesSelected && (
                       <Button
                         variant="default"
                         radius="xl"
-                        onClick={selectAllTemplates}
+                        onClick={selectAllVisibleTemplates}
                       >
-                        Select All Visible
+                        {templateSearchActive ? 'Select All Results' : 'Select All Templates'}
                       </Button>
                     )}
-                    {selectedTemplateIds.length > 0 && (
+                    {selectedTemplates.length > 0 && (
                       <>
+                        {canBulkUpdateTemplates && (
+                          <Button
+                            variant="light"
+                            color="teal"
+                            radius="xl"
+                            onClick={openBulkTemplateOptionsModal}
+                          >
+                            Edit Options ({selectedTemplates.length})
+                          </Button>
+                        )}
                         <Button
                           variant="light"
                           radius="xl"
                           onClick={openBulkAssignmentModal}
                         >
-                          Bulk Assign ({selectedTemplateIds.length})
+                          Bulk Assign ({selectedTemplates.length})
                         </Button>
                         <Button
                           variant="default"
@@ -7197,6 +7821,17 @@ const AssistantManagerTaskPlanner = () => {
               {templateState.error}
             </Alert>
           )}
+          {bulkTemplateOptionsSuccess && (
+            <Alert
+              color="teal"
+              title="Template options updated"
+              withCloseButton
+              onClose={() => setBulkTemplateOptionsSuccess(null)}
+            >
+              {bulkTemplateOptionsSuccess}. Future previews and generation will use the new
+              options.
+            </Alert>
+          )}
 
           <SimpleGrid cols={{ base: 1, sm: 2, xl: 4 }} spacing="md">
             <PlannerStatCard
@@ -7226,24 +7861,40 @@ const AssistantManagerTaskPlanner = () => {
           </SimpleGrid>
 
           <Paper withBorder radius="xl" p={isMobile ? 'md' : 'lg'}>
-            <Group justify="space-between" align="flex-start" wrap="wrap">
-              <Stack gap={4} style={{ flex: 1, minWidth: 260 }}>
+            <Stack gap="md">
+              <Group justify="space-between" align="center" wrap="wrap">
                 <Text fw={700}>Template Library</Text>
-                <Text size="sm" c="dimmed" maw={720}>
-                  Templates are grouped by category and subgroup so recurring work stays easier to
-                  scan, maintain, and assign.
-                </Text>
-              </Stack>
-              {canManage && (
-                <Button
-                  leftSection={<IconPlus size={16} />}
-                  radius="xl"
-                  onClick={() => openTemplateModal()}
-                >
-                  Create Template
-                </Button>
-              )}
-            </Group>
+                {canManage && (
+                  <Button
+                    leftSection={<IconPlus size={16} />}
+                    radius="xl"
+                    onClick={() => openTemplateModal()}
+                  >
+                    Create Template
+                  </Button>
+                )}
+              </Group>
+              <TextInput
+                aria-label="Search template library"
+                placeholder="Search templates by name"
+                leftSection={<IconSearch size={17} />}
+                rightSection={
+                  templateSearchQuery ? (
+                    <ActionIcon
+                      variant="subtle"
+                      color="gray"
+                      aria-label="Clear template search"
+                      onClick={() => setTemplateSearchQuery('')}
+                    >
+                      <IconX size={16} />
+                    </ActionIcon>
+                  ) : undefined
+                }
+                value={templateSearchQuery}
+                onChange={(event) => setTemplateSearchQuery(event.currentTarget.value)}
+                style={{ maxWidth: 520 }}
+              />
+            </Stack>
           </Paper>
 
           {templates.length === 0 ? (
@@ -7258,8 +7909,24 @@ const AssistantManagerTaskPlanner = () => {
                 ) : undefined
               }
             />
+          ) : visibleTemplates.length === 0 ? (
+            <Paper withBorder radius="xl" p="xl">
+              <Stack gap="md" align="center">
+                <Text fw={700}>No matching templates</Text>
+                <Button variant="default" radius="xl" onClick={() => setTemplateSearchQuery('')}>
+                  Clear Search
+                </Button>
+              </Stack>
+            </Paper>
           ) : (
             <Accordion
+              key={`template-library-${normalizedTemplateSearchQuery || 'all'}`}
+              multiple
+              defaultValue={
+                templateSearchActive
+                  ? visibleGroupedTemplates.map((group) => group.category)
+                  : []
+              }
               variant="separated"
               radius="xl"
               styles={{
@@ -7276,7 +7943,7 @@ const AssistantManagerTaskPlanner = () => {
                 },
               }}
             >
-              {groupedTemplates.map((group) => {
+              {visibleGroupedTemplates.map((group) => {
                 const categoryTemplateIds = group.subgroups.flatMap((subgroup) =>
                   subgroup.templates.map((template) => template.id),
                 );
@@ -7333,6 +8000,7 @@ const AssistantManagerTaskPlanner = () => {
                                 <ActionIcon
                                   variant="light"
                                   disabled={
+                                    templateSearchActive ||
                                     templateReorderBusyKey !== null ||
                                     groupedTemplates.findIndex((entry) => entry.category === group.category) === 0
                                   }
@@ -7352,6 +8020,7 @@ const AssistantManagerTaskPlanner = () => {
                                 <ActionIcon
                                   variant="light"
                                   disabled={
+                                    templateSearchActive ||
                                     templateReorderBusyKey !== null ||
                                     groupedTemplates.findIndex((entry) => entry.category === group.category) ===
                                       groupedTemplates.length - 1
@@ -7375,6 +8044,13 @@ const AssistantManagerTaskPlanner = () => {
                     </Accordion.Control>
                     <Accordion.Panel>
                       <Accordion
+                        key={`${group.category}-${normalizedTemplateSearchQuery || 'all'}`}
+                        multiple
+                        defaultValue={
+                          templateSearchActive
+                            ? group.subgroups.map((subgroup) => subgroup.subgroup)
+                            : []
+                        }
                         variant="contained"
                         radius="lg"
                         styles={{
@@ -7442,6 +8118,7 @@ const AssistantManagerTaskPlanner = () => {
                                         <ActionIcon
                                           variant="light"
                                           disabled={
+                                            templateSearchActive ||
                                             templateReorderBusyKey !== null ||
                                             group.subgroups.findIndex(
                                               (entry) => entry.subgroup === subgroup.subgroup,
@@ -7470,6 +8147,7 @@ const AssistantManagerTaskPlanner = () => {
                                         <ActionIcon
                                           variant="light"
                                           disabled={
+                                            templateSearchActive ||
                                             templateReorderBusyKey !== null ||
                                             group.subgroups.findIndex(
                                               (entry) => entry.subgroup === subgroup.subgroup,
@@ -7510,8 +8188,9 @@ const AssistantManagerTaskPlanner = () => {
                                       canMoveUp={templateIndex > 0}
                                       canMoveDown={templateIndex < subgroup.templates.length - 1}
                                       reorderDisabled={
-                                        templateReorderBusyKey !== null &&
-                                        templateReorderBusyKey !== `template:${template.id}`
+                                        templateSearchActive ||
+                                        (templateReorderBusyKey !== null &&
+                                          templateReorderBusyKey !== `template:${template.id}`)
                                       }
                                       reorderLoading={
                                         templateReorderBusyKey === `template:${template.id}`
@@ -7562,26 +8241,108 @@ const AssistantManagerTaskPlanner = () => {
       )}
 
       <Modal
-      opened={templateModalOpen}
-      onClose={closeTemplateModal}
-      title={editingTemplate ? 'Edit Template' : 'New Template'}
-      centered
-      size="lg"
-      fullScreen={Boolean(isMobile)}
+        opened={templateModalOpen}
+        onClose={closeTemplateModal}
+        title={editingTemplate ? 'Edit Template' : 'New Template'}
+        centered={!isMobile}
+        size={
+          isTemplateModalNarrow
+            ? 'calc(100vw - 24px)'
+            : 'min(1440px, calc(100vw - 64px))'
+        }
+        fullScreen={Boolean(isMobile)}
+        styles={{
+          content: {
+            display: 'flex',
+            flexDirection: 'column',
+            height: isMobile ? '100dvh' : 'min(920px, calc(100dvh - 32px))',
+            maxHeight: isMobile ? '100dvh' : 'calc(100dvh - 32px)',
+            overflow: 'hidden',
+          },
+          header: {
+            flex: '0 0 auto',
+            borderBottom: '1px solid var(--mantine-color-gray-2)',
+            paddingTop: isMobile
+              ? 'calc(var(--mantine-spacing-md) + env(safe-area-inset-top))'
+              : undefined,
+          },
+          body: {
+            display: 'flex',
+            flex: 1,
+            minHeight: 0,
+            overflow: 'hidden',
+            padding: 0,
+          },
+        }}
       >
-        <Stack gap={isMobile ? 4 : 'sm'}>
-          {isMobile && !hasExpandedTemplateSections ? templateSummaryPanel(true) : null}
-          <Group align="flex-start" gap={isMobile ? 4 : 'sm'} wrap="nowrap">
-            <Box style={{ flex: 1, minWidth: 0 }}>
+        <Stack gap={0} style={{ flex: 1, minHeight: 0, width: '100%' }}>
+          <Group
+            align="stretch"
+            gap={0}
+            wrap="nowrap"
+            style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
+          >
+            <Box
+              style={{
+                display: 'flex',
+                flex: 1,
+                minWidth: 0,
+                minHeight: 0,
+              }}
+            >
               <Tabs
                 value={templateModalTab}
                 onChange={(value) => setTemplateModalTab((value as 'core' | 'rules') ?? 'core')}
+                style={{
+                  display: 'flex',
+                  flex: 1,
+                  flexDirection: 'column',
+                  minWidth: 0,
+                  minHeight: 0,
+                }}
               >
-                <Tabs.List grow mb={isMobile ? 2 : 'xs'}>
-                  <Tabs.Tab value="core">Core</Tabs.Tab>
-                  <Tabs.Tab value="rules">Rules</Tabs.Tab>
-                </Tabs.List>
-                <Tabs.Panel value="core" pt={isMobile ? 0 : 'xs'}>
+                <Box
+                  px={isMobile ? 'sm' : 'md'}
+                  pt={isMobile ? 'xs' : 'sm'}
+                  pb="xs"
+                  style={{
+                    flexShrink: 0,
+                    borderBottom: '1px solid var(--mantine-color-gray-2)',
+                    background: 'var(--mantine-color-body)',
+                  }}
+                >
+                  <Tabs.List grow>
+                    <Tabs.Tab value="core">Core</Tabs.Tab>
+                    <Tabs.Tab value="rules">Rules</Tabs.Tab>
+                  </Tabs.List>
+                </Box>
+                <ScrollArea
+                  type="auto"
+                  offsetScrollbars
+                  viewportRef={templateModalScrollViewportRef}
+                  style={{ flex: 1, minHeight: 0 }}
+                >
+                  <Box p={isMobile ? 'sm' : 'md'}>
+                    <Box hiddenFrom="lg" mb="sm">
+                      <Accordion variant="contained" radius="lg">
+                        <Accordion.Item value="task-rule-summary">
+                          <Accordion.Control>
+                            <Group justify="space-between" gap="xs" wrap="nowrap">
+                              <Text fw={700} size="sm">
+                                Task Rule Summary
+                              </Text>
+                              <Badge variant="light" color="gray">
+                                {templateRuleSummary.length} settings
+                              </Badge>
+                            </Group>
+                          </Accordion.Control>
+                          <Accordion.Panel pt="xs">
+                            {templateSummaryPanel(true, false)}
+                          </Accordion.Panel>
+                        </Accordion.Item>
+                      </Accordion>
+                    </Box>
+                    <Tabs.Panel value="core">
                   <Accordion
                     multiple
                     value={templateAccordionValue}
@@ -7679,6 +8440,23 @@ const AssistantManagerTaskPlanner = () => {
                       }))
                     }
                   />
+                  <MultiSelect
+                    label="Only create when these shift templates exist"
+                    description="Optional. At least one selected shift template must exist on that date. This activates the task for its assigned person; it does not assign the task to the staff working that shift. Applies to subsequent preview and generation."
+                    placeholder={shiftTemplatesLoading ? 'Loading shift templates...' : 'No shift condition'}
+                    data={shiftTemplateOptions}
+                    value={templateFormState.requiredShiftTemplateIds}
+                    onChange={(value) =>
+                      setTemplateFormState((prev) => ({
+                        ...prev,
+                        requiredShiftTemplateIds: value,
+                      }))
+                    }
+                    searchable
+                    clearable
+                    disabled={shiftTemplatesLoading}
+                    nothingFoundMessage="No shift template found"
+                  />
                   <Select
                     label="Completion Window"
                     description="Choose whether the task can be completed until end of day or only until its scheduled end time."
@@ -7697,7 +8475,7 @@ const AssistantManagerTaskPlanner = () => {
                   <TextInput
                     label="Times Per Week Per Assigned User"
                     placeholder="2"
-                    description="For weekly/biweekly person-based tasks, generate the task on each matched user's first N scheduled workdays of the week."
+                    description="For weekly/twice-weekly person-based tasks, choose N eligible days for each assigned user."
                     value={templateFormState.timesPerWeekPerAssignedUser}
                     onChange={(event) => {
                       const value = event.currentTarget.value;
@@ -7707,6 +8485,21 @@ const AssistantManagerTaskPlanner = () => {
                       }));
                     }}
                   />
+                  {templateFormState.timesPerWeekPerAssignedUser.trim() &&
+                    (templateFormState.cadence === 'weekly' || templateFormState.cadence === 'biweekly') && (
+                      <Select
+                        label="Task placement within eligible days"
+                        description="Controls whether tasks use the beginning, middle, or end of each Monday-Sunday week. With the assignee schedule requirement enabled, only that person's scheduled workdays are eligible."
+                        data={SCHEDULED_WORKDAY_PLACEMENT_OPTIONS}
+                        value={templateFormState.scheduledWorkdayPlacement}
+                        onChange={(value) =>
+                          setTemplateFormState((prev) => ({
+                            ...prev,
+                            scheduledWorkdayPlacement: normalizeScheduledWorkdayPlacement(value),
+                          }))
+                        }
+                      />
+                    )}
                   <TextInput
                     label="Reminder Minutes Before Start"
                     placeholder="30"
@@ -7786,7 +8579,8 @@ const AssistantManagerTaskPlanner = () => {
                     }}
                   />
                   <Switch
-                    label="Require staff to be on shift by default"
+                    label="Only generate for staff scheduled that day"
+                    description="Checks each assignee's own schedule. When enabled, the task is skipped unless that person has a matching scheduled shift on the task date. When disabled, a group assignment can create one off-day task for every active matching person."
                     checked={templateFormState.requireShift}
                     onChange={(event) => {
                       const checked = event.currentTarget.checked;
@@ -8359,26 +9153,66 @@ const AssistantManagerTaskPlanner = () => {
               </Accordion.Panel>
             </Accordion.Item>
           </Accordion>
-                </Tabs.Panel>
+                    </Tabs.Panel>
+                  </Box>
+                </ScrollArea>
               </Tabs>
             </Box>
-            <Box visibleFrom="sm" style={{ width: 300, flexShrink: 0 }}>
-              {templateSummaryPanel(false)}
+            <Box
+              visibleFrom="lg"
+              style={{
+                width: 340,
+                flexShrink: 0,
+                minHeight: 0,
+                borderLeft: '1px solid var(--mantine-color-gray-2)',
+                background: 'var(--mantine-color-gray-0)',
+              }}
+            >
+              <ScrollArea h="100%" type="auto" offsetScrollbars>
+                <Box p="md">{templateSummaryPanel(false)}</Box>
+              </ScrollArea>
             </Box>
           </Group>
-          {templateFormError && (
-            <Alert color="red" title="Unable to save">
-              {templateFormError}
-            </Alert>
-          )}
-          <Group justify="flex-end" gap="sm" wrap="wrap">
-            <Button variant="default" onClick={closeTemplateModal} disabled={templateSubmitting}>
-              Cancel
-            </Button>
-            <Button onClick={handleTemplateSubmit} loading={templateSubmitting}>
-              {editingTemplate ? 'Save Changes' : 'Create Template'}
-            </Button>
-          </Group>
+          <Box
+            px={isMobile ? 'sm' : 'md'}
+            pt="sm"
+            pb={
+              isMobile
+                ? 'calc(var(--mantine-spacing-sm) + env(safe-area-inset-bottom))'
+                : 'sm'
+            }
+            style={{
+              flexShrink: 0,
+              borderTop: '1px solid var(--mantine-color-gray-2)',
+              background: 'var(--mantine-color-body)',
+              boxShadow: '0 -8px 24px rgba(15, 23, 42, 0.05)',
+            }}
+          >
+            <Stack gap="sm">
+              {templateFormError && (
+                <Alert color="red" title="Unable to save">
+                  {templateFormError}
+                </Alert>
+              )}
+              <Group justify="flex-end" gap="sm" wrap={isMobile ? 'wrap' : 'nowrap'}>
+                <Button
+                  variant="default"
+                  onClick={closeTemplateModal}
+                  disabled={templateSubmitting}
+                  style={{ flex: isMobile ? '1 1 100%' : undefined }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleTemplateSubmit}
+                  loading={templateSubmitting}
+                  style={{ flex: isMobile ? '1 1 100%' : undefined }}
+                >
+                  {editingTemplate ? 'Save Changes' : 'Create Template'}
+                </Button>
+              </Group>
+            </Stack>
+          </Box>
         </Stack>
       </Modal>
 
@@ -8558,6 +9392,172 @@ const AssistantManagerTaskPlanner = () => {
             </Button>
             <Button onClick={handleAssignmentSubmit} loading={assignmentSubmitting}>
               {editingAssignment ? 'Save Assignment' : 'Create Assignment'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={bulkTemplateOptionsModalOpen}
+        onClose={closeBulkTemplateOptionsModal}
+        title="Edit Selected Template Options"
+        centered
+        size="lg"
+        fullScreen={Boolean(isMobile)}
+      >
+        <Stack gap="md">
+          <Paper withBorder radius="xl" p="md">
+            <Stack gap="xs">
+              <Text size="xs" tt="uppercase" fw={700} c="dimmed">
+                Selected Templates
+              </Text>
+              <Text fw={700}>
+                {bulkTemplateOptionsTargetTemplates.length} template
+                {bulkTemplateOptionsTargetTemplates.length === 1 ? '' : 's'}
+              </Text>
+              <Group gap="xs" wrap="wrap">
+                {bulkTemplateOptionsTargetTemplates.slice(0, 8).map((template) => (
+                  <Badge key={`bulk-options-template-${template.id}`} variant="light" color="dark">
+                    {template.name}
+                  </Badge>
+                ))}
+                {bulkTemplateOptionsTargetTemplates.length > 8 && (
+                  <Badge variant="outline">
+                    +{bulkTemplateOptionsTargetTemplates.length - 8} more
+                  </Badge>
+                )}
+              </Group>
+            </Stack>
+          </Paper>
+
+          <Alert color="blue" title="Only chosen options will change">
+            Every option starts at Keep current. Names, assignments, evidence rules, and all
+            other template settings stay unchanged.
+          </Alert>
+
+          <Paper withBorder radius="xl" p="md">
+            <Stack gap="md">
+              <Stack gap={2}>
+                <Text fw={700}>Generation Options</Text>
+                <Text size="sm" c="dimmed">
+                  Apply the same generation rules to every selected template.
+                </Text>
+              </Stack>
+
+              <Select
+                label="Assignee Schedule"
+                description={`Current selection: ${bulkTemplateOptionsCurrentSummary.assigneeSchedule}`}
+                data={[
+                  { value: 'unchanged', label: 'Keep current values' },
+                  { value: 'scheduled_only', label: 'Scheduled workdays only' },
+                  { value: 'off_days_allowed', label: 'Allow off-day tasks' },
+                ]}
+                value={bulkTemplateOptionsFormState.assigneeSchedule}
+                disabled={bulkTemplateOptionsSubmitting}
+                onChange={(value) =>
+                  setBulkTemplateOptionsFormState((prev) => ({
+                    ...prev,
+                    assigneeSchedule: (value as BulkTemplateOptionMode) ?? 'unchanged',
+                  }))
+                }
+              />
+
+              {bulkTemplateOptionsFormState.assigneeSchedule === 'off_days_allowed' && (
+                <Alert color="orange" title="Group assignments can create one task per person">
+                  Allowing off-day tasks means every active person matching a user-type, staff,
+                  or shift-role assignment can receive the task on the same date.
+                </Alert>
+              )}
+
+              <Select
+                label="Operational Shift Condition"
+                description={`Current selection: ${bulkTemplateOptionsCurrentSummary.requiredShiftGate}`}
+                data={[
+                  { value: 'unchanged', label: 'Keep current values' },
+                  { value: 'replace', label: 'Replace for all selected templates' },
+                  { value: 'remove', label: 'Remove from all selected templates' },
+                ]}
+                value={bulkTemplateOptionsFormState.requiredShiftMode}
+                disabled={bulkTemplateOptionsSubmitting}
+                onChange={(value) =>
+                  setBulkTemplateOptionsFormState((prev) => ({
+                    ...prev,
+                    requiredShiftMode: (value as BulkRequiredShiftMode) ?? 'unchanged',
+                  }))
+                }
+              />
+
+              {bulkTemplateOptionsFormState.requiredShiftMode === 'replace' && (
+                <MultiSelect
+                  label="Required Shift Templates"
+                  description="At least one of these operational shifts must exist on the task date."
+                  placeholder={shiftTemplatesLoading ? 'Loading shift templates...' : 'Select shifts'}
+                  data={shiftTemplateOptions}
+                  value={bulkTemplateOptionsFormState.requiredShiftTemplateIds}
+                  onChange={(value) =>
+                    setBulkTemplateOptionsFormState((prev) => ({
+                      ...prev,
+                      requiredShiftTemplateIds: value,
+                    }))
+                  }
+                  searchable
+                  clearable
+                  disabled={shiftTemplatesLoading || bulkTemplateOptionsSubmitting}
+                  nothingFoundMessage="No shift template found"
+                />
+              )}
+
+              <Select
+                label="Eligible-Day Placement"
+                description={
+                  allBulkTargetsSupportPlacement
+                    ? `Current selection: ${bulkTemplateOptionsCurrentSummary.placement}`
+                    : `${bulkPlacementCompatibleTemplateCount} of ${bulkTemplateOptionsTargetTemplates.length} selected templates support this option. Select only weekly or twice-weekly templates with a weekly limit to change it together.`
+                }
+                data={[
+                  { value: 'unchanged', label: 'Keep current values' },
+                  ...SCHEDULED_WORKDAY_PLACEMENT_OPTIONS,
+                ]}
+                value={bulkTemplateOptionsFormState.scheduledWorkdayPlacement}
+                onChange={(value) =>
+                  setBulkTemplateOptionsFormState((prev) => ({
+                    ...prev,
+                    scheduledWorkdayPlacement:
+                      (value as BulkScheduledWorkdayPlacement) ?? 'unchanged',
+                  }))
+                }
+                disabled={!allBulkTargetsSupportPlacement || bulkTemplateOptionsSubmitting}
+              />
+            </Stack>
+          </Paper>
+
+          <Alert color="yellow" title="Already generated tasks">
+            These changes apply to future previews and generation. To change dates or assignees
+            in an already generated window, clear that window and generate it again.
+          </Alert>
+
+          {bulkTemplateOptionsError && (
+            <Alert color="red" title="Unable to update templates">
+              {bulkTemplateOptionsError}
+            </Alert>
+          )}
+
+          <Group justify="flex-end" gap="sm" wrap="wrap">
+            <Button
+              variant="default"
+              onClick={closeBulkTemplateOptionsModal}
+              disabled={bulkTemplateOptionsSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              color="teal"
+              leftSection={<IconDeviceFloppy size={16} />}
+              onClick={handleBulkTemplateOptionsSubmit}
+              loading={bulkTemplateOptionsSubmitting}
+            >
+              Apply to {bulkTemplateOptionsTargetTemplates.length} Template
+              {bulkTemplateOptionsTargetTemplates.length === 1 ? '' : 's'}
             </Button>
           </Group>
         </Stack>
@@ -8902,6 +9902,9 @@ const AssistantManagerTaskPlanner = () => {
               {syncExistingTasksSummary.skippedManualCount > 0
                 ? `, manual skipped: ${syncExistingTasksSummary.skippedManualCount}`
                 : ''}
+              {syncExistingTasksSummary.skippedManagerOverrideCount > 0
+                ? `, manager-edited skipped: ${syncExistingTasksSummary.skippedManagerOverrideCount}`
+                : ''}
               .
             </Alert>
           )}
@@ -9074,7 +10077,8 @@ const AssistantManagerTaskPlanner = () => {
             }
           />
           <Switch
-            label="Require staff to be on shift"
+            label="Warn when assignee is off shift"
+            description="The manual task is still created. When enabled, it is marked Needs attention if the selected person has no scheduled shift on that date."
             checked={manualFormState.requireShift}
             onChange={(event) =>
               setManualFormState((prev) => ({
@@ -9154,6 +10158,7 @@ const AssistantManagerTaskPlanner = () => {
                                 }
                               }}
                               loading={logDeletePendingId === selectedLog.id}
+                              disabled={dashboardTaskEditSubmitting}
                               aria-label="Delete task"
                             >
                               <IconTrash size={18} />
@@ -9164,6 +10169,7 @@ const AssistantManagerTaskPlanner = () => {
                           variant="subtle"
                           color="gray"
                           onClick={closeLogDetailModal}
+                          disabled={dashboardTaskEditSubmitting}
                           aria-label="Close task details"
                         >
                           <IconX size={18} />
@@ -9178,51 +10184,77 @@ const AssistantManagerTaskPlanner = () => {
                         templateMap.get(selectedLog.templateId)?.description ??
                         'No task description provided.'}
                     </Text>
+                    {canEditTaskLogs && !dashboardTaskEditOpen && (
+                      <Button
+                        size="xs"
+                        variant="light"
+                        color="teal"
+                        leftSection={<IconPencil size={15} />}
+                        onClick={openDashboardTaskEdit}
+                      >
+                        Edit task
+                      </Button>
+                    )}
                   </Stack>
                 </Group>
 
-                <SimpleGrid cols={{ base: 1, sm: selectedLog.userId === loggedUserId ? 1 : 2 }} spacing="sm">
-                  {selectedLog.userId !== loggedUserId && (
+                {!dashboardTaskEditOpen && (
+                  <SimpleGrid
+                    cols={{ base: 1, sm: selectedLog.userId === loggedUserId ? 1 : 2 }}
+                    spacing="sm"
+                  >
+                    {selectedLog.userId !== loggedUserId && (
+                      <Paper
+                        withBorder
+                        radius="lg"
+                        p="sm"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          minHeight: 112,
+                        }}
+                      >
+                        <Stack gap={6} align="center" justify="center">
+                          <Text size="xs" tt="uppercase" fw={700} c="dimmed" ta="center">
+                            Assigned To
+                          </Text>
+                          <Text fw={600} ta="center">
+                            {selectedLog.userName ?? `User #${selectedLog.userId}`}
+                          </Text>
+                        </Stack>
+                      </Paper>
+                    )}
                     <Paper
                       withBorder
                       radius="lg"
                       p="sm"
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 112 }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        minHeight: 112,
+                      }}
                     >
                       <Stack gap={6} align="center" justify="center">
                         <Text size="xs" tt="uppercase" fw={700} c="dimmed" ta="center">
-                          Assigned To
+                          Start Time
                         </Text>
                         <Text fw={600} ta="center">
-                          {selectedLog.userName ?? `User #${selectedLog.userId}`}
+                          {formatTaskDetailTimeRange(
+                            logDetailFormState.time,
+                            logDetailFormState.durationHours,
+                          )}
+                        </Text>
+                        <Text size="sm" c="dimmed" ta="center">
+                          {logDetailFormState.taskDate
+                            ? dayjs(logDetailFormState.taskDate).format('dddd, MMM D, YYYY')
+                            : 'No date'}
                         </Text>
                       </Stack>
                     </Paper>
-                  )}
-                  <Paper
-                    withBorder
-                    radius="lg"
-                    p="sm"
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 112 }}
-                  >
-                    <Stack gap={6} align="center" justify="center">
-                      <Text size="xs" tt="uppercase" fw={700} c="dimmed" ta="center">
-                        Start Time
-                      </Text>
-                      <Text fw={600} ta="center">
-                        {formatTaskDetailTimeRange(
-                          logDetailFormState.time,
-                          logDetailFormState.durationHours,
-                        )}
-                      </Text>
-                      <Text size="sm" c="dimmed" ta="center">
-                        {logDetailFormState.taskDate
-                          ? dayjs(logDetailFormState.taskDate).format('dddd, MMM D, YYYY')
-                          : 'No date'}
-                      </Text>
-                    </Stack>
-                  </Paper>
-                </SimpleGrid>
+                  </SimpleGrid>
+                )}
 
                 {(selectedLogCerebroLinks.knowledge.length > 0 ||
                   selectedLogCerebroLinks.policies.length > 0 ||
@@ -9298,11 +10330,180 @@ const AssistantManagerTaskPlanner = () => {
               </Stack>
             </Paper>
 
+            {dashboardTaskEditOpen && (
+              <Paper
+                withBorder
+                radius="xl"
+                p={isMobile ? 'md' : 'lg'}
+                style={{ borderColor: 'var(--mantine-color-teal-3)' }}
+              >
+                <Stack gap="md">
+                  <Stack gap={2}>
+                    <Text fw={700}>Edit this scheduled task</Text>
+                    <Text size="sm" c="dimmed">
+                      These changes affect only this dashboard task. Edit its template in Setup
+                      to change future generated tasks.
+                    </Text>
+                  </Stack>
+
+                  <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <Select
+                      label="Assigned To"
+                      data={dashboardTaskEditUserOptions}
+                      value={dashboardTaskEditFormState.userId || null}
+                      onChange={(value) =>
+                        setDashboardTaskEditFormState((prev) => ({
+                          ...prev,
+                          userId: value ?? '',
+                        }))
+                      }
+                      searchable
+                      disabled={activeUsersLoading || dashboardTaskEditSubmitting}
+                      nothingFoundMessage="No active users found"
+                    />
+                    <DatePickerInput
+                      label="Task Date"
+                      value={dashboardTaskEditFormState.taskDate}
+                      onChange={(value) =>
+                        setDashboardTaskEditFormState((prev) => ({
+                          ...prev,
+                          taskDate: value,
+                        }))
+                      }
+                      valueFormat="YYYY-MM-DD"
+                      clearable={false}
+                      disabled={dashboardTaskEditSubmitting}
+                    />
+                    <TextInput
+                      label="Start Time"
+                      description="Leave blank to use the shift or template start time."
+                      type="time"
+                      value={dashboardTaskEditFormState.time}
+                      onChange={(event) =>
+                        setDashboardTaskEditFormState((prev) => ({
+                          ...prev,
+                          time: event.currentTarget.value,
+                        }))
+                      }
+                      disabled={dashboardTaskEditSubmitting}
+                    />
+                    <TextInput
+                      label="Duration (hours)"
+                      placeholder="1.5"
+                      value={dashboardTaskEditFormState.durationHours}
+                      onChange={(event) =>
+                        setDashboardTaskEditFormState((prev) => ({
+                          ...prev,
+                          durationHours: event.currentTarget.value,
+                        }))
+                      }
+                      disabled={dashboardTaskEditSubmitting}
+                    />
+                    <Select
+                      label="Priority"
+                      data={(Object.keys(PRIORITY_META) as PlannerPriority[]).map((priority) => ({
+                        value: priority,
+                        label: PRIORITY_META[priority].label,
+                      }))}
+                      value={dashboardTaskEditFormState.priority}
+                      onChange={(value) =>
+                        setDashboardTaskEditFormState((prev) => ({
+                          ...prev,
+                          priority: (value as PlannerPriority) ?? prev.priority,
+                        }))
+                      }
+                      disabled={dashboardTaskEditSubmitting}
+                    />
+                    <TextInput
+                      label="Points"
+                      placeholder="1"
+                      value={dashboardTaskEditFormState.points}
+                      onChange={(event) =>
+                        setDashboardTaskEditFormState((prev) => ({
+                          ...prev,
+                          points: event.currentTarget.value,
+                        }))
+                      }
+                      disabled={dashboardTaskEditSubmitting}
+                    />
+                  </SimpleGrid>
+
+                  <TextInput
+                    label="Tags"
+                    description="Separate tags with commas."
+                    placeholder="cleaning, weekly"
+                    value={dashboardTaskEditFormState.tags}
+                    onChange={(event) =>
+                      setDashboardTaskEditFormState((prev) => ({
+                        ...prev,
+                        tags: event.currentTarget.value,
+                      }))
+                    }
+                    disabled={dashboardTaskEditSubmitting}
+                  />
+
+                  <Textarea
+                    label="Notes"
+                    minRows={3}
+                    value={dashboardTaskEditFormState.notes}
+                    onChange={(event) =>
+                      setDashboardTaskEditFormState((prev) => ({
+                        ...prev,
+                        notes: event.currentTarget.value,
+                      }))
+                    }
+                    disabled={dashboardTaskEditSubmitting}
+                  />
+
+                  <Switch
+                    label="Warn when assignee is off shift"
+                    description="When enabled, the task is marked Needs attention if the selected person has no scheduled shift on that date."
+                    checked={dashboardTaskEditFormState.requireShift}
+                    onChange={(event) =>
+                      setDashboardTaskEditFormState((prev) => ({
+                        ...prev,
+                        requireShift: event.currentTarget.checked,
+                      }))
+                    }
+                    disabled={dashboardTaskEditSubmitting}
+                  />
+
+                  {dashboardTaskEditError && (
+                    <Alert color="red" title="Unable to edit task">
+                      {dashboardTaskEditError}
+                    </Alert>
+                  )}
+
+                  <Group justify="flex-end" gap="sm" wrap="wrap">
+                    <Button
+                      variant="default"
+                      onClick={cancelDashboardTaskEdit}
+                      disabled={dashboardTaskEditSubmitting}
+                      style={{ flex: isMobile ? '1 1 100%' : undefined }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      color="teal"
+                      leftSection={<IconDeviceFloppy size={16} />}
+                      onClick={handleDashboardTaskEditSubmit}
+                      loading={dashboardTaskEditSubmitting}
+                      disabled={!dashboardTaskEditDirty}
+                      style={{ flex: isMobile ? '1 1 100%' : undefined }}
+                    >
+                      Save task changes
+                    </Button>
+                  </Group>
+                </Stack>
+              </Paper>
+            )}
+
             <Divider label="Evidence" labelPosition="center" />
             {selectedLogEvidenceRules.length > 0 ? (
               <Stack gap="sm">
                 {selectedLogEvidenceRules.map((rule) => {
                   const isImageRule = rule.type === 'image';
+                  const isShiftEvidenceRule = selectedLogShiftEvidenceRuleKeys.has(rule.key);
                   const ruleItems = getRuleItems(logDetailFormState.evidenceItems, rule);
                   const savedRuleItems = selectedLog
                     ? getRuleItems(getNormalizedEvidenceItems(selectedLog.meta), rule)
@@ -9343,7 +10544,7 @@ const AssistantManagerTaskPlanner = () => {
                     helperParts.push(`Pattern: ${rule.match.regex}`);
                   }
                   const expectedItemsForRule =
-                    rule.type === 'image'
+                    rule.type === 'image' && isShiftEvidenceRule
                       ? selectedLogExpectedEvidenceItems.filter(
                           (item) => item.ruleKey === rule.key && item.type === 'image',
                         )
@@ -9871,24 +11072,26 @@ const AssistantManagerTaskPlanner = () => {
                                 )}
                               </Stack>
                             ) : null}
-                            {expectedItemsForRule.length === 0 && !selectedLogEvidenceReadOnly && (
-                              <Select
-                                label="Staff member"
-                                description="Use one screenshot per staff member when the task covers more than one person."
-                                data={activeUserOptions}
-                                value={evidenceImageSubjectSelections[rule.key] ?? String(selectedLog.userId)}
-                                onChange={(value) =>
-                                  setEvidenceImageSubjectSelections((prev) => ({
-                                    ...prev,
-                                    [rule.key]: value ?? String(selectedLog.userId),
-                                  }))
-                                }
-                                searchable
-                                clearable={false}
-                                disabled={activeUsersLoading}
-                                nothingFoundMessage="No active users found"
-                              />
-                            )}
+                            {isShiftEvidenceRule &&
+                              expectedItemsForRule.length === 0 &&
+                              !selectedLogEvidenceReadOnly && (
+                                <Select
+                                  label="Staff member"
+                                  description="Use one screenshot per staff member when the task covers more than one person."
+                                  data={activeUserOptions}
+                                  value={evidenceImageSubjectSelections[rule.key] ?? String(selectedLog.userId)}
+                                  onChange={(value) =>
+                                    setEvidenceImageSubjectSelections((prev) => ({
+                                      ...prev,
+                                      [rule.key]: value ?? String(selectedLog.userId),
+                                    }))
+                                  }
+                                  searchable
+                                  clearable={false}
+                                  disabled={activeUsersLoading}
+                                  nothingFoundMessage="No active users found"
+                                />
+                              )}
                             {expectedItemsForRule.length === 0 && ruleItems.length > 0 ? (
                               ruleItems.map((item) => (
                                 <Paper key={item.id} withBorder radius="md" p="sm">
@@ -9953,9 +11156,11 @@ const AssistantManagerTaskPlanner = () => {
                                           {formatEvidenceFileSize(item.fileSize)}
                                         </Badge>
                                       )}
-                                      <Badge variant="light" color="gray">
-                                        {item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`}
-                                      </Badge>
+                                      {isShiftEvidenceRule && (
+                                        <Badge variant="light" color="gray">
+                                          {item.subjectName ?? selectedLog.userName ?? `User #${selectedLog.userId}`}
+                                        </Badge>
+                                      )}
                                       {item.uploadedAt && (
                                         <Badge variant="light" color="gray">
                                           {dayjs(item.uploadedAt).format('MMM D, HH:mm')}
@@ -10026,7 +11231,7 @@ const AssistantManagerTaskPlanner = () => {
               </Alert>
             )}
             <Group justify="center" gap="sm" wrap="wrap">
-              {selectedLogCanComplete ? (
+              {!dashboardTaskEditOpen && selectedLogCanComplete ? (
                 <Button
                   onClick={handleLogDetailSave}
                   loading={logDetailCompleting}
@@ -10034,7 +11239,7 @@ const AssistantManagerTaskPlanner = () => {
                 >
                   Complete Task
                 </Button>
-              ) : selectedLogCanReopen ? (
+              ) : !dashboardTaskEditOpen && selectedLogCanReopen ? (
                 <Button
                   variant="default"
                   onClick={handleLogDetailReopen}
@@ -10043,7 +11248,7 @@ const AssistantManagerTaskPlanner = () => {
                 >
                   Open Task
                 </Button>
-              ) : selectedLogCompletionLocked ? (
+              ) : !dashboardTaskEditOpen && selectedLogCompletionLocked ? (
                 <Paper withBorder radius="lg" px="md" py="xs" bg="red.0">
                   <Text fw={700} c="red.7">
                     {selectedLogStrictCompletionExpired ? 'Time Window Expired' : 'Task Not Completed'}
@@ -10051,7 +11256,7 @@ const AssistantManagerTaskPlanner = () => {
                 </Paper>
               ) : null}
             </Group>
-            {selectedLogCanComplete && !selectedLogRequiredEvidenceSatisfied && (
+            {!dashboardTaskEditOpen && selectedLogCanComplete && !selectedLogRequiredEvidenceSatisfied && (
               <Text size="sm" c="dimmed" ta="center">
                 Complete all required evidence first: {selectedLogMissingRequiredEvidenceLabels.join(', ')}.
               </Text>

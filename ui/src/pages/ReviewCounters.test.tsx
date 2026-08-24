@@ -6,6 +6,8 @@ import ReviewCounters from './ReviewCounters';
 
 let mockRoleSlug = 'admin';
 let mockUserId = 42;
+let mockCanUpdateReviews = true;
+let mockCanDeleteReviews = true;
 
 jest.mock('../store/hooks', () => ({
   useAppSelector: (selector: (state: { session: { roleSlug: string; loggedUserId: number } }) => unknown) =>
@@ -16,12 +18,25 @@ jest.mock('../components/access/PageAccessGuard', () => ({
   PageAccessGuard: ({ children }: { children: ReactNode }) => children,
 }));
 
+jest.mock('../hooks/useModuleAccess', () => ({
+  useModuleAccess: () => ({
+    ready: true,
+    loading: false,
+    canView: true,
+    canCreate: true,
+    canUpdate: mockCanUpdateReviews,
+    canDelete: mockCanDeleteReviews,
+  }),
+}));
+
 jest.mock('../components/reviews/ReviewOverviewDashboard', () => ({
   __esModule: true,
-  default: ({ month, onMonthChange, canManage, currentUserId }: { month: string; onMonthChange: (month: string) => void; canManage: boolean; currentUserId: number }) => (
+  default: ({ month, onMonthChange, canManage, canUpdateManualCredits, canDeleteManualCredits, currentUserId }: { month: string; onMonthChange: (month: string) => void; canManage: boolean; canUpdateManualCredits: boolean; canDeleteManualCredits: boolean; currentUserId: number }) => (
     <div>
       <output data-testid="selected-month">{month}</output>
       <output data-testid="can-manage">{String(canManage)}</output>
+      <output data-testid="can-update-manual-credits">{String(canUpdateManualCredits)}</output>
+      <output data-testid="can-delete-manual-credits">{String(canDeleteManualCredits)}</output>
       <output data-testid="current-user-id">{currentUserId}</output>
       <button type="button" onClick={() => onMonthChange('2026-09')}>Change month</button>
       {canManage && <div>Daily Review Totals</div>}
@@ -69,6 +84,8 @@ describe('ReviewCounters month query', () => {
   beforeEach(() => {
     mockRoleSlug = 'admin';
     mockUserId = 42;
+    mockCanUpdateReviews = true;
+    mockCanDeleteReviews = true;
     jest.useFakeTimers();
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
@@ -137,4 +154,15 @@ describe('ReviewCounters month query', () => {
       expect(screen.getByText('Previous review-counter history')).toBeInTheDocument();
     },
   );
+
+  it('passes the module delete permission separately from the manager role', () => {
+    mockRoleSlug = 'manager';
+    mockCanUpdateReviews = false;
+    mockCanDeleteReviews = false;
+    renderPage('/reviews?tab=overview&month=2026-08');
+
+    expect(screen.getByTestId('can-manage')).toHaveTextContent('true');
+    expect(screen.getByTestId('can-update-manual-credits')).toHaveTextContent('false');
+    expect(screen.getByTestId('can-delete-manual-credits')).toHaveTextContent('false');
+  });
 });

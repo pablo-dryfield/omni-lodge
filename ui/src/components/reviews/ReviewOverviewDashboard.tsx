@@ -30,6 +30,7 @@ import {
   IconChevronLeft,
   IconLock,
   IconLockOpen,
+  IconPencil,
   IconPlus,
   IconStar,
   IconTrash,
@@ -52,6 +53,18 @@ type Staff = {
 };
 type ReviewDetail = { id: number; reviewerName: string; comment: string | null; rating: number; reviewCreatedAt: string; creditMonth: string | null; isDeleted: boolean; credit: number };
 type ManualDetail = { id: number; date: string; credit: number; notes: string | null };
+type ManualDeleteTarget = {
+  staffName: string;
+  platform: string;
+  entry: ManualDetail;
+};
+type ManualEditTarget = ManualDeleteTarget;
+type ManualEditForm = {
+  userId: string;
+  platform: string;
+  credit: number;
+  description: string;
+};
 type PlatformSummary = { platform: string; assigned: number; manual: number; reviewCount: number; deletedReviewCount: number; total: number; reviews: ReviewDetail[]; deletedReviews: ReviewDetail[]; manualEntries: ManualDetail[] };
 type User = {
   id: number;
@@ -89,12 +102,15 @@ type OverviewSummary = {
 };
 type ReviewOverviewDashboardProps = {
   canManage?: boolean;
+  canUpdateManualCredits?: boolean;
+  canDeleteManualCredits?: boolean;
   currentUserId?: number;
   month: string;
   onMonthChange: (month: string) => void;
 };
 
 const overviewRequests = new Map<string, Promise<{ data: OverviewSummary }>>();
+const LEGACY_REVIEW_COUNTER_NOTE_PREFIX = "Backfilled from legacy review counter #";
 
 const fetchReviewOverview = (month: string): Promise<{ data: OverviewSummary }> => {
   const pending = overviewRequests.get(month);
@@ -114,6 +130,8 @@ const fetchReviewOverview = (month: string): Promise<{ data: OverviewSummary }> 
 
 export default function ReviewOverviewDashboard({
   canManage = false,
+  canUpdateManualCredits,
+  canDeleteManualCredits,
   currentUserId = 0,
   month,
   onMonthChange,
@@ -128,6 +146,18 @@ export default function ReviewOverviewDashboard({
   const [unassignedModalOpened, setUnassignedModalOpened] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualError, setManualError] = useState("");
+  const [manualEditTarget, setManualEditTarget] = useState<ManualEditTarget | null>(null);
+  const [manualEditForm, setManualEditForm] = useState<ManualEditForm>({
+    userId: "",
+    platform: "manual",
+    credit: 1,
+    description: "",
+  });
+  const [manualEditBusy, setManualEditBusy] = useState(false);
+  const [manualEditError, setManualEditError] = useState("");
+  const [manualDeleteTarget, setManualDeleteTarget] = useState<ManualDeleteTarget | null>(null);
+  const [manualDeleteBusy, setManualDeleteBusy] = useState(false);
+  const [manualDeleteError, setManualDeleteError] = useState("");
   const [form, setForm] = useState({
     userId: "",
     category: "staff" as "staff" | "no_name" | "bad",
@@ -161,6 +191,47 @@ export default function ReviewOverviewDashboard({
       setManualBusy(false);
     }
   };
+  const removeManualCredit = async () => {
+    if (!manualDeleteTarget) {
+      return;
+    }
+    setManualDeleteBusy(true);
+    setManualDeleteError("");
+    try {
+      await axiosInstance.delete(`/reviews/archive/manual-credits/${manualDeleteTarget.entry.id}`);
+      await load();
+      setManualDeleteTarget(null);
+    } catch (error: any) {
+      setManualDeleteError(
+        error.response?.data?.[0]?.message ?? error.message ?? "Unable to remove the manual addition.",
+      );
+    } finally {
+      setManualDeleteBusy(false);
+    }
+  };
+  const updateManualCredit = async () => {
+    if (!manualEditTarget) {
+      return;
+    }
+    setManualEditBusy(true);
+    setManualEditError("");
+    try {
+      await axiosInstance.patch(`/reviews/archive/manual-credits/${manualEditTarget.entry.id}`, {
+        userId: Number(manualEditForm.userId),
+        platform: manualEditForm.platform,
+        credit: manualEditForm.credit,
+        notes: manualEditForm.description.trim() || null,
+      });
+      await load();
+      setManualEditTarget(null);
+    } catch (error: any) {
+      setManualEditError(
+        error.response?.data?.[0]?.message ?? error.message ?? "Unable to update the manual addition.",
+      );
+    } finally {
+      setManualEditBusy(false);
+    }
+  };
   const toggleMonthLock = async () => {
     setLockBusy(true);
     setLockError("");
@@ -185,6 +256,8 @@ export default function ReviewOverviewDashboard({
   ] as const;
   const currentUserTotal = summary.staff.find((staff) => staff.userId === currentUserId)?.total ?? 0;
   const unassignedReviews = summary.unassignedReviews ?? [];
+  const canUpdateManualEntries = canManage && Boolean(canUpdateManualCredits);
+  const canDeleteManualEntries = canManage && Boolean(canDeleteManualCredits);
   const moveMonth = (amount: number) =>
     onMonthChange(dayjs(`${month}-01`).add(amount, "month").format("YYYY-MM"));
   const toggleUser = (userId: number) => setExpandedUsers(current => { const next = new Set(current); next.has(userId) ? next.delete(userId) : next.add(userId); return next; });
@@ -227,7 +300,11 @@ export default function ReviewOverviewDashboard({
                 </Group>
                 <Group gap="md" justify="center" wrap="wrap">
                   <Text size="sm">Assigned {platform.assigned.toFixed(3)}</Text>
-                  {platform.manual > 0 && <Text size="sm">Manual {platform.manual.toFixed(3)}</Text>}
+                  {platform.manual > 0 && (
+                    <Badge color="orange" variant="light">
+                      Manual {platform.manual.toFixed(3)}
+                    </Badge>
+                  )}
                   <Badge>{platform.total.toFixed(3)}</Badge>
                 </Group>
               </Flex>
@@ -289,16 +366,94 @@ export default function ReviewOverviewDashboard({
                     ))}
                   </>
                 )}
-                {platform.manualEntries.map((entry) => (
-                  <Paper key={`manual-${entry.id}`} p="sm" bg="white" withBorder>
-                    <Stack gap="xs" align="center">
-                      <Text fw={600}>Manual addition</Text>
-                      <Text size="xs" c="dimmed">{dayjs(entry.date).format("D MMM YYYY")}</Text>
-                      <Badge>{entry.credit.toFixed(3)}</Badge>
-                      {entry.notes && <Text size="sm" ta="center">{entry.notes}</Text>}
-                    </Stack>
-                  </Paper>
-                ))}
+                {platform.manualEntries.map((entry) => {
+                  const isLegacyEntry = String(entry.notes ?? "").startsWith(
+                    LEGACY_REVIEW_COUNTER_NOTE_PREFIX,
+                  );
+                  const canEditEntry = canUpdateManualEntries && !isLegacyEntry;
+
+                  return (
+                    <Paper
+                      key={`manual-${entry.id}`}
+                      p="sm"
+                      bg="white"
+                      withBorder
+                    >
+                      <Flex
+                        direction={{ base: "column", sm: "row" }}
+                        align="center"
+                        justify="space-between"
+                        gap="sm"
+                      >
+                        <Stack gap="xs" align="center" style={{ flex: 1 }}>
+                          <Text fw={600}>Manual addition</Text>
+                          <Text size="xs" c="dimmed">{dayjs(entry.date).format("MMMM YYYY")}</Text>
+                          <Badge color="orange" variant="light">{entry.credit.toFixed(3)}</Badge>
+                          <Paper
+                            withBorder
+                            radius="sm"
+                            p="xs"
+                            w="100%"
+                            bg="var(--mantine-color-gray-0)"
+                          >
+                            <Text size="xs" fw={700} c="dimmed" ta="center">Description</Text>
+                            <Text size="sm" ta="center" style={{ overflowWrap: "anywhere" }}>
+                              {entry.notes || "No description provided"}
+                            </Text>
+                          </Paper>
+                        </Stack>
+                        {(canDeleteManualEntries || canEditEntry) && (
+                          <Group gap="xs" wrap="nowrap" justify="center">
+                            {canEditEntry && (
+                              <Button
+                                size="xs"
+                                color="blue"
+                                variant="light"
+                                leftSection={<IconPencil size={15} />}
+                                aria-label={`Edit ${entry.credit.toFixed(3)} manual addition for ${staff.name}`}
+                                onClick={() => {
+                                  setManualEditError("");
+                                  setManualEditTarget({
+                                    staffName: staff.name,
+                                    platform: platform.platform,
+                                    entry,
+                                  });
+                                  setManualEditForm({
+                                    userId: String(staff.userId),
+                                    platform: platform.platform,
+                                    credit: entry.credit,
+                                    description: entry.notes ?? "",
+                                  });
+                                }}
+                              >
+                                Edit
+                              </Button>
+                            )}
+                            {canDeleteManualEntries && (
+                              <Button
+                                size="xs"
+                                color="red"
+                                variant="light"
+                                leftSection={<IconTrash size={15} />}
+                                aria-label={`Remove ${entry.credit.toFixed(3)} manual addition for ${staff.name}`}
+                                onClick={() => {
+                                  setManualDeleteError("");
+                                  setManualDeleteTarget({
+                                    staffName: staff.name,
+                                    platform: platform.platform,
+                                    entry,
+                                  });
+                                }}
+                              >
+                                Remove
+                              </Button>
+                            )}
+                          </Group>
+                        )}
+                      </Flex>
+                    </Paper>
+                  );
+                })}
               </Stack>
             </Collapse>
           </Paper>
@@ -523,7 +678,13 @@ export default function ReviewOverviewDashboard({
                             </Table.Td>
                             <Table.Td ta="center">{staff.reviewCount}</Table.Td>
                             <Table.Td ta="center">{staff.assigned.toFixed(3)}</Table.Td>
-                            <Table.Td ta="center">{staff.manual.toFixed(3)}</Table.Td>
+                            <Table.Td ta="center">
+                              {staff.manual > 0 ? (
+                                <Tooltip label="Expand this person to view manual additions">
+                                  <Badge color="orange" variant="light">{staff.manual.toFixed(3)}</Badge>
+                                </Tooltip>
+                              ) : staff.manual.toFixed(3)}
+                            </Table.Td>
                             <Table.Td ta="center"><Badge size="lg">{staff.total.toFixed(3)}</Badge></Table.Td>
                           </Table.Tr>
                           <Table.Tr>
@@ -570,7 +731,11 @@ export default function ReviewOverviewDashboard({
                           </Stack>
                           <Stack gap={0} align="center">
                             <Text size="xs" c="dimmed">Manual additions</Text>
-                            <Text fw={700}>{staff.manual.toFixed(3)}</Text>
+                            {staff.manual > 0 ? (
+                              <Badge color="orange" variant="light">{staff.manual.toFixed(3)}</Badge>
+                            ) : (
+                              <Text fw={700}>{staff.manual.toFixed(3)}</Text>
+                            )}
                           </Stack>
                           <Stack gap={0} align="center">
                             <Text size="xs" c="dimmed">Total</Text>
@@ -589,6 +754,175 @@ export default function ReviewOverviewDashboard({
       </Paper>
       {canManage && <ReviewMonthlySummary month={month} hideDateControls collapsible />}
       {canManage && <DailyReviewTrend snapshots={summary.trendSnapshots ?? []} />}
+      <Modal
+        opened={Boolean(manualEditTarget)}
+        onClose={() => {
+          if (!manualEditBusy) {
+            setManualEditTarget(null);
+            setManualEditError("");
+          }
+        }}
+        title="Edit manual addition"
+        size="lg"
+        centered
+        radius="lg"
+        closeOnClickOutside={!manualEditBusy}
+        closeOnEscape={!manualEditBusy}
+        styles={{ title: { fontWeight: 700 } }}
+      >
+        <Stack gap="lg">
+          <Stack gap={4} align="center">
+            <Text size="sm" c="dimmed" ta="center">
+              Update this manual addition. Its accounting month remains unchanged.
+            </Text>
+            <Badge color="gray" variant="light">
+              {manualEditTarget
+                ? dayjs(`${manualEditTarget.entry.date.slice(0, 7)}-01`).format("MMMM YYYY")
+                : ""}
+            </Badge>
+          </Stack>
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
+            <Select
+              searchable
+              required
+              label="Person"
+              placeholder="Search for a team member"
+              nothingFoundMessage="No team member found"
+              data={users.map((user) => ({
+                value: String(user.id),
+                label: `${user.firstName} ${user.lastName}`.trim() || user.username,
+              }))}
+              value={manualEditForm.userId}
+              onChange={(value) => setManualEditForm((current) => ({ ...current, userId: value ?? "" }))}
+            />
+            <Select
+              required
+              label="Platform"
+              data={[
+                { value: "google", label: "Google" },
+                { value: "tripadvisor", label: "TripAdvisor" },
+                { value: "airbnb", label: "Airbnb" },
+                { value: "getyourguide", label: "GetYourGuide" },
+                { value: "manual", label: "Manual / Other" },
+              ]}
+              value={manualEditForm.platform}
+              onChange={(value) => setManualEditForm((current) => ({ ...current, platform: value ?? "manual" }))}
+            />
+            <NumberInput
+              required
+              label="Credit amount"
+              decimalScale={3}
+              min={0.001}
+              step={0.25}
+              value={manualEditForm.credit}
+              onChange={(value) => setManualEditForm((current) => ({ ...current, credit: Number(value) }))}
+            />
+          </SimpleGrid>
+          <Textarea
+            label="Description"
+            description="Context shown with this manual addition"
+            placeholder="Why is this manual adjustment needed?"
+            autosize
+            minRows={3}
+            maxRows={6}
+            value={manualEditForm.description}
+            onChange={(event) => setManualEditForm((current) => ({
+              ...current,
+              description: event.currentTarget.value,
+            }))}
+          />
+          {manualEditError && <Text c="red" size="sm" ta="center">{manualEditError}</Text>}
+          <Group justify="center" grow>
+            <Button
+              variant="default"
+              disabled={manualEditBusy}
+              onClick={() => {
+                setManualEditTarget(null);
+                setManualEditError("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              leftSection={<IconPencil size={16} />}
+              loading={manualEditBusy}
+              disabled={
+                !manualEditForm.userId ||
+                !manualEditForm.platform ||
+                !Number.isFinite(manualEditForm.credit) ||
+                manualEditForm.credit <= 0
+              }
+              onClick={() => void updateManualCredit()}
+            >
+              Save changes
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal
+        opened={Boolean(manualDeleteTarget)}
+        onClose={() => {
+          if (!manualDeleteBusy) {
+            setManualDeleteTarget(null);
+            setManualDeleteError("");
+          }
+        }}
+        title="Remove manual addition?"
+        centered
+        radius="lg"
+        closeOnClickOutside={!manualDeleteBusy}
+        closeOnEscape={!manualDeleteBusy}
+        styles={{ title: { fontWeight: 700 } }}
+      >
+        <Stack gap="md">
+          <Text ta="center">
+            Remove this manual review credit from <Text span fw={700}>{manualDeleteTarget?.staffName}</Text>?
+          </Text>
+          <Group gap="xs" justify="center" wrap="wrap">
+            <Badge color="orange" variant="light">
+              {manualDeleteTarget ? platformLabel(manualDeleteTarget.platform) : ""}
+            </Badge>
+            <Badge color="red" variant="light">
+              {manualDeleteTarget?.entry.credit.toFixed(3)} credit
+            </Badge>
+            <Badge color="gray" variant="light">
+              {manualDeleteTarget
+                ? dayjs(`${manualDeleteTarget.entry.date.slice(0, 7)}-01`).format("MMMM YYYY")
+                : ""}
+            </Badge>
+          </Group>
+          <Paper withBorder radius="md" p="sm" bg="var(--mantine-color-gray-0)">
+            <Text size="xs" fw={700} c="dimmed" ta="center">Description</Text>
+            <Text size="sm" ta="center" style={{ overflowWrap: "anywhere" }}>
+              {manualDeleteTarget?.entry.notes || "No description provided"}
+            </Text>
+          </Paper>
+          <Text size="sm" c="dimmed" ta="center">
+            The staff and monthly totals will be recalculated immediately. This cannot be undone.
+          </Text>
+          {manualDeleteError && <Text c="red" size="sm" ta="center">{manualDeleteError}</Text>}
+          <Group justify="center" grow>
+            <Button
+              variant="default"
+              disabled={manualDeleteBusy}
+              onClick={() => {
+                setManualDeleteTarget(null);
+                setManualDeleteError("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              leftSection={<IconTrash size={16} />}
+              loading={manualDeleteBusy}
+              onClick={() => void removeManualCredit()}
+            >
+              Remove addition
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
       {canManage && (
         <Modal
           opened={manualModalOpened}
@@ -682,8 +1016,8 @@ export default function ReviewOverviewDashboard({
             </SimpleGrid>
 
             <Textarea
-              label="Reason or note"
-              description="Optional context for payroll and future audits"
+              label="Description"
+              description="Context shown with this manual addition"
               placeholder="Why is this manual adjustment needed?"
               autosize
               minRows={3}

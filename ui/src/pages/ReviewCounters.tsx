@@ -9,6 +9,7 @@ import ReviewCounterList from "../components/reviewCounters/ReviewCounterList";
 import ReviewAnalyticsPanel from "../components/reviewCounters/ReviewAnalyticsPanel";
 import ReviewMonthlySummary from "../components/reviewCounters/ReviewMonthlySummary";
 import { useAppSelector } from "../store/hooks";
+import { useModuleAccess } from "../hooks/useModuleAccess";
 import { currentReviewMonthInWarsaw } from "../utils/reviewCreditMonth";
 import classes from "./ReviewCounters.module.css";
 
@@ -25,6 +26,7 @@ const ReviewCounters = () => {
   const roleSlug = useAppSelector((state) => state.session.roleSlug);
   const currentUserId = useAppSelector((state) => state.session.loggedUserId);
   const canManage = ["owner", "manager", "admin", "administrator"].includes(String(roleSlug ?? "").trim().toLowerCase());
+  const reviewModuleAccess = useModuleAccess("review-counter-management");
   const [searchParams, setSearchParams] = useSearchParams();
   const [historySection, setHistorySection] = useState<string | null>(null);
   const tabParam = useMemo(() => searchParams.get("tab"), [searchParams]);
@@ -100,6 +102,8 @@ const ReviewCounters = () => {
             <Stack gap="lg">
               <ReviewOverviewDashboard
                 canManage={canManage}
+                canUpdateManualCredits={canManage && reviewModuleAccess.canUpdate}
+                canDeleteManualCredits={canManage && reviewModuleAccess.canDelete}
                 currentUserId={currentUserId}
                 month={activeMonth}
                 onMonthChange={handleMonthChange}

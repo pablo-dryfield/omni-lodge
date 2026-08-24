@@ -7,6 +7,7 @@ import {
   getTaskCerebroLinkOptions,
   getTaskCerebroLinkItemDetail,
   createTaskTemplate,
+  bulkUpdateTaskTemplateOptions,
   updateTaskTemplate,
   deleteTaskTemplate,
   listTaskAssignments,
@@ -23,6 +24,7 @@ import {
   deleteTaskLog,
   createManualTaskLog,
   downloadTaskLogEvidenceImage,
+  manageTaskLog,
   updateTaskLogMeta,
   uploadTaskLogEvidenceImage,
 } from '../controllers/assistantManagerTaskController.js';
@@ -41,6 +43,7 @@ router.get('/templates', authMiddleware, managerGuard, listTaskTemplates);
 router.get('/cerebro-links/options', authMiddleware, managerGuard, getTaskCerebroLinkOptions);
 router.get('/cerebro-links/item', authMiddleware, managerGuard, getTaskCerebroLinkItemDetail);
 router.post('/templates', authMiddleware, managerGuard, createTaskTemplate);
+router.patch('/templates/bulk-options', authMiddleware, managerGuard, bulkUpdateTaskTemplateOptions);
 router.put('/templates/:id', authMiddleware, managerGuard, updateTaskTemplate);
 router.delete('/templates/:id', authMiddleware, managerGuard, deleteTaskTemplate);
 
@@ -58,6 +61,7 @@ router.post('/logs/sync-template-config', authMiddleware, managerGuard, syncTask
 router.put('/logs/:id', authMiddleware, managerGuard, updateTaskLogStatus);
 router.delete('/logs/:id', authMiddleware, managerGuard, deleteTaskLog);
 router.post('/logs/manual', authMiddleware, managerGuard, createManualTaskLog);
+router.patch('/logs/:id/manage', authMiddleware, managerGuard, manageTaskLog);
 router.patch('/logs/:id/meta', authMiddleware, managerGuard, updateTaskLogMeta);
 router.post('/logs/:id/evidence-files', authMiddleware, managerGuard, upload.single('file'), uploadTaskLogEvidenceImage);
 router.get('/logs/:id/evidence-files/:itemId/download', authMiddleware, managerGuard, downloadTaskLogEvidenceImage);

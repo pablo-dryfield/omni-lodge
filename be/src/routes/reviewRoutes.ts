@@ -2,12 +2,13 @@ import express, { Router } from 'express';
 import * as reviewController from '../controllers/reviewController.js'; // Adjust import path as necessary
 import authMiddleware from '../middleware/authMiddleware.js';
 import { authorizeModuleAction, requireRoles } from '../middleware/authorizationMiddleware.js';
-import {completeFastReviewSync,completeReviewSync,createManualReviewCredit,getReviewCreditSummary,getReviewMonthLock,getReviewTrends,ingestReviewSyncPage,listArchivedReviews,lockReviewMonth,replaceReviewAssignments,startReviewSync,unlockReviewMonth,updateReviewCreditMonth,updateReviewFlags} from '../controllers/reviewArchiveController.js';
+import {completeFastReviewSync,completeReviewSync,createManualReviewCredit,deleteManualReviewCredit,getReviewCreditSummary,getReviewMonthLock,getReviewTrends,ingestReviewSyncPage,listArchivedReviews,lockReviewMonth,replaceReviewAssignments,startReviewSync,unlockReviewMonth,updateManualReviewCredit,updateReviewCreditMonth,updateReviewFlags} from '../controllers/reviewArchiveController.js';
 
 const router: Router = express.Router();
 const archiveView=authorizeModuleAction('review-counter-management','view');
 const archiveCreate=authorizeModuleAction('review-counter-management','create');
 const archiveUpdate=authorizeModuleAction('review-counter-management','update');
+const archiveDelete=authorizeModuleAction('review-counter-management','delete');
 const reviewManager=requireRoles(['owner','manager','admin','administrator']);
 
 // Get all reviews
@@ -38,6 +39,8 @@ router.put('/archive/:id/assignments',authMiddleware,reviewManager,archiveUpdate
 router.put('/archive/:id/flags',authMiddleware,reviewManager,archiveUpdate,updateReviewFlags);
 router.put('/archive/:id/credit-month',authMiddleware,reviewManager,archiveUpdate,updateReviewCreditMonth);
 router.post('/archive/manual-credits',authMiddleware,reviewManager,archiveCreate,createManualReviewCredit);
+router.patch('/archive/manual-credits/:id',authMiddleware,reviewManager,archiveUpdate,updateManualReviewCredit);
+router.delete('/archive/manual-credits/:id',authMiddleware,reviewManager,archiveDelete,deleteManualReviewCredit);
 router.get('/archive/month-lock',authMiddleware,archiveView,getReviewMonthLock);
 router.put('/archive/month-lock',authMiddleware,reviewManager,archiveUpdate,lockReviewMonth);
 router.delete('/archive/month-lock',authMiddleware,reviewManager,archiveUpdate,unlockReviewMonth);

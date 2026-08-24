@@ -1,5 +1,10 @@
 export type AssistantManagerTaskCadence = 'daily' | 'weekly' | 'biweekly' | 'every_two_weeks' | 'monthly';
 
+export type AssistantManagerTaskScheduleConfig = Record<string, unknown> & {
+  requiredShiftTemplateIds?: number[];
+  scheduledWorkdayPlacement?: 'start' | 'middle' | 'end';
+};
+
 export type AssistantManagerTaskEvidenceRuleType = 'link' | 'image';
 
 export type AssistantManagerTaskEvidenceLinkMatch = {
@@ -58,7 +63,7 @@ export type AssistantManagerTaskTemplate = {
   subgroupOrder: number;
   templateOrder: number;
   cadence: AssistantManagerTaskCadence;
-  scheduleConfig: Record<string, unknown>;
+  scheduleConfig: AssistantManagerTaskScheduleConfig;
   isActive: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -160,6 +165,18 @@ export type TaskLogMetaUpdatePayload = {
   notes?: string | null;
   taskDate?: string;
   requireShift?: boolean;
+};
+
+export type ManagedAssistantManagerTaskLogPayload = {
+  userId: number;
+  taskDate: string;
+  time: string | null;
+  durationHours: number;
+  priority: NonNullable<AssistantManagerTaskLogMeta['priority']>;
+  points: number;
+  tags: string[];
+  notes: string | null;
+  requireShift: boolean;
 };
 
 export type UploadAmTaskEvidenceImageResponse = {

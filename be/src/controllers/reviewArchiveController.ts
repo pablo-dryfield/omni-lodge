@@ -39,6 +39,8 @@ const reviewIdsFromLock = (lock: ReviewMonthLock | null): number[] =>
     ? lock.reviewIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
     : [];
 
+const LEGACY_REVIEW_COUNTER_NOTE_PREFIX = 'Backfilled from legacy review counter #';
+
 const serializeMonthLock = async (lock: ReviewMonthLock | null, month: string) => {
   const lockedByUser = lock?.lockedBy
     ? await User.findByPk(lock.lockedBy, { attributes: ['firstName', 'lastName', 'username'] })
@@ -247,6 +249,96 @@ export async function createManualReviewCredit(req: AuthenticatedRequest, res: R
     if (category === 'staff' && (!Number.isInteger(userId) || !await User.count({ where: { id: userId } }))) throw new Error('A valid user is required for staff credit');
     const row = await ReviewManualCredit.create({ userId, category, platform: String(req.body.platform ?? 'manual'), date: String(req.body.date), credit: Number(req.body.credit ?? 1), notes: req.body.notes ?? null, createdBy: actor(req) });
     res.status(201).json({ credit: row });
+  } catch (error) { fail(res, error); }
+}
+
+export async function updateManualReviewCredit(req: AuthenticatedRequest, res: Response) {
+  try {
+    const creditId = Number(req.params.id);
+    if (!Number.isInteger(creditId) || creditId <= 0) {
+      res.status(400).json([{ message: 'A valid manual credit ID is required' }]);
+      return;
+    }
+
+    const manualCredit = await ReviewManualCredit.findByPk(creditId);
+    if (!manualCredit) {
+      res.status(404).json([{ message: 'Manual review credit not found' }]);
+      return;
+    }
+    if (
+      manualCredit.category !== 'staff' ||
+      manualCredit.userId == null ||
+      String(manualCredit.notes ?? '').startsWith(LEGACY_REVIEW_COUNTER_NOTE_PREFIX)
+    ) {
+      res.status(409).json([{
+        message: 'This manual credit is managed by legacy review-counter history and cannot be edited here',
+      }]);
+      return;
+    }
+
+    const body = req.body ?? {};
+    const allowedFields = new Set(['userId', 'platform', 'credit', 'notes']);
+    const unsupportedFields = Object.keys(body).filter((key) => !allowedFields.has(key));
+    if (unsupportedFields.length > 0) {
+      throw new Error(`Unsupported manual-credit fields: ${unsupportedFields.join(', ')}`);
+    }
+    const changes: Record<string, unknown> = {};
+    if (Object.prototype.hasOwnProperty.call(body, 'userId')) {
+      const userId = Number(body.userId);
+      if (!Number.isInteger(userId) || userId <= 0 || !await User.count({ where: { id: userId } })) {
+        throw new Error('A valid user is required for staff credit');
+      }
+      changes.userId = userId;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'platform')) {
+      const platform = String(body.platform ?? '').trim().toLowerCase();
+      if (!platform || platform.length > 64) {
+        throw new Error('A valid platform is required');
+      }
+      changes.platform = platform;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'credit')) {
+      const amount = Number(body.credit);
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 999999.9999) {
+        throw new Error('Credit amount must be greater than zero and no more than 999999.9999');
+      }
+      changes.credit = amount;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'notes')) {
+      if (body.notes != null && typeof body.notes !== 'string') {
+        throw new Error('Description must be text');
+      }
+      const notes = body.notes == null ? '' : String(body.notes).trim();
+      if (notes.startsWith(LEGACY_REVIEW_COUNTER_NOTE_PREFIX)) {
+        throw new Error('This description prefix is reserved for legacy review-counter history');
+      }
+      changes.notes = notes || null;
+    }
+    if (!Object.keys(changes).length) {
+      throw new Error('Provide a person, platform, credit amount, or description to update');
+    }
+
+    await manualCredit.update(changes);
+    res.json({ credit: manualCredit });
+  } catch (error) { fail(res, error); }
+}
+
+export async function deleteManualReviewCredit(req: AuthenticatedRequest, res: Response) {
+  try {
+    const creditId = Number(req.params.id);
+    if (!Number.isInteger(creditId) || creditId <= 0) {
+      res.status(400).json([{ message: 'A valid manual credit ID is required' }]);
+      return;
+    }
+
+    const credit = await ReviewManualCredit.findByPk(creditId);
+    if (!credit) {
+      res.status(404).json([{ message: 'Manual review credit not found' }]);
+      return;
+    }
+
+    await credit.destroy();
+    res.status(204).send();
   } catch (error) { fail(res, error); }
 }
 

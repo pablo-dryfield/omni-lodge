@@ -5,6 +5,7 @@ import type {
   AssistantManagerTaskTemplate,
   AssistantManagerTaskAssignment,
   AssistantManagerTaskLog,
+  ManagedAssistantManagerTaskLogPayload,
   ManualAssistantManagerTaskPayload,
   TaskLogMetaUpdatePayload,
   UploadAmTaskEvidenceImageResponse,
@@ -113,6 +114,39 @@ export const updateAmTaskTemplate = createAsyncThunk(
         return rejectWithValue(error.message);
       }
       return rejectWithValue('Failed to update task template');
+    }
+  },
+);
+
+export type BulkAmTaskTemplateOptions = {
+  requireShift?: boolean;
+  completionWindowMode?: 'day' | 'strict';
+  priority?: 'high' | 'medium' | 'low';
+  notifyAtStart?: boolean;
+  scheduledWorkdayPlacement?: 'start' | 'middle' | 'end';
+  requiredShiftTemplateIds?: number[];
+};
+
+export const bulkUpdateAmTaskTemplateOptions = createAsyncThunk(
+  'assistantManagerTasks/bulkUpdateTemplateOptions',
+  async (
+    {
+      templateIds,
+      options,
+    }: { templateIds: number[]; options: BulkAmTaskTemplateOptions },
+    { rejectWithValue },
+  ) => {
+    try {
+      const response = await axiosInstance.patch(
+        '/assistantManagerTasks/templates/bulk-options',
+        { templateIds, options },
+        { withCredentials: true },
+      );
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, 'Failed to bulk update task template options'),
+      );
     }
   },
 );
@@ -245,6 +279,7 @@ export type SyncAmTaskLogsWithTemplateConfigResponse = {
   updatedCount: number;
   unchangedCount: number;
   skippedManualCount: number;
+  skippedManagerOverrideCount: number;
   skippedMissingTemplateCount: number;
   skippedInvalidDateCount: number;
 };
@@ -548,6 +583,10 @@ export const syncAmTaskLogsWithTemplateConfig = async (
         typeof data?.skippedManualCount === 'number'
           ? data.skippedManualCount
           : 0,
+      skippedManagerOverrideCount:
+        typeof data?.skippedManagerOverrideCount === 'number'
+          ? data.skippedManagerOverrideCount
+          : 0,
       skippedMissingTemplateCount:
         typeof data?.skippedMissingTemplateCount === 'number'
           ? data.skippedMissingTemplateCount
@@ -615,6 +654,27 @@ export const updateAmTaskLogMeta = createAsyncThunk(
       return response.data;
     } catch (error) {
       return rejectWithValue(extractApiErrorMessage(error, 'Failed to update task log metadata'));
+    }
+  },
+);
+
+export const updateManagedAmTaskLog = createAsyncThunk(
+  'assistantManagerTasks/updateManagedLog',
+  async (
+    { logId, payload }: { logId: number; payload: ManagedAssistantManagerTaskLogPayload },
+    { rejectWithValue },
+  ) => {
+    try {
+      const response = await axiosInstance.patch(
+        `/assistantManagerTasks/logs/${logId}/manage`,
+        payload,
+        { withCredentials: true },
+      );
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, 'Failed to edit task'),
+      );
     }
   },
 );
