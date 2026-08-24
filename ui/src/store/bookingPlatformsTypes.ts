@@ -54,6 +54,7 @@ export interface UnifiedOrder {
   platform: 'ecwid' | 'viator' | 'getyourguide' | 'fareharbor' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
+  selectedTshirtSizes?: Record<string, number>;
   attendedTotal?: number | null;
     attendedExtras?: OrderExtras;
     attendedTshirtSizes?: Record<string, number>;

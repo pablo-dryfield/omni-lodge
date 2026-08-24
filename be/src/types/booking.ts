@@ -39,6 +39,7 @@ export type UnifiedOrder = {
   platform: 'ecwid' | 'fareharbor' | 'viator' | 'getyourguide' | 'freetour' | 'xperiencepoland' | 'airbnb' | string;
   pickupDateTime?: string;
   extras?: OrderExtras;
+  selectedTshirtSizes?: Record<string, number>;
   attendedTotal?: number | null;
   attendedExtras?: OrderExtras;
   remainingTotal?: number;

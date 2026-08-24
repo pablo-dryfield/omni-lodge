@@ -61,7 +61,10 @@ import type {
   PlatformBreakdownEntry,
 } from '../types/booking.js';
 import { groupOrdersForManifest, transformEcwidOrders } from '../utils/ecwidAdapter.js';
-import { normalizeBookingExtrasSnapshot as normalizeExtras } from '../utils/bookingExtras.js';
+import {
+  normalizeBookingExtrasSnapshot as normalizeExtras,
+  normalizeBookingTshirtSizeSnapshot,
+} from '../utils/bookingExtras.js';
 import {
   BOOKING_ATTENDANCE_STATUSES,
   BOOKING_STATUSES,
@@ -114,6 +117,7 @@ type QueryParams = {
   time?: string;
   search?: string;
   dateField?: string;
+  ordersOnly?: string;
 };
 
 type BookingsDateField = 'experience_date' | 'source_received_at';
@@ -1830,8 +1834,10 @@ const bookingToUnifiedOrder = (
     womenCount = 0;
   }
   let extras = normalizeExtras(booking.addonsSnapshot ?? undefined);
+  let selectedTshirtSizes = normalizeBookingTshirtSizeSnapshot(booking.addonsSnapshot ?? undefined);
   if (booking.status === 'rebooked') {
     extras = { tshirts: 0, cocktails: 0, photos: 0 };
+    selectedTshirtSizes = {};
   }
   const combinedCount = menCount + womenCount;
   const quantity =
@@ -1868,6 +1874,7 @@ const bookingToUnifiedOrder = (
     platform: booking.platform,
     pickupDateTime: pickupMomentUtc?.isValid() ? pickupMomentUtc.toISOString() : undefined,
     extras,
+    selectedTshirtSizes,
     attendedTotal,
     attendedExtras,
     remainingTotal,
@@ -2362,6 +2369,17 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
       .filter((order): order is UnifiedOrder => order !== null);
 
     const products = collectProducts(orders);
+
+    if (String(query.ordersOnly ?? '').trim().toLowerCase() === 'true') {
+      res.status(200).json({
+        total: orders.length,
+        count: orders.length,
+        products,
+        orders,
+      });
+      return;
+    }
+
     const bookingIds = rows.map((booking) => Number(booking.id)).filter((id) => Number.isFinite(id) && id > 0);
 
     const bookingAddonsRows = bookingIds.length

@@ -1,9 +1,10 @@
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import {
   Accordion,
   ActionIcon,
   Alert,
   Box,
+  Button,
   Group,
   Paper,
   Popover,
@@ -15,6 +16,7 @@ import {
   ThemeIcon,
 } from "@mantine/core";
 import {
+  IconArrowsExchange,
   IconCash,
   IconChartBar,
   IconCreditCardRefund,
@@ -38,6 +40,11 @@ import {
   YAxis,
 } from "recharts";
 import type { UnifiedOrder } from "../../store/bookingPlatformsTypes";
+import {
+  buildBookingsRevenueTrend,
+  type BookingsSummaryDateField,
+} from "../../utils/bookingsSummaryDate";
+import PlatformRevenueComparisonModal from "./PlatformRevenueComparisonModal";
 
 type BookingRawFinancial = {
   bookingId: number;
@@ -133,6 +140,8 @@ type Props = {
   venueCommissionVenues?: VenueCommissionVenueRow[] | null;
   metricMode?: "earnings" | "revenue" | "costs";
   costsSummary?: BookingCostsSummary | null;
+  dateField: BookingsSummaryDateField;
+  productTypeIds?: string;
 };
 
 const CHART_COLORS = ["#214A66", "#2B7A78", "#345995", "#EF8354", "#B56576", "#6B705C", "#7D4E57", "#3D5A80"];
@@ -322,14 +331,39 @@ const SectionInfo = ({ title, formula, variables, notes }: SectionInfoProps) => 
   </Popover>
 );
 
-const ChartShell = ({ title, info, children }: { title: string; info?: ReactNode; children: ReactNode }) => (
+const ChartShell = ({
+  title,
+  info,
+  action,
+  children,
+}: {
+  title: string;
+  info?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+}) => (
   <Paper withBorder radius="lg" p="md" shadow="sm" style={{ height: "100%" }}>
     <Stack gap="sm" align="center" style={{ height: "100%" }}>
-      <Group gap={6} align="center" justify="center" wrap="nowrap" style={{ width: "100%" }}>
-        <Text fw={700} ta="center">
-          {title}
-        </Text>
-        {info}
+      <Group
+        gap="xs"
+        align="center"
+        justify="center"
+        wrap={action ? "wrap" : "nowrap"}
+        style={{ minHeight: 30, width: "100%" }}
+      >
+        <Group
+          gap={6}
+          align="center"
+          justify="center"
+          wrap="nowrap"
+          style={{ flex: action ? "1 1 180px" : undefined }}
+        >
+          <Text fw={700} ta="center">
+            {title}
+          </Text>
+          {info}
+        </Group>
+        {action ? <Box style={{ flex: "0 0 auto" }}>{action}</Box> : null}
       </Group>
       <Box style={{ flex: 1, minHeight: 240, width: "100%" }}>{children}</Box>
     </Stack>
@@ -401,7 +435,10 @@ const BookingsExecutiveDashboard = ({
   venueCommissionVenues,
   metricMode = "revenue",
   costsSummary,
+  dateField,
+  productTypeIds,
 }: Props) => {
+  const [platformComparisonOpen, setPlatformComparisonOpen] = useState(false);
   const toFinancialRow = useMemo(
     () => (order: UnifiedOrder) => {
       const raw = asRecord(order.rawData);
@@ -479,6 +516,7 @@ const BookingsExecutiveDashboard = ({
         platform: financial.platform,
         platformLabel: normalizePlatformLabel(financial.platform),
         date: order.date,
+        sourceReceivedAt: order.sourceReceivedAt,
         time: order.timeslot,
         productName: order.productName,
         people: participants,
@@ -872,35 +910,10 @@ const BookingsExecutiveDashboard = ({
     return { euRows, nonEuRows, euRevenue, nonEuRevenue };
   }, [visiblePaymentCountryBreakdown]);
 
-  const dailyTrend = useMemo(() => {
-    const map = new Map<
-      string,
-      { date: string; revenue: number; refunds: number; bookings: number; people: number }
-    >();
-    bookingFinancialRows.forEach((row) => {
-      const bucket = map.get(row.date) ?? {
-        date: row.date,
-        revenue: 0,
-        refunds: 0,
-        bookings: 0,
-        people: 0,
-      };
-      bucket.revenue += row.netRevenue - Math.max(0, Number(row.processingFee) || 0);
-      bucket.refunds += row.refundedAmount;
-      bucket.bookings += 1;
-      bucket.people += row.people;
-      map.set(row.date, bucket);
-    });
-
-    return Array.from(map.values())
-      .map((row) => ({
-        ...row,
-        revenue: roundMoney(row.revenue),
-        refunds: roundMoney(row.refunds),
-        label: row.date.slice(5),
-      }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [bookingFinancialRows]);
+  const dailyTrend = useMemo(
+    () => buildBookingsRevenueTrend(bookingFinancialRows, dateField),
+    [bookingFinancialRows, dateField],
+  );
 
   const platformRevenue = useMemo(() => {
     const map = new Map<string, { platform: string; revenue: number; bookings: number; people: number }>();
@@ -1441,7 +1454,9 @@ const BookingsExecutiveDashboard = ({
       <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">
         <Box style={{ gridColumn: "span 2" }}>
           <ChartShell
-            title="Revenue trend (online revenue, bookings/day)"
+            title={`Revenue trend by ${
+              dateField === "source_received_at" ? "Source Received At" : "Experience Date"
+            } (online revenue, bookings/day)`}
             info={
               <SectionInfo
                 title="Revenue Trend"
@@ -1482,6 +1497,16 @@ const BookingsExecutiveDashboard = ({
 
         <ChartShell
           title="Platform Revenue Share"
+          action={
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconArrowsExchange size={15} />}
+              onClick={() => setPlatformComparisonOpen(true)}
+            >
+              Compare
+            </Button>
+          }
           info={
             <SectionInfo
               title="Platform Revenue Share"
@@ -1802,6 +1827,14 @@ const BookingsExecutiveDashboard = ({
           </Alert>
         </SimpleGrid>
       </Paper>
+      <PlatformRevenueComparisonModal
+        opened={platformComparisonOpen}
+        onClose={() => setPlatformComparisonOpen(false)}
+        dateField={dateField}
+        productTypeIds={productTypeIds}
+        defaultCurrency={defaultCurrency}
+        mapOrder={toFinancialRow}
+      />
     </Stack>
   );
 };

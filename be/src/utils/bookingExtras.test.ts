@@ -1,4 +1,7 @@
-import { normalizeBookingExtrasSnapshot } from './bookingExtras';
+import {
+  normalizeBookingExtrasSnapshot,
+  normalizeBookingTshirtSizeSnapshot,
+} from './bookingExtras';
 
 describe('normalizeBookingExtrasSnapshot', () => {
   it('keeps supporting legacy extras snapshots', () => {
@@ -42,5 +45,47 @@ describe('normalizeBookingExtrasSnapshot', () => {
         ],
       }),
     ).toEqual({ cocktails: 0, tshirts: 0, photos: 0 });
+  });
+});
+
+describe('normalizeBookingTshirtSizeSnapshot', () => {
+  it('extracts and combines storefront T-shirt variants', () => {
+    expect(
+      normalizeBookingTshirtSizeSnapshot({
+        addons: [
+          {
+            name: 'T-Shirts',
+            quantity: 4,
+            variants: [
+              { value: 'S', quantity: 1 },
+              { value: ' m ', quantity: 2 },
+              { value: 'M', quantity: 1 },
+            ],
+          },
+          { name: 'Instant Photos', quantity: 1, variants: [{ value: 'XL', quantity: 1 }] },
+        ],
+      }),
+    ).toEqual({ S: 1, M: 3 });
+  });
+
+  it('supports bare and older single-value storefront snapshots', () => {
+    expect(
+      normalizeBookingTshirtSizeSnapshot([
+        { label: 'T-shirt', value: 'xl', quantity: 2 },
+        { name: 'T-Shirts', value: true, quantity: 1 },
+      ]),
+    ).toEqual({ XL: 2 });
+  });
+
+  it('ignores missing and malformed size selections without inventing sizes', () => {
+    expect(
+      normalizeBookingTshirtSizeSnapshot({
+        addons: [
+          { name: 'T-Shirts', quantity: 3, variants: [{ value: 'M', quantity: 2 }] },
+          { name: 'T-Shirts', quantity: 1, variants: [{ value: 'L', quantity: 0 }] },
+          { name: 'T-Shirts', quantity: 1, variants: [{ value: '', quantity: 1 }] },
+        ],
+      }),
+    ).toEqual({ M: 2 });
   });
 });

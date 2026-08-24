@@ -70,6 +70,7 @@ import {
   resolveBookingsSummaryProductTypeValues,
   serializeProductTypeSelection,
 } from "../utils/productTypeQuery";
+import type { BookingsSummaryDateField } from "../utils/bookingsSummaryDate";
 
 const DATE_FORMAT = "YYYY-MM-DD";
 const BookingsExecutiveDashboard = lazy(() => import("../components/bookings/BookingsExecutiveDashboard"));
@@ -79,7 +80,7 @@ type ViewMode = "week" | "month";
 type FetchStatus = "idle" | "loading" | "error" | "success";
 
 type BookingFilter = "all" | "active" | "cancelled";
-type SummaryDateField = "experience_date" | "source_received_at";
+type SummaryDateField = BookingsSummaryDateField;
 type SummaryMetricMode = "earnings" | "revenue" | "costs";
 type SummaryDatePreset =
   | "today"
@@ -2538,6 +2539,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                         venueCommissionVenues={venueCommissionVenues}
                         metricMode={summaryMetricMode}
                         costsSummary={costsSummary}
+                        dateField={summaryDateField}
+                        productTypeIds={summaryProductTypeIdsParam}
                       />
                     </Suspense>
                   )}

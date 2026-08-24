@@ -64,6 +64,7 @@ import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 
 import axiosInstance from "../utils/axiosInstance";
+import { getManifestTshirtSizeLabels } from "../utils/manifestTshirtSizes";
 
 import {
   UnifiedOrder,
@@ -5809,18 +5810,25 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                 label: string;
                                 style: { backgroundColor: string; color: string; borderColor: string };
                               } => Boolean(chip));
+                              const tshirtQuantity = order.extras?.tshirts ?? 0;
+                              const tshirtSizeLabels = getManifestTshirtSizeLabels(
+                                tshirtQuantity,
+                                order.selectedTshirtSizes,
+                              );
                               const bookingExtrasChips = [
                                 (order.extras?.cocktails ?? 0) > 0
                                   ? {
                                       key: "cocktails",
                                       value: order.extras?.cocktails ?? 0,
+                                      detailLabels: [] as string[],
                                       icon: <LocalBar fontSize="small" sx={{ color: "text.secondary", fontSize: 16 }} />,
                                     }
                                   : null,
-                                (order.extras?.tshirts ?? 0) > 0
+                                tshirtQuantity > 0
                                   ? {
                                       key: "tshirts",
-                                      value: order.extras?.tshirts ?? 0,
+                                      value: tshirtQuantity,
+                                      detailLabels: tshirtSizeLabels,
                                       icon: <Checkroom fontSize="small" sx={{ color: "text.secondary", fontSize: 16 }} />,
                                     }
                                   : null,
@@ -5828,6 +5836,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                   ? {
                                       key: "photos",
                                       value: order.extras?.photos ?? 0,
+                                      detailLabels: [] as string[],
                                       icon: <PhotoCamera fontSize="small" sx={{ color: "text.secondary", fontSize: 16 }} />,
                                     }
                                   : null,
@@ -6002,19 +6011,71 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                             radius="xl"
                                             py={4}
                                             px={8}
+                                            title={
+                                              chip.detailLabels.length > 0
+                                                ? `${chip.value} T-shirt${chip.value === 1 ? "" : "s"}: ${chip.detailLabels.join(", ")}`
+                                                : undefined
+                                            }
                                             style={{
                                               display: "flex",
                                               alignItems: "center",
                                               justifyContent: "center",
                                               gap: 6,
+                                              minWidth: 0,
                                               backgroundColor: "#f4f7fa",
                                               borderColor: "#d9e1ea",
                                             }}
                                           >
-                                            {chip.icon}
-                                            <Text size="xs" fw={700} c="dark.6" style={{ lineHeight: 1 }}>
-                                              {chip.value}
-                                            </Text>
+                                            <Box
+                                              style={{
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: 5,
+                                                flexShrink: 0,
+                                              }}
+                                            >
+                                              {chip.icon}
+                                              <Text size="xs" fw={700} c="dark.6" style={{ lineHeight: 1 }}>
+                                                {chip.value}
+                                              </Text>
+                                            </Box>
+                                            {chip.detailLabels.length > 0 && (
+                                              <>
+                                                <Box
+                                                  aria-hidden="true"
+                                                  style={{
+                                                    width: 1,
+                                                    height: 18,
+                                                    flexShrink: 0,
+                                                    backgroundColor: "#94a3b8",
+                                                  }}
+                                                />
+                                                <Group
+                                                  gap={4}
+                                                  wrap="wrap"
+                                                  justify="center"
+                                                  style={{ minWidth: 0 }}
+                                                >
+                                                  {chip.detailLabels.map((label) => (
+                                                    <Badge
+                                                      key={`${order.id}-extra-${chip.key}-${label}`}
+                                                      size="xs"
+                                                      radius="sm"
+                                                      variant="filled"
+                                                      style={{
+                                                        textTransform: "none",
+                                                        color: "#ffffff",
+                                                        backgroundColor: "#4338ca",
+                                                        border: "1px solid #3730a3",
+                                                        boxShadow: "0 1px 2px rgba(49, 46, 129, 0.28)",
+                                                      }}
+                                                    >
+                                                      {label}
+                                                    </Badge>
+                                                  ))}
+                                                </Group>
+                                              </>
+                                            )}
                                           </Paper>
                                         ))}
                                       </Box>
