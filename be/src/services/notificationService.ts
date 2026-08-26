@@ -24,13 +24,25 @@ type TemplateKey =
   | 'assignment_published'
   | 'swap_request'
   | 'swap_partner_accept'
-  | 'swap_manager_decision';
+  | 'swap_manager_decision'
+  | 'shift_takeover_request'
+  | 'shift_drop_request'
+  | 'shift_request_partner_response'
+  | 'shift_request_manager_decision'
+  | 'shift_request_canceled';
 
 type TemplateConfig = {
   channels: NotificationChannel[];
   subject: (payload: Record<string, unknown>) => string;
   html: (payload: Record<string, unknown>) => string;
 };
+
+const escapeHtml = (value: unknown): string => String(value ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#39;');
 
 const resolveScheduleTimezone = (): string => (getConfigValue('SCHED_TZ') as string) ?? 'Europe/Warsaw';
 
@@ -110,7 +122,49 @@ const templateLibrary: Record<TemplateKey, TemplateConfig> = {
     html: (payload) => `
       <p>Hi ${(payload.firstName as string | undefined) ?? ''},</p>
       <p>Your swap request for <strong>${payload.shiftType}</strong> on <strong>${payload.day}</strong> was <strong>${payload.decision}</strong>.</p>
-      ${payload.reason ? `<p>Reason: ${payload.reason}</p>` : ''}
+      ${payload.reason ? `<p>Reason: ${escapeHtml(payload.reason)}</p>` : ''}
+    `,
+  },
+  shift_takeover_request: {
+    channels: ['in_app', 'email'],
+    subject: (payload) => `Takeover request: ${payload.shiftType ?? 'Shift'} on ${payload.day}`,
+    html: (payload) => `
+      <p>Hi ${escapeHtml(payload.firstName)},</p>
+      <p>${escapeHtml(payload.requesterName)} would like to take over your <strong>${escapeHtml(payload.shiftType ?? 'shift')}</strong> shift on <strong>${escapeHtml(payload.day ?? 'the scheduled day')}</strong>${payload.time ? ` at <strong>${escapeHtml(payload.time)}</strong>` : ''}.</p>
+      <p>Please review and respond in the Scheduling app.</p>
+    `,
+  },
+  shift_drop_request: {
+    channels: ['in_app', 'email'],
+    subject: (payload) => `Drop request submitted: ${payload.shiftType ?? 'Shift'} on ${payload.day}`,
+    html: (payload) => `
+      <p>Hi ${escapeHtml(payload.firstName)},</p>
+      <p>Your request to drop the <strong>${escapeHtml(payload.shiftType ?? 'shift')}</strong> shift on <strong>${escapeHtml(payload.day ?? 'the scheduled day')}</strong>${payload.time ? ` at <strong>${escapeHtml(payload.time)}</strong>` : ''} was submitted and awaits manager approval.</p>
+    `,
+  },
+  shift_request_partner_response: {
+    channels: ['in_app', 'email'],
+    subject: (payload) => `${payload.requestLabel ?? 'Shift request'} ${payload.accepted ? 'accepted' : 'declined'}: ${payload.shiftType ?? 'Shift'} on ${payload.day}`,
+    html: (payload) => `
+      <p>Hi ${escapeHtml(payload.firstName)},</p>
+      <p>${escapeHtml(payload.partnerName)} ${payload.accepted ? 'accepted' : 'declined'} your ${escapeHtml(String(payload.requestLabel ?? 'shift request').toLowerCase())} for the <strong>${escapeHtml(payload.shiftType ?? 'shift')}</strong> shift on <strong>${escapeHtml(payload.day ?? 'the scheduled day')}</strong>.</p>
+      ${payload.accepted ? '<p>The request now awaits manager approval.</p>' : ''}
+    `,
+  },
+  shift_request_manager_decision: {
+    channels: ['in_app', 'email'],
+    subject: (payload) => `${payload.requestLabel ?? 'Shift request'} ${payload.decision === 'approved' ? 'approved' : 'denied'}: ${payload.shiftType ?? 'Shift'} on ${payload.day}`,
+    html: (payload) => `
+      <p>Hi ${escapeHtml(payload.firstName)},</p>
+      <p>Your ${escapeHtml(String(payload.requestLabel ?? 'shift request').toLowerCase())} for <strong>${escapeHtml(payload.shiftType ?? 'the shift')}</strong> on <strong>${escapeHtml(payload.day ?? 'the scheduled day')}</strong> was <strong>${payload.decision === 'approved' ? 'approved' : 'denied'}</strong>.</p>
+      ${payload.reason ? `<p>Manager note: ${escapeHtml(payload.reason)}</p>` : ''}
+    `,
+  },
+  shift_request_canceled: {
+    channels: ['in_app'],
+    subject: (payload) => `${payload.requestLabel ?? 'Shift request'} canceled`,
+    html: (payload) => `
+      <p>${escapeHtml(payload.actorName ?? 'A participant')} canceled the ${escapeHtml(String(payload.requestLabel ?? 'shift request').toLowerCase())} for <strong>${escapeHtml(payload.shiftType ?? 'the shift')}</strong> on <strong>${escapeHtml(payload.day ?? 'the scheduled day')}</strong>.</p>
     `,
   },
 };

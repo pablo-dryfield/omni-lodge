@@ -1,5 +1,10 @@
 import { formatScheduleWeekLabel, getUpcomingWeeks } from '../scheduling';
 
+jest.mock('../../utils/axiosInstance', () => ({
+  __esModule: true,
+  default: {},
+}));
+
 describe('scheduling helpers', () => {
   it('formats week label', () => {
     expect(formatScheduleWeekLabel(2025, 5)).toBe('Week 05 / 2025');

@@ -8,10 +8,12 @@ import {
   Button,
   Card,
   Group,
+  Modal,
   Paper,
   SimpleGrid,
   Stack,
   Text,
+  Textarea,
   ThemeIcon,
   Title,
 } from "@mantine/core";
@@ -24,6 +26,7 @@ import {
   IconChevronRight,
   IconClock,
   IconRefresh,
+  IconUserMinus,
   IconUserCheck,
   IconX,
 } from "@tabler/icons-react";
@@ -34,16 +37,22 @@ import type { AxiosError } from "axios";
 import { useAppSelector } from "../../store/hooks";
 import {
   getUpcomingWeeks,
-  useCreateSwap,
+  useCancelShiftRequest,
+  useCreateShiftRequest,
   useEnsureWeek,
-  useMySwaps,
-  usePartnerSwapResponse,
-  useCancelSwap,
+  useMyShiftRequests,
+  useShiftRequestPartnerResponse,
   useShiftInstances,
 } from "../../api/scheduling";
 import WeekSelector from "../../components/scheduling/WeekSelector";
 import SwapRequestModal from "../../components/scheduling/SwapRequestModal";
-import type { ShiftAssignment, ShiftInstance, SwapRequest } from "../../types/scheduling";
+import ShiftChangeRequestModal from "../../components/scheduling/ShiftChangeRequestModal";
+import {
+  getShiftRequestType,
+  resolveShiftRequestAssignment,
+  type ShiftRequestAssignmentLike,
+} from "../../components/scheduling/shiftRequestPresentation";
+import type { ShiftAssignment, ShiftInstance, ShiftRequest } from "../../types/scheduling";
 import { buildUserProfilePhotoUrl } from "../../utils/profilePhoto";
 
 dayjs.extend(isoWeek);
@@ -82,7 +91,7 @@ const formatShiftTimeRange = (start?: string | null, end?: string | null) =>
 const formatRoleLabel = (value?: string | null) =>
   value?.replace(/[_-]+/g, " ").trim().replace(/\b\w/g, (char) => char.toUpperCase()) || "Role";
 
-const getUserName = (assignment?: ShiftAssignment | null) => {
+const getUserName = (assignment?: ShiftRequestAssignmentLike | null) => {
   const user = assignment?.assignee;
   return [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim() || "Teammate";
 };
@@ -92,7 +101,7 @@ const getInitials = (name: string) => {
   return `${parts[0]?.[0] ?? "U"}${parts[1]?.[0] ?? ""}`.toUpperCase();
 };
 
-const getProfilePhotoUrl = (assignment?: ShiftAssignment | null) =>
+const getProfilePhotoUrl = (assignment?: ShiftRequestAssignmentLike | null) =>
   buildUserProfilePhotoUrl({ user: assignment?.assignee ?? null });
 
 const hasShiftStartPassed = (shift: ShiftInstance) => {
@@ -102,7 +111,7 @@ const hasShiftStartPassed = (shift: ShiftInstance) => {
   return dayjs(`${shift.date} ${shift.timeStart}`).isBefore(dayjs());
 };
 
-const getStatusColor = (status: SwapRequest["status"]) => {
+const getStatusColor = (status: ShiftRequest["status"]) => {
   switch (status) {
     case "pending_partner":
       return "orange";
@@ -128,10 +137,10 @@ const MyShiftsPage = () => {
   const ensureWeekQuery = useEnsureWeek(selectedWeek, { allowGenerate: false, enabled: isAuthenticated });
   const weekId = ensureWeekQuery.data?.week?.id ?? null;
   const instancesQuery = useShiftInstances(weekId);
-  const createSwap = useCreateSwap();
-  const mySwaps = useMySwaps();
-  const partnerResponse = usePartnerSwapResponse();
-  const cancelSwap = useCancelSwap();
+  const createShiftRequest = useCreateShiftRequest();
+  const myShiftRequests = useMyShiftRequests();
+  const partnerResponse = useShiftRequestPartnerResponse();
+  const cancelShiftRequest = useCancelShiftRequest();
 
   const selectedWeekIndex = weekOptions.findIndex((option) => option.value === selectedWeek);
   const canNavigateBackward = selectedWeekIndex > 0;
@@ -166,8 +175,12 @@ const MyShiftsPage = () => {
 
   const [respondingSwapId, setRespondingSwapId] = useState<number | null>(null);
   const [cancelingSwapId, setCancelingSwapId] = useState<number | null>(null);
+  const [dropEntry, setDropEntry] = useState<{ shift: ShiftInstance; assignment: ShiftAssignment } | null>(null);
+  const [responseModal, setResponseModal] = useState<{ request: ShiftRequest; accept: boolean } | null>(null);
+  const [responseNote, setResponseNote] = useState("");
+  const [responseError, setResponseError] = useState<string | null>(null);
 
-  const getSwapStatusLabel = useCallback((status: SwapRequest["status"]) => {
+  const getSwapStatusLabel = useCallback((status: ShiftRequest["status"]) => {
     switch (status) {
       case "pending_partner":
         return "Awaiting teammate";
@@ -247,9 +260,22 @@ const MyShiftsPage = () => {
     );
   }, [potentialAssignments, swapModal.assignment, swapModal.shift]);
 
-  const activeSwaps = useMemo(
-    () => (mySwaps.data ?? []).filter((swap) => swap.status === "pending_partner" || swap.status === "pending_manager"),
-    [mySwaps.data],
+  const activeRequests = useMemo(
+    () =>
+      (myShiftRequests.data ?? []).filter(
+        (request) => request.status === "pending_partner" || request.status === "pending_manager",
+      ),
+    [myShiftRequests.data],
+  );
+
+  const activeRequestAssignmentIds = useMemo(
+    () =>
+      new Set(
+        activeRequests
+          .flatMap((request) => [request.fromAssignmentId, request.toAssignmentId])
+          .filter((assignmentId): assignmentId is number => Number.isInteger(assignmentId)),
+      ),
+    [activeRequests],
   );
 
   const summary = useMemo(() => {
@@ -257,9 +283,9 @@ const MyShiftsPage = () => {
     return {
       total: myAssignments.length,
       upcoming,
-      pending: activeSwaps.length,
+      pending: activeRequests.length,
     };
-  }, [activeSwaps.length, myAssignments]);
+  }, [activeRequests.length, myAssignments]);
 
   const handleOpenSwap = (entry: { shift: ShiftInstance; assignment: ShiftAssignment }) => {
     if (hasShiftStartPassed(entry.shift)) {
@@ -269,14 +295,18 @@ const MyShiftsPage = () => {
   };
 
   const handleSubmitSwap = async (payload: { fromAssignmentId: number; toAssignmentId: number; partnerId: number }) => {
-    await createSwap.mutateAsync(payload);
+    await createShiftRequest.mutateAsync({
+      type: "swap",
+      fromAssignmentId: payload.fromAssignmentId,
+      toAssignmentId: payload.toAssignmentId,
+    });
   };
 
   const handlePartnerDecision = useCallback(
-    async (swapId: number, accept: boolean) => {
-      setRespondingSwapId(swapId);
+    async (requestId: number, accept: boolean, note?: string) => {
+      setRespondingSwapId(requestId);
       try {
-        await partnerResponse.mutateAsync({ swapId, accept });
+        await partnerResponse.mutateAsync({ requestId, accept, ...(note ? { note } : {}) });
       } finally {
         setRespondingSwapId(null);
       }
@@ -285,16 +315,32 @@ const MyShiftsPage = () => {
   );
 
   const handleCancelSwap = useCallback(
-    async (swapId: number) => {
-      setCancelingSwapId(swapId);
+    async (requestId: number) => {
+      setCancelingSwapId(requestId);
       try {
-        await cancelSwap.mutateAsync(swapId);
+        await cancelShiftRequest.mutateAsync({ requestId });
       } finally {
         setCancelingSwapId(null);
       }
     },
-    [cancelSwap],
+    [cancelShiftRequest],
   );
+
+  const handleSubmitDrop = async ({ assignmentId, note }: { assignmentId: number; note?: string }) => {
+    await createShiftRequest.mutateAsync({ type: "drop", assignmentId, ...(note ? { note } : {}) });
+  };
+
+  const handleConfirmPartnerResponse = async () => {
+    if (!responseModal) return;
+    setResponseError(null);
+    try {
+      await handlePartnerDecision(responseModal.request.id, responseModal.accept, responseNote.trim() || undefined);
+      setResponseModal(null);
+      setResponseNote("");
+    } catch (error) {
+      setResponseError(error instanceof Error ? error.message : "Unable to update this request.");
+    }
+  };
 
   const renderWeekControls = () => (
     <Group gap="xs" wrap="nowrap" style={{ width: "100%", maxWidth: 680 }}>
@@ -373,7 +419,9 @@ const MyShiftsPage = () => {
         assignment.shiftInstanceId !== item.assignment.shiftInstanceId &&
         shiftRolesMatch(item.assignment, assignment),
     );
-    const disableSwap = isPast || !hasEligiblePartners;
+    const hasPendingRequest = activeRequestAssignmentIds.has(item.assignment.id);
+    const disableSwap = isPast || !hasEligiblePartners || hasPendingRequest;
+    const disableDrop = isPast || hasPendingRequest;
     const roleLabel = formatRoleLabel(item.assignment.roleInShift);
 
     return (
@@ -387,6 +435,7 @@ const MyShiftsPage = () => {
             borderBottom: "1px solid #E2E8F0",
           }}
         >
+          <Stack gap="sm">
           <Group justify="space-between" gap="md" wrap="nowrap">
             <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
               <Paper radius={16} p="xs" shadow="xs" style={{ minWidth: 60, textAlign: "center", backgroundColor: "#FFFFFF" }}>
@@ -423,6 +472,8 @@ const MyShiftsPage = () => {
                 </Group>
               </Stack>
             </Group>
+          </Group>
+          <Group grow={isMobile} justify="flex-end" wrap="wrap">
             <Button
               variant={disableSwap ? "light" : "filled"}
               color={disableSwap ? "gray" : "violet"}
@@ -434,7 +485,19 @@ const MyShiftsPage = () => {
             >
               {isMobile ? "Swap" : "Request swap"}
             </Button>
+            <Button
+              variant={disableDrop ? "light" : "filled"}
+              color={disableDrop ? "gray" : "orange"}
+              radius="xl"
+              leftSection={<IconUserMinus size={16} />}
+              disabled={disableDrop}
+              onClick={() => setDropEntry(item)}
+              style={{ fontWeight: 900 }}
+            >
+              {isMobile ? "Drop" : "Drop shift"}
+            </Button>
           </Group>
+          </Stack>
         </Box>
 
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm" p="md">
@@ -458,13 +521,15 @@ const MyShiftsPage = () => {
           </Paper>
         </SimpleGrid>
 
-        {!hasEligiblePartners || isPast ? (
+        {!hasEligiblePartners || isPast || hasPendingRequest ? (
           <Box px="md" pb="md">
             <Alert color={isPast ? "gray" : "blue"} radius="lg" variant="light">
               <Text size="sm" fw={800} ta="center">
                 {isPast
-                  ? "Swap requests are closed for this shift."
-                  : "No teammates available with matching shift type and role."}
+                  ? "Shift requests are closed for this shift."
+                  : hasPendingRequest
+                    ? "A request is already pending for this shift."
+                    : "No teammates are available for a swap. You can still request to drop this shift."}
               </Text>
             </Alert>
           </Box>
@@ -473,7 +538,11 @@ const MyShiftsPage = () => {
     );
   };
 
-  const renderSwapSide = (label: string, assignment: ShiftAssignment | null | undefined, tone: "offer" | "request") => {
+  const renderSwapSide = (
+    label: string,
+    assignment: ShiftRequestAssignmentLike | null | undefined,
+    tone: "offer" | "request",
+  ) => {
     const shift = assignment?.shiftInstance;
     const name = getUserName(assignment);
     const photoUrl = getProfilePhotoUrl(assignment);
@@ -527,41 +596,68 @@ const MyShiftsPage = () => {
     );
   };
 
-  const renderSwapCard = (swap: SwapRequest) => {
-    const isRequester = swap.requesterId === loggedUserId;
-    const isPartner = swap.partnerId === loggedUserId;
-    const showPartnerActions = swap.status === "pending_partner" && isPartner;
-    const canCancel = (swap.status === "pending_partner" || swap.status === "pending_manager") && (isRequester || isPartner);
-    const statusColor = getStatusColor(swap.status);
-    const requesterName = [swap.requester?.firstName, swap.requester?.lastName].filter(Boolean).join(" ") || "Teammate";
+  const renderRequestCard = (request: ShiftRequest) => {
+    const requestType = getShiftRequestType(request);
+    const fromAssignment = resolveShiftRequestAssignment(request, "from");
+    const toAssignment = resolveShiftRequestAssignment(request, "to");
+    const isRequester = request.requesterId === loggedUserId;
+    const isPartner = request.partnerId === loggedUserId;
+    const showPartnerActions = request.status === "pending_partner" && isPartner;
+    const canCancel =
+      (request.status === "pending_partner" || request.status === "pending_manager") && (isRequester || isPartner);
+    const statusColor = getStatusColor(request.status);
+    const requesterName =
+      [request.requester?.firstName, request.requester?.lastName].filter(Boolean).join(" ") || "Teammate";
+    const requestTitle = requestType === "takeover" ? "Takeover request" : requestType === "drop" ? "Drop request" : "Swap request";
 
     return (
-      <Card key={swap.id} withBorder shadow="sm" radius={22} padding="md">
+      <Card key={request.id} withBorder shadow="sm" radius={22} padding="md">
         <Stack gap="md">
           <Group justify="space-between" align="center">
             <Stack gap={2}>
               <Text fw={900} style={{ fontFamily: HEADER_FONT_STACK, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                Swap request
+                {requestTitle}
               </Text>
               <Text size="sm" c="dimmed" fw={700}>
                 Requested by {isRequester ? "you" : requesterName}
               </Text>
             </Stack>
             <Badge color={statusColor} variant="light" radius="xl" size="lg">
-              {getSwapStatusLabel(swap.status)}
+              {getSwapStatusLabel(request.status)}
             </Badge>
           </Group>
 
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-            {renderSwapSide(isRequester ? "You offer" : "They offer", swap.fromAssignment, "offer")}
-            {renderSwapSide(isRequester ? "You request" : "You give", swap.toAssignment, "request")}
-          </SimpleGrid>
+          {requestType === "swap" ? (
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+              {renderSwapSide(isRequester ? "You offer" : "They offer", fromAssignment, "offer")}
+              {renderSwapSide(isRequester ? "You request" : "You give", toAssignment, "request")}
+            </SimpleGrid>
+          ) : requestType === "takeover" ? (
+            renderSwapSide(isPartner ? "Your shift" : "Shift to take over", fromAssignment, "request")
+          ) : (
+            renderSwapSide("Shift to drop", fromAssignment, "offer")
+          )}
 
-          {swap.decisionReason ? (
+          {request.requestNote ? (
+            <Alert color="blue" radius="lg" variant="light">
+              <Text size="xs" fw={900} tt="uppercase">Request note</Text>
+              <Text size="sm" fw={700}>{request.requestNote}</Text>
+            </Alert>
+          ) : null}
+
+          {request.partnerResponseNote ? (
+            <Alert color="teal" radius="lg" variant="light">
+              <Text size="xs" fw={900} tt="uppercase">Teammate note</Text>
+              <Text size="sm" fw={700}>{request.partnerResponseNote}</Text>
+            </Alert>
+          ) : null}
+
+          {request.decisionReason ? (
             <Alert color="gray" radius="lg" variant="light">
-              <Text size="sm" fw={700}>
-                {swap.decisionReason}
+              <Text size="xs" fw={900} tt="uppercase">
+                {request.status === "canceled" ? "Cancellation note" : "Manager note"}
               </Text>
+              <Text size="sm" fw={700}>{request.decisionReason}</Text>
             </Alert>
           ) : null}
 
@@ -572,16 +668,24 @@ const MyShiftsPage = () => {
                   <Button
                     color="red"
                     variant="light"
-                    loading={respondingSwapId === swap.id && partnerResponse.isPending}
-                    onClick={() => handlePartnerDecision(swap.id, false)}
+                    loading={respondingSwapId === request.id && partnerResponse.isPending}
+                    onClick={() => {
+                      setResponseNote("");
+                      setResponseError(null);
+                      setResponseModal({ request, accept: false });
+                    }}
                     leftSection={<IconX size={16} />}
                   >
                     Decline
                   </Button>
                   <Button
                     color="green"
-                    loading={respondingSwapId === swap.id && partnerResponse.isPending}
-                    onClick={() => handlePartnerDecision(swap.id, true)}
+                    loading={respondingSwapId === request.id && partnerResponse.isPending}
+                    onClick={() => {
+                      setResponseNote("");
+                      setResponseError(null);
+                      setResponseModal({ request, accept: true });
+                    }}
                     leftSection={<IconUserCheck size={16} />}
                   >
                     Accept
@@ -594,8 +698,8 @@ const MyShiftsPage = () => {
                 <Button
                   variant="light"
                   color="red"
-                  loading={cancelingSwapId === swap.id && cancelSwap.isPending}
-                  onClick={() => handleCancelSwap(swap.id)}
+                  loading={cancelingSwapId === request.id && cancelShiftRequest.isPending}
+                  onClick={() => handleCancelSwap(request.id)}
                   leftSection={<IconX size={16} />}
                 >
                   Cancel request
@@ -644,7 +748,7 @@ const MyShiftsPage = () => {
         {summary.pending > 0 ? (
           <Paper withBorder radius={18} p="md" style={{ textAlign: "center", backgroundColor: "#FFFFFF" }}>
             <Text size="xs" c="dimmed" fw={900} tt="uppercase" style={{ fontFamily: HEADER_FONT_STACK }}>
-              Pending swaps
+              Pending requests
             </Text>
             <Text fw={900} size="xl" c="orange" style={{ fontFamily: HEADER_FONT_STACK }}>
               {summary.pending}
@@ -665,18 +769,18 @@ const MyShiftsPage = () => {
         )}
       </Stack>
 
-      {(mySwaps.data?.length ?? 0) > 0 ? (
+      {(myShiftRequests.data?.length ?? 0) > 0 ? (
         <Stack mt="sm" gap="md">
           <Group justify="center" align="center" gap="xs">
             <Title order={3} style={{ fontFamily: HEADER_FONT_STACK }}>
-              SWAP REQUESTS
+              SHIFT REQUESTS
             </Title>
             <ThemeIcon color="violet" variant="light" radius="xl">
               <IconRefresh size={18} />
             </ThemeIcon>
           </Group>
           <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="md">
-            {(mySwaps.data ?? []).map(renderSwapCard)}
+            {(myShiftRequests.data ?? []).map(renderRequestCard)}
           </SimpleGrid>
         </Stack>
       ) : null}
@@ -689,6 +793,68 @@ const MyShiftsPage = () => {
         fromShift={swapModal.shift}
         potentialAssignments={modalAssignments}
       />
+
+      <ShiftChangeRequestModal
+        opened={Boolean(dropEntry)}
+        requestType="drop"
+        assignments={
+          dropEntry
+            ? [{ ...dropEntry.assignment, shiftInstance: dropEntry.shift }]
+            : []
+        }
+        onClose={() => setDropEntry(null)}
+        onSubmit={handleSubmitDrop}
+      />
+
+      <Modal
+        opened={Boolean(responseModal)}
+        onClose={() => {
+          if (!partnerResponse.isPending) {
+            setResponseModal(null);
+            setResponseNote("");
+            setResponseError(null);
+          }
+        }}
+        title={responseModal?.accept ? "Accept request" : "Decline request"}
+        centered
+        fullScreen={isMobile}
+        size="md"
+      >
+        <Stack gap="md">
+          <Text fw={700} ta="center">
+            {responseModal?.request.requestType === "takeover"
+              ? responseModal.accept
+                ? "Accept this takeover and send it to a manager for final approval?"
+                : "Decline this takeover request?"
+              : responseModal?.accept
+                ? "Accept this swap and send it to a manager for final approval?"
+                : "Decline this swap request?"}
+          </Text>
+          <Textarea
+            label="Response note (optional)"
+            placeholder="Add context for the requester and manager"
+            value={responseNote}
+            onChange={(event) => setResponseNote(event.currentTarget.value)}
+            maxLength={2000}
+            autosize
+            minRows={3}
+            disabled={partnerResponse.isPending}
+          />
+          {responseError ? <Alert color="red" role="alert">{responseError}</Alert> : null}
+          <Group grow>
+            <Button variant="light" color="gray" onClick={() => setResponseModal(null)} disabled={partnerResponse.isPending}>
+              Cancel
+            </Button>
+            <Button
+              color={responseModal?.accept ? "green" : "red"}
+              onClick={handleConfirmPartnerResponse}
+              loading={partnerResponse.isPending}
+            >
+              {responseModal?.accept ? "Accept" : "Decline"}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 };

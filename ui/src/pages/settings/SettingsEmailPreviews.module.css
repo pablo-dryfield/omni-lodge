@@ -1,0 +1,28 @@
+.previewOption {
+  display: block;
+  width: 100%;
+  min-height: 68px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  text-align: left;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.previewOption:hover {
+  background: var(--mantine-color-gray-0);
+}
+
+.previewOption[data-selected] {
+  background: var(--mantine-color-blue-0);
+  border-color: var(--mantine-color-blue-2);
+}
+
+.previewOption[data-selected]:hover {
+  background: var(--mantine-color-blue-0);
+}
+
+.previewOptionTitle,
+.previewOptionMeta {
+  overflow-wrap: anywhere;
+}

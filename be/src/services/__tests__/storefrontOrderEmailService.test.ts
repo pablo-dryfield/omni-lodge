@@ -8,6 +8,7 @@ import type StorefrontOrderItem from '../../models/StorefrontOrderItem';
 
 jest.mock('../../config/database.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/Booking.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/Product.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/StorefrontOrder.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/StorefrontOrderItem.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../bookings/gmailClient.js', () => ({ sendMessage: jest.fn() }));
@@ -32,6 +33,7 @@ const order = {
   items: [
     {
       id: 501,
+      productId: 28,
       productName: 'Krawl Through Krakow Pub Crawl',
       quantity: 2,
       experienceDate: '2026-08-15',
@@ -58,6 +60,23 @@ const order = {
 } as unknown as StorefrontOrder;
 
 const bookingIds = new Map([[501, 41001]]);
+const productDetails = new Map([
+  [
+    28,
+    {
+      summary: 'Krakow\'s biggest night out, all planned for you.',
+      description: 'Start with an unlimited open bar and continue through Krakow\'s best venues.',
+      highlights: ['Open bar with unlimited drinks for 1 hour'],
+      importantInformation: ['Bring a valid photo ID.'],
+      meetingPoint: {
+        name: 'Adam Mickiewicz Monument',
+        address: 'Rynek Glowny, 31-042 Krakow',
+        instructions: 'Search for the pink umbrella!',
+        mapUrl: 'https://maps.example.com/meeting-point',
+      },
+    },
+  ],
+]);
 
 describe('storefront paid-order emails', () => {
   beforeEach(() => {
@@ -69,7 +88,7 @@ describe('storefront paid-order emails', () => {
   });
 
   it('builds a useful customer confirmation in HTML and plain text', () => {
-    const email = buildCustomerStorefrontEmail(order, bookingIds);
+    const email = buildCustomerStorefrontEmail(order, bookingIds, productDetails);
 
     expect(email.subject).toContain('Booking confirmed');
     expect(email.htmlBody).toContain('Krawl Through Krakow Pub Crawl');
@@ -92,6 +111,14 @@ describe('storefront paid-order emails', () => {
     expect(email.htmlBody).toContain('Cancellation policy');
     expect(email.htmlBody).toContain('Custom cancellation terms.');
     expect(email.htmlBody).not.toContain('24 hours or more before the start time');
+    expect(email.htmlBody).toContain('Krakow&#39;s biggest night out');
+    expect(email.htmlBody).toContain('Start with an unlimited open bar');
+    expect(email.htmlBody).toContain('Open bar with unlimited drinks for 1 hour');
+    expect(email.htmlBody).toContain('Bring a valid photo ID.');
+    expect(email.htmlBody).toContain('Adam Mickiewicz Monument');
+    expect(email.htmlBody).toContain('Search for the pink umbrella!');
+    expect(email.htmlBody).toContain('OPEN IN GOOGLE MAPS');
+    expect(email.textBody).toContain('MEETING POINT');
     expect(email.textBody).toContain('+48791847981');
     expect(email.textBody).toContain('pubthroughkrakow@gmail.com');
     expect(`${email.subject}${email.htmlBody}${email.textBody}`).not.toMatch(/Ã|Â|â|Ä|Ĺ/);
@@ -107,7 +134,7 @@ describe('storefront paid-order emails', () => {
   });
 
   it('builds an operator notification with contact and payment details', () => {
-    const email = buildInternalStorefrontEmail(order, bookingIds);
+    const email = buildInternalStorefrontEmail(order, bookingIds, productDetails);
 
     expect(email.subject).toContain('New paid storefront order');
     expect(email.htmlBody).toContain('alex@example.com');
@@ -116,6 +143,7 @@ describe('storefront paid-order emails', () => {
     expect(email.htmlBody).toContain('T-Shirts: S × 2 · M × 1');
     expect(email.htmlBody).toContain('Experiences');
     expect(email.htmlBody).toContain('Customer details');
+    expect(email.htmlBody).toContain('Adam Mickiewicz Monument');
     expect(email.textBody).toContain('+48123456789');
     expect(email.textBody).toContain('KRAKOW10');
   });

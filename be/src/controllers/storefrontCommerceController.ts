@@ -3,7 +3,10 @@ import type Stripe from 'stripe';
 import { Op } from 'sequelize';
 import sequelize from '../config/database.js';
 import HttpError from '../errors/HttpError.js';
-import { getStripeClient, isStripeConfigured } from '../finance/services/stripeClient.js';
+import {
+  getStorefrontStripeClient,
+  isStorefrontStripeConfigured,
+} from '../finance/services/stripeClient.js';
 import Booking from '../models/Booking.js';
 import BookingAddon from '../models/BookingAddon.js';
 import Guest from '../models/Guest.js';
@@ -25,12 +28,20 @@ import {
   mergeStorefrontAddonsSnapshot,
 } from '../services/storefrontBookingProjectionService.js';
 import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
-import { getStorefrontCancellationPolicy } from '../services/storefrontPublicConfigService.js';
+import { getStorefrontPublicConfig } from '../services/storefrontPublicConfigService.js';
 import { getConfigValueRaw } from '../services/configService.js';
 import {
   addCustomerToSavedCart,
   getUsableSavedCart,
 } from '../services/storefrontSavedCartService.js';
+import {
+  getUsableOngoingCart,
+  markOngoingCartConverted,
+  recordOngoingCartEvent,
+  recordOngoingCartEventByIdentity,
+  resetOngoingCartCheckoutActivity,
+  upsertOngoingCart,
+} from '../services/storefrontOngoingCartService.js';
 import logger from '../utils/logger.js';
 
 type CheckoutCustomer = {
@@ -205,6 +216,7 @@ const persistPaidOrder = async (
         { status: 'paid', paidAt: order.paidAt || new Date() },
         { where: { orderId: order.id }, transaction },
       );
+      await markOngoingCartConverted(order.id, order.paidAt || new Date(), transaction);
       return order;
     }
 
@@ -222,6 +234,7 @@ const persistPaidOrder = async (
       { status: 'paid', paidAt: order.paidAt || now },
       { where: { orderId: order.id }, transaction },
     );
+    await markOngoingCartConverted(order.id, order.paidAt || now, transaction);
 
     const guest = await Guest.create(
       {
@@ -381,12 +394,7 @@ export const fulfillPaidOrder = async (
 
 export const getStorefrontConfig = async (_request: Request, response: Response, next: NextFunction) => {
   try {
-    response.json({
-      currency: STOREFRONT_CURRENCY,
-      stripeConfigured: isStripeConfigured(),
-      checkoutEnabled: isStripeConfigured(),
-      cancellationPolicy: getStorefrontCancellationPolicy(),
-    });
+    response.json(getStorefrontPublicConfig());
   } catch (error) {
     next(error);
   }
@@ -403,8 +411,47 @@ export const quoteCart = async (request: Request, response: Response, next: Next
       undefined,
       sharedCartPublicId ? { allowMissingCustomerDetails: true } : {},
     );
-    response.json(serializeQuote(quote));
+    const cartSessionId = text(request.body?.cartSessionId, 36);
+    const ongoing = !sharedCartPublicId && cartSessionId
+      ? await upsertOngoingCart({
+          sessionId: cartSessionId,
+          publicId: request.body?.ongoingCartPublicId,
+          cart,
+          customer: request.body?.customer,
+          attribution: request.body?.attribution,
+          quote,
+        })
+      : null;
+    const clientEvent = optionalRecord(request.body?.clientEvent);
+    if (ongoing && clientEvent?.type === 'checkout_cancelled') {
+      const cancelledOrder = text(clientEvent.orderPublicId, 36);
+      await recordOngoingCartEvent(ongoing, {
+        type: 'checkout_cancelled',
+        severity: 'warning',
+        message: 'Customer returned from Stripe without completing payment.',
+        details: cancelledOrder ? { orderPublicId: cancelledOrder } : null,
+        dedupeKey: `checkout_cancelled:${cancelledOrder || ongoing.orderId || 'unknown'}`,
+      });
+    }
+    response.json({
+      ...serializeQuote(quote),
+      ongoingCart: ongoing ? {
+        publicId: ongoing.publicId,
+        sessionId: ongoing.sessionId,
+        status: ongoing.status,
+        recoveryDueAt: ongoing.recoveryDueAt,
+      } : null,
+    });
   } catch (error) {
+    await recordOngoingCartEventByIdentity(
+      { publicId: request.body?.ongoingCartPublicId, sessionId: request.body?.cartSessionId },
+      {
+        type: 'quote_error',
+        severity: 'error',
+        message: error instanceof Error ? error.message : 'Unable to calculate the cart total.',
+        details: error instanceof HttpError ? { status: error.status } : null,
+      },
+    );
     next(error);
   }
 };
@@ -414,28 +461,45 @@ export const createCheckout = async (request: Request, response: Response, next:
     const customer = parseCustomer(request.body?.customer);
     const attribution = optionalRecord(request.body?.attribution);
     const sharedCartPublicId = text(request.body?.sharedCartPublicId, 36);
+    const ongoingCartPublicId = sharedCartPublicId ? '' : text(request.body?.ongoingCartPublicId, 36);
     const savedCart = sharedCartPublicId
       ? await getUsableSavedCart(sharedCartPublicId)
+      : null;
+    const ongoingCart = ongoingCartPublicId
+      ? await getUsableOngoingCart(ongoingCartPublicId)
       : null;
     const cart = savedCart
       ? addCustomerToSavedCart(savedCart.cart, customer)
       : request.body?.cart as StorefrontCartInput;
     const quote = await quoteStorefrontCart(cart);
 
-    let existingOrder = savedCart?.orderId
-      ? await StorefrontOrder.findByPk(savedCart.orderId)
+    const existingOrderId = savedCart?.orderId ?? ongoingCart?.orderId;
+    let existingOrder = existingOrderId
+      ? await StorefrontOrder.findByPk(existingOrderId)
       : null;
     if (existingOrder?.paymentStatus === 'paid') {
       await savedCart?.update({ status: 'paid', paidAt: existingOrder.paidAt || new Date() });
-      throw new HttpError(409, 'This prepared cart has already been paid.');
+      if (ongoingCart) {
+        await markOngoingCartConverted(existingOrder.id, existingOrder.paidAt || new Date());
+      }
+      throw new HttpError(409, 'This cart has already been paid.');
     }
 
-    if (existingOrder?.stripeCheckoutSessionId && isStripeConfigured()) {
-      const existingSession = await getStripeClient().checkout.sessions.retrieve(
+    if (existingOrder?.stripeCheckoutSessionId && isStorefrontStripeConfigured()) {
+      const existingSession = await getStorefrontStripeClient().checkout.sessions.retrieve(
         existingOrder.stripeCheckoutSessionId,
       );
       const totalsMatch = roundMoney(Number(existingOrder.total)) === roundMoney(quote.total);
       if (existingSession.status === 'open' && existingSession.url && totalsMatch) {
+        if (ongoingCart) {
+          await resetOngoingCartCheckoutActivity(ongoingCart, quote, existingOrder.id);
+          await recordOngoingCartEvent(ongoingCart, {
+            type: 'checkout_started',
+            severity: 'info',
+            message: 'Customer continued to Stripe checkout.',
+            details: { orderPublicId: existingOrder.publicId },
+          });
+        }
         response.status(200).json({
           publicId: existingOrder.publicId,
           checkoutUrl: existingSession.url,
@@ -447,7 +511,7 @@ export const createCheckout = async (request: Request, response: Response, next:
         throw new HttpError(409, 'Payment has already been submitted and is being confirmed.');
       }
       if (existingSession.status === 'open') {
-        await getStripeClient().checkout.sessions.expire(existingSession.id);
+        await getStorefrontStripeClient().checkout.sessions.expire(existingSession.id);
       }
     }
 
@@ -455,8 +519,14 @@ export const createCheckout = async (request: Request, response: Response, next:
       const lockedSavedCart = savedCart
         ? await getUsableSavedCart(savedCart.publicId, transaction, true)
         : null;
+      const lockedOngoingCart = ongoingCart
+        ? await getUsableOngoingCart(ongoingCart.publicId, transaction, true)
+        : null;
       if (lockedSavedCart?.orderId && lockedSavedCart.orderId !== existingOrder?.id) {
         throw new HttpError(409, 'Checkout is already being prepared. Please try the link again.');
+      }
+      if (lockedOngoingCart?.orderId && lockedOngoingCart.orderId !== existingOrder?.id) {
+        throw new HttpError(409, 'Checkout is already being prepared. Please try again.');
       }
 
       const orderValues = {
@@ -481,6 +551,7 @@ export const createCheckout = async (request: Request, response: Response, next:
           discountCodes: quote.discountCodes,
           discounts: quote.discounts,
           ...(lockedSavedCart ? { savedCartPublicId: lockedSavedCart.publicId } : {}),
+          ...(lockedOngoingCart ? { ongoingCartPublicId: lockedOngoingCart.publicId } : {}),
         },
       };
 
@@ -529,6 +600,9 @@ export const createCheckout = async (request: Request, response: Response, next:
           { transaction },
         );
       }
+      if (lockedOngoingCart) {
+        await resetOngoingCartCheckoutActivity(lockedOngoingCart, quote, pendingOrder.id, transaction);
+      }
 
       existingOrder = pendingOrder;
       return pendingOrder;
@@ -545,11 +619,11 @@ export const createCheckout = async (request: Request, response: Response, next:
       return;
     }
 
-    if (!isStripeConfigured()) {
+    if (!isStorefrontStripeConfigured()) {
       throw new HttpError(503, 'Online checkout is not configured.');
     }
 
-    const stripe = getStripeClient();
+    const stripe = getStorefrontStripeClient();
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       customer_email: customer.email,
@@ -570,16 +644,39 @@ export const createCheckout = async (request: Request, response: Response, next:
         orderId: String(order.id),
       },
       success_url: `${returnBaseUrl}/checkout/success?order=${order.publicId}&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${returnBaseUrl}/cart?checkout=cancelled${savedCart ? `&shared=${savedCart.publicId}` : ''}`,
+      cancel_url: `${returnBaseUrl}/cart?checkout=cancelled&cancelled_order=${order.publicId}${
+        savedCart
+          ? `&shared=${savedCart.publicId}`
+          : ongoingCart
+            ? `&recover=${ongoingCart.publicId}`
+            : ''
+      }`,
     });
 
     await order.update({ stripeCheckoutSessionId: session.id });
+    if (ongoingCart) {
+      await recordOngoingCartEvent(ongoingCart, {
+        type: 'checkout_started',
+        severity: 'info',
+        message: 'Customer continued to Stripe checkout.',
+        details: { orderPublicId: order.publicId },
+      });
+    }
     response.status(201).json({
       publicId: order.publicId,
       checkoutUrl: session.url,
       quote: serializeQuote(quote),
     });
   } catch (error) {
+    await recordOngoingCartEventByIdentity(
+      { publicId: request.body?.ongoingCartPublicId },
+      {
+        type: 'checkout_error',
+        severity: 'error',
+        message: error instanceof Error ? error.message : 'Unable to start Stripe checkout.',
+        details: error instanceof HttpError ? { status: error.status } : null,
+      },
+    );
     next(error);
   }
 };
@@ -606,7 +703,7 @@ export const confirmCheckout = async (request: Request, response: Response, next
       throw new HttpError(400, 'Invalid checkout session.');
     }
 
-    const session = await getStripeClient().checkout.sessions.retrieve(sessionId);
+    const session = await getStorefrontStripeClient().checkout.sessions.retrieve(sessionId);
     if (session.metadata?.orderPublicId !== publicId || session.payment_status !== 'paid') {
       throw new HttpError(409, 'Payment has not completed.');
     }

@@ -1,5 +1,9 @@
 import type { StorefrontCancellationPolicy } from '../types/storefront.js';
 import { getConfigValue } from './configService.js';
+import {
+  isStorefrontStripeConfigured,
+  isStorefrontStripeTestMode,
+} from '../finance/services/stripeClient.js';
 
 const text = (value: unknown): string =>
   typeof value === 'string' ? value.trim() : '';
@@ -34,3 +38,11 @@ export const normalizeStorefrontCancellationPolicy = (
 
 export const getStorefrontCancellationPolicy = (): StorefrontCancellationPolicy | null =>
   normalizeStorefrontCancellationPolicy(getConfigValue('STOREFRONT_CANCELLATION_POLICY'));
+
+export const getStorefrontPublicConfig = () => ({
+  currency: 'PLN',
+  stripeConfigured: isStorefrontStripeConfigured(),
+  stripeMode: isStorefrontStripeTestMode() ? 'test' : 'live',
+  checkoutEnabled: isStorefrontStripeConfigured(),
+  cancellationPolicy: getStorefrontCancellationPolicy(),
+});

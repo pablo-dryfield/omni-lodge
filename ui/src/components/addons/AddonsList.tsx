@@ -37,6 +37,14 @@ const coerceAddonPayload = (payload: Partial<Addon>): Partial<Addon> => {
     next.isActive = Boolean(next.isActive);
   }
 
+  if (next.description !== undefined) {
+    next.description = String(next.description ?? "").trim() || null;
+  }
+
+  if (next.imageUrl !== undefined) {
+    next.imageUrl = String(next.imageUrl ?? "").trim() || null;
+  }
+
   delete next.id;
   delete next.createdAt;
   delete next.updatedAt;

@@ -10,9 +10,10 @@ import FinanceManagementRequest from '../finance/models/FinanceManagementRequest
 import { applyManagementRequest } from '../finance/services/managementRequestService.js';
 import { recordFinanceAuditLog } from '../finance/services/auditLogService.js';
 import {
-  listSwapsByStatus,
-  swapManagerDecision,
+  decideShiftChangeRequest,
+  listShiftChangeRequests,
 } from '../services/scheduleService.js';
+import { parseStrictBoolean } from '../services/shiftRequestRulesService.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import {
   recordUserAuditLog,
@@ -318,21 +319,24 @@ const serializePopupRequestAudits = async () => {
 
 export const listRequests = async (_req: Request, res: Response): Promise<void> => {
   try {
-    const [userApprovals, scheduleSwaps, financeRequests, popupRequests] = await Promise.all([
+    const [userApprovals, scheduleRequests, financeRequests, popupRequests] = await Promise.all([
       findPendingUserApprovalRequests(),
-      listSwapsByStatus('pending_manager'),
+      listShiftChangeRequests({ status: 'pending_manager' }),
       findOpenFinanceRequests(),
       serializePopupRequestAudits(),
     ]);
+    const scheduleSwaps = scheduleRequests.filter((request) => (request.requestType ?? 'swap') === 'swap');
 
     res.status(200).json({
       userApprovals,
+      scheduleRequests,
       scheduleSwaps,
       financeRequests,
       popupRequests,
       summary: {
-        total: userApprovals.length + scheduleSwaps.length + financeRequests.length,
+        total: userApprovals.length + scheduleRequests.length + financeRequests.length,
         userApprovals: userApprovals.length,
+        scheduleRequests: scheduleRequests.length,
         scheduleSwaps: scheduleSwaps.length,
         financeRequests: financeRequests.length,
         popupRequests: popupRequests.length,
@@ -468,17 +472,23 @@ export const rejectUserRequest = async (req: Request, res: Response): Promise<vo
   }
 };
 
-export const decideScheduleSwapRequest = async (req: Request, res: Response): Promise<void> => {
+export const decideScheduleShiftRequest = async (req: Request, res: Response): Promise<void> => {
   try {
     const actorId = getActorId(req as AuthenticatedRequest);
-    const approve = normalizeBoolean(req.body?.approve, false);
-    const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
-    const swap = await swapManagerDecision(Number(req.params.id), actorId, approve, reason);
-    res.status(200).json(swap);
+    const approve = parseStrictBoolean(req.body?.approve);
+    if (approve == null) {
+      res.status(400).json([{ message: 'approve must be a boolean' }]);
+      return;
+    }
+    const reason = req.body?.reason ?? req.body?.note;
+    const shiftRequest = await decideShiftChangeRequest(Number(req.params.id), actorId, approve, reason);
+    res.status(200).json(shiftRequest);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 400).json([{ message: (error as Error).message }]);
   }
 };
+
+export const decideScheduleSwapRequest = decideScheduleShiftRequest;
 
 export const decideFinanceRequest = async (req: Request, res: Response): Promise<void> => {
   try {

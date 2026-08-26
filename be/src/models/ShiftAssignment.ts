@@ -55,9 +55,9 @@ export default class ShiftAssignment extends Model {
   @BelongsTo(() => ShiftRole, { foreignKey: 'shift_role_id', as: 'shiftRole' })
   declare shiftRole?: NonAttribute<ShiftRole | null>;
 
-  @HasMany(() => SwapRequest, { foreignKey: 'from_assignment_id', as: 'outgoingSwapRequests' })
+  @HasMany(() => SwapRequest, { foreignKey: 'fromAssignmentId', as: 'outgoingSwapRequests' })
   declare outgoingSwapRequests?: SwapRequest[];
 
-  @HasMany(() => SwapRequest, { foreignKey: 'to_assignment_id', as: 'incomingSwapRequests' })
+  @HasMany(() => SwapRequest, { foreignKey: 'toAssignmentId', as: 'incomingSwapRequests' })
   declare incomingSwapRequests?: SwapRequest[];
 }

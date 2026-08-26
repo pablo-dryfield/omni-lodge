@@ -113,13 +113,48 @@ export interface AvailabilityEntry {
   status: 'available' | 'unavailable';
 }
 
-export interface SwapRequest {
+export type ShiftRequestType = 'swap' | 'takeover' | 'drop';
+
+export type ShiftRequestStatus = 'pending_partner' | 'pending_manager' | 'approved' | 'denied' | 'canceled';
+
+export interface ShiftAssignmentSnapshotBase {
   id: number;
-  fromAssignmentId: number;
-  toAssignmentId: number;
+  shiftInstanceId: number;
+  userId: number;
+  shiftRoleId: number | null;
+  roleInShift: string;
+  assignee: {
+    id: number;
+    firstName: string | null;
+    lastName: string | null;
+  } | null;
+  shiftInstance: {
+    id: number;
+    date: string;
+    timeStart: string;
+    timeEnd: string | null;
+    shiftTypeId: number;
+    shiftType: {
+      id: number;
+      name: string;
+    } | null;
+  } | null;
+}
+
+export interface ShiftAssignmentSnapshot extends ShiftAssignmentSnapshotBase {
+  toAssignment?: ShiftAssignmentSnapshotBase | null;
+}
+
+export interface ShiftRequest {
+  id: number;
+  requestType: ShiftRequestType;
+  fromAssignmentId: number | null;
+  toAssignmentId: number | null;
   requesterId: number;
-  partnerId: number;
-  status: 'pending_partner' | 'pending_manager' | 'approved' | 'denied' | 'canceled';
+  partnerId: number | null;
+  status: ShiftRequestStatus;
+  requestNote?: string | null;
+  partnerResponseNote?: string | null;
   decisionReason?: string | null;
   managerId?: number | null;
   createdAt?: string;
@@ -135,7 +170,16 @@ export interface SwapRequest {
     firstName: string;
     lastName: string;
   } | null;
+  manager?: {
+    id: number;
+    firstName: string;
+    lastName: string;
+  } | null;
+  assignmentSnapshot?: ShiftAssignmentSnapshot | null;
 }
+
+/** @deprecated Prefer ShiftRequest. Retained while legacy swap call sites migrate. */
+export type SwapRequest = ShiftRequest;
 
 export interface ScheduleExport {
   id: number;

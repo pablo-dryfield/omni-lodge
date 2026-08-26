@@ -1,14 +1,23 @@
 import type { NextFunction, Request, Response } from 'express';
 import Stripe from 'stripe';
-import { getStripeClient } from '../finance/services/stripeClient.js';
+import {
+  getStorefrontStripeClient,
+  storefrontStripeWebhookConfigKey,
+} from '../finance/services/stripeClient.js';
 import { getConfigValueRaw } from '../services/configService.js';
 import logger from '../utils/logger.js';
 import { fulfillPaidOrder } from './storefrontCommerceController.js';
 
-const webhookSecret = (): string | null =>
-  getConfigValueRaw('STOREFRONT_STRIPE_WEBHOOK_SECRET')?.trim()
-  || process.env.STRIPE_WEBHOOK_SECRET?.trim()
-  || null;
+const webhookSecret = (): string | null => {
+  const configKey = storefrontStripeWebhookConfigKey();
+  const environmentSecret = configKey === 'STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET'
+    ? process.env.STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET?.trim()
+      || process.env.STRIPE_TEST_WEBHOOK_SECRET?.trim()
+    : process.env.STOREFRONT_STRIPE_WEBHOOK_SECRET?.trim()
+      || process.env.STRIPE_WEBHOOK_SECRET?.trim();
+
+  return getConfigValueRaw(configKey)?.trim() || environmentSecret || null;
+};
 
 export const storefrontStripeWebhook = async (
   request: Request,
@@ -28,7 +37,7 @@ export const storefrontStripeWebhook = async (
       return;
     }
 
-    const event = getStripeClient().webhooks.constructEvent(request.body, signature, secret);
+    const event = getStorefrontStripeClient().webhooks.constructEvent(request.body, signature, secret);
     if (
       event.type === 'checkout.session.completed'
       || event.type === 'checkout.session.async_payment_succeeded'

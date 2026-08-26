@@ -59,6 +59,7 @@ import venueNumbersRoutes from './routes/venueNumbersRoutes.js';
 import catalogRoutes from './routes/catalogRoutes.js';
 import storefrontRoutes from './routes/storefrontRoutes.js';
 import storefrontSavedCartRoutes from './routes/storefrontSavedCartRoutes.js';
+import storefrontOngoingCartRoutes from './routes/storefrontOngoingCartRoutes.js';
 import storefrontPromotionRoutes from './routes/storefrontPromotionRoutes.js';
 import { storefrontStripeWebhook } from './controllers/storefrontWebhookController.js';
 import getYourGuideRoutes from './routes/getYourGuideRoutes.js';
@@ -86,6 +87,7 @@ import { startBookingEmailIngestionJob } from './jobs/bookingEmailIngestion.cron
 import { startAmTaskPushNotificationsJob } from './jobs/amTaskPushNotifications.cron.js';
 import { startDailyMidnightClosureJob } from './jobs/dailyMidnightClosure.cron.js';
 import { startReviewFullSyncJob } from './jobs/reviewFullSync.cron.js';
+import { startStorefrontAbandonedCartJob } from './jobs/storefrontAbandonedCart.cron.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -234,6 +236,7 @@ app.use('/api/venueNumbers', venueNumbersRoutes);
 app.use('/api/catalog', catalogRoutes);
 app.use('/api/storefront', storefrontRoutes);
 app.use('/api/storefront-saved-carts', storefrontSavedCartRoutes);
+app.use('/api/storefront-ongoing-carts', storefrontOngoingCartRoutes);
 app.use('/api/storefront-promotions', storefrontPromotionRoutes);
 app.use('/api/schedules', schedulesRoutes);
 app.use('/api/sql-helper', sqlHelperRoutes);
@@ -348,6 +351,7 @@ async function bootstrap(): Promise<void> {
         }
         startDailyMidnightClosureJob();
         startReviewFullSyncJob();
+        startStorefrontAbandonedCartJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
@@ -363,6 +367,7 @@ async function bootstrap(): Promise<void> {
         }
         startDailyMidnightClosureJob();
         startReviewFullSyncJob();
+        startStorefrontAbandonedCartJob();
       });
     }
   } catch (err) {

@@ -15,19 +15,29 @@ import {
   Select,
   Stack,
   Text,
+  Tooltip,
   Title,
 } from "@mantine/core";
-import { IconAlertTriangle, IconArrowsExchange, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconArrowsExchange,
+  IconChevronLeft,
+  IconChevronRight,
+  IconUserPlus,
+} from "@tabler/icons-react";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 import { useMediaQuery } from "@mantine/hooks";
 import WeekSelector from "../../components/scheduling/WeekSelector";
+import ShiftChangeRequestModal from "../../components/scheduling/ShiftChangeRequestModal";
+import { canRequestTakeoverAssignment } from "../../components/scheduling/shiftRequestPresentation";
 import { buildUserProfilePhotoUrl } from "../../utils/profilePhoto";
 import {
   formatScheduleWeekLabel,
-  useCreateSwap,
+  useCreateShiftRequest,
   useEnsureWeek,
+  useMyShiftRequests,
   useShiftInstances,
   useScheduleWeeks,
 } from "../../api/scheduling";
@@ -549,10 +559,13 @@ const ScheduleOverviewPage = () => {
   const todayMobileCardRef = useRef<HTMLDivElement | null>(null);
   const mobileAutoScrolledRef = useRef(false);
   const scheduleWeeksQuery = useScheduleWeeks({ limit: 120 });
-  const createSwap = useCreateSwap();
+  const createSwapRequest = useCreateShiftRequest();
+  const createTakeoverRequest = useCreateShiftRequest();
+  const myShiftRequests = useMyShiftRequests();
   const [quickSwapTarget, setQuickSwapTarget] = useState<ShiftAssignment | null>(null);
   const [quickSwapSourceId, setQuickSwapSourceId] = useState<string | null>(null);
   const [quickSwapError, setQuickSwapError] = useState<string | null>(null);
+  const [takeoverAssignments, setTakeoverAssignments] = useState<ShiftAssignment[]>([]);
   const weekOptions = useMemo(() => {
     const existingWeeks = (scheduleWeeksQuery.data ?? []) as ScheduleWeek[];
     const options: { value: string; label: string }[] = existingWeeks.map((weekRecord) => ({
@@ -782,6 +795,33 @@ const ScheduleOverviewPage = () => {
     return items;
   }, [loggedUserId, shiftInstances]);
 
+  const activeRequestAssignmentIds = useMemo(
+    () =>
+      new Set(
+        (myShiftRequests.data ?? [])
+          .filter((request) => request.status === "pending_partner" || request.status === "pending_manager")
+          .flatMap((request) => [request.fromAssignmentId, request.toAssignmentId])
+          .filter((assignmentId): assignmentId is number => Number.isInteger(assignmentId)),
+      ),
+    [myShiftRequests.data],
+  );
+
+  const getEligibleTakeoverAssignments = useCallback(
+    (assignments: ShiftAssignment[]) => {
+      const ownShiftInstanceIds = new Set(myAssignmentsForWeek.map((assignment) => assignment.shiftInstanceId));
+      return assignments.filter((assignment) =>
+        canRequestTakeoverAssignment({
+          assignment,
+          currentUserId: loggedUserId,
+          ownShiftInstanceIds,
+          activeRequestAssignmentIds,
+          shiftHasStarted: hasShiftStartPassed(assignment.shiftInstance),
+        }),
+      );
+    },
+    [activeRequestAssignmentIds, loggedUserId, myAssignmentsForWeek],
+  );
+
   const getEligibleQuickSwapSources = useCallback(
     (target: ShiftAssignment | null | undefined) => {
       const targetShift = target?.shiftInstance;
@@ -868,7 +908,7 @@ const ScheduleOverviewPage = () => {
   };
 
   const handleCloseQuickSwap = () => {
-    if (createSwap.isPending) {
+    if (createSwapRequest.isPending) {
       return;
     }
     setQuickSwapTarget(null);
@@ -882,15 +922,26 @@ const ScheduleOverviewPage = () => {
     }
     setQuickSwapError(null);
     try {
-      await createSwap.mutateAsync({
+      await createSwapRequest.mutateAsync({
+        type: "swap",
         fromAssignmentId: Number(quickSwapSourceId),
         toAssignmentId: quickSwapTarget.id,
-        partnerId: quickSwapTarget.userId,
       });
       handleCloseQuickSwap();
     } catch (error) {
       setQuickSwapError(error instanceof Error ? error.message : "Could not request this swap.");
     }
+  };
+
+  const handleOpenTakeover = (assignments: ShiftAssignment[]) => {
+    const eligibleAssignments = getEligibleTakeoverAssignments(assignments);
+    if (eligibleAssignments.length > 0) {
+      setTakeoverAssignments(eligibleAssignments);
+    }
+  };
+
+  const handleSubmitTakeover = async ({ assignmentId, note }: { assignmentId: number; note?: string }) => {
+    await createTakeoverRequest.mutateAsync({ type: "takeover", assignmentId, ...(note ? { note } : {}) });
   };
 
   const renderQuickSwapAssignmentCard = (
@@ -1112,6 +1163,8 @@ const ScheduleOverviewPage = () => {
     const showCount = groupAssignments.length > 1;
     const quickSwapSources = primary ? getEligibleQuickSwapSources(primary) : [];
     const canQuickSwap = quickSwapSources.length > 0;
+    const eligibleTakeovers = getEligibleTakeoverAssignments(groupAssignments);
+    const canTakeOver = eligibleTakeovers.length > 0;
 
     if (variant === "mobile") {
       return (
@@ -1130,27 +1183,45 @@ const ScheduleOverviewPage = () => {
             position: "relative",
           }}
         >
-          {canQuickSwap && primary ? (
-            <ActionIcon
-              aria-label={`Request swap with ${name}`}
-              variant="light"
-              color="violet"
-              radius="xl"
-              size={30}
-              onClick={(event) => {
-                event.stopPropagation();
-                handleOpenQuickSwap(primary);
-              }}
-              style={{
-                position: "absolute",
-                top: 8,
-                right: 8,
-                border: "1px solid rgba(124, 77, 255, 0.22)",
-                backgroundColor: "rgba(245, 243, 255, 0.94)",
-              }}
-            >
-              <IconArrowsExchange size={16} />
-            </ActionIcon>
+          {canQuickSwap || canTakeOver ? (
+            <Group gap={5} wrap="nowrap" style={{ position: "absolute", top: 8, right: 8, zIndex: 2 }}>
+              {canQuickSwap && primary ? (
+                <Tooltip label={`Request swap with ${name}`}>
+                  <ActionIcon
+                    aria-label={`Request swap with ${name}`}
+                    variant="light"
+                    color="violet"
+                    radius="xl"
+                    size={40}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleOpenQuickSwap(primary);
+                    }}
+                    style={{ border: "1px solid rgba(124, 77, 255, 0.22)", backgroundColor: "rgba(245, 243, 255, 0.96)" }}
+                  >
+                    <IconArrowsExchange size={18} />
+                  </ActionIcon>
+                </Tooltip>
+              ) : null}
+              {canTakeOver ? (
+                <Tooltip label={`Request to take over ${name}'s shift`}>
+                  <ActionIcon
+                    aria-label={`Request to take over ${name}'s shift`}
+                    variant="light"
+                    color="teal"
+                    radius="xl"
+                    size={40}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleOpenTakeover(groupAssignments);
+                    }}
+                    style={{ border: "1px solid #5EEAD4", backgroundColor: "rgba(240, 253, 250, 0.96)" }}
+                  >
+                    <IconUserPlus size={19} />
+                  </ActionIcon>
+                </Tooltip>
+              ) : null}
+            </Group>
           ) : null}
           <Stack gap={8} align="center" style={{ padding: "12px", width: "100%" }}>
               <Avatar
@@ -1218,29 +1289,45 @@ const ScheduleOverviewPage = () => {
         style={{ ...styles.container, color: text }}
       >
         <Box style={styles.overlay} />
-        {canQuickSwap && primary ? (
-          <ActionIcon
-            aria-label={`Request swap with ${name}`}
-            variant="light"
-            color="violet"
-            radius="xl"
-            size={24}
-            onClick={(event) => {
-              event.stopPropagation();
-              handleOpenQuickSwap(primary);
-            }}
-            style={{
-              position: "absolute",
-              top: 8,
-              right: 8,
-              zIndex: 2,
-              border: "1px solid rgba(124, 77, 255, 0.26)",
-              backgroundColor: "rgba(255, 255, 255, 0.9)",
-              boxShadow: "0 8px 16px rgba(17, 24, 39, 0.16)",
-            }}
-          >
-            <IconArrowsExchange size={14} />
-          </ActionIcon>
+        {canQuickSwap || canTakeOver ? (
+          <Group gap={5} wrap="nowrap" style={{ position: "absolute", top: 8, right: 8, zIndex: 2 }}>
+            {canQuickSwap && primary ? (
+              <Tooltip label={`Request swap with ${name}`}>
+                <ActionIcon
+                  aria-label={`Request swap with ${name}`}
+                  variant="light"
+                  color="violet"
+                  radius="xl"
+                  size={34}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleOpenQuickSwap(primary);
+                  }}
+                  style={{ border: "1px solid rgba(124, 77, 255, 0.26)", backgroundColor: "rgba(255, 255, 255, 0.92)" }}
+                >
+                  <IconArrowsExchange size={16} />
+                </ActionIcon>
+              </Tooltip>
+            ) : null}
+            {canTakeOver ? (
+              <Tooltip label={`Request to take over ${name}'s shift`}>
+                <ActionIcon
+                  aria-label={`Request to take over ${name}'s shift`}
+                  variant="light"
+                  color="teal"
+                  radius="xl"
+                  size={34}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleOpenTakeover(groupAssignments);
+                  }}
+                  style={{ border: "1px solid #5EEAD4", backgroundColor: "rgba(240, 253, 250, 0.94)" }}
+                >
+                  <IconUserPlus size={17} />
+                </ActionIcon>
+              </Tooltip>
+            ) : null}
+          </Group>
         ) : null}
         <Stack gap={8} align="center" style={{ width: "100%", position: "relative", zIndex: 1 }}>
           <Avatar
@@ -2430,7 +2517,7 @@ const ScheduleOverviewPage = () => {
                   size="md"
                   radius="md"
                   onClick={handleCloseQuickSwap}
-                  disabled={createSwap.isPending}
+                  disabled={createSwapRequest.isPending}
                 >
                   Cancel
                 </Button>
@@ -2439,7 +2526,7 @@ const ScheduleOverviewPage = () => {
                   radius="md"
                   leftSection={<IconArrowsExchange size={16} />}
                   onClick={handleConfirmQuickSwap}
-                  loading={createSwap.isPending}
+                  loading={createSwapRequest.isPending}
                   disabled={!quickSwapSourceId || quickSwapSourceOptions.length === 0}
                 >
                   Send request
@@ -2449,6 +2536,14 @@ const ScheduleOverviewPage = () => {
           ) : null}
         </Stack>
       </Modal>
+
+      <ShiftChangeRequestModal
+        opened={takeoverAssignments.length > 0}
+        requestType="takeover"
+        assignments={takeoverAssignments}
+        onClose={() => setTakeoverAssignments([])}
+        onSubmit={handleSubmitTakeover}
+      />
     </Stack>
   );
 };

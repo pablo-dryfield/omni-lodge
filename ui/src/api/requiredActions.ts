@@ -10,7 +10,7 @@ export type RequiredActionField = {
 
 export type RequiredActionItem = {
   id: string;
-  source: "required_action" | "schedule_swap";
+  source: "required_action" | "schedule_swap" | "schedule_shift_request";
   recordId: number;
   type:
     | "broadcast"
@@ -21,7 +21,9 @@ export type RequiredActionItem = {
     | "customer_email"
     | "custom"
     | "schedule_swap_partner"
-    | "schedule_swap_manager";
+    | "schedule_swap_manager"
+    | "schedule_shift_request_partner"
+    | "schedule_shift_request_manager";
   title: string;
   body?: string | null;
   blocking: boolean;
@@ -153,15 +155,17 @@ export const useCompleteRequiredProfileFields = () => {
 export const useRespondToRequiredSwap = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ swapId, accept }: { swapId: number; accept: boolean }) => {
+    mutationFn: async ({ swapId, accept, note }: { swapId: number; accept: boolean; note?: string }) => {
       await axiosInstance.post(
-        `/required-actions/schedule-swaps/${swapId}/partner-response`,
-        { accept },
+        `/required-actions/schedule-shift-requests/${swapId}/partner-response`,
+        { accept, ...(note ? { note } : {}) },
         { withCredentials: true },
       );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: requiredActionsKey });
+      queryClient.invalidateQueries({ queryKey: ["scheduling"] });
+      queryClient.invalidateQueries({ queryKey: ["requests-center"] });
     },
   });
 };
@@ -169,15 +173,17 @@ export const useRespondToRequiredSwap = () => {
 export const useDecideRequiredManagerSwap = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ swapId, approve }: { swapId: number; approve: boolean }) => {
+    mutationFn: async ({ swapId, approve, reason }: { swapId: number; approve: boolean; reason?: string }) => {
       await axiosInstance.post(
-        `/required-actions/schedule-swaps/${swapId}/manager-decision`,
-        { approve },
+        `/required-actions/schedule-shift-requests/${swapId}/manager-decision`,
+        { approve, ...(reason ? { reason } : {}) },
         { withCredentials: true },
       );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: requiredActionsKey });
+      queryClient.invalidateQueries({ queryKey: ["scheduling"] });
+      queryClient.invalidateQueries({ queryKey: ["requests-center"] });
     },
   });
 };

@@ -25,3 +25,24 @@ export const getStripeTestClient = (): Stripe => getStripeClientForConfigKey('ST
 export const isStripeConfigured = (): boolean => Boolean(getConfigValueRaw('STRIPE_SECRET_KEY'));
 
 export const isStripeTestConfigured = (): boolean => Boolean(getConfigValueRaw('STRIPE_TEST_SECRET_KEY'));
+
+export const storefrontStripeConfigKey = (
+  environment = process.env.NODE_ENV,
+): 'STRIPE_SECRET_KEY' | 'STRIPE_TEST_SECRET_KEY' =>
+  environment === 'production' ? 'STRIPE_SECRET_KEY' : 'STRIPE_TEST_SECRET_KEY';
+
+export const storefrontStripeWebhookConfigKey = (
+  environment = process.env.NODE_ENV,
+): 'STOREFRONT_STRIPE_WEBHOOK_SECRET' | 'STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET' =>
+  environment === 'production'
+    ? 'STOREFRONT_STRIPE_WEBHOOK_SECRET'
+    : 'STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET';
+
+export const getStorefrontStripeClient = (): Stripe =>
+  getStripeClientForConfigKey(storefrontStripeConfigKey());
+
+export const isStorefrontStripeConfigured = (): boolean =>
+  Boolean(getConfigValueRaw(storefrontStripeConfigKey()));
+
+export const isStorefrontStripeTestMode = (): boolean =>
+  storefrontStripeConfigKey() === 'STRIPE_TEST_SECRET_KEY';

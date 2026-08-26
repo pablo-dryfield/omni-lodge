@@ -14,6 +14,7 @@ import {
   getAddonInventoryAvailability,
   type AddonInventoryAvailability,
 } from '../services/inventoryService.js';
+import { getStorefrontPublicConfig } from '../services/storefrontPublicConfigService.js';
 
 const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -36,6 +37,8 @@ type StorefrontProduct = {
   addons: Array<{
     id: number;
     name: string;
+    description: string | null;
+    imageUrl: string | null;
     price: {
       amount: number;
       currency: typeof STOREFRONT_CURRENCY;
@@ -73,7 +76,7 @@ const productIncludes: Includeable[] = [
       {
         model: Addon,
         as: 'addon',
-        attributes: ['id', 'name', 'basePrice', 'isActive'],
+        attributes: ['id', 'name', 'description', 'imageUrl', 'basePrice', 'isActive'],
         required: true,
         where: { isActive: true },
       },
@@ -210,6 +213,8 @@ const serializeProduct = (
         return {
           id: addon.id,
           name: addon.name,
+          description: addon.description ?? null,
+          imageUrl: addon.imageUrl ?? null,
           price:
             effectivePrice == null
               ? null
@@ -326,6 +331,7 @@ export const getStorefrontProduct = async (req: Request, res: Response): Promise
     res.status(200).json({
       version: 3,
       product: serializeProduct(product, effectivePrices, channelPrices, inventoryByAddon),
+      storefrontConfig: getStorefrontPublicConfig(),
     });
   } catch (error) {
     console.error(`Unable to load storefront product ${requestedSlug}:`, error);

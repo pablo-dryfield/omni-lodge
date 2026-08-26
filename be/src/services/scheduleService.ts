@@ -17,12 +17,11 @@ import Availability from '../models/Availability.js';
 import StaffProfile from '../models/StaffProfile.js';
 import User from '../models/User.js';
 import Export from '../models/Export.js';
-import SwapRequest, { type SwapRequestStatus } from '../models/SwapRequest.js';
+import SwapRequest from '../models/SwapRequest.js';
 import AuditLog from '../models/AuditLog.js';
 import ShiftRole from '../models/ShiftRole.js';
 import UserShiftRole from '../models/UserShiftRole.js';
 import Product from '../models/Product.js';
-import RequiredAction from '../models/RequiredAction.js';
 import { renderScheduleHTML } from './renderSchedule.js';
 import { ensureFolderPath, uploadBuffer } from './googleDrive.js';
 import { sendSchedulingNotification } from './notificationService.js';
@@ -38,6 +37,21 @@ dayjs.extend(customParseFormat);
 const resolveScheduleTimezone = (): string => (getConfigValue('SCHED_TZ') as string) ?? 'Europe/Warsaw';
 const resolveLockDay = (): number => Number(getConfigValue('SCHED_LOCK_DAY') ?? 0);
 const resolveLockHour = (): number => Number(getConfigValue('SCHED_LOCK_HOUR') ?? 18);
+
+export {
+  cancelShiftChangeRequest,
+  cancelSwapRequest,
+  createShiftChangeRequest,
+  createSwapRequest,
+  decideShiftChangeRequest,
+  listShiftChangeRequests,
+  listShiftChangeRequestsForUser,
+  listSwapsByStatus,
+  listSwapsForUser,
+  respondToShiftChangeRequest,
+  swapManagerDecision,
+  swapPartnerResponse,
+} from './shiftRequestService.js';
 
 const PUBLISHED_STATES: ScheduleWeekState[] = ['published'];
 const PUB_CRAWL_KEYS = new Set(['PUB_CRAWL', 'PRIVATE_PUB_CRAWL']);
@@ -218,27 +232,6 @@ async function logAudit(options: { actorId?: number | null; action: string; enti
     createdAt: dayjs().tz(resolveScheduleTimezone()).toDate(),
   });
 }
-
-const formatUserName = (user?: User | null): string => {
-  const fullName = [user?.firstName, user?.lastName]
-    .map((part) => (typeof part === 'string' ? part.trim() : ''))
-    .filter(Boolean)
-    .join(' ');
-  return fullName || user?.username || user?.email || 'Your teammate';
-};
-
-const formatSwapAssignmentForPopup = (assignment?: ShiftAssignment | null): string => {
-  const shift = assignment?.shiftInstance;
-  const shiftType = shift?.shiftType?.name ?? 'Shift';
-  const date = shift?.date && dayjs(shift.date).isValid()
-    ? dayjs(shift.date).format('ddd, MMM D')
-    : 'date unavailable';
-  const start = shift?.timeStart ? String(shift.timeStart).slice(0, 5) : null;
-  const end = shift?.timeEnd ? String(shift.timeEnd).slice(0, 5) : null;
-  const time = [start, end].filter(Boolean).join(' - ') || 'time unavailable';
-  const role = assignment?.roleInShift || assignment?.shiftRole?.name || 'role not specified';
-  return `${shiftType} | ${date} | ${time} | ${role}`;
-};
 
 async function ensureWeekExists(identifier: WeekIdentifier, transaction?: Transaction): Promise<{ week: ScheduleWeek; created: boolean }> {
   const [week, created] = await ScheduleWeek.findOrCreate({
@@ -2329,273 +2322,6 @@ export async function getAvailabilityForWeek(scheduleWeekId: number): Promise<Av
       ['day', 'ASC'],
       ['startTime', 'ASC'],
     ],
-  });
-}
-
-export async function createSwapRequest(payload: {
-  fromAssignmentId: number;
-  toAssignmentId: number;
-  partnerId: number;
-  requesterId: number;
-}): Promise<SwapRequest> {
-  const fromAssignment = await ShiftAssignment.findByPk(payload.fromAssignmentId);
-  if (!fromAssignment) {
-    throw new HttpError(404, 'Source assignment not found');
-  }
-  if (fromAssignment.userId !== payload.requesterId) {
-    throw new HttpError(403, 'You can only swap your own assignment');
-  }
-
-  const toAssignment = await ShiftAssignment.findByPk(payload.toAssignmentId);
-  if (!toAssignment) {
-    throw new HttpError(404, 'Target assignment not found');
-  }
-  if (toAssignment.userId !== payload.partnerId) {
-    throw new HttpError(400, 'Target assignment must belong to partner');
-  }
-
-  const swap = await SwapRequest.create({
-    fromAssignmentId: payload.fromAssignmentId,
-    toAssignmentId: payload.toAssignmentId,
-    requesterId: payload.requesterId,
-    partnerId: payload.partnerId,
-    status: 'pending_partner',
-  });
-
-  const partner = await User.findByPk(payload.partnerId);
-  if (partner) {
-    await sendSchedulingNotification({
-      user: partner,
-      templateKey: 'swap_request',
-      payload: {
-        shiftType: 'Shift',
-        day: dayjs().format('dddd'),
-        requesterName: 'Colleague',
-      },
-    });
-  }
-
-  await logAudit({
-    actorId: payload.requesterId,
-    action: 'schedule.swap.create',
-    entity: 'swap_request',
-    entityId: String(swap.id),
-  });
-
-  return swap;
-}
-
-export async function swapPartnerResponse(swapId: number, partnerId: number, accept: boolean): Promise<SwapRequest> {
-  const swap = await SwapRequest.findByPk(swapId);
-  if (!swap) {
-    throw new HttpError(404, 'Swap request not found');
-  }
-  if (swap.partnerId !== partnerId) {
-    throw new HttpError(403, 'Only the partner can respond to swap');
-  }
-
-  swap.status = accept ? 'pending_manager' : 'denied';
-  await swap.save();
-
-  await logAudit({
-    actorId: partnerId,
-    action: 'schedule.swap.partner-response',
-    entity: 'swap_request',
-    entityId: String(swap.id),
-    meta: { accept },
-  });
-
-  return swap;
-}
-
-export async function cancelSwapRequest(swapId: number, actorId: number): Promise<SwapRequest> {
-  const swap = await SwapRequest.findByPk(swapId);
-  if (!swap) {
-    throw new HttpError(404, 'Swap request not found');
-  }
-  if (!['pending_partner', 'pending_manager'].includes(swap.status)) {
-    throw new HttpError(400, 'Only pending swap requests can be canceled');
-  }
-  if (swap.requesterId !== actorId && swap.partnerId !== actorId) {
-    throw new HttpError(403, 'You may only cancel swap requests you are part of');
-  }
-
-  swap.status = 'canceled';
-  swap.decisionReason = 'Canceled by participant';
-  await swap.save();
-
-  await logAudit({
-    actorId,
-    action: 'schedule.swap.cancel',
-    entity: 'swap_request',
-    entityId: String(swap.id),
-  });
-
-  return swap;
-}
-
-export async function swapManagerDecision(swapId: number, managerId: number, approve: boolean, reason?: string): Promise<SwapRequest> {
-  const swap = await SwapRequest.findByPk(swapId, {
-    include: [
-      {
-        model: ShiftAssignment,
-        as: 'fromAssignment',
-        include: [
-          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
-          { model: ShiftRole, as: 'shiftRole' },
-        ],
-      },
-      {
-        model: ShiftAssignment,
-        as: 'toAssignment',
-        include: [
-          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
-          { model: ShiftRole, as: 'shiftRole' },
-        ],
-      },
-    ],
-  });
-  if (!swap) {
-    throw new HttpError(404, 'Swap request not found');
-  }
-  if (swap.status !== 'pending_manager') {
-    throw new HttpError(400, 'Swap not awaiting manager decision');
-  }
-
-  if (approve) {
-    await sequelize.transaction(async (transaction) => {
-      if (!swap.fromAssignment || !swap.toAssignment) {
-        throw new HttpError(400, 'Swap assignments missing');
-      }
-      const fromUser = swap.fromAssignment.userId;
-      const toUser = swap.toAssignment.userId;
-
-      await swap.fromAssignment.update({ userId: toUser }, { transaction });
-      await swap.toAssignment.update({ userId: fromUser }, { transaction });
-    });
-  }
-
-  swap.status = approve ? 'approved' : 'denied';
-  swap.managerId = managerId;
-  swap.decisionReason = reason ?? null;
-  await swap.save();
-
-  const participants = await User.findAll({
-    where: { id: [swap.requesterId, swap.partnerId] },
-  });
-  const requester = participants.find((participant) => participant.id === swap.requesterId) ?? null;
-  const partner = participants.find((participant) => participant.id === swap.partnerId) ?? null;
-  if (approve) {
-    const requesterName = formatUserName(requester);
-    const partnerName = formatUserName(partner);
-    await RequiredAction.create({
-      type: 'custom',
-      title: 'Swap approved',
-      body: [
-        `Your shift swap between ${requesterName} and ${partnerName} was approved by a manager.`,
-        '',
-        `${requesterName} offered: ${formatSwapAssignmentForPopup(swap.fromAssignment)}`,
-        `${partnerName} offered: ${formatSwapAssignmentForPopup(swap.toAssignment)}`,
-        '',
-        'The schedule has been updated.',
-      ].join('\n'),
-      payload: {
-        source: 'schedule_swap_manager_decision',
-        swapId: swap.id,
-        decision: 'approved',
-        requesterId: swap.requesterId,
-        partnerId: swap.partnerId,
-        fromAssignmentId: swap.fromAssignmentId,
-        toAssignmentId: swap.toAssignmentId,
-      },
-      targetUserIds: Array.from(new Set([swap.requesterId, swap.partnerId])),
-      requiresCompletion: true,
-      requiresSignature: false,
-      startsAt: new Date(),
-      status: true,
-      createdBy: managerId,
-      updatedBy: managerId,
-    });
-  }
-  await Promise.all(
-    participants.map((participant) =>
-      sendSchedulingNotification({
-        user: participant,
-        templateKey: 'swap_manager_decision',
-        payload: {
-          decision: approve ? 'approved' : 'denied',
-          reason: reason ?? '',
-        },
-      }),
-    ),
-  );
-
-  await logAudit({
-    actorId: managerId,
-    action: 'schedule.swap.manager-decision',
-    entity: 'swap_request',
-    entityId: String(swap.id),
-    meta: { approve, reason },
-  });
-
-  return swap;
-}
-
-export async function listSwapsByStatus(status: SwapRequestStatus): Promise<SwapRequest[]> {
-  return SwapRequest.findAll({
-    where: { status },
-    include: [
-      {
-        model: ShiftAssignment,
-        as: 'fromAssignment',
-        include: [
-          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
-          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
-        ],
-      },
-      {
-        model: ShiftAssignment,
-        as: 'toAssignment',
-        include: [
-          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
-          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
-        ],
-      },
-      { model: User, as: 'requester' },
-      { model: User, as: 'partner' },
-      { model: User, as: 'manager' },
-    ],
-    order: [['createdAt', 'DESC']],
-  });
-}
-
-export async function listSwapsForUser(userId: number): Promise<SwapRequest[]> {
-  return SwapRequest.findAll({
-    where: {
-      [Op.or]: [{ requesterId: userId }, { partnerId: userId }],
-    },
-    include: [
-      {
-        model: ShiftAssignment,
-        as: 'fromAssignment',
-        include: [
-          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
-          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
-        ],
-      },
-      {
-        model: ShiftAssignment,
-        as: 'toAssignment',
-        include: [
-          { model: ShiftInstance, as: 'shiftInstance', include: [{ model: ShiftType, as: 'shiftType' }] },
-          { model: User, as: 'assignee', include: [{ model: StaffProfile, as: 'staffProfile' }] },
-        ],
-      },
-      { model: User, as: 'requester' },
-      { model: User, as: 'partner' },
-      { model: User, as: 'manager' },
-    ],
-    order: [['createdAt', 'DESC']],
   });
 }
 

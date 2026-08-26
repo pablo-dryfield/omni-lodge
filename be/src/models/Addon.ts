@@ -28,6 +28,14 @@ export default class Addon extends Model {
   declare name: string;
 
   @AllowNull(true)
+  @Column(DataType.TEXT)
+  declare description: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'image_url', type: DataType.TEXT })
+  declare imageUrl: string | null;
+
+  @AllowNull(true)
   @Column({ field: 'base_price', type: DataType.DECIMAL(10, 2) })
   declare basePrice: number | null;
 

@@ -11,11 +11,13 @@ import CerebroQuiz from '../models/CerebroQuiz.js';
 import CerebroQuizAttempt from '../models/CerebroQuizAttempt.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import {
-  listSwapsByStatus,
-  listSwapsForUser,
-  swapManagerDecision,
-  swapPartnerResponse,
+  decideShiftChangeRequest,
+  listShiftChangeRequests,
+  listShiftChangeRequestsForUser,
+  respondToShiftChangeRequest,
 } from '../services/scheduleService.js';
+import { parseStrictBoolean } from '../services/shiftRequestRulesService.js';
+import { isSchedulingManagerRole } from '../routes/schedulingRoles.js';
 import {
   deleteProfilePhoto,
   storeProfilePhoto,
@@ -65,7 +67,6 @@ const USER_FIELD_SPECS: Record<UserFieldKey, { label: string; inputType: 'text' 
   profilePhoto: { label: 'Profile photo', inputType: 'image' },
 };
 
-const MANAGER_REQUIRED_ACTION_ROLES = new Set(['admin', 'administrator', 'manager']);
 const isUserFieldKey = (value: unknown): value is UserFieldKey =>
   typeof value === 'string' && Object.prototype.hasOwnProperty.call(USER_FIELD_SPECS, value);
 
@@ -367,21 +368,37 @@ const describeAssignment = (assignment: Record<string, unknown> | null | undefin
   };
 };
 
-const buildSwapActionPayload = (swap: Record<string, unknown>) => ({
-  requester: swap.requester,
-  partner: swap.partner,
-  fromAssignment: describeAssignment(swap.fromAssignment as Record<string, unknown> | null),
-  toAssignment: describeAssignment(swap.toAssignment as Record<string, unknown> | null),
-});
+const getShiftRequestType = (request: Record<string, unknown>): 'swap' | 'takeover' | 'drop' =>
+  request.requestType === 'takeover' || request.requestType === 'drop' ? request.requestType : 'swap';
+
+const buildShiftRequestActionPayload = (request: Record<string, unknown>) => {
+  const requestType = getShiftRequestType(request);
+  const assignmentSnapshot = request.assignmentSnapshot as Record<string, unknown> | null;
+  const liveFromAssignment = request.fromAssignment as Record<string, unknown> | null;
+  const liveToAssignment = request.toAssignment as Record<string, unknown> | null;
+  const toAssignmentSnapshot = assignmentSnapshot?.toAssignment as Record<string, unknown> | null;
+  const fromAssignment = describeAssignment(liveFromAssignment ?? assignmentSnapshot);
+  const toAssignment = describeAssignment(liveToAssignment ?? toAssignmentSnapshot);
+  return {
+    requestType,
+    requestNote: request.requestNote ?? null,
+    partnerResponseNote: request.partnerResponseNote ?? null,
+    assignmentSnapshot,
+    requester: request.requester,
+    partner: request.partner,
+    fromAssignment,
+    toAssignment,
+    affectedAssignment: requestType === 'swap'
+      ? toAssignment
+      : fromAssignment,
+  };
+};
 
 const isManagerRequiredActionUser = (req: AuthenticatedRequest): boolean => {
-  const slugs = [
+  return isSchedulingManagerRole(
     req.authContext?.roleSlug,
     req.authContext?.userTypeSlug,
-  ]
-    .map((value) => (value ?? '').trim().toLowerCase())
-    .filter(Boolean);
-  return slugs.some((slug) => MANAGER_REQUIRED_ACTION_ROLES.has(slug));
+  );
 };
 
 const customerEmailActionTargetsActor = (
@@ -428,8 +445,8 @@ export const listMyRequiredActions = async (req: Request, res: Response): Promis
 
     const userShiftRoleIds = ((user as unknown as { shiftRoles?: ShiftRole[] }).shiftRoles ?? []).map((role) => role.id);
     const now = new Date();
-    const canApproveManagerSwaps = isManagerRequiredActionUser(req as AuthenticatedRequest);
-    const [storedActions, completions, swaps, managerSwaps] = await Promise.all([
+    const canApproveManagerRequests = isManagerRequiredActionUser(req as AuthenticatedRequest);
+    const [storedActions, completions, shiftRequests, managerShiftRequests] = await Promise.all([
       RequiredAction.findAll({
         where: {
           status: true,
@@ -444,8 +461,10 @@ export const listMyRequiredActions = async (req: Request, res: Response): Promis
         where: { userId, status: { [Op.in]: ['completed', 'dismissed'] } },
         attributes: ['requiredActionId'],
       }),
-      listSwapsForUser(userId),
-      canApproveManagerSwaps ? listSwapsByStatus('pending_manager') : Promise.resolve([]),
+      listShiftChangeRequestsForUser(userId),
+      canApproveManagerRequests
+        ? listShiftChangeRequests({ status: 'pending_manager' })
+        : Promise.resolve([]),
     ]);
 
     const completedActionIds = new Set(completions.map((completion) => completion.requiredActionId));
@@ -457,34 +476,53 @@ export const listMyRequiredActions = async (req: Request, res: Response): Promis
       await Promise.all(candidateStoredActions.map((action) => serializeStoredAction(action, user)))
     ).filter((action): action is NonNullable<typeof action> => Boolean(action));
 
-    const swapItems = swaps
-      .filter((swap) => swap.status === 'pending_partner' && swap.partnerId === userId)
-      .map((swap) => ({
-        id: `swap:${swap.id}`,
-        source: 'schedule_swap',
-        recordId: swap.id,
-        type: 'schedule_swap_partner',
-        title: 'Shift swap approval needed',
-        body: `${swap.requester?.firstName ?? 'A teammate'} wants to swap shifts with you.`,
-        blocking: true,
-        dueAt: null,
-        payload: buildSwapActionPayload(swap as unknown as Record<string, unknown>),
-      }));
+    const partnerRequestItems = shiftRequests
+      .filter((request) => request.status === 'pending_partner' && request.partnerId === userId)
+      .map((request) => {
+        const requestRecord = request as unknown as Record<string, unknown>;
+        const requestType = getShiftRequestType(requestRecord);
+        const requesterName = request.requester?.firstName ?? 'A teammate';
+        return {
+          id: `shift-request:${request.id}`,
+          source: requestType === 'swap' ? 'schedule_swap' : 'schedule_shift_request',
+          recordId: request.id,
+          type: requestType === 'swap' ? 'schedule_swap_partner' : 'schedule_shift_request_partner',
+          title: requestType === 'takeover' ? 'Shift takeover approval needed' : 'Shift swap approval needed',
+          body: requestType === 'takeover'
+            ? `${requesterName} wants to take over your shift.`
+            : `${requesterName} wants to swap shifts with you.`,
+          blocking: true,
+          dueAt: null,
+          payload: buildShiftRequestActionPayload(requestRecord),
+        };
+      });
 
-    const managerSwapItems = managerSwaps
-      .map((swap) => ({
-        id: `swap-manager:${swap.id}`,
-        source: 'schedule_swap',
-        recordId: swap.id,
-        type: 'schedule_swap_manager',
-        title: 'Manager approval needed',
-        body: `${swap.requester?.firstName ?? 'A teammate'} and ${swap.partner?.firstName ?? 'another teammate'} accepted a shift swap. Review it before it changes the schedule.`,
-        blocking: true,
-        dueAt: null,
-        payload: buildSwapActionPayload(swap as unknown as Record<string, unknown>),
-      }));
+    const managerRequestItems = managerShiftRequests
+      .filter((request) => request.requesterId !== userId && request.partnerId !== userId)
+      .map((request) => {
+        const requestRecord = request as unknown as Record<string, unknown>;
+        const requestType = getShiftRequestType(requestRecord);
+        const requesterName = request.requester?.firstName ?? 'A teammate';
+        const partnerName = request.partner?.firstName ?? 'another teammate';
+        const body = requestType === 'drop'
+          ? `${requesterName} asked to drop a shift. Review it before the assignment is removed.`
+          : requestType === 'takeover'
+            ? `${requesterName} and ${partnerName} accepted a shift takeover. Review it before it changes the schedule.`
+            : `${requesterName} and ${partnerName} accepted a shift swap. Review it before it changes the schedule.`;
+        return {
+          id: `shift-request-manager:${request.id}`,
+          source: requestType === 'swap' ? 'schedule_swap' : 'schedule_shift_request',
+          recordId: request.id,
+          type: requestType === 'swap' ? 'schedule_swap_manager' : 'schedule_shift_request_manager',
+          title: 'Manager approval needed',
+          body,
+          blocking: true,
+          dueAt: null,
+          payload: buildShiftRequestActionPayload(requestRecord),
+        };
+      });
 
-    const actions = [...swapItems, ...managerSwapItems, ...actionItems];
+    const actions = [...partnerRequestItems, ...managerRequestItems, ...actionItems];
     res.status(200).json({
       actions,
       summary: {
@@ -760,29 +798,50 @@ export const completeProfileFieldsAction = async (req: Request, res: Response): 
   }
 };
 
-export const respondToSwapRequiredAction = async (req: Request, res: Response): Promise<void> => {
+export const respondToShiftRequestRequiredAction = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = getActorId(req as AuthenticatedRequest);
-    const accept = req.body?.accept === true;
-    const swap = await swapPartnerResponse(Number(req.params.id), userId, accept);
-    res.status(200).json(swap);
+    const accept = parseStrictBoolean(req.body?.accept);
+    if (accept == null) {
+      res.status(400).json([{ message: 'accept must be a boolean' }]);
+      return;
+    }
+    const shiftRequest = await respondToShiftChangeRequest(
+      Number(req.params.id),
+      userId,
+      accept,
+      req.body?.note,
+    );
+    res.status(200).json(shiftRequest);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 400).json([{ message: (error as Error).message }]);
   }
 };
 
-export const decideManagerSwapRequiredAction = async (req: Request, res: Response): Promise<void> => {
+export const respondToSwapRequiredAction = respondToShiftRequestRequiredAction;
+
+export const decideManagerShiftRequestRequiredAction = async (req: Request, res: Response): Promise<void> => {
   try {
     const actorId = getActorId(req as AuthenticatedRequest);
     if (!isManagerRequiredActionUser(req as AuthenticatedRequest)) {
-      res.status(403).json([{ message: 'Only managers can approve or decline this swap.' }]);
+      res.status(403).json([{ message: 'Only managers can approve or decline this shift request.' }]);
       return;
     }
-    const approve = req.body?.approve === true;
-    const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
-    const swap = await swapManagerDecision(Number(req.params.id), actorId, approve, reason);
-    res.status(200).json(swap);
+    const approve = parseStrictBoolean(req.body?.approve);
+    if (approve == null) {
+      res.status(400).json([{ message: 'approve must be a boolean' }]);
+      return;
+    }
+    const shiftRequest = await decideShiftChangeRequest(
+      Number(req.params.id),
+      actorId,
+      approve,
+      req.body?.reason ?? req.body?.note,
+    );
+    res.status(200).json(shiftRequest);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 400).json([{ message: (error as Error).message }]);
   }
 };
+
+export const decideManagerSwapRequiredAction = decideManagerShiftRequestRequiredAction;

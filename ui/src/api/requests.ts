@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axiosInstance from "../utils/axiosInstance";
 import type { FinanceManagementRequest } from "../types/finance";
-import type { SwapRequest } from "../types/scheduling";
+import type { ShiftRequest, SwapRequest } from "../types/scheduling";
 import type { User } from "../types/users/User";
 
 export type UserApprovalRequest = Partial<User> & {
@@ -27,6 +27,7 @@ export type RequestsSummary = {
   total: number;
   userApprovals: number;
   scheduleSwaps: number;
+  scheduleRequests?: number;
   financeRequests: number;
   popupRequests?: number;
 };
@@ -64,6 +65,7 @@ export type PopupRequestAudit = {
 export type RequestsCenterResponse = {
   userApprovals: UserApprovalRequest[];
   scheduleSwaps: SwapRequest[];
+  scheduleRequests?: ShiftRequest[];
   financeRequests: FinanceManagementRequest[];
   popupRequests: PopupRequestAudit[];
   summary: RequestsSummary;
@@ -121,7 +123,7 @@ export const useDecideScheduleSwapRequest = () => {
   return useMutation({
     mutationFn: async ({ swapId, approve, reason }: { swapId: number; approve: boolean; reason?: string | null }) => {
       const response = await axiosInstance.post<SwapRequest>(
-        `/requests/schedule-swaps/${swapId}/decision`,
+        `/requests/shift-change-requests/${swapId}/decision`,
         { approve, reason },
         { withCredentials: true },
       );
@@ -129,6 +131,8 @@ export const useDecideScheduleSwapRequest = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: requestsKey });
+      queryClient.invalidateQueries({ queryKey: ["scheduling"] });
+      queryClient.invalidateQueries({ queryKey: ["required-actions", "me"] });
     },
   });
 };

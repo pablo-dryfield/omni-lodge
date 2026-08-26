@@ -32,7 +32,7 @@ const BASE_TABS: SchedulingTabDefinition[] = [
   { label: "Builder", value: "builder", icon: IconClipboardList, module: "scheduling-builder", requiredAction: "create" },
   { label: "Availability", value: "availability", icon: IconCalendarCheck, module: "scheduling-availability" },
   { label: "My Shifts", value: "my-shifts", icon: IconUsersGroup, module: "scheduling-my-shifts" },
-  { label: "Swaps", value: "swaps", icon: IconRefresh, module: "scheduling-swaps" },
+  { label: "Shift Requests", value: "swaps", icon: IconRefresh, module: "scheduling-swaps" },
   { label: "History", value: "history", icon: IconHistory, module: "scheduling-history" },
 ];
 

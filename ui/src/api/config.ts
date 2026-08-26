@@ -104,6 +104,45 @@ export const discoverTripAdvisorQueryId = async (): Promise<{
   return response.data;
 };
 
+export type StripeTestListenerStatus = {
+  available: boolean;
+  cliInstalled: boolean;
+  state: "stopped" | "starting" | "running" | "error";
+  pid: number | null;
+  startedAt: string | null;
+  forwardTo: string;
+  secretConfigured: boolean;
+  message: string | null;
+  authentication: {
+    state: "unknown" | "authenticated" | "awaiting_approval" | "unauthenticated" | "error";
+    message: string | null;
+    browserUrl: string | null;
+    verificationCode: string | null;
+  };
+};
+
+export const fetchStripeTestListenerStatus = async (): Promise<StripeTestListenerStatus> => {
+  const response = await axiosInstance.get('/config/stripe-test-listener/status');
+  return response.data.listener as StripeTestListenerStatus;
+};
+
+export const authenticateStripeTestListener = async (
+  password: string,
+): Promise<StripeTestListenerStatus> => {
+  const response = await axiosInstance.post('/config/stripe-test-listener/authenticate', { password });
+  return response.data.listener as StripeTestListenerStatus;
+};
+
+export const startStripeTestListener = async (password: string): Promise<StripeTestListenerStatus> => {
+  const response = await axiosInstance.post('/config/stripe-test-listener/start', { password });
+  return response.data.listener as StripeTestListenerStatus;
+};
+
+export const stopStripeTestListener = async (): Promise<StripeTestListenerStatus> => {
+  const response = await axiosInstance.post('/config/stripe-test-listener/stop');
+  return response.data.listener as StripeTestListenerStatus;
+};
+
 export const runConfigSeed = async (
   seedKey: string,
   force = false,

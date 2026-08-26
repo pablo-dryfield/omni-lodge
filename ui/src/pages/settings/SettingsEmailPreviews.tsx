@@ -9,7 +9,6 @@ import {
   Grid,
   Group,
   Loader,
-  NavLink,
   Paper,
   ScrollArea,
   SegmentedControl,
@@ -18,11 +17,13 @@ import {
   Text,
   TextInput,
   Title,
+  UnstyledButton,
 } from "@mantine/core";
 import { IconMail, IconRefresh, IconSearch } from "@tabler/icons-react";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import axiosInstance from "../../utils/axiosInstance";
+import classes from "./SettingsEmailPreviews.module.css";
 
 type EmailPreview = {
   id: string;
@@ -166,18 +167,32 @@ const SettingsEmailPreviews = () => {
                     {filteredPreviews.length} {filteredPreviews.length === 1 ? "format" : "formats"}
                   </Text>
                   <ScrollArea h={620} offsetScrollbars type="auto">
-                    <Stack gap={4} pr="xs">
-                      {filteredPreviews.map((preview) => (
-                        <NavLink
-                          key={preview.id}
-                          active={selectedId === preview.id}
-                          label={preview.name}
-                          description={`${preview.audience} · ${preview.category}`}
-                          onClick={() => setSelectedId(preview.id)}
-                          rightSection={!preview.isActive ? <Badge color="gray" size="xs">Inactive</Badge> : null}
-                          styles={{ label: { whiteSpace: "normal" }, description: { whiteSpace: "normal" } }}
-                        />
-                      ))}
+                    <Stack gap={6} pr="xs">
+                      {filteredPreviews.map((preview) => {
+                        const isSelected = selectedId === preview.id;
+                        return (
+                          <UnstyledButton
+                            key={preview.id}
+                            type="button"
+                            className={classes.previewOption}
+                            data-selected={isSelected || undefined}
+                            aria-pressed={isSelected}
+                            onClick={() => setSelectedId(preview.id)}
+                          >
+                            <Group wrap="nowrap" gap="sm" align="center">
+                              <Box style={{ flex: 1, minWidth: 0 }}>
+                                <Text size="sm" fw={600} lh={1.35} className={classes.previewOptionTitle}>
+                                  {preview.name}
+                                </Text>
+                                <Text size="xs" c="dimmed" mt={4} lh={1.35} className={classes.previewOptionMeta}>
+                                  {preview.audience} - {preview.category}
+                                </Text>
+                              </Box>
+                              {!preview.isActive ? <Badge color="gray" size="xs">Inactive</Badge> : null}
+                            </Group>
+                          </UnstyledButton>
+                        );
+                      })}
                       {filteredPreviews.length === 0 ? (
                         <Text size="sm" c="dimmed" ta="center" py="xl">
                           No email formats match this filter.

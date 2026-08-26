@@ -14,6 +14,8 @@ import type {
   ShiftAssignment,
   ShiftInstance,
   ShiftInstancePayload,
+  ShiftRequest,
+  ShiftRequestType,
   ShiftTemplate,
   ShiftType,
   SwapRequest,
@@ -42,6 +44,9 @@ const schedulingKeys = {
   weekAvailability: (weekId: number) => [...schedulingBaseKey, "availability-week", weekId] as const,
   swaps: (status: string) => [...schedulingBaseKey, "swaps", status] as const,
   mySwaps: [...schedulingBaseKey, "swaps", "mine"] as const,
+  shiftRequests: (status: string, requestType?: ShiftRequestType | null) =>
+    [...schedulingBaseKey, "shift-requests", status, requestType ?? "all"] as const,
+  myShiftRequests: [...schedulingBaseKey, "shift-requests", "mine"] as const,
   exports: (weekId: number) => [...schedulingBaseKey, "exports", weekId] as const,
   reports: (params: ReportsQuery) => [...schedulingBaseKey, "reports", params.from, params.to, params.userId ?? "all"] as const,
   ensureWeek: (weekValue: string | null) => [...schedulingBaseKey, "ensure-week", weekValue ?? "current"] as const,
@@ -632,6 +637,107 @@ export const getUpcomingWeeks = (count = 4, includeCurrent = true) => {
       year,
       week,
     };
+  });
+};
+
+export type CreateShiftRequestPayload =
+  | {
+      type: "swap";
+      fromAssignmentId: number;
+      toAssignmentId: number;
+      note?: string;
+    }
+  | {
+      type: "takeover" | "drop";
+      assignmentId: number;
+      note?: string;
+    };
+
+const invalidateShiftRequestQueries = (queryClient: QueryClient) => {
+  invalidateQuery(queryClient, schedulingKeys.myShiftRequests);
+  invalidateQuery(queryClient, schedulingKeys.base);
+  invalidateQuery(queryClient, ["required-actions", "me"]);
+  invalidateQuery(queryClient, ["requests-center"]);
+};
+
+export const useShiftRequests = (status: string, requestType?: ShiftRequestType | null) =>
+  useQuery({
+    queryKey: schedulingKeys.shiftRequests(status, requestType),
+    queryFn: async () => {
+      const response = await axiosInstance.get("/schedules/shift-change-requests", {
+        params: { status, ...(requestType ? { type: requestType } : {}) },
+      });
+      return response.data as ShiftRequest[];
+    },
+  });
+
+export const useMyShiftRequests = () =>
+  useQuery({
+    queryKey: schedulingKeys.myShiftRequests,
+    queryFn: async () => {
+      const response = await axiosInstance.get("/schedules/shift-change-requests/mine");
+      return response.data as ShiftRequest[];
+    },
+  });
+
+export const useCreateShiftRequest = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: CreateShiftRequestPayload) => {
+      const response = await axiosInstance.post("/schedules/shift-change-requests", payload);
+      return response.data as ShiftRequest;
+    },
+    onSuccess: () => invalidateShiftRequestQueries(queryClient),
+  });
+};
+
+export const useShiftRequestPartnerResponse = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ requestId, accept, note }: { requestId: number; accept: boolean; note?: string }) => {
+      const response = await axiosInstance.post(
+        `/schedules/shift-change-requests/${requestId}/partner-response`,
+        { accept, ...(note ? { note } : {}) },
+      );
+      return response.data as ShiftRequest;
+    },
+    onSuccess: () => invalidateShiftRequestQueries(queryClient),
+  });
+};
+
+export const useCancelShiftRequest = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ requestId, note }: { requestId: number; note?: string }) => {
+      const response = await axiosInstance.post(
+        `/schedules/shift-change-requests/${requestId}/cancel`,
+        note ? { note } : {},
+      );
+      return response.data as ShiftRequest;
+    },
+    onSuccess: () => invalidateShiftRequestQueries(queryClient),
+  });
+};
+
+export const useManagerShiftRequestDecision = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      requestId,
+      approve,
+      reason,
+    }: {
+      requestId: number;
+      approve: boolean;
+      reason?: string;
+    }) => {
+      const response = await axiosInstance.post(
+        `/schedules/shift-change-requests/${requestId}/manager-decision`,
+        { approve, ...(reason ? { reason } : {}) },
+      );
+      return response.data as ShiftRequest;
+    },
+    onSuccess: () => invalidateShiftRequestQueries(queryClient),
   });
 };
 

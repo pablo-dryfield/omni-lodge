@@ -46,6 +46,47 @@ export const addonsColumnDef = (): ResponseModifications<Partial<Addon>>[] => [
     },
   },
   {
+    accessorKey: "description",
+    modifications: {
+      id: "description",
+      header: "Description",
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ cell }) => (
+        <div style={{ maxWidth: 360, whiteSpace: "normal" }}>
+          {String(cell.getValue() ?? "")}
+        </div>
+      ),
+      mantineEditTextInputProps: {
+        placeholder: "Add-on details shown to customers",
+      },
+      size: 360,
+    },
+  },
+  {
+    accessorKey: "imageUrl",
+    modifications: {
+      id: "imageUrl",
+      header: "Image",
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ cell }) => {
+        const imageUrl = String(cell.getValue() ?? "").trim();
+        return imageUrl ? (
+          <img
+            src={imageUrl}
+            alt=""
+            loading="lazy"
+            style={{ display: "block", width: 72, height: 54, objectFit: "cover" }}
+          />
+        ) : null;
+      },
+      mantineEditTextInputProps: {
+        type: "url",
+        placeholder: "https://media.example.com/addon.webp",
+      },
+      size: 120,
+    },
+  },
+  {
     accessorKey: "basePrice",
     modifications: {
       id: "basePrice",

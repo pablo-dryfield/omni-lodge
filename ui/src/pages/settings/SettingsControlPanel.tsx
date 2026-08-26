@@ -16,7 +16,17 @@ import {
   Textarea,
   Title,
 } from "@mantine/core";
-import { IconAlertCircle, IconDeviceFloppy, IconEye, IconRefresh, IconSettings } from "@tabler/icons-react";
+import {
+  IconAlertCircle,
+  IconBrandStripe,
+  IconDeviceFloppy,
+  IconExternalLink,
+  IconEye,
+  IconPlayerPlay,
+  IconPlayerStop,
+  IconRefresh,
+  IconSettings,
+} from "@tabler/icons-react";
 import { useMediaQuery } from "@mantine/hooks";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
@@ -27,6 +37,11 @@ import {
   type ConfigEntry,
   restoreConfigDefaults,
   discoverTripAdvisorQueryId,
+  authenticateStripeTestListener,
+  fetchStripeTestListenerStatus,
+  startStripeTestListener,
+  stopStripeTestListener,
+  type StripeTestListenerStatus,
 } from "../../api/config";
 import axiosInstance from "../../utils/axiosInstance";
 
@@ -119,6 +134,8 @@ const SettingsControlPanel = () => {
   const [queryDiscoveryMessage, setQueryDiscoveryMessage] = useState<string | null>(null);
   const [emailTemplateOptions, setEmailTemplateOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [emailTemplatesLoading, setEmailTemplatesLoading] = useState(false);
+  const [stripeListenerStatus, setStripeListenerStatus] = useState<StripeTestListenerStatus | null>(null);
+  const [stripeListenerAction, setStripeListenerAction] = useState<"authenticate" | "start" | "stop" | null>(null);
 
   const entries = useMemo(() => data ?? [], [data]);
 
@@ -173,6 +190,28 @@ const SettingsControlPanel = () => {
       });
     return () => {
       cancelled = true;
+    };
+  }, [activeEntry?.key]);
+
+  useEffect(() => {
+    if (activeEntry?.key !== "STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET") {
+      setStripeListenerStatus(null);
+      return;
+    }
+    let cancelled = false;
+    const refreshStatus = async () => {
+      try {
+        const status = await fetchStripeTestListenerStatus();
+        if (!cancelled) setStripeListenerStatus(status);
+      } catch (err) {
+        if (!cancelled) setModalError(extractErrorMessage(err));
+      }
+    };
+    void refreshStatus();
+    const interval = window.setInterval(refreshStatus, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
     };
   }, [activeEntry?.key]);
 
@@ -292,6 +331,28 @@ const SettingsControlPanel = () => {
       setModalError(extractErrorMessage(err));
     } finally {
       setRevealLoading(false);
+    }
+  };
+
+  const runStripeListenerAction = async (action: "authenticate" | "start" | "stop") => {
+    if (action !== "stop" && !password.trim()) {
+      setModalError("Enter your password to continue.");
+      return;
+    }
+    setModalError(null);
+    setStripeListenerAction(action);
+    try {
+      const status = action === "authenticate"
+        ? await authenticateStripeTestListener(password.trim())
+        : action === "start"
+          ? await startStripeTestListener(password.trim())
+          : await stopStripeTestListener();
+      setStripeListenerStatus(status);
+      if (action === "start") await refetch();
+    } catch (err) {
+      setModalError(extractErrorMessage(err));
+    } finally {
+      setStripeListenerAction(null);
     }
   };
 
@@ -665,6 +726,106 @@ const SettingsControlPanel = () => {
                 onChange={(event) => setPassword(event.currentTarget.value)}
                 placeholder="Enter your password to confirm"
               />
+            ) : null}
+
+            {activeEntry.key === "STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET" && stripeListenerStatus ? (
+              <Stack
+                gap="sm"
+                p="md"
+                style={{ border: "1px solid var(--mantine-color-default-border)", borderRadius: 4 }}
+              >
+                <Group justify="space-between" align="center" wrap="wrap">
+                  <Group gap="xs">
+                    <IconBrandStripe size={20} />
+                    <Text fw={700}>Local Stripe listener</Text>
+                  </Group>
+                  <Badge
+                    color={stripeListenerStatus.state === "running" ? "teal" : stripeListenerStatus.state === "error" ? "red" : "gray"}
+                    variant="light"
+                  >
+                    {stripeListenerStatus.state}
+                  </Badge>
+                </Group>
+
+                <Text size="xs" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+                  {stripeListenerStatus.forwardTo}
+                </Text>
+
+                {!stripeListenerStatus.available ? (
+                  <Alert color="yellow">Local listener controls are disabled in production.</Alert>
+                ) : !stripeListenerStatus.cliInstalled ? (
+                  <Alert color="red">Stripe CLI is not available on the backend.</Alert>
+                ) : (
+                  <>
+                    <Group justify="space-between" align="center" wrap="wrap">
+                      <Text size="sm">
+                        CLI authentication: {stripeListenerStatus.authentication.state.replace("_", " ")}
+                      </Text>
+                      <Button
+                        size="xs"
+                        variant="default"
+                        leftSection={<IconBrandStripe size={15} />}
+                        onClick={() => void runStripeListenerAction("authenticate")}
+                        loading={stripeListenerAction === "authenticate"}
+                        disabled={stripeListenerStatus.authentication.state === "awaiting_approval"}
+                      >
+                        Authenticate again
+                      </Button>
+                    </Group>
+
+                    {stripeListenerStatus.authentication.state === "awaiting_approval"
+                      && stripeListenerStatus.authentication.browserUrl ? (
+                      <Group justify="space-between" align="center" wrap="wrap">
+                        <Text size="sm" fw={700}>{stripeListenerStatus.authentication.verificationCode}</Text>
+                        <Button
+                          component="a"
+                          href={stripeListenerStatus.authentication.browserUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          size="xs"
+                          rightSection={<IconExternalLink size={14} />}
+                        >
+                          Open Stripe
+                        </Button>
+                      </Group>
+                    ) : null}
+
+                    <Group gap="sm" wrap="wrap">
+                      <Button
+                        leftSection={<IconPlayerPlay size={16} />}
+                        onClick={() => void runStripeListenerAction("start")}
+                        loading={stripeListenerAction === "start"}
+                        disabled={
+                          stripeListenerStatus.state === "running"
+                          || stripeListenerStatus.state === "starting"
+                          || stripeListenerStatus.authentication.state !== "authenticated"
+                        }
+                      >
+                        Start listener
+                      </Button>
+                      <Button
+                        color="red"
+                        variant="light"
+                        leftSection={<IconPlayerStop size={16} />}
+                        onClick={() => void runStripeListenerAction("stop")}
+                        loading={stripeListenerAction === "stop"}
+                        disabled={stripeListenerStatus.state !== "running"}
+                      >
+                        Stop listener
+                      </Button>
+                      <Badge color={stripeListenerStatus.secretConfigured ? "teal" : "gray"} variant="dot">
+                        Secret {stripeListenerStatus.secretConfigured ? "saved" : "not saved"}
+                      </Badge>
+                    </Group>
+                  </>
+                )}
+
+                {stripeListenerStatus.message ? (
+                  <Alert color={stripeListenerStatus.state === "error" ? "red" : "blue"}>
+                    {stripeListenerStatus.message}
+                  </Alert>
+                ) : null}
+              </Stack>
             ) : null}
 
             {activeEntry.isSecret ? (

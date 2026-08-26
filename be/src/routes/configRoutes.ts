@@ -14,6 +14,10 @@ import {
   getConfigSeedPreview,
   markConfigSeedRun,
   discoverAndSaveTripAdvisorQueryId,
+  getStripeTestListener,
+  authenticateStripeTestListener,
+  startStripeTestWebhookListener,
+  stopStripeTestWebhookListener,
 } from '../controllers/configController.js';
 
 const router = Router();
@@ -28,6 +32,10 @@ router.post('/seed/restore', restoreConfigDefaults);
 router.post('/seed/run', runConfigSeed);
 router.post('/seed/mark', markConfigSeedRun);
 router.post('/tripadvisor/discover-query-id', discoverAndSaveTripAdvisorQueryId);
+router.get('/stripe-test-listener/status', getStripeTestListener);
+router.post('/stripe-test-listener/authenticate', authenticateStripeTestListener);
+router.post('/stripe-test-listener/start', startStripeTestWebhookListener);
+router.post('/stripe-test-listener/stop', stopStripeTestWebhookListener);
 router.get('/:key', getConfigByKey);
 router.post('/:key', updateConfigKey);
 router.post('/:key/reveal', revealConfigKey);

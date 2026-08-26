@@ -19,6 +19,9 @@ const resolveFormat = (req: Request): string => {
   return raw;
 };
 
+const normalizeNullableText = (value: unknown): string | null =>
+  typeof value === 'string' ? value.trim() || null : null;
+
 export const listAddons = async (req: Request, res: Response): Promise<void> => {
   try {
     const format = resolveFormat(req);
@@ -44,6 +47,8 @@ export const listAddons = async (req: Request, res: Response): Promise<void> => 
       }),
       basePrice: addon.basePrice != null ? Number(addon.basePrice) : null,
       taxRate: addon.taxRate != null ? Number(addon.taxRate) : null,
+      description: addon.description ?? null,
+      imageUrl: addon.imageUrl ?? null,
       isActive: addon.isActive,
     }));
 
@@ -75,6 +80,8 @@ export const createAddon = async (req: Request, res: Response): Promise<void> =>
   try {
     const payload = {
       name: req.body.name,
+      description: normalizeNullableText(req.body.description),
+      imageUrl: normalizeNullableText(req.body.imageUrl),
       basePrice: req.body.basePrice ?? null,
       taxRate: req.body.taxRate ?? null,
       isActive: req.body.isActive ?? true,
@@ -91,12 +98,18 @@ export const createAddon = async (req: Request, res: Response): Promise<void> =>
 export const updateAddon = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const payload = {
-      name: req.body.name,
-      basePrice: req.body.basePrice ?? null,
-      taxRate: req.body.taxRate ?? null,
-      isActive: req.body.isActive ?? true,
-    };
+    const payload: Record<string, unknown> = {};
+    const hasField = (field: string): boolean =>
+      Object.prototype.hasOwnProperty.call(req.body, field);
+
+    if (hasField('name')) payload.name = req.body.name;
+    if (hasField('description')) {
+      payload.description = normalizeNullableText(req.body.description);
+    }
+    if (hasField('imageUrl')) payload.imageUrl = normalizeNullableText(req.body.imageUrl);
+    if (hasField('basePrice')) payload.basePrice = req.body.basePrice ?? null;
+    if (hasField('taxRate')) payload.taxRate = req.body.taxRate ?? null;
+    if (hasField('isActive')) payload.isActive = req.body.isActive ?? true;
 
     const [updated] = await Addon.update(payload, { where: { id } });
 

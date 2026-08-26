@@ -20,6 +20,7 @@ import ProductAlias from '../models/ProductAlias.js';
 import ProductAddon from '../models/ProductAddon.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
+import type StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 import RequiredAction from '../models/RequiredAction.js';
 import HttpError from '../errors/HttpError.js';
 import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
@@ -86,6 +87,7 @@ import {
   buildCustomerStorefrontEmail,
   buildInternalStorefrontEmail,
 } from '../services/storefrontOrderEmailService.js';
+import { buildStorefrontCartRecoveryEmail } from '../services/storefrontCartRecoveryEmailService.js';
 import {
   buildDirectBookingConfirmationEmail,
   buildInternalDirectBookingNotificationEmail,
@@ -3151,25 +3153,130 @@ export const getBookingEmailTemplateGallery = async (
       discountCode: null,
       items: [
         {
+          id: 501,
+          productId: 28,
           productName: 'Krawl Through Krakow Pub Crawl',
+          productSlug: 'pub-crawl-28',
           quantity: 3,
           experienceDate: '2026-08-29',
           experienceTime: '21:00',
+          unitPrice: 90,
+          baseTotal: 270,
+          addonTotal: 60,
           total: 330,
+          options: { participants: { men: 2, women: 1 } },
           addons: [
             {
+              addonId: 3,
               name: 'T-Shirts',
               quantity: 2,
+              value: null,
+              unitPrice: 20,
+              total: 40,
               variants: [
                 { value: 'S', quantity: 1 },
                 { value: 'M', quantity: 1 },
               ],
             },
-            { name: 'Instant photos', quantity: 1 },
+            {
+              addonId: 4,
+              name: 'Instant photos',
+              quantity: 1,
+              value: null,
+              unitPrice: 20,
+              total: 20,
+              variants: [],
+            },
           ],
         },
       ],
     } as unknown as StorefrontOrder;
+    const storefrontBookingIdsByItemId = new Map<number, number>([[501, 41002]]);
+    const storefrontProductDetailsByProductId = new Map([
+      [
+        28,
+        {
+          summary: 'Krakow\'s biggest night out, all planned for you.',
+          description: 'Start with an unlimited open bar, then follow the team through Krakow\'s best bars and clubs.',
+          highlights: [
+            'Open bar with unlimited drinks for 1 hour',
+            'Rum, Vodka, Whiskey, Gin, Beer and soft drinks',
+            'VIP entrance to 4-5 bars and clubs',
+            '1 welcome shot at the entrance of every venue',
+            'Pro Pub Crawl Guides + Photographer',
+          ],
+          importantInformation: [
+            'Please arrive 10 minutes before the scheduled start time.',
+            'Bring a valid photo ID. Guests must be 18 or older.',
+          ],
+          meetingPoint: {
+            name: 'Adam Mickiewicz Monument',
+            address: 'Rynek Glowny, 31-042 Krakow',
+            instructions: 'Search for the pink umbrella!',
+            mapUrl: 'https://maps.app.goo.gl/S3kQZC5rdABdpA1G9',
+          },
+        },
+      ],
+    ]);
+    const storefrontOngoingCart = {
+      publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d',
+      recoveryToken: 'f2ce385d-b2d7-40d4-8156-ec9681753af1',
+      customer: {
+        fullName: 'Alex Morgan',
+        email: 'alex.morgan@example.com',
+        phoneCountry: 'GB',
+        phone: '555123456',
+      },
+      quoteSnapshot: {
+        currency: 'PLN',
+        subtotal: 240,
+        addonTotal: 128,
+        discountTotal: 0,
+        total: 368,
+        discountCode: null,
+        discountCodes: [],
+        promotionId: null,
+        discounts: [],
+        items: [
+          {
+            productId: 28,
+            productName: 'Krawl Through Krakow Pub Crawl',
+            productSlug: 'pub-crawl-28',
+            quantity: 2,
+            experienceDate: '2026-08-29',
+            experienceTime: '21:00',
+            unitPrice: 120,
+            baseTotal: 240,
+            addonTotal: 128,
+            total: 368,
+            options: { participants: { men: 1, women: 1 } },
+            addons: [
+              {
+                addonId: 3,
+                name: 'T-Shirts',
+                quantity: 2,
+                value: null,
+                variants: [
+                  { value: 'S', quantity: 1 },
+                  { value: 'M', quantity: 1 },
+                ],
+                unitPrice: 59,
+                total: 118,
+              },
+              {
+                addonId: 4,
+                name: 'Cocktails',
+                quantity: 1,
+                value: null,
+                variants: [],
+                unitPrice: 10,
+                total: 10,
+              },
+            ],
+          },
+        ],
+      },
+    } as unknown as StorefrontOngoingCart;
     const previousExperienceStartAt = new Date('2026-08-27T19:00:00.000Z');
     const actionOptions: Array<{
       kind: DirectBookingActionEmailOptions['kind'];
@@ -3237,14 +3344,30 @@ export const getBookingEmailTemplateGallery = async (
       toEmailGalleryPreview(
         {
           id: 'system-omni-storefront-confirmation',
-          name: 'OmniLodge checkout confirmation',
-          description: 'Special paid-order confirmation sent after an OmniLodge storefront checkout.',
+          name: 'Storefront booking confirmed',
+          description: 'Exact customer confirmation sent after a successful OmniLodge storefront payment.',
           category: 'OmniLodge storefront',
           audience: 'Customer',
           source: 'system',
           isActive: true,
         },
-        buildCustomerStorefrontEmail(storefrontOrder),
+        buildCustomerStorefrontEmail(
+          storefrontOrder,
+          storefrontBookingIdsByItemId,
+          storefrontProductDetailsByProductId,
+        ),
+      ),
+      toEmailGalleryPreview(
+        {
+          id: 'system-omni-storefront-cart-recovery',
+          name: 'Storefront cart recovery',
+          description: 'Recovery email sent when a customer leaves an active storefront cart before payment.',
+          category: 'OmniLodge storefront',
+          audience: 'Customer',
+          source: 'system',
+          isActive: true,
+        },
+        buildStorefrontCartRecoveryEmail(storefrontOngoingCart),
       ),
       toEmailGalleryPreview(
         {
@@ -3256,7 +3379,11 @@ export const getBookingEmailTemplateGallery = async (
           source: 'system',
           isActive: true,
         },
-        buildInternalStorefrontEmail(storefrontOrder),
+        buildInternalStorefrontEmail(
+          storefrontOrder,
+          storefrontBookingIdsByItemId,
+          storefrontProductDetailsByProductId,
+        ),
       ),
     ];
 

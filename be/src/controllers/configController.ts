@@ -16,6 +16,12 @@ import {
 import { ACCESS_CONTROL_SEED_KEYS, listSeedCatalog, previewSeedChanges, runAccessControlSeedByKey } from '../utils/initializeAccessControl.js';
 import { recordSeedRun } from '../services/seedRunService.js';
 import { discoverTripAdvisorQueryId } from '../scrapers/tripAdvisorScraper.js';
+import {
+  beginStripeCliAuthentication,
+  getStripeTestListenerStatus,
+  startStripeTestListener,
+  stopStripeTestListener,
+} from '../finance/services/stripeTestListenerService.js';
 
 const handleError = (res: Response, error: unknown): void => {
   if (error instanceof HttpError) {
@@ -162,6 +168,58 @@ export const discoverAndSaveTripAdvisorQueryId = async (
       reason: `Automatically discovered and validated via ${discovered.source}`,
     });
     res.json({ config, discovery: discovered });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const getStripeTestListener = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    res.json({ listener: await getStripeTestListenerStatus() });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const authenticateStripeTestListener = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const ok = await verifyPassword(req, req.body?.password);
+    if (!ok) {
+      res.status(403).json([{ message: 'Password confirmation is required to authenticate Stripe CLI.' }]);
+      return;
+    }
+    res.json({ listener: await beginStripeCliAuthentication() });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const startStripeTestWebhookListener = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const ok = await verifyPassword(req, req.body?.password);
+    if (!ok) {
+      res.status(403).json([{ message: 'Password confirmation is required to start the Stripe listener.' }]);
+      return;
+    }
+    const actorId = req.authContext?.id ?? null;
+    res.json({ listener: await startStripeTestListener(actorId) });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const stopStripeTestWebhookListener = async (
+  _req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    res.json({ listener: await stopStripeTestListener() });
   } catch (error) {
     handleError(res, error);
   }

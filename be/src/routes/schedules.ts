@@ -27,11 +27,17 @@ import {
   createShiftAssignmentsBulk,
   deleteShiftAssignment,
   createSwapRequest,
+  createShiftChangeRequest,
   swapPartnerResponse,
+  respondToShiftChangeRequest,
   cancelSwapRequest,
+  cancelShiftChangeRequest,
   swapManagerDecision,
+  decideShiftChangeRequest,
   listSwapsByStatus,
   listSwapsForUser,
+  listShiftChangeRequests,
+  listShiftChangeRequestsForUser,
   listExports,
   listHistoricalAssignments,
   parseWeekParam,
@@ -43,6 +49,7 @@ import {
 import ScheduleWeek from '../models/ScheduleWeek.js';
 import type { SwapRequestStatus } from '../models/SwapRequest.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { parseStrictBoolean } from '../services/shiftRequestRulesService.js';
 
 const router = Router();
 
@@ -433,6 +440,118 @@ router.post('/swaps', authMiddleware, async (req, res) => {
   }
 });
 
+router.post('/shift-change-requests', authMiddleware, async (req, res) => {
+  try {
+    const requesterId = req.authContext?.id;
+    if (!requesterId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const shiftRequest = await createShiftChangeRequest({
+      requesterId,
+      requestType: req.body?.type ?? req.body?.requestType,
+      assignmentId: req.body?.assignmentId,
+      fromAssignmentId: req.body?.fromAssignmentId,
+      toAssignmentId: req.body?.toAssignmentId,
+      requestNote: req.body?.requestNote ?? req.body?.note,
+    });
+    res.status(201).json(shiftRequest);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/shift-change-requests/:id/partner-response', authMiddleware, async (req, res) => {
+  try {
+    const partnerId = req.authContext?.id;
+    if (!partnerId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const accept = parseStrictBoolean(req.body?.accept);
+    if (accept == null) {
+      res.status(400).json({ error: 'accept must be a boolean' });
+      return;
+    }
+    const shiftRequest = await respondToShiftChangeRequest(
+      Number(req.params.id),
+      partnerId,
+      accept,
+      req.body?.note,
+    );
+    res.json(shiftRequest);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/shift-change-requests/:id/cancel', authMiddleware, async (req, res) => {
+  try {
+    const actorId = req.authContext?.id;
+    if (!actorId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const shiftRequest = await cancelShiftChangeRequest(
+      Number(req.params.id),
+      actorId,
+      req.body?.note,
+    );
+    res.json(shiftRequest);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.post(
+  '/shift-change-requests/:id/manager-decision',
+  authMiddleware,
+  requireRoles(MANAGER_ROLES),
+  async (req, res) => {
+    try {
+      const approve = parseStrictBoolean(req.body?.approve);
+      if (approve == null) {
+        res.status(400).json({ error: 'approve must be a boolean' });
+        return;
+      }
+      const shiftRequest = await decideShiftChangeRequest(
+        Number(req.params.id),
+        getActorId(req) ?? 0,
+        approve,
+        req.body?.reason ?? req.body?.note,
+      );
+      res.json(shiftRequest);
+    } catch (error) {
+      res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+    }
+  },
+);
+
+router.get('/shift-change-requests', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : 'pending_manager';
+    const requestType = typeof req.query.type === 'string' ? req.query.type : null;
+    const shiftRequests = await listShiftChangeRequests({ status, requestType });
+    res.json(shiftRequests);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
+router.get('/shift-change-requests/mine', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.authContext?.id;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const shiftRequests = await listShiftChangeRequestsForUser(userId);
+    res.json(shiftRequests);
+  } catch (error) {
+    res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
+  }
+});
+
 router.post('/swaps/:id/partner-response', authMiddleware, async (req, res) => {
   try {
     const partnerId = req.authContext?.id;
@@ -440,7 +559,12 @@ router.post('/swaps/:id/partner-response', authMiddleware, async (req, res) => {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const swap = await swapPartnerResponse(Number(req.params.id), partnerId, Boolean(req.body.accept));
+    const accept = parseStrictBoolean(req.body?.accept);
+    if (accept == null) {
+      res.status(400).json({ error: 'accept must be a boolean' });
+      return;
+    }
+    const swap = await swapPartnerResponse(Number(req.params.id), partnerId, accept, req.body?.note);
     res.json(swap);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
@@ -454,7 +578,7 @@ router.post('/swaps/:id/cancel', authMiddleware, async (req, res) => {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const swap = await cancelSwapRequest(Number(req.params.id), actorId);
+    const swap = await cancelSwapRequest(Number(req.params.id), actorId, req.body?.note);
     res.json(swap);
   } catch (error) {
     res.status((error as { status?: number }).status ?? 500).json({ error: (error as Error).message });
@@ -463,10 +587,15 @@ router.post('/swaps/:id/cancel', authMiddleware, async (req, res) => {
 
 router.post('/swaps/:id/manager-decision', authMiddleware, requireRoles(MANAGER_ROLES), async (req, res) => {
   try {
+    const approve = parseStrictBoolean(req.body?.approve);
+    if (approve == null) {
+      res.status(400).json({ error: 'approve must be a boolean' });
+      return;
+    }
     const swap = await swapManagerDecision(
       Number(req.params.id),
       getActorId(req) ?? 0,
-      Boolean(req.body.approve),
+      approve,
       req.body.reason,
     );
     res.json(swap);

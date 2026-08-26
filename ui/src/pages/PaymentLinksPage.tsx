@@ -15,6 +15,7 @@ import {
   Stack,
   Switch,
   Table,
+  Tabs,
   Text,
   TextInput,
   Title,
@@ -25,8 +26,12 @@ import {
   IconCopy,
   IconExternalLink,
   IconLink,
+  IconListDetails,
+  IconMail,
   IconPlus,
   IconRefresh,
+  IconSend,
+  IconShoppingCart,
   IconTrash,
 } from "@tabler/icons-react";
 import dayjs from "dayjs";
@@ -121,6 +126,43 @@ type SavedCart = {
   createdAt: string;
 };
 
+type OngoingCart = {
+  publicId: string;
+  status: string;
+  customer: { fullName: string; email: string; phoneCountry: string; phone: string };
+  quote: {
+    items: Array<{ productName: string; quantity: number }>;
+  };
+  total: number;
+  currency: string;
+  lastActivityAt: string;
+  recoveryDueAt: string;
+  recoverySentAt: string | null;
+  firstRecoverySentAt: string | null;
+  lastRecoverySentAt: string | null;
+  recoveryOpenedAt: string | null;
+  recoveredAt: string | null;
+  recoveryCount: number;
+  createdAt: string;
+  orderPublicId: string | null;
+  events: Array<{
+    id: string;
+    type: string;
+    severity: "info" | "warning" | "error";
+    message: string;
+    details: Record<string, unknown> | null;
+    occurredAt: string;
+  }>;
+};
+
+type RecoveryEmailPreview = {
+  cart: OngoingCart;
+  to: string;
+  subject: string;
+  htmlBody: string;
+  textBody: string;
+};
+
 const storefrontBaseUrl = (process.env.REACT_APP_STOREFRONT_URL || "https://krawlthroughkrakow.com/store2")
   .replace(/\/+$/, "");
 const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
@@ -149,6 +191,10 @@ const statusColor = (status: string): string => ({
   paid: "green",
   expired: "gray",
   disabled: "red",
+  sending_recovery: "orange",
+  recovery_sent: "pink",
+  converted: "green",
+  dismissed: "gray",
 }[status] || "gray");
 
 const statusLabel = (status: string): string => ({
@@ -158,12 +204,29 @@ const statusLabel = (status: string): string => ({
   paid: "Paid",
   expired: "Expired",
   disabled: "Disabled",
+  sending_recovery: "Sending recovery",
+  recovery_sent: "Recovery sent",
+  converted: "Converted",
+  dismissed: "Dismissed",
 }[status] || status);
 
 const money = (amount: number, currency = "PLN") => new Intl.NumberFormat("en-GB", {
   style: "currency",
   currency,
 }).format(Number(amount || 0));
+
+const recoveryDuration = (openedAt: string | null, recoveredAt: string | null): string => {
+  if (!openedAt || !recoveredAt) return "-";
+  const minutes = Math.max(0, dayjs(recoveredAt).diff(dayjs(openedAt), "minute"));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} hr ${minutes % 60} min`;
+  return `${Math.floor(hours / 24)} d ${hours % 24} hr`;
+};
+
+const recoveryDate = (value: string | null): string => (
+  value ? dayjs(value).format("D MMM YYYY, HH:mm") : "-"
+);
 
 const copyText = async (value: string): Promise<void> => {
   if (navigator.clipboard?.writeText) {
@@ -197,6 +260,13 @@ const PaymentLinksPage = () => {
   const navigate = useNavigate();
   const [products, setProducts] = useState<StorefrontProduct[]>([]);
   const [links, setLinks] = useState<SavedCart[]>([]);
+  const [ongoingCarts, setOngoingCarts] = useState<OngoingCart[]>([]);
+  const [recoveredCarts, setRecoveredCarts] = useState<OngoingCart[]>([]);
+  const [sendingRecoveryId, setSendingRecoveryId] = useState<string | null>(null);
+  const [previewingRecoveryId, setPreviewingRecoveryId] = useState<string | null>(null);
+  const [recoveryEmailPreview, setRecoveryEmailPreview] = useState<RecoveryEmailPreview | null>(null);
+  const [activityCart, setActivityCart] = useState<OngoingCart | null>(null);
+  const [activeTab, setActiveTab] = useState<string | null>("prepared");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -214,12 +284,16 @@ const PaymentLinksPage = () => {
     setLoading(true);
     setError("");
     try {
-      const [catalogResponse, linksResponse] = await Promise.all([
+      const [catalogResponse, linksResponse, ongoingResponse, recoveredResponse] = await Promise.all([
         axiosInstance.get<{ products: StorefrontProduct[] }>("/storefront/products"),
         axiosInstance.get<{ data: SavedCart[] }>("/storefront-saved-carts"),
+        axiosInstance.get<{ data: OngoingCart[] }>("/storefront-ongoing-carts"),
+        axiosInstance.get<{ data: OngoingCart[] }>("/storefront-ongoing-carts/recovered"),
       ]);
       setProducts(catalogResponse.data.products || []);
       setLinks(linksResponse.data.data || []);
+      setOngoingCarts(ongoingResponse.data.data || []);
+      setRecoveredCarts(recoveredResponse.data.data || []);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -382,14 +456,61 @@ const PaymentLinksPage = () => {
     }
   };
 
+  const dismissOngoing = async (ongoingCart: OngoingCart) => {
+    if (!window.confirm(`Dismiss the ongoing cart for ${ongoingCart.customer.fullName}?`)) return;
+    try {
+      await axiosInstance.patch(`/storefront-ongoing-carts/${ongoingCart.publicId}/dismiss`);
+      setOngoingCarts((current) => current.filter((item) => item.publicId !== ongoingCart.publicId));
+    } catch (requestError) {
+      setError(errorMessage(requestError));
+    }
+  };
+
+  const copyRecoveryLink = async (ongoingCart: OngoingCart) => {
+    await copyText(`${storefrontBaseUrl}/cart?recover=${ongoingCart.publicId}`);
+  };
+
+  const previewRecoveryEmail = async (ongoingCart: OngoingCart) => {
+    setPreviewingRecoveryId(ongoingCart.publicId);
+    setError("");
+    try {
+      const response = await axiosInstance.get<{ data: Omit<RecoveryEmailPreview, "cart"> }>(
+        `/storefront-ongoing-carts/${ongoingCart.publicId}/recovery-preview`,
+      );
+      setRecoveryEmailPreview({ cart: ongoingCart, ...response.data.data });
+    } catch (requestError) {
+      setError(errorMessage(requestError));
+    } finally {
+      setPreviewingRecoveryId(null);
+    }
+  };
+
+  const sendRecoveryEmail = async (ongoingCart: OngoingCart) => {
+    setSendingRecoveryId(ongoingCart.publicId);
+    setError("");
+    try {
+      const response = await axiosInstance.post<{ data: OngoingCart }>(
+        `/storefront-ongoing-carts/${ongoingCart.publicId}/send-recovery`,
+      );
+      setOngoingCarts((current) => current.map((item) => (
+        item.publicId === ongoingCart.publicId ? response.data.data : item
+      )));
+      setRecoveryEmailPreview(null);
+    } catch (requestError) {
+      setError(errorMessage(requestError));
+    } finally {
+      setSendingRecoveryId(null);
+    }
+  };
+
   return (
     <PageAccessGuard pageSlug={PAGE_SLUGS.bookings}>
       <Stack gap="lg" p={{ base: "md", md: "xl" }}>
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <Box>
             <Text size="xs" fw={700} c="dimmed" tt="uppercase">Bookings</Text>
-            <Title order={1} size="h2">Payment links</Title>
-            <Text c="dimmed">Prepare a locked cart and send the customer one link to review and pay.</Text>
+            <Title order={1} size="h2">Storefront carts</Title>
+            <Text c="dimmed">Manage prepared links, ongoing carts, and sales recovered by email.</Text>
           </Box>
           <Group>
             <Tooltip label="Refresh statuses">
@@ -397,7 +518,7 @@ const PaymentLinksPage = () => {
                 <IconRefresh size={18} />
               </Button>
             </Tooltip>
-            <Button leftSection={<IconPlus size={18} />} onClick={openCreator}>New payment link</Button>
+            {activeTab === "prepared" && <Button leftSection={<IconPlus size={18} />} onClick={openCreator}>New payment link</Button>}
           </Group>
         </Group>
 
@@ -406,18 +527,26 @@ const PaymentLinksPage = () => {
           <Button variant="light" leftSection={<IconLink size={17} />}>Payment links</Button>
         </Group>
 
+        <Tabs value={activeTab} onChange={setActiveTab}>
+          <Tabs.List>
+            <Tabs.Tab value="prepared" leftSection={<IconLink size={16} />}>Prepared links</Tabs.Tab>
+            <Tabs.Tab value="ongoing" leftSection={<IconShoppingCart size={16} />}>Ongoing carts</Tabs.Tab>
+            <Tabs.Tab value="recovered" leftSection={<IconShoppingCart size={16} />}>Recovered sales</Tabs.Tab>
+          </Tabs.List>
+        </Tabs>
+
         {error && <Alert color="red" title="Payment links unavailable">{error}</Alert>}
 
         {loading ? (
           <Box mih={260} style={{ display: "grid", placeItems: "center" }}><Loader /></Box>
-        ) : links.length === 0 ? (
+        ) : activeTab === "prepared" && links.length === 0 ? (
           <Box py={80} ta="center">
             <IconLink size={34} color="var(--mantine-color-gray-5)" />
             <Title order={3} mt="sm">No payment links yet</Title>
             <Text c="dimmed" mb="lg">Create a prepared booking when a customer is ready to pay.</Text>
             <Button leftSection={<IconPlus size={18} />} onClick={openCreator}>New payment link</Button>
           </Box>
-        ) : (
+        ) : activeTab === "prepared" ? (
           <Box style={{ overflowX: "auto" }}>
             <Table verticalSpacing="md" horizontalSpacing="md" striped highlightOnHover>
               <Table.Thead>
@@ -457,8 +586,223 @@ const PaymentLinksPage = () => {
               </Table.Tbody>
             </Table>
           </Box>
+        ) : activeTab === "recovered" && recoveredCarts.length === 0 ? (
+          <Box py={80} ta="center">
+            <IconShoppingCart size={34} color="var(--mantine-color-gray-5)" />
+            <Title order={3} mt="sm">No recovered sales yet</Title>
+            <Text c="dimmed">Paid orders attributed to a recovery email will appear here.</Text>
+          </Box>
+        ) : activeTab === "recovered" ? (
+          <Box style={{ overflowX: "auto" }}>
+            <Table verticalSpacing="md" horizontalSpacing="md" striped highlightOnHover miw={1280}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Customer</Table.Th>
+                  <Table.Th>Experiences</Table.Th>
+                  <Table.Th>Total</Table.Th>
+                  <Table.Th>Cart started</Table.Th>
+                  <Table.Th>Recovery emails</Table.Th>
+                  <Table.Th>Link opened</Table.Th>
+                  <Table.Th>Sale recovered</Table.Th>
+                  <Table.Th>Click to sale</Table.Th>
+                  <Table.Th>Order</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {recoveredCarts.map((cart) => (
+                  <Table.Tr key={cart.publicId}>
+                    <Table.Td>
+                      <Text fw={700}>{cart.customer.fullName}</Text>
+                      <Text size="xs" c="dimmed">{cart.customer.email}</Text>
+                      <Text size="xs" c="dimmed">{cart.customer.phoneCountry} {cart.customer.phone}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      {cart.quote.items.map((item) => (
+                        <Text key={`${item.productName}-${item.quantity}`} size="sm">{item.quantity} x {item.productName}</Text>
+                      ))}
+                    </Table.Td>
+                    <Table.Td fw={700}>{money(cart.total, cart.currency)}</Table.Td>
+                    <Table.Td>{recoveryDate(cart.createdAt)}</Table.Td>
+                    <Table.Td>
+                      <Text size="sm">{cart.recoveryCount} sent</Text>
+                      <Text size="xs" c="dimmed">First: {recoveryDate(cart.firstRecoverySentAt)}</Text>
+                      {cart.recoveryCount > 1 && <Text size="xs" c="dimmed">Last: {recoveryDate(cart.lastRecoverySentAt)}</Text>}
+                    </Table.Td>
+                    <Table.Td>{recoveryDate(cart.recoveryOpenedAt)}</Table.Td>
+                    <Table.Td>{recoveryDate(cart.recoveredAt)}</Table.Td>
+                    <Table.Td>{recoveryDuration(cart.recoveryOpenedAt, cart.recoveredAt)}</Table.Td>
+                    <Table.Td>
+                      {cart.orderPublicId
+                        ? <Text size="sm" fw={600}>{cart.orderPublicId}</Text>
+                        : <Text size="sm" c="dimmed">-</Text>}
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Box>
+        ) : ongoingCarts.length === 0 ? (
+          <Box py={80} ta="center">
+            <IconShoppingCart size={34} color="var(--mantine-color-gray-5)" />
+            <Title order={3} mt="sm">No ongoing carts</Title>
+            <Text c="dimmed">Customer carts awaiting payment will appear here.</Text>
+          </Box>
+        ) : (
+          <Box style={{ overflowX: "auto" }}>
+            <Table verticalSpacing="md" horizontalSpacing="md" striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Customer</Table.Th>
+                  <Table.Th>Experiences</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Total</Table.Th>
+                  <Table.Th>Recovery</Table.Th>
+                  <Table.Th>Last activity</Table.Th>
+                  <Table.Th ta="right">Actions</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {ongoingCarts.map((ongoingCart) => {
+                  const recoveryUrl = `${storefrontBaseUrl}/cart?recover=${ongoingCart.publicId}`;
+                  return (
+                    <Table.Tr key={ongoingCart.publicId}>
+                      <Table.Td>
+                        <Text fw={700}>{ongoingCart.customer.fullName}</Text>
+                        <Text size="xs" c="dimmed">{ongoingCart.customer.email}</Text>
+                      </Table.Td>
+                      <Table.Td>
+                        {ongoingCart.quote.items.map((item) => (
+                          <Text key={`${item.productName}-${item.quantity}`} size="sm">{item.quantity} x {item.productName}</Text>
+                        ))}
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge color={ongoingCart.recoveryOpenedAt ? "cyan" : statusColor(ongoingCart.status)} variant="light">
+                          {ongoingCart.recoveryOpenedAt
+                            ? "Recovery link opened"
+                            : ongoingCart.status === "active"
+                              ? "Active cart"
+                              : statusLabel(ongoingCart.status)}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td fw={700}>{money(ongoingCart.total, ongoingCart.currency)}</Table.Td>
+                      <Table.Td>
+                        {ongoingCart.recoveryOpenedAt
+                          ? `Opened ${dayjs(ongoingCart.recoveryOpenedAt).format("D MMM, HH:mm")}`
+                          : ongoingCart.recoverySentAt
+                            ? `Sent ${dayjs(ongoingCart.recoverySentAt).format("D MMM, HH:mm")}`
+                            : `Due ${dayjs(ongoingCart.recoveryDueAt).format("D MMM, HH:mm")}`}
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm">{dayjs(ongoingCart.lastActivityAt).format("D MMM, HH:mm")}</Text>
+                        {ongoingCart.events?.[0] && (
+                          <Text size="xs" c={ongoingCart.events[0].severity === "error" ? "red" : "dimmed"} lineClamp={1} maw={260}>
+                            {ongoingCart.events[0].message}
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        <Group justify="flex-end" gap="xs" wrap="nowrap">
+                          <Tooltip label="View cart activity"><Button variant="subtle" px="xs" onClick={() => setActivityCart(ongoingCart)} aria-label="View cart activity"><IconListDetails size={18} /></Button></Tooltip>
+                          <Tooltip label={ongoingCart.recoveryCount > 0 ? "Preview another recovery email" : "Preview recovery email"}>
+                            <Button
+                              variant="subtle"
+                              px="xs"
+                              loading={previewingRecoveryId === ongoingCart.publicId}
+                              disabled={ongoingCart.status === "sending_recovery"}
+                              onClick={() => void previewRecoveryEmail(ongoingCart)}
+                              aria-label="Preview recovery email"
+                            >
+                              <IconMail size={18} />
+                            </Button>
+                          </Tooltip>
+                          <Tooltip label="Copy recovery link"><Button variant="subtle" px="xs" onClick={() => void copyRecoveryLink(ongoingCart)} aria-label="Copy recovery link"><IconCopy size={18} /></Button></Tooltip>
+                          <Tooltip label="Open recovery link"><Button component="a" href={recoveryUrl} target="_blank" rel="noreferrer" variant="subtle" px="xs" aria-label="Open recovery link"><IconExternalLink size={18} /></Button></Tooltip>
+                          <Tooltip label="Dismiss cart"><Button color="red" variant="subtle" px="xs" onClick={() => void dismissOngoing(ongoingCart)} aria-label="Dismiss ongoing cart"><IconBan size={18} /></Button></Tooltip>
+                        </Group>
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+          </Box>
         )}
       </Stack>
+
+      <Modal
+        opened={Boolean(recoveryEmailPreview)}
+        onClose={() => setRecoveryEmailPreview(null)}
+        title="Recovery email preview"
+        fullScreen
+      >
+        {recoveryEmailPreview && (
+          <Stack h="calc(100vh - 92px)" gap="md">
+            <SimpleGrid cols={{ base: 1, sm: 2 }}>
+              <Box>
+                <Text size="xs" fw={700} c="dimmed" tt="uppercase">Recipient</Text>
+                <Text fw={600}>{recoveryEmailPreview.to}</Text>
+              </Box>
+              <Box>
+                <Text size="xs" fw={700} c="dimmed" tt="uppercase">Subject</Text>
+                <Text fw={600}>{recoveryEmailPreview.subject}</Text>
+              </Box>
+            </SimpleGrid>
+            {error && <Alert color="red" title="Recovery email unavailable">{error}</Alert>}
+            <Box style={{ flex: 1, minHeight: 0, border: "1px solid var(--mantine-color-gray-4)" }}>
+              <iframe
+                title="Recovery email"
+                srcDoc={recoveryEmailPreview.htmlBody}
+                sandbox=""
+                style={{ width: "100%", height: "100%", border: 0, background: "#080708" }}
+              />
+            </Box>
+            <Group justify="flex-end">
+              <Button variant="default" disabled={Boolean(sendingRecoveryId)} onClick={() => setRecoveryEmailPreview(null)}>Cancel</Button>
+              <Button
+                leftSection={<IconSend size={18} />}
+                loading={sendingRecoveryId === recoveryEmailPreview.cart.publicId}
+                onClick={() => void sendRecoveryEmail(recoveryEmailPreview.cart)}
+              >
+                Send email
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={Boolean(activityCart)}
+        onClose={() => setActivityCart(null)}
+        title="Cart activity"
+        size="lg"
+        centered
+      >
+        {activityCart && (
+          <Stack gap="md">
+            <Box>
+              <Text fw={700}>{activityCart.customer.fullName}</Text>
+              <Text size="sm" c="dimmed">{activityCart.customer.email}</Text>
+            </Box>
+            <Divider />
+            {activityCart.events?.length ? activityCart.events.map((event, index) => (
+              <Box key={event.id} pb="md" style={index < activityCart.events.length - 1 ? { borderBottom: "1px solid var(--mantine-color-gray-3)" } : undefined}>
+                <Group justify="space-between" align="flex-start" wrap="nowrap">
+                  <div>
+                    <>
+                      <Badge color={event.severity === "error" ? "red" : event.severity === "warning" ? "yellow" : "blue"} variant="light">
+                        {event.type.replaceAll("_", " ")}
+                      </Badge>
+                      <Text mt="xs">{event.message}</Text>
+                      {event.details?.orderPublicId && <Text size="xs" c="dimmed">Order {String(event.details.orderPublicId)}</Text>}
+                    </>
+                  </div>
+                  <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>{recoveryDate(event.occurredAt)}</Text>
+                </Group>
+              </Box>
+            )) : <Text c="dimmed">No checkout events or customer-facing errors have been recorded yet.</Text>}
+          </Stack>
+        )}
+      </Modal>
 
       <Modal opened={modalOpen} onClose={() => setModalOpen(false)} title="Create payment link" size="xl" centered>
         <Stack gap="lg">

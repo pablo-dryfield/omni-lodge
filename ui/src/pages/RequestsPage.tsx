@@ -53,10 +53,16 @@ import { useCreateRequiredAction, type CreateRequiredActionPayload } from "../ap
 import { useCerebroBootstrap } from "../api/cerebro";
 import axiosInstance from "../utils/axiosInstance";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import {
+  getShiftRequestType,
+  getShiftRequestTypeLabel,
+  resolveShiftRequestAssignment,
+  type ShiftRequestAssignmentLike,
+} from "../components/scheduling/shiftRequestPresentation";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
-import { useAppDispatch } from "../store/hooks";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
 import type { FinanceManagementRequest } from "../types/finance";
-import type { ShiftAssignment, SwapRequest } from "../types/scheduling";
+import type { ShiftRequest } from "../types/scheduling";
 import type { User } from "../types/users/User";
 import type { UserType } from "../types/userTypes/UserType";
 import type { ShiftRole } from "../types/shiftRoles/ShiftRole";
@@ -234,7 +240,7 @@ const formatRequestedUserType = (value?: string | null): string => {
     .join(" ");
 };
 
-const describeShift = (assignment: ShiftAssignment | null | undefined): string => {
+const describeShift = (assignment: ShiftRequestAssignmentLike | null | undefined): string => {
   const shift = assignment?.shiftInstance;
   if (!shift) {
     return "Shift details unavailable";
@@ -561,26 +567,40 @@ const UserApprovalCard = ({
   );
 };
 
-const ScheduleSwapCard = ({
-  swap,
+const ScheduleRequestCard = ({
+  request,
   busySwapId,
+  currentUserId,
   onDecision,
 }: {
-  swap: SwapRequest;
+  request: ShiftRequest;
   busySwapId: number | null;
-  onDecision: (swap: SwapRequest, approve: boolean) => void;
+  currentUserId: number | null;
+  onDecision: (request: ShiftRequest, approve: boolean) => void;
 }) => {
-  const isBusy = busySwapId === swap.id;
+  const isBusy = busySwapId === request.id;
+  const requiresIndependentManager = currentUserId != null
+    && (request.requesterId === currentUserId || request.partnerId === currentUserId);
+  const requestType = getShiftRequestType(request);
+  const requestTypeLabel = getShiftRequestTypeLabel(requestType);
+  const fromAssignment = resolveShiftRequestAssignment(request, "from");
+  const toAssignment = resolveShiftRequestAssignment(request, "to");
+  const requesterName = formatUserName(request.requester);
+  const partnerName = formatUserName(request.partner);
   return (
     <Card withBorder radius="md" p="lg">
       <Stack gap="md">
         <Group justify="space-between" align="flex-start">
           <Stack gap={2}>
             <Text fw={800} fz="lg">
-              Swap request #{swap.id}
+              {requestTypeLabel} request #{request.id}
             </Text>
             <Text size="sm" c="dimmed">
-              {formatUserName(swap.requester)} with {formatUserName(swap.partner)}
+              {requestType === "takeover"
+                ? `${requesterName} taking over from ${partnerName}`
+                : requestType === "drop"
+                  ? `${requesterName} dropping a shift`
+                  : `${requesterName} with ${partnerName}`}
             </Text>
           </Stack>
           <Badge color="blue" variant="light">
@@ -588,28 +608,34 @@ const ScheduleSwapCard = ({
           </Badge>
         </Group>
 
-        <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
+        <SimpleGrid cols={{ base: 1, md: requestType === "swap" ? 2 : 1 }} spacing="sm">
           <Paper withBorder radius="md" p="md">
             <Stack gap={4}>
-              <Text size="xs" c="dimmed">
-                From
-              </Text>
-              <Text fw={600}>{describeShift(swap.fromAssignment)}</Text>
+              <Text size="xs" c="dimmed">{requestType === "drop" ? "Shift to drop" : requestType === "takeover" ? "Shift to take over" : "From"}</Text>
+              <Text fw={600}>{describeShift(fromAssignment)}</Text>
             </Stack>
           </Paper>
-          <Paper withBorder radius="md" p="md">
-            <Stack gap={4}>
-              <Text size="xs" c="dimmed">
-                To
-              </Text>
-              <Text fw={600}>{describeShift(swap.toAssignment)}</Text>
-            </Stack>
-          </Paper>
+          {requestType === "swap" ? (
+            <Paper withBorder radius="md" p="md">
+              <Stack gap={4}>
+                <Text size="xs" c="dimmed">To</Text>
+                <Text fw={600}>{describeShift(toAssignment)}</Text>
+              </Stack>
+            </Paper>
+          ) : null}
         </SimpleGrid>
+
+        {request.requestNote ? <Alert color="blue"><b>Request note:</b> {request.requestNote}</Alert> : null}
+        {request.partnerResponseNote ? <Alert color="teal"><b>Teammate note:</b> {request.partnerResponseNote}</Alert> : null}
+        {requiresIndependentManager ? (
+          <Alert color="yellow">
+            A different manager must make the final decision because you are involved in this request.
+          </Alert>
+        ) : null}
 
         <Group justify="space-between" align="center">
           <Text size="xs" c="dimmed">
-            Requested {formatDateTime(swap.createdAt)}
+            Requested {formatDateTime(request.createdAt)}
           </Text>
           <Group gap="xs">
             <Button
@@ -617,7 +643,8 @@ const ScheduleSwapCard = ({
               variant="light"
               leftSection={<IconX size={16} />}
               loading={isBusy}
-              onClick={() => onDecision(swap, false)}
+              disabled={requiresIndependentManager}
+              onClick={() => onDecision(request, false)}
             >
               Deny
             </Button>
@@ -625,7 +652,8 @@ const ScheduleSwapCard = ({
               color="green"
               leftSection={<IconCheck size={16} />}
               loading={isBusy}
-              onClick={() => onDecision(swap, true)}
+              disabled={requiresIndependentManager}
+              onClick={() => onDecision(request, true)}
             >
               Approve
             </Button>
@@ -677,6 +705,7 @@ const FinanceRequestCard = ({
 
 const RequestsPage = () => {
   const dispatch = useAppDispatch();
+  const loggedUserId = useAppSelector((state) => state.session.loggedUserId) ?? null;
   const isMobile = useMediaQuery("(max-width: 48em)");
   const requestsQuery = useRequestsCenter();
   const approveUser = useApproveUserRequest();
@@ -687,6 +716,9 @@ const RequestsPage = () => {
   const createRequiredAction = useCreateRequiredAction();
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
   const [busySwapId, setBusySwapId] = useState<number | null>(null);
+  const [scheduleDecision, setScheduleDecision] = useState<{ request: ShiftRequest; approve: boolean } | null>(null);
+  const [scheduleDecisionNote, setScheduleDecisionNote] = useState("");
+  const [scheduleDecisionError, setScheduleDecisionError] = useState<string | null>(null);
   const [financeModal, setFinanceModal] = useState<FinanceManagementRequest | null>(null);
   const [requiredActionModalOpen, setRequiredActionModalOpen] = useState(false);
   const cerebroQuery = useCerebroBootstrap({ enabled: requiredActionModalOpen });
@@ -738,6 +770,7 @@ const RequestsPage = () => {
     scheduleSwaps: 0,
     financeRequests: 0,
   };
+  const scheduleRequests = data?.scheduleRequests ?? data?.scheduleSwaps ?? [];
 
   const isDecisionBusy = approveUser.isPending || rejectUser.isPending || decideSwap.isPending || decideFinance.isPending;
 
@@ -827,13 +860,29 @@ const RequestsPage = () => {
     }
   };
 
-  const handleSwapDecision = async (swap: SwapRequest, approve: boolean) => {
-    setBusySwapId(swap.id);
+  const handleSwapDecision = (request: ShiftRequest, approve: boolean) => {
+    setScheduleDecisionNote("");
+    setScheduleDecisionError(null);
+    setScheduleDecision({ request, approve });
+  };
+
+  const handleConfirmScheduleDecision = async () => {
+    if (!scheduleDecision) return;
+    setBusySwapId(scheduleDecision.request.id);
     setPageError(null);
     try {
-      await decideSwap.mutateAsync({ swapId: swap.id, approve });
+      await decideSwap.mutateAsync({
+        swapId: scheduleDecision.request.id,
+        approve: scheduleDecision.approve,
+        reason: scheduleDecisionNote.trim() || null,
+      });
+      setScheduleDecision(null);
+      setScheduleDecisionNote("");
+      setScheduleDecisionError(null);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to update swap request");
+      const message = error instanceof Error ? error.message : "Unable to update shift request";
+      setScheduleDecisionError(message);
+      setPageError(message);
     } finally {
       setBusySwapId(null);
     }
@@ -964,7 +1013,7 @@ const RequestsPage = () => {
           <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="md">
             <RequestMetric label="Total open" value={summary.total} tone="blue" />
             <RequestMetric label="Users" value={summary.userApprovals} tone="orange" />
-            <RequestMetric label="Swaps" value={summary.scheduleSwaps} tone="green" />
+            <RequestMetric label="Shift requests" value={summary.scheduleRequests ?? scheduleRequests.length} tone="green" />
             <RequestMetric label="Finance" value={summary.financeRequests} tone="blue" />
             <RequestMetric label="Popup requests" value={summary.popupRequests ?? data?.popupRequests.length ?? 0} tone="orange" />
           </SimpleGrid>
@@ -1126,20 +1175,21 @@ const RequestsPage = () => {
           </Stack>
 
           <Stack gap="md">
-            <SectionHeader icon={<IconArrowsExchange size={18} />} title="Schedule Swaps" count={data.scheduleSwaps.length} />
-            {data.scheduleSwaps.length === 0 ? (
+            <SectionHeader icon={<IconArrowsExchange size={18} />} title="Shift Requests" count={scheduleRequests.length} />
+            {scheduleRequests.length === 0 ? (
               <Paper withBorder radius="md" p="lg">
                 <Text ta="center" c="dimmed">
-                  No schedule swaps waiting for manager approval.
+                  No shift requests waiting for manager approval.
                 </Text>
               </Paper>
             ) : (
               <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="md">
-                {data.scheduleSwaps.map((swap) => (
-                  <ScheduleSwapCard
-                    key={swap.id}
-                    swap={swap}
+                {scheduleRequests.map((request) => (
+                  <ScheduleRequestCard
+                    key={request.id}
+                    request={request}
                     busySwapId={busySwapId}
+                    currentUserId={loggedUserId}
                     onDecision={handleSwapDecision}
                   />
                 ))}
@@ -1304,6 +1354,70 @@ const RequestsPage = () => {
             )}
           </Stack>
         ) : null}
+      </Modal>
+
+      <Modal
+        opened={Boolean(scheduleDecision)}
+        onClose={() => {
+          if (!decideSwap.isPending) {
+            setScheduleDecision(null);
+            setScheduleDecisionNote("");
+            setScheduleDecisionError(null);
+          }
+        }}
+        title={
+          scheduleDecision
+            ? `${scheduleDecision.approve ? "Approve" : "Deny"} ${getShiftRequestTypeLabel(
+                getShiftRequestType(scheduleDecision.request),
+              ).toLowerCase()} request`
+            : "Shift request"
+        }
+        centered
+        fullScreen={isMobile}
+        size="md"
+      >
+        <Stack gap="md">
+          <Text fw={700} ta="center">
+            {scheduleDecision?.approve
+              ? getShiftRequestType(scheduleDecision.request) === "drop"
+                ? "Approve this drop request? The assignment will be removed and the role will remain unfilled."
+                : getShiftRequestType(scheduleDecision.request) === "takeover"
+                  ? "Approve this takeover request and transfer the assignment to the requester?"
+                  : "Approve this swap request and exchange both assignments?"
+              : "Deny this request without changing the schedule?"}
+          </Text>
+          <Textarea
+            label="Manager note (optional)"
+            placeholder="Add context for the staff members"
+            value={scheduleDecisionNote}
+            onChange={(event) => setScheduleDecisionNote(event.currentTarget.value)}
+            maxLength={2000}
+            autosize
+            minRows={3}
+            disabled={decideSwap.isPending}
+          />
+          {scheduleDecisionError ? <Alert color="red" role="alert">{scheduleDecisionError}</Alert> : null}
+          <Group grow>
+            <Button
+              variant="light"
+              color="gray"
+              onClick={() => {
+                setScheduleDecision(null);
+                setScheduleDecisionError(null);
+              }}
+              disabled={decideSwap.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              color={scheduleDecision?.approve ? "green" : "red"}
+              onClick={handleConfirmScheduleDecision}
+              loading={decideSwap.isPending}
+            >
+              {scheduleDecision?.approve ? "Approve request" : "Deny request"}
+            </Button>
+          </Group>
+        </Stack>
       </Modal>
 
       <Modal

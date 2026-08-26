@@ -102,7 +102,7 @@ const defaultModules = [
   { slug: 'scheduling-availability', name: 'Scheduling Availability', pageSlug: 'scheduling', description: 'Submit availability for upcoming weeks', componentRef: 'SchedulingAvailability', sortOrder: 1 },
   { slug: 'scheduling-builder', name: 'Scheduling Builder', pageSlug: 'scheduling', description: 'Configure weekly schedules and assignments', componentRef: 'SchedulingBuilder', sortOrder: 2 },
   { slug: 'scheduling-my-shifts', name: 'Scheduling My Shifts', pageSlug: 'scheduling', description: 'Review personal shift assignments', componentRef: 'SchedulingMyShifts', sortOrder: 3 },
-  { slug: 'scheduling-swaps', name: 'Scheduling Swaps', pageSlug: 'scheduling', description: 'Manage shift swap requests', componentRef: 'SchedulingSwaps', sortOrder: 4 },
+  { slug: 'scheduling-swaps', name: 'Scheduling Shift Requests', pageSlug: 'scheduling', description: 'Manage swap, takeover, and drop requests', componentRef: 'SchedulingSwaps', sortOrder: 4 },
   { slug: 'scheduling-history', name: 'Scheduling History', pageSlug: 'scheduling', description: 'View scheduling exports and history', componentRef: 'SchedulingHistory', sortOrder: 5 },
   { slug: 'finance-dashboard', name: 'Finance Dashboard', pageSlug: 'finance', description: 'Overview of finance KPIs', componentRef: 'FinanceDashboard', sortOrder: 1 },
   { slug: 'finance-transactions', name: 'Finance Transactions', pageSlug: 'finance', description: 'Manage finance transactions', componentRef: 'FinanceTransactions', sortOrder: 2 },

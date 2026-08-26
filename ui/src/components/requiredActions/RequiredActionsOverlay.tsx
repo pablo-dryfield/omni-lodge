@@ -24,7 +24,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { IconAlertCircle, IconArrowsExchange, IconCheck, IconClipboardCheck, IconEye, IconMail, IconSend, IconSignature, IconUser, IconUserEdit, IconX } from "@tabler/icons-react";
+import { IconAlertCircle, IconArrowsExchange, IconCheck, IconClipboardCheck, IconEye, IconMail, IconSend, IconSignature, IconUser, IconUserEdit, IconUserMinus, IconUserPlus, IconX } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import { acknowledgeCerebroPolicy, submitCerebroQuiz } from "../../api/cerebro";
 import {
@@ -95,6 +95,15 @@ const getInitials = (name: string): string => {
   return (parts[0]?.[0] ?? "U").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
 };
 
+const isScheduleRequestAction = (action: RequiredActionItem | null | undefined): boolean =>
+  action?.type === "schedule_swap_partner" ||
+  action?.type === "schedule_swap_manager" ||
+  action?.type === "schedule_shift_request_partner" ||
+  action?.type === "schedule_shift_request_manager";
+
+const isManagerScheduleRequestAction = (action: RequiredActionItem): boolean =>
+  action.type === "schedule_swap_manager" || action.type === "schedule_shift_request_manager";
+
 const formatRoleLabel = (value: unknown): string => {
   if (typeof value !== "string" || !value.trim()) {
     return "Role";
@@ -117,9 +126,24 @@ const getSwapAssignmentSummary = (value: unknown) => {
   const assignment = getPayloadRecord(value);
   const shiftInstance = getPayloadRecord(assignment.shiftInstance);
   const shiftType = getPayloadRecord(shiftInstance.shiftType ?? assignment.shiftType);
-  const dateValue = typeof assignment.date === "string" ? assignment.date : null;
-  const timeStart = typeof assignment.timeStart === "string" ? assignment.timeStart : null;
-  const timeEnd = typeof assignment.timeEnd === "string" ? assignment.timeEnd : null;
+  const dateValue =
+    typeof assignment.date === "string"
+      ? assignment.date
+      : typeof shiftInstance.date === "string"
+        ? shiftInstance.date
+        : null;
+  const timeStart =
+    typeof assignment.timeStart === "string"
+      ? assignment.timeStart
+      : typeof shiftInstance.timeStart === "string"
+        ? shiftInstance.timeStart
+        : null;
+  const timeEnd =
+    typeof assignment.timeEnd === "string"
+      ? assignment.timeEnd
+      : typeof shiftInstance.timeEnd === "string"
+        ? shiftInstance.timeEnd
+        : null;
   const shiftTypeName =
     typeof assignment.shiftTypeName === "string" && assignment.shiftTypeName.trim()
       ? assignment.shiftTypeName
@@ -137,8 +161,9 @@ const getSwapAssignmentSummary = (value: unknown) => {
 };
 
 const getActionIcon = (action: RequiredActionItem) => {
-  if (action.type === "schedule_swap_partner" || action.type === "schedule_swap_manager") {
-    return <IconArrowsExchange size={28} />;
+  if (isScheduleRequestAction(action)) {
+    const requestType = typeof action.payload.requestType === "string" ? action.payload.requestType : "swap";
+    return requestType === "takeover" ? <IconUserPlus size={28} /> : requestType === "drop" ? <IconUserMinus size={28} /> : <IconArrowsExchange size={28} />;
   }
   if (action.type === "profile_fields") {
     return <IconUserEdit size={28} />;
@@ -512,14 +537,30 @@ const SwapAction = ({
   loading,
 }: {
   action: RequiredActionItem;
-  onRespond: (accept: boolean) => void;
+  onRespond: (accept: boolean, note?: string) => void;
   loading: boolean;
 }) => {
-  const isManagerDecision = action.type === "schedule_swap_manager";
+  const isManagerDecision = isManagerScheduleRequestAction(action);
+  const requestType =
+    action.payload.requestType === "takeover" || action.payload.requestType === "drop"
+      ? action.payload.requestType
+      : "swap";
+  const [responseNote, setResponseNote] = useState("");
   const requesterName = getUserName(action.payload.requester, "Teammate");
   const partnerName = getUserName(action.payload.partner, "Teammate");
-  const fromAssignment = getSwapAssignmentSummary(action.payload.fromAssignment);
+  const fromAssignmentPayload =
+    requestType === "swap"
+      ? action.payload.fromAssignment
+      : action.payload.affectedAssignment ?? action.payload.fromAssignment ?? action.payload.assignmentSnapshot;
+  const fromAssignment = getSwapAssignmentSummary(fromAssignmentPayload);
   const toAssignment = getSwapAssignmentSummary(action.payload.toAssignment);
+  const requestNote = typeof action.payload.requestNote === "string" ? action.payload.requestNote.trim() : "";
+  const partnerResponseNote =
+    typeof action.payload.partnerResponseNote === "string" ? action.payload.partnerResponseNote.trim() : "";
+
+  useEffect(() => {
+    setResponseNote("");
+  }, [action.id]);
 
   const renderSwapCard = ({
     label,
@@ -651,54 +692,100 @@ const SwapAction = ({
             lineHeight: 1,
           }}
         >
-          Swap request
+          {requestType === "takeover" ? "Takeover request" : requestType === "drop" ? "Drop request" : "Swap request"}
         </Title>
         <Text c="dimmed" ta="center" fw={700}>
-          {isManagerDecision
-            ? `${requesterName} and ${partnerName} accepted this swap.`
-            : `${requesterName} wants to swap shifts with you.`}
+          {requestType === "takeover"
+            ? isManagerDecision
+              ? `${partnerName} accepted ${requesterName}'s request to take over this shift.`
+              : `${requesterName} wants to take over your shift.`
+            : requestType === "drop"
+              ? `${requesterName} wants to drop this shift.`
+              : isManagerDecision
+                ? `${requesterName} and ${partnerName} accepted this swap.`
+                : `${requesterName} wants to swap shifts with you.`}
         </Text>
       </Stack>
 
-      {renderSwapCard({
-        label: isManagerDecision ? "Requester offers" : "They offer",
-        name: requesterName,
-        assignment: fromAssignment,
-        tone: "offer",
-      })}
+      {requestType === "swap" ? (
+        <>
+          {renderSwapCard({
+            label: isManagerDecision ? "Requester offers" : "They offer",
+            name: requesterName,
+            assignment: fromAssignment,
+            tone: "offer",
+          })}
+          <Center
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: "50%",
+              backgroundColor: "#111827",
+              color: "#FFFFFF",
+              boxShadow: "0 12px 22px rgba(15, 23, 42, 0.18)",
+            }}
+          >
+            <IconArrowsExchange size={19} />
+          </Center>
+          {renderSwapCard({
+            label: isManagerDecision ? "Teammate gives" : "You give",
+            name: isManagerDecision ? partnerName : "You",
+            assignment: toAssignment,
+            tone: "request",
+          })}
+        </>
+      ) : (
+        renderSwapCard({
+          label: requestType === "takeover" ? "Shift to take over" : "Shift to drop",
+          name: requestType === "takeover" ? partnerName : requesterName,
+          assignment: fromAssignment,
+          tone: requestType === "takeover" ? "request" : "offer",
+        })
+      )}
 
-      <Center
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: "50%",
-          backgroundColor: "#111827",
-          color: "#FFFFFF",
-          boxShadow: "0 12px 22px rgba(15, 23, 42, 0.18)",
-        }}
-      >
-        <IconArrowsExchange size={19} />
-      </Center>
+      {requestNote ? (
+        <Alert color="blue" radius="md" variant="light" w="100%">
+          <Text size="xs" fw={900} tt="uppercase">Request note</Text>
+          <Text size="sm" fw={700}>{requestNote}</Text>
+        </Alert>
+      ) : null}
 
-      {renderSwapCard({
-        label: isManagerDecision ? "Teammate gives" : "You give",
-        name: isManagerDecision ? partnerName : "You",
-        assignment: toAssignment,
-        tone: "request",
-      })}
+      {partnerResponseNote ? (
+        <Alert color="teal" radius="md" variant="light" w="100%">
+          <Text size="xs" fw={900} tt="uppercase">Teammate note</Text>
+          <Text size="sm" fw={700}>{partnerResponseNote}</Text>
+        </Alert>
+      ) : null}
 
       <Alert color="blue" radius="md" variant="light" w="100%">
         <Text size="sm" fw={900} ta="center" style={{ fontFamily: HEADER_FONT_STACK }}>
-          {isManagerDecision ? "Approve to update the schedule." : "Manager will receive the request."}
+          {isManagerDecision
+            ? requestType === "drop"
+              ? "Approval removes this assignment and leaves the role unfilled."
+              : "Approve to update the schedule."
+            : "Manager will receive the request after you accept."}
         </Text>
       </Alert>
 
+      <Textarea
+        label={isManagerDecision ? "Manager note (optional)" : "Response note (optional)"}
+        placeholder="Add context for the other approvers"
+        value={responseNote}
+        onChange={(event) => setResponseNote(event.currentTarget.value)}
+        maxLength={2000}
+        autosize
+        minRows={2}
+        maxRows={6}
+        disabled={loading}
+        w="100%"
+      />
+
       <Group grow>
-        <Button color="red" size="lg" leftSection={<IconX size={18} />} loading={loading} onClick={() => onRespond(false)}>
-          {isManagerDecision ? "Decline swap" : "Decline"}
+        <Button color="red" size="lg" leftSection={<IconX size={18} />} loading={loading} onClick={() => onRespond(false, responseNote.trim() || undefined)}>
+          {isManagerDecision ? `Decline ${requestType}` : "Decline"}
         </Button>
-        <Button color="green" size="lg" leftSection={<IconCheck size={18} />} loading={loading} onClick={() => onRespond(true)}>
-          {isManagerDecision ? "Approve swap" : "Accept"}
+        <Button color="green" size="lg" leftSection={<IconCheck size={18} />} loading={loading} onClick={() => onRespond(true, responseNote.trim() || undefined)}>
+          {isManagerDecision ? `Approve ${requestType}` : "Accept"}
         </Button>
       </Group>
     </Stack>
@@ -1203,19 +1290,23 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     }
   };
 
-  const handleSwapResponse = async (accept: boolean) => {
-    if (!action || (action.type !== "schedule_swap_partner" && action.type !== "schedule_swap_manager")) {
+  const handleSwapResponse = async (accept: boolean, note?: string) => {
+    if (!action || !isScheduleRequestAction(action)) {
       return;
     }
     setError(null);
     try {
-      if (action.type === "schedule_swap_manager") {
-        await decideManagerSwap.mutateAsync({ swapId: action.recordId, approve: accept });
+      if (isManagerScheduleRequestAction(action)) {
+        await decideManagerSwap.mutateAsync({
+          swapId: action.recordId,
+          approve: accept,
+          ...(note ? { reason: note } : {}),
+        });
       } else {
-        await respondToSwap.mutateAsync({ swapId: action.recordId, accept });
+        await respondToSwap.mutateAsync({ swapId: action.recordId, accept, ...(note ? { note } : {}) });
       }
     } catch (mutationError) {
-      setError(getApiErrorMessage(mutationError, "Unable to update the swap request"));
+      setError(getApiErrorMessage(mutationError, "Unable to update the shift request"));
     }
   };
 
@@ -1292,7 +1383,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     }
   };
 
-  const isSwapAction = action?.type === "schedule_swap_partner" || action?.type === "schedule_swap_manager";
+  const isSwapAction = isScheduleRequestAction(action);
 
   return (
     <Modal
@@ -1329,7 +1420,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
             </Center>
           ) : (
             <Stack gap="lg" align="stretch">
-              {action.type === "schedule_swap_partner" || action.type === "schedule_swap_manager" ? null : (
+              {isScheduleRequestAction(action) ? null : (
                 <Stack gap="sm" align="center">
                   <ThemeIcon size={64} radius="xl" color="blue" variant="light">
                     {getActionIcon(action)}
@@ -1373,7 +1464,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
                 </Alert>
               ) : null}
 
-              {action.type === "schedule_swap_partner" || action.type === "schedule_swap_manager" ? (
+              {isScheduleRequestAction(action) ? (
                 <SwapAction action={action} onRespond={handleSwapResponse} loading={isBusy} />
               ) : action.type === "profile_fields" ? (
                 <ProfileFieldsForm action={action} onSubmit={handleProfileSubmit} loading={isBusy} signatureSlot={signatureSlot} />

@@ -11,6 +11,10 @@ import {
   quoteCart,
 } from '../controllers/storefrontCommerceController.js';
 import { getPublicSavedCart } from '../controllers/storefrontSavedCartController.js';
+import {
+  dismissOngoingCartBySession,
+  recoverOngoingCart,
+} from '../controllers/storefrontOngoingCartController.js';
 
 const router = Router();
 
@@ -22,5 +26,7 @@ router.get('/orders/:publicId', getOrder);
 router.get('/products', listStorefrontProducts);
 router.get('/products/:slug', getStorefrontProduct);
 router.get('/saved-carts/:publicId', getPublicSavedCart);
+router.delete('/ongoing-carts/session/:sessionId', dismissOngoingCartBySession);
+router.get('/ongoing-carts/:publicId', recoverOngoingCart);
 
 export default router;

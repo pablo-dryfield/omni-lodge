@@ -7,9 +7,11 @@ import {
   completeRequiredAction,
   createRequiredAction,
   decideManagerSwapRequiredAction,
+  decideManagerShiftRequestRequiredAction,
   listMyRequiredActions,
   markRequiredActionPrompted,
   respondToSwapRequiredAction,
+  respondToShiftRequestRequiredAction,
   updateRequiredActionStatus,
 } from '../controllers/requiredActionController.js';
 
@@ -31,5 +33,7 @@ router.post('/actions/:id/prompted', markRequiredActionPrompted);
 router.post('/actions/:id/profile-fields', upload.single('profilePhoto'), completeProfileFieldsAction);
 router.post('/schedule-swaps/:id/partner-response', respondToSwapRequiredAction);
 router.post('/schedule-swaps/:id/manager-decision', decideManagerSwapRequiredAction);
+router.post('/schedule-shift-requests/:id/partner-response', respondToShiftRequestRequiredAction);
+router.post('/schedule-shift-requests/:id/manager-decision', decideManagerShiftRequestRequiredAction);
 
 export default router;
