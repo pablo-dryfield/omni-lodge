@@ -70,12 +70,15 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
             authorized brief consumer. When a business administrator connects WhatsApp, Meta
             Platforms, Inc. processes WhatsApp account, authorization, message, media, and webhook
             data as required to provide the WhatsApp Business Platform.
-            Cloudflare provides network delivery and security services for OmniLodge and may process
-            request metadata and webhook payloads while delivering them to the OmniLodge backend.
-            Google Drive stores OmniLodge database backup archives, which may contain WhatsApp data
-            that was present in the database when a backup was created.
+            Cloudflare, Inc. provides network delivery and security services for OmniLodge and may
+            process request metadata and webhook payloads while delivering them to the OmniLodge
+            backend. RackNerd LLC hosts the self-managed OmniLodge backend on a virtual private
+            server located in New York, United States, and may process data stored on or transmitted
+            through that server. Google Ireland Limited provides Google Drive storage for OmniLodge
+            database backup archives, which may contain WhatsApp data that was present in the
+            database when a backup was created.
             When an administrator enables the scheduled morning brief, selected recent WhatsApp
-            message data is provided to OpenAI services solely to generate the requested private
+            message data is provided to OpenAI Ireland Ltd. solely to generate the requested private
             operational summary. These providers process data under their applicable service terms
             and data-protection commitments. OmniLodge does not sell WhatsApp message data or use it
             for advertising.
