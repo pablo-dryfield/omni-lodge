@@ -68,7 +68,13 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
             read-only API configured for the authorized brief consumer. When a business administrator
             connects WhatsApp, Meta Platforms, Inc. processes WhatsApp account, authorization,
             message, media, and webhook data as required to provide the WhatsApp Business Platform.
-            OmniLodge does not sell WhatsApp message data or use it for advertising.
+            Cloudflare provides network delivery and security services for OmniLodge and may process
+            request metadata and webhook payloads while delivering them to the OmniLodge backend.
+            When an administrator enables the scheduled morning brief, selected recent WhatsApp
+            message data is provided to OpenAI services solely to generate the requested private
+            operational summary. These providers process data under their applicable service terms
+            and data-protection commitments. OmniLodge does not sell WhatsApp message data or use it
+            for advertising.
           </Text>
         </Stack>
 
