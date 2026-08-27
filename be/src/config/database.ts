@@ -65,6 +65,7 @@ import CustomerEmailInspection from "../models/CustomerEmailInspection.js";
 import WhatsAppMessage from "../models/WhatsAppMessage.js";
 import WhatsAppSourceState from "../models/WhatsAppSourceState.js";
 import WhatsAppWebhookInbox from "../models/WhatsAppWebhookInbox.js";
+import WhatsAppEmbeddedSignupAttempt from "../models/WhatsAppEmbeddedSignupAttempt.js";
 import ConfigKey from "../models/ConfigKey.js";
 import ConfigValue from "../models/ConfigValue.js";
 import ConfigHistory from "../models/ConfigHistory.js";
@@ -280,6 +281,7 @@ const sequelize = new Sequelize({
     WhatsAppMessage,
     WhatsAppSourceState,
     WhatsAppWebhookInbox,
+    WhatsAppEmbeddedSignupAttempt,
     ConfigKey,
     ConfigValue,
     ConfigHistory,

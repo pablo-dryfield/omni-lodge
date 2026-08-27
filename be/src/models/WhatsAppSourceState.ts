@@ -28,7 +28,7 @@ export default class WhatsAppSourceState extends Model {
   @AllowNull(false)
   @Default('not_started')
   @Column({ field: 'history_sync_status', type: DataType.STRING(32) })
-  declare historySyncStatus: 'not_started' | 'in_progress' | 'complete' | 'failed';
+  declare historySyncStatus: 'not_started' | 'in_progress' | 'complete' | 'declined' | 'failed';
 
   @AllowNull(true)
   @Column({ field: 'history_sync_progress', type: DataType.SMALLINT })

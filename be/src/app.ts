@@ -63,6 +63,7 @@ import storefrontOngoingCartRoutes from './routes/storefrontOngoingCartRoutes.js
 import storefrontPromotionRoutes from './routes/storefrontPromotionRoutes.js';
 import { storefrontStripeWebhook } from './controllers/storefrontWebhookController.js';
 import whatsappBriefRoutes from './routes/whatsappBriefRoutes.js';
+import whatsappAdminRoutes from './routes/whatsappAdminRoutes.js';
 import {
   receiveWhatsAppWebhook,
   verifyWhatsAppWebhook,
@@ -197,11 +198,18 @@ app.use(
   helmet.contentSecurityPolicy({
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://connect.facebook.net'],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'"], // same-origin API calls
+      connectSrc: [
+        "'self'",
+        'https://connect.facebook.net',
+        'https://graph.facebook.com',
+        'https://www.facebook.com',
+        'https://web.facebook.com',
+      ],
+      frameSrc: ['https://www.facebook.com', 'https://web.facebook.com'],
     },
   })
 );
@@ -268,6 +276,7 @@ app.use('/api/gyg/outbound', getYourGuideOutboundRoutes);
 app.use('/api/google-api', googleApiRoutes);
 app.use('/api/integrations', integrationRoutes);
 app.use('/api/integrations/whatsapp/brief', whatsappBriefRoutes);
+app.use('/api/integrations/whatsapp/admin', whatsappAdminRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/performance', performanceRoutes);

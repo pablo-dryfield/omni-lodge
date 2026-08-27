@@ -22,6 +22,17 @@ export interface WhatsAppWebhookConfig {
   retentionDays: number;
 }
 
+export interface WhatsAppWebhookVerificationConfig {
+  verifyToken: string;
+}
+
+export interface WhatsAppEmbeddedSignupConfig {
+  appId: string;
+  appSecret: string;
+  configId: string;
+  graphApiVersion: string;
+}
+
 export interface WhatsAppBriefConfig {
   apiToken: string;
   retentionDays: number;
@@ -48,7 +59,11 @@ export type WhatsAppEnvironment = Readonly<Record<string, string | undefined>>;
 
 export type WhatsAppConfigKey =
   | 'WHATSAPP_WEBHOOK_VERIFY_TOKEN'
+  | 'WHATSAPP_META_APP_ID'
   | 'WHATSAPP_META_APP_SECRET'
+  | 'WHATSAPP_META_GRAPH_API_VERSION'
+  | 'WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID'
+  | 'WHATSAPP_BUSINESS_ACCESS_TOKEN'
   | 'WHATSAPP_WABA_ID'
   | 'WHATSAPP_PHONE_NUMBER_ID'
   | 'WHATSAPP_BRIEF_API_TOKEN'
@@ -265,6 +280,21 @@ export const getWhatsAppWebhookConfig = (
   wabaId: requireConfigValue('WHATSAPP_WABA_ID', environment),
   phoneNumberId: requireConfigValue('WHATSAPP_PHONE_NUMBER_ID', environment),
   retentionDays: parseRetentionDays(getWhatsAppConfigValue('WHATSAPP_RETENTION_DAYS', environment)),
+});
+
+export const getWhatsAppWebhookVerificationConfig = (
+  environment?: WhatsAppEnvironment,
+): WhatsAppWebhookVerificationConfig => ({
+  verifyToken: requireConfigValue('WHATSAPP_WEBHOOK_VERIFY_TOKEN', environment),
+});
+
+export const getWhatsAppEmbeddedSignupConfig = (
+  environment?: WhatsAppEnvironment,
+): WhatsAppEmbeddedSignupConfig => ({
+  appId: requireConfigValue('WHATSAPP_META_APP_ID', environment),
+  appSecret: requireConfigValue('WHATSAPP_META_APP_SECRET', environment),
+  configId: requireConfigValue('WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID', environment),
+  graphApiVersion: requireConfigValue('WHATSAPP_META_GRAPH_API_VERSION', environment),
 });
 
 export const getWhatsAppBriefConfig = (

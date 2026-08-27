@@ -28,6 +28,7 @@ import {
   IconBrandGoogle,
   IconDiscount2,
   IconMail,
+  IconBrandWhatsapp,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -175,6 +176,12 @@ const settingsNav: SettingsNavSection[] = [
         to: "/settings/google-api",
         slug: PAGE_SLUGS.settingsGoogleApi,
         icon: <IconBrandGoogle size={20} />,
+      },
+      {
+        label: "WhatsApp Business",
+        to: "/settings/whatsapp",
+        slug: PAGE_SLUGS.settingsControlPanel,
+        icon: <IconBrandWhatsapp size={20} />,
       },
       {
         label: "Payment Methods",

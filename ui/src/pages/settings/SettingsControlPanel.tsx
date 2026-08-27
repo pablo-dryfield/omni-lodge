@@ -224,6 +224,9 @@ const SettingsControlPanel = () => {
   }, [activeEntry?.key]);
 
   const openEditor = (entry: ConfigEntry) => {
+    if (!entry.isEditable) {
+      return;
+    }
     setActiveEntry(entry);
     setEditValue(resolveInitialValue(entry));
     setPassword("");
@@ -324,7 +327,7 @@ const SettingsControlPanel = () => {
   };
 
   const handleReveal = async () => {
-    if (!activeEntry || !activeEntry.isSecret) {
+    if (!activeEntry || !activeEntry.isSecret || activeEntry.isRevealable === false) {
       return;
     }
     if (!password.trim()) {
@@ -578,7 +581,12 @@ const SettingsControlPanel = () => {
                             {entry.key}
                           </Text>
                         </Stack>
-                        <Badge variant="light">{entry.category}</Badge>
+                        <Stack gap={4} align="flex-end">
+                          <Badge variant="light">{entry.category}</Badge>
+                          {entry.isSystemManaged ? (
+                            <Badge color="gray" variant="outline">System managed</Badge>
+                          ) : null}
+                        </Stack>
                       </Group>
                       {entry.description ? (
                         <Text size="xs" c="dimmed">
@@ -594,7 +602,7 @@ const SettingsControlPanel = () => {
                           onClick={() => openEditor(entry)}
                           disabled={!entry.isEditable}
                         >
-                          Edit
+                          {entry.isSystemManaged ? "Read only" : "Edit"}
                         </Button>
                       </Group>
                     </Stack>
@@ -629,7 +637,12 @@ const SettingsControlPanel = () => {
                           </Stack>
                         </Table.Td>
                         <Table.Td>
-                          <Badge variant="light">{entry.category}</Badge>
+                          <Stack gap={4} align="flex-start">
+                            <Badge variant="light">{entry.category}</Badge>
+                            {entry.isSystemManaged ? (
+                              <Badge color="gray" variant="outline">System managed</Badge>
+                            ) : null}
+                          </Stack>
                         </Table.Td>
                         <Table.Td>
                           <Text size="sm">{formatValue(entry)}</Text>
@@ -643,7 +656,7 @@ const SettingsControlPanel = () => {
                               onClick={() => openEditor(entry)}
                               disabled={!entry.isEditable}
                             >
-                              Edit
+                              {entry.isSystemManaged ? "Read only" : "Edit"}
                             </Button>
                           </Group>
                         </Table.Td>
@@ -859,7 +872,7 @@ const SettingsControlPanel = () => {
               </Stack>
             ) : null}
 
-            {activeEntry.isSecret ? (
+            {activeEntry.isSecret && activeEntry.isRevealable !== false ? (
               <Button
                 variant="subtle"
                 leftSection={<IconEye size={14} />}

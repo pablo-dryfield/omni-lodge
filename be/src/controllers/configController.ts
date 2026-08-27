@@ -242,6 +242,10 @@ export const revealConfigKey = async (req: AuthenticatedRequest, res: Response):
       res.status(400).json([{ message: 'Config key is not secret.' }]);
       return;
     }
+    if (record.isRevealable === false) {
+      res.status(403).json([{ message: 'This system-managed secret cannot be revealed.' }]);
+      return;
+    }
 
     const ok = await verifyPassword(req, req.body?.password);
     if (!ok) {

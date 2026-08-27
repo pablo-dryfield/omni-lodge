@@ -177,7 +177,9 @@ describe('configService explicit-unset tombstones', () => {
         isCleared: true,
       }),
     );
-    await expect(revealConfigSecret('WHATSAPP_META_APP_SECRET')).resolves.toEqual({ value: null });
+    await expect(revealConfigSecret('WHATSAPP_META_APP_SECRET')).rejects.toThrow(
+      'WHATSAPP_META_APP_SECRET cannot be revealed',
+    );
   });
 
   it('persists a cleared optional override as a tombstone', async () => {

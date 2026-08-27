@@ -7,6 +7,7 @@ import { CONFIG_DEFINITION_MAP, CONFIG_DEFINITIONS, type ConfigDefinition } from
 import { decryptSecret, encryptSecret } from './configEncryptionService.js';
 import HttpError from '../errors/HttpError.js';
 import { hasSeedRun, recordSeedRun, listSeedRuns } from './seedRunService.js';
+import { Op } from 'sequelize';
 
 const DEFAULT_SEED_KEY = 'defaults';
 const AUTO_SEED_RUN_TYPE = 'auto';
@@ -316,6 +317,8 @@ export const syncConfigDefinitions = async (): Promise<void> => {
           validationRules,
           isSecret: Boolean(definition.isSecret),
           isEditable: definition.isEditable ?? true,
+          isRevealable: definition.isRevealable ?? true,
+          isSystemManaged: definition.isSystemManaged ?? false,
           impact: definition.impact ?? 'low',
         });
         createdKeys.push(definition.key);
@@ -331,6 +334,8 @@ export const syncConfigDefinitions = async (): Promise<void> => {
         validationRules,
         isSecret: Boolean(definition.isSecret),
         isEditable: definition.isEditable ?? true,
+        isRevealable: definition.isRevealable ?? true,
+        isSystemManaged: definition.isSystemManaged ?? false,
         impact: definition.impact ?? 'low',
       };
       await record.update(next);
@@ -431,6 +436,42 @@ export const refreshConfigCache = async (): Promise<void> => {
   }
 };
 
+export const refreshConfigCacheKeys = async (keys: readonly string[]): Promise<void> => {
+  const uniqueKeys = Array.from(new Set(keys));
+  uniqueKeys.forEach(resolveDefinition);
+  if (uniqueKeys.length === 0) {
+    return;
+  }
+
+  const values = await ConfigValue.findAll({
+    where: { key: { [Op.in]: uniqueKeys } },
+  });
+  const valueMap = new Map(values.map((entry) => [entry.key, entry]));
+  for (const key of uniqueKeys) {
+    const entry = valueMap.get(key);
+    if (!entry) {
+      configCache.delete(key);
+      continue;
+    }
+    const definition = CONFIG_DEFINITION_MAP.get(key);
+    let value = entry.value ?? null;
+    if (definition?.isSecret) {
+      value = entry.encryptedValue && entry.encryptionIv && entry.encryptionTag
+        ? decryptSecret({
+            encryptedValue: entry.encryptedValue,
+            iv: entry.encryptionIv,
+            tag: entry.encryptionTag,
+          })
+        : null;
+    }
+    configCache.set(key, {
+      value,
+      updatedAt: entry.updatedAt ?? null,
+      updatedBy: entry.updatedBy ?? null,
+    });
+  }
+};
+
 export const initializeConfigRegistry = async (): Promise<void> => {
   await syncConfigDefinitions();
 
@@ -523,6 +564,8 @@ export const listConfigEntries = async (): Promise<Array<Record<string, unknown>
       validationRules: entry.validationRules,
       isSecret,
       isEditable: entry.isEditable,
+      isRevealable: entry.isRevealable,
+      isSystemManaged: entry.isSystemManaged,
       impact: entry.impact,
       value: isSecret ? null : rawValue,
       maskedValue: isSecret && isSet ? '********' : null,
@@ -555,6 +598,8 @@ export const getConfigDetail = async (key: string): Promise<Record<string, unkno
     validationRules: record.validationRules,
     isSecret: record.isSecret,
     isEditable: record.isEditable,
+    isRevealable: record.isRevealable,
+    isSystemManaged: record.isSystemManaged,
     impact: record.impact,
     value: record.isSecret ? null : rawValue,
     maskedValue: record.isSecret && isSet ? '********' : null,
@@ -662,6 +707,9 @@ export const revealConfigSecret = async (key: string): Promise<{ value: string |
   if (!definition.isSecret) {
     throw new HttpError(400, `${key} is not a secret config`);
   }
+  if (definition.isRevealable === false) {
+    throw new HttpError(403, `${key} cannot be revealed`);
+  }
   const record = await ConfigValue.findByPk(key);
   if (!record || !record.encryptedValue || !record.encryptionIv || !record.encryptionTag) {
     return { value: null };
@@ -672,6 +720,93 @@ export const revealConfigSecret = async (key: string): Promise<{ value: string |
     tag: record.encryptionTag,
   });
   return { value };
+};
+
+export const updateSystemConfigValues = async (params: {
+  values: Record<string, unknown>;
+  actorId: number | null;
+  reason: string;
+}): Promise<void> => {
+  const entries = Object.entries(params.values).map(([key, value]) => {
+    const definition = resolveDefinition(key);
+    if (!definition.isSystemManaged) {
+      throw new HttpError(403, `${key} is not system-managed`);
+    }
+    const rawValue = serializeValue(definition, value);
+    validateValue(definition, rawValue);
+    return { key, definition, rawValue };
+  });
+  if (entries.length === 0) {
+    return;
+  }
+
+  const database = ConfigValue.sequelize;
+  if (!database) {
+    throw new HttpError(503, 'Config database is unavailable');
+  }
+
+  await database.transaction(async (transaction) => {
+    for (const entry of entries) {
+      const keyRecord = await ConfigKey.findByPk(entry.key, { transaction });
+      if (!keyRecord) {
+        throw new HttpError(404, `Config key ${entry.key} not found`);
+      }
+      const existing = await ConfigValue.findByPk(entry.key, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const previousRaw = existing?.value ?? null;
+      const storedValue = entry.rawValue === null
+        ? {
+            value: null,
+            encryptedValue: null,
+            encryptionIv: null,
+            encryptionTag: null,
+            updatedBy: params.actorId,
+          }
+        : entry.definition.isSecret
+          ? (() => {
+              const encrypted = encryptSecret(entry.rawValue as string);
+              return {
+                value: null,
+                encryptedValue: encrypted.encryptedValue,
+                encryptionIv: encrypted.iv,
+                encryptionTag: encrypted.tag,
+                updatedBy: params.actorId,
+              };
+            })()
+          : {
+              value: entry.rawValue,
+              encryptedValue: null,
+              encryptionIv: null,
+              encryptionTag: null,
+              updatedBy: params.actorId,
+            };
+
+      if (existing) {
+        await existing.update(storedValue, { transaction });
+      } else {
+        await ConfigValue.create({ key: entry.key, ...storedValue }, { transaction });
+      }
+      await ConfigHistory.create({
+        key: entry.key,
+        actorId: params.actorId,
+        oldValue: entry.definition.isSecret ? null : previousRaw,
+        newValue: entry.definition.isSecret ? null : entry.rawValue,
+        isSecret: Boolean(entry.definition.isSecret),
+        reason: params.reason,
+      }, { transaction });
+    }
+  });
+
+  const updatedAt = new Date();
+  for (const entry of entries) {
+    configCache.set(entry.key, {
+      value: entry.rawValue,
+      updatedAt,
+      updatedBy: params.actorId,
+    });
+  }
 };
 
 export const getConfigHistory = async (key: string): Promise<ConfigHistory[]> => {

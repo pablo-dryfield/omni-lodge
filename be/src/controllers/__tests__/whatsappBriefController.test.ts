@@ -15,6 +15,9 @@ jest.mock('../../services/whatsappMessageService.js', () => ({
   getWhatsAppSourceStatus: jest.fn(),
   searchWhatsAppMessages: jest.fn(),
 }));
+jest.mock('../../services/configService.js', () => ({
+  refreshConfigCacheKeys: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../../utils/logger.js', () => ({
   __esModule: true,
   default: { error: jest.fn() },

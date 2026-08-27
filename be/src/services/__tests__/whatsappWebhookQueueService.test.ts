@@ -3,6 +3,7 @@ import { UniqueConstraintError } from 'sequelize';
 jest.mock('../../services/configService.js', () => ({
   getConfigValueRaw: jest.fn((key: string) => process.env[key] ?? null),
   hasConfigValueOverride: jest.fn(() => false),
+  refreshConfigCacheKeys: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../../models/WhatsAppWebhookInbox.js', () => ({
@@ -30,6 +31,7 @@ import {
   ingestWhatsAppWebhook,
   markWhatsAppSourceError,
 } from '../../services/whatsappMessageService';
+import { refreshConfigCacheKeys } from '../../services/configService';
 import {
   enqueueWhatsAppWebhook,
   hashWhatsAppWebhookDelivery,
@@ -44,6 +46,7 @@ const inboxModel = WhatsAppWebhookInbox as unknown as {
 };
 const mockIngest = ingestWhatsAppWebhook as jest.Mock;
 const mockMarkSourceError = markWhatsAppSourceError as jest.Mock;
+const mockRefreshConfigCacheKeys = refreshConfigCacheKeys as jest.Mock;
 const generation = 'generation-1';
 const receivedAt = new Date('2026-08-27T07:30:00.000Z');
 const batch = {
@@ -161,6 +164,15 @@ describe('whatsappWebhookQueueService', () => {
 
     await processWhatsAppWebhookJob(job, queueConfig('key-2', 2, [['key-1', 1]]));
 
+    expect(mockRefreshConfigCacheKeys).toHaveBeenCalledWith([
+      'WHATSAPP_ONBOARDING_GENERATION',
+      'WHATSAPP_CONTACT_HASH_KEY',
+      'WHATSAPP_META_APP_SECRET',
+      'WHATSAPP_RETENTION_DAYS',
+    ]);
+    expect(mockRefreshConfigCacheKeys.mock.invocationCallOrder[0]).toBeLessThan(
+      mockIngest.mock.invocationCallOrder[0],
+    );
     expect(mockIngest).toHaveBeenCalledWith(batch, {
       receivedAt,
       onboardingGeneration: generation,

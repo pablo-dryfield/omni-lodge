@@ -20,6 +20,7 @@ import {
   ingestWhatsAppWebhook,
   markWhatsAppSourceError,
 } from './whatsappMessageService.js';
+import { refreshConfigCacheKeys } from './configService.js';
 
 const ENCRYPTION_CONTEXT = 'omnilodge-whatsapp-webhook-inbox-v2';
 const MAX_ENCRYPTED_PAYLOAD_BYTES = 4 * 1024 * 1024;
@@ -27,6 +28,18 @@ const MAX_ATTEMPTS = 8;
 const PROCESSING_LEASE_MS = 5 * 60 * 1000;
 const PROCESSING_HEARTBEAT_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const QUEUE_CONFIG_CACHE_KEYS = [
+  'WHATSAPP_WEBHOOK_QUEUE_KEYRING',
+  'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID',
+  'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY',
+  'WHATSAPP_WEBHOOK_QUEUE_PREVIOUS_KEYS',
+] as const;
+const INGEST_CONFIG_CACHE_KEYS = [
+  'WHATSAPP_ONBOARDING_GENERATION',
+  'WHATSAPP_CONTACT_HASH_KEY',
+  'WHATSAPP_META_APP_SECRET',
+  'WHATSAPP_RETENTION_DAYS',
+] as const;
 let processing = false;
 
 type EncryptedPayload = {
@@ -134,6 +147,15 @@ export async function enqueueWhatsAppWebhook(params: {
 }): Promise<WhatsAppWebhookEnqueueResult> {
   if (!/^[a-f0-9]{64}$/.test(params.deliveryHash)) {
     throw new Error('Invalid WhatsApp webhook delivery hash');
+  }
+  const refreshKeys = [
+    ...(params.onboardingGeneration === undefined
+      ? ['WHATSAPP_ONBOARDING_GENERATION'] as const
+      : []),
+    ...(params.queueConfig === undefined ? QUEUE_CONFIG_CACHE_KEYS : []),
+  ];
+  if (refreshKeys.length > 0) {
+    await refreshConfigCacheKeys(refreshKeys);
   }
   const receivedAt = params.receivedAt ?? new Date();
   const onboardingGeneration = params.onboardingGeneration
@@ -318,6 +340,10 @@ export async function processWhatsAppWebhookJob(
   heartbeat.unref();
 
   try {
+    await refreshConfigCacheKeys([
+      ...INGEST_CONFIG_CACHE_KEYS,
+      ...(queueConfigOverride ? [] : QUEUE_CONFIG_CACHE_KEYS),
+    ]);
     const queueConfig = queueConfigOverride ?? getWhatsAppWebhookQueueConfig();
     const batch = decryptBatch(job, queueConfig);
     await ingestWhatsAppWebhook(batch, {

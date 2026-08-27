@@ -255,9 +255,12 @@ describe('whatsappMessageService', () => {
   });
 
   it.each([
-    ['complete', 'connected', null],
-    ['failed', 'degraded', '2593109'],
-  ] as const)('tracks a %s history sync control event', async (historyStatus, sourceStatus, errorCode) => {
+    ['complete', 'connected', null, null],
+    ['declined', 'connected', '2593109', null],
+    ['failed', 'degraded', '131000', '131000'],
+  ] as const)(
+    'tracks a %s history sync control event',
+    async (historyStatus, sourceStatus, errorCode, expectedLastErrorCode) => {
     await ingestWhatsAppWebhook(
       {
         events: [{
@@ -279,9 +282,10 @@ describe('whatsappMessageService', () => {
       id: 1,
       status: sourceStatus,
       historySyncStatus: historyStatus,
-      lastErrorCode: errorCode,
+      lastErrorCode: expectedLastErrorCode,
     }));
-  });
+    },
+  );
 
   it('does not regress a completed history sync when an older chunk arrives later', async () => {
     sourceStateModel.findByPk.mockResolvedValue({
@@ -311,6 +315,30 @@ describe('whatsappMessageService', () => {
       historySyncStatus: 'complete',
       historySyncProgress: 100,
     }));
+  });
+
+  it('keeps live post-onboarding messages available when history sharing was declined', async () => {
+    sourceStateModel.findByPk.mockResolvedValue({
+      status: 'connected',
+      onboardingGeneration: 'generation-1',
+      disconnectedGeneration: null,
+      historySyncStatus: 'declined',
+      historySyncProgress: null,
+      lastWebhookAt: now,
+      lastSuccessfulIngestAt: now,
+      lastMessageAt: now,
+      lastErrorAt: null,
+      lastErrorCode: null,
+    });
+
+    const status = await getWhatsAppSourceStatus(now);
+
+    expect(status).toMatchObject({
+      available: true,
+      status: 'connected',
+      historySyncStatus: 'declined',
+      lastErrorCode: null,
+    });
   });
 
   it('marks a previously connected source unavailable when webhook activity is stale', async () => {

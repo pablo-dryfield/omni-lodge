@@ -68,7 +68,7 @@ export type WhatsAppSourceStatus = {
   source: 'whatsapp';
   available: boolean;
   status: 'unavailable' | 'connected' | 'degraded';
-  historySyncStatus: 'not_started' | 'in_progress' | 'complete' | 'failed';
+  historySyncStatus: 'not_started' | 'in_progress' | 'complete' | 'declined' | 'failed';
   historySyncProgress: number | null;
   lastWebhookAt: string | null;
   lastSuccessfulIngestAt: string | null;
@@ -103,7 +103,7 @@ type IngestOptions = {
 
 type SourceStatePatch = Partial<{
   status: 'unavailable' | 'connected' | 'degraded';
-  historySyncStatus: 'not_started' | 'in_progress' | 'complete' | 'failed';
+  historySyncStatus: 'not_started' | 'in_progress' | 'complete' | 'declined' | 'failed';
   historySyncProgress: number | null;
   lastWebhookAt: Date | null;
   lastSuccessfulIngestAt: Date | null;
@@ -432,7 +432,7 @@ async function updateWhatsAppSourceState(patch: SourceStatePatch): Promise<void>
 }
 
 export async function setWhatsAppHistorySyncStatus(
-  historySyncStatus: 'not_started' | 'in_progress' | 'complete' | 'failed',
+  historySyncStatus: 'not_started' | 'in_progress' | 'complete' | 'declined' | 'failed',
 ): Promise<void> {
   await updateWhatsAppSourceState({ historySyncStatus });
 }
@@ -590,10 +590,14 @@ export async function ingestWhatsAppWebhook(
       || currentProgress === 100
       || historySyncEvents.some((event) => event.status === 'complete')
       || historySyncProgress === 100;
-    const historyFailed = historyComplete
+    const historyDeclined = !historyComplete
+      && (priorHistoryStatus === 'declined'
+        || historySyncEvents.some((event) => event.status === 'declined'));
+    const historyFailed = historyComplete || historyDeclined
       ? undefined
       : historySyncEvents.find((event) => event.status === 'failed');
     const historyInProgress = !historyComplete
+      && !historyDeclined
       && !historyFailed
       && (historySyncEvents.some((event) => event.status === 'in_progress')
         || incomingProgress !== null);
@@ -602,6 +606,8 @@ export async function ingestWhatsAppWebhook(
       ? 'failed'
       : historyComplete
         ? 'complete'
+        : historyDeclined
+          ? 'declined'
         : historyInProgress
           ? 'in_progress'
           : priorHistoryStatus;
@@ -623,7 +629,7 @@ export async function ingestWhatsAppWebhook(
       await updateWhatsAppSourceState({
         status: accountDisconnected
           ? 'unavailable'
-          : historySyncStatus === 'complete'
+          : historySyncStatus === 'complete' || historySyncStatus === 'declined'
             ? 'connected'
             : 'degraded',
         onboardingGeneration,
@@ -640,13 +646,17 @@ export async function ingestWhatsAppWebhook(
         lastMessageAt: latestDate(existingSourceState?.lastMessageAt, latestMessageAt),
         lastErrorAt: sourceError
           ? latestDate(existingSourceState?.lastErrorAt, receivedAt)
-          : historySyncStatus === 'complete'
+          : historySyncStatus === 'complete' || historySyncStatus === 'declined'
             ? null
             : generationChanged
               ? null
               : undefined,
         lastErrorCode: sourceError
-          ?? (historySyncStatus === 'complete' || generationChanged ? null : undefined),
+          ?? (historySyncStatus === 'complete'
+            || historySyncStatus === 'declined'
+            || generationChanged
+            ? null
+            : undefined),
       });
     }
 
@@ -824,7 +834,7 @@ export async function getWhatsAppSourceStatus(now = new Date()): Promise<WhatsAp
     && state.status === 'connected'
     && state.onboardingGeneration === onboardingGeneration
     && !accountDisconnected
-    && state.historySyncStatus === 'complete'
+    && (state.historySyncStatus === 'complete' || state.historySyncStatus === 'declined')
     && lastSuccessfulIngestAt
     && !stale
     && queueHealthy,

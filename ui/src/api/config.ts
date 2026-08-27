@@ -11,6 +11,8 @@ export type ConfigEntry = {
   validationRules: Record<string, unknown> | null;
   isSecret: boolean;
   isEditable: boolean;
+  isRevealable?: boolean;
+  isSystemManaged?: boolean;
   impact: string;
   value: string | null;
   maskedValue: string | null;

@@ -18,6 +18,12 @@ const NO_CACHE_HEADERS = {
   Expires: '0',
 };
 
+const UI_CONTENT_SECURITY_POLICY = [
+  "script-src 'self' https://connect.facebook.net",
+  "connect-src 'self' https://connect.facebook.net https://graph.facebook.com https://www.facebook.com https://web.facebook.com",
+  "frame-src 'self' blob: data: https://www.facebook.com https://web.facebook.com",
+].join('; ');
+
 const setNoCacheHeaders = (res) => {
   Object.entries(NO_CACHE_HEADERS).forEach(([header, value]) => {
     res.setHeader(header, value);
@@ -44,6 +50,13 @@ const validateUiBuildAssets = () => {
 const app = express();
 app.set('trust proxy', 1);
 
+app.use((_req, res, next) => {
+  // Keep the browser allowlist narrow while permitting Meta's official
+  // Embedded Signup SDK and preserving OmniLodge's existing local previews.
+  res.setHeader('Content-Security-Policy', UI_CONTENT_SECURITY_POLICY);
+  next();
+});
+
 app.use(
   '/api',
   createProxyMiddleware({
@@ -51,7 +64,8 @@ app.use(
     changeOrigin: false,
     xfwd: true,
     ws: true,
-    proxyTimeout: 30000,
+    // Embedded Signup completes several bounded Meta calls before returning.
+    proxyTimeout: 120000,
     pathRewrite: (path) => `/api${path}`,  
   })
 );

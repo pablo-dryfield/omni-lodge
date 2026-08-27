@@ -31,6 +31,7 @@ import {
   IconTag,
   IconBrandGoogle,
   IconMail,
+  IconBrandWhatsapp,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import axiosInstance from "../../utils/axiosInstance";
@@ -62,6 +63,13 @@ const sections: SettingsSection[] = [
     description: "Manage dynamic configuration values and secrets.",
     icon: IconSettings,
     to: "/settings/control-panel",
+    pageSlug: PAGE_SLUGS.settingsControlPanel,
+  },
+  {
+    label: "WhatsApp Business",
+    description: "Connect the WhatsApp Business app to the private morning brief.",
+    icon: IconBrandWhatsapp,
+    to: "/settings/whatsapp",
     pageSlug: PAGE_SLUGS.settingsControlPanel,
   },
   {

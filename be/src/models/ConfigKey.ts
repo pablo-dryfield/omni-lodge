@@ -56,6 +56,16 @@ export default class ConfigKey extends Model {
   declare isEditable: boolean;
 
   @AllowNull(false)
+  @Default(true)
+  @Column({ field: 'is_revealable', type: DataType.BOOLEAN })
+  declare isRevealable: boolean;
+
+  @AllowNull(false)
+  @Default(false)
+  @Column({ field: 'is_system_managed', type: DataType.BOOLEAN })
+  declare isSystemManaged: boolean;
+
+  @AllowNull(false)
   @Default('low')
   @Column({ type: DataType.STRING(16) })
   declare impact: string;

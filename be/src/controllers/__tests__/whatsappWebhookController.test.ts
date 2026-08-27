@@ -1,5 +1,9 @@
 jest.mock('../../config/whatsappConfig.js', () => ({
   getWhatsAppWebhookConfig: jest.fn(),
+  getWhatsAppWebhookVerificationConfig: jest.fn(),
+}));
+jest.mock('../../services/configService.js', () => ({
+  refreshConfigCacheKeys: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../services/whatsappWebhookQueueService.js', () => ({
   enqueueWhatsAppWebhook: jest.fn(),
@@ -18,7 +22,10 @@ jest.mock('../../utils/logger.js', () => ({
 }));
 
 import type { Request, Response } from 'express';
-import { getWhatsAppWebhookConfig } from '../../config/whatsappConfig';
+import {
+  getWhatsAppWebhookConfig,
+  getWhatsAppWebhookVerificationConfig,
+} from '../../config/whatsappConfig';
 import { kickWhatsAppWebhookQueue } from '../../jobs/whatsappWebhookQueue.cron';
 import { parseMetaWebhook, verifyMetaWebhookSignature } from '../../services/whatsappWebhookParser';
 import {
@@ -28,6 +35,7 @@ import {
 import { receiveWhatsAppWebhook, verifyWhatsAppWebhook } from '../whatsappWebhookController';
 
 const mockConfig = getWhatsAppWebhookConfig as jest.Mock;
+const mockVerificationConfig = getWhatsAppWebhookVerificationConfig as jest.Mock;
 const mockEnqueue = enqueueWhatsAppWebhook as jest.Mock;
 const mockHash = hashWhatsAppWebhookDelivery as jest.Mock;
 const mockKick = kickWhatsAppWebhookQueue as jest.Mock;
@@ -50,9 +58,10 @@ describe('WhatsApp webhook controller', () => {
       phoneNumberId: 'phone-1',
       retentionDays: 7,
     });
+    mockVerificationConfig.mockReturnValue({ verifyToken: 'verify-secret' });
   });
 
-  it('returns Meta challenge only for the matching verification token', () => {
+  it('returns Meta challenge using only the verification-token configuration', async () => {
     const req = {
       query: {
         'hub.mode': 'subscribe',
@@ -62,13 +71,16 @@ describe('WhatsApp webhook controller', () => {
     } as unknown as Request;
     const res = response();
 
-    verifyWhatsAppWebhook(req, res as unknown as Response);
+    mockConfig.mockImplementation(() => {
+      throw new Error('full webhook config is incomplete');
+    });
+    await verifyWhatsAppWebhook(req, res as unknown as Response);
 
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.send).toHaveBeenCalledWith('challenge-value');
   });
 
-  it('rejects a mismatched verification token', () => {
+  it('rejects a mismatched verification token', async () => {
     const req = {
       query: {
         'hub.mode': 'subscribe',
@@ -78,7 +90,7 @@ describe('WhatsApp webhook controller', () => {
     } as unknown as Request;
     const res = response();
 
-    verifyWhatsAppWebhook(req, res as unknown as Response);
+    await verifyWhatsAppWebhook(req, res as unknown as Response);
 
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.send).not.toHaveBeenCalledWith('challenge-value');

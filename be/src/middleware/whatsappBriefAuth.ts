@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { getWhatsAppBriefConfig } from '../config/whatsappConfig.js';
+import { refreshConfigCacheKeys } from '../services/configService.js';
 
 const timingSafeEqualString = (left: string, right: string): boolean => {
   const leftBuffer = Buffer.from(left, 'utf8');
@@ -15,10 +16,15 @@ const readBearerToken = (req: Request): string | null => {
   return match?.[1] ?? null;
 };
 
-export const whatsappBriefAuth = (req: Request, res: Response, next: NextFunction): void => {
+export const whatsappBriefAuth = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
   let configuredToken: string;
 
   try {
+    await refreshConfigCacheKeys(['WHATSAPP_BRIEF_API_TOKEN']);
     configuredToken = getWhatsAppBriefConfig().apiToken;
   } catch {
     res.status(503).json({ error: 'WhatsApp brief source is not configured.' });

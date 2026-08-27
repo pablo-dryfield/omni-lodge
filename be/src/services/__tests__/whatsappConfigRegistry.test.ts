@@ -2,7 +2,11 @@ import { CONFIG_DEFINITION_MAP } from '../../config/appConfigRegistry';
 
 const WHATSAPP_CONFIG_KEYS = [
   'WHATSAPP_WEBHOOK_VERIFY_TOKEN',
+  'WHATSAPP_META_APP_ID',
   'WHATSAPP_META_APP_SECRET',
+  'WHATSAPP_META_GRAPH_API_VERSION',
+  'WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID',
+  'WHATSAPP_BUSINESS_ACCESS_TOKEN',
   'WHATSAPP_WABA_ID',
   'WHATSAPP_PHONE_NUMBER_ID',
   'WHATSAPP_BRIEF_API_TOKEN',
@@ -30,6 +34,7 @@ describe('WhatsApp control-panel registry', () => {
     const secretKeys = [
       'WHATSAPP_WEBHOOK_VERIFY_TOKEN',
       'WHATSAPP_META_APP_SECRET',
+      'WHATSAPP_BUSINESS_ACCESS_TOKEN',
       'WHATSAPP_BRIEF_API_TOKEN',
       'WHATSAPP_WEBHOOK_QUEUE_KEYRING',
       'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY',
@@ -39,6 +44,9 @@ describe('WhatsApp control-panel registry', () => {
     const visibleKeys = [
       'WHATSAPP_WABA_ID',
       'WHATSAPP_PHONE_NUMBER_ID',
+      'WHATSAPP_META_APP_ID',
+      'WHATSAPP_META_GRAPH_API_VERSION',
+      'WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID',
       'WHATSAPP_ONBOARDING_GENERATION',
       'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID',
       'WHATSAPP_RETENTION_DAYS',
@@ -77,6 +85,23 @@ describe('WhatsApp control-panel registry', () => {
       'WHATSAPP_WEBHOOK_QUEUE_PREVIOUS_KEYS',
     ].forEach((key) => {
       expect(CONFIG_DEFINITION_MAP.get(key)?.isEditable).toBe(false);
+    });
+  });
+
+  it('keeps onboarding output system-managed and sensitive credentials non-revealable', () => {
+    [
+      'WHATSAPP_BUSINESS_ACCESS_TOKEN',
+      'WHATSAPP_WABA_ID',
+      'WHATSAPP_PHONE_NUMBER_ID',
+      'WHATSAPP_ONBOARDING_GENERATION',
+    ].forEach((key) => {
+      expect(CONFIG_DEFINITION_MAP.get(key)).toEqual(expect.objectContaining({
+        isEditable: false,
+        isSystemManaged: true,
+      }));
+    });
+    ['WHATSAPP_META_APP_SECRET', 'WHATSAPP_BUSINESS_ACCESS_TOKEN'].forEach((key) => {
+      expect(CONFIG_DEFINITION_MAP.get(key)?.isRevealable).toBe(false);
     });
   });
 });

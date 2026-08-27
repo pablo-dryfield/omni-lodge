@@ -37,7 +37,7 @@ export interface NormalizedWhatsAppHistorySyncEvent {
   source: 'history';
   wabaId: string;
   phoneNumberId: string;
-  status: 'in_progress' | 'complete' | 'failed';
+  status: 'in_progress' | 'complete' | 'declined' | 'failed';
   progress: number | null;
   phase: number | null;
   chunkOrder: number | null;

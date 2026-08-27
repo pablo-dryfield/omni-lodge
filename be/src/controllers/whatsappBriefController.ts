@@ -12,6 +12,7 @@ import {
   WHATSAPP_MAX_RETENTION_DAYS,
 } from '../services/whatsappMessageService.js';
 import logger from '../utils/logger.js';
+import { refreshConfigCacheKeys } from '../services/configService.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RFC3339_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -44,8 +45,23 @@ const sourceUnavailable = (res: Response): void => {
   res.status(503).json({ source: 'whatsapp', available: false, error: 'WhatsApp source is unavailable.' });
 };
 
+const refreshWhatsAppConnectionConfig = (): Promise<void> => refreshConfigCacheKeys([
+  'WHATSAPP_WEBHOOK_VERIFY_TOKEN',
+  'WHATSAPP_META_APP_SECRET',
+  'WHATSAPP_WABA_ID',
+  'WHATSAPP_PHONE_NUMBER_ID',
+  'WHATSAPP_ONBOARDING_GENERATION',
+  'WHATSAPP_WEBHOOK_QUEUE_KEYRING',
+  'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID',
+  'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY',
+  'WHATSAPP_WEBHOOK_QUEUE_PREVIOUS_KEYS',
+  'WHATSAPP_RETENTION_DAYS',
+  'WHATSAPP_SOURCE_STALE_HOURS',
+]);
+
 export const getWhatsAppBriefStatus = async (_req: Request, res: Response): Promise<void> => {
   try {
+    await refreshWhatsAppConnectionConfig();
     let webhookConfigured = true;
     try {
       getWhatsAppWebhookConfig();
@@ -88,14 +104,14 @@ export const getWhatsAppBriefMessages = async (req: Request, res: Response): Pro
     return;
   }
 
-  const configuredRetention = getWhatsAppBriefConfig().retentionDays;
-  const retentionDays = Math.min(configuredRetention, WHATSAPP_MAX_RETENTION_DAYS);
-  if (until.getTime() - since.getTime() > retentionDays * DAY_MS) {
-    res.status(400).json({ error: `WhatsApp lookback is limited to ${retentionDays} days.` });
-    return;
-  }
-
   try {
+    await refreshWhatsAppConnectionConfig();
+    const configuredRetention = getWhatsAppBriefConfig().retentionDays;
+    const retentionDays = Math.min(configuredRetention, WHATSAPP_MAX_RETENTION_DAYS);
+    if (until.getTime() - since.getTime() > retentionDays * DAY_MS) {
+      res.status(400).json({ error: `WhatsApp lookback is limited to ${retentionDays} days.` });
+      return;
+    }
     const status = await getWhatsAppSourceStatus();
     if (!status.available) {
       sourceUnavailable(res);
@@ -130,6 +146,7 @@ export const getWhatsAppBriefContext = async (req: Request, res: Response): Prom
   }
 
   try {
+    await refreshWhatsAppConnectionConfig();
     const status = await getWhatsAppSourceStatus();
     if (!status.available) {
       sourceUnavailable(res);

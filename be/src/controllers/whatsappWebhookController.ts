@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
-import { getWhatsAppWebhookConfig } from '../config/whatsappConfig.js';
+import {
+  getWhatsAppWebhookConfig,
+  getWhatsAppWebhookVerificationConfig,
+} from '../config/whatsappConfig.js';
 import { kickWhatsAppWebhookQueue } from '../jobs/whatsappWebhookQueue.cron.js';
 import { parseMetaWebhook, verifyMetaWebhookSignature } from '../services/whatsappWebhookParser.js';
 import {
@@ -8,6 +11,7 @@ import {
   hashWhatsAppWebhookDelivery,
 } from '../services/whatsappWebhookQueueService.js';
 import logger from '../utils/logger.js';
+import { refreshConfigCacheKeys } from '../services/configService.js';
 
 const timingSafeEqualString = (left: string, right: string): boolean => {
   const leftBuffer = Buffer.from(left, 'utf8');
@@ -26,10 +30,11 @@ const queryString = (value: unknown): string | null => {
   return null;
 };
 
-export const verifyWhatsAppWebhook = (req: Request, res: Response): void => {
+export const verifyWhatsAppWebhook = async (req: Request, res: Response): Promise<void> => {
   let verifyToken: string;
   try {
-    verifyToken = getWhatsAppWebhookConfig().verifyToken;
+    await refreshConfigCacheKeys(['WHATSAPP_WEBHOOK_VERIFY_TOKEN']);
+    verifyToken = getWhatsAppWebhookVerificationConfig().verifyToken;
   } catch {
     res.status(503).send('Webhook is not configured.');
     return;
@@ -60,6 +65,12 @@ export const receiveWhatsAppWebhook = async (req: Request, res: Response): Promi
 
   let config: ReturnType<typeof getWhatsAppWebhookConfig>;
   try {
+    await refreshConfigCacheKeys([
+      'WHATSAPP_META_APP_SECRET',
+      'WHATSAPP_WABA_ID',
+      'WHATSAPP_PHONE_NUMBER_ID',
+      'WHATSAPP_ONBOARDING_GENERATION',
+    ]);
     config = getWhatsAppWebhookConfig();
   } catch {
     res.status(503).send('Webhook is not configured.');

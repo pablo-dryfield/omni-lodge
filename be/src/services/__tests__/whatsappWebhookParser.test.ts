@@ -361,7 +361,7 @@ describe('parseWhatsAppWebhookPayload', () => {
     expect(result).toEqual([
       expect.objectContaining({
         kind: 'history_sync',
-        status: 'failed',
+        status: 'declined',
         errorCode: '2593109',
       }),
     ]);
@@ -464,7 +464,7 @@ describe('parseWhatsAppWebhookPayload', () => {
     ]);
   });
 
-  it('ignores app-state/contact sync changes', () => {
+  it('validates but does not retain app-state/contact sync changes', () => {
     const result = parseWhatsAppWebhookPayload(
       {
         object: 'whatsapp_business_account',
@@ -474,7 +474,14 @@ describe('parseWhatsAppWebhookPayload', () => {
             changes: [
               {
                 field: 'smb_app_state_sync',
-                value: { contacts: [{ name: 'Do not ingest' }] },
+                value: {
+                  metadata,
+                  state_sync: [{
+                    type: 'contact',
+                    contact: { full_name: 'Do not ingest', phone_number: '48123456789' },
+                    action: 'add',
+                  }],
+                },
               },
             ],
           },
@@ -484,6 +491,23 @@ describe('parseWhatsAppWebhookPayload', () => {
     );
 
     expect(result).toEqual([]);
+
+    expect(() => parseWhatsAppWebhookPayload(
+      {
+        object: 'whatsapp_business_account',
+        entry: [{
+          id: options.expectedWabaId,
+          changes: [{
+            field: 'smb_app_state_sync',
+            value: {
+              metadata: { ...metadata, phone_number_id: 'another-phone' },
+              state_sync: [],
+            },
+          }],
+        }],
+      },
+      options,
+    )).toThrow('unexpected phone number id');
   });
 
   it('parses a raw JSON Buffer into a batch', () => {

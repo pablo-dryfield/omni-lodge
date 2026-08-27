@@ -132,9 +132,11 @@ const pushLimited = <T>(target: T[], entry: T, limit: number): void => {
 
 const collapseWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
+const pathWithoutQuery = (value: string): string =>
+  collapseWhitespace(value).split('?')[0] || '/';
+
 const normalizePathLabel = (value: string): string =>
-  collapseWhitespace(value)
-    .split('?')[0]
+  pathWithoutQuery(value)
     .replace(/\/\d+(?=\/|$)/g, '/:id')
     .replace(/\/[0-9a-f]{24}(?=\/|$)/gi, '/:id')
     .replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}(?=\/|$)/gi, '/:uuid')
@@ -161,7 +163,7 @@ const normalizeTarget = (
     if (input instanceof URL) {
       const host = input.hostname;
       const method = 'GET';
-      const path = `${input.pathname || '/'}${input.search || ''}` || '/';
+      const path = input.pathname || '/';
       return {
         protocol,
         method,
@@ -174,7 +176,7 @@ const normalizeTarget = (
     if (typeof input === 'string') {
       const url = new URL(input);
       const method = 'GET';
-      const path = `${url.pathname || '/'}${url.search || ''}` || '/';
+      const path = url.pathname || '/';
       return {
         protocol,
         method,
@@ -190,7 +192,9 @@ const normalizeTarget = (
         search?: string;
       };
       const method = typeof input.method === 'string' && input.method.trim().length > 0 ? input.method.toUpperCase() : 'GET';
-      const path = `${requestOptions.path || requestOptions.pathname || '/'}${requestOptions.search || ''}` || '/';
+      const path = pathWithoutQuery(
+        `${requestOptions.path || requestOptions.pathname || '/'}${requestOptions.search || ''}`,
+      );
       const hostname =
         typeof requestOptions.hostname === 'string' && requestOptions.hostname.trim().length > 0
           ? requestOptions.hostname.trim()

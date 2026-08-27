@@ -326,7 +326,13 @@ const parseHistoryChange = (
       source: 'history',
       wabaId,
       phoneNumberId,
-      status: errorCode ? 'failed' : progress === 100 ? 'complete' : 'in_progress',
+      status: errorCode === '2593109'
+        ? 'declined'
+        : errorCode
+          ? 'failed'
+          : progress === 100
+            ? 'complete'
+            : 'in_progress',
       progress,
       phase: parseInteger(chunkMetadata?.phase),
       chunkOrder: parseInteger(chunkMetadata?.chunk_order),
@@ -396,7 +402,7 @@ const parseMessageEchoesChange = (
   return events;
 };
 
-type SupportedWebhookField = WhatsAppWebhookSource | 'account_update';
+type SupportedWebhookField = WhatsAppWebhookSource | 'account_update' | 'smb_app_state_sync';
 
 const supportedField = (
   value: string | null,
@@ -404,6 +410,7 @@ const supportedField = (
   value === 'messages'
   || value === 'history'
   || value === 'smb_message_echoes'
+  || value === 'smb_app_state_sync'
   || value === 'account_update';
 
 const parseAccountUpdateChange = (
@@ -481,6 +488,12 @@ export const parseWhatsAppWebhookPayload = (
       }
       const phoneNumberId = validateChangeScope(value, options);
 
+      if (field === 'smb_app_state_sync') {
+        // Coexistence requires this subscription. Validate its account scope, but
+        // intentionally retain no address-book data: the morning brief only needs
+        // messages and contact sync payloads contain personal data we do not use.
+        continue;
+      }
       if (field === 'messages') {
         events.push(...parseMessagesChange(value, wabaId, phoneNumberId));
       } else if (field === 'history') {
