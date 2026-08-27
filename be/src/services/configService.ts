@@ -96,7 +96,7 @@ const serializeValue = (definition: ConfigDefinition, value: unknown): string | 
 
 const parseValue = (definition: ConfigDefinition, raw: string | null): unknown => {
   if (raw === null || raw === undefined) {
-    return definition.defaultValue ?? null;
+    return null;
   }
 
   switch (definition.valueType) {
@@ -131,6 +131,50 @@ const isTimezone = (value: string): boolean => {
   }
 };
 
+const isBase64Encoded32ByteKey = (value: string): boolean => {
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(value)) {
+    return false;
+  }
+  const material = Buffer.from(value, 'base64');
+  return material.length === 32 && material.toString('base64') === value;
+};
+
+const validateWhatsAppQueueKeyEntries = (
+  definition: ConfigDefinition,
+  raw: string,
+  maxEntries: number,
+): void => {
+  const entries = raw
+    .split(',')
+    .map((entry) => entry.trim());
+  if (entries.some((entry) => entry.length === 0)) {
+    throw new HttpError(
+      400,
+      `${definition.key} must use key-id=base64-encoded-32-byte-key entries`,
+    );
+  }
+  if (entries.length > maxEntries) {
+    throw new HttpError(400, `${definition.key} supports at most ${maxEntries} keys`);
+  }
+
+  const keyIds = new Set<string>();
+  for (const entry of entries) {
+    const separator = entry.indexOf('=');
+    const keyId = separator > 0 ? entry.slice(0, separator).trim() : '';
+    const keyMaterial = separator > 0 ? entry.slice(separator + 1).trim() : '';
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(keyId) || !isBase64Encoded32ByteKey(keyMaterial)) {
+      throw new HttpError(
+        400,
+        `${definition.key} must use key-id=base64-encoded-32-byte-key entries`,
+      );
+    }
+    if (keyIds.has(keyId)) {
+      throw new HttpError(400, `${definition.key} contains a duplicate key ID`);
+    }
+    keyIds.add(keyId);
+  }
+};
+
 const validateValue = (definition: ConfigDefinition, raw: string | null): void => {
   const rules = definition.validation ?? {};
   if (rules.required && (!raw || raw.length === 0)) {
@@ -147,14 +191,31 @@ const validateValue = (definition: ConfigDefinition, raw: string | null): void =
     }
   }
 
+  if (typeof rules.minLength === 'number' && raw.length < rules.minLength) {
+    throw new HttpError(400, `${definition.key} must be at least ${rules.minLength} characters`);
+  }
+
   if (typeof rules.maxLength === 'number' && raw.length > rules.maxLength) {
     throw new HttpError(400, `${definition.key} exceeds max length of ${rules.maxLength}`);
+  }
+
+  if (typeof rules.pattern === 'string') {
+    const pattern = new RegExp(rules.pattern);
+    if (!pattern.test(raw)) {
+      const expected = typeof rules.patternDescription === 'string'
+        ? rules.patternDescription
+        : 'the required format';
+      throw new HttpError(400, `${definition.key} must be ${expected}`);
+    }
   }
 
   if (definition.valueType === 'number') {
     const numeric = coerceNumber(raw);
     if (numeric == null) {
       throw new HttpError(400, `${definition.key} must be a number`);
+    }
+    if (rules.integer === true && !Number.isSafeInteger(numeric)) {
+      throw new HttpError(400, `${definition.key} must be an integer`);
     }
     if (typeof rules.min === 'number' && numeric < rules.min) {
       throw new HttpError(400, `${definition.key} must be >= ${rules.min}`);
@@ -194,6 +255,15 @@ const validateValue = (definition: ConfigDefinition, raw: string | null): void =
       if (!hasExplicitTimezone || Number.isNaN(parsed.getTime())) {
         throw new HttpError(400, `${definition.key} must be a valid ISO date and time`);
       }
+    }
+    if (rules.format === 'base64-32-byte-key' && !isBase64Encoded32ByteKey(raw)) {
+      throw new HttpError(400, `${definition.key} must be a base64-encoded 32-byte key`);
+    }
+    if (rules.format === 'whatsapp-queue-previous-keys') {
+      validateWhatsAppQueueKeyEntries(definition, raw, 3);
+    }
+    if (rules.format === 'whatsapp-queue-keyring') {
+      validateWhatsAppQueueKeyEntries(definition, raw, 4);
     }
   }
 };
@@ -319,7 +389,7 @@ export const seedConfigValues = async (): Promise<string[]> => {
 export const refreshConfigCache = async (): Promise<void> => {
   try {
     const values = await ConfigValue.findAll();
-    configCache.clear();
+    const nextCache = new Map<string, ConfigCacheEntry>();
 
     values.forEach((entry) => {
       const definition = CONFIG_DEFINITION_MAP.get(entry.key);
@@ -341,18 +411,23 @@ export const refreshConfigCache = async (): Promise<void> => {
         }
       }
 
-      configCache.set(entry.key, {
+      nextCache.set(entry.key, {
         value,
         updatedAt: entry.updatedAt ?? null,
         updatedBy: entry.updatedBy ?? null,
       });
     });
 
+    configCache.clear();
+    nextCache.forEach((entry, key) => configCache.set(key, entry));
     cacheLoaded = true;
   } catch (error) {
-    logger.warn('[config] Failed to refresh config cache. Falling back to environment values.', error);
-    configCache.clear();
-    cacheLoaded = false;
+    if (cacheLoaded) {
+      logger.warn('[config] Failed to refresh config cache. Retaining last known values.', error);
+    } else {
+      logger.warn('[config] Failed to refresh config cache. Falling back to environment values.', error);
+      configCache.clear();
+    }
   }
 };
 
@@ -392,17 +467,38 @@ export const listConfigSeedRuns = async (limit = 5): Promise<ConfigSeedRun[]> =>
 
 export const getConfigValueRaw = (key: string): string | null => {
   const definition = resolveDefinition(key);
-  const cached = configCache.get(key);
-  if (cached && cached.value !== null) {
-    return cached.value;
+  if (configCache.has(key)) {
+    return configCache.get(key)?.value ?? null;
   }
   return resolveFallbackRaw(definition);
+};
+
+export const hasConfigValueOverride = (key: string): boolean => {
+  resolveDefinition(key);
+  return configCache.has(key);
 };
 
 export const getConfigValue = (key: string): unknown => {
   const definition = resolveDefinition(key);
   const raw = getConfigValueRaw(key);
   return parseValue(definition, raw);
+};
+
+const hasStoredConfigValue = (
+  valueRecord: ConfigValue | null | undefined,
+  isSecret: boolean,
+): boolean => {
+  if (!valueRecord) {
+    return false;
+  }
+  if (isSecret) {
+    return Boolean(
+      valueRecord.encryptedValue
+      && valueRecord.encryptionIv
+      && valueRecord.encryptionTag,
+    );
+  }
+  return valueRecord.value !== null && valueRecord.value !== undefined;
 };
 
 export const listConfigEntries = async (): Promise<Array<Record<string, unknown>>> => {
@@ -413,6 +509,8 @@ export const listConfigEntries = async (): Promise<Array<Record<string, unknown>
   return keys.map((entry) => {
     const valueRecord = valueMap.get(entry.key);
     const isSecret = entry.isSecret;
+    const isSet = hasStoredConfigValue(valueRecord, isSecret);
+    const isCleared = Boolean(valueRecord) && !isSet;
     const cacheEntry = configCache.get(entry.key);
     const rawValue = cacheEntry?.value ?? null;
     return {
@@ -427,8 +525,9 @@ export const listConfigEntries = async (): Promise<Array<Record<string, unknown>
       isEditable: entry.isEditable,
       impact: entry.impact,
       value: isSecret ? null : rawValue,
-      maskedValue: isSecret ? (valueRecord ? '********' : null) : null,
-      isSet: valueRecord != null,
+      maskedValue: isSecret && isSet ? '********' : null,
+      isSet,
+      isCleared,
       updatedAt: valueRecord?.updatedAt ?? null,
       updatedBy: valueRecord?.updatedBy ?? null,
     };
@@ -442,6 +541,8 @@ export const getConfigDetail = async (key: string): Promise<Record<string, unkno
     throw new HttpError(404, `Config key ${key} not found`);
   }
   const valueRecord = await ConfigValue.findByPk(key);
+  const isSet = hasStoredConfigValue(valueRecord, record.isSecret);
+  const isCleared = Boolean(valueRecord) && !isSet;
   const cacheEntry = configCache.get(key);
   const rawValue = cacheEntry?.value ?? null;
   return {
@@ -456,11 +557,12 @@ export const getConfigDetail = async (key: string): Promise<Record<string, unkno
     isEditable: record.isEditable,
     impact: record.impact,
     value: record.isSecret ? null : rawValue,
-    maskedValue: record.isSecret ? (valueRecord ? '********' : null) : null,
-    isSet: valueRecord != null,
+    maskedValue: record.isSecret && isSet ? '********' : null,
+    isSet,
+    isCleared,
     updatedAt: valueRecord?.updatedAt ?? null,
     updatedBy: valueRecord?.updatedBy ?? null,
-    fallbackValue: cacheLoaded ? null : resolveFallbackRaw(definition),
+    fallbackValue: cacheLoaded || valueRecord ? null : resolveFallbackRaw(definition),
   };
 };
 
@@ -485,48 +587,56 @@ export const updateConfigValue = async (params: {
   const existing = await ConfigValue.findByPk(params.key);
   const previousRaw = existing ? configCache.get(params.key)?.value ?? null : null;
 
-  if (definition.isSecret) {
-    if (!rawValue) {
-      await ConfigValue.destroy({ where: { key: params.key } });
+  if (rawValue === null) {
+    const tombstone = {
+      value: null,
+      encryptedValue: null,
+      encryptionIv: null,
+      encryptionTag: null,
+      updatedBy: params.actorId ?? null,
+    };
+    if (existing) {
+      await existing.update(tombstone);
     } else {
-      const encrypted = encryptSecret(rawValue);
-      if (existing) {
-        await existing.update({
-          value: null,
-          encryptedValue: encrypted.encryptedValue,
-          encryptionIv: encrypted.iv,
-          encryptionTag: encrypted.tag,
-          updatedBy: params.actorId ?? null,
-        });
-      } else {
-        await ConfigValue.create({
-          key: params.key,
-          value: null,
-          encryptedValue: encrypted.encryptedValue,
-          encryptionIv: encrypted.iv,
-          encryptionTag: encrypted.tag,
-          updatedBy: params.actorId ?? null,
-        });
-      }
+      await ConfigValue.create({ key: params.key, ...tombstone });
     }
-  } else {
-    if (!rawValue) {
-      await ConfigValue.destroy({ where: { key: params.key } });
-    } else if (existing) {
+  } else if (definition.isSecret) {
+    const encrypted = encryptSecret(rawValue);
+    if (existing) {
       await existing.update({
-        value: rawValue,
-        encryptedValue: null,
-        encryptionIv: null,
-        encryptionTag: null,
+        value: null,
+        encryptedValue: encrypted.encryptedValue,
+        encryptionIv: encrypted.iv,
+        encryptionTag: encrypted.tag,
         updatedBy: params.actorId ?? null,
       });
     } else {
       await ConfigValue.create({
         key: params.key,
-        value: rawValue,
+        value: null,
+        encryptedValue: encrypted.encryptedValue,
+        encryptionIv: encrypted.iv,
+        encryptionTag: encrypted.tag,
         updatedBy: params.actorId ?? null,
       });
     }
+  } else if (existing) {
+    await existing.update({
+      value: rawValue,
+      encryptedValue: null,
+      encryptionIv: null,
+      encryptionTag: null,
+      updatedBy: params.actorId ?? null,
+    });
+  } else {
+    await ConfigValue.create({
+      key: params.key,
+      value: rawValue,
+      encryptedValue: null,
+      encryptionIv: null,
+      encryptionTag: null,
+      updatedBy: params.actorId ?? null,
+    });
   }
 
   await ConfigHistory.create({
@@ -539,7 +649,7 @@ export const updateConfigValue = async (params: {
   });
 
   configCache.set(params.key, {
-    value: definition.isSecret ? rawValue : rawValue,
+    value: rawValue,
     updatedAt: new Date(),
     updatedBy: params.actorId ?? null,
   });

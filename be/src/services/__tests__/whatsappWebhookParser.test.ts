@@ -1,5 +1,10 @@
 import { createHmac } from 'node:crypto';
 
+jest.mock('../../services/configService.js', () => ({
+  getConfigValueRaw: jest.fn((key: string) => process.env[key] ?? null),
+  hasConfigValueOverride: jest.fn(() => false),
+}));
+
 import {
   parseMetaWebhook,
   parseSignedWhatsAppWebhook,
@@ -9,10 +14,20 @@ import {
   WhatsAppWebhookValidationError,
 } from '../whatsappWebhookParser';
 import {
+  getWhatsAppConfigValue,
   getWhatsAppBriefConfig,
   getWhatsAppWebhookConfig,
+  getWhatsAppWebhookQueueConfig,
+  loadWhatsAppConfig,
+  resolveWhatsAppOnboardingGeneration,
   WhatsAppConfigError,
 } from '../../config/whatsappConfig';
+import { getConfigValueRaw, hasConfigValueOverride } from '../../services/configService';
+
+const mockGetConfigValueRaw = getConfigValueRaw as jest.MockedFunction<typeof getConfigValueRaw>;
+const mockHasConfigValueOverride = hasConfigValueOverride as jest.MockedFunction<
+  typeof hasConfigValueOverride
+>;
 
 const options = {
   expectedWabaId: 'waba-1',
@@ -68,6 +83,13 @@ describe('WhatsApp configuration', () => {
     WHATSAPP_BRIEF_API_TOKEN: 'brief-token',
   };
 
+  beforeEach(() => {
+    mockGetConfigValueRaw.mockReset();
+    mockGetConfigValueRaw.mockImplementation((key) => process.env[key] ?? null);
+    mockHasConfigValueOverride.mockReset();
+    mockHasConfigValueOverride.mockReturnValue(false);
+  });
+
   it('loads webhook and brief settings from only the supported environment keys', () => {
     expect(getWhatsAppWebhookConfig(environment)).toEqual({
       verifyToken: 'verify-token',
@@ -88,6 +110,65 @@ describe('WhatsApp configuration', () => {
     expect(() =>
       getWhatsAppBriefConfig({ ...environment, WHATSAPP_RETENTION_DAYS: '7.5' }),
     ).toThrow('WHATSAPP_RETENTION_DAYS must be a positive integer');
+  });
+
+  it('uses dynamic registry values by default while explicit environments remain isolated', () => {
+    const dynamicValues: Record<string, string> = {
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: 'dynamic-verify-token',
+      WHATSAPP_META_APP_SECRET: 'dynamic-app-secret',
+      WHATSAPP_WABA_ID: 'dynamic-waba',
+      WHATSAPP_PHONE_NUMBER_ID: 'dynamic-phone',
+      WHATSAPP_BRIEF_API_TOKEN: 'dynamic-brief-token',
+      WHATSAPP_RETENTION_DAYS: '5',
+      WHATSAPP_ONBOARDING_GENERATION: 'generation-3',
+      WHATSAPP_WEBHOOK_QUEUE_KEYRING:
+        `queue-key-3=${Buffer.alloc(32, 3).toString('base64')},queue-key-2=${Buffer.alloc(32, 2).toString('base64')}`,
+      WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID: 'queue-key-3',
+      WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY: Buffer.alloc(32, 9).toString('base64'),
+      WHATSAPP_CONTACT_HASH_KEY: 'dynamic-contact-hash-key',
+      WHATSAPP_SOURCE_STALE_HOURS: '72',
+    };
+    mockGetConfigValueRaw.mockImplementation((key) => dynamicValues[key] ?? null);
+
+    expect(loadWhatsAppConfig()).toEqual({
+      webhookVerifyToken: 'dynamic-verify-token',
+      metaAppSecret: 'dynamic-app-secret',
+      wabaId: 'dynamic-waba',
+      phoneNumberId: 'dynamic-phone',
+      briefApiToken: 'dynamic-brief-token',
+      retentionDays: 5,
+    });
+    expect(resolveWhatsAppOnboardingGeneration()).toBe('generation-3');
+    expect(getWhatsAppWebhookQueueConfig()).toEqual({
+      activeKey: { id: 'queue-key-3', material: Buffer.alloc(32, 3) },
+      decryptionKeys: new Map([
+        ['queue-key-3', Buffer.alloc(32, 3)],
+        ['queue-key-2', Buffer.alloc(32, 2)],
+      ]),
+    });
+    expect(getWhatsAppConfigValue('WHATSAPP_CONTACT_HASH_KEY')).toBe(
+      'dynamic-contact-hash-key',
+    );
+    expect(getWhatsAppConfigValue('WHATSAPP_SOURCE_STALE_HOURS')).toBe('72');
+
+    mockGetConfigValueRaw.mockClear();
+    expect(getWhatsAppWebhookConfig(environment).appSecret).toBe('app-secret');
+    expect(mockGetConfigValueRaw).not.toHaveBeenCalled();
+  });
+
+  it('does not reactivate legacy queue fields after the composite keyring is cleared', () => {
+    const legacyValues: Record<string, string> = {
+      WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID: 'legacy-key',
+      WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY: Buffer.alloc(32, 8).toString('base64'),
+    };
+    mockGetConfigValueRaw.mockImplementation((key) => legacyValues[key] ?? null);
+    mockHasConfigValueOverride.mockImplementation(
+      (key) => key === 'WHATSAPP_WEBHOOK_QUEUE_KEYRING',
+    );
+
+    expect(() => getWhatsAppWebhookQueueConfig()).toThrow(
+      'Missing required WhatsApp configuration: WHATSAPP_WEBHOOK_QUEUE_KEYRING',
+    );
   });
 });
 

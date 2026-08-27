@@ -3,6 +3,11 @@ import WhatsAppMessage from '../../models/WhatsAppMessage';
 import WhatsAppSourceState from '../../models/WhatsAppSourceState';
 import WhatsAppWebhookInbox from '../../models/WhatsAppWebhookInbox';
 
+jest.mock('../../services/configService.js', () => ({
+  getConfigValueRaw: jest.fn((key: string) => process.env[key] ?? null),
+  hasConfigValueOverride: jest.fn(() => false),
+}));
+
 jest.mock('../../models/WhatsAppMessage.js', () => ({
   __esModule: true,
   default: {

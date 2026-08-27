@@ -1,5 +1,10 @@
 import { UniqueConstraintError } from 'sequelize';
 
+jest.mock('../../services/configService.js', () => ({
+  getConfigValueRaw: jest.fn((key: string) => process.env[key] ?? null),
+  hasConfigValueOverride: jest.fn(() => false),
+}));
+
 jest.mock('../../models/WhatsAppWebhookInbox.js', () => ({
   __esModule: true,
   default: {
@@ -233,7 +238,32 @@ describe('whatsappWebhookQueueService', () => {
 describe('WhatsApp queue keyring configuration', () => {
   const encodedKey = (byte: number): string => Buffer.alloc(32, byte).toString('base64');
 
-  it('loads an active key and previous rotation key without the Meta app secret', () => {
+  it('loads an atomic composite keyring with the first entry active', () => {
+    const config = getWhatsAppWebhookQueueConfig({
+      WHATSAPP_WEBHOOK_QUEUE_KEYRING:
+        `key-2=${encodedKey(2)},key-1=${encodedKey(1)}`,
+    });
+
+    expect(config.activeKey).toEqual({ id: 'key-2', material: Buffer.alloc(32, 2) });
+    expect(config.decryptionKeys.get('key-1')).toEqual(Buffer.alloc(32, 1));
+  });
+
+  it('rejects duplicate IDs in the composite keyring', () => {
+    expect(() => getWhatsAppWebhookQueueConfig({
+      WHATSAPP_WEBHOOK_QUEUE_KEYRING:
+        `key-1=${encodedKey(1)},key-1=${encodedKey(2)}`,
+    })).toThrow('Duplicate WhatsApp queue encryption key ID');
+  });
+
+  it('rejects more than four total composite keyring entries', () => {
+    expect(() => getWhatsAppWebhookQueueConfig({
+      WHATSAPP_WEBHOOK_QUEUE_KEYRING: [1, 2, 3, 4, 5]
+        .map((key) => `key-${key}=${encodedKey(key)}`)
+        .join(','),
+    })).toThrow('supports at most 4 keys');
+  });
+
+  it('falls back to legacy queue fields when no composite keyring exists', () => {
     const config = getWhatsAppWebhookQueueConfig({
       WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID: 'key-2',
       WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY: encodedKey(2),

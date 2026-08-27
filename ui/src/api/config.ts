@@ -15,6 +15,7 @@ export type ConfigEntry = {
   value: string | null;
   maskedValue: string | null;
   isSet: boolean;
+  isCleared: boolean;
   updatedAt: string | null;
   updatedBy: number | null;
 };

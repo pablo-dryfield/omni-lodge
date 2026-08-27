@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Op } from 'sequelize';
 import {
+  getWhatsAppConfigValue,
   getWhatsAppWebhookQueueConfig,
   resolveWhatsAppOnboardingGeneration,
 } from '../config/whatsappConfig.js';
@@ -197,8 +198,8 @@ function chunksOf<T>(values: readonly T[], size = PERSISTENCE_BATCH_SIZE): T[][]
 function resolveContactHashKey(override?: string): string {
   const configured =
     override?.trim() ||
-    process.env.WHATSAPP_CONTACT_HASH_KEY?.trim() ||
-    process.env.WHATSAPP_META_APP_SECRET?.trim();
+    getWhatsAppConfigValue('WHATSAPP_CONTACT_HASH_KEY')?.trim() ||
+    getWhatsAppConfigValue('WHATSAPP_META_APP_SECRET')?.trim();
   if (!configured) {
     throw new Error('WHATSAPP_CONTACT_HASH_KEY or WHATSAPP_META_APP_SECRET must be configured');
   }
@@ -361,7 +362,7 @@ async function bulkUpsert(rows: StoredMessageValues[]): Promise<number> {
 }
 
 export function resolveWhatsAppRetentionDays(
-  configured = process.env.WHATSAPP_RETENTION_DAYS,
+  configured = getWhatsAppConfigValue('WHATSAPP_RETENTION_DAYS'),
 ): number {
   if (!configured) return WHATSAPP_MAX_RETENTION_DAYS;
   const normalized = configured.trim();
@@ -372,7 +373,7 @@ export function resolveWhatsAppRetentionDays(
 }
 
 export function resolveWhatsAppSourceStaleHours(
-  configured = process.env.WHATSAPP_SOURCE_STALE_HOURS,
+  configured = getWhatsAppConfigValue('WHATSAPP_SOURCE_STALE_HOURS'),
 ): number {
   if (!configured) return DEFAULT_WHATSAPP_SOURCE_STALE_HOURS;
   const normalized = configured.trim();

@@ -75,6 +75,10 @@ const extractErrorMessage = (error: unknown): string => {
 };
 
 const formatValue = (entry: ConfigEntry): string => {
+  if (entry.isCleared) {
+    return "Cleared (fallback disabled)";
+  }
+
   if (entry.isSecret) {
     return entry.isSet ? entry.maskedValue ?? "********" : "Not set";
   }
@@ -94,6 +98,10 @@ const formatValue = (entry: ConfigEntry): string => {
 };
 
 const resolveInitialValue = (entry: ConfigEntry): string | number | boolean | null => {
+  if (entry.isCleared) {
+    return null;
+  }
+
   if (entry.isSecret) {
     return "";
   }
@@ -221,7 +229,7 @@ const SettingsControlPanel = () => {
     setPassword("");
     setReason("");
     setModalError(null);
-    setClearRequested(false);
+    setClearRequested(entry.isCleared);
     setQueryDiscoveryMessage(null);
   };
 
@@ -232,6 +240,7 @@ const SettingsControlPanel = () => {
     try {
       const result = await discoverTripAdvisorQueryId();
       setEditValue(result.discovery.queryId);
+      setClearRequested(false);
       setQueryDiscoveryMessage(
         `Saved and validated ${result.discovery.queryId}; TripAdvisor returned ${result.discovery.sampleCount} of ${result.discovery.totalCount.toLocaleString()} reviews.`,
       );
@@ -327,6 +336,7 @@ const SettingsControlPanel = () => {
     try {
       const response = await revealConfigSecret(activeEntry.key, password);
       setEditValue(response.value ?? "");
+      setClearRequested(response.value == null);
     } catch (err) {
       setModalError(extractErrorMessage(err));
     } finally {
@@ -366,7 +376,10 @@ const SettingsControlPanel = () => {
         <Switch
           label="Value"
           checked={Boolean(editValue)}
-          onChange={(event) => setEditValue(event.currentTarget.checked)}
+          onChange={(event) => {
+            setEditValue(event.currentTarget.checked);
+            setClearRequested(false);
+          }}
         />
       );
     }
@@ -376,7 +389,10 @@ const SettingsControlPanel = () => {
         <NumberInput
           label="Value"
           value={typeof editValue === "number" ? editValue : editValue ? Number(editValue) : undefined}
-          onChange={(value) => setEditValue(value === "" ? null : value)}
+          onChange={(value) => {
+            setEditValue(value === "" ? null : value);
+            setClearRequested(false);
+          }}
           min={0}
         />
       );
@@ -389,7 +405,10 @@ const SettingsControlPanel = () => {
           label="Value"
           data={options.map((value) => ({ value, label: value }))}
           value={typeof editValue === "string" ? editValue : null}
-          onChange={setEditValue}
+          onChange={(value) => {
+            setEditValue(value);
+            setClearRequested(false);
+          }}
           clearable
         />
       );
@@ -400,7 +419,10 @@ const SettingsControlPanel = () => {
         <Textarea
           label="Value (JSON)"
           value={typeof editValue === "string" ? editValue : editValue ? JSON.stringify(editValue, null, 2) : ""}
-          onChange={(event) => setEditValue(event.currentTarget.value)}
+          onChange={(event) => {
+            setEditValue(event.currentTarget.value);
+            setClearRequested(false);
+          }}
           minRows={4}
         />
       );
@@ -414,7 +436,10 @@ const SettingsControlPanel = () => {
           placeholder={emailTemplatesLoading ? "Loading templates..." : "Select a template"}
           data={emailTemplateOptions}
           value={typeof editValue === "string" && editValue ? editValue : null}
-          onChange={(value) => setEditValue(value ?? "")}
+          onChange={(value) => {
+            setEditValue(value ?? "");
+            setClearRequested(false);
+          }}
           searchable
           clearable
           disabled={emailTemplatesLoading}
@@ -428,7 +453,10 @@ const SettingsControlPanel = () => {
         <Textarea
           label="Value"
           value={typeof editValue === "string" ? editValue : ""}
-          onChange={(event) => setEditValue(event.currentTarget.value)}
+          onChange={(event) => {
+            setEditValue(event.currentTarget.value);
+            setClearRequested(false);
+          }}
           minRows={3}
         />
       );
@@ -438,7 +466,10 @@ const SettingsControlPanel = () => {
       <TextInput
         label="Value"
         value={typeof editValue === "string" ? editValue : ""}
-        onChange={(event) => setEditValue(event.currentTarget.value)}
+        onChange={(event) => {
+          setEditValue(event.currentTarget.value);
+          setClearRequested(false);
+        }}
       />
     );
   };

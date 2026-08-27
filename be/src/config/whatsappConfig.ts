@@ -1,6 +1,9 @@
+import { getConfigValueRaw, hasConfigValueOverride } from '../services/configService.js';
+
 export const DEFAULT_WHATSAPP_RETENTION_DAYS = 7;
 export const DEFAULT_WHATSAPP_ONBOARDING_GENERATION = '1';
 export const MAX_WHATSAPP_QUEUE_PREVIOUS_KEYS = 3;
+export const MAX_WHATSAPP_QUEUE_KEYRING_KEYS = 4;
 
 export interface WhatsAppConfig {
   webhookVerifyToken: string;
@@ -41,13 +44,38 @@ export class WhatsAppConfigError extends Error {
   }
 }
 
-type WhatsAppEnvironment = Readonly<Record<string, string | undefined>>;
+export type WhatsAppEnvironment = Readonly<Record<string, string | undefined>>;
 
-const requireEnvironmentValue = (
-  environment: WhatsAppEnvironment,
-  key: keyof NodeJS.ProcessEnv,
+export type WhatsAppConfigKey =
+  | 'WHATSAPP_WEBHOOK_VERIFY_TOKEN'
+  | 'WHATSAPP_META_APP_SECRET'
+  | 'WHATSAPP_WABA_ID'
+  | 'WHATSAPP_PHONE_NUMBER_ID'
+  | 'WHATSAPP_BRIEF_API_TOKEN'
+  | 'WHATSAPP_ONBOARDING_GENERATION'
+  | 'WHATSAPP_WEBHOOK_QUEUE_KEYRING'
+  | 'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID'
+  | 'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY'
+  | 'WHATSAPP_WEBHOOK_QUEUE_PREVIOUS_KEYS'
+  | 'WHATSAPP_CONTACT_HASH_KEY'
+  | 'WHATSAPP_RETENTION_DAYS'
+  | 'WHATSAPP_SOURCE_STALE_HOURS';
+
+export const getWhatsAppConfigValue = (
+  key: WhatsAppConfigKey,
+  environment?: WhatsAppEnvironment,
+): string | undefined => {
+  if (environment !== undefined) {
+    return environment[key];
+  }
+  return getConfigValueRaw(key) ?? undefined;
+};
+
+const requireConfigValue = (
+  key: WhatsAppConfigKey,
+  environment?: WhatsAppEnvironment,
 ): string => {
-  const value = environment[key]?.trim();
+  const value = getWhatsAppConfigValue(key, environment)?.trim();
   if (!value) {
     throw new WhatsAppConfigError(`Missing required WhatsApp configuration: ${key}`);
   }
@@ -94,26 +122,91 @@ const parseQueueEncryptionKey = (value: string, environmentName: string): Buffer
   return material;
 };
 
+const parseWhatsAppQueueKeyring = (
+  value: string,
+  configName = 'WHATSAPP_WEBHOOK_QUEUE_KEYRING',
+): WhatsAppWebhookQueueConfig => {
+  const entries = value.split(',').map((entry) => entry.trim());
+  if (entries.some((entry) => entry.length === 0)) {
+    throw new WhatsAppConfigError(`${configName} must use key-id=base64-key entries`);
+  }
+  if (entries.length > MAX_WHATSAPP_QUEUE_KEYRING_KEYS) {
+    throw new WhatsAppConfigError(
+      `${configName} supports at most ${MAX_WHATSAPP_QUEUE_KEYRING_KEYS} keys`,
+    );
+  }
+
+  const keys: WhatsAppQueueEncryptionKey[] = [];
+  const keyIds = new Set<string>();
+  entries.forEach((entry, index) => {
+    const separator = entry.indexOf('=');
+    if (separator <= 0) {
+      throw new WhatsAppConfigError(`${configName} must use key-id=base64-key entries`);
+    }
+    const id = parseIdentifier(entry.slice(0, separator), `${configName} entry ${index + 1} key ID`);
+    if (keyIds.has(id)) {
+      throw new WhatsAppConfigError(`Duplicate WhatsApp queue encryption key ID: ${id}`);
+    }
+    keyIds.add(id);
+    keys.push({
+      id,
+      material: parseQueueEncryptionKey(
+        entry.slice(separator + 1),
+        `${configName} entry ${index + 1}`,
+      ),
+    });
+  });
+
+  const activeKey = keys[0];
+  if (!activeKey) {
+    throw new WhatsAppConfigError(`Missing required WhatsApp configuration: ${configName}`);
+  }
+  return {
+    activeKey,
+    decryptionKeys: new Map(keys.map((key) => [key.id, key.material])),
+  };
+};
+
 export const resolveWhatsAppOnboardingGeneration = (
-  environment: WhatsAppEnvironment = process.env,
+  environment?: WhatsAppEnvironment,
 ): string => parseIdentifier(
-  environment.WHATSAPP_ONBOARDING_GENERATION ?? DEFAULT_WHATSAPP_ONBOARDING_GENERATION,
+  getWhatsAppConfigValue('WHATSAPP_ONBOARDING_GENERATION', environment)
+    ?? DEFAULT_WHATSAPP_ONBOARDING_GENERATION,
   'WHATSAPP_ONBOARDING_GENERATION',
 );
 
 export const getWhatsAppWebhookQueueConfig = (
-  environment: WhatsAppEnvironment = process.env,
+  environment?: WhatsAppEnvironment,
 ): WhatsAppWebhookQueueConfig => {
+  const compositeKeyring = getWhatsAppConfigValue(
+    'WHATSAPP_WEBHOOK_QUEUE_KEYRING',
+    environment,
+  )?.trim();
+  if (compositeKeyring) {
+    return parseWhatsAppQueueKeyring(compositeKeyring);
+  }
+  if (
+    environment === undefined
+    && hasConfigValueOverride('WHATSAPP_WEBHOOK_QUEUE_KEYRING')
+  ) {
+    throw new WhatsAppConfigError(
+      'Missing required WhatsApp configuration: WHATSAPP_WEBHOOK_QUEUE_KEYRING',
+    );
+  }
+
   const activeKeyId = parseIdentifier(
-    requireEnvironmentValue(environment, 'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID'),
+    requireConfigValue('WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID', environment),
     'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID',
   );
   const activeKey = parseQueueEncryptionKey(
-    requireEnvironmentValue(environment, 'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY'),
+    requireConfigValue('WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY', environment),
     'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY',
   );
   const decryptionKeys = new Map<string, Buffer>([[activeKeyId, activeKey]]);
-  const previousEntries = (environment.WHATSAPP_WEBHOOK_QUEUE_PREVIOUS_KEYS ?? '')
+  const previousEntries = (getWhatsAppConfigValue(
+    'WHATSAPP_WEBHOOK_QUEUE_PREVIOUS_KEYS',
+    environment,
+  ) ?? '')
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
@@ -154,29 +247,29 @@ export const getWhatsAppWebhookQueueConfig = (
 };
 
 export const loadWhatsAppConfig = (
-  environment: WhatsAppEnvironment = process.env,
+  environment?: WhatsAppEnvironment,
 ): WhatsAppConfig => ({
-  webhookVerifyToken: requireEnvironmentValue(environment, 'WHATSAPP_WEBHOOK_VERIFY_TOKEN'),
-  metaAppSecret: requireEnvironmentValue(environment, 'WHATSAPP_META_APP_SECRET'),
-  wabaId: requireEnvironmentValue(environment, 'WHATSAPP_WABA_ID'),
-  phoneNumberId: requireEnvironmentValue(environment, 'WHATSAPP_PHONE_NUMBER_ID'),
-  briefApiToken: requireEnvironmentValue(environment, 'WHATSAPP_BRIEF_API_TOKEN'),
-  retentionDays: parseRetentionDays(environment.WHATSAPP_RETENTION_DAYS),
+  webhookVerifyToken: requireConfigValue('WHATSAPP_WEBHOOK_VERIFY_TOKEN', environment),
+  metaAppSecret: requireConfigValue('WHATSAPP_META_APP_SECRET', environment),
+  wabaId: requireConfigValue('WHATSAPP_WABA_ID', environment),
+  phoneNumberId: requireConfigValue('WHATSAPP_PHONE_NUMBER_ID', environment),
+  briefApiToken: requireConfigValue('WHATSAPP_BRIEF_API_TOKEN', environment),
+  retentionDays: parseRetentionDays(getWhatsAppConfigValue('WHATSAPP_RETENTION_DAYS', environment)),
 });
 
 export const getWhatsAppWebhookConfig = (
-  environment: WhatsAppEnvironment = process.env,
+  environment?: WhatsAppEnvironment,
 ): WhatsAppWebhookConfig => ({
-  verifyToken: requireEnvironmentValue(environment, 'WHATSAPP_WEBHOOK_VERIFY_TOKEN'),
-  appSecret: requireEnvironmentValue(environment, 'WHATSAPP_META_APP_SECRET'),
-  wabaId: requireEnvironmentValue(environment, 'WHATSAPP_WABA_ID'),
-  phoneNumberId: requireEnvironmentValue(environment, 'WHATSAPP_PHONE_NUMBER_ID'),
-  retentionDays: parseRetentionDays(environment.WHATSAPP_RETENTION_DAYS),
+  verifyToken: requireConfigValue('WHATSAPP_WEBHOOK_VERIFY_TOKEN', environment),
+  appSecret: requireConfigValue('WHATSAPP_META_APP_SECRET', environment),
+  wabaId: requireConfigValue('WHATSAPP_WABA_ID', environment),
+  phoneNumberId: requireConfigValue('WHATSAPP_PHONE_NUMBER_ID', environment),
+  retentionDays: parseRetentionDays(getWhatsAppConfigValue('WHATSAPP_RETENTION_DAYS', environment)),
 });
 
 export const getWhatsAppBriefConfig = (
-  environment: WhatsAppEnvironment = process.env,
+  environment?: WhatsAppEnvironment,
 ): WhatsAppBriefConfig => ({
-  apiToken: requireEnvironmentValue(environment, 'WHATSAPP_BRIEF_API_TOKEN'),
-  retentionDays: parseRetentionDays(environment.WHATSAPP_RETENTION_DAYS),
+  apiToken: requireConfigValue('WHATSAPP_BRIEF_API_TOKEN', environment),
+  retentionDays: parseRetentionDays(getWhatsAppConfigValue('WHATSAPP_RETENTION_DAYS', environment)),
 });
