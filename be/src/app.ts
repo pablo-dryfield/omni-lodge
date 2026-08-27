@@ -62,6 +62,11 @@ import storefrontSavedCartRoutes from './routes/storefrontSavedCartRoutes.js';
 import storefrontOngoingCartRoutes from './routes/storefrontOngoingCartRoutes.js';
 import storefrontPromotionRoutes from './routes/storefrontPromotionRoutes.js';
 import { storefrontStripeWebhook } from './controllers/storefrontWebhookController.js';
+import whatsappBriefRoutes from './routes/whatsappBriefRoutes.js';
+import {
+  receiveWhatsAppWebhook,
+  verifyWhatsAppWebhook,
+} from './controllers/whatsappWebhookController.js';
 import getYourGuideRoutes from './routes/getYourGuideRoutes.js';
 import getYourGuideOutboundRoutes from './routes/getYourGuideOutboundRoutes.js';
 import inventoryRoutes from './routes/inventoryRoutes.js';
@@ -88,6 +93,8 @@ import { startAmTaskPushNotificationsJob } from './jobs/amTaskPushNotifications.
 import { startDailyMidnightClosureJob } from './jobs/dailyMidnightClosure.cron.js';
 import { startReviewFullSyncJob } from './jobs/reviewFullSync.cron.js';
 import { startStorefrontAbandonedCartJob } from './jobs/storefrontAbandonedCart.cron.js';
+import { startWhatsAppRetentionJob } from './jobs/whatsappRetention.cron.js';
+import { startWhatsAppWebhookQueueJob } from './jobs/whatsappWebhookQueue.cron.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -177,6 +184,13 @@ app.post(
   storefrontStripeWebhook,
 );
 
+app.get('/api/integrations/whatsapp/webhook', verifyWhatsAppWebhook);
+app.post(
+  '/api/integrations/whatsapp/webhook',
+  express.raw({ type: 'application/json', limit: '3mb' }),
+  receiveWhatsAppWebhook,
+);
+
 app.use(express.json());
 
 app.use(
@@ -253,6 +267,7 @@ app.use('/api/gyg', getYourGuideRoutes);
 app.use('/api/gyg/outbound', getYourGuideOutboundRoutes);
 app.use('/api/google-api', googleApiRoutes);
 app.use('/api/integrations', integrationRoutes);
+app.use('/api/integrations/whatsapp/brief', whatsappBriefRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/performance', performanceRoutes);
@@ -352,6 +367,8 @@ async function bootstrap(): Promise<void> {
         startDailyMidnightClosureJob();
         startReviewFullSyncJob();
         startStorefrontAbandonedCartJob();
+        startWhatsAppRetentionJob();
+        startWhatsAppWebhookQueueJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
@@ -368,6 +385,8 @@ async function bootstrap(): Promise<void> {
         startDailyMidnightClosureJob();
         startReviewFullSyncJob();
         startStorefrontAbandonedCartJob();
+        startWhatsAppRetentionJob();
+        startWhatsAppWebhookQueueJob();
       });
     }
   } catch (err) {
