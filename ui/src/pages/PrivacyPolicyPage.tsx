@@ -61,15 +61,19 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
         <Stack gap={6}>
           <Title order={3}>4. Sharing and Access</Title>
           <Text style={{ lineHeight: 1.75 }}>
-            OmniLodge applications communicate with the OmniLodge backend API to authenticate users
-            and retrieve or update operational data. Information may be accessible to authorized
-            administrators, managers, and staff users according to permissions configured in the
-            OmniLodge platform. WhatsApp brief data is exposed through a separate bearer-authenticated,
-            read-only API configured for the authorized brief consumer. When a business administrator
-            connects WhatsApp, Meta Platforms, Inc. processes WhatsApp account, authorization,
-            message, media, and webhook data as required to provide the WhatsApp Business Platform.
+            Pablo Jose Cabrera Camposeco, located in Poland, is responsible for deciding how and why
+            personal data is processed through OmniLodge. OmniLodge applications communicate with
+            the OmniLodge backend API to authenticate users and retrieve or update operational data.
+            Information may be accessible to authorized administrators, managers, and staff users
+            according to permissions configured in the OmniLodge platform. WhatsApp brief data is
+            exposed through a separate bearer-authenticated, read-only API configured for the
+            authorized brief consumer. When a business administrator connects WhatsApp, Meta
+            Platforms, Inc. processes WhatsApp account, authorization, message, media, and webhook
+            data as required to provide the WhatsApp Business Platform.
             Cloudflare provides network delivery and security services for OmniLodge and may process
             request metadata and webhook payloads while delivering them to the OmniLodge backend.
+            Google Drive stores OmniLodge database backup archives, which may contain WhatsApp data
+            that was present in the database when a backup was created.
             When an administrator enables the scheduled morning brief, selected recent WhatsApp
             message data is provided to OpenAI services solely to generate the requested private
             operational summary. These providers process data under their applicable service terms
@@ -100,8 +104,10 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
             a seven-day queue-retention limit and the same hourly purge. Synced WhatsApp address-book data,
             media files, and Meta media identifiers are not retained. Connection-health, security,
             and webhook delivery records may be retained separately when needed to protect or operate
-            the service. Locally stored session data may remain on a device until the user signs out,
-            the app clears the session, or the app data is removed.
+            the service. Data removed from the live database may remain in Google Drive backup copies
+            until those backup copies are deleted; backup copies are used for service recovery.
+            Locally stored session data may remain on a device until the user signs out, the app
+            clears the session, or the app data is removed.
           </Text>
         </Stack>
 
