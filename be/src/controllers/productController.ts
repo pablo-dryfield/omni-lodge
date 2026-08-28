@@ -10,6 +10,7 @@ import type { ProductImage } from '../types/productMedia.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import HttpError from '../errors/HttpError.js';
 import { getAllowedProductTypeIds, requireProductAccess, requireProductTypeAccess, scopeProductWhere } from '../services/productScopeService.js';
+import { deleteProductMedia, uploadProductMedia } from '../services/storefrontMediaService.js';
 
 function buildProductColumns() {
   const attributes = Product.getAttributes();
@@ -218,6 +219,43 @@ export const deleteProduct = async (req: AuthenticatedRequest, res: Response): P
       return;
     }
 
+    res.status(204).send();
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
+  }
+};
+
+export const uploadProductImage = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const product = await requireProductAccess(req, Number(req.params.id));
+    if (!req.file) {
+      res.status(400).json([{ message: 'Choose an image to upload.' }]);
+      return;
+    }
+
+    const image = await uploadProductMedia({
+      productId: product.id,
+      productName: product.name,
+      file: req.file,
+    });
+    res.status(201).json({ image });
+  } catch (error) {
+    const errorMessage = (error as ErrorWithMessage).message;
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
+  }
+};
+
+export const removeProductImage = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const product = await requireProductAccess(req, Number(req.params.id));
+    const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!url) {
+      res.status(400).json([{ message: 'Image URL is required.' }]);
+      return;
+    }
+
+    await deleteProductMedia({ productId: product.id, url });
     res.status(204).send();
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;

@@ -9,6 +9,7 @@ import {
   Center,
   Divider,
   Group,
+  Image,
   Loader,
   Menu,
   Modal,
@@ -40,11 +41,13 @@ import {
   deleteProduct,
   fetchProducts,
   updateProduct,
+  removeProductImageFile,
 } from "../../actions/productActions";
 import { fetchProductTypes } from "../../actions/productTypeActions";
 import { Product } from "../../types/products/Product";
 import { useModuleAccess } from "../../hooks/useModuleAccess";
 import { ProductStorefrontRulesEditor } from "../storefront/StorefrontRulesEditors";
+import ProductMediaEditor from "./ProductMediaEditor";
 
 const DEFAULT_MODULE_SLUG = "product-catalog";
 
@@ -60,6 +63,8 @@ type ProductForm = {
   status: boolean;
   requiresNightReportCostReconciliation: boolean;
   storefrontConfig: Product["storefrontConfig"];
+  imageUrl: string | null;
+  images: Product["images"];
 };
 
 const EMPTY_FORM: ProductForm = {
@@ -69,6 +74,18 @@ const EMPTY_FORM: ProductForm = {
   status: true,
   requiresNightReportCostReconciliation: false,
   storefrontConfig: {},
+  imageUrl: null,
+  images: [],
+};
+
+const normalizeProductImages = (product: Partial<Product>): Product["images"] => {
+  const images = [...(product.images ?? [])];
+  if (product.imageUrl && !images.some((image) => image.url === product.imageUrl)) {
+    images.unshift({ url: product.imageUrl, alt: product.name ?? "", order: 0 });
+  }
+  return images
+    .sort((left, right) => left.order - right.order)
+    .map((image, index) => ({ ...image, order: index + 1 }));
 };
 
 const formatPrice = (price?: number) =>
@@ -101,6 +118,9 @@ const ProductList = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [initialImageUrls, setInitialImageUrls] = useState<string[]>([]);
+  const [sessionUploadedUrls, setSessionUploadedUrls] = useState<string[]>([]);
+  const [mediaUploading, setMediaUploading] = useState(false);
 
   useEffect(() => {
     dispatch(fetchProducts());
@@ -152,22 +172,39 @@ const ProductList = ({
     (product) => product.requiresNightReportCostReconciliation,
   ).length;
 
-  const closeForm = () => {
-    if (submitting) return;
+  const resetForm = () => {
     setFormOpen(false);
     setEditingProduct(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    setInitialImageUrls([]);
+    setSessionUploadedUrls([]);
+    setMediaUploading(false);
+  };
+
+  const cleanupImageFiles = async (productId: number, urls: string[]) => {
+    await Promise.allSettled(urls.map((url) => removeProductImageFile(productId, url)));
+  };
+
+  const closeForm = () => {
+    if (submitting || mediaUploading) return;
+    if (typeof editingProduct?.id === "number" && sessionUploadedUrls.length > 0) {
+      void cleanupImageFiles(editingProduct.id, sessionUploadedUrls);
+    }
+    resetForm();
   };
 
   const openCreateForm = () => {
     setEditingProduct(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    setInitialImageUrls([]);
+    setSessionUploadedUrls([]);
     setFormOpen(true);
   };
 
   const openEditForm = (product: Partial<Product>) => {
+    const images = normalizeProductImages(product);
     setEditingProduct(product);
     setForm({
       name: product.name ?? "",
@@ -178,7 +215,11 @@ const ProductList = ({
       requiresNightReportCostReconciliation:
         product.requiresNightReportCostReconciliation === true,
       storefrontConfig: product.storefrontConfig ?? {},
+      imageUrl: product.imageUrl ?? images[0]?.url ?? null,
+      images,
     });
+    setInitialImageUrls(images.map((image) => image.url));
+    setSessionUploadedUrls([]);
     setFormError(null);
     setFormOpen(true);
   };
@@ -206,6 +247,8 @@ const ProductList = ({
       requiresNightReportCostReconciliation:
         form.requiresNightReportCostReconciliation,
       storefrontConfig: form.storefrontConfig,
+      imageUrl: form.imageUrl,
+      images: form.images.map((image, index) => ({ ...image, order: index + 1 })),
     };
 
     setSubmitting(true);
@@ -218,12 +261,19 @@ const ProductList = ({
             productData: { ...payload, updatedBy: loggedUserId },
           }),
         ).unwrap();
+        const keptUrls = new Set([
+          ...form.images.map((image) => image.url),
+          ...(form.imageUrl ? [form.imageUrl] : []),
+        ]);
+        const removedUrls = [...new Set([...initialImageUrls, ...sessionUploadedUrls])]
+          .filter((url) => !keptUrls.has(url));
+        await cleanupImageFiles(editingProduct.id, removedUrls);
       } else {
         await dispatch(createProduct({ ...payload, createdBy: loggedUserId })).unwrap();
       }
       await dispatch(fetchProducts()).unwrap();
       setSubmitting(false);
-      closeForm();
+      resetForm();
     } catch (submitError) {
       setFormError(getErrorMessage(submitError, "Unable to save this product."));
       setSubmitting(false);
@@ -400,9 +450,13 @@ const ProductList = ({
                   <Stack gap="md" h="100%">
                     <Group justify="space-between" align="flex-start" wrap="nowrap">
                       <Group gap="sm" align="flex-start" wrap="nowrap">
-                        <ThemeIcon size={42} radius="md" variant="light">
-                          <IconBox size={21} />
-                        </ThemeIcon>
+                        {product.imageUrl ? (
+                          <Image src={product.imageUrl} alt={product.name ?? ""} w={54} h={54} fit="cover" radius="sm" />
+                        ) : (
+                          <ThemeIcon size={42} radius="md" variant="light">
+                            <IconBox size={21} />
+                          </ThemeIcon>
+                        )}
                         <Box>
                           <Text fw={700} lh={1.25}>{product.name || "Unnamed product"}</Text>
                           <Text size="sm" c="dimmed" mt={3}>{productType}</Text>
@@ -468,7 +522,7 @@ const ProductList = ({
         opened={formOpen}
         onClose={closeForm}
         title={editingProduct ? "Edit product" : "New product"}
-        size="lg"
+        size="xl"
         centered
         radius="md"
       >
@@ -529,12 +583,25 @@ const ProductList = ({
               setForm((current) => ({ ...current, storefrontConfig }))
             }
           />
+          <ProductMediaEditor
+            productId={editingProduct?.id}
+            productName={form.name}
+            imageUrl={form.imageUrl}
+            images={form.images}
+            onChange={({ imageUrl, images }) =>
+              setForm((current) => ({ ...current, imageUrl, images }))
+            }
+            onUploaded={(url) =>
+              setSessionUploadedUrls((current) => [...current, url])
+            }
+            onUploadingChange={setMediaUploading}
+          />
           {formError && (
             <Alert color="red" title="Unable to save">{formError}</Alert>
           )}
           <Group justify="flex-end">
-            <Button variant="default" onClick={closeForm} disabled={submitting}>Cancel</Button>
-            <Button loading={submitting} onClick={handleSubmit}>
+            <Button variant="default" onClick={closeForm} disabled={submitting || mediaUploading}>Cancel</Button>
+            <Button loading={submitting} disabled={mediaUploading} onClick={handleSubmit}>
               {editingProduct ? "Save changes" : "Create product"}
             </Button>
           </Group>

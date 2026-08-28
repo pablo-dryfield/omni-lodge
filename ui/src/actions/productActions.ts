@@ -1,7 +1,9 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
+import axios from 'axios';
 import axiosInstance from './../utils/axiosInstance';
 import { ServerResponse } from '../types/general/ServerResponse';
 import { Product } from '../types/products/Product';
+import { ProductImage } from '../types/products/Product';
 
 /**
  * Fetches a list of products from the server.
@@ -117,3 +119,30 @@ export const deleteProduct = createAsyncThunk(
     }
   }
 );
+
+export const uploadProductImage = async (productId: number, file: File): Promise<ProductImage> => {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await axiosInstance.post<{ image: ProductImage }>(
+      `/products/${productId}/media`,
+      formData,
+      { withCredentials: true },
+    );
+    return response.data.image;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const payload = error.response?.data as Array<{ message?: string }> | { message?: string } | undefined;
+      const message = Array.isArray(payload) ? payload[0]?.message : payload?.message;
+      if (message) throw new Error(message);
+    }
+    throw error;
+  }
+};
+
+export const removeProductImageFile = async (productId: number, url: string): Promise<void> => {
+  await axiosInstance.delete(`/products/${productId}/media`, {
+    data: { url },
+    withCredentials: true,
+  });
+};
