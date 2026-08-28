@@ -1197,8 +1197,11 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     if (!actionsQuery.data || customerEmailActionSignatureRef.current === customerEmailActionSignature) {
       return;
     }
+    const reason = customerEmailActionSignatureRef.current === null ? "snapshot" : "changed";
     customerEmailActionSignatureRef.current = customerEmailActionSignature;
-    window.dispatchEvent(new CustomEvent("customer-email-actions-changed"));
+    window.dispatchEvent(new CustomEvent("customer-email-actions-changed", {
+      detail: { reason },
+    }));
   }, [actionsQuery.data, customerEmailActionSignature]);
 
   useEffect(() => {

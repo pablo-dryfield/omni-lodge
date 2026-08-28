@@ -43,6 +43,7 @@ import {
   upsertOngoingCart,
 } from '../services/storefrontOngoingCartService.js';
 import logger from '../utils/logger.js';
+import { ingestClientJourneyEvents } from '../services/storefrontJourneyService.js';
 
 type CheckoutCustomer = {
   firstName: string;
@@ -401,6 +402,7 @@ export const quoteCart = async (request: Request, response: Response, next: Next
           cart,
           customer: request.body?.customer,
           attribution: request.body?.attribution,
+          clientContext: request.body?.clientContext,
           quote,
         })
       : null;
@@ -431,6 +433,13 @@ export const quoteCart = async (request: Request, response: Response, next: Next
         ...(clientEventId ? { dedupeKey: `client:${clientEventId}` } : {}),
       });
     }
+    const journey = ongoing
+      ? await ingestClientJourneyEvents(
+          ongoing,
+          request.body?.journeyEvents,
+          request.body?.clientContext,
+        )
+      : { acceptedEventIds: [] };
     response.json({
       ...serializeQuote(quote),
       ongoingCart: ongoing ? {
@@ -439,6 +448,8 @@ export const quoteCart = async (request: Request, response: Response, next: Next
         status: ongoing.status,
         recoveryDueAt: ongoing.recoveryDueAt,
       } : null,
+      journey,
+      journeyReplay: getStorefrontPublicConfig().journeyReplay,
     });
   } catch (error) {
     await recordOngoingCartEventByIdentity(
@@ -466,6 +477,13 @@ export const createCheckout = async (request: Request, response: Response, next:
     const ongoingCart = ongoingCartPublicId
       ? await getUsableOngoingCart(ongoingCartPublicId)
       : null;
+    const journey = ongoingCart
+      ? await ingestClientJourneyEvents(
+          ongoingCart,
+          request.body?.journeyEvents,
+          request.body?.clientContext,
+        )
+      : { acceptedEventIds: [] };
     const cart = savedCart
       ? addCustomerToSavedCart(savedCart.cart, customer)
       : request.body?.cart as StorefrontCartInput;
@@ -496,6 +514,7 @@ export const createCheckout = async (request: Request, response: Response, next:
           publicId: existingOrder.publicId,
           paymentComplete: true,
           quote: serializeQuote(quote),
+          journey,
         });
         return;
       }
@@ -523,6 +542,7 @@ export const createCheckout = async (request: Request, response: Response, next:
           paymentComplete: true,
           paymentIntentId: existingPaymentIntent.id,
           quote: serializeQuote(quote),
+          journey,
         });
         return;
       }
@@ -648,6 +668,7 @@ export const createCheckout = async (request: Request, response: Response, next:
         publicId: order.publicId,
         paymentComplete: true,
         quote: serializeQuote(quote),
+        journey,
       });
       return;
     }
@@ -704,6 +725,7 @@ export const createCheckout = async (request: Request, response: Response, next:
       clientSecret: paymentIntent.client_secret,
       publishableKey,
       quote: serializeQuote(quote),
+      journey,
     });
   } catch (error) {
     await recordOngoingCartEventByIdentity(

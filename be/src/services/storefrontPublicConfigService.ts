@@ -45,4 +45,14 @@ export const getStorefrontPublicConfig = () => ({
   stripeMode: isStorefrontStripeTestMode() ? 'test' : 'live',
   checkoutEnabled: isStorefrontStripeConfigured(),
   cancellationPolicy: getStorefrontCancellationPolicy(),
+  journeyReplay: {
+    enabled: getConfigValue('STOREFRONT_CLARITY_REPLAY_ENABLED') === true,
+    projectId: text(getConfigValue('STOREFRONT_CLARITY_PROJECT_ID')),
+    samplePercent: Math.min(
+      100,
+      Math.max(0, Number(getConfigValue('STOREFRONT_CLARITY_SAMPLE_PERCENT')) || 0),
+    ),
+    requireAnalyticsConsent:
+      getConfigValue('STOREFRONT_CLARITY_REQUIRE_ANALYTICS_CONSENT') !== false,
+  },
 });

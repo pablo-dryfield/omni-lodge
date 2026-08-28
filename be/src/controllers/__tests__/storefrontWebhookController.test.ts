@@ -216,6 +216,47 @@ describe('storefront Stripe webhook activity tracking', () => {
       'order-5',
       expect.objectContaining({ id: 'pi_paid', status: 'succeeded' }),
     );
+    expect(mockedRecordEvent).toHaveBeenCalledWith(
+      { publicId: 'cart-5' },
+      expect.objectContaining({
+        type: 'payment_succeeded',
+        source: 'stripe',
+        dedupeKey: 'stripe:evt_pi_paid',
+      }),
+      { resetRecoveryDue: false },
+    );
     expect(res.json).toHaveBeenCalledWith({ received: true });
+  });
+
+  it('records when Stripe requests 3DS authentication', async () => {
+    constructEvent.mockReturnValue({
+      id: 'evt_pi_action',
+      type: 'payment_intent.requires_action',
+      data: {
+        object: {
+          id: 'pi_action',
+          status: 'requires_action',
+          metadata: { orderPublicId: 'order-6', ongoingCartPublicId: 'cart-6' },
+        },
+      },
+    });
+    const res = response();
+
+    await storefrontStripeWebhook(
+      { headers: { 'stripe-signature': 'signature' }, body: Buffer.from('{}') } as never,
+      res as never,
+      jest.fn(),
+    );
+
+    expect(mockedRecordEvent).toHaveBeenCalledWith(
+      { publicId: 'cart-6' },
+      expect.objectContaining({
+        type: 'payment_authentication_required',
+        source: 'stripe',
+        details: expect.objectContaining({ status: 'requires_action' }),
+      }),
+      { resetRecoveryDue: false },
+    );
+    expect(mockedFulfill).not.toHaveBeenCalled();
   });
 });

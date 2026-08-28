@@ -2,6 +2,7 @@ import { Router } from 'express';
 import authMiddleware from '../middleware/authMiddleware.js';
 import {
   dismissOngoingCart,
+  getOngoingCartActivity,
   listOngoingCarts,
   listRecoveredCarts,
   previewOngoingCartRecoveryEmail,
@@ -13,6 +14,7 @@ const router = Router();
 router.use(authMiddleware);
 router.get('/', listOngoingCarts);
 router.get('/recovered', listRecoveredCarts);
+router.get('/:publicId/activity', getOngoingCartActivity);
 router.get('/:publicId/recovery-preview', previewOngoingCartRecoveryEmail);
 router.post('/:publicId/send-recovery', sendOngoingCartRecoveryEmail);
 router.patch('/:publicId/dismiss', dismissOngoingCart);

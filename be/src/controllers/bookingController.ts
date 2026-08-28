@@ -21,6 +21,7 @@ import ProductAddon from '../models/ProductAddon.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
 import type StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
+import { getBookingStorefrontActivity } from '../services/storefrontBookingActivityService.js';
 import RequiredAction from '../models/RequiredAction.js';
 import HttpError from '../errors/HttpError.js';
 import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
@@ -4705,10 +4706,16 @@ export const getBookingDetails = async (req: AuthenticatedRequest, res: Response
       return;
     }
 
-    const bookingEvents = await BookingEvent.findAll({
-      where: { bookingId: booking.id },
-      order: [['id', 'DESC']],
-    });
+    const [bookingEvents, storeActivity] = await Promise.all([
+      BookingEvent.findAll({
+        where: { bookingId: booking.id },
+        order: [['id', 'DESC']],
+      }),
+      getBookingStorefrontActivity({
+        platform: booking.platform,
+        platformOrderId: booking.platformOrderId,
+      }),
+    ]);
 
     const emailMessageIds = new Set<string>();
     if (booking.lastEmailMessageId) {
@@ -4776,6 +4783,7 @@ export const getBookingDetails = async (req: AuthenticatedRequest, res: Response
       stripe,
       stripeError,
       ecwidOrderId,
+      storeActivity,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load booking details';

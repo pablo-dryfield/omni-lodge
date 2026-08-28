@@ -55,6 +55,7 @@ const recordSessionFailure = async (
         orderPublicId: session.metadata?.orderPublicId || null,
       },
       dedupeKey: `stripe:${event.id}`,
+      source: 'stripe',
     },
     { resetRecoveryDue: !expired },
   );
@@ -87,8 +88,49 @@ const recordPaymentIntentFailure = async (
           : {}),
       },
       dedupeKey: `stripe:${event.id}`,
+      source: 'stripe',
     },
     { resetRecoveryDue: true },
+  );
+};
+
+const recordPaymentIntentStatus = async (
+  event: Stripe.Event,
+  paymentIntent: Stripe.PaymentIntent,
+): Promise<void> => {
+  const definitions = {
+    'payment_intent.requires_action': {
+      type: 'payment_authentication_required',
+      severity: 'warning' as const,
+      message: 'Stripe requested customer authentication before completing payment.',
+    },
+    'payment_intent.processing': {
+      type: 'payment_processing',
+      severity: 'info' as const,
+      message: 'Stripe is processing the payment.',
+    },
+    'payment_intent.succeeded': {
+      type: 'payment_succeeded',
+      severity: 'info' as const,
+      message: 'Stripe confirmed the payment.',
+    },
+  } as const;
+  const definition = definitions[event.type as keyof typeof definitions];
+  if (!definition) return;
+  await recordOngoingCartEventByIdentity(
+    await ongoingCartIdentity(paymentIntent.metadata),
+    {
+      ...definition,
+      details: {
+        stripeEventId: event.id,
+        paymentIntentId: paymentIntent.id,
+        orderPublicId: paymentIntent.metadata?.orderPublicId || null,
+        status: paymentIntent.status,
+      },
+      dedupeKey: `stripe:${event.id}`,
+      source: 'stripe',
+    },
+    { resetRecoveryDue: false },
   );
 };
 
@@ -130,8 +172,14 @@ export const storefrontStripeWebhook = async (
         logger.info(
           `[storefront-webhook] Processing event=${event.id} type=${event.type} order=${publicId} payment=${paymentIntent.id}`,
         );
+        await recordPaymentIntentStatus(event, paymentIntent);
         await fulfillPaidOrder(publicId, paymentIntent);
       }
+    } else if (
+      event.type === 'payment_intent.requires_action'
+      || event.type === 'payment_intent.processing'
+    ) {
+      await recordPaymentIntentStatus(event, event.data.object as Stripe.PaymentIntent);
     } else if (
       event.type === 'checkout.session.async_payment_failed'
       || event.type === 'checkout.session.expired'

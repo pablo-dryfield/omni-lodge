@@ -16,6 +16,10 @@ import {
   sendAndRecordStorefrontCartRecoveryEmail,
 } from '../services/storefrontCartRecoveryEmailService.js';
 import HttpError from '../errors/HttpError.js';
+import {
+  getOngoingCartJourney,
+  ingestClientJourneyEvents,
+} from '../services/storefrontJourneyService.js';
 
 export const dismissOngoingCartBySession = async (
   request: Request,
@@ -54,6 +58,24 @@ export const recoverOngoingCart = async (request: Request, response: Response, n
       total: quote.total,
     });
     response.json({ ongoingCart: serializeOngoingCart(ongoing) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const recordOngoingCartActivity = async (
+  request: Request,
+  response: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const ongoing = await getUsableOngoingCart(request.params.publicId);
+    const journey = await ingestClientJourneyEvents(
+      ongoing,
+      request.body?.journeyEvents,
+      request.body?.clientContext,
+    );
+    response.status(202).json({ journey });
   } catch (error) {
     next(error);
   }
@@ -100,6 +122,27 @@ export const listRecoveredCarts = async (
       limit: 250,
     });
     response.json({ data: await serializeRowsWithOrders(rows) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getOngoingCartActivity = async (
+  request: AuthenticatedRequest,
+  response: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const publicId = parseStorefrontUuid(request.params.publicId, 'Ongoing cart ID');
+    const ongoing = await StorefrontOngoingCart.findOne({ where: { publicId } });
+    if (!ongoing) throw new HttpError(404, 'Ongoing cart not found.');
+    response.json({
+      data: {
+        publicId: ongoing.publicId,
+        visits: await getOngoingCartJourney(ongoing.id),
+        legacyEvents: serializeOngoingCart(ongoing).events,
+      },
+    });
   } catch (error) {
     next(error);
   }

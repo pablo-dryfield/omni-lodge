@@ -53,11 +53,17 @@ describe('normalizeStorefrontCancellationPolicy', () => {
     mockedGetConfigValueRaw.mockImplementation((key) => (
       key === 'STRIPE_TEST_SECRET_KEY' ? 'sk_test_example' : null
     ));
-    mockedGetConfigValue.mockReturnValue({
-      title: 'Cancellation policy',
-      summary: 'Our complete cancellation terms.',
-      items: [],
-    });
+    mockedGetConfigValue.mockImplementation((key) => ({
+      STOREFRONT_CANCELLATION_POLICY: {
+        title: 'Cancellation policy',
+        summary: 'Our complete cancellation terms.',
+        items: [],
+      },
+      STOREFRONT_CLARITY_REPLAY_ENABLED: true,
+      STOREFRONT_CLARITY_PROJECT_ID: 'clarity-project',
+      STOREFRONT_CLARITY_SAMPLE_PERCENT: 20,
+      STOREFRONT_CLARITY_REQUIRE_ANALYTICS_CONSENT: true,
+    } as Record<string, unknown>)[key]);
 
     expect(getStorefrontPublicConfig()).toEqual({
       currency: 'PLN',
@@ -68,6 +74,12 @@ describe('normalizeStorefrontCancellationPolicy', () => {
         title: 'Cancellation policy',
         summary: 'Our complete cancellation terms.',
         items: [],
+      },
+      journeyReplay: {
+        enabled: true,
+        projectId: 'clarity-project',
+        samplePercent: 20,
+        requireAnalyticsConsent: true,
       },
     });
   });

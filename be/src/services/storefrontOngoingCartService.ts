@@ -1,5 +1,5 @@
 import { Op, UniqueConstraintError, type Transaction } from 'sequelize';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import HttpError from '../errors/HttpError.js';
 import StorefrontOngoingCart, {
   type StorefrontOngoingCartCustomer,
@@ -10,6 +10,7 @@ import {
   normalizeSavedCartCustomer,
   normalizeSavedCartFromQuote,
 } from './storefrontSavedCartService.js';
+import { recordServerJourneyEvent } from './storefrontJourneyService.js';
 
 export const ONGOING_CART_STATUSES = [
   'active',
@@ -63,6 +64,7 @@ type OngoingCartInput = {
   customer: unknown;
   attribution?: unknown;
   quote?: StorefrontQuote;
+  clientContext?: unknown;
 };
 
 const activeWhere = (sessionId: string) => ({
@@ -70,11 +72,115 @@ const activeWhere = (sessionId: string) => ({
   status: { [Op.in]: [...ONGOING_CART_STATUSES] },
 });
 
+type CartClientContext = {
+  browserId: string | null;
+  pageId: string | null;
+};
+
+const normalizeClientContext = (value: unknown): CartClientContext => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { browserId: null, pageId: null };
+  }
+  const input = value as Record<string, unknown>;
+  const browserId = String(input.browserId ?? '').trim();
+  const pageId = String(input.pageId ?? '').trim();
+  return {
+    browserId: STOREFRONT_UUID_PATTERN.test(browserId) ? browserId : null,
+    pageId: STOREFRONT_UUID_PATTERN.test(pageId) ? pageId : null,
+  };
+};
+
+const canonicalJson = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, canonicalJson(entry)]),
+  );
+};
+
+export const ongoingCartFingerprint = (cart: StorefrontCartInput): string =>
+  createHash('sha256').update(JSON.stringify(canonicalJson(cart))).digest('hex');
+
+const dedupeWindowMinutes = (): number => {
+  const configured = Number(getConfigValue('STOREFRONT_ONGOING_CART_DEDUPE_WINDOW_MINUTES'));
+  return Number.isFinite(configured) ? Math.min(1440, Math.max(5, Math.round(configured))) : 30;
+};
+
+const dedupeCutoff = (now = new Date()): Date =>
+  new Date(now.getTime() - dedupeWindowMinutes() * 60_000);
+
+const normalizedPhone = (customer: StorefrontOngoingCartCustomer): string =>
+  `${customer.phoneCountry}:${customer.phone.replace(/\D/g, '')}`;
+
+const sameCustomer = (
+  left: StorefrontOngoingCartCustomer,
+  right: StorefrontOngoingCartCustomer,
+): boolean => left.email === right.email && normalizedPhone(left) === normalizedPhone(right);
+
+const fingerprintFor = (ongoing: StorefrontOngoingCart): string => {
+  const stored = ongoing.metadata?.cartFingerprint;
+  return typeof stored === 'string' && stored ? stored : ongoingCartFingerprint(ongoing.cart);
+};
+
+const appendUnique = (existing: unknown, value: string | null, limit = 10): string[] => {
+  const values = Array.isArray(existing)
+    ? existing.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  return value ? [...new Set([...values, value])].slice(-limit) : values.slice(-limit);
+};
+
+const cartMetadata = (
+  existing: Record<string, unknown> | null | undefined,
+  fingerprint: string,
+  sessionId: string,
+  context: CartClientContext,
+): Record<string, unknown> => ({
+  ...(existing ?? {}),
+  recoveryCount: Number(existing?.recoveryCount ?? 0),
+  cartFingerprint: fingerprint,
+  sessionIds: appendUnique(existing?.sessionIds, sessionId),
+  browserIds: appendUnique(existing?.browserIds, context.browserId),
+  pageIds: appendUnique(existing?.pageIds, context.pageId, 20),
+  lastBrowserId: context.browserId ?? existing?.lastBrowserId ?? null,
+  lastPageId: context.pageId ?? existing?.lastPageId ?? null,
+});
+
+const findRecentCustomerDuplicate = async (
+  customer: StorefrontOngoingCartCustomer,
+  fingerprint: string,
+  now: Date,
+): Promise<StorefrontOngoingCart | null> => {
+  const candidates = await StorefrontOngoingCart.findAll({
+    where: {
+      status: { [Op.in]: [...ONGOING_CART_STATUSES] },
+      lastActivityAt: { [Op.gte]: dedupeCutoff(now) },
+      customer: { [Op.contains]: { email: customer.email } } as never,
+    },
+    order: [['lastActivityAt', 'DESC']],
+    limit: 25,
+  });
+  return candidates.find((candidate) => (
+    sameCustomer(candidate.customer, customer) && fingerprintFor(candidate) === fingerprint
+  )) ?? null;
+};
+
+const terminalCartError = (ongoing: StorefrontOngoingCart): HttpError | null => {
+  if (ongoing.status === 'converted') return new HttpError(409, 'This cart has already been paid.');
+  if (ongoing.status === 'dismissed') return new HttpError(410, 'This cart is no longer available.');
+  return ONGOING_CART_STATUSES.includes(ongoing.status as typeof ONGOING_CART_STATUSES[number])
+    ? null
+    : new HttpError(409, 'This cart is not available for checkout.');
+};
+
 export const upsertOngoingCart = async (input: OngoingCartInput): Promise<StorefrontOngoingCart> => {
   const sessionId = parseStorefrontUuid(input.sessionId, 'Cart session ID');
   const customer = normalizeCustomer(input.customer);
   const quote = input.quote ?? await quoteStorefrontCart(input.cart as StorefrontCartInput);
   const cart = normalizeSavedCartFromQuote(quote);
+  const fingerprint = ongoingCartFingerprint(cart);
+  const clientContext = normalizeClientContext(input.clientContext);
   const attribution = normalizeAttribution(input.attribution);
   const now = new Date();
   const values = {
@@ -96,17 +202,35 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
   const requestedPublicId = String(input.publicId ?? '').trim();
   let ongoing = requestedPublicId
     ? await StorefrontOngoingCart.findOne({
-        where: {
-          publicId: parseStorefrontUuid(requestedPublicId, 'Ongoing cart ID'),
-          status: { [Op.in]: [...ONGOING_CART_STATUSES] },
-        },
+        where: { publicId: parseStorefrontUuid(requestedPublicId, 'Ongoing cart ID') },
       })
     : null;
+  if (ongoing) {
+    const terminalError = terminalCartError(ongoing);
+    if (terminalError) throw terminalError;
+  }
   ongoing ??= await StorefrontOngoingCart.findOne({ where: activeWhere(sessionId) });
+  if (!ongoing) {
+    const recentSessionCarts = await StorefrontOngoingCart.findAll({
+      where: {
+        sessionId,
+        status: 'converted',
+        convertedAt: { [Op.gte]: dedupeCutoff(now) },
+      },
+      order: [['convertedAt', 'DESC']],
+      limit: 5,
+    });
+    const recentConverted = recentSessionCarts.find((candidate) => (
+      fingerprintFor(candidate) === fingerprint
+    ));
+    if (recentConverted) throw new HttpError(409, 'This cart has already been paid.');
+    ongoing = await findRecentCustomerDuplicate(customer, fingerprint, now);
+  }
   if (ongoing) {
     await ongoing.update({
       ...values,
       status: ongoing.status === 'checkout_started' ? 'checkout_started' : values.status,
+      metadata: cartMetadata(ongoing.metadata, fingerprint, sessionId, clientContext),
     });
     return ongoing;
   }
@@ -124,13 +248,16 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
       checkoutStartedAt: null,
       convertedAt: null,
       orderId: null,
-      metadata: { recoveryCount: 0 },
+      metadata: cartMetadata(null, fingerprint, sessionId, clientContext),
     });
   } catch (error) {
     if (!(error instanceof UniqueConstraintError)) throw error;
     ongoing = await StorefrontOngoingCart.findOne({ where: activeWhere(sessionId) });
     if (!ongoing) throw error;
-    await ongoing.update(values);
+    await ongoing.update({
+      ...values,
+      metadata: cartMetadata(ongoing.metadata, fingerprint, sessionId, clientContext),
+    });
     return ongoing;
   }
 };
@@ -189,6 +316,47 @@ export const markOngoingCartConverted = async (
       convertedAt,
       ...(ongoing.recoveryOpenedAt && !ongoing.recoveredAt ? { recoveredAt: convertedAt } : {}),
     }, { transaction });
+
+    const fingerprint = fingerprintFor(ongoing);
+    const candidates = await StorefrontOngoingCart.findAll({
+      where: {
+        status: { [Op.in]: [...ONGOING_CART_STATUSES] },
+        lastActivityAt: { [Op.gte]: dedupeCutoff(convertedAt) },
+        [Op.or]: [
+          { sessionId: ongoing.sessionId },
+          { customer: { [Op.contains]: { email: ongoing.customer.email } } as never },
+        ],
+      },
+      transaction,
+      ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}),
+      limit: 200,
+    });
+    for (const duplicate of candidates) {
+      if (Number(duplicate.id) === Number(ongoing.id)) continue;
+      const matchesSession = duplicate.sessionId === ongoing.sessionId;
+      const matchesCustomerCart = sameCustomer(duplicate.customer, ongoing.customer)
+        && fingerprintFor(duplicate) === fingerprint;
+      if (!matchesSession && !matchesCustomerCart) continue;
+      const metadata = duplicate.metadata && typeof duplicate.metadata === 'object'
+        ? duplicate.metadata
+        : {};
+      const events = Array.isArray(metadata.events) ? metadata.events : [];
+      await duplicate.update({
+        status: 'dismissed',
+        dismissedAt: convertedAt,
+        metadata: {
+          ...metadata,
+          events: [...events, {
+            id: randomUUID(),
+            type: 'post_payment_duplicate_dismissed',
+            severity: 'info',
+            message: 'Duplicate ongoing cart dismissed after payment completed.',
+            details: { convertedCartPublicId: ongoing.publicId, orderId },
+            occurredAt: convertedAt.toISOString(),
+          }].slice(-50),
+        },
+      }, { transaction });
+    }
   }
 };
 
@@ -208,27 +376,20 @@ const storedEvents = (ongoing: StorefrontOngoingCart): StorefrontOngoingCartEven
 
 export const recordOngoingCartEvent = async (
   ongoing: StorefrontOngoingCart,
-  event: Omit<StorefrontOngoingCartEvent, 'id' | 'occurredAt'> & { dedupeKey?: string },
+  event: Omit<StorefrontOngoingCartEvent, 'id' | 'occurredAt'> & {
+    dedupeKey?: string;
+    source?: 'server' | 'stripe';
+  },
 ): Promise<void> => {
-  const metadata = ongoing.metadata && typeof ongoing.metadata === 'object' ? ongoing.metadata : {};
-  const events = storedEvents(ongoing);
-  if (event.dedupeKey && events.some((item) => item.details?.dedupeKey === event.dedupeKey)) return;
-  const nextEvent: StorefrontOngoingCartEvent = {
-    id: randomUUID(),
-    type: event.type.slice(0, 64),
-    severity: event.severity,
-    message: event.message.slice(0, 1000),
-    details: event.details || event.dedupeKey
-      ? { ...(event.details || {}), ...(event.dedupeKey ? { dedupeKey: event.dedupeKey } : {}) }
-      : null,
-    occurredAt: new Date().toISOString(),
-  };
-  await ongoing.update({ metadata: { ...metadata, events: [...events, nextEvent].slice(-50) } });
+  await recordServerJourneyEvent(ongoing, event);
 };
 
 export const recordOngoingCartEventByIdentity = async (
   identity: { publicId?: unknown; sessionId?: unknown },
-  event: Omit<StorefrontOngoingCartEvent, 'id' | 'occurredAt'> & { dedupeKey?: string },
+  event: Omit<StorefrontOngoingCartEvent, 'id' | 'occurredAt'> & {
+    dedupeKey?: string;
+    source?: 'server' | 'stripe';
+  },
   options: { resetRecoveryDue?: boolean } = {},
 ): Promise<void> => {
   try {
@@ -246,9 +407,6 @@ export const recordOngoingCartEventByIdentity = async (
       order: [['lastActivityAt', 'DESC']],
     });
     if (!ongoing) return;
-    if (event.dedupeKey && storedEvents(ongoing).some(
-      (item) => item.details?.dedupeKey === event.dedupeKey,
-    )) return;
     if (options.resetRecoveryDue) {
       const now = new Date();
       await ongoing.update({
@@ -285,6 +443,16 @@ export const serializeOngoingCart = (
   recoveredAt: ongoing.recoveredAt,
   recoveryCount: ongoing.recoveryCount,
   events: [...storedEvents(ongoing)].reverse(),
+  diagnostics: {
+    cartFingerprint: typeof ongoing.metadata?.cartFingerprint === 'string'
+      ? ongoing.metadata.cartFingerprint
+      : ongoingCartFingerprint(ongoing.cart),
+    sessionIds: Array.isArray(ongoing.metadata?.sessionIds) ? ongoing.metadata.sessionIds : [],
+    browserIds: Array.isArray(ongoing.metadata?.browserIds) ? ongoing.metadata.browserIds : [],
+    pageIds: Array.isArray(ongoing.metadata?.pageIds) ? ongoing.metadata.pageIds : [],
+    lastBrowserId: ongoing.metadata?.lastBrowserId ?? null,
+    lastPageId: ongoing.metadata?.lastPageId ?? null,
+  },
   openedAt: ongoing.openedAt,
   checkoutStartedAt: ongoing.checkoutStartedAt,
   convertedAt: ongoing.convertedAt,

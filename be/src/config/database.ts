@@ -30,6 +30,8 @@ import StorefrontOrderItem from "../models/StorefrontOrderItem.js";
 import StorefrontPromotion from "../models/StorefrontPromotion.js";
 import StorefrontSavedCart from "../models/StorefrontSavedCart.js";
 import StorefrontOngoingCart from "../models/StorefrontOngoingCart.js";
+import StorefrontJourneyVisit from "../models/StorefrontJourneyVisit.js";
+import StorefrontJourneyEvent from "../models/StorefrontJourneyEvent.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import PaymentMethod from "../models/PaymentMethod.js";
 import ProductPrice from "../models/ProductPrice.js";
@@ -242,6 +244,8 @@ const sequelize = new Sequelize({
     StorefrontPromotion,
     StorefrontSavedCart,
     StorefrontOngoingCart,
+    StorefrontJourneyVisit,
+    StorefrontJourneyEvent,
     Venue,
     VenueCompensationTerm,
     VenueCompensationTermRate,

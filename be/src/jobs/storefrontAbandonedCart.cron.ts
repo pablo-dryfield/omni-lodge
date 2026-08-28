@@ -3,11 +3,23 @@ import { Op } from 'sequelize';
 import StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 import { sendAndRecordStorefrontCartRecoveryEmail } from '../services/storefrontCartRecoveryEmailService.js';
 import { getConfigValue } from '../services/configService.js';
+import { purgeExpiredStorefrontJourneyDetails } from '../services/storefrontJourneyService.js';
 import logger from '../utils/logger.js';
 
 let task: ScheduledTask | null = null;
+let lastJourneyCleanupAt = 0;
+
+const runJourneyRetentionIfDue = async (): Promise<void> => {
+  const now = Date.now();
+  if (now - lastJourneyCleanupAt < 24 * 60 * 60 * 1000) return;
+  lastJourneyCleanupAt = now;
+  const configured = Number(getConfigValue('STOREFRONT_JOURNEY_RETENTION_DAYS'));
+  const removed = await purgeExpiredStorefrontJourneyDetails(configured || 90);
+  if (removed) logger.info(`[storefront-journey] Removed ${removed} expired detailed events.`);
+};
 
 export const runStorefrontAbandonedCartRecovery = async (): Promise<number> => {
+  await runJourneyRetentionIfDue();
   if (getConfigValue('STOREFRONT_ABANDONED_CART_EMAIL_ENABLED') !== true) return 0;
 
   const rows = await StorefrontOngoingCart.findAll({

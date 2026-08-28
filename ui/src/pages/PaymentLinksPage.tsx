@@ -35,8 +35,8 @@ import {
   IconTrash,
 } from "@tabler/icons-react";
 import dayjs from "dayjs";
-import { getCountries, getCountryCallingCode } from "libphonenumber-js/min";
-import { useNavigate } from "react-router-dom";
+import { getCountries, getCountryCallingCode, type CountryCode } from "libphonenumber-js/min";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import axiosInstance from "../utils/axiosInstance";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -131,7 +131,19 @@ type OngoingCart = {
   status: string;
   customer: { fullName: string; email: string; phoneCountry: string; phone: string };
   quote: {
-    items: Array<{ productName: string; quantity: number }>;
+    items: Array<{
+      productName: string;
+      quantity: number;
+      experienceDate: string | null;
+      experienceTime: string | null;
+      addons: Array<{
+        name: string;
+        quantity: number;
+        value: string | null;
+        variants: Array<{ value: string; quantity: number }>;
+      }>;
+      options: Record<string, unknown>;
+    }>;
   };
   total: number;
   currency: string;
@@ -162,6 +174,44 @@ type RecoveryEmailPreview = {
   htmlBody: string;
   textBody: string;
 };
+
+type JourneyEvent = {
+  id: string;
+  type: string;
+  source: "client" | "server" | "stripe";
+  severity: "info" | "warning" | "error";
+  sequence: number | null;
+  occurredAt: string;
+  receivedAt: string;
+  details: Record<string, unknown> | null;
+};
+
+type JourneyVisit = {
+  id: string;
+  browserInstanceId: string | null;
+  startedAt: string;
+  lastActivityAt: string;
+  qualifiedAt: string;
+  claritySampled: boolean;
+  claritySessionId: string | null;
+  events: JourneyEvent[];
+};
+
+type CartActivity = {
+  publicId: string;
+  visits: JourneyVisit[];
+  legacyEvents: OngoingCart["events"];
+};
+
+type StorefrontCartTab = "prepared" | "ongoing" | "recovered";
+
+const storefrontCartTabs = new Set<StorefrontCartTab>(["prepared", "ongoing", "recovered"]);
+
+const storefrontCartTab = (value: string | null): StorefrontCartTab => (
+  value && storefrontCartTabs.has(value as StorefrontCartTab)
+    ? (value as StorefrontCartTab)
+    : "prepared"
+);
 
 const storefrontBaseUrl = (process.env.REACT_APP_STOREFRONT_URL || "https://krawlthroughkrakow.com/store2")
   .replace(/\/+$/, "");
@@ -225,7 +275,71 @@ const recoveryDuration = (openedAt: string | null, recoveredAt: string | null): 
 };
 
 const recoveryDate = (value: string | null): string => (
-  value ? dayjs(value).format("D MMM YYYY, HH:mm") : "-"
+  value ? dayjs(value).format("D MMM YYYY, HH:mm:ss") : "-"
+);
+
+const customerCountry = (countryCode: string): string => (
+  countryCode ? regionNames.of(countryCode) || countryCode : ""
+);
+
+const customerPhone = (customer: OngoingCart["customer"]): string => {
+  const phone = String(customer.phone || "").trim();
+  if (!phone || phone.startsWith("+")) return phone;
+  try {
+    return `+${getCountryCallingCode(customer.phoneCountry as CountryCode)} ${phone}`;
+  } catch {
+    return phone;
+  }
+};
+
+type OngoingCartQuoteItem = OngoingCart["quote"]["items"][number];
+
+const participantSummary = (item: OngoingCartQuoteItem): string => {
+  const rawParticipants = item.options?.participants;
+  if (rawParticipants && typeof rawParticipants === "object" && !Array.isArray(rawParticipants)) {
+    const participants = rawParticipants as Record<string, unknown>;
+    const men = Math.max(0, Number(participants.men) || 0);
+    const women = Math.max(0, Number(participants.women) || 0);
+    const parts = [
+      men > 0 ? `${men} ${men === 1 ? "man" : "men"}` : "",
+      women > 0 ? `${women} ${women === 1 ? "woman" : "women"}` : "",
+    ].filter(Boolean);
+    if (parts.length > 0) return parts.join(", ");
+  }
+  return `${item.quantity} ${item.quantity === 1 ? "guest" : "guests"}`;
+};
+
+const addonSummary = (addon: OngoingCartQuoteItem["addons"][number]): string => {
+  const variants = (addon.variants || [])
+    .filter((variant) => Number(variant.quantity) > 0)
+    .map((variant) => `${variant.value} x ${variant.quantity}`);
+  const selectedValue = addon.value && addon.value !== "true" ? addon.value : "";
+  const selection = variants.length > 0
+    ? variants.join(", ")
+    : selectedValue
+      ? selectedValue
+      : `x ${addon.quantity}`;
+  return `${addon.name}: ${selection}`;
+};
+
+const ExperienceDetails = ({ item }: { item: OngoingCartQuoteItem }) => (
+  <Stack gap={3} miw={230}>
+    <Text size="sm" fw={700}>{item.quantity} x {item.productName}</Text>
+    {(item.experienceDate || item.experienceTime) && (
+      <Text size="xs" c="dimmed">
+        {[
+          item.experienceDate ? dayjs(item.experienceDate).format("D MMM YYYY") : "",
+          item.experienceTime || "",
+        ].filter(Boolean).join(" | ")}
+      </Text>
+    )}
+    <Text size="xs">{participantSummary(item)}</Text>
+    {(item.addons || []).map((addon) => (
+      <Text key={`${addon.name}-${addon.value}-${addon.quantity}`} size="xs" c="dimmed">
+        Add-on: {addonSummary(addon)}
+      </Text>
+    ))}
+  </Stack>
 );
 
 const copyText = async (value: string): Promise<void> => {
@@ -248,6 +362,57 @@ const errorMessage = (error: unknown): string => {
   return payload.response?.data?.message || payload.response?.data?.error?.message || payload.message || "Request failed.";
 };
 
+const eventValue = (value: unknown): string => {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+};
+
+const journeyEventDescription = (event: JourneyEvent): string => {
+  const details = event.details || {};
+  const product = eventValue(details.productName || details.productSlug || "experience");
+  const previous = eventValue(details.previousValue);
+  const next = eventValue(details.newValue);
+  const participant = eventValue(details.participantType).replace("participants", "guests");
+  const addon = eventValue(details.addonName || "Add-on");
+  const descriptions: Record<string, string> = {
+    product_viewed: `Viewed ${product}`,
+    booking_builder_reached: "Build Your Booking reached",
+    participant_changed: `${participant} changed from ${previous} to ${next}`,
+    experience_date_changed: `Activity date changed from ${previous} to ${next}`,
+    experience_time_changed: `Start time changed from ${previous} to ${next}`,
+    addon_changed: `${addon} changed from ${previous} to ${next}`,
+    addon_variant_changed: `${addon} size ${eventValue(details.variant)} changed from ${previous} to ${next}`,
+    contact_field_completed: `${eventValue(details.field).replaceAll("_", " ")} completed`,
+    contact_information_valid: "Contact information completed",
+    add_to_cart: `Added ${product} to cart`,
+    cart_opened: "Cart opened",
+    cart_item_removed: `Removed ${product} from cart`,
+    cart_item_edit_started: `Started editing ${product}`,
+    cart_item_updated: `Updated ${product}`,
+    discount_applied: `Applied discount code ${eventValue(details.code)}`,
+    checkout_opened: "Secure checkout opened",
+    checkout_reopened: "Checkout reopened",
+    payment_element_ready: "Payment form ready",
+    payment_attempted: "Payment attempted",
+    payment_authentication_required: "Payment authentication required",
+    payment_processing: "Payment processing",
+    payment_succeeded: "Payment succeeded",
+    payment_failed: eventValue(details.message) || "Payment failed",
+    payment_cancelled: eventValue(details.message) || "Payment cancelled",
+    checkout_expired: "Checkout expired",
+    async_payment_failed: eventValue(details.message) || "Delayed payment failed",
+    payment_error: eventValue(details.message || "Payment error"),
+    payment_authentication_cancelled: "Payment authentication cancelled",
+    checkout_page_hidden: "Checkout left or moved to the background",
+    checkout_page_resumed: "Checkout resumed",
+    recovery_email_opened: "Recovery email link opened",
+  };
+  return descriptions[event.type]
+    || eventValue(details.message)
+    || event.type.replaceAll("_", " ");
+};
+
 const addonCap = (addon: StorefrontAddon, participants: number): number => {
   const configured = Number(addon.config.maxQuantity);
   const attendeeCap = addon.maxPerAttendee
@@ -258,6 +423,7 @@ const addonCap = (addon: StorefrontAddon, participants: number): number => {
 
 const PaymentLinksPage = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [products, setProducts] = useState<StorefrontProduct[]>([]);
   const [links, setLinks] = useState<SavedCart[]>([]);
   const [ongoingCarts, setOngoingCarts] = useState<OngoingCart[]>([]);
@@ -266,7 +432,9 @@ const PaymentLinksPage = () => {
   const [previewingRecoveryId, setPreviewingRecoveryId] = useState<string | null>(null);
   const [recoveryEmailPreview, setRecoveryEmailPreview] = useState<RecoveryEmailPreview | null>(null);
   const [activityCart, setActivityCart] = useState<OngoingCart | null>(null);
-  const [activeTab, setActiveTab] = useState<string | null>("prepared");
+  const [activity, setActivity] = useState<CartActivity | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const activeTab = storefrontCartTab(searchParams.get("tab"));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -304,6 +472,20 @@ const PaymentLinksPage = () => {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get("tab") === activeTab) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("tab", activeTab);
+    setSearchParams(nextParams, { replace: true });
+  }, [activeTab, searchParams, setSearchParams]);
+
+  const changeTab = (value: string | null) => {
+    if (!value || !storefrontCartTabs.has(value as StorefrontCartTab)) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("tab", value);
+    setSearchParams(nextParams, { replace: false });
+  };
 
   const productById = useMemo(
     () => new Map(products.map((product) => [product.id, product])),
@@ -470,6 +652,22 @@ const PaymentLinksPage = () => {
     await copyText(`${storefrontBaseUrl}/cart?recover=${ongoingCart.publicId}`);
   };
 
+  const openCartActivity = async (ongoingCart: OngoingCart) => {
+    setActivityCart(ongoingCart);
+    setActivity(null);
+    setActivityLoading(true);
+    try {
+      const response = await axiosInstance.get<{ data: CartActivity }>(
+        `/storefront-ongoing-carts/${ongoingCart.publicId}/activity`,
+      );
+      setActivity(response.data.data);
+    } catch (requestError) {
+      setError(errorMessage(requestError));
+    } finally {
+      setActivityLoading(false);
+    }
+  };
+
   const previewRecoveryEmail = async (ongoingCart: OngoingCart) => {
     setPreviewingRecoveryId(ongoingCart.publicId);
     setError("");
@@ -527,7 +725,7 @@ const PaymentLinksPage = () => {
           <Button variant="light" leftSection={<IconLink size={17} />}>Payment links</Button>
         </Group>
 
-        <Tabs value={activeTab} onChange={setActiveTab}>
+        <Tabs value={activeTab} onChange={changeTab}>
           <Tabs.List>
             <Tabs.Tab value="prepared" leftSection={<IconLink size={16} />}>Prepared links</Tabs.Tab>
             <Tabs.Tab value="ongoing" leftSection={<IconShoppingCart size={16} />}>Ongoing carts</Tabs.Tab>
@@ -606,6 +804,7 @@ const PaymentLinksPage = () => {
                   <Table.Th>Sale recovered</Table.Th>
                   <Table.Th>Click to sale</Table.Th>
                   <Table.Th>Order</Table.Th>
+                  <Table.Th ta="right">Actions</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -614,12 +813,18 @@ const PaymentLinksPage = () => {
                     <Table.Td>
                       <Text fw={700}>{cart.customer.fullName}</Text>
                       <Text size="xs" c="dimmed">{cart.customer.email}</Text>
-                      <Text size="xs" c="dimmed">{cart.customer.phoneCountry} {cart.customer.phone}</Text>
+                      <Text size="xs" c="dimmed">{customerPhone(cart.customer)}</Text>
+                      <Text size="xs" c="dimmed">{customerCountry(cart.customer.phoneCountry)}</Text>
                     </Table.Td>
                     <Table.Td>
-                      {cart.quote.items.map((item) => (
-                        <Text key={`${item.productName}-${item.quantity}`} size="sm">{item.quantity} x {item.productName}</Text>
-                      ))}
+                      <Stack gap="sm">
+                        {cart.quote.items.map((item, itemIndex) => (
+                          <ExperienceDetails
+                            key={`${item.productName}-${item.experienceDate}-${item.experienceTime}-${itemIndex}`}
+                            item={item}
+                          />
+                        ))}
+                      </Stack>
                     </Table.Td>
                     <Table.Td fw={700}>{money(cart.total, cart.currency)}</Table.Td>
                     <Table.Td>{recoveryDate(cart.createdAt)}</Table.Td>
@@ -635,6 +840,20 @@ const PaymentLinksPage = () => {
                       {cart.orderPublicId
                         ? <Text size="sm" fw={600}>{cart.orderPublicId}</Text>
                         : <Text size="sm" c="dimmed">-</Text>}
+                    </Table.Td>
+                    <Table.Td>
+                      <Group justify="flex-end" gap="xs" wrap="nowrap">
+                        <Tooltip label="View cart activity">
+                          <Button
+                            variant="subtle"
+                            px="xs"
+                            onClick={() => void openCartActivity(cart)}
+                            aria-label="View cart activity"
+                          >
+                            <IconListDetails size={18} />
+                          </Button>
+                        </Tooltip>
+                      </Group>
                     </Table.Td>
                   </Table.Tr>
                 ))}
@@ -669,11 +888,18 @@ const PaymentLinksPage = () => {
                       <Table.Td>
                         <Text fw={700}>{ongoingCart.customer.fullName}</Text>
                         <Text size="xs" c="dimmed">{ongoingCart.customer.email}</Text>
+                        <Text size="xs" c="dimmed">{customerPhone(ongoingCart.customer)}</Text>
+                        <Text size="xs" c="dimmed">{customerCountry(ongoingCart.customer.phoneCountry)}</Text>
                       </Table.Td>
                       <Table.Td>
-                        {ongoingCart.quote.items.map((item) => (
-                          <Text key={`${item.productName}-${item.quantity}`} size="sm">{item.quantity} x {item.productName}</Text>
-                        ))}
+                        <Stack gap="sm">
+                          {ongoingCart.quote.items.map((item, itemIndex) => (
+                            <ExperienceDetails
+                              key={`${item.productName}-${item.experienceDate}-${item.experienceTime}-${itemIndex}`}
+                              item={item}
+                            />
+                          ))}
+                        </Stack>
                       </Table.Td>
                       <Table.Td>
                         <Badge color={ongoingCart.recoveryOpenedAt ? "cyan" : statusColor(ongoingCart.status)} variant="light">
@@ -687,13 +913,13 @@ const PaymentLinksPage = () => {
                       <Table.Td fw={700}>{money(ongoingCart.total, ongoingCart.currency)}</Table.Td>
                       <Table.Td>
                         {ongoingCart.recoveryOpenedAt
-                          ? `Opened ${dayjs(ongoingCart.recoveryOpenedAt).format("D MMM, HH:mm")}`
+                          ? `Opened ${dayjs(ongoingCart.recoveryOpenedAt).format("D MMM, HH:mm:ss")}`
                           : ongoingCart.recoverySentAt
-                            ? `Sent ${dayjs(ongoingCart.recoverySentAt).format("D MMM, HH:mm")}`
-                            : `Due ${dayjs(ongoingCart.recoveryDueAt).format("D MMM, HH:mm")}`}
+                            ? `Sent ${dayjs(ongoingCart.recoverySentAt).format("D MMM, HH:mm:ss")}`
+                            : `Due ${dayjs(ongoingCart.recoveryDueAt).format("D MMM, HH:mm:ss")}`}
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm">{dayjs(ongoingCart.lastActivityAt).format("D MMM, HH:mm")}</Text>
+                        <Text size="sm">{dayjs(ongoingCart.lastActivityAt).format("D MMM, HH:mm:ss")}</Text>
                         {ongoingCart.events?.[0] && (
                           <Text size="xs" c={ongoingCart.events[0].severity === "error" ? "red" : "dimmed"} lineClamp={1} maw={260}>
                             {ongoingCart.events[0].message}
@@ -702,7 +928,7 @@ const PaymentLinksPage = () => {
                       </Table.Td>
                       <Table.Td>
                         <Group justify="flex-end" gap="xs" wrap="nowrap">
-                          <Tooltip label="View cart activity"><Button variant="subtle" px="xs" onClick={() => setActivityCart(ongoingCart)} aria-label="View cart activity"><IconListDetails size={18} /></Button></Tooltip>
+                          <Tooltip label="View cart activity"><Button variant="subtle" px="xs" onClick={() => void openCartActivity(ongoingCart)} aria-label="View cart activity"><IconListDetails size={18} /></Button></Tooltip>
                           <Tooltip label={ongoingCart.recoveryCount > 0 ? "Preview another recovery email" : "Preview recovery email"}>
                             <Button
                               variant="subtle"
@@ -772,9 +998,9 @@ const PaymentLinksPage = () => {
 
       <Modal
         opened={Boolean(activityCart)}
-        onClose={() => setActivityCart(null)}
+        onClose={() => { setActivityCart(null); setActivity(null); }}
         title="Cart activity"
-        size="lg"
+        size="xl"
         centered
       >
         {activityCart && (
@@ -784,22 +1010,61 @@ const PaymentLinksPage = () => {
               <Text size="sm" c="dimmed">{activityCart.customer.email}</Text>
             </Box>
             <Divider />
-            {activityCart.events?.length ? activityCart.events.map((event, index) => (
-              <Box key={event.id} pb="md" style={index < activityCart.events.length - 1 ? { borderBottom: "1px solid var(--mantine-color-gray-3)" } : undefined}>
+            {activityLoading && <Group justify="center" py="xl"><Loader size="sm" /><Text c="dimmed">Loading customer journey</Text></Group>}
+            {!activityLoading && activity?.visits.map((visit, visitIndex) => (
+              <Paper key={visit.id} withBorder p="md" radius="sm">
+                <Group justify="space-between" align="flex-start" mb="md">
+                  <Box>
+                    <Text fw={700}>Visit {visitIndex + 1}</Text>
+                    <Text size="xs" c="dimmed">
+                      {visitIndex > 0 && visit.browserInstanceId === activity.visits[visitIndex - 1]?.browserInstanceId
+                        ? "Returned from the same browser"
+                        : "Storefront visit"}
+                    </Text>
+                  </Box>
+                  <Stack gap={2} align="flex-end">
+                    <Text size="xs" c="dimmed">{dayjs(visit.startedAt).format("D MMM YYYY, HH:mm:ss")}</Text>
+                    {visit.claritySampled && <Badge size="xs" variant="light">Replay sampled</Badge>}
+                  </Stack>
+                </Group>
+                <Stack gap={0}>
+                  {visit.events.map((event, eventIndex) => (
+                    <Box
+                      key={event.id}
+                      py="sm"
+                      style={eventIndex < visit.events.length - 1 ? { borderBottom: "1px solid var(--mantine-color-gray-3)" } : undefined}
+                    >
+                      <Group justify="space-between" align="flex-start" wrap="nowrap">
+                        <Box>
+                          <Text size="sm" fw={600}>{journeyEventDescription(event)}</Text>
+                          <Group gap="xs" mt={4}>
+                            <Badge size="xs" color={event.severity === "error" ? "red" : event.severity === "warning" ? "yellow" : "blue"} variant="light">
+                              {event.source}
+                            </Badge>
+                            <Text size="xs" c="dimmed">{event.type.replaceAll("_", " ")}</Text>
+                          </Group>
+                        </Box>
+                        <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>{dayjs(event.occurredAt).format("HH:mm:ss")}</Text>
+                      </Group>
+                    </Box>
+                  ))}
+                </Stack>
+              </Paper>
+            ))}
+            {!activityLoading && activity && activity.visits.length === 0 && activity.legacyEvents.length === 0 && (
+              <Text c="dimmed">No customer journey has been recorded for this cart yet.</Text>
+            )}
+            {!activityLoading && activity?.legacyEvents.map((event) => (
+              <Box key={event.id} p="sm" style={{ border: "1px solid var(--mantine-color-gray-3)" }}>
                 <Group justify="space-between" align="flex-start" wrap="nowrap">
-                  <div>
-                    <>
-                      <Badge color={event.severity === "error" ? "red" : event.severity === "warning" ? "yellow" : "blue"} variant="light">
-                        {event.type.replaceAll("_", " ")}
-                      </Badge>
-                      <Text mt="xs">{event.message}</Text>
-                      {event.details?.orderPublicId && <Text size="xs" c="dimmed">Order {String(event.details.orderPublicId)}</Text>}
-                    </>
-                  </div>
-                  <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>{recoveryDate(event.occurredAt)}</Text>
+                  <Box>
+                    <Text size="sm" fw={600}>{event.message}</Text>
+                    <Badge mt={4} size="xs" variant="light" color={event.severity === "error" ? "red" : "yellow"}>Earlier event</Badge>
+                  </Box>
+                  <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>{dayjs(event.occurredAt).format("HH:mm:ss")}</Text>
                 </Group>
               </Box>
-            )) : <Text c="dimmed">No checkout events or customer-facing errors have been recorded yet.</Text>}
+            ))}
           </Stack>
         )}
       </Modal>
