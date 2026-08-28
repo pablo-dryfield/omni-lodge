@@ -69,6 +69,29 @@ describe('storefront journey service', () => {
     ], context)).toEqual([]);
   });
 
+  it('accepts payment completion without retaining sensitive field details', () => {
+    const result = normalizeClientJourneyEvents([{
+      eventId: '319a56f6-57ab-4d40-8cdd-2d9949f30ab2',
+      visitId: 'c3c7d60f-b420-4925-892f-00484ce786cd',
+      type: 'payment_details_completed',
+      occurredAt: '2026-08-28T11:59:00Z',
+      sequence: 12,
+      details: {
+        orderPublicId: 'order-reference',
+        cardNumber: 'not-retained',
+        expiry: 'not-retained',
+        cvc: 'not-retained',
+      },
+    }], context, new Date('2026-08-28T12:00:00Z'));
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: 'payment_details_completed',
+      details: { orderPublicId: 'order-reference' },
+    });
+    expect(JSON.stringify(result)).not.toContain('not-retained');
+  });
+
   it('stores a qualified visit and acknowledges the accepted event identifiers', async () => {
     const update = jest.fn();
     visitModel.findOrCreate.mockResolvedValue([{
@@ -113,6 +136,7 @@ describe('storefront journey service', () => {
     const where = eventModel.destroy.mock.calls[0][0].where;
     expect(where.source).toBe('client');
     expect(where.type[Op.notIn]).toEqual(expect.arrayContaining([
+      'payment_details_completed',
       'payment_attempted',
       'payment_error',
       'payment_authentication_cancelled',

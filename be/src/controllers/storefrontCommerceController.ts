@@ -13,6 +13,7 @@ import BookingAddon from '../models/BookingAddon.js';
 import Guest from '../models/Guest.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
+import StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 import StorefrontPromotion from '../models/StorefrontPromotion.js';
 import StorefrontSavedCart from '../models/StorefrontSavedCart.js';
 import {
@@ -354,6 +355,27 @@ export const fulfillPaidOrder = async (
       `[storefront-fulfillment] Failed order=${publicId} payment=${paymentId} error=${message}`,
     );
     throw error;
+  }
+
+  try {
+    const ongoing = await StorefrontOngoingCart.findOne({ where: { orderId: order.id } });
+    if (ongoing) {
+      await recordOngoingCartEvent(ongoing, {
+        type: 'booking_confirmed',
+        severity: 'info',
+        message: 'Payment was accepted and the booking was confirmed.',
+        details: {
+          orderPublicId: order.publicId,
+          paymentIntentId: order.stripePaymentIntentId,
+        },
+        dedupeKey: `booking_confirmed:${order.publicId}`,
+        source: 'server',
+      });
+    }
+  } catch (error) {
+    logger.error(
+      `[storefront-journey] Confirmation event failed for paid order ${publicId}: ${(error as Error).message}`,
+    );
   }
 
   try {
@@ -749,7 +771,27 @@ export const confirmCheckout = async (request: Request, response: Response, next
     const order = await StorefrontOrder.findOne({ where: { publicId } });
     if (!order) throw new HttpError(404, 'Storefront order not found.');
 
+    const ingestJourney = async () => {
+      const ongoing = await StorefrontOngoingCart.findOne({ where: { orderId: order.id } });
+      return ongoing
+        ? ingestClientJourneyEvents(
+            ongoing,
+            request.body?.journeyEvents,
+            request.body?.clientContext,
+          )
+        : { acceptedEventIds: [] };
+    };
+
     if (order.paymentStatus === 'paid') {
+      if (
+        (requestedPaymentIntentId && requestedPaymentIntentId !== order.stripePaymentIntentId)
+        || (sessionId && sessionId !== order.stripeCheckoutSessionId)
+      ) {
+        throw new HttpError(400, 'Invalid checkout confirmation.');
+      }
+      const journey = requestedPaymentIntentId || sessionId
+        ? await ingestJourney()
+        : { acceptedEventIds: [] };
       // The webhook may have committed the booking before its email attempt completed.
       // Re-entering fulfillment is idempotent and resumes only unsent messages.
       await fulfillPaidOrder(publicId, null);
@@ -757,11 +799,12 @@ export const confirmCheckout = async (request: Request, response: Response, next
         where: { publicId },
         include: [{ model: StorefrontOrderItem, as: 'items' }],
       });
-      response.json(await serializeOrder(hydrated!));
+      response.json({ ...await serializeOrder(hydrated!), journey });
       return;
     }
 
     let paymentComplete = false;
+    let journey = { acceptedEventIds: [] as string[] };
     if (requestedPaymentIntentId) {
       if (requestedPaymentIntentId !== order.stripePaymentIntentId) {
         throw new HttpError(400, 'Invalid payment intent.');
@@ -772,6 +815,7 @@ export const confirmCheckout = async (request: Request, response: Response, next
       if (paymentIntent.metadata?.orderPublicId !== publicId) {
         throw new HttpError(400, 'Invalid payment intent.');
       }
+      journey = await ingestJourney();
       paymentComplete = paymentIntent.status === 'succeeded';
       if (paymentComplete) await fulfillPaidOrder(publicId, paymentIntent);
       if (
@@ -788,6 +832,7 @@ export const confirmCheckout = async (request: Request, response: Response, next
       if (session.metadata?.orderPublicId !== publicId) {
         throw new HttpError(400, 'Invalid checkout session.');
       }
+      journey = await ingestJourney();
       paymentComplete = session.payment_status === 'paid';
       if (paymentComplete) await fulfillPaidOrder(publicId, session);
     }
@@ -796,7 +841,10 @@ export const confirmCheckout = async (request: Request, response: Response, next
       where: { publicId },
       include: [{ model: StorefrontOrderItem, as: 'items' }],
     });
-    response.status(paymentComplete ? 200 : 202).json(await serializeOrder(hydrated!));
+    response.status(paymentComplete ? 200 : 202).json({
+      ...await serializeOrder(hydrated!),
+      journey,
+    });
   } catch (error) {
     next(error);
   }
