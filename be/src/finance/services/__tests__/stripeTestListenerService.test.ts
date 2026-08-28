@@ -16,7 +16,7 @@ describe('Stripe test listener safety', () => {
     expect(stripeTestListenerArgs('http://localhost:3001/api/storefront/webhooks/stripe')).toEqual([
       'listen',
       '--events',
-      'checkout.session.completed,checkout.session.async_payment_succeeded',
+      'checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired,payment_intent.succeeded,payment_intent.payment_failed,payment_intent.canceled',
       '--forward-to',
       'http://localhost:3001/api/storefront/webhooks/stripe',
     ]);

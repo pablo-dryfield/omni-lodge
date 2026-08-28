@@ -4,6 +4,7 @@ import { Op } from 'sequelize';
 import sequelize from '../config/database.js';
 import HttpError from '../errors/HttpError.js';
 import {
+  getStorefrontStripePublishableKey,
   getStorefrontStripeClient,
   isStorefrontStripeConfigured,
 } from '../finance/services/stripeClient.js';
@@ -29,7 +30,6 @@ import {
 } from '../services/storefrontBookingProjectionService.js';
 import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
 import { getStorefrontPublicConfig } from '../services/storefrontPublicConfigService.js';
-import { getConfigValueRaw } from '../services/configService.js';
 import {
   addCustomerToSavedCart,
   getUsableSavedCart,
@@ -88,28 +88,6 @@ const parseCustomer = (value: unknown): CheckoutCustomer => {
   return { firstName, lastName, email, phone, countryCode };
 };
 
-const getReturnBaseUrl = (request: Request): string => {
-  const requested = text(request.body?.returnBaseUrl, 500);
-  if (requested) {
-    try {
-      const url = new URL(requested);
-      if (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) {
-        return url.toString().replace(/\/+$/, '');
-      }
-    } catch {
-      throw new HttpError(400, 'Invalid checkout return URL.');
-    }
-  }
-
-  const configured = getConfigValueRaw('STOREFRONT_PUBLIC_URL')?.trim();
-  if (configured) return configured.replace(/\/+$/, '');
-
-  const origin = request.get('origin');
-  if (origin) return `${origin.replace(/\/+$/, '')}/store2`;
-
-  return `${request.protocol}://${request.get('host')}/store2`;
-};
-
 const serializeQuote = (quote: StorefrontQuote) => ({
   ...quote,
   itemCount: quote.items.reduce((total, item) => total + item.quantity, 0),
@@ -160,14 +138,18 @@ const serializeOrder = async (order: StorefrontOrder) => {
   };
 };
 
-const paymentIntentId = (session: Stripe.Checkout.Session): string | null =>
-  typeof session.payment_intent === 'string'
-    ? session.payment_intent
-    : session.payment_intent?.id || null;
+type StorefrontStripePayment = Stripe.Checkout.Session | Stripe.PaymentIntent;
+
+const paymentIntentId = (payment: StorefrontStripePayment): string | null => {
+  if (payment.object === 'payment_intent') return payment.id;
+  return typeof payment.payment_intent === 'string'
+    ? payment.payment_intent
+    : payment.payment_intent?.id || null;
+};
 
 const persistPaidOrder = async (
   publicId: string,
-  stripeSession: Stripe.Checkout.Session | null,
+  stripePayment: StorefrontStripePayment | null,
 ): Promise<StorefrontOrder> =>
   sequelize.transaction(async (transaction) => {
     const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
@@ -206,7 +188,7 @@ const persistPaidOrder = async (
           {
             status: 'confirmed',
             paymentStatus: 'paid',
-            stripePaymentIntentId: stripeSession ? paymentIntentId(stripeSession) : null,
+            stripePaymentIntentId: stripePayment ? paymentIntentId(stripePayment) : order.stripePaymentIntentId,
             paidAt: order.paidAt || new Date(),
           },
           { transaction },
@@ -225,7 +207,7 @@ const persistPaidOrder = async (
       {
         status: 'confirmed',
         paymentStatus: 'paid',
-        stripePaymentIntentId: stripeSession ? paymentIntentId(stripeSession) : null,
+        stripePaymentIntentId: stripePayment ? paymentIntentId(stripePayment) : order.stripePaymentIntentId,
         paidAt: order.paidAt || now,
       },
       { transaction },
@@ -260,11 +242,11 @@ const persistPaidOrder = async (
         grossBeforeDiscount > 0 ? roundMoney(orderDiscount * (itemGross / grossBeforeDiscount)) : 0;
       const itemNet = Math.max(0, roundMoney(itemGross - allocatedDiscount));
       const addons = Array.isArray(item.addons) ? item.addons : [];
-      const stripePaymentIntentId = stripeSession ? paymentIntentId(stripeSession) : null;
+      const stripePaymentIntentId = stripePayment ? paymentIntentId(stripePayment) : order.stripePaymentIntentId;
       const bookingNotes = [
         `Storefront order ${order.publicId}`,
         stripePaymentIntentId ? `Stripe payment_intent: ${stripePaymentIntentId}` : null,
-        stripeSession ? `Stripe livemode: ${stripeSession.livemode}` : null,
+        stripePayment ? `Stripe livemode: ${stripePayment.livemode}` : null,
         'Checkout source: storefront',
       ].filter((value): value is string => Boolean(value));
 
@@ -277,7 +259,7 @@ const persistPaidOrder = async (
           status: 'confirmed',
           statusChangedAt: now,
           paymentStatus: 'paid',
-          paymentMethod: stripeSession ? 'stripe' : 'free',
+          paymentMethod: stripePayment ? 'stripe' : 'free',
           paymentMethodCountry: order.customerCountryCode,
           utmSource: order.attribution?.utm_source || null,
           utmMedium: order.attribution?.utm_medium || null,
@@ -357,18 +339,18 @@ const persistPaidOrder = async (
 
 export const fulfillPaidOrder = async (
   publicId: string,
-  stripeSession: Stripe.Checkout.Session | null,
+  stripePayment: StorefrontStripePayment | null,
 ): Promise<StorefrontOrder> => {
-  const sessionId = stripeSession?.id || 'none';
-  logger.info(`[storefront-fulfillment] Started order=${publicId} session=${sessionId}`);
+  const paymentId = stripePayment?.id || 'none';
+  logger.info(`[storefront-fulfillment] Started order=${publicId} payment=${paymentId}`);
 
   let order: StorefrontOrder;
   try {
-    order = await persistPaidOrder(publicId, stripeSession);
+    order = await persistPaidOrder(publicId, stripePayment);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error(
-      `[storefront-fulfillment] Failed order=${publicId} session=${sessionId} error=${message}`,
+      `[storefront-fulfillment] Failed order=${publicId} payment=${paymentId} error=${message}`,
     );
     throw error;
   }
@@ -388,7 +370,7 @@ export const fulfillPaidOrder = async (
   } catch (error) {
     logger.error(`[storefront-email] T-shirt size automation failed for paid order ${publicId}: ${(error as Error).message}`);
   }
-  logger.info(`[storefront-fulfillment] Completed order=${publicId} session=${sessionId}`);
+  logger.info(`[storefront-fulfillment] Completed order=${publicId} payment=${paymentId}`);
   return order;
 };
 
@@ -432,6 +414,22 @@ export const quoteCart = async (request: Request, response: Response, next: Next
         details: cancelledOrder ? { orderPublicId: cancelledOrder } : null,
         dedupeKey: `checkout_cancelled:${cancelledOrder || ongoing.orderId || 'unknown'}`,
       });
+    } else if (ongoing && clientEvent?.type === 'payment_error') {
+      const clientEventId = text(clientEvent.id, 100);
+      const orderPublicId = text(clientEvent.orderPublicId, 36);
+      const errorType = text(clientEvent.errorType, 64);
+      const code = text(clientEvent.code, 100);
+      await recordOngoingCartEvent(ongoing, {
+        type: 'payment_error',
+        severity: 'error',
+        message: text(clientEvent.message, 500) || 'The payment form reported an error.',
+        details: {
+          ...(orderPublicId ? { orderPublicId } : {}),
+          ...(errorType ? { errorType } : {}),
+          ...(code ? { code } : {}),
+        },
+        ...(clientEventId ? { dedupeKey: `client:${clientEventId}` } : {}),
+      });
     }
     response.json({
       ...serializeQuote(quote),
@@ -472,6 +470,9 @@ export const createCheckout = async (request: Request, response: Response, next:
       ? addCustomerToSavedCart(savedCart.cart, customer)
       : request.body?.cart as StorefrontCartInput;
     const quote = await quoteStorefrontCart(cart);
+    const publishableKey = getStorefrontStripePublishableKey();
+    const amount = Math.round(quote.total * 100);
+    const currency = quote.currency.toLowerCase();
 
     const existingOrderId = savedCart?.orderId ?? ongoingCart?.orderId;
     let existingOrder = existingOrderId
@@ -489,20 +490,11 @@ export const createCheckout = async (request: Request, response: Response, next:
       const existingSession = await getStorefrontStripeClient().checkout.sessions.retrieve(
         existingOrder.stripeCheckoutSessionId,
       );
-      const totalsMatch = roundMoney(Number(existingOrder.total)) === roundMoney(quote.total);
-      if (existingSession.status === 'open' && existingSession.url && totalsMatch) {
-        if (ongoingCart) {
-          await resetOngoingCartCheckoutActivity(ongoingCart, quote, existingOrder.id);
-          await recordOngoingCartEvent(ongoingCart, {
-            type: 'checkout_started',
-            severity: 'info',
-            message: 'Customer continued to Stripe checkout.',
-            details: { orderPublicId: existingOrder.publicId },
-          });
-        }
+      if (existingSession.status === 'complete' && existingSession.payment_status === 'paid') {
+        await fulfillPaidOrder(existingOrder.publicId, existingSession);
         response.status(200).json({
           publicId: existingOrder.publicId,
-          checkoutUrl: existingSession.url,
+          paymentComplete: true,
           quote: serializeQuote(quote),
         });
         return;
@@ -511,7 +503,48 @@ export const createCheckout = async (request: Request, response: Response, next:
         throw new HttpError(409, 'Payment has already been submitted and is being confirmed.');
       }
       if (existingSession.status === 'open') {
+        await getStorefrontStripeClient().checkout.sessions.update(existingSession.id, {
+          metadata: { ...existingSession.metadata, ktkReplaced: 'true' },
+        });
         await getStorefrontStripeClient().checkout.sessions.expire(existingSession.id);
+      }
+    }
+
+    let reusablePaymentIntent: Stripe.PaymentIntent | null = null;
+    if (existingOrder?.stripePaymentIntentId && isStorefrontStripeConfigured()) {
+      const stripe = getStorefrontStripeClient();
+      const existingPaymentIntent = await stripe.paymentIntents.retrieve(
+        existingOrder.stripePaymentIntentId,
+      );
+      if (existingPaymentIntent.status === 'succeeded') {
+        await fulfillPaidOrder(existingOrder.publicId, existingPaymentIntent);
+        response.status(200).json({
+          publicId: existingOrder.publicId,
+          paymentComplete: true,
+          paymentIntentId: existingPaymentIntent.id,
+          quote: serializeQuote(quote),
+        });
+        return;
+      }
+      if (
+        existingPaymentIntent.status === 'processing'
+        || existingPaymentIntent.status === 'requires_capture'
+        || existingPaymentIntent.status === 'requires_action'
+      ) {
+        throw new HttpError(409, 'Payment has already been submitted and is being confirmed.');
+      }
+
+      const totalsMatch = existingPaymentIntent.amount === amount
+        && existingPaymentIntent.currency === currency;
+      if ((!totalsMatch || amount === 0) && existingPaymentIntent.status !== 'canceled') {
+        await stripe.paymentIntents.update(existingPaymentIntent.id, {
+          metadata: { ...existingPaymentIntent.metadata, ktkReplaced: 'true' },
+        });
+        await stripe.paymentIntents.cancel(existingPaymentIntent.id, {
+          cancellation_reason: 'abandoned',
+        });
+      } else if (existingPaymentIntent.status !== 'canceled') {
+        reusablePaymentIntent = existingPaymentIntent;
       }
     }
 
@@ -533,6 +566,7 @@ export const createCheckout = async (request: Request, response: Response, next:
         status: 'pending_payment',
         paymentStatus: 'unpaid',
         stripeCheckoutSessionId: null,
+        stripePaymentIntentId: reusablePaymentIntent?.id || null,
         currency: quote.currency,
         subtotal: quote.subtotal,
         addonTotal: quote.addonTotal,
@@ -608,12 +642,11 @@ export const createCheckout = async (request: Request, response: Response, next:
       return pendingOrder;
     });
 
-    const returnBaseUrl = getReturnBaseUrl(request);
     if (quote.total === 0) {
       await fulfillPaidOrder(order.publicId, null);
       response.status(201).json({
         publicId: order.publicId,
-        checkoutUrl: `${returnBaseUrl}/checkout/success?order=${order.publicId}`,
+        paymentComplete: true,
         quote: serializeQuote(quote),
       });
       return;
@@ -622,49 +655,54 @@ export const createCheckout = async (request: Request, response: Response, next:
     if (!isStorefrontStripeConfigured()) {
       throw new HttpError(503, 'Online checkout is not configured.');
     }
+    if (!publishableKey) {
+      throw new HttpError(503, 'The Stripe publishable key is not configured for this environment.');
+    }
 
     const stripe = getStorefrontStripeClient();
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      customer_email: customer.email,
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: quote.currency.toLowerCase(),
-            unit_amount: Math.round(quote.total * 100),
-            product_data: {
-              name: `Krawl Through Krakow booking (${quote.items.length} experience${quote.items.length === 1 ? '' : 's'})`,
-            },
-          },
-        },
-      ],
-      metadata: {
-        orderPublicId: order.publicId,
-        orderId: String(order.id),
-      },
-      success_url: `${returnBaseUrl}/checkout/success?order=${order.publicId}&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${returnBaseUrl}/cart?checkout=cancelled&cancelled_order=${order.publicId}${
-        savedCart
-          ? `&shared=${savedCart.publicId}`
-          : ongoingCart
-            ? `&recover=${ongoingCart.publicId}`
-            : ''
-      }`,
-    });
+    const stripeMetadata = {
+      orderPublicId: order.publicId,
+      orderId: String(order.id),
+      ...(ongoingCart ? { ongoingCartPublicId: ongoingCart.publicId } : {}),
+    };
+    let paymentIntent: Stripe.PaymentIntent | null = null;
+    if (reusablePaymentIntent) {
+      paymentIntent = await stripe.paymentIntents.update(reusablePaymentIntent.id, {
+        receipt_email: customer.email,
+        metadata: stripeMetadata,
+      });
+    }
 
-    await order.update({ stripeCheckoutSessionId: session.id });
+    paymentIntent ??= await stripe.paymentIntents.create({
+      amount,
+      currency,
+      automatic_payment_methods: { enabled: true },
+      receipt_email: customer.email,
+      description: `Krawl Through Krakow booking ${order.publicId}`,
+      metadata: stripeMetadata,
+    });
+    if (!paymentIntent.client_secret) {
+      throw new HttpError(502, 'Stripe did not return a payment client secret.');
+    }
+
+    await order.update({
+      stripeCheckoutSessionId: null,
+      stripePaymentIntentId: paymentIntent.id,
+    });
     if (ongoingCart) {
       await recordOngoingCartEvent(ongoingCart, {
         type: 'checkout_started',
         severity: 'info',
-        message: 'Customer continued to Stripe checkout.',
-        details: { orderPublicId: order.publicId },
+        message: 'Customer opened the Stripe payment form.',
+        details: { orderPublicId: order.publicId, paymentIntentId: paymentIntent.id },
       });
     }
     response.status(201).json({
       publicId: order.publicId,
-      checkoutUrl: session.url,
+      paymentMode: 'payment_element',
+      paymentIntentId: paymentIntent.id,
+      clientSecret: paymentIntent.client_secret,
+      publishableKey,
       quote: serializeQuote(quote),
     });
   } catch (error) {
@@ -684,6 +722,7 @@ export const createCheckout = async (request: Request, response: Response, next:
 export const confirmCheckout = async (request: Request, response: Response, next: NextFunction) => {
   try {
     const publicId = text(request.params.publicId, 100);
+    const requestedPaymentIntentId = text(request.body?.paymentIntentId, 255);
     const sessionId = text(request.body?.sessionId, 255);
     const order = await StorefrontOrder.findOne({ where: { publicId } });
     if (!order) throw new HttpError(404, 'Storefront order not found.');
@@ -699,21 +738,43 @@ export const confirmCheckout = async (request: Request, response: Response, next
       response.json(await serializeOrder(hydrated!));
       return;
     }
-    if (!sessionId || sessionId !== order.stripeCheckoutSessionId) {
-      throw new HttpError(400, 'Invalid checkout session.');
+
+    let paymentComplete = false;
+    if (requestedPaymentIntentId) {
+      if (requestedPaymentIntentId !== order.stripePaymentIntentId) {
+        throw new HttpError(400, 'Invalid payment intent.');
+      }
+      const paymentIntent = await getStorefrontStripeClient().paymentIntents.retrieve(
+        requestedPaymentIntentId,
+      );
+      if (paymentIntent.metadata?.orderPublicId !== publicId) {
+        throw new HttpError(400, 'Invalid payment intent.');
+      }
+      paymentComplete = paymentIntent.status === 'succeeded';
+      if (paymentComplete) await fulfillPaidOrder(publicId, paymentIntent);
+      if (
+        !paymentComplete
+        && (paymentIntent.status === 'requires_payment_method' || paymentIntent.status === 'canceled')
+      ) {
+        throw new HttpError(409, 'Payment was not completed. Return to your cart and try again.');
+      }
+    } else {
+      if (!sessionId || sessionId !== order.stripeCheckoutSessionId) {
+        throw new HttpError(400, 'Invalid checkout confirmation.');
+      }
+      const session = await getStorefrontStripeClient().checkout.sessions.retrieve(sessionId);
+      if (session.metadata?.orderPublicId !== publicId) {
+        throw new HttpError(400, 'Invalid checkout session.');
+      }
+      paymentComplete = session.payment_status === 'paid';
+      if (paymentComplete) await fulfillPaidOrder(publicId, session);
     }
 
-    const session = await getStorefrontStripeClient().checkout.sessions.retrieve(sessionId);
-    if (session.metadata?.orderPublicId !== publicId || session.payment_status !== 'paid') {
-      throw new HttpError(409, 'Payment has not completed.');
-    }
-
-    await fulfillPaidOrder(publicId, session);
     const hydrated = await StorefrontOrder.findOne({
       where: { publicId },
       include: [{ model: StorefrontOrderItem, as: 'items' }],
     });
-    response.json(await serializeOrder(hydrated!));
+    response.status(paymentComplete ? 200 : 202).json(await serializeOrder(hydrated!));
   } catch (error) {
     next(error);
   }

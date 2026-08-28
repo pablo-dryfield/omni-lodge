@@ -38,11 +38,27 @@ export const storefrontStripeWebhookConfigKey = (
     ? 'STOREFRONT_STRIPE_WEBHOOK_SECRET'
     : 'STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET';
 
+export const storefrontStripePublishableConfigKey = (
+  environment = process.env.NODE_ENV,
+): 'STRIPE_PUBLISHABLE_KEY' | 'STRIPE_TEST_PUBLISHABLE_KEY' =>
+  environment === 'production'
+    ? 'STRIPE_PUBLISHABLE_KEY'
+    : 'STRIPE_TEST_PUBLISHABLE_KEY';
+
 export const getStorefrontStripeClient = (): Stripe =>
   getStripeClientForConfigKey(storefrontStripeConfigKey());
 
 export const isStorefrontStripeConfigured = (): boolean =>
   Boolean(getConfigValueRaw(storefrontStripeConfigKey()));
+
+export const getStorefrontStripePublishableKey = (
+  environment = process.env.NODE_ENV,
+): string | null => {
+  const configKey = storefrontStripePublishableConfigKey(environment);
+  const key = getConfigValueRaw(configKey)?.trim() || '';
+  const expectedPrefix = configKey === 'STRIPE_PUBLISHABLE_KEY' ? 'pk_live_' : 'pk_test_';
+  return key.startsWith(expectedPrefix) ? key : null;
+};
 
 export const isStorefrontStripeTestMode = (): boolean =>
   storefrontStripeConfigKey() === 'STRIPE_TEST_SECRET_KEY';

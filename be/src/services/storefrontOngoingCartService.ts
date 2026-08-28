@@ -229,6 +229,7 @@ export const recordOngoingCartEvent = async (
 export const recordOngoingCartEventByIdentity = async (
   identity: { publicId?: unknown; sessionId?: unknown },
   event: Omit<StorefrontOngoingCartEvent, 'id' | 'occurredAt'> & { dedupeKey?: string },
+  options: { resetRecoveryDue?: boolean } = {},
 ): Promise<void> => {
   try {
     const candidates: Record<string, string>[] = [];
@@ -244,7 +245,18 @@ export const recordOngoingCartEventByIdentity = async (
       },
       order: [['lastActivityAt', 'DESC']],
     });
-    if (ongoing) await recordOngoingCartEvent(ongoing, event);
+    if (!ongoing) return;
+    if (event.dedupeKey && storedEvents(ongoing).some(
+      (item) => item.details?.dedupeKey === event.dedupeKey,
+    )) return;
+    if (options.resetRecoveryDue) {
+      const now = new Date();
+      await ongoing.update({
+        lastActivityAt: now,
+        recoveryDueAt: nextRecoveryDueAt(now),
+      });
+    }
+    await recordOngoingCartEvent(ongoing, event);
   } catch {
     // Activity tracking must never interrupt the customer's storefront request.
   }

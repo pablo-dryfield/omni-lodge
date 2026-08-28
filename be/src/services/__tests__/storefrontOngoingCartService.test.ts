@@ -5,6 +5,7 @@ import { normalizeSavedCartCustomer, normalizeSavedCartFromQuote } from '../stor
 import {
   markOngoingCartConverted,
   recordOngoingCartEvent,
+  recordOngoingCartEventByIdentity,
   upsertOngoingCart,
 } from '../storefrontOngoingCartService';
 
@@ -179,5 +180,35 @@ describe('storefront ongoing cart service', () => {
         })],
       },
     });
+  });
+
+  it('resets recovery timing for a new Stripe payment failure', async () => {
+    const update = jest.fn().mockResolvedValue(undefined);
+    model.findOne.mockResolvedValue({ metadata: { events: [] }, update });
+
+    const before = Date.now();
+    await recordOngoingCartEventByIdentity(
+      { publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d' },
+      {
+        type: 'payment_failed',
+        severity: 'error',
+        message: 'Stripe could not complete the payment.',
+        details: { code: 'card_declined' },
+        dedupeKey: 'stripe:evt_test_failure',
+      },
+      { resetRecoveryDue: true },
+    );
+
+    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      lastActivityAt: expect.any(Date),
+      recoveryDueAt: expect.any(Date),
+    }));
+    const timing = update.mock.calls[0][0];
+    expect(timing.recoveryDueAt.getTime()).toBeGreaterThanOrEqual(before + 30 * 60_000);
+    expect(update).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      metadata: expect.objectContaining({
+        events: [expect.objectContaining({ type: 'payment_failed' })],
+      }),
+    }));
   });
 });

@@ -6,7 +6,15 @@ import { getConfigValueRaw, updateConfigValue } from '../../services/configServi
 import logger from '../../utils/logger.js';
 
 const TEST_WEBHOOK_CONFIG_KEY = 'STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET';
-const LISTENER_EVENTS = 'checkout.session.completed,checkout.session.async_payment_succeeded';
+const LISTENER_EVENTS = [
+  'checkout.session.completed',
+  'checkout.session.async_payment_succeeded',
+  'checkout.session.async_payment_failed',
+  'checkout.session.expired',
+  'payment_intent.succeeded',
+  'payment_intent.payment_failed',
+  'payment_intent.canceled',
+].join(',');
 const READY_TIMEOUT_MS = 20_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 
