@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import type Stripe from 'stripe';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Op } from 'sequelize';
 import sequelize from '../config/database.js';
 import HttpError from '../errors/HttpError.js';
@@ -57,6 +58,7 @@ type CheckoutCustomer = {
 const SYSTEM_USER_ID = Number(process.env.STOREFRONT_SYSTEM_USER_ID || 1);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SETTLED_PAYMENT_STATUSES = new Set(['paid', 'partial', 'refunded']);
+const CONFIRMATION_TOKEN_HASH_KEY = 'confirmationTokenHash';
 
 const roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -88,6 +90,32 @@ const parseCustomer = (value: unknown): CheckoutCustomer => {
   }
 
   return { firstName, lastName, email, phone, countryCode };
+};
+
+const createConfirmationToken = (): { token: string; hash: string } => {
+  const token = randomBytes(32).toString('base64url');
+  return {
+    token,
+    hash: createHash('sha256').update(token).digest('hex'),
+  };
+};
+
+const withConfirmationTokenHash = (
+  metadata: Record<string, unknown> | null,
+  hash: string,
+): Record<string, unknown> => ({
+  ...(metadata || {}),
+  [CONFIRMATION_TOKEN_HASH_KEY]: hash,
+});
+
+const requireConfirmationToken = (order: StorefrontOrder, value: unknown): void => {
+  const token = text(value, 255);
+  const expected = text(order.metadata?.[CONFIRMATION_TOKEN_HASH_KEY], 64);
+  const actual = token ? createHash('sha256').update(token).digest('hex') : '';
+  const matches = expected.length === actual.length
+    && expected.length > 0
+    && timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
+  if (!matches) throw new HttpError(403, 'This order confirmation is not available in this browser.');
 };
 
 const serializeQuote = (quote: StorefrontQuote) => ({
@@ -513,6 +541,7 @@ export const createCheckout = async (request: Request, response: Response, next:
     const publishableKey = getStorefrontStripePublishableKey();
     const amount = Math.round(quote.total * 100);
     const currency = quote.currency.toLowerCase();
+    const confirmation = createConfirmationToken();
 
     const existingOrderId = savedCart?.orderId ?? ongoingCart?.orderId;
     let existingOrder = existingOrderId
@@ -531,9 +560,13 @@ export const createCheckout = async (request: Request, response: Response, next:
         existingOrder.stripeCheckoutSessionId,
       );
       if (existingSession.status === 'complete' && existingSession.payment_status === 'paid') {
+        await existingOrder.update({
+          metadata: withConfirmationTokenHash(existingOrder.metadata, confirmation.hash),
+        });
         await fulfillPaidOrder(existingOrder.publicId, existingSession);
         response.status(200).json({
           publicId: existingOrder.publicId,
+          confirmationToken: confirmation.token,
           paymentComplete: true,
           quote: serializeQuote(quote),
           journey,
@@ -558,9 +591,13 @@ export const createCheckout = async (request: Request, response: Response, next:
         existingOrder.stripePaymentIntentId,
       );
       if (existingPaymentIntent.status === 'succeeded') {
+        await existingOrder.update({
+          metadata: withConfirmationTokenHash(existingOrder.metadata, confirmation.hash),
+        });
         await fulfillPaidOrder(existingOrder.publicId, existingPaymentIntent);
         response.status(200).json({
           publicId: existingOrder.publicId,
+          confirmationToken: confirmation.token,
           paymentComplete: true,
           paymentIntentId: existingPaymentIntent.id,
           quote: serializeQuote(quote),
@@ -627,6 +664,7 @@ export const createCheckout = async (request: Request, response: Response, next:
           discounts: quote.discounts,
           ...(lockedSavedCart ? { savedCartPublicId: lockedSavedCart.publicId } : {}),
           ...(lockedOngoingCart ? { ongoingCartPublicId: lockedOngoingCart.publicId } : {}),
+          [CONFIRMATION_TOKEN_HASH_KEY]: confirmation.hash,
         },
       };
 
@@ -687,6 +725,7 @@ export const createCheckout = async (request: Request, response: Response, next:
       await fulfillPaidOrder(order.publicId, null);
       response.status(201).json({
         publicId: order.publicId,
+        confirmationToken: confirmation.token,
         paymentComplete: true,
         quote: serializeQuote(quote),
         journey,
@@ -742,6 +781,7 @@ export const createCheckout = async (request: Request, response: Response, next:
     }
     response.status(201).json({
       publicId: order.publicId,
+      confirmationToken: confirmation.token,
       paymentMode: 'payment_element',
       paymentIntentId: paymentIntent.id,
       clientSecret: paymentIntent.client_secret,
@@ -770,6 +810,7 @@ export const confirmCheckout = async (request: Request, response: Response, next
     const sessionId = text(request.body?.sessionId, 255);
     const order = await StorefrontOrder.findOne({ where: { publicId } });
     if (!order) throw new HttpError(404, 'Storefront order not found.');
+    requireConfirmationToken(order, request.body?.confirmationToken);
 
     const ingestJourney = async () => {
       const ongoing = await StorefrontOngoingCart.findOne({ where: { orderId: order.id } });
@@ -857,6 +898,7 @@ export const getOrder = async (request: Request, response: Response, next: NextF
       include: [{ model: StorefrontOrderItem, as: 'items' }],
     });
     if (!order) throw new HttpError(404, 'Storefront order not found.');
+    requireConfirmationToken(order, request.get('x-ktk-confirmation-token'));
     response.json(await serializeOrder(order));
   } catch (error) {
     next(error);
