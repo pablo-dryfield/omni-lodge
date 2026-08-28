@@ -14,6 +14,8 @@ const LISTENER_EVENTS = [
   'payment_intent.succeeded',
   'payment_intent.payment_failed',
   'payment_intent.canceled',
+  'payment_intent.processing',
+  'payment_intent.requires_action',
 ].join(',');
 const READY_TIMEOUT_MS = 20_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -148,13 +150,17 @@ const parseJsonObject = (output: string): LoginPayload => {
   return JSON.parse(output.slice(firstBrace, lastBrace + 1)) as LoginPayload;
 };
 
-const pollUrlFromLoginPayload = (payload: LoginPayload): string | null => {
+export const stripeLoginCompletionArgs = (payload: LoginPayload): string[] | null => {
   if (typeof payload.poll_url === 'string' && payload.poll_url.startsWith('https://')) {
-    return payload.poll_url;
+    return ['login', '--complete', payload.poll_url];
   }
   if (typeof payload.next_step !== 'string') return null;
+  if (/^stripe(?:\.exe)?\s+login\s+--complete-device\s*$/.test(payload.next_step.trim())) {
+    return ['login', '--complete-device'];
+  }
   const match = payload.next_step.match(/--complete\s+(?:'([^']+)'|"([^"]+)"|(https:\/\/\S+))/);
-  return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+  const pollUrl = match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+  return pollUrl?.startsWith('https://') ? ['login', '--complete', pollUrl] : null;
 };
 
 const clearLoginTimeout = (): void => {
@@ -223,8 +229,8 @@ export const beginStripeCliAuthentication = async (): Promise<StripeTestListener
     const payload = parseJsonObject(`${result.stdout}\n${result.stderr}`);
     const browserUrl = typeof payload.browser_url === 'string' ? payload.browser_url : null;
     const verificationCode = typeof payload.verification_code === 'string' ? payload.verification_code : null;
-    const pollUrl = pollUrlFromLoginPayload(payload);
-    if (!browserUrl || !verificationCode || !pollUrl) {
+    const completionArgs = stripeLoginCompletionArgs(payload);
+    if (!browserUrl || !verificationCode || !completionArgs) {
       throw new HttpError(502, 'Stripe CLI returned an incomplete authentication response.');
     }
 
@@ -233,7 +239,7 @@ export const beginStripeCliAuthentication = async (): Promise<StripeTestListener
     authenticationBrowserUrl = browserUrl;
     authenticationVerificationCode = verificationCode;
 
-    const child = spawn(executable, ['login', '--complete', pollUrl], { windowsHide: true });
+    const child = spawn(executable, completionArgs, { windowsHide: true });
     loginProcess = child;
     child.once('error', () => {
       finishLoginProcess('error', 'Stripe CLI authentication could not be completed.');

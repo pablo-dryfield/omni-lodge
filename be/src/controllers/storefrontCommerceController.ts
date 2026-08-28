@@ -554,9 +554,8 @@ export const createCheckout = async (request: Request, response: Response, next:
         throw new HttpError(409, 'Payment has already been submitted and is being confirmed.');
       }
 
-      const totalsMatch = existingPaymentIntent.amount === amount
-        && existingPaymentIntent.currency === currency;
-      if ((!totalsMatch || amount === 0) && existingPaymentIntent.status !== 'canceled') {
+      const currencyMatches = existingPaymentIntent.currency === currency;
+      if ((!currencyMatches || amount === 0) && existingPaymentIntent.status !== 'canceled') {
         await stripe.paymentIntents.update(existingPaymentIntent.id, {
           metadata: { ...existingPaymentIntent.metadata, ktkReplaced: 'true' },
         });
@@ -689,6 +688,7 @@ export const createCheckout = async (request: Request, response: Response, next:
     let paymentIntent: Stripe.PaymentIntent | null = null;
     if (reusablePaymentIntent) {
       paymentIntent = await stripe.paymentIntents.update(reusablePaymentIntent.id, {
+        amount,
         receipt_email: customer.email,
         metadata: stripeMetadata,
       });
