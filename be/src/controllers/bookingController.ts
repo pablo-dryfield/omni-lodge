@@ -97,6 +97,7 @@ import CounterRegistryService from '../services/counterRegistryService.js';
 import { recordCustomerEmailThreadParticipant } from '../services/bookings/customerEmailThreadService.js';
 import { resolveCustomerEmailActionsForReply } from '../services/bookings/customerEmailActionService.js';
 import { getTshirtVariantAvailability } from '../services/inventoryService.js';
+import { buildManifestBookingSearchWhere } from '../utils/manifestBookingSearch.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -1156,6 +1157,9 @@ const parseBookingEmailPlatformOrderIds = (value?: string | null): string[] => {
   return Array.from(new Set(entries));
 };
 
+const escapeSearchTerm = (input: string): string =>
+  input.replace(/[%_]/g, (match) => `\\${match}`);
+
 const buildEmailLikeValue = (value: string): string => `%${escapeSearchTerm(value)}%`;
 
 const buildBookingEmailFilterWhere = (query: BookingEmailQueryParams): WhereOptions => {
@@ -1366,26 +1370,6 @@ const deriveProductId = (booking: Booking): string => {
   }
 
   return `${booking.platform}-${booking.id}`;
-};
-
-const escapeSearchTerm = (input: string): string =>
-  input.replace(/[%_]/g, (match) => `\\${match}`);
-
-const buildSearchWhere = (term: string): WhereOptions => {
-  const safeTerm = escapeSearchTerm(term);
-  const likeValue = `%${safeTerm}%`;
-  return {
-    [Op.or]: [
-      { platformBookingId: { [Op.iLike]: likeValue } },
-      { guestPhone: { [Op.iLike]: likeValue } },
-      { guestEmail: { [Op.iLike]: likeValue } },
-      { guestFirstName: { [Op.iLike]: likeValue } },
-      { guestLastName: { [Op.iLike]: likeValue } },
-      sequelizeWhere(fn('concat_ws', ' ', col('guest_first_name'), col('guest_last_name')), {
-        [Op.iLike]: likeValue,
-      }),
-    ],
-  };
 };
 
 const buildCustomerName = (booking: Booking): string => {
@@ -4022,7 +4006,7 @@ export const getManifest = async (req: AuthenticatedRequest, res: Response): Pro
 
     const rows = await Booking.findAll({
       where: hasSearch
-        ? buildSearchWhere(searchTerm)
+        ? buildManifestBookingSearchWhere(searchTerm)
         : {
             experienceDate: targetDate,
             ...(hasNumericProductId ? { productId: numericProductId } : {}),

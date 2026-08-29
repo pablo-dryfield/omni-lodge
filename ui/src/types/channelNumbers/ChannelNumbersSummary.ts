@@ -114,6 +114,25 @@ export type ChannelNumbersDetailEntry = {
   note: string | null;
 };
 
+export type ChannelNumbersTrendPeriod = {
+  startDate: string;
+  endDate: string;
+  entries: ChannelNumbersDetailEntry[];
+};
+
+export type ChannelNumbersTrendMetadata = Pick<
+  ChannelNumbersSummary,
+  'addons' | 'productTypes' | 'products'
+>;
+
+export type ChannelNumbersTrend = {
+  currentYear: number;
+  previousYear: number;
+  current: ChannelNumbersTrendPeriod;
+  previous: ChannelNumbersTrendPeriod;
+  previousYearMetadata: ChannelNumbersTrendMetadata;
+};
+
 export type ChannelNumbersDetailResponse = {
   startDate: string;
   endDate: string;

@@ -35,21 +35,27 @@ const buildPermissionCache = async (userTypeId: number): Promise<Map<string, Set
   return cache;
 };
 
+export const hasModuleActionPermission = async (
+  req: AuthenticatedRequest,
+  moduleSlug: string,
+  actionKey: string,
+): Promise<boolean> => {
+  const context = req.authContext;
+  if (!context || context.userTypeId == null) {
+    return false;
+  }
+
+  if (!req.permissionCache || req.permissionCache.size === 0) {
+    req.permissionCache = await buildPermissionCache(context.userTypeId);
+  }
+
+  return req.permissionCache.get(moduleSlug)?.has(actionKey) ?? false;
+};
+
 export const authorizeModuleAction = (moduleSlug: string, actionKey: string) => {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const context = req.authContext;
-      if (!context || context.userTypeId == null) {
-        res.status(403).json([{ message: 'Forbidden' }]);
-        return;
-      }
-
-      if (!req.permissionCache || req.permissionCache.size === 0) {
-        req.permissionCache = await buildPermissionCache(context.userTypeId);
-      }
-
-      const actions = req.permissionCache.get(moduleSlug);
-      if (!actions || !actions.has(actionKey)) {
+      if (!(await hasModuleActionPermission(req, moduleSlug, actionKey))) {
         res.status(403).json([{ message: 'Forbidden' }]);
         return;
       }

@@ -27,6 +27,7 @@ import {
   manageTaskLog,
   updateTaskLogMeta,
   uploadTaskLogEvidenceImage,
+  getTaskPlannerBootstrap,
 } from '../controllers/assistantManagerTaskController.js';
 import {
   deleteTaskPushSubscription,
@@ -39,6 +40,7 @@ const router: Router = express.Router();
 const managerGuard = requireRoles(['admin', 'owner', 'manager', 'assistant-manager']);
 const upload = multer({ storage: multer.memoryStorage() });
 
+router.get('/bootstrap', authMiddleware, managerGuard, getTaskPlannerBootstrap);
 router.get('/templates', authMiddleware, managerGuard, listTaskTemplates);
 router.get('/cerebro-links/options', authMiddleware, managerGuard, getTaskCerebroLinkOptions);
 router.get('/cerebro-links/item', authMiddleware, managerGuard, getTaskCerebroLinkItemDetail);

@@ -39,6 +39,10 @@ import { getCountries, getCountryCallingCode, type CountryCode } from "libphonen
 import { useNavigate, useSearchParams } from "react-router-dom";
 import axiosInstance from "../utils/axiosInstance";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import {
+  storefrontJourneyEventDescription,
+  storefrontJourneyEventSummary,
+} from "../components/storefront/StorefrontActivityTimeline";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 
 type AddonConfig = {
@@ -360,59 +364,6 @@ const copyText = async (value: string): Promise<void> => {
 const errorMessage = (error: unknown): string => {
   const payload = error as { response?: { data?: { message?: string; error?: { message?: string } } }; message?: string };
   return payload.response?.data?.message || payload.response?.data?.error?.message || payload.message || "Request failed.";
-};
-
-const eventValue = (value: unknown): string => {
-  if (value === null || value === undefined || value === "") return "";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-};
-
-const journeyEventDescription = (event: JourneyEvent): string => {
-  const details = event.details || {};
-  const product = eventValue(details.productName || details.productSlug || "experience");
-  const previous = eventValue(details.previousValue);
-  const next = eventValue(details.newValue);
-  const participant = eventValue(details.participantType).replace("participants", "guests");
-  const addon = eventValue(details.addonName || "Add-on");
-  const descriptions: Record<string, string> = {
-    product_viewed: `Viewed ${product}`,
-    booking_builder_reached: "Build Your Booking reached",
-    participant_changed: `${participant} changed from ${previous} to ${next}`,
-    experience_date_changed: `Activity date changed from ${previous} to ${next}`,
-    experience_time_changed: `Start time changed from ${previous} to ${next}`,
-    addon_changed: `${addon} changed from ${previous} to ${next}`,
-    addon_variant_changed: `${addon} size ${eventValue(details.variant)} changed from ${previous} to ${next}`,
-    contact_field_completed: `${eventValue(details.field).replaceAll("_", " ")} completed`,
-    contact_information_valid: "Contact information completed",
-    add_to_cart: `Added ${product} to cart`,
-    cart_opened: "Cart opened",
-    cart_item_removed: `Removed ${product} from cart`,
-    cart_item_edit_started: `Started editing ${product}`,
-    cart_item_updated: `Updated ${product}`,
-    discount_applied: `Applied discount code ${eventValue(details.code)}`,
-    checkout_opened: "Secure checkout opened",
-    checkout_reopened: "Checkout reopened",
-    payment_element_ready: "Payment form ready",
-    payment_details_completed: "Payment details completed",
-    payment_attempted: "Payment attempted",
-    payment_authentication_required: "Payment authentication required",
-    payment_processing: "Payment processing",
-    payment_succeeded: "Payment succeeded",
-    booking_confirmed: "Booking confirmed",
-    payment_failed: eventValue(details.message) || "Payment failed",
-    payment_cancelled: eventValue(details.message) || "Payment cancelled",
-    checkout_expired: "Checkout expired",
-    async_payment_failed: eventValue(details.message) || "Delayed payment failed",
-    payment_error: eventValue(details.message || "Payment error"),
-    payment_authentication_cancelled: "Payment authentication cancelled",
-    checkout_page_hidden: "Checkout left or moved to the background",
-    checkout_page_resumed: "Checkout resumed",
-    recovery_email_opened: "Recovery email link opened",
-  };
-  return descriptions[event.type]
-    || eventValue(details.message)
-    || event.type.replaceAll("_", " ");
 };
 
 const addonCap = (addon: StorefrontAddon, participants: number): number => {
@@ -1038,7 +989,12 @@ const PaymentLinksPage = () => {
                     >
                       <Group justify="space-between" align="flex-start" wrap="nowrap">
                         <Box>
-                          <Text size="sm" fw={600}>{journeyEventDescription(event)}</Text>
+                          <Text size="sm" fw={600}>{storefrontJourneyEventDescription(event)}</Text>
+                          {storefrontJourneyEventSummary(event) && (
+                            <Text size="xs" c="dimmed" mt={3}>
+                              {storefrontJourneyEventSummary(event)}
+                            </Text>
+                          )}
                           <Group gap="xs" mt={4}>
                             <Badge size="xs" color={event.severity === "error" ? "red" : event.severity === "warning" ? "yellow" : "blue"} variant="light">
                               {event.source}

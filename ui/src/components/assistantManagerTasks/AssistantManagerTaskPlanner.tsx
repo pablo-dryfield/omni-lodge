@@ -68,23 +68,21 @@ import {
   type BulkAmTaskTemplateOptions,
   clearAmTaskLogsForRange,
   createAmTaskAssignment,
-  fetchAmTaskCerebroLinkOptions,
   fetchAmTaskCerebroLinkItemDetail,
   createAmTaskTemplate,
   createManualAmTaskLog,
   deleteAmTaskAssignment,
   deleteAmTaskLog,
-  fetchAmTaskPushConfig,
   fetchAmTaskLogs,
+  fetchAmTaskPlannerBootstrap,
   fetchAmTaskTemplates,
   generateAmTaskLogsForRange,
   previewAmTaskLogsForRange,
-  removeAmTaskPushSubscription,
-  saveAmTaskPushSubscription,
   syncAmTaskLogsWithTemplateConfig,
   type AmTaskCerebroLinkOptionsResponse,
   type AmTaskCerebroLinkItemDetail,
   type AmTaskCerebroLinkItemType,
+  type AmTaskPlannerBootstrapResponse,
   type ClearAmTaskLogsResponse,
   type GenerateAmTaskLogsResponse,
   type PreviewAmTaskLogsResponse,
@@ -96,17 +94,14 @@ import {
   updateManagedAmTaskLog,
   updateAmTaskTemplate,
 } from '../../actions/assistantManagerTaskActions';
-import { fetchUserTypes } from '../../actions/userTypeActions';
-import { useShiftRoles } from '../../api/shiftRoles';
-import { useShiftTemplates, useShiftTypes } from '../../api/scheduling';
-import { useActiveUsers } from '../../api/users';
 import { CerebroRichTextContent } from '../cerebro/CerebroRichTextContent';
-import { useConfigEntry } from '../../api/config';
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { compressImageFile } from '../../utils/imageCompression';
 import {
+  getMissingExpectedShiftImageEvidenceItems,
   getShiftEvidenceRuleKeys,
+  mergeUploadedEvidenceItem,
   resolveImageEvidenceSubject,
 } from './assistantManagerTaskEvidenceUtils';
 import type { ShiftRole } from '../../types/shiftRoles/ShiftRole';
@@ -1070,27 +1065,6 @@ const upsertLinkEvidenceItem = (
   return items.map((item) => (item.id === targetItem.id ? nextItem : item));
 };
 
-const applyUploadedEvidenceItem = (
-  items: AssistantManagerTaskEvidenceItem[],
-  rule: AssistantManagerTaskEvidenceRule,
-  nextItem: AssistantManagerTaskEvidenceItem,
-) => {
-  const remainingItems =
-    rule.multiple && nextItem.subjectUserId != null
-      ? items.filter(
-          (item) =>
-            !(
-              item.ruleKey === rule.key &&
-              item.type === rule.type &&
-              item.subjectUserId === nextItem.subjectUserId
-            ),
-        )
-      : rule.multiple
-        ? items
-        : items.filter((item) => !(item.ruleKey === rule.key && item.type === rule.type));
-  return [...remainingItems, nextItem];
-};
-
 const hasEvidenceItemContent = (item: AssistantManagerTaskEvidenceItem) => {
   if (item.type === 'link') {
     return Boolean(item.value?.trim());
@@ -1239,18 +1213,6 @@ const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
 const TASK_COMPLETION_WINDOW_MODE_LABELS: Record<TaskCompletionWindowMode, string> = {
   day: 'End of day',
   strict: 'Strict to schedule',
-};
-
-const decodeBase64UrlToArrayBuffer = (value: string): ArrayBuffer => {
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
-  const binary = window.atob(padded);
-  const buffer = new ArrayBuffer(binary.length);
-  const output = new Uint8Array(buffer);
-  for (let index = 0; index < binary.length; index += 1) {
-    output[index] = binary.charCodeAt(index);
-  }
-  return buffer;
 };
 
 const startOfPlannerWeek = (value: Date | string | dayjs.Dayjs) => {
@@ -3304,18 +3266,16 @@ const AssistantManagerTaskPlanner = () => {
     () => normalizeRoleSlug(sessionRoleSlug),
     [sessionRoleSlug],
   );
-  const canReadControlPanelConfig = normalizedSessionRole === 'admin';
+  const canViewAllTasks = useMemo(
+    () => normalizedSessionRole != null && GLOBAL_TASK_VIEWER_ROLES.has(normalizedSessionRole),
+    [normalizedSessionRole],
+  );
   const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
   const templateState = useAppSelector((state) => state.assistantManagerTasks.templates)[0];
   const logState = useAppSelector((state) => state.assistantManagerTasks.logs)[0];
-  const userTypesState = useAppSelector((state) => state.userTypes[0]);
-  const { data: shiftRolesResponse, isLoading: shiftRolesLoading, error: shiftRolesError } = useShiftRoles();
-  const { data: shiftTypesResponse, isLoading: shiftTypesLoading } = useShiftTypes();
-  const { data: shiftTemplatesResponse = [], isLoading: shiftTemplatesLoading } = useShiftTemplates();
-  const { data: activeUsers = [], isLoading: activeUsersLoading, error: activeUsersError } = useActiveUsers();
-  const { data: plannerStartConfig } = useConfigEntry(
-    canReadControlPanelConfig ? 'AM_TASK_PLANNER_START_DATE' : null,
-  );
+  const [plannerBootstrap, setPlannerBootstrap] =
+    useState<AmTaskPlannerBootstrapResponse | null>(null);
+  const [plannerBootstrapError, setPlannerBootstrapError] = useState<string | null>(null);
   const templates = useMemo(
     () => ((templateState.data as any)[0]?.data ?? []) as AssistantManagerTaskTemplate[],
     [templateState.data],
@@ -3329,13 +3289,38 @@ const AssistantManagerTaskPlanner = () => {
     [templates],
   );
   const userTypes = useMemo(
-    () => (userTypesState.data?.[0]?.data ?? []) as Partial<UserType>[],
-    [userTypesState.data],
+    () => (plannerBootstrap?.referenceData.userTypes ?? []) as Partial<UserType>[],
+    [plannerBootstrap?.referenceData.userTypes],
   );
   const shiftRoles = useMemo(
-    () => ((shiftRolesResponse?.[0]?.data ?? []) as ShiftRole[]),
-    [shiftRolesResponse],
+    () => (plannerBootstrap?.referenceData.shiftRoles ?? []) as ShiftRole[],
+    [plannerBootstrap?.referenceData.shiftRoles],
   );
+  const shiftTypesResponse = useMemo(
+    () => plannerBootstrap?.referenceData.shiftTypes ?? [],
+    [plannerBootstrap?.referenceData.shiftTypes],
+  );
+  const shiftTemplatesResponse = useMemo(
+    () => plannerBootstrap?.referenceData.shiftTemplates ?? [],
+    [plannerBootstrap?.referenceData.shiftTemplates],
+  );
+  const activeUsers = useMemo(
+    () => plannerBootstrap?.referenceData.activeUsers ?? [],
+    [plannerBootstrap?.referenceData.activeUsers],
+  );
+  const referenceDataLoading = plannerBootstrap === null && (templateState.loading || logState.loading);
+  const referenceDataWarning = plannerBootstrap?.warnings.some((warning) =>
+    ['activeUsers', 'userTypes', 'shiftRoles', 'shiftTypes', 'shiftTemplates'].includes(warning),
+  )
+    ? 'Some filter options could not be loaded or are not available to your account'
+    : null;
+  const referenceDataError = plannerBootstrapError ?? referenceDataWarning;
+  const shiftRolesLoading = referenceDataLoading;
+  const shiftTypesLoading = referenceDataLoading;
+  const shiftTemplatesLoading = referenceDataLoading;
+  const activeUsersLoading = referenceDataLoading;
+  const shiftRolesError = referenceDataError ? new Error(referenceDataError) : null;
+  const activeUsersError = referenceDataError ? new Error(referenceDataError) : null;
   const userTypeOptions = useMemo(
     () =>
       userTypes
@@ -3472,7 +3457,7 @@ const AssistantManagerTaskPlanner = () => {
     [shiftRoleOptions],
   );
   const plannerStartDate = useMemo(() => {
-    const rawValue = plannerStartConfig?.value ?? plannerStartConfig?.defaultValue ?? null;
+    const rawValue = plannerBootstrap?.plannerStartDate ?? null;
     if (typeof rawValue !== 'string') {
       return null;
     }
@@ -3485,12 +3470,9 @@ const AssistantManagerTaskPlanner = () => {
       return null;
     }
     return parsed.startOf('day');
-  }, [plannerStartConfig?.defaultValue, plannerStartConfig?.value]);
+  }, [plannerBootstrap?.plannerStartDate]);
 
   const access = useModuleAccess('am-task-management');
-  const canViewAllTasks = useMemo(() => {
-    return normalizedSessionRole != null && GLOBAL_TASK_VIEWER_ROLES.has(normalizedSessionRole);
-  }, [normalizedSessionRole]);
   const canManage = canViewAllTasks && (access.canCreate || access.canUpdate || access.canDelete);
   const canBulkUpdateTemplates = canViewAllTasks && access.canUpdate;
   const canEditTaskLogs = canViewAllTasks && access.canUpdate;
@@ -3524,13 +3506,19 @@ const AssistantManagerTaskPlanner = () => {
   const [editingTemplate, setEditingTemplate] =
     useState<AssistantManagerTaskTemplate | null>(null);
   const [templateSubmitting, setTemplateSubmitting] = useState(false);
-  const [cerebroLinkOptions, setCerebroLinkOptions] = useState<AmTaskCerebroLinkOptionsResponse>({
-    knowledgeEntries: [],
-    policyEntries: [],
-    quizzes: [],
-  });
-  const [cerebroLinkOptionsLoading, setCerebroLinkOptionsLoading] = useState(false);
-  const [cerebroLinkOptionsError, setCerebroLinkOptionsError] = useState<string | null>(null);
+  const cerebroLinkOptions = useMemo<AmTaskCerebroLinkOptionsResponse>(
+    () =>
+      plannerBootstrap?.referenceData.cerebroLinkOptions ?? {
+        knowledgeEntries: [],
+        policyEntries: [],
+        quizzes: [],
+      },
+    [plannerBootstrap?.referenceData.cerebroLinkOptions],
+  );
+  const cerebroLinkOptionsLoading = referenceDataLoading;
+  const cerebroLinkOptionsError = plannerBootstrap?.warnings.includes('cerebroLinkOptions')
+    ? 'Failed to load Cerebro links'
+    : null;
   const [templateReorderBusyKey, setTemplateReorderBusyKey] = useState<string | null>(null);
   const [templateReorderDirection, setTemplateReorderDirection] = useState<'up' | 'down' | null>(null);
   const [templateAccordionValue, setTemplateAccordionValue] = useState<string[]>([]);
@@ -3759,6 +3747,10 @@ const AssistantManagerTaskPlanner = () => {
     const [start, end] = canViewAllTasks ? getThisWeekRange() : getTodayRange();
     return [start, end];
   });
+  const plannerRoleDefaultsInitializedRef = useRef(normalizedSessionRole != null);
+  const [plannerRoleDefaultsReady, setPlannerRoleDefaultsReady] = useState(
+    normalizedSessionRole != null,
+  );
   const [generateWeeklyTasksSubmitting, setGenerateWeeklyTasksSubmitting] =
     useState(false);
   const [generateWeeklyTasksError, setGenerateWeeklyTasksError] = useState<string | null>(null);
@@ -3773,7 +3765,11 @@ const AssistantManagerTaskPlanner = () => {
   const [clearWeekError, setClearWeekError] = useState<string | null>(null);
   const [clearWeekSummary, setClearWeekSummary] =
     useState<ClearAmTaskLogsResponse | null>(null);
-  const [logScope, setLogScope] = useState<'self' | 'all'>('all');
+  const [logScope, setLogScope] = useState<'self' | 'all'>(() =>
+    canViewAllTasks ? 'all' : 'self',
+  );
+  const plannerBootstrapSequenceRef = useRef(0);
+  const lastPlannerBootstrapKeyRef = useRef<string | null>(null);
   const [logFilterStatus, setLogFilterStatus] =
     useState<TaskStatusFilterValue>('all');
   const activeSection =
@@ -3838,8 +3834,6 @@ const AssistantManagerTaskPlanner = () => {
       return window.Notification.permission;
     },
   );
-  const [pushPublicKey, setPushPublicKey] = useState<string | null>(null);
-  const [pushEnabledInBackend, setPushEnabledInBackend] = useState(false);
   const [pushSubscriptionReady, setPushSubscriptionReady] = useState(false);
   const notificationTimeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const initializedEvidenceModesLogIdRef = useRef<number | null>(null);
@@ -4034,8 +4028,24 @@ const AssistantManagerTaskPlanner = () => {
     }
 
     const missingRules: string[] = [];
+    const missingExpectedItems = getMissingExpectedShiftImageEvidenceItems(
+      selectedLogExpectedEvidenceItems,
+      logDetailFormState.evidenceItems.filter((item) => hasEvidenceItemContent(item)),
+    );
 
     for (const rule of selectedLogEvidenceRules) {
+      const expectedItemsForRule = selectedLogExpectedEvidenceItems.filter(
+        (item) => item.ruleKey === rule.key && item.type === 'image',
+      );
+      if (rule.type === 'image' && expectedItemsForRule.length > 0) {
+        missingRules.push(
+          ...missingExpectedItems
+            .filter((item) => item.ruleKey === rule.key)
+            .map((item) => `${rule.label} for ${item.subjectName}`),
+        );
+        continue;
+      }
+
       const minimumRequiredItems = Math.max(rule.required === false ? 0 : 1, rule.minItems ?? 0);
       if (minimumRequiredItems <= 0) {
         continue;
@@ -4059,7 +4069,12 @@ const AssistantManagerTaskPlanner = () => {
     }
 
     return missingRules;
-  }, [logDetailFormState.evidenceItems, selectedLog, selectedLogEvidenceRules]);
+  }, [
+    logDetailFormState.evidenceItems,
+    selectedLog,
+    selectedLogEvidenceRules,
+    selectedLogExpectedEvidenceItems,
+  ]);
   const selectedLogRequiredEvidenceSatisfied = selectedLogMissingRequiredEvidenceLabels.length === 0;
   const selectedTemplates = useMemo(
     () => templates.filter((template) => selectedTemplateIds.includes(template.id)),
@@ -4159,52 +4174,121 @@ const AssistantManagerTaskPlanner = () => {
   const allVisibleTemplatesSelected =
     visibleTemplateIds.length > 0 &&
     visibleTemplateIds.every((templateId) => selectedTemplateIds.includes(templateId));
+  const bootstrapStartDate = logDateRange[0]
+    ? dayjs(logDateRange[0]).format('YYYY-MM-DD')
+    : null;
+  const bootstrapEndDate = logDateRange[1]
+    ? dayjs(logDateRange[1]).format('YYYY-MM-DD')
+    : null;
 
   useEffect(() => {
-    dispatch(fetchAmTaskTemplates());
-  }, [dispatch]);
+    if (normalizedSessionRole == null || plannerRoleDefaultsInitializedRef.current) {
+      return;
+    }
+
+    plannerRoleDefaultsInitializedRef.current = true;
+    const nextMode: PlannerDateWindowMode = canViewAllTasks ? 'week' : 'day';
+    const [nextStart, nextEnd] = canViewAllTasks ? getThisWeekRange() : getTodayRange();
+    setLogDateWindowMode(nextMode);
+    setLogDateRange([nextStart, nextEnd]);
+    setLogScope(canViewAllTasks ? 'all' : 'self');
+    setPlannerRoleDefaultsReady(true);
+  }, [canViewAllTasks, getThisWeekRange, getTodayRange, normalizedSessionRole]);
 
   useEffect(() => {
-    let isActive = true;
-    setCerebroLinkOptionsLoading(true);
-    setCerebroLinkOptionsError(null);
+    if (
+      !loggedUserId ||
+      !plannerRoleDefaultsReady ||
+      normalizedSessionRole == null ||
+      !bootstrapStartDate ||
+      !bootstrapEndDate
+    ) {
+      return;
+    }
 
-    fetchAmTaskCerebroLinkOptions()
-      .then((options) => {
-        if (!isActive) {
+    const effectiveScope = canViewAllTasks ? logScope : 'self';
+    const requestKeyPrefix = `${bootstrapStartDate}|${bootstrapEndDate}|${effectiveScope}|`;
+    const requestKey = `${requestKeyPrefix}${logDateWindowMode}`;
+    if (lastPlannerBootstrapKeyRef.current === requestKey) {
+      return;
+    }
+    if (
+      plannerBootstrap?.range.startDate === bootstrapStartDate &&
+      plannerBootstrap.range.endDate === bootstrapEndDate &&
+      lastPlannerBootstrapKeyRef.current?.startsWith(requestKeyPrefix)
+    ) {
+      lastPlannerBootstrapKeyRef.current = requestKey;
+      return;
+    }
+
+    lastPlannerBootstrapKeyRef.current = requestKey;
+    const requestSequence = plannerBootstrapSequenceRef.current + 1;
+    plannerBootstrapSequenceRef.current = requestSequence;
+    setPlannerBootstrapError(null);
+
+    dispatch(
+      fetchAmTaskPlannerBootstrap({
+        startDate: bootstrapStartDate,
+        endDate: bootstrapEndDate,
+        scope: effectiveScope,
+        windowMode: logDateWindowMode,
+      }),
+    )
+      .unwrap()
+      .then((bootstrap) => {
+        if (plannerBootstrapSequenceRef.current !== requestSequence) {
           return;
         }
-        setCerebroLinkOptions(options);
+
+        setPlannerBootstrap(bootstrap);
+        if (!bootstrap.pushConfig.enabled || !bootstrap.pushConfig.publicKey) {
+          setPushSubscriptionReady(false);
+        }
+
+        const effectiveRangeKey = `${bootstrap.range.startDate}|${bootstrap.range.endDate}|${effectiveScope}|${logDateWindowMode}`;
+        lastPlannerBootstrapKeyRef.current = effectiveRangeKey;
+        setLogDateRange((previousRange) => {
+          const previousStart = previousRange[0]
+            ? dayjs(previousRange[0]).format('YYYY-MM-DD')
+            : null;
+          const previousEnd = previousRange[1]
+            ? dayjs(previousRange[1]).format('YYYY-MM-DD')
+            : null;
+          if (
+            previousStart === bootstrap.range.startDate &&
+            previousEnd === bootstrap.range.endDate
+          ) {
+            return previousRange;
+          }
+          return [
+            dayjs(bootstrap.range.startDate).toDate(),
+            dayjs(bootstrap.range.endDate).toDate(),
+          ];
+        });
       })
       .catch((error) => {
-        if (!isActive) {
+        if (plannerBootstrapSequenceRef.current !== requestSequence) {
           return;
         }
-        setCerebroLinkOptionsError(getErrorMessage(error, 'Failed to load Cerebro links'));
-      })
-      .finally(() => {
-        if (!isActive) {
-          return;
-        }
-        setCerebroLinkOptionsLoading(false);
+        lastPlannerBootstrapKeyRef.current = null;
+        setPlannerBootstrapError(
+          getErrorMessage(error, 'Failed to load assistant manager task dashboard'),
+        );
+        setPushSubscriptionReady(false);
       });
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    dispatch(fetchUserTypes()).catch((error) =>
-      console.error('Failed to load user types', error),
-    );
-  }, [dispatch]);
-
-  useEffect(() => {
-    if (!canViewAllTasks) {
-      setLogScope('self');
-    }
-  }, [canViewAllTasks]);
+  }, [
+    bootstrapEndDate,
+    bootstrapStartDate,
+    canViewAllTasks,
+    dispatch,
+    loggedUserId,
+    logDateWindowMode,
+    logScope,
+    normalizedSessionRole,
+    plannerBootstrap?.range.endDate,
+    plannerBootstrap?.range.startDate,
+    plannerRoleDefaultsReady,
+  ]);
 
   useEffect(() => {
     if (!plannerStartDate) {
@@ -4231,7 +4315,12 @@ const AssistantManagerTaskPlanner = () => {
     });
   }, [plannerStartDate]);
 
+  const previousLogDateWindowModeRef = useRef(logDateWindowMode);
   useEffect(() => {
+    if (previousLogDateWindowModeRef.current === logDateWindowMode) {
+      return;
+    }
+    previousLogDateWindowModeRef.current = logDateWindowMode;
     if (logDateWindowMode === 'week') {
       const [start, end] = getThisWeekRange();
       setLogDateRange([start, end]);
@@ -4261,30 +4350,6 @@ const AssistantManagerTaskPlanner = () => {
       document.removeEventListener('visibilitychange', syncPermission);
     };
   }, [notificationsSupported]);
-
-  useEffect(() => {
-    if (!loggedUserId) {
-      setPushPublicKey(null);
-      setPushEnabledInBackend(false);
-      setPushSubscriptionReady(false);
-      return;
-    }
-
-    fetchAmTaskPushConfig()
-      .then((config) => {
-        setPushPublicKey(config.publicKey);
-        setPushEnabledInBackend(config.enabled);
-        if (!config.enabled || !config.publicKey) {
-          setPushSubscriptionReady(false);
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to load task push notification config', error);
-        setPushEnabledInBackend(false);
-        setPushPublicKey(null);
-        setPushSubscriptionReady(false);
-      });
-  }, [loggedUserId]);
 
   useEffect(() => {
     const normalizedSection =
@@ -4615,84 +4680,36 @@ const AssistantManagerTaskPlanner = () => {
     [logDateRange, logDateWindowMode, plannerStartDate],
   );
 
-  const syncPushSubscription = useCallback(async () => {
+  useEffect(() => {
     if (
       !pushSupported ||
       notificationPermission !== 'granted' ||
-      !pushEnabledInBackend ||
-      !pushPublicKey
+      !plannerBootstrap?.pushConfig.enabled
     ) {
       setPushSubscriptionReady(false);
-      return false;
+      return undefined;
     }
-    try {
-      const registration = await navigator.serviceWorker.getRegistration();
-      if (!registration) {
-        setPushSubscriptionReady(false);
-        return false;
-      }
-      let subscription = await registration.pushManager.getSubscription();
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: decodeBase64UrlToArrayBuffer(pushPublicKey),
-        });
-      }
 
-      await saveAmTaskPushSubscription(subscription.toJSON());
-      setPushSubscriptionReady(true);
-      return true;
-    } catch (error) {
-      console.error('Failed to sync task push subscription', error);
-      setPushSubscriptionReady(false);
-      return false;
-    }
-  }, [
-    notificationPermission,
-    pushEnabledInBackend,
-    pushPublicKey,
-    pushSupported,
-  ]);
-
-  const removePushSubscription = useCallback(async () => {
-    if (!pushSupported) {
-      setPushSubscriptionReady(false);
-      return;
-    }
-    try {
-      const registration = await navigator.serviceWorker.getRegistration();
-      if (!registration) {
-        return;
-      }
-      const subscription = await registration.pushManager.getSubscription();
-      if (subscription) {
-        const endpoint = subscription.endpoint;
-        await subscription.unsubscribe().catch(() => undefined);
-        if (endpoint) {
-          await removeAmTaskPushSubscription(endpoint).catch(() => undefined);
+    let isActive = true;
+    navigator.serviceWorker
+      .getRegistration()
+      .then((registration) => registration?.pushManager.getSubscription() ?? null)
+      .then((subscription) => {
+        if (isActive) {
+          setPushSubscriptionReady(Boolean(subscription));
         }
-      }
-    } catch (error) {
-      console.error('Failed to remove task push subscription', error);
-    } finally {
-      setPushSubscriptionReady(false);
-    }
-  }, [pushSupported]);
+      })
+      .catch((error) => {
+        console.error('Failed to inspect task push subscription', error);
+        if (isActive) {
+          setPushSubscriptionReady(false);
+        }
+      });
 
-  useEffect(() => {
-    if (notificationPermission !== 'granted') {
-      setPushSubscriptionReady(false);
-      if (notificationPermission === 'denied') {
-        removePushSubscription().catch((error) =>
-          console.error('Failed to clear push subscription after deny', error),
-        );
-      }
-      return;
-    }
-    syncPushSubscription().catch((error) =>
-      console.error('Failed to auto-sync push subscription', error),
-    );
-  }, [notificationPermission, removePushSubscription, syncPushSubscription]);
+    return () => {
+      isActive = false;
+    };
+  }, [notificationPermission, plannerBootstrap?.pushConfig.enabled, pushSupported]);
 
   useEffect(() => {
     setSelectedTemplateIds((prev) => prev.filter((id) => templates.some((template) => template.id === id)));
@@ -4712,10 +4729,6 @@ const AssistantManagerTaskPlanner = () => {
       }),
     );
   }, [dispatch, logDateRange, logScope]);
-
-  useEffect(() => {
-    refreshLogs().catch((error) => console.error('Failed to refresh task logs', error));
-  }, [refreshLogs]);
 
   useEffect(() => {
     setGenerateWeeklyTasksError(null);
@@ -6542,7 +6555,12 @@ const AssistantManagerTaskPlanner = () => {
           };
           setLogDetailFormState((prev) => ({
             ...prev,
-            evidenceItems: applyUploadedEvidenceItem(prev.evidenceItems, rule, nextItem),
+            evidenceItems: mergeUploadedEvidenceItem(
+              prev.evidenceItems,
+              rule,
+              nextItem,
+              selectedLogShiftEvidenceRuleKeys,
+            ),
           }));
           setSelectedLog((prev) =>
             prev
@@ -6550,10 +6568,11 @@ const AssistantManagerTaskPlanner = () => {
                   ...prev,
                   meta: {
                     ...(prev.meta ?? {}),
-                    evidenceItems: applyUploadedEvidenceItem(
+                    evidenceItems: mergeUploadedEvidenceItem(
                       getNormalizedEvidenceItems(prev.meta),
                       rule,
                       nextItem,
+                      selectedLogShiftEvidenceRuleKeys,
                     ),
                   },
                 }
@@ -9277,7 +9296,7 @@ const AssistantManagerTaskPlanner = () => {
                       userTypeId: value ?? '',
                     }))
                   }
-                  disabled={userTypesState.loading}
+                  disabled={referenceDataLoading}
                   nothingFoundMessage="No user types found"
                 />
                 <Select
@@ -9332,9 +9351,9 @@ const AssistantManagerTaskPlanner = () => {
               </SimpleGrid>
             </Stack>
           </Paper>
-          {(userTypesState.error || shiftRolesError || activeUsersError) && (
+          {(referenceDataError || shiftRolesError || activeUsersError) && (
             <Alert color="yellow" title="Reference data">
-              {userTypesState.error ??
+              {referenceDataError ??
                 (shiftRolesError instanceof Error
                   ? shiftRolesError.message
                   : activeUsersError instanceof Error
@@ -9618,7 +9637,7 @@ const AssistantManagerTaskPlanner = () => {
                       userTypeId: value ?? '',
                     }))
                   }
-                  disabled={userTypesState.loading}
+                  disabled={referenceDataLoading}
                   nothingFoundMessage="No user types found"
                 />
                 <Select
@@ -9673,9 +9692,9 @@ const AssistantManagerTaskPlanner = () => {
               </SimpleGrid>
             </Stack>
           </Paper>
-          {(userTypesState.error || shiftRolesError || activeUsersError) && (
+          {(referenceDataError || shiftRolesError || activeUsersError) && (
             <Alert color="yellow" title="Reference data">
-              {userTypesState.error ??
+              {referenceDataError ??
                 (shiftRolesError instanceof Error
                   ? shiftRolesError.message
                   : activeUsersError instanceof Error

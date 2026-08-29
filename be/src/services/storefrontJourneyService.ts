@@ -8,6 +8,7 @@ import StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_CLIENT_EVENTS = 200;
 const MAX_EVENT_AGE_MS = 48 * 60 * 60 * 1000;
+const MAX_DETAIL_DEPTH = 6;
 const PERMANENT_CLIENT_EVENT_TYPES = [
   'checkout_opened',
   'checkout_reopened',
@@ -116,7 +117,7 @@ const sanitizeValue = (value: unknown, depth = 0): unknown => {
   if (value === null || typeof value === 'boolean') return value;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value === 'string') return value.slice(0, 300);
-  if (depth >= 3) return null;
+  if (depth >= MAX_DETAIL_DEPTH) return null;
   if (Array.isArray(value)) return value.slice(0, 20).map((item) => sanitizeValue(item, depth + 1));
   if (!value || typeof value !== 'object') return null;
   return Object.fromEntries(

@@ -5642,7 +5642,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 <TextInput
                   value={searchInput}
                   onChange={handleSearchChange}
-                  placeholder="Search booking id, name, or phone"
+                  placeholder="Search internal ID, platform booking ID, name, phone, or email"
                   leftSection={<IconSearch size={16} />}
                   rightSection={
                     <Button

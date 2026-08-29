@@ -1,6 +1,7 @@
 import axiosInstance from '../utils/axiosInstance';
 import {
   ChannelNumbersSummary,
+  type ChannelNumbersTrend,
   type ChannelNumbersDetailMetric,
   type ChannelNumbersDetailResponse,
 } from '../types/channelNumbers/ChannelNumbersSummary';
@@ -9,21 +10,13 @@ import type { FinanceCategory } from '../types/finance/Category';
 import type { FinanceClient } from '../types/finance/Client';
 import type { FinanceVendor } from '../types/finance/Vendor';
 
-export const fetchChannelNumbersSummary = async (params: {
-  startDate: string;
-  endDate: string;
-}): Promise<ChannelNumbersSummary> => {
-  const response = await axiosInstance.get<ChannelNumbersSummary>('/channelNumbers/summary', {
-    params,
-  });
-  return response.data;
-};
-
 export const fetchChannelNumbersBootstrap = async (params: {
   startDate: string;
   endDate: string;
+  signal?: AbortSignal;
 }): Promise<{
   summary: ChannelNumbersSummary;
+  trend: ChannelNumbersTrend;
   finance: {
     accounts: FinanceAccount[];
     categories: FinanceCategory[];
@@ -33,6 +26,7 @@ export const fetchChannelNumbersBootstrap = async (params: {
 }> => {
   const response = await axiosInstance.get<{
     summary: ChannelNumbersSummary;
+    trend: ChannelNumbersTrend;
     finance: {
       accounts: FinanceAccount[];
       categories: FinanceCategory[];
@@ -40,7 +34,11 @@ export const fetchChannelNumbersBootstrap = async (params: {
       clients: FinanceClient[];
     };
   }>('/channelNumbers/bootstrap', {
-    params,
+    params: {
+      startDate: params.startDate,
+      endDate: params.endDate,
+    },
+    signal: params.signal,
   });
   return response.data;
 };

@@ -92,6 +92,62 @@ describe('storefront journey service', () => {
     expect(JSON.stringify(result)).not.toContain('not-retained');
   });
 
+  it('preserves cart item snapshots and nested add-on variants without contact details', () => {
+    const result = normalizeClientJourneyEvents([{
+      eventId: '319a56f6-57ab-4d40-8cdd-2d9949f30ab2',
+      visitId: 'c3c7d60f-b420-4925-892f-00484ce786cd',
+      type: 'cart_item_updated',
+      occurredAt: '2026-08-28T11:59:00Z',
+      sequence: 13,
+      details: {
+        cartItemId: '28-1787920000000',
+        cartItemNumber: 2,
+        productName: 'Pub Crawl',
+        previousItem: {
+          quantity: 4,
+          participants: { men: 4, women: 0 },
+          addons: [],
+        },
+        newItem: {
+          quantity: 4,
+          participants: { men: 4, women: 0 },
+          addons: [{
+            addonId: 2,
+            name: 'T-Shirts',
+            quantity: 3,
+            variants: [
+              { value: 'S', quantity: 1 },
+              { value: 'M', quantity: 2 },
+            ],
+          }],
+          customer: {
+            fullName: 'Private Person',
+            email: 'private@example.com',
+            phone: '+48123456789',
+          },
+        },
+      },
+    }], context, new Date('2026-08-28T12:00:00Z'));
+
+    expect(result).toHaveLength(1);
+    expect(result[0].details).toMatchObject({
+      cartItemId: '28-1787920000000',
+      cartItemNumber: 2,
+      newItem: {
+        addons: [{
+          name: 'T-Shirts',
+          variants: [
+            { value: 'S', quantity: 1 },
+            { value: 'M', quantity: 2 },
+          ],
+        }],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('Private Person');
+    expect(JSON.stringify(result)).not.toContain('private@example.com');
+    expect(JSON.stringify(result)).not.toContain('+48123456789');
+  });
+
   it('stores a qualified visit and acknowledges the accepted event identifiers', async () => {
     const update = jest.fn();
     visitModel.findOrCreate.mockResolvedValue([{

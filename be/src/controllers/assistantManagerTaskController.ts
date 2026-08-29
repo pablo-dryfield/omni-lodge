@@ -26,6 +26,7 @@ import {
   ensureAssistantManagerTaskEvidenceStorage,
   openAssistantManagerTaskEvidenceImageStream,
   storeAssistantManagerTaskEvidenceImage,
+  type StoreAssistantManagerTaskEvidenceImageResult,
 } from '../services/assistantManagerTaskEvidenceStorageService.js';
 import { getConfigValue } from '../services/configService.js';
 import {
@@ -56,6 +57,17 @@ import {
   filterExpectedEvidenceItemsForCurrentShiftSources,
   retainEvidenceSubjectForConfiguredShiftRule,
 } from '../services/assistantManagerTaskEvidenceSubjectService.js';
+import {
+  findMissingExpectedShiftEvidencePairs,
+  mergeUploadedImageEvidenceItems,
+} from '../services/assistantManagerTaskEvidenceMergeService.js';
+import { listShiftTemplates, listShiftTypes } from '../services/scheduleService.js';
+import {
+  getAmTaskPushPublicKey,
+  isAmTaskPushEnabled,
+} from '../services/amTaskPushService.js';
+import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
+import { resolveAssistantManagerTaskPlannerRange } from '../utils/assistantManagerTaskPlannerRange.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -402,6 +414,29 @@ const sanitizeShiftEvidenceSources = (value: unknown): ShiftEvidenceSourceConfig
   });
 };
 
+const validateShiftEvidenceSourcesAgainstRules = (
+  evidenceRules: AssistantManagerTaskEvidenceRule[],
+  shiftEvidenceSources: ShiftEvidenceSourceConfig[],
+): void => {
+  const rulesByKey = new Map(evidenceRules.map((rule) => [rule.key, rule]));
+
+  shiftEvidenceSources.forEach((source) => {
+    const rule = rulesByKey.get(source.evidenceRuleKey);
+    if (!rule) {
+      throw new HttpError(
+        400,
+        `Shift evidence source "${source.label}" must reference an existing evidence rule`,
+      );
+    }
+    if (rule.type !== 'image') {
+      throw new HttpError(
+        400,
+        `Shift evidence source "${source.label}" must reference an image evidence rule`,
+      );
+    }
+  });
+};
+
 const getEvidenceRules = (template?: AssistantManagerTaskTemplate | null): AssistantManagerTaskEvidenceRule[] => {
   if (!template) {
     return [];
@@ -423,6 +458,11 @@ const getShiftEvidenceSources = (template?: AssistantManagerTaskTemplate | null)
     return [];
   }
 };
+
+const getShiftEvidenceRuleKeys = (
+  template?: AssistantManagerTaskTemplate | null,
+): Set<string> =>
+  new Set(getShiftEvidenceSources(template).map((source) => source.evidenceRuleKey));
 
 const sanitizeEvidenceItems = (value: unknown): AssistantManagerTaskEvidenceItem[] => {
   if (value == null) {
@@ -511,20 +551,38 @@ const validateEvidenceItemsAgainstRules = (
   evidenceItems: AssistantManagerTaskEvidenceItem[],
   options?: {
     enforceRequired?: boolean;
+    shiftEvidenceRuleKeys?: ReadonlySet<string>;
   },
 ) => {
   const enforceRequired = options?.enforceRequired === true;
+  const shiftEvidenceRuleKeys = options?.shiftEvidenceRuleKeys ?? new Set<string>();
   const errors: string[] = [];
   const normalizedItems = evidenceItems.map((item) => ({ ...item }));
 
   for (const rule of rules) {
     const matched = normalizedItems.filter((item) => item.ruleKey === rule.key && item.type === rule.type);
-    if (!rule.multiple && matched.length > 1) {
+    const isShiftImageRule = rule.type === 'image' && shiftEvidenceRuleKeys.has(rule.key);
+    if (!rule.multiple && !isShiftImageRule && matched.length > 1) {
       errors.push(`${rule.label} accepts only one evidence item`);
       continue;
     }
-    if (rule.maxItems != null && matched.length > rule.maxItems) {
+    if (!isShiftImageRule && rule.maxItems != null && matched.length > rule.maxItems) {
       errors.push(`${rule.label} accepts at most ${rule.maxItems} evidence item(s)`);
+    }
+    if (isShiftImageRule) {
+      const subjectCounts = new Map<number, number>();
+      matched.forEach((item) => {
+        if (item.subjectUserId == null) {
+          return;
+        }
+        subjectCounts.set(
+          item.subjectUserId,
+          (subjectCounts.get(item.subjectUserId) ?? 0) + 1,
+        );
+      });
+      if (Array.from(subjectCounts.values()).some((count) => count > 1)) {
+        errors.push(`${rule.label} accepts only one current image per staff member`);
+      }
     }
 
     let validCount = 0;
@@ -624,6 +682,15 @@ const sanitizeTemplatePayload = (body: Record<string, unknown>) => {
         next.scheduleConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY],
       );
     }
+    const evidenceRules = Array.isArray(next.scheduleConfig.evidenceRules)
+      ? (next.scheduleConfig.evidenceRules as AssistantManagerTaskEvidenceRule[])
+      : [];
+    const shiftEvidenceSources = Array.isArray(
+      next.scheduleConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY],
+    )
+      ? (next.scheduleConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY] as ShiftEvidenceSourceConfig[])
+      : [];
+    validateShiftEvidenceSourcesAgainstRules(evidenceRules, shiftEvidenceSources);
     if ('requiredShiftTemplateIds' in next.scheduleConfig) {
       const requiredShiftTemplateIds = normalizeRequiredShiftTemplateIds(
         next.scheduleConfig.requiredShiftTemplateIds,
@@ -1422,19 +1489,30 @@ const requireActorId = (req: AuthenticatedRequest): number => {
 const ensureEvidenceRequirementsSatisfied = (
   template: AssistantManagerTaskTemplate | null | undefined,
   meta: Record<string, unknown>,
+  expectedEvidenceItems: AssistantManagerTaskExpectedEvidenceItem[] = [],
 ) => {
   const rules = getEvidenceRules(template);
-  if (rules.length === 0) {
-    return {
-      normalizedItems: sanitizeEvidenceItems(meta['evidenceItems']),
-    };
-  }
+  const shiftEvidenceRuleKeys = getShiftEvidenceRuleKeys(template);
+  const evidenceItems = sanitizeEvidenceItems(meta['evidenceItems']);
 
   const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
     rules,
-    sanitizeEvidenceItems(meta['evidenceItems']),
-    { enforceRequired: true },
+    evidenceItems,
+    { enforceRequired: true, shiftEvidenceRuleKeys },
   );
+
+  const missingExpectedItems = findMissingExpectedShiftEvidencePairs(
+    expectedEvidenceItems,
+    normalizedItems,
+  );
+  if (missingExpectedItems.length > 0) {
+    const rulesByKey = new Map(rules.map((rule) => [rule.key, rule]));
+    const missingLabels = missingExpectedItems.map((item) => {
+      const ruleLabel = rulesByKey.get(item.ruleKey)?.label ?? item.sourceLabel;
+      return `${ruleLabel} for ${item.subjectName}`;
+    });
+    errors.push(`Evidence is still required: ${missingLabels.join(', ')}`);
+  }
 
   if (errors.length > 0) {
     throw new HttpError(400, errors.join(' '));
@@ -2558,29 +2636,84 @@ const generateLogsForAssignments = async (
   };
 };
 
+const loadTaskTemplates = async (req: AuthenticatedRequest) => {
+  const includeAssignments =
+    req.query.includeAssignments !== 'false' && canViewAllTaskLogs(req);
+  const templates = await AssistantManagerTaskTemplate.findAll({
+    include: includeAssignments
+      ? [{ model: AssistantManagerTaskAssignment, as: 'assignments', include: taskAssignmentInclude }]
+      : [],
+    order: [
+      ['isActive', 'DESC'],
+      ['categoryOrder', 'ASC'],
+      ['category', 'ASC'],
+      ['subgroupOrder', 'ASC'],
+      ['subgroup', 'ASC'],
+      ['templateOrder', 'ASC'],
+      ['name', 'ASC'],
+    ],
+  });
+  return templates.map((template) =>
+    formatTemplate(
+      template as AssistantManagerTaskTemplate & {
+        assignments?: AssistantManagerTaskAssignment[];
+      },
+    ),
+  );
+};
+
 export const listTaskTemplates = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const includeAssignments =
-      req.query.includeAssignments !== 'false' && canViewAllTaskLogs(req);
-    const templates = await AssistantManagerTaskTemplate.findAll({
-      include: includeAssignments
-        ? [{ model: AssistantManagerTaskAssignment, as: 'assignments', include: taskAssignmentInclude }]
-        : [],
-      order: [
-        ['isActive', 'DESC'],
-        ['categoryOrder', 'ASC'],
-        ['category', 'ASC'],
-        ['subgroupOrder', 'ASC'],
-        ['subgroup', 'ASC'],
-        ['templateOrder', 'ASC'],
-        ['name', 'ASC'],
-      ],
-    });
-    res.status(200).json([{ data: templates.map((template) => formatTemplate(template as AssistantManagerTaskTemplate & { assignments?: AssistantManagerTaskAssignment[] })), columns: [] }]);
+    const templates = await loadTaskTemplates(req);
+    res.status(200).json([{ data: templates, columns: [] }]);
   } catch (error) {
     console.error('Failed to list assistant manager task templates', error);
     res.status(500).json([{ message: 'Failed to list assistant manager tasks' }]);
   }
+};
+
+const loadTaskCerebroLinkOptions = async () => {
+  const [entries, quizzes] = await Promise.all([
+    CerebroEntry.findAll({
+      where: { status: true },
+      attributes: ['id', 'slug', 'title', 'kind', 'requiresAcknowledgement', 'policyVersion', 'sortOrder'],
+      order: [['sortOrder', 'ASC'], ['title', 'ASC']],
+    }),
+    CerebroQuiz.findAll({
+      where: { status: true },
+      attributes: ['id', 'slug', 'title', 'entryId', 'sortOrder'],
+      order: [['sortOrder', 'ASC'], ['title', 'ASC']],
+    }),
+  ]);
+
+  const knowledgeEntries = entries
+    .filter((entry) => entry.kind !== 'policy')
+    .map((entry) => ({
+      id: entry.id,
+      slug: entry.slug,
+      title: entry.title,
+      kind: entry.kind,
+    }));
+
+  const policyEntries = entries
+    .filter((entry) => entry.kind === 'policy' || entry.requiresAcknowledgement)
+    .map((entry) => ({
+      id: entry.id,
+      slug: entry.slug,
+      title: entry.title,
+      policyVersion: entry.policyVersion ?? null,
+    }));
+
+  return {
+    knowledgeEntries,
+    policyEntries,
+    quizzes: quizzes.map((quiz) => ({
+      id: quiz.id,
+      slug: quiz.slug,
+      title: quiz.title,
+      entryId: quiz.entryId ?? null,
+    })),
+  };
 };
 
 export const getTaskCerebroLinkOptions = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -2590,51 +2723,8 @@ export const getTaskCerebroLinkOptions = async (req: AuthenticatedRequest, res: 
       return;
     }
 
-    const [entries, quizzes] = await Promise.all([
-      CerebroEntry.findAll({
-        where: { status: true },
-        attributes: ['id', 'slug', 'title', 'kind', 'requiresAcknowledgement', 'policyVersion', 'sortOrder'],
-        order: [['sortOrder', 'ASC'], ['title', 'ASC']],
-      }),
-      CerebroQuiz.findAll({
-        where: { status: true },
-        attributes: ['id', 'slug', 'title', 'entryId', 'sortOrder'],
-        order: [['sortOrder', 'ASC'], ['title', 'ASC']],
-      }),
-    ]);
-
-    const knowledgeEntries = entries
-      .filter((entry) => entry.kind !== 'policy')
-      .map((entry) => ({
-        id: entry.id,
-        slug: entry.slug,
-        title: entry.title,
-        kind: entry.kind,
-      }));
-
-    const policyEntries = entries
-      .filter((entry) => entry.kind === 'policy' || entry.requiresAcknowledgement)
-      .map((entry) => ({
-        id: entry.id,
-        slug: entry.slug,
-        title: entry.title,
-        policyVersion: entry.policyVersion ?? null,
-      }));
-
-    const quizOptions = quizzes.map((quiz) => ({
-      id: quiz.id,
-      slug: quiz.slug,
-      title: quiz.title,
-      entryId: quiz.entryId ?? null,
-    }));
-
-    res.status(200).json([{
-      data: {
-        knowledgeEntries,
-        policyEntries,
-        quizzes: quizOptions,
-      },
-    }]);
+    const options = await loadTaskCerebroLinkOptions();
+    res.status(200).json([{ data: options }]);
   } catch (error) {
     logger.error('Failed to list Cerebro link options for assistant manager tasks', error);
     res.status(500).json([{ message: 'Failed to load Cerebro link options' }]);
@@ -3744,87 +3834,267 @@ export const deleteTaskAssignment = async (req: AuthenticatedRequest, res: Respo
   }
 };
 
+const loadTaskLogs = async (
+  req: AuthenticatedRequest,
+  options: { preserveRangeAfterPlannerStart?: boolean } = {},
+) => {
+  const { startDate, endDate, scope, userId } = req.query;
+  const start =
+    typeof startDate === 'string' && startDate.trim()
+      ? dayjs(startDate)
+      : startOfPlannerWeek();
+  const end = typeof endDate === 'string' && endDate.trim() ? dayjs(endDate) : start.add(6, 'day');
+  if (!start.isValid() || !end.isValid()) {
+    throw new HttpError(400, 'Invalid date range provided');
+  }
+
+  const requestedStart = start.startOf('day');
+  const requestedEnd = end.endOf('day');
+  const plannerStartDate = resolvePlannerStartDate();
+  const { start: effectiveStart, end: effectiveEnd } =
+    resolveAssistantManagerTaskPlannerRange({
+      requestedStart,
+      requestedEnd,
+      plannerStartDate,
+      preserveRequestedSpan: Boolean(options.preserveRangeAfterPlannerStart),
+    });
+  const effectiveStartDate = effectiveStart.format('YYYY-MM-DD');
+  const effectiveEndDate = effectiveEnd.format('YYYY-MM-DD');
+
+  if (effectiveEnd.isBefore(effectiveStart, 'day')) {
+    return {
+      logs: [],
+      effectiveStartDate,
+      effectiveEndDate,
+    };
+  }
+
+  const actorId = getActorId(req);
+  const allowGlobalView = canViewAllTaskLogs(req);
+  if (!allowGlobalView && !actorId) {
+    throw new HttpError(403, 'Forbidden');
+  }
+
+  const where: WhereOptions = {
+    taskDate: {
+      [Op.between]: [effectiveStartDate, effectiveEndDate],
+    },
+  };
+
+  if (!allowGlobalView) {
+    where.userId = actorId;
+  } else if (typeof userId === 'string' && userId.trim()) {
+    const numeric = Number(userId);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      where.userId = numeric;
+    }
+  } else if (scope === 'self' && actorId) {
+    where.userId = actorId;
+  }
+
+  const logs = await AssistantManagerTaskLog.findAll({
+    where,
+    include: [
+      {
+        model: AssistantManagerTaskTemplate,
+        as: 'template',
+        attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'],
+      },
+      { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
+    ],
+    order: [
+      ['taskDate', 'ASC'],
+      ['userId', 'ASC'],
+    ],
+  });
+  const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
+    effectiveStart,
+    effectiveEnd,
+  );
+
+  return {
+    logs: logs.map((log) =>
+      formatLogWithLiveExpectedEvidenceItems(
+        log as AssistantManagerTaskLog & {
+          template?: AssistantManagerTaskTemplate | null;
+          user?: User | null;
+        },
+        scheduledShiftCandidatesByDate,
+      ),
+    ),
+    effectiveStartDate,
+    effectiveEndDate,
+  };
+};
+
 export const listTaskLogs = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { startDate, endDate, scope, userId } = req.query;
-    const start =
-      typeof startDate === 'string' && startDate.trim()
-        ? dayjs(startDate)
-        : startOfPlannerWeek();
-    const end = typeof endDate === 'string' && endDate.trim() ? dayjs(endDate) : start.add(6, 'day');
-    if (!start.isValid() || !end.isValid()) {
-      res.status(400).json([{ message: 'Invalid date range provided' }]);
-      return;
-    }
-    const plannerStartDate = resolvePlannerStartDate();
-    const effectiveStart =
-      plannerStartDate && start.isBefore(plannerStartDate, 'day')
-        ? plannerStartDate
-        : start.startOf('day');
-    const effectiveEnd = end.endOf('day');
-    if (effectiveEnd.isBefore(effectiveStart, 'day')) {
-      res.status(200).json([
-        {
-          data: [],
-          columns: [],
-        },
-      ]);
-      return;
-    }
-    const actorId = getActorId(req);
-    const allowGlobalView = canViewAllTaskLogs(req);
-    if (!allowGlobalView && !actorId) {
-      res.status(403).json([{ message: 'Forbidden' }]);
-      return;
-    }
+    const result = await loadTaskLogs(req);
+    res.status(200).json([{ data: result.logs, columns: [] }]);
+  } catch (error) {
+    console.error('Failed to list assistant manager task logs', error);
+    const status = error instanceof HttpError ? error.status : 500;
+    const message = error instanceof HttpError ? error.message : 'Failed to list task logs';
+    res.status(status).json([{ message }]);
+  }
+};
 
-    const where: WhereOptions = {
-      taskDate: {
-        [Op.between]: [effectiveStart.format('YYYY-MM-DD'), effectiveEnd.format('YYYY-MM-DD')],
-      },
+export const getTaskPlannerBootstrap = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const canViewAllTasks = canViewAllTaskLogs(req);
+    const preserveRequestedWindow =
+      req.query.windowMode === 'day' || req.query.windowMode === 'week';
+    const warnings: string[] = [];
+    const loadOptional = async <T>(
+      key: string,
+      label: string,
+      loader: () => Promise<T>,
+      fallback: T,
+    ): Promise<T> => {
+      try {
+        return await loader();
+      } catch (error) {
+        warnings.push(key);
+        logger.warn(`Failed to load ${label} for assistant manager task bootstrap`, error);
+        return fallback;
+      }
     };
 
-    if (!allowGlobalView) {
-      where.userId = actorId;
-    } else if (typeof userId === 'string' && userId.trim()) {
-      const numeric = Number(userId);
-      if (Number.isFinite(numeric) && numeric > 0) {
-        where.userId = numeric;
-      }
-    } else if (scope === 'self' && actorId) {
-      where.userId = actorId;
-    }
-
-    const logs = await AssistantManagerTaskLog.findAll({
-      where,
-      include: [
-        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'] },
-        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
-      ],
-      order: [
-        ['taskDate', 'ASC'],
-        ['userId', 'ASC'],
-      ],
-    });
-    const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
-      effectiveStart,
-      effectiveEnd,
+    const canViewActiveUsers = await loadOptional(
+      'activeUsers',
+      'active user permissions',
+      () => hasModuleActionPermission(req, 'user-directory', 'view'),
+      false,
     );
+    if (!canViewActiveUsers && !warnings.includes('activeUsers')) {
+      warnings.push('activeUsers');
+    }
+    const activeUsersPromise = canViewActiveUsers
+      ? loadOptional(
+          'activeUsers',
+          'active users',
+          async () => {
+            const users = await User.findAll({
+              where: { status: true, approved: true },
+              attributes: ['id', 'firstName', 'lastName', 'email', 'status'],
+              order: [
+                ['firstName', 'ASC'],
+                ['lastName', 'ASC'],
+              ],
+            });
+            return users.map((user) => ({
+              id: user.id,
+              firstName: user.firstName ?? '',
+              lastName: user.lastName ?? '',
+              email: user.email ?? '',
+              status: user.status,
+            }));
+          },
+          [],
+        )
+      : Promise.resolve([]);
+
+    const setupReferencePromise = canViewAllTasks
+      ? Promise.all([
+          loadOptional(
+            'userTypes',
+            'user types',
+            async () => {
+              const userTypes = await UserType.findAll({
+                attributes: ['id', 'name'],
+                order: [['name', 'ASC']],
+              });
+              return userTypes.map((userType) => ({ id: userType.id, name: userType.name }));
+            },
+            [],
+          ),
+          loadOptional(
+            'shiftRoles',
+            'shift roles',
+            async () => {
+              const shiftRoles = await ShiftRole.findAll({
+                attributes: ['id', 'name', 'slug'],
+                order: [['name', 'ASC']],
+              });
+              return shiftRoles.map((shiftRole) => ({
+                id: shiftRole.id,
+                name: shiftRole.name,
+                slug: shiftRole.slug,
+              }));
+            },
+            [],
+          ),
+          loadOptional('shiftTypes', 'shift types', listShiftTypes, []),
+          loadOptional('shiftTemplates', 'shift templates', listShiftTemplates, []),
+          loadOptional(
+            'cerebroLinkOptions',
+            'Cerebro link options',
+            loadTaskCerebroLinkOptions,
+            { knowledgeEntries: [], policyEntries: [], quizzes: [] },
+          ),
+        ]).then(([userTypes, shiftRoles, shiftTypes, shiftTemplates, cerebroLinkOptions]) => ({
+          userTypes,
+          shiftRoles,
+          shiftTypes,
+          shiftTemplates,
+          cerebroLinkOptions,
+        }))
+      : Promise.resolve({
+          userTypes: [],
+          shiftRoles: [],
+          shiftTypes: [],
+          shiftTemplates: [],
+          cerebroLinkOptions: {
+            knowledgeEntries: [],
+            policyEntries: [],
+            quizzes: [],
+          },
+        });
+
+    const [templates, logResult, activeUsers, setupReferenceData] = await Promise.all([
+      loadTaskTemplates(req),
+      loadTaskLogs(req, { preserveRangeAfterPlannerStart: preserveRequestedWindow }),
+      activeUsersPromise,
+      setupReferencePromise,
+    ]);
+    const plannerStartDate = resolvePlannerStartDate();
 
     res.status(200).json([
       {
-        data: logs.map((log) =>
-          formatLogWithLiveExpectedEvidenceItems(
-            log as AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null },
-            scheduledShiftCandidatesByDate,
-          ),
-        ),
+        data: {
+          range: {
+            startDate: logResult.effectiveStartDate,
+            endDate: logResult.effectiveEndDate,
+          },
+          capabilities: {
+            canViewAllTasks,
+          },
+          templates,
+          logs: logResult.logs,
+          referenceData: {
+            activeUsers,
+            ...setupReferenceData,
+          },
+          plannerStartDate: plannerStartDate?.format('YYYY-MM-DD') ?? null,
+          pushConfig: {
+            enabled: isAmTaskPushEnabled(),
+            publicKey: getAmTaskPushPublicKey(),
+          },
+          warnings,
+        },
         columns: [],
       },
     ]);
   } catch (error) {
-    console.error('Failed to list assistant manager task logs', error);
-    res.status(500).json([{ message: 'Failed to list task logs' }]);
+    logger.error('Failed to load assistant manager task bootstrap', error);
+    const status = error instanceof HttpError ? error.status : 500;
+    const message = error instanceof HttpError
+      ? error.message
+      : 'Failed to load assistant manager task dashboard';
+    res.status(status).json([{ message }]);
   }
 };
 
@@ -3870,9 +4140,22 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
           res.status(400).json([{ message: 'Task can no longer be completed after its scheduled end time' }]);
           return;
         }
-        const { normalizedItems } = ensureEvidenceRequirementsSatisfied(log.template, nextMeta);
-        nextMeta.evidenceItems = normalizedItems;
-        payload.meta = nextMeta;
+        const taskDay = dayjs(log.taskDate);
+        const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
+          taskDay.startOf('day'),
+          taskDay.endOf('day'),
+        );
+        const expectedEvidenceItems = resolveLogExpectedEvidenceItems(
+          log as AssistantManagerTaskLog & {
+            template?: AssistantManagerTaskTemplate | null;
+          },
+          scheduledShiftCandidatesByDate,
+        );
+        ensureEvidenceRequirementsSatisfied(
+          log.template,
+          nextMeta,
+          expectedEvidenceItems,
+        );
       }
       payload.status = status;
       payload.completedAt = status === 'completed' ? new Date() : null;
@@ -4109,10 +4392,35 @@ export const createManualTaskLog = async (req: AuthenticatedRequest, res: Respon
   }
 };
 
+const deleteEvidenceImagesBestEffort = async (
+  items: Array<{ storagePath?: string | null; driveFileId?: string | null }>,
+  context: string,
+): Promise<void> => {
+  if (items.length === 0) {
+    return;
+  }
+
+  const results = await Promise.allSettled(
+    items.map((item) =>
+      deleteAssistantManagerTaskEvidenceImage({
+        storagePath: item.storagePath ?? null,
+        driveFileId: item.driveFileId ?? null,
+      }),
+    ),
+  );
+  results.forEach((result) => {
+    if (result.status === 'rejected') {
+      logger.warn(`Failed to clean up assistant manager task evidence image (${context})`, result.reason);
+    }
+  });
+};
+
 export const uploadTaskLogEvidenceImage = async (
   req: AuthenticatedRequest,
   res: Response,
 ): Promise<void> => {
+  let storedImagePendingCommit: StoreAssistantManagerTaskEvidenceImageResult | null = null;
+
   try {
     const actorId = requireActorId(req);
     const logId = Number(req.params.id);
@@ -4173,15 +4481,27 @@ export const uploadTaskLogEvidenceImage = async (
     if (rule.type !== 'image') {
       throw new HttpError(400, 'Selected evidence rule does not accept images');
     }
-    const { subjectUserId, subjectName } = retainEvidenceSubjectForConfiguredShiftRule({
+    const preflightShiftEvidenceSources = getShiftEvidenceSources(log.template);
+    const isPreflightShiftEvidenceRule = preflightShiftEvidenceSources.some(
+      (source) => source.evidenceRuleKey === ruleKey,
+    );
+    const preflightSubject = retainEvidenceSubjectForConfiguredShiftRule({
       ruleKey,
-      shiftEvidenceSources: getShiftEvidenceSources(log.template),
+      shiftEvidenceSources: preflightShiftEvidenceSources,
       subjectUserId: requestedSubjectUserId,
       subjectName: requestedSubjectName,
     });
+    if (isPreflightShiftEvidenceRule && preflightSubject.subjectUserId == null) {
+      throw new HttpError(400, 'A staff member is required for shift-based evidence');
+    }
+
+    const sequelize = AssistantManagerTaskLog.sequelize;
+    if (!sequelize) {
+      throw new HttpError(500, 'Database connection is not available');
+    }
 
     await ensureAssistantManagerTaskEvidenceStorage();
-    const stored = await storeAssistantManagerTaskEvidenceImage({
+    storedImagePendingCommit = await storeAssistantManagerTaskEvidenceImage({
       logId: log.id,
       taskDate: log.taskDate,
       ruleKey,
@@ -4190,76 +4510,119 @@ export const uploadTaskLogEvidenceImage = async (
       data: file.buffer,
     });
 
-    const meta = { ...(log.meta ?? {}) } as Record<string, unknown>;
-    const evidenceItems = sanitizeEvidenceItems(meta['evidenceItems']);
-    const nextItem: AssistantManagerTaskEvidenceItem = {
-      id: randomUUID(),
-      ruleKey,
-      type: 'image',
-      valid: true,
-      fileName: stored.originalName,
-      mimeType: stored.mimeType,
-      fileSize: stored.fileSize,
-      storagePath: stored.storagePath,
-      driveFileId: stored.driveFileId,
-      driveWebViewLink: stored.driveWebViewLink,
-      uploadedAt: new Date().toISOString(),
-      uploadedBy: actorId,
-      subjectUserId,
-      subjectName,
-    };
-    const removedEvidenceItems =
-      rule.multiple && subjectUserId != null
-        ? evidenceItems.filter(
-            (item) =>
-              item.ruleKey === ruleKey &&
-              item.type === 'image' &&
-              item.subjectUserId === subjectUserId,
-          )
-        : rule.multiple
-          ? []
-          : evidenceItems.filter((item) => !(item.ruleKey === ruleKey && item.type === 'image'));
-    const remainingItems =
-      rule.multiple && subjectUserId != null
-        ? evidenceItems.filter(
-            (item) =>
-              !(
-                item.ruleKey === ruleKey &&
-                item.type === 'image' &&
-                item.subjectUserId === subjectUserId
-              ),
-          )
-        : rule.multiple
-          ? evidenceItems
-          : evidenceItems.filter((item) => !(item.ruleKey === ruleKey && item.type === 'image'));
-    const nextItems = [...remainingItems, nextItem];
-    const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
-      getEvidenceRules(log.template),
-      nextItems,
-      { enforceRequired: false },
-    );
-    if (errors.length > 0) {
-      throw new HttpError(400, errors.join(' '));
-    }
+    const stored = storedImagePendingCommit;
+    const transactionResult = await sequelize.transaction(async (transaction) => {
+      const lockedLog = await AssistantManagerTaskLog.findByPk(logId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!lockedLog) {
+        throw new HttpError(404, 'Task log not found');
+      }
+      if (!canViewAllTaskLogs(req) && actorId !== lockedLog.userId) {
+        throw new HttpError(403, 'Forbidden');
+      }
+      if (!canEditTaskLogEvidence(lockedLog)) {
+        throw new HttpError(400, 'Evidence can only be edited for pending tasks on the current day');
+      }
 
-    meta['evidenceItems'] = normalizedItems;
-    await AssistantManagerTaskLog.update(
-      {
-        meta,
-        updatedBy: actorId,
-      },
-      { where: { id: log.id } },
-    );
-    if (removedEvidenceItems.length > 0) {
-      await Promise.all(
-        removedEvidenceItems.map((item) =>
-          deleteAssistantManagerTaskEvidenceImage({
-            storagePath: item.storagePath ?? null,
-            driveFileId: item.driveFileId ?? null,
-          }),
-        ),
+      const currentTemplate = await AssistantManagerTaskTemplate.findByPk(
+        lockedLog.templateId,
+        {
+          attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig', 'isActive'],
+          transaction,
+        },
       );
-    }
+      if (!currentTemplate) {
+        throw new HttpError(404, 'Task template not found');
+      }
+
+      const currentRules = getEvidenceRules(currentTemplate);
+      const currentRule = currentRules.find((entry) => entry.key === ruleKey);
+      if (!currentRule) {
+        throw new HttpError(400, 'Evidence rule not found');
+      }
+      if (currentRule.type !== 'image') {
+        throw new HttpError(400, 'Selected evidence rule does not accept images');
+      }
+
+      const currentShiftEvidenceSources = getShiftEvidenceSources(currentTemplate);
+      const isShiftEvidenceRule = currentShiftEvidenceSources.some(
+        (source) => source.evidenceRuleKey === ruleKey,
+      );
+      const { subjectUserId, subjectName } = retainEvidenceSubjectForConfiguredShiftRule({
+        ruleKey,
+        shiftEvidenceSources: currentShiftEvidenceSources,
+        subjectUserId: requestedSubjectUserId,
+        subjectName: requestedSubjectName,
+      });
+      if (isShiftEvidenceRule && subjectUserId == null) {
+        throw new HttpError(400, 'A staff member is required for shift-based evidence');
+      }
+
+      const nextItem: AssistantManagerTaskEvidenceItem = {
+        id: randomUUID(),
+        ruleKey,
+        type: 'image',
+        valid: true,
+        fileName: stored.originalName,
+        mimeType: stored.mimeType,
+        fileSize: stored.fileSize,
+        storagePath: stored.storagePath,
+        driveFileId: stored.driveFileId,
+        driveWebViewLink: stored.driveWebViewLink,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: actorId,
+        subjectUserId,
+        subjectName,
+      };
+      const meta = { ...(lockedLog.meta ?? {}) } as Record<string, unknown>;
+      const mergeResult = mergeUploadedImageEvidenceItems({
+        existingItems: sanitizeEvidenceItems(meta['evidenceItems']),
+        nextImageItem: nextItem,
+        rule: {
+          key: currentRule.key,
+          type: 'image',
+          multiple: currentRule.multiple,
+        },
+        isShiftBased: isShiftEvidenceRule,
+      });
+      const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
+        currentRules,
+        mergeResult.nextItems,
+        {
+          enforceRequired: false,
+          shiftEvidenceRuleKeys: new Set(
+            currentShiftEvidenceSources.map((source) => source.evidenceRuleKey),
+          ),
+        },
+      );
+      if (errors.length > 0) {
+        throw new HttpError(400, errors.join(' '));
+      }
+
+      meta['evidenceItems'] = normalizedItems;
+      await lockedLog.update(
+        {
+          meta,
+          updatedBy: actorId,
+        },
+        { transaction },
+      );
+
+      return {
+        nextItem,
+        removedEvidenceItems: mergeResult.removedItems,
+      };
+    });
+
+    storedImagePendingCommit = null;
+    await deleteEvidenceImagesBestEffort(
+      transactionResult.removedEvidenceItems,
+      `replaced upload for task log ${logId}`,
+    );
+
+    const { nextItem } = transactionResult;
 
     res.status(201).json([
       {
@@ -4279,6 +4642,13 @@ export const uploadTaskLogEvidenceImage = async (
       },
     ]);
   } catch (error) {
+    if (storedImagePendingCommit) {
+      await deleteEvidenceImagesBestEffort(
+        [storedImagePendingCommit],
+        `rolled back upload for task log ${req.params.id ?? 'unknown'}`,
+      );
+      storedImagePendingCommit = null;
+    }
     if (error instanceof HttpError) {
       res.status(error.status).json([{ message: error.message }]);
       return;
@@ -4590,7 +4960,10 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
     const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
       getEvidenceRules(log.template),
       sanitizeEvidenceItems(meta['evidenceItems']),
-      { enforceRequired: false },
+      {
+        enforceRequired: false,
+        shiftEvidenceRuleKeys: getShiftEvidenceRuleKeys(log.template),
+      },
     );
     if (errors.length > 0) {
       res.status(400).json([{ message: errors.join(' ') }]);

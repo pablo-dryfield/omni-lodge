@@ -1,6 +1,7 @@
 import axiosInstance from '../utils/axiosInstance';
 import {
   bulkUpdateAmTaskTemplateOptions,
+  fetchAmTaskPlannerBootstrap,
   updateManagedAmTaskLog,
 } from './assistantManagerTaskActions';
 
@@ -14,11 +15,80 @@ jest.mock('axios', () => ({
 jest.mock('../utils/axiosInstance', () => ({
   __esModule: true,
   default: {
+    get: jest.fn(),
     patch: jest.fn(),
   },
 }));
 
+const mockedGet = axiosInstance.get as jest.Mock;
 const mockedPatch = axiosInstance.patch as jest.Mock;
+
+describe('fetchAmTaskPlannerBootstrap', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('shares one credentials-enabled GET between identical concurrent calls', async () => {
+    const bootstrapData = {
+      range: {
+        startDate: '2026-08-24',
+        endDate: '2026-08-30',
+      },
+      capabilities: {
+        canViewAllTasks: true,
+      },
+      templates: [],
+      logs: [],
+      referenceData: {
+        activeUsers: [],
+        userTypes: [],
+        shiftRoles: [],
+        shiftTypes: [],
+        shiftTemplates: [],
+        cerebroLinkOptions: {
+          knowledgeEntries: [],
+          policyEntries: [],
+          quizzes: [],
+        },
+      },
+      plannerStartDate: null,
+      pushConfig: {
+        enabled: false,
+        publicKey: null,
+      },
+      warnings: [],
+    };
+    let resolveRequest: (value: { data: unknown }) => void = () => undefined;
+    mockedGet.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRequest = resolve;
+      }),
+    );
+    const params = {
+      startDate: '2026-08-24',
+      endDate: '2026-08-30',
+      scope: 'all' as const,
+      windowMode: 'week' as const,
+    };
+
+    const firstRequest = fetchAmTaskPlannerBootstrap(params)(jest.fn(), jest.fn(), undefined);
+    const secondRequest = fetchAmTaskPlannerBootstrap(params)(jest.fn(), jest.fn(), undefined);
+
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+    expect(mockedGet).toHaveBeenCalledWith(
+      '/assistantManagerTasks/bootstrap?startDate=2026-08-24&endDate=2026-08-30&scope=all&windowMode=week',
+      { withCredentials: true },
+    );
+
+    resolveRequest({ data: [{ data: bootstrapData, columns: [] }] });
+    const [firstResult, secondResult] = await Promise.all([firstRequest, secondRequest]);
+
+    expect(firstResult.type).toBe('assistantManagerTasks/fetchPlannerBootstrap/fulfilled');
+    expect(secondResult.type).toBe('assistantManagerTasks/fetchPlannerBootstrap/fulfilled');
+    expect(firstResult.payload).toEqual(bootstrapData);
+    expect(secondResult.payload).toEqual(bootstrapData);
+  });
+});
 
 describe('bulkUpdateAmTaskTemplateOptions', () => {
   beforeEach(() => {

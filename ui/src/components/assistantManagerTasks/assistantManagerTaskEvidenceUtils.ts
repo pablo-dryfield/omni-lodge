@@ -1,3 +1,9 @@
+import type {
+  AssistantManagerTaskEvidenceItem,
+  AssistantManagerTaskEvidenceRule,
+  AssistantManagerTaskExpectedEvidenceItem,
+} from '../../types/assistantManagerTasks/AssistantManagerTask';
+
 const SHIFT_EVIDENCE_SOURCES_CONFIG_KEY = 'shiftEvidenceSources';
 
 type EvidenceSubjectOverride = {
@@ -19,6 +25,9 @@ export type ResolvedImageEvidenceSubject = {
   subjectUserId: number | null;
   subjectName: string | null;
 };
+
+const buildShiftEvidenceSlotKey = (ruleKey: string, subjectUserId: number): string =>
+  `${ruleKey}\u0000${subjectUserId}`;
 
 const normalizePositiveInteger = (value: unknown): number | null => {
   const normalized = Number(value);
@@ -102,4 +111,55 @@ export const resolveImageEvidenceSubject = ({
       assignedSubjectName ||
       `User #${subjectUserId}`,
   };
+};
+
+export const mergeUploadedEvidenceItem = (
+  items: readonly AssistantManagerTaskEvidenceItem[],
+  rule: AssistantManagerTaskEvidenceRule,
+  nextItem: AssistantManagerTaskEvidenceItem,
+  shiftEvidenceRuleKeys: ReadonlySet<string>,
+): AssistantManagerTaskEvidenceItem[] => {
+  const hasSubject = nextItem.subjectUserId != null;
+  const isShiftEvidenceSubjectUpload =
+    shiftEvidenceRuleKeys.has(rule.key) &&
+    rule.type === 'image' &&
+    nextItem.type === 'image' &&
+    hasSubject;
+  const replaceSameSubject =
+    hasSubject && (isShiftEvidenceSubjectUpload || rule.multiple === true);
+
+  const remainingItems = replaceSameSubject
+    ? items.filter(
+        (item) =>
+          !(
+            item.ruleKey === rule.key &&
+            item.type === rule.type &&
+            item.subjectUserId === nextItem.subjectUserId
+          ),
+      )
+    : rule.multiple
+      ? items
+      : items.filter((item) => !(item.ruleKey === rule.key && item.type === rule.type));
+
+  return [...remainingItems, nextItem];
+};
+
+export const getMissingExpectedShiftImageEvidenceItems = (
+  expectedItems: readonly AssistantManagerTaskExpectedEvidenceItem[],
+  evidenceItems: readonly AssistantManagerTaskEvidenceItem[],
+): AssistantManagerTaskExpectedEvidenceItem[] => {
+  const uploadedSlotKeys = new Set<string>();
+
+  evidenceItems.forEach((item) => {
+    if (item.type !== 'image' || item.subjectUserId == null) {
+      return;
+    }
+
+    uploadedSlotKeys.add(buildShiftEvidenceSlotKey(item.ruleKey, item.subjectUserId));
+  });
+
+  return expectedItems.filter(
+    (item) =>
+      !uploadedSlotKeys.has(buildShiftEvidenceSlotKey(item.ruleKey, item.subjectUserId)),
+  );
 };

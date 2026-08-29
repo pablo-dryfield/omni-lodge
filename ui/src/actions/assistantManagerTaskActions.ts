@@ -11,6 +11,10 @@ import type {
   UploadAmTaskEvidenceImageResponse,
 } from '../types/assistantManagerTasks/AssistantManagerTask';
 import type { ServerResponse } from '../types/general/ServerResponse';
+import type { ShiftRole } from '../types/shiftRoles/ShiftRole';
+import type { ShiftTemplate, ShiftType } from '../types/scheduling';
+import type { UserType } from '../types/userTypes/UserType';
+import type { UserSummary } from '../api/users';
 
 const extractApiErrorMessage = (error: unknown, fallbackMessage: string) => {
   if (axios.isAxiosError(error)) {
@@ -70,6 +74,93 @@ const extractEnvelopeData = <T>(payload: unknown): T | null => {
   }
   return null;
 };
+
+export type AmTaskPlannerBootstrapResponse = {
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  capabilities: {
+    canViewAllTasks: boolean;
+  };
+  templates: AssistantManagerTaskTemplate[];
+  logs: AssistantManagerTaskLog[];
+  referenceData: {
+    activeUsers: UserSummary[];
+    userTypes: Partial<UserType>[];
+    shiftRoles: ShiftRole[];
+    shiftTypes: ShiftType[];
+    shiftTemplates: ShiftTemplate[];
+    cerebroLinkOptions: AmTaskCerebroLinkOptionsResponse;
+  };
+  plannerStartDate: string | null;
+  pushConfig: AmTaskPushConfig;
+  warnings: string[];
+};
+
+export type FetchAmTaskPlannerBootstrapParams = {
+  startDate: string;
+  endDate: string;
+  scope: 'self' | 'all';
+  windowMode: 'day' | 'week' | 'custom';
+};
+
+const plannerBootstrapRequests = new Map<
+  string,
+  Promise<AmTaskPlannerBootstrapResponse>
+>();
+
+const requestAmTaskPlannerBootstrap = (
+  params: FetchAmTaskPlannerBootstrapParams,
+): Promise<AmTaskPlannerBootstrapResponse> => {
+  const key = `${params.startDate}|${params.endDate}|${params.scope}|${params.windowMode}`;
+  const inFlightRequest = plannerBootstrapRequests.get(key);
+  if (inFlightRequest) {
+    return inFlightRequest;
+  }
+
+  const searchParams = new URLSearchParams({
+    startDate: params.startDate,
+    endDate: params.endDate,
+    scope: params.scope,
+    windowMode: params.windowMode,
+  });
+  const request = axiosInstance
+    .get(`/assistantManagerTasks/bootstrap?${searchParams.toString()}`, {
+      withCredentials: true,
+    })
+    .then((response) => {
+      const data = extractEnvelopeData<AmTaskPlannerBootstrapResponse>(response.data);
+      if (!data) {
+        throw new Error('Assistant manager task bootstrap returned no data');
+      }
+      return data;
+    });
+  const trackedRequest = request.finally(() => {
+    if (plannerBootstrapRequests.get(key) === trackedRequest) {
+      plannerBootstrapRequests.delete(key);
+    }
+  });
+  plannerBootstrapRequests.set(key, trackedRequest);
+  return trackedRequest;
+};
+
+export const fetchAmTaskPlannerBootstrap = createAsyncThunk<
+  AmTaskPlannerBootstrapResponse,
+  FetchAmTaskPlannerBootstrapParams,
+  { rejectValue: string }
+>(
+  'assistantManagerTasks/fetchPlannerBootstrap',
+  async (params, { rejectWithValue }) => {
+    try {
+      return await requestAmTaskPlannerBootstrap(params);
+    } catch (error) {
+      return rejectWithValue(
+        extractApiErrorMessage(error, 'Failed to load assistant manager task dashboard'),
+      );
+    }
+  },
+);
 
 export const fetchAmTaskTemplates = createAsyncThunk(
   'assistantManagerTasks/fetchTemplates',

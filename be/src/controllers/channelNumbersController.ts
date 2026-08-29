@@ -4,6 +4,7 @@ import HttpError from '../errors/HttpError.js';
 import logger from '../utils/logger.js';
 import {
   getChannelNumbersSummary,
+  getChannelNumbersTrendBundle,
   recordChannelCashCollection,
   getChannelNumbersDetails,
   type ChannelNumbersDetailMetric,
@@ -39,10 +40,13 @@ export const getSummary = async (req: AuthenticatedRequest, res: Response): Prom
 export const getBootstrap = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { startDate, endDate } = req.query;
-    const [summary, accounts, categories, vendors, clients] = await Promise.all([
+    const [summary, trend, accounts, categories, vendors, clients] = await Promise.all([
       getChannelNumbersSummary({
         startDate: typeof startDate === 'string' ? startDate : undefined,
         endDate: typeof endDate === 'string' ? endDate : undefined,
+      }),
+      getChannelNumbersTrendBundle({
+        referenceDate: typeof endDate === 'string' ? endDate : undefined,
       }),
       FinanceAccount.findAll({ order: [['name', 'ASC']] }),
       FinanceCategory.findAll({
@@ -58,6 +62,7 @@ export const getBootstrap = async (req: AuthenticatedRequest, res: Response): Pr
 
     res.status(200).json({
       summary,
+      trend,
       finance: {
         accounts,
         categories,

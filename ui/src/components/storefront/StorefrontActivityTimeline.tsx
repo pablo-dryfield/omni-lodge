@@ -35,6 +35,100 @@ const eventValue = (value: unknown): string => {
   return String(value);
 };
 
+const detailRecord = (value: unknown): Record<string, unknown> | null => (
+  value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+);
+
+const itemNumber = (details: Record<string, unknown>): string => {
+  const number = Number(details.cartItemNumber || details.cartPosition);
+  return Number.isInteger(number) && number > 0 ? String(number).padStart(2, "0") : "";
+};
+
+const participantSummary = (snapshot: Record<string, unknown>): string => {
+  const participants = detailRecord(snapshot.participants);
+  if (participants) {
+    const men = Number(participants.men) || 0;
+    const women = Number(participants.women) || 0;
+    const values = [
+      men > 0 ? `${men} ${men === 1 ? "man" : "men"}` : "",
+      women > 0 ? `${women} ${women === 1 ? "woman" : "women"}` : "",
+    ].filter(Boolean);
+    if (values.length) return values.join(" | ");
+  }
+  const quantity = Number(snapshot.quantity) || 0;
+  return quantity > 0 ? `${quantity} ${quantity === 1 ? "guest" : "guests"}` : "";
+};
+
+const addonSummary = (snapshot: Record<string, unknown>): string => {
+  if (!Array.isArray(snapshot.addons)) return "";
+  return snapshot.addons.flatMap((candidate) => {
+    const addon = detailRecord(candidate);
+    if (!addon) return [];
+    const name = eventValue(addon.name || "Add-on");
+    if (Array.isArray(addon.variants) && addon.variants.length) {
+      const variants = addon.variants.flatMap((candidateVariant) => {
+        const variant = detailRecord(candidateVariant);
+        if (!variant || Number(variant.quantity) <= 0) return [];
+        return [`${eventValue(variant.value)} x ${Number(variant.quantity)}`];
+      });
+      if (variants.length) return [`${name}: ${variants.join(", ")}`];
+    }
+    if (addon.value !== null && addon.value !== undefined && addon.value !== "") {
+      return [`${name}: ${eventValue(addon.value)}`];
+    }
+    const quantity = Number(addon.quantity) || 0;
+    return quantity > 0 ? [`${name} x ${quantity}`] : [];
+  }).join(" | ");
+};
+
+const totalSummary = (snapshot: Record<string, unknown>): string => {
+  if (snapshot.itemTotal === null || snapshot.itemTotal === undefined || snapshot.itemTotal === "") {
+    return "";
+  }
+  const total = Number(snapshot.itemTotal);
+  if (!Number.isFinite(total)) return "";
+  const currency = eventValue(snapshot.currency || "PLN");
+  try {
+    return new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+    }).format(total);
+  } catch {
+    return `${currency} ${total.toFixed(2)}`;
+  }
+};
+
+const cartItemSummary = (snapshot: Record<string, unknown> | null): string => {
+  if (!snapshot) return "";
+  const date = eventValue(snapshot.experienceDate);
+  const formattedDate = date && dayjs(date).isValid() ? dayjs(date).format("D MMM YYYY") : date;
+  return [
+    formattedDate,
+    eventValue(snapshot.experienceTime),
+    participantSummary(snapshot),
+    addonSummary(snapshot),
+    totalSummary(snapshot),
+  ].filter(Boolean).join(" | ");
+};
+
+export const storefrontJourneyEventSummary = (event: StorefrontJourneyEvent): string => {
+  const details = event.details || {};
+  if (event.type === "cart_item_updated") {
+    const previous = cartItemSummary(detailRecord(details.previousItem));
+    const next = cartItemSummary(detailRecord(details.newItem) || details);
+    if (!previous) return next;
+    if (!next || previous === next) return `Selection: ${previous}`;
+    return `Before: ${previous} | After: ${next}`;
+  }
+  if (!["add_to_cart", "cart_item_removed", "cart_item_edit_started"].includes(event.type)) {
+    return "";
+  }
+  return cartItemSummary(details);
+};
+
 export const storefrontJourneyEventDescription = (event: StorefrontJourneyEvent): string => {
   const details = event.details || {};
   const product = eventValue(details.productName || details.productSlug || "experience");
@@ -42,6 +136,8 @@ export const storefrontJourneyEventDescription = (event: StorefrontJourneyEvent)
   const next = eventValue(details.newValue);
   const participant = eventValue(details.participantType).replace("participants", "guests");
   const addon = eventValue(details.addonName || "Add-on");
+  const number = itemNumber(details);
+  const numberedProduct = number ? `item ${number}: ${product}` : product;
   const descriptions: Record<string, string> = {
     product_viewed: `Viewed ${product}`,
     booking_builder_reached: "Build Your Booking reached",
@@ -52,11 +148,11 @@ export const storefrontJourneyEventDescription = (event: StorefrontJourneyEvent)
     addon_variant_changed: `${addon} size ${eventValue(details.variant)} changed from ${previous} to ${next}`,
     contact_field_completed: `${eventValue(details.field).replaceAll("_", " ")} completed`,
     contact_information_valid: "Contact information completed",
-    add_to_cart: `Added ${product} to cart`,
+    add_to_cart: number ? `Added ${numberedProduct}` : `Added ${product} to cart`,
     cart_opened: "Cart opened",
-    cart_item_removed: `Removed ${product} from cart`,
-    cart_item_edit_started: `Started editing ${product}`,
-    cart_item_updated: `Updated ${product}`,
+    cart_item_removed: number ? `Removed ${numberedProduct}` : `Removed ${product} from cart`,
+    cart_item_edit_started: `Started editing ${numberedProduct}`,
+    cart_item_updated: `Updated ${numberedProduct}`,
     discount_applied: `Applied discount code ${eventValue(details.code)}`,
     checkout_opened: "Secure checkout opened",
     checkout_reopened: "Checkout reopened",
@@ -140,36 +236,40 @@ export const StorefrontActivityTimeline = ({
             </Group>
 
             <Box ml={17} pl="lg" style={{ borderLeft: "2px solid var(--mantine-color-gray-3)" }}>
-              {visit.events.map((event, eventIndex) => (
-                <Box
-                  key={event.id}
-                  pos="relative"
-                  pb={eventIndex < visit.events.length - 1 ? "md" : 0}
-                >
+              {visit.events.map((event, eventIndex) => {
+                const summary = storefrontJourneyEventSummary(event);
+                return (
                   <Box
-                    pos="absolute"
-                    top={6}
-                    left={-29}
-                    w={10}
-                    h={10}
-                    bg={`var(--mantine-color-${eventColor(event.severity)}-6)`}
-                    style={{ borderRadius: "50%", boxShadow: "0 0 0 4px var(--mantine-color-body)" }}
-                  />
-                  <Group justify="space-between" align="flex-start" wrap="wrap" gap={6}>
-                    <Text size="sm" fw={650} style={{ flex: "1 1 260px" }}>
-                      {storefrontJourneyEventDescription(event)}
-                    </Text>
-                    <Group gap={6}>
-                      <Badge size="xs" variant="light" color={sourceColor(event.source)}>
-                        {event.source}
-                      </Badge>
-                      <Text size="xs" c="dimmed" ff="monospace">
-                        {dayjs(event.occurredAt).format("HH:mm:ss")}
+                    key={event.id}
+                    pos="relative"
+                    pb={eventIndex < visit.events.length - 1 ? "md" : 0}
+                  >
+                    <Box
+                      pos="absolute"
+                      top={6}
+                      left={-29}
+                      w={10}
+                      h={10}
+                      bg={`var(--mantine-color-${eventColor(event.severity)}-6)`}
+                      style={{ borderRadius: "50%", boxShadow: "0 0 0 4px var(--mantine-color-body)" }}
+                    />
+                    <Group justify="space-between" align="flex-start" wrap="wrap" gap={6}>
+                      <Text size="sm" fw={650} style={{ flex: "1 1 260px" }}>
+                        {storefrontJourneyEventDescription(event)}
                       </Text>
+                      <Group gap={6}>
+                        <Badge size="xs" variant="light" color={sourceColor(event.source)}>
+                          {event.source}
+                        </Badge>
+                        <Text size="xs" c="dimmed" ff="monospace">
+                          {dayjs(event.occurredAt).format("HH:mm:ss")}
+                        </Text>
+                      </Group>
                     </Group>
-                  </Group>
-                </Box>
-              ))}
+                    {summary && <Text size="xs" c="dimmed" mt={4}>{summary}</Text>}
+                  </Box>
+                );
+              })}
             </Box>
           </Paper>
         );

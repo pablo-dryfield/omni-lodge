@@ -58,6 +58,24 @@ describe('Channel Numbers URL state', () => {
     expect(next.get('productTypes')).toBe('2,10');
   });
 
+  it('persists a single-day custom range with the same start and end date', () => {
+    const selectedDay = new Date(2026, 7, 24, 12);
+    const next = serializeChannelNumbersSearchParams(
+      new URLSearchParams('source=shared'),
+      {
+        preset: 'custom',
+        range: [selectedDay, selectedDay],
+        productTypeIds: ['1', '2'],
+      },
+    );
+
+    expect(next.get('source')).toBe('shared');
+    expect(next.get('period')).toBe('custom');
+    expect(next.get('startDate')).toBe('2026-08-24');
+    expect(next.get('endDate')).toBe('2026-08-24');
+    expect(next.get('productTypes')).toBe('1,2');
+  });
+
   it('uses an absent product-type parameter as the unfiltered default', () => {
     const state = parseChannelNumbersSearchParams(new URLSearchParams(), referenceDate);
 

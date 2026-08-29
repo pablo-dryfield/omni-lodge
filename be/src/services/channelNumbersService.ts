@@ -868,7 +868,7 @@ function buildChannelConfigs(
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 }
 
-type AddonMeta = {
+export type AddonMeta = {
   addonId: number;
   name: string;
   key: string;
@@ -878,12 +878,12 @@ type AddonMeta = {
   productTypeName: string | null;
 };
 
-type ChannelNumbersProductType = {
+export type ChannelNumbersProductType = {
   id: number;
   name: string;
 };
 
-type ChannelNumbersProduct = {
+export type ChannelNumbersProduct = {
   id: number;
   name: string;
   productTypeId: number | null;
@@ -982,40 +982,31 @@ export type ChannelNumbersSummary = {
   cashSummary: ChannelCashSummary;
 };
 
-async function loadActiveProducts(
-  end: dayjs.Dayjs,
+export type ChannelNumbersTrendMetadata = {
+  addons: AddonMeta[];
+  productTypes: ChannelNumbersProductType[];
+  products: ChannelNumbersProduct[];
+};
+
+export type ChannelNumbersTrendRange = {
+  startDate: string;
+  endDate: string;
+  entries: ChannelNumbersDetailEntry[];
+};
+
+export type ChannelNumbersTrendBundle = {
+  currentYear: number;
+  previousYear: number;
+  current: ChannelNumbersTrendRange;
+  previous: ChannelNumbersTrendRange;
+  previousYearMetadata: ChannelNumbersTrendMetadata;
+};
+
+function buildProductMetadata(
+  productRows: Array<{ id: number; name: string; productTypeId: number | null }>,
+  typeRecords: Array<{ id: number; name: string }>,
   addonMeta: AddonMeta[],
-): Promise<{ productTypes: ChannelNumbersProductType[]; products: ChannelNumbersProduct[] }> {
-  const productRows = (await Product.findAll({
-    where: {
-      status: true,
-      createdAt: { [Op.lte]: end.toDate() },
-    },
-    attributes: ['id', 'name', 'productTypeId'],
-    order: [['name', 'ASC']],
-    raw: true,
-  })) as Array<{ id: number; name: string; productTypeId: number | null }>;
-
-  const productTypeIds = new Set<number>();
-  productRows.forEach((row) => {
-    if (row.productTypeId != null) {
-      productTypeIds.add(row.productTypeId);
-    }
-  });
-  addonMeta.forEach((meta) => {
-    if (meta.productTypeId != null) {
-      productTypeIds.add(meta.productTypeId);
-    }
-  });
-
-  const typeRecords =
-    productTypeIds.size > 0
-      ? await ProductType.findAll({
-          where: { id: { [Op.in]: [...productTypeIds] } },
-          order: [['name', 'ASC']],
-        })
-      : [];
-
+): { productTypes: ChannelNumbersProductType[]; products: ChannelNumbersProduct[] } {
   const productTypeLookup = new Map<number, string>();
   typeRecords.forEach((record) => {
     productTypeLookup.set(record.id, record.name);
@@ -1071,6 +1062,43 @@ async function loadActiveProducts(
       : [];
 
   return { productTypes, products: productList };
+}
+
+async function loadActiveProducts(
+  end: dayjs.Dayjs,
+  addonMeta: AddonMeta[],
+): Promise<{ productTypes: ChannelNumbersProductType[]; products: ChannelNumbersProduct[] }> {
+  const productRows = (await Product.findAll({
+    where: {
+      status: true,
+      createdAt: { [Op.lte]: end.toDate() },
+    },
+    attributes: ['id', 'name', 'productTypeId'],
+    order: [['name', 'ASC']],
+    raw: true,
+  })) as Array<{ id: number; name: string; productTypeId: number | null }>;
+
+  const productTypeIds = new Set<number>();
+  productRows.forEach((row) => {
+    if (row.productTypeId != null) {
+      productTypeIds.add(row.productTypeId);
+    }
+  });
+  addonMeta.forEach((meta) => {
+    if (meta.productTypeId != null) {
+      productTypeIds.add(meta.productTypeId);
+    }
+  });
+
+  const typeRecords =
+    productTypeIds.size > 0
+      ? await ProductType.findAll({
+          where: { id: { [Op.in]: [...productTypeIds] } },
+          order: [['name', 'ASC']],
+        })
+      : [];
+
+  return buildProductMetadata(productRows, typeRecords, addonMeta);
 }
 
 export async function getChannelNumbersSummary(params: {
@@ -1457,6 +1485,286 @@ export async function getChannelNumbersSummary(params: {
     productTotals,
     totals,
     cashSummary,
+  };
+}
+
+/**
+ * Loads the two full years used by the platform trend in a single catalog,
+ * counter, and metric pass. The returned buckets contain both attended and
+ * non-show values so callers do not need one query per metric or add-on.
+ */
+export async function getChannelNumbersTrendBundle(params: {
+  referenceDate?: string;
+}): Promise<ChannelNumbersTrendBundle> {
+  const referenceDate = normalizeDateInput(params.referenceDate, dayjs().startOf('day'));
+  const currentYear = referenceDate.year();
+  const previousYear = currentYear - 1;
+  const previousStart = dayjs(`${previousYear}-01-01`).startOf('day');
+  const previousEnd = dayjs(`${previousYear}-12-31`).endOf('day');
+  const currentStart = dayjs(`${currentYear}-01-01`).startOf('day');
+  const currentEnd = dayjs(`${currentYear}-12-31`).endOf('day');
+  const previousStartIso = previousStart.format('YYYY-MM-DD');
+  const previousEndIso = previousEnd.format('YYYY-MM-DD');
+  const currentStartIso = currentStart.format('YYYY-MM-DD');
+  const currentEndIso = currentEnd.format('YYYY-MM-DD');
+
+  type TrendProductRow = {
+    id: number;
+    name: string;
+    productTypeId: number | null;
+    createdAt: Date | string;
+    status: boolean;
+  };
+
+  const [channelRows, addonRows, rawProductAddons, productRows, productTypeRows, counters] =
+    await Promise.all([
+      Channel.findAll({ attributes: ['id', 'name'] }),
+      Addon.findAll({ where: { isActive: true } }),
+      ProductAddon.findAll({
+        include: [
+          {
+            model: Product,
+            as: 'product',
+            include: [{ model: ProductType, as: 'ProductType' }],
+          },
+        ],
+      }),
+      Product.findAll({
+        where: { createdAt: { [Op.lte]: currentEnd.toDate() } },
+        attributes: ['id', 'name', 'productTypeId', 'createdAt', 'status'],
+        raw: true,
+      }) as Promise<TrendProductRow[]>,
+      ProductType.findAll({ attributes: ['id', 'name'], raw: true }) as Promise<
+        Array<{ id: number; name: string }>
+      >,
+      Counter.findAll({
+        where: { date: { [Op.between]: [previousStartIso, currentEndIso] } },
+        attributes: ['id', 'date', 'productId'],
+      }),
+    ]);
+
+  const productAddonRows = rawProductAddons as Array<
+    ProductAddon & { product?: (Product & { ProductType?: ProductType | null }) | null }
+  >;
+  const { configs: addonConfigs, meta: addonMeta } = buildAddonConfigs(
+    addonRows,
+    productAddonRows,
+    null,
+  );
+  const addonLookup = new Map(
+    addonConfigs.map((addon) => [addon.addonId, { key: addon.key, name: addon.name }]),
+  );
+  const channelNameById = new Map(channelRows.map((channel) => [channel.id, channel.name]));
+  const channelIdBySlug = new Map(
+    channelRows.map((channel) => [toChannelSlug(channel.name), channel.id]),
+  );
+  const productNameById = new Map(productRows.map((product) => [product.id, product.name]));
+  const legacyProductId =
+    productRows.find((product) => product.name.toLowerCase() === 'pub crawl')?.id ?? null;
+  const cocktailsAddonId =
+    addonRows.find((addon) => addon.name.toLowerCase() === 'cocktails')?.id ?? null;
+
+  const counterLookup = new Map<
+    number,
+    { date: string; productId: number | null; productName: string | null }
+  >();
+  counters.forEach((counter) => {
+    const resolvedProductId =
+      counter.productId == null && legacyProductId != null && isLegacyCounterDate(counter.date)
+        ? legacyProductId
+        : (counter.productId ?? null);
+    counterLookup.set(counter.id, {
+      date: counter.date,
+      productId: resolvedProductId,
+      productName:
+        resolvedProductId == null
+          ? null
+          : (productNameById.get(resolvedProductId) ?? `Product ${resolvedProductId}`),
+    });
+  });
+
+  const counterIds = Array.from(counterLookup.keys());
+  const legacyCounterIds = counterIds.filter((counterId) => {
+    const counter = counterLookup.get(counterId);
+    return counter ? isLegacyCounterDate(counter.date) : false;
+  });
+  const legacyCounterSet = new Set(legacyCounterIds);
+  const newCounterIds = counterIds.filter((counterId) => !legacyCounterSet.has(counterId));
+
+  const [metricRows, legacyRows] = await Promise.all([
+    newCounterIds.length > 0
+      ? CounterChannelMetric.findAll({
+          where: {
+            counterId: { [Op.in]: newCounterIds },
+            kind: { [Op.in]: ['people', 'addon'] },
+          },
+          attributes: ['counterId', 'channelId', 'kind', 'addonId', 'tallyType', 'period', 'qty'],
+        })
+      : Promise.resolve([]),
+    legacyCounterIds.length > 0
+      ? ((CounterProduct.findAll({
+          where: { counterId: { [Op.in]: legacyCounterIds } },
+          attributes: ['counterId', 'productId', 'quantity', 'total'],
+          raw: true,
+        }) as unknown) as Promise<
+          Array<{ counterId: number; productId: number; quantity: number; total: number }>
+        >)
+      : Promise.resolve([]),
+  ]);
+
+  const legacyMetrics =
+    legacyRows.length > 0
+      ? buildLegacyMetrics({
+          rows: legacyRows.map((row) => ({
+            ...row,
+            productName: productNameById.get(row.productId) ?? null,
+          })),
+          channelIdBySlug,
+          cocktailsAddonId,
+        })
+      : [];
+
+  const metrics: MetricCell[] = [
+    ...metricRows.map((row) => ({
+      counterId: row.counterId,
+      channelId: row.channelId,
+      kind: row.kind as MetricKind,
+      addonId: row.addonId ?? null,
+      tallyType: row.tallyType as MetricTallyType,
+      period:
+        row.tallyType === 'attended'
+          ? null
+          : ((row.period as MetricPeriod | null) ?? 'before_cutoff'),
+      qty: Number(row.qty ?? 0),
+    })),
+    ...legacyMetrics,
+  ];
+
+  type TrendBucket = {
+    counterId: number;
+    channelId: number;
+    addonId: number | null;
+    bookedBefore: number;
+    bookedAfter: number;
+    attended: number;
+  };
+
+  const buckets = new Map<string, TrendBucket>();
+  metrics.forEach((metric) => {
+    if (metric.kind !== 'people' && metric.kind !== 'addon') {
+      return;
+    }
+    const addonId = metric.kind === 'addon' ? (metric.addonId ?? null) : null;
+    if (metric.kind === 'addon' && (addonId == null || !addonLookup.has(addonId))) {
+      return;
+    }
+    const key = `${metric.counterId}|${metric.channelId}|${addonId ?? 'people'}`;
+    const bucket =
+      buckets.get(key) ??
+      {
+        counterId: metric.counterId,
+        channelId: metric.channelId,
+        addonId,
+        bookedBefore: 0,
+        bookedAfter: 0,
+        attended: 0,
+      };
+    if (!buckets.has(key)) {
+      buckets.set(key, bucket);
+    }
+
+    const qty = Number(metric.qty ?? 0);
+    if (metric.tallyType === 'booked') {
+      if (metric.period === 'before_cutoff') {
+        bucket.bookedBefore += qty;
+      } else {
+        bucket.bookedAfter += qty;
+      }
+    } else if (metric.tallyType === 'attended') {
+      bucket.attended += qty;
+    }
+  });
+
+  const entries: ChannelNumbersDetailEntry[] = [];
+  buckets.forEach((bucket) => {
+    const counter = counterLookup.get(bucket.counterId);
+    if (!counter) {
+      return;
+    }
+    const addon = bucket.addonId == null ? null : (addonLookup.get(bucket.addonId) ?? null);
+    const nonShow = Math.max(bucket.bookedBefore + bucket.bookedAfter - bucket.attended, 0);
+    entries.push({
+      counterId: bucket.counterId,
+      counterDate: counter.date,
+      channelId: bucket.channelId,
+      channelName: channelNameById.get(bucket.channelId) ?? `Channel ${bucket.channelId}`,
+      productId: counter.productId,
+      productName: counter.productName,
+      addonKey: addon?.key ?? null,
+      addonName: addon?.name ?? null,
+      bookedBefore: bucket.bookedBefore,
+      bookedAfter: bucket.bookedAfter,
+      attended: bucket.attended,
+      nonShow,
+      value: bucket.attended,
+      note: null,
+    });
+  });
+
+  entries.sort((a, b) => {
+    if (a.counterDate !== b.counterDate) {
+      return a.counterDate.localeCompare(b.counterDate);
+    }
+    if (a.channelName !== b.channelName) {
+      return a.channelName.localeCompare(b.channelName);
+    }
+    if (a.channelId !== b.channelId) {
+      return a.channelId - b.channelId;
+    }
+    if ((a.addonKey ?? '') !== (b.addonKey ?? '')) {
+      return (a.addonKey ?? '').localeCompare(b.addonKey ?? '');
+    }
+    return a.counterId - b.counterId;
+  });
+
+  const previousProductRows = productRows.filter(
+    (product) => product.status && !dayjs(product.createdAt).isAfter(previousEnd),
+  );
+  const previousProductTypeIds = new Set<number>();
+  previousProductRows.forEach((product) => {
+    if (product.productTypeId != null) {
+      previousProductTypeIds.add(product.productTypeId);
+    }
+  });
+  addonMeta.forEach((addon) => {
+    if (addon.productTypeId != null) {
+      previousProductTypeIds.add(addon.productTypeId);
+    }
+  });
+  const previousMetadata = buildProductMetadata(
+    previousProductRows,
+    productTypeRows.filter((productType) => previousProductTypeIds.has(productType.id)),
+    addonMeta,
+  );
+
+  return {
+    currentYear,
+    previousYear,
+    current: {
+      startDate: currentStartIso,
+      endDate: currentEndIso,
+      entries: entries.filter((entry) => entry.counterDate >= currentStartIso),
+    },
+    previous: {
+      startDate: previousStartIso,
+      endDate: previousEndIso,
+      entries: entries.filter((entry) => entry.counterDate <= previousEndIso),
+    },
+    previousYearMetadata: {
+      addons: addonMeta,
+      productTypes: previousMetadata.productTypes,
+      products: previousMetadata.products,
+    },
   };
 }
 

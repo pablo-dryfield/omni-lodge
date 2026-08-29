@@ -33,7 +33,6 @@ import { useSearchParams } from 'react-router-dom';
 
 import {
   fetchChannelNumbersBootstrap,
-  fetchChannelNumbersSummary,
   recordChannelCashCollection,
   fetchChannelNumbersDetails,
 } from '../../api/channelNumbers';
@@ -45,25 +44,39 @@ import {
   ChannelCashEntry,
   type ChannelNumbersDetailMetric,
   type ChannelNumbersDetailEntry,
+  type ChannelNumbersTrend,
+  type ChannelNumbersTrendMetadata,
 } from '../../types/channelNumbers/ChannelNumbersSummary';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { selectFinanceAccounts, selectFinanceCategories, selectFinanceClients } from '../../selectors/financeSelectors';
 import { createFinanceTransaction } from '../../actions/financeActions';
 import { setFinanceBasics } from '../../reducers/financeReducer';
 import {
+  CHANNEL_NUMBERS_QUERY_PARAMS,
   type ChannelNumbersPreset,
   type ChannelNumbersUrlSelection,
   parseChannelNumbersSearchParams,
   resolveChannelNumbersPresetRange,
   serializeChannelNumbersSearchParams,
 } from '../../utils/channelNumbersUrlState';
-import { serializeProductTypeSelection } from '../../utils/productTypeQuery';
+import {
+  resolveBookingsSummaryProductTypeValues,
+  serializeProductTypeSelection,
+} from '../../utils/productTypeQuery';
+import {
+  groupChannelNumbersTrendEntries,
+  isExcludedChannelNumbersTrendAddonName as isExcludedNoShowAddonName,
+} from '../../utils/channelNumbersTrend';
 
-const DATE_FORMAT = 'YYYY-MM-DD';
 const MAIN_PRODUCT_TYPE_SLUG = 'main product';
 const MAIN_PRODUCT_LABEL = 'Main Product';
 const ACTIVITY_PRODUCT_LABEL = 'Activities';
 const LEGACY_CUTOFF_DATE = '2025-10-01';
+const CHANNEL_NUMBERS_PERIOD_OPTIONS: Array<{ value: ChannelNumbersPreset; label: string }> = [
+  { value: 'thisMonth', label: 'This Month' },
+  { value: 'lastMonth', label: 'Last Month' },
+  { value: 'custom', label: 'Custom Range' },
+];
 
 const DETAIL_METRIC_META: Record<
   ChannelNumbersDetailMetric,
@@ -79,14 +92,6 @@ const DETAIL_METRIC_META: Record<
 const normalizeTypeName = (value?: string | null) => (value ?? 'Other').trim().toLowerCase();
 const getProductTypeFilterValue = (typeId: number | string | null, typeName?: string | null) =>
   typeId != null ? String(typeId) : `name:${normalizeTypeName(typeName ?? 'Other')}`;
-
-const formatDisplayRange = (value: [Date | null, Date | null]) => {
-  const [start, end] = value;
-  if (!start || !end) {
-    return 'Select a date range';
-  }
-  return `${dayjs(start).format('MMM D, YYYY')} - ${dayjs(end).format('MMM D, YYYY')}`;
-};
 
 type ProductGroup = {
   id: number | string;
@@ -176,12 +181,9 @@ const getQuantityForProduct = (product: ProductGroup, metrics?: ChannelProductMe
 };
 
 const normalizeProductName = (value?: string | null) => (value ?? '').trim().toLowerCase();
-const isExcludedNoShowAddonName = (value?: string | null) => {
-  const normalized = (value ?? '').trim().toLowerCase();
-  return normalized.includes('photo') || normalized.includes('t-shirt') || normalized.includes('tshirt');
-};
-
-const buildProductTypeLookup = (summary: ChannelNumbersSummaryType | null): ProductTypeLookup => {
+const buildProductTypeLookup = (
+  summary: ChannelNumbersTrendMetadata | null,
+): ProductTypeLookup => {
   const byId = new Map<number, string>();
   const byName = new Map<string, string>();
   if (!summary) {
@@ -381,20 +383,18 @@ const ChannelNumbersSummary = () => {
     [searchParams],
   );
   const { preset, range } = channelUrlState;
+  const activeDateRangeRef = useRef({
+    startDate: channelUrlState.startDate,
+    endDate: channelUrlState.endDate,
+  });
+  activeDateRangeRef.current = {
+    startDate: channelUrlState.startDate,
+    endDate: channelUrlState.endDate,
+  };
   const [customRangeDraft, setCustomRangeDraft] = useState<[Date | null, Date | null] | null>(null);
   const [summary, setSummary] = useState<ChannelNumbersSummaryType | null>(null);
-  const [previousYearSummary, setPreviousYearSummary] = useState<ChannelNumbersSummaryType | null>(null);
-  const [previousYearLoading, setPreviousYearLoading] = useState(false);
+  const [trend, setTrend] = useState<ChannelNumbersTrend | null>(null);
   const [attendeesChartGranularity, setAttendeesChartGranularity] = useState<ChartGranularity>('month');
-  const [attendeesEntriesCurrent, setAttendeesEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
-  const [attendeesEntriesPrevious, setAttendeesEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
-  const [addonAttendeesEntriesCurrent, setAddonAttendeesEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
-  const [addonAttendeesEntriesPrevious, setAddonAttendeesEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
-  const [noShowEntriesCurrent, setNoShowEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
-  const [noShowEntriesPrevious, setNoShowEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
-  const [addonNoShowEntriesCurrent, setAddonNoShowEntriesCurrent] = useState<ChannelNumbersDetailEntry[]>([]);
-  const [addonNoShowEntriesPrevious, setAddonNoShowEntriesPrevious] = useState<ChannelNumbersDetailEntry[]>([]);
-  const [attendeesChartLoading, setAttendeesChartLoading] = useState(false);
   const [platformTrendFullscreen, setPlatformTrendFullscreen] = useState(false);
   const [activeTrendLabel, setActiveTrendLabel] = useState<string | number | null>(null);
   const [suppressTrendTooltip, setSuppressTrendTooltip] = useState(false);
@@ -424,18 +424,15 @@ const ChannelNumbersSummary = () => {
     error: null,
   });
   const chartYear = useMemo(() => {
+    if (trend?.currentYear) {
+      return trend.currentYear;
+    }
     if (summary?.endDate) {
       return dayjs(summary.endDate).year();
     }
     return dayjs(channelUrlState.endDate).year();
-  }, [channelUrlState.endDate, summary?.endDate]);
-  const trendAddonKeys = useMemo(
-    () =>
-      (summary?.addons ?? [])
-        .filter((addon) => !isExcludedNoShowAddonName(addon.name))
-        .map((addon) => addon.key),
-    [summary?.addons],
-  );
+  }, [channelUrlState.endDate, summary?.endDate, trend?.currentYear]);
+  const previousChartYear = trend?.previousYear ?? chartYear - 1;
 
   const commitUrlState = useCallback(
     (selection: ChannelNumbersUrlSelection) => {
@@ -456,7 +453,7 @@ const ChannelNumbersSummary = () => {
 
   useEffect(() => {
     setCustomRangeDraft(null);
-  }, [searchParams]);
+  }, [channelUrlState.endDate, channelUrlState.preset, channelUrlState.startDate]);
 
   const handlePresetChange = useCallback(
     (value: ChannelNumbersPreset) => {
@@ -489,10 +486,11 @@ const ChannelNumbersSummary = () => {
     [channelUrlState.productTypeIds, commitUrlState],
   );
 
-  const fetchSummary = useCallback(async (): Promise<ChannelNumbersSummaryType | null> => {
+  const fetchBootstrap = useCallback(async (signal?: AbortSignal) => {
     const response = await fetchChannelNumbersBootstrap({
       startDate: channelUrlState.startDate,
       endDate: channelUrlState.endDate,
+      signal,
     });
     if (response?.finance) {
       dispatch(
@@ -504,26 +502,38 @@ const ChannelNumbersSummary = () => {
         }),
       );
     }
-    return response.summary ?? null;
+    return response;
   }, [channelUrlState.endDate, channelUrlState.startDate, dispatch]);
 
+  const applyBootstrapResponse = useCallback(
+    (response: Awaited<ReturnType<typeof fetchChannelNumbersBootstrap>>) => {
+      const activeRange = activeDateRangeRef.current;
+      if (
+        response.summary?.startDate !== activeRange.startDate ||
+        response.summary?.endDate !== activeRange.endDate
+      ) {
+        return false;
+      }
+      setSummary(response.summary ?? null);
+      setTrend(response.trend ?? null);
+      return true;
+    },
+    [],
+  );
+
   useEffect(() => {
-    let isMounted = true;
+    const controller = new AbortController();
     const run = async () => {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetchSummary();
-        if (!isMounted) {
+        const response = await fetchBootstrap(controller.signal);
+        if (controller.signal.aborted) {
           return;
         }
-        if (response) {
-          setSummary(response);
-        } else {
-          setSummary(null);
-        }
+        applyBootstrapResponse(response);
       } catch (err) {
-        if (!isMounted) {
+        if (controller.signal.aborted) {
           return;
         }
         const message =
@@ -532,149 +542,18 @@ const ChannelNumbersSummary = () => {
           'Failed to load channel numbers';
         setError(message);
         setSummary(null);
+        setTrend(null);
       } finally {
-        if (isMounted) {
+        if (!controller.signal.aborted) {
           setLoading(false);
         }
       }
     };
-    run();
+    void run();
     return () => {
-      isMounted = false;
+      controller.abort();
     };
-  }, [fetchSummary]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const run = async () => {
-      setPreviousYearLoading(true);
-      try {
-        const response = await fetchChannelNumbersSummary({
-          startDate: dayjs(`${chartYear - 1}-01-01`).format(DATE_FORMAT),
-          endDate: dayjs(`${chartYear - 1}-12-31`).format(DATE_FORMAT),
-        });
-        if (!isMounted) {
-          return;
-        }
-        setPreviousYearSummary(response ?? null);
-      } catch {
-        if (isMounted) {
-          setPreviousYearSummary(null);
-        }
-      } finally {
-        if (isMounted) {
-          setPreviousYearLoading(false);
-        }
-      }
-    };
-
-    run();
-    return () => {
-      isMounted = false;
-    };
-  }, [chartYear]);
-
-  useEffect(() => {
-    const currentStart = dayjs(`${chartYear}-01-01`).format(DATE_FORMAT);
-    const currentEnd = dayjs(`${chartYear}-12-31`).format(DATE_FORMAT);
-    const previousStart = dayjs(`${chartYear - 1}-01-01`).format(DATE_FORMAT);
-    const previousEnd = dayjs(`${chartYear - 1}-12-31`).format(DATE_FORMAT);
-
-    let isMounted = true;
-    const fetchAddonMetricEntries = async (
-      startDate: string,
-      endDate: string,
-      metric: 'addon' | 'addonNonShow',
-    ) => {
-      if (trendAddonKeys.length === 0) {
-        return [] as ChannelNumbersDetailEntry[];
-      }
-      const responses = await Promise.all(
-        trendAddonKeys.map((addonKey) =>
-          fetchChannelNumbersDetails({
-            startDate,
-            endDate,
-            metric,
-            addonKey,
-          }),
-        ),
-      );
-      return responses.flatMap((response) => response.entries ?? []);
-    };
-
-    const run = async () => {
-      setAttendeesChartLoading(true);
-      try {
-        const [
-          currentDetails,
-          previousDetails,
-          currentNoShowDetails,
-          previousNoShowDetails,
-          currentAddonAttendeesDetails,
-          previousAddonAttendeesDetails,
-          currentAddonNoShowDetails,
-          previousAddonNoShowDetails,
-        ] = await Promise.all([
-          fetchChannelNumbersDetails({
-            startDate: currentStart,
-            endDate: currentEnd,
-            metric: 'normal',
-          }),
-          fetchChannelNumbersDetails({
-            startDate: previousStart,
-            endDate: previousEnd,
-            metric: 'normal',
-          }),
-          fetchChannelNumbersDetails({
-            startDate: currentStart,
-            endDate: currentEnd,
-            metric: 'nonShow',
-          }),
-          fetchChannelNumbersDetails({
-            startDate: previousStart,
-            endDate: previousEnd,
-            metric: 'nonShow',
-          }),
-          fetchAddonMetricEntries(currentStart, currentEnd, 'addon'),
-          fetchAddonMetricEntries(previousStart, previousEnd, 'addon'),
-          fetchAddonMetricEntries(currentStart, currentEnd, 'addonNonShow'),
-          fetchAddonMetricEntries(previousStart, previousEnd, 'addonNonShow'),
-        ]);
-        if (!isMounted) {
-          return;
-        }
-        setAttendeesEntriesCurrent(currentDetails.entries ?? []);
-        setAttendeesEntriesPrevious(previousDetails.entries ?? []);
-        setAddonAttendeesEntriesCurrent(currentAddonAttendeesDetails);
-        setAddonAttendeesEntriesPrevious(previousAddonAttendeesDetails);
-        setNoShowEntriesCurrent(currentNoShowDetails.entries ?? []);
-        setNoShowEntriesPrevious(previousNoShowDetails.entries ?? []);
-        setAddonNoShowEntriesCurrent(currentAddonNoShowDetails);
-        setAddonNoShowEntriesPrevious(previousAddonNoShowDetails);
-      } catch {
-        if (!isMounted) {
-          return;
-        }
-        setAttendeesEntriesCurrent([]);
-        setAttendeesEntriesPrevious([]);
-        setAddonAttendeesEntriesCurrent([]);
-        setAddonAttendeesEntriesPrevious([]);
-        setNoShowEntriesCurrent([]);
-        setNoShowEntriesPrevious([]);
-        setAddonNoShowEntriesCurrent([]);
-        setAddonNoShowEntriesPrevious([]);
-      } finally {
-        if (isMounted) {
-          setAttendeesChartLoading(false);
-        }
-      }
-    };
-
-    run();
-    return () => {
-      isMounted = false;
-    };
-  }, [chartYear, trendAddonKeys]);
+  }, [applyBootstrapResponse, fetchBootstrap]);
 
   const productTypeGroups = useMemo<ProductTypeGroup[]>(() => {
     if (!summary) {
@@ -813,18 +692,52 @@ const ChannelNumbersSummary = () => {
     [productTypeOptions],
   );
 
-  const selectedProductTypeIds = useMemo(() => {
-    if (!channelUrlState.productTypeIds || availableProductTypeIds.length === 0) {
-      return availableProductTypeIds;
+  const hasExplicitProductTypeSelection = searchParams.has(
+    CHANNEL_NUMBERS_QUERY_PARAMS.productTypeIds,
+  );
+
+  const selectedProductTypeIds = useMemo(
+    () =>
+      resolveBookingsSummaryProductTypeValues(
+        productTypeOptions,
+        channelUrlState.productTypeIds ?? [],
+        hasExplicitProductTypeSelection,
+      ),
+    [channelUrlState.productTypeIds, hasExplicitProductTypeSelection, productTypeOptions],
+  );
+
+  useEffect(() => {
+    if (hasExplicitProductTypeSelection || productTypeOptions.length === 0) {
+      return;
     }
-    const requested = new Set(channelUrlState.productTypeIds);
-    const validSelection = availableProductTypeIds.filter((value) => requested.has(value));
-    return validSelection.length > 0 ? validSelection : availableProductTypeIds;
-  }, [availableProductTypeIds, channelUrlState.productTypeIds]);
+    const productTypeParam = serializeProductTypeSelection(
+      selectedProductTypeIds,
+      availableProductTypeIds,
+      { omitWhenAllSelected: false },
+    );
+    if (!productTypeParam) {
+      return;
+    }
+    commitUrlState({
+      preset,
+      range,
+      productTypeIds: productTypeParam.split(','),
+    });
+  }, [
+    availableProductTypeIds,
+    commitUrlState,
+    hasExplicitProductTypeSelection,
+    preset,
+    productTypeOptions.length,
+    range,
+    selectedProductTypeIds,
+  ]);
 
   const handleProductTypeChange = useCallback(
     (values: string[]) => {
-      const productTypeParam = serializeProductTypeSelection(values, availableProductTypeIds);
+      const productTypeParam = serializeProductTypeSelection(values, availableProductTypeIds, {
+        omitWhenAllSelected: false,
+      });
       commitUrlState({
         preset,
         range,
@@ -903,19 +816,35 @@ const ChannelNumbersSummary = () => {
     [selectedProductTypeIds],
   );
   const isProductTypeFilterActive = useMemo(() => {
-    if (!channelUrlState.productTypeIds || availableProductTypeIds.length === 0) {
+    if (availableProductTypeIds.length === 0) {
       return false;
     }
     return availableProductTypeIds.some((value) => !selectedTypeKeys.has(value));
-  }, [availableProductTypeIds, channelUrlState.productTypeIds, selectedTypeKeys]);
+  }, [availableProductTypeIds, selectedTypeKeys]);
   const currentAggregates = useMemo(
     () => aggregateMetricsByProductType(summary, isProductTypeFilterActive ? selectedTypeKeys : null),
     [isProductTypeFilterActive, selectedTypeKeys, summary],
   );
+  const currentTrendGroups = useMemo(
+    () => groupChannelNumbersTrendEntries(trend?.current.entries ?? []),
+    [trend],
+  );
+  const previousTrendGroups = useMemo(
+    () => groupChannelNumbersTrendEntries(trend?.previous.entries ?? []),
+    [trend],
+  );
+  const attendeesEntriesCurrent = currentTrendGroups.attendees;
+  const attendeesEntriesPrevious = previousTrendGroups.attendees;
+  const addonAttendeesEntriesCurrent = currentTrendGroups.addonAttendees;
+  const addonAttendeesEntriesPrevious = previousTrendGroups.addonAttendees;
+  const noShowEntriesCurrent = currentTrendGroups.noShows;
+  const noShowEntriesPrevious = previousTrendGroups.noShows;
+  const addonNoShowEntriesCurrent = currentTrendGroups.addonNoShows;
+  const addonNoShowEntriesPrevious = previousTrendGroups.addonNoShows;
   const currentProductTypeLookup = useMemo(() => buildProductTypeLookup(summary), [summary]);
   const previousProductTypeLookup = useMemo(
-    () => buildProductTypeLookup(previousYearSummary),
-    [previousYearSummary],
+    () => buildProductTypeLookup(trend?.previousYearMetadata ?? null),
+    [trend?.previousYearMetadata],
   );
   const filteredAttendeesCurrent = useMemo(
     () =>
@@ -1028,7 +957,7 @@ const ChannelNumbersSummary = () => {
         return sum + (entry.value ?? entry.nonShow ?? 0);
       }, 0);
       return [
-        { label: String(chartYear - 1), attendees: lastYearAttendees + lastYearNoShow },
+        { label: String(previousChartYear), attendees: lastYearAttendees + lastYearNoShow },
         { label: String(chartYear), attendees: thisYearAttendees + thisYearNoShow },
       ];
     }
@@ -1051,7 +980,7 @@ const ChannelNumbersSummary = () => {
 
       filteredTotalAttendeesPrevious.forEach((entry) => {
         const date = dayjs(entry.counterDate);
-        if (date.year() !== chartYear - 1) {
+        if (date.year() !== previousChartYear) {
           return;
         }
         const month = date.month();
@@ -1073,7 +1002,7 @@ const ChannelNumbersSummary = () => {
           return;
         }
         const date = dayjs(entry.counterDate);
-        if (date.year() !== chartYear - 1) {
+        if (date.year() !== previousChartYear) {
           return;
         }
         const month = date.month();
@@ -1105,10 +1034,10 @@ const ChannelNumbersSummary = () => {
 
     filteredTotalAttendeesPrevious.forEach((entry) => {
       const date = dayjs(entry.counterDate);
-      if (date.year() !== chartYear - 1) {
+      if (date.year() !== previousChartYear) {
         return;
       }
-      const weekIndex = getWeekIndexWithinYear(date, chartYear - 1);
+      const weekIndex = getWeekIndexWithinYear(date, previousChartYear);
       if (!weekIndex) {
         return;
       }
@@ -1133,10 +1062,10 @@ const ChannelNumbersSummary = () => {
         return;
       }
       const date = dayjs(entry.counterDate);
-      if (date.year() !== chartYear - 1) {
+      if (date.year() !== previousChartYear) {
         return;
       }
-      const weekIndex = getWeekIndexWithinYear(date, chartYear - 1);
+      const weekIndex = getWeekIndexWithinYear(date, previousChartYear);
       if (!weekIndex) {
         return;
       }
@@ -1149,10 +1078,10 @@ const ChannelNumbersSummary = () => {
       const thisYearEnd = thisYearStart.add(6, 'day').year() === chartYear
         ? thisYearStart.add(6, 'day')
         : dayjs(`${chartYear}-12-31`);
-      const lastYearStart = dayjs(`${chartYear - 1}-01-01`).add((weekNumber - 1) * 7, 'day');
-      const lastYearEnd = lastYearStart.add(6, 'day').year() === chartYear - 1
+      const lastYearStart = dayjs(`${previousChartYear}-01-01`).add((weekNumber - 1) * 7, 'day');
+      const lastYearEnd = lastYearStart.add(6, 'day').year() === previousChartYear
         ? lastYearStart.add(6, 'day')
-        : dayjs(`${chartYear - 1}-12-31`);
+        : dayjs(`${previousChartYear}-12-31`);
       return {
         label: String(weekNumber),
         weekNumber,
@@ -1164,6 +1093,7 @@ const ChannelNumbersSummary = () => {
     });
   }, [
     chartYear,
+    previousChartYear,
     attendeesChartGranularity,
     filteredTotalAttendeesCurrent,
     filteredTotalAttendeesPrevious,
@@ -1545,7 +1475,8 @@ const ChannelNumbersSummary = () => {
         note: cashModal.description,
       });
       handleCloseCashModal();
-      await fetchSummary();
+      const response = await fetchBootstrap();
+      applyBootstrapResponse(response);
     } catch (err) {
       const message =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
@@ -1555,7 +1486,7 @@ const ChannelNumbersSummary = () => {
     } finally {
       setCashSubmitting(false);
     }
-  }, [cashModal, dispatch, fetchSummary, handleCloseCashModal, summary]);
+  }, [applyBootstrapResponse, cashModal, dispatch, fetchBootstrap, handleCloseCashModal, summary]);
   const handleCloseDetailModal = useCallback(() => {
     setDetailModal({
       open: false,
@@ -1685,7 +1616,7 @@ const ChannelNumbersSummary = () => {
   };
 
   const renderMetricCard = (label: string, value: number, color: string) => (
-    <Paper withBorder p="md" key={label}>
+    <Paper component="section" aria-label={`${label} metric`} withBorder p="md" key={label}>
       <Group justify="space-between">
         <Stack gap={2}>
           <Text size="sm" c="dimmed">
@@ -1723,57 +1654,44 @@ const ChannelNumbersSummary = () => {
     <Stack mt="lg">
       <Paper withBorder p="md">
         <Stack gap="sm">
-          <Group justify="space-between" align={isMobile ? 'stretch' : 'flex-end'} gap="sm" wrap="wrap">
-            <Stack gap={4} style={{ flex: '1 1 260px', minWidth: 0 }}>
-              <Text fw={600}>Reporting period</Text>
-              <Group gap="xs" wrap="wrap" grow={isMobile}>
-                <Button
-                  size={isMobile ? 'sm' : 'xs'}
-                  variant={preset === 'thisMonth' ? 'filled' : 'light'}
-                  onClick={() => handlePresetChange('thisMonth')}
-                >
-                  This Month
-                </Button>
-                <Button
-                  size={isMobile ? 'sm' : 'xs'}
-                  variant={preset === 'lastMonth' ? 'filled' : 'light'}
-                  onClick={() => handlePresetChange('lastMonth')}
-                >
-                  Last Month
-                </Button>
-                <Button
-                  size={isMobile ? 'sm' : 'xs'}
-                  variant={preset === 'custom' ? 'filled' : 'light'}
-                  onClick={() => handlePresetChange('custom')}
-                >
-                  Custom
-                </Button>
-              </Group>
-            </Stack>
-            <Box
-              w={isMobile ? '100%' : 'auto'}
-              style={{ display: 'flex', justifyContent: isMobile ? 'flex-start' : 'flex-end' }}
-            >
-              {preset === 'custom' ? (
-                <DatePickerInput
-                  type="range"
-                  value={customRangeDraft ?? range}
-                  onChange={handleCustomRangeChange}
-                  maxDate={dayjs().endOf('day').toDate()}
-                  placeholder="Select range"
-                  allowSingleDateInRange
-                  style={{ width: isMobile ? '100%' : 260 }}
-                />
-              ) : (
-                <Text size="sm" c="dimmed" style={{ textAlign: isMobile ? 'left' : 'right', width: '100%' }}>
-                  {formatDisplayRange(range)}
-                </Text>
-              )}
-            </Box>
+          <Group gap="sm" wrap="wrap" align="flex-end" justify={isMobile ? 'stretch' : 'center'}>
+            <Select
+              value={preset}
+              onChange={(value) => {
+                if (value) {
+                  handlePresetChange(value as ChannelNumbersPreset);
+                }
+              }}
+              data={CHANNEL_NUMBERS_PERIOD_OPTIONS}
+              allowDeselect={false}
+              checkIconPosition="right"
+              size={isMobile ? 'xs' : 'sm'}
+              w={isMobile ? '100%' : 220}
+              styles={{
+                input: { textAlign: 'center', fontWeight: 700 },
+                dropdown: { textAlign: 'center' },
+                options: { textAlign: 'center' },
+                option: { justifyContent: 'center', textAlign: 'center', fontWeight: 600 },
+              }}
+            />
+            {preset === 'custom' && (
+              <DatePickerInput
+                label="Date range"
+                type="range"
+                allowSingleDateInRange
+                value={customRangeDraft ?? range}
+                onChange={handleCustomRangeChange}
+                placeholder="Select custom range"
+                size={isMobile ? 'xs' : 'sm'}
+                valueFormat="YYYY-MM-DD"
+                clearable
+                w={isMobile ? '100%' : 280}
+                styles={{ input: { textAlign: 'center' } }}
+              />
+            )}
           </Group>
           {productTypeOptions.length > 0 && (
             <MultiSelect
-              label="Product types"
               data={productTypeOptions}
               value={selectedProductTypeIds}
               onChange={handleProductTypeChange}
@@ -1804,11 +1722,6 @@ const ChannelNumbersSummary = () => {
                 <Group justify="space-between">
                   <Text fw={600}>Platform trend</Text>
                   <Group gap="xs">
-                    {(previousYearLoading || attendeesChartLoading) && (
-                      <Text size="sm" c="dimmed">
-                        Loading...
-                      </Text>
-                    )}
                     <Button
                       size={isMobile ? 'sm' : 'xs'}
                       variant="light"
