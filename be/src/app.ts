@@ -85,6 +85,7 @@ import searchConsoleRoutes from './routes/searchConsoleRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import requestRoutes from './routes/requestRoutes.js';
 import requiredActionRoutes from './routes/requiredActionRoutes.js';
+import healthRoutes from './routes/healthRoutes.js';
 import { financeRouter } from './finance/index.js';
 import { startFinanceRecurringJob } from './finance/jobs/recurringJob.js';
 import { startScheduleJobs } from './jobs/schedules.cron.js';
@@ -215,6 +216,9 @@ app.use(
 );
 
 app.use(instrumentMiddleware);
+
+// Keep this public and independent so clients can verify backend availability.
+app.use('/api/health', healthRoutes);
 
 app.use('/api/', apiLimiter);
 

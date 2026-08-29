@@ -16,8 +16,14 @@ import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { useAppDispatch, useAppSelector } from "./store/hooks";
 import { fetchSession } from "./actions/sessionActions";
 import { fetchAccessSnapshot } from "./actions/accessControlActions";
+import devConfig from "./config/devConfig";
+import prodConfig from "./config/prodConfig";
 import { getNavbarSettings } from "./utils/getNavbarSettings";
-import axiosInstance from "./utils/axiosInstance";
+import {
+  SERVER_AVAILABILITY_CANDIDATE_EVENT,
+  probeServerHealth,
+  type ServerAvailabilityCandidateDetail,
+} from "./utils/serverAvailability";
 
 const MainTabs = lazy(() => import("./components/main/MainTabs"));
 const Routes = lazy(() => import("./components/main/Routes"));
@@ -43,6 +49,10 @@ const SectionLoader = () => (
 );
 
 const PUBLIC_ROUTE_PATHS = new Set(["/privacy-policy", "/data-deletion", "/terms", "/terms-and-conditions"]);
+const SERVER_FAILURE_CONFIRMATION_DELAY_MS = 1500;
+const SERVER_OUTAGE_RETRY_DELAY_MS = 7000;
+const SERVER_HEALTH_PROBE_TIMEOUT_MS = 4000;
+const API_BASE_URL = process.env.NODE_ENV === "production" ? prodConfig.baseURL : devConfig.baseURL;
 
 const AppContent = () => {
   const location = useLocation();
@@ -64,8 +74,12 @@ const AppContent = () => {
   const serverDownRef = useRef(false);
   const serverDownStatusRef = useRef<number | undefined>(undefined);
   const retryTimerRef = useRef<number | null>(null);
-  const checkInFlightRef = useRef(false);
-  const recoverySuccessCountRef = useRef(0);
+  const activeProbeIdRef = useRef<number | null>(null);
+  const nextProbeIdRef = useRef(0);
+  const consecutiveProbeFailuresRef = useRef(0);
+  const confirmationNotBeforeRef = useRef(0);
+  const pendingVisibleProbeRef = useRef(false);
+  const lastCandidateStatusRef = useRef<number | undefined>(undefined);
   const isPublicRoute = PUBLIC_ROUTE_PATHS.has(location.pathname);
 
   const rawNavbarSettings = useMemo(
@@ -87,52 +101,106 @@ const AppContent = () => {
   }, [rawNavbarSettings, sidebarOpened]);
 
   const checkServer = useCallback(async () => {
-    if (checkInFlightRef.current) {
+    if (document.visibilityState === "hidden") {
+      pendingVisibleProbeRef.current = true;
       return;
     }
-    checkInFlightRef.current = true;
+
+    if (activeProbeIdRef.current !== null) {
+      return;
+    }
+
+    if (!serverDownRef.current && consecutiveProbeFailuresRef.current === 1) {
+      const confirmationDelay = confirmationNotBeforeRef.current - Date.now();
+      if (confirmationDelay > 0) {
+        if (retryTimerRef.current === null) {
+          retryTimerRef.current = window.setTimeout(() => {
+            retryTimerRef.current = null;
+            void checkServer();
+          }, confirmationDelay);
+        }
+        return;
+      }
+    }
+
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+
+    const probeId = ++nextProbeIdRef.current;
+    activeProbeIdRef.current = probeId;
+    pendingVisibleProbeRef.current = false;
     setCheckingServer(true);
+
     try {
-      const response = await axiosInstance.get("/session", {
-        withCredentials: true,
-        timeout: 4000,
-        validateStatus: () => true,
-      });
-      if (response.status >= 500) {
-        throw new Error(`Server health check returned ${response.status}`);
+      const result = await probeServerHealth({
+        baseURL: API_BASE_URL,
+        timeoutMs: SERVER_HEALTH_PROBE_TIMEOUT_MS,
+      }).catch(() => ({ available: false, status: undefined }));
+
+      // A probe that began before the PWA was suspended must not change state
+      // after a newer foreground probe has taken its place.
+      if (activeProbeIdRef.current !== probeId) {
+        return;
       }
-      if (retryTimerRef.current) {
-        window.clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
-      }
-      if (serverDownRef.current) {
-        recoverySuccessCountRef.current += 1;
-        if (recoverySuccessCountRef.current >= 2) {
-          recoverySuccessCountRef.current = 0;
+
+      if (result.available) {
+        consecutiveProbeFailuresRef.current = 0;
+        confirmationNotBeforeRef.current = 0;
+        lastCandidateStatusRef.current = undefined;
+
+        if (serverDownRef.current) {
+          serverDownRef.current = false;
+          serverDownStatusRef.current = undefined;
           setServerDown(false);
           setServerDownStatus(undefined);
-        } else {
-          // Keep the outage screen latched until the server answers twice in a row.
-          // A restarting proxy can briefly return one successful response before
-          // the application and database are actually ready.
-          retryTimerRef.current = window.setTimeout(() => {
-            void checkServer();
-          }, 1500);
         }
+        return;
       }
-    } catch {
-      recoverySuccessCountRef.current = 0;
+
       if (serverDownRef.current) {
-        if (retryTimerRef.current) {
-          window.clearTimeout(retryTimerRef.current);
+        if (result.status !== undefined && result.status !== serverDownStatusRef.current) {
+          serverDownStatusRef.current = result.status;
+          setServerDownStatus(result.status);
         }
         retryTimerRef.current = window.setTimeout(() => {
-          checkServer();
-        }, 10000);
+          retryTimerRef.current = null;
+          void checkServer();
+        }, SERVER_OUTAGE_RETRY_DELAY_MS);
+        return;
       }
+
+      if (result.status !== undefined) {
+        lastCandidateStatusRef.current = result.status;
+      }
+
+      if (consecutiveProbeFailuresRef.current === 0) {
+        consecutiveProbeFailuresRef.current = 1;
+        confirmationNotBeforeRef.current = Date.now() + SERVER_FAILURE_CONFIRMATION_DELAY_MS;
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          void checkServer();
+        }, SERVER_FAILURE_CONFIRMATION_DELAY_MS);
+        return;
+      }
+
+      const confirmedStatus = result.status ?? lastCandidateStatusRef.current;
+      consecutiveProbeFailuresRef.current = 0;
+      confirmationNotBeforeRef.current = 0;
+      serverDownRef.current = true;
+      serverDownStatusRef.current = confirmedStatus;
+      setServerDownStatus(confirmedStatus);
+      setServerDown(true);
+      retryTimerRef.current = window.setTimeout(() => {
+        retryTimerRef.current = null;
+        void checkServer();
+      }, SERVER_OUTAGE_RETRY_DELAY_MS);
     } finally {
-      checkInFlightRef.current = false;
-      setCheckingServer(false);
+      if (activeProbeIdRef.current === probeId) {
+        activeProbeIdRef.current = null;
+        setCheckingServer(false);
+      }
     }
   }, []);
 
@@ -154,51 +222,95 @@ const AppContent = () => {
 
   useEffect(() => {
     serverDownRef.current = serverDown;
-    if (!serverDown && retryTimerRef.current) {
-      window.clearTimeout(retryTimerRef.current);
-      retryTimerRef.current = null;
-    }
-    if (serverDown) {
-      recoverySuccessCountRef.current = 0;
-      checkServer();
-    }
-  }, [serverDown, checkServer]);
+  }, [serverDown]);
 
   useEffect(() => {
     serverDownStatusRef.current = serverDownStatus;
   }, [serverDownStatus]);
 
   useEffect(() => {
-    const handleServerDown = (event: Event) => {
-      const detail = (event as CustomEvent).detail as { status?: number };
-      if (!serverDownRef.current) {
-        recoverySuccessCountRef.current = 0;
-        setServerDown(true);
-        setServerDownStatus(detail?.status);
+    const handleAvailabilityCandidate = (event: Event) => {
+      const detail = (event as CustomEvent<ServerAvailabilityCandidateDetail>).detail;
+      lastCandidateStatusRef.current = detail?.status;
+
+      if (document.visibilityState === "hidden") {
+        pendingVisibleProbeRef.current = true;
         return;
       }
-      if (detail?.status && detail.status !== serverDownStatusRef.current) {
-        setServerDownStatus(detail.status);
+
+      // One failed application request is only evidence of a possible outage.
+      // The native health probe confirms it independently before any overlay is shown.
+      if (!serverDownRef.current) {
+        void checkServer();
       }
     };
 
-    const handleOnline = () => {
-      if (serverDownRef.current) {
-        checkServer();
+    const checkWhenVisible = () => {
+      if (document.visibilityState === "hidden") {
+        pendingVisibleProbeRef.current = true;
+        return;
       }
+
+      void checkServer();
+    };
+
+    const checkOnFocus = () => {
+      if (document.visibilityState === "hidden") {
+        pendingVisibleProbeRef.current = true;
+        return;
+      }
+
+      if (pendingVisibleProbeRef.current || serverDownRef.current) {
+        void checkServer();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        // Invalidate a probe the OS may have suspended. It can still resolve, but
+        // its result is ignored and it cannot block a fresh foreground check.
+        activeProbeIdRef.current = null;
+        nextProbeIdRef.current += 1;
+        setCheckingServer(false);
+        consecutiveProbeFailuresRef.current = 0;
+        confirmationNotBeforeRef.current = 0;
+        pendingVisibleProbeRef.current = true;
+        if (retryTimerRef.current !== null) {
+          window.clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
+        }
+        return;
+      }
+
+      if (pendingVisibleProbeRef.current || serverDownRef.current) {
+        pendingVisibleProbeRef.current = false;
+      }
+      void checkServer();
     };
 
     const handleOpenGame = () => {
       setShowMiniGame(true);
     };
 
-    window.addEventListener("omni-server-down", handleServerDown as EventListener);
-    window.addEventListener("online", handleOnline);
+    window.addEventListener(SERVER_AVAILABILITY_CANDIDATE_EVENT, handleAvailabilityCandidate as EventListener);
+    window.addEventListener("online", checkWhenVisible);
+    window.addEventListener("focus", checkOnFocus);
+    window.addEventListener("pageshow", checkWhenVisible);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("omni-open-game", handleOpenGame as EventListener);
     return () => {
-      window.removeEventListener("omni-server-down", handleServerDown as EventListener);
-      window.removeEventListener("online", handleOnline);
+      window.removeEventListener(SERVER_AVAILABILITY_CANDIDATE_EVENT, handleAvailabilityCandidate as EventListener);
+      window.removeEventListener("online", checkWhenVisible);
+      window.removeEventListener("focus", checkOnFocus);
+      window.removeEventListener("pageshow", checkWhenVisible);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("omni-open-game", handleOpenGame as EventListener);
+      activeProbeIdRef.current = null;
+      nextProbeIdRef.current += 1;
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
     };
   }, [checkServer]);
 

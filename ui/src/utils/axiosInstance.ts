@@ -1,6 +1,10 @@
 import axios from 'axios';
 import prodConfig from '../config/prodConfig';
 import devConfig from '../config/devConfig';
+import {
+  dispatchServerAvailabilityCandidate,
+  type ServerAvailabilityCandidateDetail,
+} from './serverAvailability';
 
 const config = process.env.NODE_ENV === 'production' ? prodConfig : devConfig;
 
@@ -8,17 +12,6 @@ const instance = axios.create({
   baseURL: config.baseURL, // Replace with the actual URL of your server
   withCredentials: true,
 });
-
-const notifyServerDown = (details: { status?: number; isNetworkError?: boolean; message?: string }) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.dispatchEvent(new CustomEvent("omni-server-down", { detail: details }));
-  } catch {
-    // Ignore event dispatch failures in older environments.
-  }
-};
 
 // Add a request interceptor
 instance.interceptors.request.use(
@@ -49,17 +42,54 @@ const isRequestCanceled = (error: unknown): boolean => {
   );
 };
 
+const resolveRequestUrl = (baseURL: unknown, url: unknown): string | undefined => {
+  if (typeof url !== "string" || !url) {
+    return typeof baseURL === "string" && baseURL ? baseURL : undefined;
+  }
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(url) || typeof baseURL !== "string" || !baseURL) {
+    return url;
+  }
+  return `${baseURL.replace(/\/+$/, "")}/${url.replace(/^\/+/, "")}`;
+};
+
+type AvailabilityCandidateError = {
+  response?: { status?: unknown };
+  config?: { method?: unknown; baseURL?: unknown; url?: unknown };
+  message?: unknown;
+  code?: unknown;
+};
+
+const getCandidateDetail = (error: unknown): ServerAvailabilityCandidateDetail => {
+  const candidate = (
+    typeof error === "object" && error !== null ? error : {}
+  ) as AvailabilityCandidateError;
+  const method = typeof candidate.config?.method === "string"
+    ? candidate.config.method.toUpperCase()
+    : undefined;
+
+  return {
+    status: typeof candidate.response?.status === "number" ? candidate.response.status : undefined,
+    isNetworkError: !candidate.response,
+    message: typeof candidate.message === "string" ? candidate.message : undefined,
+    code: typeof candidate.code === "string" ? candidate.code : undefined,
+    method,
+    url: resolveRequestUrl(candidate.config?.baseURL, candidate.config?.url),
+    visibilityState: typeof document === "undefined" ? undefined : document.visibilityState,
+    occurredAt: Date.now(),
+  };
+};
+
 instance.interceptors.response.use(
   (response) => response,
   (error) => {
     if (isRequestCanceled(error)) {
       return Promise.reject(error);
     }
-    const status = error?.response?.status as number | undefined;
-    const isNetworkError = !error?.response;
+    const detail = getCandidateDetail(error);
+    const { status, isNetworkError } = detail;
     const isServerError = typeof status === "number" && status >= 500;
     if (isNetworkError || isServerError) {
-      notifyServerDown({ status, isNetworkError, message: error?.message });
+      dispatchServerAvailabilityCandidate(detail);
     }
     return Promise.reject(error);
   }
