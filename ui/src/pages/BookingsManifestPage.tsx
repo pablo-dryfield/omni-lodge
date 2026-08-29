@@ -74,6 +74,10 @@ import { useModuleAccess } from "../hooks/useModuleAccess";
 import axiosInstance from "../utils/axiosInstance";
 import { getManifestTshirtSizeLabels } from "../utils/manifestTshirtSizes";
 import {
+  formatStorefrontSaleDuration,
+  getStorefrontSaleTiming,
+} from "../utils/storefrontSaleTiming";
+import {
   StorefrontActivityTimeline,
   type StorefrontJourneyVisit,
 } from "../components/storefront/StorefrontActivityTimeline";
@@ -1345,6 +1349,8 @@ const formatDateTime = (value?: string | null): string => {
   const parsed = dayjs(value);
   return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm") : String(value);
 };
+
+const formatSaleTime = (value: string): string => dayjs(value).format("HH:mm:ss");
 
 const formatBookingActivityDate = (booking: BookingDetailsBooking): string => {
   const value = booking.experienceDate ?? booking.date;
@@ -5493,6 +5499,47 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
 
+  const storefrontSaleTiming = getStorefrontSaleTiming(detailsState.data?.storeActivity?.visits);
+  const storefrontActivityCart = detailsState.data?.storeActivity?.cart;
+  const storefrontCartTimingEntries: Array<{ label: string; value: string | null }> = storefrontActivityCart
+    ? [
+      {
+        label: "Cart opened",
+        value: storefrontActivityCart.openedAt ? formatDateTime(storefrontActivityCart.openedAt) : null,
+      },
+      {
+        label: "Sale Started",
+        value: storefrontSaleTiming ? formatSaleTime(storefrontSaleTiming.startedAt) : null,
+      },
+      {
+        label: "Sale Finished",
+        value: storefrontSaleTiming ? formatSaleTime(storefrontSaleTiming.finishedAt) : null,
+      },
+      {
+        label: "Duration",
+        value: storefrontSaleTiming
+          ? formatStorefrontSaleDuration(storefrontSaleTiming.durationSeconds)
+          : null,
+      },
+      {
+        label: "Recovery sent",
+        value: storefrontActivityCart.recoverySentAt
+          ? formatDateTime(storefrontActivityCart.recoverySentAt)
+          : null,
+      },
+      {
+        label: "Recovery opened",
+        value: storefrontActivityCart.recoveryOpenedAt
+          ? formatDateTime(storefrontActivityCart.recoveryOpenedAt)
+          : null,
+      },
+      {
+        label: "Recovered",
+        value: storefrontActivityCart.recoveredAt ? formatDateTime(storefrontActivityCart.recoveredAt) : null,
+      },
+    ]
+    : [];
+
   return (
 
     <PageAccessGuard pageSlug={PAGE_SLUGS.bookingsManifest}>
@@ -7939,17 +7986,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                             </Group>
                           </Group>
                           <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="md" mt="lg">
-                            {[
-                              ["Cart opened", detailsState.data.storeActivity.cart.openedAt],
-                              ["Checkout started", detailsState.data.storeActivity.cart.checkoutStartedAt],
-                              ["Recovery sent", detailsState.data.storeActivity.cart.recoverySentAt],
-                              ["Recovery opened", detailsState.data.storeActivity.cart.recoveryOpenedAt],
-                              ["Recovered", detailsState.data.storeActivity.cart.recoveredAt],
-                              ["Converted", detailsState.data.storeActivity.cart.convertedAt],
-                            ].filter(([, value]) => Boolean(value)).map(([label, value]) => (
+                            {storefrontCartTimingEntries.filter(({ value }) => Boolean(value)).map(({ label, value }) => (
                               <Box key={label}>
                                 <Text size="xs" c="dimmed">{label}</Text>
-                                <Text size="sm" fw={600}>{formatDateTime(value)}</Text>
+                                <Text size="sm" fw={600}>{value}</Text>
                               </Box>
                             ))}
                           </SimpleGrid>
