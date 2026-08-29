@@ -28,6 +28,7 @@ import {
   Checkbox,
   Accordion,
   Tooltip,
+  Image,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import { useSearchParams } from 'react-router-dom';
@@ -39,6 +40,9 @@ import {
   type LockedComponentSummary,
   type PayReimbursementEntry,
   type PayRecordedEntry,
+  type PayPayoutReceiptDetail,
+  type PayPayoutReceiptHistoryEntry,
+  type PayPayoutReceiptHistoryResponse,
 } from '../types/pays/Pay';
 import type { CompensationComponent } from '../types/compensation/CompensationComponent';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
@@ -62,7 +66,14 @@ import {
 } from '../selectors/financeSelectors';
 import type { FinanceVendor, FinanceCategory } from '../types/finance';
 import type { ServerResponse } from '../types/general/ServerResponse';
-import { IconChevronLeft, IconChevronRight, IconTrash } from '@tabler/icons-react';
+import { IconChevronLeft, IconChevronRight, IconHistory, IconReceipt, IconTrash } from '@tabler/icons-react';
+import {
+  buildPayReceiptHistoryLookupParams,
+  canOpenPayReceipt,
+  getPayReceiptHistoryEvent,
+  getPayReceiptHistoryStatusMeta,
+  getPayReceiptStatusMeta,
+} from './paysReceiptUtils';
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
 const DEFAULT_CURRENCY = 'PLN';
@@ -738,6 +749,55 @@ type PaidEntriesModalState = {
   selectedIds: number[];
 };
 
+const extractRequestErrorMessage = (error: unknown, fallback: string): string => {
+  const responseData = (error as { response?: { data?: unknown } })?.response?.data;
+  const firstEntry = Array.isArray(responseData) ? responseData[0] : responseData;
+  if (firstEntry && typeof firstEntry === 'object' && 'message' in firstEntry) {
+    const message = (firstEntry as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message.trim();
+    }
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return fallback;
+};
+
+type StaffPayoutBatchResponse = {
+  duplicated: boolean;
+  batchKey: string;
+  receipts?: Array<{
+    id: number;
+    actionId: number | null;
+    status: 'pending' | 'completed' | 'cancelled';
+    payoutBatchKey: string;
+  }>;
+};
+
+type ReceiptEvidenceModalState = {
+  open: boolean;
+  receiptId: number | null;
+  detail: PayPayoutReceiptDetail | null;
+  loading: boolean;
+  error: string | null;
+  photoUrl: string | null;
+  signatureUrl: string | null;
+  history: PayPayoutReceiptHistoryEntry[];
+  historyLoading: boolean;
+  historyError: string | null;
+  historyHasMore: boolean;
+};
+
+type ReceiptHistoryBrowserModalState = {
+  open: boolean;
+  staff: Pay | null;
+  receipts: PayPayoutReceiptHistoryEntry[];
+  loading: boolean;
+  error: string | null;
+  hasMore: boolean;
+};
+
 type OpeningBalanceDetailRow = {
   staff: Pay;
   openingBalance: number;
@@ -773,6 +833,29 @@ const createEmptyPaidEntriesModalState = (): PaidEntriesModalState => ({
   open: false,
   staff: null,
   selectedIds: [],
+});
+
+const createEmptyReceiptEvidenceModalState = (): ReceiptEvidenceModalState => ({
+  open: false,
+  receiptId: null,
+  detail: null,
+  loading: false,
+  error: null,
+  photoUrl: null,
+  signatureUrl: null,
+  history: [],
+  historyLoading: false,
+  historyError: null,
+  historyHasMore: false,
+});
+
+const createEmptyReceiptHistoryBrowserModalState = (): ReceiptHistoryBrowserModalState => ({
+  open: false,
+  staff: null,
+  receipts: [],
+  loading: false,
+  error: null,
+  hasMore: false,
 });
 
 const PAYMENT_BUCKET_METADATA: Record<
@@ -827,7 +910,7 @@ const normalizeRecordedLineLabel = (value: string | null | undefined) => {
   return normalized === 'affiliate commission' ? 'promotion sales' : normalized;
 };
 
-const buildDefaultPaymentLines = (
+export const buildDefaultPaymentLines = (
   staff: Pay,
   categoryLookup: Map<string, FinanceCategory>,
   fallbackCategoryId: string,
@@ -1056,12 +1139,15 @@ const buildDefaultPaymentLines = (
     return roundLineAmount(consumed);
   };
 
-  const pushRemainingLine = (line: Omit<EntryPaymentLine, 'id'>) => {
+  const pushRemainingLine = (
+    line: Omit<EntryPaymentLine, 'id'>,
+    options?: { reconcileRecordedPayments?: boolean },
+  ) => {
     const grossAmount = roundLineAmount(line.amount);
     if (grossAmount <= 0) {
       return 0;
     }
-    const paidAmount = consumePaidAmount(line, grossAmount);
+    const paidAmount = options?.reconcileRecordedPayments === false ? 0 : consumePaidAmount(line, grossAmount);
     const remainingAmount = roundLineAmount(Math.max(grossAmount - paidAmount, 0));
     if (remainingAmount <= 0) {
       return 0;
@@ -1262,18 +1348,24 @@ const buildDefaultPaymentLines = (
     outstandingAffiliateBookings.reduce((sum, booking) => sum + booking.affiliateCommissionAmount, 0),
   );
   if (staff.userId && affiliateCommissionAmount > 0 && outstandingAffiliateBookings.length > 0) {
-    pushRemainingLine({
-      label: 'Promotion Sales',
-      amount: affiliateCommissionAmount,
-      categoryId: findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId),
-      accountId: '',
-      description: `Promotion sales payout for ${staff.firstName}`,
-      affiliatePayout: {
-        affiliateUserId: staff.userId,
-        bookingIds: outstandingAffiliateBookings.map((booking) => booking.id),
+    pushRemainingLine(
+      {
+        label: 'Promotion Sales',
+        amount: affiliateCommissionAmount,
+        categoryId: findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId),
+        accountId: '',
+        description: `Promotion sales payout for ${staff.firstName}`,
+        affiliatePayout: {
+          affiliateUserId: staff.userId,
+          bookingIds: outstandingAffiliateBookings.map((booking) => booking.id),
+        },
+        include: true,
       },
-      include: true,
-    });
+      // Affiliate payout state already identifies exactly which bookings remain unpaid.
+      // Generic label reconciliation would let an older Promotion Sales payment consume
+      // commission from these newly outstanding booking IDs a second time.
+      { reconcileRecordedPayments: false },
+    );
   }
 
   if (lines.length === 0) {
@@ -1556,11 +1648,13 @@ const PaidEntriesTable = ({
   entries,
   selectedIds,
   onToggle,
+  onOpenReceipt,
   compact = false,
 }: {
   entries: PayRecordedEntry[];
   selectedIds: number[];
   onToggle: (entryId: number, checked: boolean) => void;
+  onOpenReceipt?: (receiptId: number) => void;
   compact?: boolean;
 }) => {
   if (compact) {
@@ -1568,6 +1662,8 @@ const PaidEntriesTable = ({
       <Stack gap="xs">
         {entries.map((entry) => {
           const selected = selectedIds.includes(entry.id);
+          const receipt = entry.receipt;
+          const receiptStatus = getPayReceiptStatusMeta(receipt);
           return (
             <Paper
               key={entry.id}
@@ -1594,7 +1690,7 @@ const PaidEntriesTable = ({
                   </Text>
                   <Text size="xs" c="dimmed">
                     {dayjs(entry.date).format('MMM D, YYYY')}
-                    {entry.financeTransactionId ? ` · Finance TX #${entry.financeTransactionId}` : ''}
+                    {entry.financeTransactionId ? ` | Finance TX #${entry.financeTransactionId}` : ''}
                   </Text>
                 </Stack>
                 <Text size="lg" fw={700}>
@@ -1603,6 +1699,21 @@ const PaidEntriesTable = ({
                 <Text size="sm" c={entry.note ? undefined : 'dimmed'}>
                   {entry.note || 'No note'}
                 </Text>
+                <Stack gap={6} align="center">
+                  <Badge color={receiptStatus.color} variant="light">
+                    {receiptStatus.label}
+                  </Badge>
+                  {canOpenPayReceipt(receipt) && onOpenReceipt ? (
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      leftSection={<IconReceipt size={15} />}
+                      onClick={() => onOpenReceipt(receipt.id)}
+                    >
+                      View receipt
+                    </Button>
+                  ) : null}
+                </Stack>
               </Stack>
             </Paper>
           );
@@ -1620,10 +1731,14 @@ const PaidEntriesTable = ({
           <th>Component</th>
           <th>Amount</th>
           <th>Note</th>
+          <th>Receipt</th>
         </tr>
       </thead>
       <tbody>
-        {entries.map((entry) => (
+        {entries.map((entry) => {
+          const receipt = entry.receipt;
+          const receiptStatus = getPayReceiptStatusMeta(receipt);
+          return (
           <tr key={entry.id}>
             <td style={{ textAlign: 'center' }}>
               <Checkbox
@@ -1651,8 +1766,26 @@ const PaidEntriesTable = ({
                 {entry.note || 'No note'}
               </Text>
             </td>
+            <td>
+              <Stack gap={4} align="flex-start">
+                <Badge color={receiptStatus.color} variant="light">
+                  {receiptStatus.label}
+                </Badge>
+                {canOpenPayReceipt(receipt) && onOpenReceipt ? (
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    leftSection={<IconReceipt size={15} />}
+                    onClick={() => onOpenReceipt(receipt.id)}
+                  >
+                    View receipt
+                  </Button>
+                ) : null}
+              </Stack>
+            </td>
           </tr>
-        ))}
+          );
+        })}
       </tbody>
     </Table>
   );
@@ -2319,6 +2452,7 @@ const renderProductTotals = (
 const Pays: React.FC = () => {
   const dispatch = useAppDispatch();
   const payState = useAppSelector((state) => state.pays)[0];
+  const roleSlug = useAppSelector((state) => state.session.roleSlug ?? null);
   const { data: responseData, loading, error } = payState;
   const compensationComponentState = useAppSelector((state) => state.compensationComponents)[0];
   const accounts = useAppSelector(selectFinanceAccounts);
@@ -2326,6 +2460,9 @@ const Pays: React.FC = () => {
   const vendors = useAppSelector(selectFinanceVendors);
   const fullAccess = useModuleAccess(FULL_ACCESS_MODULE);
   const selfAccess = useModuleAccess(SELF_ACCESS_MODULE);
+  const canManageReceiptEvidence = ['admin', 'administrator', 'manager', 'owner'].includes(
+    String(roleSlug ?? '').trim().toLowerCase(),
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const categoryLookup = useMemo(() => {
     const map = new Map<string, FinanceCategory>();
@@ -2359,6 +2496,11 @@ const Pays: React.FC = () => {
   const [selfDetailsOpen, setSelfDetailsOpen] = useState(false);
   const [entryModal, setEntryModal] = useState<EntryModalState>(createEmptyEntryModalState());
   const [paidEntriesModal, setPaidEntriesModal] = useState<PaidEntriesModalState>(createEmptyPaidEntriesModalState());
+  const [receiptEvidenceModal, setReceiptEvidenceModal] = useState<ReceiptEvidenceModalState>(
+    createEmptyReceiptEvidenceModalState(),
+  );
+  const [receiptHistoryBrowserModal, setReceiptHistoryBrowserModal] =
+    useState<ReceiptHistoryBrowserModalState>(createEmptyReceiptHistoryBrowserModalState());
   const [openingBalanceDetailsOpen, setOpeningBalanceDetailsOpen] = useState(false);
   const [ledgerRecalculating, setLedgerRecalculating] = useState(false);
   const [ledgerRecalculationMessage, setLedgerRecalculationMessage] = useState<{
@@ -2373,6 +2515,12 @@ const Pays: React.FC = () => {
   const [baseOverridePending, setBaseOverridePending] = useState<Set<number>>(new Set());
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const desktopTableHeaderRef = useRef<HTMLTableSectionElement | null>(null);
+  const receiptEvidenceRequestRef = useRef(0);
+  const receiptHistoryBrowserRequestRef = useRef(0);
+  const receiptEvidenceUrlsRef = useRef<{ photoUrl: string | null; signatureUrl: string | null }>({
+    photoUrl: null,
+    signatureUrl: null,
+  });
   const [fixedDesktopHeader, setFixedDesktopHeader] = useState<FixedDesktopHeaderState>({
     visible: false,
     left: 0,
@@ -2568,7 +2716,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
   }, [canViewFull, componentDefinitions.length, compensationComponentState.loading, dispatch]);
 
   const canRecordPayments = isCanonicalRange;
-  const canRecordStaffPayments = canRecordPayments && canViewFull;
+  const canRecordStaffPayments = canRecordPayments && canViewFull && canManageReceiptEvidence;
 
   const refetchPaysForRange = useCallback(
     async (rangeStartOverride?: string, rangeEndOverride?: string) => {
@@ -2881,6 +3029,208 @@ const resolveStaffCounterpartyDefaults = useCallback(
     setPaidEntriesMessage(null);
   }, []);
 
+  const closeReceiptHistoryBrowserModal = useCallback(() => {
+    receiptHistoryBrowserRequestRef.current += 1;
+    setReceiptHistoryBrowserModal(createEmptyReceiptHistoryBrowserModalState());
+  }, []);
+
+  const openStaffReceiptHistory = useCallback(
+    async (staff: Pay) => {
+      const requestId = receiptHistoryBrowserRequestRef.current + 1;
+      receiptHistoryBrowserRequestRef.current = requestId;
+      setReceiptHistoryBrowserModal({
+        ...createEmptyReceiptHistoryBrowserModalState(),
+        open: true,
+        staff,
+        loading: true,
+      });
+
+      const staffUserId = staff.staffProfileId ?? staff.userId ?? null;
+      if (!Number.isInteger(staffUserId) || Number(staffUserId) <= 0 || !startDate || !endDate) {
+        setReceiptHistoryBrowserModal((current) => ({
+          ...current,
+          loading: false,
+          error: 'Unable to identify this staff member or the selected payout period.',
+        }));
+        return;
+      }
+
+      try {
+        const response = await axiosInstance.get<PayPayoutReceiptHistoryResponse>(
+          '/reports/staffPayouts/receipts/history',
+          {
+            params: {
+              staffUserId,
+              startDate: startDate.format(URL_DATE_FORMAT),
+              endDate: endDate.format(URL_DATE_FORMAT),
+            },
+            withCredentials: true,
+          },
+        );
+        if (receiptHistoryBrowserRequestRef.current !== requestId) {
+          return;
+        }
+        setReceiptHistoryBrowserModal({
+          open: true,
+          staff,
+          receipts: response.data.receipts ?? [],
+          loading: false,
+          error: null,
+          hasMore: response.data.hasMore ?? false,
+        });
+      } catch (historyError) {
+        if (receiptHistoryBrowserRequestRef.current !== requestId) {
+          return;
+        }
+        setReceiptHistoryBrowserModal((current) => ({
+          ...current,
+          loading: false,
+          error: extractRequestErrorMessage(historyError, 'Unable to load receipt history.'),
+        }));
+      }
+    },
+    [endDate, startDate],
+  );
+
+  const closeReceiptEvidenceModal = useCallback(() => {
+    receiptEvidenceRequestRef.current += 1;
+    const currentUrls = receiptEvidenceUrlsRef.current;
+    if (currentUrls.photoUrl) {
+      URL.revokeObjectURL(currentUrls.photoUrl);
+    }
+    if (currentUrls.signatureUrl) {
+      URL.revokeObjectURL(currentUrls.signatureUrl);
+    }
+    receiptEvidenceUrlsRef.current = { photoUrl: null, signatureUrl: null };
+    setReceiptEvidenceModal(createEmptyReceiptEvidenceModalState());
+    void refetchPaysForRange();
+  }, [refetchPaysForRange]);
+
+  useEffect(
+    () => () => {
+      receiptEvidenceRequestRef.current += 1;
+      receiptHistoryBrowserRequestRef.current += 1;
+      const currentUrls = receiptEvidenceUrlsRef.current;
+      if (currentUrls.photoUrl) {
+        URL.revokeObjectURL(currentUrls.photoUrl);
+      }
+      if (currentUrls.signatureUrl) {
+        URL.revokeObjectURL(currentUrls.signatureUrl);
+      }
+      receiptEvidenceUrlsRef.current = { photoUrl: null, signatureUrl: null };
+    },
+    [],
+  );
+
+  const openReceiptEvidenceModal = useCallback(async (receiptId: number) => {
+    const requestId = receiptEvidenceRequestRef.current + 1;
+    receiptEvidenceRequestRef.current = requestId;
+    const currentUrls = receiptEvidenceUrlsRef.current;
+    if (currentUrls.photoUrl) {
+      URL.revokeObjectURL(currentUrls.photoUrl);
+    }
+    if (currentUrls.signatureUrl) {
+      URL.revokeObjectURL(currentUrls.signatureUrl);
+    }
+    receiptEvidenceUrlsRef.current = { photoUrl: null, signatureUrl: null };
+    setReceiptEvidenceModal({
+      ...createEmptyReceiptEvidenceModalState(),
+      open: true,
+      receiptId,
+      loading: true,
+      historyLoading: true,
+    });
+
+    let nextPhotoUrl: string | null = null;
+    let nextSignatureUrl: string | null = null;
+    try {
+      const detailResponse = await axiosInstance.get<PayPayoutReceiptDetail>(
+        `/reports/staffPayouts/receipts/${receiptId}`,
+        { withCredentials: true },
+      );
+      const detail = detailResponse.data;
+      const historyRequest = axiosInstance
+        .get<PayPayoutReceiptHistoryResponse>('/reports/staffPayouts/receipts/history', {
+          params: buildPayReceiptHistoryLookupParams(detail),
+          withCredentials: true,
+        })
+        .then((response) => ({ response, error: null as string | null }))
+        .catch((historyError: unknown) => ({
+          response: null,
+          error: extractRequestErrorMessage(historyError, 'Unable to load receipt history.'),
+        }));
+      const [photoResponse, signatureResponse, historyResult] = await Promise.all([
+        detail.hasPhoto
+          ? axiosInstance.get(`/reports/staffPayouts/receipts/${receiptId}/photo`, {
+              responseType: 'blob',
+              withCredentials: true,
+            })
+          : Promise.resolve(null),
+        detail.hasSignature
+          ? axiosInstance.get(`/reports/staffPayouts/receipts/${receiptId}/signature`, {
+              responseType: 'blob',
+              withCredentials: true,
+            })
+          : Promise.resolve(null),
+        historyRequest,
+      ]);
+      nextPhotoUrl = photoResponse ? URL.createObjectURL(photoResponse.data) : null;
+      nextSignatureUrl = signatureResponse ? URL.createObjectURL(signatureResponse.data) : null;
+
+      if (receiptEvidenceRequestRef.current !== requestId) {
+        if (nextPhotoUrl) {
+          URL.revokeObjectURL(nextPhotoUrl);
+        }
+        if (nextSignatureUrl) {
+          URL.revokeObjectURL(nextSignatureUrl);
+        }
+        return;
+      }
+
+      receiptEvidenceUrlsRef.current = {
+        photoUrl: nextPhotoUrl,
+        signatureUrl: nextSignatureUrl,
+      };
+      setReceiptEvidenceModal({
+        open: true,
+        receiptId,
+        detail,
+        loading: false,
+        error: null,
+        photoUrl: nextPhotoUrl,
+        signatureUrl: nextSignatureUrl,
+        history: historyResult.response?.data.receipts ?? [],
+        historyLoading: false,
+        historyError: historyResult.error,
+        historyHasMore: historyResult.response?.data.hasMore ?? false,
+      });
+    } catch (receiptError) {
+      if (nextPhotoUrl) {
+        URL.revokeObjectURL(nextPhotoUrl);
+      }
+      if (nextSignatureUrl) {
+        URL.revokeObjectURL(nextSignatureUrl);
+      }
+      if (receiptEvidenceRequestRef.current !== requestId) {
+        return;
+      }
+      setReceiptEvidenceModal((current) => ({
+        ...current,
+        loading: false,
+        historyLoading: false,
+        error: extractRequestErrorMessage(receiptError, 'Unable to load this payout receipt.'),
+      }));
+    }
+  }, []);
+
+  const openReceiptFromHistoryBrowser = useCallback(
+    (receiptId: number) => {
+      closeReceiptHistoryBrowserModal();
+      void openReceiptEvidenceModal(receiptId);
+    },
+    [closeReceiptHistoryBrowserModal, openReceiptEvidenceModal],
+  );
+
   const handleTogglePaidEntry = useCallback((entryId: number, checked: boolean) => {
     setPaidEntriesModal((prev) => {
       const nextSelected = checked
@@ -2896,24 +3246,62 @@ const resolveStaffCounterpartyDefaults = useCallback(
   const renderRecordAction = (item: Pay, options?: { fullWidth?: boolean }) => {
     const outstanding = item.payouts?.payableOutstanding ?? 0;
     const hasRecordedEntries = (item.paidEntries?.length ?? 0) > 0;
+    const recordedReceipts = (item.paidEntries ?? [])
+      .map((entry) => entry.receipt)
+      .filter((receipt): receipt is NonNullable<typeof receipt> => Boolean(receipt));
+    const receiptForStatus =
+      recordedReceipts.find((receipt) => receipt.status === 'pending') ??
+      recordedReceipts.find((receipt) => receipt.status === 'completed') ??
+      recordedReceipts[0] ??
+      null;
+    const receiptStatus = receiptForStatus ? getPayReceiptStatusMeta(receiptForStatus) : null;
     const fullWidth = options?.fullWidth ?? false;
     if (!canRecordPayments) {
       return (
-        <Text size="xs" c="dimmed" ta={fullWidth ? 'center' : undefined}>
-          View-only range
-        </Text>
+        <Stack gap={6} align={fullWidth ? 'stretch' : 'flex-start'} style={fullWidth ? { width: '100%' } : undefined}>
+          <Text size="xs" c="dimmed" ta={fullWidth ? 'center' : undefined}>
+            View-only range
+          </Text>
+          {canManageReceiptEvidence ? (
+            <Button
+              variant="subtle"
+              size="xs"
+              fullWidth={fullWidth}
+              leftSection={<IconHistory size={15} />}
+              onClick={() => void openStaffReceiptHistory(item)}
+            >
+              Receipt history
+            </Button>
+          ) : null}
+        </Stack>
       );
     }
     if (outstanding > 0) {
       if (canRecordStaffPayments) {
         return (
           <Stack gap={6} align={fullWidth ? 'stretch' : 'flex-start'} style={fullWidth ? { width: '100%' } : undefined}>
+            {receiptStatus ? (
+              <Badge color={receiptStatus.color} variant="light" w="fit-content">
+                {receiptStatus.label}
+              </Badge>
+            ) : null}
             <Button variant="light" size="xs" fullWidth={fullWidth} onClick={() => openEntryModal(item)}>
               Record payment
             </Button>
             {hasRecordedEntries ? (
               <Button variant="subtle" size="xs" color="red" fullWidth={fullWidth} onClick={() => openPaidEntriesModal(item)}>
                 Manage paid
+              </Button>
+            ) : null}
+            {canManageReceiptEvidence ? (
+              <Button
+                variant="subtle"
+                size="xs"
+                fullWidth={fullWidth}
+                leftSection={<IconHistory size={15} />}
+                onClick={() => void openStaffReceiptHistory(item)}
+              >
+                Receipt history
               </Button>
             ) : null}
           </Stack>
@@ -2928,9 +3316,25 @@ const resolveStaffCounterpartyDefaults = useCallback(
         <Badge color="green" variant="light" w="fit-content">
           Settled
         </Badge>
+        {receiptStatus ? (
+          <Badge color={receiptStatus.color} variant="light" w="fit-content">
+            {receiptStatus.label}
+          </Badge>
+        ) : null}
         {canRecordStaffPayments && hasRecordedEntries ? (
           <Button variant="subtle" size="xs" color="red" fullWidth={fullWidth} onClick={() => openPaidEntriesModal(item)}>
             Manage paid
+          </Button>
+        ) : null}
+        {canManageReceiptEvidence ? (
+          <Button
+            variant="subtle"
+            size="xs"
+            fullWidth={fullWidth}
+            leftSection={<IconHistory size={15} />}
+            onClick={() => void openStaffReceiptHistory(item)}
+          >
+            Receipt history
           </Button>
         ) : null}
       </Stack>
@@ -3136,7 +3540,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
 
     setEntrySubmitting(true);
     try {
-      await axiosInstance.post(
+      const payoutResponse = await axiosInstance.post<StaffPayoutBatchResponse>(
         '/reports/staffPayouts/batch',
         {
           staffProfileId: entryModal.staff.staffProfileId,
@@ -3180,6 +3584,28 @@ const resolveStaffCounterpartyDefaults = useCallback(
       const refetchStart = startDate ? startDate.format('YYYY-MM-DD') : entryModal.rangeStart;
       const refetchEnd = endDate ? endDate.format('YYYY-MM-DD') : entryModal.rangeEnd;
       await refetchPaysForRange(refetchStart, refetchEnd);
+      const receiptCount = payoutResponse.data.receipts?.length ?? 0;
+      if (payoutResponse.data.duplicated) {
+        setActionAlert({
+          type: 'success',
+          text: `This payout for ${entryModal.staff.firstName} was already recorded. No new confirmation request was sent.`,
+        });
+      } else if (receiptCount === 1) {
+        setActionAlert({
+          type: 'success',
+          text: `Payout recorded. Confirmation request sent to ${entryModal.staff.firstName}.`,
+        });
+      } else if (receiptCount > 1) {
+        setActionAlert({
+          type: 'success',
+          text: `Payout recorded. ${receiptCount} confirmation requests sent to ${entryModal.staff.firstName}, one per currency.`,
+        });
+      } else {
+        setActionAlert({
+          type: 'error',
+          text: `Payout recorded for ${entryModal.staff.firstName}, but no confirmation request was created.`,
+        });
+      }
     } catch (submissionError) {
       const message =
         submissionError instanceof Error ? submissionError.message : 'Unable to record payout.';
@@ -4164,15 +4590,21 @@ const renderLedgerSnapshot = (staff: Pay) => {
                             entries={paidModalEntries}
                             selectedIds={paidEntriesModal.selectedIds}
                             onToggle={handleTogglePaidEntry}
+                            onOpenReceipt={canManageReceiptEvidence
+                              ? (receiptId) => void openReceiptEvidenceModal(receiptId)
+                              : undefined}
                           />
                         </ScrollArea>
                       ) : (
-                        <PaidEntriesTable
-                          entries={paidModalEntries}
-                          selectedIds={paidEntriesModal.selectedIds}
-                          onToggle={handleTogglePaidEntry}
-                          compact
-                        />
+                          <PaidEntriesTable
+                            entries={paidModalEntries}
+                            selectedIds={paidEntriesModal.selectedIds}
+                            onToggle={handleTogglePaidEntry}
+                            onOpenReceipt={canManageReceiptEvidence
+                              ? (receiptId) => void openReceiptEvidenceModal(receiptId)
+                              : undefined}
+                            compact
+                          />
                       )
                     ) : (
                       <Alert color="blue" variant="light">
@@ -4215,6 +4647,401 @@ const renderLedgerSnapshot = (staff: Pay) => {
               </Group>
             </Box>
           </Box>
+        </Modal>
+        <Modal
+          opened={receiptHistoryBrowserModal.open}
+          onClose={closeReceiptHistoryBrowserModal}
+          title={
+            receiptHistoryBrowserModal.staff
+              ? `Receipt history for ${receiptHistoryBrowserModal.staff.firstName}`
+              : 'Staff payout receipt history'
+          }
+          size={isDesktop ? '65vw' : '100%'}
+          fullScreen={!isDesktop}
+          radius={isDesktop ? 'lg' : 0}
+          styles={{ title: { fontWeight: 700 } }}
+        >
+          <Stack gap="md">
+            <Alert color="blue" variant="light">
+              Showing receipt requests whose compensation period overlaps {reportingRangeLabel}, including cancelled and superseded versions.
+            </Alert>
+            {receiptHistoryBrowserModal.loading ? (
+              <Center py="xl">
+                <Stack gap="sm" align="center">
+                  <Loader />
+                  <Text size="sm" c="dimmed">
+                    Loading receipt history...
+                  </Text>
+                </Stack>
+              </Center>
+            ) : receiptHistoryBrowserModal.error ? (
+              <Alert color="red" variant="light">
+                {receiptHistoryBrowserModal.error}
+              </Alert>
+            ) : receiptHistoryBrowserModal.receipts.length === 0 ? (
+              <Alert color="gray" variant="light">
+                No payout receipt requests were found for this staff member and period.
+              </Alert>
+            ) : (
+              <Stack gap="sm">
+                {receiptHistoryBrowserModal.receipts.map((historyReceipt) => {
+                  const historyStatus = getPayReceiptHistoryStatusMeta(historyReceipt);
+                   const { at: eventAt, label: eventLabel } = getPayReceiptHistoryEvent(historyReceipt);
+                  return (
+                    <Paper key={historyReceipt.id} withBorder radius="md" p="md">
+                      <Group justify="space-between" align="center" wrap="wrap" gap="md">
+                        <Stack gap={5}>
+                          <Group gap="xs" wrap="wrap">
+                            <Text fw={700}>Receipt #{historyReceipt.id}</Text>
+                            <Badge color={historyStatus.color} variant="light">
+                              {historyStatus.label}
+                            </Badge>
+                            {historyReceipt.isCurrent ? (
+                              <Badge color="blue" variant="filled">
+                                Current
+                              </Badge>
+                            ) : null}
+                            {historyReceipt.hasPhoto || historyReceipt.hasSignature ? (
+                              <Badge color="violet" variant="light">
+                                Evidence saved
+                              </Badge>
+                            ) : null}
+                          </Group>
+                          <Text fw={700}>
+                            {historyReceipt.totals
+                              .map((total) => formatCurrency(total.amount, total.currency))
+                              .join(' + ')}
+                          </Text>
+                          <Text size="sm" c="dimmed">
+                            {formatRangeLabel(historyReceipt.rangeStart, historyReceipt.rangeEnd)} | Paid{' '}
+                            {dayjs(historyReceipt.paidDate).format('MMM D, YYYY')}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            {eventLabel} {formatDateTimeLabel(eventAt)} | {historyReceipt.itemCount}{' '}
+                            {historyReceipt.itemCount === 1 ? 'component' : 'components'}
+                          </Text>
+                        </Stack>
+                        <Button
+                          variant="light"
+                          leftSection={<IconReceipt size={16} />}
+                          onClick={() => openReceiptFromHistoryBrowser(historyReceipt.id)}
+                        >
+                          View receipt
+                        </Button>
+                      </Group>
+                    </Paper>
+                  );
+                })}
+              </Stack>
+            )}
+            {receiptHistoryBrowserModal.hasMore ? (
+              <Alert color="blue" variant="light">
+                More receipt versions exist outside this result. Narrow the selected payout period to view them.
+              </Alert>
+            ) : null}
+          </Stack>
+        </Modal>
+        <Modal
+          opened={receiptEvidenceModal.open}
+          onClose={closeReceiptEvidenceModal}
+          title={
+            receiptEvidenceModal.detail
+              ? `Payout receipt #${receiptEvidenceModal.detail.id}`
+              : 'Payout receipt'
+          }
+          size={isDesktop ? '75vw' : '100%'}
+          fullScreen={!isDesktop}
+          radius={isDesktop ? 'lg' : 0}
+          styles={{ title: { fontWeight: 700 } }}
+        >
+          {receiptEvidenceModal.loading ? (
+            <Center py="xl">
+              <Stack gap="sm" align="center">
+                <Loader />
+                <Text size="sm" c="dimmed">
+                  Loading receipt evidence...
+                </Text>
+              </Stack>
+            </Center>
+          ) : receiptEvidenceModal.error ? (
+            <Alert color="red" variant="light">
+              {receiptEvidenceModal.error}
+            </Alert>
+          ) : receiptEvidenceModal.detail ? (
+            <Stack gap="lg">
+              <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
+                <Card withBorder radius="md" padding="sm">
+                  <Stack gap={4} align="center" ta="center">
+                    <Text size="xs" c="dimmed">
+                      Status
+                    </Text>
+                    <Badge
+                      color={getPayReceiptStatusMeta(receiptEvidenceModal.detail).color}
+                      variant="light"
+                    >
+                      {getPayReceiptStatusMeta(receiptEvidenceModal.detail).label}
+                    </Badge>
+                  </Stack>
+                </Card>
+                <Card withBorder radius="md" padding="sm">
+                  <Stack gap={4} align="center" ta="center">
+                    <Text size="xs" c="dimmed">
+                      Received amount
+                    </Text>
+                    <Text fw={700}>
+                      {receiptEvidenceModal.detail.totals
+                        .map((total) => formatCurrency(total.amount, total.currency))
+                        .join(' + ')}
+                    </Text>
+                  </Stack>
+                </Card>
+                <Card withBorder radius="md" padding="sm">
+                  <Stack gap={4} align="center" ta="center">
+                    <Text size="xs" c="dimmed">
+                      Payment date
+                    </Text>
+                    <Text fw={700}>{dayjs(receiptEvidenceModal.detail.paidDate).format('MMM D, YYYY')}</Text>
+                  </Stack>
+                </Card>
+                <Card withBorder radius="md" padding="sm">
+                  <Stack gap={4} align="center" ta="center">
+                    <Text size="xs" c="dimmed">
+                      Confirmed
+                    </Text>
+                    <Text fw={700}>{formatDateTimeLabel(receiptEvidenceModal.detail.confirmedAt)}</Text>
+                  </Stack>
+                </Card>
+              </SimpleGrid>
+
+              <Card withBorder radius="md" padding="md">
+                <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
+                  <Stack gap={4} align={isDesktop ? 'flex-start' : 'center'}>
+                    <Text size="xs" c="dimmed">
+                      Staff member
+                    </Text>
+                    <Text fw={700}>{receiptEvidenceModal.detail.staffName}</Text>
+                  </Stack>
+                  <Stack gap={4} align="center">
+                    <Text size="xs" c="dimmed">
+                      Payout period
+                    </Text>
+                    <Text fw={700}>
+                      {formatRangeLabel(
+                        receiptEvidenceModal.detail.rangeStart,
+                        receiptEvidenceModal.detail.rangeEnd,
+                      )}
+                    </Text>
+                  </Stack>
+                  <Stack gap={4} align={isDesktop ? 'flex-end' : 'center'}>
+                    <Text size="xs" c="dimmed">
+                      Recorded by
+                    </Text>
+                    <Text fw={700}>{receiptEvidenceModal.detail.paidByName}</Text>
+                  </Stack>
+                </SimpleGrid>
+              </Card>
+
+              {receiptEvidenceModal.detail.status === 'cancelled' ? (
+                <Alert color="red" variant="light">
+                  This receipt request was cancelled
+                  {receiptEvidenceModal.detail.cancelledAt
+                    ? ` on ${formatDateTimeLabel(receiptEvidenceModal.detail.cancelledAt)}`
+                    : ''}
+                  .{receiptEvidenceModal.detail.cancelReason ? ` ${receiptEvidenceModal.detail.cancelReason}` : ''}
+                </Alert>
+              ) : receiptEvidenceModal.detail.status === 'pending' ? (
+                <Alert color="orange" variant="light">
+                  Waiting for the staff member to photograph the payment and sign the receipt.
+                </Alert>
+              ) : null}
+
+              <Card withBorder radius="md" padding="md">
+                <Stack gap="sm">
+                  <Group justify="space-between" align="flex-start" wrap="wrap">
+                    <Group gap="sm" align="flex-start">
+                      <IconHistory size={22} />
+                      <Stack gap={2}>
+                        <Text fw={700}>Receipt history</Text>
+                        <Text size="sm" c="dimmed">
+                          Current and previous receipt requests for this payout. Superseded evidence remains available for audit.
+                        </Text>
+                      </Stack>
+                    </Group>
+                    {!receiptEvidenceModal.historyLoading && !receiptEvidenceModal.historyError ? (
+                      <Badge variant="light" color="gray">
+                        {receiptEvidenceModal.history.length}{' '}
+                        {receiptEvidenceModal.history.length === 1 ? 'version' : 'versions'}
+                      </Badge>
+                    ) : null}
+                  </Group>
+
+                  {receiptEvidenceModal.historyLoading ? (
+                    <Group gap="xs" justify="center" py="sm">
+                      <Loader size="sm" />
+                      <Text size="sm" c="dimmed">
+                        Loading receipt history...
+                      </Text>
+                    </Group>
+                  ) : receiptEvidenceModal.historyError ? (
+                    <Alert color="orange" variant="light">
+                      {receiptEvidenceModal.historyError}
+                    </Alert>
+                  ) : receiptEvidenceModal.history.length === 0 ? (
+                    <Text size="sm" c="dimmed" ta="center" py="sm">
+                      No related receipt versions were found.
+                    </Text>
+                  ) : (
+                    <Stack gap="xs">
+                      {receiptEvidenceModal.history.map((historyReceipt) => {
+                        const historyStatus = getPayReceiptHistoryStatusMeta(historyReceipt);
+                        const isViewing = historyReceipt.id === receiptEvidenceModal.detail?.id;
+                        const { at: eventAt, label: eventLabel } = getPayReceiptHistoryEvent(historyReceipt);
+                        return (
+                          <Paper
+                            key={historyReceipt.id}
+                            withBorder
+                            radius="md"
+                            p="sm"
+                            style={{
+                              borderColor: isViewing
+                                ? 'var(--mantine-color-blue-5)'
+                                : undefined,
+                              backgroundColor: isViewing
+                                ? 'var(--mantine-color-blue-0)'
+                                : undefined,
+                            }}
+                          >
+                            <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                              <Stack gap={4}>
+                                <Group gap="xs" wrap="wrap">
+                                  <Text fw={700}>Receipt #{historyReceipt.id}</Text>
+                                  <Badge color={historyStatus.color} variant="light">
+                                    {historyStatus.label}
+                                  </Badge>
+                                  {historyReceipt.isCurrent ? (
+                                    <Badge color="blue" variant="filled">
+                                      Current
+                                    </Badge>
+                                  ) : null}
+                                  {isViewing ? (
+                                    <Badge color="gray" variant="outline">
+                                      Viewing
+                                    </Badge>
+                                  ) : null}
+                                  {historyReceipt.hasPhoto || historyReceipt.hasSignature ? (
+                                    <Badge color="violet" variant="light">
+                                      Evidence saved
+                                    </Badge>
+                                  ) : null}
+                                </Group>
+                                <Text size="sm" fw={600}>
+                                  {historyReceipt.totals
+                                    .map((total) => formatCurrency(total.amount, total.currency))
+                                    .join(' + ')}
+                                </Text>
+                                <Text size="xs" c="dimmed">
+                                  {eventLabel} {formatDateTimeLabel(eventAt)} | {historyReceipt.itemCount}{' '}
+                                  {historyReceipt.itemCount === 1 ? 'component' : 'components'}
+                                </Text>
+                              </Stack>
+                              <Button
+                                size="compact-sm"
+                                variant={isViewing ? 'light' : 'subtle'}
+                                leftSection={<IconReceipt size={15} />}
+                                disabled={isViewing}
+                                onClick={() => void openReceiptEvidenceModal(historyReceipt.id)}
+                              >
+                                {isViewing ? 'Viewing' : 'View evidence'}
+                              </Button>
+                            </Group>
+                          </Paper>
+                        );
+                      })}
+                    </Stack>
+                  )}
+
+                  {receiptEvidenceModal.historyHasMore ? (
+                    <Alert color="blue" variant="light">
+                      More receipt versions exist outside this result. Narrow the staff payout date range to view them.
+                    </Alert>
+                  ) : null}
+                </Stack>
+              </Card>
+
+              <Card withBorder radius="md" padding="md">
+                <Stack gap="sm">
+                  <Text fw={700}>Payment components</Text>
+                  <ScrollArea offsetScrollbars>
+                    <Table striped withColumnBorders miw={560}>
+                      <thead>
+                        <tr>
+                          <th>Component</th>
+                          <th>Amount</th>
+                          <th>Finance transaction</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {receiptEvidenceModal.detail.items.map((item) => (
+                          <tr key={item.id}>
+                            <td>{item.label}</td>
+                            <td>{formatCurrency(item.amount, item.currency)}</td>
+                            <td>{item.financeTransactionId ? `#${item.financeTransactionId}` : '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  </ScrollArea>
+                </Stack>
+              </Card>
+
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+                <Card withBorder radius="md" padding="md">
+                  <Stack gap="sm">
+                    <Text fw={700} ta="center">
+                      Photo evidence
+                    </Text>
+                    {receiptEvidenceModal.photoUrl ? (
+                      <Image
+                        src={receiptEvidenceModal.photoUrl}
+                        alt={`Payout receipt ${receiptEvidenceModal.detail.id} photo evidence`}
+                        radius="md"
+                        fit="contain"
+                        mah={460}
+                      />
+                    ) : (
+                      <Text size="sm" c="dimmed" ta="center">
+                        No photo evidence has been submitted.
+                      </Text>
+                    )}
+                  </Stack>
+                </Card>
+                <Card withBorder radius="md" padding="md">
+                  <Stack gap="sm">
+                    <Text fw={700} ta="center">
+                      Staff e-signature
+                    </Text>
+                    {receiptEvidenceModal.signatureUrl ? (
+                      <Box p="md" bg="gray.0" style={{ borderRadius: 'var(--mantine-radius-md)' }}>
+                        <Image
+                          src={receiptEvidenceModal.signatureUrl}
+                          alt={`Payout receipt ${receiptEvidenceModal.detail.id} signature`}
+                          fit="contain"
+                          mah={260}
+                        />
+                      </Box>
+                    ) : (
+                      <Text size="sm" c="dimmed" ta="center">
+                        No signature has been submitted.
+                      </Text>
+                    )}
+                    <Text size="xs" c="dimmed" ta="center">
+                      {receiptEvidenceModal.detail.acceptanceText}
+                    </Text>
+                  </Stack>
+                </Card>
+              </SimpleGrid>
+            </Stack>
+          ) : null}
         </Modal>
         <Modal
           opened={entryModal.open}

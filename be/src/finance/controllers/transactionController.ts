@@ -14,6 +14,7 @@ import {
 } from '../services/transactionService.js';
 import { recordFinanceAuditLog } from '../services/auditLogService.js';
 import { deleteFinanceTransactionAndCleanupInvoice } from '../services/transactionDeletionService.js';
+import { STAFF_PAYOUT_RECEIPT_TRANSACTION_PROTECTED_MESSAGE } from '../../services/staffPayoutReceiptProtectionService.js';
 
 function requireActor(req: AuthenticatedRequest): number {
   const actorId = req.authContext?.id;
@@ -111,11 +112,17 @@ export const createTransactionHandler = async (req: Request, res: Response): Pro
 export const updateTransactionHandler = async (req: Request, res: Response): Promise<void> => {
   try {
     const actorId = requireActor(req as AuthenticatedRequest);
-    const transaction = await updateFinanceTransaction(Number(req.params.id), req.body, actorId);
+    const transactionId = Number(req.params.id);
+    const transaction = await updateFinanceTransaction(transactionId, req.body, actorId);
     res.status(200).json(transaction);
   } catch (error) {
     const message = (error as Error).message;
-    res.status(message === 'Transaction not found' ? 404 : 400).json([{ message }]);
+    const status = message === 'Transaction not found'
+      ? 404
+      : message === STAFF_PAYOUT_RECEIPT_TRANSACTION_PROTECTED_MESSAGE
+        ? 409
+        : 400;
+    res.status(status).json([{ message }]);
   }
 };
 
@@ -135,7 +142,13 @@ export const deleteTransaction = async (req: Request, res: Response): Promise<vo
     });
     res.status(204).send();
   } catch (error) {
-    res.status(500).json([{ message: (error as Error).message }]);
+    const message = (error as Error).message;
+    const status = message === STAFF_PAYOUT_RECEIPT_TRANSACTION_PROTECTED_MESSAGE
+      ? 409
+      : message === 'Transaction not found'
+        ? 404
+        : 500;
+    res.status(status).json([{ message }]);
   }
 };
 

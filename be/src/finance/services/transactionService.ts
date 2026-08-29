@@ -6,7 +6,12 @@ import FinanceTransaction, {
   FinanceTransactionStatus,
   FinanceTransactionCounterpartyType,
 } from '../models/FinanceTransaction.js';
+import FinanceFile from '../models/FinanceFile.js';
 import { recordFinanceAuditLog } from './auditLogService.js';
+import {
+  assertCounterpartyIsNotStaffPayment,
+  assertFinanceTransactionIsNotReceiptProtected,
+} from '../../services/staffPayoutReceiptProtectionService.js';
 
 export type FinanceTransactionInput = {
   kind: FinanceTransactionKind;
@@ -34,6 +39,32 @@ export type FinanceTransactionInput = {
   receiptAllocationNote?: string | null;
   receiptLineOrder?: number | null;
   approvedBy?: number | null;
+};
+
+type FinanceTransactionServiceOptions = {
+  transaction?: SequelizeTransaction;
+  allowStaffPayoutReceiptFlow?: boolean;
+};
+
+const assertGeneralInvoiceFile = async (
+  invoiceFileId: number | null | undefined,
+  transaction?: SequelizeTransaction,
+): Promise<void> => {
+  if (invoiceFileId == null) {
+    return;
+  }
+  const normalizedId = Number(invoiceFileId);
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    throw new Error('Invoice file not found');
+  }
+  const file = await FinanceFile.findOne({
+    attributes: ['id'],
+    where: { id: normalizedId, purpose: 'general' },
+    transaction,
+  });
+  if (!file) {
+    throw new Error('Invoice file not found');
+  }
 };
 
 function calculateBaseAmount(amountMinor: number, fxRate: number | string | null | undefined): number {
@@ -82,7 +113,7 @@ function ensureMeta(meta: Record<string, unknown> | null | undefined): Record<st
 export async function createFinanceTransaction(
   data: FinanceTransactionInput,
   userId: number,
-  options?: { transaction?: SequelizeTransaction },
+  options?: FinanceTransactionServiceOptions,
 ): Promise<FinanceTransaction> {
   const amountMinor = Number(data.amountMinor);
   if (!Number.isFinite(amountMinor)) {
@@ -92,6 +123,16 @@ export async function createFinanceTransaction(
   const fxRate = data.fxRate ?? 1;
   const baseAmountMinor = data.baseAmountMinor ?? calculateBaseAmount(amountMinor, fxRate);
   const { counterpartyType, counterpartyId } = normalizeCounterparty(data);
+
+  if (!options?.allowStaffPayoutReceiptFlow) {
+    await assertCounterpartyIsNotStaffPayment({
+      kind: data.kind,
+      status: data.status ?? 'planned',
+      counterpartyId,
+      transaction: options?.transaction,
+    });
+  }
+  await assertGeneralInvoiceFile(data.invoiceFileId, options?.transaction);
 
   const meta = ensureMeta(data.meta);
 
@@ -135,6 +176,7 @@ export async function createFinanceTransaction(
     action: 'create',
     performedBy: userId,
     changes: record.toJSON() as Record<string, unknown>,
+    transaction: options?.transaction,
   });
 
   return record;
@@ -144,12 +186,27 @@ export async function updateFinanceTransaction(
   id: number,
   changes: Partial<FinanceTransactionInput>,
   userId: number,
-  options?: { transaction?: SequelizeTransaction },
+  options?: FinanceTransactionServiceOptions,
 ): Promise<FinanceTransaction> {
-  const record = await FinanceTransaction.findByPk(id, { transaction: options?.transaction });
+  if (!options?.transaction) {
+    return sequelize.transaction((transaction) =>
+      updateFinanceTransaction(id, changes, userId, {
+        transaction,
+        allowStaffPayoutReceiptFlow: options?.allowStaffPayoutReceiptFlow,
+      }),
+    );
+  }
+
+  const transaction = options.transaction;
+  const record = await FinanceTransaction.findByPk(id, {
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
   if (!record) {
     throw new Error('Transaction not found');
   }
+
+  await assertFinanceTransactionIsNotReceiptProtected(record.id, transaction);
 
   const nextCounterparty = changes.kind
     ? normalizeCounterparty({ ...record.toJSON(), ...changes } as FinanceTransactionInput)
@@ -157,6 +214,18 @@ export async function updateFinanceTransaction(
         counterpartyType: record.counterpartyType,
         counterpartyId: record.counterpartyId,
       };
+
+  if (!options.allowStaffPayoutReceiptFlow) {
+    await assertCounterpartyIsNotStaffPayment({
+      kind: changes.kind ?? record.kind,
+      status: changes.status ?? record.status,
+      counterpartyId: nextCounterparty.counterpartyId,
+      transaction,
+    });
+  }
+  if ('invoiceFileId' in changes) {
+    await assertGeneralInvoiceFile(changes.invoiceFileId, transaction);
+  }
 
   const nextAmountMinor =
     'amountMinor' in changes && changes.amountMinor != null ? Number(changes.amountMinor) : record.amountMinor;
@@ -194,7 +263,7 @@ export async function updateFinanceTransaction(
     ...('approvedBy' in changes ? { approvedBy: changes.approvedBy ?? null } : {}),
   };
 
-  await record.update(payload, { transaction: options?.transaction });
+  await record.update(payload, { transaction });
 
   await recordFinanceAuditLog({
     entity: 'finance_transaction',
@@ -202,6 +271,7 @@ export async function updateFinanceTransaction(
     action: 'update',
     performedBy: userId,
     changes: payload as Record<string, unknown>,
+    transaction,
   });
 
   return record;

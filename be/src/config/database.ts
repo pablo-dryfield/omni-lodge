@@ -49,6 +49,8 @@ import ChannelCashCollectionLog from "../models/ChannelCashCollectionLog.js";
 import StaffProfile from "../models/StaffProfile.js";
 import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
 import StaffPayoutLedger from "../models/StaffPayoutLedger.js";
+import StaffPayoutReceipt from "../models/StaffPayoutReceipt.js";
+import StaffPayoutReceiptItem from "../models/StaffPayoutReceiptItem.js";
 import ShiftType from "../models/ShiftType.js";
 import ShiftTypeProduct from "../models/ShiftTypeProduct.js";
 import ShiftTemplate from "../models/ShiftTemplate.js";
@@ -258,6 +260,8 @@ const sequelize = new Sequelize({
     StaffProfile,
     StaffPayoutCollectionLog,
     StaffPayoutLedger,
+    StaffPayoutReceipt,
+    StaffPayoutReceiptItem,
     ShiftType,
     ShiftTypeProduct,
     ShiftTemplate,

@@ -14,6 +14,17 @@ import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the impo
 import { requireRoles } from '../middleware/authorizationMiddleware.js';
 
 const router: Router = express.Router();
+const staffPayoutManagerGuard = requireRoles(['admin', 'administrator', 'manager', 'owner']);
+const legacyStaffReceivableOnly = (req: Request, res: Response, next: NextFunction): void => {
+  const direction = typeof req.body?.direction === 'string' ? req.body.direction.trim().toLowerCase() : 'payable';
+  if (direction !== 'receivable') {
+    res.status(410).json([{
+      message: 'Direct payable staff collections are no longer supported. Use /staffPayouts/batch so receipt evidence is requested.',
+    }]);
+    return;
+  }
+  next();
+};
 
 // Validation for ID parameter
 const validateId = [
@@ -31,9 +42,39 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 };
 
 router.get('/getCommissionByDateRange', authMiddleware, reportController.getCommissionByDateRange);
-router.post('/staffPayouts/collections', authMiddleware, createStaffPayoutCollectionLog);
-router.post('/staffPayouts/batch', authMiddleware, createStaffPayoutBatch);
-router.post('/staffPayouts/deleteEntries', authMiddleware, deleteStaffPayoutEntries);
+router.post(
+  '/staffPayouts/collections',
+  authMiddleware,
+  staffPayoutManagerGuard,
+  legacyStaffReceivableOnly,
+  createStaffPayoutCollectionLog,
+);
+router.post('/staffPayouts/batch', authMiddleware, staffPayoutManagerGuard, createStaffPayoutBatch);
+router.post('/staffPayouts/deleteEntries', authMiddleware, staffPayoutManagerGuard, deleteStaffPayoutEntries);
+router.get(
+  '/staffPayouts/receipts/history',
+  authMiddleware,
+  staffPayoutManagerGuard,
+  reportController.listStaffPayoutReceiptHistory,
+);
+router.get(
+  '/staffPayouts/receipts/:id',
+  authMiddleware,
+  staffPayoutManagerGuard,
+  reportController.getStaffPayoutReceiptDetail,
+);
+router.get(
+  '/staffPayouts/receipts/:id/photo',
+  authMiddleware,
+  staffPayoutManagerGuard,
+  reportController.downloadStaffPayoutReceiptPhoto,
+);
+router.get(
+  '/staffPayouts/receipts/:id/signature',
+  authMiddleware,
+  staffPayoutManagerGuard,
+  reportController.downloadStaffPayoutReceiptSignature,
+);
 router.get('/models', authMiddleware, reportController.listReportModels);
 router.post('/preview', authMiddleware, reportController.runReportPreview);
 router.post('/query', authMiddleware, reportController.executeReportQuery);

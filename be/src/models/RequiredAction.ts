@@ -18,6 +18,7 @@ export type RequiredActionType =
   | 'quiz'
   | 'assistant_manager_task'
   | 'customer_email'
+  | 'staff_payout_receipt'
   | 'custom';
 
 @Table({

@@ -416,7 +416,7 @@ const AppContent = () => {
             </Stack>
           </AppShell.Main>
           <Suspense fallback={null}>
-            <RequiredActionsOverlay enabled={authenticated && accessLoaded && !showOverlay} />
+            <RequiredActionsOverlay enabled={authenticated && !showOverlay} />
           </Suspense>
         </AppShell>
       ) : isPublicRoute ? (

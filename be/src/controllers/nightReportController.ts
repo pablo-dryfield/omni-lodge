@@ -3509,7 +3509,9 @@ export const createNightReportCost = async (req: AuthenticatedRequest, res: Resp
     }
 
     if (payload.invoiceFileId) {
-      const fileExists = await FinanceFile.count({ where: { id: payload.invoiceFileId } });
+      const fileExists = await FinanceFile.count({
+        where: { id: payload.invoiceFileId, purpose: 'general' },
+      });
       if (!fileExists) {
         throw new HttpError(400, 'Attached file was not found');
       }
@@ -3596,7 +3598,9 @@ export const createNightReportReceiptAllocations = async (
     }
 
     if (payload.invoiceFileId) {
-      const fileExists = await FinanceFile.count({ where: { id: payload.invoiceFileId } });
+      const fileExists = await FinanceFile.count({
+        where: { id: payload.invoiceFileId, purpose: 'general' },
+      });
       if (!fileExists) {
         throw new HttpError(400, 'Attached file was not found');
       }
@@ -3745,7 +3749,9 @@ export const updateNightReportReceiptAllocations = async (
     }
 
     if (payload.invoiceFileId) {
-      const fileExists = await FinanceFile.count({ where: { id: payload.invoiceFileId } });
+      const fileExists = await FinanceFile.count({
+        where: { id: payload.invoiceFileId, purpose: 'general' },
+      });
       if (!fileExists) {
         throw new HttpError(400, 'Attached file was not found');
       }

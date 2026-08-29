@@ -109,6 +109,82 @@ export type PayOpeningBalanceSource = PayOpeningBalanceLedgerEntry & {
   history: PayOpeningBalanceLedgerEntry[];
 };
 
+export type PayPayoutReceiptStatus = 'pending' | 'completed' | 'cancelled';
+
+export type PayRecordedEntryReceipt = {
+  id: number;
+  status: PayPayoutReceiptStatus;
+  payoutBatchKey: string | null;
+  confirmedAt: string | null;
+  cancelledAt: string | null;
+  hasPhoto: boolean;
+  hasSignature: boolean;
+};
+
+export type PayPayoutReceiptTotal = {
+  amount: number;
+  amountMinor: number;
+  currency: string;
+};
+
+export type PayPayoutReceiptDetailItem = {
+  id: number;
+  collectionLogId: number;
+  financeTransactionId: number | null;
+  label: string;
+  amount: number;
+  amountMinor: number;
+  currency: string;
+};
+
+export type PayPayoutReceiptDetail = {
+  id: number;
+  status: PayPayoutReceiptStatus;
+  staffUserId: number;
+  staffName: string;
+  payoutBatchKey: string | null;
+  rangeStart: string;
+  rangeEnd: string;
+  paidDate: string;
+  paidByName: string;
+  acceptanceText: string;
+  acceptanceVersion: string;
+  confirmedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  createdAt: string;
+  totals: PayPayoutReceiptTotal[];
+  items: PayPayoutReceiptDetailItem[];
+  hasPhoto: boolean;
+  hasSignature: boolean;
+};
+
+export type PayPayoutReceiptHistoryEntry = {
+  id: number;
+  status: PayPayoutReceiptStatus;
+  staffUserId: number;
+  staffName: string;
+  payoutBatchKey: string | null;
+  rangeStart: string;
+  rangeEnd: string;
+  paidDate: string;
+  paidByName: string;
+  confirmedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  createdAt: string;
+  totals: PayPayoutReceiptTotal[];
+  itemCount: number;
+  hasPhoto: boolean;
+  hasSignature: boolean;
+  isCurrent: boolean;
+};
+
+export type PayPayoutReceiptHistoryResponse = {
+  receipts: PayPayoutReceiptHistoryEntry[];
+  hasMore: boolean;
+};
+
 export type PayRecordedEntry = {
   id: number;
   financeTransactionId: number | null;
@@ -120,6 +196,7 @@ export type PayRecordedEntry = {
   note: string | null;
   createdAt: string;
   canDelete: boolean;
+  receipt?: PayRecordedEntryReceipt | null;
 };
 
 export type PayCounterIncentiveDetail = {

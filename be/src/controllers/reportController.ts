@@ -8,6 +8,7 @@ import {
   col,
   fn,
   type ModelAttributeColumnReferencesOptions,
+  type WhereOptions,
 } from "sequelize";
 import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
 import dayjs from "dayjs";
@@ -19,6 +20,8 @@ import User from "../models/User.js";
 import StaffProfile from "../models/StaffProfile.js";
 import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
 import StaffPayoutLedger from "../models/StaffPayoutLedger.js";
+import StaffPayoutReceipt from "../models/StaffPayoutReceipt.js";
+import StaffPayoutReceiptItem from "../models/StaffPayoutReceiptItem.js";
 import UserShiftRole from "../models/UserShiftRole.js";
 import ReviewCounter from "../models/ReviewCounter.js";
 import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
@@ -67,10 +70,24 @@ import FinanceTransaction, {
   type FinanceTransactionStatus,
 } from "../finance/models/FinanceTransaction.js";
 import FinanceVendor from "../finance/models/FinanceVendor.js";
+import FinanceFile from "../finance/models/FinanceFile.js";
+import { openFinanceFileStream } from "../finance/services/driveService.js";
 import {
   getAffiliateOverview,
   type AffiliateBookingRow,
 } from "../services/affiliateService.js";
+import {
+  applyAffiliateCommissionEarnings,
+  getUncollectedAffiliatePaidAmount,
+} from "../services/staffPayoutAffiliateAccountingService.js";
+import {
+  buildStaffPayoutReceiptCompactView,
+  buildStaffPayoutReceiptTotals,
+} from "../services/staffPayoutReceiptViewService.js";
+import {
+  isSensitiveReportModel,
+  listSensitiveReportModelReferences,
+} from "../services/reportModelAccessService.js";
 
 type CommissionBreakdownEntry = {
   date: string;
@@ -223,6 +240,15 @@ type PaidPayoutEntry = {
   note: string | null;
   createdAt: string;
   canDelete: boolean;
+  receipt: {
+    id: number;
+    status: "pending" | "completed" | "cancelled";
+    payoutBatchKey: string | null;
+    confirmedAt: string | null;
+    cancelledAt: string | null;
+    hasPhoto: boolean;
+    hasSignature: boolean;
+  } | null;
 };
 
 type StaffAffiliateSaleBooking = {
@@ -239,6 +265,7 @@ type StaffAffiliateSaleBooking = {
   affiliateCommissionAmount: number;
   affiliateCommissionEligible: boolean;
   affiliateCommissionIneligibleReason: string | null;
+  affiliatePayoutLogId: number | null;
   isCommissionPaid: boolean;
   utmSource: string | null;
   utmMedium: string | null;
@@ -2110,6 +2137,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     );
 
     let affiliateSalesByUserId = new Map<number, StaffAffiliateSalesSummary>();
+    const affiliatePayoutFinanceTransactionIdByLogId = new Map<number, number | null>();
     try {
       const affiliateOverview = await getAffiliateOverview({
         startDate: start.format("YYYY-MM-DD"),
@@ -2118,17 +2146,19 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         currentRoleSlug: "manager",
         includeStaffAffiliateAssignments: true,
       });
+      affiliateOverview.payoutLogs.forEach((payoutLog) => {
+        affiliatePayoutFinanceTransactionIdByLogId.set(
+          payoutLog.id,
+          payoutLog.financeTransactionId,
+        );
+      });
       affiliateSalesByUserId = buildStaffAffiliateSalesByUser(affiliateOverview.bookings);
       await ensureSummariesForUserIds(affiliateSalesByUserId.keys(), commissionDataByUser);
       affiliateSalesByUserId.forEach((affiliateSales, userId) => {
         const summary = commissionDataByUser.get(userId);
         if (summary) {
           summary.affiliateSales = affiliateSales;
-          if (affiliateSales.commissionOutstandingTotal > 0) {
-            summary.bucketTotals.affiliate_commission =
-              (summary.bucketTotals.affiliate_commission ?? 0) + affiliateSales.commissionOutstandingTotal;
-            summary.totalPayout += affiliateSales.commissionOutstandingTotal;
-          }
+          applyAffiliateCommissionEarnings(summary, affiliateSales);
         }
       });
     } catch (error) {
@@ -2155,6 +2185,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       { currency: string; receivable: number; payable: number }
     >();
     const paidEntriesByStaffProfileId = new Map<number, PaidPayoutEntry[]>();
+    const collectedPayableFinanceTransactionIdsByUserId = new Map<number, Set<number>>();
     let staffProfileIds: number[] = [];
     if (hydratedSummaryUserIds.length > 0) {
       const staffProfiles = (await StaffProfile.findAll({
@@ -2227,6 +2258,43 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           ],
         });
 
+        const payoutLogIds = payoutLogRows.map((row) => row.id);
+        const receiptItems = payoutLogIds.length > 0
+          ? await StaffPayoutReceiptItem.findAll({
+              attributes: ["receiptId", "collectionLogId"],
+              where: { collectionLogId: { [Op.in]: payoutLogIds } },
+            })
+          : [];
+        const receiptIds = Array.from(new Set(receiptItems.map((item) => item.receiptId)));
+        const receiptsById = receiptIds.length > 0
+          ? new Map(
+              (
+                await StaffPayoutReceipt.findAll({
+                  attributes: [
+                    "id",
+                    "status",
+                    "payoutBatchKey",
+                    "confirmedAt",
+                    "cancelledAt",
+                    "photoFileId",
+                    "signatureFileId",
+                  ],
+                  where: { id: { [Op.in]: receiptIds } },
+                })
+              ).map((receipt) => [receipt.id, receipt]),
+            )
+          : new Map<number, StaffPayoutReceipt>();
+        const receiptByCollectionLogId = new Map<number, StaffPayoutReceipt>();
+        receiptItems.forEach((item) => {
+          if (!item.collectionLogId) {
+            return;
+          }
+          const receipt = receiptsById.get(item.receiptId);
+          if (receipt) {
+            receiptByCollectionLogId.set(item.collectionLogId, receipt);
+          }
+        });
+
         const financeTransactionIds = Array.from(
           new Set(
             payoutLogRows
@@ -2251,6 +2319,13 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           const staffProfileId = Number(row.staffProfileId ?? NaN);
           if (!Number.isFinite(staffProfileId)) {
             return;
+          }
+
+          if (row.financeTransactionId && Number.isInteger(row.financeTransactionId)) {
+            const collectedTransactionIds =
+              collectedPayableFinanceTransactionIdsByUserId.get(staffProfileId) ?? new Set<number>();
+            collectedTransactionIds.add(row.financeTransactionId);
+            collectedPayableFinanceTransactionIdsByUserId.set(staffProfileId, collectedTransactionIds);
           }
 
           const linkedTransaction =
@@ -2295,6 +2370,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
               ? linkedTransaction.date
               : dayjs(row.createdAt).format("YYYY-MM-DD");
           const createdAt = dayjs(row.createdAt).toISOString();
+          const receipt = receiptByCollectionLogId.get(row.id) ?? null;
           const existingEntries = paidEntriesByStaffProfileId.get(staffProfileId) ?? [];
           existingEntries.push({
             id: row.id,
@@ -2310,6 +2386,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             note,
             createdAt,
             canDelete: true,
+            receipt: receipt ? buildStaffPayoutReceiptCompactView(receipt) : null,
           });
           paidEntriesByStaffProfileId.set(staffProfileId, existingEntries);
         });
@@ -2361,12 +2438,19 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         summary.totalPayout > 0 ? roundCurrencyValue(summary.totalPayout) : 0;
       const receivableDue =
         summary.totalPayout < 0 ? roundCurrencyValue(Math.abs(summary.totalPayout)) : 0;
+      const uncollectedAffiliatePaid = getUncollectedAffiliatePaidAmount({
+        bookings: summary.affiliateSales.bookings,
+        payoutFinanceTransactionIdByLogId: affiliatePayoutFinanceTransactionIdByLogId,
+        collectedFinanceTransactionIds:
+          collectedPayableFinanceTransactionIdsByUserId.get(userId) ?? new Set<number>(),
+      });
+      const payablePaid = roundCurrencyValue(collection.payable + uncollectedAffiliatePaid);
 
       summary.payouts = {
         currency: collection.currency ?? resolvePayoutCurrency(),
         payableDue,
-        payablePaid: roundCurrencyValue(collection.payable),
-        payableOutstanding: roundCurrencyValue(Math.max(payableDue - collection.payable, 0)),
+        payablePaid,
+        payableOutstanding: roundCurrencyValue(Math.max(payableDue - payablePaid, 0)),
         receivableDue,
         receivableCollected: roundCurrencyValue(collection.receivable),
         receivableOutstanding: roundCurrencyValue(
@@ -2794,11 +2878,345 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
   }
 };
 
+const parseStaffPayoutReceiptId = (value: unknown): number | null => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const serializeReceiptDateTime = (value: Date | string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.toISOString() : null;
+};
+
+const formatReceiptStaffName = (user: User | null): string => {
+  if (!user) {
+    return "Unknown staff member";
+  }
+  const name = [user.firstName, user.lastName]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter(Boolean)
+    .join(" ");
+  return name || `Staff #${user.id}`;
+};
+
+const parseStaffPayoutReceiptHistoryDate = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return null;
+  }
+  const parsed = dayjs(normalized);
+  return parsed.isValid() && parsed.format("YYYY-MM-DD") === normalized ? normalized : null;
+};
+
+const getReceiptHistoryBatchGroupKey = (receipt: StaffPayoutReceipt): string => {
+  const batchKey = typeof receipt.payoutBatchKey === "string" ? receipt.payoutBatchKey.trim() : "";
+  return batchKey || `receipt:${receipt.id}`;
+};
+
+const setSensitiveReceiptResponseHeaders = (res: Response): void => {
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+};
+
+export const listStaffPayoutReceiptHistory = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  setSensitiveReceiptResponseHeaders(res);
+  try {
+    const batchKey = typeof req.query.batchKey === "string" ? req.query.batchKey.trim() : "";
+    if (batchKey.length > 128) {
+      res.status(400).json([{ message: "Payout batch key must be 128 characters or fewer." }]);
+      return;
+    }
+
+    const staffUserIdRaw = req.query.staffUserId;
+    const staffUserId = staffUserIdRaw === undefined
+      ? null
+      : parseStaffPayoutReceiptId(staffUserIdRaw);
+    if (staffUserIdRaw !== undefined && !staffUserId) {
+      res.status(400).json([{ message: "A valid staffUserId is required." }]);
+      return;
+    }
+
+    const where: WhereOptions = {};
+    if (batchKey) {
+      Object.assign(where, { payoutBatchKey: batchKey });
+      if (staffUserId) {
+        Object.assign(where, { staffUserId });
+      }
+    } else {
+      const startDate = parseStaffPayoutReceiptHistoryDate(req.query.startDate);
+      const endDate = parseStaffPayoutReceiptHistoryDate(req.query.endDate);
+      if (!staffUserId || !startDate || !endDate) {
+        res.status(400).json([{
+          message: "Provide a batchKey, or provide staffUserId with valid startDate and endDate values.",
+        }]);
+        return;
+      }
+      if (dayjs(startDate).isAfter(dayjs(endDate), "day")) {
+        res.status(400).json([{ message: "startDate cannot be after endDate." }]);
+        return;
+      }
+      Object.assign(where, {
+        staffUserId,
+        rangeStart: { [Op.lte]: endDate },
+        rangeEnd: { [Op.gte]: startDate },
+      });
+    }
+
+    const receipts = await StaffPayoutReceipt.findAll({
+      attributes: [
+        "id",
+        "staffUserId",
+        "payoutBatchKey",
+        "status",
+        "rangeStart",
+        "rangeEnd",
+        "paidDate",
+        "paidByName",
+        "confirmedAt",
+        "cancelledAt",
+        "cancelReason",
+        "photoFileId",
+        "signatureFileId",
+        "createdAt",
+      ],
+      where,
+      order: [
+        ["createdAt", "DESC"],
+        ["id", "DESC"],
+      ],
+    });
+
+    const receiptIds = receipts.map((receipt) => receipt.id);
+    const staffUserIds = Array.from(new Set(receipts.map((receipt) => receipt.staffUserId)));
+    const [items, staffUsers] = await Promise.all([
+      receiptIds.length > 0
+        ? StaffPayoutReceiptItem.findAll({
+            attributes: ["receiptId", "amountMinor", "currencyCode"],
+            where: { receiptId: { [Op.in]: receiptIds } },
+            order: [["id", "ASC"]],
+          })
+        : Promise.resolve([] as StaffPayoutReceiptItem[]),
+      staffUserIds.length > 0
+        ? User.findAll({
+            attributes: ["id", "firstName", "lastName"],
+            where: { id: { [Op.in]: staffUserIds } },
+          })
+        : Promise.resolve([] as User[]),
+    ]);
+
+    const itemsByReceiptId = new Map<number, StaffPayoutReceiptItem[]>();
+    items.forEach((item) => {
+      const receiptItems = itemsByReceiptId.get(item.receiptId) ?? [];
+      receiptItems.push(item);
+      itemsByReceiptId.set(item.receiptId, receiptItems);
+    });
+    const staffUsersById = new Map(staffUsers.map((user) => [user.id, user]));
+
+    const currentReceiptIdByBatch = new Map<string, number>();
+    receipts.forEach((receipt) => {
+      if (receipt.status !== "pending" && receipt.status !== "completed") {
+        return;
+      }
+      const groupKey = getReceiptHistoryBatchGroupKey(receipt);
+      if (!currentReceiptIdByBatch.has(groupKey)) {
+        currentReceiptIdByBatch.set(groupKey, receipt.id);
+      }
+    });
+    receipts.forEach((receipt) => {
+      const groupKey = getReceiptHistoryBatchGroupKey(receipt);
+      if (!currentReceiptIdByBatch.has(groupKey)) {
+        currentReceiptIdByBatch.set(groupKey, receipt.id);
+      }
+    });
+
+    res.status(200).json({
+      receipts: receipts.map((receipt) => {
+        const receiptItems = itemsByReceiptId.get(receipt.id) ?? [];
+        const createdAtValue = receipt.get("createdAt") as Date | string | null | undefined;
+        return {
+          id: receipt.id,
+          status: receipt.status,
+          staffUserId: receipt.staffUserId,
+          staffName: formatReceiptStaffName(staffUsersById.get(receipt.staffUserId) ?? null),
+          payoutBatchKey: receipt.payoutBatchKey ?? null,
+          rangeStart: receipt.rangeStart,
+          rangeEnd: receipt.rangeEnd,
+          paidDate: receipt.paidDate,
+          paidByName: receipt.paidByName,
+          confirmedAt: serializeReceiptDateTime(receipt.confirmedAt),
+          cancelledAt: serializeReceiptDateTime(receipt.cancelledAt),
+          cancelReason: receipt.cancelReason ?? null,
+          createdAt: serializeReceiptDateTime(createdAtValue),
+          totals: buildStaffPayoutReceiptTotals(receiptItems),
+          itemCount: receiptItems.length,
+          hasPhoto: Boolean(receipt.photoFileId),
+          hasSignature: Boolean(receipt.signatureFileId),
+          isCurrent: currentReceiptIdByBatch.get(getReceiptHistoryBatchGroupKey(receipt)) === receipt.id,
+        };
+      }),
+      hasMore: false,
+    });
+  } catch (error) {
+    console.error("Failed to load staff payout receipt history", error);
+    res.status(500).json([{ message: "Failed to load payout receipt history." }]);
+  }
+};
+
+export const getStaffPayoutReceiptDetail = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  setSensitiveReceiptResponseHeaders(res);
+  try {
+    const receiptId = parseStaffPayoutReceiptId(req.params.id);
+    if (!receiptId) {
+      res.status(400).json([{ message: "A valid payout receipt id is required." }]);
+      return;
+    }
+
+    const receipt = await StaffPayoutReceipt.findByPk(receiptId);
+    if (!receipt) {
+      res.status(404).json([{ message: "Payout receipt not found." }]);
+      return;
+    }
+
+    const [items, staffUser] = await Promise.all([
+      StaffPayoutReceiptItem.findAll({
+        where: { receiptId },
+        order: [["id", "ASC"]],
+      }),
+      User.findByPk(receipt.staffUserId, {
+        attributes: ["id", "firstName", "lastName"],
+      }),
+    ]);
+
+    const createdAtValue = receipt.get("createdAt") as Date | string | null | undefined;
+    res.status(200).json({
+      id: receipt.id,
+      status: receipt.status,
+      staffUserId: receipt.staffUserId,
+      staffName: formatReceiptStaffName(staffUser),
+      payoutBatchKey: receipt.payoutBatchKey ?? null,
+      rangeStart: receipt.rangeStart,
+      rangeEnd: receipt.rangeEnd,
+      paidDate: receipt.paidDate,
+      paidByName: receipt.paidByName,
+      acceptanceText: receipt.acceptanceText,
+      acceptanceVersion: receipt.acceptanceVersion,
+      confirmedAt: serializeReceiptDateTime(receipt.confirmedAt),
+      cancelledAt: serializeReceiptDateTime(receipt.cancelledAt),
+      cancelReason: receipt.cancelReason ?? null,
+      createdAt: serializeReceiptDateTime(createdAtValue),
+      totals: buildStaffPayoutReceiptTotals(items),
+      items: items.map((item) => ({
+        id: item.id,
+        collectionLogId: item.collectionLogId ?? item.collectionLogIdSnapshot,
+        financeTransactionId: item.financeTransactionId ?? item.financeTransactionIdSnapshot,
+        label: item.label,
+        amountMinor: item.amountMinor,
+        amount: item.amountMinor / 100,
+        currency: item.currencyCode.trim().toUpperCase(),
+      })),
+      hasPhoto: Boolean(receipt.photoFileId),
+      hasSignature: Boolean(receipt.signatureFileId),
+    });
+  } catch (error) {
+    console.error("Failed to load staff payout receipt", error);
+    res.status(500).json([{ message: "Failed to load payout receipt." }]);
+  }
+};
+
+const streamStaffPayoutReceiptEvidence = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  kind: "photo" | "signature",
+): Promise<void> => {
+  setSensitiveReceiptResponseHeaders(res);
+  try {
+    const receiptId = parseStaffPayoutReceiptId(req.params.id);
+    if (!receiptId) {
+      res.status(400).json([{ message: "A valid payout receipt id is required." }]);
+      return;
+    }
+
+    const receipt = await StaffPayoutReceipt.findByPk(receiptId, {
+      attributes: ["id", "photoFileId", "signatureFileId"],
+    });
+    if (!receipt) {
+      res.status(404).json([{ message: "Payout receipt not found." }]);
+      return;
+    }
+
+    const fileId = kind === "photo" ? receipt.photoFileId : receipt.signatureFileId;
+    if (!fileId) {
+      res.status(404).json([{ message: `Payout receipt ${kind} not found.` }]);
+      return;
+    }
+    const file = await FinanceFile.findOne({
+      where: { id: fileId, purpose: "staff_payout_receipt" },
+    });
+    if (!file) {
+      res.status(404).json([{ message: `Payout receipt ${kind} file not found.` }]);
+      return;
+    }
+
+    const stream = await openFinanceFileStream(file.driveFileId);
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    const maxEvidenceBytes = 10 * 1024 * 1024;
+    for await (const chunk of stream) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > maxEvidenceBytes) {
+        stream.destroy();
+        throw new Error(`Stored payout receipt ${kind} exceeds the evidence size limit.`);
+      }
+      chunks.push(buffer);
+    }
+    const evidence = Buffer.concat(chunks, totalBytes);
+    const digest = crypto.createHash("sha256").update(evidence).digest("hex");
+    if (digest !== file.sha256 || evidence.length !== Number(file.sizeBytes)) {
+      throw new Error(`Stored payout receipt ${kind} failed its integrity check.`);
+    }
+
+    res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.originalName)}"`);
+    res.setHeader("Content-Length", String(evidence.length));
+    res.status(200).send(evidence);
+  } catch (error) {
+    console.error(`Failed to load payout receipt ${kind}`, error);
+    if (!res.headersSent) {
+      res.status(500).json([{ message: `Failed to load payout receipt ${kind}.` }]);
+    }
+  }
+};
+
+export const downloadStaffPayoutReceiptPhoto = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => streamStaffPayoutReceiptEvidence(req, res, "photo");
+
+export const downloadStaffPayoutReceiptSignature = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => streamStaffPayoutReceiptEvidence(req, res, "signature");
+
 export const listReportModels = (_req: Request, res: Response): void => {
   try {
     modelDescriptorCache.clear();
     const models = Object.values(sequelize.models) as Array<ModelCtor<Model>>;
     const payload = models
+      .filter((model) => !isSensitiveReportModel(model.name))
       .map(describeModel)
       .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -2930,9 +3348,20 @@ const normalizeSelectQueryConfig = (config: QueryConfig): ReportPreviewRequest =
   };
 };
 
+const assertNoSensitiveReportModelReferences = (value: unknown): void => {
+  const blockedModels = listSensitiveReportModelReferences(value);
+  if (blockedModels.length > 0) {
+    throw new PreviewQueryError(
+      `The following models are available only through their dedicated restricted endpoints: ${blockedModels.join(", ")}.`,
+      403,
+    );
+  }
+};
+
 export const executePreviewQuery = async (
   payload: ReportPreviewRequest,
 ): Promise<{ result: ReportPreviewResponse; sql: string; meta: Record<string, unknown> }> => {
+  assertNoSensitiveReportModelReferences(payload);
   if (!payload || !Array.isArray(payload.models) || payload.models.length === 0) {
     throw new PreviewQueryError("At least one data model is required.");
   }
@@ -3838,6 +4267,7 @@ const isAggregatedConfig = (config: QueryConfig): boolean =>
 const executeQueryConfigSync = async (
   config: QueryConfig,
 ): Promise<QueryExecutionResult> => {
+  assertNoSensitiveReportModelReferences(config);
   const unionQueries = Array.isArray(config.union?.queries) ? config.union?.queries ?? [] : [];
   const isUnionRequest = unionQueries.length > 0;
   if (isUnionRequest) {
@@ -3870,6 +4300,7 @@ const executeQueryConfigSync = async (
 const runQueryConfigWithCache = async (
   config: QueryConfig,
 ): Promise<{ execution: QueryExecutionResult; hash: string; cached: boolean }> => {
+  assertNoSensitiveReportModelReferences(config);
   const hash = computeQueryHash(config);
   const cached = await getCachedQueryResult(hash);
   if (cached) {
@@ -4004,6 +4435,7 @@ export const runReportPreview = async (
   let lastSql = "";
   try {
     ensureReportingAccess(req);
+    assertNoSensitiveReportModelReferences(req.body);
     const unionPayload = (req.body as QueryConfig)?.union;
     if (unionPayload && Array.isArray(unionPayload.queries) && unionPayload.queries.length > 0) {
       const { result, sql, meta } = await executeUnionQuery(unionPayload, { disableLimit: true });
@@ -4048,6 +4480,7 @@ export const executeReportQuery = async (req: AuthenticatedRequest, res: Respons
   try {
     ensureReportingAccess(req);
     const config = req.body as QueryConfig;
+    assertNoSensitiveReportModelReferences(config);
     const unionQueries = Array.isArray(config.union?.queries) ? config.union?.queries ?? [] : [];
     const isUnionRequest = unionQueries.length > 0;
     const templateId = config.options?.templateId ?? null;
@@ -4573,6 +5006,7 @@ const buildStaffAffiliateSalesByUser = (
       affiliateCommissionAmount: booking.affiliateCommissionAmount,
       affiliateCommissionEligible: booking.affiliateCommissionEligible,
       affiliateCommissionIneligibleReason: booking.affiliateCommissionIneligibleReason,
+      affiliatePayoutLogId: booking.affiliatePayoutLogId,
       isCommissionPaid: booking.isCommissionPaid,
       utmSource: booking.utmSource,
       utmMedium: booking.utmMedium,
@@ -7758,6 +8192,9 @@ function findField(
 }
 
 function ensureModelDescriptor(modelId: string): ReportModelDescriptor | null {
+  if (isSensitiveReportModel(modelId)) {
+    return null;
+  }
   const cached = modelDescriptorCache.get(modelId);
   if (cached) {
     return cached;

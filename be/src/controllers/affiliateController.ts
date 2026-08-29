@@ -100,7 +100,16 @@ const parseBodyDate = (value: unknown, field: string): string => {
     throw new Error(`${field} must be a valid YYYY-MM-DD date`);
   }
   const trimmed = value.trim();
-  if (!ISO_DATE_PATTERN.test(trimmed) || !dayjs(trimmed).isValid()) {
+  if (!ISO_DATE_PATTERN.test(trimmed)) {
+    throw new Error(`${field} must be a valid YYYY-MM-DD date`);
+  }
+  const [year, month, day] = trimmed.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+  ) {
     throw new Error(`${field} must be a valid YYYY-MM-DD date`);
   }
   return trimmed;

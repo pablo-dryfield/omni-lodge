@@ -1,4 +1,6 @@
 import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone.js';
+import utc from 'dayjs/plugin/utc.js';
 import { Op } from 'sequelize';
 import Booking from '../models/Booking.js';
 import Product from '../models/Product.js';
@@ -7,6 +9,9 @@ import UserType from '../models/UserType.js';
 import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
 import { getConfigValue, updateConfigValue } from './configService.js';
 import { fetchBookingUtmCatalog } from './bookings/bookingUtmCatalogService.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 export type AffiliateAssignmentRule = {
   id: string;
@@ -177,14 +182,21 @@ const normalizeAffiliateCommissionPerPerson = (value: unknown, fallback = 20): n
 };
 
 const AFFILIATE_COMMISSION_CUTOFF_MINUTES = 20 * 60 + 45;
+const AFFILIATE_COMMISSION_TIMEZONE = 'Europe/Warsaw';
 
-const getAffiliateCommissionEligibility = (
+export const getAffiliateCommissionEligibility = (
   sourceReceivedAt: string | null,
+  isCommissionPaid = false,
 ): { eligible: boolean; reason: string | null } => {
+  // A recorded payout is an accounting fact. Later eligibility-rule changes must
+  // not remove previously earned commission from historical payout reports.
+  if (isCommissionPaid) {
+    return { eligible: true, reason: null };
+  }
   if (!sourceReceivedAt) {
     return { eligible: true, reason: null };
   }
-  const parsed = dayjs(sourceReceivedAt);
+  const parsed = dayjs(sourceReceivedAt).tz(AFFILIATE_COMMISSION_TIMEZONE);
   if (!parsed.isValid()) {
     return { eligible: true, reason: null };
   }
@@ -311,7 +323,9 @@ const buildMetricSeries = (rows: AffiliateBookingRow[]): AffiliateDailySeriesPoi
   const map = new Map<string, { bookingCount: number; peopleCount: number; revenue: number; commission: number }>();
 
   rows.forEach((row) => {
-    const date = row.sourceReceivedAt ? dayjs(row.sourceReceivedAt).format('YYYY-MM-DD') : null;
+    const date = row.sourceReceivedAt
+      ? dayjs(row.sourceReceivedAt).tz(AFFILIATE_COMMISSION_TIMEZONE).format('YYYY-MM-DD')
+      : null;
     if (!date) {
       return;
     }
@@ -504,6 +518,13 @@ type NormalizedAffiliatePayoutLog = {
   note: string | null;
 };
 
+type AffiliateBookingWithUser = AffiliateBookingRow & { affiliateUserId: number };
+
+type AffiliateBookingPayoutState = {
+  payoutLogId: number;
+  commissionAmount: number | null;
+};
+
 const normalizeBookingIds = (value: unknown): number[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -511,6 +532,52 @@ const normalizeBookingIds = (value: unknown): number[] => {
   return value
     .map((entry) => Number(entry))
     .filter((entry) => Number.isInteger(entry) && entry > 0);
+};
+
+const allocatePayoutLogAmount = (
+  log: NormalizedAffiliatePayoutLog,
+  partySizeByBookingId: ReadonlyMap<number, number>,
+): Map<number, number> => {
+  const bookingIds = Array.from(new Set(log.bookingIds));
+  const weightedBookings = bookingIds.map((bookingId) => ({
+    bookingId,
+    partySize: partySizeByBookingId.get(bookingId) ?? 0,
+  }));
+  if (weightedBookings.some(({ partySize }) => !Number.isFinite(partySize) || partySize <= 0)) {
+    return new Map();
+  }
+
+  const totalPartySize = weightedBookings.reduce((sum, booking) => sum + booking.partySize, 0);
+  const amountMinor = Math.round(log.amountMinor);
+  const sign = amountMinor < 0 ? -1 : 1;
+  const absoluteAmountMinor = Math.abs(amountMinor);
+  const shares = weightedBookings.map((booking) => {
+    const rawShare = (absoluteAmountMinor * booking.partySize) / totalPartySize;
+    const baseShare = Math.floor(rawShare);
+    return {
+      bookingId: booking.bookingId,
+      amountMinor: baseShare,
+      remainder: rawShare - baseShare,
+    };
+  });
+  let remainingMinor = absoluteAmountMinor - shares.reduce((sum, share) => sum + share.amountMinor, 0);
+  shares
+    .slice()
+    .sort((left, right) => right.remainder - left.remainder || left.bookingId - right.bookingId)
+    .forEach((share) => {
+      if (remainingMinor <= 0) {
+        return;
+      }
+      const target = shares.find((candidate) => candidate.bookingId === share.bookingId);
+      if (target) {
+        target.amountMinor += 1;
+        remainingMinor -= 1;
+      }
+    });
+
+  return new Map(
+    shares.map((share) => [share.bookingId, normalizeMoney((share.amountMinor * sign) / 100)]),
+  );
 };
 
 const fetchAffiliatePayoutLogs = async (affiliateUserIds: number[]): Promise<NormalizedAffiliatePayoutLog[]> => {
@@ -546,8 +613,13 @@ const fetchAffiliatePayoutLogs = async (affiliateUserIds: number[]): Promise<Nor
 };
 
 const fetchAffiliateBookings = async (startDate: string, endDate: string): Promise<AffiliateBookingRow[]> => {
-  const rangeStart = `${startDate}T00:00:00.000Z`;
-  const rangeEndExclusive = `${dayjs(endDate).add(1, 'day').format('YYYY-MM-DD')}T00:00:00.000Z`;
+  const rangeStart = dayjs.tz(startDate, AFFILIATE_COMMISSION_TIMEZONE).startOf('day').utc().toISOString();
+  const rangeEndExclusive = dayjs
+    .tz(endDate, AFFILIATE_COMMISSION_TIMEZONE)
+    .add(1, 'day')
+    .startOf('day')
+    .utc()
+    .toISOString();
   const rows = await Booking.findAll({
     where: {
       sourceReceivedAt: {
@@ -628,7 +700,6 @@ export const getAffiliateOverview = async (params: {
     ? await fetchAffiliateUsers(assignments.rules.map((rule) => rule.userId))
     : affiliateUsers;
   const bookings = await fetchAffiliateBookings(startDate, endDate);
-  const affiliateUserMap = new Map(affiliateUsers.map((user) => [user.id, user]));
   const attributionUserMap = new Map(attributionUsers.map((user) => [user.id, user]));
   const affiliateRoleUserIds = new Set(affiliateUsers.map((user) => user.id));
 
@@ -647,8 +718,8 @@ export const getAffiliateOverview = async (params: {
     throw new Error('Affiliate users can only view their own bookings');
   }
 
-  const resolvedBookings = bookings
-    .map((booking) => {
+  const attributedBookings = bookings
+    .map<AffiliateBookingRow>((booking) => {
       const matchedRule = findMatchingRule(booking, assignments.rules);
       if (!matchedRule) {
         return {
@@ -670,23 +741,16 @@ export const getAffiliateOverview = async (params: {
       const affiliateCommissionPerPerson = affiliateUser
         ? normalizeAffiliateCommissionPerPerson(affiliateUser.affiliateCommissionPerPerson)
         : null;
-      const commissionEligibility = getAffiliateCommissionEligibility(booking.sourceReceivedAt);
       return {
         ...booking,
         affiliateUserId: matchedRule.userId,
         affiliateUserName: affiliateUser?.fullName ?? null,
         affiliateRuleId: matchedRule.id,
         affiliateCommissionPerPerson,
-        affiliateCommissionEligible: commissionEligibility.eligible,
-        affiliateCommissionIneligibleReason: commissionEligibility.reason,
-        affiliateCommissionAmount:
-          affiliateCommissionPerPerson != null && commissionEligibility.eligible
-            ? normalizeMoney(booking.partySizeTotal * affiliateCommissionPerPerson)
-            : 0,
       };
     })
-    .filter((booking) => {
-      if (!booking.affiliateUserId) {
+    .filter((booking): booking is AffiliateBookingWithUser => {
+      if (booking.affiliateUserId == null) {
         return false;
       }
       if (normalizedSelectedAffiliateUserId == null) {
@@ -695,27 +759,72 @@ export const getAffiliateOverview = async (params: {
       return booking.affiliateUserId === normalizedSelectedAffiliateUserId;
     });
 
-  const matchedAffiliateIds = Array.from(
-    new Set(resolvedBookings.map((booking) => booking.affiliateUserId).filter((value): value is number => Boolean(value))),
-  );
+  const matchedAffiliateIds = Array.from(new Set(attributedBookings.map((booking) => booking.affiliateUserId)));
   const payoutLogs = await fetchAffiliatePayoutLogs(matchedAffiliateIds);
-  const visibleBookingIds = new Set(resolvedBookings.map((booking) => booking.id));
-  const relevantPayoutLogs = payoutLogs.filter((log) => log.bookingIds.some((bookingId) => visibleBookingIds.has(bookingId)));
-  const bookingPayoutMap = new Map<number, number>();
+  const toAffiliateBookingKey = (affiliateUserId: number, bookingId: number): string => `${affiliateUserId}:${bookingId}`;
+  const visibleAffiliateBookingKeys = new Set(
+    attributedBookings.map((booking) => toAffiliateBookingKey(booking.affiliateUserId, booking.id)),
+  );
+  const relevantPayoutLogs = payoutLogs.filter((log) =>
+    log.bookingIds.some((bookingId) =>
+      visibleAffiliateBookingKeys.has(toAffiliateBookingKey(log.affiliateUserId, bookingId)),
+    ),
+  );
+  const partySizeByBookingId = new Map(bookings.map((booking) => [booking.id, booking.partySizeTotal]));
+  const missingPayoutBookingIds = Array.from(
+    new Set(relevantPayoutLogs.flatMap((log) => log.bookingIds)),
+  ).filter((bookingId) => !partySizeByBookingId.has(bookingId));
+  if (missingPayoutBookingIds.length > 0) {
+    const payoutBookingRows = await Booking.findAll({
+      where: {
+        id: {
+          [Op.in]: missingPayoutBookingIds,
+        },
+      },
+      attributes: ['id', 'partySizeTotal', 'partySizeAdults', 'partySizeChildren'],
+    });
+    payoutBookingRows.forEach((booking) => {
+      partySizeByBookingId.set(booking.id, resolvePartySizeTotal(booking));
+    });
+  }
+
+  const payoutCommissionAllocations = new Map(
+    relevantPayoutLogs.map((log) => [log.id, allocatePayoutLogAmount(log, partySizeByBookingId)]),
+  );
+  const bookingPayoutMap = new Map<string, AffiliateBookingPayoutState>();
   relevantPayoutLogs.forEach((log) => {
     log.bookingIds.forEach((bookingId) => {
-      if (visibleBookingIds.has(bookingId) && !bookingPayoutMap.has(bookingId)) {
-        bookingPayoutMap.set(bookingId, log.id);
+      const bookingKey = toAffiliateBookingKey(log.affiliateUserId, bookingId);
+      if (visibleAffiliateBookingKeys.has(bookingKey) && !bookingPayoutMap.has(bookingKey)) {
+        bookingPayoutMap.set(bookingKey, {
+          payoutLogId: log.id,
+          commissionAmount: payoutCommissionAllocations.get(log.id)?.get(bookingId) ?? null,
+        });
       }
     });
   });
 
-  const bookingsWithPayoutState = resolvedBookings.map((booking) => {
-    const payoutLogId = bookingPayoutMap.get(booking.id) ?? null;
+  const bookingsWithPayoutState = attributedBookings.map((booking) => {
+    const payoutState = bookingPayoutMap.get(toAffiliateBookingKey(booking.affiliateUserId, booking.id)) ?? null;
+    const payoutLogId = payoutState?.payoutLogId ?? null;
+    const isCommissionPaid = payoutState != null;
+    const commissionEligibility = getAffiliateCommissionEligibility(booking.sourceReceivedAt, isCommissionPaid);
+    const calculatedCommissionAmount =
+      booking.affiliateCommissionPerPerson != null && commissionEligibility.eligible
+        ? normalizeMoney(booking.partySizeTotal * booking.affiliateCommissionPerPerson)
+        : 0;
+    const affiliateCommissionAmount = payoutState?.commissionAmount ?? calculatedCommissionAmount;
     return {
       ...booking,
+      affiliateCommissionPerPerson:
+        payoutState?.commissionAmount != null && booking.partySizeTotal > 0
+          ? normalizeMoney(payoutState.commissionAmount / booking.partySizeTotal)
+          : booking.affiliateCommissionPerPerson,
+      affiliateCommissionEligible: commissionEligibility.eligible,
+      affiliateCommissionIneligibleReason: commissionEligibility.reason,
+      affiliateCommissionAmount,
       affiliatePayoutLogId: payoutLogId,
-      isCommissionPaid: payoutLogId != null,
+      isCommissionPaid,
     };
   });
 
@@ -775,7 +884,7 @@ export const getAffiliateOverview = async (params: {
     affiliateUsers,
     assignments,
     summary: {
-      bookingCount: resolvedBookings.length,
+      bookingCount: bookingsWithPayoutState.length,
       revenueTotal: normalizeMoney(bookingsWithPayoutState.reduce((sum, booking) => sum + booking.baseAmount, 0)),
       commissionTotal: normalizeMoney(bookingsWithPayoutState.reduce((sum, booking) => sum + booking.affiliateCommissionAmount, 0)),
       commissionPaidTotal: normalizeMoney(
@@ -813,7 +922,9 @@ export const getAffiliateOverview = async (params: {
       paidDate: log.paidDate,
       rangeStart: log.rangeStart,
       rangeEnd: log.rangeEnd,
-      bookingCount: log.bookingIds.filter((bookingId) => visibleBookingIds.has(bookingId)).length,
+      bookingCount: log.bookingIds.filter((bookingId) =>
+        visibleAffiliateBookingKeys.has(toAffiliateBookingKey(log.affiliateUserId, bookingId)),
+      ).length,
       financeTransactionId: log.financeTransactionId,
       note: log.note,
     })),

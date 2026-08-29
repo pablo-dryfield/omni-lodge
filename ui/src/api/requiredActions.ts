@@ -8,6 +8,19 @@ export type RequiredActionField = {
   currentValue?: string | null;
 };
 
+export type StaffPayoutReceiptPayload = {
+  id: number;
+  amount?: number;
+  amountMinor?: number;
+  currency: string;
+  rangeStart: string;
+  rangeEnd: string;
+  payoutDate?: string | null;
+  paidByName?: string | null;
+  acceptanceText?: string | null;
+  acceptanceVersion?: string | null;
+};
+
 export type RequiredActionItem = {
   id: string;
   source: "required_action" | "schedule_swap" | "schedule_shift_request";
@@ -19,6 +32,7 @@ export type RequiredActionItem = {
     | "quiz"
     | "assistant_manager_task"
     | "customer_email"
+    | "staff_payout_receipt"
     | "custom"
     | "schedule_swap_partner"
     | "schedule_swap_manager"
@@ -51,6 +65,7 @@ export type RequiredActionItem = {
         options: Array<{ id: string; label: string }>;
       }>;
     };
+    staffPayoutReceipt?: StaffPayoutReceiptPayload;
   };
 };
 
@@ -148,6 +163,47 @@ export const useCompleteRequiredProfileFields = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: requiredActionsKey });
+    },
+  });
+};
+
+export const useConfirmStaffPayoutReceipt = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      receiptId,
+      actionId,
+      photo,
+      signature,
+      acknowledgedAmount,
+      acknowledgedAt,
+    }: {
+      receiptId: number;
+      actionId: number;
+      photo: File;
+      signature: Record<string, unknown>;
+      acknowledgedAmount: string;
+      acknowledgedAt: string;
+    }) => {
+      const formData = new FormData();
+      formData.append("actionId", String(actionId));
+      formData.append("photo", photo);
+      formData.append("signature", JSON.stringify(signature));
+      formData.append("acknowledgedAmount", acknowledgedAmount);
+      formData.append("acknowledgedAt", acknowledgedAt);
+      const response = await axiosInstance.post<{ completed: boolean }>(
+        `/required-actions/staff-payout-receipts/${receiptId}/confirm`,
+        formData,
+        {
+          withCredentials: true,
+          headers: { "Content-Type": "multipart/form-data" },
+        },
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: requiredActionsKey });
+      queryClient.invalidateQueries({ queryKey: ["requests-center"] });
     },
   });
 };

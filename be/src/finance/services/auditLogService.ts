@@ -1,4 +1,5 @@
 import FinanceAuditLog from '../models/FinanceAuditLog.js';
+import type { Transaction as SequelizeTransaction } from 'sequelize';
 
 type AuditLogParams = {
   entity: string;
@@ -7,6 +8,7 @@ type AuditLogParams = {
   performedBy?: number | null;
   changes?: Record<string, unknown> | null;
   metadata?: Record<string, unknown> | null;
+  transaction?: SequelizeTransaction;
 };
 
 export async function recordFinanceAuditLog({
@@ -16,14 +18,17 @@ export async function recordFinanceAuditLog({
   performedBy = null,
   changes = null,
   metadata = null,
+  transaction,
 }: AuditLogParams): Promise<FinanceAuditLog> {
-  return FinanceAuditLog.create({
-    entity,
-    entityId,
-    action,
-    performedBy,
-    changes,
-    metadata,
-  });
+  return FinanceAuditLog.create(
+    {
+      entity,
+      entityId,
+      action,
+      performedBy,
+      changes,
+      metadata,
+    },
+    { transaction },
+  );
 }
-

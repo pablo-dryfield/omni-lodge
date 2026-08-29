@@ -27,6 +27,10 @@ import {
   customerEmailActionTargetsUser,
   shouldCloseCustomerEmailActionForAll,
 } from '../services/bookings/customerEmailActionRules.js';
+import {
+  confirmStaffPayoutReceipt,
+  getStaffPayoutReceiptActionPayload,
+} from '../services/staffPayoutReceiptService.js';
 
 type UserFieldKey =
   | 'phone'
@@ -213,6 +217,32 @@ const getPolicyAcceptedVersion = (entry: CerebroEntry): string =>
 
 const serializeStoredAction = async (action: RequiredAction, user: User) => {
   const payload = normalizeRequiredActionPayload(action.payload);
+  if (action.type === 'staff_payout_receipt') {
+    const receiptId = normalizePositiveInteger(payload.receiptId);
+    if (!receiptId) {
+      return null;
+    }
+    const staffPayoutReceipt = await getStaffPayoutReceiptActionPayload({
+      receiptId,
+      actionId: action.id,
+      staffUserId: user.id,
+    });
+    if (!staffPayoutReceipt) {
+      return null;
+    }
+    return {
+      id: `required:${action.id}`,
+      source: 'required_action',
+      recordId: action.id,
+      type: action.type,
+      title: action.title,
+      body: action.body,
+      blocking: true,
+      requiresSignature: true,
+      dueAt: action.dueAt,
+      payload: { staffPayoutReceipt },
+    };
+  }
   if (action.type === 'profile_fields') {
     const fieldKeys = getProfileFieldKeys(action);
     const missingFields = fieldKeys.filter((field) => {
@@ -544,6 +574,10 @@ export const createRequiredAction = async (req: Request, res: Response): Promise
       res.status(400).json([{ message: 'type and title are required' }]);
       return;
     }
+    if (type === 'staff_payout_receipt') {
+      res.status(400).json([{ message: 'Payout receipt requests are created automatically when a staff payment is recorded.' }]);
+      return;
+    }
 
     const action = await RequiredAction.create({
       type,
@@ -578,6 +612,10 @@ export const updateRequiredActionStatus = async (req: Request, res: Response): P
       res.status(404).json([{ message: 'Required action not found' }]);
       return;
     }
+    if (action.type === 'staff_payout_receipt') {
+      res.status(400).json([{ message: 'Payout receipt requests can only be cancelled through the related payout adjustment.' }]);
+      return;
+    }
 
     if (typeof req.body?.status !== 'boolean') {
       res.status(400).json([{ message: 'status must be true or false' }]);
@@ -601,6 +639,10 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
     const action = await RequiredAction.findByPk(req.params.id);
     if (!action) {
       res.status(404).json([{ message: 'Required action not found' }]);
+      return;
+    }
+    if (action.type === 'staff_payout_receipt') {
+      res.status(400).json([{ message: 'Use the payout receipt confirmation form to complete this request.' }]);
       return;
     }
     const responseJson = normalizeRequiredActionPayload(req.body?.response);
@@ -660,6 +702,34 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
     }
 
     res.status(200).json({ completed: true, resolvedForAll });
+  } catch (error) {
+    res.status(400).json([{ message: (error as Error).message }]);
+  }
+};
+
+export const confirmStaffPayoutReceiptRequiredAction = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const actorId = getActorId(req as AuthenticatedRequest);
+    const receiptId = normalizePositiveInteger(req.params.receiptId);
+    const actionId = normalizePositiveInteger(req.body?.actionId);
+    if (!receiptId || !actionId) {
+      res.status(400).json([{ message: 'receiptId and actionId are required.' }]);
+      return;
+    }
+
+    const receipt = await confirmStaffPayoutReceipt({
+      receiptId,
+      actionId,
+      actorId,
+      photo: req.file,
+      signature: req.body?.signature,
+      acknowledgedAmount: req.body?.acknowledgedAmount,
+      acknowledgedAt: req.body?.acknowledgedAt,
+      confirmationIp: req.ip || null,
+      confirmationUserAgent: req.get('user-agent') ?? null,
+    });
+
+    res.status(200).json({ completed: true, receipt });
   } catch (error) {
     res.status(400).json([{ message: (error as Error).message }]);
   }

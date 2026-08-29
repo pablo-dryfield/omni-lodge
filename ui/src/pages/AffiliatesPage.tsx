@@ -407,6 +407,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   const [payoutModalOpen, setPayoutModalOpen] = useState(false);
   const [payoutForm, setPayoutForm] = useState<AffiliatePayoutFormState>(INITIAL_AFFILIATE_PAYOUT_FORM);
   const [payoutError, setPayoutError] = useState<string | null>(null);
+  const [payoutSuccess, setPayoutSuccess] = useState<string | null>(null);
   const [payoutLoading, setPayoutLoading] = useState(false);
   const [undoPayoutId, setUndoPayoutId] = useState<number | null>(null);
   const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
@@ -723,6 +724,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
 
   const handleOpenPayoutModal = () => {
     setPayoutError(null);
+    setPayoutSuccess(null);
     setPayoutForm(INITIAL_AFFILIATE_PAYOUT_FORM);
     setPayoutModalOpen(true);
   };
@@ -748,7 +750,8 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     try {
       setPayoutLoading(true);
       setPayoutError(null);
-      await createAffiliatePayout({
+      setPayoutSuccess(null);
+      const payout = await createAffiliatePayout({
         affiliateUserId: selectedAffiliateUserId,
         startDate,
         endDate,
@@ -760,7 +763,13 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
       await loadOverview(startDate, endDate, selectedAffiliateUserId, { force: true, keepCurrentData: true });
       setPayoutModalOpen(false);
       setPayoutForm(INITIAL_AFFILIATE_PAYOUT_FORM);
+      setPayoutSuccess(
+        payout.receipt
+          ? `${payout.affiliateUserName} will receive a required payment confirmation popup for photo evidence and e-signature.`
+          : "Affiliate payout created. No staff receipt request was needed because this affiliate does not have a staff profile.",
+      );
     } catch (err: unknown) {
+      setPayoutSuccess(null);
       setPayoutError(extractErrorMessage(err));
     } finally {
       setPayoutLoading(false);
@@ -771,9 +780,12 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     try {
       setUndoPayoutId(payoutLogId);
       setPayoutError(null);
+      setPayoutSuccess(null);
       await undoAffiliatePayout(payoutLogId);
       await loadOverview(startDate, endDate, selectedAffiliateUserId, { force: true, keepCurrentData: true });
+      setPayoutSuccess("Payout undone. Any linked confirmation request was cancelled; existing evidence remains in its audit record.");
     } catch (err: unknown) {
+      setPayoutSuccess(null);
       setPayoutError(extractErrorMessage(err));
     } finally {
       setUndoPayoutId(null);
@@ -1153,6 +1165,11 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               {payoutError ? (
                 <Alert color="red" radius="md" title="Affiliate payout error">
                   {payoutError}
+                </Alert>
+              ) : null}
+              {payoutSuccess ? (
+                <Alert color="green" radius="md" title="Affiliate payout updated">
+                  {payoutSuccess}
                 </Alert>
               ) : null}
 

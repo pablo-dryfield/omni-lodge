@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   Center,
+  Checkbox,
   Divider,
   FileInput,
   Group,
@@ -24,12 +25,13 @@ import {
   Title,
 } from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { IconAlertCircle, IconArrowsExchange, IconCheck, IconClipboardCheck, IconEye, IconMail, IconSend, IconSignature, IconUser, IconUserEdit, IconUserMinus, IconUserPlus, IconX } from "@tabler/icons-react";
+import { IconAlertCircle, IconArrowsExchange, IconCamera, IconCheck, IconClipboardCheck, IconEye, IconMail, IconPhoto, IconReceipt, IconSend, IconSignature, IconUpload, IconUser, IconUserEdit, IconUserMinus, IconUserPlus, IconX } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import { acknowledgeCerebroPolicy, submitCerebroQuiz } from "../../api/cerebro";
 import {
   useCompleteRequiredAction,
   useCompleteRequiredProfileFields,
+  useConfirmStaffPayoutReceipt,
   useDecideRequiredManagerSwap,
   useMarkRequiredActionPrompted,
   useMyRequiredActions,
@@ -40,6 +42,10 @@ import {
 import { CerebroRichTextContent } from "../cerebro/CerebroRichTextContent";
 import { compressImageFile } from "../../utils/imageCompression";
 import axiosInstance from "../../utils/axiosInstance";
+import {
+  formatPayoutReceiptAmount,
+  normalizeStaffPayoutReceipt,
+} from "./staffPayoutReceiptUtils";
 
 const HEADER_FONT_STACK = "'Arial Black', 'Inter', sans-serif";
 const PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
@@ -48,6 +54,15 @@ const PROFILE_PHOTO_COMPRESSION_OPTIONS = {
   maxHeight: 1400,
   maxSizeBytes: 900 * 1024,
   quality: 0.84,
+  outputMimeType: "image/jpeg" as const,
+};
+const PAYOUT_RECEIPT_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+const PAYOUT_RECEIPT_PHOTO_COMPRESSION_OPTIONS = {
+  maxWidth: 1600,
+  maxHeight: 1600,
+  maxSizeBytes: 900 * 1024,
+  quality: 0.84,
+  force: true,
   outputMimeType: "image/jpeg" as const,
 };
 
@@ -72,6 +87,14 @@ const formatDateTime = (value?: string | null): string | null => {
   }
   const parsed = dayjs(value);
   return parsed.isValid() ? parsed.format("MMM D, YYYY HH:mm") : value;
+};
+
+const formatDate = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format("MMM D, YYYY") : value;
 };
 
 const getPayloadRecord = (value: unknown): Record<string, unknown> => {
@@ -170,6 +193,9 @@ const getActionIcon = (action: RequiredActionItem) => {
   }
   if (action.type === "customer_email") {
     return <IconMail size={28} />;
+  }
+  if (action.type === "staff_payout_receipt") {
+    return <IconReceipt size={28} />;
   }
   return <IconClipboardCheck size={28} />;
 };
@@ -1018,6 +1044,274 @@ const CustomerEmailAction = ({
   );
 };
 
+const StaffPayoutReceiptAction = ({
+  action,
+  onConfirm,
+  loading,
+  signatureSlot,
+}: {
+  action: RequiredActionItem;
+  onConfirm: (photo: File) => Promise<void>;
+  loading: boolean;
+  signatureSlot?: ReactNode;
+}) => {
+  const receipt = normalizeStaffPayoutReceipt(action.payload.staffPayoutReceipt);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [accepted, setAccepted] = useState(false);
+  const [acceptanceError, setAcceptanceError] = useState<string | null>(null);
+  const [preparingPhoto, setPreparingPhoto] = useState(false);
+
+  useEffect(() => {
+    setPhoto(null);
+    setPhotoError(null);
+    setAccepted(false);
+    setAcceptanceError(null);
+  }, [receipt?.id]);
+
+  useEffect(() => {
+    if (!photo) {
+      setPhotoPreview(null);
+      return undefined;
+    }
+    const nextPreview = URL.createObjectURL(photo);
+    setPhotoPreview(nextPreview);
+    return () => URL.revokeObjectURL(nextPreview);
+  }, [photo]);
+
+  const selectPhoto = (file: File | null) => {
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setPhoto(null);
+      setPhotoError("Choose an image file.");
+      return;
+    }
+    if (file.size > PAYOUT_RECEIPT_PHOTO_MAX_BYTES) {
+      setPhoto(null);
+      setPhotoError("The photo must be 10 MB or less.");
+      return;
+    }
+    setPhoto(file);
+    setPhotoError(null);
+  };
+
+  const handleSubmit = async () => {
+    if (!photo) {
+      setPhotoError("Take or upload a photo before confirming the payment.");
+    }
+    if (!accepted) {
+      setAcceptanceError("Confirm that you received the displayed amount.");
+    }
+    if (!receipt || !photo || !accepted) {
+      return;
+    }
+
+    setPreparingPhoto(true);
+    try {
+      let preparedPhoto = photo;
+      try {
+        preparedPhoto = await compressImageFile(photo, PAYOUT_RECEIPT_PHOTO_COMPRESSION_OPTIONS);
+      } catch (compressionError) {
+        console.error("Failed to compress payout receipt photo before upload", compressionError);
+      }
+      await onConfirm(preparedPhoto);
+    } finally {
+      setPreparingPhoto(false);
+    }
+  };
+
+  if (!receipt) {
+    return (
+      <Alert color="red" icon={<IconAlertCircle size={16} />}>
+        This payment confirmation is missing its receipt details. Ask a manager to recreate the request.
+      </Alert>
+    );
+  }
+
+  const amountLabel = formatPayoutReceiptAmount(receipt);
+  const payoutDateLabel = formatDate(receipt.payoutDate);
+  const rangeStartLabel = formatDate(receipt.rangeStart);
+  const rangeEndLabel = formatDate(receipt.rangeEnd);
+  const periodLabel =
+    rangeStartLabel && rangeEndLabel
+      ? rangeStartLabel === rangeEndLabel
+        ? rangeStartLabel
+        : `${rangeStartLabel} - ${rangeEndLabel}`
+      : "Not specified";
+  const immutableAcceptanceText =
+    typeof receipt.acceptanceText === "string" ? receipt.acceptanceText.trim() : "";
+  const confirmationStatement =
+    immutableAcceptanceText ||
+    (payoutDateLabel
+      ? `I confirm that I received ${amountLabel} on ${payoutDateLabel}.`
+      : `I confirm that I received ${amountLabel}.`);
+
+  return (
+    <Stack gap="lg">
+      <Card
+        withBorder
+        radius="lg"
+        p={{ base: "md", sm: "xl" }}
+        style={{
+          borderColor: "var(--mantine-color-blue-3)",
+          background: "linear-gradient(145deg, var(--mantine-color-blue-0), var(--mantine-color-white))",
+        }}
+      >
+        <Stack gap="md" align="center" ta="center">
+          <Text size="xs" fw={800} tt="uppercase" c="blue.7">
+            Amount received
+          </Text>
+          <Title order={1} c="blue.9" style={{ fontSize: "clamp(2rem, 8vw, 3.5rem)" }}>
+            {amountLabel}
+          </Title>
+          <SimpleFieldGrid>
+            <Stack gap={2} align="center">
+              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                Payment date
+              </Text>
+              <Text fw={700}>{payoutDateLabel ?? "Not specified"}</Text>
+            </Stack>
+            <Stack gap={2} align="center">
+              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                Earnings period
+              </Text>
+              <Text fw={700}>{periodLabel}</Text>
+            </Stack>
+          </SimpleFieldGrid>
+          {receipt.paidByName ? (
+            <Text size="sm" c="dimmed">
+              Payment recorded by {receipt.paidByName}
+            </Text>
+          ) : null}
+        </Stack>
+      </Card>
+
+      <Card
+        withBorder
+        radius="lg"
+        p={{ base: "md", sm: "lg" }}
+        style={{ borderColor: photoError ? "var(--mantine-color-red-4)" : photo ? "var(--mantine-color-green-4)" : undefined }}
+      >
+        <Stack gap="md" align="center" ta="center">
+          <Group gap="xs" justify="center">
+            <ThemeIcon radius="xl" variant="light" color={photo ? "green" : "blue"}>
+              {photo ? <IconCheck size={18} /> : <IconPhoto size={18} />}
+            </ThemeIcon>
+            <Text fw={900}>Photo evidence required</Text>
+          </Group>
+          <Text size="sm" c={photoError ? "red.6" : "dimmed"}>
+            {photoError ?? (photo ? "Photo ready to submit." : "Take a clear photo that confirms the cash or payment was received.")}
+          </Text>
+
+          {photoPreview ? (
+            <Box
+              w="100%"
+              maw={520}
+              style={{
+                overflow: "hidden",
+                borderRadius: 14,
+                border: "1px solid var(--mantine-color-gray-3)",
+                background: "var(--mantine-color-gray-0)",
+              }}
+            >
+              <img
+                src={photoPreview}
+                alt="Payment receipt evidence preview"
+                style={{ display: "block", width: "100%", maxHeight: 320, objectFit: "contain" }}
+              />
+            </Box>
+          ) : null}
+
+          <Group grow w="100%" maw={520} gap="sm" wrap="wrap">
+            <Button
+              leftSection={<IconCamera size={18} />}
+              onClick={() => cameraInputRef.current?.click()}
+              disabled={loading || preparingPhoto}
+              style={{ minWidth: 160 }}
+            >
+              {photo ? "Retake photo" : "Take photo"}
+            </Button>
+            <Button
+              variant="default"
+              leftSection={<IconUpload size={18} />}
+              onClick={() => uploadInputRef.current?.click()}
+              disabled={loading || preparingPhoto}
+              style={{ minWidth: 160 }}
+            >
+              {photo ? "Choose another" : "Upload photo"}
+            </Button>
+          </Group>
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            hidden
+            onChange={(event) => {
+              selectPhoto(event.currentTarget.files?.[0] ?? null);
+              event.currentTarget.value = "";
+            }}
+          />
+          <input
+            ref={uploadInputRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(event) => {
+              selectPhoto(event.currentTarget.files?.[0] ?? null);
+              event.currentTarget.value = "";
+            }}
+          />
+        </Stack>
+      </Card>
+
+      <Divider label="Confirmation" labelPosition="center" />
+      <Checkbox
+        checked={accepted}
+        onChange={(event) => {
+          const nextAccepted = event.currentTarget.checked;
+          setAccepted(nextAccepted);
+          if (nextAccepted) {
+            setAcceptanceError(null);
+          }
+        }}
+        color="green"
+        size="md"
+        label={confirmationStatement}
+        error={acceptanceError}
+        styles={{
+          root: {
+            padding: 16,
+            border: `1px solid ${acceptanceError ? "var(--mantine-color-red-4)" : accepted ? "var(--mantine-color-green-4)" : "var(--mantine-color-gray-3)"}`,
+            borderRadius: 12,
+            background: accepted ? "var(--mantine-color-green-0)" : "var(--mantine-color-white)",
+          },
+          label: { fontWeight: 700, lineHeight: 1.45 },
+        }}
+      />
+      {signatureSlot}
+      <Button
+        size="lg"
+        fullWidth
+        color="green"
+        leftSection={<IconCheck size={20} />}
+        loading={loading || preparingPhoto}
+        onClick={() => void handleSubmit()}
+      >
+        Confirm payment received
+      </Button>
+      <Text size="xs" c="dimmed" ta="center">
+        Your photo, signature, account identity, and confirmation time will be saved as payment evidence.
+      </Text>
+    </Stack>
+  );
+};
+
 const GenericAction = ({
   action,
   onComplete,
@@ -1158,6 +1452,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
   const queryClient = useQueryClient();
   const completeAction = useCompleteRequiredAction();
   const completeProfileFields = useCompleteRequiredProfileFields();
+  const confirmStaffPayoutReceipt = useConfirmStaffPayoutReceipt();
   const markPrompted = useMarkRequiredActionPrompted();
   const promptedActionIdsRef = useRef<Set<string>>(new Set());
   const customerEmailActionSignatureRef = useRef<string | null>(null);
@@ -1176,10 +1471,14 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
     .map((item) => item.id)
     .sort()
     .join("|");
-  const requiresSignature = Boolean(action?.source === "required_action" && action.requiresSignature);
+  const requiresSignature = Boolean(
+    action?.source === "required_action" &&
+      (action.requiresSignature || action.type === "staff_payout_receipt"),
+  );
   const isBusy =
     completeAction.isPending ||
     completeProfileFields.isPending ||
+    confirmStaffPayoutReceipt.isPending ||
     respondToSwap.isPending ||
     decideManagerSwap.isPending ||
     cerebroSubmitting ||
@@ -1290,6 +1589,34 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
       await completeProfileFields.mutateAsync({ actionId: action.recordId, values, profilePhoto, signature: eSignature });
     } catch (mutationError) {
       setError(getApiErrorMessage(mutationError, "Unable to save your details"));
+    }
+  };
+
+  const handleStaffPayoutReceiptConfirm = async (photo: File) => {
+    if (!action || action.source !== "required_action" || action.type !== "staff_payout_receipt") {
+      return;
+    }
+    const receipt = normalizeStaffPayoutReceipt(action.payload.staffPayoutReceipt);
+    if (!receipt) {
+      setError("This payment confirmation is missing its receipt details. Ask a manager to recreate the request.");
+      return;
+    }
+    const eSignature = getSignatureForSubmit();
+    if (!eSignature) {
+      return;
+    }
+    setError(null);
+    try {
+      await confirmStaffPayoutReceipt.mutateAsync({
+        receiptId: receipt.id,
+        actionId: action.recordId,
+        photo,
+        signature: eSignature,
+        acknowledgedAmount: receipt.acknowledgedAmount,
+        acknowledgedAt: new Date().toISOString(),
+      });
+    } catch (mutationError) {
+      setError(getApiErrorMessage(mutationError, "Unable to confirm that you received this payment"));
     }
   };
 
@@ -1469,6 +1796,13 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
 
               {isScheduleRequestAction(action) ? (
                 <SwapAction action={action} onRespond={handleSwapResponse} loading={isBusy} />
+              ) : action.type === "staff_payout_receipt" ? (
+                <StaffPayoutReceiptAction
+                  action={action}
+                  onConfirm={handleStaffPayoutReceiptConfirm}
+                  loading={isBusy}
+                  signatureSlot={signatureSlot}
+                />
               ) : action.type === "profile_fields" ? (
                 <ProfileFieldsForm action={action} onSubmit={handleProfileSubmit} loading={isBusy} signatureSlot={signatureSlot} />
               ) : action.type === "policy_consent" ? (

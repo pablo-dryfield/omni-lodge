@@ -57,7 +57,7 @@ export async function uploadFinanceFile(options: UploadOptions): Promise<UploadR
 }
 
 export async function findDuplicateFinanceFile(sha256: string): Promise<FinanceFile | null> {
-  return FinanceFile.findOne({ where: { sha256 } });
+  return FinanceFile.findOne({ where: { sha256, purpose: 'general' } });
 }
 
 export async function openFinanceFileStream(driveFileId: string): Promise<Readable> {

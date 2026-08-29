@@ -5,6 +5,7 @@ import { authorizeModuleAction } from '../middleware/authorizationMiddleware.js'
 import {
   completeProfileFieldsAction,
   completeRequiredAction,
+  confirmStaffPayoutReceiptRequiredAction,
   createRequiredAction,
   decideManagerSwapRequiredAction,
   decideManagerShiftRequestRequiredAction,
@@ -31,6 +32,11 @@ router.patch('/actions/:id/status', authorizeModuleAction('requests-center', 'up
 router.post('/actions/:id/complete', completeRequiredAction);
 router.post('/actions/:id/prompted', markRequiredActionPrompted);
 router.post('/actions/:id/profile-fields', upload.single('profilePhoto'), completeProfileFieldsAction);
+router.post(
+  '/staff-payout-receipts/:receiptId/confirm',
+  upload.single('photo'),
+  confirmStaffPayoutReceiptRequiredAction,
+);
 router.post('/schedule-swaps/:id/partner-response', respondToSwapRequiredAction);
 router.post('/schedule-swaps/:id/manager-decision', decideManagerSwapRequiredAction);
 router.post('/schedule-shift-requests/:id/partner-response', respondToShiftRequestRequiredAction);

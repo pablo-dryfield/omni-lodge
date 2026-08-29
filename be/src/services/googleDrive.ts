@@ -7,6 +7,7 @@ import { getConfigValue } from './configService.js';
 type EnsureFolderResult = { id: string; path: string[] };
 
 type UploadBufferParams = {
+  fileId?: string;
   name: string;
   mimeType: string;
   buffer: Buffer;
@@ -130,6 +131,7 @@ export async function uploadBuffer(params: UploadBufferParams): Promise<UploadRe
 
   const response = await drive.files.create({
     requestBody: {
+      ...(params.fileId ? { id: params.fileId } : {}),
       name: safeName,
       mimeType,
       parents,

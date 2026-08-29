@@ -41,6 +41,7 @@ export const uploadFinanceFileHandler = async (req: Request, res: Response): Pro
       driveFileId,
       driveWebViewLink,
       sha256,
+      purpose: 'general',
       uploadedBy: actorId,
       uploadedAt: new Date(),
     });
@@ -64,6 +65,7 @@ export const uploadFinanceFileHandler = async (req: Request, res: Response): Pro
 export const listFinanceFiles = async (_req: Request, res: Response): Promise<void> => {
   try {
     const files = await FinanceFile.findAll({
+      where: { purpose: 'general' },
       order: [['uploadedAt', 'DESC']],
       limit: 50,
     });
@@ -75,7 +77,9 @@ export const listFinanceFiles = async (_req: Request, res: Response): Promise<vo
 
 export const downloadFinanceFileHandler = async (req: Request, res: Response): Promise<void> => {
   try {
-    const file = await FinanceFile.findByPk(req.params.id);
+    const file = await FinanceFile.findOne({
+      where: { id: req.params.id, purpose: 'general' },
+    });
     if (!file) {
       res.status(404).json([{ message: 'File not found' }]);
       return;

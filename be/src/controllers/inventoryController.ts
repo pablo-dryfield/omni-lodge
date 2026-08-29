@@ -52,7 +52,7 @@ export async function listInventoryPurchases(req: AuthenticatedRequest, res: Res
 }
 
 export async function getInventoryFinanceOptions(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try { const [accounts,categories,vendors,files] = await Promise.all([FinanceAccount.findAll(),FinanceCategory.findAll(),FinanceVendor.findAll(),FinanceFile.findAll({ order:[['uploadedAt','DESC']],limit:100 })]); res.json({ accounts,categories,vendors,files }); } catch(e) { fail(res,e); }
+  try { const [accounts,categories,vendors,files] = await Promise.all([FinanceAccount.findAll(),FinanceCategory.findAll(),FinanceVendor.findAll(),FinanceFile.findAll({ where:{ purpose:'general' },order:[['uploadedAt','DESC']],limit:100 })]); res.json({ accounts,categories,vendors,files }); } catch(e) { fail(res,e); }
 }
 
 export async function createInventoryPurchase(req: AuthenticatedRequest, res: Response): Promise<void> {

@@ -172,10 +172,18 @@ export type CreateAffiliatePayoutInput = {
   note?: string | null;
 };
 
+export type CreateAffiliatePayoutResponse = AffiliateOverviewResponse["payoutLogs"][number] & {
+  receipt: {
+    id: number;
+    actionId: number | null;
+    status: "pending" | "completed" | "cancelled";
+  } | null;
+};
+
 export const createAffiliatePayout = async (
   payload: CreateAffiliatePayoutInput,
-): Promise<AffiliateOverviewResponse["payoutLogs"][number]> => {
-  const response = await axiosInstance.post<AffiliateOverviewResponse["payoutLogs"][number]>("/affiliates/payouts", payload);
+): Promise<CreateAffiliatePayoutResponse> => {
+  const response = await axiosInstance.post<CreateAffiliatePayoutResponse>("/affiliates/payouts", payload);
   return response.data;
 };
 

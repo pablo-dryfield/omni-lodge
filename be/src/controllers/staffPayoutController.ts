@@ -6,13 +6,31 @@ import sequelize from '../config/database.js';
 import StaffPayoutCollectionLog from '../models/StaffPayoutCollectionLog.js';
 import StaffProfile from '../models/StaffProfile.js';
 import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
+import StaffPayoutReceipt from '../models/StaffPayoutReceipt.js';
+import StaffPayoutReceiptItem from '../models/StaffPayoutReceiptItem.js';
+import RequiredAction from '../models/RequiredAction.js';
+import User from '../models/User.js';
 import FinanceAccount from '../finance/models/FinanceAccount.js';
+import FinanceCategory from '../finance/models/FinanceCategory.js';
 import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import { createFinanceTransaction, updateFinanceTransaction } from '../finance/services/transactionService.js';
 import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getConfigValue } from '../services/configService.js';
 import { getAffiliateOverview } from '../services/affiliateService.js';
+import {
+  createStaffPayoutReceipt,
+  type StaffPayoutReceiptSourceItem,
+} from '../services/staffPayoutReceiptService.js';
+import { buildStaffPayoutReceiptReissueItems } from '../services/staffPayoutReceiptDeletionService.js';
+import { groupStaffPayoutReceiptItemsByCurrency } from '../services/staffPayoutReceiptValidation.js';
+import {
+  assertStaffPayoutDirectionDetails,
+  assertUniqueStaffAffiliatePayoutClaims,
+  deriveStaffPayoutReimbursementAmount,
+  parseStrictStaffPayoutDate,
+  validateStaffPayoutFinanceSelections,
+} from '../services/staffPayoutBatchValidation.js';
 
 const resolveDefaultCurrency = (): string =>
   String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
@@ -170,9 +188,6 @@ const normalizeBatchLines = (rawLines: unknown): NormalizedStaffPayoutBatchLine[
     })
     .filter((line) => line.amountMinor > 0);
 
-  if (normalized.length === 0) {
-    throw new HttpError(400, 'Select at least one payout line.');
-  }
   return normalized;
 };
 
@@ -210,14 +225,18 @@ const normalizeReimbursementPayload = (raw: unknown): NormalizedStaffPayoutBatch
   };
 };
 
-const buildStaffPayoutBatchKey = (params: {
+type StaffPayoutBatchKeyParams = {
   staffProfileId: number;
+  direction: 'receivable' | 'payable';
+  counterpartyId: number;
+  paidDate: string;
   rangeStart: string;
   rangeEnd: string;
   lines: NormalizedStaffPayoutBatchLine[];
   reimbursement: NormalizedStaffPayoutBatchReimbursement | null;
-}): string => {
-  const normalized = {
+};
+
+const buildStaffPayoutBatchKeyBase = (params: StaffPayoutBatchKeyParams) => ({
     staffProfileId: params.staffProfileId,
     rangeStart: params.rangeStart,
     rangeEnd: params.rangeEnd,
@@ -251,9 +270,22 @@ const buildStaffPayoutBatchKey = (params: {
           transactionIds: [...params.reimbursement.transactionIds].sort((a, b) => a - b),
         }
       : null,
-  };
-  return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
-};
+});
+
+const hashStaffPayoutBatchKey = (value: unknown): string =>
+  crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+const buildLegacyStaffPayoutBatchKey = (params: StaffPayoutBatchKeyParams): string =>
+  hashStaffPayoutBatchKey(buildStaffPayoutBatchKeyBase(params));
+
+const buildStaffPayoutBatchKey = (params: StaffPayoutBatchKeyParams): string =>
+  hashStaffPayoutBatchKey({
+    version: 2,
+    direction: params.direction,
+    counterpartyId: params.counterpartyId,
+    paidDate: params.paidDate,
+    ...buildStaffPayoutBatchKeyBase(params),
+  });
 
 const findExistingBatchTransaction = async (batchKey: string, transaction?: SequelizeTransaction): Promise<FinanceTransaction | null> =>
   FinanceTransaction.findOne({
@@ -265,6 +297,60 @@ const findExistingBatchTransaction = async (batchKey: string, transaction?: Sequ
     },
     transaction,
   });
+
+const findExistingCompatibleStaffPayoutBatch = async (params: {
+  batchKey: string;
+  legacyBatchKey: string;
+  direction: 'receivable' | 'payable';
+  counterpartyId: number;
+  paidDate: string;
+  transaction?: SequelizeTransaction;
+}): Promise<FinanceTransaction | null> => {
+  const current = await findExistingBatchTransaction(params.batchKey, params.transaction);
+  if (current) {
+    return current;
+  }
+  const legacy = await findExistingBatchTransaction(params.legacyBatchKey, params.transaction);
+  const expectedKind = params.direction === 'payable' ? 'expense' : 'income';
+  return legacy
+    && legacy.kind === expectedKind
+    && Number(legacy.counterpartyId) === params.counterpartyId
+    && legacy.date === params.paidDate
+    ? legacy
+    : null;
+};
+
+const getStoredStaffPayoutBatchKey = (
+  financeTransaction: FinanceTransaction,
+  fallback: string,
+): string => {
+  const meta = financeTransaction.meta && typeof financeTransaction.meta === 'object'
+    ? financeTransaction.meta as Record<string, unknown>
+    : null;
+  const stored = typeof meta?.payoutBatchKey === 'string' ? meta.payoutBatchKey.trim() : '';
+  return stored || fallback;
+};
+
+const listActiveBatchReceipts = async (
+  batchKey: string,
+  transaction?: SequelizeTransaction,
+): Promise<StaffPayoutReceipt[]> =>
+  StaffPayoutReceipt.findAll({
+    where: {
+      payoutBatchKey: { [Op.like]: `${batchKey}:%` },
+      status: { [Op.in]: ['pending', 'completed'] },
+    },
+    order: [['id', 'ASC']],
+    transaction,
+  });
+
+const serializeReceiptReferences = (receipts: StaffPayoutReceipt[]) =>
+  receipts.map((receipt) => ({
+    id: receipt.id,
+    actionId: receipt.requiredActionId,
+    status: receipt.status,
+    payoutBatchKey: receipt.payoutBatchKey,
+  }));
 
 const createPayoutCollectionLog = async (
   params: {
@@ -506,9 +592,7 @@ export const createStaffPayoutBatch = async (
     const rangeStartRaw = typeof req.body.rangeStart === 'string' ? req.body.rangeStart : '';
     const rangeEndRaw = typeof req.body.rangeEnd === 'string' ? req.body.rangeEnd : '';
     const { rangeStart, rangeEnd } = ensureCanonicalMonthRange(rangeStartRaw, rangeEndRaw);
-    const payoutDate = typeof req.body.date === 'string' && dayjs(req.body.date).isValid()
-      ? dayjs(req.body.date).format('YYYY-MM-DD')
-      : dayjs().format('YYYY-MM-DD');
+    const payoutDate = parseStrictStaffPayoutDate(req.body.date);
 
     const staffProfile = await StaffProfile.findOne({
       where: { userId: staffProfileId },
@@ -524,56 +608,235 @@ export const createStaffPayoutBatch = async (
       throw new HttpError(400, 'This staff profile is not linked to a finance client.');
     }
 
-    const counterpartyId = parsePositiveInteger(
-      req.body.counterpartyId ?? (direction === 'payable' ? staffProfile.financeVendorId : staffProfile.financeClientId),
-      'counterpartyId',
+    const linkedCounterpartyId = direction === 'payable'
+      ? Number(staffProfile.financeVendorId)
+      : Number(staffProfile.financeClientId);
+    const counterpartyId = parsePositiveInteger(linkedCounterpartyId, 'counterpartyId');
+    if (req.body.counterpartyId !== undefined && req.body.counterpartyId !== null) {
+      const requestedCounterpartyId = parsePositiveInteger(req.body.counterpartyId, 'counterpartyId');
+      if (requestedCounterpartyId !== counterpartyId) {
+        throw new HttpError(
+          400,
+          direction === 'payable'
+            ? 'counterpartyId must match the finance vendor linked to this staff profile.'
+            : 'counterpartyId must match the finance client linked to this staff profile.',
+        );
+      }
+    }
+    const normalizedLines = normalizeBatchLines(req.body.lines);
+    const normalizedReimbursement = normalizeReimbursementPayload(req.body.reimbursement);
+    if (normalizedLines.length === 0 && !normalizedReimbursement) {
+      throw new HttpError(400, 'Select at least one payout line or reimbursement.');
+    }
+    assertStaffPayoutDirectionDetails({
+      direction,
+      hasReimbursement: Boolean(normalizedReimbursement),
+      hasAffiliatePayout: normalizedLines.some((line) => Boolean(line.affiliatePayout)),
+    });
+    assertUniqueStaffAffiliatePayoutClaims({
+      staffUserId: staffProfileId,
+      claims: normalizedLines
+        .map((line) => line.affiliatePayout)
+        .filter((claim): claim is NonNullable<typeof claim> => Boolean(claim)),
+    });
+
+    const accountIds = Array.from(
+      new Set([
+        ...normalizedLines.map((line) => line.accountId),
+        ...(normalizedReimbursement ? [normalizedReimbursement.accountId] : []),
+      ]),
     );
-    const lines = normalizeBatchLines(req.body.lines);
-    const reimbursement = normalizeReimbursementPayload(req.body.reimbursement);
-    const batchKey = buildStaffPayoutBatchKey({
+    const categoryIds = Array.from(
+      new Set([
+        ...normalizedLines.map((line) => line.categoryId),
+        ...(normalizedReimbursement ? [normalizedReimbursement.categoryId] : []),
+      ]),
+    );
+    const [accounts, categories] = await Promise.all([
+      FinanceAccount.findAll({
+        where: { id: { [Op.in]: accountIds } },
+        attributes: ['id', 'currency', 'isActive'],
+      }),
+      FinanceCategory.findAll({
+        where: { id: { [Op.in]: categoryIds } },
+        attributes: ['id', 'kind', 'isActive'],
+      }),
+    ]);
+    const financeSelections = validateStaffPayoutFinanceSelections({
+      direction,
+      lines: normalizedLines,
+      reimbursement: normalizedReimbursement,
+      accounts,
+      categories,
+      baseCurrency: resolveDefaultCurrency(),
+    });
+    const lines = normalizedLines.map((line, index) => ({
+      ...line,
+      currency: financeSelections.lineCurrencies[index],
+    }));
+
+    let reimbursement = normalizedReimbursement;
+    if (normalizedReimbursement) {
+      const sourceRows = await FinanceTransaction.findAll({
+        where: { id: { [Op.in]: normalizedReimbursement.transactionIds } },
+        attributes: [
+          'id',
+          'kind',
+          'status',
+          'date',
+          'currency',
+          'amountMinor',
+          'baseAmountMinor',
+          'counterpartyId',
+          'meta',
+        ],
+      });
+      const amountMinor = deriveStaffPayoutReimbursementAmount({
+        requestedTransactionIds: normalizedReimbursement.transactionIds,
+        requestedAmountMinor: normalizedReimbursement.amountMinor,
+        sourceRows,
+        staffUserId: staffProfileId,
+        staffVendorId: Number(staffProfile.financeVendorId),
+        rangeStart: rangeStart.format('YYYY-MM-DD'),
+        rangeEnd: rangeEnd.format('YYYY-MM-DD'),
+        baseCurrency: financeSelections.reimbursementCurrency ?? resolveDefaultCurrency(),
+        requireAwaitingStatus: false,
+      });
+      reimbursement = { ...normalizedReimbursement, amountMinor };
+    }
+    const batchKeyParams: StaffPayoutBatchKeyParams = {
       staffProfileId,
+      direction,
+      counterpartyId,
+      paidDate: payoutDate,
       rangeStart: rangeStart.format('YYYY-MM-DD'),
       rangeEnd: rangeEnd.format('YYYY-MM-DD'),
       lines,
       reimbursement,
-    });
+    };
+    const batchKey = buildStaffPayoutBatchKey(batchKeyParams);
+    const legacyBatchKey = buildLegacyStaffPayoutBatchKey(batchKeyParams);
 
-    const existing = await findExistingBatchTransaction(batchKey);
+    const existing = await findExistingCompatibleStaffPayoutBatch({
+      batchKey,
+      legacyBatchKey,
+      direction,
+      counterpartyId,
+      paidDate: payoutDate,
+    });
     if (existing) {
+      const storedBatchKey = getStoredStaffPayoutBatchKey(existing, batchKey);
+      const receipts = await listActiveBatchReceipts(storedBatchKey);
       res.status(200).json({
         duplicated: true,
-        batchKey,
+        batchKey: storedBatchKey,
         financeTransactionId: existing.id,
+        receipts: serializeReceiptReferences(receipts),
       });
       return;
     }
 
-    const accountIds = Array.from(
-      new Set([
-        ...lines.map((line) => line.accountId),
-        ...(reimbursement ? [reimbursement.accountId] : []),
-      ]),
-    );
-    const accounts = await FinanceAccount.findAll({
-      where: { id: { [Op.in]: accountIds } },
-      attributes: ['id', 'currency'],
-    });
-    const accountsById = new Map(accounts.map((account) => [account.id, account]));
-    accountIds.forEach((accountId) => {
-      if (!accountsById.has(accountId)) {
-        throw new HttpError(400, `Finance account ${accountId} not found.`);
-      }
-    });
-
     const batchResult = await sequelize.transaction(async (transaction) => {
-      const duplicateInsideTx = await findExistingBatchTransaction(batchKey, transaction);
-      if (duplicateInsideTx) {
-        return { duplicated: true as const };
+      // Use the same affiliate/staff user lock as the direct Affiliates payout
+      // flow. Any fresh affiliate-booking eligibility read below therefore
+      // happens after competing Pays/Affiliates payouts have committed.
+      const lockedStaffUser = await User.findByPk(staffProfileId, {
+        attributes: ['id'],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!lockedStaffUser) {
+        throw new HttpError(404, 'Staff user not found.');
       }
+
+      const lockedStaffProfile = await StaffProfile.findOne({
+        where: { userId: staffProfileId },
+        attributes: ['userId', 'financeVendorId', 'financeClientId'],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const lockedCounterpartyId = direction === 'payable'
+        ? Number(lockedStaffProfile?.financeVendorId)
+        : Number(lockedStaffProfile?.financeClientId);
+      if (!lockedStaffProfile || lockedCounterpartyId !== counterpartyId) {
+        throw new HttpError(409, 'The staff finance link changed. Refresh Pays and try again.');
+      }
+
+      const duplicateInsideTx = await findExistingCompatibleStaffPayoutBatch({
+        batchKey,
+        legacyBatchKey,
+        direction,
+        counterpartyId,
+        paidDate: payoutDate,
+        transaction,
+      });
+      if (duplicateInsideTx) {
+        const receipts = await listActiveBatchReceipts(
+          getStoredStaffPayoutBatchKey(duplicateInsideTx, batchKey),
+          transaction,
+        );
+        return { duplicated: true as const, receipts };
+      }
+
+      const [lockedAccounts, lockedCategories] = await Promise.all([
+        FinanceAccount.findAll({
+          where: { id: { [Op.in]: accountIds } },
+          attributes: ['id', 'currency', 'isActive'],
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        }),
+        FinanceCategory.findAll({
+          where: { id: { [Op.in]: categoryIds } },
+          attributes: ['id', 'kind', 'isActive'],
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        }),
+      ]);
+      validateStaffPayoutFinanceSelections({
+        direction,
+        lines,
+        reimbursement,
+        accounts: lockedAccounts,
+        categories: lockedCategories,
+        baseCurrency: resolveDefaultCurrency(),
+      });
+
+      if (reimbursement) {
+        const lockedSourceRows = await FinanceTransaction.findAll({
+          where: { id: { [Op.in]: reimbursement.transactionIds } },
+          attributes: [
+            'id',
+            'kind',
+            'status',
+            'date',
+            'currency',
+            'amountMinor',
+            'baseAmountMinor',
+            'counterpartyId',
+            'meta',
+          ],
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+        deriveStaffPayoutReimbursementAmount({
+          requestedTransactionIds: reimbursement.transactionIds,
+          requestedAmountMinor: reimbursement.amountMinor,
+          sourceRows: lockedSourceRows,
+          staffUserId: staffProfileId,
+          staffVendorId: Number(lockedStaffProfile.financeVendorId),
+          rangeStart: rangeStart.format('YYYY-MM-DD'),
+          rangeEnd: rangeEnd.format('YYYY-MM-DD'),
+          baseCurrency: financeSelections.reimbursementCurrency ?? resolveDefaultCurrency(),
+        });
+      }
+
+      const receiptItems: StaffPayoutReceiptSourceItem[] = [];
+      const addReceiptItem = (item: StaffPayoutReceiptSourceItem) => {
+        receiptItems.push(item);
+      };
 
       for (const line of lines) {
-        const account = accountsById.get(line.accountId);
-        const currency = normalizeCurrencyCode(line.currency, account?.currency ?? resolveDefaultCurrency());
+        const currency = normalizeCurrencyCode(line.currency);
         const financeTransaction = await createFinanceTransaction(
           {
             kind: direction === 'payable' ? 'expense' : 'income',
@@ -605,10 +868,10 @@ export const createStaffPayoutBatch = async (
             },
           },
           actorId,
-          { transaction },
+          { transaction, allowStaffPayoutReceiptFlow: true },
         );
 
-        await createPayoutCollectionLog(
+        const collectionLog = await createPayoutCollectionLog(
           {
             staffProfileId,
             direction,
@@ -622,6 +885,16 @@ export const createStaffPayoutBatch = async (
           },
           transaction,
         );
+
+        if (direction === 'payable') {
+          addReceiptItem({
+            collectionLogId: collectionLog.id,
+            financeTransactionId: financeTransaction.id,
+            label: line.label,
+            amountMinor: line.amountMinor,
+            currencyCode: currency,
+          });
+        }
 
         if (line.affiliatePayout) {
           await createAffiliatePayoutLogForStaffLine(
@@ -643,8 +916,7 @@ export const createStaffPayoutBatch = async (
       }
 
       if (reimbursement && reimbursement.amountMinor > 0) {
-        const account = accountsById.get(reimbursement.accountId);
-        const currency = normalizeCurrencyCode(undefined, account?.currency ?? resolveDefaultCurrency());
+        const currency = financeSelections.reimbursementCurrency ?? resolveDefaultCurrency();
         const reimbursementTransaction = await createFinanceTransaction(
           {
             kind: 'expense',
@@ -667,10 +939,10 @@ export const createStaffPayoutBatch = async (
             },
           },
           actorId,
-          { transaction },
+          { transaction, allowStaffPayoutReceiptFlow: true },
         );
 
-        await createPayoutCollectionLog(
+        const reimbursementCollectionLog = await createPayoutCollectionLog(
           {
             staffProfileId,
             direction: 'payable',
@@ -685,17 +957,41 @@ export const createStaffPayoutBatch = async (
           transaction,
         );
 
+        addReceiptItem({
+          collectionLogId: reimbursementCollectionLog.id,
+          financeTransactionId: reimbursementTransaction.id,
+          label: 'Reimbursements',
+          amountMinor: reimbursement.amountMinor,
+          currencyCode: currency,
+        });
+
         for (const transactionId of reimbursement.transactionIds) {
           await updateFinanceTransaction(
             transactionId,
             { status: 'reimbursed' },
             actorId,
-            { transaction },
+            { transaction, allowStaffPayoutReceiptFlow: true },
           );
         }
       }
 
-      return { duplicated: false as const };
+      const receipts: StaffPayoutReceipt[] = [];
+      for (const currencyGroup of groupStaffPayoutReceiptItemsByCurrency(receiptItems)) {
+        receipts.push(
+          await createStaffPayoutReceipt({
+            staffUserId: staffProfileId,
+            payoutBatchKey: `${batchKey}:${currencyGroup.currency}`,
+            rangeStart: rangeStart.format('YYYY-MM-DD'),
+            rangeEnd: rangeEnd.format('YYYY-MM-DD'),
+            paidDate: payoutDate,
+            createdBy: actorId,
+            items: currencyGroup.items,
+            transaction,
+          }),
+        );
+      }
+
+      return { duplicated: false as const, receipts };
     });
 
     res.status(batchResult.duplicated ? 200 : 201).json({
@@ -703,6 +999,7 @@ export const createStaffPayoutBatch = async (
       batchKey,
       lineCount: lines.length,
       reimbursementIncluded: Boolean(reimbursement && reimbursement.amountMinor > 0),
+      receipts: serializeReceiptReferences(batchResult.receipts),
     });
   } catch (error) {
     if (error instanceof HttpError) {
@@ -718,66 +1015,144 @@ export const deleteStaffPayoutEntries = async (
   res: Response,
 ): Promise<void> => {
   try {
-    requireActorId(req);
+    const actorId = requireActorId(req);
     const staffProfileId = parsePositiveInteger(req.body.staffProfileId, 'staffProfileId');
     const rangeStartRaw = typeof req.body.rangeStart === 'string' ? req.body.rangeStart : '';
     const rangeEndRaw = typeof req.body.rangeEnd === 'string' ? req.body.rangeEnd : '';
     const { rangeStart, rangeEnd } = ensureCanonicalMonthRange(rangeStartRaw, rangeEndRaw);
     const entryIds = parseEntryIds(req.body.entryIds);
 
-    const logs = await StaffPayoutCollectionLog.findAll({
-      where: {
-        id: { [Op.in]: entryIds },
-        staffProfileId,
-        direction: 'payable',
-        rangeStart: rangeStart.format('YYYY-MM-DD'),
-        rangeEnd: rangeEnd.format('YYYY-MM-DD'),
-      },
-      order: [['id', 'ASC']],
-    });
-
-    if (logs.length !== entryIds.length) {
-      throw new HttpError(404, 'Some selected paid entries could not be found for this staff member and month.');
-    }
-
-    const financeTransactionIds = Array.from(
-      new Set(
-        logs
-          .map((log) => log.financeTransactionId)
-          .filter((value): value is number => Number.isInteger(value) && Number(value) > 0),
-      ),
-    );
-
-    const financeTransactions =
-      financeTransactionIds.length > 0
-        ? await FinanceTransaction.findAll({
-            attributes: ['id', 'description', 'meta'],
-            where: { id: { [Op.in]: financeTransactionIds } },
-          })
-        : [];
-    const financeTransactionsById = new Map(financeTransactions.map((transaction) => [transaction.id, transaction]));
-
-    const reimbursementEntries = logs.filter((log) => {
-      const linkedTransaction =
-        log.financeTransactionId && Number.isInteger(log.financeTransactionId)
-          ? financeTransactionsById.get(log.financeTransactionId)
-          : null;
-      const meta =
-        linkedTransaction?.meta && typeof linkedTransaction.meta === 'object'
-          ? (linkedTransaction.meta as Record<string, unknown>)
-          : null;
-      return looksLikeReimbursementEntry({
-        meta,
-        description: linkedTransaction?.description ?? null,
-        note: log.note ?? null,
+    const deletionResult = await sequelize.transaction(async (transaction) => {
+      // Every deletion for a staff member takes the same row lock before it reads
+      // payout logs or receipt links. This matters when two requests remove
+      // different entries from one receipt: the second request must see the
+      // replacement receipt created by the first request, not the cancelled one
+      // it was linked to before waiting for a lock.
+      const lockedStaffProfile = await StaffProfile.findOne({
+        where: { userId: staffProfileId },
+        attributes: ['userId'],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
       });
-    });
+      if (!lockedStaffProfile) {
+        throw new HttpError(404, 'Staff profile not found.');
+      }
 
-    if (reimbursementEntries.length > 0) {
-      throw new HttpError(400, 'Reimbursement payouts cannot be deleted from this action.');
-    }
+      const logs = await StaffPayoutCollectionLog.findAll({
+        where: {
+          id: { [Op.in]: entryIds },
+          staffProfileId,
+          direction: 'payable',
+          rangeStart: rangeStart.format('YYYY-MM-DD'),
+          rangeEnd: rangeEnd.format('YYYY-MM-DD'),
+        },
+        order: [['id', 'ASC']],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
 
-    await sequelize.transaction(async (transaction) => {
+      if (logs.length !== entryIds.length) {
+        throw new HttpError(404, 'Some selected paid entries could not be found for this staff member and month.');
+      }
+
+      const financeTransactionIds = Array.from(
+        new Set(
+          logs
+            .map((log) => log.financeTransactionId)
+            .filter((value): value is number => Number.isInteger(value) && Number(value) > 0),
+        ),
+      );
+
+      const financeTransactions =
+        financeTransactionIds.length > 0
+          ? await FinanceTransaction.findAll({
+              attributes: ['id', 'description', 'meta'],
+              where: { id: { [Op.in]: financeTransactionIds } },
+              transaction,
+              lock: transaction.LOCK.UPDATE,
+            })
+          : [];
+      const financeTransactionsById = new Map(
+        financeTransactions.map((financeTransaction) => [financeTransaction.id, financeTransaction]),
+      );
+
+      const reimbursementEntries = logs.filter((log) => {
+        const linkedTransaction =
+          log.financeTransactionId && Number.isInteger(log.financeTransactionId)
+            ? financeTransactionsById.get(log.financeTransactionId)
+            : null;
+        const meta =
+          linkedTransaction?.meta && typeof linkedTransaction.meta === 'object'
+            ? (linkedTransaction.meta as Record<string, unknown>)
+            : null;
+        return looksLikeReimbursementEntry({
+          meta,
+          description: linkedTransaction?.description ?? null,
+          note: log.note ?? null,
+        });
+      });
+
+      if (reimbursementEntries.length > 0) {
+        throw new HttpError(400, 'Reimbursement payouts cannot be deleted from this action.');
+      }
+
+      const selectedReceiptItems = await StaffPayoutReceiptItem.findAll({
+        where: { collectionLogId: { [Op.in]: entryIds } },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const affectedReceiptIds = Array.from(new Set(selectedReceiptItems.map((item) => item.receiptId)));
+      if (affectedReceiptIds.length > 0) {
+        const affectedReceipts = await StaffPayoutReceipt.findAll({
+          where: { id: { [Op.in]: affectedReceiptIds } },
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+        const allReceiptItems = await StaffPayoutReceiptItem.findAll({
+          where: { receiptId: { [Op.in]: affectedReceiptIds } },
+          transaction,
+          order: [['id', 'ASC']],
+          lock: transaction.LOCK.UPDATE,
+        });
+        const selectedEntryIds = new Set(entryIds);
+        for (const receipt of affectedReceipts.filter((entry) => entry.status === 'pending' || entry.status === 'completed')) {
+          const receiptItems = allReceiptItems.filter((item) => item.receiptId === receipt.id);
+          const remainingItems = buildStaffPayoutReceiptReissueItems(receiptItems, selectedEntryIds);
+          await receipt.update(
+            {
+              status: 'cancelled',
+              cancelledAt: new Date(),
+              cancelledBy: actorId,
+              cancelReason: 'The recorded payout was edited or removed after the receipt request was created.',
+            },
+            { transaction },
+          );
+          if (receipt.requiredActionId) {
+            await RequiredAction.update(
+              { status: false, updatedBy: actorId },
+              { where: { id: receipt.requiredActionId }, transaction },
+            );
+          }
+          await StaffPayoutReceiptItem.update(
+            { collectionLogId: null, financeTransactionId: null },
+            { where: { receiptId: receipt.id }, transaction },
+          );
+
+          if (remainingItems.length > 0) {
+            await createStaffPayoutReceipt({
+              staffUserId: receipt.staffUserId,
+              payoutBatchKey: receipt.payoutBatchKey,
+              rangeStart: receipt.rangeStart,
+              rangeEnd: receipt.rangeEnd,
+              paidDate: receipt.paidDate,
+              createdBy: receipt.createdBy,
+              items: remainingItems,
+              transaction,
+            });
+          }
+        }
+      }
+
       if (financeTransactionIds.length > 0) {
         const reusedTransactionCount = await StaffPayoutCollectionLog.count({
           where: {
@@ -808,12 +1183,14 @@ export const deleteStaffPayoutEntries = async (
           transaction,
         });
       }
+
+      return { financeTransactionIds };
     });
 
     res.status(200).json({
       deletedEntryIds: entryIds,
       deletedCount: entryIds.length,
-      deletedFinanceTransactionIds: financeTransactionIds,
+      deletedFinanceTransactionIds: deletionResult.financeTransactionIds,
     });
   } catch (error) {
     if (error instanceof HttpError) {

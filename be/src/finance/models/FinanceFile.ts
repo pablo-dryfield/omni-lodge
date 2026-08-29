@@ -12,6 +12,8 @@ import {
 } from 'sequelize-typescript';
 import User from '../../models/User.js';
 
+export type FinanceFilePurpose = 'general' | 'staff_payout_receipt';
+
 @Table({
   tableName: 'finance_files',
   timestamps: false,
@@ -46,6 +48,11 @@ export default class FinanceFile extends Model {
   @AllowNull(false)
   @Column({ field: 'sha256', type: DataType.STRING(64) })
   declare sha256: string;
+
+  @AllowNull(false)
+  @Default('general')
+  @Column({ field: 'purpose', type: DataType.STRING(32) })
+  declare purpose: FinanceFilePurpose;
 
   @ForeignKey(() => User)
   @AllowNull(false)
