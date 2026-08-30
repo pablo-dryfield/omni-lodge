@@ -47,26 +47,17 @@ import {
 } from '../types/pays/Pay';
 import type { CompensationComponent } from '../types/compensation/CompensationComponent';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { fetchPays } from '../actions/payActions';
 import {
-  fetchFinanceAccounts,
-  fetchFinanceCategories,
-  fetchFinanceVendors,
-} from '../actions/financeActions';
-import { fetchCompensationComponents } from '../actions/compensationComponentActions';
+  fetchPays,
+  type StaffPayoutFinanceCategory,
+  type StaffPayoutFinanceVendor,
+} from '../actions/payActions';
 import { useModuleAccess } from '../hooks/useModuleAccess';
 import { PageAccessGuard } from '../components/access/PageAccessGuard';
 import { PAGE_SLUGS } from '../constants/pageSlugs';
 import { useMediaQuery } from '@mantine/hooks';
 import axiosInstance from '../utils/axiosInstance';
 import { updateReviewMonthlyApproval } from '../api/reviewCounters';
-import {
-  selectFinanceAccounts,
-  selectFinanceCategories,
-  selectFinanceVendors,
-} from '../selectors/financeSelectors';
-import type { FinanceVendor, FinanceCategory } from '../types/finance';
-import type { ServerResponse } from '../types/general/ServerResponse';
 import { IconChevronLeft, IconChevronRight, IconHistory, IconReceipt, IconTrash } from '@tabler/icons-react';
 import {
   buildPayReceiptHistoryLookupParams,
@@ -1046,7 +1037,7 @@ const computeSelectedLineTotal = (lines: EntryPaymentLine[]) =>
     .reduce((sum, line) => sum + line.amount, 0);
 
 const findCategoryIdByName = (
-  lookup: Map<string, FinanceCategory>,
+  lookup: Map<string, StaffPayoutFinanceCategory>,
   name: string | undefined,
   fallback: string,
 ) => {
@@ -1067,7 +1058,7 @@ const normalizeRecordedLineLabel = (value: string | null | undefined) => {
 
 export const buildDefaultPaymentLines = (
   staff: Pay,
-  categoryLookup: Map<string, FinanceCategory>,
+  categoryLookup: Map<string, StaffPayoutFinanceCategory>,
   fallbackCategoryId: string,
   componentDefinitions: Map<number, CompensationComponent>,
 ): EntryPaymentLine[] => {
@@ -2947,15 +2938,21 @@ const renderProductTotals = (
   );
 };
 
-const Pays: React.FC = () => {
+const PaysContent: React.FC = () => {
   const dispatch = useAppDispatch();
   const payState = useAppSelector((state) => state.pays)[0];
   const roleSlug = useAppSelector((state) => state.session.roleSlug ?? null);
-  const { data: responseData, loading, error } = payState;
-  const compensationComponentState = useAppSelector((state) => state.compensationComponents)[0];
-  const accounts = useAppSelector(selectFinanceAccounts);
-  const categories = useAppSelector(selectFinanceCategories);
-  const vendors = useAppSelector(selectFinanceVendors);
+  const {
+    data: responseData,
+    loading,
+    error,
+    finance,
+    compensationComponents: bootstrapCompensationComponents,
+    canManagePayouts: bootstrapCanManagePayouts,
+  } = payState;
+  const accounts = useMemo(() => finance?.accounts ?? [], [finance?.accounts]);
+  const categories = useMemo(() => finance?.categories ?? [], [finance?.categories]);
+  const vendors = useMemo(() => finance?.vendors ?? [], [finance?.vendors]);
   const fullAccess = useModuleAccess(FULL_ACCESS_MODULE);
   const selfAccess = useModuleAccess(SELF_ACCESS_MODULE);
   const canManageReceiptEvidence = ['admin', 'administrator', 'manager', 'owner'].includes(
@@ -2963,12 +2960,12 @@ const Pays: React.FC = () => {
   );
   const [searchParams, setSearchParams] = useSearchParams();
   const categoryLookup = useMemo(() => {
-    const map = new Map<string, FinanceCategory>();
-    categories.data.forEach((category) => {
+    const map = new Map<string, StaffPayoutFinanceCategory>();
+    categories.forEach((category) => {
       map.set(category.name.toLowerCase(), category);
     });
     return map;
-  }, [categories.data]);
+  }, [categories]);
 
   const today = dayjs();
   const initialUrlStart = parseUrlDate(searchParams.get(URL_START_DATE_PARAM));
@@ -3015,6 +3012,7 @@ const Pays: React.FC = () => {
   const desktopTableHeaderRef = useRef<HTMLTableSectionElement | null>(null);
   const receiptEvidenceRequestRef = useRef(0);
   const receiptHistoryBrowserRequestRef = useRef(0);
+  const automaticPaysRequestKeyRef = useRef<string | null>(null);
   const receiptEvidenceUrlsRef = useRef<{ photoUrl: string | null; signatureUrl: string | null }>({
     photoUrl: null,
     signatureUrl: null,
@@ -3032,14 +3030,16 @@ const Pays: React.FC = () => {
     if (datePreset === 'custom') {
       const [start, end] = customRangeValue;
       if (start && end) {
-        setStartDate(dayjs(start).startOf('day'));
-        setEndDate(dayjs(end).endOf('day'));
+        const nextStart = dayjs(start).startOf('day');
+        const nextEnd = dayjs(end).endOf('day');
+        setStartDate((current) => current?.isSame(nextStart) ? current : nextStart);
+        setEndDate((current) => current?.isSame(nextEnd) ? current : nextEnd);
       }
       return;
     }
     const range = calculatePresetRange(datePreset);
-    setStartDate(range.start);
-    setEndDate(range.end);
+    setStartDate((current) => current?.isSame(range.start) ? current : range.start);
+    setEndDate((current) => current?.isSame(range.end) ? current : range.end);
   }, [datePreset, customRangeValue]);
 
   useEffect(() => {
@@ -3064,31 +3064,19 @@ const Pays: React.FC = () => {
     setSearchParams(nextParams, { replace: true });
   }, [datePreset, endDate, searchParams, setSearchParams, startDate]);
 
-  useEffect(() => {
-    if (!accounts.loading && accounts.data.length === 0) {
-      void dispatch(fetchFinanceAccounts());
-    }
-  }, [dispatch, accounts.data.length, accounts.loading]);
-
-  useEffect(() => {
-    if (!categories.loading && categories.data.length === 0) {
-      void dispatch(fetchFinanceCategories());
-    }
-  }, [dispatch, categories.data.length, categories.loading]);
-
   const financeVendorsById = useMemo(() => {
-    const map = new Map<number, FinanceVendor>();
-    vendors.data.forEach((vendor) => {
+    const map = new Map<number, StaffPayoutFinanceVendor>();
+    vendors.forEach((vendor) => {
       if (typeof vendor.id === 'number') {
         map.set(vendor.id, vendor);
       }
     });
     return map;
-  }, [vendors.data]);
+  }, [vendors]);
 
   const accountOptions = useMemo(
     () =>
-      accounts.data
+      accounts
         .filter(
           (account) =>
             (account.type === 'cash' || account.type === 'bank')
@@ -3099,23 +3087,20 @@ const Pays: React.FC = () => {
           value: String(account.id),
           label: `${account.name} (${account.currency})`,
         })),
-    [accounts.data, entryModal.currency],
+    [accounts, entryModal.currency],
   );
 
   const expenseCategoryOptions = useMemo(
     () =>
-      categories.data
+      categories
         .filter((category) => category.kind === 'expense')
         .map((category) => ({ value: String(category.id), label: category.name })),
-    [categories.data],
+    [categories],
   );
 
   const componentDefinitions = useMemo<CompensationComponent[]>(() => {
-    const payload =
-      (compensationComponentState.data as ServerResponse<CompensationComponent> | undefined) ?? [];
-    const records = payload[0]?.data ?? [];
-    return [...records] as CompensationComponent[];
-  }, [compensationComponentState.data]);
+    return [...(bootstrapCompensationComponents ?? [])];
+  }, [bootstrapCompensationComponents]);
 
   const compensationComponentLookup = useMemo(() => {
     const map = new Map<number, CompensationComponent>();
@@ -3125,7 +3110,7 @@ const Pays: React.FC = () => {
     return map;
   }, [componentDefinitions]);
 
-  const accountList = accounts.data;
+  const accountList = accounts;
 
   const financeAccountsById = useMemo(() => {
     const map = new Map<number, (typeof accountList)[number]>();
@@ -3134,12 +3119,6 @@ const Pays: React.FC = () => {
     });
     return map;
   }, [accountList]);
-
-  useEffect(() => {
-    if (!vendors.loading && vendors.data.length === 0) {
-      void dispatch(fetchFinanceVendors());
-    }
-  }, [dispatch, vendors.data.length, vendors.loading]);
 
 const resolveStaffCounterpartyDefaults = useCallback(
   (staff: Pay) => {
@@ -3209,17 +3188,11 @@ const resolveStaffCounterpartyDefaults = useCallback(
   const usingSelfScope = !canViewFull && canViewSelf;
   const scopeParam = usingSelfScope ? 'self' : undefined;
 
-  useEffect(() => {
-    if (!canViewFull) {
-      return;
-    }
-    if (!compensationComponentState.loading && componentDefinitions.length === 0) {
-      void dispatch(fetchCompensationComponents());
-    }
-  }, [canViewFull, componentDefinitions.length, compensationComponentState.loading, dispatch]);
-
   const canRecordPayments = isCanonicalRange;
-  const canRecordStaffPayments = canRecordPayments && canViewFull && canManageReceiptEvidence;
+  const canRecordStaffPayments = canRecordPayments
+    && canViewFull
+    && canManageReceiptEvidence
+    && bootstrapCanManagePayouts;
 
   const refetchPaysForRange = useCallback(
     async (rangeStartOverride?: string, rangeEndOverride?: string) => {
@@ -4022,6 +3995,11 @@ const resolveStaffCounterpartyDefaults = useCallback(
     if (startDate && endDate) {
       const start = startDate.format('YYYY-MM-DD');
       const end = endDate.format('YYYY-MM-DD');
+      const requestKey = `${start}|${end}|${scopeParam ?? 'all'}`;
+      if (automaticPaysRequestKeyRef.current === requestKey) {
+        return;
+      }
+      automaticPaysRequestKeyRef.current = requestKey;
       void dispatch(fetchPays({ startDate: start, endDate: end, scope: scopeParam }));
     }
   }, [startDate, endDate, dispatch, permissionsReady, permissionsLoading, canViewFull, canViewSelf, scopeParam]);
@@ -5272,7 +5250,6 @@ const renderVolunteerFundSnapshot = (
     deletablePaidEntries.every((entry) => paidEntriesModal.selectedIds.includes(entry.id));
 
   return (
-    <PageAccessGuard pageSlug={PAGE_SLUG}>
       <>
         {content}
         <Modal
@@ -6266,9 +6243,14 @@ const renderVolunteerFundSnapshot = (
           </Box>
         </Modal>
       </>
-    </PageAccessGuard>
   );
 };
+
+const Pays: React.FC = () => (
+  <PageAccessGuard pageSlug={PAGE_SLUG}>
+    <PaysContent />
+  </PageAccessGuard>
+);
 
 export default Pays;
 

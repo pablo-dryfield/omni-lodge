@@ -9,9 +9,11 @@ import {
   createStaffPayoutCollectionLog,
   deleteStaffPayoutEntries,
 } from '../controllers/staffPayoutController.js';
+import { getStaffPayoutBootstrap } from '../controllers/staffPayoutBootstrapController.js';
 import { check, param, validationResult } from 'express-validator';
 import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the import path as necessary
 import { requireRoles } from '../middleware/authorizationMiddleware.js';
+import { authorizeStaffPayoutView } from '../middleware/staffPayoutAccessMiddleware.js';
 
 const router: Router = express.Router();
 const staffPayoutManagerGuard = requireRoles(['admin', 'administrator', 'manager', 'owner']);
@@ -41,7 +43,18 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
   next();
 };
 
-router.get('/getCommissionByDateRange', authMiddleware, reportController.getCommissionByDateRange);
+router.get(
+  '/getCommissionByDateRange',
+  authMiddleware,
+  authorizeStaffPayoutView,
+  reportController.getCommissionByDateRange,
+);
+router.get(
+  '/staffPayouts/bootstrap',
+  authMiddleware,
+  authorizeStaffPayoutView,
+  getStaffPayoutBootstrap,
+);
 router.post(
   '/staffPayouts/collections',
   authMiddleware,

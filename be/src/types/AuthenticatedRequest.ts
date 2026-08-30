@@ -23,6 +23,7 @@ export interface StaffPayoutReceiptAccessContext {
 export interface AuthenticatedRequest extends Request {
   user?: string | JwtPayload;
   authContext?: AuthorizationContext;
+  staffPayoutAccessScope?: 'all' | 'self';
   receiptAccess?: StaffPayoutReceiptAccessContext;
   permissionCache?: Map<string, Set<string>>;
   file?: Express.Multer.File;

@@ -161,6 +161,11 @@ import {
   sortStaffPayoutSettlementSnapshotSources,
   staffPayoutSettlementSnapshotsMatch,
 } from "../services/staffPayoutSettlementSnapshotService.js";
+import {
+  buildLegacySettledPayoutSnapshotPresentation,
+  resolveAuthoritativeLegacySettledPayoutSnapshot,
+  type LegacySettledPayoutSnapshotPresentation,
+} from "../services/legacySettledPayoutSnapshotService.js";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -1882,6 +1887,19 @@ const serializeReportTemplate = (
 export const getCommissionByDateRange = async (req: Request, res: Response): Promise<void> => {
   try {
     const { startDate, endDate, scope } = req.query;
+    const authRequest = req as AuthenticatedRequest;
+    const requesterId = authRequest.authContext?.id ?? null;
+    const requesterRoleSlug = authRequest.authContext?.roleSlug ?? null;
+    const enforcedAccessScope = authRequest.staffPayoutAccessScope;
+    const requesterHasFullAccess = enforcedAccessScope
+      ? enforcedAccessScope === "all"
+      : requesterRoleSlug
+        ? FULL_ACCESS_ROLE_SLUGS.has(requesterRoleSlug)
+        : false;
+    const forceSelfScope = scope === "self";
+    const shouldLimitToSelf = forceSelfScope
+      || enforcedAccessScope === "self"
+      || !requesterHasFullAccess;
 
     if (!startDate || !endDate) {
       res.status(400).json([{ message: "Start date and end date are required" }]);
@@ -2105,8 +2123,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       await ensureSummariesForUserIds(managerUserIds, commissionDataByUser);
     }
 
-    const activeComponents = await CompensationComponent.findAll({
-      where: { isActive: true },
+    const configuredComponents = await CompensationComponent.findAll({
       include: [
         {
           model: CompensationComponentAssignment,
@@ -2121,9 +2138,17 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       ],
     });
 
-    const typedComponents = activeComponents as Array<
+    const typedConfiguredComponents = configuredComponents as Array<
       CompensationComponent & { assignments?: CompensationComponentAssignment[] }
     >;
+    const typedComponents = typedConfiguredComponents.filter((component) => component.isActive);
+    const legacySettledPayoutComponentDefinitions = typedConfiguredComponents.map((component) => ({
+      id: component.id,
+      name: component.name,
+      category: component.category,
+      calculationMethod: component.calculationMethod,
+      isActive: component.isActive,
+    }));
     const guideCommissionRates = buildGuideCommissionRateLookup(typedComponents);
 
     const platformGuestTotals = await computePlatformGuestTotals(counterIds);
@@ -2879,6 +2904,9 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     const settlementFundById = new Map(
       settlementFundRows.map((fund) => [fund.id, fund] as const),
     );
+    const settlementFundNameById = new Map(
+      settlementFundRows.map((fund) => [fund.id, fund.name] as const),
+    );
     // Read the whole period, not only users still present in the live report.
     // Otherwise an allocation can disappear from reconciliation when its
     // staff/source calculation is removed entirely.
@@ -3489,7 +3517,12 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           remainingOutstanding = roundCurrencyValue(
             Math.max(remainingOutstanding - source.outstandingAmount, 0),
           );
-          if (source.outstandingAmount > 0 && source.fundId && !source.routeChanged) {
+          if (
+            !shouldLimitToSelf
+            && source.outstandingAmount > 0
+            && source.fundId
+            && !source.routeChanged
+          ) {
             source.settlementIntent = signCompensationSettlementIntent({
               userId: summary.userId,
               rangeStart: rangeStartIso,
@@ -3552,7 +3585,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         personalRemainingOutstanding = roundCurrencyValue(
           Math.max(personalRemainingOutstanding - source.outstandingAmount, 0),
         );
-        if (source.outstandingAmount > 0 && !source.routeChanged) {
+        if (!shouldLimitToSelf && source.outstandingAmount > 0 && !source.routeChanged) {
           source.settlementIntent = signCompensationSettlementIntent({
             userId: summary.userId,
             rangeStart: rangeStartIso,
@@ -3875,6 +3908,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       );
       let settlementReconciliationRequired = false;
       let settlementReconciliationMessage: string | null = null;
+      let authoritativeLegacyPresentation: LegacySettledPayoutSnapshotPresentation | null = null;
       if (isClosedLedgerPeriod && exactLedger) {
         if (canRefreshClosedSnapshot) {
           // A report snapshot is not a settlement by itself. If no personal
@@ -3896,9 +3930,33 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
                 .filter((source) => source.destination === "staff_vendor")
                 .reduce((sum, source) => sum + source.grossAmountMinor, 0)
             : null;
+          const authoritativeLegacySnapshot = resolveAuthoritativeLegacySettledPayoutSnapshot({
+            settlementSnapshot: rawStoredSnapshot,
+            rangeStart: rangeStartIso,
+            rangeEnd: rangeEndIso,
+            ledgerCurrency: exactLedger.currencyCode,
+            dueAmountMinor: Number(exactLedger.dueAmountMinor),
+            ledgerPaidAmountMinor: Number(exactLedger.paidAmountMinor),
+            canonicalPaidAmountMinor: convertMajorUnitsToMinor(payouts.payablePaid ?? 0),
+            liveFundAllocatedAmountMinor: convertMajorUnitsToMinor(
+              entry.volunteerFundAllocatedTotal ?? 0,
+            ),
+          });
+          if (authoritativeLegacySnapshot) {
+            authoritativeLegacyPresentation = buildLegacySettledPayoutSnapshotPresentation(
+              authoritativeLegacySnapshot,
+              legacySettledPayoutComponentDefinitions,
+              settlementFundNameById,
+            );
+          }
           const canInitializeLegacySnapshot = rawStoredSnapshot === null
             && convertMajorUnitsToMinor(entry.personalPayableTotal) === exactLedger.dueAmountMinor;
-          if (canInitializeLegacySnapshot) {
+          // Effective-dated staff eligibility starts in August 2026. For an
+          // earlier period that is valid and fully paid in both ledgers, the
+          // immutable v1 snapshot is the read authority. When that presentation
+          // exists, both mutation and mismatch branches below are skipped: the
+          // snapshot is never rewritten and no new settlement intent is minted.
+          if (!authoritativeLegacyPresentation && canInitializeLegacySnapshot) {
             // Ledgers created before source snapshots existed can be adopted only
             // when the recomputed personal liability still equals the frozen due.
             settlementSnapshotForPersistenceByUserId.set(
@@ -3906,12 +3964,15 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
               currentSettlementSnapshot,
             );
           } else if (
-            !storedSnapshot
-            || !staffPayoutSettlementSnapshotsMatch(storedSnapshot, currentSettlementSnapshot, {
-              rangeStart: rangeStartIso,
-              rangeEnd: rangeEndIso,
-            })
-            || storedPersonalDueMinor !== exactLedger.dueAmountMinor
+            !authoritativeLegacyPresentation
+            && (
+              !storedSnapshot
+              || !staffPayoutSettlementSnapshotsMatch(storedSnapshot, currentSettlementSnapshot, {
+                rangeStart: rangeStartIso,
+                rangeEnd: rangeEndIso,
+              })
+              || storedPersonalDueMinor !== exactLedger.dueAmountMinor
+            )
           ) {
             settlementReconciliationRequired = true;
             settlementReconciliationMessage =
@@ -3936,36 +3997,80 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
       return {
         ...entry,
-        totalCommission: Number(entry.totalCommission.toFixed(2)),
+        totalCommission: Number(
+          (authoritativeLegacyPresentation?.totalCommission ?? entry.totalCommission).toFixed(2),
+        ),
         totalCustomers: entry.totalCustomers,
         breakdown: entry.breakdown.map((item) => ({
           ...item,
           commission: Number(item.commission.toFixed(2)),
         })),
-        componentTotals: entry.componentTotals.map((component) => ({
+        componentTotals: (
+          authoritativeLegacyPresentation?.componentTotals ?? entry.componentTotals
+        ).map((component) => ({
           ...component,
           amount: Number(component.amount.toFixed(2)),
         })),
         bucketTotals: Object.fromEntries(
-          Object.entries(entry.bucketTotals).map(([key, value]) => [key, Number(value.toFixed(2))]),
+          Object.entries(
+            authoritativeLegacyPresentation?.bucketTotals ?? entry.bucketTotals,
+          ).map(([key, value]) => [key, Number(value.toFixed(2))]),
         ),
         grossBucketTotals: Object.fromEntries(
-          Object.entries(entry.grossBucketTotals).map(([key, value]) => [key, Number(value.toFixed(2))]),
+          Object.entries(
+            authoritativeLegacyPresentation?.grossBucketTotals ?? entry.grossBucketTotals,
+          ).map(([key, value]) => [key, Number(value.toFixed(2))]),
         ),
         fundBucketTotals: Object.fromEntries(
-          Object.entries(entry.fundBucketTotals).map(([key, value]) => [key, Number(value.toFixed(2))]),
+          Object.entries(
+            authoritativeLegacyPresentation?.fundBucketTotals ?? entry.fundBucketTotals,
+          ).map(([key, value]) => [key, Number(value.toFixed(2))]),
         ),
         totalPayout: periodDueAmount,
-        grossCompensationTotal: Number(entry.grossCompensationTotal.toFixed(2)),
-        personalPayableTotal: isClosedLedgerPeriod && exactLedger
-          ? periodDueAmount
-          : Number(entry.personalPayableTotal.toFixed(2)),
-        volunteerFundAllocationTotal: Number(entry.volunteerFundAllocationTotal.toFixed(2)),
-        volunteerFundAllocatedTotal: Number(entry.volunteerFundAllocatedTotal.toFixed(2)),
-        volunteerFundOutstandingTotal: Number(entry.volunteerFundOutstandingTotal.toFixed(2)),
-        volunteerFundOverallocatedTotal: Number(entry.volunteerFundOverallocatedTotal.toFixed(2)),
-        excludedSettlementTotal: Number(entry.excludedSettlementTotal.toFixed(2)),
-        settlementSources: entry.settlementSources.map((source) => ({
+        grossCompensationTotal: Number(
+          (
+            authoritativeLegacyPresentation?.grossCompensationTotal
+            ?? entry.grossCompensationTotal
+          ).toFixed(2),
+        ),
+        personalPayableTotal: authoritativeLegacyPresentation
+          ? Number(authoritativeLegacyPresentation.personalPayableTotal.toFixed(2))
+          : isClosedLedgerPeriod && exactLedger
+            ? periodDueAmount
+            : Number(entry.personalPayableTotal.toFixed(2)),
+        volunteerFundAllocationTotal: Number(
+          (
+            authoritativeLegacyPresentation?.volunteerFundAllocationTotal
+            ?? entry.volunteerFundAllocationTotal
+          ).toFixed(2),
+        ),
+        volunteerFundAllocatedTotal: Number(
+          (
+            authoritativeLegacyPresentation?.volunteerFundAllocatedTotal
+            ?? entry.volunteerFundAllocatedTotal
+          ).toFixed(2),
+        ),
+        volunteerFundOutstandingTotal: Number(
+          (
+            authoritativeLegacyPresentation?.volunteerFundOutstandingTotal
+            ?? entry.volunteerFundOutstandingTotal
+          ).toFixed(2),
+        ),
+        volunteerFundOverallocatedTotal: Number(
+          (
+            authoritativeLegacyPresentation?.volunteerFundOverallocatedTotal
+            ?? entry.volunteerFundOverallocatedTotal
+          ).toFixed(2),
+        ),
+        excludedSettlementTotal: Number(
+          (
+            authoritativeLegacyPresentation?.excludedSettlementTotal
+            ?? entry.excludedSettlementTotal
+          ).toFixed(2),
+        ),
+        settlementSources: (
+          authoritativeLegacyPresentation?.settlementSources ?? entry.settlementSources
+        ).map((source) => ({
           ...source,
           settlementIntent: settlementReconciliationRequired
             ? null
@@ -4031,9 +4136,20 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       };
     });
 
-    if (isLedgerEligible && allSummaries.length > 0) {
+    const data = shouldLimitToSelf
+      ? requesterId === null
+        ? []
+        : allSummaries.filter((entry) => entry.userId === requesterId)
+      : allSummaries;
+
+    // Self-service views must never refresh or create payout ledgers for other
+    // staff members. The configured module permission is resolved by route
+    // middleware before this expensive report starts.
+    const summariesForPersistence = shouldLimitToSelf ? data : allSummaries;
+
+    if (isLedgerEligible && summariesForPersistence.length > 0) {
       await Promise.all(
-        allSummaries.map((summary) => sequelize.transaction(async (transaction) => {
+        summariesForPersistence.map((summary) => sequelize.transaction(async (transaction) => {
           // Serialize report writers for a user, then validate and lock their
           // existing carry chain before changing due/snapshot authority.
           await User.findByPk(summary.userId, {
@@ -4142,18 +4258,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         })),
       );
     }
-
-    const authRequest = req as AuthenticatedRequest;
-    const requesterId = authRequest.authContext?.id ?? null;
-    const requesterRoleSlug = authRequest.authContext?.roleSlug ?? null;
-
-    const requesterHasFullAccess = requesterRoleSlug ? FULL_ACCESS_ROLE_SLUGS.has(requesterRoleSlug) : false;
-    const forceSelfScope = scope === "self";
-    const shouldLimitToSelf = forceSelfScope || !requesterHasFullAccess;
-
-    const data = shouldLimitToSelf && requesterId !== null
-      ? allSummaries.filter((entry) => entry.userId === requesterId)
-      : allSummaries;
 
     res.status(200).json([{ data, columns: [] }]);
   } catch (error) {
