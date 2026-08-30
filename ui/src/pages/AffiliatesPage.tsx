@@ -57,6 +57,17 @@ import {
 import type { FinanceAccount, FinanceCategory } from "../types/finance";
 
 const PAGE_SLUG = PAGE_SLUGS.affiliates;
+const AFFILIATE_BOOKING_TIMEZONE = "Europe/Warsaw";
+const affiliateBookingDateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: AFFILIATE_BOOKING_TIMEZONE,
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
 
 type DatePreset =
   | "today"
@@ -270,6 +281,33 @@ const formatBookingDate = (value: string | null): string => {
   }
   const parsed = dayjs(value);
   return parsed.isValid() ? parsed.format("MMM D, YYYY") : "-";
+};
+
+const formatBookingDateTime = (value: string | null): string => {
+  if (!value) {
+    return "-";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "-";
+  }
+
+  const parts = new Map(
+    affiliateBookingDateTimeFormatter
+      .formatToParts(parsed)
+      .map((part) => [part.type, part.value]),
+  );
+  const year = parts.get("year");
+  const month = parts.get("month");
+  const day = parts.get("day");
+  const hour = parts.get("hour");
+  const minute = parts.get("minute");
+  const second = parts.get("second");
+
+  return year && month && day && hour && minute && second
+    ? `${month} ${day}, ${year} ${hour}:${minute}:${second}`
+    : "-";
 };
 
 const normalizeRule = (rule: AffiliateAssignmentRule): AffiliateAssignmentRule => ({
@@ -974,7 +1012,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                 <Table stickyHeader withColumnBorders highlightOnHover styles={centeredTableStyles}>
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>Date</Table.Th>
+                      <Table.Th style={{ minWidth: 190 }}>Date &amp; time (Warsaw)</Table.Th>
                       <Table.Th>Booking</Table.Th>
                       <Table.Th>Guest</Table.Th>
                       <Table.Th>Product</Table.Th>
@@ -999,7 +1037,9 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
                     ) : (
                       bookings.map((booking) => (
                         <Table.Tr key={booking.id}>
-                          <Table.Td>{formatBookingDate(booking.sourceReceivedAt)}</Table.Td>
+                          <Table.Td style={{ whiteSpace: "nowrap" }}>
+                            {formatBookingDateTime(booking.sourceReceivedAt)}
+                          </Table.Td>
                           <Table.Td>{booking.platformBookingId}</Table.Td>
                           <Table.Td>{booking.guestName}</Table.Td>
                           <Table.Td>{booking.productName ?? "-"}</Table.Td>
