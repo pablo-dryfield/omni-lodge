@@ -33,6 +33,7 @@ const RequestsPage = lazy(() => import("../../pages/RequestsPage"));
 const PrivacyPolicyPage = lazy(() => import("../../pages/PrivacyPolicyPage"));
 const DataDeletionPage = lazy(() => import("../../pages/DataDeletionPage"));
 const TermsPage = lazy(() => import("../../pages/TermsPage"));
+const PayoutReceiptAccessPage = lazy(() => import("../../pages/PayoutReceiptAccessPage"));
 const PerformancePage = lazy(() => import("../../pages/PerformancePage"));
 const Pays = lazyRoute(() => import("../../pages/Pays"), loadPaysReducers);
 const ReviewCounters = lazyRoute(() => import("../../pages/ReviewCounters"), loadReviewCountersReducers);
@@ -131,6 +132,7 @@ const Routes = () => {
         <Route path="/data-deletion" element={<DataDeletionPage title="Data Deletion Request" />} />
         <Route path="/terms" element={<TermsPage title="Terms" />} />
         <Route path="/terms-and-conditions" element={<Navigate to="/terms" replace />} />
+        <Route path="/payout-receipt/:receiptId" element={<PayoutReceiptAccessPage />} />
         <Route path="/performance" element={<PerformancePage title="Performance" />} />
         <Route path="/reviews" element={<ReviewCounters />} />
         <Route path="/pays" element={<Pays />} />

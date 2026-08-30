@@ -7,6 +7,7 @@ import Product from '../models/Product.js';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
 import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
+import StaffProfile from '../models/StaffProfile.js';
 import { getConfigValue, updateConfigValue } from './configService.js';
 import { fetchBookingUtmCatalog } from './bookings/bookingUtmCatalogService.js';
 
@@ -37,6 +38,7 @@ export type AffiliateUserSummary = {
   userTypeName: string | null;
   affiliateCommissionPerPerson: number;
   financeVendorId: number | null;
+  hasStaffProfile: boolean;
 };
 
 export type AffiliateBookingRow = {
@@ -433,6 +435,7 @@ const findMatchingRule = (booking: AffiliateBookingRow, rules: AffiliateAssignme
 
 const toAffiliateUserSummary = (user: User): AffiliateUserSummary => {
   const role = (user as unknown as { role?: UserType | null }).role ?? null;
+  const staffProfile = (user as unknown as { staffProfile?: StaffProfile | null }).staffProfile ?? null;
   return {
     id: user.id,
     fullName: parseName(user.firstName ?? null, user.lastName ?? null),
@@ -444,6 +447,7 @@ const toAffiliateUserSummary = (user: User): AffiliateUserSummary => {
     userTypeName: role?.name ?? null,
     affiliateCommissionPerPerson: normalizeAffiliateCommissionPerPerson(user.affiliateCommissionRate),
     financeVendorId: user.financeVendorId ?? null,
+    hasStaffProfile: Boolean(staffProfile),
   };
 };
 
@@ -459,6 +463,12 @@ const fetchAffiliateUsers = async (
         required: true,
         where: { slug: 'affiliate' },
         attributes: ['id', 'slug', 'name'],
+      },
+      {
+        model: StaffProfile,
+        as: 'staffProfile',
+        required: false,
+        attributes: ['userId'],
       },
     ],
     order: [['firstName', 'ASC'], ['lastName', 'ASC'], ['id', 'ASC']],
@@ -488,6 +498,12 @@ const fetchAffiliateUsers = async (
               as: 'role',
               required: false,
               attributes: ['id', 'slug', 'name'],
+            },
+            {
+              model: StaffProfile,
+              as: 'staffProfile',
+              required: false,
+              attributes: ['userId'],
             },
           ],
           transaction,

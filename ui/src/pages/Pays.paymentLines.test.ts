@@ -1,6 +1,7 @@
 import {
   buildDefaultFundAllocationLines,
   buildDefaultPaymentLines,
+  createStaffPayoutSettlementRequestId,
   formatPayStaffName,
 } from './Pays';
 import type { Pay, PayAffiliateSaleBooking, PaySettlementSource } from '../types/pays/Pay';
@@ -126,6 +127,17 @@ describe('formatPayStaffName', () => {
   });
 });
 
+describe('createStaffPayoutSettlementRequestId', () => {
+  it('creates distinct backend-safe identifiers for separate modal opens', () => {
+    const firstRequestId = createStaffPayoutSettlementRequestId();
+    const secondRequestId = createStaffPayoutSettlementRequestId();
+
+    expect(firstRequestId).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+    expect(secondRequestId).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+    expect(secondRequestId).not.toBe(firstRequestId);
+  });
+});
+
 describe('buildDefaultPaymentLines', () => {
   it('does not let an older Promotion Sales payment consume newly outstanding bookings', () => {
     const paidBooking = createAffiliateBooking(1001, 40, true);
@@ -240,6 +252,65 @@ describe('buildDefaultPaymentLines', () => {
         amount: 100,
         fundId: 1,
         settlementIntent: 'signed-period-routing-intent',
+      }),
+    ]);
+  });
+
+  it('keeps effective-dated staff-type segments separate in a mixed month', () => {
+    const personalSource: PaySettlementSource = {
+      ...createGuideCommissionSource('staff_vendor'),
+      label: 'Guide commission',
+      amount: 60,
+      outstandingAmount: 60,
+      segmentKey: 'seg_long_term',
+      earningStart: '2026-08-01',
+      earningEnd: '2026-08-15',
+      staffTypePeriodId: 81,
+      staffType: 'long_term',
+      settlementIntent: 'signed-personal-segment',
+    };
+    const fundSource: PaySettlementSource = {
+      ...createGuideCommissionSource('volunteer_fund'),
+      label: 'Guide commission',
+      amount: 40,
+      outstandingAmount: 40,
+      segmentKey: 'seg_volunteer',
+      earningStart: '2026-08-16',
+      earningEnd: '2026-08-31',
+      staffTypePeriodId: 82,
+      staffType: 'volunteer',
+      settlementIntent: 'signed-fund-segment',
+    };
+    const staff = volunteerCommissionStaff({
+      range: { startDate: '2026-08-01', endDate: '2026-08-31' },
+      totalPayout: 60,
+      personalPayableTotal: 60,
+      volunteerFundAllocationTotal: 40,
+      closingBalance: 60,
+      payouts: {
+        currency: 'PLN',
+        payableDue: 60,
+        payablePaid: 0,
+        payableOutstanding: 60,
+        receivableDue: 0,
+        receivableCollected: 0,
+        receivableOutstanding: 0,
+      },
+      settlementSources: [personalSource, fundSource],
+    });
+
+    expect(buildDefaultPaymentLines(staff, new Map(), '', new Map())).toEqual([
+      expect.objectContaining({
+        label: 'Guide commission (Aug 1–Aug 15)',
+        amount: 60,
+        settlementIntent: 'signed-personal-segment',
+      }),
+    ]);
+    expect(buildDefaultFundAllocationLines(staff)).toEqual([
+      expect.objectContaining({
+        label: 'Guide commission (Aug 16–Aug 31)',
+        amount: 40,
+        settlementIntent: 'signed-fund-segment',
       }),
     ]);
   });

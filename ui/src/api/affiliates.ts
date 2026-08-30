@@ -11,6 +11,7 @@ export type AffiliateUserSummary = {
   userTypeName: string | null;
   affiliateCommissionPerPerson: number;
   financeVendorId: number | null;
+  hasStaffProfile: boolean;
 };
 
 export type AffiliateAssignmentRule = {
@@ -177,6 +178,7 @@ export type CreateAffiliatePayoutResponse = AffiliateOverviewResponse["payoutLog
     id: number;
     actionId: number | null;
     status: "pending" | "completed" | "cancelled";
+    accessPath: string;
   } | null;
 };
 

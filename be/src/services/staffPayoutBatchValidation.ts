@@ -1,4 +1,8 @@
 import HttpError from '../errors/HttpError.js';
+import {
+  getCompensationSettlementIntentDirection,
+  type CompensationSettlementIntentPayload,
+} from './compensationSettlementIntentService.js';
 
 export type StaffPayoutBatchDirection = 'payable' | 'receivable';
 
@@ -28,6 +32,7 @@ export type StaffPayoutReimbursementSourceRecord = {
   currency: string;
   amountMinor: number;
   baseAmountMinor: number;
+  counterpartyType: string | null;
   counterpartyId: number | null;
   meta: Record<string, unknown> | null;
 };
@@ -71,6 +76,20 @@ export const assertStaffPayoutDirectionDetails = (params: {
   }
   if (params.direction === 'receivable' && params.hasAffiliatePayout) {
     throw new HttpError(400, 'Affiliate commissions can only be included in payable staff batches.');
+  }
+};
+
+export const assertStaffPayoutSettlementIntentDirections = (params: {
+  direction: StaffPayoutBatchDirection;
+  intents: readonly CompensationSettlementIntentPayload[];
+}): void => {
+  if (params.intents.some((intent) => (
+    getCompensationSettlementIntentDirection(intent) !== params.direction
+  ))) {
+    throw new HttpError(
+      400,
+      'Calculated compensation authorizations can only be used in payable staff batches.',
+    );
   }
 };
 
@@ -180,7 +199,8 @@ export const deriveStaffPayoutReimbursementAmount = (params: {
     const attributedUserId = normalizePositiveUserId(meta?.paidByUserId ?? meta?.staffUserId);
     const belongsToStaff = attributedUserId
       ? attributedUserId === params.staffUserId
-      : Number(row.counterpartyId) === params.staffVendorId;
+      : row.counterpartyType === 'vendor'
+        && Number(row.counterpartyId) === params.staffVendorId;
     if (!belongsToStaff) {
       throw new HttpError(400, `Finance transaction ${row.id} does not belong to the selected staff member.`);
     }

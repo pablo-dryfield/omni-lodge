@@ -43,6 +43,7 @@ import {
   type PayPayoutReceiptDetail,
   type PayPayoutReceiptHistoryEntry,
   type PayPayoutReceiptHistoryResponse,
+  type PaySettlementSource,
 } from '../types/pays/Pay';
 import type { CompensationComponent } from '../types/compensation/CompensationComponent';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
@@ -844,6 +845,7 @@ type EntryFundAllocationLine = {
 
 type EntryModalState = {
   open: boolean;
+  requestId: string;
   staff: Pay | null;
   amount: number;
   currency: string;
@@ -892,7 +894,14 @@ type StaffPayoutBatchResponse = {
     actionId: number | null;
     status: 'pending' | 'completed' | 'cancelled';
     payoutBatchKey: string;
+    accessPath: string;
   }>;
+};
+
+type StaffPayoutActionAlert = {
+  type: 'error' | 'success';
+  text: string;
+  receiptLinks?: Array<{ id: number; accessPath: string }>;
 };
 
 type ReceiptEvidenceModalState = {
@@ -932,6 +941,7 @@ type FixedDesktopHeaderState = {
 
 const createEmptyEntryModalState = (): EntryModalState => ({
   open: false,
+  requestId: '',
   staff: null,
   amount: 0,
   currency: DEFAULT_CURRENCY,
@@ -1004,7 +1014,31 @@ const PAYMENT_BUCKET_METADATA: Record<
 
 const createLineId = () => `line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+export const createStaffPayoutSettlementRequestId = (): string =>
+  globalThis.crypto?.randomUUID?.() ??
+  `staff-payout-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
 const roundLineAmount = (value: number) => Math.round((value ?? 0) * 100) / 100;
+
+const formatSettlementSourceDisplayLabel = (
+  source: PaySettlementSource,
+  allSources: PaySettlementSource[],
+): string => {
+  if (!source.earningStart || !source.earningEnd) {
+    return source.label;
+  }
+  const matchingSourceCount = allSources.filter((candidate) => (
+    candidate.sourceKey === source.sourceKey
+    && (candidate.componentId ?? null) === (source.componentId ?? null)
+  )).length;
+  if (matchingSourceCount <= 1) {
+    return source.label;
+  }
+  const period = source.earningStart === source.earningEnd
+    ? dayjs(source.earningStart).format('MMM D')
+    : `${dayjs(source.earningStart).format('MMM D')}–${dayjs(source.earningEnd).format('MMM D')}`;
+  return `${source.label} (${period})`;
+};
 
 const computeSelectedLineTotal = (lines: EntryPaymentLine[]) =>
   lines
@@ -1038,6 +1072,116 @@ export const buildDefaultPaymentLines = (
   componentDefinitions: Map<number, CompensationComponent>,
 ): EntryPaymentLine[] => {
   const settlementSources = staff.settlementSources ?? [];
+  const hasEffectiveDatedSources = settlementSources.some((source) => Boolean(source.segmentKey));
+
+  // Version-two settlement sources already contain the server-authoritative
+  // amount remaining for each effective-dated staff-type segment. Building
+  // directly from those rows prevents a mid-month Volunteer/Long-Term change
+  // from being collapsed back into one component or system-source line.
+  if (hasEffectiveDatedSources) {
+    const payableSources = settlementSources.filter((source) => (
+      source.destination === 'staff_vendor'
+      && source.sourceKey !== 'reimbursement'
+      && source.outstandingAmount > 0
+      && Boolean(source.settlementIntent)
+    ));
+    const promotionSourceCount = payableSources.filter(
+      (source) => source.sourceKey === 'promotion_sales',
+    ).length;
+
+    const lines: EntryPaymentLine[] = payableSources.flatMap((source) => {
+      const component = source.componentId
+        ? componentDefinitions.get(source.componentId) ?? null
+        : null;
+      const label = formatSettlementSourceDisplayLabel(source, settlementSources);
+      const categoryId = component?.defaultFinanceCategoryId
+        ? String(component.defaultFinanceCategoryId)
+        : findCategoryIdByName(
+            categoryLookup,
+            source.category || component?.category || source.label,
+            fallbackCategoryId,
+          );
+      const accountId = component?.defaultFinanceAccountId
+        ? String(component.defaultFinanceAccountId)
+        : '';
+
+      let affiliatePayout: EntryPaymentLine['affiliatePayout'];
+      if (source.sourceKey === 'promotion_sales') {
+        const explicitIds = Array.from(new Set(source.referenceIds ?? []))
+          .filter((id) => Number.isInteger(id) && id > 0);
+        const fallbackIds = (staff.affiliateSales?.bookings ?? [])
+          .filter((booking) => {
+            if (booking.isCommissionPaid || booking.affiliateCommissionAmount <= 0) {
+              return false;
+            }
+            if (promotionSourceCount <= 1 || !source.earningStart || !source.earningEnd) {
+              return true;
+            }
+            const earningDate = booking.sourceReceivedAt
+              ? dayjs(booking.sourceReceivedAt).format(URL_DATE_FORMAT)
+              : null;
+            return Boolean(
+              earningDate
+              && earningDate >= source.earningStart
+              && earningDate <= source.earningEnd,
+            );
+          })
+          .map((booking) => booking.id);
+        const bookingIds = explicitIds.length > 0 ? explicitIds : fallbackIds;
+        if (!staff.userId || bookingIds.length === 0) {
+          return [];
+        }
+        affiliatePayout = {
+          affiliateUserId: staff.userId,
+          bookingIds,
+        };
+      }
+
+      return [{
+        id: createLineId(),
+        label,
+        componentId: source.componentId ?? undefined,
+        sourceKey: source.sourceKey,
+        amount: roundLineAmount(source.outstandingAmount),
+        categoryId,
+        accountId,
+        description: `Auto payout - ${label}`,
+        settlementIntent: source.settlementIntent as string,
+        ...(affiliatePayout ? { affiliatePayout } : {}),
+        include: true,
+      }];
+    });
+
+    const currentReimbursementOutstanding = roundLineAmount(
+      Math.max(staff.reimbursements?.awaitingAmount ?? 0, 0),
+    );
+    const selectedCurrentTotal = computeSelectedLineTotal(lines);
+    const fullOutstanding = roundLineAmount(
+      Math.max(
+        (staff.closingBalance ?? staff.payouts?.payableOutstanding ?? selectedCurrentTotal)
+          - currentReimbursementOutstanding,
+        0,
+      ),
+    );
+    const carryForwardAmount = roundLineAmount(
+      Math.max(fullOutstanding - selectedCurrentTotal, 0),
+    );
+    if (carryForwardAmount > 0) {
+      lines.push({
+        id: createLineId(),
+        label: 'Previous personal balance',
+        sourceKey: 'carry_forward_personal',
+        amount: carryForwardAmount,
+        categoryId: fallbackCategoryId,
+        accountId: '',
+        description: `Previous personal balance for ${formatPayStaffName(staff)}`,
+        include: true,
+      });
+    }
+
+    return lines;
+  }
+
   const settlementSourceByIdentity = new Map(
     settlementSources.map((source) => [
       `${source.sourceKey}:${source.componentId ?? 0}`,
@@ -1604,8 +1748,9 @@ export const buildDefaultPaymentLines = (
   return lines;
 };
 
-export const buildDefaultFundAllocationLines = (staff: Pay): EntryFundAllocationLine[] =>
-  (staff.settlementSources ?? [])
+export const buildDefaultFundAllocationLines = (staff: Pay): EntryFundAllocationLine[] => {
+  const settlementSources = staff.settlementSources ?? [];
+  return settlementSources
     .filter(
       (source) =>
         source.destination === 'volunteer_fund'
@@ -1613,18 +1758,22 @@ export const buildDefaultFundAllocationLines = (staff: Pay): EntryFundAllocation
         && Boolean(source.settlementIntent)
         && source.outstandingAmount > 0,
     )
-    .map((source) => ({
-      id: createLineId(),
-      label: source.label,
-      componentId: source.componentId ?? undefined,
-      sourceKey: source.sourceKey,
-      amount: roundLineAmount(source.outstandingAmount),
-      fundId: source.fundId as number,
-      fundName: source.fundName ?? `Volunteer Fund #${source.fundId}`,
-      settlementIntent: source.settlementIntent as string,
-      description: `Allocate ${source.label} to ${source.fundName ?? 'Volunteer Fund'}`,
-      include: true,
-    }));
+    .map((source) => {
+      const label = formatSettlementSourceDisplayLabel(source, settlementSources);
+      return {
+        id: createLineId(),
+        label,
+        componentId: source.componentId ?? undefined,
+        sourceKey: source.sourceKey,
+        amount: roundLineAmount(source.outstandingAmount),
+        fundId: source.fundId as number,
+        fundName: source.fundName ?? `Volunteer Fund #${source.fundId}`,
+        settlementIntent: source.settlementIntent as string,
+        description: `Allocate ${label} to ${source.fundName ?? 'Volunteer Fund'}`,
+        include: true,
+      };
+    });
+};
 
 type VolunteerRoutingPresentation = {
   statusLabel: string;
@@ -1638,7 +1787,7 @@ const isVolunteerStaff = (staff: Pay | null | undefined): boolean =>
 const getVolunteerRoutingPresentation = (
   staff: Pay | null | undefined,
 ): VolunteerRoutingPresentation | null => {
-  if (!staff || !isVolunteerStaff(staff)) {
+  if (!staff) {
     return null;
   }
   const activeSources = (staff.settlementSources ?? []).filter(
@@ -1656,6 +1805,10 @@ const getVolunteerRoutingPresentation = (
       .filter((source) => source.destination === 'volunteer_fund')
       .map((source) => source.label),
   ));
+  const currentProfileIsVolunteer = isVolunteerStaff(staff);
+  if (!currentProfileIsVolunteer && fundLabels.length === 0) {
+    return null;
+  }
   const periodLabel = staff.range?.startDate && staff.range?.endDate
     ? formatRangeLabel(staff.range.startDate, staff.range.endDate)
     : 'the selected period';
@@ -1663,16 +1816,16 @@ const getVolunteerRoutingPresentation = (
 
   if (personalLabels.length > 0 && fundLabels.length > 0) {
     return {
-      statusLabel: 'Split: staff + fund',
+      statusLabel: currentProfileIsVolunteer ? 'Split: staff + fund' : 'Historical staff + fund split',
       color: 'blue',
-      description: `${periodLabel} pays ${personalLabels.join(', ')} to staff and allocates ${fundLabels.join(', ')} to the Volunteer Fund. ${suffix}`,
+      description: `${periodLabel} pays ${personalLabels.join(', ')} to staff and allocates ${fundLabels.join(', ')} to the Volunteer Fund.${currentProfileIsVolunteer ? '' : ' This reflects the staff-profile types effective on the earning dates.'} ${suffix}`,
     };
   }
   if (fundLabels.length > 0) {
     return {
-      statusLabel: 'Volunteer Fund route',
+      statusLabel: currentProfileIsVolunteer ? 'Volunteer Fund route' : 'Historical fund route',
       color: 'violet',
-      description: `${periodLabel} allocates ${fundLabels.join(', ')} to the Volunteer Fund. ${suffix}`,
+      description: `${periodLabel} allocates ${fundLabels.join(', ')} to the Volunteer Fund.${currentProfileIsVolunteer ? '' : ' The current profile is no longer Volunteer, but these earnings retain their historical destination.'} ${suffix}`,
     };
   }
   if (personalLabels.length > 0) {
@@ -1703,7 +1856,9 @@ const renderVolunteerRoutingBadges = (staff: Pay) => {
   }
   return (
     <Group gap={4} justify="center">
-      <Badge size="xs" variant="light" color="violet">Volunteer</Badge>
+      <Badge size="xs" variant="light" color="violet">
+        {isVolunteerStaff(staff) ? 'Volunteer' : 'Historical routing'}
+      </Badge>
       <Tooltip label={routing.description} multiline w={360}>
         <Badge size="xs" variant="light" color={routing.color}>{routing.statusLabel}</Badge>
       </Tooltip>
@@ -2854,7 +3009,7 @@ const Pays: React.FC = () => {
   const [entrySubmitting, setEntrySubmitting] = useState(false);
   const [paidEntriesSubmitting, setPaidEntriesSubmitting] = useState(false);
   const [paidEntriesMessage, setPaidEntriesMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
-  const [actionAlert, setActionAlert] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [actionAlert, setActionAlert] = useState<StaffPayoutActionAlert | null>(null);
   const [baseOverridePending, setBaseOverridePending] = useState<Set<number>>(new Set());
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const desktopTableHeaderRef = useRef<HTMLTableSectionElement | null>(null);
@@ -3319,6 +3474,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
       const reimbursementCategoryId = findCategoryIdByName(categoryLookup, 'reimbursements', defaults.categoryId);
       setEntryModal({
         open: true,
+        requestId: createStaffPayoutSettlementRequestId(),
         staff,
         amount: selectedTotal,
         currency,
@@ -3883,6 +4039,13 @@ const resolveStaffCounterpartyDefaults = useCallback(
       setEntryMessage({ type: 'error', text: 'Select a payout period before recording a payment.' });
       return;
     }
+    if (!entryModal.requestId) {
+      setEntryMessage({
+        type: 'error',
+        text: 'This payout request is missing its retry protection. Close the form and open it again.',
+      });
+      return;
+    }
     if (!entryModal.staff.staffProfileId) {
       setEntryMessage({
         type: 'error',
@@ -3937,6 +4100,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
       const payoutResponse = await axiosInstance.post<StaffPayoutBatchResponse>(
         '/reports/staffPayouts/batch',
         {
+          requestId: entryModal.requestId,
           staffProfileId: entryModal.staff.staffProfileId,
           direction: 'payable',
           counterpartyId: entryModal.counterpartyId ? Number(entryModal.counterpartyId) : null,
@@ -3991,20 +4155,26 @@ const resolveStaffCounterpartyDefaults = useCallback(
       await refetchPaysForRange(refetchStart, refetchEnd);
       const receiptCount = payoutResponse.data.receipts?.length ?? 0;
       const fundAllocationCount = payoutResponse.data.fundAllocationCount ?? 0;
+      const receiptLinks = (payoutResponse.data.receipts ?? [])
+        .filter((receipt) => receipt.status === 'pending' && Boolean(receipt.accessPath))
+        .map((receipt) => ({ id: receipt.id, accessPath: receipt.accessPath }));
       if (payoutResponse.data.duplicated) {
         setActionAlert({
           type: 'success',
           text: `This settlement for ${formatPayStaffName(entryModal.staff)} was already recorded. Nothing was duplicated.`,
+          receiptLinks,
         });
       } else if (receiptCount === 1) {
         setActionAlert({
           type: 'success',
           text: `Settlement recorded. Confirmation request sent to ${formatPayStaffName(entryModal.staff)}.${fundAllocationCount > 0 ? ` ${fundAllocationCount} Volunteer Fund allocation${fundAllocationCount === 1 ? '' : 's'} recorded.` : ''}`,
+          receiptLinks,
         });
       } else if (receiptCount > 1) {
         setActionAlert({
           type: 'success',
           text: `Settlement recorded. ${receiptCount} confirmation requests sent to ${formatPayStaffName(entryModal.staff)}, one per currency.${fundAllocationCount > 0 ? ` ${fundAllocationCount} Volunteer Fund allocations recorded.` : ''}`,
+          receiptLinks,
         });
       } else if (fundAllocationCount > 0) {
         setActionAlert({
@@ -5028,7 +5198,32 @@ const renderVolunteerFundSnapshot = (
               )}
               {actionAlert && (
                 <Alert color={actionAlert.type === 'error' ? 'red' : 'teal'} title="Staff payouts" variant="light">
-                  <Text size="sm">{actionAlert.text}</Text>
+                  <Stack gap="xs">
+                    <Text size="sm">{actionAlert.text}</Text>
+                    {actionAlert.receiptLinks?.length ? (
+                      <>
+                        <Text size="xs" c="dimmed">
+                          Share the confirmation link when the staff member cannot open normal required actions.
+                        </Text>
+                        <Group gap="xs">
+                          {actionAlert.receiptLinks.map((receipt) => (
+                            <Button
+                              key={receipt.id}
+                              component="a"
+                              href={receipt.accessPath}
+                              target="_blank"
+                              rel="noreferrer"
+                              size="xs"
+                              variant="light"
+                              leftSection={<IconReceipt size={14} />}
+                            >
+                              Confirmation link #{receipt.id}
+                            </Button>
+                          ))}
+                        </Group>
+                      </>
+                    ) : null}
+                  </Stack>
                 </Alert>
               )}
 

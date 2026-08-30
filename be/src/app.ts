@@ -202,7 +202,7 @@ app.use(
       scriptSrc: ["'self'", "'unsafe-inline'", 'https://connect.facebook.net'],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
-      imgSrc: ["'self'", "data:"],
+      imgSrc: ["'self'", "data:", "blob:"],
       connectSrc: [
         "'self'",
         'https://connect.facebook.net',

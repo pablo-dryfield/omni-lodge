@@ -8,6 +8,7 @@ import { AuthenticatedRequest } from '../types/AuthenticatedRequest';
 import { getRequestContextValue, setRequestContextValue } from '../services/requestContextService.js';
 import { performanceMonitorService } from '../services/performanceMonitorService.js';
 import { queryDiagnosticsService } from '../services/queryDiagnosticsService.js';
+import { isStaffPayoutReceiptAccessPayload } from '../services/staffPayoutReceiptAccessTokenService.js';
 
 dotenv.config();
 
@@ -45,6 +46,13 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
   }
 
   try {
+    // Receipt-only capabilities are intentionally unusable as normal account
+    // sessions, even if the same signing secret is configured or the account
+    // is reactivated before the short-lived capability expires.
+    if (isStaffPayoutReceiptAccessPayload(jwt.decode(token))) {
+      res.status(403).json({ error: 'Forbidden, invalid or expired token' });
+      return;
+    }
     const decoded = jwt.verify(token, process.env.JWT_SECRET || '') as JwtPayload;
 
     if (!decoded || typeof decoded === 'string' || typeof decoded.id !== 'number') {

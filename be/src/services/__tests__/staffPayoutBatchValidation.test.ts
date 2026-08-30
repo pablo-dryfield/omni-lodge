@@ -1,12 +1,14 @@
 import HttpError from '../../errors/HttpError.js';
 import {
   assertStaffPayoutDirectionDetails,
+  assertStaffPayoutSettlementIntentDirections,
   assertUniqueStaffAffiliatePayoutClaims,
   deriveStaffPayoutReimbursementAmount,
   parseStrictStaffPayoutDate,
   validateStaffPayoutFinanceSelections,
   type StaffPayoutReimbursementSourceRecord,
 } from '../staffPayoutBatchValidation.js';
+import type { CompensationSettlementIntentPayload } from '../compensationSettlementIntentService.js';
 
 const expectHttpError = (
   callback: () => unknown,
@@ -37,6 +39,7 @@ const buildReimbursementSource = (
   currency: 'PLN',
   amountMinor: 2_000,
   baseAmountMinor: 2_000,
+  counterpartyType: 'vendor',
   counterpartyId: 8,
   meta: { paidByUserId: 24 },
   ...overrides,
@@ -117,6 +120,50 @@ describe('staff payout batch validation', () => {
         hasReimbursement: true,
         hasAffiliatePayout: true,
       })).not.toThrow();
+    });
+
+    it('rejects calculated payout intents in receivable batches but permits manual receivables', () => {
+      const calculatedIntent: CompensationSettlementIntentPayload = {
+        version: 2,
+        direction: 'payable',
+        userId: 24,
+        rangeStart: '2026-08-01',
+        rangeEnd: '2026-08-31',
+        sourceKey: 'promotion_sales',
+        componentId: null,
+        category: 'affiliate_commission',
+        destination: 'staff_vendor',
+        fundId: null,
+        grossAmountMinor: 8_000,
+        outstandingAmountMinor: 8_000,
+        ruleId: 42,
+        currency: 'PLN',
+        issuedAt: 1_777_464_000,
+        segmentKey: 'seg_direction_bound',
+        earningStart: '2026-08-01',
+        earningEnd: '2026-08-31',
+        staffTypePeriodId: 10,
+        staffType: 'long_term',
+        legacyExtrapolation: false,
+        referenceIds: [9513],
+      };
+
+      expect(() => assertStaffPayoutSettlementIntentDirections({
+        direction: 'payable',
+        intents: [calculatedIntent],
+      })).not.toThrow();
+      expect(() => assertStaffPayoutSettlementIntentDirections({
+        direction: 'receivable',
+        intents: [],
+      })).not.toThrow();
+      expectHttpError(
+        () => assertStaffPayoutSettlementIntentDirections({
+          direction: 'receivable',
+          intents: [calculatedIntent],
+        }),
+        400,
+        'Calculated compensation authorizations can only be used in payable staff batches.',
+      );
     });
   });
 
@@ -353,6 +400,17 @@ describe('staff payout batch validation', () => {
       expectHttpError(
         () => deriveReimbursement({
           sourceRows: [buildReimbursementSource({ meta: null, counterpartyId: 9 })],
+        }),
+        400,
+        'Finance transaction 71 does not belong to the selected staff member.',
+      );
+      expectHttpError(
+        () => deriveReimbursement({
+          sourceRows: [buildReimbursementSource({
+            meta: null,
+            counterpartyType: 'client',
+            counterpartyId: 8,
+          })],
         }),
         400,
         'Finance transaction 71 does not belong to the selected staff member.',

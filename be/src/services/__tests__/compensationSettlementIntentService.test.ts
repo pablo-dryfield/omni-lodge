@@ -3,6 +3,8 @@ import HttpError from '../../errors/HttpError.js';
 import {
   COMPENSATION_SETTLEMENT_INTENT_MAX_AGE_SECONDS,
   CompensationSettlementIntentConfigurationError,
+  getCompensationSettlementIntentDirection,
+  isSegmentedCompensationSettlementIntent,
   signCompensationSettlementIntent,
   verifyCompensationSettlementIntent,
   type CompensationSettlementIntentInput,
@@ -53,6 +55,7 @@ describe('compensation settlement intent service', () => {
     expect(verifyCompensationSettlementIntent(token, { now: FIXED_NOW })).toEqual({
       ...baseIntent(),
       issuedAt: FIXED_NOW_SECONDS,
+      version: 1,
     });
     expect(token.split('.')).toHaveLength(2);
   });
@@ -110,7 +113,113 @@ describe('compensation settlement intent service', () => {
     })).toMatchObject({
       ...baseIntent(),
       issuedAt: FIXED_NOW_SECONDS,
+      version: 1,
     });
+  });
+
+  it('round-trips the complete v2 staff-type earning segment', () => {
+    const token = signCompensationSettlementIntent({
+      ...baseIntent(),
+      direction: 'payable',
+      segmentKey: 'seg_1234567890abcdef1234567890abcdef',
+      earningStart: '2026-08-01',
+      earningEnd: '2026-08-15',
+      staffTypePeriodId: 10,
+      staffType: ' VOLUNTEER ',
+      legacyExtrapolation: true,
+      referenceIds: [9514, 9513, 9514],
+    }, { now: FIXED_NOW });
+
+    const verified = verifyCompensationSettlementIntent(token, { now: FIXED_NOW });
+    expect(isSegmentedCompensationSettlementIntent(verified)).toBe(true);
+    expect(getCompensationSettlementIntentDirection(verified)).toBe('payable');
+    expect(verified).toEqual({
+      ...baseIntent(),
+      issuedAt: FIXED_NOW_SECONDS,
+      version: 2,
+      direction: 'payable',
+      segmentKey: 'seg_1234567890abcdef1234567890abcdef',
+      earningStart: '2026-08-01',
+      earningEnd: '2026-08-15',
+      staffTypePeriodId: 10,
+      staffType: 'volunteer',
+      legacyExtrapolation: true,
+      referenceIds: [9513, 9514],
+    });
+  });
+
+  it('verifies pre-version signed intents as normalized v1 payloads', () => {
+    const token = signRawPayload({
+      ...baseIntent(),
+      issuedAt: FIXED_NOW_SECONDS,
+    }, process.env.JWT_SECRET as string);
+
+    expect(verifyCompensationSettlementIntent(token, { now: FIXED_NOW })).toEqual({
+      ...baseIntent(),
+      issuedAt: FIXED_NOW_SECONDS,
+      version: 1,
+    });
+    expect(getCompensationSettlementIntentDirection(
+      verifyCompensationSettlementIntent(token, { now: FIXED_NOW }),
+    )).toBe('payable');
+  });
+
+  it('rejects partial or range-inconsistent v2 segment fields', () => {
+    expect(() => signCompensationSettlementIntent({
+      ...baseIntent(),
+      version: 2,
+      segmentKey: 'seg_incomplete',
+    } as CompensationSettlementIntentInput, { now: FIXED_NOW })).toThrow(
+      'earningStart must use YYYY-MM-DD.',
+    );
+
+    expect(() => signCompensationSettlementIntent({
+      ...baseIntent(),
+      segmentKey: 'seg_outside_range',
+      earningStart: '2026-07-31',
+      earningEnd: '2026-08-15',
+      staffTypePeriodId: 10,
+      staffType: 'volunteer',
+      legacyExtrapolation: false,
+    }, { now: FIXED_NOW })).toThrow(
+      'The earning range must be contained in the settlement range.',
+    );
+
+    expect(() => signCompensationSettlementIntent({
+      ...baseIntent(),
+      version: 2,
+      direction: 'payable',
+      segmentKey: 'seg_bad_references',
+      earningStart: '2026-08-01',
+      earningEnd: '2026-08-15',
+      staffTypePeriodId: 10,
+      staffType: 'volunteer',
+      legacyExtrapolation: false,
+      referenceIds: [9513, 0],
+    }, { now: FIXED_NOW })).toThrow('referenceIds must be a positive integer.');
+  });
+
+  it('requires signed v2 calculated intents to declare the payable direction', () => {
+    const segmentedIntent = {
+      ...baseIntent(),
+      version: 2 as const,
+      segmentKey: 'seg_direction_bound',
+      earningStart: '2026-08-01',
+      earningEnd: '2026-08-15',
+      staffTypePeriodId: 10,
+      staffType: 'volunteer',
+      legacyExtrapolation: false,
+      referenceIds: [9513],
+    };
+
+    expect(() => signCompensationSettlementIntent(
+      segmentedIntent as CompensationSettlementIntentInput,
+      { now: FIXED_NOW },
+    )).toThrow('direction must be payable for a version 2 intent.');
+    expect(() => signCompensationSettlementIntent(
+      { ...segmentedIntent, direction: 'receivable' } as unknown as CompensationSettlementIntentInput,
+      { now: FIXED_NOW },
+    )).toThrow('direction must be payable for a version 2 intent.');
   });
 
   it('rejects intents issued beyond the clock-skew allowance', () => {

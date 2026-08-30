@@ -72,6 +72,15 @@ export type PaySettlementSource = {
   sourceKey: string;
   label: string;
   componentId: number | null;
+  /** Stable identity for an effective-dated staff-type earning segment. */
+  segmentKey?: string | null;
+  earningStart?: string | null;
+  earningEnd?: string | null;
+  staffTypePeriodId?: number | string | null;
+  staffType?: string | null;
+  legacyExtrapolation?: boolean;
+  /** Exact source records, such as unpaid affiliate booking IDs, covered by the segment. */
+  referenceIds?: number[];
   category: string;
   amount: number;
   destination: PaySettlementDestination;

@@ -12,6 +12,8 @@ import {
 } from "sequelize";
 import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
 import Counter, { type CounterStatus } from "../models/Counter.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import CounterProduct from "../models/CounterProduct.js";
@@ -22,11 +24,10 @@ import AffiliatePayoutLog from "../models/AffiliatePayoutLog.js";
 import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
 import StaffPayoutLedger, {
   type StaffPayoutSettlementSnapshot,
-  type StaffPayoutSettlementSnapshotSource,
+  type StaffPayoutSettlementSnapshotV1,
 } from "../models/StaffPayoutLedger.js";
 import StaffPayoutReceipt from "../models/StaffPayoutReceipt.js";
 import StaffPayoutReceiptItem from "../models/StaffPayoutReceiptItem.js";
-import UserShiftRole from "../models/UserShiftRole.js";
 import ShiftAssignment from "../models/ShiftAssignment.js";
 import ShiftInstance from "../models/ShiftInstance.js";
 import ShiftRole from "../models/ShiftRole.js";
@@ -128,6 +129,41 @@ import {
   type CompensationSettlementDestination,
 } from "../services/compensationSettlementRoutingService.js";
 import { signCompensationSettlementIntent } from "../services/compensationSettlementIntentService.js";
+import {
+  getShiftRoleMembersForRange,
+  getStaffProfileTypePeriodsForRange,
+  getStaffTypeMembersForRange,
+  getUserTypeMembersForRange,
+} from "../services/staffEligibilityHistoryService.js";
+import {
+  allocateCompensationAmountAcrossDates,
+  allocateCompensationAmountByDateWeights,
+  buildCompensationEligibilityDateIndex,
+  enumerateInclusiveIsoDates,
+  mergeCompensationEarningBreakdown,
+  restrictCompensationEligibilityDateIndex,
+  scaleCompensationEarningBreakdown,
+  type CompensationEarningBreakdownEntry,
+} from "../services/compensationEarningDateService.js";
+import {
+  allocateMinorAcrossDates,
+  splitDatedEarningsAtCutoff,
+  splitDatedEarningsByStaffType,
+  splitDatedEarningsByStaffTypeAndRouting,
+  type DatedMinorAmount,
+  type StaffPayoutRoutingPartition,
+  type StaffTypeEligibilityPeriod,
+} from "../services/staffPayoutEarningSegmentationService.js";
+import { isStaffPayoutPeriodClosedInWarsaw } from "../services/staffPayoutPeriodService.js";
+import {
+  buildStaffPayoutSettlementSnapshotV2,
+  normalizeStaffPayoutSettlementSnapshot,
+  sortStaffPayoutSettlementSnapshotSources,
+  staffPayoutSettlementSnapshotsMatch,
+} from "../services/staffPayoutSettlementSnapshotService.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 type CommissionBreakdownEntry = {
   date: string;
@@ -244,6 +280,7 @@ type ComponentTotalEntry = {
   amount: number;
   baseDaysCount?: number;
   baseDays?: string[];
+  earningBreakdown?: CompensationEarningBreakdownEntry[];
   taskCompletionDailyBreakdown?: AssistantManagerSalaryDailyBreakdown[];
 };
 
@@ -251,6 +288,7 @@ type ComponentComputationResult = {
   amount: number;
   baseDaysCount?: number;
   baseDays?: string[];
+  earningBreakdown?: CompensationEarningBreakdownEntry[];
   taskCompletionDailyBreakdown?: AssistantManagerSalaryDailyBreakdown[];
 };
 
@@ -287,6 +325,7 @@ type PaidPayoutEntry = {
   label: string;
   componentId: number | null;
   sourceKey: string | null;
+  segmentKey: string | null;
   amount: number;
   currency: string;
   date: string;
@@ -308,6 +347,13 @@ type SettlementSourceSummary = {
   sourceKey: string;
   label: string;
   componentId: number | null;
+  segmentKey: string | null;
+  earningStart: string | null;
+  earningEnd: string | null;
+  staffTypePeriodId: number | null;
+  staffType: string | null;
+  legacyExtrapolation: boolean;
+  referenceIds: number[];
   category: string;
   amount: number;
   destination: CompensationSettlementDestination;
@@ -541,6 +587,7 @@ const MANUAL_ATTENDANCE_START = dayjs("2025-10-01");
 // attendance (booked minus inferred no-shows). Booking-level check-ins take over here.
 const PAYOUT_ATTENDANCE_START = dayjs("2026-02-26");
 const REVIEW_ARCHIVE_PAYOUT_START = dayjs("2026-07-01");
+const STAFF_TYPE_SEGMENTED_PAYOUT_START = "2026-08-01";
 const REVIEW_MINIMUM_THRESHOLD = 15;
 const isExcludedNoShowAddonName = (value?: string | null): boolean => {
   const normalized = value?.toLowerCase() ?? "";
@@ -561,17 +608,43 @@ const convertMinorUnitsToMajor = (value: unknown): number =>
   roundCurrencyValue(Number(value ?? 0) / 100);
 const convertMajorUnitsToMinor = (value: number): number => Math.round(value * 100);
 
-const sortStaffPayoutSettlementSnapshotSources = (
-  sources: StaffPayoutSettlementSnapshotSource[],
-): StaffPayoutSettlementSnapshotSource[] =>
-  [...sources].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
-
 const buildStaffPayoutSettlementSnapshot = (
   sources: SettlementSourceSummary[],
-): StaffPayoutSettlementSnapshot => ({
-  version: 1,
-  sources: sortStaffPayoutSettlementSnapshotSources(
-    sources.map((source) => ({
+  rangeStart: string,
+  rangeEnd: string,
+): StaffPayoutSettlementSnapshot => {
+  const isSegmented = sources.length > 0 && sources.every((source) => (
+    source.segmentKey !== null
+    && source.earningStart !== null
+    && source.earningEnd !== null
+    && source.staffTypePeriodId !== null
+    && source.staffType !== null
+  ));
+  if (isSegmented) {
+    return buildStaffPayoutSettlementSnapshotV2(
+      sources.map((source) => ({
+        sourceKey: source.sourceKey,
+        componentId: source.componentId,
+        category: source.category,
+        grossAmountMinor: convertMajorUnitsToMinor(source.amount),
+        destination: source.destination,
+        fundId: source.fundId,
+        ruleId: source.ruleId,
+        currency: source.currency,
+        segmentKey: source.segmentKey as string,
+        earningStart: source.earningStart as string,
+        earningEnd: source.earningEnd as string,
+        staffTypePeriodId: source.staffTypePeriodId as number,
+        staffType: source.staffType as string,
+        legacyExtrapolation: source.legacyExtrapolation,
+      })),
+      { rangeStart, rangeEnd },
+    );
+  }
+
+  return {
+    version: 1,
+    sources: sortStaffPayoutSettlementSnapshotSources(sources.map((source) => ({
       sourceKey: source.sourceKey,
       componentId: source.componentId,
       category: source.category,
@@ -580,65 +653,9 @@ const buildStaffPayoutSettlementSnapshot = (
       fundId: source.fundId,
       ruleId: source.ruleId,
       currency: source.currency,
-    })),
-  ),
-});
-
-const normalizeStaffPayoutSettlementSnapshot = (
-  value: unknown,
-): StaffPayoutSettlementSnapshot | null => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const snapshot = value as { version?: unknown; sources?: unknown };
-  if (snapshot.version !== 1 || !Array.isArray(snapshot.sources)) {
-    return null;
-  }
-  const normalizedSources: StaffPayoutSettlementSnapshotSource[] = [];
-  for (const rawSource of snapshot.sources) {
-    if (!rawSource || typeof rawSource !== "object" || Array.isArray(rawSource)) {
-      return null;
-    }
-    const source = rawSource as Record<string, unknown>;
-    const destination = source.destination;
-    const componentId = source.componentId;
-    const fundId = source.fundId;
-    const grossAmountMinor = Number(source.grossAmountMinor);
-    const ruleId = Number(source.ruleId);
-    if (
-      typeof source.sourceKey !== "string"
-      || typeof source.category !== "string"
-      || typeof source.currency !== "string"
-      || !Number.isSafeInteger(grossAmountMinor)
-      || !Number.isSafeInteger(ruleId)
-      || ruleId <= 0
-      || (componentId !== null && (!Number.isSafeInteger(Number(componentId)) || Number(componentId) <= 0))
-      || (fundId !== null && (!Number.isSafeInteger(Number(fundId)) || Number(fundId) <= 0))
-      || (destination !== "staff_vendor" && destination !== "volunteer_fund" && destination !== "excluded")
-    ) {
-      return null;
-    }
-    normalizedSources.push({
-      sourceKey: source.sourceKey,
-      componentId: componentId === null ? null : Number(componentId),
-      category: source.category,
-      grossAmountMinor,
-      destination,
-      fundId: fundId === null ? null : Number(fundId),
-      ruleId,
-      currency: source.currency.trim().toUpperCase(),
-    });
-  }
-  return {
-    version: 1,
-    sources: sortStaffPayoutSettlementSnapshotSources(normalizedSources),
-  };
+    }))),
+  } satisfies StaffPayoutSettlementSnapshotV1;
 };
-
-const staffPayoutSettlementSnapshotsMatch = (
-  left: StaffPayoutSettlementSnapshot,
-  right: StaffPayoutSettlementSnapshot,
-): boolean => JSON.stringify(left) === JSON.stringify(right);
 
 type DialectQuoter = {
   quoteTable: (value: string | { tableName: string; schema?: string }) => string;
@@ -2267,7 +2284,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       summary.baseOverrideApproved = baseOverrideUsers.has(userId);
     });
 
-    const assignmentTargets = await resolveAssignmentTargets(commissionDataByUser, typedComponents, end);
+    const {
+      targets: assignmentTargets,
+      eligibilityDates: assignmentEligibilityDates,
+    } = await resolveAssignmentTargets(commissionDataByUser, typedComponents, start, end);
     commissionDataByUser.forEach((summary) => {
       summary.platformGuestTotals = platformGuestTotals;
     });
@@ -2315,6 +2335,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       start,
       end,
       assignmentTargets,
+      assignmentEligibilityDates,
       taskScoreContext,
       nightReportStats,
       productBucketsByUser,
@@ -2603,6 +2624,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
                 : meta?.affiliatePayout === true || meta?.source === "affiliate-payout"
                   ? "promotion_sales"
                   : null;
+          const segmentKey =
+            typeof meta?.segmentKey === "string" && meta.segmentKey.startsWith("seg_")
+              ? meta.segmentKey
+              : null;
           const date =
             typeof linkedTransaction?.date === "string" && linkedTransaction.date.trim().length > 0
               ? linkedTransaction.date
@@ -2619,6 +2644,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             label,
             componentId: componentId && componentId > 0 ? componentId : null,
             sourceKey,
+            segmentKey,
             amount: roundCurrencyValue(amount),
             currency,
             date,
@@ -2809,9 +2835,44 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
     const rangeStartIso = start.format("YYYY-MM-DD");
     const rangeEndIso = end.format("YYYY-MM-DD");
-    const settlementRouter = await loadCompensationSettlementRouter({
-      effectiveDate: rangeEndIso,
+    const usesSegmentedStaffTypeRouting = rangeEndIso >= STAFF_TYPE_SEGMENTED_PAYOUT_START;
+    const routingEvaluationDate = (date: string): string => `${date.slice(0, 7)}-01`;
+    const rangeEndRoutingDate = routingEvaluationDate(rangeEndIso);
+    const rangeEndSettlementRouter = await loadCompensationSettlementRouter({
+      effectiveDate: rangeEndRoutingDate,
     });
+    const settlementRouterByDate = new Map([[rangeEndRoutingDate, rangeEndSettlementRouter]]);
+    const getSettlementRouterForDate = async (effectiveDate: string) => {
+      const evaluationDate = routingEvaluationDate(effectiveDate);
+      const existing = settlementRouterByDate.get(evaluationDate);
+      if (existing) {
+        return existing;
+      }
+      const loaded = await loadCompensationSettlementRouter({ effectiveDate: evaluationDate });
+      settlementRouterByDate.set(evaluationDate, loaded);
+      return loaded;
+    };
+    const staffTypePeriodsByUserId = new Map<number, StaffTypeEligibilityPeriod[]>();
+    if (usesSegmentedStaffTypeRouting) {
+      const periodRows = await getStaffProfileTypePeriodsForRange({
+        userIds: Array.from(commissionDataByUser.keys()),
+        startDate: rangeStartIso < STAFF_TYPE_SEGMENTED_PAYOUT_START
+          ? STAFF_TYPE_SEGMENTED_PAYOUT_START
+          : rangeStartIso,
+        endDate: rangeEndIso,
+      });
+      periodRows.forEach((period) => {
+        const periods = staffTypePeriodsByUserId.get(period.userId) ?? [];
+        periods.push({
+          id: Number(period.id),
+          staffType: period.staffType,
+          effectiveStart: period.effectiveStart,
+          effectiveEnd: period.effectiveEnd,
+          legacyExtrapolation: period.metadata?.legacyExtrapolation === true,
+        });
+        staffTypePeriodsByUserId.set(period.userId, periods);
+      });
+    }
     const settlementFundRows = await VolunteerFund.findAll({
       attributes: ["id", "name", "currency", "isActive"],
     });
@@ -2829,6 +2890,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         "attributedStaffUserId",
         "compensationComponentId",
         "sourceKind",
+        "sourceReference",
       ],
       where: {
         entryType: "allocation",
@@ -2850,11 +2912,12 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       userId: number,
       sourceKey: string,
       componentId: number | null,
-    ) => `${userId}:${sourceKey}:${componentId ?? 0}`;
+      segmentKey: string | null,
+    ) => `${userId}:${sourceKey}:${componentId ?? 0}:${segmentKey ?? "legacy"}`;
     const allocatedMinorBySourceAndFund = new Map<string, Map<number, number>>();
     const allocationIdentityByKey = new Map<
       string,
-      { userId: number; sourceKey: string; componentId: number | null }
+      { userId: number; sourceKey: string; componentId: number | null; segmentKey: string | null }
     >();
     const matchedSettlementAllocationKeys = new Set<string>();
     const allocationById = new Map(allocationRows.map((entry) => [entry.id, entry] as const));
@@ -2884,11 +2947,13 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         entry.attributedStaffUserId,
         entry.sourceKind,
         entry.compensationComponentId,
+        entry.sourceReference?.startsWith("seg_") ? entry.sourceReference : null,
       );
       allocationIdentityByKey.set(key, {
         userId: entry.attributedStaffUserId,
         sourceKey: entry.sourceKind,
         componentId: entry.compensationComponentId,
+        segmentKey: entry.sourceReference?.startsWith("seg_") ? entry.sourceReference : null,
       });
       addNetFundAllocation(key, entry.fundId, Number(entry.amountMinor ?? 0));
     });
@@ -2904,47 +2969,253 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         original.attributedStaffUserId,
         original.sourceKind,
         original.compensationComponentId,
+        original.sourceReference?.startsWith("seg_") ? original.sourceReference : null,
       );
       allocationIdentityByKey.set(key, {
         userId: original.attributedStaffUserId,
         sourceKey: original.sourceKind,
         componentId: original.compensationComponentId,
+        segmentKey: original.sourceReference?.startsWith("seg_") ? original.sourceReference : null,
       });
       addNetFundAllocation(key, original.fundId, Number(reversal.amountMinor ?? 0));
     });
 
-    commissionDataByUser.forEach((summary) => {
+    const fallbackSettlementDates = enumerateInclusiveIsoDates(rangeStartIso, rangeEndIso);
+    const buildExactDatedMinorEarnings = (
+      totalAmount: number,
+      rawEntries: Array<{ date: string; amount: number }>,
+    ): DatedMinorAmount[] => {
+      const totalMinor = convertMajorUnitsToMinor(totalAmount);
+      const byDate = new Map<string, number>();
+      rawEntries.forEach((entry) => {
+        if (
+          /^\d{4}-\d{2}-\d{2}$/.test(entry.date)
+          && entry.date >= rangeStartIso
+          && entry.date <= rangeEndIso
+        ) {
+          byDate.set(
+            entry.date,
+            (byDate.get(entry.date) ?? 0) + convertMajorUnitsToMinor(entry.amount),
+          );
+        }
+      });
+      if (byDate.size === 0) {
+        return allocateMinorAcrossDates(totalMinor, fallbackSettlementDates);
+      }
+      const dated = Array.from(byDate.entries())
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([date, amountMinor]) => ({ date, amountMinor }));
+      const difference = totalMinor - dated.reduce((sum, entry) => sum + entry.amountMinor, 0);
+      dated[dated.length - 1].amountMinor += difference;
+      return dated;
+    };
+    const affiliateBookingEarningDate = (booking: StaffAffiliateSaleBooking): string | null => {
+      if (!booking.sourceReceivedAt) {
+        return null;
+      }
+      const parsed = dayjs(booking.sourceReceivedAt);
+      return parsed.isValid() ? parsed.tz("Europe/Warsaw").format("YYYY-MM-DD") : null;
+    };
+
+    for (const summary of commissionDataByUser.values()) {
       const grossBucketTotals = { ...summary.bucketTotals };
       const personalBucketTotals: Record<string, number> = {};
       const fundBucketTotals: Record<string, number> = {};
       const sources: SettlementSourceSummary[] = [];
 
-      const addSettlementSource = (input: {
+      const addSettlementSource = async (input: {
         sourceKey: string;
         label: string;
         componentId?: number | null;
         category: string;
         amount: number;
-      }): void => {
-        const amount = roundCurrencyValue(input.amount);
+        earnings: DatedMinorAmount[];
+        references?: Array<{ id: number; date: string }>;
+      }): Promise<void> => {
+        const sourceAmount = roundCurrencyValue(input.amount);
         const componentId = input.componentId ?? null;
-        const allocationKey = settlementSourceAllocationKey(
+        if (!sourceAmount) {
+          return;
+        }
+        let settlementSegments: Array<{
+          segmentKey: string | null;
+          earningStart: string | null;
+          earningEnd: string | null;
+          coverageStart: string;
+          coverageEnd: string;
+          staffTypePeriodId: number | null;
+          staffType: string | null;
+          legacyExtrapolation: boolean;
+          grossAmountMinor: number;
+          routing: StaffPayoutRoutingPartition | null;
+        }>;
+        try {
+          const cutoffPartition = splitDatedEarningsAtCutoff({
+            earnings: input.earnings,
+            cutoffDate: STAFF_TYPE_SEGMENTED_PAYOUT_START,
+          });
+          settlementSegments = [];
+
+          const legacyEarnings = cutoffPartition.before.filter((entry) => entry.amountMinor !== 0);
+          if (legacyEarnings.length > 0) {
+            const legacyDates = legacyEarnings.map((entry) => entry.date).sort();
+            const legacyGrossAmountMinor = legacyEarnings.reduce(
+              (sum, entry) => sum + entry.amountMinor,
+              0,
+            );
+            if (legacyGrossAmountMinor !== 0) {
+              settlementSegments.push({
+                segmentKey: null,
+                earningStart: null,
+                earningEnd: null,
+                coverageStart: legacyDates[0],
+                coverageEnd: legacyDates[legacyDates.length - 1],
+                staffTypePeriodId: null,
+                staffType: summary.staffType,
+                legacyExtrapolation: false,
+                grossAmountMinor: legacyGrossAmountMinor,
+                routing: null,
+              });
+            }
+          }
+
+          const effectiveDatedEarnings = cutoffPartition.onOrAfter.filter(
+            (entry) => entry.amountMinor !== 0,
+          );
+          if (usesSegmentedStaffTypeRouting && effectiveDatedEarnings.length > 0) {
+            const periods = staffTypePeriodsByUserId.get(summary.userId) ?? [];
+            // Resolve the staff type first, then resolve the routing rule valid
+            // for every earning date. The routed split below groups those dates
+            // by immutable staff-period + calendar-month + rule identity.
+            const staffTypeSegments = splitDatedEarningsByStaffType({
+              sourceKey: input.sourceKey,
+              componentId,
+              earnings: effectiveDatedEarnings,
+              periods,
+            });
+            const routingByDate = new Map<string, StaffPayoutRoutingPartition>();
+            for (const earning of effectiveDatedEarnings) {
+              const staffTypeSegment = staffTypeSegments.find((segment) => (
+                earning.date >= segment.earningStart && earning.date <= segment.earningEnd
+              ));
+              if (!staffTypeSegment) {
+                throw new Error(`No staff-type eligibility period covers ${earning.date}.`);
+              }
+              const settlementRouter = await getSettlementRouterForDate(earning.date);
+              const route = settlementRouter.resolve({
+                userId: summary.userId,
+                staffType: staffTypeSegment.staffType,
+                ...(componentId
+                  ? { componentId, componentCategory: input.category }
+                  : { systemSource: input.sourceKey }),
+              });
+              routingByDate.set(earning.date, {
+                ruleId: route.ruleId,
+                destination: route.destination,
+                fundId: route.fundId,
+              });
+            }
+            settlementSegments.push(
+              ...splitDatedEarningsByStaffTypeAndRouting({
+                sourceKey: input.sourceKey,
+                componentId,
+                earnings: effectiveDatedEarnings,
+                periods,
+                routingByDate,
+              })
+                .filter((segment) => segment.grossAmountMinor !== 0)
+                .map((segment) => ({
+                  segmentKey: segment.segmentKey,
+                  earningStart: segment.earningStart,
+                  earningEnd: segment.earningEnd,
+                  coverageStart: segment.earningStart,
+                  coverageEnd: segment.earningEnd,
+                  staffTypePeriodId: Number(segment.staffTypePeriodId),
+                  staffType: segment.staffType,
+                  legacyExtrapolation: segment.legacyExtrapolation,
+                  grossAmountMinor: segment.grossAmountMinor,
+                  routing: segment.routing,
+                })),
+            );
+          }
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "Eligibility history is incomplete.";
+          throw new HttpError(
+            409,
+            `${input.label} for ${summary.fullName} cannot be routed by earning date. ${detail}`,
+          );
+        }
+        if (settlementSegments.length === 0) {
+          throw new HttpError(
+            409,
+            `${input.label} for ${summary.fullName} has money but no earning-date segment.`,
+          );
+        }
+        const segmentedGrossAmountMinor = settlementSegments.reduce(
+          (sum, segment) => sum + segment.grossAmountMinor,
+          0,
+        );
+        if (segmentedGrossAmountMinor !== convertMajorUnitsToMinor(sourceAmount)) {
+          throw new HttpError(
+            409,
+            `${input.label} for ${summary.fullName} could not preserve its exact earning total.`,
+          );
+        }
+        const legacyAllocationKey = settlementSourceAllocationKey(
           summary.userId,
           input.sourceKey,
           componentId,
+          null,
         );
-        const nonzeroAllocationsByFund = Array.from(
-          allocatedMinorBySourceAndFund.get(allocationKey)?.entries() ?? [],
+        const legacyAllocationsByFund = Array.from(
+          allocatedMinorBySourceAndFund.get(legacyAllocationKey)?.entries() ?? [],
         ).filter(([, amountMinor]) => amountMinor !== 0);
-        if (!amount) {
-          if (nonzeroAllocationsByFund.length > 0) {
-            throw new HttpError(
-              409,
-              `${input.label} has a live Volunteer Fund allocation but its calculated amount is now zero. Reconcile or reverse that allocation before continuing.`,
-            );
-          }
-          return;
+        if (usesSegmentedStaffTypeRouting && settlementSegments.length > 1 && legacyAllocationsByFund.length > 0) {
+          throw new HttpError(
+            409,
+            `${input.label} has a legacy Volunteer Fund allocation spanning more than one staff type. Reconcile it to the earning-date segments before continuing.`,
+          );
         }
+        const legacyPaidEntries = (summary.paidEntries ?? []).filter((entry) => (
+          entry.currency === resolvePayoutCurrency()
+          && entry.segmentKey === null
+          && (
+            componentId
+              ? entry.componentId === componentId
+              : entry.sourceKey === input.sourceKey
+          )
+        ));
+        if (
+          usesSegmentedStaffTypeRouting
+          && input.sourceKey !== "promotion_sales"
+          && settlementSegments.length > 1
+          && legacyPaidEntries.some((entry) => entry.amount !== 0)
+        ) {
+          throw new HttpError(
+            409,
+            `${input.label} has a legacy staff payment spanning more than one staff type. Reconcile it to the earning-date segments before continuing.`,
+          );
+        }
+
+        for (const settlementSegment of settlementSegments) {
+        const amount = convertMinorUnitsToMajor(settlementSegment.grossAmountMinor);
+        const exactAllocationKey = settlementSourceAllocationKey(
+          summary.userId,
+          input.sourceKey,
+          componentId,
+          settlementSegment.segmentKey,
+        );
+        const exactAllocationsByFund = Array.from(
+          allocatedMinorBySourceAndFund.get(exactAllocationKey)?.entries() ?? [],
+        ).filter(([, amountMinor]) => amountMinor !== 0);
+        const usesLegacyAllocation = settlementSegment.segmentKey !== null
+          && settlementSegments.length === 1
+          && exactAllocationsByFund.length === 0
+          && legacyAllocationsByFund.length > 0;
+        const allocationKey = usesLegacyAllocation ? legacyAllocationKey : exactAllocationKey;
+        const nonzeroAllocationsByFund = usesLegacyAllocation
+          ? legacyAllocationsByFund
+          : exactAllocationsByFund;
         matchedSettlementAllocationKeys.add(allocationKey);
         if (nonzeroAllocationsByFund.some(([, amountMinor]) => amountMinor < 0)) {
           throw new HttpError(
@@ -2952,9 +3223,11 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             `${input.label} has an invalid negative Volunteer Fund balance. Reconcile that allocation before continuing.`,
           );
         }
-        const route = settlementRouter.resolve({
+        const route = settlementSegment.routing ?? (
+          await getSettlementRouterForDate(settlementSegment.coverageEnd)
+        ).resolve({
           userId: summary.userId,
-          staffType: summary.staffType,
+          staffType: settlementSegment.staffType,
           ...(componentId
             ? { componentId, componentCategory: input.category }
             : { systemSource: input.sourceKey }),
@@ -2988,8 +3261,20 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             `${input.label} has already been allocated to a Volunteer Fund above its recalculated takeover share. Reverse the excess allocation before applying the takeover salary split.`,
           );
         }
+        const segmentIncludesDate = (date: string | null): boolean => Boolean(
+          date
+          && date >= settlementSegment.coverageStart
+          && date <= settlementSegment.coverageEnd
+        );
         const personallySettledAmount = input.sourceKey === "promotion_sales"
-          ? roundCurrencyValue(summary.affiliateSales.commissionPaidTotal)
+          ? roundCurrencyValue(
+              summary.affiliateSales.bookings
+                .filter((booking) => (
+                  booking.isCommissionPaid
+                  && segmentIncludesDate(affiliateBookingEarningDate(booking))
+                ))
+                .reduce((sum, booking) => sum + booking.affiliateCommissionAmount, 0),
+            )
           : roundCurrencyValue(
               (summary.paidEntries ?? [])
                 .filter((entry) => (
@@ -2998,6 +3283,14 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
                     componentId
                       ? entry.componentId === componentId
                       : entry.sourceKey === input.sourceKey
+                  )
+                  && (
+                    entry.segmentKey === settlementSegment.segmentKey
+                    || (
+                      settlementSegment.segmentKey !== null
+                      && settlementSegments.length === 1
+                      && entry.segmentKey === null
+                    )
                   )
                 ))
                 .reduce((sum, entry) => sum + entry.amount, 0),
@@ -3070,6 +3363,16 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           sourceKey: input.sourceKey,
           label: input.label,
           componentId,
+          segmentKey: settlementSegment.segmentKey,
+          earningStart: settlementSegment.earningStart,
+          earningEnd: settlementSegment.earningEnd,
+          staffTypePeriodId: settlementSegment.staffTypePeriodId,
+          staffType: settlementSegment.staffType,
+          legacyExtrapolation: settlementSegment.legacyExtrapolation,
+          referenceIds: (input.references ?? [])
+            .filter((reference) => segmentIncludesDate(reference.date))
+            .map((reference) => reference.id)
+            .sort((left, right) => left - right),
           category: input.category,
           amount,
           destination,
@@ -3092,35 +3395,67 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         } else if (destination === "volunteer_fund") {
           fundBucketTotals[input.category] = (fundBucketTotals[input.category] ?? 0) + amount;
         }
+        }
       };
 
-      addSettlementSource({
+      await addSettlementSource({
         sourceKey: "guide_commission",
         label: "Guide commission",
         category: "commission",
         amount: summary.totalCommission,
+        earnings: buildExactDatedMinorEarnings(
+          summary.totalCommission,
+          summary.breakdown.map((entry) => ({ date: entry.date, amount: entry.commission })),
+        ),
       });
-      summary.componentTotals.forEach((component) => {
-        addSettlementSource({
+      for (const component of summary.componentTotals) {
+        await addSettlementSource({
           sourceKey: "compensation_component",
           label: component.name,
           componentId: component.componentId,
           category: component.category,
           amount: component.amount,
+          earnings: buildExactDatedMinorEarnings(
+            component.amount,
+            (component.earningBreakdown ?? []).map((entry) => ({
+              date: entry.date,
+              amount: entry.amount,
+            })),
+          ),
         });
-      });
-      addSettlementSource({
+      }
+      const promotionBookingsWithDates = summary.affiliateSales.bookings
+        .map((booking) => ({ booking, date: affiliateBookingEarningDate(booking) }))
+        .filter((entry): entry is { booking: StaffAffiliateSaleBooking; date: string } => Boolean(entry.date));
+      await addSettlementSource({
         sourceKey: "promotion_sales",
         label: "Promotion Sales",
         category: "affiliate_commission",
         amount: summary.affiliateSales.commissionTotal,
+        earnings: buildExactDatedMinorEarnings(
+          summary.affiliateSales.commissionTotal,
+          promotionBookingsWithDates.map(({ booking, date }) => ({
+            date,
+            amount: booking.affiliateCommissionAmount,
+          })),
+        ),
+        references: promotionBookingsWithDates
+          .filter(({ booking }) => !booking.isCommissionPaid && booking.affiliateCommissionAmount > 0)
+          .map(({ booking, date }) => ({ id: booking.id, date })),
       });
-      addSettlementSource({
+      await addSettlementSource({
         sourceKey: "reimbursement",
         label: "Reimbursements",
         category: "reimbursement",
         amount:
           summary.reimbursements.awaitingAmount + summary.reimbursements.reimbursedAmount,
+        earnings: buildExactDatedMinorEarnings(
+          summary.reimbursements.awaitingAmount + summary.reimbursements.reimbursedAmount,
+          summary.reimbursements.entries.map((entry) => ({
+            date: entry.date,
+            amount: entry.amount,
+          })),
+        ),
       });
 
       // Deductions are signed compensation sources but the fund ledger records
@@ -3168,6 +3503,16 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
               outstandingAmountMinor: Math.round(source.outstandingAmount * 100),
               ruleId: source.ruleId,
               currency: source.currency,
+              ...(source.segmentKey ? {
+                direction: "payable",
+                segmentKey: source.segmentKey,
+                earningStart: source.earningStart as string,
+                earningEnd: source.earningEnd as string,
+                staffTypePeriodId: source.staffTypePeriodId as number,
+                staffType: source.staffType as string,
+                legacyExtrapolation: source.legacyExtrapolation,
+                referenceIds: source.referenceIds,
+              } : {}),
             });
           }
         });
@@ -3177,9 +3522,17 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       // Distribute only the net remaining amount across positive sources so
       // deductions cannot be bypassed by submitting their gross rows. Staff
       // reimbursements retain their separate transaction-ID validation path.
-      const personalSources = sources.filter(
-        (source) => source.destination === "staff_vendor" && source.sourceKey !== "reimbursement",
-      );
+      const personalSources = sources
+        .filter(
+          (source) => source.destination === "staff_vendor" && source.sourceKey !== "reimbursement",
+        )
+        // Promotion Sales are tied to immutable booking IDs and their payout
+        // log must equal those bookings. Apply any cross-source deduction to a
+        // flexible compensation line before reducing this evidence-bound row.
+        .sort((left, right) => (
+          Number(right.sourceKey === "promotion_sales")
+          - Number(left.sourceKey === "promotion_sales")
+        ));
       const personalGross = roundCurrencyValue(
         personalSources.reduce((sum, source) => sum + source.amount, 0),
       );
@@ -3213,6 +3566,16 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             outstandingAmountMinor: Math.round(source.outstandingAmount * 100),
             ruleId: source.ruleId,
             currency: source.currency,
+            ...(source.segmentKey ? {
+              direction: "payable",
+              segmentKey: source.segmentKey,
+              earningStart: source.earningStart as string,
+              earningEnd: source.earningEnd as string,
+              staffTypePeriodId: source.staffTypePeriodId as number,
+              staffType: source.staffType as string,
+              legacyExtrapolation: source.legacyExtrapolation,
+              referenceIds: source.referenceIds,
+            } : {}),
           });
         }
       });
@@ -3262,7 +3625,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       summary.excludedSettlementTotal = roundCurrencyValue(excludedTotal);
       summary.settlementSources = sources;
       summary.totalPayout = summary.personalPayableTotal;
-    });
+    }
 
     const unmatchedAllocation = Array.from(allocatedMinorBySourceAndFund.entries()).find(
       ([allocationKey, allocationsByFund]) => (
@@ -3458,7 +3821,8 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       };
     };
 
-    const isClosedLedgerPeriod = isLedgerEligible && end.isBefore(dayjs().startOf("month"), "day");
+    const isClosedLedgerPeriod = isLedgerEligible
+      && isStaffPayoutPeriodClosedInWarsaw(rangeEndIso);
     const settlementSnapshotForPersistenceByUserId = new Map<
       number,
       StaffPayoutSettlementSnapshot
@@ -3496,6 +3860,8 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       const exactLedger = exactLedgerByUserId.get(entry.userId) ?? null;
       const currentSettlementSnapshot = buildStaffPayoutSettlementSnapshot(
         entry.settlementSources,
+        rangeStartIso,
+        rangeEndIso,
       );
       const canRefreshClosedSnapshot = Boolean(
         isClosedLedgerPeriod
@@ -3521,7 +3887,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           );
         } else {
           const rawStoredSnapshot = exactLedger.settlementSnapshot;
-          const storedSnapshot = normalizeStaffPayoutSettlementSnapshot(rawStoredSnapshot);
+          const storedSnapshot = normalizeStaffPayoutSettlementSnapshot(rawStoredSnapshot, {
+            rangeStart: rangeStartIso,
+            rangeEnd: rangeEndIso,
+          });
           const storedPersonalDueMinor = storedSnapshot
             ? storedSnapshot.sources
                 .filter((source) => source.destination === "staff_vendor")
@@ -3538,7 +3907,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             );
           } else if (
             !storedSnapshot
-            || !staffPayoutSettlementSnapshotsMatch(storedSnapshot, currentSettlementSnapshot)
+            || !staffPayoutSettlementSnapshotsMatch(storedSnapshot, currentSettlementSnapshot, {
+              rangeStart: rangeStartIso,
+              rangeEnd: rangeEndIso,
+            })
             || storedPersonalDueMinor !== exactLedger.dueAmountMinor
           ) {
             settlementReconciliationRequired = true;
@@ -6432,6 +6804,12 @@ const isAssignmentEffectiveForRange = (
 };
 
 type AssignmentTargetMap = Map<number, number[]>;
+type AssignmentEligibilityDateMap = Map<number, Map<number, Set<string>>>;
+
+type DatedEligibilityTarget = {
+  userIds: number[];
+  datesByUserId: Map<number, Set<string>>;
+};
 
 type TaskLogStatusBucket = {
   total: number;
@@ -6500,10 +6878,29 @@ const assignmentAppliesToUser = (
   if (targetUserIds && targetUserIds.includes(userId)) {
     return true;
   }
-  if (assignment.targetScope === "user" && assignment.userId) {
-    return assignment.userId === userId;
-  }
   return false;
+};
+
+const resolveEarningBreakdownForAmount = (
+  amount: number,
+  earningBreakdown: CompensationEarningBreakdownEntry[] | undefined,
+  eligibleDates: ReadonlySet<string> | null,
+): CompensationEarningBreakdownEntry[] | undefined => {
+  if (!amount) {
+    return undefined;
+  }
+  const merged = mergeCompensationEarningBreakdown(earningBreakdown ?? []);
+  if (merged.length > 0) {
+    const mergedMinor = merged.reduce((sum, row) => sum + Math.round(row.amount * 100), 0);
+    const targetMinor = Math.round(amount * 100);
+    return mergedMinor === targetMinor
+      ? merged
+      : scaleCompensationEarningBreakdown(merged, amount);
+  }
+  if (eligibleDates && eligibleDates.size > 0) {
+    return allocateCompensationAmountAcrossDates(amount, eligibleDates);
+  }
+  return undefined;
 };
 
 const computeAssignmentAmount = (
@@ -6516,6 +6913,8 @@ const computeAssignmentAmount = (
   productBucketsByUser: ProductBucketLookup,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
+  eligibleDates: ReadonlySet<string> | null,
+  assignmentEligibilityDatesByUser: ReadonlyMap<number, ReadonlySet<string>> | null,
 ): ComponentComputationResult => {
   const reviewRequirement = resolveReviewTargetRequirement(component, assignment);
   const performanceTierSettings = resolvePerformanceTierSettings(component, assignment);
@@ -6526,6 +6925,7 @@ const computeAssignmentAmount = (
     baseDaysCount?: number,
     baseDays?: string[],
     taskCompletionDailyBreakdown?: AssistantManagerSalaryDailyBreakdown[],
+    earningBreakdown?: CompensationEarningBreakdownEntry[],
   ): ComponentComputationResult => {
     if (!amount) {
       return {
@@ -6535,11 +6935,22 @@ const computeAssignmentAmount = (
         taskCompletionDailyBreakdown,
       };
     }
+    const resolvedEarningBreakdown = resolveEarningBreakdownForAmount(
+      amount,
+      earningBreakdown,
+      eligibleDates,
+    );
     const hasOverride =
       component.category === "review" ? summary.reviewPaymentOverride : summary.incentiveOverride;
     if (reviewRequirement && totalEligibleReviews < reviewRequirement.minReviews) {
       if (hasOverride) {
-        return { amount, baseDaysCount, baseDays, taskCompletionDailyBreakdown };
+        return {
+          amount,
+          baseDaysCount,
+          baseDays,
+          taskCompletionDailyBreakdown,
+          earningBreakdown: resolvedEarningBreakdown,
+        };
       }
       recordLockedComponent(summary, component, amount, {
         type: "review_target",
@@ -6559,6 +6970,7 @@ const computeAssignmentAmount = (
         summary,
         taskScoreContext.byUser,
         performanceTierSettings,
+        eligibleDates,
       );
       const adjustedAmount = amount * outcome.multiplier;
 
@@ -6578,27 +6990,56 @@ const computeAssignmentAmount = (
         baseDaysCount,
         baseDays,
         taskCompletionDailyBreakdown,
+        earningBreakdown: resolveEarningBreakdownForAmount(
+          adjustedAmount,
+          resolvedEarningBreakdown,
+          eligibleDates,
+        ),
       };
     }
 
-    return { amount, baseDaysCount, baseDays, taskCompletionDailyBreakdown };
+    return {
+      amount,
+      baseDaysCount,
+      baseDays,
+      taskCompletionDailyBreakdown,
+      earningBreakdown: resolvedEarningBreakdown,
+    };
   };
 
   if (component.calculationMethod === "task_score") {
+    const taskScorePayout = computeTaskScorePayout(
+      component,
+      assignment,
+      summary,
+      taskScoreContext.byUser,
+      eligibleDates,
+    );
     return applyCompensationGates(
-      computeTaskScorePayout(component, assignment, summary, taskScoreContext.byUser),
+      taskScorePayout.amount,
+      undefined,
+      undefined,
+      undefined,
+      taskScorePayout.earningBreakdown,
     );
   }
   if (component.calculationMethod === "night_report") {
+    const nightReportPayout = computeNightReportIncentive(
+      component,
+      assignment,
+      summary,
+      nightReportStats,
+      nightReportBestCache,
+      productBucketsByUser,
+      eligibleDates,
+      assignmentEligibilityDatesByUser,
+    );
     return applyCompensationGates(
-      computeNightReportIncentive(
-        component,
-        assignment,
-        summary,
-        nightReportStats,
-        nightReportBestCache,
-        productBucketsByUser,
-      ),
+      nightReportPayout.amount,
+      undefined,
+      undefined,
+      undefined,
+      nightReportPayout.earningBreakdown,
     );
   }
 
@@ -6616,13 +7057,25 @@ const computeAssignmentAmount = (
 
   const monthlyBaseSettings = resolveMonthlyBaseSettings(component, assignment);
   if (component.calculationMethod === "flat" && monthlyBaseSettings?.mode === "calendar_days") {
-    const { amount: proratedAmount, creditedUnits, creditedDates } = computeCalendarDayBaseAmount(
+    const {
+      amount: proratedAmount,
+      creditedUnits,
+      creditedDates,
+      earningBreakdown,
+    } = computeCalendarDayBaseAmount(
       assignment,
       monthlyBaseSettings,
       rangeStart,
       rangeEnd,
+      eligibleDates,
     );
-    return applyCompensationGates(proratedAmount, creditedUnits, creditedDates);
+    return applyCompensationGates(
+      proratedAmount,
+      creditedUnits,
+      creditedDates,
+      undefined,
+      earningBreakdown,
+    );
   }
   if (component.calculationMethod === "per_unit" && monthlyBaseSettings?.mode === "shift_quota") {
     const {
@@ -6640,6 +7093,7 @@ const computeAssignmentAmount = (
       summary,
       rangeStart,
       rangeEnd,
+      eligibleDates,
     );
     let baseAmount = amount;
     let baseUnits = creditedUnits;
@@ -6668,6 +7122,10 @@ const computeAssignmentAmount = (
     }
     const dailyProration = monthlyBaseSettings.taskCompletionProration;
     let taskCompletionDailyBreakdown: AssistantManagerSalaryDailyBreakdown[] | undefined;
+    let earningBreakdown = eligibleDailyBase.map((day) => ({
+      date: day.date,
+      amount: day.baseAmount,
+    }));
     if (
       dailyProration?.enabled
       && dailyProration.effectiveStart
@@ -6706,12 +7164,17 @@ const computeAssignmentAmount = (
         (sum, day) => sum + day.payableAmount,
         0,
       );
+      earningBreakdown = [
+        ...unchangedDailyBase.map((day) => ({ date: day.date, amount: day.baseAmount })),
+        ...calculatedBreakdown.map((day) => ({ date: day.date, amount: day.payableAmount })),
+      ];
     }
     return applyCompensationGates(
       baseAmount,
       baseUnits,
       baseDates,
       taskCompletionDailyBreakdown,
+      earningBreakdown,
     );
   }
 
@@ -6730,12 +7193,32 @@ const computeAssignmentAmount = (
   return applyCompensationGates(total);
 };
 
+const resolveAssignmentEligibleDatesForUser = (
+  assignment: CompensationComponentAssignment,
+  userId: number,
+  rangeStart: dayjs.Dayjs,
+  rangeEnd: dayjs.Dayjs,
+  assignmentEligibilityDates: AssignmentEligibilityDateMap,
+): ReadonlySet<string> | null => {
+  if (assignment.targetScope !== "global") {
+    return assignmentEligibilityDates.get(assignment.id)?.get(userId) ?? null;
+  }
+  const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
+  return overlap
+    ? new Set(enumerateInclusiveIsoDates(
+        overlap.start.format("YYYY-MM-DD"),
+        overlap.end.format("YYYY-MM-DD"),
+      ))
+    : null;
+};
+
 const applyCompensationComponents = (
   summaries: Map<number, CommissionSummary>,
   components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
   assignmentTargets: AssignmentTargetMap,
+  assignmentEligibilityDates: AssignmentEligibilityDateMap,
   taskScoreContext: TaskScoreContext,
   nightReportStats: NightReportStatsMap,
   productBucketsByUser: ProductBucketLookup,
@@ -6764,6 +7247,19 @@ const applyCompensationComponents = (
           ) {
             return acc;
           }
+          const eligibleDates = resolveAssignmentEligibleDatesForUser(
+            assignment,
+            summary.userId,
+            rangeStart,
+            rangeEnd,
+            assignmentEligibilityDates,
+          );
+          if (!eligibleDates || eligibleDates.size === 0) {
+            return acc;
+          }
+          const eligibilityDatesByUser = assignment.targetScope === "global"
+            ? null
+            : assignmentEligibilityDates.get(assignment.id) ?? null;
           const computation = computeAssignmentAmount(
             component,
             assignment,
@@ -6774,6 +7270,8 @@ const applyCompensationComponents = (
             productBucketsByUser,
             rangeStart,
             rangeEnd,
+            eligibleDates,
+            eligibilityDatesByUser,
           );
           acc.amount += computation.amount;
           if (computation.baseDaysCount !== undefined) {
@@ -6790,6 +7288,10 @@ const applyCompensationComponents = (
             acc.taskCompletionDailyBreakdown = acc.taskCompletionDailyBreakdown ?? [];
             acc.taskCompletionDailyBreakdown.push(...computation.taskCompletionDailyBreakdown);
           }
+          if (computation.earningBreakdown && computation.earningBreakdown.length > 0) {
+            acc.earningBreakdown = acc.earningBreakdown ?? [];
+            acc.earningBreakdown.push(...computation.earningBreakdown);
+          }
           return acc;
         },
         { amount: 0 },
@@ -6801,6 +7303,11 @@ const applyCompensationComponents = (
       const hasTaskCompletionDailyBreakdown = Boolean(
         aggregate.taskCompletionDailyBreakdown
         && aggregate.taskCompletionDailyBreakdown.length > 0,
+      );
+      const earningBreakdown = resolveEarningBreakdownForAmount(
+        aggregate.amount,
+        aggregate.earningBreakdown,
+        null,
       );
 
       if (aggregate.amount !== 0 || hasBaseDayMetadata || hasTaskCompletionDailyBreakdown) {
@@ -6818,6 +7325,9 @@ const applyCompensationComponents = (
           ...(aggregate.baseDaysCount !== undefined ? { baseDaysCount: aggregate.baseDaysCount } : {}),
           ...(aggregate.baseDays && aggregate.baseDays.length > 0
             ? { baseDays: [...aggregate.baseDays].sort((a, b) => a.localeCompare(b)) }
+            : {}),
+          ...(earningBreakdown && earningBreakdown.length > 0
+            ? { earningBreakdown }
             : {}),
           ...(taskCompletionDailyBreakdown && taskCompletionDailyBreakdown.length > 0
             ? { taskCompletionDailyBreakdown }
@@ -6946,6 +7456,15 @@ const applyAssistantManagerSalaryTakeoverSplits = async (
       plan.sourceComponent.amount - transferredAmount,
     );
     plan.sourceComponent.taskCompletionDailyBreakdown = plan.sourceRows;
+    if (plan.sourceComponent.earningBreakdown) {
+      plan.sourceComponent.earningBreakdown = mergeCompensationEarningBreakdown([
+        ...plan.sourceComponent.earningBreakdown,
+        ...plan.credits.map((credit) => ({
+          date: credit.taskOwnerRow.date,
+          amount: -credit.amount,
+        })),
+      ]);
+    }
     plan.sourceSummary.bucketTotals[plan.sourceComponent.category] = roundCurrencyValue(
       (plan.sourceSummary.bucketTotals[plan.sourceComponent.category] ?? 0)
       - transferredAmount,
@@ -6978,6 +7497,10 @@ const applyAssistantManagerSalaryTakeoverSplits = async (
       ...(taskOwnerComponent.taskCompletionDailyBreakdown ?? []),
       credit.taskOwnerRow,
     ].sort((left, right) => left.date.localeCompare(right.date));
+    taskOwnerComponent.earningBreakdown = mergeCompensationEarningBreakdown([
+      ...(taskOwnerComponent.earningBreakdown ?? []),
+      { date: credit.taskOwnerRow.date, amount: credit.amount },
+    ]);
     taskOwnerSummary.bucketTotals[credit.sourceComponent.category] = roundCurrencyValue(
       (taskOwnerSummary.bucketTotals[credit.sourceComponent.category] ?? 0) + credit.amount,
     );
@@ -7084,6 +7607,48 @@ const selectTaskBucket = (
     return fallbackToOverall ? summary.overall : aggregate;
   }
   return aggregate;
+};
+
+const mergeTaskStatusBucket = (
+  target: TaskLogStatusBucket,
+  source: TaskLogStatusBucket,
+): void => {
+  target.total += source.total;
+  target.completed += source.completed;
+  target.waived += source.waived;
+  target.missed += source.missed;
+  target.pending += source.pending;
+  target.totalPoints += source.totalPoints;
+  target.completedPoints += source.completedPoints;
+  target.waivedPoints += source.waivedPoints;
+  target.missedPoints += source.missedPoints;
+  target.pendingPoints += source.pendingPoints;
+};
+
+const selectTaskBucketForDates = (
+  summary: TaskLogSummary | undefined,
+  templateIds: number[] | undefined,
+  eligibleDates: ReadonlySet<string> | null,
+): TaskLogStatusBucket | null => {
+  if (!summary || !eligibleDates) {
+    return selectTaskBucket(summary, templateIds);
+  }
+  const filtered: TaskLogDaySummary = {
+    overall: createStatusBucket(),
+    byTemplate: new Map<number, TaskLogStatusBucket>(),
+  };
+  summary.byDate.forEach((daySummary, date) => {
+    if (!eligibleDates.has(date)) {
+      return;
+    }
+    mergeTaskStatusBucket(filtered.overall, daySummary.overall);
+    daySummary.byTemplate.forEach((bucket, templateId) => {
+      const target = filtered.byTemplate.get(templateId) ?? createStatusBucket();
+      mergeTaskStatusBucket(target, bucket);
+      filtered.byTemplate.set(templateId, target);
+    });
+  });
+  return selectTaskBucket(filtered, templateIds);
 };
 
 const taskProgressFromBucket = (
@@ -7809,8 +8374,9 @@ const hasPerformanceTierConfig = (config: unknown): boolean => {
 const resolveTaskProgressByPoints = (
   summary: TaskLogSummary | undefined,
   settings: Pick<PerformanceTierSettings, "templateIds" | "treatWaivedAsComplete" | "treatPendingAsComplete">,
+  eligibleDates: ReadonlySet<string> | null,
 ): number | null => {
-  const bucket = selectTaskBucket(summary, settings.templateIds);
+  const bucket = selectTaskBucketForDates(summary, settings.templateIds, eligibleDates);
   if (!bucket) {
     return null;
   }
@@ -7833,10 +8399,12 @@ const resolvePerformanceTierOutcome = (
   summary: CommissionSummary,
   taskScoreLookup: TaskScoreLookup,
   settings: PerformanceTierSettings,
+  eligibleDates: ReadonlySet<string> | null,
 ): PerformanceTierOutcome => {
   const userTaskSummary = taskScoreLookup.get(summary.userId);
   const resolvedProgress =
-    resolveTaskProgressByPoints(userTaskSummary, settings) ?? settings.defaultProgressRatio;
+    resolveTaskProgressByPoints(userTaskSummary, settings, eligibleDates)
+    ?? settings.defaultProgressRatio;
 
   const matchedRule = settings.tiers.find((rule) => {
     if (resolvedProgress < rule.minProgress) {
@@ -7865,21 +8433,22 @@ const computeTaskScorePayout = (
   assignment: CompensationComponentAssignment,
   summary: CommissionSummary,
   taskScoreLookup: TaskScoreLookup,
-) => {
+  eligibleDates: ReadonlySet<string> | null,
+): ComponentComputationResult => {
   const baseAmount = Number(assignment.baseAmount ?? 0);
   if (baseAmount === 0) {
-    return 0;
+    return { amount: 0 };
   }
 
   const userSummary = taskScoreLookup.get(summary.userId);
   if (!userSummary) {
-    return baseAmount;
+    return { amount: baseAmount };
   }
 
   const settings = resolveTaskScoreSettings(component, assignment);
-  const bucket = selectTaskBucket(userSummary, settings.templateIds);
+  const bucket = selectTaskBucketForDates(userSummary, settings.templateIds, eligibleDates);
   if (!bucket || bucket.total === 0) {
-    return baseAmount;
+    return { amount: baseAmount };
   }
 
   const completedCount =
@@ -7900,7 +8469,28 @@ const computeTaskScorePayout = (
     total += unitAmount * completedCount;
   }
 
-  return total;
+  const dailyWeights: Array<{ date: string; weight: number }> = [];
+  userSummary.byDate.forEach((daySummary, date) => {
+    if (eligibleDates && !eligibleDates.has(date)) {
+      return;
+    }
+    const dayBucket = selectTaskBucket(daySummary, settings.templateIds);
+    if (!dayBucket || dayBucket.total <= 0) {
+      return;
+    }
+    const dayCompleted = dayBucket.completed
+      + (settings.treatWaivedAsComplete ? dayBucket.waived : 0)
+      + (settings.treatPendingAsComplete ? dayBucket.pending : 0);
+    dailyWeights.push({
+      date,
+      weight: dayCompleted > 0 ? dayCompleted : dayBucket.total,
+    });
+  });
+
+  return {
+    amount: total,
+    earningBreakdown: allocateCompensationAmountByDateWeights(total, dailyWeights),
+  };
 };
 
 const resolveTaskLogPoints = (metaValue: unknown, templateConfigValue: unknown): number => {
@@ -9029,18 +9619,25 @@ const computeCalendarDayBaseAmount = (
   settings: Extract<MonthlyBaseSettings, { mode: "calendar_days" }>,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-): { amount: number; creditedUnits: number; creditedDates: string[] } => {
+  eligibleDates: ReadonlySet<string> | null = null,
+): {
+  amount: number;
+  creditedUnits: number;
+  creditedDates: string[];
+  earningBreakdown: CompensationEarningBreakdownEntry[];
+} => {
   const monthlyAmount = settings.amountOverride ?? Number(assignment.baseAmount ?? 0);
   if (!Number.isFinite(monthlyAmount) || monthlyAmount === 0) {
-    return { amount: 0, creditedUnits: 0, creditedDates: [] };
+    return { amount: 0, creditedUnits: 0, creditedDates: [], earningBreakdown: [] };
   }
   const overlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
   if (!overlap) {
-    return { amount: 0, creditedUnits: 0, creditedDates: [] };
+    return { amount: 0, creditedUnits: 0, creditedDates: [], earningBreakdown: [] };
   }
   let total = 0;
   let creditedUnits = 0;
   const creditedDates: string[] = [];
+  const earningBreakdown: CompensationEarningBreakdownEntry[] = [];
   const monthlyCap = settings.monthlyCap ?? null;
   let cursor = overlap.start.startOf("day");
   const finalDay = overlap.end.startOf("day");
@@ -9048,22 +9645,33 @@ const computeCalendarDayBaseAmount = (
     const monthStart = cursor.startOf("month");
     const monthEnd = cursor.endOf("month").startOf("day");
     const sliceEnd = monthEnd.isBefore(finalDay) ? monthEnd : finalDay;
-    const daysCovered = sliceEnd.diff(cursor, "day") + 1;
+    const sliceDates: string[] = [];
+    let sliceCursor = cursor.clone();
+    while (!sliceCursor.isAfter(sliceEnd, "day")) {
+      const date = sliceCursor.format("YYYY-MM-DD");
+      if (!eligibleDates || eligibleDates.has(date)) {
+        sliceDates.push(date);
+      }
+      sliceCursor = sliceCursor.add(1, "day");
+    }
+    const daysCovered = sliceDates.length;
     const daysInMonth = monthEnd.diff(monthStart.startOf("day"), "day") + 1;
     if (daysCovered > 0 && daysInMonth > 0) {
       const prorated = monthlyAmount * (daysCovered / daysInMonth);
       const capped = monthlyCap !== null && monthlyCap > 0 ? Math.min(prorated, monthlyCap) : prorated;
       total += capped;
       creditedUnits += daysCovered;
-      let dayCursor = cursor.clone();
-      while (!dayCursor.isAfter(sliceEnd, "day")) {
-        creditedDates.push(dayCursor.format("YYYY-MM-DD"));
-        dayCursor = dayCursor.add(1, "day");
-      }
+      creditedDates.push(...sliceDates);
+      earningBreakdown.push(...allocateCompensationAmountAcrossDates(capped, sliceDates));
     }
     cursor = sliceEnd.add(1, "day").startOf("day");
   }
-  return { amount: total, creditedUnits, creditedDates };
+  return {
+    amount: total,
+    creditedUnits,
+    creditedDates,
+    earningBreakdown: mergeCompensationEarningBreakdown(earningBreakdown),
+  };
 };
 
 const computeShiftQuotaBaseAmount = (
@@ -9072,6 +9680,7 @@ const computeShiftQuotaBaseAmount = (
   summary: CommissionSummary,
   rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
+  eligibleDates: ReadonlySet<string> | null = null,
 ): {
   amount: number;
   creditedUnits: number;
@@ -9140,7 +9749,8 @@ const computeShiftQuotaBaseAmount = (
         (day) =>
           day.isValid() &&
           (day.isSame(overlap.start, "day") || day.isAfter(overlap.start, "day")) &&
-          (day.isSame(overlap.end, "day") || day.isBefore(overlap.end, "day")),
+          (day.isSame(overlap.end, "day") || day.isBefore(overlap.end, "day")) &&
+          (!eligibleDates || eligibleDates.has(day.format("YYYY-MM-DD"))),
       )
       .sort((a, b) => a.valueOf() - b.valueOf())
       .map((day) => day.format("YYYY-MM-DD"));
@@ -9161,14 +9771,12 @@ const computeShiftQuotaBaseAmount = (
     }
 
     const monthKey = cursor.format("YYYY-MM");
+    const normalizedDays = normalizeDaysForOverlap(collectRecordedDays(monthKey));
     let worked: number;
-    if (settings.countSource === "counter_manager") {
-      if (summary.managerShiftDayIndex.has(monthKey)) {
-        const daySet = summary.managerShiftDayIndex.get(monthKey)!;
-        worked = countDaysWithinRange(daySet, overlap.start, overlap.end);
-      } else {
-        worked = summary.managerMonthlyShiftCounts[monthKey] ?? 0;
-      }
+    if (normalizedDays.length > 0 || eligibleDates) {
+      worked = normalizedDays.length;
+    } else if (settings.countSource === "counter_manager") {
+      worked = summary.managerMonthlyShiftCounts[monthKey] ?? 0;
     } else {
       worked = summary.monthlyShiftCounts[monthKey] ?? 0;
     }
@@ -9184,7 +9792,6 @@ const computeShiftQuotaBaseAmount = (
       creditedUnits = quota;
     }
 
-    const normalizedDays = normalizeDaysForOverlap(collectRecordedDays(monthKey));
     const creditedDays = normalizedDays.slice(0, creditedUnits);
 
     const extraUnits = Math.max(0, worked - creditedUnits);
@@ -9320,15 +9927,20 @@ const computeNightReportIncentive = (
   nightReportStats: NightReportStatsMap,
   nightReportBestCache: Map<string, NightReportBestCacheEntry>,
   productBucketsByUser: ProductBucketLookup,
-) => {
+  eligibleDates: ReadonlySet<string> | null,
+  assignmentEligibilityDatesByUser: ReadonlyMap<number, ReadonlySet<string>> | null,
+): ComponentComputationResult => {
   const leaderStats = nightReportStats.get(summary.userId);
   if (!leaderStats) {
-    return 0;
+    return { amount: 0 };
   }
 
   const settings = resolveNightReportSettings(component, assignment);
   const productFilter = buildProductFilterSet(settings.allowedProductIds);
   const qualifiedReports = leaderStats.reports.filter((report) => {
+    if (eligibleDates && !eligibleDates.has(report.date)) {
+      return false;
+    }
     if (!reportMatchesProductFilter(report, productFilter)) {
       return false;
     }
@@ -9345,13 +9957,14 @@ const computeNightReportIncentive = (
   });
 
   if (qualifiedReports.length < settings.minReports) {
-    return 0;
+    return { amount: 0 };
   }
 
   const productAmountMap = new Map<
     string,
     { productId: number | null; productName: string; amount: number }
   >();
+  const earningAmountsByDate = new Map<string, number>();
 
   const creditReportAmount = (report: typeof qualifiedReports[number] | null, amount: number) => {
     if (!report || !amount) {
@@ -9366,6 +9979,10 @@ const computeNightReportIncentive = (
     }
     const entry = productAmountMap.get(key)!;
     entry.amount += amount;
+    earningAmountsByDate.set(
+      report.date,
+      (earningAmountsByDate.get(report.date) ?? 0) + amount,
+    );
     recordCounterIncentiveMarker(summary, report.counterId, component.name ?? component.id.toString(), amount);
     recordCounterIncentiveTotal(summary, report.counterId, amount);
   };
@@ -9397,7 +10014,14 @@ const computeNightReportIncentive = (
   }
 
   if (settings.bestOfRangeBonus > 0) {
-    const bestEntry = getNightReportBestEntry(nightReportBestCache, settings, nightReportStats);
+    const bestEntry = getNightReportBestEntry(
+      nightReportBestCache,
+      assignment,
+      settings,
+      nightReportStats,
+      eligibleDates,
+      assignmentEligibilityDatesByUser,
+    );
     if (bestEntry.topHits > 0 && bestEntry.topUserIds.has(summary.userId)) {
       let bestReport: (typeof qualifiedReports)[number] | null = null;
       qualifiedReports.forEach((candidate) => {
@@ -9422,13 +10046,21 @@ const computeNightReportIncentive = (
     );
   });
 
-  return total;
+  return {
+    amount: total,
+    earningBreakdown: mergeCompensationEarningBreakdown(
+      Array.from(earningAmountsByDate.entries()).map(([date, amount]) => ({ date, amount })),
+    ),
+  };
 };
 
 const getNightReportBestEntry = (
   cache: Map<string, NightReportBestCacheEntry>,
+  assignment: CompensationComponentAssignment,
   settings: NightReportIncentiveSettings,
   nightReportStats: NightReportStatsMap,
+  globalEligibleDates: ReadonlySet<string> | null,
+  assignmentEligibilityDatesByUser: ReadonlyMap<number, ReadonlySet<string>> | null,
 ): NightReportBestCacheEntry => {
   const productFilter = buildProductFilterSet(settings.allowedProductIds);
   const productKey =
@@ -9436,6 +10068,7 @@ const getNightReportBestEntry = (
       ? settings.allowedProductIds.join(",")
       : "*";
   const cacheKey = [
+    assignment.id,
     settings.minAttendance,
     settings.minReports,
     settings.retentionThreshold,
@@ -9451,7 +10084,16 @@ const getNightReportBestEntry = (
   const topUserIds = new Set<number>();
 
   nightReportStats.forEach((summary, userId) => {
+    const userEligibleDates = assignment.targetScope === "global"
+      ? globalEligibleDates
+      : assignmentEligibilityDatesByUser?.get(userId) ?? null;
+    if (!userEligibleDates || userEligibleDates.size === 0) {
+      return;
+    }
     const qualifiedReports = summary.reports.filter((report) => {
+      if (!userEligibleDates.has(report.date)) {
+        return false;
+      }
       if (!reportMatchesProductFilter(report, productFilter)) {
         return false;
       }
@@ -9489,33 +10131,119 @@ const getNightReportBestEntry = (
 const resolveAssignmentTargets = async (
   summaries: Map<number, CommissionSummary>,
   components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
+  rangeStart: dayjs.Dayjs,
   rangeEnd: dayjs.Dayjs,
-): Promise<AssignmentTargetMap> => {
+): Promise<{
+  targets: AssignmentTargetMap;
+  eligibilityDates: AssignmentEligibilityDateMap;
+}> => {
   const targets = new Map<number, number[]>();
-  const staffTypeCache = new Map<string, number[]>();
-  const shiftRoleCache = new Map<number, number[]>();
-  const userTypeCache = new Map<number, number[]>();
+  const eligibilityDates = new Map<number, Map<number, Set<string>>>();
+  const staffTypeCache = new Map<string, DatedEligibilityTarget>();
+  const shiftRoleCache = new Map<number, DatedEligibilityTarget>();
+  const userTypeCache = new Map<number, DatedEligibilityTarget>();
   const missingUserIds = new Set<number>();
   const latestUserCreatedAt = rangeEnd.endOf("day").toDate();
+  const rangeStartIso = rangeStart.format("YYYY-MM-DD");
+  const rangeEndIso = rangeEnd.format("YYYY-MM-DD");
+
+  const buildTarget = (datesByUserId: Map<number, Set<string>>): DatedEligibilityTarget => ({
+    userIds: Array.from(datesByUserId.keys()).sort((left, right) => left - right),
+    datesByUserId,
+  });
+
+  const loadStaffTypeTarget = async (staffType: string): Promise<DatedEligibilityTarget> => {
+    const cached = staffTypeCache.get(staffType);
+    if (cached) {
+      return cached;
+    }
+    const rows = await getStaffTypeMembersForRange({
+      staffType: staffType as StaffProfile["staffType"],
+      startDate: rangeStartIso,
+      endDate: rangeEndIso,
+    });
+    const target = buildTarget(buildCompensationEligibilityDateIndex(
+      rows,
+      rangeStartIso,
+      rangeEndIso,
+    ));
+    staffTypeCache.set(staffType, target);
+    return target;
+  };
+
+  const loadShiftRoleTarget = async (shiftRoleId: number): Promise<DatedEligibilityTarget> => {
+    const cached = shiftRoleCache.get(shiftRoleId);
+    if (cached) {
+      return cached;
+    }
+    const rows = await getShiftRoleMembersForRange({
+      shiftRoleId,
+      startDate: rangeStartIso,
+      endDate: rangeEndIso,
+    });
+    const target = buildTarget(buildCompensationEligibilityDateIndex(
+      rows,
+      rangeStartIso,
+      rangeEndIso,
+    ));
+    shiftRoleCache.set(shiftRoleId, target);
+    return target;
+  };
+
+  const loadUserTypeTarget = async (userTypeId: number): Promise<DatedEligibilityTarget> => {
+    const cached = userTypeCache.get(userTypeId);
+    if (cached) {
+      return cached;
+    }
+    const rows = await getUserTypeMembersForRange({
+      userTypeId,
+      startDate: rangeStartIso,
+      endDate: rangeEndIso,
+    });
+    const target = buildTarget(buildCompensationEligibilityDateIndex(
+      rows,
+      rangeStartIso,
+      rangeEndIso,
+    ));
+    userTypeCache.set(userTypeId, target);
+    return target;
+  };
 
   for (const component of components) {
     for (const assignment of component.assignments ?? []) {
-      let userIds: number[] = [];
+      let target: DatedEligibilityTarget = { userIds: [], datesByUserId: new Map() };
       if (assignment.targetScope === "user" && assignment.userId) {
-        userIds = await filterUserIdsCreatedOnOrBefore([assignment.userId], latestUserCreatedAt);
+        const userIds = await filterUserIdsCreatedOnOrBefore([assignment.userId], latestUserCreatedAt);
+        target = {
+          userIds,
+          datesByUserId: new Map(userIds.map((userId) => [
+            userId,
+            new Set(enumerateInclusiveIsoDates(rangeStartIso, rangeEndIso)),
+          ])),
+        };
       } else if (assignment.targetScope === "staff_type" && assignment.staffType) {
-        userIds = await fetchStaffTypeUserIds(assignment.staffType, staffTypeCache, latestUserCreatedAt);
+        target = await loadStaffTypeTarget(assignment.staffType);
       } else if (assignment.targetScope === "shift_role" && assignment.shiftRoleId) {
-        userIds = await fetchShiftRoleUserIds(assignment.shiftRoleId, shiftRoleCache, latestUserCreatedAt);
+        target = await loadShiftRoleTarget(assignment.shiftRoleId);
       } else if (assignment.targetScope === "user_type" && assignment.userTypeId) {
-        userIds = await fetchUserTypeUserIds(assignment.userTypeId, userTypeCache, latestUserCreatedAt);
+        target = await loadUserTypeTarget(assignment.userTypeId);
       }
 
-      if (userIds.length > 0) {
-        targets.set(assignment.id, userIds);
+      const assignmentOverlap = getAssignmentOverlapRange(assignment, rangeStart, rangeEnd);
+      const assignmentTarget = assignmentOverlap
+        ? buildTarget(restrictCompensationEligibilityDateIndex(
+            target.datesByUserId,
+            assignmentOverlap.start.format("YYYY-MM-DD"),
+            assignmentOverlap.end.format("YYYY-MM-DD"),
+          ))
+        : { userIds: [], datesByUserId: new Map<number, Set<string>>() };
+
+      if (assignmentTarget.userIds.length > 0) {
+        targets.set(assignment.id, assignmentTarget.userIds);
+        eligibilityDates.set(assignment.id, assignmentTarget.datesByUserId);
       }
 
-      userIds.forEach((userId) => {
+      assignmentTarget.userIds.forEach((userId) => {
         if (!summaries.has(userId)) {
           missingUserIds.add(userId);
         }
@@ -9541,102 +10269,7 @@ const resolveAssignmentTargets = async (
     });
   }
 
-  return targets;
-};
-
-const fetchStaffTypeUserIds = async (
-  staffType: string,
-  cache: Map<string, number[]>,
-  latestUserCreatedAt: Date,
-): Promise<number[]> => {
-  if (!staffType) {
-    return [];
-  }
-  if (cache.has(staffType)) {
-    return cache.get(staffType) ?? [];
-  }
-  const profiles = await StaffProfile.findAll({
-    where: {
-      staffType,
-    },
-    attributes: ["userId"],
-    include: [
-      {
-        model: User,
-        as: "user",
-        attributes: [],
-        required: true,
-        where: {
-          createdAt: {
-            [Op.lte]: latestUserCreatedAt,
-          },
-        },
-      },
-    ],
-  });
-  const userIds = profiles.map((profile) => profile.userId);
-  cache.set(staffType, userIds);
-  return userIds;
-};
-
-const fetchShiftRoleUserIds = async (
-  shiftRoleId: number,
-  cache: Map<number, number[]>,
-  latestUserCreatedAt: Date,
-): Promise<number[]> => {
-  if (!shiftRoleId) {
-    return [];
-  }
-  if (cache.has(shiftRoleId)) {
-    return cache.get(shiftRoleId) ?? [];
-  }
-  const rows = await UserShiftRole.findAll({
-    where: {
-      shiftRoleId,
-    },
-    attributes: ["userId"],
-    include: [
-      {
-        model: User,
-        as: "user",
-        attributes: [],
-        required: true,
-        where: {
-          createdAt: {
-            [Op.lte]: latestUserCreatedAt,
-          },
-        },
-      },
-    ],
-  });
-  const userIds = rows.map((row) => row.userId);
-  cache.set(shiftRoleId, userIds);
-  return userIds;
-};
-
-const fetchUserTypeUserIds = async (
-  userTypeId: number,
-  cache: Map<number, number[]>,
-  latestUserCreatedAt: Date,
-): Promise<number[]> => {
-  if (!userTypeId) {
-    return [];
-  }
-  if (cache.has(userTypeId)) {
-    return cache.get(userTypeId) ?? [];
-  }
-  const users = await User.findAll({
-    where: {
-      userTypeId,
-      createdAt: {
-        [Op.lte]: latestUserCreatedAt,
-      },
-    },
-    attributes: ["id"],
-  });
-  const userIds = users.map((user) => user.id);
-  cache.set(userTypeId, userIds);
-  return userIds;
+  return { targets, eligibilityDates };
 };
 
 const filterUserIdsCreatedOnOrBefore = async (

@@ -66,6 +66,9 @@ import ConfigHistory from './ConfigHistory.js';
 import SeoActionLog from './SeoActionLog.js';
 import ShiftRole from './ShiftRole.js';
 import UserShiftRole from './UserShiftRole.js';
+import UserTypeMembershipPeriod from './UserTypeMembershipPeriod.js';
+import UserShiftRoleMembershipPeriod from './UserShiftRoleMembershipPeriod.js';
+import StaffProfileTypePeriod from './StaffProfileTypePeriod.js';
 import ReportTemplate from './ReportTemplate.js';
 import ReportSchedule from './ReportSchedule.js';
 import DerivedFieldDefinition from './DerivedFieldDefinition.js';
@@ -113,6 +116,9 @@ export function defineAssociations() {
   User.hasMany(CompensationSettlementRule, { foreignKey: 'user_id', as: 'targetedSettlementRules' });
   User.hasMany(VolunteerFundEntry, { foreignKey: 'attributed_staff_user_id', as: 'volunteerFundAttributions' });
   User.hasMany(StaffPayoutLedger, { foreignKey: 'staff_user_id', as: 'payoutLedgers' });
+  User.hasMany(UserTypeMembershipPeriod, { foreignKey: 'user_id', as: 'userTypeMembershipPeriods' });
+  User.hasMany(UserShiftRoleMembershipPeriod, { foreignKey: 'user_id', as: 'shiftRoleMembershipPeriods' });
+  User.hasMany(StaffProfileTypePeriod, { foreignKey: 'user_id', as: 'staffProfileTypePeriods' });
   StaffPayoutLedger.belongsTo(User, { foreignKey: 'staff_user_id', as: 'ledgerUser' });
   User.hasMany(ConfigHistory, { foreignKey: 'actor_id', as: 'configHistory' });
   User.hasMany(ConfigValue, { foreignKey: 'updated_by', as: 'configValuesUpdated' });
@@ -129,6 +135,7 @@ export function defineAssociations() {
   UserType.belongsTo(User, { foreignKey: 'updatedBy', as: 'updatedByUser' });
   UserType.hasMany(RolePagePermission, { foreignKey: 'userTypeId', as: 'pagePermissions' });
   UserType.hasMany(RoleModulePermission, { foreignKey: 'userTypeId', as: 'modulePermissions' });
+  UserType.hasMany(UserTypeMembershipPeriod, { foreignKey: 'user_type_id', as: 'membershipPeriods' });
   UserType.belongsToMany(ProductType, {
     through: UserTypeProductType,
     as: 'allowedProductTypes',
@@ -196,6 +203,7 @@ export function defineAssociations() {
   CompensationComponent.hasMany(VolunteerFundEntry, { foreignKey: 'compensation_component_id', as: 'volunteerFundEntries' });
   CompensationComponentAssignment.belongsTo(CompensationComponent, { foreignKey: 'component_id', as: 'componentCompensation' });
   ShiftRole.hasMany(CompensationComponentAssignment, { foreignKey: 'shift_role_id', as: 'shiftRoleCompensationAssignments' });
+  ShiftRole.hasMany(UserShiftRoleMembershipPeriod, { foreignKey: 'shift_role_id', as: 'membershipPeriods' });
   CompensationComponentAssignment.belongsTo(ShiftRole, { foreignKey: 'shift_role_id', as: 'shiftRoleCompensation' });
   UserType.hasMany(CompensationComponentAssignment, { foreignKey: 'user_type_id', as: 'userTypeCompensationAssignments' });
   CompensationComponentAssignment.belongsTo(UserType, { foreignKey: 'user_type_id', as: 'userTypeCompensation' });
@@ -322,6 +330,7 @@ export function defineAssociations() {
   FinanceVendor.hasMany(Venue, { foreignKey: 'finance_vendor_id', as: 'venues' });
   FinanceClient.hasMany(Venue, { foreignKey: 'finance_client_id', as: 'venues' });
   FinanceVendor.hasMany(StaffProfile, { foreignKey: 'finance_vendor_id', as: 'staffProfiles' });
+  StaffProfile.hasMany(StaffProfileTypePeriod, { foreignKey: 'user_id', as: 'typePeriods' });
   FinanceVendor.hasMany(User, { foreignKey: 'finance_vendor_id', as: 'users' });
   FinanceClient.hasMany(StaffProfile, { foreignKey: 'finance_client_id', as: 'staffProfiles' });
   FinanceAccount.hasMany(FinanceTransaction, { foreignKey: 'accountId', as: 'transactions' });

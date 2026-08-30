@@ -146,74 +146,22 @@ describe('affiliate payout staff receipt integration', () => {
     configureCreateMocks();
   });
 
-  it('creates a collection row and required receipt for an affiliate with a staff profile', async () => {
+  it('requires staff-profile Promotion Sales to be settled from Pays', async () => {
     (StaffProfile.findByPk as jest.Mock).mockResolvedValue({
       userId: 24,
       financeVendorId: 8,
       staffType: 'volunteer',
     });
-    (StaffPayoutCollectionLog.create as jest.Mock).mockResolvedValue({ id: 412 });
-    (createStaffPayoutReceipt as jest.Mock).mockResolvedValue({
-      id: 91,
-      requiredActionId: 92,
-      status: 'pending',
-    });
 
-    const result = await createAffiliatePayout(input);
+    await expect(createAffiliatePayout(input)).rejects.toThrow(
+      /must be settled from Pays.*deductions.*payout ledger.*receipt evidence/i,
+    );
 
-    expect(getAffiliateOverview).toHaveBeenCalledWith(expect.objectContaining({
-      selectedAffiliateUserId: 24,
-      transaction,
-    }));
-    expect(loadCompensationSettlementRouter).toHaveBeenCalledWith({
-      effectiveDate: '2026-07-31',
-      transaction,
-    });
-    expect(StaffPayoutCollectionLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        staffProfileId: 24,
-        direction: 'payable',
-        amountMinor: 8000,
-        currencyCode: 'PLN',
-        financeTransactionId: 601,
-      }),
-      { transaction },
-    );
-    expect(createStaffPayoutReceipt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        staffUserId: 24,
-        rangeStart: '2026-07-01',
-        rangeEnd: '2026-07-31',
-        paidDate: '2026-08-29',
-        items: [
-          expect.objectContaining({
-            collectionLogId: 412,
-            financeTransactionId: 601,
-            label: 'Affiliate commission',
-            amountMinor: 8000,
-            currencyCode: 'PLN',
-          }),
-        ],
-        transaction,
-      }),
-    );
-    expect(result.receipt).toEqual({ id: 91, actionId: 92, status: 'pending' });
-    expect((createFinanceTransaction as jest.Mock).mock.calls[0][0].meta).toEqual(
-      expect.objectContaining({
-        source: 'affiliate-payout',
-        staffUserId: 24,
-        lineLabel: 'Affiliate commission',
-        sourceKey: 'promotion_sales',
-        affiliatePayout: true,
-        payoutBatchKey: expect.stringMatching(/^affiliate-direct:[a-f0-9]{64}$/u),
-      }),
-    );
-    expect(reconcilePersistedStaffPayoutLedgers).toHaveBeenCalledWith({
-      staffUserId: 24,
-      affectedRangeStart: '2026-07-01',
-      affectedRangeEnd: '2026-07-31',
-      transaction,
-    });
+    expect(getAffiliateOverview).not.toHaveBeenCalled();
+    expect(createFinanceTransaction).not.toHaveBeenCalled();
+    expect(AffiliatePayoutLog.create).not.toHaveBeenCalled();
+    expect(StaffPayoutCollectionLog.create).not.toHaveBeenCalled();
+    expect(createStaffPayoutReceipt).not.toHaveBeenCalled();
   });
 
   it('leaves external affiliates on the existing payout flow without a staff receipt', async () => {
@@ -226,57 +174,6 @@ describe('affiliate payout staff receipt integration', () => {
     expect(reconcilePersistedStaffPayoutLedgers).not.toHaveBeenCalled();
     expect(result.receipt).toBeNull();
     expect((createFinanceTransaction as jest.Mock).mock.calls[0][0].meta).not.toHaveProperty('staffUserId');
-  });
-
-  it('rejects a staff affiliate payout in a different currency than the payout ledger', async () => {
-    (StaffProfile.findByPk as jest.Mock).mockResolvedValue({ userId: 24, financeVendorId: 8 });
-    (StaffPayoutLedger.findAll as jest.Mock).mockResolvedValue([{ currencyCode: 'PLN' }]);
-    (FinanceAccount.findByPk as jest.Mock).mockResolvedValue({ id: 3, isActive: true, currency: 'EUR' });
-    (getAffiliateOverview as jest.Mock).mockResolvedValue({
-      affiliateUsers: [{ id: 24, fullName: 'Cristian Staff' }],
-      bookings: [
-        { id: 9513, isCommissionPaid: false, affiliateCommissionAmount: 40, currency: 'EUR' },
-        { id: 9514, isCommissionPaid: false, affiliateCommissionAmount: 40, currency: 'EUR' },
-      ],
-    });
-
-    await expect(createAffiliatePayout(input)).rejects.toThrow(/must match payout ledger currency PLN/i);
-
-    expect(createFinanceTransaction).not.toHaveBeenCalled();
-    expect(StaffPayoutCollectionLog.create).not.toHaveBeenCalled();
-  });
-
-  it('rejects direct payment when Promotion Sales are routed to a Volunteer Fund', async () => {
-    (StaffProfile.findByPk as jest.Mock).mockResolvedValue({
-      userId: 24,
-      financeVendorId: 8,
-      staffType: 'volunteer',
-    });
-    (loadCompensationSettlementRouter as jest.Mock).mockResolvedValue({
-      resolve: jest.fn().mockReturnValue({ destination: 'volunteer_fund', fundId: 7, ruleId: 2 }),
-    });
-
-    await expect(createAffiliatePayout(input)).rejects.toThrow(
-      /routed to a Volunteer Fund.*Process them from Pays/i,
-    );
-
-    expect(createFinanceTransaction).not.toHaveBeenCalled();
-    expect(AffiliatePayoutLog.create).not.toHaveBeenCalled();
-    expect(StaffPayoutCollectionLog.create).not.toHaveBeenCalled();
-  });
-
-  it('rejects a staff affiliate payout that crosses a calendar-month ledger boundary', async () => {
-    (StaffProfile.findByPk as jest.Mock).mockResolvedValue({ userId: 24, financeVendorId: 8 });
-
-    await expect(createAffiliatePayout({
-      ...input,
-      startDate: '2026-07-15',
-      endDate: '2026-08-15',
-    })).rejects.toThrow(/must stay within one calendar month/i);
-
-    expect(getAffiliateOverview).not.toHaveBeenCalled();
-    expect(createFinanceTransaction).not.toHaveBeenCalled();
-    expect(StaffPayoutCollectionLog.create).not.toHaveBeenCalled();
   });
 
   it('cancels a linked receipt and removes only live links when the affiliate payout is undone', async () => {

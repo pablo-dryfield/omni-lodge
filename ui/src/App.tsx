@@ -80,7 +80,8 @@ const AppContent = () => {
   const confirmationNotBeforeRef = useRef(0);
   const pendingVisibleProbeRef = useRef(false);
   const lastCandidateStatusRef = useRef<number | undefined>(undefined);
-  const isPublicRoute = PUBLIC_ROUTE_PATHS.has(location.pathname);
+  const isReceiptAccessRoute = /^\/payout-receipt\/[^/]+\/?$/.test(location.pathname);
+  const isPublicRoute = PUBLIC_ROUTE_PATHS.has(location.pathname) || isReceiptAccessRoute;
 
   const rawNavbarSettings = useMemo(
     () => getNavbarSettings(currentPage, location.pathname),
@@ -315,18 +316,18 @@ const AppContent = () => {
   }, [checkServer]);
 
   useEffect(() => {
-    if (!authenticated) {
+    if (!authenticated && !isReceiptAccessRoute) {
       dispatch(fetchSession());
     }
-  }, [dispatch, authenticated, currentPage]);
+  }, [dispatch, authenticated, currentPage, isReceiptAccessRoute]);
 
   useEffect(() => {
-    if (authenticated && !accessLoaded && !accessLoading && !accessError) {
+    if (authenticated && !isReceiptAccessRoute && !accessLoaded && !accessLoading && !accessError) {
       dispatch(fetchAccessSnapshot());
     }
-  }, [authenticated, accessLoaded, accessLoading, accessError, dispatch]);
+  }, [authenticated, isReceiptAccessRoute, accessLoaded, accessLoading, accessError, dispatch]);
 
-  if (checkingSession) {
+  if (checkingSession && !isReceiptAccessRoute) {
     return (
       <Center style={{ height: "100vh" }}>
         <Loader variant="dots" />
@@ -338,7 +339,7 @@ const AppContent = () => {
     dispatch(fetchAccessSnapshot());
   };
 
-  const showOverlay = serverDown || showMiniGame;
+  const showOverlay = !isReceiptAccessRoute && (serverDown || showMiniGame);
   const overlayMode = serverDown ? "server-down" : "freeplay";
 
   return (
@@ -355,7 +356,11 @@ const AppContent = () => {
           />
         </Suspense>
       )}
-      {authenticated ? (
+      {isReceiptAccessRoute ? (
+        <Suspense fallback={<FullscreenLoader />}>
+          <Routes />
+        </Suspense>
+      ) : authenticated ? (
         <AppShell
           header={{ height: isMobile ? 56 : 68 }}
           navbar={computedNavbarSettings}

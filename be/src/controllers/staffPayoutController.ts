@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import type { Response } from 'express';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import { Op, col, fn, where, type Transaction as SequelizeTransaction } from 'sequelize';
 import sequelize from '../config/database.js';
 import StaffPayoutCollectionLog from '../models/StaffPayoutCollectionLog.js';
@@ -8,6 +10,7 @@ import StaffPayoutLedger, {
   type StaffPayoutSettlementSnapshotSource,
 } from '../models/StaffPayoutLedger.js';
 import StaffProfile from '../models/StaffProfile.js';
+import StaffProfileTypePeriod from '../models/StaffProfileTypePeriod.js';
 import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
 import StaffPayoutReceipt from '../models/StaffPayoutReceipt.js';
 import StaffPayoutReceiptItem from '../models/StaffPayoutReceiptItem.js';
@@ -32,6 +35,7 @@ import { buildStaffPayoutReceiptReissueItems } from '../services/staffPayoutRece
 import { groupStaffPayoutReceiptItemsByCurrency } from '../services/staffPayoutReceiptValidation.js';
 import {
   assertStaffPayoutDirectionDetails,
+  assertStaffPayoutSettlementIntentDirections,
   assertUniqueStaffAffiliatePayoutClaims,
   deriveStaffPayoutReimbursementAmount,
   parseStrictStaffPayoutDate,
@@ -39,10 +43,18 @@ import {
 } from '../services/staffPayoutBatchValidation.js';
 import { loadCompensationSettlementRouter } from '../services/compensationSettlementRoutingService.js';
 import {
+  isSegmentedCompensationSettlementIntent,
   verifyCompensationSettlementIntent,
   type CompensationSettlementIntentPayload,
 } from '../services/compensationSettlementIntentService.js';
 import { reconcilePersistedStaffPayoutLedgers } from '../services/staffPayoutLedgerReconciliationService.js';
+import {
+  assertStaffPayoutSettlementRequestBinding,
+  createStaffPayoutSettlementRequestBinding,
+} from '../services/staffPayoutSettlementRequestService.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 const resolveDefaultCurrency = (): string =>
   String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
@@ -147,16 +159,28 @@ const assertSettlementIntentsMatchLedgerSnapshot = (params: {
     return;
   }
   const snapshot = params.ledger.settlementSnapshot;
-  if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.sources)) {
+  if (!snapshot || (snapshot.version !== 1 && snapshot.version !== 2) || !Array.isArray(snapshot.sources)) {
     throw new HttpError(
       409,
       'The payout source snapshot is not ready. Refresh Pays before processing compensation.',
     );
   }
   for (const intent of intents) {
+    const segmentedIntent = isSegmentedCompensationSettlementIntent(intent);
+    if (segmentedIntent && snapshot.version !== 2) {
+      throw new HttpError(
+        409,
+        'The segmented payout source snapshot is not ready. Refresh Pays before processing compensation.',
+      );
+    }
     const candidates = snapshot.sources.filter((source) => (
       source.sourceKey === intent.sourceKey
       && source.componentId === intent.componentId
+      && (
+        segmentedIntent
+          ? 'segmentKey' in source && source.segmentKey === intent.segmentKey
+          : snapshot.version === 1
+      )
     ));
     const source: StaffPayoutSettlementSnapshotSource | undefined = candidates[0];
     if (
@@ -168,6 +192,17 @@ const assertSettlementIntentsMatchLedgerSnapshot = (params: {
       || source.fundId !== intent.fundId
       || Number(source.ruleId) !== intent.ruleId
       || source.currency.trim().toUpperCase() !== intent.currency
+      || (
+        segmentedIntent
+        && (
+          source.segmentKey !== intent.segmentKey
+          || source.earningStart !== intent.earningStart
+          || source.earningEnd !== intent.earningEnd
+          || Number(source.staffTypePeriodId) !== intent.staffTypePeriodId
+          || source.staffType !== intent.staffType
+          || source.legacyExtrapolation !== intent.legacyExtrapolation
+        )
+      )
     ) {
       throw new HttpError(
         409,
@@ -183,6 +218,14 @@ const parseOptionalString = (value: unknown): string | null => {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+};
+
+const parseSettlementRequestId = (value: unknown): string => {
+  const requestId = parseOptionalString(value);
+  if (!requestId || !/^[A-Za-z0-9_-]{16,128}$/.test(requestId)) {
+    throw new HttpError(400, 'requestId is required and must be a valid settlement request identifier.');
+  }
+  return requestId;
 };
 
 const normalizeSettlementSourceKey = (value: unknown, fallback = 'manual_adjustment'): string => {
@@ -216,6 +259,24 @@ const normalizeCurrencyCode = (value: unknown, fallback = resolveDefaultCurrency
   }
   return fallback;
 };
+
+const getSettlementIntentSegmentKey = (
+  intent: CompensationSettlementIntentPayload | null | undefined,
+): string | null => (
+  intent && isSegmentedCompensationSettlementIntent(intent)
+    ? intent.segmentKey
+    : null
+);
+
+const buildCalculatedSettlementIdentity = (params: {
+  sourceKey: string;
+  componentId: number | null;
+  intent?: CompensationSettlementIntentPayload | null;
+}): string => [
+  params.sourceKey,
+  params.componentId ?? 0,
+  getSettlementIntentSegmentKey(params.intent) ?? 'legacy',
+].join(':');
 
 const assertStaffPayoutLedgerCurrencies = (
   direction: 'receivable' | 'payable',
@@ -406,6 +467,8 @@ const normalizeFundAllocations = (rawLines: unknown): NormalizedStaffPayoutFundA
         existing.fundId === line.fundId
         && existing.sourceKey === line.sourceKey
         && existing.componentId === line.componentId
+        && getSettlementIntentSegmentKey(existing.verifiedIntent)
+          === getSettlementIntentSegmentKey(line.verifiedIntent)
       ));
       if (duplicate) {
         throw new HttpError(400, `Duplicate Volunteer Fund source: ${line.label}.`);
@@ -455,6 +518,7 @@ const getNetFundAllocationForSource = async (params: {
   rangeEnd: string;
   sourceKey: string;
   componentId: number | null;
+  segmentKey?: string | null;
   transaction?: SequelizeTransaction;
 }): Promise<number> => {
   const allocations = await VolunteerFundEntry.findAll({
@@ -466,6 +530,7 @@ const getNetFundAllocationForSource = async (params: {
       periodEnd: params.rangeEnd,
       sourceKind: params.sourceKey,
       compensationComponentId: params.componentId,
+      ...(params.segmentKey ? { sourceReference: params.segmentKey } : {}),
     },
     transaction: params.transaction,
     ...(params.transaction ? { lock: params.transaction.LOCK.UPDATE } : {}),
@@ -537,6 +602,7 @@ const getRecordedPersonalSettlementMinor = async (params: {
   rangeEnd: string;
   sourceKey: string;
   componentId: number | null;
+  segmentKey?: string | null;
   transaction?: SequelizeTransaction;
 }): Promise<number> => {
   const sourceIdentity = params.componentId
@@ -556,6 +622,9 @@ const getRecordedPersonalSettlementMinor = async (params: {
         where(fn('jsonb_extract_path_text', col('meta'), 'rangeStart'), params.rangeStart),
         where(fn('jsonb_extract_path_text', col('meta'), 'rangeEnd'), params.rangeEnd),
         sourceIdentity,
+        ...(params.segmentKey
+          ? [where(fn('jsonb_extract_path_text', col('meta'), 'segmentKey'), params.segmentKey)]
+          : []),
       ],
     },
     transaction: params.transaction,
@@ -567,6 +636,7 @@ const getRecordedPersonalSettlementMinor = async (params: {
 const validateBatchSettlementRouting = async (params: {
   staffUserId: number;
   staffType: string | null;
+  direction: 'receivable' | 'payable';
   effectiveDate: string;
   rangeStart: string;
   rangeEnd: string;
@@ -575,6 +645,14 @@ const validateBatchSettlementRouting = async (params: {
   reimbursement: NormalizedStaffPayoutBatchReimbursement | null;
   transaction?: SequelizeTransaction;
 }): Promise<Map<number, VolunteerFund>> => {
+  const settlementIntents = [
+    ...params.lines.map((line) => line.verifiedIntent),
+    ...params.fundAllocations.map((line) => line.verifiedIntent),
+  ].filter((intent): intent is CompensationSettlementIntentPayload => Boolean(intent));
+  assertStaffPayoutSettlementIntentDirections({
+    direction: params.direction,
+    intents: settlementIntents,
+  });
   const componentIds = Array.from(
     new Set(
       [...params.lines, ...params.fundAllocations]
@@ -583,7 +661,11 @@ const validateBatchSettlementRouting = async (params: {
     ),
   );
   const fundIds = Array.from(new Set(params.fundAllocations.map((line) => line.fundId)));
-  const [components, funds, settlementRouter] = await Promise.all([
+  const segmentedIntents = settlementIntents.filter(isSegmentedCompensationSettlementIntent);
+  const staffTypePeriodIds = Array.from(new Set(
+    segmentedIntents.map((intent) => intent.staffTypePeriodId),
+  ));
+  const [components, funds, settlementRouter, staffTypePeriods] = await Promise.all([
     componentIds.length > 0
       ? CompensationComponent.findAll({
           where: { id: { [Op.in]: componentIds } },
@@ -604,9 +686,27 @@ const validateBatchSettlementRouting = async (params: {
       effectiveDate: params.effectiveDate,
       transaction: params.transaction,
     }),
+    staffTypePeriodIds.length > 0
+      ? StaffProfileTypePeriod.findAll({
+          where: { id: { [Op.in]: staffTypePeriodIds } },
+          attributes: [
+            'id',
+            'userId',
+            'staffType',
+            'effectiveStart',
+            'effectiveEnd',
+            'metadata',
+          ],
+          transaction: params.transaction,
+          ...(params.transaction ? { lock: params.transaction.LOCK.SHARE } : {}),
+        })
+      : Promise.resolve([]),
   ]);
   const componentById = new Map(components.map((component) => [component.id, component] as const));
   const fundById = new Map(funds.map((fund) => [fund.id, fund] as const));
+  const staffTypePeriodById = new Map(
+    staffTypePeriods.map((period) => [Number(period.id), period] as const),
+  );
 
   if (componentById.size !== componentIds.length) {
     throw new HttpError(409, 'One or more compensation components no longer exist. Refresh Pays and try again.');
@@ -624,15 +724,57 @@ const validateBatchSettlementRouting = async (params: {
     }
   }
 
-  const resolveLineRoute = (line: {
+  for (const intent of segmentedIntents) {
+    const period = staffTypePeriodById.get(intent.staffTypePeriodId);
+    const legacyExtrapolation = period?.metadata?.legacyExtrapolation === true;
+    if (
+      !period
+      || period.userId !== params.staffUserId
+      || period.staffType !== intent.staffType
+      || period.effectiveStart > intent.earningStart
+      || (period.effectiveEnd !== null && period.effectiveEnd < intent.earningEnd)
+      || legacyExtrapolation !== intent.legacyExtrapolation
+    ) {
+      throw new HttpError(
+        409,
+        'The staff-type history behind this settlement changed. Refresh Pays and try again.',
+      );
+    }
+  }
+
+  const routerByDate = new Map<string, typeof settlementRouter>([
+    [params.effectiveDate, settlementRouter],
+  ]);
+  const getSettlementRouterForDate = async (effectiveDate: string) => {
+    const cached = routerByDate.get(effectiveDate);
+    if (cached) {
+      return cached;
+    }
+    const router = await loadCompensationSettlementRouter({
+      effectiveDate,
+      transaction: params.transaction,
+    });
+    routerByDate.set(effectiveDate, router);
+    return router;
+  };
+
+  const resolveLineRoute = async (line: {
     componentId: number | null;
     sourceKey: string;
     affiliatePayout?: NormalizedStaffPayoutBatchLine['affiliatePayout'];
+    verifiedIntent?: CompensationSettlementIntentPayload | null;
   }) => {
     const component = line.componentId ? componentById.get(line.componentId) : null;
-    return settlementRouter.resolve({
+    const segmentedIntent = line.verifiedIntent
+      && isSegmentedCompensationSettlementIntent(line.verifiedIntent)
+      ? line.verifiedIntent
+      : null;
+    const router = await getSettlementRouterForDate(
+      segmentedIntent?.earningStart ?? params.effectiveDate,
+    );
+    return router.resolve({
       userId: params.staffUserId,
-      staffType: params.staffType,
+      staffType: segmentedIntent?.staffType ?? params.staffType,
       ...(component
         ? { componentId: component.id, componentCategory: component.category }
         : {
@@ -653,7 +795,7 @@ const validateBatchSettlementRouting = async (params: {
     amountMinor: number;
   }>();
   for (const line of params.lines) {
-    const route = resolveLineRoute(line);
+    const route = await resolveLineRoute(line);
     if (route.destination !== 'staff_vendor') {
       throw new HttpError(
         409,
@@ -689,7 +831,11 @@ const validateBatchSettlementRouting = async (params: {
           `${line.label} must be paid from a ${intent.currency} account.`,
         );
       }
-      const identity = `${line.sourceKey}:${line.componentId ?? 0}`;
+      const identity = buildCalculatedSettlementIdentity({
+        sourceKey: line.sourceKey,
+        componentId: line.componentId,
+        intent,
+      });
       const existingUsage = calculatedIntentUsage.get(identity);
       if (existingUsage && existingUsage.token !== line.settlementIntent) {
         throw new HttpError(
@@ -741,6 +887,7 @@ const validateBatchSettlementRouting = async (params: {
       rangeEnd: params.rangeEnd,
       sourceKey: usage.intent.sourceKey,
       componentId: usage.intent.componentId,
+      segmentKey: getSettlementIntentSegmentKey(usage.intent),
       transaction: params.transaction,
     });
     const currentlyAvailableMinor = Math.max(usage.intent.grossAmountMinor - recordedMinor, 0);
@@ -754,7 +901,7 @@ const validateBatchSettlementRouting = async (params: {
 
   for (const line of params.fundAllocations) {
     verifyCompensationSettlementIntent(line.settlementIntent);
-    const route = resolveLineRoute(line);
+    const route = await resolveLineRoute(line);
     const intent = line.verifiedIntent;
     if (
       intent.userId !== params.staffUserId
@@ -784,6 +931,7 @@ const validateBatchSettlementRouting = async (params: {
       rangeEnd: params.rangeEnd,
       sourceKey: line.sourceKey,
       componentId: line.componentId,
+      segmentKey: getSettlementIntentSegmentKey(intent),
       transaction: params.transaction,
     });
     const currentlyAvailableMinor = Math.max(
@@ -813,6 +961,7 @@ const validateBatchSettlementRouting = async (params: {
 };
 
 type StaffPayoutBatchKeyParams = {
+  requestId: string;
   staffProfileId: number;
   direction: 'receivable' | 'payable';
   counterpartyId: number | null;
@@ -863,21 +1012,10 @@ const buildStaffPayoutBatchKeyBase = (params: StaffPayoutBatchKeyParams) => ({
 const hashStaffPayoutBatchKey = (value: unknown): string =>
   crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-const buildLegacyStaffPayoutBatchKey = (params: StaffPayoutBatchKeyParams): string =>
-  hashStaffPayoutBatchKey(buildStaffPayoutBatchKeyBase(params));
-
-const buildPreviousStaffPayoutBatchKey = (params: StaffPayoutBatchKeyParams): string =>
-  hashStaffPayoutBatchKey({
-    version: 2,
-    direction: params.direction,
-    counterpartyId: params.counterpartyId,
-    paidDate: params.paidDate,
-    ...buildStaffPayoutBatchKeyBase(params),
-  });
-
 const buildStaffPayoutBatchKey = (params: StaffPayoutBatchKeyParams): string =>
   hashStaffPayoutBatchKey({
-    version: 3,
+    version: 4,
+    requestId: params.requestId,
     direction: params.direction,
     counterpartyId: params.counterpartyId,
     paidDate: params.paidDate,
@@ -890,11 +1028,17 @@ const buildStaffPayoutBatchKey = (params: StaffPayoutBatchKeyParams): string =>
         label: line.label,
         componentId: line.componentId,
         sourceKey: line.sourceKey,
+        ...(getSettlementIntentSegmentKey(line.verifiedIntent)
+          ? { segmentKey: getSettlementIntentSegmentKey(line.verifiedIntent) }
+          : {}),
         amountMinor: line.amountMinor,
         categoryId: line.categoryId,
         accountId: line.accountId,
         currency: line.currency ?? null,
         description: line.description ?? null,
+        settlementAuthorizationHash: line.settlementIntent
+          ? hashStaffPayoutBatchKey(line.settlementIntent)
+          : null,
         affiliatePayout: line.affiliatePayout
           ? {
               affiliateUserId: line.affiliatePayout.affiliateUserId,
@@ -908,9 +1052,13 @@ const buildStaffPayoutBatchKey = (params: StaffPayoutBatchKeyParams): string =>
         label: line.label,
         componentId: line.componentId,
         sourceKey: line.sourceKey,
+        ...(getSettlementIntentSegmentKey(line.verifiedIntent)
+          ? { segmentKey: getSettlementIntentSegmentKey(line.verifiedIntent) }
+          : {}),
         amountMinor: line.amountMinor,
         fundId: line.fundId,
         description: line.description,
+        settlementAuthorizationHash: hashStaffPayoutBatchKey(line.settlementIntent),
       }))
       .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
   });
@@ -926,48 +1074,32 @@ const findExistingBatchTransaction = async (batchKey: string, transaction?: Sequ
     transaction,
   });
 
-const findExistingCompatibleStaffPayoutBatch = async (params: {
-  batchKey: string;
-  previousBatchKey: string;
-  legacyBatchKey: string;
-  direction: 'receivable' | 'payable';
-  counterpartyId: number | null;
-  paidDate: string;
-  transaction?: SequelizeTransaction;
-}): Promise<FinanceTransaction | null> => {
-  const current = await findExistingBatchTransaction(params.batchKey, params.transaction);
-  if (current) {
-    return current;
-  }
-  const previous = await findExistingBatchTransaction(params.previousBatchKey, params.transaction);
-  if (previous) {
-    return previous;
-  }
-  const legacy = await findExistingBatchTransaction(params.legacyBatchKey, params.transaction);
-  const expectedKind = params.direction === 'payable' ? 'expense' : 'income';
-  return legacy
-    && legacy.kind === expectedKind
-    && Number(legacy.counterpartyId) === Number(params.counterpartyId)
-    && legacy.date === params.paidDate
-    ? legacy
-    : null;
-};
+const getFundAllocationIdentity = (
+  allocation: NormalizedStaffPayoutFundAllocation,
+): string => hashStaffPayoutBatchKey({
+  fundId: allocation.fundId,
+  sourceKey: allocation.sourceKey,
+  componentId: allocation.componentId,
+  segmentKey: getSettlementIntentSegmentKey(allocation.verifiedIntent),
+  settlementAuthorizationHash: hashStaffPayoutBatchKey(allocation.settlementIntent),
+}).slice(0, 32);
 
-const getFundAllocationIdempotencyKey = (batchKey: string, index: number): string =>
-  `staff-settlement:${batchKey}:${index}`;
+const getFundAllocationIdempotencyKey = (
+  batchKey: string,
+  allocation: NormalizedStaffPayoutFundAllocation,
+): string => `staff-settlement:${batchKey}:fund:${getFundAllocationIdentity(allocation)}`;
 
 const getFundAllocationAttemptState = async (
   batchKey: string,
-  index: number,
-  fundId: number,
+  allocation: NormalizedStaffPayoutFundAllocation,
   transaction?: SequelizeTransaction,
 ): Promise<{ hasActiveAllocation: boolean; attemptCount: number }> => {
-  const baseKey = getFundAllocationIdempotencyKey(batchKey, index);
+  const baseKey = getFundAllocationIdempotencyKey(batchKey, allocation);
   const attempts = await VolunteerFundEntry.findAll({
     attributes: ['id'],
     where: {
       entryType: 'allocation',
-      fundId,
+      fundId: allocation.fundId,
       [Op.or]: [
         { idempotencyKey: baseKey },
         { idempotencyKey: { [Op.like]: `${baseKey}:retry:%` } },
@@ -1008,10 +1140,9 @@ const hasCompleteFundAllocationBatch = async (
     return false;
   }
   const states = await Promise.all(
-    allocations.map((allocation, index) => getFundAllocationAttemptState(
+    allocations.map((allocation) => getFundAllocationAttemptState(
       batchKey,
-      index,
-      allocation.fundId,
+      allocation,
       transaction,
     )),
   );
@@ -1048,6 +1179,7 @@ const serializeReceiptReferences = (receipts: StaffPayoutReceipt[]) =>
     actionId: receipt.requiredActionId,
     status: receipt.status,
     payoutBatchKey: receipt.payoutBatchKey,
+    accessPath: `/payout-receipt/${receipt.id}`,
   }));
 
 const createPayoutCollectionLog = async (
@@ -1094,6 +1226,13 @@ export const createAffiliatePayoutLogForStaffLine = async (
       affiliateUserId: number;
       bookingIds: number[];
     };
+    settlementAuthorization?: {
+      grossAmountMinor: number;
+      outstandingAmountMinor: number;
+      earningStart: string | null;
+      earningEnd: string | null;
+      referenceIds: number[];
+    } | null;
   },
   transaction: SequelizeTransaction,
 ): Promise<void> => {
@@ -1140,15 +1279,66 @@ export const createAffiliatePayoutLogForStaffLine = async (
   if (expectedAmountMinor <= 0) {
     throw new HttpError(400, 'Affiliate payout amount must be positive.');
   }
+  const authorization = params.settlementAuthorization ?? null;
+  const segmentIncludesBooking = (booking: typeof overview.bookings[number]): boolean => {
+    if (!authorization?.earningStart || !authorization.earningEnd) {
+      return true;
+    }
+    if (!booking.sourceReceivedAt) {
+      return false;
+    }
+    const parsed = dayjs(booking.sourceReceivedAt);
+    if (!parsed.isValid()) {
+      return false;
+    }
+    const earningDate = parsed.tz('Europe/Warsaw').format('YYYY-MM-DD');
+    return earningDate >= authorization.earningStart && earningDate <= authorization.earningEnd;
+  };
+  if (authorization?.earningStart && selectedBookings.some((booking) => !segmentIncludesBooking(booking))) {
+    throw new HttpError(400, 'One or more affiliate bookings do not belong to the authorized earning segment.');
+  }
+  const selectedIds = Array.from(selectedBookingIds.values()).sort((left, right) => left - right);
+  const authorizedReferenceIds = Array.from(new Set(authorization?.referenceIds ?? []))
+    .sort((left, right) => left - right);
+  if (
+    authorization?.earningStart
+    && (
+      authorizedReferenceIds.length === 0
+      || JSON.stringify(selectedIds) !== JSON.stringify(authorizedReferenceIds)
+    )
+  ) {
+    throw new HttpError(400, 'Affiliate booking evidence no longer matches the signed settlement authorization.');
+  }
   if (expectedAmountMinor !== params.amountMinor) {
-    throw new HttpError(400, 'Affiliate payout line amount no longer matches selected bookings.');
+    const allUnpaidSegmentBookingIds = overview.bookings
+      .filter((booking) => (
+        !booking.isCommissionPaid
+        && booking.affiliateCommissionAmount > 0
+        && segmentIncludesBooking(booking)
+      ))
+      .map((booking) => booking.id)
+      .sort((left, right) => left - right);
+    const isAuthorizedNettedSettlement = Boolean(
+      authorization
+      && params.amountMinor === authorization.outstandingAmountMinor
+      && params.amountMinor > 0
+      && params.amountMinor < expectedAmountMinor
+      && expectedAmountMinor <= authorization.grossAmountMinor
+      && JSON.stringify(selectedIds) === JSON.stringify(allUnpaidSegmentBookingIds)
+    );
+    if (!isAuthorizedNettedSettlement) {
+      throw new HttpError(400, 'Affiliate payout line amount no longer matches selected bookings.');
+    }
   }
 
   await AffiliatePayoutLog.create(
     {
       affiliateUserId: params.staffProfileId,
       currencyCode: bookingCurrency,
-      amountMinor: params.amountMinor,
+      // The log closes the gross booking commission. The linked finance and
+      // collection rows retain the lower net cash amount when another signed
+      // compensation source deducts from the same staff payout.
+      amountMinor: expectedAmountMinor,
       rangeStart: params.rangeStart,
       rangeEnd: params.rangeEnd,
       paidDate: params.paidDate,
@@ -1292,18 +1482,23 @@ export const createStaffPayoutBatch = async (
     const rangeEndRaw = typeof req.body.rangeEnd === 'string' ? req.body.rangeEnd : '';
     const { rangeStart, rangeEnd } = ensureCanonicalMonthRange(rangeStartRaw, rangeEndRaw);
     const payoutDate = parseStrictStaffPayoutDate(req.body.date);
+    const settlementRequestId = parseSettlementRequestId(req.body.requestId);
     const normalizedLines = normalizeBatchLines(req.body.lines ?? []);
     const fundAllocations = normalizeFundAllocations(req.body.fundAllocations).sort((left, right) =>
       JSON.stringify([
         left.fundId,
         left.sourceKey,
         left.componentId,
+        getSettlementIntentSegmentKey(left.verifiedIntent),
+        hashStaffPayoutBatchKey(left.settlementIntent),
         left.label,
         left.amountMinor,
       ]).localeCompare(JSON.stringify([
         right.fundId,
         right.sourceKey,
         right.componentId,
+        getSettlementIntentSegmentKey(right.verifiedIntent),
+        hashStaffPayoutBatchKey(right.settlementIntent),
         right.label,
         right.amountMinor,
       ])),
@@ -1414,6 +1609,7 @@ export const createStaffPayoutBatch = async (
           'currency',
           'amountMinor',
           'baseAmountMinor',
+          'counterpartyType',
           'counterpartyId',
           'meta',
         ],
@@ -1432,6 +1628,7 @@ export const createStaffPayoutBatch = async (
       reimbursement = { ...normalizedReimbursement, amountMinor };
     }
     const batchKeyParams: StaffPayoutBatchKeyParams = {
+      requestId: settlementRequestId,
       staffProfileId,
       direction,
       counterpartyId,
@@ -1443,44 +1640,31 @@ export const createStaffPayoutBatch = async (
       reimbursement,
     };
     const batchKey = buildStaffPayoutBatchKey(batchKeyParams);
-    const previousBatchKey = buildPreviousStaffPayoutBatchKey(batchKeyParams);
-    const legacyBatchKey = buildLegacyStaffPayoutBatchKey(batchKeyParams);
+
+    const existingRequestBinding = await assertStaffPayoutSettlementRequestBinding({
+      staffUserId: staffProfileId,
+      requestId: settlementRequestId,
+      payoutBatchKey: batchKey,
+    });
 
     const existing = hasPersonalSettlement
-      ? await findExistingCompatibleStaffPayoutBatch({
-          batchKey,
-          previousBatchKey,
-          legacyBatchKey,
-          direction,
-          counterpartyId,
-          paidDate: payoutDate,
-        })
+      ? await findExistingBatchTransaction(batchKey)
       : null;
-    const existingFundBatchComplete = await hasCompleteFundAllocationBatch(
-      batchKey,
-      fundAllocations,
-    );
-    if (existing && (fundAllocations.length === 0 || existingFundBatchComplete)) {
-      const storedBatchKey = getStoredStaffPayoutBatchKey(existing, batchKey);
-      const receipts = await listActiveBatchReceipts(storedBatchKey);
+    if (existingRequestBinding) {
+      const receipts = await listActiveBatchReceipts(batchKey);
       res.status(200).json({
         duplicated: true,
-        batchKey: storedBatchKey,
-        financeTransactionId: existing.id,
+        batchKey,
+        ...(existing ? { financeTransactionId: existing.id } : {}),
         receipts: serializeReceiptReferences(receipts),
         fundAllocationCount: fundAllocations.length,
       });
       return;
     }
-    if (!existing && existingFundBatchComplete) {
-      res.status(200).json({
-        duplicated: true,
-        batchKey,
-        receipts: [],
-        fundAllocationCount: fundAllocations.length,
-      });
-      return;
-    }
+    const existingFundBatchComplete = await hasCompleteFundAllocationBatch(
+      batchKey,
+      fundAllocations,
+    );
 
     // Do availability/freshness checks only after exact idempotency lookup.
     // A client retry can arrive after the first request has already consumed
@@ -1489,11 +1673,12 @@ export const createStaffPayoutBatch = async (
     await validateBatchSettlementRouting({
       staffUserId: staffProfileId,
       staffType: staffProfile.staffType,
+      direction,
       effectiveDate: rangeEnd.format('YYYY-MM-DD'),
       rangeStart: rangeStart.format('YYYY-MM-DD'),
       rangeEnd: rangeEnd.format('YYYY-MM-DD'),
       lines: existing ? [] : lines,
-      fundAllocations,
+      fundAllocations: existingFundBatchComplete ? [] : fundAllocations,
       reimbursement: existing ? null : reimbursement,
     });
 
@@ -1509,6 +1694,35 @@ export const createStaffPayoutBatch = async (
       if (!lockedStaffUser) {
         throw new HttpError(404, 'Staff user not found.');
       }
+
+      // The User row lock makes this the authoritative request-id binding
+      // check. Concurrent settlements for this staff member cannot both bind
+      // one request id to different canonical payloads.
+      const requestBindingInsideTx = await assertStaffPayoutSettlementRequestBinding({
+        staffUserId: staffProfileId,
+        requestId: settlementRequestId,
+        payoutBatchKey: batchKey,
+        transaction,
+      });
+      if (requestBindingInsideTx) {
+        const receipts = await listActiveBatchReceipts(batchKey, transaction);
+        return {
+          duplicated: true as const,
+          receipts,
+          fundAllocationCount: fundAllocations.length,
+        };
+      }
+
+      // This immutable row commits atomically with the settlement and is not
+      // removed by payout deletion or fund reversal. Any failed batch rolls it
+      // back together with the rest of the transaction.
+      await createStaffPayoutSettlementRequestBinding({
+        staffUserId: staffProfileId,
+        requestId: settlementRequestId,
+        payoutBatchKey: batchKey,
+        actorId,
+        transaction,
+      });
 
       const lockedStaffProfile = await StaffProfile.findOne({
         where: { userId: staffProfileId },
@@ -1529,15 +1743,7 @@ export const createStaffPayoutBatch = async (
       }
 
       const duplicateInsideTx = hasPersonalSettlement
-        ? await findExistingCompatibleStaffPayoutBatch({
-            batchKey,
-            previousBatchKey,
-            legacyBatchKey,
-            direction,
-            counterpartyId,
-            paidDate: payoutDate,
-            transaction,
-          })
+        ? await findExistingBatchTransaction(batchKey, transaction)
         : null;
       const fundBatchCompleteInsideTx = await hasCompleteFundAllocationBatch(
         batchKey,
@@ -1562,6 +1768,7 @@ export const createStaffPayoutBatch = async (
       const lockedFundById = await validateBatchSettlementRouting({
         staffUserId: staffProfileId,
         staffType: lockedStaffProfile.staffType,
+        direction,
         effectiveDate: rangeEnd.format('YYYY-MM-DD'),
         rangeStart: rangeStart.format('YYYY-MM-DD'),
         rangeEnd: rangeEnd.format('YYYY-MM-DD'),
@@ -1666,6 +1873,7 @@ export const createStaffPayoutBatch = async (
             'currency',
             'amountMinor',
             'baseAmountMinor',
+            'counterpartyType',
             'counterpartyId',
             'meta',
           ],
@@ -1691,6 +1899,10 @@ export const createStaffPayoutBatch = async (
 
       for (const line of shouldCreatePersonalSettlement ? lines : []) {
         const currency = normalizeCurrencyCode(line.currency);
+        const segmentedIntent = line.verifiedIntent
+          && isSegmentedCompensationSettlementIntent(line.verifiedIntent)
+          ? line.verifiedIntent
+          : null;
         const financeTransaction = await createFinanceTransaction(
           {
             kind: direction === 'payable' ? 'expense' : 'income',
@@ -1711,7 +1923,18 @@ export const createStaffPayoutBatch = async (
               lineLabel: line.label,
               sourceKey: line.sourceKey,
               ...(line.componentId ? { componentId: line.componentId } : {}),
+              ...(segmentedIntent
+                ? {
+                    segmentKey: segmentedIntent.segmentKey,
+                    earningStart: segmentedIntent.earningStart,
+                    earningEnd: segmentedIntent.earningEnd,
+                    staffTypePeriodId: segmentedIntent.staffTypePeriodId,
+                    staffType: segmentedIntent.staffType,
+                    legacyExtrapolation: segmentedIntent.legacyExtrapolation,
+                  }
+                : {}),
               payoutBatchKey: batchKey,
+              settlementRequestId,
               ...(line.affiliatePayout
                 ? {
                     affiliatePayout: true,
@@ -1764,6 +1987,21 @@ export const createStaffPayoutBatch = async (
               note: line.description,
               actorId,
               affiliatePayout: line.affiliatePayout,
+              settlementAuthorization: line.verifiedIntent
+                ? {
+                    grossAmountMinor: line.verifiedIntent.grossAmountMinor,
+                    outstandingAmountMinor: line.verifiedIntent.outstandingAmountMinor,
+                    earningStart: isSegmentedCompensationSettlementIntent(line.verifiedIntent)
+                      ? line.verifiedIntent.earningStart
+                      : null,
+                    earningEnd: isSegmentedCompensationSettlementIntent(line.verifiedIntent)
+                      ? line.verifiedIntent.earningEnd
+                      : null,
+                    referenceIds: isSegmentedCompensationSettlementIntent(line.verifiedIntent)
+                      ? line.verifiedIntent.referenceIds
+                      : [],
+                  }
+                : null,
             },
             transaction,
           );
@@ -1791,6 +2029,7 @@ export const createStaffPayoutBatch = async (
               staffUserId: staffProfileId,
               lineLabel: 'Reimbursements',
               payoutBatchKey: batchKey,
+              settlementRequestId,
             },
           },
           actorId,
@@ -1840,41 +2079,26 @@ export const createStaffPayoutBatch = async (
       }
 
       if (fundAllocations.length > 0) {
-        const lockedSettlementRouter = await loadCompensationSettlementRouter({
-          effectiveDate: rangeEnd.format('YYYY-MM-DD'),
-          transaction,
-        });
-        for (const [index, allocation] of fundAllocations.entries()) {
+        for (const allocation of fundAllocations) {
           const fund = lockedFundById.get(allocation.fundId);
           if (!fund) {
             throw new HttpError(409, 'The selected Volunteer Fund is no longer available.');
           }
-          const component = allocation.componentId
-            ? await CompensationComponent.findByPk(allocation.componentId, {
-                attributes: ['id', 'name', 'category'],
-                transaction,
-              })
+          const segmentedIntent = isSegmentedCompensationSettlementIntent(
+            allocation.verifiedIntent,
+          )
+            ? allocation.verifiedIntent
             : null;
-          const route = lockedSettlementRouter.resolve({
-            userId: staffProfileId,
-            staffType: lockedStaffProfile.staffType,
-            ...(component
-              ? { componentId: component.id, componentCategory: component.category }
-              : { systemSource: allocation.sourceKey }),
-          });
-          if (route.destination !== 'volunteer_fund' || route.fundId !== allocation.fundId) {
-            throw new HttpError(409, `${allocation.label} routing changed. Refresh Pays and try again.`);
-          }
+          const settlementStaffType = segmentedIntent?.staffType ?? lockedStaffProfile.staffType;
           const allocationAttempt = await getFundAllocationAttemptState(
             batchKey,
-            index,
-            allocation.fundId,
+            allocation,
             transaction,
           );
           if (allocationAttempt.hasActiveAllocation) {
             continue;
           }
-          const baseIdempotencyKey = getFundAllocationIdempotencyKey(batchKey, index);
+          const baseIdempotencyKey = getFundAllocationIdempotencyKey(batchKey, allocation);
           const allocationIdempotencyKey = allocationAttempt.attemptCount === 0
             ? baseIdempotencyKey
             : `${baseIdempotencyKey}:retry:${allocationAttempt.attemptCount}`;
@@ -1889,28 +2113,47 @@ export const createStaffPayoutBatch = async (
               periodEnd: rangeEnd.format('YYYY-MM-DD'),
               description:
                 allocation.description
-                ?? `${allocation.label} allocated from ${lockedStaffProfile.staffType} compensation`,
+                ?? `${allocation.label} allocated from ${settlementStaffType} compensation`,
               attributedStaffUserId: staffProfileId,
               compensationComponentId: allocation.componentId,
               sourceKind: allocation.sourceKey,
-              sourceReference: [
-                staffProfileId,
-                rangeStart.format('YYYY-MM-DD'),
-                rangeEnd.format('YYYY-MM-DD'),
-                allocation.sourceKey,
-                allocation.componentId ?? 0,
-              ].join(':'),
+              sourceReference: segmentedIntent?.segmentKey ?? [
+                  staffProfileId,
+                  rangeStart.format('YYYY-MM-DD'),
+                  rangeEnd.format('YYYY-MM-DD'),
+                  allocation.sourceKey,
+                  allocation.componentId ?? 0,
+                ].join(':'),
               attributionSnapshot: {
                 staffUserId: staffProfileId,
-                staffType: lockedStaffProfile.staffType,
+                staffType: settlementStaffType,
+                ...(segmentedIntent
+                  ? {
+                      staffTypePeriodId: segmentedIntent.staffTypePeriodId,
+                      earningStart: segmentedIntent.earningStart,
+                      earningEnd: segmentedIntent.earningEnd,
+                      legacyExtrapolation: segmentedIntent.legacyExtrapolation,
+                    }
+                  : {}),
               },
               sourceSnapshot: {
                 source: 'staff-compensation-settlement',
                 label: allocation.label,
                 sourceKey: allocation.sourceKey,
                 componentId: allocation.componentId,
-                ruleId: route.ruleId,
+                ruleId: allocation.verifiedIntent.ruleId,
+                ...(segmentedIntent
+                  ? {
+                      segmentKey: segmentedIntent.segmentKey,
+                      earningStart: segmentedIntent.earningStart,
+                      earningEnd: segmentedIntent.earningEnd,
+                      staffTypePeriodId: segmentedIntent.staffTypePeriodId,
+                      staffType: segmentedIntent.staffType,
+                      legacyExtrapolation: segmentedIntent.legacyExtrapolation,
+                    }
+                  : {}),
                 payoutBatchKey: batchKey,
+                settlementRequestId,
                 periodStart: rangeStart.format('YYYY-MM-DD'),
                 periodEnd: rangeEnd.format('YYYY-MM-DD'),
               },

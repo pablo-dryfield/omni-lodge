@@ -51,6 +51,7 @@ import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
 import StaffPayoutLedger from "../models/StaffPayoutLedger.js";
 import StaffPayoutReceipt from "../models/StaffPayoutReceipt.js";
 import StaffPayoutReceiptItem from "../models/StaffPayoutReceiptItem.js";
+import StaffPayoutSettlementRequest from "../models/StaffPayoutSettlementRequest.js";
 import ShiftType from "../models/ShiftType.js";
 import ShiftTypeProduct from "../models/ShiftTypeProduct.js";
 import ShiftTemplate from "../models/ShiftTemplate.js";
@@ -79,6 +80,9 @@ import BookingUtmCatalog from "../models/BookingUtmCatalog.js";
 import AffiliatePayoutLog from "../models/AffiliatePayoutLog.js";
 import ShiftRole from "../models/ShiftRole.js";
 import UserShiftRole from "../models/UserShiftRole.js";
+import UserTypeMembershipPeriod from "../models/UserTypeMembershipPeriod.js";
+import UserShiftRoleMembershipPeriod from "../models/UserShiftRoleMembershipPeriod.js";
+import StaffProfileTypePeriod from "../models/StaffProfileTypePeriod.js";
 import ReportTemplate from "../models/ReportTemplate.js";
 import ReportSchedule from "../models/ReportSchedule.js";
 import DerivedFieldDefinition from "../models/DerivedFieldDefinition.js";
@@ -266,6 +270,7 @@ const sequelize = new Sequelize({
     StaffPayoutLedger,
     StaffPayoutReceipt,
     StaffPayoutReceiptItem,
+    StaffPayoutSettlementRequest,
     ShiftType,
     ShiftTypeProduct,
     ShiftTemplate,
@@ -303,6 +308,9 @@ const sequelize = new Sequelize({
     AffiliatePayoutLog,
     ShiftRole,
     UserShiftRole,
+    UserTypeMembershipPeriod,
+    UserShiftRoleMembershipPeriod,
+    StaffProfileTypePeriod,
     UserType,
     UserTypeProductType,
     Page,

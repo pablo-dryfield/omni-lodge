@@ -11,6 +11,10 @@ jest.mock('../../models/AffiliatePayoutLog.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn() },
 }));
+jest.mock('../../models/StaffProfile.js', () => ({
+  __esModule: true,
+  default: {},
+}));
 jest.mock('../configService.js', () => ({
   getConfigValue: jest.fn(),
   updateConfigValue: jest.fn(),

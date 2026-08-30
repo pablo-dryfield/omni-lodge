@@ -12,22 +12,24 @@ import {
 } from "sequelize-typescript";
 import type { NonAttribute } from "sequelize";
 import User from "./User.js";
+import type { StaffPayoutSettlementSnapshot } from "../types/StaffPayoutSettlementSnapshot.js";
 
-export type StaffPayoutSettlementSnapshotSource = {
-  sourceKey: string;
-  componentId: number | null;
-  category: string;
-  grossAmountMinor: number;
-  destination: "staff_vendor" | "volunteer_fund" | "excluded";
-  fundId: number | null;
-  ruleId: number;
-  currency: string;
-};
-
-export type StaffPayoutSettlementSnapshot = {
-  version: 1;
-  sources: StaffPayoutSettlementSnapshotSource[];
-};
+// Keep the historical model import surface intact while the contract itself
+// stays decorator-free and safe for services/tests to consume directly.
+export {
+  STAFF_PAYOUT_SETTLEMENT_SNAPSHOT_LEGACY_VERSION,
+  STAFF_PAYOUT_SETTLEMENT_SNAPSHOT_SEGMENTED_VERSION,
+} from "../types/StaffPayoutSettlementSnapshot.js";
+export type {
+  StaffPayoutSettlementSegmentFields,
+  StaffPayoutSettlementSnapshot,
+  StaffPayoutSettlementSnapshotSource,
+  StaffPayoutSettlementSnapshotSourceBase,
+  StaffPayoutSettlementSnapshotSourceV1,
+  StaffPayoutSettlementSnapshotSourceV2,
+  StaffPayoutSettlementSnapshotV1,
+  StaffPayoutSettlementSnapshotV2,
+} from "../types/StaffPayoutSettlementSnapshot.js";
 
 @Table({
   tableName: "staff_payout_ledgers",

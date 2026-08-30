@@ -5,6 +5,11 @@ import User from '../models/User.js';
 import UserShiftRole from '../models/UserShiftRole.js';
 import StaffProfile from '../models/StaffProfile.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
+import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import {
+  applyUserShiftRolesChange,
+  StaffEligibilityHistoryError,
+} from '../services/staffEligibilityHistoryService.js';
 
 const slugify = (value: string) =>
   value
@@ -151,6 +156,7 @@ export const listUserShiftRoleAssignments = async (_req: Request, res: Response)
 };
 
 export const updateUserShiftRoles = async (req: Request, res: Response): Promise<void> => {
+  const request = req as AuthenticatedRequest;
   const { userId } = req.params;
   const parsedUserId = Number(userId);
   if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
@@ -182,28 +188,25 @@ export const updateUserShiftRoles = async (req: Request, res: Response): Promise
       }
     }
 
-    await UserShiftRole.destroy({ where: { userId: parsedUserId } });
-
-    if (normalizedRoleIds.length > 0) {
-      const rows = normalizedRoleIds.map((roleId) => ({
-        userId: parsedUserId,
-        shiftRoleId: roleId,
-      }));
-      await UserShiftRole.bulkCreate(rows, { updateOnDuplicate: ['shiftRoleId'] });
-    }
-
-    const updatedAssignments = await UserShiftRole.findAll({
-      where: { userId: parsedUserId },
-      attributes: ['shiftRoleId'],
+    const result = await applyUserShiftRolesChange({
+      userId: parsedUserId,
+      shiftRoleIds: normalizedRoleIds,
+      effectiveDate: req.body?.effectiveDate,
+      actorId: request.authContext?.id ?? null,
+      reason: req.body?.reason,
     });
 
     res.json([
       {
         userId: parsedUserId,
-        roleIds: updatedAssignments.map((assignment) => assignment.shiftRoleId),
+        roleIds: result.next,
       },
     ]);
   } catch (error) {
+    if (error instanceof StaffEligibilityHistoryError) {
+      res.status(error.status).json([{ message: error.message, code: error.code }]);
+      return;
+    }
     res.status(500).json([{ message: (error as ErrorWithMessage).message }]);
   }
 };

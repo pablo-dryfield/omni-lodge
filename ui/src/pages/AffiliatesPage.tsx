@@ -446,6 +446,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   const [payoutForm, setPayoutForm] = useState<AffiliatePayoutFormState>(INITIAL_AFFILIATE_PAYOUT_FORM);
   const [payoutError, setPayoutError] = useState<string | null>(null);
   const [payoutSuccess, setPayoutSuccess] = useState<string | null>(null);
+  const [payoutReceiptAccessPath, setPayoutReceiptAccessPath] = useState<string | null>(null);
   const [payoutLoading, setPayoutLoading] = useState(false);
   const [undoPayoutId, setUndoPayoutId] = useState<number | null>(null);
   const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
@@ -763,6 +764,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
   const handleOpenPayoutModal = () => {
     setPayoutError(null);
     setPayoutSuccess(null);
+    setPayoutReceiptAccessPath(null);
     setPayoutForm(INITIAL_AFFILIATE_PAYOUT_FORM);
     setPayoutModalOpen(true);
   };
@@ -789,6 +791,7 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
       setPayoutLoading(true);
       setPayoutError(null);
       setPayoutSuccess(null);
+      setPayoutReceiptAccessPath(null);
       const payout = await createAffiliatePayout({
         affiliateUserId: selectedAffiliateUserId,
         startDate,
@@ -806,8 +809,10 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
           ? `${payout.affiliateUserName} will receive a required payment confirmation popup for photo evidence and e-signature.`
           : "Affiliate payout created. No staff receipt request was needed because this affiliate does not have a staff profile.",
       );
+      setPayoutReceiptAccessPath(payout.receipt?.accessPath ?? null);
     } catch (err: unknown) {
       setPayoutSuccess(null);
+      setPayoutReceiptAccessPath(null);
       setPayoutError(extractErrorMessage(err));
     } finally {
       setPayoutLoading(false);
@@ -819,11 +824,13 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
       setUndoPayoutId(payoutLogId);
       setPayoutError(null);
       setPayoutSuccess(null);
+      setPayoutReceiptAccessPath(null);
       await undoAffiliatePayout(payoutLogId);
       await loadOverview(startDate, endDate, selectedAffiliateUserId, { force: true, keepCurrentData: true });
       setPayoutSuccess("Payout undone. Any linked confirmation request was cancelled; existing evidence remains in its audit record.");
     } catch (err: unknown) {
       setPayoutSuccess(null);
+      setPayoutReceiptAccessPath(null);
       setPayoutError(extractErrorMessage(err));
     } finally {
       setUndoPayoutId(null);
@@ -843,7 +850,19 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
     label: category.name,
   }));
   const selectedAffiliate = data?.affiliateUsers.find((affiliate) => affiliate.id === selectedAffiliateUserId) ?? null;
-  const canPaySelectedAffiliate = canManageAssignments && selectedAffiliateUserId != null && data != null && data.summary.commissionOutstandingTotal > 0;
+  const selectedStaffAffiliateRequiresPays = Boolean(
+    canManageAssignments
+    && selectedAffiliate?.hasStaffProfile
+    && data
+    && data.summary.commissionOutstandingTotal > 0,
+  );
+  const canPaySelectedAffiliate = Boolean(
+    canManageAssignments
+    && selectedAffiliateUserId != null
+    && !selectedAffiliate?.hasStaffProfile
+    && data
+    && data.summary.commissionOutstandingTotal > 0,
+  );
 
   const sourceRows = data?.sourceBreakdown ?? [];
   const mediumRows = data?.mediumBreakdown ?? [];
@@ -1195,13 +1214,27 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               title="Affiliate payouts"
               icon={<IconDeviceFloppy size={18} />}
               right={
-                canPaySelectedAffiliate ? (
+                selectedStaffAffiliateRequiresPays ? (
+                  <Button
+                    component="a"
+                    href={`/pays?preset=custom&startDate=${startDate}&endDate=${endDate}`}
+                    variant="light"
+                  >
+                    Open Staff payments
+                  </Button>
+                ) : canPaySelectedAffiliate ? (
                   <Button onClick={handleOpenPayoutModal}>
                     Pay outstanding
                   </Button>
                 ) : undefined
               }
             >
+              {selectedStaffAffiliateRequiresPays ? (
+                <Alert color="blue" radius="md" title="Settle staff Promotion Sales from Staff payments">
+                  {selectedAffiliate?.fullName ?? 'This affiliate'} has a staff profile. Use Staff payments so deductions,
+                  earning-date Volunteer Fund routing, the payroll ledger, and receipt evidence are processed together.
+                </Alert>
+              ) : null}
               {payoutError ? (
                 <Alert color="red" radius="md" title="Affiliate payout error">
                   {payoutError}
@@ -1209,7 +1242,22 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               ) : null}
               {payoutSuccess ? (
                 <Alert color="green" radius="md" title="Affiliate payout updated">
-                  {payoutSuccess}
+                  <Stack gap="xs">
+                    <Text size="sm">{payoutSuccess}</Text>
+                    {payoutReceiptAccessPath ? (
+                      <Button
+                        component="a"
+                        href={payoutReceiptAccessPath}
+                        target="_blank"
+                        rel="noreferrer"
+                        size="xs"
+                        variant="light"
+                        w="fit-content"
+                      >
+                        Open/share confirmation link
+                      </Button>
+                    ) : null}
+                  </Stack>
                 </Alert>
               ) : null}
 

@@ -16,6 +16,7 @@ import {
   decodeStaffPayoutSignatureDataUrl,
   validateStaffPayoutReceiptPhoto,
 } from './staffPayoutReceiptValidation.js';
+import { staffPayoutReceiptStateError } from '../errors/StaffPayoutReceiptError.js';
 
 export const STAFF_PAYOUT_RECEIPT_ACCEPTANCE_VERSION = 'v1';
 
@@ -253,7 +254,7 @@ export async function confirmStaffPayoutReceipt(params: {
 }): Promise<StaffPayoutReceiptActionPayload> {
   const receipt = await loadReceiptForConfirmation(params.receiptId);
   if (!receipt) {
-    throw new Error('Payout receipt request was not found.');
+    throw staffPayoutReceiptStateError(404, 'Payout receipt request was not found.');
   }
   assertStaffPayoutReceiptActor({
     staffUserId: receipt.staffUserId,
@@ -262,7 +263,7 @@ export async function confirmStaffPayoutReceipt(params: {
     actionId: params.actionId,
   });
   if (receipt.status === 'cancelled') {
-    throw new Error('This payout receipt request was cancelled.');
+    throw staffPayoutReceiptStateError(409, 'This payout receipt request was cancelled.');
   }
   const payload = buildReceiptActionPayload(receipt);
   if (receipt.status === 'completed') {
@@ -307,7 +308,7 @@ export async function confirmStaffPayoutReceipt(params: {
         lock: transaction.LOCK.UPDATE,
       });
       if (!lockedReceipt) {
-        throw new Error('Payout receipt request was not found.');
+        throw staffPayoutReceiptStateError(404, 'Payout receipt request was not found.');
       }
       assertStaffPayoutReceiptActor({
         staffUserId: lockedReceipt.staffUserId,
@@ -316,7 +317,7 @@ export async function confirmStaffPayoutReceipt(params: {
         actionId: params.actionId,
       });
       if (lockedReceipt.status !== 'pending') {
-        throw new Error('This payout receipt request is no longer pending.');
+        throw staffPayoutReceiptStateError(409, 'This payout receipt request is no longer pending.');
       }
 
       await lockedReceipt.update(

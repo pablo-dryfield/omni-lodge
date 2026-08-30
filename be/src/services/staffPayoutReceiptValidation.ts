@@ -1,4 +1,8 @@
 import type { StaffPayoutReceiptSourceItem } from './staffPayoutReceiptService.js';
+import {
+  staffPayoutReceiptInputError,
+  staffPayoutReceiptStateError,
+} from '../errors/StaffPayoutReceiptError.js';
 
 export type PayoutReceiptPhotoFile = {
   buffer: Buffer;
@@ -12,14 +16,14 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 export const parseStaffPayoutAcknowledgedAmountMinor = (value: unknown): number => {
   const amount = typeof value === 'string' ? Number(value.trim()) : Number(value);
   if (!Number.isFinite(amount)) {
-    throw new Error('Acknowledged amount is required.');
+    throw staffPayoutReceiptInputError('Acknowledged amount is required.');
   }
   return Math.round(amount * 100);
 };
 
 export const assertStaffPayoutAcknowledgedAmount = (value: unknown, expectedAmountMinor: number): void => {
   if (parseStaffPayoutAcknowledgedAmountMinor(value) !== expectedAmountMinor) {
-    throw new Error('The acknowledged amount does not match this payout.');
+    throw staffPayoutReceiptInputError('The acknowledged amount does not match this payout.');
   }
 };
 
@@ -30,7 +34,7 @@ export const assertStaffPayoutReceiptActor = (params: {
   actionId: number;
 }): void => {
   if (params.staffUserId !== params.actorId || params.requiredActionId !== params.actionId) {
-    throw new Error('Payout receipt request was not found.');
+    throw staffPayoutReceiptStateError(404, 'Payout receipt request was not found.');
   }
 };
 
@@ -46,35 +50,35 @@ export const decodeStaffPayoutSignatureDataUrl = (value: unknown): Buffer => {
         })()
       : value;
   if (!signature || typeof signature !== 'object' || Array.isArray(signature)) {
-    throw new Error('E-signature is required.');
+    throw staffPayoutReceiptInputError('E-signature is required.');
   }
   const dataUrl = typeof (signature as { dataUrl?: unknown }).dataUrl === 'string'
     ? (signature as { dataUrl: string }).dataUrl.trim()
     : '';
   const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
   if (!match) {
-    throw new Error('E-signature must be a PNG image.');
+    throw staffPayoutReceiptInputError('E-signature must be a PNG image.');
   }
   const buffer = Buffer.from(match[1], 'base64');
   if (buffer.length === 0 || buffer.length > 2 * 1024 * 1024) {
-    throw new Error('E-signature file is empty or too large.');
+    throw staffPayoutReceiptInputError('E-signature file is empty or too large.');
   }
   if (!buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
-    throw new Error('E-signature image is invalid.');
+    throw staffPayoutReceiptInputError('E-signature image is invalid.');
   }
   return buffer;
 };
 
 export const validateStaffPayoutReceiptPhoto = <T extends PayoutReceiptPhotoFile | undefined>(file: T): Exclude<T, undefined> => {
   if (!file?.buffer?.length) {
-    throw new Error('Photo evidence is required.');
+    throw staffPayoutReceiptInputError('Photo evidence is required.');
   }
   const mimeType = file.mimetype.toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'].includes(mimeType)) {
-    throw new Error('Photo evidence must be a JPEG, PNG, WebP, HEIC, or HEIF image.');
+    throw staffPayoutReceiptInputError('Photo evidence must be a JPEG, PNG, WebP, HEIC, or HEIF image.');
   }
   if (file.size > 10 * 1024 * 1024 || file.buffer.length > 10 * 1024 * 1024) {
-    throw new Error('Photo evidence cannot exceed 10 MB.');
+    throw staffPayoutReceiptInputError('Photo evidence cannot exceed 10 MB.');
   }
   const isJpeg = file.buffer[0] === 0xff && file.buffer[1] === 0xd8 && file.buffer[2] === 0xff;
   const isPng = file.buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
@@ -89,7 +93,7 @@ export const validateStaffPayoutReceiptPhoto = <T extends PayoutReceiptPhotoFile
     (mimeType === 'image/webp' && !isWebp) ||
     ((mimeType === 'image/heic' || mimeType === 'image/heif') && !isHeif)
   ) {
-    throw new Error('Photo evidence contents do not match the selected image type.');
+    throw staffPayoutReceiptInputError('Photo evidence contents do not match the selected image type.');
   }
   return file as Exclude<T, undefined>;
 };

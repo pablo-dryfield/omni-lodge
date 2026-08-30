@@ -7,6 +7,11 @@ import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import FinanceVendor from '../finance/models/FinanceVendor.js';
 import FinanceClient from '../finance/models/FinanceClient.js';
+import {
+  applyStaffProfileTypeChange,
+  closeStaffProfileTypeHistoryForDeletion,
+  StaffEligibilityHistoryError,
+} from '../services/staffEligibilityHistoryService.js';
 
 const STAFF_TYPE_OPTIONS: Array<StaffProfile['staffType']> = ['volunteer', 'long_term'];
 
@@ -226,6 +231,7 @@ export const getStaffProfile = async (req: Request, res: Response): Promise<void
 
 export const createStaffProfile = async (req: Request, res: Response): Promise<void> => {
   try {
+    const request = req as AuthenticatedRequest;
     const userId = Number(req.body.userId);
     if (!Number.isInteger(userId) || userId <= 0) {
       res.status(400).json([{ message: 'A valid userId is required.' }]);
@@ -273,13 +279,29 @@ export const createStaffProfile = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    const profile = await StaffProfile.create({
-      userId,
-      staffType,
-      livesInAccom,
-      active: active ?? true,
-      financeVendorId,
-      financeClientId,
+    const sequelize = StaffProfile.sequelize;
+    if (!sequelize) {
+      throw new Error('Database connection is unavailable.');
+    }
+
+    const profile = await sequelize.transaction(async (transaction) => {
+      const created = await StaffProfile.create({
+        userId,
+        staffType,
+        livesInAccom,
+        active: active ?? true,
+        financeVendorId,
+        financeClientId,
+      }, { transaction });
+      await applyStaffProfileTypeChange({
+        userId,
+        staffType,
+        actorId: request.authContext?.id ?? null,
+        source: 'staff_profile_creation',
+        metadata: { initialization: true },
+        transaction,
+      });
+      return created;
     });
 
     res.status(201).json([profile]);
@@ -291,6 +313,7 @@ export const createStaffProfile = async (req: Request, res: Response): Promise<v
 
 export const updateStaffProfile = async (req: Request, res: Response): Promise<void> => {
   try {
+    const request = req as AuthenticatedRequest;
     const userId = Number(req.params.userId);
     if (!Number.isInteger(userId) || userId <= 0) {
       res.status(400).json([{ message: 'A valid userId is required.' }]);
@@ -298,14 +321,16 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
     }
 
     const updates: Partial<StaffProfile> = {};
+    const hasStaffTypeChange = Object.prototype.hasOwnProperty.call(req.body, 'staffType');
+    let requestedStaffType: StaffProfile['staffType'] | undefined;
 
-    if (req.body.staffType !== undefined) {
+    if (hasStaffTypeChange) {
       const staffType = normalizeStaffType(req.body.staffType);
       if (!staffType) {
         res.status(400).json([{ message: `staffType must be one of: ${STAFF_TYPE_OPTIONS.join(', ')}` }]);
         return;
       }
-      updates.staffType = staffType;
+      requestedStaffType = staffType;
     }
 
     if (req.body.livesInAccom !== undefined) {
@@ -349,16 +374,37 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    if (Object.keys(updates).length === 0) {
+    if (Object.keys(updates).length === 0 && !hasStaffTypeChange) {
       res.status(400).json([{ message: 'No valid fields provided for update.' }]);
       return;
     }
 
-    const [updated] = await StaffProfile.update(updates, { where: { userId } });
-    if (!updated) {
+    const existingProfile = await StaffProfile.findByPk(userId);
+    if (!existingProfile) {
       res.status(404).json([{ message: 'Staff profile not found' }]);
       return;
     }
+
+    const sequelize = StaffProfile.sequelize;
+    if (!sequelize) {
+      throw new Error('Database connection is unavailable.');
+    }
+
+    await sequelize.transaction(async (transaction) => {
+      if (Object.keys(updates).length > 0) {
+        await existingProfile.update(updates, { transaction });
+      }
+      if (hasStaffTypeChange && requestedStaffType) {
+        await applyStaffProfileTypeChange({
+          userId,
+          staffType: requestedStaffType,
+          effectiveDate: req.body?.effectiveDate,
+          actorId: request.authContext?.id ?? null,
+          reason: req.body?.reason,
+          transaction,
+        });
+      }
+    });
 
     const profile = await fetchProfileWithRelations(userId);
 
@@ -369,6 +415,10 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
 
     res.status(200).json([formatProfilePayload(profile)]);
   } catch (error) {
+    if (error instanceof StaffEligibilityHistoryError) {
+      res.status(error.status).json([{ message: error.message, code: error.code }]);
+      return;
+    }
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
   }
@@ -456,20 +506,44 @@ export const createClientForStaffProfile = async (req: Request, res: Response): 
 
 export const deleteStaffProfile = async (req: Request, res: Response): Promise<void> => {
   try {
+    const request = req as AuthenticatedRequest;
     const userId = Number(req.params.userId);
     if (!Number.isInteger(userId) || userId <= 0) {
       res.status(400).json([{ message: 'A valid userId is required.' }]);
       return;
     }
 
-    const deleted = await StaffProfile.destroy({ where: { userId } });
-    if (!deleted) {
-      res.status(404).json([{ message: 'Staff profile not found' }]);
-      return;
+    const sequelize = StaffProfile.sequelize;
+    if (!sequelize) {
+      throw new Error('Database connection is unavailable.');
     }
+
+    await sequelize.transaction(async (transaction) => {
+      await closeStaffProfileTypeHistoryForDeletion({
+        userId,
+        actorId: request.authContext?.id ?? null,
+        reason: req.body?.reason,
+        source: 'staff_profile_deletion',
+        metadata: { profileDeleted: true },
+        transaction,
+      });
+
+      const deleted = await StaffProfile.destroy({ where: { userId }, transaction });
+      if (!deleted) {
+        throw new StaffEligibilityHistoryError(
+          404,
+          'STAFF_PROFILE_NOT_FOUND',
+          'Staff profile not found.',
+        );
+      }
+    });
 
     res.status(204).send();
   } catch (error) {
+    if (error instanceof StaffEligibilityHistoryError) {
+      res.status(error.status).json([{ message: error.message, code: error.code }]);
+      return;
+    }
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
   }

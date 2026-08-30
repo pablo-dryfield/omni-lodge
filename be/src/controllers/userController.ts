@@ -7,8 +7,10 @@ import User from '../models/User.js';
 import UserType from '../models/UserType.js';
 import AuditLog from '../models/AuditLog.js';
 import StaffProfile from '../models/StaffProfile.js';
+import StaffProfileTypePeriod from '../models/StaffProfileTypePeriod.js';
 import ShiftRole from '../models/ShiftRole.js';
-import UserShiftRole from '../models/UserShiftRole.js';
+import UserShiftRoleMembershipPeriod from '../models/UserShiftRoleMembershipPeriod.js';
+import UserTypeMembershipPeriod from '../models/UserTypeMembershipPeriod.js';
 import { deleteProfilePhoto, storeProfilePhoto, StoreProfilePhotoResult, openProfilePhotoStream } from '../services/profilePhotoStorageService.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 import { Env } from '../types/Env.js';
@@ -21,6 +23,12 @@ import {
   sendBadgeToPrint,
 } from '../services/badgePrintService.js';
 import { upsertBadgeAffiliateAssignment } from '../services/affiliateService.js';
+import {
+  applyStaffProfileTypeChange,
+  applyUserShiftRolesChange,
+  applyUserTypeChange,
+  StaffEligibilityHistoryError,
+} from '../services/staffEligibilityHistoryService.js';
 
 const NAME_TO_SLUG: Record<string, string[]> = {
   guide: ['guide', 'pub-crawl-guide'],
@@ -325,6 +333,15 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       const newUser = await User.create(userPayload, { transaction });
       createdUser = newUser;
 
+      await applyUserTypeChange({
+        userId: newUser.id,
+        userTypeId: signupRole.id,
+        actorId: null,
+        source: 'user_signup',
+        metadata: { initialization: true },
+        transaction,
+      });
+
       await AuditLog.create(
         {
           actorId: null,
@@ -390,6 +407,14 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
           },
           { transaction },
         );
+        await applyStaffProfileTypeChange({
+          userId: newUser.id,
+          staffType: staffType as StaffProfile['staffType'],
+          actorId: null,
+          source: 'user_signup',
+          metadata: { initialization: true },
+          transaction,
+        });
       }
 
       if (shiftRoleIds.length > 0) {
@@ -411,12 +436,14 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
           throw new HttpError(400, 'Selected shift roles are not available during signup.');
         }
 
-        const assignmentRows = roles.map((role) => ({
+        await applyUserShiftRolesChange({
           userId: newUser.id,
-          shiftRoleId: role.id,
-        }));
-
-        await UserShiftRole.bulkCreate(assignmentRows, { transaction });
+          shiftRoleIds,
+          actorId: null,
+          source: 'user_signup',
+          metadata: { initialization: true },
+          transaction,
+        });
       }
     });
 
@@ -658,6 +685,19 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     const previousApproved = Boolean(existingUser.approved);
     const previousStatus = Boolean(existingUser.status);
     const previousUserTypeId = existingUser.userTypeId ?? null;
+    const hasUserTypeChange = Object.prototype.hasOwnProperty.call(data, 'userTypeId');
+    const requestedUserTypeId = data.userTypeId;
+    const eligibilityEffectiveDate = data.effectiveDate == null || typeof data.effectiveDate === 'string'
+      ? data.effectiveDate
+      : String(data.effectiveDate);
+    const eligibilityReason = typeof data.reason === 'string' ? data.reason : null;
+
+    // These fields describe an effective-dated eligibility command. They are
+    // not columns on users, and userTypeId is projected by the history service
+    // in the same transaction as its history and audit records.
+    delete data.userTypeId;
+    delete data.effectiveDate;
+    delete data.reason;
 
     [
       'approvedAt',
@@ -749,8 +789,18 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     const nextApproved = hasApprovedChange ? normalizeBoolean(data.approved, previousApproved) : previousApproved;
     const hasStatusChange = Object.prototype.hasOwnProperty.call(data, 'status');
     const nextStatus = hasStatusChange ? normalizeBoolean(data.status, previousStatus) : previousStatus;
-    const hasUserTypeChange = Object.prototype.hasOwnProperty.call(data, 'userTypeId');
-    const nextUserTypeId = hasUserTypeChange && data.userTypeId != null ? Number(data.userTypeId) : previousUserTypeId;
+    const nextUserTypeId = hasUserTypeChange && requestedUserTypeId != null
+      ? Number(requestedUserTypeId)
+      : previousUserTypeId;
+
+    if (
+      hasUserTypeChange
+      && requestedUserTypeId != null
+      && (!Number.isInteger(nextUserTypeId) || Number(nextUserTypeId) <= 0)
+    ) {
+      res.status(400).json([{ message: 'userTypeId must be a positive integer.' }]);
+      return;
+    }
 
     if (nextApproved && !nextUserTypeId) {
       res.status(400).json([{ message: 'A user type is required before approving the user.' }]);
@@ -779,7 +829,25 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
       }
     }
 
-    await existingUser.update(data);
+    const sequelize = User.sequelize;
+    if (!sequelize) {
+      throw new Error('Database connection is unavailable.');
+    }
+
+    await sequelize.transaction(async (transaction) => {
+      await existingUser.update(data, { transaction });
+      if (hasUserTypeChange && nextUserTypeId) {
+        await applyUserTypeChange({
+          userId: existingUser.id,
+          userTypeId: nextUserTypeId,
+          effectiveDate: eligibilityEffectiveDate,
+          actorId,
+          reason: eligibilityReason,
+          transaction,
+        });
+      }
+    });
+    await existingUser.reload();
 
     const auditMeta = {
       previous: {
@@ -846,17 +914,12 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
       });
     }
 
-    if (hasUserTypeChange && previousUserTypeId !== nextUserTypeId) {
-      await recordUserAuditLog({
-        actorId,
-        action: 'user.role_changed',
-        userId: existingUser.id,
-        meta: auditMeta,
-      });
-    }
-
     res.status(200).json([existingUser]);
   } catch (error) {
+    if (error instanceof StaffEligibilityHistoryError) {
+      res.status(error.status).json([{ message: error.message, code: error.code }]);
+      return;
+    }
     const errorMessage = (error as ErrorWithMessage).message;
     res.status(500).json([{ message: errorMessage }]);
   }
@@ -936,6 +999,20 @@ export const sendUserBadgeToPrint = async (req: Request, res: Response): Promise
 export const deleteUser = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const userId = Number(id);
+    const historyCounts = Number.isInteger(userId) && userId > 0
+      ? await Promise.all([
+          UserTypeMembershipPeriod.count({ where: { userId } }),
+          UserShiftRoleMembershipPeriod.count({ where: { userId } }),
+          StaffProfileTypePeriod.count({ where: { userId } }),
+        ])
+      : [0, 0, 0];
+    if (historyCounts.some((count) => count > 0)) {
+      res.status(409).json([{
+        message: 'This user has payroll eligibility history and cannot be deleted. Deactivate the user instead.',
+      }]);
+      return;
+    }
     const deleted = await User.destroy({ where: { id } });
 
     if (!deleted) {

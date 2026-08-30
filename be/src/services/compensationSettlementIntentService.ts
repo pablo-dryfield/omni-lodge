@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import HttpError from '../errors/HttpError.js';
+import type { StaffPayoutSettlementSegmentFields } from '../types/StaffPayoutSettlementSnapshot.js';
 import type { CompensationSettlementDestination } from './compensationSettlementRoutingService.js';
 
 // These tokens authorize calculated money movement, so they intentionally
@@ -7,8 +8,11 @@ import type { CompensationSettlementDestination } from './compensationSettlement
 // is required after compensation data has had time to change.
 export const COMPENSATION_SETTLEMENT_INTENT_MAX_AGE_SECONDS = 10 * 60;
 export const COMPENSATION_SETTLEMENT_INTENT_CLOCK_SKEW_SECONDS = 60;
+export const COMPENSATION_SETTLEMENT_INTENT_LEGACY_VERSION = 1 as const;
+export const COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION = 2 as const;
+export type CompensationSettlementDirection = 'payable' | 'receivable';
 
-export type CompensationSettlementIntentPayload = {
+export type CompensationSettlementIntentPayloadBase = {
   userId: number;
   rangeStart: string;
   rangeEnd: string;
@@ -25,10 +29,45 @@ export type CompensationSettlementIntentPayload = {
   issuedAt: number;
 };
 
-export type CompensationSettlementIntentInput = Omit<
-  CompensationSettlementIntentPayload,
-  'issuedAt'
->;
+export type CompensationSettlementIntentSegmentFields =
+  StaffPayoutSettlementSegmentFields;
+
+export type CompensationSettlementIntentPayloadV1 =
+  CompensationSettlementIntentPayloadBase & {
+    version: typeof COMPENSATION_SETTLEMENT_INTENT_LEGACY_VERSION;
+  };
+
+export type CompensationSettlementIntentPayloadV2 =
+  CompensationSettlementIntentPayloadBase
+  & CompensationSettlementIntentSegmentFields
+  & {
+    version: typeof COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION;
+    direction: 'payable';
+    referenceIds: number[];
+  };
+
+export type CompensationSettlementIntentPayload =
+  | CompensationSettlementIntentPayloadV1
+  | CompensationSettlementIntentPayloadV2;
+
+export type CompensationSettlementIntentInputV1 =
+  Omit<CompensationSettlementIntentPayloadBase, 'issuedAt'> & {
+    version?: typeof COMPENSATION_SETTLEMENT_INTENT_LEGACY_VERSION;
+  };
+
+export type CompensationSettlementIntentInputV2 =
+  Omit<CompensationSettlementIntentPayloadBase, 'issuedAt'>
+  & CompensationSettlementIntentSegmentFields
+  & {
+    version?: typeof COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION;
+    direction: 'payable';
+    referenceIds?: number[];
+  };
+
+/** Segment fields infer v2, so callers may omit `version` during rollout. */
+export type CompensationSettlementIntentInput =
+  | CompensationSettlementIntentInputV1
+  | CompensationSettlementIntentInputV2;
 
 export type SignCompensationSettlementIntentOptions = {
   now?: Date;
@@ -79,6 +118,17 @@ const parseNullablePositiveInteger = (value: unknown, field: string): number | n
     return null;
   }
   return parsePositiveInteger(value, field);
+};
+
+const parseReferenceIds = (value: unknown): number[] => {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw invalidIntent('referenceIds must be an array.');
+  }
+  return Array.from(new Set(value.map((entry) => parsePositiveInteger(entry, 'referenceIds'))))
+    .sort((left, right) => left - right);
 };
 
 const parseMinorAmount = (
@@ -143,6 +193,13 @@ const parseDestination = (value: unknown): CompensationSettlementDestination => 
   return value;
 };
 
+const parseDirection = (value: unknown): 'payable' => {
+  if (value !== 'payable') {
+    throw invalidIntent('direction must be payable for a version 2 intent.');
+  }
+  return value;
+};
+
 const parseIssuedAt = (value: unknown): number => {
   const issuedAt = Number(value);
   if (!Number.isSafeInteger(issuedAt) || issuedAt <= 0) {
@@ -150,6 +207,17 @@ const parseIssuedAt = (value: unknown): number => {
   }
   return issuedAt;
 };
+
+const SEGMENT_FIELD_NAMES = [
+  'direction',
+  'segmentKey',
+  'earningStart',
+  'earningEnd',
+  'staffTypePeriodId',
+  'staffType',
+  'legacyExtrapolation',
+  'referenceIds',
+] as const;
 
 const normalizePayload = (raw: Record<string, unknown>): CompensationSettlementIntentPayload => {
   const rangeStart = parseDateOnly(raw.rangeStart, 'rangeStart');
@@ -179,7 +247,7 @@ const normalizePayload = (raw: Record<string, unknown>): CompensationSettlementI
     throw invalidIntent('outstandingAmountMinor cannot exceed grossAmountMinor.');
   }
 
-  return {
+  const base: CompensationSettlementIntentPayloadBase = {
     userId: parsePositiveInteger(raw.userId, 'userId'),
     rangeStart,
     rangeEnd,
@@ -193,6 +261,52 @@ const normalizePayload = (raw: Record<string, unknown>): CompensationSettlementI
     ruleId: parsePositiveInteger(raw.ruleId, 'ruleId'),
     currency: parseCurrency(raw.currency),
     issuedAt: parseIssuedAt(raw.issuedAt),
+  };
+
+  const hasSegmentField = SEGMENT_FIELD_NAMES.some((field) => raw[field] !== undefined);
+  const version = raw.version === undefined
+    ? (hasSegmentField
+      ? COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION
+      : COMPENSATION_SETTLEMENT_INTENT_LEGACY_VERSION)
+    : raw.version;
+
+  if (version === COMPENSATION_SETTLEMENT_INTENT_LEGACY_VERSION) {
+    if (hasSegmentField) {
+      throw invalidIntent('Segment fields are only allowed for a version 2 intent.');
+    }
+    return {
+      ...base,
+      version: COMPENSATION_SETTLEMENT_INTENT_LEGACY_VERSION,
+    };
+  }
+
+  if (version !== COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION) {
+    throw invalidIntent('version must be 1 or 2.');
+  }
+
+  const earningStart = parseDateOnly(raw.earningStart, 'earningStart');
+  const earningEnd = parseDateOnly(raw.earningEnd, 'earningEnd');
+  if (earningEnd < earningStart) {
+    throw invalidIntent('earningEnd must be on or after earningStart.');
+  }
+  if (earningStart < rangeStart || earningEnd > rangeEnd) {
+    throw invalidIntent('The earning range must be contained in the settlement range.');
+  }
+  if (typeof raw.legacyExtrapolation !== 'boolean') {
+    throw invalidIntent('legacyExtrapolation must be a boolean.');
+  }
+
+  return {
+    ...base,
+    version: COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION,
+    direction: parseDirection(raw.direction),
+    segmentKey: parseIdentifier(raw.segmentKey, 'segmentKey'),
+    earningStart,
+    earningEnd,
+    staffTypePeriodId: parsePositiveInteger(raw.staffTypePeriodId, 'staffTypePeriodId'),
+    staffType: parseIdentifier(raw.staffType, 'staffType'),
+    legacyExtrapolation: raw.legacyExtrapolation,
+    referenceIds: parseReferenceIds(raw.referenceIds),
   };
 };
 
@@ -303,3 +417,16 @@ export const verifyCompensationSettlementIntent = (
   }
   return payload;
 };
+
+export const isSegmentedCompensationSettlementIntent = (
+  payload: CompensationSettlementIntentPayload,
+): payload is CompensationSettlementIntentPayloadV2 => (
+  payload.version === COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION
+);
+
+/** Legacy intents predate an explicit direction and are payable-only by definition. */
+export const getCompensationSettlementIntentDirection = (
+  payload: CompensationSettlementIntentPayload,
+): 'payable' => (
+  isSegmentedCompensationSettlementIntent(payload) ? payload.direction : 'payable'
+);
