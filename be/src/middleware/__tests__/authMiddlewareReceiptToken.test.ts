@@ -66,6 +66,7 @@ describe('normal auth receipt-token isolation', () => {
   });
 
   it('preserves the existing active-user JWT flow', async () => {
+    const updatedAt = new Date('2026-08-30T12:34:56.789Z');
     (User.findByPk as jest.Mock).mockResolvedValue({
       id: 28,
       status: true,
@@ -73,6 +74,8 @@ describe('normal auth receipt-token isolation', () => {
       userTypeId: 3,
       firstName: 'Aimee',
       lastName: 'Kelly',
+      profilePhotoPath: 'drive:private-file-id',
+      updatedAt,
       role: { slug: 'assistant-manager', name: 'Assistant Manager' },
       shiftRoles: [{ slug: 'manager' }],
     });
@@ -90,7 +93,40 @@ describe('normal auth receipt-token isolation', () => {
       id: 28,
       userTypeId: 3,
       roleSlug: 'assistant-manager',
+      profilePhotoPath: 'drive:private-file-id',
+      profilePhotoVersion: `28-${updatedAt.getTime()}`,
       shiftRoleSlugs: ['manager'],
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes a whitespace-only profile photo path to absent metadata', async () => {
+    (User.findByPk as jest.Mock).mockResolvedValue({
+      id: 28,
+      status: true,
+      approved: true,
+      userTypeId: 3,
+      firstName: 'Aimee',
+      lastName: 'Kelly',
+      profilePhotoPath: '   \t  ',
+      updatedAt: new Date('2026-08-30T12:34:56.789Z'),
+      role: { slug: 'assistant-manager', name: 'Assistant Manager' },
+      shiftRoles: [{ slug: 'manager' }],
+    });
+    const token = jwt.sign({ id: 28 }, process.env.JWT_SECRET as string, { expiresIn: '1h' });
+    const req = {
+      headers: { authorization: `Bearer ${token}` },
+      cookies: {},
+    } as unknown as AuthenticatedRequest;
+    const res = createResponse();
+
+    await authenticateJWT(req, res, next);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(req.authContext).toMatchObject({
+      id: 28,
+      profilePhotoPath: null,
+      profilePhotoVersion: null,
     });
     expect(next).toHaveBeenCalledTimes(1);
   });

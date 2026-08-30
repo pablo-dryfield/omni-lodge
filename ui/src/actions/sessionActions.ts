@@ -1,18 +1,21 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import axiosInstance from './../utils/axiosInstance';
-import { setUser, setAuthenticated } from '../reducers/sessionReducer';
+import { setUser, setAuthenticated, setProfilePhotoState } from '../reducers/sessionReducer';
+import type { SessionResponse } from '../types/general/SessionState';
 
 export const setUserState = (user: string) => setUser(user);
 export const setAuthenticatedState = (auth: boolean) => setAuthenticated(auth);
+export const setSessionProfilePhotoState = (
+  hasStoredProfilePhoto: boolean,
+  profilePhotoVersion: string | null,
+) => setProfilePhotoState({ hasStoredProfilePhoto, profilePhotoVersion });
 
-// Async thunk for fetching users
+// Async thunk for hydrating the authenticated session.
 export const fetchSession = createAsyncThunk(
     'session/session',
     async (_, { rejectWithValue }) => {
       try {
-        const response = await axiosInstance.get<
-          [{ authenticated: boolean; userId: number; roleSlug?: string | null; roleName?: string | null; userTypeId?: number | null }]
-        >('/session', {
+        const response = await axiosInstance.get<[SessionResponse]>('/session', {
           withCredentials: true, 
         });
         return response.data;

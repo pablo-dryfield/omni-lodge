@@ -11,6 +11,10 @@ const initialState: SessionState = {
   roleSlug: null,
   roleName: null,
   userTypeId: null,
+  firstName: null,
+  lastName: null,
+  hasStoredProfilePhoto: false,
+  profilePhotoVersion: null,
   error: null,
 };
 
@@ -24,6 +28,16 @@ const sessionSlice = createSlice({
     },
     setAuthenticated: (state, action: PayloadAction<boolean>) => {
       state.authenticated = action.payload;
+    },
+    setProfilePhotoState: (
+      state,
+      action: PayloadAction<{
+        hasStoredProfilePhoto: boolean;
+        profilePhotoVersion: string | null;
+      }>,
+    ) => {
+      state.hasStoredProfilePhoto = action.payload.hasStoredProfilePhoto;
+      state.profilePhotoVersion = action.payload.profilePhotoVersion;
     },
     clearSessionError: (state) => {
       state.error = null;
@@ -45,6 +59,10 @@ const sessionSlice = createSlice({
         state.roleSlug = null;
         state.roleName = null;
         state.userTypeId = null;
+        state.firstName = null;
+        state.lastName = null;
+        state.hasStoredProfilePhoto = false;
+        state.profilePhotoVersion = null;
         state.error = (action.payload as string) ?? action.error.message ?? 'Login failed';
       })
       .addCase(logoutUser.fulfilled, (state) => {
@@ -54,6 +72,10 @@ const sessionSlice = createSlice({
         state.roleSlug = null;
         state.roleName = null;
         state.userTypeId = null;
+        state.firstName = null;
+        state.lastName = null;
+        state.hasStoredProfilePhoto = false;
+        state.profilePhotoVersion = null;
         state.error = null;
       })
       .addCase(logoutUser.rejected, (state) => {
@@ -63,6 +85,10 @@ const sessionSlice = createSlice({
         state.roleSlug = null;
         state.roleName = null;
         state.userTypeId = null;
+        state.firstName = null;
+        state.lastName = null;
+        state.hasStoredProfilePhoto = false;
+        state.profilePhotoVersion = null;
         state.error = null;
       })
       .addCase(fetchSession.pending, (state) => {
@@ -75,17 +101,28 @@ const sessionSlice = createSlice({
         state.roleSlug = action.payload[0].roleSlug ?? null;
         state.roleName = action.payload[0].roleName ?? null;
         state.userTypeId = action.payload[0].userTypeId ?? null;
+        state.firstName = action.payload[0].firstName ?? null;
+        state.lastName = action.payload[0].lastName ?? null;
+        state.user = [state.firstName, state.lastName].filter(Boolean).join(' ').trim();
+        state.hasStoredProfilePhoto = action.payload[0].hasStoredProfilePhoto ?? false;
+        state.profilePhotoVersion = action.payload[0].profilePhotoVersion ?? null;
         state.error = null;
       })
       .addCase(fetchSession.rejected, (state) => {
         state.checkingSession = false;
         state.authenticated = false;
+        state.loggedUserId = 0;
+        state.user = '';
         state.roleSlug = null;
         state.roleName = null;
         state.userTypeId = null;
+        state.firstName = null;
+        state.lastName = null;
+        state.hasStoredProfilePhoto = false;
+        state.profilePhotoVersion = null;
       });
   },
 });
 
-export const { setUser, setAuthenticated, clearSessionError } = sessionSlice.actions;
+export const { setUser, setAuthenticated, setProfilePhotoState, clearSessionError } = sessionSlice.actions;
 export default sessionSlice.reducer;

@@ -112,11 +112,15 @@ export const updateUser = createAsyncThunk(
     { rejectWithValue },
   ) => {
     try {
-      const response = await axiosInstance.put<Partial<User>>(`/users/${userId}`, userData, {
+      const response = await axiosInstance.put<[Partial<User>]>(`/users/${userId}`, userData, {
         withCredentials: true,
         headers: userData instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : undefined,
       });
-      return response.data;
+      const updatedUser = response.data[0];
+      if (!updatedUser) {
+        throw new Error('The server did not return the updated user');
+      }
+      return updatedUser;
     } catch (error) {
       return rejectWithValue(extractErrorMessage(error));
     }

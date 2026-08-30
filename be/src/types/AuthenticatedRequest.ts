@@ -9,6 +9,9 @@ export interface AuthorizationContext {
   roleName?: string | null;
   firstName?: string | null;
   lastName?: string | null;
+  /** Internal storage locator. Never include this value in an API response. */
+  profilePhotoPath?: string | null;
+  profilePhotoVersion?: string | null;
   shiftRoleSlugs?: string[];
 }
 

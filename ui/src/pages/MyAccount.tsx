@@ -27,7 +27,7 @@ import QRCode from "qrcode";
 import { fetchUsers, sendUserBadgeToPrint, updateUser } from "../actions/userActions";
 import { fetchUserTypes } from "../actions/userTypeActions";
 import { fetchStaffProfiles } from "../actions/staffProfileActions";
-import { setUserState } from "../actions/sessionActions";
+import { setSessionProfilePhotoState, setUserState } from "../actions/sessionActions";
 import { useShiftRoleAssignments, useShiftRoles } from "../api/shiftRoles";
 import type { StaffProfile } from "../types/staffProfiles/StaffProfile";
 import type { User } from "../types/users/User";
@@ -1054,6 +1054,7 @@ const MyAccount = () => {
     setPhotoFeedback(null);
     setPhotoSaving(true);
     try {
+      let updatedUser: Partial<User>;
       if (profilePhotoFile) {
         let uploadFile = profilePhotoFile;
         try {
@@ -1063,15 +1064,23 @@ const MyAccount = () => {
         }
         const formData = new FormData();
         formData.append("profilePhoto", uploadFile);
-        await dispatch(updateUser({ userId: loggedUserId, userData: formData })).unwrap();
+        updatedUser = await dispatch(updateUser({ userId: loggedUserId, userData: formData })).unwrap();
       } else if (removePhotoRequested) {
-        await dispatch(
+        updatedUser = await dispatch(
           updateUser({
             userId: loggedUserId,
             userData: { profilePhotoUrl: null, profilePhotoPath: null },
           }),
         ).unwrap();
+      } else {
+        return;
       }
+      const hasStoredProfilePhoto = typeof updatedUser.profilePhotoPath === "string"
+        && updatedUser.profilePhotoPath.trim().length > 0;
+      dispatch(setSessionProfilePhotoState(
+        hasStoredProfilePhoto,
+        hasStoredProfilePhoto ? `${updatedUser.id ?? loggedUserId}-${Date.now()}` : null,
+      ));
       setPhotoFeedback({
         type: "success",
         message: profilePhotoFile ? "Profile photo updated." : "Profile photo removed.",

@@ -35,9 +35,8 @@ import {
 } from "@tabler/icons-react";
 
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
-import { fetchUsers, logoutUser } from "../../actions/userActions";
+import { logoutUser } from "../../actions/userActions";
 import { selectAllowedNavigationPages } from "../../selectors/accessControlSelectors";
-import type { User } from "../../types/users/User";
 import { buildUserProfilePhotoUrl } from "../../utils/profilePhoto";
 import {
   fetchInboxNotifications,
@@ -63,9 +62,9 @@ const MainTabs = ({
   const queryClient = useQueryClient();
   const allowedPages = useAppSelector(selectAllowedNavigationPages);
   const { currentPage } = useAppSelector((state) => state.navigation);
-  const sessionUserName = useAppSelector((state) => state.session.user);
-  const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
-  const usersState = useAppSelector((state) => state.users);
+  const session = useAppSelector((state) => state.session);
+  const sessionUserName = session.user;
+  const loggedUserId = session.loggedUserId;
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useMantineTheme();
@@ -82,20 +81,22 @@ const MainTabs = ({
   const [refreshingApp, setRefreshingApp] = useState(false);
   const navContainerRef = useRef<HTMLDivElement | null>(null);
   const navMeasurementRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const requestedUsersRef = useRef(false);
   const navRafRef = useRef<number | null>(null);
 
-  const userRecords = useMemo(
-    () => (usersState?.[0]?.data?.[0]?.data ?? []) as Partial<User>[],
-    [usersState],
-  );
-  const currentUserRecord = useMemo(
-    () => userRecords.find((record) => record.id === loggedUserId),
-    [userRecords, loggedUserId],
-  );
   const userProfilePhotoUrl = useMemo(
-    () => buildUserProfilePhotoUrl({ user: currentUserRecord }),
-    [currentUserRecord],
+    () => buildUserProfilePhotoUrl({
+      user: {
+        id: loggedUserId,
+        hasStoredProfilePhoto: session.hasStoredProfilePhoto,
+      },
+      cacheOverride: session.profilePhotoVersion ?? undefined,
+      resourcePath: "/session/profile-photo",
+    }),
+    [
+      loggedUserId,
+      session.hasStoredProfilePhoto,
+      session.profilePhotoVersion,
+    ],
   );
 
   const profileInitials = useMemo(() => {
@@ -211,18 +212,6 @@ const MainTabs = ({
   useEffect(() => {
     closeDrawer();
   }, [location.pathname, closeDrawer]);
-
-  useEffect(() => {
-    if (!loggedUserId) {
-      requestedUsersRef.current = false;
-      return;
-    }
-    if (currentUserRecord || usersState?.[0]?.loading || requestedUsersRef.current) {
-      return;
-    }
-    requestedUsersRef.current = true;
-    dispatch(fetchUsers());
-  }, [loggedUserId, currentUserRecord, usersState, dispatch]);
 
   useEffect(() => {
     if (!loggedUserId) {

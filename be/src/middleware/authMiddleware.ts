@@ -88,6 +88,9 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
           .filter((value): value is string => Boolean(value)),
       ),
     );
+    const profilePhotoPath = typeof user.profilePhotoPath === 'string' && user.profilePhotoPath.trim()
+      ? user.profilePhotoPath.trim()
+      : null;
 
     req.user = decoded;
     req.authContext = {
@@ -98,6 +101,10 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       roleName: role?.name ?? null,
       firstName: user.firstName ?? null,
       lastName: user.lastName ?? null,
+      profilePhotoPath,
+      profilePhotoVersion: profilePhotoPath
+        ? `${user.id}-${user.updatedAt?.getTime() ?? 0}`
+        : null,
       shiftRoleSlugs,
     };
     req.permissionCache = new Map();
