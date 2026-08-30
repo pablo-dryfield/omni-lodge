@@ -7,6 +7,7 @@ import FinanceTransaction, {
   FinanceTransactionCounterpartyType,
 } from '../models/FinanceTransaction.js';
 import FinanceFile from '../models/FinanceFile.js';
+import VolunteerFundEntry from '../models/VolunteerFundEntry.js';
 import { recordFinanceAuditLog } from './auditLogService.js';
 import {
   assertCounterpartyIsNotStaffPayment,
@@ -44,6 +45,7 @@ export type FinanceTransactionInput = {
 type FinanceTransactionServiceOptions = {
   transaction?: SequelizeTransaction;
   allowStaffPayoutReceiptFlow?: boolean;
+  allowVolunteerFundSpendReversal?: boolean;
 };
 
 const assertGeneralInvoiceFile = async (
@@ -193,6 +195,7 @@ export async function updateFinanceTransaction(
       updateFinanceTransaction(id, changes, userId, {
         transaction,
         allowStaffPayoutReceiptFlow: options?.allowStaffPayoutReceiptFlow,
+        allowVolunteerFundSpendReversal: options?.allowVolunteerFundSpendReversal,
       }),
     );
   }
@@ -204,6 +207,26 @@ export async function updateFinanceTransaction(
   });
   if (!record) {
     throw new Error('Transaction not found');
+  }
+
+  const volunteerFundSpend = await VolunteerFundEntry.findOne({
+    attributes: ['id'],
+    where: { financeTransactionId: record.id, entryType: 'spend' },
+    transaction,
+  });
+  if (volunteerFundSpend) {
+    const changedFields = Object.entries(changes)
+      .filter(([, value]) => value !== undefined)
+      .map(([field]) => field);
+    const isFundReversalVoid = options.allowVolunteerFundSpendReversal === true
+      && changedFields.length === 1
+      && changedFields[0] === 'status'
+      && changes.status === 'void';
+    if (!isFundReversalVoid) {
+      throw new Error(
+        'This Finance expense backs a Volunteer Fund spend and can only be voided through that fund entry reversal.',
+      );
+    }
   }
 
   await assertFinanceTransactionIsNotReceiptProtected(record.id, transaction);

@@ -7,4 +7,5 @@ export * from './Transaction';
 export * from './RecurringRule';
 export * from './ManagementRequest';
 export * from './Budget';
-
+export * from './SettlementRule';
+export * from './VolunteerFund';

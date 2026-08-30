@@ -15,6 +15,7 @@ const quickLinks = [
   { label: "Inventory", path: "/finance/inventory" },
   { label: "Clients", path: "/finance/clients" },
   { label: "Recurring Rules", path: "/finance/recurring" },
+  { label: "Volunteer Funds", path: "/finance/volunteer-funds" },
   { label: "Management Requests", path: "/finance/management-requests" },
   { label: "Settings", path: "/finance/settings" },
 ];

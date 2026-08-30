@@ -43,6 +43,8 @@ import {
   FinanceRecurringRule,
   FinanceTransaction,
   FinanceVendor,
+  VolunteerFund,
+  VolunteerFundEntry,
 } from '../finance/models/index.js';
 import StaffProfile from './StaffProfile.js';
 import StaffPayoutCollectionLog from './StaffPayoutCollectionLog.js';
@@ -74,6 +76,7 @@ import GameScore from './GameScore.js';
 import AffiliatePayoutLog from './AffiliatePayoutLog.js';
 import CompensationComponent from './CompensationComponent.js';
 import CompensationComponentAssignment from './CompensationComponentAssignment.js';
+import CompensationSettlementRule from './CompensationSettlementRule.js';
 import AssistantManagerTaskTemplate from './AssistantManagerTaskTemplate.js';
 import AssistantManagerTaskAssignment from './AssistantManagerTaskAssignment.js';
 import AssistantManagerTaskLog from './AssistantManagerTaskLog.js';
@@ -107,6 +110,8 @@ export function defineAssociations() {
   User.hasMany(CompensationComponent, { foreignKey: 'updated_by', as: 'compensationComponentsUpdated' });
   User.hasMany(CompensationComponentAssignment, { foreignKey: 'user_id', as: 'compensationAssignments' });
   CompensationComponentAssignment.belongsTo(User, { foreignKey: 'user_id', as: 'userCompensation' });
+  User.hasMany(CompensationSettlementRule, { foreignKey: 'user_id', as: 'targetedSettlementRules' });
+  User.hasMany(VolunteerFundEntry, { foreignKey: 'attributed_staff_user_id', as: 'volunteerFundAttributions' });
   User.hasMany(StaffPayoutLedger, { foreignKey: 'staff_user_id', as: 'payoutLedgers' });
   StaffPayoutLedger.belongsTo(User, { foreignKey: 'staff_user_id', as: 'ledgerUser' });
   User.hasMany(ConfigHistory, { foreignKey: 'actor_id', as: 'configHistory' });
@@ -187,6 +192,8 @@ export function defineAssociations() {
 
   // Compensation components
   CompensationComponent.hasMany(CompensationComponentAssignment, { foreignKey: 'component_id', as: 'assignmentsCompensation' });
+  CompensationComponent.hasMany(CompensationSettlementRule, { foreignKey: 'component_id', as: 'settlementRules' });
+  CompensationComponent.hasMany(VolunteerFundEntry, { foreignKey: 'compensation_component_id', as: 'volunteerFundEntries' });
   CompensationComponentAssignment.belongsTo(CompensationComponent, { foreignKey: 'component_id', as: 'componentCompensation' });
   ShiftRole.hasMany(CompensationComponentAssignment, { foreignKey: 'shift_role_id', as: 'shiftRoleCompensationAssignments' });
   CompensationComponentAssignment.belongsTo(ShiftRole, { foreignKey: 'shift_role_id', as: 'shiftRoleCompensation' });
@@ -330,6 +337,11 @@ export function defineAssociations() {
   FinanceCategory.hasMany(FinanceVendor, { foreignKey: 'defaultCategoryId', as: 'vendors' });
   FinanceCategory.hasMany(FinanceClient, { foreignKey: 'defaultCategoryId', as: 'clients' });
   FinanceTransaction.hasOne(AffiliatePayoutLog, { foreignKey: 'finance_transaction_id', as: 'affiliatePayoutLog' });
+  FinanceTransaction.hasOne(VolunteerFundEntry, { foreignKey: 'finance_transaction_id', as: 'volunteerFundEntry' });
+  VolunteerFund.hasMany(CompensationSettlementRule, { foreignKey: 'fund_id', as: 'settlementRules' });
+  VolunteerFund.hasMany(VolunteerFundEntry, { foreignKey: 'fund_id', as: 'ledgerEntries' });
+  VolunteerFundEntry.belongsTo(VolunteerFundEntry, { foreignKey: 'reversal_of_entry_id', as: 'reversalSource' });
+  VolunteerFundEntry.hasOne(VolunteerFundEntry, { foreignKey: 'reversal_of_entry_id', as: 'reversalEntry' });
   AffiliatePayoutLog.belongsTo(FinanceTransaction, { foreignKey: 'finance_transaction_id', as: 'financeTransaction' });
   AffiliatePayoutLog.belongsTo(User, { foreignKey: 'affiliate_user_id', as: 'affiliateUser' });
   AffiliatePayoutLog.belongsTo(User, { foreignKey: 'created_by', as: 'createdByUser' });

@@ -1,5 +1,9 @@
-import { buildDefaultPaymentLines } from './Pays';
-import type { Pay, PayAffiliateSaleBooking } from '../types/pays/Pay';
+import {
+  buildDefaultFundAllocationLines,
+  buildDefaultPaymentLines,
+  formatPayStaffName,
+} from './Pays';
+import type { Pay, PayAffiliateSaleBooking, PaySettlementSource } from '../types/pays/Pay';
 
 jest.mock('axios', () => {
   const axiosInstance = {
@@ -49,6 +53,77 @@ const createStaff = (overrides: Partial<Pay>): Pay => ({
   totalPayout: 0,
   breakdown: [],
   ...overrides,
+});
+
+const createGuideCommissionSource = (
+  destination: PaySettlementSource['destination'],
+): PaySettlementSource => ({
+  sourceKey: 'guide_commission',
+  label: 'Pub Crawl - Commission',
+  componentId: null,
+  category: 'commission',
+  amount: 100,
+  destination,
+  fundId: destination === 'volunteer_fund' ? 1 : null,
+  fundName: destination === 'volunteer_fund' ? 'Volunteer Fund' : null,
+  ruleId: 10,
+  settledAmount: 0,
+  allocatedAmount: 0,
+  outstandingAmount: 100,
+  overallocatedAmount: 0,
+  currency: 'PLN',
+  allocatedFundIds: [],
+  routeChanged: false,
+  settlementIntent: 'signed-period-routing-intent',
+});
+
+const volunteerCommissionStaff = (overrides: Partial<Pay> = {}): Pay => createStaff({
+  staffType: 'volunteer',
+  totalPayout: 100,
+  personalPayableTotal: 100,
+  closingBalance: 100,
+  payouts: {
+    currency: 'PLN',
+    payableDue: 100,
+    payablePaid: 0,
+    payableOutstanding: 100,
+    receivableDue: 0,
+    receivableCollected: 0,
+    receivableOutstanding: 0,
+  },
+  productTotals: [{
+    productId: 1,
+    productName: 'Pub Crawl',
+    counterIds: [],
+    totalCustomers: 10,
+    totalCommission: 100,
+    componentTotals: [],
+  }],
+  ...overrides,
+});
+
+describe('formatPayStaffName', () => {
+  it('prefers and normalizes the full name supplied by the payout payload', () => {
+    expect(formatPayStaffName({
+      firstName: 'Ignored',
+      lastName: 'Fields',
+      fullName: '  Luna   Martini  ',
+    })).toBe('Luna Martini');
+  });
+
+  it('combines first and last name when fullName is absent', () => {
+    expect(formatPayStaffName({ firstName: '  Cristian ', lastName: ' Lopez  ' }))
+      .toBe('Cristian Lopez');
+  });
+
+  it('uses an unambiguous staff id when name fields are empty', () => {
+    expect(formatPayStaffName({ firstName: ' ', lastName: null, userId: 177 }))
+      .toBe('Staff #177');
+  });
+
+  it('uses the safe generic fallback when no identity is available', () => {
+    expect(formatPayStaffName(null)).toBe('Staff member');
+  });
 });
 
 describe('buildDefaultPaymentLines', () => {
@@ -118,5 +193,54 @@ describe('buildDefaultPaymentLines', () => {
     const lines = buildDefaultPaymentLines(staff, new Map(), '', new Map());
 
     expect(lines.find((line) => line.label === 'Bonus')?.amount).toBe(60);
+  });
+
+  it('keeps an explicitly routed historical Volunteer liability payable to staff', () => {
+    const staff = volunteerCommissionStaff({
+      range: { startDate: '2026-07-01', endDate: '2026-07-31' },
+      settlementSources: [createGuideCommissionSource('staff_vendor')],
+    });
+
+    const lines = buildDefaultPaymentLines(staff, new Map(), '', new Map());
+
+    expect(lines).toEqual([
+      expect.objectContaining({
+        label: 'Pub Crawl - Commission',
+        sourceKey: 'guide_commission',
+        amount: 100,
+        settlementIntent: 'signed-period-routing-intent',
+      }),
+    ]);
+  });
+
+  it('selects the August Volunteer Fund destination instead of a personal line', () => {
+    const source = createGuideCommissionSource('volunteer_fund');
+    const staff = volunteerCommissionStaff({
+      range: { startDate: '2026-08-01', endDate: '2026-08-31' },
+      totalPayout: 0,
+      personalPayableTotal: 0,
+      volunteerFundAllocationTotal: 100,
+      closingBalance: 0,
+      payouts: {
+        currency: 'PLN',
+        payableDue: 0,
+        payablePaid: 0,
+        payableOutstanding: 0,
+        receivableDue: 0,
+        receivableCollected: 0,
+        receivableOutstanding: 0,
+      },
+      settlementSources: [source],
+    });
+
+    expect(buildDefaultPaymentLines(staff, new Map(), '', new Map())).toEqual([]);
+    expect(buildDefaultFundAllocationLines(staff)).toEqual([
+      expect.objectContaining({
+        sourceKey: 'guide_commission',
+        amount: 100,
+        fundId: 1,
+        settlementIntent: 'signed-period-routing-intent',
+      }),
+    ]);
   });
 });

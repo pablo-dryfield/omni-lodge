@@ -79,3 +79,28 @@ export const getUncollectedAffiliatePaidAmount = (params: {
 
   return amountMinor / 100;
 };
+
+/**
+ * Canonical paid amount for the payable side of a staff payout period.
+ *
+ * Collection rows are authoritative for integrated Pays/affiliate payments.
+ * Legacy/direct affiliate payout logs that have no matching collection row
+ * are added once from their visible booking allocations.
+ */
+export const getCanonicalPayablePaidMinor = (params: {
+  collectedPayableMinor: number;
+  uncollectedAffiliatePaidMinor: number;
+}): number => {
+  if (!Number.isSafeInteger(params.collectedPayableMinor) || params.collectedPayableMinor < 0) {
+    throw new Error('Collected payable amount must be a non-negative safe integer.');
+  }
+  if (!Number.isSafeInteger(params.uncollectedAffiliatePaidMinor)
+    || params.uncollectedAffiliatePaidMinor < 0) {
+    throw new Error('Uncollected affiliate paid amount must be a non-negative safe integer.');
+  }
+  const totalPaidMinor = params.collectedPayableMinor + params.uncollectedAffiliatePaidMinor;
+  if (!Number.isSafeInteger(totalPaidMinor)) {
+    throw new Error('Canonical payable paid amount exceeds safe currency limits.');
+  }
+  return totalPaidMinor;
+};

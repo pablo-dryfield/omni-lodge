@@ -100,6 +100,7 @@ import ReviewDailySnapshot from "../models/ReviewDailySnapshot.js";
 import ReviewMonthLock from "../models/ReviewMonthLock.js";
 import CompensationComponent from "../models/CompensationComponent.js";
 import CompensationComponentAssignment from "../models/CompensationComponentAssignment.js";
+import CompensationSettlementRule from "../models/CompensationSettlementRule.js";
 import AssistantManagerTaskTemplate from "../models/AssistantManagerTaskTemplate.js";
 import AssistantManagerTaskAssignment from "../models/AssistantManagerTaskAssignment.js";
 import AssistantManagerTaskLog from "../models/AssistantManagerTaskLog.js";
@@ -139,6 +140,8 @@ import {
   FinanceRecurringRule,
   FinanceTransaction,
   FinanceVendor,
+  VolunteerFund,
+  VolunteerFundEntry,
 } from "../finance/models/index.js";
 import { queryDiagnosticsService } from "../services/queryDiagnosticsService.js";
 
@@ -204,6 +207,7 @@ const sequelize = new Sequelize({
     ReviewMonthLock,
     CompensationComponent,
     CompensationComponentAssignment,
+    CompensationSettlementRule,
     AssistantManagerTaskTemplate,
     AssistantManagerTaskAssignment,
     AssistantManagerTaskLog,
@@ -317,6 +321,8 @@ const sequelize = new Sequelize({
     FinanceManagementRequest,
     FinanceBudget,
     FinanceAuditLog,
+    VolunteerFund,
+    VolunteerFundEntry,
   ],
 });
 

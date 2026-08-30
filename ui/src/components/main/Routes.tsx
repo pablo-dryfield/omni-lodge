@@ -95,6 +95,7 @@ const FinanceClients = lazy(() => import("../../pages/Finance/FinanceClients"));
 const FinanceCategories = lazy(() => import("../../pages/Finance/FinanceCategories"));
 const FinanceRecurring = lazy(() => import("../../pages/Finance/FinanceRecurring"));
 const FinanceBudgets = lazy(() => import("../../pages/Finance/FinanceBudgets"));
+const FinanceVolunteerFunds = lazy(() => import("../../pages/Finance/FinanceVolunteerFunds"));
 const FinanceManagementRequests = lazy(() => import("../../pages/Finance/FinanceManagementRequests"));
 const FinanceReports = lazy(() => import("../../pages/Finance/FinanceReports"));
 const FinanceFiles = lazy(() => import("../../pages/Finance/FinanceFiles"));
@@ -162,6 +163,7 @@ const Routes = () => {
           <Route path="categories" element={<FinanceCategories />} />
           <Route path="recurring" element={<FinanceRecurring />} />
           <Route path="budgets" element={<FinanceBudgets />} />
+          <Route path="volunteer-funds" element={<FinanceVolunteerFunds />} />
           <Route path="management-requests" element={<FinanceManagementRequests />} />
           <Route path="files" element={<FinanceFiles />} />
           <Route path="inventory" element={<FinanceInventory />} />

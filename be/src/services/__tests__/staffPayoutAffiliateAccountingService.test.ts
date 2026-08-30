@@ -1,5 +1,6 @@
 import {
   applyAffiliateCommissionEarnings,
+  getCanonicalPayablePaidMinor,
   getUncollectedAffiliatePaidAmount,
 } from '../staffPayoutAffiliateAccountingService';
 
@@ -169,5 +170,21 @@ describe('getUncollectedAffiliatePaidAmount', () => {
         collectedFinanceTransactionIds: new Set(),
       }),
     ).toBe(12.34);
+  });
+});
+
+describe('getCanonicalPayablePaidMinor', () => {
+  it('combines collection rows with legacy affiliate payouts without double counting integrated payouts', () => {
+    expect(getCanonicalPayablePaidMinor({
+      collectedPayableMinor: 8_000,
+      uncollectedAffiliatePaidMinor: 1_234,
+    })).toBe(9_234);
+  });
+
+  it('rejects an unsafe collection total instead of persisting a corrupt ledger balance', () => {
+    expect(() => getCanonicalPayablePaidMinor({
+      collectedPayableMinor: -1,
+      uncollectedAffiliatePaidMinor: 0,
+    })).toThrow(/non-negative safe integer/i);
   });
 });

@@ -1,10 +1,12 @@
 import crypto from 'crypto';
+import dayjs from 'dayjs';
 import { Op, type Transaction as SequelizeTransaction } from 'sequelize';
 import sequelize from '../config/database.js';
 import User from '../models/User.js';
 import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
 import RequiredAction from '../models/RequiredAction.js';
 import StaffPayoutCollectionLog from '../models/StaffPayoutCollectionLog.js';
+import StaffPayoutLedger from '../models/StaffPayoutLedger.js';
 import StaffPayoutReceipt from '../models/StaffPayoutReceipt.js';
 import StaffPayoutReceiptItem from '../models/StaffPayoutReceiptItem.js';
 import StaffProfile from '../models/StaffProfile.js';
@@ -17,11 +19,18 @@ import { createFinanceTransaction } from '../finance/services/transactionService
 import { cleanupInvoiceFileIfOrphan } from '../finance/services/transactionDeletionService.js';
 import { recordFinanceAuditLog } from '../finance/services/auditLogService.js';
 import { createStaffPayoutReceipt } from './staffPayoutReceiptService.js';
+import { reconcilePersistedStaffPayoutLedgers } from './staffPayoutLedgerReconciliationService.js';
+import { getConfigValue } from './configService.js';
+import { loadCompensationSettlementRouter } from './compensationSettlementRoutingService.js';
+import HttpError from '../errors/HttpError.js';
 
 const normalizeMoney = (value: unknown): number => {
   const numeric = typeof value === 'number' ? value : Number(value ?? 0);
   return Number.isFinite(numeric) ? Math.round((numeric + Number.EPSILON) * 100) / 100 : 0;
 };
+
+const resolveStaffPayoutCurrency = (): string =>
+  String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN').trim().toUpperCase();
 
 const deriveCounterpartyName = (user: User): string => {
   const name = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
@@ -158,10 +167,37 @@ export const createAffiliatePayout = async (input: CreateAffiliatePayoutInput): 
       throw new Error('Affiliate user not found');
     }
     const staffProfile = await StaffProfile.findByPk(input.affiliateUserId, {
-      attributes: ['userId', 'financeVendorId'],
+      attributes: ['userId', 'financeVendorId', 'staffType'],
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
+    if (
+      staffProfile
+      && !dayjs(input.startDate).startOf('day').isSame(dayjs(input.endDate).startOf('day'), 'month')
+    ) {
+      throw new Error(
+        'Staff affiliate payouts must stay within one calendar month so the payout ledger remains reconcilable.',
+      );
+    }
+    if (staffProfile) {
+      const settlementRouter = await loadCompensationSettlementRouter({
+        effectiveDate: input.endDate,
+        transaction,
+      });
+      const promotionRoute = settlementRouter.resolve({
+        userId: input.affiliateUserId,
+        staffType: staffProfile.staffType,
+        systemSource: 'promotion_sales',
+      });
+      if (promotionRoute.destination !== 'staff_vendor') {
+        throw new HttpError(
+          409,
+          promotionRoute.destination === 'volunteer_fund'
+            ? 'Promotion Sales for this staff member are routed to a Volunteer Fund. Process them from Pays so the fund allocation is recorded.'
+            : 'Promotion Sales for this staff member are excluded from direct payment. Review the payout routing rule in Pays.',
+        );
+      }
+    }
     const [account, category] = await Promise.all([
       FinanceAccount.findByPk(input.accountId, {
         transaction,
@@ -184,6 +220,7 @@ export const createAffiliatePayout = async (input: CreateAffiliatePayoutInput): 
       selectedAffiliateUserId: input.affiliateUserId,
       currentUserId: input.actorId,
       currentRoleSlug: 'manager',
+      transaction,
     });
     const unpaidBookings = overview.bookings.filter(
       (booking) => !booking.isCommissionPaid && booking.affiliateCommissionAmount > 0,
@@ -200,6 +237,28 @@ export const createAffiliatePayout = async (input: CreateAffiliatePayoutInput): 
       throw new Error('Affiliate payout requires all unpaid bookings in the selected range to use the same currency');
     }
     const currencyCode = Array.from(currencySet)[0];
+    if (staffProfile) {
+      const overlappingLedgers = await StaffPayoutLedger.findAll({
+        attributes: ['currencyCode'],
+        where: {
+          staffUserId: input.affiliateUserId,
+          rangeStart: { [Op.lte]: input.endDate },
+          rangeEnd: { [Op.gte]: input.startDate },
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const expectedCurrencies = new Set(
+        overlappingLedgers.map((ledger) => ledger.currencyCode.trim().toUpperCase()),
+      );
+      if (expectedCurrencies.size > 1) {
+        throw new Error('Overlapping staff payout ledgers use different currencies');
+      }
+      const expectedCurrency = Array.from(expectedCurrencies)[0] ?? resolveStaffPayoutCurrency();
+      if (currencyCode !== expectedCurrency) {
+        throw new Error(`Staff affiliate payout currency must match payout ledger currency ${expectedCurrency}`);
+      }
+    }
     if (account.currency.trim().toUpperCase() !== currencyCode) {
       throw new Error(`Selected finance account currency must match payout currency ${currencyCode}`);
     }
@@ -264,6 +323,8 @@ export const createAffiliatePayout = async (input: CreateAffiliatePayoutInput): 
             ? {
                 staffUserId: input.affiliateUserId,
                 lineLabel: 'Affiliate commission',
+                sourceKey: 'promotion_sales',
+                affiliatePayout: true,
               }
             : {}),
         },
@@ -323,6 +384,13 @@ export const createAffiliatePayout = async (input: CreateAffiliatePayoutInput): 
         ],
         transaction,
       });
+
+      await reconcilePersistedStaffPayoutLedgers({
+        staffUserId: input.affiliateUserId,
+        affectedRangeStart: input.startDate,
+        affectedRangeEnd: input.endDate,
+        transaction,
+      });
     }
 
     return buildPayoutPayload(payoutLog, affiliateUserName, receipt);
@@ -346,7 +414,7 @@ export const undoAffiliatePayout = async (payoutLogId: number, actorId: number):
     // that same lock before locking the affiliate payout so both entry points
     // observe/reissue mixed receipts in one consistent order. External
     // affiliates have no StaffProfile row and retain the ordinary payout lock.
-    await StaffProfile.findOne({
+    const staffProfile = await StaffProfile.findOne({
       where: { userId: payoutIdentity.affiliateUserId },
       attributes: ['userId'],
       transaction,
@@ -481,6 +549,15 @@ export const undoAffiliatePayout = async (payoutLogId: number, actorId: number):
         orphanedInvoiceFileId = financeTransaction.invoiceFileId ?? null;
         await FinanceTransaction.destroy({ where: { id: financeTransaction.id }, transaction });
       }
+    }
+
+    if (staffProfile) {
+      await reconcilePersistedStaffPayoutLedgers({
+        staffUserId: payoutLog.affiliateUserId,
+        affectedRangeStart: payoutLog.rangeStart,
+        affectedRangeEnd: payoutLog.rangeEnd,
+        transaction,
+      });
     }
   });
 

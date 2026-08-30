@@ -10,6 +10,51 @@ export type PayBreakdown = {
   productName?: string;
 };
 
+export type PayTaskAttributionMethod =
+  | 'salary_recipient'
+  | 'shift_assignment'
+  | 'shift_instance'
+  | 'ambiguous';
+
+export type PayAssistantManagerSalaryTakeoverSplit = {
+  shiftTakerUserId: number;
+  shiftTakerName: string;
+  taskOwnerUserId: number;
+  taskOwnerName: string;
+  shiftTakerPercent: number;
+  taskOwnerPercent: number;
+  fullDayBaseAmount: number;
+  fullDayPayableAmount: number;
+  shiftTakerBaseAmount: number;
+  shiftTakerPayableAmount: number;
+  taskOwnerBaseAmount: number;
+  taskOwnerPayableAmount: number;
+};
+
+export type PayAssistantManagerSalaryTakeoverAllocationRole =
+  | 'shift_taker'
+  | 'task_owner';
+
+export type PayTaskCompletionDailyBreakdownRow = {
+  date: string;
+  baseAmount: number;
+  taskOwnerUserId?: number | null;
+  taskOwnerName?: string | null;
+  attributionMethod?: PayTaskAttributionMethod | null;
+  shiftInstanceIds?: number[];
+  attributionWarning?: string | null;
+  totalTasks?: number;
+  completedTasks?: number;
+  waivedTasks?: number;
+  incompleteTasks?: number;
+  completedPercent: number;
+  missingPercent: number;
+  deductionAmount: number;
+  payableAmount: number;
+  takeoverAllocationRole?: PayAssistantManagerSalaryTakeoverAllocationRole;
+  takeoverSplit?: PayAssistantManagerSalaryTakeoverSplit;
+};
+
 export type PayComponentSummary = {
   componentId: number;
   name: string;
@@ -18,6 +63,29 @@ export type PayComponentSummary = {
   amount: number;
   baseDaysCount?: number;
   baseDays?: string[];
+  taskCompletionDailyBreakdown?: PayTaskCompletionDailyBreakdownRow[];
+};
+
+export type PaySettlementDestination = 'staff_vendor' | 'volunteer_fund' | 'excluded';
+
+export type PaySettlementSource = {
+  sourceKey: string;
+  label: string;
+  componentId: number | null;
+  category: string;
+  amount: number;
+  destination: PaySettlementDestination;
+  fundId: number | null;
+  fundName: string | null;
+  ruleId: number;
+  settledAmount: number;
+  allocatedAmount: number;
+  outstandingAmount: number;
+  overallocatedAmount: number;
+  currency: string;
+  allocatedFundIds: number[];
+  routeChanged: boolean;
+  settlementIntent: string | null;
 };
 
 export type LockedComponentRequirement =
@@ -190,6 +258,7 @@ export type PayRecordedEntry = {
   financeTransactionId: number | null;
   label: string;
   componentId: number | null;
+  sourceKey?: string | null;
   amount: number;
   currency: string;
   date: string;
@@ -239,10 +308,25 @@ export type PayAffiliateSalesSummary = {
 export type Pay = {
   userId?: number;
   firstName: string;
+  lastName?: string | null;
+  fullName?: string | null;
+  staffType?: string | null;
   totalCommission: number;
   totalPayout?: number;
+  grossCompensationTotal?: number;
+  personalPayableTotal?: number;
+  volunteerFundAllocationTotal?: number;
+  volunteerFundAllocatedTotal?: number;
+  volunteerFundOutstandingTotal?: number;
+  volunteerFundOverallocatedTotal?: number;
+  excludedSettlementTotal?: number;
+  settlementSources?: PaySettlementSource[];
+  settlementReconciliationRequired?: boolean;
+  settlementReconciliationMessage?: string | null;
   totalCustomers?: number;
   bucketTotals?: Record<string, number>;
+  grossBucketTotals?: Record<string, number>;
+  fundBucketTotals?: Record<string, number>;
   componentTotals?: PayComponentSummary[];
   productTotals?: Array<{
     productId: number | null;

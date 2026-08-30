@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import { requireRoles } from '../../middleware/authorizationMiddleware.js';
 import { financeAuthChain } from '../middleware/financeAccessMiddleware.js';
 import {
   listAccounts,
@@ -71,8 +72,28 @@ import {
 } from '../controllers/budgetController.js';
 import { getFinanceReports } from '../controllers/reportController.js';
 import { listStripeRefunds } from '../controllers/refundController.js';
+import {
+  bulkUpdateSettlementRules,
+  createSettlementRuleHandler,
+  deleteSettlementRuleHandler,
+  getSettlementRule,
+  listSettlementRules,
+  updateSettlementRuleHandler,
+} from '../controllers/compensationSettlementRuleController.js';
+import {
+  createVolunteerFundAdjustment,
+  createVolunteerFundHandler,
+  createVolunteerFundSpend,
+  deleteVolunteerFundHandler,
+  getVolunteerFund,
+  getVolunteerFundLedger,
+  listVolunteerFunds,
+  reverseVolunteerFundEntryHandler,
+  updateVolunteerFundHandler,
+} from '../controllers/volunteerFundController.js';
 
 const router = Router();
+const settlementRuleWriteGuard = requireRoles(['admin', 'owner']);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -150,6 +171,25 @@ router.get('/budgets/:id', getBudget);
 router.post('/budgets', createBudget);
 router.put('/budgets/:id', updateBudget);
 router.delete('/budgets/:id', deleteBudget);
+
+// Compensation settlement routing
+router.get('/settlement-rules', listSettlementRules);
+router.post('/settlement-rules', settlementRuleWriteGuard, createSettlementRuleHandler);
+router.put('/settlement-rules/bulk', settlementRuleWriteGuard, bulkUpdateSettlementRules);
+router.get('/settlement-rules/:id', getSettlementRule);
+router.put('/settlement-rules/:id', settlementRuleWriteGuard, updateSettlementRuleHandler);
+router.delete('/settlement-rules/:id', settlementRuleWriteGuard, deleteSettlementRuleHandler);
+
+// Volunteer funds and append-only ledger
+router.get('/volunteer-funds', listVolunteerFunds);
+router.post('/volunteer-funds', createVolunteerFundHandler);
+router.get('/volunteer-funds/:id', getVolunteerFund);
+router.put('/volunteer-funds/:id', updateVolunteerFundHandler);
+router.delete('/volunteer-funds/:id', deleteVolunteerFundHandler);
+router.get('/volunteer-funds/:id/ledger', getVolunteerFundLedger);
+router.post('/volunteer-funds/:id/adjustments', createVolunteerFundAdjustment);
+router.post('/volunteer-funds/:id/spend', createVolunteerFundSpend);
+router.post('/volunteer-funds/:id/entries/:entryId/reversal', reverseVolunteerFundEntryHandler);
 
 // Reports
 router.get('/reports', getFinanceReports);

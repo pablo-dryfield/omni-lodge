@@ -11,6 +11,7 @@ const financeLinks = [
   { label: "Categories", path: "/finance/categories" },
   { label: "Recurring Rules", path: "/finance/recurring" },
   { label: "Budgets", path: "/finance/budgets" },
+  { label: "Volunteer Funds", path: "/finance/volunteer-funds" },
   { label: "Management Requests", path: "/finance/management-requests" },
   { label: "Files", path: "/finance/files" },
   { label: "Reports", path: "/finance/reports" },

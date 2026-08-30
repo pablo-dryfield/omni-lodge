@@ -8,6 +8,8 @@ import FinanceManagementRequest from './FinanceManagementRequest.js';
 import FinanceRecurringRule from './FinanceRecurringRule.js';
 import FinanceTransaction from './FinanceTransaction.js';
 import FinanceVendor from './FinanceVendor.js';
+import VolunteerFund from './VolunteerFund.js';
+import VolunteerFundEntry from './VolunteerFundEntry.js';
 
 export {
   FinanceAccount,
@@ -20,5 +22,6 @@ export {
   FinanceRecurringRule,
   FinanceTransaction,
   FinanceVendor,
+  VolunteerFund,
+  VolunteerFundEntry,
 };
-

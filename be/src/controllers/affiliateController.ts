@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getAffiliateOverview, updateAffiliateAssignments, type AffiliateAssignmentRule } from '../services/affiliateService.js';
 import { createAffiliatePayout, undoAffiliatePayout } from '../services/affiliatePayoutService.js';
+import HttpError from '../errors/HttpError.js';
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
@@ -131,7 +132,7 @@ export const createAffiliatePayoutController = async (req: AuthenticatedRequest,
     res.status(201).json(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create affiliate payout';
-    res.status(400).json({ message });
+    res.status(error instanceof HttpError ? error.status : 400).json({ message });
   }
 };
 

@@ -74,6 +74,8 @@ import {
   getPayReceiptHistoryStatusMeta,
   getPayReceiptStatusMeta,
 } from './paysReceiptUtils';
+import TaskCompletionDailyBreakdown from '../components/pays/TaskCompletionDailyBreakdown';
+import FinanceInfoButton from '../components/finance/FinanceInfoButton';
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
 const DEFAULT_CURRENCY = 'PLN';
@@ -129,6 +131,41 @@ const formatDateTimeLabel = (value: string | null | undefined) => {
   return parsed.isValid() ? parsed.format('MMM D, YYYY HH:mm') : value;
 };
 
+type PayStaffIdentity = {
+  firstName?: string | null;
+  lastName?: string | null;
+  fullName?: string | null;
+  userId?: number | null;
+};
+
+const normalizeStaffNamePart = (value: string | null | undefined): string =>
+  (value ?? '').trim().replace(/\s+/g, ' ');
+
+export const formatPayStaffName = (
+  staff: PayStaffIdentity | null | undefined,
+  fallback = 'Staff member',
+): string => {
+  const explicitFullName = normalizeStaffNamePart(staff?.fullName);
+  if (explicitFullName) {
+    return explicitFullName;
+  }
+
+  const composedName = [staff?.firstName, staff?.lastName]
+    .map(normalizeStaffNamePart)
+    .filter(Boolean)
+    .join(' ');
+  if (composedName) {
+    return composedName;
+  }
+
+  const userId = Number(staff?.userId);
+  if (Number.isInteger(userId) && userId > 0) {
+    return `Staff #${userId}`;
+  }
+
+  return normalizeStaffNamePart(fallback) || 'Staff member';
+};
+
 const getComponentColor = (category: string) => {
   switch (category) {
     case 'base':
@@ -151,6 +188,14 @@ const getComponentColor = (category: string) => {
 };
 
 const normalizeTotal = (summary: Pay) => summary.totalPayout ?? summary.totalCommission;
+
+const resolveGrossCompensationTotal = (summary: Pay) =>
+  summary.grossCompensationTotal
+  ?? roundLineAmount(
+    normalizeTotal(summary)
+      + (summary.volunteerFundAllocationTotal ?? 0)
+      + (summary.excludedSettlementTotal ?? 0),
+  );
 
 const humanizeErrorMessage = (rawMessage?: string | null): { title: string; description: string; details?: string } => {
   const defaultDescription = 'Please adjust the selected period or try again in a moment.';
@@ -215,6 +260,56 @@ const KPI_CARD_STYLE: React.CSSProperties = {
   justifyContent: 'center',
   textAlign: 'center',
 };
+
+const PAY_KPI_HELP = {
+  lastMonthBalance:
+    'Unpaid personal staff balance carried into the selected period from the previous payout ledger.',
+  grossCompensation:
+    'Compensation earned in the selected period before it is routed between personal staff pay, Volunteer Funds, or exclusions.',
+  payToStaff:
+    'Compensation from the selected period that is payable personally to staff. Volunteer Fund allocations are shown separately.',
+  volunteerFund:
+    'Compensation routed to the internal Volunteer Fund instead of being paid personally to staff.',
+  alreadyPaid:
+    'Personal staff payments already recorded against the selected period. Volunteer Fund allocations are tracked separately.',
+  outstanding:
+    'Personal amount still owed: the carried balance plus current pay to staff, less recorded staff payments.',
+} as const;
+
+const PAY_TABLE_HEADER_HELP: Record<string, string> = {
+  Name: 'The staff member whose compensation, balances, routing, and payment actions are shown in this row.',
+  'Last Months Owed': 'The unpaid personal balance carried into this period from the staff member\'s previous payout ledger.',
+  'Gross compensation': 'Everything earned in this period before routing amounts to personal staff pay, Volunteer Funds, or exclusions.',
+  'Pay to staff': 'The current-period amount routed for personal payment to this staff member.',
+  'Volunteer Fund': 'The current-period amount routed to an internal Volunteer Fund, including what is allocated and still to allocate.',
+  Paid: 'Personal payments already recorded for this staff member and payout period.',
+  Outstanding: 'The personal balance still owed after carried balances, current pay, and recorded payments are combined.',
+  Actions: 'Available payout, receipt-history, and detail actions for this staff member. Access depends on your permissions.',
+};
+
+const renderPayInfoLabel = (
+  label: string,
+  description: string,
+  options: { dimmed?: boolean; size?: 'xs' | 'sm' } = {},
+) => (
+  <Group
+    gap={5}
+    justify="center"
+    wrap="nowrap"
+    style={{ minWidth: 0, maxWidth: '100%' }}
+  >
+    <Text
+      component="span"
+      size={options.size ?? 'sm'}
+      c={options.dimmed ? 'dimmed' : undefined}
+      ta="center"
+      style={{ minWidth: 0, lineHeight: 1.2 }}
+    >
+      {label}
+    </Text>
+    <FinanceInfoButton label={label} description={description} />
+  </Group>
+);
 const BREAKDOWN_ROW_STYLE: React.CSSProperties = {
   padding: '8px 0',
   borderBottom: '1px solid var(--mantine-color-gray-2)',
@@ -298,6 +393,7 @@ type ComponentListItemProps = {
   breakdown: PlatformGuestTierBreakdown[];
   showPlatformTotals: boolean;
   platformGuestTotals?: { totalGuests: number; totalBooked: number; totalAttended: number };
+  salaryRecipientUserId?: number | null;
 };
 
 const ComponentListItem: React.FC<ComponentListItemProps> = ({
@@ -305,6 +401,7 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
   breakdown,
   showPlatformTotals,
   platformGuestTotals,
+  salaryRecipientUserId,
 }) => {
   const [showBaseDays, setShowBaseDays] = useState(false);
   const [showPlatformDetails, setShowPlatformDetails] = useState(false);
@@ -380,6 +477,11 @@ const ComponentListItem: React.FC<ComponentListItemProps> = ({
           <Text size="sm" fw={700} ta="center">
             {formatCurrency(component.amount)}
           </Text>
+          <TaskCompletionDailyBreakdown
+            rows={component.taskCompletionDailyBreakdown}
+            formatAmount={(amount) => formatCurrency(amount)}
+            salaryRecipientUserId={salaryRecipientUserId}
+          />
 
       {hasBaseDayList && (
         <Collapse in={showBaseDays}>
@@ -592,6 +694,7 @@ const renderComponentList = (
                   breakdown={breakdown}
                   showPlatformTotals={Boolean(showPlatformTotals)}
                   platformGuestTotals={platformGuestTotals}
+                  salaryRecipientUserId={staff?.userId}
                 />
                 {componentIndex === lastBaseIndex && productCommissionChips}
                 {componentIndex === lastBaseIndex && affiliateCommissionChip}
@@ -716,10 +819,25 @@ type EntryPaymentLine = {
   accountId?: string | null;
   accountLabel?: string | null;
   componentId?: number;
+  sourceKey?: string;
+  settlementIntent?: string;
   affiliatePayout?: {
     affiliateUserId: number;
     bookingIds: number[];
   };
+  description: string;
+  include: boolean;
+};
+
+type EntryFundAllocationLine = {
+  id: string;
+  label: string;
+  componentId?: number;
+  sourceKey: string;
+  amount: number;
+  fundId: number;
+  fundName: string;
+  settlementIntent: string;
   description: string;
   include: boolean;
 };
@@ -737,6 +855,7 @@ type EntryModalState = {
   rangeStart: string;
   rangeEnd: string;
   lines: EntryPaymentLine[];
+  fundAllocations: EntryFundAllocationLine[];
   includeReimbursements: boolean;
   reimbursementEntries: PayReimbursementEntry[];
   reimbursementsAwaitingAmount: number;
@@ -767,6 +886,7 @@ const extractRequestErrorMessage = (error: unknown, fallback: string): string =>
 type StaffPayoutBatchResponse = {
   duplicated: boolean;
   batchKey: string;
+  fundAllocationCount?: number;
   receipts?: Array<{
     id: number;
     actionId: number | null;
@@ -823,6 +943,7 @@ const createEmptyEntryModalState = (): EntryModalState => ({
   rangeStart: '',
   rangeEnd: '',
   lines: [],
+  fundAllocations: [],
   includeReimbursements: false,
   reimbursementEntries: [],
   reimbursementsAwaitingAmount: 0,
@@ -916,6 +1037,30 @@ export const buildDefaultPaymentLines = (
   fallbackCategoryId: string,
   componentDefinitions: Map<number, CompensationComponent>,
 ): EntryPaymentLine[] => {
+  const settlementSources = staff.settlementSources ?? [];
+  const settlementSourceByIdentity = new Map(
+    settlementSources.map((source) => [
+      `${source.sourceKey}:${source.componentId ?? 0}`,
+      source,
+    ] as const),
+  );
+  const componentDestination = new Map(
+    settlementSources
+      .filter((source) => source.componentId != null)
+      .map((source) => [source.componentId as number, source.destination] as const),
+  );
+  const systemDestination = new Map(
+    settlementSources
+      .filter((source) => source.componentId == null)
+      .map((source) => [source.sourceKey, source.destination] as const),
+  );
+  const missingRouteDestination = (staff.staffType ?? '').trim().toLowerCase() === 'volunteer'
+    ? 'volunteer_fund'
+    : 'staff_vendor';
+  const componentPaysStaff = (componentId: number) =>
+    (componentDestination.get(componentId) ?? missingRouteDestination) === 'staff_vendor';
+  const systemPaysStaff = (sourceKey: string) =>
+    (systemDestination.get(sourceKey) ?? missingRouteDestination) === 'staff_vendor';
   const GUIDE_COMMISSION_CANDIDATE_KEYS = [
     'guideCommission',
     'guide_commission',
@@ -1152,10 +1297,17 @@ export const buildDefaultPaymentLines = (
     if (remainingAmount <= 0) {
       return 0;
     }
+    const canonicalSourceKey = line.componentId ? 'compensation_component' : line.sourceKey;
+    const settlementSource = canonicalSourceKey
+      ? settlementSourceByIdentity.get(`${canonicalSourceKey}:${line.componentId ?? 0}`)
+      : null;
     lines.push({
       id: createLineId(),
       ...line,
       amount: remainingAmount,
+      settlementIntent: settlementSource?.destination === 'staff_vendor'
+        ? settlementSource.settlementIntent ?? undefined
+        : undefined,
     });
     return remainingAmount;
   };
@@ -1170,6 +1322,9 @@ export const buildDefaultPaymentLines = (
 
   (staff.componentTotals ?? []).forEach((summary) => {
     if (lockedComponentIds.has(summary.componentId)) {
+      return;
+    }
+    if (!componentPaysStaff(summary.componentId)) {
       return;
     }
     if (summary.amount == null || summary.amount <= 0) {
@@ -1236,7 +1391,7 @@ export const buildDefaultPaymentLines = (
     amount: number,
     options?: { productName?: string },
   ) => {
-    if (!amount || amount <= 0) {
+    if (!amount || amount <= 0 || !componentPaysStaff(componentId)) {
       return;
     }
     const aggregate = componentAggregates.get(componentId);
@@ -1261,6 +1416,7 @@ export const buildDefaultPaymentLines = (
     pushRemainingLine({
       label,
       componentId,
+      sourceKey: 'compensation_component',
       amount: roundedAmount,
       categoryId: defaultCategoryId,
       accountId: defaultAccountId,
@@ -1296,19 +1452,20 @@ export const buildDefaultPaymentLines = (
     });
 
     const commissionAmount = product.totalCommission ?? 0;
-    if (commissionAmount > 0) {
+    if (commissionAmount > 0 && systemPaysStaff('guide_commission')) {
       const roundedCommission = roundLineAmount(commissionAmount);
       const productCommissionComponentId = findProductCommissionComponentId(
         productComponentTotals,
         product.productId ?? null,
       );
-      if (productCommissionComponentId) {
+      if (productCommissionComponentId && componentPaysStaff(productCommissionComponentId)) {
         spendComponentAmount(productCommissionComponentId, roundedCommission, { productName });
         return;
       }
 
       pushRemainingLine({
         label: `${productName} - Commission`,
+        sourceKey: 'guide_commission',
         amount: roundedCommission,
         categoryId: findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId),
         accountId: '',
@@ -1347,14 +1504,20 @@ export const buildDefaultPaymentLines = (
   const affiliateCommissionAmount = roundLineAmount(
     outstandingAffiliateBookings.reduce((sum, booking) => sum + booking.affiliateCommissionAmount, 0),
   );
-  if (staff.userId && affiliateCommissionAmount > 0 && outstandingAffiliateBookings.length > 0) {
+  if (
+    staff.userId
+    && affiliateCommissionAmount > 0
+    && outstandingAffiliateBookings.length > 0
+    && systemPaysStaff('promotion_sales')
+  ) {
     pushRemainingLine(
       {
         label: 'Promotion Sales',
+        sourceKey: 'promotion_sales',
         amount: affiliateCommissionAmount,
         categoryId: findCategoryIdByName(categoryLookup, 'commission', fallbackCategoryId),
         accountId: '',
-        description: `Promotion sales payout for ${staff.firstName}`,
+        description: `Promotion sales payout for ${formatPayStaffName(staff)}`,
         affiliatePayout: {
           affiliateUserId: staff.userId,
           bookingIds: outstandingAffiliateBookings.map((booking) => booking.id),
@@ -1368,26 +1531,206 @@ export const buildDefaultPaymentLines = (
     );
   }
 
-  if (lines.length === 0) {
-    const outstanding =
-      staff.closingBalance ??
-      staff.payouts?.payableOutstanding ??
-      Math.max(staff.totalPayout ?? staff.totalCommission ?? 0, 0);
-    const fallbackAmount = roundLineAmount(Math.max(outstanding, 0));
-    if (fallbackAmount > 0) {
-      lines.push({
-        id: createLineId(),
-        label: 'Outstanding payout',
-        amount: fallbackAmount,
-        categoryId: fallbackCategoryId,
-        accountId: '',
-        description: `Payout for ${staff.firstName}`,
-        include: true,
-      });
+  // Component rows are positive finance transactions, while deductions are
+  // represented in the server's net payable. Trim the proposed rows to that
+  // authoritative current-period outstanding so a negative component cannot
+  // make the modal pay more than the report says is due.
+  // Reimbursements use their own server-validated transaction flow below.
+  // Keep them out of the ordinary compensation-line cap and carry-forward
+  // calculation or the same awaiting reimbursement appears once as a payout
+  // line and again as a reimbursement.
+  const currentReimbursementOutstanding = roundLineAmount(
+    Math.max(staff.reimbursements?.awaitingAmount ?? 0, 0),
+  );
+  const currentPersonalOutstanding =
+    staff.payouts?.payableOutstanding
+    ?? staff.personalPayableTotal
+    ?? staff.totalPayout
+    ?? staff.totalCommission
+    ?? 0;
+  let remainingCurrentOutstanding = roundLineAmount(
+    Math.max(currentPersonalOutstanding - currentReimbursementOutstanding, 0),
+  );
+  const remainingByIntent = new Map(
+    settlementSources
+      .filter((source) => source.destination === 'staff_vendor' && Boolean(source.settlementIntent))
+      .map((source) => [source.settlementIntent as string, roundLineAmount(source.outstandingAmount)] as const),
+  );
+  const cappedLines = lines.flatMap((line) => {
+    if (remainingCurrentOutstanding <= 0) {
+      return [];
     }
+    const intentRemaining = line.settlementIntent
+      ? remainingByIntent.get(line.settlementIntent) ?? 0
+      : Number.POSITIVE_INFINITY;
+    const amount = roundLineAmount(Math.min(line.amount, remainingCurrentOutstanding, intentRemaining));
+    remainingCurrentOutstanding = roundLineAmount(Math.max(remainingCurrentOutstanding - amount, 0));
+    if (line.settlementIntent) {
+      remainingByIntent.set(
+        line.settlementIntent,
+        roundLineAmount(Math.max(intentRemaining - amount, 0)),
+      );
+    }
+    return amount > 0 ? [{ ...line, amount }] : [];
+  });
+  lines.splice(0, lines.length, ...cappedLines);
+
+  // Prior finalized personal liabilities stay personal even after a staff
+  // member is labelled Volunteer. Include that carry-forward in addition to
+  // current review/promotion lines instead of only using it as an empty-state
+  // fallback.
+  const selectedCurrentTotal = computeSelectedLineTotal(lines);
+  const fullOutstanding = roundLineAmount(
+    Math.max(
+      (staff.closingBalance ?? staff.payouts?.payableOutstanding ?? selectedCurrentTotal)
+        - currentReimbursementOutstanding,
+      0,
+    ),
+  );
+  const carryForwardAmount = roundLineAmount(Math.max(fullOutstanding - selectedCurrentTotal, 0));
+  if (carryForwardAmount > 0) {
+    lines.push({
+      id: createLineId(),
+      label: 'Previous personal balance',
+      sourceKey: 'carry_forward_personal',
+      amount: carryForwardAmount,
+      categoryId: fallbackCategoryId,
+      accountId: '',
+      description: `Previous personal balance for ${formatPayStaffName(staff)}`,
+      include: true,
+    });
   }
 
   return lines;
+};
+
+export const buildDefaultFundAllocationLines = (staff: Pay): EntryFundAllocationLine[] =>
+  (staff.settlementSources ?? [])
+    .filter(
+      (source) =>
+        source.destination === 'volunteer_fund'
+        && source.fundId != null
+        && Boolean(source.settlementIntent)
+        && source.outstandingAmount > 0,
+    )
+    .map((source) => ({
+      id: createLineId(),
+      label: source.label,
+      componentId: source.componentId ?? undefined,
+      sourceKey: source.sourceKey,
+      amount: roundLineAmount(source.outstandingAmount),
+      fundId: source.fundId as number,
+      fundName: source.fundName ?? `Volunteer Fund #${source.fundId}`,
+      settlementIntent: source.settlementIntent as string,
+      description: `Allocate ${source.label} to ${source.fundName ?? 'Volunteer Fund'}`,
+      include: true,
+    }));
+
+type VolunteerRoutingPresentation = {
+  statusLabel: string;
+  color: string;
+  description: string;
+};
+
+const isVolunteerStaff = (staff: Pay | null | undefined): boolean =>
+  (staff?.staffType ?? '').trim().toLowerCase() === 'volunteer';
+
+const getVolunteerRoutingPresentation = (
+  staff: Pay | null | undefined,
+): VolunteerRoutingPresentation | null => {
+  if (!staff || !isVolunteerStaff(staff)) {
+    return null;
+  }
+  const activeSources = (staff.settlementSources ?? []).filter(
+    (source) => Math.abs(source.amount) > 0.005
+      || source.outstandingAmount > 0.005
+      || source.allocatedAmount > 0.005,
+  );
+  const personalLabels = Array.from(new Set(
+    activeSources
+      .filter((source) => source.destination === 'staff_vendor')
+      .map((source) => source.label),
+  ));
+  const fundLabels = Array.from(new Set(
+    activeSources
+      .filter((source) => source.destination === 'volunteer_fund')
+      .map((source) => source.label),
+  ));
+  const periodLabel = staff.range?.startDate && staff.range?.endDate
+    ? formatRangeLabel(staff.range.startDate, staff.range.endDate)
+    : 'the selected period';
+  const suffix = 'Completed or recorded settlements are preserved; an unpaid period may refresh to the latest eligible routing.';
+
+  if (personalLabels.length > 0 && fundLabels.length > 0) {
+    return {
+      statusLabel: 'Split: staff + fund',
+      color: 'blue',
+      description: `${periodLabel} pays ${personalLabels.join(', ')} to staff and allocates ${fundLabels.join(', ')} to the Volunteer Fund. ${suffix}`,
+    };
+  }
+  if (fundLabels.length > 0) {
+    return {
+      statusLabel: 'Volunteer Fund route',
+      color: 'violet',
+      description: `${periodLabel} allocates ${fundLabels.join(', ')} to the Volunteer Fund. ${suffix}`,
+    };
+  }
+  if (personalLabels.length > 0) {
+    return {
+      statusLabel: 'Period routes to staff',
+      color: 'orange',
+      description: `${periodLabel} currently routes ${personalLabels.join(', ')} as personal staff pay. This can represent an older-policy period or an explicit personal exception. ${suffix}`,
+    };
+  }
+  if ((staff.openingBalance ?? 0) > 0) {
+    return {
+      statusLabel: 'Previous personal balance',
+      color: 'orange',
+      description: `${periodLabel} includes a personal balance saved before this period. A later Volunteer policy does not move that historical liability into the fund.`,
+    };
+  }
+  return {
+    statusLabel: 'Routing unavailable',
+    color: 'red',
+    description: `No source-routing breakdown is available for ${periodLabel}. Refresh the report before processing compensation.`,
+  };
+};
+
+const renderVolunteerRoutingBadges = (staff: Pay) => {
+  const routing = getVolunteerRoutingPresentation(staff);
+  if (!routing) {
+    return null;
+  }
+  return (
+    <Group gap={4} justify="center">
+      <Badge size="xs" variant="light" color="violet">Volunteer</Badge>
+      <Tooltip label={routing.description} multiline w={360}>
+        <Badge size="xs" variant="light" color={routing.color}>{routing.statusLabel}</Badge>
+      </Tooltip>
+    </Group>
+  );
+};
+
+const renderStaffRoutingLabel = (staff: Pay) => {
+  const routingBadges = renderVolunteerRoutingBadges(staff);
+  return (
+    <Stack gap={4} align="center">
+      <Text fw={600}>{formatPayStaffName(staff)}</Text>
+      {routingBadges}
+    </Stack>
+  );
+};
+
+const renderVolunteerRoutingNotice = (staff: Pay | null | undefined) => {
+  const routing = getVolunteerRoutingPresentation(staff);
+  if (!routing) {
+    return null;
+  }
+  return (
+    <Alert color={routing.color} title={`Volunteer profile - ${routing.statusLabel}`}>
+      {routing.description}
+    </Alert>
+  );
 };
 
 
@@ -2593,13 +2936,15 @@ const Pays: React.FC = () => {
       accounts.data
         .filter(
           (account) =>
-            (account.type === 'cash' || account.type === 'bank') && (account.isActive ?? true),
+            (account.type === 'cash' || account.type === 'bank')
+            && (account.isActive ?? true)
+            && account.currency.toUpperCase() === (entryModal.currency || DEFAULT_CURRENCY).toUpperCase(),
         )
         .map((account) => ({
           value: String(account.id),
           label: `${account.name} (${account.currency})`,
         })),
-    [accounts.data],
+    [accounts.data, entryModal.currency],
   );
 
   const expenseCategoryOptions = useMemo(
@@ -2608,11 +2953,6 @@ const Pays: React.FC = () => {
         .filter((category) => category.kind === 'expense')
         .map((category) => ({ value: String(category.id), label: category.name })),
     [categories.data],
-  );
-
-  const vendorOptions = useMemo(
-    () => vendors.data.map((vendor) => ({ value: String(vendor.id), label: vendor.name })),
-    [vendors.data],
   );
 
   const componentDefinitions = useMemo<CompensationComponent[]>(() => {
@@ -2669,7 +3009,15 @@ const resolveStaffCounterpartyDefaults = useCallback(
         const currentPayout = normalizeTotal(summary);
         const openingBalance = summary.openingBalance ?? 0;
         const outstanding = summary.closingBalance ?? summary.payouts?.payableOutstanding ?? 0;
-        return currentPayout > 0 || openingBalance !== 0 || outstanding !== 0;
+        const grossActivity = summary.grossCompensationTotal ?? 0;
+        const fundActivity = summary.volunteerFundAllocationTotal ?? 0;
+        const fundOutstanding = summary.volunteerFundOutstandingTotal ?? 0;
+        return currentPayout > 0
+          || openingBalance !== 0
+          || outstanding !== 0
+          || grossActivity !== 0
+          || fundActivity > 0
+          || fundOutstanding > 0;
       }),
     [responseData],
   );
@@ -2776,23 +3124,6 @@ const resolveStaffCounterpartyDefaults = useCallback(
     }
   }, [endDate, ledgerRecalculating, refetchPaysForRange, startDate]);
 
-  const handleCounterpartyChange = useCallback(
-    (value: string | null) => {
-      setEntryModal((prev) => {
-        const nextId = value ?? '';
-        let nextCategoryId = prev.categoryId;
-        if (!value) {
-          nextCategoryId = '';
-        } else {
-          const vendor = financeVendorsById.get(Number(value));
-          nextCategoryId = vendor?.defaultCategoryId ? String(vendor.defaultCategoryId) : '';
-        }
-        return { ...prev, counterpartyId: nextId, categoryId: nextCategoryId };
-      });
-    },
-    [financeVendorsById],
-  );
-
   const updateBaseOverridePending = useCallback((userId: number, active: boolean) => {
     setBaseOverridePending((prev) => {
       const next = new Set(prev);
@@ -2837,7 +3168,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
         await refetchPaysForRange(refetchStart, refetchEnd);
         setActionAlert({
           type: 'success',
-          text: `Approved extra base days for ${staff.firstName ?? 'this staff member'}.`,
+          text: `Approved extra base days for ${formatPayStaffName(staff)}.`,
         });
       } catch (approvalError) {
         const message =
@@ -2935,6 +3266,15 @@ const resolveStaffCounterpartyDefaults = useCallback(
         });
         return;
       }
+      if (staff.settlementReconciliationRequired) {
+        setEntryMessage({
+          type: 'error',
+          text:
+            staff.settlementReconciliationMessage
+            ?? 'This closed period must be reconciled before more compensation can be processed.',
+        });
+        return;
+      }
       if (!canViewFull) {
         setEntryMessage({
           type: 'error',
@@ -2954,7 +3294,18 @@ const resolveStaffCounterpartyDefaults = useCallback(
         categoryLookup,
         defaults.categoryId,
         compensationComponentLookup,
-      );
+      ).map((line) => {
+        if (!line.accountId) {
+          return line;
+        }
+        const defaultAccount = financeAccountsById.get(Number(line.accountId));
+        return defaultAccount
+          && defaultAccount.isActive
+          && defaultAccount.currency.toUpperCase() === currency.toUpperCase()
+            ? line
+            : { ...line, accountId: '' };
+      });
+      const defaultFundAllocations = buildDefaultFundAllocationLines(staff);
       const selectedTotal = computeSelectedLineTotal(defaultLines);
       const uniqueAccounts = new Set(
         defaultLines.map((line) => line.accountId).filter((value): value is string => Boolean(value)),
@@ -2975,10 +3326,11 @@ const resolveStaffCounterpartyDefaults = useCallback(
         accountId: defaultLineAccount || '',
         categoryId: defaults.categoryId,
         counterpartyId: defaults.counterpartyId,
-        description: `Staff payout for ${staff.firstName} (${formatRangeLabel(rangeStartValue, rangeEndValue)})`,
+        description: `Staff payout for ${formatPayStaffName(staff)} (${formatRangeLabel(rangeStartValue, rangeEndValue)})`,
         rangeStart: rangeStartValue,
         rangeEnd: rangeEndValue,
         lines: defaultLines,
+        fundAllocations: defaultFundAllocations,
         includeReimbursements: reimbursementSummary.awaitingAmount > 0,
         reimbursementEntries: reimbursementSummary.entries ?? [],
         reimbursementsAwaitingAmount: reimbursementSummary.awaitingAmount ?? 0,
@@ -2992,6 +3344,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
       categoryLookup,
       compensationComponentLookup,
       endDate,
+      financeAccountsById,
       resolveStaffCounterpartyDefaults,
       startDate,
     ],
@@ -3244,7 +3597,8 @@ const resolveStaffCounterpartyDefaults = useCallback(
   }, []);
 
   const renderRecordAction = (item: Pay, options?: { fullWidth?: boolean }) => {
-    const outstanding = item.payouts?.payableOutstanding ?? 0;
+    const outstanding = Math.max(item.closingBalance ?? item.payouts?.payableOutstanding ?? 0, 0);
+    const fundOutstanding = item.volunteerFundOutstandingTotal ?? 0;
     const hasRecordedEntries = (item.paidEntries?.length ?? 0) > 0;
     const recordedReceipts = (item.paidEntries ?? [])
       .map((entry) => entry.receipt)
@@ -3276,7 +3630,36 @@ const resolveStaffCounterpartyDefaults = useCallback(
         </Stack>
       );
     }
-    if (outstanding > 0) {
+    if (item.settlementReconciliationRequired) {
+      return (
+        <Stack gap={6} align={fullWidth ? 'stretch' : 'flex-start'} style={fullWidth ? { width: '100%' } : undefined}>
+          <Badge color="red" variant="light" w="fit-content">
+            Reconciliation required
+          </Badge>
+          <Text size="xs" c="red.8" maw={260}>
+            {item.settlementReconciliationMessage
+              ?? 'The saved liability and historical source breakdown no longer match.'}
+          </Text>
+          {canRecordStaffPayments && hasRecordedEntries ? (
+            <Button variant="subtle" size="xs" color="red" fullWidth={fullWidth} onClick={() => openPaidEntriesModal(item)}>
+              Manage paid
+            </Button>
+          ) : null}
+          {canManageReceiptEvidence ? (
+            <Button
+              variant="subtle"
+              size="xs"
+              fullWidth={fullWidth}
+              leftSection={<IconHistory size={15} />}
+              onClick={() => void openStaffReceiptHistory(item)}
+            >
+              Receipt history
+            </Button>
+          ) : null}
+        </Stack>
+      );
+    }
+    if (outstanding > 0 || fundOutstanding > 0) {
       if (canRecordStaffPayments) {
         return (
           <Stack gap={6} align={fullWidth ? 'stretch' : 'flex-start'} style={fullWidth ? { width: '100%' } : undefined}>
@@ -3286,7 +3669,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
               </Badge>
             ) : null}
             <Button variant="light" size="xs" fullWidth={fullWidth} onClick={() => openEntryModal(item)}>
-              Record payment
+              Process compensation
             </Button>
             {hasRecordedEntries ? (
               <Button variant="subtle" size="xs" color="red" fullWidth={fullWidth} onClick={() => openPaidEntriesModal(item)}>
@@ -3348,19 +3731,17 @@ const resolveStaffCounterpartyDefaults = useCallback(
 
   const handleEntryAccountChange = useCallback(
     (value: string | null) => {
-      if (!value) {
-        setEntryModal((prev) => ({ ...prev, accountId: '' }));
-        return;
-      }
-      const account = accounts.data.find((item) => item.id === Number(value));
       setEntryModal((prev) => ({
         ...prev,
-        accountId: value,
-        currency: account?.currency ?? prev.currency,
-        lines: prev.lines.map((line) => (line.accountId ? line : { ...line, accountId: value })),
+        accountId: value ?? '',
+        lines: prev.lines.map((line) => (
+          !line.accountId || line.accountId === prev.accountId
+            ? { ...line, accountId: value ?? '' }
+            : line
+        )),
       }));
     },
-    [accounts.data],
+    [],
   );
 
   const handlePresetChange = (value: string | null) => {
@@ -3440,12 +3821,20 @@ const resolveStaffCounterpartyDefaults = useCallback(
     () => summaries.reduce((sum, item) => sum + (item.openingBalance ?? 0), 0),
     [summaries],
   );
-  const totalEarnings = useMemo(
+  const totalPayToStaff = useMemo(
     () =>
       summaries.reduce(
         (sum, item) => sum + (item.dueAmount ?? item.totalPayout ?? normalizeTotal(item)),
         0,
       ),
+    [summaries],
+  );
+  const totalGrossCompensation = useMemo(
+    () => summaries.reduce((sum, item) => sum + resolveGrossCompensationTotal(item), 0),
+    [summaries],
+  );
+  const totalVolunteerFund = useMemo(
+    () => summaries.reduce((sum, item) => sum + (item.volunteerFundAllocationTotal ?? 0), 0),
     [summaries],
   );
   const totalPaid = useMemo(
@@ -3497,11 +3886,14 @@ const resolveStaffCounterpartyDefaults = useCallback(
     if (!entryModal.staff.staffProfileId) {
       setEntryMessage({
         type: 'error',
-        text: 'Link this staff profile to a finance vendor before recording a payout.',
+        text: 'This user does not have a staff profile available for settlement.',
       });
       return;
     }
     const selectedLines = entryModal.lines.filter((line) => line.include && line.amount > 0);
+    const selectedFundAllocations = entryModal.fundAllocations.filter(
+      (line) => line.include && line.amount > 0,
+    );
     const missingCategory = selectedLines.some((line) => !line.categoryId);
     const missingAccount = selectedLines.some((line) => !(line.accountId || entryModal.accountId));
     const awaitingReimbursements =
@@ -3512,14 +3904,16 @@ const resolveStaffCounterpartyDefaults = useCallback(
     const reimbursementCategoryIdForTransaction =
       entryModal.reimbursementCategoryId || entryModal.categoryId || selectedLines[0]?.categoryId || '';
     if (
-      (selectedLines.length === 0 && totalReimbursementAmount <= 0) ||
+      (selectedLines.length === 0
+        && selectedFundAllocations.length === 0
+        && totalReimbursementAmount <= 0) ||
       missingCategory ||
       missingAccount ||
-      !entryModal.counterpartyId
+      ((selectedLines.length > 0 || totalReimbursementAmount > 0) && !entryModal.counterpartyId)
     ) {
       setEntryMessage({
         type: 'error',
-        text: 'Select at least one payment line with a category and account, plus vendor.',
+        text: 'Select at least one staff payment or Volunteer Fund allocation. Staff payments also require an account, category, and vendor.',
       });
       return;
     }
@@ -3545,24 +3939,35 @@ const resolveStaffCounterpartyDefaults = useCallback(
         {
           staffProfileId: entryModal.staff.staffProfileId,
           direction: 'payable',
-          counterpartyId: Number(entryModal.counterpartyId),
+          counterpartyId: entryModal.counterpartyId ? Number(entryModal.counterpartyId) : null,
           rangeStart: entryModal.rangeStart,
           rangeEnd: entryModal.rangeEnd,
           date: dayjs(entryModal.date).format('YYYY-MM-DD'),
           lines: selectedLines.map((line) => {
-            const resolvedAccountId = Number(line.accountId ?? entryModal.accountId);
+            const resolvedAccountId = Number(line.accountId || entryModal.accountId);
             const accountRecord = financeAccountsById.get(resolvedAccountId);
             return {
               label: line.label,
               componentId: line.componentId ?? null,
+              sourceKey: line.sourceKey ?? 'manual_adjustment',
               amount: line.amount,
               categoryId: Number(line.categoryId),
               accountId: resolvedAccountId,
               currency: accountRecord?.currency ?? entryModal.currency,
               description: line.description || entryModal.description || `${line.label} payout`,
               affiliatePayout: line.affiliatePayout ?? null,
+              settlementIntent: line.settlementIntent ?? null,
             };
           }),
+          fundAllocations: selectedFundAllocations.map((line) => ({
+            label: line.label,
+            componentId: line.componentId ?? null,
+            sourceKey: line.sourceKey,
+            amount: line.amount,
+            fundId: line.fundId,
+            settlementIntent: line.settlementIntent,
+            description: line.description,
+          })),
           reimbursement:
             totalReimbursementAmount > 0 && entryModal.accountId
               ? {
@@ -3585,30 +3990,35 @@ const resolveStaffCounterpartyDefaults = useCallback(
       const refetchEnd = endDate ? endDate.format('YYYY-MM-DD') : entryModal.rangeEnd;
       await refetchPaysForRange(refetchStart, refetchEnd);
       const receiptCount = payoutResponse.data.receipts?.length ?? 0;
+      const fundAllocationCount = payoutResponse.data.fundAllocationCount ?? 0;
       if (payoutResponse.data.duplicated) {
         setActionAlert({
           type: 'success',
-          text: `This payout for ${entryModal.staff.firstName} was already recorded. No new confirmation request was sent.`,
+          text: `This settlement for ${formatPayStaffName(entryModal.staff)} was already recorded. Nothing was duplicated.`,
         });
       } else if (receiptCount === 1) {
         setActionAlert({
           type: 'success',
-          text: `Payout recorded. Confirmation request sent to ${entryModal.staff.firstName}.`,
+          text: `Settlement recorded. Confirmation request sent to ${formatPayStaffName(entryModal.staff)}.${fundAllocationCount > 0 ? ` ${fundAllocationCount} Volunteer Fund allocation${fundAllocationCount === 1 ? '' : 's'} recorded.` : ''}`,
         });
       } else if (receiptCount > 1) {
         setActionAlert({
           type: 'success',
-          text: `Payout recorded. ${receiptCount} confirmation requests sent to ${entryModal.staff.firstName}, one per currency.`,
+          text: `Settlement recorded. ${receiptCount} confirmation requests sent to ${formatPayStaffName(entryModal.staff)}, one per currency.${fundAllocationCount > 0 ? ` ${fundAllocationCount} Volunteer Fund allocations recorded.` : ''}`,
+        });
+      } else if (fundAllocationCount > 0) {
+        setActionAlert({
+          type: 'success',
+          text: `${fundAllocationCount} Volunteer Fund allocation${fundAllocationCount === 1 ? '' : 's'} recorded for ${formatPayStaffName(entryModal.staff)}. No staff receipt was requested because no money was paid personally.`,
         });
       } else {
         setActionAlert({
           type: 'error',
-          text: `Payout recorded for ${entryModal.staff.firstName}, but no confirmation request was created.`,
+          text: `Payout recorded for ${formatPayStaffName(entryModal.staff)}, but no confirmation request was created.`,
         });
       }
     } catch (submissionError) {
-      const message =
-        submissionError instanceof Error ? submissionError.message : 'Unable to record payout.';
+      const message = extractRequestErrorMessage(submissionError, 'Unable to record payout.');
       setEntryMessage({ type: 'error', text: message });
     } finally {
       setEntrySubmitting(false);
@@ -3652,7 +4062,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
         type: 'success',
         text: `Removed ${paidEntriesModal.selectedIds.length} recorded payout component${
           paidEntriesModal.selectedIds.length === 1 ? '' : 's'
-        } for ${paidEntriesModal.staff.firstName}.`,
+        } for ${formatPayStaffName(paidEntriesModal.staff)}.`,
       });
     } catch (deleteError) {
       const message =
@@ -3752,9 +4162,7 @@ const renderSummaryBoard = () => {
       {totalOpening !== 0 && (
         <Card withBorder p="sm" style={kpiCardStyle}>
           <Stack gap={4} align="center" justify="center">
-            <Text size="sm" c="dimmed" ta="center">
-              Last Month Balance
-            </Text>
+            {renderPayInfoLabel('Last Month Balance', PAY_KPI_HELP.lastMonthBalance, { dimmed: true })}
             <Title order={4} ta="center">
               {formatCurrency(totalOpening)}
             </Title>
@@ -3773,19 +4181,37 @@ const renderSummaryBoard = () => {
       )}
       <Card withBorder p="sm" style={kpiCardStyle}>
         <Stack gap={4} align="center" justify="center">
-          <Text size="sm" c="dimmed" ta="center">
-            {usingSelfScope ? 'My Payment' : 'Total Payments'}
-          </Text>
+          {renderPayInfoLabel('Gross compensation', PAY_KPI_HELP.grossCompensation, { dimmed: true })}
           <Title order={4} ta="center">
-            {formatCurrency(totalEarnings)}
+            {formatCurrency(totalGrossCompensation)}
           </Title>
         </Stack>
       </Card>
       <Card withBorder p="sm" style={kpiCardStyle}>
         <Stack gap={4} align="center" justify="center">
-          <Text size="sm" c="dimmed" ta="center">
-            Already Paid
-          </Text>
+          {renderPayInfoLabel(
+            usingSelfScope ? 'My pay to staff' : 'Pay to staff',
+            PAY_KPI_HELP.payToStaff,
+            { dimmed: true },
+          )}
+          <Title order={4} ta="center">
+            {formatCurrency(totalPayToStaff)}
+          </Title>
+        </Stack>
+      </Card>
+      {totalVolunteerFund > 0 && (
+        <Card withBorder p="sm" style={kpiCardStyle}>
+          <Stack gap={4} align="center" justify="center">
+            {renderPayInfoLabel('Volunteer Fund', PAY_KPI_HELP.volunteerFund, { dimmed: true })}
+            <Title order={4} ta="center">
+              {formatCurrency(totalVolunteerFund)}
+            </Title>
+          </Stack>
+        </Card>
+      )}
+      <Card withBorder p="sm" style={kpiCardStyle}>
+        <Stack gap={4} align="center" justify="center">
+          {renderPayInfoLabel('Already Paid', PAY_KPI_HELP.alreadyPaid, { dimmed: true })}
           <Title order={4} ta="center">
             {formatCurrency(totalPaid, DEFAULT_CURRENCY)}
           </Title>
@@ -3793,9 +4219,7 @@ const renderSummaryBoard = () => {
       </Card>
       <Card withBorder p="sm" style={kpiCardStyle}>
         <Stack gap={4} align="center" justify="center">
-          <Text size="sm" c="dimmed" ta="center">
-            Outstanding
-          </Text>
+          {renderPayInfoLabel('Outstanding', PAY_KPI_HELP.outstanding, { dimmed: true })}
           <Title order={4} ta="center">
             {formatCurrency(totalClosing)}
           </Title>
@@ -3866,7 +4290,7 @@ const renderOpeningBalanceDetails = () => {
                 const source = staff.openingBalanceSource!;
                 return (
                   <tr key={`${staff.userId ?? source.staffUserId}-${source.ledgerId}`}>
-                    <td style={{ padding: 8 }}>{staff.firstName}</td>
+                    <td style={{ padding: 8 }}>{formatPayStaffName(staff)}</td>
                     <td style={{ padding: 8 }}>{formatCurrency(openingBalance, source.currency)}</td>
                     <td style={{ padding: 8 }}>{formatRangeLabel(source.rangeStart, source.rangeEnd)}</td>
                     <td style={{ padding: 8 }}>{formatCurrency(source.openingBalance, source.currency)}</td>
@@ -3919,7 +4343,7 @@ const renderOpeningBalanceDetails = () => {
                   <Accordion.Control>
                     <Group justify="space-between" gap="sm">
                       <Text size="sm" fw={600}>
-                        {staff.firstName}
+                        {formatPayStaffName(staff)}
                       </Text>
                       <Text size="sm">{formatCurrency(openingBalance, source.currency)}</Text>
                     </Group>
@@ -3984,15 +4408,19 @@ const renderLedgerSnapshot = (staff: Pay) => {
 
   return (
     <Stack gap={2}>
-      <Group justify="space-between">
-        <Text size="xs" c="dimmed">
-          Last Months Owed
+      <Group justify="space-between" gap="xs" wrap="nowrap">
+        {renderPayInfoLabel(
+          'Last Months Owed',
+          PAY_TABLE_HEADER_HELP['Last Months Owed'],
+          { dimmed: true, size: 'xs' },
+        )}
+        <Text size="xs" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {formatCurrency(ledger.opening, currency)}
         </Text>
-        <Text size="xs">{formatCurrency(ledger.opening, currency)}</Text>
       </Group>
       <Group justify="space-between">
         <Text size="xs" c="dimmed">
-          Payment
+          Pay to staff
         </Text>
         <Text size="xs">{formatCurrency(ledger.due, currency)}</Text>
       </Group>
@@ -4012,11 +4440,73 @@ const renderLedgerSnapshot = (staff: Pay) => {
   );
 };
 
+const renderVolunteerFundSnapshot = (
+  staff: Pay,
+  options: { showInfo?: boolean } = {},
+) => {
+  const total = staff.volunteerFundAllocationTotal ?? 0;
+  if (total <= 0) {
+    return null;
+  }
+  const currency = staff.payouts?.currency ?? DEFAULT_CURRENCY;
+  const allocated = staff.volunteerFundAllocatedTotal ?? 0;
+  const outstanding = staff.volunteerFundOutstandingTotal ?? 0;
+  const overallocated = staff.volunteerFundOverallocatedTotal ?? 0;
+  const hasRouteConflict = (staff.settlementSources ?? []).some((source) => source.routeChanged);
+  const fundNames = Array.from(
+    new Set(
+      (staff.settlementSources ?? [])
+        .filter((source) => source.destination === 'volunteer_fund' && source.fundName)
+        .map((source) => source.fundName as string),
+    ),
+  );
+  return (
+    <Stack gap={2}>
+      <Group justify="space-between" gap="xs">
+        <Group gap={4} wrap="nowrap">
+          <Text size="xs" fw={700} c="blue.8">Volunteer Fund</Text>
+          {options.showInfo && (
+            <FinanceInfoButton
+              label="Volunteer Fund"
+              description={PAY_TABLE_HEADER_HELP['Volunteer Fund']}
+            />
+          )}
+        </Group>
+        <Text size="xs" fw={700}>{formatCurrency(total, currency)}</Text>
+      </Group>
+      {fundNames.length > 0 && <Text size="xs" c="dimmed">{fundNames.join(', ')}</Text>}
+      <Group justify="space-between" gap="xs">
+        <Text size="xs" c="dimmed">Allocated</Text>
+        <Text size="xs" c="teal.8">{formatCurrency(allocated, currency)}</Text>
+      </Group>
+      <Group justify="space-between" gap="xs">
+        <Text size="xs" c="dimmed">To allocate</Text>
+        <Text size="xs" c={outstanding > 0 ? 'orange.8' : 'teal.8'}>
+          {formatCurrency(outstanding, currency)}
+        </Text>
+      </Group>
+      {overallocated > 0 && (
+        <Group justify="space-between" gap="xs">
+          <Text size="xs" c="red.8" fw={700}>Overallocated</Text>
+          <Text size="xs" c="red.8" fw={700}>{formatCurrency(overallocated, currency)}</Text>
+        </Group>
+      )}
+      {hasRouteConflict && (
+        <Text size="xs" c="red.8" fw={700}>
+          Routing changed after allocation. Reverse the old fund entry before applying a successor route.
+        </Text>
+      )}
+    </Stack>
+  );
+};
+
   const renderMobileCards = () => (
     <Stack gap="md">
       {summaries.map((item, index) => {
         const expanded = expandedRow === index;
         const total = normalizeTotal(item);
+        const grossTotal = resolveGrossCompensationTotal(item);
+        const volunteerFundTotal = item.volunteerFundAllocationTotal ?? 0;
         const hasDetails =
           hasPositivePaymentBucket(item) ||
           (item.productTotals && item.productTotals.length > 0) ||
@@ -4028,28 +4518,49 @@ const renderLedgerSnapshot = (staff: Pay) => {
           <Paper key={item.userId ?? index} shadow="sm" radius="lg" p="lg" withBorder>
             <Stack gap="md" align="stretch">
               <Stack gap={4} align="center" ta="center">
-                <Title order={4}>{item.firstName}</Title>
-                <Text size="sm" c="dimmed">
-                  Payment
-                </Text>
-                <Title order={4}>{formatCurrency(total)}</Title>
+                <Title order={4}>{formatPayStaffName(item)}</Title>
+                {renderVolunteerRoutingBadges(item)}
+                <SimpleGrid cols={volunteerFundTotal > 0 ? 3 : 2} spacing="xs" w="100%">
+                  <Stack gap={2} align="center">
+                    {renderPayInfoLabel(
+                      'Gross compensation',
+                      PAY_TABLE_HEADER_HELP['Gross compensation'],
+                      { dimmed: true, size: 'xs' },
+                    )}
+                    <Text size="sm" fw={700}>{formatCurrency(grossTotal)}</Text>
+                  </Stack>
+                  <Stack gap={2} align="center">
+                    {renderPayInfoLabel(
+                      'Pay to staff',
+                      PAY_TABLE_HEADER_HELP['Pay to staff'],
+                      { dimmed: true, size: 'xs' },
+                    )}
+                    <Text size="sm" fw={700}>{formatCurrency(total)}</Text>
+                  </Stack>
+                  {volunteerFundTotal > 0 && (
+                    <Stack gap={2} align="center">
+                      <Text size="xs" c="dimmed">Volunteer Fund</Text>
+                      <Text size="sm" fw={700} c="blue.8">{formatCurrency(volunteerFundTotal)}</Text>
+                    </Stack>
+                  )}
+                </SimpleGrid>
               </Stack>
 
               <SimpleGrid cols={2} spacing="xs">
                 <Stack gap={2} align="center" ta="center">
-                  <Text size="sm" c="dimmed">
-                    Paid
-                  </Text>
+                  {renderPayInfoLabel('Paid', PAY_TABLE_HEADER_HELP.Paid, { dimmed: true })}
                   <Text size="sm" fw={700}>
                     {formatCurrency(item.payouts?.payablePaid ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
                   </Text>
                 </Stack>
                 <Stack gap={2} align="center" ta="center">
-                  <Text size="sm" c="dimmed">
-                    Outstanding
-                  </Text>
-                  <Text size="sm" fw={700} c={(item.payouts?.payableOutstanding ?? 0) > 0 ? undefined : 'teal'}>
-                    {formatCurrency(item.payouts?.payableOutstanding ?? 0, item.payouts?.currency ?? DEFAULT_CURRENCY)}
+                  {renderPayInfoLabel(
+                    'Outstanding',
+                    PAY_TABLE_HEADER_HELP.Outstanding,
+                    { dimmed: true },
+                  )}
+                  <Text size="sm" fw={700} c={Math.max(item.closingBalance ?? item.payouts?.payableOutstanding ?? 0, 0) > 0 ? undefined : 'teal'}>
+                    {formatCurrency(Math.max(item.closingBalance ?? item.payouts?.payableOutstanding ?? 0, 0), item.payouts?.currency ?? DEFAULT_CURRENCY)}
                   </Text>
                 </Stack>
               </SimpleGrid>
@@ -4065,6 +4576,16 @@ const renderLedgerSnapshot = (staff: Pay) => {
               >
                 {renderLedgerSnapshot(item)}
               </Box>
+
+              {(item.volunteerFundAllocationTotal ?? 0) > 0 && (
+                <Box
+                  p="sm"
+                  bg="blue.0"
+                  style={{ border: '1px solid var(--mantine-color-blue-4)', borderRadius: 'var(--mantine-radius-md)' }}
+                >
+                  {renderVolunteerFundSnapshot(item, { showInfo: true })}
+                </Box>
+              )}
 
               {hasDetails && (
                 <Button variant="subtle" fullWidth onClick={() => toggleRow(index)}>
@@ -4146,19 +4667,34 @@ const renderLedgerSnapshot = (staff: Pay) => {
     };
     const tableOpeningTotal = summaries.reduce((sum, item) => sum + (item.openingBalance ?? 0), 0);
     const showLastMonthsOwedColumn = Math.abs(roundLineAmount(tableOpeningTotal)) > 0;
+    const tableGrossTotal = summaries.reduce(
+      (sum, item) => sum + resolveGrossCompensationTotal(item),
+      0,
+    );
     const tablePayoutTotal = summaries.reduce((sum, item) => sum + normalizeTotal(item), 0);
+    const tableFundTotal = summaries.reduce(
+      (sum, item) => sum + (item.volunteerFundAllocationTotal ?? 0),
+      0,
+    );
+    const tableFundOutstandingTotal = summaries.reduce(
+      (sum, item) => sum + (item.volunteerFundOutstandingTotal ?? 0),
+      0,
+    );
+    const showVolunteerFundColumn = tableFundTotal > 0;
     const tablePaidTotal = summaries.reduce(
       (sum, item) => sum + (item.payouts?.payablePaid ?? 0),
       0,
     );
     const tableOutstandingTotal = summaries.reduce(
-      (sum, item) => sum + (item.payouts?.payableOutstanding ?? 0),
+      (sum, item) => sum + Math.max(item.closingBalance ?? item.payouts?.payableOutstanding ?? 0, 0),
       0,
     );
     const desktopHeaderLabels = [
       'Name',
       ...(showLastMonthsOwedColumn ? ['Last Months Owed'] : []),
-      'Payment',
+      'Gross compensation',
+      'Pay to staff',
+      ...(showVolunteerFundColumn ? ['Volunteer Fund'] : []),
       'Paid',
       'Outstanding',
       'Actions',
@@ -4183,7 +4719,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
               borderTop: '1px solid var(--mantine-color-gray-3)',
               borderBottom: '1px solid var(--mantine-color-gray-4)',
               boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)',
-              pointerEvents: 'none',
+              pointerEvents: 'auto',
             }}
           >
             {desktopHeaderLabels.map((label) => (
@@ -4195,7 +4731,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                   fontWeight: 700,
                 }}
               >
-                {label}
+                {renderPayInfoLabel(label, PAY_TABLE_HEADER_HELP[label])}
               </Box>
             ))}
           </Box>
@@ -4204,16 +4740,38 @@ const renderLedgerSnapshot = (staff: Pay) => {
           striped
           highlightOnHover
           withRowBorders
-          style={{ minWidth: 640, borderCollapse: 'separate', borderSpacing: 0 }}
+          style={{ minWidth: 900, borderCollapse: 'separate', borderSpacing: 0 }}
         >
           <thead ref={desktopTableHeaderRef}>
             <tr>
-              <th style={desktopHeaderCellStyle}>Name</th>
-              {showLastMonthsOwedColumn && <th style={desktopHeaderCellStyle}>Last Months Owed</th>}
-              <th style={desktopHeaderCellStyle}>Payment</th>
-              <th style={desktopHeaderCellStyle}>Paid</th>
-              <th style={desktopHeaderCellStyle}>Outstanding</th>
-              <th style={desktopHeaderCellStyle}>Actions</th>
+              <th style={desktopHeaderCellStyle}>
+                {renderPayInfoLabel('Name', PAY_TABLE_HEADER_HELP.Name)}
+              </th>
+              {showLastMonthsOwedColumn && (
+                <th style={desktopHeaderCellStyle}>
+                  {renderPayInfoLabel('Last Months Owed', PAY_TABLE_HEADER_HELP['Last Months Owed'])}
+                </th>
+              )}
+              <th style={desktopHeaderCellStyle}>
+                {renderPayInfoLabel('Gross compensation', PAY_TABLE_HEADER_HELP['Gross compensation'])}
+              </th>
+              <th style={desktopHeaderCellStyle}>
+                {renderPayInfoLabel('Pay to staff', PAY_TABLE_HEADER_HELP['Pay to staff'])}
+              </th>
+              {showVolunteerFundColumn && (
+                <th style={desktopHeaderCellStyle}>
+                  {renderPayInfoLabel('Volunteer Fund', PAY_TABLE_HEADER_HELP['Volunteer Fund'])}
+                </th>
+              )}
+              <th style={desktopHeaderCellStyle}>
+                {renderPayInfoLabel('Paid', PAY_TABLE_HEADER_HELP.Paid)}
+              </th>
+              <th style={desktopHeaderCellStyle}>
+                {renderPayInfoLabel('Outstanding', PAY_TABLE_HEADER_HELP.Outstanding)}
+              </th>
+              <th style={desktopHeaderCellStyle}>
+                {renderPayInfoLabel('Actions', PAY_TABLE_HEADER_HELP.Actions)}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -4227,17 +4785,22 @@ const renderLedgerSnapshot = (staff: Pay) => {
                 (item.componentTotals && item.componentTotals.length > 0) ||
                 Boolean(item.affiliateSales?.bookingCount);
               const paidAmount = item.payouts?.payablePaid ?? 0;
-              const outstandingAmount = item.payouts?.payableOutstanding ?? 0;
+              const outstandingAmount = Math.max(item.closingBalance ?? item.payouts?.payableOutstanding ?? 0, 0);
               const openingAmount = item.openingBalance ?? 0;
+              const grossAmount = resolveGrossCompensationTotal(item);
               const payoutCurrency = item.payouts?.currency ?? DEFAULT_CURRENCY;
               return (
                 <Fragment key={item.userId ?? index}>
                   <tr>
-                    <td style={desktopTableCellStyle}>{item.firstName}</td>
+                    <td style={desktopTableCellStyle}>{renderStaffRoutingLabel(item)}</td>
                     {showLastMonthsOwedColumn && (
                       <td style={desktopTableCellStyle}>{formatCurrency(openingAmount, payoutCurrency)}</td>
                     )}
+                    <td style={desktopTableCellStyle}>{formatCurrency(grossAmount, payoutCurrency)}</td>
                     <td style={desktopTableCellStyle}>{formatCurrency(normalizeTotal(item))}</td>
+                    {showVolunteerFundColumn && (
+                      <td style={desktopTableCellStyle}>{renderVolunteerFundSnapshot(item)}</td>
+                    )}
                     <td style={desktopTableCellStyle}>{formatCurrency(paidAmount, payoutCurrency)}</td>
                     <td style={desktopTableCellStyle}>{formatCurrency(outstandingAmount, payoutCurrency)}</td>
                     <td style={desktopActionsCellStyle}>
@@ -4290,8 +4853,21 @@ const renderLedgerSnapshot = (staff: Pay) => {
                 </td>
               )}
               <td style={desktopTableCellStyle}>
+                <strong>{formatCurrency(tableGrossTotal)}</strong>
+              </td>
+              <td style={desktopTableCellStyle}>
                 <strong>{formatCurrency(tablePayoutTotal)}</strong>
               </td>
+              {showVolunteerFundColumn && (
+                <td style={desktopTableCellStyle}>
+                  <Stack gap={2} align="center">
+                    <strong>{formatCurrency(tableFundTotal)}</strong>
+                    <Text size="xs" c={tableFundOutstandingTotal > 0 ? 'orange.8' : 'teal.8'}>
+                      {formatCurrency(tableFundOutstandingTotal)} to allocate
+                    </Text>
+                  </Stack>
+                </td>
+              )}
               <td style={desktopTableCellStyle}>
                 <strong>{formatCurrency(tablePaidTotal, DEFAULT_CURRENCY)}</strong>
               </td>
@@ -4484,6 +5060,14 @@ const renderLedgerSnapshot = (staff: Pay) => {
       : 'selected period';
   const reimbursementAddon = entryModal.includeReimbursements ? entryModal.reimbursementsAwaitingAmount : 0;
   const modalTotalAmount = entryModal.amount + reimbursementAddon;
+  const modalFundAllocationAmount = entryModal.fundAllocations
+    .filter((line) => line.include)
+    .reduce((sum, line) => sum + line.amount, 0);
+  const modalSettlementAmount = modalTotalAmount + modalFundAllocationAmount;
+  const modalHasPersonalPayment = modalTotalAmount > 0;
+  const modalRouteConflicts = (entryModal.staff?.settlementSources ?? []).filter(
+    (source) => source.routeChanged,
+  );
   const paidModalEntries = paidEntriesModal.staff?.paidEntries ?? [];
   const deletablePaidEntries = paidModalEntries.filter((entry) => entry.canDelete);
   const selectedPaidEntries = paidModalEntries.filter((entry) => paidEntriesModal.selectedIds.includes(entry.id));
@@ -4510,7 +5094,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
           onClose={closePaidEntriesModal}
           title={
             paidEntriesModal.staff
-              ? `Manage paid for ${paidEntriesModal.staff.firstName}`
+              ? `Manage paid for ${formatPayStaffName(paidEntriesModal.staff)}`
               : 'Manage paid'
           }
           size={isDesktop ? '70vw' : '100%'}
@@ -4653,7 +5237,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
           onClose={closeReceiptHistoryBrowserModal}
           title={
             receiptHistoryBrowserModal.staff
-              ? `Receipt history for ${receiptHistoryBrowserModal.staff.firstName}`
+              ? `Receipt history for ${formatPayStaffName(receiptHistoryBrowserModal.staff)}`
               : 'Staff payout receipt history'
           }
           size={isDesktop ? '65vw' : '100%'}
@@ -4819,7 +5403,12 @@ const renderLedgerSnapshot = (staff: Pay) => {
                     <Text size="xs" c="dimmed">
                       Staff member
                     </Text>
-                    <Text fw={700}>{receiptEvidenceModal.detail.staffName}</Text>
+                    <Text fw={700}>
+                      {formatPayStaffName({
+                        fullName: receiptEvidenceModal.detail.staffName,
+                        userId: receiptEvidenceModal.detail.staffUserId,
+                      })}
+                    </Text>
                   </Stack>
                   <Stack gap={4} align="center">
                     <Text size="xs" c="dimmed">
@@ -5048,8 +5637,8 @@ const renderLedgerSnapshot = (staff: Pay) => {
           onClose={closeEntryModal}
           title={
             entryModal.staff
-              ? `Record payout for ${entryModal.staff.firstName}`
-              : 'Record staff payout'
+              ? `Process compensation for ${formatPayStaffName(entryModal.staff)}`
+              : 'Process staff compensation'
           }
           size={isDesktop ? '80vw' : '100%'}
           fullScreen={!isDesktop}
@@ -5067,6 +5656,13 @@ const renderLedgerSnapshot = (staff: Pay) => {
           <Box style={{ height: isDesktop ? 'auto' : 'calc(100dvh - 61px)', display: 'flex', flexDirection: 'column' }}>
             <ScrollArea.Autosize mah={isDesktop ? '80vh' : undefined} style={{ flex: 1, minHeight: 0 }}>
               <Stack gap="md" p={isDesktop ? 0 : 'md'} pb={isDesktop ? 'lg' : 96}>
+                {entryModal.staff?.settlementReconciliationRequired ? (
+                  <Alert color="red" title="Historical payout reconciliation required">
+                    {entryModal.staff.settlementReconciliationMessage
+                      ?? 'The saved liability and historical source breakdown no longer match.'}
+                  </Alert>
+                ) : null}
+                {renderVolunteerRoutingNotice(entryModal.staff)}
                 <Card withBorder radius="md" padding={isDesktop ? 'lg' : 'md'}>
                   <Stack gap="md" align="stretch">
                     <Stack gap={8} align="center" ta="center">
@@ -5080,15 +5676,20 @@ const renderLedgerSnapshot = (staff: Pay) => {
                       </Text>
                     </Stack>
                   {entryModal.staff && (
-                    <SimpleGrid cols={{ base: 1, sm: 3 }}>
+                    <SimpleGrid cols={{ base: 1, sm: modalFundAllocationAmount > 0 ? 4 : 3 }}>
                       <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
                         <Stack gap={2} align="center">
                           <Text size="xs" c="dimmed">
-                            Outstanding
+                            Personal outstanding
                           </Text>
                           <Text fw={600}>
                             {formatCurrency(
-                              entryModal.staff.payouts?.payableOutstanding ?? 0,
+                              Math.max(
+                                entryModal.staff.closingBalance
+                                  ?? entryModal.staff.payouts?.payableOutstanding
+                                  ?? 0,
+                                0,
+                              ),
                               entryModal.staff.payouts?.currency ?? DEFAULT_CURRENCY,
                             )}
                           </Text>
@@ -5097,20 +5698,37 @@ const renderLedgerSnapshot = (staff: Pay) => {
                       <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
                         <Stack gap={2} align="center">
                           <Text size="xs" c="dimmed">
-                            This payout
+                            Pay to staff
                           </Text>
                           <Text fw={600}>{formatCurrency(modalTotalAmount, entryModal.currency)}</Text>
                         </Stack>
                       </Card>
+                      {modalFundAllocationAmount > 0 && (
+                        <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
+                          <Stack gap={2} align="center">
+                            <Text size="xs" c="dimmed">
+                              Allocate to fund
+                            </Text>
+                            <Text fw={600} c="blue">
+                              {formatCurrency(modalFundAllocationAmount, entryModal.currency)}
+                            </Text>
+                          </Stack>
+                        </Card>
+                      )}
                       <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
                         <Stack gap={2} align="center">
                           <Text size="xs" c="dimmed">
-                            Remaining
+                            Personal remaining
                           </Text>
                           <Text fw={600}>
                             {formatCurrency(
                               Math.max(
-                                (entryModal.staff.payouts?.payableOutstanding ?? 0) - modalTotalAmount,
+                                Math.max(
+                                  entryModal.staff.closingBalance
+                                    ?? entryModal.staff.payouts?.payableOutstanding
+                                    ?? 0,
+                                  0,
+                                ) - modalTotalAmount,
                                 0,
                               ),
                               entryModal.currency,
@@ -5123,30 +5741,92 @@ const renderLedgerSnapshot = (staff: Pay) => {
                 </Stack>
               </Card>
 
+              {modalRouteConflicts.length > 0 && (
+                <Alert color="red" title="Fund allocation needs reconciliation">
+                  {modalRouteConflicts.map((source) => source.label).join(', ')} already has an active allocation under an older route. Reverse that ledger entry before applying the new routing rule.
+                </Alert>
+              )}
+
+              {entryModal.fundAllocations.length > 0 && (
+                <Card
+                  withBorder
+                  radius="md"
+                  padding={isDesktop ? 'lg' : 'md'}
+                  bg="blue.0"
+                  style={{ borderColor: 'var(--mantine-color-blue-5)' }}
+                >
+                  <Stack gap="md">
+                    <Stack gap={3}>
+                      <Group justify="space-between" align="center" wrap="wrap">
+                        <Text fw={800} c="blue.9">Allocate to Volunteer Fund</Text>
+                        <Badge color="blue" variant="filled">
+                          {formatCurrency(modalFundAllocationAmount, entryModal.currency)}
+                        </Badge>
+                      </Group>
+                      <Text size="sm" c="blue.9">
+                        These amounts remain in the organization-controlled fund. They are not paid to the staff member and do not create a receipt request.
+                      </Text>
+                    </Stack>
+                    <Stack gap="xs">
+                      {entryModal.fundAllocations.map((line) => (
+                        <Card key={line.id} withBorder radius="md" padding="sm" bg="white">
+                          <Group justify="space-between" align="center" gap="sm" wrap="wrap">
+                            <Stack gap={2} style={{ minWidth: 0 }}>
+                              <Text fw={700}>{line.label}</Text>
+                              <Text size="xs" c="dimmed">{line.fundName}</Text>
+                            </Stack>
+                            <Group gap="md">
+                              <Text fw={800} c="blue.8">{formatCurrency(line.amount, entryModal.currency)}</Text>
+                              <Switch
+                                label="Allocate"
+                                checked={line.include}
+                                onChange={(event) =>
+                                  setEntryModal((previous) => ({
+                                    ...previous,
+                                    fundAllocations: previous.fundAllocations.map((entry) =>
+                                      entry.id === line.id
+                                        ? { ...entry, include: event.currentTarget.checked }
+                                        : entry,
+                                    ),
+                                  }))
+                                }
+                              />
+                            </Group>
+                          </Group>
+                        </Card>
+                      ))}
+                    </Stack>
+                  </Stack>
+                </Card>
+              )}
+
               <Card withBorder radius="md" padding={isDesktop ? 'lg' : 'md'}>
                 <Stack gap="md">
-                  <SimpleGrid cols={{ base: 1, sm: 2 }}>
-                    <Select
-                      label="Vendor"
-                      placeholder="Select the staff vendor profile"
-                      data={vendorOptions}
-                      value={entryModal.counterpartyId}
-                      onChange={handleCounterpartyChange}
-                      searchable
-                    />
-                    <Select
-                      label="Payout account"
-                      placeholder="Select an account"
-                      data={accountOptions}
-                      value={entryModal.accountId || null}
-                      onChange={handleEntryAccountChange}
-                      searchable
-                      clearable
-                    />
-                  </SimpleGrid>
+                  {modalHasPersonalPayment && (
+                    <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                      <TextInput
+                        label="Linked staff vendor"
+                        value={
+                          financeVendorsById.get(Number(entryModal.counterpartyId))?.name
+                          ?? "No finance vendor linked"
+                        }
+                        readOnly
+                        variant="filled"
+                      />
+                      <Select
+                        label="Payout account"
+                        placeholder="Select an account"
+                        data={accountOptions}
+                        value={entryModal.accountId || null}
+                        onChange={handleEntryAccountChange}
+                        searchable
+                        clearable
+                      />
+                    </SimpleGrid>
+                  )}
                   <SimpleGrid cols={{ base: 1, sm: 2 }}>
                     <DatePickerInput
-                      label="Payment date"
+                      label="Settlement date"
                       value={entryModal.date}
                       onChange={(value) => {
                         if (value) {
@@ -5157,7 +5837,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                     <TextInput label="Currency" value={entryModal.currency} readOnly variant="filled" />
                   </SimpleGrid>
                   <Textarea
-                    label="Global note"
+                    label="Settlement note"
                     minRows={2}
                     value={entryModal.description}
                     onChange={(event) =>
@@ -5211,15 +5891,18 @@ const renderLedgerSnapshot = (staff: Pay) => {
                 </Card>
               )}
 
+              {entryModal.lines.length > 0 && (
               <Card withBorder radius="md" padding={isDesktop ? 'lg' : 'md'}>
                 <Stack gap="md">
                   <Group justify="space-between" align={isDesktop ? 'center' : 'stretch'} wrap="wrap">
                     <Stack gap={2} align={isDesktop ? 'stretch' : 'center'} ta={isDesktop ? undefined : 'center'} style={{ flex: 1 }}>
                       <Text fw={700}>Compensation Items</Text>
                     </Stack>
-                    <Button variant="subtle" size="xs" fullWidth={!isDesktop} onClick={handleAddManualLine}>
-                      Add manual line
-                    </Button>
+                    {(entryModal.staff?.staffType ?? '').trim().toLowerCase() !== 'volunteer' && (
+                      <Button variant="subtle" size="xs" fullWidth={!isDesktop} onClick={handleAddManualLine}>
+                        Add manual line
+                      </Button>
+                    )}
                   </Group>
                   <Stack gap="sm">
                     {entryModal.lines.map((line) => {
@@ -5342,6 +6025,11 @@ const renderLedgerSnapshot = (staff: Pay) => {
                           {formatCurrency(modalTotalAmount, entryModal.currency)}
                         </Text>
                       )}
+                      {modalFundAllocationAmount > 0 && (
+                        <Text size="xs" fw={700} c="blue.8">
+                          Total processed: {formatCurrency(modalSettlementAmount, entryModal.currency)}
+                        </Text>
+                      )}
                       <Text size="xs" c="dimmed">
                         Lines with blank accounts use the payout account above.
                       </Text>
@@ -5349,6 +6037,7 @@ const renderLedgerSnapshot = (staff: Pay) => {
                   </Group>
                 </Stack>
               </Card>
+              )}
 
               {entryMessage && (
                 <Alert color={entryMessage.type === 'error' ? 'red' : 'green'}>{entryMessage.text}</Alert>
@@ -5370,8 +6059,12 @@ const renderLedgerSnapshot = (staff: Pay) => {
               <Button variant="subtle" onClick={closeEntryModal}>
                 Cancel
               </Button>
-              <Button onClick={handleEntrySubmit} loading={entrySubmitting}>
-                Record payout
+              <Button
+                onClick={handleEntrySubmit}
+                loading={entrySubmitting}
+                disabled={Boolean(entryModal.staff?.settlementReconciliationRequired)}
+              >
+                Process compensation
               </Button>
             </Group>
           </Box>

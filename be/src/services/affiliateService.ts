@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
-import { Op } from 'sequelize';
+import { Op, type Transaction as SequelizeTransaction } from 'sequelize';
 import Booking from '../models/Booking.js';
 import Product from '../models/Product.js';
 import User from '../models/User.js';
@@ -447,7 +447,10 @@ const toAffiliateUserSummary = (user: User): AffiliateUserSummary => {
   };
 };
 
-const fetchAffiliateUsers = async (assignedUserIds: number[] = []): Promise<AffiliateUserSummary[]> => {
+const fetchAffiliateUsers = async (
+  assignedUserIds: number[] = [],
+  transaction?: SequelizeTransaction,
+): Promise<AffiliateUserSummary[]> => {
   const affiliateRoleUsers = await User.findAll({
     include: [
       {
@@ -459,6 +462,7 @@ const fetchAffiliateUsers = async (assignedUserIds: number[] = []): Promise<Affi
       },
     ],
     order: [['firstName', 'ASC'], ['lastName', 'ASC'], ['id', 'ASC']],
+    transaction,
   });
 
   const existingIds = new Set(affiliateRoleUsers.map((user) => user.id));
@@ -486,6 +490,7 @@ const fetchAffiliateUsers = async (assignedUserIds: number[] = []): Promise<Affi
               attributes: ['id', 'slug', 'name'],
             },
           ],
+          transaction,
         })
       : [];
 
@@ -580,7 +585,10 @@ const allocatePayoutLogAmount = (
   );
 };
 
-const fetchAffiliatePayoutLogs = async (affiliateUserIds: number[]): Promise<NormalizedAffiliatePayoutLog[]> => {
+const fetchAffiliatePayoutLogs = async (
+  affiliateUserIds: number[],
+  transaction?: SequelizeTransaction,
+): Promise<NormalizedAffiliatePayoutLog[]> => {
   if (affiliateUserIds.length === 0) {
     return [];
   }
@@ -595,6 +603,7 @@ const fetchAffiliatePayoutLogs = async (affiliateUserIds: number[]): Promise<Nor
       ['paidDate', 'DESC'],
       ['id', 'DESC'],
     ],
+    transaction,
   });
 
   return rows.map((row) => ({
@@ -612,7 +621,11 @@ const fetchAffiliatePayoutLogs = async (affiliateUserIds: number[]): Promise<Nor
   }));
 };
 
-const fetchAffiliateBookings = async (startDate: string, endDate: string): Promise<AffiliateBookingRow[]> => {
+const fetchAffiliateBookings = async (
+  startDate: string,
+  endDate: string,
+  transaction?: SequelizeTransaction,
+): Promise<AffiliateBookingRow[]> => {
   const rangeStart = dayjs.tz(startDate, AFFILIATE_COMMISSION_TIMEZONE).startOf('day').utc().toISOString();
   const rangeEndExclusive = dayjs
     .tz(endDate, AFFILIATE_COMMISSION_TIMEZONE)
@@ -655,6 +668,7 @@ const fetchAffiliateBookings = async (startDate: string, endDate: string): Promi
       ['sourceReceivedAt', 'ASC'],
       ['id', 'ASC'],
     ],
+    transaction,
   });
 
   return rows.map((row) => ({
@@ -690,16 +704,17 @@ export const getAffiliateOverview = async (params: {
   currentUserId: number;
   currentRoleSlug: string | null;
   includeStaffAffiliateAssignments?: boolean;
+  transaction?: SequelizeTransaction;
 }): Promise<AffiliateOverviewResponse> => {
   const { startDate, endDate } = buildDateRange(params.startDate, params.endDate);
   const isManager = ['admin', 'administrator', 'owner', 'manager'].includes((params.currentRoleSlug ?? '').trim().toLowerCase());
   const canManageAssignments = isManager;
   const assignments = await loadAssignments();
-  const affiliateUsers = await fetchAffiliateUsers();
+  const affiliateUsers = await fetchAffiliateUsers([], params.transaction);
   const attributionUsers = params.includeStaffAffiliateAssignments
-    ? await fetchAffiliateUsers(assignments.rules.map((rule) => rule.userId))
+    ? await fetchAffiliateUsers(assignments.rules.map((rule) => rule.userId), params.transaction)
     : affiliateUsers;
-  const bookings = await fetchAffiliateBookings(startDate, endDate);
+  const bookings = await fetchAffiliateBookings(startDate, endDate, params.transaction);
   const attributionUserMap = new Map(attributionUsers.map((user) => [user.id, user]));
   const affiliateRoleUserIds = new Set(affiliateUsers.map((user) => user.id));
 
@@ -760,7 +775,7 @@ export const getAffiliateOverview = async (params: {
     });
 
   const matchedAffiliateIds = Array.from(new Set(attributedBookings.map((booking) => booking.affiliateUserId)));
-  const payoutLogs = await fetchAffiliatePayoutLogs(matchedAffiliateIds);
+  const payoutLogs = await fetchAffiliatePayoutLogs(matchedAffiliateIds, params.transaction);
   const toAffiliateBookingKey = (affiliateUserId: number, bookingId: number): string => `${affiliateUserId}:${bookingId}`;
   const visibleAffiliateBookingKeys = new Set(
     attributedBookings.map((booking) => toAffiliateBookingKey(booking.affiliateUserId, booking.id)),
@@ -782,6 +797,7 @@ export const getAffiliateOverview = async (params: {
         },
       },
       attributes: ['id', 'partySizeTotal', 'partySizeAdults', 'partySizeChildren'],
+      transaction: params.transaction,
     });
     payoutBookingRows.forEach((booking) => {
       partySizeByBookingId.set(booking.id, resolvePartySizeTotal(booking));

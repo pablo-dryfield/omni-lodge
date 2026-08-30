@@ -13,6 +13,22 @@ import {
 import type { NonAttribute } from "sequelize";
 import User from "./User.js";
 
+export type StaffPayoutSettlementSnapshotSource = {
+  sourceKey: string;
+  componentId: number | null;
+  category: string;
+  grossAmountMinor: number;
+  destination: "staff_vendor" | "volunteer_fund" | "excluded";
+  fundId: number | null;
+  ruleId: number;
+  currency: string;
+};
+
+export type StaffPayoutSettlementSnapshot = {
+  version: 1;
+  sources: StaffPayoutSettlementSnapshotSource[];
+};
+
 @Table({
   tableName: "staff_payout_ledgers",
   modelName: "StaffPayoutLedger",
@@ -64,6 +80,10 @@ export default class StaffPayoutLedger extends Model {
   @Default(0)
   @Column({ field: "closing_balance_minor", type: DataType.INTEGER })
   declare closingBalanceMinor: number;
+
+  @AllowNull(true)
+  @Column({ field: "settlement_snapshot", type: DataType.JSONB })
+  declare settlementSnapshot: StaffPayoutSettlementSnapshot | null;
 
   @AllowNull(false)
   @Default(DataType.NOW)
