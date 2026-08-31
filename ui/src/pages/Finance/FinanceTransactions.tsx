@@ -102,6 +102,7 @@ import {
 } from "./financeTransactionPayment";
 import InlineCategorySelect from "./InlineCategorySelect";
 import { getInlineParentCategoryOptions } from "./inlineCategoryCreate";
+import { getNewTransactionPwaInstallUrl } from "../../utils/newTransactionPwa";
 import {
   buildFinanceTransactionDraftStorageKey,
   parseFinanceTransactionModalSearchParams,
@@ -1279,7 +1280,7 @@ const FinanceTransactions = () => {
             <Group gap="sm" wrap="wrap">
               <Button
                 component="a"
-                href="/finance/new-transaction/install.html"
+                href={getNewTransactionPwaInstallUrl(window.location)}
                 target="_blank"
                 rel="noopener"
                 variant="default"

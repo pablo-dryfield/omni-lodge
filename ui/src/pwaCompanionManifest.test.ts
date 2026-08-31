@@ -25,14 +25,14 @@ describe("New Transaction companion PWA", () => {
     path.join("finance", "new-transaction", "new-transaction.webmanifest"),
   );
 
-  it("has a stable identity distinct from the main OmniLodge app", () => {
+  it("has a stable identity that is installed from the companion origin", () => {
     expect(mainManifest.id).toBe("/");
     expect(companionManifest.id).toBe("/pwa/new-transaction");
     expect(companionManifest.id).not.toBe(mainManifest.id);
   });
 
   it("launches the permission-guarded create transaction URL within its scope", () => {
-    const origin = "https://omni-lodge.com";
+    const origin = "https://transaction.omni-lodge.com";
     const startUrl = new URL(companionManifest.start_url, origin);
     const scopeUrl = new URL(companionManifest.scope, origin);
 
@@ -40,6 +40,7 @@ describe("New Transaction companion PWA", () => {
     expect(startUrl.pathname).toBe("/finance/transactions");
     expect(startUrl.searchParams.get("transactionModal")).toBe("create");
     expect(startUrl.searchParams.get("pwa")).toBe("new-transaction");
+    expect(scopeUrl.pathname).toBe("/");
   });
 
   it("ships installable and maskable icon files", () => {
@@ -66,5 +67,12 @@ describe("New Transaction companion PWA", () => {
       'rel="manifest" href="/finance/new-transaction/new-transaction.webmanifest"',
     );
     expect(installer).toContain('rel="apple-touch-icon"');
+  });
+
+  it("selects the companion manifest by hostname rather than a nested main-app URL", () => {
+    const selector = readFileSync(path.join(publicDirectory, "pwa-manifest-selector.js"), "utf8");
+
+    expect(selector).toContain('window.location.hostname === "transaction.omni-lodge.com"');
+    expect(selector).not.toContain('params.get("pwa")');
   });
 });

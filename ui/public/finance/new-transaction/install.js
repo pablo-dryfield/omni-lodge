@@ -1,6 +1,23 @@
 (function setupNewTransactionInstaller() {
   "use strict";
 
+  var productionCompanionOrigin = "https://transaction.omni-lodge.com";
+  var localCompanionOrigin = window.location.port
+    ? "http://transaction.localhost:" + window.location.port
+    : "http://transaction.localhost";
+  var redirectOrigin = null;
+
+  if (window.location.hostname === "omni-lodge.com" || window.location.hostname === "www.omni-lodge.com") {
+    redirectOrigin = productionCompanionOrigin;
+  } else if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+    redirectOrigin = localCompanionOrigin;
+  }
+
+  if (redirectOrigin) {
+    window.location.replace(redirectOrigin + window.location.pathname + window.location.search + window.location.hash);
+    return;
+  }
+
   var transactionUrl = "/finance/transactions?transactionModal=create&pwa=new-transaction";
   var installButton = document.getElementById("install-button");
   var installStatus = document.getElementById("install-status");

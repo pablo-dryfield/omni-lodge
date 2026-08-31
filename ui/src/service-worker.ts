@@ -69,7 +69,10 @@ const postPushReceipt = async (params: {
   }
 
   try {
-    await fetch('/api/notifications/push/receipt', {
+    const apiOrigin = self.location.hostname === 'transaction.omni-lodge.com'
+      ? 'https://omni-lodge.com'
+      : '';
+    await fetch(`${apiOrigin}/api/notifications/push/receipt`, {
       method: 'POST',
       credentials: 'include',
       headers: {

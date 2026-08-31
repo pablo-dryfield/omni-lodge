@@ -4,7 +4,7 @@
   "short_name": "New Txn",
   "description": "Open OmniLodge directly in a new finance transaction.",
   "start_url": "/finance/transactions?transactionModal=create&pwa=new-transaction",
-  "scope": "/finance/",
+  "scope": "/",
   "display": "standalone",
   "theme_color": "#0a1f44",
   "background_color": "#0a1f44",

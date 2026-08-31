@@ -163,22 +163,20 @@ const app = express();
 app.use(cookieParser());
 
 // Configure CORS middleware
-const allowedOrigins = [
-  'http://localhost:3000',
-];
+const allowedOrigins = process.env.NODE_ENV === 'production'
+  ? ['https://transaction.omni-lodge.com']
+  : ['http://localhost:3000', 'http://transaction.localhost:3000'];
+const corsOptions: cors.CorsOptions = {
+  origin: allowedOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type'],
+};
 
-// CORS: dev only
-if (process.env.NODE_ENV !== 'production') {
-  app.use(
-    cors({
-      origin: allowedOrigins, // your UI dev server
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Authorization', 'Content-Type'],
-    })
-  );
-  app.options('*', cors()); // handle preflight
-}
+// The production exception is intentionally limited to the separately
+// installable Transaction PWA. Ordinary OmniLodge traffic remains same-origin.
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.post(
   '/api/storefront/webhooks/stripe',
