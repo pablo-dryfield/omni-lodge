@@ -5,6 +5,8 @@ export interface VolunteerFundSummary {
   name: string;
   currency: string;
   description: string | null;
+  fundingSourceAccountId: number | null;
+  fundingSourceAccountName?: string | null;
   linkedAccountId: number | null;
   linkedAccountName?: string | null;
   expenseCategoryId: number | null;
@@ -46,6 +48,7 @@ export type VolunteerFundPayload = {
   name: string;
   currency: string;
   description?: string | null;
+  fundingSourceAccountId?: number | null;
   linkedAccountId?: number | null;
   expenseCategoryId?: number | null;
   isActive?: boolean;
@@ -79,12 +82,14 @@ export type VolunteerFundSpendPayload = VolunteerFundSpendBasePayload & (
       accountId?: never;
       categoryId?: never;
       vendorId?: never;
+      invoiceFileId?: never;
     }
   | {
       financeTransactionId?: null;
       accountId: number;
       categoryId: number;
       vendorId: number;
+      invoiceFileId?: number | null;
     }
 );
 

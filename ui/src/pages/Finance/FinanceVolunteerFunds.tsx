@@ -6,32 +6,33 @@ import {
   Button,
   Card,
   Group,
-  Loader,
-  Modal,
   NumberInput,
   Pagination,
   ScrollArea,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
   Switch,
   Table,
-  Tabs,
   Text,
   Textarea,
   TextInput,
-  Title,
   Tooltip,
   useMantineTheme,
 } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import {
+  IconAdjustments,
+  IconArrowDownRight,
   IconArrowBackUp,
+  IconArrowUpRight,
   IconCoins,
   IconPencil,
   IconPlus,
   IconRefresh,
   IconShoppingCart,
+  IconWallet,
 } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import {
@@ -61,11 +62,23 @@ import type {
   VolunteerFundSummary,
 } from "../../types/finance";
 import FinanceInfoButton from "../../components/finance/FinanceInfoButton";
+import {
+  FinanceEmptyState,
+  FinanceFormSection,
+  FinanceLoadingState,
+  FinanceMetricCard,
+  FinanceModal,
+  FinanceModalFooter,
+  FinancePageHeader,
+  FinancePanel,
+} from "../../components/finance/FinanceUi";
+import { getFinanceErrorMessage } from "../../components/finance/financeFormatters";
 
 type FundDraft = {
   name: string;
   currency: string;
   description: string;
+  fundingSourceAccountId: string | null;
   linkedAccountId: string | null;
   expenseCategoryId: string | null;
   isActive: boolean;
@@ -90,6 +103,7 @@ const EMPTY_FUND_DRAFT: FundDraft = {
   name: "",
   currency: "PLN",
   description: "",
+  fundingSourceAccountId: null,
   linkedAccountId: null,
   expenseCategoryId: null,
   isActive: true,
@@ -122,19 +136,19 @@ const LEDGER_PAGE_SIZE = 100;
 
 const KPI_HELP = {
   availableBalance: "Current balance from all entries in this fund, regardless of the From/To dates. Positive allocations and adjustments increase the fund balance; spends and negative adjustments reduce it. Reversals apply the opposite of the original entry.",
-  allocatedInPeriod: "Sum of allocation entries dated within From/To, regardless of the activity tab. They come from staff settlements and increase the fund balance. Reversals remain separate and affect the balance without rewriting this total.",
+  allocatedInPeriod: "Original sum of allocation entries dated within From/To, regardless of the activity tab. Staff settlements transfer and reserve this compensation in the linked fund account. Later spends and reversals stay separate, so they never rewrite the original allocation amount.",
   spentInPeriod: "Sum of spend entries dated within From/To, regardless of the activity tab. It is shown as a positive total here, although each spend is negative in the ledger and reduces the fund. Reversals remain separate.",
   periodAdjustments: "Net manual, non-cash corrections dated within From/To, regardless of the activity tab. A positive adjustment increases the fund balance; a negative adjustment reduces it. Reversals remain separate.",
 } as const;
 
 const LEDGER_HEADER_HELP = {
   date: "The effective ledger date used by the From/To filter and entry order. It may differ from the time the record was created.",
-  type: "How the entry arose: Allocation reserves staff compensation; Spend links a paid Finance expense; Adjustment is a manual non-cash correction; Reversal offsets an earlier entry.",
+  type: "How the entry arose: Allocation transfers and reserves staff compensation; Spend links a paid Finance expense and reduces the available balance; Adjustment is a manual non-cash correction; Reversal offsets an earlier entry.",
   description: "The saved audit reason or note for this entry. If none was saved, the entry number is shown.",
   attribution: "The staff member and compensation component that produced an allocation. Manual spends and adjustments may have no attribution.",
   amount: "The signed change to the fund in its currency. A plus increases the fund balance; a minus reduces it. A reversal has the opposite sign of its original entry.",
   runningBalance: "The fund balance immediately after this entry, including activity before the selected From date and activity hidden by the selected tab.",
-  actions: "Shows Reverse only when an entry is eligible. Reversing keeps the original audit record and adds an equal, opposite entry; reversing a spend also voids its linked Finance expense.",
+  actions: "Shows Reverse only when an entry is eligible. Reversing keeps the original audit record and adds an equal, opposite entry; a spend reversal voids its linked expense, while an allocation reversal voids both sides of its linked transfer.",
 } as const;
 
 const createEntryIdempotencyKey = (kind: "spend" | "adjustment"): string => {
@@ -153,7 +167,7 @@ const extractErrorMessage = (error: unknown, fallback: string): string => {
       return message.trim();
     }
   }
-  return error instanceof Error && error.message.trim() ? error.message : fallback;
+  return getFinanceErrorMessage(error, fallback);
 };
 
 const formatMoney = (amountMinor: number | null | undefined, currency = "PLN") =>
@@ -248,6 +262,16 @@ const FinanceVolunteerFunds = () => {
   }, [accounts.data.length, accounts.loading, categories.data.length, categories.loading, dispatch, vendors.data.length, vendors.loading]);
 
   const selectedFund = ledgerQuery.data?.fund ?? funds.find((fund) => fund.id === selectedFundId) ?? null;
+  const fundingSourceAccountName = selectedFund
+    ? selectedFund.fundingSourceAccountName
+      ?? accounts.data.find((account) => account.id === selectedFund.fundingSourceAccountId)?.name
+      ?? (selectedFund.fundingSourceAccountId ? `Account #${selectedFund.fundingSourceAccountId}` : "Not configured")
+    : null;
+  const linkedFundAccountName = selectedFund
+    ? selectedFund.linkedAccountName
+      ?? accounts.data.find((account) => account.id === selectedFund.linkedAccountId)?.name
+      ?? (selectedFund.linkedAccountId ? `Account #${selectedFund.linkedAccountId}` : "Not configured")
+    : null;
   const availableBalanceMinor = funds.find((fund) => fund.id === selectedFundId)?.balanceMinor
     ?? selectedFund?.balanceMinor
     ?? 0;
@@ -257,15 +281,20 @@ const FinanceVolunteerFunds = () => {
   const spendExceedsAvailableBalance = entryModal === "spend"
     && draftSpendMinor > availableBalanceMinor;
   const entries = ledgerQuery.data?.entries ?? [];
-  const fundAccountOptions = accounts.data
-    .filter((account) => (
-      (account.isActive || String(account.id) === fundDraft.linkedAccountId)
-      && account.currency.toUpperCase() === fundDraft.currency.toUpperCase()
-    ))
-    .map((account) => ({
-      value: String(account.id),
-      label: `${account.name} (${account.currency})`,
-    }));
+  const draftCurrency = fundDraft.currency.trim().toUpperCase();
+  const eligibleFundAccounts = accounts.data.filter((account) => (
+    account.isActive && account.currency.trim().toUpperCase() === draftCurrency
+  ));
+  const fundingSourceAccountOptions = eligibleFundAccounts.map((account) => ({
+    value: String(account.id),
+    label: `${account.name} (${account.currency})`,
+    disabled: String(account.id) === fundDraft.linkedAccountId,
+  }));
+  const linkedFundAccountOptions = eligibleFundAccounts.map((account) => ({
+    value: String(account.id),
+    label: `${account.name} (${account.currency})`,
+    disabled: String(account.id) === fundDraft.fundingSourceAccountId,
+  }));
   const spendAccountOptions = accounts.data
     .filter((account) => (
       account.isActive
@@ -305,6 +334,9 @@ const FinanceVolunteerFunds = () => {
       name: selectedFund.name,
       currency: selectedFund.currency,
       description: selectedFund.description ?? "",
+      fundingSourceAccountId: selectedFund.fundingSourceAccountId
+        ? String(selectedFund.fundingSourceAccountId)
+        : null,
       linkedAccountId: selectedFund.linkedAccountId ? String(selectedFund.linkedAccountId) : null,
       expenseCategoryId: selectedFund.expenseCategoryId ? String(selectedFund.expenseCategoryId) : null,
       isActive: selectedFund.isActive,
@@ -323,10 +355,38 @@ const FinanceVolunteerFunds = () => {
       setActionError("Currency must be a three-letter code.");
       return;
     }
+    const normalizedCurrency = fundDraft.currency.trim().toUpperCase();
+    const fundingSourceAccount = fundDraft.fundingSourceAccountId
+      ? accounts.data.find((account) => String(account.id) === fundDraft.fundingSourceAccountId)
+      : null;
+    const linkedFundAccount = fundDraft.linkedAccountId
+      ? accounts.data.find((account) => String(account.id) === fundDraft.linkedAccountId)
+      : null;
+    if (fundDraft.fundingSourceAccountId && (
+      !fundingSourceAccount?.isActive
+      || fundingSourceAccount.currency.trim().toUpperCase() !== normalizedCurrency
+    )) {
+      setActionError("Select an active funding source account in the fund currency.");
+      return;
+    }
+    if (fundDraft.linkedAccountId && (
+      !linkedFundAccount?.isActive
+      || linkedFundAccount.currency.trim().toUpperCase() !== normalizedCurrency
+    )) {
+      setActionError("Select an active linked fund account in the fund currency.");
+      return;
+    }
+    if (fundDraft.fundingSourceAccountId && fundDraft.fundingSourceAccountId === fundDraft.linkedAccountId) {
+      setActionError("Funding source and linked fund account must be different accounts.");
+      return;
+    }
     const payload: VolunteerFundPayload = {
       name: fundDraft.name.trim(),
-      currency: fundDraft.currency.trim().toUpperCase(),
+      currency: normalizedCurrency,
       description: fundDraft.description.trim() || null,
+      fundingSourceAccountId: fundDraft.fundingSourceAccountId
+        ? Number(fundDraft.fundingSourceAccountId)
+        : null,
       linkedAccountId: fundDraft.linkedAccountId ? Number(fundDraft.linkedAccountId) : null,
       expenseCategoryId: fundDraft.expenseCategoryId ? Number(fundDraft.expenseCategoryId) : null,
       isActive: fundDraft.isActive,
@@ -455,8 +515,14 @@ const FinanceVolunteerFunds = () => {
     const canReverse = entry.entryType !== "reversal" && !entry.isReversed && !entry.reversedByEntryId;
     return canReverse ? (
       <Tooltip label="Reverse entry">
-        <ActionIcon variant="light" color="grape" onClick={() => openReverse(entry)} aria-label="Reverse fund entry">
-          <IconArrowBackUp size={16} />
+        <ActionIcon
+          variant="light"
+          color="grape"
+          size={36}
+          onClick={() => openReverse(entry)}
+          aria-label={`Reverse fund entry ${entry.id}`}
+        >
+          <IconArrowBackUp size={17} />
         </ActionIcon>
       </Tooltip>
     ) : null;
@@ -467,23 +533,20 @@ const FinanceVolunteerFunds = () => {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between" align="flex-start" gap="sm" wrap="wrap">
-        <Stack gap={3} style={{ flex: "1 1 320px" }}>
-          <Group gap="xs">
-            <IconCoins size={22} />
-            <Title order={3}>Volunteer Funds</Title>
+      <FinancePageHeader
+        eyebrow="Planning"
+        title="Volunteer funds"
+        description="Keep volunteer compensation allocations, purchases, adjustments and reversals in a complete auditable ledger."
+        icon={<IconWallet size={22} />}
+        actions={
+          <Group gap="xs" grow={isMobile}>
+            <Button variant="default" leftSection={<IconPencil size={16} />} onClick={openEditFund} disabled={!selectedFund}>
+              Edit fund
+            </Button>
+            <Button leftSection={<IconPlus size={16} />} onClick={openNewFund}>New fund</Button>
           </Group>
-          <Text size="sm" c="dimmed">
-            Track compensation allocations reserved for volunteers and every purchase, adjustment, and reversal made against them.
-          </Text>
-        </Stack>
-        <Group gap="xs" grow={isMobile}>
-          <Button variant="light" leftSection={<IconPencil size={16} />} onClick={openEditFund} disabled={!selectedFund}>
-            Edit fund
-          </Button>
-          <Button leftSection={<IconPlus size={16} />} onClick={openNewFund}>New fund</Button>
-        </Group>
-      </Group>
+        }
+      />
 
       {fundsQuery.isError && (
         <Alert color="red" title="Unable to load volunteer funds">
@@ -491,65 +554,85 @@ const FinanceVolunteerFunds = () => {
         </Alert>
       )}
       {actionError && (
-        <Alert color="red" title="Action could not be completed" withCloseButton onClose={() => setActionError(null)}>
+        <Alert
+          color="red"
+          title="Action could not be completed"
+          withCloseButton
+          closeButtonLabel="Dismiss action error"
+          onClose={() => setActionError(null)}
+        >
           {actionError}
         </Alert>
       )}
 
       {fundsQuery.isLoading ? (
-        <Group justify="center" py="xl"><Loader variant="dots" /></Group>
+        <FinancePanel noPadding>
+          <FinanceLoadingState label="Loading volunteer funds" />
+        </FinancePanel>
       ) : funds.length === 0 ? (
-        <Card withBorder radius="md" padding="xl">
-          <Stack align="center" gap="sm">
-            <IconCoins size={32} color="var(--mantine-color-violet-6)" />
-            <Text fw={700}>Create the first volunteer fund</Text>
-            <Text size="sm" c="dimmed" ta="center">
-              Use a fund ledger to earmark volunteer compensation without pretending that cash moved between real accounts.
-            </Text>
-            <Button leftSection={<IconPlus size={16} />} onClick={openNewFund}>Create Volunteer Fund</Button>
-          </Stack>
-        </Card>
+        <FinancePanel noPadding>
+          <FinanceEmptyState
+            title="Create the first volunteer fund"
+            description="Transfer volunteer compensation from its source account into a linked fund account. Original allocations stay visible, while later spending is recorded separately and reduces the available balance."
+            icon={<IconCoins size={27} />}
+            action={<Button leftSection={<IconPlus size={16} />} onClick={openNewFund}>Create volunteer fund</Button>}
+          />
+        </FinancePanel>
       ) : (
         <>
           <Card withBorder radius="md" padding="md">
-            <Group justify="space-between" align="flex-end" gap="sm" wrap="wrap">
-              <Select
-                label="Volunteer fund"
-                data={funds.map((fund) => ({
-                  value: String(fund.id),
-                  label: `${fund.name}${fund.isActive ? "" : " (inactive)"}`,
-                }))}
-                value={selectedFundId ? String(selectedFundId) : null}
-                onChange={(value) => {
-                  setSelectedFundId(value ? Number(value) : null);
-                  setLedgerPage(1);
-                }}
-                searchable
-                style={{ flex: "1 1 280px" }}
-              />
-              <Group gap="xs" grow={isMobile}>
-                {selectedFund && !selectedFund.isActive && (
-                  <Badge color="gray" variant="filled">Inactive · read only</Badge>
-                )}
-                <Button
-                  variant="light"
-                  color="orange"
-                  leftSection={<IconShoppingCart size={16} />}
-                  onClick={() => openEntryModal("spend")}
-                  disabled={!selectedFund?.isActive}
-                >
-                  Record spend
-                </Button>
-                <Button variant="light" onClick={() => openEntryModal("adjustment")} disabled={!selectedFund?.isActive}>
-                  Add adjustment
-                </Button>
-                <Tooltip label="Refresh ledger">
-                  <ActionIcon variant="light" size="lg" onClick={() => void ledgerQuery.refetch()} aria-label="Refresh fund ledger">
-                    <IconRefresh size={16} />
-                  </ActionIcon>
-                </Tooltip>
+            <Stack gap="sm">
+              <Group justify="space-between" align="flex-end" gap="sm" wrap="wrap">
+                <Select
+                  label="Volunteer fund"
+                  data={funds.map((fund) => ({
+                    value: String(fund.id),
+                    label: `${fund.name}${fund.isActive ? "" : " (inactive)"}`,
+                  }))}
+                  value={selectedFundId ? String(selectedFundId) : null}
+                  onChange={(value) => {
+                    setSelectedFundId(value ? Number(value) : null);
+                    setLedgerPage(1);
+                  }}
+                  searchable
+                  style={{ flex: "1 1 280px" }}
+                />
+                <Group gap="xs" grow={isMobile}>
+                  {selectedFund && !selectedFund.isActive && (
+                    <Badge color="gray" variant="filled">Inactive - read only</Badge>
+                  )}
+                  <Button
+                    variant="light"
+                    color="orange"
+                    leftSection={<IconShoppingCart size={16} />}
+                    onClick={() => openEntryModal("spend")}
+                    disabled={!selectedFund?.isActive}
+                  >
+                    Record spend
+                  </Button>
+                  <Button variant="light" onClick={() => openEntryModal("adjustment")} disabled={!selectedFund?.isActive}>
+                    Add adjustment
+                  </Button>
+                  <Tooltip label="Refresh ledger">
+                    <ActionIcon variant="light" size="lg" onClick={() => void ledgerQuery.refetch()} aria-label="Refresh fund ledger">
+                      <IconRefresh size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                </Group>
               </Group>
-            </Group>
+              {selectedFund && (
+                <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+                  <Stack gap={0}>
+                    <Text size="xs" c="dimmed">Source account - compensation is taken from</Text>
+                    <Text size="sm" fw={600}>{fundingSourceAccountName}</Text>
+                  </Stack>
+                  <Stack gap={0}>
+                    <Text size="xs" c="dimmed">Linked fund account - compensation is reserved here</Text>
+                    <Text size="sm" fw={600}>{linkedFundAccountName}</Text>
+                  </Stack>
+                </SimpleGrid>
+              )}
+            </Stack>
           </Card>
 
           {selectedFund && !selectedFund.isActive && (
@@ -558,44 +641,47 @@ const FinanceVolunteerFunds = () => {
             </Alert>
           )}
 
+          {selectedFund?.isActive
+            && (!selectedFund.fundingSourceAccountId || !selectedFund.linkedAccountId) && (
+            <Alert color="orange" title="Account routing is incomplete">
+              Staff compensation cannot be allocated to this fund until both a funding source account and a linked fund account are configured.
+            </Alert>
+          )}
+
           {selectedFund && (
             <SimpleGrid cols={{ base: 1, xs: 2, lg: 4 }}>
-              <Card withBorder radius="md" padding="md" bg="var(--mantine-color-violet-0)">
-                <Group gap={4} wrap="nowrap">
-                  <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Available balance</Text>
-                  <FinanceInfoButton label="Available balance" description={KPI_HELP.availableBalance} />
-                </Group>
-                <Text size="xl" fw={800} c={availableBalanceMinor < 0 ? "red" : "violet"}>
-                  {formatMoney(availableBalanceMinor, selectedFund.currency)}
-                </Text>
-              </Card>
-              <Card withBorder radius="md" padding="md">
-                <Group gap={4} wrap="nowrap">
-                  <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Allocated in period</Text>
-                  <FinanceInfoButton label="Allocated in period" description={KPI_HELP.allocatedInPeriod} />
-                </Group>
-                <Text size="xl" fw={700} c="teal">
-                  {formatMoney(selectedFund.allocationTotalMinor, selectedFund.currency)}
-                </Text>
-              </Card>
-              <Card withBorder radius="md" padding="md">
-                <Group gap={4} wrap="nowrap">
-                  <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Spent in period</Text>
-                  <FinanceInfoButton label="Spent in period" description={KPI_HELP.spentInPeriod} />
-                </Group>
-                <Text size="xl" fw={700} c="orange">
-                  {formatMoney(Math.abs(selectedFund.spendTotalMinor), selectedFund.currency)}
-                </Text>
-              </Card>
-              <Card withBorder radius="md" padding="md">
-                <Group gap={4} wrap="nowrap">
-                  <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Period adjustments</Text>
-                  <FinanceInfoButton label="Period adjustments" description={KPI_HELP.periodAdjustments} />
-                </Group>
-                <Text size="xl" fw={700}>
-                  {formatMoney(selectedFund.adjustmentTotalMinor, selectedFund.currency)}
-                </Text>
-              </Card>
+              <FinanceMetricCard
+                label="Available balance"
+                value={formatMoney(availableBalanceMinor, selectedFund.currency)}
+                description="Current amount available to spend"
+                icon={<IconWallet size={20} />}
+                accent={availableBalanceMinor < 0 ? "rose" : "violet"}
+                detail={<FinanceInfoButton label="Available balance" description={KPI_HELP.availableBalance} />}
+              />
+              <FinanceMetricCard
+                label="Allocated in period"
+                value={formatMoney(selectedFund.allocationTotalMinor, selectedFund.currency)}
+                description="Compensation routed into this fund"
+                icon={<IconArrowUpRight size={20} />}
+                accent="green"
+                detail={<FinanceInfoButton label="Allocated in period" description={KPI_HELP.allocatedInPeriod} />}
+              />
+              <FinanceMetricCard
+                label="Spent in period"
+                value={formatMoney(Math.abs(selectedFund.spendTotalMinor), selectedFund.currency)}
+                description="Purchases recorded against the fund"
+                icon={<IconArrowDownRight size={20} />}
+                accent="orange"
+                detail={<FinanceInfoButton label="Spent in period" description={KPI_HELP.spentInPeriod} />}
+              />
+              <FinanceMetricCard
+                label="Period adjustments"
+                value={formatMoney(selectedFund.adjustmentTotalMinor, selectedFund.currency)}
+                description="Audited non-cash corrections"
+                icon={<IconAdjustments size={20} />}
+                accent="slate"
+                detail={<FinanceInfoButton label="Period adjustments" description={KPI_HELP.periodAdjustments} />}
+              />
             </SimpleGrid>
           )}
 
@@ -604,7 +690,7 @@ const FinanceVolunteerFunds = () => {
               <Group justify="space-between" align="flex-end" wrap="wrap">
                 <Stack gap={2}>
                   <Text fw={700}>Fund ledger</Text>
-                  <Text size="xs" c="dimmed">Allocations are created by staff settlement. Manual changes remain auditable.</Text>
+                  <Text size="xs" c="dimmed">Settlement allocations retain their original amount. Spends, adjustments and reversals are recorded as separate auditable entries.</Text>
                 </Stack>
                 <SimpleGrid cols={{ base: 1, xs: 2 }} style={{ flex: "1 1 330px", maxWidth: isMobile ? undefined : 440 }}>
                   <TextInput
@@ -627,19 +713,19 @@ const FinanceVolunteerFunds = () => {
                   />
                 </SimpleGrid>
               </Group>
-              <Tabs
-                value={entryTab}
-                onChange={(value) => {
-                  setEntryTab((value ?? "all") as typeof entryTab);
-                  setLedgerPage(1);
-                }}
-              >
-                <ScrollArea type="auto" scrollbarSize={4}>
-                  <Tabs.List style={{ flexWrap: "nowrap" }}>
-                    {ENTRY_TABS.map((tab) => <Tabs.Tab key={tab.value} value={tab.value}>{tab.label}</Tabs.Tab>)}
-                  </Tabs.List>
-                </ScrollArea>
-              </Tabs>
+              <ScrollArea type="auto" scrollbarSize={4}>
+                <SegmentedControl
+                  aria-label="Filter volunteer fund activity"
+                  value={entryTab}
+                  data={ENTRY_TABS}
+                  fullWidth={!isMobile}
+                  onChange={(value) => {
+                    setEntryTab(value as typeof entryTab);
+                    setLedgerPage(1);
+                  }}
+                  styles={{ root: { minWidth: isMobile ? 520 : undefined } }}
+                />
+              </ScrollArea>
             </Stack>
           </Card>
 
@@ -649,7 +735,7 @@ const FinanceVolunteerFunds = () => {
             </Alert>
           )}
           {ledgerQuery.isLoading ? (
-            <Group justify="center" py="xl"><Loader variant="dots" /></Group>
+            <FinanceLoadingState label="Loading fund activity" />
           ) : entries.length === 0 ? (
             <Card withBorder radius="md" padding="xl">
               <Text ta="center" c="dimmed">No {entryTab === "all" ? "fund activity" : entryTab} entries match this period.</Text>
@@ -790,7 +876,7 @@ const FinanceVolunteerFunds = () => {
         </>
       )}
 
-      <Modal
+      <FinanceModal
         opened={fundModalOpen}
         onClose={() => !fundBusy && setFundModalOpen(false)}
         title={editingFund ? "Edit volunteer fund" : "New volunteer fund"}
@@ -799,79 +885,139 @@ const FinanceVolunteerFunds = () => {
         centered={!isMobile}
         scrollAreaComponent={ScrollArea.Autosize}
       >
-        <Stack gap="md">
-          <SimpleGrid cols={{ base: 1, sm: 2 }}>
-            <TextInput
-              label="Fund name"
-              placeholder="Volunteer Fund"
-              value={fundDraft.name}
-              onChange={(event) => setFundDraft((current) => ({ ...current, name: event.currentTarget.value }))}
-              required
-            />
-            <TextInput
-              label="Currency"
-              value={fundDraft.currency}
-              maxLength={3}
-              onChange={(event) => {
-                const currency = event.currentTarget.value.toUpperCase();
-                setFundDraft((current) => {
-                  const linkedAccount = accounts.data.find(
-                    (account) => String(account.id) === current.linkedAccountId,
-                  );
-                  return {
-                    ...current,
-                    currency,
-                    linkedAccountId:
-                      linkedAccount?.currency.toUpperCase() === currency
-                        ? current.linkedAccountId
-                        : null,
-                  };
-                });
-              }}
-              required
-            />
-          </SimpleGrid>
-          <Textarea
-            label="Description"
-            minRows={2}
-            value={fundDraft.description}
-            onChange={(event) => setFundDraft((current) => ({ ...current, description: event.currentTarget.value }))}
-          />
-          <SimpleGrid cols={{ base: 1, sm: 2 }}>
-            <Select
-              label="Optional backing account"
-              description="Use only when this fund is backed by a real finance account."
-              data={fundAccountOptions}
-              value={fundDraft.linkedAccountId}
-              onChange={(value) => setFundDraft((current) => ({ ...current, linkedAccountId: value }))}
-              searchable
-              clearable
-            />
-            <Select
-              label="Default expense category"
-              data={fundExpenseCategoryOptions}
-              value={fundDraft.expenseCategoryId}
-              onChange={(value) => setFundDraft((current) => ({ ...current, expenseCategoryId: value }))}
-              searchable
-              clearable
-            />
-          </SimpleGrid>
+        <Stack
+          component="form"
+          gap="md"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSaveFund();
+          }}
+        >
+          <FinanceFormSection title="Fund identity" description="Name the restricted ledger and choose its reporting currency." icon={<IconWallet size={18} />}>
+            <Stack gap="sm">
+              <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                <TextInput
+                  label="Fund name"
+                  placeholder="Volunteer Fund"
+                  value={fundDraft.name}
+                  onChange={(event) => setFundDraft((current) => ({ ...current, name: event.currentTarget.value }))}
+                  required
+                />
+                <TextInput
+                  label="Currency"
+                  value={fundDraft.currency}
+                  maxLength={3}
+                  onChange={(event) => {
+                    const currency = event.currentTarget.value.toUpperCase();
+                    setFundDraft((current) => {
+                      const fundingSourceAccount = accounts.data.find(
+                        (account) => String(account.id) === current.fundingSourceAccountId,
+                      );
+                      const linkedAccount = accounts.data.find(
+                        (account) => String(account.id) === current.linkedAccountId,
+                      );
+                      return {
+                        ...current,
+                        currency,
+                        fundingSourceAccountId:
+                          fundingSourceAccount?.currency.trim().toUpperCase() === currency
+                            ? current.fundingSourceAccountId
+                            : null,
+                        linkedAccountId:
+                          linkedAccount?.currency.trim().toUpperCase() === currency
+                            ? current.linkedAccountId
+                            : null,
+                      };
+                    });
+                  }}
+                  required
+                />
+              </SimpleGrid>
+              <Textarea
+                label="Description"
+                minRows={2}
+                value={fundDraft.description}
+                onChange={(event) => setFundDraft((current) => ({ ...current, description: event.currentTarget.value }))}
+              />
+            </Stack>
+          </FinanceFormSection>
+          <FinanceFormSection
+            title="Account routing"
+            description="Choose where compensation is taken from and where the fund keeps it reserved."
+            icon={<IconCoins size={18} />}
+          >
+            <Stack gap="sm">
+              <Alert color="blue" variant="light" radius="md">
+                The source account is where volunteer compensation is taken from. The linked fund account is where
+                that amount is reserved and later used for fund expenses. Use two different active
+                {` ${draftCurrency || "fund-currency"}`} accounts.
+              </Alert>
+              <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                <Select
+                  label="Funding source account"
+                  description="Where volunteer compensation is taken from."
+                  leftSection={<IconArrowDownRight size={16} />}
+                  data={fundingSourceAccountOptions}
+                  value={fundDraft.fundingSourceAccountId}
+                  onChange={(value) =>
+                    setFundDraft((current) => ({
+                      ...current,
+                      fundingSourceAccountId: value,
+                      linkedAccountId: value && value === current.linkedAccountId ? null : current.linkedAccountId,
+                    }))
+                  }
+                  searchable
+                  clearable
+                  nothingFoundMessage={`No active ${draftCurrency || "matching"} accounts`}
+                />
+                <Select
+                  label="Linked fund account"
+                  description="Where compensation is reserved and fund expenses are paid."
+                  leftSection={<IconWallet size={16} />}
+                  data={linkedFundAccountOptions}
+                  value={fundDraft.linkedAccountId}
+                  onChange={(value) =>
+                    setFundDraft((current) => ({
+                      ...current,
+                      linkedAccountId: value,
+                      fundingSourceAccountId:
+                        value && value === current.fundingSourceAccountId
+                          ? null
+                          : current.fundingSourceAccountId,
+                    }))
+                  }
+                  searchable
+                  clearable
+                  nothingFoundMessage={`No active ${draftCurrency || "matching"} accounts`}
+                />
+              </SimpleGrid>
+              <Select
+                label="Default expense category"
+                description="Preselected when recording a purchase from the fund."
+                data={fundExpenseCategoryOptions}
+                value={fundDraft.expenseCategoryId}
+                onChange={(value) => setFundDraft((current) => ({ ...current, expenseCategoryId: value }))}
+                searchable
+                clearable
+              />
+            </Stack>
+          </FinanceFormSection>
           <Switch
             label="Fund is active"
             checked={fundDraft.isActive}
             onChange={(event) => setFundDraft((current) => ({ ...current, isActive: event.currentTarget.checked }))}
           />
           {actionError && <Alert color="red">{actionError}</Alert>}
-          <Group justify="flex-end" grow={isMobile}>
-            <Button variant="default" onClick={() => setFundModalOpen(false)} disabled={fundBusy}>Cancel</Button>
-            <Button onClick={() => void handleSaveFund()} loading={fundBusy}>
+          <FinanceModalFooter>
+            <Button type="button" variant="default" onClick={() => setFundModalOpen(false)} disabled={fundBusy}>Cancel</Button>
+            <Button type="submit" loading={fundBusy}>
               {editingFund ? "Save changes" : "Create fund"}
             </Button>
-          </Group>
+          </FinanceModalFooter>
         </Stack>
-      </Modal>
+      </FinanceModal>
 
-      <Modal
+      <FinanceModal
         opened={entryModal != null}
         onClose={() => !entryBusy && setEntryModal(null)}
         title={entryModal === "spend" ? "Record volunteer fund spend" : "Add fund adjustment"}
@@ -880,7 +1026,14 @@ const FinanceVolunteerFunds = () => {
         centered={!isMobile}
         scrollAreaComponent={ScrollArea.Autosize}
       >
-        <Stack gap="md">
+        <Stack
+          component="form"
+          gap="md"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSaveEntry();
+          }}
+        >
           {entryModal === "adjustment" && (
             <Alert color="blue">
               Use a positive value to add to the fund or a negative value to reduce it. Adjustments require a clear audit description.
@@ -960,21 +1113,21 @@ const FinanceVolunteerFunds = () => {
             required
           />
           {actionError && <Alert color="red">{actionError}</Alert>}
-          <Group justify="flex-end" grow={isMobile}>
-            <Button variant="default" onClick={() => setEntryModal(null)} disabled={entryBusy}>Cancel</Button>
+          <FinanceModalFooter>
+            <Button type="button" variant="default" onClick={() => setEntryModal(null)} disabled={entryBusy}>Cancel</Button>
             <Button
+              type="submit"
               color={entryModal === "spend" ? "orange" : "blue"}
-              onClick={() => void handleSaveEntry()}
               loading={entryBusy}
               disabled={spendExceedsAvailableBalance}
             >
               {entryModal === "spend" ? "Record spend & Finance expense" : "Add adjustment"}
             </Button>
-          </Group>
+          </FinanceModalFooter>
         </Stack>
-      </Modal>
+      </FinanceModal>
 
-      <Modal
+      <FinanceModal
         opened={reversalTarget != null}
         onClose={() => !reverseEntry.isPending && setReversalTarget(null)}
         title="Reverse volunteer fund entry"
@@ -982,7 +1135,14 @@ const FinanceVolunteerFunds = () => {
         fullScreen={isMobile}
         centered={!isMobile}
       >
-        <Stack gap="md">
+        <Stack
+          component="form"
+          gap="md"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleReverse();
+          }}
+        >
           {reversalTarget && (
             <Alert color="grape" title={`Reverse ${entryMeta(reversalTarget.entryType).label.toLowerCase()} #${reversalTarget.id}`}>
               This creates an opposite ledger entry. The original remains visible for audit history.
@@ -1009,12 +1169,12 @@ const FinanceVolunteerFunds = () => {
             required
           />
           {actionError && <Alert color="red">{actionError}</Alert>}
-          <Group justify="flex-end" grow={isMobile}>
-            <Button variant="default" onClick={() => setReversalTarget(null)} disabled={reverseEntry.isPending}>Cancel</Button>
-            <Button color="grape" onClick={() => void handleReverse()} loading={reverseEntry.isPending}>Create reversal</Button>
-          </Group>
+          <FinanceModalFooter>
+            <Button type="button" variant="default" onClick={() => setReversalTarget(null)} disabled={reverseEntry.isPending}>Cancel</Button>
+            <Button type="submit" color="grape" loading={reverseEntry.isPending}>Create reversal</Button>
+          </FinanceModalFooter>
         </Stack>
-      </Modal>
+      </FinanceModal>
     </Stack>
   );
 };

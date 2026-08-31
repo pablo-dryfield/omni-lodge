@@ -13,6 +13,7 @@ import VolunteerFund from '../models/VolunteerFund.js';
 import VolunteerFundEntry, { type VolunteerFundEntryType } from '../models/VolunteerFundEntry.js';
 import { recordFinanceAuditLog } from './auditLogService.js';
 import { createFinanceTransaction, updateFinanceTransaction } from './transactionService.js';
+import { reverseVolunteerFundAllocationTransfer } from './volunteerFundAllocationFinanceService.js';
 
 export type VolunteerFundInput = {
   name: string;
@@ -20,6 +21,7 @@ export type VolunteerFundInput = {
   currency: string;
   description: string | null;
   linkedAccountId: number | null;
+  fundingSourceAccountId: number | null;
   expenseCategoryId: number | null;
   isActive: boolean;
 };
@@ -42,8 +44,120 @@ type ManualEntryInput = {
     categoryId: number | null;
     vendorId: number | null;
     paymentMethod: string | null;
+    invoiceFileId: number | null;
   } | null;
   idempotencyKey: string;
+};
+
+type SpendIdempotencyFingerprint =
+  | {
+      mode: 'existing';
+      financeTransactionId: number;
+    }
+  | {
+      mode: 'created';
+      accountId: number | null;
+      categoryId: number | null;
+      vendorId: number | null;
+      invoiceFileId: number | null;
+      paymentMethod: string | null;
+    };
+
+const asRecord = (value: unknown): Record<string, unknown> | null => (
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+);
+
+const optionalStoredPositiveInteger = (value: unknown): number | null | undefined => {
+  if (value === null) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const buildSpendIdempotencyFingerprint = (
+  input: ManualEntryInput,
+): SpendIdempotencyFingerprint => {
+  if (input.financeTransactionId) {
+    return {
+      mode: 'existing',
+      financeTransactionId: input.financeTransactionId,
+    };
+  }
+  return {
+    mode: 'created',
+    accountId: input.spendFinance?.accountId ?? null,
+    categoryId: input.spendFinance?.categoryId ?? null,
+    vendorId: input.spendFinance?.vendorId ?? null,
+    invoiceFileId: input.spendFinance?.invoiceFileId ?? null,
+    paymentMethod: input.spendFinance?.paymentMethod ?? null,
+  };
+};
+
+const readStoredSpendIdempotencyFingerprint = (
+  sourceSnapshot: unknown,
+): SpendIdempotencyFingerprint | null => {
+  const stored = asRecord(asRecord(sourceSnapshot)?.spendIdempotency);
+  if (!stored) {
+    return null;
+  }
+  if (stored.mode === 'existing') {
+    const financeTransactionId = optionalStoredPositiveInteger(stored.financeTransactionId);
+    return typeof financeTransactionId === 'number'
+      ? { mode: 'existing', financeTransactionId }
+      : null;
+  }
+  if (stored.mode !== 'created') {
+    return null;
+  }
+  const accountId = optionalStoredPositiveInteger(stored.accountId);
+  const categoryId = optionalStoredPositiveInteger(stored.categoryId);
+  const vendorId = optionalStoredPositiveInteger(stored.vendorId);
+  const invoiceFileId = optionalStoredPositiveInteger(stored.invoiceFileId);
+  const paymentMethod = stored.paymentMethod === null
+    ? null
+    : typeof stored.paymentMethod === 'string'
+      ? stored.paymentMethod
+      : undefined;
+  if (
+    accountId === undefined
+    || categoryId === undefined
+    || vendorId === undefined
+    || invoiceFileId === undefined
+    || paymentMethod === undefined
+  ) {
+    return null;
+  }
+  return {
+    mode: 'created',
+    accountId,
+    categoryId,
+    vendorId,
+    invoiceFileId,
+    paymentMethod,
+  };
+};
+
+const spendFingerprintsMatch = (
+  left: SpendIdempotencyFingerprint,
+  right: SpendIdempotencyFingerprint,
+): boolean => {
+  if (left.mode !== right.mode) {
+    return false;
+  }
+  if (left.mode === 'existing' && right.mode === 'existing') {
+    return left.financeTransactionId === right.financeTransactionId;
+  }
+  if (left.mode === 'created' && right.mode === 'created') {
+    return left.accountId === right.accountId
+      && left.categoryId === right.categoryId
+      && left.vendorId === right.vendorId
+      && left.invoiceFileId === right.invoiceFileId
+      && left.paymentMethod === right.paymentMethod;
+  }
+  return false;
 };
 
 const parseOptionalPositiveInteger = (value: unknown, field: string): number | null => {
@@ -169,6 +283,12 @@ export const normalizeVolunteerFundInput = (
       raw.linkedAccountId !== undefined ? raw.linkedAccountId : fallback?.linkedAccountId,
       'linkedAccountId',
     ),
+    fundingSourceAccountId: parseOptionalPositiveInteger(
+      raw.fundingSourceAccountId !== undefined
+        ? raw.fundingSourceAccountId
+        : fallback?.fundingSourceAccountId,
+      'fundingSourceAccountId',
+    ),
     expenseCategoryId: parseOptionalPositiveInteger(
       raw.expenseCategoryId !== undefined ? raw.expenseCategoryId : fallback?.expenseCategoryId,
       'expenseCategoryId',
@@ -181,6 +301,13 @@ const validateFundReferences = async (
   input: VolunteerFundInput,
   transaction: SequelizeTransaction,
 ): Promise<void> => {
+  if (
+    input.linkedAccountId
+    && input.fundingSourceAccountId
+    && input.linkedAccountId === input.fundingSourceAccountId
+  ) {
+    throw new HttpError(400, 'Funding source account must be different from the linked volunteer fund account.');
+  }
   if (input.linkedAccountId) {
     const account = await FinanceAccount.findByPk(input.linkedAccountId, {
       attributes: ['id', 'currency', 'isActive'],
@@ -194,6 +321,21 @@ const validateFundReferences = async (
     }
     if (input.isActive && !account.isActive) {
       throw new HttpError(400, 'An active volunteer fund cannot use an inactive finance account.');
+    }
+  }
+  if (input.fundingSourceAccountId) {
+    const account = await FinanceAccount.findByPk(input.fundingSourceAccountId, {
+      attributes: ['id', 'currency', 'isActive'],
+      transaction,
+    });
+    if (!account) {
+      throw new HttpError(400, 'Funding source finance account was not found.');
+    }
+    if (account.currency.toUpperCase() !== input.currency) {
+      throw new HttpError(400, 'Funding source account currency must match the volunteer fund currency.');
+    }
+    if (input.isActive && !account.isActive) {
+      throw new HttpError(400, 'An active volunteer fund cannot use an inactive funding source account.');
     }
   }
   if (input.expenseCategoryId) {
@@ -234,6 +376,52 @@ export const createVolunteerFund = async (
   return fund;
 });
 
+const assertLinkedAccountChangeIsSafe = async (
+  fund: VolunteerFund,
+  nextLinkedAccountId: number | null,
+  transaction: SequelizeTransaction,
+): Promise<void> => {
+  if (nextLinkedAccountId === fund.linkedAccountId) {
+    return;
+  }
+
+  const financeBackedEntryCount = await VolunteerFundEntry.count({
+    where: {
+      fundId: fund.id,
+      financeTransactionId: { [Op.ne]: null },
+    },
+    transaction,
+  });
+  if (financeBackedEntryCount > 0) {
+    throw new HttpError(
+      409,
+      'Linked finance account cannot change after finance-backed Volunteer Fund entries exist.',
+    );
+  }
+
+  // A legacy ledger-only fund may be linked for the first time even when it
+  // already has a balance. Once a fund has a linked account, however, moving a
+  // non-zero balance to another account (or unlinking it) without a real
+  // Finance transfer would make the two ledgers disagree.
+  if (fund.linkedAccountId !== null) {
+    const currentBalanceMinor = Number(
+      await VolunteerFundEntry.sum('amountMinor', {
+        where: { fundId: fund.id },
+        transaction,
+      }) ?? 0,
+    );
+    if (!Number.isSafeInteger(currentBalanceMinor)) {
+      throw new HttpError(409, 'Volunteer Fund balance could not be verified safely.');
+    }
+    if (currentBalanceMinor !== 0) {
+      throw new HttpError(
+        409,
+        'Linked finance account cannot change while the Volunteer Fund has a non-zero balance.',
+      );
+    }
+  }
+};
+
 export const updateVolunteerFund = async (
   id: number,
   raw: Record<string, unknown>,
@@ -249,6 +437,7 @@ export const updateVolunteerFund = async (
     currency: fund.currency,
     description: fund.description,
     linkedAccountId: fund.linkedAccountId,
+    fundingSourceAccountId: fund.fundingSourceAccountId,
     expenseCategoryId: fund.expenseCategoryId,
     isActive: fund.isActive,
   });
@@ -279,6 +468,7 @@ export const updateVolunteerFund = async (
       throw new HttpError(409, 'Volunteer fund currency cannot change after ledger entries exist.');
     }
   }
+  await assertLinkedAccountChangeIsSafe(fund, input.linkedAccountId, transaction);
   await validateFundReferences(input, transaction);
   await fund.update({ ...input, updatedBy: actorId }, { transaction });
   await recordFinanceAuditLog({
@@ -320,11 +510,13 @@ const normalizeManualEntryInput = (
   const requestedCategoryId = parseOptionalPositiveInteger(raw.categoryId, 'categoryId');
   const requestedVendorId = parseOptionalPositiveInteger(raw.vendorId ?? raw.counterpartyId, 'vendorId');
   const requestedPaymentMethod = parseOptionalText(raw.paymentMethod, 60);
+  const requestedInvoiceFileId = parseOptionalPositiveInteger(raw.invoiceFileId, 'invoiceFileId');
   const hasSpendFinanceFields = Boolean(
     requestedAccountId
     || requestedCategoryId
     || requestedVendorId
-    || requestedPaymentMethod,
+    || requestedPaymentMethod
+    || requestedInvoiceFileId,
   );
   if (entryType !== 'spend' && (financeTransactionId || hasSpendFinanceFields)) {
     throw new HttpError(
@@ -366,6 +558,7 @@ const normalizeManualEntryInput = (
           categoryId: requestedCategoryId,
           vendorId: requestedVendorId,
           paymentMethod: requestedPaymentMethod,
+          invoiceFileId: requestedInvoiceFileId,
         }
       : null,
     idempotencyKey: parseText(raw.idempotencyKey, 'idempotencyKey', 180),
@@ -435,6 +628,7 @@ const createLinkedSpendTransaction = async (
       counterpartyType: 'vendor',
       counterpartyId: vendorId,
       paymentMethod: input.spendFinance.paymentMethod,
+      invoiceFileId: input.spendFinance.invoiceFileId,
       status: 'paid',
       description: input.description,
       tags: { volunteerFundId: fund.id },
@@ -445,7 +639,7 @@ const createLinkedSpendTransaction = async (
       },
     },
     actorId,
-    { transaction },
+    { transaction, allowVolunteerFundSpendForFundId: fund.id },
   );
   return financeTransaction.id;
 };
@@ -542,6 +736,36 @@ const assertIdempotentEntryMatches = (
   ) {
     throw new HttpError(409, 'idempotencyKey is already used by a different volunteer fund entry.');
   }
+  if (entryType !== 'spend') {
+    return;
+  }
+
+  const requestedFingerprint = buildSpendIdempotencyFingerprint(input);
+  const sourceSnapshot = asRecord(existing.sourceSnapshot);
+  const storedFingerprint = readStoredSpendIdempotencyFingerprint(sourceSnapshot);
+  if (storedFingerprint) {
+    if (!spendFingerprintsMatch(storedFingerprint, requestedFingerprint)) {
+      throw new HttpError(409, 'idempotencyKey is already used by a different volunteer fund spend request.');
+    }
+    return;
+  }
+
+  // Compatibility for entries created before fingerprints were persisted.
+  // When legacy metadata identifies a mode, keep enforcing it. Existing-link
+  // retries can also be checked safely against the stored transaction id.
+  const legacyMode = sourceSnapshot?.financeLinkMode;
+  if (
+    (legacyMode === 'created' || legacyMode === 'existing')
+    && legacyMode !== requestedFingerprint.mode
+  ) {
+    throw new HttpError(409, 'idempotencyKey is already used by a different volunteer fund spend request.');
+  }
+  if (
+    requestedFingerprint.mode === 'existing'
+    && Number(existing.financeTransactionId) !== requestedFingerprint.financeTransactionId
+  ) {
+    throw new HttpError(409, 'idempotencyKey is already used by a different volunteer fund spend request.');
+  }
 };
 
 export const createManualVolunteerFundEntry = async (
@@ -587,6 +811,9 @@ export const createManualVolunteerFundEntry = async (
       ? 'existing'
       : 'created'
     : null;
+  const spendIdempotency = entryType === 'spend'
+    ? buildSpendIdempotencyFingerprint(input)
+    : null;
   if (entryType === 'spend') {
     input.financeTransactionId = await createLinkedSpendTransaction(
       fund,
@@ -612,7 +839,11 @@ export const createManualVolunteerFundEntry = async (
       sourceReference: input.sourceReference,
       attributionSnapshot: input.attributionSnapshot,
       sourceSnapshot: financeLinkMode
-        ? { ...input.sourceSnapshot, financeLinkMode }
+        ? {
+            ...input.sourceSnapshot,
+            financeLinkMode,
+            spendIdempotency,
+          }
         : input.sourceSnapshot,
       financeTransactionId: input.financeTransactionId,
       idempotencyKey: input.idempotencyKey,
@@ -725,7 +956,7 @@ export const reverseVolunteerFundEntry = async (
   if (financeTransactionId) {
     throw new HttpError(
       400,
-      'Volunteer Fund reversals cannot link a new Finance transaction. Spend reversals manage the original expense automatically.',
+      'Volunteer Fund reversals cannot link a new Finance transaction. Linked Finance records are managed automatically.',
     );
   }
   if (original.entryType === 'allocation' && !original.sourceKind) {
@@ -758,6 +989,14 @@ export const reverseVolunteerFundEntry = async (
     actorId,
     transaction,
   );
+  const allocationFinanceReversal = original.entryType === 'allocation'
+    ? await reverseVolunteerFundAllocationTransfer({
+        fund,
+        original,
+        actorId,
+        transaction,
+      })
+    : null;
   const reversalInput: ManualEntryInput = {
     amountMinor: reversalAmountMinor,
     entryDate,
@@ -779,6 +1018,9 @@ export const reverseVolunteerFundEntry = async (
       originalSourceSnapshot: original.sourceSnapshot ?? {},
       reason: parseOptionalText(raw.reason, 2000),
       ...(spendFinanceReversal ? { financeReversal: spendFinanceReversal } : {}),
+      ...(allocationFinanceReversal
+        ? { financeTransferReversal: allocationFinanceReversal }
+        : {}),
     },
     financeTransactionId: null,
     spendFinance: null,

@@ -2,12 +2,18 @@ jest.mock('../../services/profilePhotoStorageService.js', () => ({
   openProfilePhotoStream: jest.fn(),
 }));
 
+jest.mock('../../services/configService.js', () => ({
+  getConfigValue: jest.fn(),
+}));
+
 import type { Response } from 'express';
 import { openProfilePhotoStream } from '../../services/profilePhotoStorageService';
+import { getConfigValue } from '../../services/configService';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
 import { checkSession, streamSessionProfilePhoto } from '../sessionController';
 
 const mockedOpenProfilePhotoStream = openProfilePhotoStream as jest.Mock;
+const mockedGetConfigValue = getConfigValue as jest.Mock;
 
 const createResponse = () => {
   const response = {
@@ -45,6 +51,7 @@ const createStream = () => {
 describe('session controller', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedGetConfigValue.mockReturnValue(true);
   });
 
   describe('checkSession', () => {
@@ -77,10 +84,31 @@ describe('session controller', () => {
         userTypeId: 3,
         hasStoredProfilePhoto: true,
         profilePhotoVersion: '28-1788105600000',
+        notificationInboxPollingEnabled: true,
       }]);
       const payload = response.json.mock.calls[0][0][0] as Record<string, unknown>;
       expect(payload).not.toHaveProperty('profilePhotoPath');
       expect(payload).not.toHaveProperty('profilePhotoUrl');
+    });
+
+    it('returns the disabled inbox polling setting without an extra client request', () => {
+      mockedGetConfigValue.mockReturnValue(false);
+      const request = {
+        user: { id: 28 },
+        authContext: {
+          id: 28,
+          userTypeId: 3,
+          roleSlug: 'assistant-manager',
+        },
+      } as unknown as AuthenticatedRequest;
+      const response = createResponse();
+
+      checkSession(request, response);
+
+      expect(response.json).toHaveBeenCalledWith([
+        expect.objectContaining({ notificationInboxPollingEnabled: false }),
+      ]);
+      expect(mockedGetConfigValue).toHaveBeenCalledWith('NOTIFICATION_INBOX_POLLING_ENABLED');
     });
 
     it('returns 401 when no authenticated user is attached', () => {

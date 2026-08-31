@@ -68,6 +68,11 @@ const handleError = (res: Response, error: unknown): void => {
 
 const fundIncludes = [
   { model: FinanceAccount, as: 'linkedAccount', attributes: ['id', 'name', 'type', 'currency', 'isActive'] },
+  {
+    model: FinanceAccount,
+    as: 'fundingSourceAccount',
+    attributes: ['id', 'name', 'type', 'currency', 'isActive'],
+  },
   { model: FinanceCategory, as: 'expenseCategory', attributes: ['id', 'name', 'kind', 'isActive'] },
 ];
 

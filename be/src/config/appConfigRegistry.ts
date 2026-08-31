@@ -98,6 +98,16 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     defaultValue: true,
   },
   {
+    key: 'NOTIFICATION_INBOX_POLLING_ENABLED',
+    label: 'Automatic notification inbox checks',
+    description:
+      'When enabled, signed-in clients check the notification inbox automatically every minute. When disabled, the inbox is only loaded when a user opens Notifications.',
+    category: 'Notifications',
+    valueType: 'boolean',
+    defaultValue: true,
+    impact: 'low',
+  },
+  {
     key: 'AM_TASK_PUSH_VAPID_SUBJECT',
     label: 'Assistant manager task push VAPID subject',
     description: 'VAPID subject used for Web Push (for example: mailto:ops@omni-lodge.com).',

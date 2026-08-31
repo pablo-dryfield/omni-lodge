@@ -12,6 +12,7 @@ export interface AuthorizationContext {
   /** Internal storage locator. Never include this value in an API response. */
   profilePhotoPath?: string | null;
   profilePhotoVersion?: string | null;
+  shiftRoleIds?: number[];
   shiftRoleSlugs?: string[];
 }
 

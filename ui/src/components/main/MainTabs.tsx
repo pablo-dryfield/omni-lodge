@@ -65,6 +65,7 @@ const MainTabs = ({
   const session = useAppSelector((state) => state.session);
   const sessionUserName = session.user;
   const loggedUserId = session.loggedUserId;
+  const notificationInboxPollingEnabled = session.notificationInboxPollingEnabled;
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useMantineTheme();
@@ -82,6 +83,15 @@ const MainTabs = ({
   const navContainerRef = useRef<HTMLDivElement | null>(null);
   const navMeasurementRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const navRafRef = useRef<number | null>(null);
+  const notificationRequestInFlightRef = useRef(false);
+  const notificationPollingContextRef = useRef({
+    userId: loggedUserId,
+    enabled: notificationInboxPollingEnabled,
+  });
+  notificationPollingContextRef.current = {
+    userId: loggedUserId,
+    enabled: notificationInboxPollingEnabled,
+  };
 
   const userProfilePhotoUrl = useMemo(
     () => buildUserProfilePhotoUrl({
@@ -141,19 +151,37 @@ const MainTabs = ({
   }, [allowedPages, location.pathname, currentPage]);
 
   const loadRecentNotifications = useCallback(async () => {
+    if (!loggedUserId || !notificationInboxPollingEnabled) {
+      setUnreadNotificationCount(0);
+      setNotificationsLoading(false);
+      setNotificationsError(null);
+      return;
+    }
+    if (document.visibilityState === "hidden" || notificationRequestInFlightRef.current) {
+      return;
+    }
+    const requestUserId = loggedUserId;
+    notificationRequestInFlightRef.current = true;
     setNotificationsLoading(true);
     setNotificationsError(null);
     try {
       const response = await fetchInboxNotifications({ limit: 1, offset: 0 });
-      setUnreadNotificationCount(response.unreadCount);
+      const currentContext = notificationPollingContextRef.current;
+      if (currentContext.enabled && currentContext.userId === requestUserId) {
+        setUnreadNotificationCount(response.unreadCount);
+      }
     } catch (error) {
-      setNotificationsError(
-        error instanceof Error ? error.message : "Failed to load notifications",
-      );
+      const currentContext = notificationPollingContextRef.current;
+      if (currentContext.enabled && currentContext.userId === requestUserId) {
+        setNotificationsError(
+          error instanceof Error ? error.message : "Failed to load notifications",
+        );
+      }
     } finally {
+      notificationRequestInFlightRef.current = false;
       setNotificationsLoading(false);
     }
-  }, []);
+  }, [loggedUserId, notificationInboxPollingEnabled]);
 
   const openNotifications = async () => {
     closeDrawer();
@@ -214,19 +242,27 @@ const MainTabs = ({
   }, [location.pathname, closeDrawer]);
 
   useEffect(() => {
-    if (!loggedUserId) {
+    if (!loggedUserId || !notificationInboxPollingEnabled) {
       setUnreadNotificationCount(0);
+      setNotificationsLoading(false);
       setNotificationsError(null);
       return;
     }
-    loadRecentNotifications().catch(() => undefined);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "hidden") {
+        loadRecentNotifications().catch(() => undefined);
+      }
+    };
+    refreshWhenVisible();
     const intervalId = window.setInterval(() => {
-      loadRecentNotifications().catch(() => undefined);
+      refreshWhenVisible();
     }, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [loggedUserId, loadRecentNotifications]);
+  }, [loggedUserId, loadRecentNotifications, notificationInboxPollingEnabled]);
 
   useEffect(() => {
     setVisiblePages(allowedPages);
@@ -666,6 +702,10 @@ const MainTabs = ({
                     unreadNotificationCount > 0 ? (
                       <Badge color="red" variant="filled" size="sm">
                         {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
+                      </Badge>
+                    ) : !notificationInboxPollingEnabled ? (
+                      <Badge color="gray" variant="light" size="sm">
+                        Manual only
                       </Badge>
                     ) : undefined
                   }

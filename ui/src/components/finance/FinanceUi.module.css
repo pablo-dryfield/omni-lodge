@@ -1,0 +1,520 @@
+.workspace {
+  --finance-ink: #172033;
+  --finance-muted: #64748b;
+  --finance-border: #dfe6ef;
+  --finance-surface: #ffffff;
+  --finance-soft: #f6f8fb;
+  --finance-primary: #2563eb;
+  --finance-primary-dark: #1e40af;
+  --finance-positive: #047857;
+  --finance-negative: #be123c;
+  width: 100%;
+  max-width: 1640px;
+  margin: 0 auto;
+  padding-bottom: 32px;
+  color: var(--finance-ink);
+}
+
+.page {
+  width: 100%;
+}
+
+.moduleBar {
+  position: relative;
+  overflow: hidden;
+  padding: 18px 20px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 86% -30%, rgba(59, 130, 246, 0.22), transparent 44%),
+    linear-gradient(135deg, #ffffff 0%, #f7faff 58%, #eef5ff 100%);
+  box-shadow: 0 14px 40px -32px rgba(15, 23, 42, 0.75);
+}
+
+.moduleMark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 14px;
+  color: white;
+  background: linear-gradient(145deg, #2563eb, #1d4ed8 58%, #1e3a8a);
+  box-shadow: 0 12px 24px -14px rgba(37, 99, 235, 0.9);
+}
+
+.moduleActions {
+  flex: 0 1 auto;
+}
+
+.pageHeader {
+  position: relative;
+  overflow: hidden;
+  padding: 22px 24px;
+  border: 1px solid var(--finance-border);
+  border-radius: 18px;
+  background: var(--finance-surface);
+  box-shadow: 0 16px 38px -34px rgba(15, 23, 42, 0.8);
+}
+
+.pageHeader::after {
+  content: "";
+  position: absolute;
+  top: -46px;
+  right: -34px;
+  width: 150px;
+  height: 150px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(37, 99, 235, 0.1), rgba(37, 99, 235, 0));
+  pointer-events: none;
+}
+
+.pageHeading {
+  min-width: 0;
+  flex: 1 1 360px;
+}
+
+.pageIcon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border-radius: 14px;
+  color: var(--finance-primary);
+  background: #eaf2ff;
+  border: 1px solid #d8e7ff;
+}
+
+.eyebrow {
+  color: var(--finance-primary-dark);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.pageTitle {
+  color: var(--finance-ink);
+  font-size: clamp(1.35rem, 2vw, 1.85rem);
+  line-height: 1.16;
+  letter-spacing: -0.025em;
+}
+
+.pageDescription {
+  max-width: 720px;
+  color: var(--finance-muted);
+  line-height: 1.55;
+}
+
+.headerActions {
+  position: relative;
+  z-index: 1;
+  flex: 0 1 auto;
+}
+
+.panel {
+  overflow: hidden;
+  border: 1px solid var(--finance-border);
+  border-radius: 18px;
+  background: var(--finance-surface);
+  box-shadow: 0 16px 40px -36px rgba(15, 23, 42, 0.85);
+}
+
+.panelHeader {
+  padding: 18px 20px;
+  border-bottom: 1px solid #e8edf4;
+  background: linear-gradient(180deg, #ffffff, #fbfcfe);
+}
+
+.panelBody {
+  padding: 20px;
+}
+
+.toolbar {
+  padding: 12px;
+  border: 1px solid var(--finance-border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 12px 30px -30px rgba(15, 23, 42, 0.8);
+}
+
+.toolbarSearch {
+  flex: 1 1 260px;
+  min-width: min(100%, 220px);
+}
+
+.metricCard {
+  position: relative;
+  overflow: hidden;
+  min-height: 142px;
+  padding: 18px;
+  border: 1px solid var(--finance-border);
+  border-radius: 18px;
+  background: var(--finance-surface);
+  box-shadow: 0 16px 36px -34px rgba(15, 23, 42, 0.8);
+}
+
+.metricCard::after {
+  content: "";
+  position: absolute;
+  right: -28px;
+  bottom: -42px;
+  width: 112px;
+  height: 112px;
+  border-radius: 999px;
+  background: var(--metric-soft, #eff6ff);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.metricCard > * {
+  position: relative;
+  z-index: 1;
+}
+
+.metricIcon {
+  position: relative;
+  z-index: 1;
+  color: var(--metric-color, #2563eb);
+  background: var(--metric-soft, #eff6ff);
+  border: 1px solid color-mix(in srgb, var(--metric-color, #2563eb) 18%, transparent);
+}
+
+.metricValue {
+  color: var(--finance-ink);
+  font-size: clamp(1.35rem, 2vw, 1.75rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+
+.recordCard {
+  padding: 16px;
+  border: 1px solid var(--finance-border);
+  border-radius: 16px;
+  background: var(--finance-surface);
+  box-shadow: 0 12px 30px -30px rgba(15, 23, 42, 0.9);
+}
+
+.recordCard + .recordCard {
+  margin-top: 10px;
+}
+
+.recordField {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 11px;
+  background: var(--finance-soft);
+}
+
+.recordFieldLabel {
+  margin-bottom: 3px;
+  color: var(--finance-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.recordFieldValue {
+  overflow: hidden;
+  color: var(--finance-ink);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.emptyState {
+  display: grid;
+  place-items: center;
+  min-height: 230px;
+  padding: 36px 20px;
+  text-align: center;
+}
+
+.emptyIcon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  color: var(--finance-primary);
+  background: #eaf2ff;
+}
+
+.formSection {
+  padding: 16px;
+  border: 1px solid #e3e9f1;
+  border-radius: 15px;
+  background: #fbfcfe;
+}
+
+.modalContent {
+  --finance-ink: #172033;
+  --finance-muted: #64748b;
+  --finance-border: #dfe6ef;
+  --finance-primary: #2563eb;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 20px;
+  box-shadow: 0 30px 90px -38px rgba(15, 23, 42, 0.68);
+}
+
+.modalHeader {
+  min-height: 68px;
+  padding: 16px 22px;
+  border-bottom: 1px solid #e4eaf2;
+  background: linear-gradient(180deg, #ffffff, #fbfcff);
+}
+
+.modalTitle {
+  color: var(--finance-ink);
+  font-family: "Roboto Slab", serif;
+  font-size: 1.18rem;
+  font-weight: 800;
+}
+
+.modalBody {
+  padding: 22px;
+  background: #ffffff;
+}
+
+.modalFooter {
+  position: sticky;
+  z-index: 2;
+  bottom: -22px;
+  margin: 4px -22px -22px;
+  padding: 14px 22px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid #e4eaf2;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+}
+
+.workspace :global(.mantine-Input-input),
+.modalContent :global(.mantine-Input-input) {
+  min-height: 42px;
+  border-color: #d8e0eb;
+  border-radius: 11px;
+  background: #ffffff;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.workspace :global(.mantine-Input-input:focus),
+.workspace :global(.mantine-Input-input:focus-within),
+.modalContent :global(.mantine-Input-input:focus),
+.modalContent :global(.mantine-Input-input:focus-within) {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.workspace :global(.mantine-InputWrapper-label),
+.modalContent :global(.mantine-InputWrapper-label) {
+  margin-bottom: 6px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workspace :global(.mantine-InputWrapper-description),
+.modalContent :global(.mantine-InputWrapper-description) {
+  margin-bottom: 7px;
+  color: #5f6b7d;
+  line-height: 1.4;
+}
+
+.workspace :global(.mantine-Button-root),
+.modalContent :global(.mantine-Button-root) {
+  min-height: 38px;
+  border-radius: 11px;
+  font-weight: 750;
+}
+
+.workspace :global(.mantine-ActionIcon-root),
+.modalContent :global(.mantine-ActionIcon-root) {
+  border-radius: 10px;
+}
+
+.workspace :global(.mantine-Card-root) {
+  border-color: var(--finance-border);
+  border-radius: 16px;
+  box-shadow: 0 14px 34px -34px rgba(15, 23, 42, 0.85);
+}
+
+.workspace :global(.mantine-Tabs-list) {
+  gap: 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 13px;
+  background: #f1f5f9;
+}
+
+.workspace :global(.mantine-Tabs-tab) {
+  min-height: 36px;
+  border: 0;
+  border-radius: 9px;
+  color: #5f6d82;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.workspace :global(.mantine-Tabs-tab[data-active]) {
+  color: #1d4ed8;
+  background: #ffffff;
+  box-shadow: 0 4px 14px -10px rgba(15, 23, 42, 0.8);
+}
+
+.workspace :global(.mantine-Table-table) {
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace :global(.mantine-Table-th) {
+  height: 46px;
+  color: #526178;
+  background: #f8fafc;
+  border-bottom-color: #dfe6ef;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.workspace :global(.mantine-Table-td) {
+  border-bottom-color: #edf1f6;
+  color: #243047;
+}
+
+.workspace :global(.mantine-Table-tr:last-child .mantine-Table-td) {
+  border-bottom: 0;
+}
+
+.workspace :global(.mantine-Tabs-panel) {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+@media (max-width: 48em) {
+  .workspace {
+    padding-bottom: 18px;
+  }
+
+  .moduleBar {
+    padding: 14px;
+    border-radius: 15px;
+  }
+
+  .moduleMark {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+    border-radius: 12px;
+  }
+
+  .moduleActions {
+    width: 100%;
+  }
+
+  .moduleActions :global(.mantine-Button-root) {
+    flex: 1 1 170px;
+  }
+
+  .pageHeader {
+    padding: 17px;
+    border-radius: 16px;
+  }
+
+  .pageHeaderMain {
+    align-items: flex-start;
+  }
+
+  .pageIcon {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+    border-radius: 12px;
+  }
+
+  .pageDescription {
+    font-size: 13px;
+  }
+
+  .headerActions,
+  .headerActions > * {
+    width: 100%;
+  }
+
+  .headerActions :global(.mantine-Group-root) {
+    width: 100%;
+  }
+
+  .headerActions :global(.mantine-Button-root) {
+    flex: 1 1 150px;
+  }
+
+  .panel,
+  .metricCard,
+  .recordCard {
+    border-radius: 15px;
+  }
+
+  .panelHeader,
+  .panelBody {
+    padding: 15px;
+  }
+
+  .toolbar {
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .toolbarSearch {
+    flex-basis: 100%;
+  }
+
+  .metricCard {
+    min-height: 128px;
+    padding: 15px;
+  }
+
+  .recordCard {
+    padding: 14px;
+  }
+
+  .modalContent {
+    border: 0;
+    border-radius: 0;
+  }
+
+  .modalHeader {
+    min-height: 60px;
+    padding: max(12px, env(safe-area-inset-top)) 16px 12px;
+  }
+
+  .modalBody {
+    padding: 16px;
+  }
+
+  .modalFooter {
+    bottom: -16px;
+    margin: 4px -16px -16px;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .modalFooter :global(.mantine-Button-root) {
+    flex: 1 1 140px;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace *,
+  .workspace *::before,
+  .workspace *::after,
+  .modalContent *,
+  .modalContent *::before,
+  .modalContent *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,21 +1,46 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
-  Alert,
-  Card,
-  Grid,
+  Box,
   Group,
   Loader,
+  ScrollArea,
   SegmentedControl,
+  SimpleGrid,
   Stack,
   Table,
   Tabs,
   Text,
-  Title,
 } from "@mantine/core";
-import { DatePickerInput } from "@mantine/dates";
+import { MonthPickerInput } from "@mantine/dates";
+import {
+  IconArrowDownRight,
+  IconArrowUpRight,
+  IconBuildingBank,
+  IconChartBar,
+  IconReportMoney,
+  IconScale,
+  IconSitemap,
+  IconUsersGroup,
+  IconWallet,
+} from "@tabler/icons-react";
 import dayjs from "dayjs";
-import axiosInstance from "../../utils/axiosInstance";
 import { isAxiosError } from "axios";
+import axiosInstance from "../../utils/axiosInstance";
+import {
+  FinanceEmptyState,
+  FinanceErrorState,
+  FinanceLoadingState,
+  FinanceMetricCard,
+  FinancePageHeader,
+  FinancePanel,
+  FinanceToolbar,
+} from "../../components/finance/FinanceUi";
+import {
+  formatFinanceDate,
+  formatFinanceMoneyMajor,
+} from "../../components/finance/financeFormatters";
+
 const FinanceReportsChart = lazy(() => import("../../components/finance/FinanceReportsChart"));
 
 type ProfitLossMonthlyPoint = {
@@ -111,6 +136,12 @@ type FinanceReportsResponse = {
 
 type DatePreset = "six_months" | "ytd" | "custom";
 
+const ChartFallback = () => (
+  <Group justify="center" my="xl" aria-label="Loading report chart">
+    <Loader size="sm" />
+  </Group>
+);
+
 const FinanceReports = () => {
   const [activeTab, setActiveTab] = useState("pl");
   const [preset, setPreset] = useState<DatePreset>("six_months");
@@ -118,6 +149,8 @@ const FinanceReports = () => {
   const [data, setData] = useState<FinanceReportsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const customRangeComplete = Boolean(customRange[0] && customRange[1]);
 
   const { startDate, endDate } = useMemo(() => {
     if (preset === "custom" && customRange[0] && customRange[1]) {
@@ -140,61 +173,67 @@ const FinanceReports = () => {
   }, [preset, customRange]);
 
   useEffect(() => {
+    if (preset === "custom" && !customRangeComplete) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
     const fetchReports = async () => {
       try {
         setLoading(true);
         setError(null);
+        setData(null);
         const response = await axiosInstance.get<FinanceReportsResponse>("/finance/reports", {
           params: {
             startDate: startDate.format("YYYY-MM-DD"),
             endDate: endDate.format("YYYY-MM-DD"),
           },
         });
-        setData(response.data);
+        if (!cancelled) {
+          setData(response.data);
+        }
       } catch (err: unknown) {
         const message = isAxiosError(err)
           ? err.response?.data?.message ?? err.message
           : "Unable to load finance reports";
-        setError(message);
+        if (!cancelled) {
+          setError(message);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
     void fetchReports();
-  }, [startDate, endDate]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [customRangeComplete, endDate, preset, reloadKey, startDate]);
 
   const currency = data?.currency ?? "PLN";
-  const formatCurrency = (value: number) =>
-    new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency,
-      maximumFractionDigits: 2,
-      minimumFractionDigits: 2,
-    }).format(value);
+  const formatCurrency = (value: number) => formatFinanceMoneyMajor(value, currency);
   const formatCurrencyWithCode = (value: number, code?: string) =>
-    new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: code ?? currency,
-      maximumFractionDigits: 2,
-      minimumFractionDigits: 2,
-    }).format(value);
+    formatFinanceMoneyMajor(value, code ?? currency);
 
-  const renderSummaryCard = (title: string, value: number, description?: string, color?: string) => (
-    <Card withBorder padding="lg">
-      <Stack gap={4}>
-        <Text size="sm" c="dimmed">
-          {title}
-        </Text>
-        <Title order={3} c={color}>
-          {formatCurrency(value)}
-        </Title>
-        {description && (
-          <Text size="xs" c="dimmed">
-            {description}
-          </Text>
-        )}
-      </Stack>
-    </Card>
+  const renderSummaryCard = (
+    title: string,
+    value: number,
+    description: string,
+    accent: "blue" | "green" | "orange" | "violet" | "rose" | "slate",
+    icon: ReactNode,
+  ) => (
+    <FinanceMetricCard
+      label={title}
+      value={formatCurrency(value)}
+      description={description}
+      accent={accent}
+      icon={icon}
+    />
   );
 
   const monthlyPnL = data?.profitAndLoss.monthly ?? [];
@@ -207,408 +246,472 @@ const FinanceReports = () => {
   const clientSummary = data?.clientSummary ?? [];
 
   return (
-    <Stack gap="md">
-      <Group justify="space-between" align="flex-end" wrap="wrap">
-        <Stack gap={4}>
-          <Title order={3}>Finance reports</Title>
-          <Text size="sm" c="dimmed">
-            Showing {startDate.format("MMM YYYY")}  {endDate.format("MMM YYYY")}
-          </Text>
-        </Stack>
-        <Group wrap="wrap" gap="sm">
+    <Stack gap="lg">
+      <FinancePageHeader
+        eyebrow="Analysis"
+        title="Finance reports"
+        description={
+          preset === "custom" && !customRangeComplete
+            ? "Choose a starting and ending month to prepare the report."
+            : `Performance from ${startDate.format("MMM YYYY")} to ${endDate.format("MMM YYYY")}, reported in ${currency}.`
+        }
+        icon={<IconReportMoney size={24} />}
+      />
+
+      <FinanceToolbar>
+        <Box style={{ flex: "1 1 360px", minWidth: 0 }}>
           <SegmentedControl
+            fullWidth
             value={preset}
             onChange={(value) => setPreset(value as DatePreset)}
             data={[
               { label: "Last 6 months", value: "six_months" },
-              { label: "YTD", value: "ytd" },
+              { label: "Year to date", value: "ytd" },
               { label: "Custom", value: "custom" },
             ]}
+            aria-label="Report period"
           />
-          {preset === "custom" && (
-            <DatePickerInput
-              type="range"
-              value={customRange}
-              onChange={(value) => setCustomRange(value ?? [null, null])}
-              allowSingleDateInRange={false}
-              label="Custom range"
-              valueFormat="MMM YYYY"
-            />
-          )}
-        </Group>
-      </Group>
+        </Box>
+        {preset === "custom" ? (
+          <MonthPickerInput
+            type="range"
+            value={customRange}
+            onChange={(value) => setCustomRange(value ?? [null, null])}
+            allowSingleDateInRange
+            label="Custom month range"
+            placeholder="Choose start and end months"
+            valueFormat="MMM YYYY"
+            style={{ flex: "1 1 280px" }}
+            clearable
+          />
+        ) : null}
+      </FinanceToolbar>
 
-      {error && (
-        <Alert color="red" title="Unable to load finance reports">
-          {error}
-        </Alert>
-      )}
+      {error ? (
+        <FinanceErrorState message={error} onRetry={() => setReloadKey((current) => current + 1)} />
+      ) : null}
 
-      {loading && (
-        <Group justify="center" my="lg">
-          <Loader />
-        </Group>
-      )}
+      {loading ? <FinanceLoadingState label="Preparing finance reports" /> : null}
 
-      {!loading && data && (
+      {!loading && !data && !error ? (
+        <FinancePanel>
+          <FinanceEmptyState
+            title="No report data available"
+            description="Choose a reporting period to load financial performance and balance information."
+            icon={<IconReportMoney size={25} />}
+          />
+        </FinancePanel>
+      ) : null}
+
+      {!loading && data ? (
         <Tabs value={activeTab} onChange={(value) => setActiveTab(value ?? "pl")} keepMounted={false}>
-          <Tabs.List>
-            <Tabs.Tab value="pl">Profit &amp; Loss</Tabs.Tab>
-            <Tabs.Tab value="cf">Cash Flow</Tabs.Tab>
-            <Tabs.Tab value="bva">Budgets vs Actual</Tabs.Tab>
-            <Tabs.Tab value="accounts">Accounts</Tabs.Tab>
-            <Tabs.Tab value="categories">Categories</Tabs.Tab>
-            <Tabs.Tab value="counterparties">Counterparties</Tabs.Tab>
-          </Tabs.List>
+          <ScrollArea type="auto" offsetScrollbars scrollbarSize={6}>
+            <Tabs.List style={{ flexWrap: "nowrap", minWidth: "max-content" }} aria-label="Finance report sections">
+              <Tabs.Tab value="pl">Profit &amp; Loss</Tabs.Tab>
+              <Tabs.Tab value="cf">Cash Flow</Tabs.Tab>
+              <Tabs.Tab value="bva">Budgets vs Actual</Tabs.Tab>
+              <Tabs.Tab value="accounts">Accounts</Tabs.Tab>
+              <Tabs.Tab value="categories">Categories</Tabs.Tab>
+              <Tabs.Tab value="counterparties">Counterparties</Tabs.Tab>
+            </Tabs.List>
+          </ScrollArea>
 
           <Tabs.Panel value="pl" pt="md">
             <Stack gap="lg">
-              <Grid>
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  {renderSummaryCard("Income", data.profitAndLoss.totals.income)}
-                </Grid.Col>
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  {renderSummaryCard("Expenses", data.profitAndLoss.totals.expense)}
-                </Grid.Col>
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  {renderSummaryCard(
-                    "Net",
-                    data.profitAndLoss.totals.net,
-                    undefined,
-                    data.profitAndLoss.totals.net >= 0 ? "green" : "red"
-                  )}
-                </Grid.Col>
-              </Grid>
-              <Card withBorder padding="lg">
-                <Title order={4} mb="sm">
-                  Monthly performance
-                </Title>
+              <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
+                {renderSummaryCard(
+                  "Income",
+                  data.profitAndLoss.totals.income,
+                  "Recognised income in the selected range",
+                  "green",
+                  <IconArrowUpRight size={22} />,
+                )}
+                {renderSummaryCard(
+                  "Expenses",
+                  data.profitAndLoss.totals.expense,
+                  "Recognised expenses in the selected range",
+                  "rose",
+                  <IconArrowDownRight size={22} />,
+                )}
+                {renderSummaryCard(
+                  "Net result",
+                  data.profitAndLoss.totals.net,
+                  "Income less expenses",
+                  data.profitAndLoss.totals.net >= 0 ? "blue" : "orange",
+                  <IconScale size={22} />,
+                )}
+              </SimpleGrid>
+              <FinancePanel
+                title="Monthly performance"
+                description="Income, expenses, and net result by month"
+                icon={<IconChartBar size={19} />}
+              >
                 {monthlyPnL.length === 0 ? (
-                  <Text size="sm" c="dimmed">
-                    No transactions recorded in this range.
-                  </Text>
+                  <FinanceEmptyState
+                    title="No monthly activity"
+                    description="No transactions were recorded in this reporting range."
+                    icon={<IconChartBar size={25} />}
+                  />
                 ) : (
-                  <Suspense fallback={<Group justify="center" my="lg"><Loader /></Group>}>
-                    <FinanceReportsChart
-                      variant="profitLoss"
-                      data={monthlyPnL}
-                      formatCurrency={formatCurrency}
-                    />
+                  <Suspense fallback={<ChartFallback />}>
+                    <FinanceReportsChart variant="profitLoss" data={monthlyPnL} formatCurrency={formatCurrency} />
                   </Suspense>
                 )}
-              </Card>
-              <Card withBorder padding="lg">
-                <Title order={4} mb="sm">
-                  Top expense categories
-                </Title>
+              </FinancePanel>
+              <FinancePanel
+                title="Top expense categories"
+                description="Largest expense totals in the selected period"
+                icon={<IconSitemap size={19} />}
+              >
                 {data.profitAndLoss.topCategories.length === 0 ? (
-                  <Text size="sm" c="dimmed">
-                    No categorized expenses in this range.
-                  </Text>
+                  <FinanceEmptyState
+                    title="No categorised expenses"
+                    description="Categorised expenses will appear here once they are recorded."
+                    icon={<IconSitemap size={25} />}
+                  />
                 ) : (
-                  <Stack gap="xs">
-                    {data.profitAndLoss.topCategories.map((category) => (
-                      <Group justify="space-between" key={`${category.categoryId ?? "uncat"}`}>
-                        <Text>{category.categoryName}</Text>
-                        <Text fw={600}>{formatCurrency(category.total)}</Text>
+                  <Stack gap={0}>
+                    {data.profitAndLoss.topCategories.map((category, index) => (
+                      <Group
+                        justify="space-between"
+                        gap="md"
+                        py="sm"
+                        wrap="nowrap"
+                        key={`${category.categoryId ?? "uncat"}`}
+                        style={index > 0 ? { borderTop: "1px solid var(--mantine-color-gray-2)" } : undefined}
+                      >
+                        <Text size="sm" fw={600} lineClamp={1}>
+                          {category.categoryName}
+                        </Text>
+                        <Text size="sm" fw={800} style={{ whiteSpace: "nowrap" }}>
+                          {formatCurrency(category.total)}
+                        </Text>
                       </Group>
                     ))}
                   </Stack>
                 )}
-              </Card>
+              </FinancePanel>
             </Stack>
           </Tabs.Panel>
 
           <Tabs.Panel value="cf" pt="md">
             <Stack gap="lg">
-              <Grid>
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  {renderSummaryCard("Inflow", data.cashFlow.totals.inflow)}
-                </Grid.Col>
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  {renderSummaryCard("Outflow", data.cashFlow.totals.outflow)}
-                </Grid.Col>
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  {renderSummaryCard(
-                    "Net",
-                    data.cashFlow.totals.net,
-                    undefined,
-                    data.cashFlow.totals.net >= 0 ? "green" : "red"
-                  )}
-                </Grid.Col>
-              </Grid>
-              <Card withBorder padding="lg">
-                <Title order={4} mb="sm">
-                  Cash flow timeline
-                </Title>
+              <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
+                {renderSummaryCard(
+                  "Cash inflow",
+                  data.cashFlow.totals.inflow,
+                  "Money received in the selected range",
+                  "green",
+                  <IconArrowUpRight size={22} />,
+                )}
+                {renderSummaryCard(
+                  "Cash outflow",
+                  data.cashFlow.totals.outflow,
+                  "Money paid in the selected range",
+                  "rose",
+                  <IconArrowDownRight size={22} />,
+                )}
+                {renderSummaryCard(
+                  "Net cash flow",
+                  data.cashFlow.totals.net,
+                  "Inflow less outflow",
+                  data.cashFlow.totals.net >= 0 ? "blue" : "orange",
+                  <IconWallet size={22} />,
+                )}
+              </SimpleGrid>
+              <FinancePanel
+                title="Cash flow timeline"
+                description="Cash movements across the selected months"
+                icon={<IconWallet size={19} />}
+              >
                 {cashFlowTimeline.length === 0 ? (
-                  <Text size="sm" c="dimmed">
-                    No cash movements in this range.
-                  </Text>
+                  <FinanceEmptyState
+                    title="No cash movements"
+                    description="There are no cash movements in this reporting range."
+                    icon={<IconWallet size={25} />}
+                  />
                 ) : (
-                  <Suspense fallback={<Group justify="center" my="lg"><Loader /></Group>}>
-                    <FinanceReportsChart
-                      variant="cashFlow"
-                      data={cashFlowTimeline}
-                      formatCurrency={formatCurrency}
-                    />
+                  <Suspense fallback={<ChartFallback />}>
+                    <FinanceReportsChart variant="cashFlow" data={cashFlowTimeline} formatCurrency={formatCurrency} />
                   </Suspense>
                 )}
-              </Card>
+              </FinancePanel>
             </Stack>
           </Tabs.Panel>
+
           <Tabs.Panel value="bva" pt="md">
             <Stack gap="lg">
-              <Card withBorder padding="lg">
-                <Title order={4} mb="sm">
-                  Budgets vs actual
-                </Title>
+              <FinancePanel
+                title="Budgets vs actual"
+                description="Compare category targets with recorded spending"
+                icon={<IconScale size={19} />}
+              >
                 {budgetRows.length === 0 ? (
-                  <Text size="sm" c="dimmed">
-                    No budgets or actuals recorded in this range.
-                  </Text>
+                  <FinanceEmptyState
+                    title="No budget comparison"
+                    description="No budgets or actuals were recorded in this reporting range."
+                    icon={<IconScale size={25} />}
+                  />
                 ) : (
-                  <Suspense fallback={<Group justify="center" my="lg"><Loader /></Group>}>
-                    <FinanceReportsChart
-                      variant="budgetVsActual"
-                      data={budgetRows}
-                      formatCurrency={formatCurrency}
-                    />
+                  <Suspense fallback={<ChartFallback />}>
+                    <FinanceReportsChart variant="budgetVsActual" data={budgetRows} formatCurrency={formatCurrency} />
                   </Suspense>
                 )}
-              </Card>
-              {budgetRows.length > 0 && (
-                <Card withBorder padding="lg">
-                  <Title order={5} mb="sm">
-                    Category detail
-                  </Title>
-                  <Table withColumnBorders highlightOnHover>
+              </FinancePanel>
+              {budgetRows.length > 0 ? (
+                <FinancePanel title="Category detail" description="Budget utilisation by category" noPadding>
+                  <ScrollArea type="auto" offsetScrollbars>
+                    <Table withColumnBorders highlightOnHover miw={620} verticalSpacing="sm">
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Category</Table.Th>
+                          <Table.Th>Budget</Table.Th>
+                          <Table.Th>Actual</Table.Th>
+                          <Table.Th>Variance</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {budgetRows.map((row) => (
+                          <Table.Tr key={`${row.categoryId ?? "uncat"}-${row.categoryName}`}>
+                            <Table.Td>{row.categoryName}</Table.Td>
+                            <Table.Td>{formatCurrency(row.budget)}</Table.Td>
+                            <Table.Td>{formatCurrency(row.actual)}</Table.Td>
+                            <Table.Td c={row.variance >= 0 ? "green" : "red"} fw={700}>
+                              {formatCurrency(row.variance)}
+                            </Table.Td>
+                          </Table.Tr>
+                        ))}
+                        <Table.Tr>
+                          <Table.Td fw={800}>Totals</Table.Td>
+                          <Table.Td fw={800}>{formatCurrency(data.budgetsVsActual.totals.budget)}</Table.Td>
+                          <Table.Td fw={800}>{formatCurrency(data.budgetsVsActual.totals.actual)}</Table.Td>
+                          <Table.Td c={data.budgetsVsActual.totals.variance >= 0 ? "green" : "red"} fw={800}>
+                            {formatCurrency(data.budgetsVsActual.totals.variance)}
+                          </Table.Td>
+                        </Table.Tr>
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea>
+                </FinancePanel>
+              ) : null}
+            </Stack>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="accounts" pt="md">
+            <FinancePanel
+              title="Account balances"
+              description="Opening, movement, and closing balances by account currency"
+              icon={<IconBuildingBank size={19} />}
+              noPadding
+            >
+              {accountSummary.length === 0 ? (
+                <FinanceEmptyState
+                  title="No account activity"
+                  description="No account activity was recorded in this reporting range."
+                  icon={<IconBuildingBank size={25} />}
+                />
+              ) : (
+                <ScrollArea type="auto" offsetScrollbars>
+                  <Table withColumnBorders highlightOnHover miw={1100} verticalSpacing="sm">
                     <Table.Thead>
                       <Table.Tr>
-                        <Table.Th>Category</Table.Th>
-                        <Table.Th>Budget</Table.Th>
-                        <Table.Th>Actual</Table.Th>
-                        <Table.Th>Variance</Table.Th>
+                        <Table.Th>Account</Table.Th>
+                        <Table.Th>Currency</Table.Th>
+                        <Table.Th>Opening</Table.Th>
+                        <Table.Th>Inflow</Table.Th>
+                        <Table.Th>Outflow</Table.Th>
+                        <Table.Th>Net</Table.Th>
+                        <Table.Th>Closing</Table.Th>
+                        <Table.Th>Outstanding</Table.Th>
+                        <Table.Th>Status</Table.Th>
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
-                      {budgetRows.map((row) => (
-                        <Table.Tr key={`${row.categoryId ?? "uncat"}-${row.categoryName}`}>
-                          <Table.Td>{row.categoryName}</Table.Td>
-                          <Table.Td>{formatCurrency(row.budget)}</Table.Td>
-                          <Table.Td>{formatCurrency(row.actual)}</Table.Td>
-                          <Table.Td c={row.variance >= 0 ? "green" : "red"}>
-                            {formatCurrency(row.variance)}
+                      {accountSummary.map((row) => (
+                        <Table.Tr key={row.accountId}>
+                          <Table.Td fw={700}>{row.name}</Table.Td>
+                          <Table.Td>{row.currency}</Table.Td>
+                          <Table.Td>{formatCurrencyWithCode(row.openingBalance, row.currency)}</Table.Td>
+                          <Table.Td>{formatCurrencyWithCode(row.inflow, row.currency)}</Table.Td>
+                          <Table.Td>{formatCurrencyWithCode(row.outflow, row.currency)}</Table.Td>
+                          <Table.Td c={row.net >= 0 ? "green" : "red"} fw={700}>
+                            {formatCurrencyWithCode(row.net, row.currency)}
                           </Table.Td>
+                          <Table.Td>{formatCurrencyWithCode(row.closingBalance, row.currency)}</Table.Td>
+                          <Table.Td c={row.outstanding >= 0 ? "green" : "red"}>
+                            {formatCurrencyWithCode(row.outstanding, row.currency)}
+                          </Table.Td>
+                          <Table.Td>{row.isActive ? "Active" : "Archived"}</Table.Td>
                         </Table.Tr>
                       ))}
-                      <Table.Tr>
-                        <Table.Td>
-                          <Text fw={600}>Totals</Text>
-                        </Table.Td>
-                        <Table.Td>{formatCurrency(data.budgetsVsActual.totals.budget)}</Table.Td>
-                        <Table.Td>{formatCurrency(data.budgetsVsActual.totals.actual)}</Table.Td>
-                        <Table.Td c={data.budgetsVsActual.totals.variance >= 0 ? "green" : "red"}>
-                          {formatCurrency(data.budgetsVsActual.totals.variance)}
-                        </Table.Td>
-                      </Table.Tr>
                     </Table.Tbody>
                   </Table>
-                </Card>
+                </ScrollArea>
               )}
-            </Stack>
+            </FinancePanel>
           </Tabs.Panel>
-          <Tabs.Panel value="accounts" pt="md">
-            <Card withBorder padding="lg">
-              <Title order={4} mb="sm">
-                Account balances
-              </Title>
-              {accountSummary.length === 0 ? (
-                <Text size="sm" c="dimmed">
-                  No account activity in this range.
-                </Text>
-              ) : (
-                <Table withColumnBorders highlightOnHover>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Account</Table.Th>
-                      <Table.Th>Currency</Table.Th>
-                      <Table.Th>Opening</Table.Th>
-                      <Table.Th>Inflow</Table.Th>
-                      <Table.Th>Outflow</Table.Th>
-                      <Table.Th>Net</Table.Th>
-                      <Table.Th>Closing</Table.Th>
-                      <Table.Th>Outstanding</Table.Th>
-                      <Table.Th>Status</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {accountSummary.map((row) => (
-                      <Table.Tr key={row.accountId}>
-                        <Table.Td>{row.name}</Table.Td>
-                        <Table.Td>{row.currency}</Table.Td>
-                        <Table.Td>{formatCurrencyWithCode(row.openingBalance, row.currency)}</Table.Td>
-                        <Table.Td>{formatCurrencyWithCode(row.inflow, row.currency)}</Table.Td>
-                        <Table.Td>{formatCurrencyWithCode(row.outflow, row.currency)}</Table.Td>
-                        <Table.Td c={row.net >= 0 ? "green" : "red"}>
-                          {formatCurrencyWithCode(row.net, row.currency)}
-                        </Table.Td>
-                        <Table.Td>{formatCurrencyWithCode(row.closingBalance, row.currency)}</Table.Td>
-                        <Table.Td c={row.outstanding >= 0 ? "green" : "red"}>
-                          {formatCurrencyWithCode(row.outstanding, row.currency)}
-                        </Table.Td>
-                        <Table.Td>{row.isActive ? "Active" : "Archived"}</Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              )}
-            </Card>
-          </Tabs.Panel>
+
           <Tabs.Panel value="categories" pt="md">
-            <Stack gap="lg">
-              <Grid>
-                <Grid.Col span={{ base: 12, md: 6 }}>
-                  <Card withBorder padding="lg">
-                    <Title order={4} mb="sm">
-                      Income categories
-                    </Title>
-                    {incomeCategorySummary.length === 0 ? (
-                      <Text size="sm" c="dimmed">
-                        No income categories found for this period.
-                      </Text>
-                    ) : (
-                      <Table withColumnBorders highlightOnHover>
-                        <Table.Thead>
-                          <Table.Tr>
-                            <Table.Th>Category</Table.Th>
-                            <Table.Th ta="right">Amount</Table.Th>
+            <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
+              <FinancePanel
+                title="Income categories"
+                description="Income grouped by finance category"
+                icon={<IconArrowUpRight size={19} />}
+                noPadding
+              >
+                {incomeCategorySummary.length === 0 ? (
+                  <FinanceEmptyState
+                    title="No income categories"
+                    description="No income categories were found for this reporting period."
+                    icon={<IconSitemap size={25} />}
+                  />
+                ) : (
+                  <ScrollArea type="auto" offsetScrollbars>
+                    <Table withColumnBorders highlightOnHover miw={420} verticalSpacing="sm">
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Category</Table.Th>
+                          <Table.Th ta="right">Amount</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {incomeCategorySummary.map((row) => (
+                          <Table.Tr key={`${row.categoryId ?? "uncat"}-income`}>
+                            <Table.Td fw={600}>{row.categoryName}</Table.Td>
+                            <Table.Td ta="right">{formatCurrency(row.amount)}</Table.Td>
                           </Table.Tr>
-                        </Table.Thead>
-                        <Table.Tbody>
-                          {incomeCategorySummary.map((row) => (
-                            <Table.Tr key={`${row.categoryId ?? "uncat"}-income`}>
-                              <Table.Td>{row.categoryName}</Table.Td>
-                              <Table.Td ta="right">{formatCurrency(row.amount)}</Table.Td>
-                            </Table.Tr>
-                          ))}
-                        </Table.Tbody>
-                      </Table>
-                    )}
-                  </Card>
-                </Grid.Col>
-                <Grid.Col span={{ base: 12, md: 6 }}>
-                  <Card withBorder padding="lg">
-                    <Title order={4} mb="sm">
-                      Expense categories
-                    </Title>
-                    {expenseCategorySummary.length === 0 ? (
-                      <Text size="sm" c="dimmed">
-                        No expenses recorded in this period.
-                      </Text>
-                    ) : (
-                      <Table withColumnBorders highlightOnHover>
-                        <Table.Thead>
-                          <Table.Tr>
-                            <Table.Th>Category</Table.Th>
-                            <Table.Th ta="right">Amount</Table.Th>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea>
+                )}
+              </FinancePanel>
+              <FinancePanel
+                title="Expense categories"
+                description="Expenses grouped by finance category"
+                icon={<IconArrowDownRight size={19} />}
+                noPadding
+              >
+                {expenseCategorySummary.length === 0 ? (
+                  <FinanceEmptyState
+                    title="No expense categories"
+                    description="No expenses were recorded in this reporting period."
+                    icon={<IconSitemap size={25} />}
+                  />
+                ) : (
+                  <ScrollArea type="auto" offsetScrollbars>
+                    <Table withColumnBorders highlightOnHover miw={420} verticalSpacing="sm">
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Category</Table.Th>
+                          <Table.Th ta="right">Amount</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {expenseCategorySummary.map((row) => (
+                          <Table.Tr key={`${row.categoryId ?? "uncat"}-expense`}>
+                            <Table.Td fw={600}>{row.categoryName}</Table.Td>
+                            <Table.Td ta="right">{formatCurrency(row.amount)}</Table.Td>
                           </Table.Tr>
-                        </Table.Thead>
-                        <Table.Tbody>
-                          {expenseCategorySummary.map((row) => (
-                            <Table.Tr key={`${row.categoryId ?? "uncat"}-expense`}>
-                              <Table.Td>{row.categoryName}</Table.Td>
-                              <Table.Td ta="right">{formatCurrency(row.amount)}</Table.Td>
-                            </Table.Tr>
-                          ))}
-                        </Table.Tbody>
-                      </Table>
-                    )}
-                  </Card>
-                </Grid.Col>
-              </Grid>
-            </Stack>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea>
+                )}
+              </FinancePanel>
+            </SimpleGrid>
           </Tabs.Panel>
+
           <Tabs.Panel value="counterparties" pt="md">
             <Stack gap="lg">
-              <Card withBorder padding="lg">
-                <Title order={4} mb="sm">
-                  Vendors
-                </Title>
+              <FinancePanel
+                title="Vendors"
+                description="Settled and outstanding vendor activity"
+                icon={<IconUsersGroup size={19} />}
+                noPadding
+              >
                 {vendorSummary.length === 0 ? (
-                  <Text size="sm" c="dimmed">
-                    No vendor activity recorded in this period.
-                  </Text>
+                  <FinanceEmptyState
+                    title="No vendor activity"
+                    description="No vendor activity was recorded in this reporting period."
+                    icon={<IconUsersGroup size={25} />}
+                  />
                 ) : (
-                  <Table withColumnBorders highlightOnHover>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Vendor</Table.Th>
-                        <Table.Th>Total</Table.Th>
-                        <Table.Th>Settled</Table.Th>
-                        <Table.Th>Outstanding</Table.Th>
-                        <Table.Th>Last activity</Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {vendorSummary.map((row) => (
-                        <Table.Tr key={row.vendorId}>
-                          <Table.Td>{row.vendorName}</Table.Td>
-                          <Table.Td>{formatCurrency(row.total)}</Table.Td>
-                          <Table.Td>{formatCurrency(row.settled)}</Table.Td>
-                          <Table.Td c={row.outstanding >= 0 ? "red" : "green"}>
-                            {formatCurrency(row.outstanding)}
-                          </Table.Td>
-                          <Table.Td>{row.lastActivity ?? ""}</Table.Td>
+                  <ScrollArea type="auto" offsetScrollbars>
+                    <Table withColumnBorders highlightOnHover miw={720} verticalSpacing="sm">
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Vendor</Table.Th>
+                          <Table.Th>Total</Table.Th>
+                          <Table.Th>Settled</Table.Th>
+                          <Table.Th>Outstanding</Table.Th>
+                          <Table.Th>Last activity</Table.Th>
                         </Table.Tr>
-                      ))}
-                    </Table.Tbody>
-                  </Table>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {vendorSummary.map((row) => (
+                          <Table.Tr key={row.vendorId}>
+                            <Table.Td fw={700}>{row.vendorName}</Table.Td>
+                            <Table.Td>{formatCurrency(row.total)}</Table.Td>
+                            <Table.Td>{formatCurrency(row.settled)}</Table.Td>
+                            <Table.Td c={row.outstanding >= 0 ? "red" : "green"} fw={700}>
+                              {formatCurrency(row.outstanding)}
+                            </Table.Td>
+                            <Table.Td>{formatFinanceDate(row.lastActivity)}</Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea>
                 )}
-              </Card>
-              <Card withBorder padding="lg">
-                <Title order={4} mb="sm">
-                  Clients
-                </Title>
+              </FinancePanel>
+              <FinancePanel
+                title="Clients"
+                description="Settled and outstanding client activity"
+                icon={<IconUsersGroup size={19} />}
+                noPadding
+              >
                 {clientSummary.length === 0 ? (
-                  <Text size="sm" c="dimmed">
-                    No client transactions recorded in this period.
-                  </Text>
+                  <FinanceEmptyState
+                    title="No client activity"
+                    description="No client transactions were recorded in this reporting period."
+                    icon={<IconUsersGroup size={25} />}
+                  />
                 ) : (
-                  <Table withColumnBorders highlightOnHover>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Client</Table.Th>
-                        <Table.Th>Total</Table.Th>
-                        <Table.Th>Settled</Table.Th>
-                        <Table.Th>Outstanding</Table.Th>
-                        <Table.Th>Last activity</Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {clientSummary.map((row) => (
-                        <Table.Tr key={row.clientId}>
-                          <Table.Td>{row.clientName}</Table.Td>
-                          <Table.Td>{formatCurrency(row.total)}</Table.Td>
-                          <Table.Td>{formatCurrency(row.settled)}</Table.Td>
-                          <Table.Td c={row.outstanding >= 0 ? "green" : "red"}>
-                            {formatCurrency(row.outstanding)}
-                          </Table.Td>
-                          <Table.Td>{row.lastActivity ?? ""}</Table.Td>
+                  <ScrollArea type="auto" offsetScrollbars>
+                    <Table withColumnBorders highlightOnHover miw={720} verticalSpacing="sm">
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Client</Table.Th>
+                          <Table.Th>Total</Table.Th>
+                          <Table.Th>Settled</Table.Th>
+                          <Table.Th>Outstanding</Table.Th>
+                          <Table.Th>Last activity</Table.Th>
                         </Table.Tr>
-                      ))}
-                    </Table.Tbody>
-                  </Table>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {clientSummary.map((row) => (
+                          <Table.Tr key={row.clientId}>
+                            <Table.Td fw={700}>{row.clientName}</Table.Td>
+                            <Table.Td>{formatCurrency(row.total)}</Table.Td>
+                            <Table.Td>{formatCurrency(row.settled)}</Table.Td>
+                            <Table.Td c={row.outstanding >= 0 ? "green" : "red"} fw={700}>
+                              {formatCurrency(row.outstanding)}
+                            </Table.Td>
+                            <Table.Td>{formatFinanceDate(row.lastActivity)}</Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </ScrollArea>
                 )}
-              </Card>
+              </FinancePanel>
             </Stack>
           </Tabs.Panel>
         </Tabs>
-      )}
+      ) : null}
     </Stack>
   );
 };
 
 export default FinanceReports;
-
-

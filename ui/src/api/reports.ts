@@ -534,6 +534,7 @@ export type HomeDashboardPreferenceDto = {
   viewMode: "navigation" | "dashboard";
   savedDashboardIds: string[];
   activeDashboardId: string | null;
+  quickActionVisibility?: Record<string, boolean> | null;
 };
 
 export type UpdateHomeDashboardPreferencePayload = Partial<{
@@ -875,6 +876,7 @@ export const useHomeDashboardPreference = () =>
       return (response.data as { preference: HomeDashboardPreferenceDto }).preference;
     },
     staleTime: 5 * 60 * 1000,
+    refetchOnMount: "always",
   });
 
 export const useUpdateHomeDashboardPreference = () =>

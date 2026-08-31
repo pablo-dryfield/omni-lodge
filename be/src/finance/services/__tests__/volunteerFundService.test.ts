@@ -55,9 +55,11 @@ import VolunteerFundEntry from '../../models/VolunteerFundEntry.js';
 import { createFinanceTransaction, updateFinanceTransaction } from '../transactionService.js';
 import {
   createManualVolunteerFundEntry,
+  createVolunteerFund,
   normalizeVolunteerFundInput,
   parseFinanceDate,
   reverseVolunteerFundEntry,
+  updateVolunteerFund,
 } from '../volunteerFundService.js';
 
 describe('volunteer fund validation', () => {
@@ -76,6 +78,7 @@ describe('volunteer fund validation', () => {
       name: '  Volunteer Activities  ',
       currency: 'pln',
       linkedAccountId: 3,
+      fundingSourceAccountId: 4,
       expenseCategoryId: 7,
     })).toEqual({
       name: 'Volunteer Activities',
@@ -83,6 +86,7 @@ describe('volunteer fund validation', () => {
       currency: 'PLN',
       description: null,
       linkedAccountId: 3,
+      fundingSourceAccountId: 4,
       expenseCategoryId: 7,
       isActive: true,
     });
@@ -97,10 +101,173 @@ describe('volunteer fund validation', () => {
         currency: 'PLN',
         description: null,
         linkedAccountId: null,
+        fundingSourceAccountId: 4,
         expenseCategoryId: null,
         isActive: true,
       },
-    ).isActive).toBe(false);
+    )).toMatchObject({
+      isActive: false,
+      fundingSourceAccountId: 4,
+    });
+  });
+
+  it('rejects using the linked volunteer fund account as its funding source', async () => {
+    await expect(createVolunteerFund({
+      name: 'Volunteer Fund',
+      currency: 'PLN',
+      linkedAccountId: 3,
+      fundingSourceAccountId: 3,
+    }, 91)).rejects.toMatchObject({
+      status: 400,
+      message: 'Funding source account must be different from the linked volunteer fund account.',
+    });
+
+    expect(FinanceAccount.findByPk).not.toHaveBeenCalled();
+    expect(VolunteerFund.create).not.toHaveBeenCalled();
+  });
+
+  it('requires the funding source account to exist, be active, and match the fund currency', async () => {
+    (FinanceAccount.findByPk as jest.Mock)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 4, currency: 'EUR', isActive: true })
+      .mockResolvedValueOnce({ id: 4, currency: 'PLN', isActive: false });
+
+    const input = {
+      name: 'Volunteer Fund',
+      currency: 'PLN',
+      fundingSourceAccountId: 4,
+    };
+
+    await expect(createVolunteerFund(input, 91)).rejects.toMatchObject({
+      status: 400,
+      message: 'Funding source finance account was not found.',
+    });
+    await expect(createVolunteerFund(input, 91)).rejects.toMatchObject({
+      status: 400,
+      message: 'Funding source account currency must match the volunteer fund currency.',
+    });
+    await expect(createVolunteerFund(input, 91)).rejects.toMatchObject({
+      status: 400,
+      message: 'An active volunteer fund cannot use an inactive funding source account.',
+    });
+
+    expect(VolunteerFund.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a distinct active funding source in the same currency', async () => {
+    (FinanceAccount.findByPk as jest.Mock)
+      .mockResolvedValueOnce({ id: 3, currency: 'PLN', isActive: true })
+      .mockResolvedValueOnce({ id: 4, currency: 'PLN', isActive: true });
+    (VolunteerFund.create as jest.Mock).mockImplementation(async (payload) => ({
+      id: 8,
+      ...payload,
+      toJSON: () => payload,
+    }));
+
+    await expect(createVolunteerFund({
+      name: 'Volunteer Fund',
+      currency: 'PLN',
+      linkedAccountId: 3,
+      fundingSourceAccountId: 4,
+    }, 91)).resolves.toMatchObject({
+      linkedAccountId: 3,
+      fundingSourceAccountId: 4,
+    });
+
+    expect(FinanceAccount.findByPk).toHaveBeenNthCalledWith(
+      2,
+      4,
+      expect.objectContaining({
+        attributes: ['id', 'currency', 'isActive'],
+        transaction,
+      }),
+    );
+  });
+
+  const mockFundForUpdate = (overrides: Record<string, unknown> = {}) => {
+    const fund = {
+      id: 8,
+      name: 'Volunteer Fund',
+      slug: 'volunteer-fund',
+      currency: 'PLN',
+      description: null,
+      linkedAccountId: 3,
+      fundingSourceAccountId: 4,
+      expenseCategoryId: null,
+      isActive: true,
+      update: jest.fn(),
+      ...overrides,
+    };
+    fund.update.mockImplementation(async (payload: Record<string, unknown>) => {
+      Object.assign(fund, payload);
+      return fund;
+    });
+    (VolunteerFund.findByPk as jest.Mock).mockResolvedValue(fund);
+    return fund;
+  };
+
+  it('allows first-time linking of a legacy ledger-only fund with a non-zero balance', async () => {
+    const fund = mockFundForUpdate({ linkedAccountId: null });
+    (VolunteerFundEntry.count as jest.Mock).mockResolvedValue(0);
+    (FinanceAccount.findByPk as jest.Mock)
+      .mockResolvedValueOnce({ id: 3, currency: 'PLN', isActive: true })
+      .mockResolvedValueOnce({ id: 4, currency: 'PLN', isActive: true });
+
+    await expect(updateVolunteerFund(8, { linkedAccountId: 3 }, 91)).resolves.toBe(fund);
+
+    expect(VolunteerFundEntry.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ fundId: 8 }),
+      transaction,
+    }));
+    expect(VolunteerFundEntry.sum).not.toHaveBeenCalled();
+    expect(fund.update).toHaveBeenCalledWith(
+      expect.objectContaining({ linkedAccountId: 3 }),
+      { transaction },
+    );
+  });
+
+  it('blocks changing a linked account after any finance-backed fund entry exists', async () => {
+    const fund = mockFundForUpdate();
+    (VolunteerFundEntry.count as jest.Mock).mockResolvedValue(1);
+
+    await expect(updateVolunteerFund(8, { linkedAccountId: 5 }, 91)).rejects.toMatchObject({
+      status: 409,
+      message: 'Linked finance account cannot change after finance-backed Volunteer Fund entries exist.',
+    });
+
+    expect(VolunteerFundEntry.sum).not.toHaveBeenCalled();
+    expect(FinanceAccount.findByPk).not.toHaveBeenCalled();
+    expect(fund.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks moving a non-zero ledger balance away from its existing linked account', async () => {
+    const fund = mockFundForUpdate();
+    (VolunteerFundEntry.count as jest.Mock).mockResolvedValue(0);
+    (VolunteerFundEntry.sum as jest.Mock).mockResolvedValue(12_500);
+
+    await expect(updateVolunteerFund(8, { linkedAccountId: 5 }, 91)).rejects.toMatchObject({
+      status: 409,
+      message: 'Linked finance account cannot change while the Volunteer Fund has a non-zero balance.',
+    });
+
+    expect(FinanceAccount.findByPk).not.toHaveBeenCalled();
+    expect(fund.update).not.toHaveBeenCalled();
+  });
+
+  it('allows changing only the funding source account without invoking the linked-account guard', async () => {
+    const fund = mockFundForUpdate();
+    (FinanceAccount.findByPk as jest.Mock)
+      .mockResolvedValueOnce({ id: 3, currency: 'PLN', isActive: true })
+      .mockResolvedValueOnce({ id: 6, currency: 'PLN', isActive: true });
+
+    await expect(updateVolunteerFund(8, { fundingSourceAccountId: 6 }, 91)).resolves.toBe(fund);
+
+    expect(VolunteerFundEntry.count).not.toHaveBeenCalled();
+    expect(VolunteerFundEntry.sum).not.toHaveBeenCalled();
+    expect(fund.update).toHaveBeenCalledWith(
+      expect.objectContaining({ linkedAccountId: 3, fundingSourceAccountId: 6 }),
+      { transaction },
+    );
   });
 
   it('accepts exact calendar dates and rejects impossible dates', () => {
@@ -308,6 +475,99 @@ describe('volunteer fund validation', () => {
     expect(VolunteerFundEntry.create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['account', { accountId: 6 }],
+    ['category', { categoryId: 8 }],
+    ['vendor', { vendorId: 10 }],
+    ['invoice', { invoiceFileId: 89 }],
+    ['payment method', { paymentMethod: 'card' }],
+  ] as const)(
+    'rejects an idempotent spend retry when its %s changed',
+    async (_field, changedFields) => {
+      (VolunteerFund.findByPk as jest.Mock).mockResolvedValue({
+        id: 4,
+        isActive: true,
+        currency: 'PLN',
+        linkedAccountId: 3,
+        expenseCategoryId: 7,
+      });
+      (VolunteerFundEntry.findOne as jest.Mock).mockResolvedValue({
+        id: 91,
+        entryType: 'spend',
+        amountMinor: -2_500,
+        entryDate: '2026-08-29',
+        description: 'Volunteer supplies',
+        financeTransactionId: 55,
+        sourceSnapshot: {
+          financeLinkMode: 'created',
+          spendIdempotency: {
+            mode: 'created',
+            accountId: 3,
+            categoryId: 7,
+            vendorId: 9,
+            invoiceFileId: 88,
+            paymentMethod: null,
+          },
+        },
+      });
+
+      await expect(createManualVolunteerFundEntry(
+        4,
+        'spend',
+        {
+          entryDate: '2026-08-29',
+          amountMinor: 2_500,
+          description: 'Volunteer supplies',
+          accountId: 3,
+          categoryId: 7,
+          vendorId: 9,
+          invoiceFileId: 88,
+          idempotencyKey: 'manual-spend:stable-retry-key',
+          ...changedFields,
+        },
+        7,
+      )).rejects.toThrow(/different volunteer fund spend request/i);
+
+      expect(createFinanceTransaction).not.toHaveBeenCalled();
+      expect(VolunteerFundEntry.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects changing an older existing-link retry into create-expense mode', async () => {
+    (VolunteerFund.findByPk as jest.Mock).mockResolvedValue({
+      id: 4,
+      isActive: true,
+      currency: 'PLN',
+      linkedAccountId: 3,
+      expenseCategoryId: 7,
+    });
+    (VolunteerFundEntry.findOne as jest.Mock).mockResolvedValue({
+      id: 91,
+      entryType: 'spend',
+      amountMinor: -2_500,
+      entryDate: '2026-08-29',
+      description: 'Volunteer supplies',
+      financeTransactionId: 77,
+      sourceSnapshot: { financeLinkMode: 'existing' },
+    });
+
+    await expect(createManualVolunteerFundEntry(
+      4,
+      'spend',
+      {
+        entryDate: '2026-08-29',
+        amountMinor: 2_500,
+        description: 'Volunteer supplies',
+        vendorId: 9,
+        idempotencyKey: 'manual-spend:legacy-existing-link',
+      },
+      7,
+    )).rejects.toThrow(/different volunteer fund spend request/i);
+
+    expect(createFinanceTransaction).not.toHaveBeenCalled();
+    expect(VolunteerFundEntry.create).not.toHaveBeenCalled();
+  });
+
   it('atomically creates and links a paid Finance expense for a spend', async () => {
     (VolunteerFund.findByPk as jest.Mock).mockResolvedValue({
       id: 4,
@@ -347,6 +607,7 @@ describe('volunteer fund validation', () => {
         accountId: 3,
         categoryId: 7,
         vendorId: 9,
+        invoiceFileId: 88,
         idempotencyKey: 'manual-spend:auto-finance',
       },
       7,
@@ -361,16 +622,27 @@ describe('volunteer fund validation', () => {
         categoryId: 7,
         counterpartyId: 9,
         amountMinor: 2_500,
+        invoiceFileId: 88,
       }),
       7,
-      { transaction },
+      { transaction, allowVolunteerFundSpendForFundId: 4 },
     );
     expect(VolunteerFundEntry.create).toHaveBeenCalledWith(
       expect.objectContaining({
         entryType: 'spend',
         amountMinor: -2_500,
         financeTransactionId: 55,
-        sourceSnapshot: expect.objectContaining({ financeLinkMode: 'created' }),
+        sourceSnapshot: expect.objectContaining({
+          financeLinkMode: 'created',
+          spendIdempotency: {
+            mode: 'created',
+            accountId: 3,
+            categoryId: 7,
+            vendorId: 9,
+            invoiceFileId: 88,
+            paymentMethod: null,
+          },
+        }),
       }),
       { transaction },
     );
@@ -418,7 +690,13 @@ describe('volunteer fund validation', () => {
     expect(VolunteerFundEntry.create).toHaveBeenCalledWith(
       expect.objectContaining({
         financeTransactionId: 77,
-        sourceSnapshot: expect.objectContaining({ financeLinkMode: 'existing' }),
+        sourceSnapshot: expect.objectContaining({
+          financeLinkMode: 'existing',
+          spendIdempotency: {
+            mode: 'existing',
+            financeTransactionId: 77,
+          },
+        }),
       }),
       { transaction },
     );

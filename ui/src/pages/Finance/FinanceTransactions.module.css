@@ -1,0 +1,160 @@
+.transactionForm {
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.kindBlock {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.compactTitle,
+.receiptLabel {
+  display: block;
+  width: 100%;
+  margin-bottom: 4px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.095em;
+  line-height: 1.2;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.kindControl {
+  width: 100%;
+  padding: 4px;
+  border: 1px solid #dbe4ef;
+  border-radius: 14px;
+  background: #f1f5f9;
+}
+
+.kindControl :global(.mantine-SegmentedControl-label) {
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  padding-inline: 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.amountCard {
+  width: min(100%, 430px);
+  margin: 0 auto;
+  padding: 14px 18px 16px;
+  border: 1px solid #cfe0f7;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% -75%, rgba(37, 99, 235, 0.2), transparent 68%),
+    linear-gradient(180deg, #f8fbff, #ffffff);
+  box-shadow: 0 18px 38px -34px rgba(30, 64, 175, 0.85);
+}
+
+.amountCurrency {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+}
+
+.formGrid {
+  width: 100%;
+  align-items: end;
+}
+
+.transactionForm :global(.mantine-InputWrapper-label) {
+  display: block;
+  width: 100%;
+  margin-bottom: 4px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.085em;
+  line-height: 1.2;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.transactionForm :global(.mantine-Input-input) {
+  min-height: 42px;
+  text-align: center;
+}
+
+.transactionForm .amountInput :global(.mantine-Input-input) {
+  min-height: 64px;
+  padding-inline: 58px;
+  border-color: #b7ccec;
+  border-radius: 14px;
+  font-size: clamp(1.75rem, 5vw, 2.35rem);
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
+  text-align: center;
+}
+
+.transactionForm :global(.mantine-Select-input) {
+  padding-inline: 34px;
+}
+
+.receiptField {
+  min-width: 0;
+}
+
+.receiptButton {
+  width: 100%;
+  min-height: 42px;
+}
+
+.receiptMeta {
+  justify-content: center;
+}
+
+.formAlert {
+  text-align: center;
+}
+
+.fundContext {
+  border-color: #c4b5fd;
+  text-align: center;
+}
+
+.fundContext :global(.mantine-Alert-title) {
+  justify-content: center;
+}
+
+.footerContent {
+  width: 100%;
+  justify-content: center;
+}
+
+@media (max-width: 48em) {
+  .transactionForm {
+    max-width: 560px;
+  }
+
+  .kindControl :global(.mantine-SegmentedControl-label) {
+    min-height: 40px;
+    padding-inline: 5px;
+    font-size: 11px;
+  }
+
+  .amountCard {
+    padding: 10px 12px 12px;
+    border-radius: 15px;
+  }
+
+  .amountInput :global(.mantine-Input-input) {
+    min-height: 58px;
+    font-size: 1.85rem;
+  }
+
+  .footerContent :global(.mantine-Button-root) {
+    flex: 1 1 140px;
+  }
+}

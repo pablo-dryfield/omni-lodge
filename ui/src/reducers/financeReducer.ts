@@ -49,7 +49,6 @@ import {
   FinanceRecurringRule,
   FinanceTransaction,
   FinanceVendor,
-  FinanceTransactionListResponse,
 } from '../types/finance';
 
 type EntityState<T> = {
@@ -61,6 +60,7 @@ type EntityState<T> = {
 type TransactionState = {
   loading: boolean;
   error: string | null;
+  activeRequestId: string | null;
   data: FinanceTransaction[];
   meta: {
     count: number;
@@ -118,6 +118,7 @@ const initialState: FinanceState = {
   transactions: {
     loading: false,
     error: null,
+    activeRequestId: null,
     data: [],
     meta: { count: 0, limit: 50, offset: 0 },
   },
@@ -260,16 +261,25 @@ const financeSlice = createSlice({
 
     // Transactions
     builder
-      .addCase(fetchFinanceTransactions.pending, (state) => {
+      .addCase(fetchFinanceTransactions.pending, (state, action) => {
+        state.transactions.activeRequestId = action.meta.requestId;
         state.transactions.loading = true;
         state.transactions.error = null;
       })
-      .addCase(fetchFinanceTransactions.fulfilled, (state, action: PayloadAction<FinanceTransactionListResponse>) => {
+      .addCase(fetchFinanceTransactions.fulfilled, (state, action) => {
+        if (state.transactions.activeRequestId !== action.meta.requestId) {
+          return;
+        }
+        state.transactions.activeRequestId = null;
         state.transactions.loading = false;
         state.transactions.data = action.payload.data;
         state.transactions.meta = action.payload.meta;
       })
       .addCase(fetchFinanceTransactions.rejected, (state, action) => {
+        if (state.transactions.activeRequestId !== action.meta.requestId) {
+          return;
+        }
+        state.transactions.activeRequestId = null;
         state.transactions.loading = false;
         state.transactions.error = action.error.message ?? 'Failed to load transactions';
       })

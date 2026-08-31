@@ -1,8 +1,34 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Button, Group, ScrollArea, Stack, Table, Text, Title } from "@mantine/core";
-import { IconRefresh } from "@tabler/icons-react";
-import dayjs from "dayjs";
+import {
+  Badge,
+  Button,
+  ScrollArea,
+  Select,
+  Stack,
+  Table,
+  Text,
+  ThemeIcon,
+  useMantineTheme,
+} from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
+import { IconReceiptRefund, IconRefresh } from "@tabler/icons-react";
 import axiosInstance from "../../utils/axiosInstance";
+import {
+  FinanceEmptyState,
+  FinanceErrorState,
+  FinanceLoadingState,
+  FinancePageHeader,
+  FinancePanel,
+  FinanceRecordCard,
+  FinanceToolbar,
+  financePageClass,
+} from "../../components/finance/FinanceUi";
+import {
+  formatFinanceDate,
+  formatFinanceMoneyMinor,
+  getFinanceErrorMessage,
+  humanizeFinanceValue,
+} from "../../components/finance/financeFormatters";
 
 type StripeRefund = {
   id: string;
@@ -33,23 +59,18 @@ const getStatusColor = (status: string | null | undefined): string => {
   }
 };
 
-const formatAmount = (amount: number, currency: string): string => {
-  const major = (amount / 100).toFixed(2);
-  return `${major} ${currency.toUpperCase()}`;
-};
-
-const formatReason = (reason?: string | null): string => {
-  if (!reason) {
-    return "—";
-  }
-  return reason.replace(/_/g, " ");
-};
+const formatReason = (reason?: string | null): string =>
+  reason ? humanizeFinanceValue(reason) : "—";
 
 const FinanceRefunds = () => {
+  const theme = useMantineTheme();
+  const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const [refunds, setRefunds] = useState<StripeRefund[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
 
   const fetchRefunds = useCallback(async () => {
     setLoading(true);
@@ -62,8 +83,7 @@ const FinanceRefunds = () => {
       setRefunds(data);
       setHasMore(Boolean(response.data.has_more));
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to load refunds.";
-      setError(message);
+      setError(getFinanceErrorMessage(err, "Unable to load refunds."));
     } finally {
       setLoading(false);
     }
@@ -77,74 +97,156 @@ const FinanceRefunds = () => {
     () =>
       refunds.map((refund) => ({
         ...refund,
-        createdLabel: dayjs.unix(refund.created).format("YYYY-MM-DD HH:mm"),
+        createdLabel: formatFinanceDate(refund.created * 1000, true),
         source: refund.charge ?? refund.payment_intent ?? "—",
+        statusLabel: humanizeFinanceValue(refund.status ?? "unknown"),
       })),
     [refunds],
   );
 
+  const statusOptions = useMemo(
+    () =>
+      Array.from(new Set(refundRows.map((refund) => refund.status ?? "unknown")))
+        .sort()
+        .map((status) => ({ value: status, label: humanizeFinanceValue(status) })),
+    [refundRows],
+  );
+
+  const visibleRefunds = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return refundRows.filter((refund) => {
+      if (statusFilter && (refund.status ?? "unknown") !== statusFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return [
+        refund.id,
+        refund.source,
+        refund.status,
+        refund.reason,
+        refund.currency,
+        String(refund.amount),
+      ].some((value) => String(value ?? "").toLowerCase().includes(query));
+    });
+  }, [refundRows, search, statusFilter]);
+
+  const statusBadge = (refund: (typeof refundRows)[number]) => (
+    <Badge color={getStatusColor(refund.status)} variant="light">
+      {refund.statusLabel}
+    </Badge>
+  );
+
   return (
-    <Stack gap="lg">
-      <Group justify="space-between" wrap="wrap">
-        <Title order={3}>Refunds</Title>
-        <Button
-          variant="light"
-          leftSection={<IconRefresh size={16} />}
-          onClick={() => fetchRefunds()}
-          loading={loading}
-        >
-          Refresh
-        </Button>
-      </Group>
+    <Stack className={financePageClass} gap="lg">
+      <FinancePageHeader
+        title="Refunds"
+        description="Review Stripe refund activity, payment references, outcomes, and reasons."
+        icon={<IconReceiptRefund size={24} />}
+        actions={
+          <Button
+            variant="light"
+            leftSection={<IconRefresh size={16} />}
+            onClick={() => void fetchRefunds()}
+            loading={loading}
+          >
+            Refresh refunds
+          </Button>
+        }
+      />
 
-      <ScrollArea offsetScrollbars type="auto">
-        <Table striped highlightOnHover withColumnBorders miw={900}>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Created</Table.Th>
-              <Table.Th>Refund</Table.Th>
-              <Table.Th>Amount</Table.Th>
-              <Table.Th>Status</Table.Th>
-              <Table.Th>Reason</Table.Th>
-              <Table.Th>Charge / PI</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {refundRows.map((refund) => (
-              <Table.Tr key={refund.id}>
-                <Table.Td>{refund.createdLabel}</Table.Td>
-                <Table.Td>{refund.id}</Table.Td>
-                <Table.Td>{formatAmount(refund.amount, refund.currency)}</Table.Td>
-                <Table.Td>
-                  <Badge color={getStatusColor(refund.status)} variant="light">
-                    {(refund.status ?? "unknown").toUpperCase()}
-                  </Badge>
-                </Table.Td>
-                <Table.Td>{formatReason(refund.reason)}</Table.Td>
-                <Table.Td>{refund.source}</Table.Td>
-              </Table.Tr>
+      <FinanceToolbar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search refund, reason, or payment reference"
+      >
+        <Select
+          placeholder="All statuses"
+          aria-label="Filter refunds by status"
+          data={statusOptions}
+          value={statusFilter}
+          onChange={setStatusFilter}
+          clearable
+          style={{ flex: "1 1 180px", maxWidth: isMobile ? undefined : 220 }}
+        />
+      </FinanceToolbar>
+
+      <FinancePanel
+        title="Refund activity"
+        description={`${visibleRefunds.length} of ${refundRows.length} refunds shown`}
+        noPadding
+      >
+        {error ? (
+          <FinanceErrorState message={error} onRetry={() => void fetchRefunds()} />
+        ) : loading && refundRows.length === 0 ? (
+          <FinanceLoadingState label="Loading refunds" />
+        ) : visibleRefunds.length === 0 ? (
+          <FinanceEmptyState
+            icon={<IconReceiptRefund size={25} />}
+            title={refundRows.length === 0 ? "No refunds yet" : "No matching refunds"}
+            description={
+              refundRows.length === 0
+                ? "Stripe refund activity will appear here when a refund is created."
+                : "Try clearing the status filter or using a broader search."
+            }
+          />
+        ) : isMobile ? (
+          <Stack gap={0} p="sm">
+            {visibleRefunds.map((refund) => (
+              <FinanceRecordCard
+                key={refund.id}
+                leading={
+                  <ThemeIcon variant="light" color="red" radius="md">
+                    <IconReceiptRefund size={17} />
+                  </ThemeIcon>
+                }
+                title={formatFinanceMoneyMinor(refund.amount, refund.currency)}
+                subtitle={refund.createdLabel}
+                status={statusBadge(refund)}
+                fields={[
+                  { label: "Reason", value: formatReason(refund.reason) },
+                  { label: "Payment reference", value: refund.source },
+                  { label: "Refund ID", value: refund.id },
+                ]}
+              />
             ))}
-            {refundRows.length === 0 && !loading && (
-              <Table.Tr>
-                <Table.Td colSpan={6}>
-                  <Text size="sm" c="dimmed">
-                    No refunds available.
-                  </Text>
-                </Table.Td>
-              </Table.Tr>
-            )}
-          </Table.Tbody>
-        </Table>
-      </ScrollArea>
+          </Stack>
+        ) : (
+          <ScrollArea offsetScrollbars type="auto">
+            <Table highlightOnHover verticalSpacing="sm" miw={920}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Created</Table.Th>
+                  <Table.Th>Refund ID</Table.Th>
+                  <Table.Th ta="right">Amount</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Reason</Table.Th>
+                  <Table.Th>Charge / payment intent</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {visibleRefunds.map((refund) => (
+                  <Table.Tr key={refund.id}>
+                    <Table.Td>{refund.createdLabel}</Table.Td>
+                    <Table.Td>{refund.id}</Table.Td>
+                    <Table.Td ta="right" fw={700}>
+                      {formatFinanceMoneyMinor(refund.amount, refund.currency)}
+                    </Table.Td>
+                    <Table.Td>{statusBadge(refund)}</Table.Td>
+                    <Table.Td>{formatReason(refund.reason)}</Table.Td>
+                    <Table.Td>{refund.source}</Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        )}
+      </FinancePanel>
 
-      {error && (
-        <Text size="sm" c="red">
-          {error}
-        </Text>
-      )}
       {hasMore && (
-        <Text size="sm" c="dimmed">
-          Showing the first {refunds.length} refunds. Update the API query to load more.
+        <Text size="sm" c="dimmed" ta={isMobile ? "center" : "left"}>
+          Showing the most recent {refunds.length} refunds. Older refund history remains available in Stripe.
         </Text>
       )}
     </Stack>

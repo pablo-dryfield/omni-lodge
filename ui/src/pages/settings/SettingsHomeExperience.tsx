@@ -21,6 +21,9 @@ import { IconAlertCircle, IconDeviceFloppy, IconLayoutDashboard, IconRefresh } f
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import { useActiveUsers } from "../../api/users";
+import { useHomeQuickActionConfiguration } from "../../api/homeQuickActions";
+import SettingsHomeQuickActions from "../../components/home/SettingsHomeQuickActions";
+import { useModuleAccess } from "../../hooks/useModuleAccess";
 import {
   useReportDashboards,
   useHomeDashboardPreferenceAdmin,
@@ -114,9 +117,16 @@ const buildPayload = (
   return payload;
 };
 
-const SettingsHomeExperience = () => {
+const SettingsHomeExperienceContent = () => {
   const queryClient = useQueryClient();
-  const usersQuery = useActiveUsers();
+  const homeSettingsAccess = useModuleAccess("settings-home");
+  const canViewShortcutConfig = homeSettingsAccess.ready && homeSettingsAccess.canView;
+  const quickActionConfigurationQuery = useHomeQuickActionConfiguration({
+    enabled: canViewShortcutConfig,
+  });
+  const usersQuery = useActiveUsers({
+    enabled: homeSettingsAccess.ready && !homeSettingsAccess.canView,
+  });
   const dashboardsQuery = useReportDashboards({ enabled: true });
   const dashboards = useMemo(() => dashboardsQuery.data?.dashboards ?? [], [dashboardsQuery.data]);
 
@@ -143,14 +153,25 @@ const SettingsHomeExperience = () => {
   }, [preferenceQuery.data]);
 
   const userOptions = useMemo(
-    () =>
-      (usersQuery.data ?? []).map((user) => ({
+    () => {
+      const users = canViewShortcutConfig
+        ? quickActionConfigurationQuery.data?.options.users ?? []
+        : usersQuery.data ?? [];
+      return users.map((user) => ({
         value: user.id.toString(),
         label: `${user.firstName} ${user.lastName}`.trim() || user.email || `User ${user.id}`,
         description: user.email,
-      })),
-    [usersQuery.data],
+      }));
+    },
+    [canViewShortcutConfig, quickActionConfigurationQuery.data?.options.users, usersQuery.data],
   );
+
+  const userDirectoryLoading = canViewShortcutConfig
+    ? quickActionConfigurationQuery.isLoading
+    : usersQuery.isLoading;
+  const userDirectoryError = canViewShortcutConfig
+    ? quickActionConfigurationQuery.isError
+    : usersQuery.isError;
 
   const dashboardOptions = useMemo(
     () =>
@@ -240,14 +261,15 @@ const SettingsHomeExperience = () => {
   };
 
   return (
-    <PageAccessGuard pageSlug={PAGE_SLUG}>
-      <Stack gap="xl">
+    <Stack gap="xl">
         <Stack gap="xs">
           <Title order={3}>Home Experience</Title>
           <Text size="sm" c="dimmed">
-            Choose whether each user lands on navigation tiles or a dashboard layout and which dashboards they can pin.
+            Configure homepage shortcuts, default navigation, and the dashboards available to each user.
           </Text>
         </Stack>
+
+        <SettingsHomeQuickActions />
 
         <Card withBorder padding="lg" radius="md">
           <Stack gap="md">
@@ -257,19 +279,19 @@ const SettingsHomeExperience = () => {
                 Select the user whose default Home screen you want to adjust.
               </Text>
             </div>
-            {usersQuery.isError && (
+            {userDirectoryError && (
               <Alert color="red" icon={<IconAlertCircle size={16} />}>
                 Failed to load users. Please refresh the page.
               </Alert>
             )}
             <Select
               label="User"
-              placeholder={usersQuery.isLoading ? "Loading users..." : "Select a user"}
+              placeholder={userDirectoryLoading ? "Loading users..." : "Select a user"}
               data={userOptions}
               value={selectedUserId ? selectedUserId.toString() : null}
               onChange={(value) => setSelectedUserId(value ? Number(value) : null)}
               searchable
-              disabled={usersQuery.isLoading || usersQuery.isError}
+              disabled={userDirectoryLoading || userDirectoryError}
               clearable
             />
           </Stack>
@@ -444,9 +466,14 @@ const SettingsHomeExperience = () => {
             )}
           </Stack>
         </Card>
-      </Stack>
-    </PageAccessGuard>
+    </Stack>
   );
 };
+
+const SettingsHomeExperience = () => (
+  <PageAccessGuard pageSlug={PAGE_SLUG}>
+    <SettingsHomeExperienceContent />
+  </PageAccessGuard>
+);
 
 export default SettingsHomeExperience;

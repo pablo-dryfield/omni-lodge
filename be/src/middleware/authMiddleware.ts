@@ -63,7 +63,7 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     const user = await User.findByPk(decoded.id, {
       include: [
         { model: UserType, as: 'role', attributes: ['id', 'slug', 'name'] },
-        { model: ShiftRole, as: 'shiftRoles', through: { attributes: [] }, attributes: ['slug'] },
+        { model: ShiftRole, as: 'shiftRoles', through: { attributes: [] }, attributes: ['id', 'slug'] },
       ],
     });
 
@@ -78,7 +78,7 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     }
 
     const role = (user as unknown as { role?: UserType | null }).role ?? null;
-    const shiftRoles = (user as unknown as { shiftRoles?: Array<Pick<ShiftRole, 'slug'>> }).shiftRoles ?? [];
+    const shiftRoles = (user as unknown as { shiftRoles?: Array<Pick<ShiftRole, 'id' | 'slug'>> }).shiftRoles ?? [];
     const explicitRole = (user as unknown as { roleKey?: string | null }).roleKey ?? null;
     const roleSlug = normalizeRoleSlug(role?.slug ?? explicitRole ?? null);
     const shiftRoleSlugs = Array.from(
@@ -86,6 +86,13 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
         shiftRoles
           .map((roleRecord) => normalizeRoleSlug(roleRecord.slug))
           .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const shiftRoleIds = Array.from(
+      new Set(
+        shiftRoles
+          .map((roleRecord) => roleRecord.id)
+          .filter((value): value is number => Number.isInteger(value) && value > 0),
       ),
     );
     const profilePhotoPath = typeof user.profilePhotoPath === 'string' && user.profilePhotoPath.trim()
@@ -105,6 +112,7 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       profilePhotoVersion: profilePhotoPath
         ? `${user.id}-${user.updatedAt?.getTime() ?? 0}`
         : null,
+      shiftRoleIds,
       shiftRoleSlugs,
     };
     req.permissionCache = new Map();

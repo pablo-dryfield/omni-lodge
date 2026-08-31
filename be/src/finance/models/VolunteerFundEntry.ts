@@ -114,6 +114,17 @@ export default class VolunteerFundEntry extends Model {
   })
   declare financeTransaction?: NonAttribute<FinanceTransaction | null>;
 
+  @ForeignKey(() => FinanceTransaction)
+  @AllowNull(true)
+  @Column({ field: 'finance_counter_transaction_id', type: DataType.INTEGER })
+  declare financeCounterTransactionId: number | null;
+
+  @BelongsTo(() => FinanceTransaction, {
+    foreignKey: 'finance_counter_transaction_id',
+    as: 'financeCounterTransaction',
+  })
+  declare financeCounterTransaction?: NonAttribute<FinanceTransaction | null>;
+
   @AllowNull(true)
   @Column({ field: 'idempotency_key', type: DataType.STRING(180) })
   declare idempotencyKey: string | null;

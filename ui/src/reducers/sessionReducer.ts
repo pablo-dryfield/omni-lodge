@@ -15,6 +15,7 @@ const initialState: SessionState = {
   lastName: null,
   hasStoredProfilePhoto: false,
   profilePhotoVersion: null,
+  notificationInboxPollingEnabled: false,
   error: null,
 };
 
@@ -63,6 +64,7 @@ const sessionSlice = createSlice({
         state.lastName = null;
         state.hasStoredProfilePhoto = false;
         state.profilePhotoVersion = null;
+        state.notificationInboxPollingEnabled = false;
         state.error = (action.payload as string) ?? action.error.message ?? 'Login failed';
       })
       .addCase(logoutUser.fulfilled, (state) => {
@@ -76,6 +78,7 @@ const sessionSlice = createSlice({
         state.lastName = null;
         state.hasStoredProfilePhoto = false;
         state.profilePhotoVersion = null;
+        state.notificationInboxPollingEnabled = false;
         state.error = null;
       })
       .addCase(logoutUser.rejected, (state) => {
@@ -89,6 +92,7 @@ const sessionSlice = createSlice({
         state.lastName = null;
         state.hasStoredProfilePhoto = false;
         state.profilePhotoVersion = null;
+        state.notificationInboxPollingEnabled = false;
         state.error = null;
       })
       .addCase(fetchSession.pending, (state) => {
@@ -106,6 +110,8 @@ const sessionSlice = createSlice({
         state.user = [state.firstName, state.lastName].filter(Boolean).join(' ').trim();
         state.hasStoredProfilePhoto = action.payload[0].hasStoredProfilePhoto ?? false;
         state.profilePhotoVersion = action.payload[0].profilePhotoVersion ?? null;
+        state.notificationInboxPollingEnabled =
+          action.payload[0].notificationInboxPollingEnabled ?? false;
         state.error = null;
       })
       .addCase(fetchSession.rejected, (state) => {
@@ -120,6 +126,7 @@ const sessionSlice = createSlice({
         state.lastName = null;
         state.hasStoredProfilePhoto = false;
         state.profilePhotoVersion = null;
+        state.notificationInboxPollingEnabled = false;
       });
   },
 });

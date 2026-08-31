@@ -20,7 +20,7 @@ const FinanceInfoButton = ({ label, description }: FinanceInfoButtonProps) => (
     <Popover.Target>
       <ActionIcon
         type="button"
-        size={22}
+        size={32}
         radius="xl"
         variant="light"
         color="gray"

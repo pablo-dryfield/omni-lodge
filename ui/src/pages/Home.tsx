@@ -1,13 +1,4 @@
 import { Link as RouterLink } from "react-router-dom";
-import EventAvailableIcon from "@mui/icons-material/EventAvailable";
-import AssignmentTurnedInIcon from "@mui/icons-material/AssignmentTurnedIn";
-import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
-import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
-import FormatListNumberedIcon from "@mui/icons-material/FormatListNumbered";
-import PersonIcon from "@mui/icons-material/Person";
-import SettingsIcon from "@mui/icons-material/Settings";
-import BarChartIcon from "@mui/icons-material/BarChart";
-import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
 import Grid from "@mui/material/Grid";
 import {
   Alert,
@@ -39,9 +30,12 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { selectAllowedNavigationPages } from "../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import HomeQuickActions from "../components/home/HomeQuickActions";
+import HomeModuleLauncher from "../components/home/HomeModuleLauncher";
+import { isHomeQuickActionVisibilityMap } from "../components/home/homeQuickActionRegistry";
+import { isHomeManagementRole } from "../components/home/homeModuleRegistry";
 import type { VisualChartPoint } from "../components/dashboard/GraphicCard";
 import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
-import type { NavigationIconKey } from "../types/general/NavigationState";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import {
   useReportDashboards,
@@ -915,31 +909,6 @@ const isSpotlightCardViewConfig = (
 
 const theme = createTheme();
 
-const renderNavigationIcon = (icon: NavigationIconKey) => {
-  switch (icon) {
-    case "eventAvailable":
-      return <EventAvailableIcon fontSize="large" />;
-    case "assignmentTurnedIn":
-      return <AssignmentTurnedInIcon fontSize="large" />;
-    case "calendarMonth":
-      return <CalendarMonthIcon fontSize="large" />;
-    case "accountBalance":
-      return <AccountBalanceIcon fontSize="large" />;
-    case "formatListNumbered":
-      return <FormatListNumberedIcon fontSize="large" />;
-    case "person":
-      return <PersonIcon fontSize="large" />;
-    case "settings":
-      return <SettingsIcon fontSize="large" />;
-    case "barChart":
-      return <BarChartIcon fontSize="large" />;
-    case "star":
-      return <SportsEsportsIcon fontSize="large" />;
-    default:
-      return <PersonIcon fontSize="large" />;
-  }
-};
-
 const PageWrapper = styled("div")(({ theme: muiTheme }) => ({
   display: "flex",
   alignItems: "flex-start",
@@ -960,51 +929,6 @@ const TilesContainer = styled("div")({
   maxWidth: 1260,
   margin: "0 auto",
 });
-
-const TileLink = styled(RouterLink)(({ theme: muiTheme }) => ({
-  display: "flex",
-  justifyContent: "center",
-  textDecoration: "none",
-  width: "100%",
-  paddingTop: muiTheme.spacing(1),
-  paddingBottom: muiTheme.spacing(1),
-}));
-
-const TileButtonWrapper = styled("div")(({ theme: muiTheme }) => ({
-  display: "flex",
-  justifyContent: "center",
-  width: "100%",
-  paddingTop: muiTheme.spacing(1),
-  paddingBottom: muiTheme.spacing(1),
-}));
-
-const LogoTile = styled(Paper)(({ theme: muiTheme }) => ({
-  width: "clamp(140px, 28vw, 200px)",
-  height: "clamp(140px, 28vw, 200px)",
-  backgroundColor: muiTheme.palette.grey[100],
-  borderRadius: "50%",
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "center",
-  alignItems: "center",
-  gap: muiTheme.spacing(1),
-  textAlign: "center",
-  transition: muiTheme.transitions.create(["background-color", "transform"], {
-    duration: muiTheme.transitions.duration.shorter,
-  }),
-  [muiTheme.breakpoints.down("sm")]: {
-    width: "min(240px, 70vw)",
-    height: "min(240px, 70vw)",
-  },
-  "&:hover": {
-    backgroundColor: muiTheme.palette.grey[200],
-    transform: "translateY(-4px)",
-  },
-  "&:active": {
-    backgroundColor: muiTheme.palette.grey[300],
-    transform: "translateY(-1px)",
-  },
-}));
 
 const StyledDashboardCard = styled(Card)(({ theme: muiTheme }) => ({
   height: "100%",
@@ -1037,12 +961,6 @@ const CardSubtitle = styled(Typography)(({ theme: muiTheme }) => ({
   color: muiTheme.palette.text.secondary,
   fontSize: 13,
   lineHeight: 1.5,
-}));
-
-const PageName = styled(Typography)(({ theme: muiTheme }) => ({
-  color: muiTheme.palette.text.primary,
-  textDecoration: "none",
-  marginTop: muiTheme.spacing(1),
 }));
 
 const formatSpotlightRangeLabel = (range: { from: string; to: string } | null): string | null => {
@@ -1654,6 +1572,10 @@ const Home = (props: GenericPageProps) => {
   }, [dispatch, props.title]);
 
   const allowedPages = useAppSelector(selectAllowedNavigationPages);
+  const sessionRoleSlug = useAppSelector((state) => state.session.roleSlug);
+  const moduleDescriptionAudience = isHomeManagementRole(sessionRoleSlug)
+    ? "management"
+    : "staff";
   const canUseDashboards = useMemo(
     () => allowedPages.some((page) => page.slug === PAGE_SLUGS.reports),
     [allowedPages],
@@ -1663,6 +1585,16 @@ const Home = (props: GenericPageProps) => {
   const dashboardsQuery = useReportDashboards({ search: "", enabled: canUseDashboards });
 
   const preference = homePreferenceQuery.data ?? DEFAULT_HOME_PREFERENCE;
+  const resolvedQuickActionVisibility = isHomeQuickActionVisibilityMap(
+    preference.quickActionVisibility,
+  )
+    ? preference.quickActionVisibility
+    : null;
+  const quickActionVisibility = resolvedQuickActionVisibility ?? {};
+  const quickActionAudienceReady =
+    homePreferenceQuery.isSuccess
+    && !homePreferenceQuery.isFetching
+    && resolvedQuickActionVisibility !== null;
   const normalizedSavedIds = preference.savedDashboardIds.filter((id) => typeof id === "string" && id.length > 0);
   const activeDashboardId = useMemo(() => {
     if (preference.activeDashboardId && normalizedSavedIds.includes(preference.activeDashboardId)) {
@@ -3507,54 +3439,18 @@ const Home = (props: GenericPageProps) => {
     }
   }, [globalSegmentOptions, globalSegmentValue]);
 
-  const renderNavigationTiles = () => (
-    <Card sx={{backgroundColor: 'transparent', boxShadow: 'none'}}>
-      <CardContent>
-        <Grid container spacing={{ xs: 3, sm: 4, md: 5 }} justifyContent="center">
-          {allowedPages.length === 0 ? (
-            <Grid size={{ xs: 12 }}>
-              <Typography variant="subtitle1" color="textSecondary">
-                You do not have access to any sections yet.
-              </Typography>
-            </Grid>
-          ) : (
-            <>
-              {allowedPages.map((page) => (
-                <Grid key={page.name} size={{ xs: 12, sm: 6, md: 3, lg: 3 }}>
-                  <TileLink to={page.path} aria-label={`Go to ${page.name}`}>
-                    <LogoTile elevation={3}>
-                      {renderNavigationIcon(page.icon)}
-                      <PageName variant="subtitle1">{page.name}</PageName>
-                    </LogoTile>
-                  </TileLink>
-                </Grid>
-              ))}
-              <Grid size={{ xs: 12, sm: 6, md: 3, lg: 3 }}>
-                <TileButtonWrapper>
-                  <LogoTile
-                    elevation={3}
-                    onClick={handleOpenMiniGame}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        handleOpenMiniGame();
-                      }
-                    }}
-                    sx={{ cursor: "pointer", border: "none" }}
-                    aria-label="Play Krakow Runner"
-                  >
-                    <SportsEsportsIcon fontSize="large" />
-                    <PageName variant="subtitle1">Krakow Runner</PageName>
-                  </LogoTile>
-                </TileButtonWrapper>
-              </Grid>
-            </>
-          )}
-        </Grid>
-      </CardContent>
-    </Card>
+  const renderNavigationWorkspace = () => (
+    <HomeModuleLauncher
+      pages={allowedPages}
+      descriptionAudience={moduleDescriptionAudience}
+      onOpenMiniGame={handleOpenMiniGame}
+      quickActions={(
+        <HomeQuickActions
+          quickActionVisibility={quickActionVisibility}
+          audienceReady={quickActionAudienceReady}
+        />
+      )}
+    />
   );
 
   const renderDashboardSummary = () => {
@@ -3700,9 +3596,18 @@ const Home = (props: GenericPageProps) => {
           <TilesContainer
             style={effectiveViewMode === "dashboard" ? { maxWidth: "100%" } : undefined}
           >
-            <Stack gap={3}>
-              {effectiveViewMode === "dashboard" ? renderDashboardSummary() : renderNavigationTiles()}
-            </Stack>
+            {effectiveViewMode === "dashboard" ? (
+              <Stack gap={1.5}>
+                <HomeQuickActions
+                  compact
+                  quickActionVisibility={quickActionVisibility}
+                  audienceReady={quickActionAudienceReady}
+                />
+                {renderDashboardSummary()}
+              </Stack>
+            ) : (
+              renderNavigationWorkspace()
+            )}
           </TilesContainer>
         </PageWrapper>
       </ThemeProvider>

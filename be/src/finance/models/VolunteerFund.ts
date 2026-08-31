@@ -53,6 +53,14 @@ export default class VolunteerFund extends Model {
   @BelongsTo(() => FinanceAccount, { foreignKey: 'linked_account_id', as: 'linkedAccount' })
   declare linkedAccount?: NonAttribute<FinanceAccount | null>;
 
+  @ForeignKey(() => FinanceAccount)
+  @AllowNull(true)
+  @Column({ field: 'funding_source_account_id', type: DataType.INTEGER })
+  declare fundingSourceAccountId: number | null;
+
+  @BelongsTo(() => FinanceAccount, { foreignKey: 'funding_source_account_id', as: 'fundingSourceAccount' })
+  declare fundingSourceAccount?: NonAttribute<FinanceAccount | null>;
+
   @ForeignKey(() => FinanceCategory)
   @AllowNull(true)
   @Column({ field: 'expense_category_id', type: DataType.INTEGER })

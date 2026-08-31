@@ -19,8 +19,14 @@ jest.mock('../../models/VolunteerFundEntry.js', () => ({
   __esModule: true,
   default: { findOne: jest.fn() },
 }));
+jest.mock('../../models/VolunteerFund.js', () => ({
+  __esModule: true,
+  default: { findAll: jest.fn() },
+}));
 
+import { Op } from 'sequelize';
 import FinanceTransaction from '../../models/FinanceTransaction.js';
+import VolunteerFund from '../../models/VolunteerFund.js';
 import VolunteerFundEntry from '../../models/VolunteerFundEntry.js';
 import { updateFinanceTransaction } from '../transactionService.js';
 
@@ -45,12 +51,13 @@ describe('Finance transaction protection for Volunteer Fund spends', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (VolunteerFund.findAll as jest.Mock).mockResolvedValue([]);
   });
 
   it('rejects an ordinary edit of an expense backing a fund spend', async () => {
     const record = createRecord();
     (FinanceTransaction.findByPk as jest.Mock).mockResolvedValue(record);
-    (VolunteerFundEntry.findOne as jest.Mock).mockResolvedValue({ id: 91 });
+    (VolunteerFundEntry.findOne as jest.Mock).mockResolvedValue({ id: 91, entryType: 'spend' });
 
     await expect(updateFinanceTransaction(
       55,
@@ -65,13 +72,62 @@ describe('Finance transaction protection for Volunteer Fund spends', () => {
   it('allows only the internal atomic void used by a fund spend reversal', async () => {
     const record = createRecord();
     (FinanceTransaction.findByPk as jest.Mock).mockResolvedValue(record);
-    (VolunteerFundEntry.findOne as jest.Mock).mockResolvedValue({ id: 91 });
+    (VolunteerFundEntry.findOne as jest.Mock).mockResolvedValue({ id: 91, entryType: 'spend' });
 
     await expect(updateFinanceTransaction(
       55,
       { status: 'void' },
       1,
       { transaction, allowVolunteerFundSpendReversal: true },
+    )).resolves.toBe(record);
+
+    expect(record.update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'void' }),
+      { transaction },
+    );
+  });
+
+  it('protects either side of a Volunteer Fund allocation transfer from ordinary edits', async () => {
+    const record = {
+      ...createRecord(),
+      kind: 'transfer',
+      meta: { source: 'volunteer-fund-allocation', direction: 'in' },
+    };
+    (FinanceTransaction.findByPk as jest.Mock).mockResolvedValue(record);
+    (VolunteerFundEntry.findOne as jest.Mock).mockResolvedValue(null);
+
+    await expect(updateFinanceTransaction(
+      55,
+      { status: 'void' },
+      1,
+      { transaction },
+    )).rejects.toThrow(/backs a Volunteer Fund allocation/i);
+
+    expect(record.update).not.toHaveBeenCalled();
+    expect(VolunteerFundEntry.findOne).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        [Op.or]: expect.arrayContaining([
+          { financeTransactionId: 55 },
+          { financeCounterTransactionId: 55 },
+        ]),
+      },
+    }));
+  });
+
+  it('allows the internal paired void used by an allocation reversal', async () => {
+    const record = {
+      ...createRecord(),
+      kind: 'transfer',
+      meta: { source: 'volunteer-fund-allocation', direction: 'out' },
+    };
+    (FinanceTransaction.findByPk as jest.Mock).mockResolvedValue(record);
+    (VolunteerFundEntry.findOne as jest.Mock).mockResolvedValue({ id: 91, entryType: 'allocation' });
+
+    await expect(updateFinanceTransaction(
+      55,
+      { status: 'void' },
+      1,
+      { transaction, allowVolunteerFundAllocationReversal: true },
     )).resolves.toBe(record);
 
     expect(record.update).toHaveBeenCalledWith(

@@ -91,6 +91,8 @@ import ReportDashboard from "../models/ReportDashboard.js";
 import ReportDashboardCard from "../models/ReportDashboardCard.js";
 import ReportAsyncJob from "../models/ReportAsyncJob.js";
 import UserHomePreference from "../models/UserHomePreference.js";
+import HomeQuickActionConfig from "../models/HomeQuickActionConfig.js";
+import HomeQuickActionTarget from "../models/HomeQuickActionTarget.js";
 import GameScore from "../models/GameScore.js";
 import ReviewCounter from "../models/ReviewCounter.js";
 import ReviewCounterEntry from "../models/ReviewCounterEntry.js";
@@ -287,6 +289,8 @@ const sequelize = new Sequelize({
     ReportDashboardCard,
     ReportAsyncJob,
     UserHomePreference,
+    HomeQuickActionConfig,
+    HomeQuickActionTarget,
     GameScore,
     Export,
     Notification,

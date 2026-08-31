@@ -5,6 +5,9 @@ import { deleteFinanceFileFromDrive } from './driveService.js';
 import sequelize from '../../config/database.js';
 import { assertFinanceTransactionIsNotReceiptProtected } from '../../services/staffPayoutReceiptProtectionService.js';
 
+export const VOLUNTEER_FUND_ALLOCATION_TRANSFER_PROTECTED_MESSAGE =
+  'This Finance transfer backs a Volunteer Fund allocation and can only be voided through that fund entry reversal.';
+
 export async function cleanupInvoiceFileIfOrphan(invoiceFileId: number | null): Promise<void> {
   if (!invoiceFileId) {
     return;
@@ -54,6 +57,12 @@ export async function deleteFinanceTransactionAndCleanupInvoice(
       lockedTransaction.id,
       databaseTransaction,
     );
+    const transactionMeta = lockedTransaction.meta && typeof lockedTransaction.meta === 'object'
+      ? lockedTransaction.meta as Record<string, unknown>
+      : null;
+    if (transactionMeta?.source === 'volunteer-fund-allocation') {
+      throw new Error(VOLUNTEER_FUND_ALLOCATION_TRANSFER_PROTECTED_MESSAGE);
+    }
     invoiceFileId = lockedTransaction.invoiceFileId ?? null;
     await FinanceTransaction.destroy({
       where: { id: lockedTransaction.id },

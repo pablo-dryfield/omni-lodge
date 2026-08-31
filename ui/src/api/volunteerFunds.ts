@@ -24,6 +24,9 @@ const normalizeFund = (value: unknown): VolunteerFundSummary => {
   const linkedAccount = fund.linkedAccount && typeof fund.linkedAccount === "object"
     ? (fund.linkedAccount as Record<string, unknown>)
     : null;
+  const fundingSourceAccount = fund.fundingSourceAccount && typeof fund.fundingSourceAccount === "object"
+    ? (fund.fundingSourceAccount as Record<string, unknown>)
+    : null;
   const expenseCategory = fund.expenseCategory && typeof fund.expenseCategory === "object"
     ? (fund.expenseCategory as Record<string, unknown>)
     : null;
@@ -33,6 +36,13 @@ const normalizeFund = (value: unknown): VolunteerFundSummary => {
     name: typeof fund.name === "string" ? fund.name : "Volunteer Fund",
     currency: typeof fund.currency === "string" ? fund.currency : "PLN",
     description: typeof fund.description === "string" ? fund.description : null,
+    fundingSourceAccountId: toFiniteNumber(fund.fundingSourceAccountId, 0) || null,
+    fundingSourceAccountName:
+      typeof fundingSourceAccount?.name === "string"
+        ? fundingSourceAccount.name
+        : typeof fund.fundingSourceAccountName === "string"
+          ? fund.fundingSourceAccountName
+          : null,
     linkedAccountId: toFiniteNumber(fund.linkedAccountId, 0) || null,
     linkedAccountName: typeof linkedAccount?.name === "string" ? linkedAccount.name : null,
     expenseCategoryId: toFiniteNumber(fund.expenseCategoryId, 0) || null,
@@ -164,13 +174,14 @@ const extractLedger = (payload: unknown): VolunteerFundLedgerResponse => {
   };
 };
 
-export const useVolunteerFunds = () =>
+export const useVolunteerFunds = ({ enabled = true }: { enabled?: boolean } = {}) =>
   useQuery<VolunteerFundListResponse>({
     queryKey: volunteerFundsQueryKey,
     queryFn: async () => {
       const response = await axiosInstance.get("/finance/volunteer-funds");
       return { funds: extractFunds(response.data) };
     },
+    enabled,
   });
 
 export const useVolunteerFundLedger = (

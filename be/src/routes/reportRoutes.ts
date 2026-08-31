@@ -5,6 +5,10 @@ import * as dashboardController from '../controllers/dashboardController.js';
 import * as templateScheduleController from '../controllers/templateScheduleController.js';
 import * as homePreferenceController from '../controllers/homePreferenceController.js';
 import {
+  getHomeQuickActionBootstrap,
+  updateHomeQuickActionConfiguration,
+} from '../controllers/homeQuickActionController.js';
+import {
   createStaffPayoutBatch,
   createStaffPayoutCollectionLog,
   deleteStaffPayoutEntries,
@@ -12,7 +16,7 @@ import {
 import { getStaffPayoutBootstrap } from '../controllers/staffPayoutBootstrapController.js';
 import { check, param, validationResult } from 'express-validator';
 import authMiddleware from '../middleware/authMiddleware.js'; // Adjust the import path as necessary
-import { requireRoles } from '../middleware/authorizationMiddleware.js';
+import { authorizeModuleAction, requireRoles } from '../middleware/authorizationMiddleware.js';
 import { authorizeStaffPayoutView } from '../middleware/staffPayoutAccessMiddleware.js';
 
 const router: Router = express.Router();
@@ -116,6 +120,18 @@ router.post('/dashboards/:id/cards/:cardId/preview', authMiddleware, dashboardCo
 router.post('/dashboards/:id/export', authMiddleware, dashboardController.exportDashboard);
 router.get('/home-preferences', authMiddleware, homePreferenceController.getHomePreference);
 router.put('/home-preferences', authMiddleware, homePreferenceController.updateHomePreference);
+router.get(
+  '/home-quick-actions/bootstrap',
+  authMiddleware,
+  authorizeModuleAction('settings-home', 'view'),
+  getHomeQuickActionBootstrap,
+);
+router.put(
+  '/home-quick-actions/configuration',
+  authMiddleware,
+  authorizeModuleAction('settings-home', 'update'),
+  updateHomeQuickActionConfiguration,
+);
 router.get(
   '/home-preferences/:userId',
   authMiddleware,

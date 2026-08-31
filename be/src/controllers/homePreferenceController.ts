@@ -1,11 +1,16 @@
 import type { Response } from "express";
 import UserHomePreference, { type HomeViewMode } from "../models/UserHomePreference.js";
+import { resolveHomeQuickActionVisibility } from "../services/homeQuickActionService.js";
 import type { AuthenticatedRequest } from "../types/AuthenticatedRequest";
 
 type PreferenceShape = {
   viewMode: HomeViewMode;
   savedDashboardIds: string[];
   activeDashboardId: string | null;
+};
+
+type CurrentPreferenceShape = PreferenceShape & {
+  quickActionVisibility: Record<string, boolean> | null;
 };
 
 const sanitizeDashboardIds = (value: unknown): string[] => {
@@ -34,6 +39,29 @@ const serializePreference = (preference?: UserHomePreference | null): Preference
     savedDashboardIds,
     activeDashboardId: preference?.activeDashboardId ?? null,
   };
+};
+
+const serializeCurrentPreference = async (
+  req: AuthenticatedRequest,
+  preference?: UserHomePreference | null,
+): Promise<CurrentPreferenceShape> => {
+  const base = serializePreference(preference);
+  const identity = req.authContext;
+  if (!identity) {
+    return { ...base, quickActionVisibility: null };
+  }
+  try {
+    const quickActionVisibility = await resolveHomeQuickActionVisibility({
+      userId: identity.id,
+      userTypeId: identity.userTypeId,
+      shiftRoleIds: identity.shiftRoleIds ?? [],
+    });
+    return { ...base, quickActionVisibility };
+  } catch (error) {
+    // A shortcut configuration problem must not prevent the user from opening Home.
+    console.error("Failed to resolve homepage shortcut audience", error);
+    return { ...base, quickActionVisibility: null };
+  }
 };
 
 const applyPreferencePatch = (current: PreferenceShape, payload: Record<string, unknown>): PreferenceShape => {
@@ -127,7 +155,7 @@ export const getHomePreference = async (req: AuthenticatedRequest, res: Response
     }
 
     const preference = await UserHomePreference.findOne({ where: { userId } });
-    res.json({ preference: serializePreference(preference) });
+    res.json({ preference: await serializeCurrentPreference(req, preference) });
   } catch (error) {
     console.error("Failed to load home preference", error);
     res.status(500).json({ message: "Failed to load home preference" });
@@ -148,7 +176,7 @@ export const updateHomePreference = async (req: AuthenticatedRequest, res: Respo
     const next = applyPreferencePatch(current, payload);
     const saved = await persistPreferenceRecord(preferenceRecord, next);
 
-    res.json({ preference: serializePreference(saved) });
+    res.json({ preference: await serializeCurrentPreference(req, saved) });
   } catch (error) {
     console.error("Failed to update home preference", error);
     res.status(500).json({ message: "Failed to update home preference" });

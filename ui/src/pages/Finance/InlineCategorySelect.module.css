@@ -1,0 +1,41 @@
+.form {
+  width: 100%;
+  text-align: center;
+}
+
+.form :global(.mantine-InputWrapper-label) {
+  display: block;
+  width: 100%;
+  margin-bottom: 4px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.085em;
+  line-height: 1.2;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.form :global(.mantine-Input-input) {
+  min-height: 42px;
+  text-align: center;
+}
+
+.kindBadge {
+  align-self: center;
+}
+
+.error {
+  text-align: center;
+}
+
+.footer {
+  width: 100%;
+  justify-content: center;
+}
+
+@media (max-width: 48em) {
+  .footer :global(.mantine-Button-root) {
+    flex: 1 1 140px;
+  }
+}

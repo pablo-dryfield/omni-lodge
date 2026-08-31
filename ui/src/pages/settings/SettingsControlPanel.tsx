@@ -44,6 +44,8 @@ import {
   type StripeTestListenerStatus,
 } from "../../api/config";
 import axiosInstance from "../../utils/axiosInstance";
+import { fetchSession } from "../../actions/sessionActions";
+import { useAppDispatch } from "../../store/hooks";
 
 const PAGE_SLUG = PAGE_SLUGS.settingsControlPanel;
 
@@ -121,6 +123,7 @@ const resolveInitialValue = (entry: ConfigEntry): string | number | boolean | nu
 };
 
 const SettingsControlPanel = () => {
+  const dispatch = useAppDispatch();
   const isMobile = useMediaQuery("(max-width: 48em)");
   const { data, isLoading, isError, error, refetch, isFetching } = useConfigEntries();
   const updateConfig = useUpdateConfigEntry();
@@ -314,6 +317,7 @@ const SettingsControlPanel = () => {
     }
 
     try {
+      const refreshSessionConfig = activeEntry.key === "NOTIFICATION_INBOX_POLLING_ENABLED";
       await updateConfig.mutateAsync({
         key: activeEntry.key,
         value: valuePayload,
@@ -321,6 +325,9 @@ const SettingsControlPanel = () => {
         reason: reason.trim().length > 0 ? reason.trim() : undefined,
       });
       closeEditor();
+      if (refreshSessionConfig) {
+        void dispatch(fetchSession());
+      }
     } catch (err) {
       setModalError(extractErrorMessage(err));
     }

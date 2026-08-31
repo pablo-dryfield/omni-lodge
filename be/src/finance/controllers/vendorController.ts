@@ -1,7 +1,60 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
+import HttpError from '../../errors/HttpError.js';
+import FinanceCategory from '../models/FinanceCategory.js';
 import FinanceVendor from '../models/FinanceVendor.js';
 import { recordFinanceAuditLog } from '../services/auditLogService.js';
+
+const hasOwn = (value: object, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(value, key);
+
+const validateDefaultCategoryId = async (value: unknown): Promise<number | null> => {
+  if (value === null) {
+    return null;
+  }
+
+  if (
+    (typeof value !== 'number' && typeof value !== 'string')
+    || (typeof value === 'string' && !value.trim())
+  ) {
+    throw new HttpError(400, 'defaultCategoryId must be a positive integer or null.');
+  }
+
+  const categoryId = Number(value);
+  if (!Number.isSafeInteger(categoryId) || categoryId <= 0) {
+    throw new HttpError(400, 'defaultCategoryId must be a positive integer or null.');
+  }
+
+  const category = await FinanceCategory.findByPk(categoryId, {
+    attributes: ['id', 'kind'],
+  });
+  if (!category) {
+    throw new HttpError(400, 'Default category was not found.');
+  }
+  if (category.kind !== 'expense') {
+    throw new HttpError(400, 'A vendor default category must be an expense category.');
+  }
+
+  return categoryId;
+};
+
+const prepareVendorChanges = async (
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> => {
+  const changes = { ...body };
+  if (hasOwn(body, 'defaultCategoryId')) {
+    changes.defaultCategoryId = await validateDefaultCategoryId(body.defaultCategoryId);
+  }
+  return changes;
+};
+
+const handleVendorError = (res: Response, error: unknown): void => {
+  if (error instanceof HttpError) {
+    res.status(error.status).json([{ message: error.message }]);
+    return;
+  }
+  res.status(500).json([{ message: (error as Error).message }]);
+};
 
 export const listVendors = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -47,7 +100,8 @@ export const getVendor = async (req: Request, res: Response): Promise<void> => {
 
 export const createVendor = async (req: Request, res: Response): Promise<void> => {
   try {
-    const vendor = await FinanceVendor.create(req.body);
+    const changes = await prepareVendorChanges(req.body as Record<string, unknown>);
+    const vendor = await FinanceVendor.create(changes);
     await recordFinanceAuditLog({
       entity: 'finance_vendor',
       entityId: vendor.id,
@@ -57,13 +111,14 @@ export const createVendor = async (req: Request, res: Response): Promise<void> =
     });
     res.status(201).json(vendor);
   } catch (error) {
-    res.status(500).json([{ message: (error as Error).message }]);
+    handleVendorError(res, error);
   }
 };
 
 export const updateVendor = async (req: Request, res: Response): Promise<void> => {
   try {
-    const [count] = await FinanceVendor.update(req.body, { where: { id: req.params.id } });
+    const changes = await prepareVendorChanges(req.body as Record<string, unknown>);
+    const [count] = await FinanceVendor.update(changes, { where: { id: req.params.id } });
     if (!count) {
       res.status(404).json([{ message: 'Vendor not found' }]);
       return;
@@ -75,12 +130,12 @@ export const updateVendor = async (req: Request, res: Response): Promise<void> =
         entityId: updated.id,
         action: 'update',
         performedBy: (req as { authContext?: { id?: number } }).authContext?.id ?? null,
-        changes: req.body,
+        changes,
       });
     }
     res.status(200).json(updated);
   } catch (error) {
-    res.status(500).json([{ message: (error as Error).message }]);
+    handleVendorError(res, error);
   }
 };
 
@@ -102,4 +157,3 @@ export const deleteVendor = async (req: Request, res: Response): Promise<void> =
     res.status(500).json([{ message: (error as Error).message }]);
   }
 };
-

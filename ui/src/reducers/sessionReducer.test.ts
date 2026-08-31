@@ -32,6 +32,7 @@ const hydrateSession = () =>
           userTypeId: 4,
           hasStoredProfilePhoto: true,
           profilePhotoVersion: '28-1788105600000',
+          notificationInboxPollingEnabled: true,
         },
       ],
       'session-request',
@@ -55,6 +56,7 @@ describe('sessionReducer session profile hydration', () => {
       userTypeId: 4,
       hasStoredProfilePhoto: true,
       profilePhotoVersion: '28-1788105600000',
+      notificationInboxPollingEnabled: true,
       error: null,
     });
   });
@@ -87,6 +89,7 @@ describe('sessionReducer session profile hydration', () => {
       user: 'Aimee Guide',
       hasStoredProfilePhoto: false,
       profilePhotoVersion: null,
+      notificationInboxPollingEnabled: true,
     });
   });
 
@@ -107,6 +110,7 @@ describe('sessionReducer session profile hydration', () => {
       lastName: null,
       hasStoredProfilePhoto: false,
       profilePhotoVersion: null,
+      notificationInboxPollingEnabled: false,
     });
   });
 
@@ -126,6 +130,7 @@ describe('sessionReducer session profile hydration', () => {
         lastName: null,
         hasStoredProfilePhoto: false,
         profilePhotoVersion: null,
+        notificationInboxPollingEnabled: false,
       });
     },
   );

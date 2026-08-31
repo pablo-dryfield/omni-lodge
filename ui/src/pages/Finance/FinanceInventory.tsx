@@ -6,9 +6,9 @@ import {
   Button,
   FileInput,
   Group,
-  Modal,
   NumberInput,
   Paper,
+  ScrollArea,
   Select,
   SimpleGrid,
   Stack,
@@ -19,6 +19,7 @@ import {
   Textarea,
   Title,
 } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import {
   IconAlertCircle,
   IconPackage,
@@ -28,6 +29,17 @@ import {
 } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import axiosInstance from "../../utils/axiosInstance";
+import {
+  FinanceEmptyState,
+  FinanceFormSection,
+  FinanceLoadingState,
+  FinanceMetricCard,
+  FinanceModal,
+  FinanceModalFooter,
+  FinancePageHeader,
+  FinancePanel,
+} from "../../components/finance/FinanceUi";
+import { formatFinanceMoneyMinor } from "../../components/finance/financeFormatters";
 
 type Item = {
   id: number;
@@ -99,7 +111,14 @@ type Incident = {
 type PurchaseLine = { id: number; inventoryItemId: string; quantity: number; unitCost: number };
 let nextPurchaseLineId = 2;
 
+const calculatePurchaseLineTotalMinor = (line: PurchaseLine): number => {
+  const quantity = Number(line.quantity) || 0;
+  const unitCostMinor = Math.round((Number(line.unitCost) || 0) * 100);
+  return Math.round(quantity * unitCostMinor);
+};
+
 const FinanceInventory = () => {
+  const isMobile = useMediaQuery("(max-width: 48em)");
   const [items, setItems] = useState<Item[]>([]);
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
@@ -110,6 +129,7 @@ const FinanceInventory = () => {
   const [vendors, setVendors] = useState<Option[]>([]);
   const [addons, setAddons] = useState<Option[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [itemOpen, setItemOpen] = useState(false);
   const [itemForm, setItemForm] = useState({
@@ -169,6 +189,7 @@ const FinanceInventory = () => {
   });
   const load = useCallback(async () => {
     try {
+      setLoading(true);
       setError("");
       const [overview, purchaseRows, finance, addonRows, fulfillmentRows] =
         await Promise.all([
@@ -193,6 +214,8 @@ const FinanceInventory = () => {
       );
     } catch (e: any) {
       setError(e.response?.data?.[0]?.message ?? e.message);
+    } finally {
+      setLoading(false);
     }
   }, []);
   useEffect(() => {
@@ -214,77 +237,208 @@ const FinanceInventory = () => {
     value: String(x.id),
     label: `${x.name} (${x.sku})`,
   }));
-  const purchaseTotal = purchaseLines.reduce((sum, line) => sum + line.quantity * line.unitCost, 0);
+  const purchaseTotalMinor = purchaseLines.reduce(
+    (sum, line) => sum + calculatePurchaseLineTotalMinor(line),
+    0,
+  );
   const purchaseLinesValid = purchaseLines.length > 0 && purchaseLines.every(line => line.inventoryItemId && line.quantity > 0 && line.unitCost > 0);
+  const purchaseValid = Boolean(
+    purchase.date && purchase.vendorId && purchase.accountId && purchase.categoryId && purchase.currency.trim()
+      && purchaseLinesValid,
+  );
+  const incidentValid = Boolean(
+    incident.addonId && incident.inventoryItemId && incident.quantity > 0 && incident.date,
+  );
+  const promiseValid = Boolean(
+    promise.addonId && promise.inventoryItemId && promise.quantity > 0 && promise.recipientName.trim(),
+  );
+  const adjustmentValid = Boolean(
+    adjust.inventoryItemId && adjust.quantityDelta !== 0 && adjust.date,
+  );
+  const mappingValid = Boolean(
+    mappingForm.addonId && mappingForm.inventoryItemId && mappingForm.quantityPerAddon > 0,
+  );
   const option = (rows: Option[]) =>
     rows.map((x) => ({ value: String(x.id), label: x.name }));
+
+  const openItemModal = () => {
+    setError("");
+    setItemOpen(true);
+  };
+
+  const handleRecordIncident = () => {
+    if (!incidentValid) {
+      setError("Select an add-on, stock item, positive quantity, and date.");
+      return;
+    }
+    void run(() =>
+      axiosInstance.post("/inventory/usage-incidents", {
+        ...incident,
+        addonId: Number(incident.addonId),
+        inventoryItemId: Number(incident.inventoryItemId),
+        bookingId: incident.bookingId ? Number(incident.bookingId) : null,
+        counterId: incident.counterId ? Number(incident.counterId) : null,
+      }),
+    );
+  };
+
+  const handleCreatePromise = () => {
+    if (!promiseValid) {
+      setError("Select an add-on and stock item, enter a positive quantity, and add the recipient name.");
+      return;
+    }
+    void run(() =>
+      axiosInstance.post("/inventory/fulfillments", {
+        ...promise,
+        inventoryItemId: Number(promise.inventoryItemId),
+        addonId: Number(promise.addonId),
+        bookingId: promise.bookingId ? Number(promise.bookingId) : null,
+        counterId: promise.counterId ? Number(promise.counterId) : null,
+      }),
+    );
+  };
+
+  const handleSavePurchase = () => {
+    if (!purchaseValid) {
+      setError("Complete the purchase date, vendor, payment account, expense category, and every item line.");
+      return;
+    }
+    void run(async () => {
+      let invoiceFileId: null | number = null;
+      if (invoice) {
+        const fd = new FormData();
+        fd.append("file", invoice);
+        const uploaded = await axiosInstance.post("/finance/files", fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        invoiceFileId = uploaded.data.id;
+      }
+      await axiosInstance.post("/inventory/purchases", {
+        ...purchase,
+        vendorId: Number(purchase.vendorId),
+        accountId: Number(purchase.accountId),
+        categoryId: Number(purchase.categoryId),
+        invoiceFileId,
+        totalMinor: purchaseTotalMinor,
+        items: purchaseLines.map((line) => ({
+          inventoryItemId: Number(line.inventoryItemId),
+          quantity: line.quantity,
+          unitCostMinor: Math.round(line.unitCost * 100),
+        })),
+      });
+      setInvoice(null);
+      setPurchaseLines([{ id: nextPurchaseLineId++, inventoryItemId: "", quantity: 1, unitCost: 0 }]);
+    });
+  };
+
+  const handlePostAdjustment = () => {
+    if (!adjustmentValid) {
+      setError("Select a stock item, enter a non-zero quantity change, and choose a date.");
+      return;
+    }
+    void run(() =>
+      axiosInstance.post("/inventory/adjustments", {
+        ...adjust,
+        inventoryItemId: Number(adjust.inventoryItemId),
+        unitCostMinor: Math.round(adjust.unitCost * 100),
+      }),
+    );
+  };
+
+  const handleAddMapping = () => {
+    if (!mappingValid) {
+      setError("Select an add-on and stock item, then enter a positive usage quantity.");
+      return;
+    }
+    void run(() =>
+      axiosInstance.post("/inventory/mappings", {
+        ...mappingForm,
+        addonId: Number(mappingForm.addonId),
+        inventoryItemId: Number(mappingForm.inventoryItemId),
+      }),
+    );
+  };
   return (
     <Stack gap="lg">
-      <Group justify="space-between">
-        <div>
-          <Title order={3}>Inventory & purchases</Title>
-          <Text size="sm" c="dimmed">
-            Stock-controlled add-ons with automatic counter usage and Finance
-            expenses.
-          </Text>
-        </div>
-        <Button
-          leftSection={<IconPlus size={16} />}
-          onClick={() => setItemOpen(true)}
-        >
-          New stock item
-        </Button>
-      </Group>
+      <FinancePageHeader
+        eyebrow="Operations"
+        title="Inventory & purchases"
+        description="Control stock, fulfill promised items, record waste and connect every purchase to its Finance expense."
+        icon={<IconPackage size={22} />}
+        actions={
+          <Button leftSection={<IconPlus size={16} />} onClick={openItemModal}>
+            New stock item
+          </Button>
+        }
+      />
       {error && (
         <Alert
           color="red"
           icon={<IconAlertCircle size={18} />}
           withCloseButton
+          closeButtonLabel="Dismiss inventory error"
           onClose={() => setError("")}
         >
           {error}
         </Alert>
       )}
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
-        {items.map((x) => (
-          <Paper key={x.id} withBorder p="md">
-            <Group justify="space-between">
-              <Text fw={600}>{x.name}</Text>
-              {x.lowStock && <Badge color="red">Low</Badge>}
-            </Group>
-            <Text fz={28} fw={700}>
-              {x.availableStock}{" "}
-              <Text component="span" size="sm" c="dimmed">
-                available
-              </Text>
-            </Text>
-            <Text size="sm">
-              {x.currentStock} on hand · {x.reservedStock} reserved
-            </Text>
-            <Text size="xs" c="dimmed">
-              SKU {x.sku} · reorder at {x.reorderLevel}
-            </Text>
-          </Paper>
-        ))}
-      </SimpleGrid>
-      <Tabs defaultValue="fulfillments">
-        <Tabs.List>
-          <Tabs.Tab value="fulfillments">Mail-later queue</Tabs.Tab>
-          <Tabs.Tab value="incidents">Retakes & waste</Tabs.Tab>
-          <Tabs.Tab value="purchases" leftSection={<IconReceipt size={16} />}>
-            Purchases
-          </Tabs.Tab>
-          <Tabs.Tab value="adjustments">Stock adjustment</Tabs.Tab>
-          <Tabs.Tab value="mappings">Add-on mappings</Tabs.Tab>
-          <Tabs.Tab value="history" leftSection={<IconPackage size={16} />}>
-            Purchase history
-          </Tabs.Tab>
-        </Tabs.List>
+      {loading && items.length === 0 ? (
+        <FinancePanel noPadding>
+          <FinanceLoadingState label="Loading inventory and purchase data" />
+        </FinancePanel>
+      ) : items.length > 0 ? (
+        <SimpleGrid cols={{ base: 1, xs: 2, lg: 4 }}>
+          {items.map((x) => (
+            <FinanceMetricCard
+              key={x.id}
+              label={x.name}
+              value={`${x.availableStock} ${x.unit}`}
+              description={`${x.currentStock} on hand · ${x.reservedStock} reserved · reorder at ${x.reorderLevel}`}
+              icon={<IconPackage size={21} />}
+              accent={x.lowStock ? "rose" : "blue"}
+              detail={x.lowStock ? <Badge color="red" variant="light">Low stock</Badge> : <Text size="xs" c="dimmed">{x.sku}</Text>}
+            />
+          ))}
+        </SimpleGrid>
+      ) : (
+        <FinancePanel noPadding>
+          <FinanceEmptyState
+            title="No stock items yet"
+            description="Create the first inventory item to begin tracking purchases, usage and fulfillment."
+            icon={<IconPackage size={25} />}
+            action={<Button leftSection={<IconPlus size={16} />} onClick={openItemModal}>Create stock item</Button>}
+          />
+        </FinancePanel>
+      )}
+      <FinancePanel noPadding>
+        <Tabs defaultValue="fulfillments" p={isMobile ? "sm" : "md"}>
+          <ScrollArea type="auto" scrollbarSize={5} offsetScrollbars>
+            <Tabs.List style={{ flexWrap: "nowrap", width: "max-content", minWidth: "100%" }}>
+              <Tabs.Tab value="fulfillments">Mail-later queue</Tabs.Tab>
+              <Tabs.Tab value="incidents">Retakes & waste</Tabs.Tab>
+              <Tabs.Tab value="purchases" leftSection={<IconReceipt size={16} />}>
+                Purchases
+              </Tabs.Tab>
+              <Tabs.Tab value="adjustments">Stock adjustment</Tabs.Tab>
+              <Tabs.Tab value="mappings">Add-on mappings</Tabs.Tab>
+              <Tabs.Tab value="history" leftSection={<IconPackage size={16} />}>
+                Purchase history
+              </Tabs.Tab>
+            </Tabs.List>
+          </ScrollArea>
         <Tabs.Panel value="incidents" pt="md">
           <Stack>
-            <Paper withBorder p="md">
+            <Paper
+              component="form"
+              withBorder
+              p="md"
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleRecordIncident();
+              }}
+            >
               <Stack>
-                <Title order={4}>Record an extra photo or damaged item</Title>
+                <Title order={3} size="h4">Record an extra photo or damaged item</Title>
                 <Text size="sm" c="dimmed">
                   Use Retake when a photo failed and another one was produced.
                   This deducts the extra film immediately.
@@ -292,6 +446,7 @@ const FinanceInventory = () => {
                 <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
                   <Select
                     label="Add-on"
+                    withAsterisk
                     data={option(addons)}
                     value={incident.addonId}
                     onChange={(v) => {
@@ -309,6 +464,7 @@ const FinanceInventory = () => {
                   />
                   <Select
                     label="Stock item"
+                    withAsterisk
                     data={itemOptions}
                     value={incident.inventoryItemId}
                     onChange={(v) =>
@@ -331,6 +487,7 @@ const FinanceInventory = () => {
                   />
                   <NumberInput
                     label="Extra quantity used"
+                    withAsterisk
                     min={1}
                     value={incident.quantity}
                     onChange={(v) =>
@@ -362,6 +519,7 @@ const FinanceInventory = () => {
                   <TextInput
                     type="date"
                     label="Date"
+                    withAsterisk
                     value={incident.date}
                     onChange={(e) =>
                       setIncident({ ...incident, date: e.currentTarget.value })
@@ -376,28 +534,16 @@ const FinanceInventory = () => {
                   }
                 />
                 <Button
+                  type="submit"
                   loading={busy}
-                  onClick={() =>
-                    run(() =>
-                      axiosInstance.post("/inventory/usage-incidents", {
-                        ...incident,
-                        addonId: Number(incident.addonId),
-                        inventoryItemId: Number(incident.inventoryItemId),
-                        bookingId: incident.bookingId
-                          ? Number(incident.bookingId)
-                          : null,
-                        counterId: incident.counterId
-                          ? Number(incident.counterId)
-                          : null,
-                      }),
-                    )
-                  }
+                  disabled={!incidentValid}
                 >
                   Record extra usage
                 </Button>
               </Stack>
             </Paper>
-            <Table striped>
+            <ScrollArea type="auto" offsetScrollbars tabIndex={0} aria-label="Inventory usage incident history">
+            <Table striped miw={760}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Date</Table.Th>
@@ -426,13 +572,22 @@ const FinanceInventory = () => {
                 ))}
               </Table.Tbody>
             </Table>
+            </ScrollArea>
           </Stack>
         </Tabs.Panel>
         <Tabs.Panel value="fulfillments" pt="md">
           <Stack>
-            <Paper withBorder p="md">
+            <Paper
+              component="form"
+              withBorder
+              p="md"
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleCreatePromise();
+              }}
+            >
               <Stack>
-                <Title order={4}>Add promised item</Title>
+                <Title order={3} size="h4">Add promised item</Title>
                 <Text size="sm" c="dimmed">
                   Create this before finalizing the counter so it is not counted
                   as handed out. Existing promises can be entered at any time.
@@ -440,6 +595,7 @@ const FinanceInventory = () => {
                 <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
                   <Select
                     label="Add-on"
+                    withAsterisk
                     data={option(addons)}
                     value={promise.addonId}
                     onChange={(v) => {
@@ -457,6 +613,7 @@ const FinanceInventory = () => {
                   />
                   <Select
                     label="Stock item"
+                    withAsterisk
                     data={itemOptions}
                     value={promise.inventoryItemId}
                     onChange={(v) =>
@@ -465,6 +622,7 @@ const FinanceInventory = () => {
                   />
                   <NumberInput
                     label="Quantity"
+                    withAsterisk
                     min={1}
                     value={promise.quantity}
                     onChange={(v) =>
@@ -510,6 +668,7 @@ const FinanceInventory = () => {
                   />
                   <TextInput
                     label="Recipient"
+                    withAsterisk
                     value={promise.recipientName}
                     onChange={(e) =>
                       setPromise({
@@ -519,6 +678,7 @@ const FinanceInventory = () => {
                     }
                   />
                   <TextInput
+                    type="email"
                     label="Email"
                     value={promise.email}
                     onChange={(e) =>
@@ -526,6 +686,7 @@ const FinanceInventory = () => {
                     }
                   />
                   <TextInput
+                    type="tel"
                     label="Phone"
                     value={promise.phone}
                     onChange={(e) =>
@@ -541,28 +702,16 @@ const FinanceInventory = () => {
                   }
                 />
                 <Button
+                  type="submit"
                   loading={busy}
-                  onClick={() =>
-                    run(() =>
-                      axiosInstance.post("/inventory/fulfillments", {
-                        ...promise,
-                        inventoryItemId: Number(promise.inventoryItemId),
-                        addonId: Number(promise.addonId),
-                        bookingId: promise.bookingId
-                          ? Number(promise.bookingId)
-                          : null,
-                        counterId: promise.counterId
-                          ? Number(promise.counterId)
-                          : null,
-                      }),
-                    )
-                  }
+                  disabled={!promiseValid}
                 >
                   Create promise
                 </Button>
               </Stack>
             </Paper>
-            <Table striped highlightOnHover>
+            <ScrollArea type="auto" offsetScrollbars tabIndex={0} aria-label="Inventory fulfillment queue">
+            <Table striped highlightOnHover miw={900}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Created</Table.Th>
@@ -674,16 +823,26 @@ const FinanceInventory = () => {
                 ))}
               </Table.Tbody>
             </Table>
+            </ScrollArea>
           </Stack>
         </Tabs.Panel>
         <Tabs.Panel value="purchases" pt="md">
-          <Paper withBorder p="md">
+          <Paper
+            component="form"
+            withBorder
+            p="md"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleSavePurchase();
+            }}
+          >
             <Stack>
-              <Title order={4}>Record purchase and Finance expense</Title>
+              <Title order={3} size="h4">Record purchase and Finance expense</Title>
               <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
                 <TextInput
                   type="date"
                   label="Purchase date"
+                  withAsterisk
                   value={purchase.date}
                   onChange={(e) =>
                     setPurchase({ ...purchase, date: e.currentTarget.value })
@@ -692,6 +851,7 @@ const FinanceInventory = () => {
                 <Select
                   searchable
                   label="Vendor"
+                  withAsterisk
                   data={option(vendors)}
                   value={purchase.vendorId}
                   onChange={(v) =>
@@ -700,6 +860,7 @@ const FinanceInventory = () => {
                 />
                 <Select
                   label="Payment account"
+                  withAsterisk
                   data={option(accounts)}
                   value={purchase.accountId}
                   onChange={(v) => {
@@ -713,6 +874,7 @@ const FinanceInventory = () => {
                 />
                 <Select
                   label="Expense category"
+                  withAsterisk
                   data={option(categories)}
                   value={purchase.categoryId}
                   onChange={(v) =>
@@ -732,6 +894,7 @@ const FinanceInventory = () => {
                 <FileInput
                   label="Invoice file"
                   placeholder="PDF or image"
+                  accept="application/pdf,image/*"
                   value={invoice}
                   onChange={setInvoice}
                 />
@@ -754,8 +917,76 @@ const FinanceInventory = () => {
               </SimpleGrid>
               <Paper withBorder p="md" radius="md">
                 <Stack gap="sm">
-                  <Group justify="space-between"><div><Text fw={700}>Purchase items</Text><Text size="sm" c="dimmed">Add every stock item included on this invoice.</Text></div><Button size="xs" variant="light" leftSection={<IconPlus size={14}/>} onClick={() => setPurchaseLines(lines => [...lines, { id: nextPurchaseLineId++, inventoryItemId: "", quantity: 1, unitCost: 0 }])}>Add item</Button></Group>
-                  {purchaseLines.map((line, index) => <SimpleGrid key={line.id} cols={{base:1,sm:4}} style={{alignItems:"end"}}><Select searchable label={`Stock item ${index + 1}`} data={itemOptions} value={line.inventoryItemId} onChange={value => setPurchaseLines(lines => lines.map(current => current.id === line.id ? {...current, inventoryItemId:value ?? ""} : current))}/><NumberInput min={0.001} decimalScale={3} label="Quantity" value={line.quantity} onChange={value => setPurchaseLines(lines => lines.map(current => current.id === line.id ? {...current,quantity:Number(value)} : current))}/><NumberInput min={0.01} decimalScale={2} label={`Unit cost (${purchase.currency})`} value={line.unitCost} onChange={value => setPurchaseLines(lines => lines.map(current => current.id === line.id ? {...current,unitCost:Number(value)} : current))}/><Group gap="xs"><Text fw={600} style={{flex:1}}>{(line.quantity * line.unitCost).toFixed(2)} {purchase.currency}</Text><ActionIcon color="red" variant="subtle" aria-label={`Remove item ${index + 1}`} disabled={purchaseLines.length === 1} onClick={() => setPurchaseLines(lines => lines.filter(current => current.id !== line.id))}><IconTrash size={17}/></ActionIcon></Group></SimpleGrid>)}
+                  <Group justify="space-between"><div><Text fw={700}>Purchase items</Text><Text size="sm" c="dimmed">Add every stock item included on this invoice.</Text></div><Button type="button" size="xs" variant="light" leftSection={<IconPlus size={14}/>} onClick={() => setPurchaseLines(lines => [...lines, { id: nextPurchaseLineId++, inventoryItemId: "", quantity: 1, unitCost: 0 }])}>Add item</Button></Group>
+                  {purchaseLines.map((line, index) => (
+                    <SimpleGrid key={line.id} cols={{ base: 1, sm: 4 }} style={{ alignItems: "end" }}>
+                      <Select
+                        searchable
+                        withAsterisk
+                        label={`Stock item ${index + 1}`}
+                        data={itemOptions}
+                        value={line.inventoryItemId}
+                        onChange={(value) =>
+                          setPurchaseLines((lines) =>
+                            lines.map((current) =>
+                              current.id === line.id
+                                ? { ...current, inventoryItemId: value ?? "" }
+                                : current,
+                            ),
+                          )
+                        }
+                      />
+                      <NumberInput
+                        withAsterisk
+                        min={0.001}
+                        decimalScale={3}
+                        label="Quantity"
+                        value={line.quantity}
+                        onChange={(value) =>
+                          setPurchaseLines((lines) =>
+                            lines.map((current) =>
+                              current.id === line.id
+                                ? { ...current, quantity: Number(value) }
+                                : current,
+                            ),
+                          )
+                        }
+                      />
+                      <NumberInput
+                        withAsterisk
+                        min={0.01}
+                        decimalScale={2}
+                        label={`Unit cost (${purchase.currency})`}
+                        value={line.unitCost}
+                        onChange={(value) =>
+                          setPurchaseLines((lines) =>
+                            lines.map((current) =>
+                              current.id === line.id
+                                ? { ...current, unitCost: Number(value) }
+                                : current,
+                            ),
+                          )
+                        }
+                      />
+                      <Group gap="xs">
+                        <Text fw={600} style={{ flex: 1 }}>
+                          {formatFinanceMoneyMinor(calculatePurchaseLineTotalMinor(line), purchase.currency)}
+                        </Text>
+                        <ActionIcon
+                          type="button"
+                          color="red"
+                          variant="subtle"
+                          aria-label={`Remove item ${index + 1}`}
+                          disabled={purchaseLines.length === 1}
+                          onClick={() =>
+                            setPurchaseLines((lines) => lines.filter((current) => current.id !== line.id))
+                          }
+                        >
+                          <IconTrash size={17} />
+                        </ActionIcon>
+                      </Group>
+                    </SimpleGrid>
+                  ))}
                 </Stack>
               </Paper>
               <Textarea
@@ -767,40 +998,12 @@ const FinanceInventory = () => {
               />
               <Group justify="flex-end">
                 <Text fw={600}>
-                  Total: {purchaseTotal.toFixed(2)}{" "}
-                  {purchase.currency}
+                  Total: {formatFinanceMoneyMinor(purchaseTotalMinor, purchase.currency)}
                 </Text>
                 <Button
+                  type="submit"
                   loading={busy}
-                  disabled={!purchaseLinesValid}
-                  onClick={() =>
-                    run(async () => {
-                      let invoiceFileId: null | number = null;
-                      if (invoice) {
-                        const fd = new FormData();
-                        fd.append("file", invoice);
-                        const uploaded = await axiosInstance.post(
-                          "/finance/files",
-                          fd,
-                          {
-                            headers: { "Content-Type": "multipart/form-data" },
-                          },
-                        );
-                        invoiceFileId = uploaded.data.id;
-                      }
-                      await axiosInstance.post("/inventory/purchases", {
-                        ...purchase,
-                        vendorId: Number(purchase.vendorId),
-                        accountId: Number(purchase.accountId),
-                        categoryId: Number(purchase.categoryId),
-                        invoiceFileId,
-                        totalMinor: Math.round(purchaseTotal * 100),
-                        items: purchaseLines.map(line => ({ inventoryItemId: Number(line.inventoryItemId), quantity: line.quantity, unitCostMinor: Math.round(line.unitCost * 100) })),
-                      });
-                      setInvoice(null);
-                      setPurchaseLines([{ id: nextPurchaseLineId++, inventoryItemId: "", quantity: 1, unitCost: 0 }]);
-                    })
-                  }
+                  disabled={!purchaseValid}
                 >
                   Save purchase
                 </Button>
@@ -809,12 +1012,21 @@ const FinanceInventory = () => {
           </Paper>
         </Tabs.Panel>
         <Tabs.Panel value="adjustments" pt="md">
-          <Paper withBorder p="md">
+          <Paper
+            component="form"
+            withBorder
+            p="md"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handlePostAdjustment();
+            }}
+          >
             <Stack>
-              <Title order={4}>Initial stock or adjustment</Title>
+              <Title order={3} size="h4">Initial stock or adjustment</Title>
               <SimpleGrid cols={{ base: 1, sm: 2 }}>
                 <Select
                   label="Stock item"
+                  withAsterisk
                   data={itemOptions}
                   value={adjust.inventoryItemId}
                   onChange={(v) =>
@@ -837,6 +1049,7 @@ const FinanceInventory = () => {
                 />
                 <NumberInput
                   label="Quantity change"
+                  withAsterisk
                   description="Use a negative number to reduce stock"
                   value={adjust.quantityDelta}
                   onChange={(v) =>
@@ -854,6 +1067,7 @@ const FinanceInventory = () => {
                 <TextInput
                   type="date"
                   label="Date"
+                  withAsterisk
                   value={adjust.date}
                   onChange={(e) =>
                     setAdjust({ ...adjust, date: e.currentTarget.value })
@@ -868,16 +1082,9 @@ const FinanceInventory = () => {
                 }
               />
               <Button
+                type="submit"
                 loading={busy}
-                onClick={() =>
-                  run(() =>
-                    axiosInstance.post("/inventory/adjustments", {
-                      ...adjust,
-                      inventoryItemId: Number(adjust.inventoryItemId),
-                      unitCostMinor: Math.round(adjust.unitCost * 100),
-                    }),
-                  )
-                }
+                disabled={!adjustmentValid}
               >
                 Post adjustment
               </Button>
@@ -886,10 +1093,19 @@ const FinanceInventory = () => {
         </Tabs.Panel>
         <Tabs.Panel value="mappings" pt="md">
           <Stack>
-            <Paper withBorder p="md">
+            <Paper
+              component="form"
+              withBorder
+              p="md"
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleAddMapping();
+              }}
+            >
               <SimpleGrid cols={{ base: 1, sm: 4 }}>
                 <Select
                   label="Add-on"
+                  withAsterisk
                   data={option(addons)}
                   value={mappingForm.addonId}
                   onChange={(v) =>
@@ -898,6 +1114,7 @@ const FinanceInventory = () => {
                 />
                 <Select
                   label="Stock item"
+                  withAsterisk
                   data={itemOptions}
                   value={mappingForm.inventoryItemId}
                   onChange={(v) =>
@@ -908,6 +1125,7 @@ const FinanceInventory = () => {
                 <NumberInput
                   min={0.001}
                   label="Units per checked add-on"
+                  withAsterisk
                   value={mappingForm.quantityPerAddon}
                   onChange={(v) =>
                     setMappingForm({
@@ -918,22 +1136,16 @@ const FinanceInventory = () => {
                 />
               </SimpleGrid>
               <Button
+                type="submit"
                 mt="md"
                 loading={busy}
-                onClick={() =>
-                  run(() =>
-                    axiosInstance.post("/inventory/mappings", {
-                      ...mappingForm,
-                      addonId: Number(mappingForm.addonId),
-                      inventoryItemId: Number(mappingForm.inventoryItemId),
-                    }),
-                  )
-                }
+                disabled={!mappingValid}
               >
                 Add mapping
               </Button>
             </Paper>
-            <Table striped>
+            <ScrollArea type="auto" offsetScrollbars tabIndex={0} aria-label="Add-on inventory mappings">
+            <Table striped miw={600}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Add-on</Table.Th>
@@ -955,10 +1167,12 @@ const FinanceInventory = () => {
                 ))}
               </Table.Tbody>
             </Table>
+            </ScrollArea>
           </Stack>
         </Tabs.Panel>
         <Tabs.Panel value="history" pt="md">
-          <Table striped highlightOnHover>
+          <ScrollArea type="auto" offsetScrollbars tabIndex={0} aria-label="Inventory purchase history">
+          <Table striped highlightOnHover miw={620}>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Date</Table.Th>
@@ -974,54 +1188,87 @@ const FinanceInventory = () => {
                   <Table.Td>{x.invoiceNumber ?? "—"}</Table.Td>
                   <Table.Td>#{x.financeTransactionId}</Table.Td>
                   <Table.Td ta="right">
-                    {(x.totalMinor / 100).toFixed(2)} {x.currency}
+                    {formatFinanceMoneyMinor(x.totalMinor, x.currency)}
                   </Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>
           </Table>
+          </ScrollArea>
         </Tabs.Panel>
-      </Tabs>
-      <Modal
+        </Tabs>
+      </FinancePanel>
+      <FinanceModal
         opened={itemOpen}
-        onClose={() => setItemOpen(false)}
+        onClose={() => {
+          if (!busy) {
+            setItemOpen(false);
+          }
+        }}
         title="New stock item"
+        size="lg"
+        closeOnClickOutside={!busy}
+        closeOnEscape={!busy}
       >
-        <Stack>
-          <TextInput
-            label="Name"
-            value={itemForm.name}
-            onChange={(e) =>
-              setItemForm({ ...itemForm, name: e.currentTarget.value })
-            }
-          />
-          <TextInput
-            label="SKU"
-            value={itemForm.sku}
-            onChange={(e) =>
-              setItemForm({ ...itemForm, sku: e.currentTarget.value })
-            }
-          />
-          <NumberInput
-            label="Low-stock threshold"
-            value={itemForm.reorderLevel}
-            onChange={(v) =>
-              setItemForm({ ...itemForm, reorderLevel: Number(v) })
-            }
-          />
-          <Button
-            loading={busy}
-            onClick={() =>
-              run(async () => {
-                await axiosInstance.post("/inventory/items", itemForm);
-                setItemOpen(false);
-              })
-            }
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void run(async () => {
+              await axiosInstance.post("/inventory/items", itemForm);
+              setItemOpen(false);
+            });
+          }}
+        >
+          <Stack gap="md">
+          <FinanceFormSection
+            title="Stock item details"
+            description="Use a unique SKU and set the point where the item should be reordered."
+            icon={<IconPackage size={18} />}
           >
-            Create item
-          </Button>
-        </Stack>
-      </Modal>
+            <Stack gap="sm">
+              <TextInput
+                label="Name"
+                placeholder="For example: Polaroid film"
+                value={itemForm.name}
+                onChange={(e) => setItemForm({ ...itemForm, name: e.currentTarget.value })}
+                withAsterisk
+                required
+              />
+              <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                <TextInput
+                  label="SKU"
+                  placeholder="FILM-001"
+                  value={itemForm.sku}
+                  onChange={(e) => setItemForm({ ...itemForm, sku: e.currentTarget.value })}
+                  withAsterisk
+                  required
+                />
+                <NumberInput
+                  label="Low-stock threshold"
+                  description="Show a warning at or below this quantity"
+                  min={0}
+                  value={itemForm.reorderLevel}
+                  onChange={(v) => setItemForm({ ...itemForm, reorderLevel: Number(v) })}
+                />
+              </SimpleGrid>
+            </Stack>
+          </FinanceFormSection>
+          {error ? <Alert color="red">{error}</Alert> : null}
+          <FinanceModalFooter>
+            <Button type="button" variant="default" onClick={() => setItemOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              loading={busy}
+              disabled={!itemForm.name.trim() || !itemForm.sku.trim()}
+            >
+              Create item
+            </Button>
+          </FinanceModalFooter>
+          </Stack>
+        </form>
+      </FinanceModal>
     </Stack>
   );
 };

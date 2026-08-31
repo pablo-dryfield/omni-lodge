@@ -23,6 +23,7 @@ import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import VolunteerFund from '../finance/models/VolunteerFund.js';
 import VolunteerFundEntry from '../finance/models/VolunteerFundEntry.js';
 import { createFinanceTransaction, updateFinanceTransaction } from '../finance/services/transactionService.js';
+import { createVolunteerFundAllocationTransfer } from '../finance/services/volunteerFundAllocationFinanceService.js';
 import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getConfigValue } from '../services/configService.js';
@@ -677,7 +678,14 @@ const validateBatchSettlementRouting = async (params: {
     fundIds.length > 0
       ? VolunteerFund.findAll({
           where: { id: { [Op.in]: fundIds } },
-          attributes: ['id', 'name', 'currency', 'isActive'],
+          attributes: [
+            'id',
+            'name',
+            'currency',
+            'isActive',
+            'linkedAccountId',
+            'fundingSourceAccountId',
+          ],
           transaction: params.transaction,
           ...(params.transaction ? { lock: params.transaction.LOCK.UPDATE } : {}),
         })
@@ -2102,6 +2110,45 @@ export const createStaffPayoutBatch = async (
           const allocationIdempotencyKey = allocationAttempt.attemptCount === 0
             ? baseIdempotencyKey
             : `${baseIdempotencyKey}:retry:${allocationAttempt.attemptCount}`;
+          const allocationDescription = allocation.description
+            ?? `${allocation.label} allocated from ${settlementStaffType} compensation`;
+          const allocationSourceSnapshot = {
+            source: 'staff-compensation-settlement',
+            label: allocation.label,
+            sourceKey: allocation.sourceKey,
+            componentId: allocation.componentId,
+            ruleId: allocation.verifiedIntent.ruleId,
+            ...(segmentedIntent
+              ? {
+                  segmentKey: segmentedIntent.segmentKey,
+                  earningStart: segmentedIntent.earningStart,
+                  earningEnd: segmentedIntent.earningEnd,
+                  staffTypePeriodId: segmentedIntent.staffTypePeriodId,
+                  staffType: segmentedIntent.staffType,
+                  legacyExtrapolation: segmentedIntent.legacyExtrapolation,
+                }
+              : {}),
+            payoutBatchKey: batchKey,
+            settlementRequestId,
+            periodStart: rangeStart.format('YYYY-MM-DD'),
+            periodEnd: rangeEnd.format('YYYY-MM-DD'),
+          };
+          const financeTransfer = await createVolunteerFundAllocationTransfer({
+            fund,
+            allocationIdempotencyKey,
+            amountMinor: allocation.amountMinor,
+            date: payoutDate,
+            description: allocationDescription,
+            payoutBatchKey: batchKey,
+            settlementRequestId,
+            staffUserId: staffProfileId,
+            sourceKey: allocation.sourceKey,
+            componentId: allocation.componentId,
+            periodStart: rangeStart.format('YYYY-MM-DD'),
+            periodEnd: rangeEnd.format('YYYY-MM-DD'),
+            actorId,
+            transaction,
+          });
           await VolunteerFundEntry.create(
             {
               fundId: allocation.fundId,
@@ -2111,9 +2158,7 @@ export const createStaffPayoutBatch = async (
               entryDate: payoutDate,
               periodStart: rangeStart.format('YYYY-MM-DD'),
               periodEnd: rangeEnd.format('YYYY-MM-DD'),
-              description:
-                allocation.description
-                ?? `${allocation.label} allocated from ${settlementStaffType} compensation`,
+              description: allocationDescription,
               attributedStaffUserId: staffProfileId,
               compensationComponentId: allocation.componentId,
               sourceKind: allocation.sourceKey,
@@ -2137,27 +2182,11 @@ export const createStaffPayoutBatch = async (
                   : {}),
               },
               sourceSnapshot: {
-                source: 'staff-compensation-settlement',
-                label: allocation.label,
-                sourceKey: allocation.sourceKey,
-                componentId: allocation.componentId,
-                ruleId: allocation.verifiedIntent.ruleId,
-                ...(segmentedIntent
-                  ? {
-                      segmentKey: segmentedIntent.segmentKey,
-                      earningStart: segmentedIntent.earningStart,
-                      earningEnd: segmentedIntent.earningEnd,
-                      staffTypePeriodId: segmentedIntent.staffTypePeriodId,
-                      staffType: segmentedIntent.staffType,
-                      legacyExtrapolation: segmentedIntent.legacyExtrapolation,
-                    }
-                  : {}),
-                payoutBatchKey: batchKey,
-                settlementRequestId,
-                periodStart: rangeStart.format('YYYY-MM-DD'),
-                periodEnd: rangeEnd.format('YYYY-MM-DD'),
+                ...allocationSourceSnapshot,
+                financeTransfer,
               },
-              financeTransactionId: null,
+              financeTransactionId: financeTransfer.debitTransactionId,
+              financeCounterTransactionId: financeTransfer.creditTransactionId,
               idempotencyKey: allocationIdempotencyKey,
               reversalOfEntryId: null,
               createdBy: actorId,

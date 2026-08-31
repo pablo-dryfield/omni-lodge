@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { Transaction as SequelizeTransaction } from 'sequelize';
+import { Op, Transaction as SequelizeTransaction } from 'sequelize';
 import sequelize from '../../config/database.js';
 import FinanceTransaction, {
   FinanceTransactionKind,
@@ -7,6 +7,7 @@ import FinanceTransaction, {
   FinanceTransactionCounterpartyType,
 } from '../models/FinanceTransaction.js';
 import FinanceFile from '../models/FinanceFile.js';
+import VolunteerFund from '../models/VolunteerFund.js';
 import VolunteerFundEntry from '../models/VolunteerFundEntry.js';
 import { recordFinanceAuditLog } from './auditLogService.js';
 import {
@@ -42,10 +43,85 @@ export type FinanceTransactionInput = {
   approvedBy?: number | null;
 };
 
-type FinanceTransactionServiceOptions = {
+export type FinanceTransactionServiceOptions = {
   transaction?: SequelizeTransaction;
   allowStaffPayoutReceiptFlow?: boolean;
+  allowVolunteerFundSpendForFundId?: number;
+  allowVolunteerFundAllocationForFundId?: number;
   allowVolunteerFundSpendReversal?: boolean;
+  allowVolunteerFundAllocationReversal?: boolean;
+};
+
+type VolunteerFundAccountOperation = FinanceTransactionKind;
+
+const assertVolunteerFundAccountUse = async (params: {
+  accountIds: Array<number | null | undefined>;
+  operation: VolunteerFundAccountOperation;
+  trustedFundId?: number;
+  transaction?: SequelizeTransaction;
+}): Promise<void> => {
+  const accountIds = [...new Set(
+    params.accountIds
+      .map(Number)
+      .filter((id) => Number.isSafeInteger(id) && id > 0),
+  )];
+  if (accountIds.length === 0) {
+    return;
+  }
+
+  // Use all matches rather than findOne: a legacy/shared account configuration
+  // must fail closed instead of allowing whichever Volunteer Fund happens to be
+  // returned first.
+  const linkedFunds = await VolunteerFund.findAll({
+    attributes: ['id', 'name', 'linkedAccountId'],
+    where: {
+      isActive: true,
+      linkedAccountId: { [Op.in]: accountIds },
+    },
+    order: [['id', 'ASC']],
+    transaction: params.transaction,
+  });
+  if (linkedFunds.length === 0) {
+    return;
+  }
+
+  const linkedFundIds = [...new Set(linkedFunds.map((fund) => Number(fund.id)))];
+  const trustedFundId = Number(params.trustedFundId ?? NaN);
+  if (
+    Number.isSafeInteger(trustedFundId)
+    && trustedFundId > 0
+    && linkedFundIds.length === 1
+    && linkedFundIds[0] === trustedFundId
+  ) {
+    return;
+  }
+
+  if (linkedFundIds.length > 1) {
+    throw new Error(
+      'These Finance accounts are linked to multiple active Volunteer Funds. Resolve the account configuration before recording this operation.',
+    );
+  }
+  if (params.trustedFundId !== undefined) {
+    throw new Error(
+      'The trusted Volunteer Fund operation does not match the active fund linked to this Finance account.',
+    );
+  }
+
+  const fundName = String(linkedFunds[0]?.name ?? '').trim();
+  const fundLabel = fundName ? ` "${fundName}"` : '';
+  if (params.operation === 'expense') {
+    throw new Error(
+      `This Finance account is linked to active Volunteer Fund${fundLabel}. Record the expense through the Volunteer Fund spend flow so both ledgers stay synchronized.`,
+    );
+  }
+  if (params.operation === 'transfer') {
+    throw new Error(
+      `This transfer uses an account linked to active Volunteer Fund${fundLabel}. Use the Volunteer Fund allocation flow so both ledgers stay synchronized.`,
+    );
+  }
+  throw new Error(
+    `This ${params.operation} uses an account linked to active Volunteer Fund${fundLabel}. Fund-linked accounts can only change through trusted Volunteer Fund workflows.`,
+  );
 };
 
 const assertGeneralInvoiceFile = async (
@@ -126,6 +202,17 @@ export async function createFinanceTransaction(
   const baseAmountMinor = data.baseAmountMinor ?? calculateBaseAmount(amountMinor, fxRate);
   const { counterpartyType, counterpartyId } = normalizeCounterparty(data);
 
+  await assertVolunteerFundAccountUse({
+    accountIds: [data.accountId],
+    operation: data.kind,
+    trustedFundId: data.kind === 'expense'
+      ? options?.allowVolunteerFundSpendForFundId
+      : data.kind === 'transfer'
+        ? options?.allowVolunteerFundAllocationForFundId
+        : undefined,
+    transaction: options?.transaction,
+  });
+
   if (!options?.allowStaffPayoutReceiptFlow) {
     await assertCounterpartyIsNotStaffPayment({
       kind: data.kind,
@@ -195,7 +282,10 @@ export async function updateFinanceTransaction(
       updateFinanceTransaction(id, changes, userId, {
         transaction,
         allowStaffPayoutReceiptFlow: options?.allowStaffPayoutReceiptFlow,
+        allowVolunteerFundSpendForFundId: options?.allowVolunteerFundSpendForFundId,
+        allowVolunteerFundAllocationForFundId: options?.allowVolunteerFundAllocationForFundId,
         allowVolunteerFundSpendReversal: options?.allowVolunteerFundSpendReversal,
+        allowVolunteerFundAllocationReversal: options?.allowVolunteerFundAllocationReversal,
       }),
     );
   }
@@ -209,12 +299,22 @@ export async function updateFinanceTransaction(
     throw new Error('Transaction not found');
   }
 
-  const volunteerFundSpend = await VolunteerFundEntry.findOne({
-    attributes: ['id'],
-    where: { financeTransactionId: record.id, entryType: 'spend' },
+  const volunteerFundEntry = await VolunteerFundEntry.findOne({
+    attributes: ['id', 'entryType'],
+    where: {
+      [Op.or]: [
+        { financeTransactionId: record.id },
+        { financeCounterTransactionId: record.id },
+      ],
+    },
     transaction,
   });
-  if (volunteerFundSpend) {
+  const recordMeta = record.meta && typeof record.meta === 'object'
+    ? record.meta as Record<string, unknown>
+    : null;
+  const isVolunteerFundAllocationTransfer = volunteerFundEntry?.entryType === 'allocation'
+    || recordMeta?.source === 'volunteer-fund-allocation';
+  if (volunteerFundEntry?.entryType === 'spend') {
     const changedFields = Object.entries(changes)
       .filter(([, value]) => value !== undefined)
       .map(([field]) => field);
@@ -227,6 +327,42 @@ export async function updateFinanceTransaction(
         'This Finance expense backs a Volunteer Fund spend and can only be voided through that fund entry reversal.',
       );
     }
+  }
+  if (isVolunteerFundAllocationTransfer) {
+    const changedFields = Object.entries(changes)
+      .filter(([, value]) => value !== undefined)
+      .map(([field]) => field);
+    const isFundAllocationReversalVoid = options.allowVolunteerFundAllocationReversal === true
+      && changedFields.length === 1
+      && changedFields[0] === 'status'
+      && changes.status === 'void';
+    if (!isFundAllocationReversalVoid) {
+      throw new Error(
+        'This Finance transfer backs a Volunteer Fund allocation and can only be voided through that fund entry reversal.',
+      );
+    }
+  }
+
+  const nextKind = changes.kind ?? record.kind;
+  const nextAccountId = changes.accountId ?? record.accountId;
+  const isLedgerProtectedVolunteerFundRecord = volunteerFundEntry?.entryType === 'spend'
+    || isVolunteerFundAllocationTransfer;
+  if (
+    !isLedgerProtectedVolunteerFundRecord
+  ) {
+    // This also protects legacy ordinary rows already sitting on a fund-linked
+    // account. They may be moved to an ordinary account, but cannot otherwise
+    // keep changing the Finance balance without a corresponding fund entry.
+    await assertVolunteerFundAccountUse({
+      accountIds: [nextAccountId],
+      operation: nextKind,
+      trustedFundId: nextKind === 'expense'
+        ? options.allowVolunteerFundSpendForFundId
+        : nextKind === 'transfer'
+          ? options.allowVolunteerFundAllocationForFundId
+          : undefined,
+      transaction,
+    });
   }
 
   await assertFinanceTransactionIsNotReceiptProtected(record.id, transaction);
@@ -316,6 +452,10 @@ type TransferInput = {
 export async function createFinanceTransfer(
   data: TransferInput,
   userId: number,
+  options?: Pick<
+    FinanceTransactionServiceOptions,
+    'transaction' | 'allowVolunteerFundAllocationForFundId'
+  >,
 ): Promise<{ debit: FinanceTransaction; credit: FinanceTransaction }> {
   if (data.fromAccountId === data.toAccountId) {
     throw new Error('Transfer accounts must be different');
@@ -330,7 +470,13 @@ export async function createFinanceTransfer(
   const baseAmountMinor = calculateBaseAmount(amountMinor, fxRate);
   const transferGroupId = crypto.randomUUID();
 
-  return sequelize.transaction(async (transaction) => {
+  const createPair = async (transaction: SequelizeTransaction) => {
+    await assertVolunteerFundAccountUse({
+      accountIds: [data.fromAccountId, data.toAccountId],
+      operation: 'transfer',
+      trustedFundId: options?.allowVolunteerFundAllocationForFundId,
+      transaction,
+    });
     const debitMeta = {
       ...(data.meta ?? {}),
       direction: 'out',
@@ -364,7 +510,10 @@ export async function createFinanceTransfer(
         meta: debitMeta,
       },
       userId,
-      { transaction },
+      {
+        transaction,
+        allowVolunteerFundAllocationForFundId: options?.allowVolunteerFundAllocationForFundId,
+      },
     );
 
     const credit = await createFinanceTransaction(
@@ -386,9 +535,16 @@ export async function createFinanceTransfer(
         meta: creditMeta,
       },
       userId,
-      { transaction },
+      {
+        transaction,
+        allowVolunteerFundAllocationForFundId: options?.allowVolunteerFundAllocationForFundId,
+      },
     );
 
     return { debit, credit };
-  });
+  };
+
+  return options?.transaction
+    ? createPair(options.transaction)
+    : sequelize.transaction(createPair);
 }

@@ -10,6 +10,7 @@ export type SessionState = {
   lastName?: string | null;
   hasStoredProfilePhoto: boolean;
   profilePhotoVersion?: string | null;
+  notificationInboxPollingEnabled: boolean;
   error: string | null;
 };
 
@@ -23,4 +24,5 @@ export type SessionResponse = {
   userTypeId?: number | null;
   hasStoredProfilePhoto?: boolean;
   profilePhotoVersion?: string | null;
+  notificationInboxPollingEnabled?: boolean;
 };

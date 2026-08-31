@@ -77,7 +77,7 @@ describe('normal auth receipt-token isolation', () => {
       profilePhotoPath: 'drive:private-file-id',
       updatedAt,
       role: { slug: 'assistant-manager', name: 'Assistant Manager' },
-      shiftRoles: [{ slug: 'manager' }],
+      shiftRoles: [{ id: 7, slug: 'manager' }],
     });
     const token = jwt.sign({ id: 28 }, process.env.JWT_SECRET as string, { expiresIn: '1h' });
     const req = {
@@ -95,6 +95,7 @@ describe('normal auth receipt-token isolation', () => {
       roleSlug: 'assistant-manager',
       profilePhotoPath: 'drive:private-file-id',
       profilePhotoVersion: `28-${updatedAt.getTime()}`,
+      shiftRoleIds: [7],
       shiftRoleSlugs: ['manager'],
     });
     expect(next).toHaveBeenCalledTimes(1);

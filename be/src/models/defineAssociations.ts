@@ -75,6 +75,8 @@ import DerivedFieldDefinition from './DerivedFieldDefinition.js';
 import ReportDashboard from './ReportDashboard.js';
 import ReportDashboardCard from './ReportDashboardCard.js';
 import UserHomePreference from './UserHomePreference.js';
+import HomeQuickActionConfig from './HomeQuickActionConfig.js';
+import HomeQuickActionTarget from './HomeQuickActionTarget.js';
 import GameScore from './GameScore.js';
 import AffiliatePayoutLog from './AffiliatePayoutLog.js';
 import CompensationComponent from './CompensationComponent.js';
@@ -105,10 +107,13 @@ export function defineAssociations() {
   User.hasMany(ReportTemplate, { foreignKey: 'userId', as: 'reportTemplates' });
   User.hasMany(ReportDashboard, { foreignKey: 'ownerId', as: 'reportDashboards' });
   User.hasOne(UserHomePreference, { foreignKey: 'userId', as: 'homePreference' });
+  User.hasMany(HomeQuickActionTarget, { foreignKey: 'userId', as: 'homeQuickActionTargets' });
   User.hasOne(GameScore, { foreignKey: 'user_id', as: 'gameScore' });
   ReportTemplate.belongsTo(User, { foreignKey: 'userId', as: 'reportOwner' });
   ReportDashboard.belongsTo(User, { foreignKey: 'ownerId', as: 'dashboardOwner' });
   UserHomePreference.belongsTo(User, { foreignKey: 'userId', as: 'userHome' });
+  HomeQuickActionConfig.hasMany(HomeQuickActionTarget, { foreignKey: 'actionKey', as: 'targets' });
+  HomeQuickActionTarget.belongsTo(HomeQuickActionConfig, { foreignKey: 'actionKey', as: 'config' });
   User.hasMany(CompensationComponent, { foreignKey: 'created_by', as: 'compensationComponentsCreated' });
   User.hasMany(CompensationComponent, { foreignKey: 'updated_by', as: 'compensationComponentsUpdated' });
   User.hasMany(CompensationComponentAssignment, { foreignKey: 'user_id', as: 'compensationAssignments' });
@@ -339,6 +344,14 @@ export function defineAssociations() {
     foreignKey: 'default_finance_account_id',
     as: 'defaultAccountCompensationComponents',
   });
+  FinanceAccount.hasMany(VolunteerFund, {
+    foreignKey: 'linked_account_id',
+    as: 'linkedVolunteerFunds',
+  });
+  FinanceAccount.hasMany(VolunteerFund, {
+    foreignKey: 'funding_source_account_id',
+    as: 'fundingSourceVolunteerFunds',
+  });
   FinanceCategory.hasMany(CompensationComponent, {
     foreignKey: 'default_finance_category_id',
     as: 'defaultCategoryCompensationComponents',
@@ -347,6 +360,10 @@ export function defineAssociations() {
   FinanceCategory.hasMany(FinanceClient, { foreignKey: 'defaultCategoryId', as: 'clients' });
   FinanceTransaction.hasOne(AffiliatePayoutLog, { foreignKey: 'finance_transaction_id', as: 'affiliatePayoutLog' });
   FinanceTransaction.hasOne(VolunteerFundEntry, { foreignKey: 'finance_transaction_id', as: 'volunteerFundEntry' });
+  FinanceTransaction.hasOne(VolunteerFundEntry, {
+    foreignKey: 'finance_counter_transaction_id',
+    as: 'volunteerFundCounterEntry',
+  });
   VolunteerFund.hasMany(CompensationSettlementRule, { foreignKey: 'fund_id', as: 'settlementRules' });
   VolunteerFund.hasMany(VolunteerFundEntry, { foreignKey: 'fund_id', as: 'ledgerEntries' });
   VolunteerFundEntry.belongsTo(VolunteerFundEntry, { foreignKey: 'reversal_of_entry_id', as: 'reversalSource' });
