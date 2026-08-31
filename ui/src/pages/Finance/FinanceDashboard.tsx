@@ -23,6 +23,7 @@ import {
   selectFinanceTransactions,
 } from "../../selectors/financeSelectors";
 import { useFinanceBootstrap } from "../../hooks/useFinanceBootstrap";
+import { useModuleAccess } from "../../hooks/useModuleAccess";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import {
@@ -93,6 +94,7 @@ const summariseByCurrency = (transactions: FinanceTransaction[], status: Finance
 const FinanceDashboard = () => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const transactionAccess = useModuleAccess(PAGE_SLUGS.financeTransactions);
   useFinanceBootstrap();
 
   useEffect(() => {
@@ -128,7 +130,7 @@ const FinanceDashboard = () => {
   };
 
   const openNewTransaction = () => {
-    navigate("/finance/transactions", { state: { create: true } });
+    navigate("/finance/transactions?transactionModal=create");
   };
 
   return (
@@ -144,12 +146,14 @@ const FinanceDashboard = () => {
               <Button variant="light" leftSection={<IconChartBar size={17} />} onClick={() => navigate("/finance/reports")}>
                 Open reports
               </Button>
-              <FinancePrimaryAction
-                leftSection={<IconPlus size={17} />}
-                onClick={openNewTransaction}
-              >
-                Record transaction
-              </FinancePrimaryAction>
+              {transactionAccess.ready && transactionAccess.canCreate ? (
+                <FinancePrimaryAction
+                  leftSection={<IconPlus size={17} />}
+                  onClick={openNewTransaction}
+                >
+                  Record transaction
+                </FinancePrimaryAction>
+              ) : null}
             </Group>
           }
         />
@@ -221,11 +225,11 @@ const FinanceDashboard = () => {
               title="No transactions yet"
               description="Record an expense, income, refund, or transfer to begin building your finance history."
               icon={<IconReceipt2 size={25} />}
-              action={
+              action={transactionAccess.ready && transactionAccess.canCreate ? (
                 <FinancePrimaryAction leftSection={<IconPlus size={16} />} onClick={openNewTransaction}>
                   Record transaction
                 </FinancePrimaryAction>
-              }
+              ) : undefined}
             />
           ) : (
             <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="sm">

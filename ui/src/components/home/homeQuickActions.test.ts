@@ -8,15 +8,13 @@ import {
 
 describe("Home quick actions", () => {
   it("opens the Finance transaction creation flow", () => {
-    expect(HOME_QUICK_ACTIONS).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "finance-record-transaction",
-          to: "/finance/transactions",
-          state: { create: true },
-        }),
-      ]),
-    );
+    const action = HOME_QUICK_ACTIONS.find(({ id }) => id === "finance-record-transaction");
+
+    expect(action).toMatchObject({
+      id: "finance-record-transaction",
+      to: "/finance/transactions?transactionModal=create",
+    });
+    expect(action?.state).toBeUndefined();
   });
 
   it("shows actions only when their page and module action are allowed", () => {

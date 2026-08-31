@@ -1,5 +1,5 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
-import type { AxiosProgressEvent } from 'axios';
+import axios, { type AxiosProgressEvent } from 'axios';
 import axiosInstance from '../utils/axiosInstance';
 import {
   FinanceAccount,
@@ -179,6 +179,39 @@ export const fetchFinanceTransactions = createAsyncThunk<FinanceTransactionListR
       },
     );
     return response.data;
+  },
+);
+
+export const fetchFinanceTransactionById = createAsyncThunk<
+  FinanceTransaction,
+  number,
+  { rejectValue: { message: string; status: number | null } }
+>(
+  'finance/transactions/fetchById',
+  async (id, { rejectWithValue }) => {
+    try {
+      const response = await axiosInstance.get<FinanceTransaction>(
+        buildFinanceUrl(`/transactions/${id}`),
+        withCredentials,
+      );
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const payload = error.response?.data;
+        const firstMessage = Array.isArray(payload)
+          && payload[0]
+          && typeof payload[0] === 'object'
+          && 'message' in payload[0]
+          && typeof payload[0].message === 'string'
+          ? payload[0].message
+          : null;
+        return rejectWithValue({
+          message: firstMessage ?? error.message ?? 'Unable to load this transaction.',
+          status: error.response?.status ?? null,
+        });
+      }
+      throw error;
+    }
   },
 );
 

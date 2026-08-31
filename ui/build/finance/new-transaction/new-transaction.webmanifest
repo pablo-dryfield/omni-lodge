@@ -1,0 +1,31 @@
+{
+  "id": "/pwa/new-transaction",
+  "name": "OmniLodge New Transaction",
+  "short_name": "New Txn",
+  "description": "Open OmniLodge directly in a new finance transaction.",
+  "start_url": "/finance/transactions?transactionModal=create&pwa=new-transaction",
+  "scope": "/finance/",
+  "display": "standalone",
+  "theme_color": "#0a1f44",
+  "background_color": "#0a1f44",
+  "icons": [
+    {
+      "src": "/icons/new-transaction/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/new-transaction/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/new-transaction/icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ]
+}

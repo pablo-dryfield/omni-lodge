@@ -32,8 +32,7 @@ export const HOME_QUICK_ACTIONS: HomeQuickAction[] = [
     label: "Record transaction",
     description: "Add income, an expense, a refund, or a transfer.",
     group: "Finance",
-    to: "/finance/transactions",
-    state: { create: true },
+    to: "/finance/transactions?transactionModal=create",
     icon: AddCardRoundedIcon,
     tone: "emerald",
     permission: {

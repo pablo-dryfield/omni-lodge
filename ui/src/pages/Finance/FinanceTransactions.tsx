@@ -26,6 +26,7 @@ import { useMediaQuery } from "@mantine/hooks";
 import {
   IconArrowsExchange,
   IconArrowsLeftRight,
+  IconDownload,
   IconEdit,
   IconFileUpload,
   IconLock,
@@ -40,6 +41,7 @@ import {
   fetchFinanceAccounts,
   fetchFinanceCategories,
   fetchFinanceClients,
+  fetchFinanceTransactionById,
   fetchFinanceTransactions,
   fetchFinanceVendors,
   updateFinanceTransaction,
@@ -58,6 +60,8 @@ import { FinanceTransaction } from "../../types/finance";
 import type { StaffProfile } from "../../types/staffProfiles/StaffProfile";
 import dayjs from "dayjs";
 import { compressImageFile } from "../../utils/imageCompression";
+import { useModuleAccess } from "../../hooks/useModuleAccess";
+import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import {
   FinanceEmptyState,
   FinanceErrorState,
@@ -98,6 +102,17 @@ import {
 } from "./financeTransactionPayment";
 import InlineCategorySelect from "./InlineCategorySelect";
 import { getInlineParentCategoryOptions } from "./inlineCategoryCreate";
+import {
+  buildFinanceTransactionDraftStorageKey,
+  parseFinanceTransactionModalSearchParams,
+  readFinanceTransactionDraft,
+  removeFinanceTransactionDraft,
+  serializeFinanceTransactionModalSearchParams,
+  writeFinanceTransactionDraft,
+  type FinanceTransactionActiveModalState,
+  type FinanceTransactionDraft,
+  type FinanceTransactionModalState,
+} from "./financeTransactionModalPersistence";
 import {
   activeVolunteerFundLinkedAccountIds,
   createVolunteerFundSpendIdempotencyKey,
@@ -162,22 +177,7 @@ const getKindColor = (kind: FinanceTransaction["kind"]): string => {
 const extractActionError = (error: unknown, fallback: string): string =>
   getFinanceErrorMessage(error, fallback);
 
-type TransactionDraft = {
-  kind: FinanceTransaction["kind"];
-  date: string;
-  accountId: number | null;
-  targetAccountId?: number | null;
-  currency: string;
-  amountMinor: number;
-  fxRate: number;
-  categoryId: number | null;
-  counterpartyType: FinanceTransaction["counterpartyType"];
-  counterpartyId: number | null;
-  status: FinanceTransaction["status"];
-  description: string | null;
-  invoiceFileId: number | null;
-  meta: Record<string, unknown> | null;
-};
+type TransactionDraft = FinanceTransactionDraft;
 
 const toFinanceTransactionChanges = (draft: TransactionDraft): Partial<FinanceTransaction> => ({
   kind: draft.kind,
@@ -214,17 +214,71 @@ const createDefaultDraft = (
   meta: null,
 });
 
+const createDraftFromTransaction = (transaction: FinanceTransaction): TransactionDraft => {
+  const meta = transaction.meta && typeof transaction.meta === "object"
+    ? transaction.meta as Record<string, unknown>
+    : null;
+  const rawTargetAccountId = meta?.targetAccountId;
+  return {
+    kind: transaction.kind,
+    date: transaction.date,
+    accountId: transaction.accountId,
+    targetAccountId: typeof rawTargetAccountId === "number" && rawTargetAccountId > 0
+      ? rawTargetAccountId
+      : null,
+    currency: transaction.currency,
+    amountMinor: transaction.amountMinor,
+    fxRate: Number(transaction.fxRate),
+    categoryId: transaction.categoryId,
+    counterpartyType: transaction.counterpartyType,
+    counterpartyId: transaction.counterpartyId,
+    status: transaction.status,
+    description: transaction.description,
+    invoiceFileId: transaction.invoiceFileId,
+    meta,
+  };
+};
+
+const getBrowserLocalStorage = (): Storage | null => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage;
+  } catch (_error) {
+    return null;
+  }
+};
+
+class ProtectedFinanceTransactionEditError extends Error {}
+
+const getRequestStatus = (error: unknown): number | null => {
+  if (!error || typeof error !== "object" || !("status" in error)) {
+    return null;
+  }
+  const status = Number((error as { status?: unknown }).status);
+  return Number.isSafeInteger(status) && status > 0 ? status : null;
+};
+
 const FinanceTransactions = () => {
   const dispatch = useAppDispatch();
   const location = useLocation();
   const navigate = useNavigate();
+  const transactionAccess = useModuleAccess(PAGE_SLUGS.financeTransactions);
   const accounts = useAppSelector(selectFinanceAccounts);
   const categories = useAppSelector(selectFinanceCategories);
   const vendors = useAppSelector(selectFinanceVendors);
   const clients = useAppSelector(selectFinanceClients);
   const transactions = useAppSelector(selectFinanceTransactions);
   const files = useAppSelector(selectFinanceFiles);
+  const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
   const staffProfileState = useAppSelector((state) => state.staffProfiles[0]);
+  const transactionModalState = useMemo(
+    () => parseFinanceTransactionModalSearchParams(new URLSearchParams(location.search)),
+    [location.search],
+  );
+  const activeTransactionModalState: FinanceTransactionActiveModalState | null =
+    transactionModalState.mode === "closed" ? null : transactionModalState;
   const staffProfiles = useMemo(
     () =>
       ((staffProfileState.data[0]?.data as Partial<StaffProfile>[] | undefined) ?? []) as Partial<StaffProfile>[],
@@ -251,13 +305,22 @@ const FinanceTransactions = () => {
   const [uploadingInvoice, setUploadingInvoice] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [modalRouteLoading, setModalRouteLoading] = useState(false);
+  const [modalRouteError, setModalRouteError] = useState<string | null>(null);
+  const [modalAccessError, setModalAccessError] = useState<string | null>(null);
+  const [modalRouteRetryToken, setModalRouteRetryToken] = useState(0);
+  const [hydratedDraftStorageKey, setHydratedDraftStorageKey] = useState<string | null>(null);
   const [volunteerFundSpendIdempotencyKey, setVolunteerFundSpendIdempotencyKey] = useState(
     createVolunteerFundSpendIdempotencyKey,
   );
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const modalHistoryEntryRef = useRef(false);
+  const defaultCashPlnAccountRef = useRef(defaultCashPlnAccount);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
-  const volunteerFundsQuery = useVolunteerFunds({ enabled: modalOpen });
+  const volunteerFundsQuery = useVolunteerFunds({
+    enabled: modalOpen || transactionModalState.mode !== "closed",
+  });
   const createVolunteerFundSpend = useCreateVolunteerFundSpend();
   const volunteerFunds = useMemo(
     () => volunteerFundsQuery.data?.funds ?? [],
@@ -279,25 +342,74 @@ const FinanceTransactions = () => {
     [categories.data],
   );
 
-  const openCreateModal = useCallback(() => {
-    setEditingTransaction(null);
-    setDraft(createDefaultDraft(defaultCashPlnAccount));
-    setVolunteerFundSpendIdempotencyKey(createVolunteerFundSpendIdempotencyKey());
-    setSaveError(null);
-    setUploadError(null);
-    setInlineCreateModalOpen(false);
-    setModalOpen(true);
+  useEffect(() => {
+    defaultCashPlnAccountRef.current = defaultCashPlnAccount;
   }, [defaultCashPlnAccount]);
+
+  const navigateTransactionModal = useCallback((
+    nextState: FinanceTransactionModalState,
+    replace: boolean,
+  ) => {
+    const nextParams = serializeFinanceTransactionModalSearchParams(
+      new URLSearchParams(location.search),
+      nextState,
+    );
+    const query = nextParams.toString();
+    navigate(
+      {
+        pathname: location.pathname,
+        search: query ? `?${query}` : "",
+        hash: location.hash,
+      },
+      { replace, state: null },
+    );
+  }, [location.hash, location.pathname, location.search, navigate]);
+
+  const removeStoredDraft = useCallback((state: FinanceTransactionActiveModalState | null) => {
+    const storage = getBrowserLocalStorage();
+    if (storage && state && loggedUserId > 0) {
+      removeFinanceTransactionDraft(storage, loggedUserId, state);
+    }
+  }, [loggedUserId]);
+
+  const openCreateModal = useCallback(() => {
+    if (!transactionAccess.ready || !transactionAccess.canCreate) {
+      setModalAccessError(
+        transactionAccess.ready
+          ? "You do not have permission to create finance transactions."
+          : "Your finance permissions are still loading. Try again in a moment.",
+      );
+      return;
+    }
+    modalHistoryEntryRef.current = true;
+    setModalAccessError(null);
+    setModalRouteError(null);
+    navigateTransactionModal({ mode: "create", transactionId: null }, false);
+  }, [navigateTransactionModal, transactionAccess.canCreate, transactionAccess.ready]);
+
+  const openEditModal = useCallback((transactionId: number) => {
+    modalHistoryEntryRef.current = true;
+    setModalRouteError(null);
+    navigateTransactionModal({ mode: "edit", transactionId }, false);
+  }, [navigateTransactionModal]);
 
   const closeModal = () => {
     if (saving || uploadingInvoice) {
       return;
     }
+    removeStoredDraft(activeTransactionModalState);
     setModalOpen(false);
     setInlineCreateModalOpen(false);
     setEditingTransaction(null);
+    setHydratedDraftStorageKey(null);
     setSaveError(null);
     setUploadError(null);
+    if (modalHistoryEntryRef.current) {
+      modalHistoryEntryRef.current = false;
+      navigate(-1);
+      return;
+    }
+    navigateTransactionModal({ mode: "closed", transactionId: null }, true);
   };
 
   useEffect(() => {
@@ -305,9 +417,22 @@ const FinanceTransactions = () => {
     if (!routeState?.create) {
       return;
     }
-    openCreateModal();
-    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
-  }, [location.pathname, location.search, location.state, navigate, openCreateModal]);
+    if (!transactionAccess.ready) {
+      return;
+    }
+    if (!transactionAccess.canCreate) {
+      setModalAccessError("You do not have permission to create finance transactions.");
+      navigateTransactionModal({ mode: "closed", transactionId: null }, true);
+      return;
+    }
+    setModalAccessError(null);
+    navigateTransactionModal({ mode: "create", transactionId: null }, true);
+  }, [
+    location.state,
+    navigateTransactionModal,
+    transactionAccess.canCreate,
+    transactionAccess.ready,
+  ]);
 
   useEffect(() => {
     void dispatch(fetchFinanceAccounts());
@@ -317,6 +442,194 @@ const FinanceTransactions = () => {
     void dispatch(fetchFinanceTransactions({ limit: TRANSACTION_PAGE_SIZE, offset: 0 }));
     void dispatch(fetchStaffProfiles());
   }, [dispatch]);
+
+  useEffect(() => {
+    const currentParams = new URLSearchParams(location.search);
+    const hasModalParams = currentParams.has("transactionModal")
+      || currentParams.has("transactionId");
+
+    if (transactionModalState.mode === "closed") {
+      if (hasModalParams) {
+        navigateTransactionModal({ mode: "closed", transactionId: null }, true);
+        return;
+      }
+      setModalOpen(false);
+      setInlineCreateModalOpen(false);
+      setEditingTransaction(null);
+      setHydratedDraftStorageKey(null);
+      setModalRouteLoading(false);
+      modalHistoryEntryRef.current = false;
+      return;
+    }
+
+    if (transactionModalState.mode === "create" && !transactionAccess.ready) {
+      setModalRouteLoading(true);
+      return;
+    }
+
+    if (transactionModalState.mode === "create" && !transactionAccess.canCreate) {
+      setModalOpen(false);
+      setInlineCreateModalOpen(false);
+      setEditingTransaction(null);
+      setHydratedDraftStorageKey(null);
+      setModalRouteLoading(false);
+      setModalAccessError("You do not have permission to create finance transactions.");
+      modalHistoryEntryRef.current = false;
+      navigateTransactionModal({ mode: "closed", transactionId: null }, true);
+      return;
+    }
+
+    if (transactionModalState.mode === "create") {
+      setModalAccessError(null);
+    }
+
+    if (!Number.isSafeInteger(loggedUserId) || loggedUserId <= 0) {
+      return;
+    }
+
+    const activeState = transactionModalState;
+    const storageKey = buildFinanceTransactionDraftStorageKey(loggedUserId, activeState);
+    if (!storageKey || hydratedDraftStorageKey === storageKey) {
+      return;
+    }
+
+    const storage = getBrowserLocalStorage();
+    let cancelled = false;
+    setHydratedDraftStorageKey(null);
+    setSaveError(null);
+    setUploadError(null);
+    setInlineCreateModalOpen(false);
+    setModalRouteError(null);
+
+    if (activeState.mode === "create") {
+      const restored = storage
+        ? readFinanceTransactionDraft(storage, loggedUserId, activeState)
+        : null;
+      setEditingTransaction(null);
+      setDraft(restored?.draft ?? createDefaultDraft(defaultCashPlnAccountRef.current));
+      setVolunteerFundSpendIdempotencyKey(
+        restored?.volunteerFundSpendIdempotencyKey
+        ?? createVolunteerFundSpendIdempotencyKey(),
+      );
+      setModalOpen(true);
+      setModalRouteLoading(false);
+      setHydratedDraftStorageKey(storageKey);
+      return;
+    }
+
+    setModalOpen(false);
+    setModalRouteLoading(true);
+    const hydrateEdit = async () => {
+      try {
+        const transaction = await dispatch(
+          fetchFinanceTransactionById(activeState.transactionId),
+        ).unwrap();
+        if (cancelled) {
+          return;
+        }
+        if (
+          transaction.kind === "transfer"
+          || isVolunteerFundManagedTransactionMeta(transaction.meta)
+        ) {
+          throw new ProtectedFinanceTransactionEditError(
+            "This transaction is managed by a protected workflow and cannot be edited here.",
+          );
+        }
+
+        let restored = storage
+          ? readFinanceTransactionDraft(storage, loggedUserId, activeState)
+          : null;
+        if (restored) {
+          const serverUpdatedAt = Date.parse(transaction.updatedAt ?? transaction.createdAt);
+          const draftUpdatedAt = Date.parse(restored.updatedAt);
+          if (
+            Number.isFinite(serverUpdatedAt)
+            && Number.isFinite(draftUpdatedAt)
+            && serverUpdatedAt > draftUpdatedAt
+          ) {
+            removeFinanceTransactionDraft(storage!, loggedUserId, activeState);
+            restored = null;
+            setModalRouteError(
+              "A newer version of this transaction was found, so the older local draft was not restored.",
+            );
+          }
+        }
+
+        setEditingTransaction(transaction);
+        setDraft(restored?.draft ?? createDraftFromTransaction(transaction));
+        setVolunteerFundSpendIdempotencyKey(createVolunteerFundSpendIdempotencyKey());
+        setModalOpen(true);
+        setModalRouteLoading(false);
+        setHydratedDraftStorageKey(storageKey);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const isTerminalError = error instanceof ProtectedFinanceTransactionEditError
+          || getRequestStatus(error) === 404;
+        if (storage && isTerminalError) {
+          removeFinanceTransactionDraft(storage, loggedUserId, activeState);
+        }
+        setModalOpen(false);
+        setEditingTransaction(null);
+        setModalRouteLoading(false);
+        setHydratedDraftStorageKey(null);
+        setModalRouteError(extractActionError(error, "Unable to open this transaction."));
+        if (isTerminalError) {
+          modalHistoryEntryRef.current = false;
+          navigateTransactionModal({ mode: "closed", transactionId: null }, true);
+        }
+      }
+    };
+    void hydrateEdit();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    dispatch,
+    hydratedDraftStorageKey,
+    location.search,
+    loggedUserId,
+    modalRouteRetryToken,
+    navigateTransactionModal,
+    transactionAccess.canCreate,
+    transactionAccess.ready,
+    transactionModalState,
+  ]);
+
+  useEffect(() => {
+    if (!modalOpen || !activeTransactionModalState || loggedUserId <= 0) {
+      return;
+    }
+    const storageKey = buildFinanceTransactionDraftStorageKey(
+      loggedUserId,
+      activeTransactionModalState,
+    );
+    if (!storageKey || storageKey !== hydratedDraftStorageKey) {
+      return;
+    }
+    const storage = getBrowserLocalStorage();
+    if (!storage) {
+      return;
+    }
+    writeFinanceTransactionDraft(
+      storage,
+      loggedUserId,
+      activeTransactionModalState,
+      draft,
+      activeTransactionModalState.mode === "create"
+        ? volunteerFundSpendIdempotencyKey
+        : null,
+    );
+  }, [
+    activeTransactionModalState,
+    draft,
+    hydratedDraftStorageKey,
+    loggedUserId,
+    modalOpen,
+    volunteerFundSpendIdempotencyKey,
+  ]);
 
   useEffect(() => {
     if (!modalOpen || editingTransaction || draft.accountId || !defaultCashPlnAccount) {
@@ -393,31 +706,6 @@ const FinanceTransactions = () => {
       ].some((value) => String(value ?? "").toLowerCase().includes(query)),
     );
   }, [search, transactionRows]);
-
-  useEffect(() => {
-    if (!editingTransaction) {
-      return;
-    }
-    const metaRecord = (editingTransaction.meta as Record<string, unknown> | null) ?? null;
-    const targetAccountId =
-      metaRecord && typeof metaRecord.targetAccountId === "number" ? Number(metaRecord.targetAccountId) : null;
-    setDraft({
-      kind: editingTransaction.kind,
-      date: editingTransaction.date,
-      accountId: editingTransaction.accountId,
-      targetAccountId,
-      currency: editingTransaction.currency,
-      amountMinor: editingTransaction.amountMinor,
-      fxRate: Number(editingTransaction.fxRate),
-      categoryId: editingTransaction.categoryId,
-      counterpartyType: editingTransaction.counterpartyType,
-      counterpartyId: editingTransaction.counterpartyId,
-      status: editingTransaction.status,
-      description: editingTransaction.description,
-      invoiceFileId: editingTransaction.invoiceFileId,
-      meta: metaRecord,
-    });
-  }, [editingTransaction]);
 
   const selectedVolunteerFundResolution = useMemo(
     () => resolveActiveVolunteerFundAccount(volunteerFunds, draft.accountId),
@@ -510,6 +798,10 @@ const FinanceTransactions = () => {
 
   const handleSubmit = async () => {
     setSaveError(null);
+    if (!editingTransaction && (!transactionAccess.ready || !transactionAccess.canCreate)) {
+      setSaveError("You do not have permission to create finance transactions.");
+      return;
+    }
     if (!draft.accountId || !draft.date || !draft.currency.trim()) {
       setSaveError("Date, account, and currency are required.");
       return;
@@ -736,6 +1028,17 @@ const FinanceTransactions = () => {
         await dispatch(createFinanceTransaction(commonPayload)).unwrap();
       }
 
+      removeStoredDraft(activeTransactionModalState);
+      setModalOpen(false);
+      setInlineCreateModalOpen(false);
+      setEditingTransaction(null);
+      setHydratedDraftStorageKey(null);
+      setDraft(createDefaultDraft(defaultCashPlnAccount));
+      setFilters({ ...appliedFilters });
+      setSearch("");
+      modalHistoryEntryRef.current = false;
+      navigateTransactionModal({ mode: "closed", transactionId: null }, true);
+
       await dispatch(
         fetchFinanceTransactions({
           status: appliedFilters.status,
@@ -745,12 +1048,6 @@ const FinanceTransactions = () => {
           offset: 0,
         }),
       );
-
-      setModalOpen(false);
-      setEditingTransaction(null);
-      setDraft(createDefaultDraft(defaultCashPlnAccount));
-      setFilters({ ...appliedFilters });
-      setSearch("");
     } catch (error) {
       setSaveError(extractActionError(error, "Unable to save this transaction."));
     } finally {
@@ -950,10 +1247,7 @@ const FinanceTransactions = () => {
               if (isReadOnly) {
                 return;
               }
-              setEditingTransaction(transaction);
-              setSaveError(null);
-              setUploadError(null);
-              setModalOpen(true);
+              openEditModal(transaction.id);
             }}
             aria-label={
               isReadOnly
@@ -981,11 +1275,66 @@ const FinanceTransactions = () => {
         description="Record income, expenses, transfers, and refunds with consistent finance classifications."
         icon={<IconArrowsExchange size={24} />}
         actions={
-          <FinancePrimaryAction leftSection={<IconPlus size={18} />} onClick={openCreateModal}>
-            New transaction
-          </FinancePrimaryAction>
+          transactionAccess.ready && transactionAccess.canCreate ? (
+            <Group gap="sm" wrap="wrap">
+              <Button
+                component="a"
+                href="/finance/new-transaction/install.html"
+                target="_blank"
+                rel="noopener"
+                variant="default"
+                leftSection={<IconDownload size={17} />}
+              >
+                Install transaction app
+              </Button>
+              <FinancePrimaryAction leftSection={<IconPlus size={18} />} onClick={openCreateModal}>
+                New transaction
+              </FinancePrimaryAction>
+            </Group>
+          ) : null
         }
       />
+
+      {modalAccessError && (
+        <Alert
+          color="orange"
+          variant="light"
+          title="Cannot create transaction"
+          withCloseButton
+          onClose={() => setModalAccessError(null)}
+        >
+          {modalAccessError}
+        </Alert>
+      )}
+      {modalRouteLoading && (
+        <Alert color="blue" variant="light" title="Opening transaction">
+          Loading the requested transaction…
+        </Alert>
+      )}
+      {modalRouteError && !modalOpen && (
+        <Alert
+          color="orange"
+          variant="light"
+          title="Transaction draft notice"
+          withCloseButton
+          onClose={() => setModalRouteError(null)}
+        >
+          <Stack gap="xs">
+            <Text size="sm">{modalRouteError}</Text>
+            {transactionModalState.mode === "edit" && !modalOpen && (
+              <Group justify="flex-start">
+                <Button
+                  size="xs"
+                  variant="light"
+                  onClick={() => setModalRouteRetryToken((value) => value + 1)}
+                >
+                  Retry opening
+                </Button>
+              </Group>
+            )}
+          </Stack>
+        </Alert>
+      )}
 
       <FinanceToolbar
         searchValue={search}
@@ -1060,7 +1409,13 @@ const FinanceTransactions = () => {
                 ? "Record the first income, expense, transfer, or refund to start the ledger."
                 : "Try clearing a filter or using a broader search."
             }
-            action={transactionRows.length === 0 ? <Button onClick={openCreateModal}>Record transaction</Button> : undefined}
+            action={
+              transactionRows.length === 0
+                && transactionAccess.ready
+                && transactionAccess.canCreate
+                ? <Button onClick={openCreateModal}>Record transaction</Button>
+                : undefined
+            }
           />
         ) : isMobile ? (
           <Stack gap={0} p="sm">
@@ -1158,12 +1513,25 @@ const FinanceTransactions = () => {
         styles={{ title: { width: "100%", textAlign: "center" } }}
       >
         <form
+          key={hydratedDraftStorageKey ?? "closed-transaction-modal"}
           onSubmit={(event) => {
             event.preventDefault();
             void handleSubmit();
           }}
         >
           <Stack gap="md" className={classes.transactionForm}>
+            {modalRouteError && (
+              <Alert
+                className={classes.formAlert}
+                color="orange"
+                variant="light"
+                title="Local draft notice"
+                withCloseButton
+                onClose={() => setModalRouteError(null)}
+              >
+                {modalRouteError}
+              </Alert>
+            )}
             {!editingTransaction && (
               <Box className={classes.kindBlock}>
                 <Text className={classes.compactTitle}>Transaction type</Text>
@@ -1289,7 +1657,7 @@ const FinanceTransactions = () => {
                 className={classes.fundContext}
                 color={volunteerFundCategoryIssue || volunteerFundSpendExceedsBalance ? "red" : "violet"}
                 icon={<IconWallet size={18} />}
-                title={`Volunteer Fund spend · ${selectedVolunteerFund.name}`}
+                title={`${selectedVolunteerFund.name}`}
               >
                 <Stack gap={5}>
                   <Group justify="center" gap="xs" wrap="wrap">
@@ -1305,17 +1673,9 @@ const FinanceTransactions = () => {
                       </Badge>
                     )}
                   </Group>
-                  <Text size="sm" ta="center">
-                    Saving records one paid company expense and one fund-ledger spend together.
-                  </Text>
                   {volunteerFundCategoryIssue && (
                     <Text size="sm" fw={700} c="red.8" ta="center">
                       {volunteerFundCategoryIssue} Configure it on the Volunteer Funds page first.
-                    </Text>
-                  )}
-                  {!selectedVolunteerFund.expenseCategoryId && (
-                    <Text size="sm" c="dimmed" ta="center">
-                      This fund has no default category. Select an active expense category below.
                     </Text>
                   )}
                   {volunteerFundSpendExceedsBalance && (
@@ -1512,6 +1872,7 @@ const FinanceTransactions = () => {
                   loading={saving}
                   disabled={
                     uploadingInvoice
+                    || (!editingTransaction && (!transactionAccess.ready || !transactionAccess.canCreate))
                     || accountCurrencyMismatch
                     || transferCurrencyMismatch
                     || (!editingTransaction && volunteerFundsQuery.isFetching)

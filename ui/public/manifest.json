@@ -2,6 +2,7 @@
   "name": "OmniLodge",
   "short_name": "OmniLodge",
   "description": "Operations platform for Omni Lodge",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -34,6 +35,26 @@
       "type": "image/png",
       "sizes": "512x512",
       "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Record transaction",
+      "short_name": "Transaction",
+      "description": "Open a new finance transaction.",
+      "url": "/finance/transactions?transactionModal=create",
+      "icons": [
+        {
+          "src": "icons/new-transaction/icon-96.png",
+          "type": "image/png",
+          "sizes": "96x96"
+        },
+        {
+          "src": "icons/new-transaction/icon-192.png",
+          "type": "image/png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ],
   "screenshots": [

@@ -77,7 +77,19 @@ app.use(
     setHeaders: (res, filePath) => {
       const filename = path.basename(filePath);
 
-      if (filename === 'index.html' || filename === 'asset-manifest.json' || filename === 'service-worker.js') {
+      if (filename.endsWith('.webmanifest')) {
+        res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+      }
+
+      if (
+        filename === 'index.html' ||
+        filename === 'asset-manifest.json' ||
+        filename === 'service-worker.js' ||
+        filename === 'manifest.json' ||
+        filename === 'pwa-manifest-selector.js' ||
+        filename === 'install.html' ||
+        filename.endsWith('.webmanifest')
+      ) {
         setNoCacheHeaders(res);
         return;
       }

@@ -42,7 +42,7 @@ import { clearSessionError } from '../reducers/sessionReducer';
 import { useShiftRoles } from '../api/shiftRoles';
 import type { ShiftRole } from '../types/shiftRoles/ShiftRole';
 import { useMediaQuery } from '@mantine/hooks';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import PhoneCodeSelectField from '../components/common/PhoneCodeSelectField';
 import { StaffBadgeFrontPreview } from '../components/badges/StaffBadgeFrontPreview';
 import { PRONOUN_OPTIONS } from '../constants/pronouns';
@@ -50,6 +50,7 @@ import { DEFAULT_PHONE_CODE } from '../constants/phoneCodes';
 import { DISCOVERY_SOURCE_OPTIONS } from '../constants/discoverySources';
 import { EMAIL_REGEX, isPhoneNumberValid, normalizePhoneNumber } from '../utils/contactValidation';
 import { buildPhoneFromParts, splitPhoneNumber } from '../utils/phone';
+import { getPostLoginDestination } from './loginRedirect';
 
 const COUNTRY_NAMES = [
   'Afghanistan',
@@ -550,6 +551,7 @@ const signupFlowCss = `
 const LoginPage: React.FC = () => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, error } = useAppSelector((state) => state.session);
   const [isSignup, setIsSignup] = useState(false);
   const [password, setPassword] = useState('');
@@ -974,7 +976,7 @@ const LoginPage: React.FC = () => {
       await dispatch(loginUser({ email: user, password })).unwrap();
       const sessionPayload = await dispatch(fetchSession()).unwrap();
       const roleSlug = String(sessionPayload?.[0]?.roleSlug ?? '').trim().toLowerCase();
-      navigate(roleSlug === 'affiliate' ? '/affiliates' : '/', { replace: true });
+      navigate(getPostLoginDestination(roleSlug, location), { replace: true });
     } catch (err) {
       console.error('Login failed:', err);
     } finally {

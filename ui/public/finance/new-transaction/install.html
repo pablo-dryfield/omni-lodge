@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a1f44" />
+    <meta name="description" content="Install the OmniLodge New Transaction companion app." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/icons/new-transaction/icon-96.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/new-transaction/apple-touch-icon-180.png" />
+    <link rel="manifest" href="/finance/new-transaction/new-transaction.webmanifest" />
+    <link rel="stylesheet" href="/finance/new-transaction/install.css" />
+    <title>Install New Transaction · OmniLodge</title>
+  </head>
+  <body>
+    <main class="install-shell">
+      <section class="install-card" aria-labelledby="install-title">
+        <div class="brand-row">
+          <span class="brand-mark" aria-hidden="true">OL</span>
+          <span>OmniLodge companion app</span>
+        </div>
+
+        <img
+          class="app-icon"
+          src="/icons/new-transaction/icon-192.png"
+          width="112"
+          height="112"
+          alt="New Transaction app icon"
+        />
+
+        <p class="eyebrow">One-tap finance entry</p>
+        <h1 id="install-title">New Transaction</h1>
+        <p class="intro">
+          Add a second OmniLodge icon to your home screen. Tapping it opens a fresh transaction immediately.
+        </p>
+
+        <div class="actions">
+          <button id="install-button" class="primary-action" type="button" hidden>
+            Install New Transaction
+          </button>
+          <a
+            class="secondary-action"
+            href="/finance/transactions?transactionModal=create&pwa=new-transaction"
+          >
+            Open transaction now
+          </a>
+        </div>
+
+        <p id="install-status" class="status" role="status" aria-live="polite"></p>
+
+        <section id="manual-install" class="instructions" aria-labelledby="manual-title">
+          <h2 id="manual-title">Install from your browser</h2>
+          <ol>
+            <li id="menu-step">Open your browser menu or Share menu.</li>
+            <li>Choose <strong>Install app</strong> or <strong>Add to Home Screen</strong>.</li>
+            <li>Confirm <strong>New Transaction</strong>.</li>
+          </ol>
+        </section>
+
+        <div class="security-note">
+          <span aria-hidden="true">✓</span>
+          <p>
+            This uses the same OmniLodge backend and finance permissions. You may be asked to sign in on a newly installed device app.
+          </p>
+        </div>
+
+        <a class="back-link" href="/finance/transactions">Back to Finance</a>
+      </section>
+    </main>
+    <script src="/finance/new-transaction/install.js"></script>
+  </body>
+</html>
