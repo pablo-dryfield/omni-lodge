@@ -3,6 +3,24 @@ export type AssistantManagerTaskCadence = 'daily' | 'weekly' | 'biweekly' | 'eve
 export type AssistantManagerTaskScheduleConfig = Record<string, unknown> & {
   requiredShiftTemplateIds?: number[];
   scheduledWorkdayPlacement?: 'start' | 'middle' | 'end';
+  requireSocialMediaPlan?: boolean;
+};
+
+export type AssistantManagerTaskSocialMediaContentStatus =
+  | 'idea'
+  | 'planned'
+  | 'in_production'
+  | 'ready'
+  | 'published'
+  | 'archived';
+
+export type AssistantManagerTaskSocialMediaContentSummary = {
+  id: number;
+  title: string;
+  status: AssistantManagerTaskSocialMediaContentStatus;
+  platforms: string[];
+  scheduledAt: string | null;
+  thumbnailUrl: string | null;
 };
 
 export type AssistantManagerTaskEvidenceRuleType = 'link' | 'image';
@@ -97,6 +115,9 @@ export type AssistantManagerTaskLogMeta = {
   shiftAssignmentId?: number | null;
   shiftTimeStart?: string | null;
   shiftTimeEnd?: string | null;
+  requireSocialMediaPlan?: boolean;
+  socialMediaContentId?: number | null;
+  socialMediaContentSnapshot?: AssistantManagerTaskSocialMediaContentSummary | null;
   [key: string]: unknown;
 };
 
@@ -131,6 +152,7 @@ export type AssistantManagerTaskLog = {
   completedAt?: string | null;
   notes?: string | null;
   meta: AssistantManagerTaskLogMeta;
+  socialMediaContent?: AssistantManagerTaskSocialMediaContentSummary | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 };
@@ -150,6 +172,7 @@ export type ManualAssistantManagerTaskPayload = {
   evidence?: string[];
   comment?: string;
   requireShift?: boolean;
+  socialMediaContentId?: number | null;
 };
 
 export type TaskLogMetaUpdatePayload = {
@@ -165,6 +188,14 @@ export type TaskLogMetaUpdatePayload = {
   notes?: string | null;
   taskDate?: string;
   requireShift?: boolean;
+  socialMediaContentId?: number | null;
+};
+
+export type TaskLogStatusUpdatePayload = {
+  status?: AssistantManagerTaskLog['status'];
+  notes?: string | null;
+  evidenceItems?: AssistantManagerTaskEvidenceItem[];
+  socialMediaContentId?: number | null;
 };
 
 export type ManagedAssistantManagerTaskLogPayload = {

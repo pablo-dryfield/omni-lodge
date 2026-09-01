@@ -130,6 +130,13 @@ export const HOME_MODULE_PRESENTATIONS: Record<string, HomeModulePresentation> =
     tone: "rose",
     icon: CampaignRoundedIcon,
   },
+  [PAGE_SLUGS.socialMedia]: {
+    description: "Plan, produce, and publish social content from one visual board.",
+    staffDescription: "Plan and follow the social content assigned to your team.",
+    group: "growth",
+    tone: "violet",
+    icon: CampaignRoundedIcon,
+  },
   [PAGE_SLUGS.searchConsole]: {
     description: "Analyze search visibility, queries, and opportunities.",
     staffDescription: "View the search visibility and query insights available to you.",

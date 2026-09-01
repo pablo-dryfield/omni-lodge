@@ -69,6 +69,7 @@ import {
   clearAmTaskLogsForRange,
   createAmTaskAssignment,
   fetchAmTaskCerebroLinkItemDetail,
+  fetchAmTaskSocialMediaContentOptions,
   createAmTaskTemplate,
   createManualAmTaskLog,
   deleteAmTaskAssignment,
@@ -82,6 +83,7 @@ import {
   type AmTaskCerebroLinkOptionsResponse,
   type AmTaskCerebroLinkItemDetail,
   type AmTaskCerebroLinkItemType,
+  type AmTaskSocialMediaContentOption,
   type AmTaskPlannerBootstrapResponse,
   type ClearAmTaskLogsResponse,
   type GenerateAmTaskLogsResponse,
@@ -115,6 +117,7 @@ import type {
   AssistantManagerTaskEvidenceRule,
   AssistantManagerTaskLog,
   AssistantManagerTaskLogMeta,
+  AssistantManagerTaskSocialMediaContentSummary,
   ManagedAssistantManagerTaskLogPayload,
   AssistantManagerTaskTemplate,
   ManualAssistantManagerTaskPayload,
@@ -130,6 +133,7 @@ type ScheduledWorkdayPlacement = 'start' | 'middle' | 'end';
 
 type BulkTemplateOptionMode = 'unchanged' | 'scheduled_only' | 'off_days_allowed';
 type BulkRequiredShiftMode = 'unchanged' | 'replace' | 'remove';
+type BulkSocialMediaPlanMode = 'unchanged' | 'required' | 'optional';
 type BulkScheduledWorkdayPlacement = 'unchanged' | ScheduledWorkdayPlacement;
 
 type TemplateFormState = {
@@ -151,6 +155,7 @@ type TemplateFormState = {
   completionWindowMode: TaskCompletionWindowMode;
   defaultPoints: string;
   requireShift: boolean;
+  requireSocialMediaPlan: boolean;
   reminderMinutesBeforeStart: string;
   notifyAtStart: boolean;
   evidenceRules: EvidenceRuleDraft[];
@@ -172,6 +177,7 @@ type AssignmentFormState = {
 
 type BulkTemplateOptionsFormState = {
   assigneeSchedule: BulkTemplateOptionMode;
+  socialMediaPlan: BulkSocialMediaPlanMode;
   requiredShiftMode: BulkRequiredShiftMode;
   requiredShiftTemplateIds: string[];
   scheduledWorkdayPlacement: BulkScheduledWorkdayPlacement;
@@ -199,6 +205,7 @@ type LogDetailFormState = {
   priority: PlannerPriority;
   points: string;
   evidenceItems: AssistantManagerTaskEvidenceItem[];
+  socialMediaContentId: string;
 };
 
 type DashboardTaskEditFormState = {
@@ -313,6 +320,7 @@ const defaultTemplateFormState: TemplateFormState = {
   completionWindowMode: 'day',
   defaultPoints: '',
   requireShift: true,
+  requireSocialMediaPlan: false,
   reminderMinutesBeforeStart: '',
   notifyAtStart: true,
   evidenceRules: [],
@@ -334,6 +342,7 @@ const defaultAssignmentFormState: AssignmentFormState = {
 
 const defaultBulkTemplateOptionsFormState: BulkTemplateOptionsFormState = {
   assigneeSchedule: 'unchanged',
+  socialMediaPlan: 'unchanged',
   requiredShiftMode: 'unchanged',
   requiredShiftTemplateIds: [],
   scheduledWorkdayPlacement: 'unchanged',
@@ -440,6 +449,7 @@ const defaultLogDetailFormState: LogDetailFormState = {
   priority: 'medium',
   points: '1',
   evidenceItems: [],
+  socialMediaContentId: '',
 };
 
 const defaultDashboardTaskEditFormState: DashboardTaskEditFormState = {
@@ -520,6 +530,31 @@ const STATUS_COLORS: Record<AssistantManagerTaskLog['status'], string> = {
   missed: 'red',
   waived: 'yellow',
 };
+
+const SOCIAL_MEDIA_STATUS_META: Record<
+  AssistantManagerTaskSocialMediaContentSummary['status'],
+  { label: string; color: string; taskReady: boolean }
+> = {
+  idea: { label: 'Idea', color: 'gray', taskReady: false },
+  planned: { label: 'Planned', color: 'blue', taskReady: true },
+  in_production: { label: 'In production', color: 'violet', taskReady: true },
+  ready: { label: 'Ready', color: 'teal', taskReady: true },
+  published: { label: 'Published', color: 'green', taskReady: true },
+  archived: { label: 'Archived', color: 'red', taskReady: false },
+};
+
+const getTaskSocialMediaContent = (
+  log?: AssistantManagerTaskLog | null,
+): AssistantManagerTaskSocialMediaContentSummary | null =>
+  log?.socialMediaContent ?? log?.meta?.socialMediaContentSnapshot ?? null;
+
+const doesTaskRequireSocialMediaPlan = (
+  log?: AssistantManagerTaskLog | null,
+  template?: AssistantManagerTaskTemplate | null,
+): boolean =>
+  typeof log?.meta?.requireSocialMediaPlan === 'boolean'
+    ? log.meta.requireSocialMediaPlan
+    : template?.scheduleConfig?.requireSocialMediaPlan === true;
 
 const isSatisfiedTaskStatus = (status: AssistantManagerTaskLog['status']) =>
   status === 'completed' || status === 'waived';
@@ -922,6 +957,7 @@ const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate |
   delete nextConfig.priority;
   delete nextConfig.points;
   delete nextConfig.requireShift;
+  delete nextConfig.requireSocialMediaPlan;
   delete nextConfig.requireScheduledShift;
   delete nextConfig.allowOffDays;
   delete nextConfig.completionWindowMode;
@@ -1237,6 +1273,12 @@ const buildLogDetailFormStateFromLog = (log: AssistantManagerTaskLog): LogDetail
     priority,
     points: meta.points != null ? String(meta.points) : '1',
     evidenceItems: getNormalizedEvidenceItems(meta),
+    socialMediaContentId:
+      typeof meta.socialMediaContentId === 'number' && meta.socialMediaContentId > 0
+        ? String(meta.socialMediaContentId)
+        : log.socialMediaContent?.id
+          ? String(log.socialMediaContent.id)
+          : '',
   };
 };
 
@@ -1458,6 +1500,7 @@ const resolveTemplateDefaults = (template?: AssistantManagerTaskTemplate | null)
       config.requireScheduledShift === false ||
       config.allowOffDays === true
     ),
+    requireSocialMediaPlan: config.requireSocialMediaPlan === true,
     tags: normalizeTags(config.tags),
   };
 };
@@ -3633,6 +3676,11 @@ const AssistantManagerTaskPlanner = () => {
     });
 
     summary.push({
+      label: 'Social Media gate',
+      value: templateFormState.requireSocialMediaPlan ? 'Required' : 'Optional',
+    });
+
+    summary.push({
       label: 'Shift evidence',
       value: `${templateFormState.shiftEvidenceSources.length} configured`,
     });
@@ -3662,6 +3710,7 @@ const AssistantManagerTaskPlanner = () => {
     templateFormState.linkedQuizIds.length,
     templateFormState.nightReportWaiverRules.length,
     templateFormState.requireShift,
+    templateFormState.requireSocialMediaPlan,
     templateFormState.requiredShiftTemplateIds.length,
     templateFormState.scheduledWorkdayPlacement,
     templateFormState.timesPerWeekPerAssignedUser,
@@ -3790,6 +3839,13 @@ const AssistantManagerTaskPlanner = () => {
   const [logDetailCompleting, setLogDetailCompleting] = useState(false);
   const [logDetailReopening, setLogDetailReopening] = useState(false);
   const [logDetailError, setLogDetailError] = useState<string | null>(null);
+  const [socialMediaPlanOptions, setSocialMediaPlanOptions] = useState<
+    AmTaskSocialMediaContentOption[]
+  >([]);
+  const [socialMediaPlanSearch, setSocialMediaPlanSearch] = useState('');
+  const [socialMediaPlanOptionsLoading, setSocialMediaPlanOptionsLoading] = useState(false);
+  const [socialMediaPlanOptionsError, setSocialMediaPlanOptionsError] = useState<string | null>(null);
+  const [socialMediaPlanSaving, setSocialMediaPlanSaving] = useState(false);
   const [dashboardTaskEditOpen, setDashboardTaskEditOpen] = useState(false);
   const [dashboardTaskEditFormState, setDashboardTaskEditFormState] =
     useState<DashboardTaskEditFormState>(defaultDashboardTaskEditFormState);
@@ -3891,6 +3947,100 @@ const AssistantManagerTaskPlanner = () => {
     () => (selectedLog ? templateMap.get(selectedLog.templateId) ?? null : null),
     [selectedLog, templateMap],
   );
+  const selectedLogId = selectedLog?.id ?? null;
+  const selectedLogRequiresSocialMediaPlan = doesTaskRequireSocialMediaPlan(
+    selectedLog,
+    selectedLogTemplate,
+  );
+  const selectedLogSocialMediaContent = useMemo(
+    () => getTaskSocialMediaContent(selectedLog),
+    [selectedLog],
+  );
+  const selectedSocialMediaPlanOption = useMemo(() => {
+    const contentId = Number(logDetailFormState.socialMediaContentId);
+    if (!Number.isInteger(contentId) || contentId <= 0) {
+      return null;
+    }
+    const option = socialMediaPlanOptions.find((item) => item.id === contentId);
+    if (option) {
+      return option;
+    }
+    if (selectedLogSocialMediaContent?.id === contentId) {
+      return {
+        ...selectedLogSocialMediaContent,
+        isTaskReady:
+          SOCIAL_MEDIA_STATUS_META[selectedLogSocialMediaContent.status].taskReady,
+      } satisfies AmTaskSocialMediaContentOption;
+    }
+    return null;
+  }, [
+    logDetailFormState.socialMediaContentId,
+    selectedLogSocialMediaContent,
+    socialMediaPlanOptions,
+  ]);
+  const socialMediaPlanSelectData = useMemo(() => {
+    const options = [...socialMediaPlanOptions];
+    if (
+      selectedLogSocialMediaContent &&
+      !options.some((item) => item.id === selectedLogSocialMediaContent.id)
+    ) {
+      options.unshift({
+        ...selectedLogSocialMediaContent,
+        isTaskReady:
+          SOCIAL_MEDIA_STATUS_META[selectedLogSocialMediaContent.status].taskReady,
+      });
+    }
+    return options.map((item) => ({
+      value: String(item.id),
+      label: `${item.title} - ${SOCIAL_MEDIA_STATUS_META[item.status].label}${
+        item.platforms.length > 0 ? ` - ${item.platforms.join(', ')}` : ''
+      }`,
+    }));
+  }, [selectedLogSocialMediaContent, socialMediaPlanOptions]);
+  const selectedLogSocialMediaPlanSatisfied =
+    !selectedLogRequiresSocialMediaPlan || selectedSocialMediaPlanOption?.isTaskReady === true;
+  useEffect(() => {
+    const hasLinkedPlan = Boolean(logDetailFormState.socialMediaContentId);
+    if (!logDetailModalOpen || !selectedLogId || (!selectedLogRequiresSocialMediaPlan && !hasLinkedPlan)) {
+      setSocialMediaPlanOptions([]);
+      setSocialMediaPlanOptionsError(null);
+      setSocialMediaPlanOptionsLoading(false);
+      return;
+    }
+
+    let active = true;
+    const timeoutId = window.setTimeout(() => {
+      setSocialMediaPlanOptionsLoading(true);
+      setSocialMediaPlanOptionsError(null);
+      void fetchAmTaskSocialMediaContentOptions()
+        .then((items) => {
+          if (active) {
+            setSocialMediaPlanOptions(items);
+          }
+        })
+        .catch((error) => {
+          if (active) {
+            setSocialMediaPlanOptionsError(
+              getErrorMessage(error, 'Failed to load Social Media plans'),
+            );
+          }
+        })
+        .finally(() => {
+          if (active) {
+            setSocialMediaPlanOptionsLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    logDetailModalOpen,
+    selectedLogId,
+    selectedLogRequiresSocialMediaPlan,
+  ]);
   const selectedLogShiftEvidenceRuleKeys = useMemo(
     () => getShiftEvidenceRuleKeys(selectedLogTemplate?.scheduleConfig),
     [selectedLogTemplate],
@@ -4104,6 +4254,11 @@ const AssistantManagerTaskPlanner = () => {
         (template) => resolveTemplateDefaults(template).requireShift,
       ),
     );
+    const socialMediaPlanValues = new Set(
+      bulkTemplateOptionsTargetTemplates.map(
+        (template) => resolveTemplateDefaults(template).requireSocialMediaPlan,
+      ),
+    );
     const shiftGateValues = new Set(
       bulkTemplateOptionsTargetTemplates.map((template) =>
         [...resolveTemplateDefaults(template).requiredShiftTemplateIds]
@@ -4118,6 +4273,7 @@ const AssistantManagerTaskPlanner = () => {
     );
 
     const onlyScheduleValue = Array.from(scheduleValues)[0];
+    const onlySocialMediaPlanValue = Array.from(socialMediaPlanValues)[0];
     const onlyShiftGateValue = Array.from(shiftGateValues)[0] ?? '';
     const onlyPlacementValue = Array.from(placementValues)[0];
     const shiftTemplateNameById = new Map(
@@ -4145,6 +4301,12 @@ const AssistantManagerTaskPlanner = () => {
           ? onlyScheduleValue
             ? 'Scheduled workdays only'
             : 'Off days allowed'
+          : 'Mixed',
+      socialMediaPlan:
+        socialMediaPlanValues.size === 1
+          ? onlySocialMediaPlanValue
+            ? 'Required before completion'
+            : 'Optional'
           : 'Mixed',
       requiredShiftGate:
         shiftGateValues.size === 1
@@ -4435,7 +4597,6 @@ const AssistantManagerTaskPlanner = () => {
     }
   }, [logDetailModalOpen, logs, requestedTaskId, selectedLog]);
 
-  const selectedLogId = selectedLog?.id ?? null;
 
   useEffect(() => {
     if (!selectedLogId || !selectedLog) {
@@ -4896,6 +5057,7 @@ const AssistantManagerTaskPlanner = () => {
         completionWindowMode: defaults.completionWindowMode,
         defaultPoints: defaults.points != null ? String(defaults.points) : '',
         requireShift: defaults.requireShift,
+        requireSocialMediaPlan: defaults.requireSocialMediaPlan,
         reminderMinutesBeforeStart:
           defaults.reminderMinutesBeforeStart != null
             ? String(defaults.reminderMinutesBeforeStart)
@@ -5004,6 +5166,7 @@ const AssistantManagerTaskPlanner = () => {
       delete nextScheduleConfig.requireScheduledShift;
       delete nextScheduleConfig.allowOffDays;
       nextScheduleConfig.requireShift = templateFormState.requireShift;
+      nextScheduleConfig.requireSocialMediaPlan = templateFormState.requireSocialMediaPlan;
       nextScheduleConfig.notifyAtStart = templateFormState.notifyAtStart;
       nextScheduleConfig.completionWindowMode = templateFormState.completionWindowMode;
 
@@ -5700,6 +5863,11 @@ const AssistantManagerTaskPlanner = () => {
         bulkTemplateOptionsFormState.assigneeSchedule === 'scheduled_only';
     }
 
+    if (bulkTemplateOptionsFormState.socialMediaPlan !== 'unchanged') {
+      options.requireSocialMediaPlan =
+        bulkTemplateOptionsFormState.socialMediaPlan === 'required';
+    }
+
     if (bulkTemplateOptionsFormState.requiredShiftMode === 'replace') {
       const requiredShiftTemplateIds = bulkTemplateOptionsFormState.requiredShiftTemplateIds
         .map((value) => Number(value))
@@ -6289,7 +6457,7 @@ const AssistantManagerTaskPlanner = () => {
   );
 
   const closeLogDetailModal = useCallback(() => {
-    if (logDetailSubmitting || commentSubmitting || dashboardTaskEditSubmitting) {
+    if (logDetailSubmitting || commentSubmitting || dashboardTaskEditSubmitting || socialMediaPlanSaving) {
       return;
     }
 
@@ -6300,6 +6468,9 @@ const AssistantManagerTaskPlanner = () => {
     setSelectedLog(null);
     setLogDetailFormState(defaultLogDetailFormState);
     setLogDetailError(null);
+    setSocialMediaPlanOptions([]);
+    setSocialMediaPlanSearch('');
+    setSocialMediaPlanOptionsError(null);
     setDashboardTaskEditOpen(false);
     setDashboardTaskEditFormState(defaultDashboardTaskEditFormState);
     setDashboardTaskEditError(null);
@@ -6319,6 +6490,7 @@ const AssistantManagerTaskPlanner = () => {
     logDetailSubmitting,
     searchParams,
     setSearchParams,
+    socialMediaPlanSaving,
   ]);
 
   const handleTaskLogDelete = useCallback(
@@ -6836,32 +7008,76 @@ const AssistantManagerTaskPlanner = () => {
     [cameraCaptureSupported, openCameraCaptureModal, openNativeImageFilePicker],
   );
 
+  const handleSocialMediaPlanChange = useCallback(
+    async (value: string | null) => {
+      if (!selectedLog || selectedLog.status !== 'pending') {
+        return;
+      }
+      const previousValue = logDetailFormState.socialMediaContentId;
+      const contentId = value ? Number(value) : null;
+      if (contentId != null && (!Number.isInteger(contentId) || contentId <= 0)) {
+        return;
+      }
+
+      setLogDetailFormState((prev) => ({
+        ...prev,
+        socialMediaContentId: contentId == null ? '' : String(contentId),
+      }));
+      setSocialMediaPlanSaving(true);
+      setSocialMediaPlanOptionsError(null);
+      setLogDetailError(null);
+      try {
+        const response = (await dispatch(
+          updateAmTaskLogMeta({
+            logId: selectedLog.id,
+            payload: { socialMediaContentId: contentId },
+          }),
+        ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
+        const updatedLog = (response?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
+        if (updatedLog) {
+          setSelectedLog(updatedLog);
+          setLogDetailFormState(buildLogDetailFormStateFromLog(updatedLog));
+        }
+        await refreshLogs();
+      } catch (error) {
+        setLogDetailFormState((prev) => ({
+          ...prev,
+          socialMediaContentId: previousValue,
+        }));
+        setLogDetailError(getErrorMessage(error, 'Failed to link the Social Media plan'));
+      } finally {
+        setSocialMediaPlanSaving(false);
+      }
+    },
+    [
+      dispatch,
+      logDetailFormState.socialMediaContentId,
+      refreshLogs,
+      selectedLog,
+    ],
+  );
+
   const handleLogDetailSave = useCallback(async () => {
     if (!selectedLog) {
       return;
     }
-
-    const payload: TaskLogMetaUpdatePayload = {
-      evidenceItems: logDetailFormState.evidenceItems,
-    };
 
     setLogDetailSubmitting(true);
     setLogDetailCompleting(true);
     setLogDetailError(null);
 
     try {
-      const metaResponse = (await dispatch(
-        updateAmTaskLogMeta({ logId: selectedLog.id, payload }),
-      ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
-      const metaUpdatedLog = (metaResponse?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
-
-      if (metaUpdatedLog) {
-        setSelectedLog(metaUpdatedLog);
-        setLogDetailFormState(buildLogDetailFormStateFromLog(metaUpdatedLog));
-      }
-
       const statusResponse = (await dispatch(
-        updateAmTaskLogStatus({ logId: selectedLog.id, payload: { status: 'completed' } }),
+        updateAmTaskLogStatus({
+          logId: selectedLog.id,
+          payload: {
+            status: 'completed',
+            evidenceItems: logDetailFormState.evidenceItems,
+            socialMediaContentId: logDetailFormState.socialMediaContentId
+              ? Number(logDetailFormState.socialMediaContentId)
+              : null,
+          },
+        }),
       ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
       const completedLog = (statusResponse?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
 
@@ -6887,7 +7103,7 @@ const AssistantManagerTaskPlanner = () => {
       setLogDetailCompleting(false);
       setLogDetailSubmitting(false);
     }
-  }, [dispatch, logDetailFormState.evidenceItems, refreshLogs, searchParams, selectedLog, setSearchParams]);
+  }, [dispatch, logDetailFormState.evidenceItems, logDetailFormState.socialMediaContentId, refreshLogs, searchParams, selectedLog, setSearchParams]);
 
   const handleLogDetailReopen = useCallback(async () => {
     if (!selectedLog || !selectedLogCanReopen) {
@@ -8635,6 +8851,19 @@ const AssistantManagerTaskPlanner = () => {
               </Accordion.Control>
               <Accordion.Panel pt="xs" pb="sm">
                 <Stack gap="xs">
+                  <Paper withBorder radius="lg" p="sm" bg="blue.0">
+                    <Switch
+                      label="Require a planned Social Media item before completion"
+                      description="The assignee can link an idea at any stage, but this task can only be completed once that item reaches Planned, In production, Ready, or Published."
+                      checked={templateFormState.requireSocialMediaPlan}
+                      onChange={(event) =>
+                        setTemplateFormState((prev) => ({
+                          ...prev,
+                          requireSocialMediaPlan: event.currentTarget.checked,
+                        }))
+                      }
+                    />
+                  </Paper>
                   <Stack gap={4}>
                     <Text size="sm" fw={600}>
                       Quick Presets
@@ -9487,6 +9716,24 @@ const AssistantManagerTaskPlanner = () => {
                   or shift-role assignment can receive the task on the same date.
                 </Alert>
               )}
+
+              <Select
+                label="Social Media Plan Gate"
+                description={`Current selection: ${bulkTemplateOptionsCurrentSummary.socialMediaPlan}`}
+                data={[
+                  { value: 'unchanged', label: 'Keep current values' },
+                  { value: 'required', label: 'Require a planned Social Media item' },
+                  { value: 'optional', label: 'Do not require a Social Media item' },
+                ]}
+                value={bulkTemplateOptionsFormState.socialMediaPlan}
+                disabled={bulkTemplateOptionsSubmitting}
+                onChange={(value) =>
+                  setBulkTemplateOptionsFormState((prev) => ({
+                    ...prev,
+                    socialMediaPlan: (value as BulkSocialMediaPlanMode) ?? 'unchanged',
+                  }))
+                }
+              />
 
               <Select
                 label="Operational Shift Condition"
@@ -10517,6 +10764,141 @@ const AssistantManagerTaskPlanner = () => {
               </Paper>
             )}
 
+            {!dashboardTaskEditOpen &&
+              (selectedLogRequiresSocialMediaPlan || logDetailFormState.socialMediaContentId) && (
+                <Paper
+                  withBorder
+                  radius="xl"
+                  p={isMobile ? 'md' : 'lg'}
+                  style={{ borderColor: 'var(--mantine-color-blue-3)' }}
+                >
+                  <Stack gap="md">
+                    <Group justify="space-between" align="flex-start" wrap="wrap">
+                      <Stack gap={2}>
+                        <Group gap="xs">
+                          <Text fw={700}>Social Media plan</Text>
+                          {selectedLogRequiresSocialMediaPlan && (
+                            <Badge color="blue" variant="light">
+                              Required
+                            </Badge>
+                          )}
+                        </Group>
+                        <Text size="sm" c="dimmed">
+                          Link the Reel or TikTok idea this task will deliver. Ideas can be linked
+                          early, then moved to Planned when the concept and captions are ready.
+                        </Text>
+                      </Stack>
+                      {selectedSocialMediaPlanOption && (
+                        <Badge
+                          color={SOCIAL_MEDIA_STATUS_META[selectedSocialMediaPlanOption.status].color}
+                          variant="light"
+                        >
+                          {SOCIAL_MEDIA_STATUS_META[selectedSocialMediaPlanOption.status].label}
+                        </Badge>
+                      )}
+                    </Group>
+
+                    <Select
+                      label="Linked content plan"
+                      placeholder={
+                        socialMediaPlanOptionsLoading
+                          ? 'Loading plans...'
+                          : 'Search ideas and planned posts'
+                      }
+                      data={socialMediaPlanSelectData}
+                      value={logDetailFormState.socialMediaContentId || null}
+                      searchValue={socialMediaPlanSearch}
+                      onSearchChange={setSocialMediaPlanSearch}
+                      onChange={(value) => {
+                        void handleSocialMediaPlanChange(value);
+                      }}
+                      searchable
+                      clearable
+                      nothingFoundMessage={
+                        socialMediaPlanOptionsLoading ? 'Loading...' : 'No Social Media plan found'
+                      }
+                      disabled={selectedLog.status !== 'pending' || socialMediaPlanSaving}
+                      rightSection={socialMediaPlanOptionsLoading ? <Loader size={16} /> : undefined}
+                    />
+
+                    {selectedSocialMediaPlanOption && (
+                      <Paper withBorder radius="lg" p="sm" bg="gray.0">
+                        <Group align="center" wrap="nowrap">
+                          {selectedSocialMediaPlanOption.thumbnailUrl ? (
+                            <Image
+                              src={selectedSocialMediaPlanOption.thumbnailUrl}
+                              alt=""
+                              w={72}
+                              h={72}
+                              radius="md"
+                              fit="cover"
+                              style={{ flex: '0 0 auto' }}
+                            />
+                          ) : (
+                            <ThemeIcon size={72} radius="md" variant="light" color="blue">
+                              <IconPaperclip size={28} />
+                            </ThemeIcon>
+                          )}
+                          <Stack gap={5} style={{ minWidth: 0, flex: 1 }}>
+                            <Text fw={700} lineClamp={2}>
+                              {selectedSocialMediaPlanOption.title}
+                            </Text>
+                            <Group gap="xs" wrap="wrap">
+                              {selectedSocialMediaPlanOption.platforms.map((platform) => (
+                                <Badge key={platform} size="sm" variant="outline" color="gray">
+                                  {platform}
+                                </Badge>
+                              ))}
+                              {selectedSocialMediaPlanOption.scheduledAt && (
+                                <Badge size="sm" variant="light" color="blue">
+                                  {dayjs(selectedSocialMediaPlanOption.scheduledAt).format('MMM D, h:mm A')}
+                                </Badge>
+                              )}
+                            </Group>
+                          </Stack>
+                          <Button
+                            component="a"
+                            href={`/social-media?editor=${selectedSocialMediaPlanOption.id}`}
+                            size="xs"
+                            variant="light"
+                            style={{ flex: '0 0 auto' }}
+                          >
+                            Open
+                          </Button>
+                        </Group>
+                      </Paper>
+                    )}
+
+                    {socialMediaPlanOptionsError && (
+                      <Alert color="red" title="Unable to load plans">
+                        {socialMediaPlanOptionsError}
+                      </Alert>
+                    )}
+                    {selectedLogRequiresSocialMediaPlan && !logDetailFormState.socialMediaContentId && (
+                      <Alert color="blue" title="Choose a content plan">
+                        This task cannot be completed until a Social Media item is linked.
+                      </Alert>
+                    )}
+                    {selectedLogRequiresSocialMediaPlan &&
+                      logDetailFormState.socialMediaContentId &&
+                      !selectedSocialMediaPlanOption &&
+                      !socialMediaPlanOptionsLoading && (
+                        <Alert color="red" title="Linked plan is unavailable">
+                          Choose another active Social Media item before completing this task.
+                        </Alert>
+                      )}
+                    {selectedLogRequiresSocialMediaPlan &&
+                      selectedSocialMediaPlanOption &&
+                      !selectedSocialMediaPlanOption.isTaskReady && (
+                        <Alert color="orange" title="Plan the idea before completing">
+                          Move this item to Planned, In production, Ready, or Published in Social
+                          Media, then return here to complete the task.
+                        </Alert>
+                      )}
+                  </Stack>
+                </Paper>
+              )}
+
             <Divider label="Evidence" labelPosition="center" />
             {selectedLogEvidenceRules.length > 0 ? (
               <Stack gap="sm">
@@ -11254,7 +11636,12 @@ const AssistantManagerTaskPlanner = () => {
                 <Button
                   onClick={handleLogDetailSave}
                   loading={logDetailCompleting}
-                  disabled={logDetailCompleting || !selectedLogRequiredEvidenceSatisfied}
+                  disabled={
+                    logDetailCompleting ||
+                    socialMediaPlanSaving ||
+                    !selectedLogRequiredEvidenceSatisfied ||
+                    !selectedLogSocialMediaPlanSatisfied
+                  }
                 >
                   Complete Task
                 </Button>
@@ -11280,6 +11667,14 @@ const AssistantManagerTaskPlanner = () => {
                 Complete all required evidence first: {selectedLogMissingRequiredEvidenceLabels.join(', ')}.
               </Text>
             )}
+            {!dashboardTaskEditOpen &&
+              selectedLogCanComplete &&
+              selectedLogRequiredEvidenceSatisfied &&
+              !selectedLogSocialMediaPlanSatisfied && (
+                <Text size="sm" c="dimmed" ta="center">
+                  Link a Social Media item and move it to Planned or a later active stage first.
+                </Text>
+              )}
 
             <Divider label="Comments" labelPosition="center" />
 

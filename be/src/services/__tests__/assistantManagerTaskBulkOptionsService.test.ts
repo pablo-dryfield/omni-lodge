@@ -9,6 +9,7 @@ describe('assistant-manager task bulk options payload validation', () => {
       templateIds: [3, 8],
       options: {
         requireShift: false,
+        requireSocialMediaPlan: true,
         completionWindowMode: 'strict',
         priority: 'high',
         notifyAtStart: true,
@@ -19,6 +20,7 @@ describe('assistant-manager task bulk options payload validation', () => {
       templateIds: [3, 8],
       options: {
         requireShift: false,
+        requireSocialMediaPlan: true,
         completionWindowMode: 'strict',
         priority: 'high',
         notifyAtStart: true,
@@ -44,6 +46,7 @@ describe('assistant-manager task bulk options payload validation', () => {
     [{ templateIds: [3, 3], options: { requireShift: true } }, 'templateIds cannot contain duplicate ids'],
     [{ templateIds: [3], options: {} }, 'At least one option is required'],
     [{ templateIds: [3], options: { requireShift: 'true' } }, 'options.requireShift must be a boolean'],
+    [{ templateIds: [3], options: { requireSocialMediaPlan: 'true' } }, 'options.requireSocialMediaPlan must be a boolean'],
     [{ templateIds: [3], options: { priority: 'urgent' } }, 'options.priority must be high, medium, or low'],
     [{ templateIds: [3], options: { scheduledWorkdayPlacement: 'later' } }, 'options.scheduledWorkdayPlacement must be start, middle, or end'],
     [{ templateIds: [3], options: { requiredShiftTemplateIds: [0] } }, 'options.requiredShiftTemplateIds must contain only positive integer ids'],
@@ -73,6 +76,7 @@ describe('assistant-manager task bulk options merge', () => {
       },
       {
         requireShift: false,
+        requireSocialMediaPlan: true,
         priority: 'low',
         notifyAtStart: false,
         scheduledWorkdayPlacement: 'middle',
@@ -82,6 +86,7 @@ describe('assistant-manager task bulk options merge', () => {
       daysOfWeek: [1, 3],
       time: '09:00',
       requireShift: false,
+      requireSocialMediaPlan: true,
       priority: 'low',
       notifyAtStart: false,
       scheduledWorkdayPlacement: 'middle',

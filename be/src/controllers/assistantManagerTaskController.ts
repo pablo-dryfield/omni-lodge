@@ -8,6 +8,7 @@ import utc from 'dayjs/plugin/utc.js';
 import AssistantManagerTaskTemplate, { type AssistantManagerTaskCadence } from '../models/AssistantManagerTaskTemplate.js';
 import AssistantManagerTaskAssignment, { type AssistantManagerTaskAssignmentScope } from '../models/AssistantManagerTaskAssignment.js';
 import AssistantManagerTaskLog, { type AssistantManagerTaskStatus } from '../models/AssistantManagerTaskLog.js';
+import SocialMediaContent from '../models/SocialMediaContent.js';
 import StaffProfile from '../models/StaffProfile.js';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
@@ -59,6 +60,7 @@ import {
 } from '../services/assistantManagerTaskEvidenceSubjectService.js';
 import {
   findMissingExpectedShiftEvidencePairs,
+  findRemovedStoredImageEvidenceItems,
   mergeUploadedImageEvidenceItems,
 } from '../services/assistantManagerTaskEvidenceMergeService.js';
 import { listShiftTemplates, listShiftTypes } from '../services/scheduleService.js';
@@ -68,6 +70,19 @@ import {
 } from '../services/amTaskPushService.js';
 import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
 import { resolveAssistantManagerTaskPlannerRange } from '../utils/assistantManagerTaskPlannerRange.js';
+import {
+  SOCIAL_MEDIA_CONTENT_ID_META_KEY,
+  SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY,
+  SOCIAL_MEDIA_PLAN_CONFIG_KEY,
+  buildAssistantManagerTaskSocialMediaSnapshot,
+  getStoredSocialMediaContentId,
+  getStoredSocialMediaSnapshot,
+  parseSocialMediaContentId,
+  requireTaskReadySocialMediaContent,
+  resolveRequireSocialMediaPlan,
+  type AssistantManagerTaskSocialMediaContentRecord,
+  type AssistantManagerTaskSocialMediaContentSnapshot,
+} from '../services/assistantManagerTaskSocialMediaRuleService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -96,6 +111,7 @@ const TEMPLATE_CONFIG_MANAGED_META_KEYS = [
   'shiftTimeStart',
   'shiftTimeEnd',
   'expectedEvidenceItems',
+  'requireSocialMediaPlan',
 ] as const;
 
 const startOfPlannerWeek = (value?: string | dayjs.Dayjs | Date | null) => {
@@ -712,6 +728,11 @@ const sanitizeTemplatePayload = (body: Record<string, unknown>) => {
       }
       next.scheduleConfig.scheduledWorkdayPlacement = scheduledWorkdayPlacement;
     }
+    if (SOCIAL_MEDIA_PLAN_CONFIG_KEY in next.scheduleConfig) {
+      if (typeof next.scheduleConfig[SOCIAL_MEDIA_PLAN_CONFIG_KEY] !== 'boolean') {
+        throw new HttpError(400, 'scheduleConfig.requireSocialMediaPlan must be a boolean');
+      }
+    }
   }
   if (body.isActive != null) {
     next.isActive = Boolean(body.isActive);
@@ -1071,6 +1092,11 @@ const sanitizePlannerMetaInput = (source: Record<string, unknown>) => {
   if ('manual' in source) {
     meta.manual = Boolean(source.manual);
   }
+  if (SOCIAL_MEDIA_CONTENT_ID_META_KEY in source) {
+    meta[SOCIAL_MEDIA_CONTENT_ID_META_KEY] = parseSocialMediaContentId(
+      source[SOCIAL_MEDIA_CONTENT_ID_META_KEY],
+    );
+  }
   return meta;
 };
 
@@ -1097,6 +1123,7 @@ const sanitizeScheduleConfigMeta = (config: Record<string, unknown>, shiftTime?:
   if (Array.isArray(config.tags)) {
     meta.tags = config.tags.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
   }
+  meta[SOCIAL_MEDIA_PLAN_CONFIG_KEY] = config[SOCIAL_MEDIA_PLAN_CONFIG_KEY] === true;
   return meta;
 };
 
@@ -1486,6 +1513,85 @@ const requireActorId = (req: AuthenticatedRequest): number => {
   return actorId;
 };
 
+const SOCIAL_MEDIA_TASK_SUMMARY_ATTRIBUTES = [
+  'id',
+  'title',
+  'status',
+  'targetPlatforms',
+  'scheduledAt',
+  'thumbnailUrl',
+] as const;
+
+const toSocialMediaTaskRecord = (
+  content: SocialMediaContent,
+): AssistantManagerTaskSocialMediaContentRecord => ({
+  id: content.id,
+  title: content.title,
+  status: content.status,
+  targetPlatforms: content.targetPlatforms,
+  scheduledAt: content.scheduledAt,
+  thumbnailUrl: content.thumbnailUrl,
+});
+
+const loadSocialMediaTaskRecord = async (
+  contentId: number,
+  transaction?: Transaction,
+): Promise<AssistantManagerTaskSocialMediaContentRecord | null> => {
+  const content = await SocialMediaContent.findByPk(contentId, {
+    attributes: [...SOCIAL_MEDIA_TASK_SUMMARY_ATTRIBUTES],
+    transaction,
+    lock: transaction ? transaction.LOCK.SHARE : undefined,
+  });
+  return content ? toSocialMediaTaskRecord(content) : null;
+};
+
+const applySocialMediaContentLink = async (
+  meta: Record<string, unknown>,
+  contentId: number | null,
+  transaction?: Transaction,
+): Promise<AssistantManagerTaskSocialMediaContentSnapshot | null> => {
+  if (contentId == null) {
+    delete meta[SOCIAL_MEDIA_CONTENT_ID_META_KEY];
+    delete meta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY];
+    return null;
+  }
+
+  const content = await loadSocialMediaTaskRecord(contentId, transaction);
+  if (!content) {
+    throw new HttpError(400, 'Selected Social Media plan was not found');
+  }
+  const snapshot = buildAssistantManagerTaskSocialMediaSnapshot(content);
+  meta[SOCIAL_MEDIA_CONTENT_ID_META_KEY] = contentId;
+  meta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY] = snapshot;
+  return snapshot;
+};
+
+const loadSocialMediaTaskSnapshotsForLogs = async (
+  logs: ReadonlyArray<Pick<AssistantManagerTaskLog, 'meta'>>,
+): Promise<Map<number, AssistantManagerTaskSocialMediaContentSnapshot>> => {
+  const ids = Array.from(
+    new Set(
+      logs
+        .map((log) => getStoredSocialMediaContentId(log.meta))
+        .filter((id): id is number => id != null),
+    ),
+  );
+  if (ids.length === 0) {
+    return new Map();
+  }
+
+  const contents = await SocialMediaContent.findAll({
+    where: { id: { [Op.in]: ids } },
+    attributes: [...SOCIAL_MEDIA_TASK_SUMMARY_ATTRIBUTES],
+  });
+  return new Map(
+    contents.map((content) => [
+      content.id,
+      buildAssistantManagerTaskSocialMediaSnapshot(toSocialMediaTaskRecord(content)),
+    ]),
+  );
+};
+
 const ensureEvidenceRequirementsSatisfied = (
   template: AssistantManagerTaskTemplate | null | undefined,
   meta: Record<string, unknown>,
@@ -1577,21 +1683,25 @@ const formatAssignment = (
 
 const formatLog = (
   log: AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null },
-) => ({
-  id: log.id,
-  templateId: log.templateId,
-  templateName: log.template?.name ?? null,
-  templateDescription: log.template?.description ?? null,
-  userId: log.userId,
-  userName: log.user ? `${log.user.firstName ?? ''} ${log.user.lastName ?? ''}`.trim() || null : null,
-  taskDate: dayjs(log.taskDate).tz(resolveTaskPlannerTimezone()).format('YYYY-MM-DD'),
-  status: log.status,
-  completedAt: log.completedAt?.toISOString() ?? null,
-  notes: log.notes ?? null,
-  meta: log.meta ?? {},
-  createdAt: log.createdAt?.toISOString() ?? null,
-  updatedAt: log.updatedAt?.toISOString() ?? null,
-});
+) => {
+  const meta = (log.meta ?? {}) as Record<string, unknown>;
+  return {
+    id: log.id,
+    templateId: log.templateId,
+    templateName: log.template?.name ?? null,
+    templateDescription: log.template?.description ?? null,
+    userId: log.userId,
+    userName: log.user ? `${log.user.firstName ?? ''} ${log.user.lastName ?? ''}`.trim() || null : null,
+    taskDate: dayjs(log.taskDate).tz(resolveTaskPlannerTimezone()).format('YYYY-MM-DD'),
+    status: log.status,
+    completedAt: log.completedAt?.toISOString() ?? null,
+    notes: log.notes ?? null,
+    meta,
+    socialMediaContent: getStoredSocialMediaSnapshot(meta),
+    createdAt: log.createdAt?.toISOString() ?? null,
+    updatedAt: log.updatedAt?.toISOString() ?? null,
+  };
+};
 
 const getNormalizedExpectedEvidenceItems = (
   value: unknown,
@@ -1649,6 +1759,7 @@ const resolveLogExpectedEvidenceItems = (
 const formatLogWithLiveExpectedEvidenceItems = (
   log: AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate | null; user?: User | null },
   scheduledShiftCandidatesByDate?: Map<string, ScheduledShiftCandidate[]>,
+  liveSocialMediaSnapshot?: AssistantManagerTaskSocialMediaContentSnapshot | null,
 ) => {
   const expectedEvidenceItems = resolveLogExpectedEvidenceItems(log, scheduledShiftCandidatesByDate);
   const meta = { ...(log.meta ?? {}) } as Record<string, unknown>;
@@ -1656,6 +1767,13 @@ const formatLogWithLiveExpectedEvidenceItems = (
     meta.expectedEvidenceItems = expectedEvidenceItems;
   } else {
     delete meta.expectedEvidenceItems;
+  }
+  if (liveSocialMediaSnapshot !== undefined) {
+    if (liveSocialMediaSnapshot) {
+      meta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY] = liveSocialMediaSnapshot;
+    } else {
+      delete meta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY];
+    }
   }
 
   const plainLog =
@@ -2605,6 +2723,11 @@ const generateLogsForAssignments = async (
       continue;
     }
     let shouldUpdateMeta = false;
+    if (typeof existingMeta[SOCIAL_MEDIA_PLAN_CONFIG_KEY] !== 'boolean') {
+      existingMeta[SOCIAL_MEDIA_PLAN_CONFIG_KEY] =
+        baseMeta[SOCIAL_MEDIA_PLAN_CONFIG_KEY] === true;
+      shouldUpdateMeta = true;
+    }
     Object.entries(shiftMeta).forEach(([key, value]) => {
       if (existingMeta[key] !== value) {
         existingMeta[key] = value;
@@ -3911,17 +4034,22 @@ const loadTaskLogs = async (
     effectiveStart,
     effectiveEnd,
   );
+  const socialMediaSnapshotsById = await loadSocialMediaTaskSnapshotsForLogs(logs);
 
   return {
-    logs: logs.map((log) =>
-      formatLogWithLiveExpectedEvidenceItems(
+    logs: logs.map((log) => {
+      const socialMediaContentId = getStoredSocialMediaContentId(log.meta);
+      return formatLogWithLiveExpectedEvidenceItems(
         log as AssistantManagerTaskLog & {
           template?: AssistantManagerTaskTemplate | null;
           user?: User | null;
         },
         scheduledShiftCandidatesByDate,
-      ),
-    ),
+        socialMediaContentId
+          ? socialMediaSnapshotsById.get(socialMediaContentId) ?? null
+          : null,
+      );
+    }),
     effectiveStartDate,
     effectiveEndDate,
   };
@@ -4105,66 +4233,162 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
       res.status(400).json([{ message: 'Invalid task log id' }]);
       return;
     }
-    const log = await AssistantManagerTaskLog.findByPk(logId, {
-      include: [
-        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'scheduleConfig'] },
-        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
-      ],
-    });
-    if (!log) {
-      res.status(404).json([{ message: 'Task log not found' }]);
-      return;
-    }
-    const actorId = getActorId(req);
-    if (!canViewAllTaskLogs(req) && actorId !== log.userId) {
-      res.status(403).json([{ message: 'Forbidden' }]);
-      return;
-    }
     const status = typeof req.body.status === 'string' ? (req.body.status.trim() as AssistantManagerTaskStatus) : undefined;
     const notes = typeof req.body.notes === 'string' ? req.body.notes.trim() : undefined;
     if (status && !STATUS_VALUES.has(status)) {
       res.status(400).json([{ message: 'Invalid status provided' }]);
       return;
     }
+    const hasEvidenceItems = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'evidenceItems');
+    const hasSocialMediaContentId = Object.prototype.hasOwnProperty.call(
+      req.body ?? {},
+      SOCIAL_MEDIA_CONTENT_ID_META_KEY,
+    );
+    const requestedSocialMediaContentId = hasSocialMediaContentId
+      ? parseSocialMediaContentId(req.body[SOCIAL_MEDIA_CONTENT_ID_META_KEY])
+      : undefined;
+    const sequelize = AssistantManagerTaskLog.sequelize;
+    if (!sequelize) {
+      throw new HttpError(500, 'Database connection is not available');
+    }
+
+    const actorId = getActorId(req);
     const timezoneName = resolveTaskPlannerTimezone();
-    const payload: Partial<AssistantManagerTaskLog> = {};
-    const nextMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
-    if (status) {
-      if (status === 'completed') {
-        if (!isTaskLogOnCurrentDay(log, timezoneName)) {
-          res.status(400).json([{ message: 'Task can only be completed on its scheduled day' }]);
-          return;
-        }
-        const strictDeadline = getTaskLogStrictCompletionDeadline(log, timezoneName);
-        if (strictDeadline && dayjs().tz(timezoneName).isAfter(strictDeadline)) {
-          res.status(400).json([{ message: 'Task can no longer be completed after its scheduled end time' }]);
-          return;
-        }
-        const taskDay = dayjs(log.taskDate);
-        const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
-          taskDay.startOf('day'),
-          taskDay.endOf('day'),
-        );
-        const expectedEvidenceItems = resolveLogExpectedEvidenceItems(
-          log as AssistantManagerTaskLog & {
-            template?: AssistantManagerTaskTemplate | null;
-          },
-          scheduledShiftCandidatesByDate,
-        );
-        ensureEvidenceRequirementsSatisfied(
-          log.template,
-          nextMeta,
-          expectedEvidenceItems,
-        );
+    const { updatedTaskDate, removedImageEvidenceItems } = await sequelize.transaction(async (transaction) => {
+      const log = await AssistantManagerTaskLog.findByPk(logId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!log) {
+        throw new HttpError(404, 'Task log not found');
       }
-      payload.status = status;
-      payload.completedAt = status === 'completed' ? new Date() : null;
-    }
-    if (notes !== undefined) {
-      payload.notes = notes;
-    }
-    payload.updatedBy = actorId;
-    await AssistantManagerTaskLog.update(payload, { where: { id: logId } });
+      if (!canViewAllTaskLogs(req) && actorId !== log.userId) {
+        throw new HttpError(403, 'Forbidden');
+      }
+      if (hasEvidenceItems && !canEditTaskLogEvidence(log)) {
+        throw new HttpError(400, 'Evidence can only be edited for pending tasks on the current day');
+      }
+      if (hasSocialMediaContentId && log.status !== 'pending' && status !== 'pending') {
+        throw new HttpError(400, 'A Social Media plan can only be linked to a pending task');
+      }
+
+      const template = await AssistantManagerTaskTemplate.findByPk(log.templateId, {
+        attributes: ['id', 'name', 'description', 'scheduleConfig'],
+        transaction,
+      });
+      if (!template) {
+        throw new HttpError(404, 'Task template not found');
+      }
+
+      const payload: Partial<AssistantManagerTaskLog> = {};
+      const nextMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
+      const previousEvidenceItems = hasEvidenceItems
+        ? sanitizeEvidenceItems((log.meta ?? {})['evidenceItems'])
+        : [];
+      let shouldUpdateMeta = false;
+
+      if (hasEvidenceItems) {
+        let evidenceItems: AssistantManagerTaskEvidenceItem[];
+        try {
+          evidenceItems = sanitizeEvidenceItems(req.body.evidenceItems);
+        } catch (error) {
+          throw new HttpError(400, error instanceof Error ? error.message : 'Invalid evidenceItems');
+        }
+        const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
+          getEvidenceRules(template),
+          evidenceItems,
+          {
+            enforceRequired: false,
+            shiftEvidenceRuleKeys: getShiftEvidenceRuleKeys(template),
+          },
+        );
+        if (errors.length > 0) {
+          throw new HttpError(400, errors.join(' '));
+        }
+        nextMeta.evidenceItems = normalizedItems;
+        shouldUpdateMeta = true;
+      }
+
+      if (hasSocialMediaContentId) {
+        await applySocialMediaContentLink(
+          nextMeta,
+          requestedSocialMediaContentId ?? null,
+          transaction,
+        );
+        shouldUpdateMeta = true;
+      }
+
+      if (status) {
+        if (status === 'completed') {
+          if (!isTaskLogOnCurrentDay(log, timezoneName)) {
+            throw new HttpError(400, 'Task can only be completed on its scheduled day');
+          }
+          const strictDeadline = getTaskLogStrictCompletionDeadline(
+            { taskDate: log.taskDate, meta: nextMeta, template },
+            timezoneName,
+          );
+          if (strictDeadline && dayjs().tz(timezoneName).isAfter(strictDeadline)) {
+            throw new HttpError(400, 'Task can no longer be completed after its scheduled end time');
+          }
+          const taskDay = dayjs(log.taskDate);
+          const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
+            taskDay.startOf('day'),
+            taskDay.endOf('day'),
+          );
+          const expectedEvidenceItems = resolveLogExpectedEvidenceItems(
+            {
+              taskDate: log.taskDate,
+              meta: nextMeta,
+              template,
+            } as AssistantManagerTaskLog & {
+              template?: AssistantManagerTaskTemplate | null;
+            },
+            scheduledShiftCandidatesByDate,
+          );
+          const { normalizedItems } = ensureEvidenceRequirementsSatisfied(
+            template,
+            nextMeta,
+            expectedEvidenceItems,
+          );
+          nextMeta.evidenceItems = normalizedItems;
+
+          const socialMediaSnapshot = await requireTaskReadySocialMediaContent({
+            required: resolveRequireSocialMediaPlan(nextMeta, template.scheduleConfig),
+            linkedContentId: getStoredSocialMediaContentId(nextMeta),
+            loadContent: (contentId) => loadSocialMediaTaskRecord(contentId, transaction),
+          });
+          if (socialMediaSnapshot) {
+            nextMeta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY] = socialMediaSnapshot;
+          }
+          shouldUpdateMeta = true;
+        }
+        payload.status = status;
+        payload.completedAt = status === 'completed' ? new Date() : null;
+      }
+      if (notes !== undefined) {
+        payload.notes = notes;
+      }
+      if (shouldUpdateMeta) {
+        payload.meta = nextMeta;
+      }
+      payload.updatedBy = actorId;
+      await log.update(payload, { transaction });
+      const nextEvidenceItems = hasEvidenceItems
+        ? sanitizeEvidenceItems(nextMeta.evidenceItems)
+        : [];
+      return {
+        updatedTaskDate: log.taskDate,
+        removedImageEvidenceItems: hasEvidenceItems
+          ? findRemovedStoredImageEvidenceItems(previousEvidenceItems, nextEvidenceItems)
+          : [],
+      };
+    });
+
+    await deleteEvidenceImagesBestEffort(
+      removedImageEvidenceItems,
+      `atomic status update for task ${logId}`,
+    );
+
     const refreshed = await AssistantManagerTaskLog.findByPk(logId, {
       include: [
         { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'] },
@@ -4173,8 +4397,8 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
     });
     const refreshedCandidates = refreshed
       ? await buildScheduledShiftCandidateMap(
-          dayjs(refreshed.taskDate).startOf('day'),
-          dayjs(refreshed.taskDate).endOf('day'),
+          dayjs(updatedTaskDate).startOf('day'),
+          dayjs(updatedTaskDate).endOf('day'),
         )
       : undefined;
     res.status(200).json([
@@ -4323,7 +4547,26 @@ export const createManualTaskLog = async (req: AuthenticatedRequest, res: Respon
       taskDay.startOf('day'),
       taskDay.endOf('day'),
     );
-    const meta: Record<string, unknown> = { manual: true, ...payload.meta };
+    const meta: Record<string, unknown> = {
+      manual: true,
+      ...payload.meta,
+      [SOCIAL_MEDIA_PLAN_CONFIG_KEY]:
+        template.scheduleConfig?.[SOCIAL_MEDIA_PLAN_CONFIG_KEY] === true,
+    };
+    const linkedSocialMediaContentId = getStoredSocialMediaContentId(meta);
+    if (linkedSocialMediaContentId) {
+      await applySocialMediaContentLink(meta, linkedSocialMediaContentId);
+    }
+    if (payload.status === 'completed') {
+      const socialMediaSnapshot = await requireTaskReadySocialMediaContent({
+        required: resolveRequireSocialMediaPlan(meta, template.scheduleConfig),
+        linkedContentId: linkedSocialMediaContentId,
+        loadContent: loadSocialMediaTaskRecord,
+      });
+      if (socialMediaSnapshot) {
+        meta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY] = socialMediaSnapshot;
+      }
+    }
     if (!Object.prototype.hasOwnProperty.call(meta, 'priority') || meta['priority'] == null) {
       meta['priority'] = 'medium';
     }
@@ -4387,6 +4630,10 @@ export const createManualTaskLog = async (req: AuthenticatedRequest, res: Respon
       },
     ]);
   } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
     console.error('Failed to create manual assistant manager task log', error);
     res.status(500).json([{ message: 'Failed to create manual task log' }]);
   }
@@ -4950,13 +5197,27 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
     const isEvidenceUpdate =
       Object.prototype.hasOwnProperty.call(payload.metaPatch, 'evidenceItems') ||
       Object.prototype.hasOwnProperty.call(payload.metaPatch, 'evidence');
+    const isSocialMediaLinkUpdate = Object.prototype.hasOwnProperty.call(
+      payload.metaPatch,
+      SOCIAL_MEDIA_CONTENT_ID_META_KEY,
+    );
     if (isEvidenceUpdate && !canEditTaskLogEvidence(log)) {
       res.status(400).json([{ message: 'Evidence can only be edited for pending tasks on the current day' }]);
+      return;
+    }
+    if (isSocialMediaLinkUpdate && log.status !== 'pending') {
+      res.status(400).json([{ message: 'A Social Media plan can only be linked to a pending task' }]);
       return;
     }
     const previousEvidenceItems = sanitizeEvidenceItems((log.meta ?? {})['evidenceItems']);
     const meta = { ...(log.meta ?? {}) } as Record<string, unknown>;
     Object.assign(meta, payload.metaPatch);
+    if (isSocialMediaLinkUpdate) {
+      await applySocialMediaContentLink(
+        meta,
+        parseSocialMediaContentId(meta[SOCIAL_MEDIA_CONTENT_ID_META_KEY]),
+      );
+    }
     const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
       getEvidenceRules(log.template),
       sanitizeEvidenceItems(meta['evidenceItems']),
@@ -4970,29 +5231,8 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
       return;
     }
     meta['evidenceItems'] = normalizedItems;
-    const nextImageIds = new Set(
-      normalizedItems.filter((item) => item.type === 'image').map((item) => item.id),
-    );
-    const nextImageDriveIds = new Set(
-      normalizedItems
-        .filter((item) => item.type === 'image' && typeof item.driveFileId === 'string')
-        .map((item) => (item.driveFileId as string).trim())
-        .filter(Boolean),
-    );
     const removedImageEvidenceItems = isEvidenceUpdate
-      ? previousEvidenceItems.filter((item) => {
-          if (item.type !== 'image') {
-            return false;
-          }
-          const hasStoredFile = Boolean(item.storagePath || item.driveFileId);
-          if (!hasStoredFile) {
-            return false;
-          }
-          const stillPresentById = item.id ? nextImageIds.has(item.id) : false;
-          const driveId = typeof item.driveFileId === 'string' ? item.driveFileId.trim() : '';
-          const stillPresentByDriveId = driveId ? nextImageDriveIds.has(driveId) : false;
-          return !stillPresentById && !stillPresentByDriveId;
-        })
+      ? findRemovedStoredImageEvidenceItems(previousEvidenceItems, normalizedItems)
       : [];
     let nextTaskDate = log.taskDate;
     if (payload.taskDate) {

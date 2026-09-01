@@ -2,6 +2,7 @@ import HttpError from '../errors/HttpError.js';
 
 export type AssistantManagerTaskBulkOptions = {
   requireShift?: boolean;
+  requireSocialMediaPlan?: boolean;
   completionWindowMode?: 'day' | 'strict';
   priority?: 'high' | 'medium' | 'low';
   notifyAtStart?: boolean;
@@ -18,6 +19,7 @@ const MAX_TEMPLATE_IDS = 500;
 const BODY_KEYS = new Set(['templateIds', 'options']);
 const OPTION_KEYS = new Set<keyof AssistantManagerTaskBulkOptions>([
   'requireShift',
+  'requireSocialMediaPlan',
   'completionWindowMode',
   'priority',
   'notifyAtStart',
@@ -95,6 +97,12 @@ export const parseAssistantManagerTaskBulkOptionsPayload = (
     }
     options.requireShift = body.options.requireShift;
   }
+  if (hasOwn(body.options, 'requireSocialMediaPlan')) {
+    if (typeof body.options.requireSocialMediaPlan !== 'boolean') {
+      throw new HttpError(400, 'options.requireSocialMediaPlan must be a boolean');
+    }
+    options.requireSocialMediaPlan = body.options.requireSocialMediaPlan;
+  }
   if (hasOwn(body.options, 'completionWindowMode')) {
     if (body.options.completionWindowMode !== 'day' && body.options.completionWindowMode !== 'strict') {
       throw new HttpError(400, 'options.completionWindowMode must be day or strict');
@@ -148,6 +156,9 @@ export const mergeAssistantManagerTaskBulkOptions = (
     scheduleConfig.requireShift = options.requireShift;
     delete scheduleConfig.requireScheduledShift;
     delete scheduleConfig.allowOffDays;
+  }
+  if (options.requireSocialMediaPlan !== undefined) {
+    scheduleConfig.requireSocialMediaPlan = options.requireSocialMediaPlan;
   }
   if (options.completionWindowMode !== undefined) {
     scheduleConfig.completionWindowMode = options.completionWindowMode;

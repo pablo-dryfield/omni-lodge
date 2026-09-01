@@ -61,8 +61,10 @@ describe('assistant-manager self-service task-log metadata boundary', () => {
   it('allows comments and evidence fields at the supported levels', () => {
     expect(isSelfServiceAssistantManagerTaskLogMetaPayload({ comment: 'Done' })).toBe(true);
     expect(isSelfServiceAssistantManagerTaskLogMetaPayload({ evidenceItems: [] })).toBe(true);
+    expect(isSelfServiceAssistantManagerTaskLogMetaPayload({ socialMediaContentId: 14 })).toBe(true);
+    expect(isSelfServiceAssistantManagerTaskLogMetaPayload({ socialMediaContentId: null })).toBe(true);
     expect(isSelfServiceAssistantManagerTaskLogMetaPayload({
-      meta: { evidence: ['https://example.com/proof'] },
+      meta: { evidence: ['https://example.com/proof'], socialMediaContentId: null },
     })).toBe(true);
   });
 

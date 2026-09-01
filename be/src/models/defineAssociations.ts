@@ -99,6 +99,7 @@ import CerebroEntry from './CerebroEntry.js';
 import CerebroQuiz from './CerebroQuiz.js';
 import CerebroQuizAttempt from './CerebroQuizAttempt.js';
 import CerebroAcknowledgement from './CerebroAcknowledgement.js';
+import SocialMediaContent from './SocialMediaContent.js';
 
 export function defineAssociations() {
   // User Associations
@@ -132,6 +133,8 @@ export function defineAssociations() {
   User.hasMany(CerebroAcknowledgement, { foreignKey: 'user_id', as: 'cerebroAcknowledgements' });
   User.hasMany(AffiliatePayoutLog, { foreignKey: 'affiliate_user_id', as: 'affiliatePayoutLogs' });
   User.hasMany(AffiliatePayoutLog, { foreignKey: 'created_by', as: 'affiliatePayoutLogsCreated' });
+  User.hasMany(SocialMediaContent, { foreignKey: 'created_by', as: 'socialMediaContentCreated' });
+  User.hasMany(SocialMediaContent, { foreignKey: 'updated_by', as: 'socialMediaContentUpdated' });
   User.belongsTo(FinanceVendor, { foreignKey: 'finance_vendor_id', as: 'financeVendor' });
 
   // UserType Associations

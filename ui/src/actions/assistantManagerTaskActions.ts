@@ -8,6 +8,7 @@ import type {
   ManagedAssistantManagerTaskLogPayload,
   ManualAssistantManagerTaskPayload,
   TaskLogMetaUpdatePayload,
+  TaskLogStatusUpdatePayload,
   UploadAmTaskEvidenceImageResponse,
 } from '../types/assistantManagerTasks/AssistantManagerTask';
 import type { ServerResponse } from '../types/general/ServerResponse';
@@ -15,6 +16,12 @@ import type { ShiftRole } from '../types/shiftRoles/ShiftRole';
 import type { ShiftTemplate, ShiftType } from '../types/scheduling';
 import type { UserType } from '../types/userTypes/UserType';
 import type { UserSummary } from '../api/users';
+import {
+  adaptAmTaskSocialMediaContentOption,
+  type AmTaskSocialMediaContentOption,
+} from '../utils/assistantManagerTaskSocialMedia';
+
+export type { AmTaskSocialMediaContentOption } from '../utils/assistantManagerTaskSocialMedia';
 
 const extractApiErrorMessage = (error: unknown, fallbackMessage: string) => {
   if (axios.isAxiosError(error)) {
@@ -211,11 +218,38 @@ export const updateAmTaskTemplate = createAsyncThunk(
 
 export type BulkAmTaskTemplateOptions = {
   requireShift?: boolean;
+  requireSocialMediaPlan?: boolean;
   completionWindowMode?: 'day' | 'strict';
   priority?: 'high' | 'medium' | 'low';
   notifyAtStart?: boolean;
   scheduledWorkdayPlacement?: 'start' | 'middle' | 'end';
   requiredShiftTemplateIds?: number[];
+};
+
+export const fetchAmTaskSocialMediaContentOptions = async (
+  params: { search?: string } = {},
+): Promise<AmTaskSocialMediaContentOption[]> => {
+  try {
+    const response = await axiosInstance.get('/social-media/content/selectable', {
+      withCredentials: true,
+      params: {
+        search: params.search?.trim() || undefined,
+      },
+    });
+    const directPayload = response.data as unknown;
+    const envelopedPayload = extractEnvelopeData<unknown>(directPayload);
+    const payload = envelopedPayload ?? directPayload;
+    const rawItems = Array.isArray(payload)
+      ? payload
+      : payload && typeof payload === 'object' && Array.isArray((payload as { items?: unknown }).items)
+        ? ((payload as { items: unknown[] }).items)
+        : [];
+    return rawItems
+      .map(adaptAmTaskSocialMediaContentOption)
+      .filter((item): item is AmTaskSocialMediaContentOption => item != null);
+  } catch (error) {
+    throw new Error(extractApiErrorMessage(error, 'Failed to load Social Media plans'));
+  }
 };
 
 export const bulkUpdateAmTaskTemplateOptions = createAsyncThunk(
@@ -696,7 +730,7 @@ export const syncAmTaskLogsWithTemplateConfig = async (
 
 export const updateAmTaskLogStatus = createAsyncThunk(
   'assistantManagerTasks/updateLog',
-  async ({ logId, payload }: { logId: number; payload: Partial<AssistantManagerTaskLog> }, { rejectWithValue }) => {
+  async ({ logId, payload }: { logId: number; payload: TaskLogStatusUpdatePayload }, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.put(`/assistantManagerTasks/logs/${logId}`, payload, { withCredentials: true });
       return response.data;

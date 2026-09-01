@@ -19,6 +19,7 @@ export const PAGE_SLUGS = {
   venueNumbers: "venue-numbers",
   channelNumbers: "channel-numbers",
   marketing: "marketing",
+  socialMedia: "social-media",
   searchConsole: "search-console",
   affiliates: "affiliates",
   requests: "requests",

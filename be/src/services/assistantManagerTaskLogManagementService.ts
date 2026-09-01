@@ -35,12 +35,14 @@ const SELF_SERVICE_META_KEYS = new Set([
   'comment',
   'evidence',
   'evidenceItems',
+  'socialMediaContentId',
   'attachments',
   'meta',
 ]);
 const SELF_SERVICE_NESTED_META_KEYS = new Set([
   'evidence',
   'evidenceItems',
+  'socialMediaContentId',
   'attachments',
 ]);
 const TASK_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;

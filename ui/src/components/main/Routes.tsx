@@ -27,6 +27,7 @@ const Counters = lazyRoute(() => import("../../pages/Counters"), loadCountersRed
 const VenueNumbers = lazyRoute(() => import("../../pages/VenueNumbers"), loadVenueNumbersReducers);
 const ChannelNumbers = lazyRoute(() => import("../../pages/ChannelNumbers"), loadChannelNumbersReducers);
 const MarketingPage = lazy(() => import("../../pages/MarketingPage"));
+const SocialMediaContentBoard = lazy(() => import("../../pages/SocialMediaContentBoard"));
 const SearchConsolePage = lazy(() => import("../../pages/SearchConsolePage"));
 const AffiliatesPage = lazy(() => import("../../pages/AffiliatesPage"));
 const RequestsPage = lazy(() => import("../../pages/RequestsPage"));
@@ -125,6 +126,7 @@ const Routes = () => {
         <Route path="/venueNumbers" element={<VenueNumbers title="Venue Numbers" />} />
         <Route path="/channelNumbers" element={<ChannelNumbers title="Channel Numbers" />} />
         <Route path="/marketing" element={<MarketingPage title="Marketing" />} />
+        <Route path="/social-media" element={<SocialMediaContentBoard />} />
         <Route path="/search-console" element={<SearchConsolePage title="Search Console" />} />
         <Route path="/affiliates" element={<AffiliatesPage title="Affiliates" />} />
         <Route path="/requests" element={<RequestsPage />} />

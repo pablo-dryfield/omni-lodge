@@ -1,4 +1,5 @@
 import {
+  findRemovedStoredImageEvidenceItems,
   findMissingExpectedShiftEvidencePairs,
   mergeUploadedImageEvidenceItems,
 } from '../assistantManagerTaskEvidenceMergeService';
@@ -248,5 +249,47 @@ describe('findMissingExpectedShiftEvidencePairs', () => {
     expect(findMissingExpectedShiftEvidencePairs([expectedPair], evidenceItems)).toEqual([
       expectedPair,
     ]);
+  });
+});
+
+describe('findRemovedStoredImageEvidenceItems', () => {
+  it('returns only stored images no longer referenced after an atomic evidence update', () => {
+    const removedById = imageItem('remove-by-id', promotionRule.key, 191);
+    const keptById = imageItem('keep-by-id', promotionRule.key, 192);
+    const keptByDriveId: EvidenceItem = {
+      ...imageItem('legacy-id', promotionRule.key, 193),
+      driveFileId: 'drive-kept',
+    };
+    const keptByStoragePath = imageItem('legacy-storage-id', promotionRule.key, 194);
+    const unstoredImage: EvidenceItem = {
+      id: 'unstored',
+      ruleKey: promotionRule.key,
+      type: 'image',
+    };
+    const link: EvidenceItem = {
+      id: 'link',
+      ruleKey: promotionRule.key,
+      type: 'link',
+      storagePath: 'not-an-image-file.jpg',
+    };
+
+    expect(findRemovedStoredImageEvidenceItems(
+      [removedById, keptById, keptByDriveId, keptByStoragePath, unstoredImage, link],
+      [
+        keptById,
+        { ...keptByDriveId, id: 'regenerated-id' },
+        { ...keptByStoragePath, id: 'regenerated-storage-id' },
+      ],
+    )).toEqual([removedById]);
+  });
+
+  it('does not mutate either evidence collection', () => {
+    const previous = [imageItem('previous', promotionRule.key)];
+    const next = [imageItem('next', promotionRule.key)];
+
+    findRemovedStoredImageEvidenceItems(previous, next);
+
+    expect(previous[0].id).toBe('previous');
+    expect(next[0].id).toBe('next');
   });
 });

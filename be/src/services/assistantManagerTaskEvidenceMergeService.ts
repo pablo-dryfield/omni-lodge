@@ -92,6 +92,56 @@ export type AssistantManagerTaskStoredShiftEvidenceItem =
     driveWebViewLink?: string | null;
   };
 
+export type AssistantManagerTaskStoredImageEvidenceItem = {
+  id?: string | null;
+  type: string;
+  storagePath?: string | null;
+  driveFileId?: string | null;
+};
+
+/**
+ * Finds stored image files that are no longer referenced by the next evidence
+ * collection. Matching by both item id and Drive id protects legacy entries
+ * whose generated item id may have changed while retaining the same file.
+ */
+export const findRemovedStoredImageEvidenceItems = <
+  TItem extends AssistantManagerTaskStoredImageEvidenceItem,
+>(
+  previousItems: readonly TItem[],
+  nextItems: readonly AssistantManagerTaskStoredImageEvidenceItem[],
+): TItem[] => {
+  const nextImageIds = new Set(
+    nextItems
+      .filter((item) => item.type === 'image' && typeof item.id === 'string')
+      .map((item) => (item.id as string).trim())
+      .filter(Boolean),
+  );
+  const nextImageDriveIds = new Set(
+    nextItems
+      .filter((item) => item.type === 'image' && typeof item.driveFileId === 'string')
+      .map((item) => (item.driveFileId as string).trim())
+      .filter(Boolean),
+  );
+  const nextImageStoragePaths = new Set(
+    nextItems
+      .filter((item) => item.type === 'image' && typeof item.storagePath === 'string')
+      .map((item) => (item.storagePath as string).trim())
+      .filter(Boolean),
+  );
+
+  return previousItems.filter((item) => {
+    if (item.type !== 'image' || !Boolean(item.storagePath || item.driveFileId)) {
+      return false;
+    }
+    const itemId = typeof item.id === 'string' ? item.id.trim() : '';
+    const driveFileId = typeof item.driveFileId === 'string' ? item.driveFileId.trim() : '';
+    const storagePath = typeof item.storagePath === 'string' ? item.storagePath.trim() : '';
+    return !(itemId && nextImageIds.has(itemId)) &&
+      !(driveFileId && nextImageDriveIds.has(driveFileId)) &&
+      !(storagePath && nextImageStoragePaths.has(storagePath));
+  });
+};
+
 const hasStoredImageContent = (
   item: AssistantManagerTaskStoredShiftEvidenceItem,
 ): boolean => {
