@@ -3,7 +3,9 @@ import HttpError from '../errors/HttpError.js';
 import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
 import StaffPayoutCollectionLog from '../models/StaffPayoutCollectionLog.js';
 import StaffPayoutLedger from '../models/StaffPayoutLedger.js';
+import FinanceTransaction from '../finance/models/FinanceTransaction.js';
 import { getCanonicalPayablePaidMinor } from './staffPayoutAffiliateAccountingService.js';
+import { isStaffPayoutReimbursementCollection } from './staffPayoutCollectionClassificationService.js';
 
 const assertSafeLedgerMinor = (value: unknown): number => {
   const normalized = Number(value ?? 0);
@@ -92,7 +94,7 @@ export const loadCanonicalStaffPayablePaidMinor = async (params: {
   transaction?: SequelizeTransaction;
 }): Promise<number> => {
   const collectionRows = await StaffPayoutCollectionLog.findAll({
-    attributes: ['amountMinor', 'financeTransactionId'],
+    attributes: ['amountMinor', 'financeTransactionId', 'note'],
     where: {
       staffProfileId: params.staffUserId,
       direction: 'payable',
@@ -102,7 +104,36 @@ export const loadCanonicalStaffPayablePaidMinor = async (params: {
     },
     transaction: params.transaction,
   });
-  const collectedPayableMinor = collectionRows.reduce(
+  const financeTransactionIds = Array.from(new Set(
+    collectionRows
+      .map((row) => Number(row.financeTransactionId ?? NaN))
+      .filter((id) => Number.isSafeInteger(id) && id > 0),
+  ));
+  const financeTransactions = financeTransactionIds.length > 0
+    ? await FinanceTransaction.findAll({
+        attributes: ['id', 'description', 'meta'],
+        where: { id: financeTransactionIds },
+        transaction: params.transaction,
+      })
+    : [];
+  const financeTransactionsById = new Map(
+    financeTransactions.map((financeTransaction) => [Number(financeTransaction.id), financeTransaction]),
+  );
+  const compensationCollectionRows = collectionRows.filter((row) => {
+    const financeTransactionId = Number(row.financeTransactionId ?? NaN);
+    const financeTransaction = Number.isSafeInteger(financeTransactionId)
+      ? financeTransactionsById.get(financeTransactionId)
+      : null;
+    const meta = financeTransaction?.meta && typeof financeTransaction.meta === 'object'
+      ? financeTransaction.meta as Record<string, unknown>
+      : null;
+    return !isStaffPayoutReimbursementCollection({
+      meta,
+      description: financeTransaction?.description ?? null,
+      note: row.note ?? null,
+    });
+  });
+  const collectedPayableMinor = compensationCollectionRows.reduce(
     (sum, row) => sum + assertSafeLedgerMinor(row.amountMinor),
     0,
   );
@@ -110,7 +141,7 @@ export const loadCanonicalStaffPayablePaidMinor = async (params: {
     throw new HttpError(409, 'The persisted staff payout ledger could not be reconciled safely.');
   }
   const collectedFinanceTransactionIds = new Set(
-    collectionRows
+    compensationCollectionRows
       .map((row) => Number(row.financeTransactionId ?? NaN))
       .filter((id) => Number.isSafeInteger(id) && id > 0),
   );

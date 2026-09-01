@@ -166,6 +166,8 @@ import {
   resolveAuthoritativeLegacySettledPayoutSnapshot,
   type LegacySettledPayoutSnapshotPresentation,
 } from "../services/legacySettledPayoutSnapshotService.js";
+import { findRecoverableInterruptedPayoutBatches } from "../services/staffPayoutSettlementDeletionService.js";
+import { isStaffPayoutReimbursementCollection } from "../services/staffPayoutCollectionClassificationService.js";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -2622,11 +2624,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
               : null;
           const note =
             typeof row.note === "string" && row.note.trim().length > 0 ? row.note.trim() : null;
-          const reimbursementFingerprint = [lineLabel, description, note]
-            .filter((value): value is string => Boolean(value))
-            .some((value) => value.toLowerCase().includes("reimbursement"));
-
-          if (reimbursementFingerprint) {
+          if (isStaffPayoutReimbursementCollection({ meta, description, note })) {
             return;
           }
 
@@ -4136,16 +4134,32 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       };
     });
 
+    const reconciliationUserIds = allSummaries
+      .filter((entry) => entry.settlementReconciliationRequired)
+      .map((entry) => entry.userId);
+    const recoverableInterruptedBatches = reconciliationUserIds.length > 0
+      ? await findRecoverableInterruptedPayoutBatches({
+          staffUserIds: reconciliationUserIds,
+          rangeStart: rangeStartIso,
+          rangeEnd: rangeEndIso,
+        })
+      : new Map<number, string[]>();
+    const summariesWithRecoveryState = allSummaries.map((entry) => ({
+      ...entry,
+      interruptedSettlementRecoveryAvailable:
+        (recoverableInterruptedBatches.get(entry.userId)?.length ?? 0) > 0,
+    }));
+
     const data = shouldLimitToSelf
       ? requesterId === null
         ? []
-        : allSummaries.filter((entry) => entry.userId === requesterId)
-      : allSummaries;
+        : summariesWithRecoveryState.filter((entry) => entry.userId === requesterId)
+      : summariesWithRecoveryState;
 
     // Self-service views must never refresh or create payout ledgers for other
     // staff members. The configured module permission is resolved by route
     // middleware before this expensive report starts.
-    const summariesForPersistence = shouldLimitToSelf ? data : allSummaries;
+    const summariesForPersistence = shouldLimitToSelf ? data : summariesWithRecoveryState;
 
     if (isLedgerEligible && summariesForPersistence.length > 0) {
       await Promise.all(

@@ -53,6 +53,12 @@ import {
   assertStaffPayoutSettlementRequestBinding,
   createStaffPayoutSettlementRequestBinding,
 } from '../services/staffPayoutSettlementRequestService.js';
+import {
+  findRecoverableInterruptedPayoutBatches,
+  getStaffPayoutBatchKeyForDeletion,
+  reverseFundAllocationsForFullyDeletedPayoutBatches,
+} from '../services/staffPayoutSettlementDeletionService.js';
+import { isStaffPayoutReimbursementCollection } from '../services/staffPayoutCollectionClassificationService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -1372,18 +1378,6 @@ const parseEntryIds = (raw: unknown): number[] => {
   return unique;
 };
 
-const looksLikeReimbursementEntry = (params: {
-  meta?: Record<string, unknown> | null;
-  description?: string | null;
-  note?: string | null;
-}): boolean => {
-  const metaLineLabel =
-    typeof params.meta?.lineLabel === 'string' ? params.meta.lineLabel.trim() : '';
-  const description = typeof params.description === 'string' ? params.description.trim() : '';
-  const note = typeof params.note === 'string' ? params.note.trim() : '';
-  return [metaLineLabel, description, note].some((value) => value.toLowerCase().includes('reimbursement'));
-};
-
 export const createStaffPayoutCollectionLog = async (
   req: AuthenticatedRequest,
   res: Response,
@@ -1821,9 +1815,11 @@ export const createStaffPayoutBatch = async (
           fundAllocations,
         });
         if (shouldCreatePersonalSettlement) {
+          // Reimbursements settle separate Finance expenses and belong in the
+          // receipt total, not in the compensation-liability cap.
           const requestedPersonalMinor = lines.reduce(
             (sum, line) => sum + line.amountMinor,
-            reimbursement?.amountMinor ?? 0,
+            0,
           );
           const availablePersonalMinor = Math.max(
             Number(lockedPayoutLedger.closingBalanceMinor ?? 0),
@@ -2036,6 +2032,8 @@ export const createStaffPayoutBatch = async (
               rangeEnd: rangeEnd.format('YYYY-MM-DD'),
               staffUserId: staffProfileId,
               lineLabel: 'Reimbursements',
+              settlementKind: 'reimbursement',
+              excludeFromStaffPayoutLedger: true,
               payoutBatchKey: batchKey,
               settlementRequestId,
             },
@@ -2301,6 +2299,15 @@ export const deleteStaffPayoutEntries = async (
       const financeTransactionsById = new Map(
         financeTransactions.map((financeTransaction) => [financeTransaction.id, financeTransaction]),
       );
+      const linkedPayoutBatchKeys = new Set(
+        financeTransactions
+          .map((financeTransaction) => getStaffPayoutBatchKeyForDeletion(financeTransaction, {
+            staffUserId: staffProfileId,
+            rangeStart: rangeStart.format('YYYY-MM-DD'),
+            rangeEnd: rangeEnd.format('YYYY-MM-DD'),
+          }))
+          .filter((value): value is string => Boolean(value)),
+      );
 
       const reimbursementEntries = logs.filter((log) => {
         const linkedTransaction =
@@ -2311,7 +2318,7 @@ export const deleteStaffPayoutEntries = async (
           linkedTransaction?.meta && typeof linkedTransaction.meta === 'object'
             ? (linkedTransaction.meta as Record<string, unknown>)
             : null;
-        return looksLikeReimbursementEntry({
+        return isStaffPayoutReimbursementCollection({
           meta,
           description: linkedTransaction?.description ?? null,
           note: log.note ?? null,
@@ -2410,6 +2417,16 @@ export const deleteStaffPayoutEntries = async (
         });
       }
 
+      const reversedFundAllocations = await reverseFundAllocationsForFullyDeletedPayoutBatches({
+        staffUserId: staffProfileId,
+        rangeStart: rangeStart.format('YYYY-MM-DD'),
+        rangeEnd: rangeEnd.format('YYYY-MM-DD'),
+        candidateBatchKeys: linkedPayoutBatchKeys,
+        actorId,
+        reversalDate: dayjs().tz('Europe/Warsaw').format('YYYY-MM-DD'),
+        transaction,
+      });
+
       await reconcilePersistedStaffPayoutLedgers({
         staffUserId: staffProfileId,
         affectedRangeStart: rangeStart.format('YYYY-MM-DD'),
@@ -2417,13 +2434,15 @@ export const deleteStaffPayoutEntries = async (
         transaction,
       });
 
-      return { financeTransactionIds };
+      return { financeTransactionIds, reversedFundAllocations };
     });
 
     res.status(200).json({
       deletedEntryIds: entryIds,
       deletedCount: entryIds.length,
       deletedFinanceTransactionIds: deletionResult.financeTransactionIds,
+      reversedFundAllocationCount: deletionResult.reversedFundAllocations.reversedAllocationCount,
+      reversedPayoutBatchCount: deletionResult.reversedFundAllocations.reversedBatchKeys.length,
     });
   } catch (error) {
     if (error instanceof HttpError) {
@@ -2431,5 +2450,90 @@ export const deleteStaffPayoutEntries = async (
       return;
     }
     res.status(500).json([{ message: 'Failed to delete paid entries' }]);
+  }
+};
+
+export const recoverInterruptedStaffPayoutSettlement = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const staffProfileId = parsePositiveInteger(req.body.staffProfileId, 'staffProfileId');
+    const rangeStartRaw = typeof req.body.rangeStart === 'string' ? req.body.rangeStart : '';
+    const rangeEndRaw = typeof req.body.rangeEnd === 'string' ? req.body.rangeEnd : '';
+    const { rangeStart, rangeEnd } = ensureCanonicalMonthRange(rangeStartRaw, rangeEndRaw);
+    const rangeStartIso = rangeStart.format('YYYY-MM-DD');
+    const rangeEndIso = rangeEnd.format('YYYY-MM-DD');
+
+    const recoveryResult = await sequelize.transaction(async (transaction) => {
+      const lockedUser = await User.findByPk(staffProfileId, {
+        attributes: ['id'],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!lockedUser) {
+        throw new HttpError(404, 'Staff user not found.');
+      }
+      const lockedStaffProfile = await StaffProfile.findOne({
+        where: { userId: staffProfileId },
+        attributes: ['userId'],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!lockedStaffProfile) {
+        throw new HttpError(404, 'Staff profile not found.');
+      }
+
+      const recoverableByUserId = await findRecoverableInterruptedPayoutBatches({
+        staffUserIds: [staffProfileId],
+        rangeStart: rangeStartIso,
+        rangeEnd: rangeEndIso,
+        transaction,
+      });
+      const recoverableBatchKeys = recoverableByUserId.get(staffProfileId) ?? [];
+      if (recoverableBatchKeys.length === 0) {
+        throw new HttpError(
+          409,
+          'No safely recoverable interrupted settlement was found for this staff member and month.',
+        );
+      }
+
+      const reversedFundAllocations = await reverseFundAllocationsForFullyDeletedPayoutBatches({
+        staffUserId: staffProfileId,
+        rangeStart: rangeStartIso,
+        rangeEnd: rangeEndIso,
+        candidateBatchKeys: recoverableBatchKeys,
+        actorId,
+        reversalDate: dayjs().tz('Europe/Warsaw').format('YYYY-MM-DD'),
+        transaction,
+      });
+      if (reversedFundAllocations.reversedAllocationCount === 0) {
+        throw new HttpError(
+          409,
+          'The interrupted settlement changed while it was being recovered. Refresh Pays and try again.',
+        );
+      }
+
+      await reconcilePersistedStaffPayoutLedgers({
+        staffUserId: staffProfileId,
+        affectedRangeStart: rangeStartIso,
+        affectedRangeEnd: rangeEndIso,
+        transaction,
+      });
+      return reversedFundAllocations;
+    });
+
+    res.status(200).json({
+      recovered: true,
+      reversedFundAllocationCount: recoveryResult.reversedAllocationCount,
+      reversedPayoutBatchCount: recoveryResult.reversedBatchKeys.length,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    res.status(500).json([{ message: 'Failed to recover interrupted staff payout settlement' }]);
   }
 };

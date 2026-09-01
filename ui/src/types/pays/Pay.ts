@@ -332,6 +332,7 @@ export type Pay = {
   settlementSources?: PaySettlementSource[];
   settlementReconciliationRequired?: boolean;
   settlementReconciliationMessage?: string | null;
+  interruptedSettlementRecoveryAvailable?: boolean;
   totalCustomers?: number;
   bucketTotals?: Record<string, number>;
   grossBucketTotals?: Record<string, number>;

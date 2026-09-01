@@ -3007,6 +3007,9 @@ const PaysContent: React.FC = () => {
   const [paidEntriesSubmitting, setPaidEntriesSubmitting] = useState(false);
   const [paidEntriesMessage, setPaidEntriesMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [actionAlert, setActionAlert] = useState<StaffPayoutActionAlert | null>(null);
+  const [recoveringSettlementIds, setRecoveringSettlementIds] = useState<Set<number>>(
+    () => new Set<number>(),
+  );
   const [baseOverridePending, setBaseOverridePending] = useState<Set<number>>(new Set());
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const desktopTableHeaderRef = useRef<HTMLTableSectionElement | null>(null);
@@ -3769,6 +3772,18 @@ const resolveStaffCounterpartyDefaults = useCallback(
             {item.settlementReconciliationMessage
               ?? 'The saved liability and historical source breakdown no longer match.'}
           </Text>
+          {canRecordStaffPayments && item.interruptedSettlementRecoveryAvailable ? (
+            <Button
+              variant="light"
+              size="xs"
+              color="orange"
+              fullWidth={fullWidth}
+              loading={recoveringSettlementIds.has(Number(item.staffProfileId ?? item.userId))}
+              onClick={() => void recoverInterruptedSettlement(item)}
+            >
+              Recover interrupted settlement
+            </Button>
+          ) : null}
           {canRecordStaffPayments && hasRecordedEntries ? (
             <Button variant="subtle" size="xs" color="red" fullWidth={fullWidth} onClick={() => openPaidEntriesModal(item)}>
               Manage paid
@@ -4194,7 +4209,10 @@ const resolveStaffCounterpartyDefaults = useCallback(
     try {
       setPaidEntriesSubmitting(true);
       setPaidEntriesMessage(null);
-      await axiosInstance.post(
+      const deletionResponse = await axiosInstance.post<{
+        reversedFundAllocationCount?: number;
+        reversedPayoutBatchCount?: number;
+      }>(
         '/reports/staffPayouts/deleteEntries',
         {
           staffProfileId: paidEntriesModal.staff.staffProfileId,
@@ -4206,11 +4224,20 @@ const resolveStaffCounterpartyDefaults = useCallback(
       );
       closePaidEntriesModal();
       await refetchPaysForRange(rangeStartValue, rangeEndValue);
+      const reversedFundAllocationCount = Number(
+        deletionResponse.data.reversedFundAllocationCount ?? 0,
+      );
       setActionAlert({
         type: 'success',
         text: `Removed ${paidEntriesModal.selectedIds.length} recorded payout component${
           paidEntriesModal.selectedIds.length === 1 ? '' : 's'
-        } for ${formatPayStaffName(paidEntriesModal.staff)}.`,
+        } for ${formatPayStaffName(paidEntriesModal.staff)}.${
+          reversedFundAllocationCount > 0
+            ? ` Reversed ${reversedFundAllocationCount} linked Volunteer Fund allocation${
+                reversedFundAllocationCount === 1 ? '' : 's'
+              } because the entire settlement batch was removed.`
+            : ''
+        }`,
       });
     } catch (deleteError) {
       const message =
@@ -4218,6 +4245,55 @@ const resolveStaffCounterpartyDefaults = useCallback(
       setPaidEntriesMessage({ type: 'error', text: message });
     } finally {
       setPaidEntriesSubmitting(false);
+    }
+  };
+
+  const recoverInterruptedSettlement = async (staff: Pay) => {
+    const staffProfileId = Number(staff.staffProfileId ?? staff.userId);
+    const rangeStartValue = staff.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? null;
+    const rangeEndValue = staff.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? null;
+    if (!Number.isSafeInteger(staffProfileId) || staffProfileId <= 0 || !rangeStartValue || !rangeEndValue) {
+      setActionAlert({
+        type: 'error',
+        text: 'Unable to identify the interrupted payout settlement.',
+      });
+      return;
+    }
+
+    setRecoveringSettlementIds((previous) => new Set(previous).add(staffProfileId));
+    setActionAlert(null);
+    try {
+      const response = await axiosInstance.post<{
+        reversedFundAllocationCount?: number;
+      }>(
+        '/reports/staffPayouts/recoverInterruptedSettlement',
+        {
+          staffProfileId,
+          rangeStart: rangeStartValue,
+          rangeEnd: rangeEndValue,
+        },
+        { withCredentials: true },
+      );
+      await refetchPaysForRange(rangeStartValue, rangeEndValue);
+      const reversedCount = Number(response.data.reversedFundAllocationCount ?? 0);
+      setActionAlert({
+        type: 'success',
+        text: `Recovered the interrupted settlement for ${formatPayStaffName(staff)} and reversed ${reversedCount} linked Volunteer Fund allocation${reversedCount === 1 ? '' : 's'}. The payment can now be processed again with the reimbursement included.`,
+      });
+    } catch (recoveryError) {
+      setActionAlert({
+        type: 'error',
+        text: extractRequestErrorMessage(
+          recoveryError,
+          'Unable to recover the interrupted payout settlement.',
+        ),
+      });
+    } finally {
+      setRecoveringSettlementIds((previous) => {
+        const next = new Set(previous);
+        next.delete(staffProfileId);
+        return next;
+      });
     }
   };
 

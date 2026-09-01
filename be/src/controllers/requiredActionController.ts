@@ -31,6 +31,8 @@ import {
   confirmStaffPayoutReceipt,
   getStaffPayoutReceiptActionPayload,
 } from '../services/staffPayoutReceiptService.js';
+import { StaffPayoutReceiptSafeError } from '../errors/StaffPayoutReceiptError.js';
+import logger from '../utils/logger.js';
 
 type UserFieldKey =
   | 'phone'
@@ -731,7 +733,12 @@ export const confirmStaffPayoutReceiptRequiredAction = async (req: Request, res:
 
     res.status(200).json({ completed: true, receipt });
   } catch (error) {
-    res.status(400).json([{ message: (error as Error).message }]);
+    if (error instanceof StaffPayoutReceiptSafeError) {
+      res.status(error.status).json([{ message: error.message, code: error.code }]);
+      return;
+    }
+    logger.error('[staff-payout-receipt] authenticated confirmation failed', error);
+    res.status(500).json([{ message: 'Unable to confirm that the payment was received.' }]);
   }
 };
 
@@ -745,15 +752,12 @@ export const markRequiredActionPrompted = async (req: Request, res: Response): P
     }
 
     const now = new Date();
-    const existing = await RequiredActionCompletion.findOne({
+    const [existing, created] = await RequiredActionCompletion.findOrCreate({
       where: {
         requiredActionId: action.id,
         userId,
       },
-    });
-
-    if (!existing) {
-      await RequiredActionCompletion.create({
+      defaults: {
         requiredActionId: action.id,
         userId,
         status: 'prompted',
@@ -762,7 +766,10 @@ export const markRequiredActionPrompted = async (req: Request, res: Response): P
         promptCount: 1,
         completedAt: null,
         responseJson: {},
-      });
+      },
+    });
+
+    if (created) {
       res.status(200).json({ prompted: true });
       return;
     }

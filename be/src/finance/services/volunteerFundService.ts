@@ -921,12 +921,13 @@ const reverseLinkedSpendFinance = async (
   };
 };
 
-export const reverseVolunteerFundEntry = async (
+export const reverseVolunteerFundEntryInTransaction = async (
   fundId: number,
   entryId: number,
   raw: Record<string, unknown>,
   actorId: number,
-): Promise<{ entry: VolunteerFundEntry; duplicated: boolean }> => sequelize.transaction(async (transaction) => {
+  transaction: SequelizeTransaction,
+): Promise<{ entry: VolunteerFundEntry; duplicated: boolean }> => {
   const fund = await VolunteerFund.findByPk(fundId, { transaction, lock: transaction.LOCK.UPDATE });
   if (!fund) {
     throw new HttpError(404, 'Volunteer fund not found.');
@@ -1060,4 +1061,19 @@ export const reverseVolunteerFundEntry = async (
     transaction,
   });
   return { entry: reversal, duplicated: false };
-});
+};
+
+export const reverseVolunteerFundEntry = async (
+  fundId: number,
+  entryId: number,
+  raw: Record<string, unknown>,
+  actorId: number,
+): Promise<{ entry: VolunteerFundEntry; duplicated: boolean }> => sequelize.transaction(
+  (transaction) => reverseVolunteerFundEntryInTransaction(
+    fundId,
+    entryId,
+    raw,
+    actorId,
+    transaction,
+  ),
+);

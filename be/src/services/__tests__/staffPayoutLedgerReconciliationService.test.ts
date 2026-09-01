@@ -10,11 +10,17 @@ jest.mock('../../models/StaffPayoutLedger.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn() },
 }));
+jest.mock('../../finance/models/FinanceTransaction.js', () => ({
+  __esModule: true,
+  default: { findAll: jest.fn() },
+}));
 
 import AffiliatePayoutLog from '../../models/AffiliatePayoutLog';
+import FinanceTransaction from '../../finance/models/FinanceTransaction';
 import StaffPayoutCollectionLog from '../../models/StaffPayoutCollectionLog';
 import StaffPayoutLedger from '../../models/StaffPayoutLedger';
 import {
+  loadCanonicalStaffPayablePaidMinor,
   loadImmutableUncollectedAffiliatePaidMinor,
   reconcilePersistedStaffPayoutLedgers,
 } from '../staffPayoutLedgerReconciliationService';
@@ -24,6 +30,7 @@ describe('staff payout ledger reconciliation', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (FinanceTransaction.findAll as jest.Mock).mockResolvedValue([]);
   });
 
   it('persists canonical paid and closing amounts including uncollected legacy affiliate payouts', async () => {
@@ -97,7 +104,7 @@ describe('staff payout ledger reconciliation', () => {
       lock: transaction.LOCK.UPDATE,
     }));
     expect(StaffPayoutCollectionLog.findAll).toHaveBeenCalledWith({
-      attributes: ['amountMinor', 'financeTransactionId'],
+      attributes: ['amountMinor', 'financeTransactionId', 'note'],
       where: {
         staffProfileId: 24,
         direction: 'payable',
@@ -127,6 +134,45 @@ describe('staff payout ledger reconciliation', () => {
       },
       { transaction },
     );
+  });
+
+  it('keeps reimbursement cash out of the compensation liability ledger', async () => {
+    (StaffPayoutCollectionLog.findAll as jest.Mock).mockResolvedValue([
+      { amountMinor: 33_333, financeTransactionId: 701, note: 'Staff compensation' },
+      { amountMinor: 25_000, financeTransactionId: 702, note: 'Staff reimbursements payout' },
+    ]);
+    (FinanceTransaction.findAll as jest.Mock).mockResolvedValue([
+      {
+        id: 701,
+        description: 'Reviews payout',
+        meta: { source: 'staff-payments', lineLabel: 'Reviews' },
+      },
+      {
+        id: 702,
+        description: 'Staff reimbursements payout',
+        meta: {
+          source: 'staff-payments',
+          lineLabel: 'Reimbursements',
+          settlementKind: 'reimbursement',
+          excludeFromStaffPayoutLedger: true,
+        },
+      },
+    ]);
+    (AffiliatePayoutLog.findAll as jest.Mock).mockResolvedValue([]);
+
+    await expect(loadCanonicalStaffPayablePaidMinor({
+      staffUserId: 184,
+      rangeStart: '2026-08-01',
+      rangeEnd: '2026-08-31',
+      currencyCode: 'PLN',
+      transaction,
+    })).resolves.toBe(33_333);
+
+    expect(FinanceTransaction.findAll).toHaveBeenCalledWith({
+      attributes: ['id', 'description', 'meta'],
+      where: { id: [701, 702] },
+      transaction,
+    });
   });
 
   it('does not load payout data when no persisted ledger period overlaps the affected range', async () => {

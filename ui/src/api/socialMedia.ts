@@ -1,10 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
-import {
-  SOCIAL_MEDIA_CONTENT_STATUSES,
-  type SocialMediaContentStatus,
-} from "../types/socialMedia";
+import type { SocialMediaContentStatus } from "../types/socialMedia";
 
 export { SOCIAL_MEDIA_CONTENT_STATUSES } from "../types/socialMedia";
 export type { SocialMediaContentStatus } from "../types/socialMedia";

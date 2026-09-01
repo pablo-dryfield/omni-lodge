@@ -12,6 +12,7 @@ import {
   createStaffPayoutBatch,
   createStaffPayoutCollectionLog,
   deleteStaffPayoutEntries,
+  recoverInterruptedStaffPayoutSettlement,
 } from '../controllers/staffPayoutController.js';
 import { getStaffPayoutBootstrap } from '../controllers/staffPayoutBootstrapController.js';
 import { check, param, validationResult } from 'express-validator';
@@ -68,6 +69,12 @@ router.post(
 );
 router.post('/staffPayouts/batch', authMiddleware, staffPayoutManagerGuard, createStaffPayoutBatch);
 router.post('/staffPayouts/deleteEntries', authMiddleware, staffPayoutManagerGuard, deleteStaffPayoutEntries);
+router.post(
+  '/staffPayouts/recoverInterruptedSettlement',
+  authMiddleware,
+  staffPayoutManagerGuard,
+  recoverInterruptedStaffPayoutSettlement,
+);
 router.get(
   '/staffPayouts/receipts/history',
   authMiddleware,

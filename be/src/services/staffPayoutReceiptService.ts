@@ -279,6 +279,7 @@ export async function confirmStaffPayoutReceipt(params: {
 
   let photoFile: FinanceFile | null = null;
   let signatureFile: FinanceFile | null = null;
+  let duplicateCompletion = false;
   try {
     photoFile = await storeStaffPayoutReceiptFile({
       receiptId: receipt.id,
@@ -316,6 +317,14 @@ export async function confirmStaffPayoutReceipt(params: {
         actorId: params.actorId,
         actionId: params.actionId,
       });
+      if (lockedReceipt.status === 'completed') {
+        // A mobile client, proxy, or impatient double tap can replay the same
+        // multipart request while the first upload is still being committed.
+        // Treat that replay as success and discard only the duplicate files
+        // created by this request; the first confirmation remains immutable.
+        duplicateCompletion = true;
+        return;
+      }
       if (lockedReceipt.status !== 'pending') {
         throw staffPayoutReceiptStateError(409, 'This payout receipt request is no longer pending.');
       }
@@ -346,33 +355,32 @@ export async function confirmStaffPayoutReceipt(params: {
         confirmedAt: confirmedAt.toISOString(),
         clientAcknowledgedAt: parsedClientAcknowledgedAt?.toISOString() ?? null,
       };
-      const completion = await RequiredActionCompletion.findOne({
+      const [completion] = await RequiredActionCompletion.findOrCreate({
         where: { requiredActionId: params.actionId, userId: params.actorId },
+        defaults: {
+          requiredActionId: params.actionId,
+          userId: params.actorId,
+          status: 'completed',
+          completedAt: confirmedAt,
+          responseJson,
+        },
         transaction,
-        lock: transaction.LOCK.UPDATE,
       });
-      if (completion) {
-        await completion.update(
-          { status: 'completed', completedAt: confirmedAt, responseJson },
-          { transaction },
-        );
-      } else {
-        await RequiredActionCompletion.create(
-          {
-            requiredActionId: params.actionId,
-            userId: params.actorId,
-            status: 'completed',
-            completedAt: confirmedAt,
-            responseJson,
-          },
-          { transaction },
-        );
-      }
+      await completion.update(
+        { status: 'completed', completedAt: confirmedAt, responseJson },
+        { transaction },
+      );
       await RequiredAction.update(
         { status: false, updatedBy: params.actorId },
         { where: { id: params.actionId }, transaction },
       );
     });
+    if (duplicateCompletion) {
+      await Promise.all([
+        deleteStoredStaffPayoutReceiptFile(photoFile),
+        deleteStoredStaffPayoutReceiptFile(signatureFile),
+      ]);
+    }
   } catch (error) {
     await Promise.all([
       deleteStoredStaffPayoutReceiptFile(photoFile),

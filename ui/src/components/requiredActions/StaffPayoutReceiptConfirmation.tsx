@@ -257,6 +257,7 @@ export const StaffPayoutReceiptConfirmation = ({
   const receipt = normalizeStaffPayoutReceipt(receiptPayload);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const submissionInFlightRef = useRef(false);
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -300,6 +301,9 @@ export const StaffPayoutReceiptConfirmation = ({
   };
 
   const handleSubmit = async () => {
+    if (submissionInFlightRef.current) {
+      return;
+    }
     if (!photo) {
       setPhotoError("Take or upload a photo before confirming the payment.");
     }
@@ -310,6 +314,7 @@ export const StaffPayoutReceiptConfirmation = ({
       return;
     }
 
+    submissionInFlightRef.current = true;
     setPreparingPhoto(true);
     try {
       let preparedPhoto = photo;
@@ -320,6 +325,7 @@ export const StaffPayoutReceiptConfirmation = ({
       }
       await onConfirm(preparedPhoto);
     } finally {
+      submissionInFlightRef.current = false;
       setPreparingPhoto(false);
     }
   };

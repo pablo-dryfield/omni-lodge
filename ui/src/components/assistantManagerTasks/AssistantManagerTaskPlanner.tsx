@@ -3999,9 +3999,15 @@ const AssistantManagerTaskPlanner = () => {
   }, [selectedLogSocialMediaContent, socialMediaPlanOptions]);
   const selectedLogSocialMediaPlanSatisfied =
     !selectedLogRequiresSocialMediaPlan || selectedSocialMediaPlanOption?.isTaskReady === true;
+  const selectedLogHasLinkedSocialMediaPlan = Boolean(
+    logDetailFormState.socialMediaContentId,
+  );
   useEffect(() => {
-    const hasLinkedPlan = Boolean(logDetailFormState.socialMediaContentId);
-    if (!logDetailModalOpen || !selectedLogId || (!selectedLogRequiresSocialMediaPlan && !hasLinkedPlan)) {
+    if (
+      !logDetailModalOpen ||
+      !selectedLogId ||
+      (!selectedLogRequiresSocialMediaPlan && !selectedLogHasLinkedSocialMediaPlan)
+    ) {
       setSocialMediaPlanOptions([]);
       setSocialMediaPlanOptionsError(null);
       setSocialMediaPlanOptionsLoading(false);
@@ -4039,6 +4045,7 @@ const AssistantManagerTaskPlanner = () => {
   }, [
     logDetailModalOpen,
     selectedLogId,
+    selectedLogHasLinkedSocialMediaPlan,
     selectedLogRequiresSocialMediaPlan,
   ]);
   const selectedLogShiftEvidenceRuleKeys = useMemo(
