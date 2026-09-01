@@ -32,6 +32,7 @@ import { selectAllowedNavigationPages } from "../selectors/accessControlSelector
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import HomeQuickActions from "../components/home/HomeQuickActions";
 import HomeModuleLauncher from "../components/home/HomeModuleLauncher";
+import HomePlannedExpenses from "../components/home/HomePlannedExpenses";
 import { isHomeQuickActionVisibilityMap } from "../components/home/homeQuickActionRegistry";
 import { isHomeManagementRole } from "../components/home/homeModuleRegistry";
 import type { VisualChartPoint } from "../components/dashboard/GraphicCard";
@@ -3445,10 +3446,13 @@ const Home = (props: GenericPageProps) => {
       descriptionAudience={moduleDescriptionAudience}
       onOpenMiniGame={handleOpenMiniGame}
       quickActions={(
-        <HomeQuickActions
-          quickActionVisibility={quickActionVisibility}
-          audienceReady={quickActionAudienceReady}
-        />
+        <Stack spacing={{ xs: 2.5, md: 3.5 }}>
+          <HomeQuickActions
+            quickActionVisibility={quickActionVisibility}
+            audienceReady={quickActionAudienceReady}
+          />
+          <HomePlannedExpenses />
+        </Stack>
       )}
     />
   );
@@ -3603,6 +3607,7 @@ const Home = (props: GenericPageProps) => {
                   quickActionVisibility={quickActionVisibility}
                   audienceReady={quickActionAudienceReady}
                 />
+                <HomePlannedExpenses compact />
                 {renderDashboardSummary()}
               </Stack>
             ) : (

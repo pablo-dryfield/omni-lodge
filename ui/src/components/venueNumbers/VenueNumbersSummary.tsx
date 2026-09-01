@@ -22,7 +22,7 @@ import {
 import { DatePickerInput } from "@mantine/dates";
 import dayjs from "dayjs";
 import isSameOrBefore from "dayjs/plugin/isSameOrBefore";
-import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
+import { IconChevronDown, IconChevronRight, IconShare3 } from "@tabler/icons-react";
 import axiosInstance from "../../utils/axiosInstance";
 import { ServerResponse } from "../../types/general/ServerResponse";
 import type { NightReport } from "../../types/nightReports/NightReport";
@@ -49,9 +49,11 @@ import type { FinanceAccount } from "../../types/finance/Account";
 import type { FinanceCategory } from "../../types/finance/Category";
 import type { FinanceClient } from "../../types/finance/Client";
 import type { FinanceVendor } from "../../types/finance/Vendor";
+import { shareVenueSummaryImage } from "../../utils/venueNumbersShareImage";
 type DailyRow = VenuePayoutVenueDaily & { placeholder?: boolean };
 
 type MessageState = { type: "success" | "error"; text: string } | null;
+type ShareMessageState = { type: "success" | "warning" | "error"; text: string } | null;
 
 type EntryModalState = {
   open: boolean;
@@ -90,6 +92,19 @@ const toMinorUnits = (value: number) => Math.round(value * 100);
 
 const formatDateRangeLabel = (startDate: string, endDate: string) =>
   `${dayjs(startDate).format("MMMM D, YYYY")} — ${dayjs(endDate).format("MMMM D, YYYY")}`;
+
+const formatStayDuration = (minutes: number | null | undefined): string => {
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) {
+    return "—";
+  }
+  const roundedMinutes = Math.round(minutes);
+  const hours = Math.floor(roundedMinutes / 60);
+  const remainingMinutes = roundedMinutes % 60;
+  if (hours > 0 && remainingMinutes > 0) {
+    return `${hours}h ${remainingMinutes}m`;
+  }
+  return hours > 0 ? `${hours}h` : `${remainingMinutes}m`;
+};
 
 dayjs.extend(isSameOrBefore);
 
@@ -142,6 +157,8 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
   const [entrySubmitting, setEntrySubmitting] = useState(false);
   const [undoCollectionLogId, setUndoCollectionLogId] = useState<number | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [sharingRowKey, setSharingRowKey] = useState<string | null>(null);
+  const [shareMessage, setShareMessage] = useState<ShareMessageState>(null);
   const [reportPreviewLoading, setReportPreviewLoading] = useState<number | null>(null);
   const [reportPreviewError, setReportPreviewError] = useState<string | null>(null);
   const [activePhotoPreview, setActivePhotoPreview] = useState<NightReportPhotoPreview | null>(null);
@@ -441,6 +458,7 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
 
   useEffect(() => {
     setExpandedRows(new Set());
+    setShareMessage(null);
   }, [summary]);
 
   useEffect(
@@ -884,6 +902,38 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
     [previewObjectUrl],
   );
 
+  const handleShareVenue = useCallback(
+    async (venue: VenuePayoutVenueBreakdown) => {
+      if (!summary) {
+        return;
+      }
+
+      setShareMessage(null);
+      setSharingRowKey(venue.rowKey);
+      try {
+        const result = await shareVenueSummaryImage({
+          venue,
+          startDate: summary.range.startDate,
+          endDate: summary.range.endDate,
+        });
+        setShareMessage(
+          result === "copied"
+            ? { type: "success", text: `${venue.venueName} image copied to the clipboard.` }
+            : {
+                type: "warning",
+                text: "Image clipboard access was unavailable, so the PNG was downloaded instead.",
+              },
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to create the venue image.";
+        setShareMessage({ type: "error", text: message });
+      } finally {
+        setSharingRowKey((current) => (current === venue.rowKey ? null : current));
+      }
+    },
+    [summary],
+  );
+
   return (
     <Stack gap="xs">
       <Card withBorder padding="md">
@@ -1029,6 +1079,19 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
           </Card>
           <Card withBorder padding={0}>
             <Stack gap={0}>
+              {shareMessage && (
+                <Alert
+                  color={
+                    shareMessage.type === "success"
+                      ? "green"
+                      : shareMessage.type === "warning"
+                        ? "yellow"
+                        : "red"
+                  }
+                >
+                  {shareMessage.text}
+                </Alert>
+              )}
               {summary.venues.length === 0 ? (
                 <Text>No venue data for this range.</Text>
               ) : (
@@ -1159,6 +1222,14 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                         {summary.venues.map((venue) => {
                       const isExpanded = expandedRows.has(venue.rowKey);
                       const dailyRows = buildDailyRows(venue);
+                      const showStayDuration = dailyRows.some(
+                        (day) =>
+                          !day.placeholder &&
+                          day.direction === "receivable" &&
+                          typeof day.stayDurationMinutes === "number" &&
+                          Number.isFinite(day.stayDurationMinutes) &&
+                          day.stayDurationMinutes > 0,
+                      );
                       const receivablePeople = venue.totalPeopleReceivable ?? 0;
                       const payablePeople = venue.totalPeoplePayable ?? 0;
                       const showSplitPeople = receivablePeople > 0 && payablePeople > 0;
@@ -1306,6 +1377,15 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                             </Table.Td>
                             <Table.Td style={{ textAlign: "center", verticalAlign: "middle" }}>
                               <Stack gap={4} align="center">
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  leftSection={<IconShare3 size={14} />}
+                                  loading={sharingRowKey === venue.rowKey}
+                                  onClick={() => void handleShareVenue(venue)}
+                                >
+                                  Share
+                                </Button>
                                 {showCollectButton && (
                                   <Button
                                     size="xs"
@@ -1394,6 +1474,11 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                                               Date
                                             </Table.Th>
                                             <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Total People</Table.Th>
+                                            {showStayDuration && (
+                                              <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>
+                                                Stay Duration
+                                              </Table.Th>
+                                            )}
                                             <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Normal</Table.Th>
                                             <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Cocktail</Table.Th>
                                             <Table.Th style={{ textAlign: "center", verticalAlign: "middle" }}>Brunch</Table.Th>
@@ -1425,6 +1510,13 @@ const VenueNumbersSummary = ({ active = true }: { active?: boolean }) => {
                                                 {dayjs(day.date).format("MMM D, YYYY")}
                                               </Table.Td>
                                               <Table.Td style={{ textAlign: "center", verticalAlign: "middle" }}>{day.totalPeople}</Table.Td>
+                                              {showStayDuration && (
+                                                <Table.Td style={{ textAlign: "center", verticalAlign: "middle" }}>
+                                                  {!placeholder && day.direction === "receivable"
+                                                    ? formatStayDuration(day.stayDurationMinutes)
+                                                    : "—"}
+                                                </Table.Td>
+                                              )}
                                               <Table.Td>
                                                 {!placeholder && day.direction === "payable"
                                                   ? day.normalCount

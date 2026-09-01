@@ -27,6 +27,7 @@ export type VenuePayoutVenueDaily = {
   normalCount: number;
   cocktailsCount: number;
   brunchCount: number;
+  stayDurationMinutes?: number | null;
 };
 
 export type VenuePayoutVenueBreakdown = {

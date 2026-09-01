@@ -95,6 +95,22 @@ type RouteCase = {
 };
 
 const routeCases: RouteCase[] = [
+  { method: 'get', path: '/api/finance/transactions', permissions: ['finance-transactions:view'] },
+  {
+    method: 'get',
+    path: '/api/finance/transactions/planned-expenses',
+    permissions: ['finance-transactions:view'],
+  },
+  {
+    method: 'post',
+    path: '/api/finance/transactions/4/planned-expense-action',
+    permissions: ['finance-transactions:update'],
+  },
+  { method: 'get', path: '/api/finance/transactions/4', permissions: ['finance-transactions:view'] },
+  { method: 'post', path: '/api/finance/transactions', permissions: ['finance-transactions:create'] },
+  { method: 'put', path: '/api/finance/transactions/4', permissions: ['finance-transactions:update'] },
+  { method: 'delete', path: '/api/finance/transactions/4', permissions: ['finance-transactions:delete'] },
+  { method: 'post', path: '/api/finance/transfers', permissions: ['finance-transactions:create'] },
   { method: 'get', path: '/api/finance/recurring-rules', permissions: ['finance-recurring:view'] },
   { method: 'get', path: '/api/finance/recurring-rules/bootstrap', permissions: ['finance-recurring:view'] },
   { method: 'get', path: '/api/finance/recurring-rules/4', permissions: ['finance-recurring:view'] },

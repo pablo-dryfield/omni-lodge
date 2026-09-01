@@ -2864,6 +2864,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         'normalCount',
         'cocktailsCount',
         'brunchCount',
+        'stayDurationMinutes',
         [col('report.activity_date'), 'activityDate'],
         [col('report.id'), 'reportId'],
         [col('nightReportVenueVenue.allows_open_bar'), 'allowsOpenBar'],
@@ -3017,6 +3018,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           normalCount: number;
           cocktailsCount: number;
           brunchCount: number;
+          stayDurationMinutes: number | null;
         }>;
         latestReceivableCollectionLogId: number | null;
         latestReceivableFinanceTransactionId: number | null;
@@ -3039,6 +3041,14 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       const cocktailsCount = Number.isFinite(cocktailsCountRaw) ? cocktailsCountRaw : 0;
       const brunchCountRaw = Number(row.brunchCount ?? 0);
       const brunchCount = Number.isFinite(brunchCountRaw) ? brunchCountRaw : 0;
+      const stayDurationMinutesRaw =
+        row.stayDurationMinutes == null ? null : Number(row.stayDurationMinutes);
+      const stayDurationMinutes =
+        stayDurationMinutesRaw != null &&
+        Number.isFinite(stayDurationMinutesRaw) &&
+        stayDurationMinutesRaw > 0
+          ? stayDurationMinutesRaw
+          : null;
       const activityDate = row.activityDate ? dayjs(row.activityDate).format('YYYY-MM-DD') : '';
       const reportId = typeof row.reportId === 'number' ? row.reportId : null;
       const venueId = row.venueId ?? null;
@@ -3084,6 +3094,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         normalCount,
         cocktailsCount,
         brunchCount,
+        stayDurationMinutes,
       });
 
       if (!totalsMap.has(currency)) {

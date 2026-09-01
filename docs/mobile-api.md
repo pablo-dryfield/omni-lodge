@@ -208,6 +208,7 @@ VenuePayoutVenueDaily {
   normalCount: number
   cocktailsCount: number
   brunchCount: number
+  stayDurationMinutes?: number | null
 }
 ```
 

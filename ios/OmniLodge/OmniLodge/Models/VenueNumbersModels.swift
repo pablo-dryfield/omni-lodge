@@ -31,6 +31,7 @@ struct VenuePayoutVenueDaily: Decodable, Identifiable {
   let normalCount: Int
   let cocktailsCount: Int
   let brunchCount: Int
+  let stayDurationMinutes: Int?
 }
 
 struct VenuePayoutVenueBreakdown: Decodable, Identifiable {

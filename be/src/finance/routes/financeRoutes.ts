@@ -38,6 +38,8 @@ import {
 } from '../controllers/clientController.js';
 import {
   listTransactions,
+  listPlannedExpenseTransactions,
+  applyPlannedExpenseActionHandler,
   getTransaction,
   createTransactionHandler,
   updateTransactionHandler,
@@ -108,6 +110,7 @@ const recurringDeleteGuard = authorizeModuleAction('finance-recurring', 'delete'
 const transactionViewGuard = authorizeModuleAction('finance-transactions', 'view');
 const transactionCreateGuard = authorizeModuleAction('finance-transactions', 'create');
 const transactionUpdateGuard = authorizeModuleAction('finance-transactions', 'update');
+const transactionDeleteGuard = authorizeModuleAction('finance-transactions', 'delete');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -155,12 +158,18 @@ router.get('/files/:id/download', downloadFinanceFileHandler);
 router.post('/files', upload.single('file'), uploadFinanceFileHandler);
 
 // Transactions
-router.get('/transactions', listTransactions);
-router.get('/transactions/:id', getTransaction);
-router.post('/transactions', createTransactionHandler);
-router.put('/transactions/:id', updateTransactionHandler);
-router.delete('/transactions/:id', deleteTransaction);
-router.post('/transfers', createTransferHandler);
+router.get('/transactions', transactionViewGuard, listTransactions);
+router.get('/transactions/planned-expenses', transactionViewGuard, listPlannedExpenseTransactions);
+router.post(
+  '/transactions/:id/planned-expense-action',
+  transactionUpdateGuard,
+  applyPlannedExpenseActionHandler,
+);
+router.get('/transactions/:id', transactionViewGuard, getTransaction);
+router.post('/transactions', transactionCreateGuard, createTransactionHandler);
+router.put('/transactions/:id', transactionUpdateGuard, updateTransactionHandler);
+router.delete('/transactions/:id', transactionDeleteGuard, deleteTransaction);
+router.post('/transfers', transactionCreateGuard, createTransferHandler);
 
 // Recurring Rules
 router.get('/recurring-rules', recurringViewGuard, listRecurringRules);
