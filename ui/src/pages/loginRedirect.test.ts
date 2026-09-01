@@ -11,6 +11,16 @@ describe('getPostLoginDestination', () => {
     ).toBe('/finance/transactions?transactionModal=create');
   });
 
+  it('preserves the New Counter companion deep link after login', () => {
+    expect(
+      getPostLoginDestination('manager', {
+        pathname: '/counters',
+        search: '?mode=create&pwa=new-counter',
+        hash: '',
+      }),
+    ).toBe('/counters?mode=create&pwa=new-counter');
+  });
+
   it('preserves the existing affiliate landing-page policy', () => {
     expect(
       getPostLoginDestination(' Affiliate ', {

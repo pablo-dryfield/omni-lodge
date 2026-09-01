@@ -1,0 +1,15 @@
+@import url("/finance/new-transaction/install.css");
+
+.eyebrow {
+  color: #0369a1;
+}
+
+.security-note {
+  border-color: #bae6fd;
+  background: #f0f9ff;
+  color: #075985;
+}
+
+.security-note span {
+  background: #0284c7;
+}

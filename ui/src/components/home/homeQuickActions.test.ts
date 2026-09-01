@@ -17,6 +17,17 @@ describe("Home quick actions", () => {
     expect(action?.state).toBeUndefined();
   });
 
+  it("opens the Counter creation flow", () => {
+    const action = HOME_QUICK_ACTIONS.find(({ id }) => id === "counters-create");
+
+    expect(action).toMatchObject({
+      id: "counters-create",
+      to: "/counters?mode=create",
+      permission: { pageSlug: PAGE_SLUGS.counters },
+    });
+    expect(action?.state).toBeUndefined();
+  });
+
   it("shows actions only when their page and module action are allowed", () => {
     const action = HOME_QUICK_ACTIONS[0];
     const allowedPages = new Set([PAGE_SLUGS.finance]);
@@ -46,6 +57,17 @@ describe("Home quick actions", () => {
     };
 
     expect(filterVisibleHomeQuickActions([action], new Set(), new Map())).toEqual([action]);
+  });
+
+  it("shows the Counter shortcut only to users with Counter page access", () => {
+    const action = HOME_QUICK_ACTIONS.find(({ id }) => id === "counters-create");
+    expect(action).toBeDefined();
+    if (!action) return;
+
+    expect(
+      filterVisibleHomeQuickActions([action], new Set([PAGE_SLUGS.counters]), new Map()),
+    ).toEqual([action]);
+    expect(filterVisibleHomeQuickActions([action], new Set(), new Map())).toEqual([]);
   });
 
   it("lets audience rules hide but never grant permission to a shortcut", () => {

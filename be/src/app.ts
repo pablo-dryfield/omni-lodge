@@ -164,8 +164,12 @@ app.use(cookieParser());
 
 // Configure CORS middleware
 const allowedOrigins = process.env.NODE_ENV === 'production'
-  ? ['https://transaction.omni-lodge.com']
-  : ['http://localhost:3000', 'http://transaction.localhost:3000'];
+  ? ['https://transaction.omni-lodge.com', 'https://counter.omni-lodge.com']
+  : [
+      'http://localhost:3000',
+      'http://transaction.localhost:3000',
+      'http://counter.localhost:3000',
+    ];
 const corsOptions: cors.CorsOptions = {
   origin: allowedOrigins,
   credentials: true,
@@ -173,8 +177,8 @@ const corsOptions: cors.CorsOptions = {
   allowedHeaders: ['Authorization', 'Content-Type'],
 };
 
-// The production exception is intentionally limited to the separately
-// installable Transaction PWA. Ordinary OmniLodge traffic remains same-origin.
+// Production exceptions are limited to the separately installable companion
+// PWAs. Ordinary OmniLodge traffic remains same-origin.
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 

@@ -1,0 +1,32 @@
+{
+  "id": "/pwa/new-counter",
+  "name": "OmniLodge New Counter",
+  "short_name": "New Counter",
+  "description": "Open OmniLodge directly in a new counter.",
+  "start_url": "/counters?mode=create&pwa=new-counter",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0a1f44",
+  "background_color": "#0a1f44",
+  "icons": [
+    {
+      "src": "/icons/new-counter/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/new-counter/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/new-counter/icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">OmniLodge New Counter</title>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0284c7" />
+      <stop offset="1" stop-color="#0a1f44" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#background)" />
+  <circle cx="72" cy="62" r="92" fill="#fff" opacity=".08" />
+  <circle cx="466" cy="84" r="138" fill="#38bdf8" opacity=".12" />
+  <rect x="94" y="110" width="324" height="292" rx="46" fill="#06152f" opacity=".24" transform="translate(0 16)" />
+  <rect x="94" y="110" width="324" height="292" rx="46" fill="#fff" />
+  <rect x="132" y="158" width="184" height="28" rx="14" fill="#bae6fd" />
+  <circle cx="354" cy="172" r="17" fill="#0284c7" />
+  <rect x="132" y="220" width="136" height="25" rx="12.5" fill="#dbeafe" />
+  <circle cx="354" cy="232" r="17" fill="#2563eb" />
+  <rect x="132" y="279" width="164" height="25" rx="12.5" fill="#e0f2fe" />
+  <circle cx="354" cy="292" r="17" fill="#0369a1" />
+  <circle cx="382" cy="372" r="72" fill="#059669" />
+  <path d="M382 334v76M344 372h76" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="22" />
+</svg>

@@ -1,3 +1,5 @@
+import { NEW_COUNTER_PWA_HOSTNAME } from "./newCounterPwa";
+
 export const NEW_TRANSACTION_PWA_HOSTNAME = "transaction.omni-lodge.com";
 export const NEW_TRANSACTION_PWA_LOCAL_HOSTNAME = "transaction.localhost";
 export const NEW_TRANSACTION_PWA_INSTALL_PATH = "/finance/new-transaction/install.html";
@@ -9,7 +11,9 @@ const isLoopbackHostname = (hostname: string): boolean =>
   hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 
 export const getProductionApiBaseUrl = (hostname: string): string =>
-  hostname === NEW_TRANSACTION_PWA_HOSTNAME ? PRIMARY_PRODUCTION_API_BASE_URL : "/api";
+  hostname === NEW_TRANSACTION_PWA_HOSTNAME || hostname === NEW_COUNTER_PWA_HOSTNAME
+    ? PRIMARY_PRODUCTION_API_BASE_URL
+    : "/api";
 
 export const getNewTransactionPwaInstallUrl = (location: LocationLike): string => {
   if (

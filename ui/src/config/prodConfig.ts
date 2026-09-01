@@ -4,7 +4,7 @@ const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
 
 const config = {
     // Keep authentication on the primary origin. Its existing host-only,
-    // HttpOnly session cookie can then authenticate the companion PWA without
+    // HttpOnly session cookie can then authenticate companion PWAs without
     // widening that cookie to every OmniLodge subdomain.
     baseURL: getProductionApiBaseUrl(hostname),
 };

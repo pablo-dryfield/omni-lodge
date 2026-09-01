@@ -1,5 +1,6 @@
 import type { SvgIconComponent } from "@mui/icons-material";
 import AddCardRoundedIcon from "@mui/icons-material/AddCardRounded";
+import AddCircleRoundedIcon from "@mui/icons-material/AddCircleRounded";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 
 export type QuickActionPermission = {
@@ -39,6 +40,18 @@ export const HOME_QUICK_ACTIONS: HomeQuickAction[] = [
       pageSlug: PAGE_SLUGS.finance,
       moduleSlug: PAGE_SLUGS.financeTransactions,
       moduleAction: "create",
+    },
+  },
+  {
+    id: "counters-create",
+    label: "Create counter",
+    description: "Open a new check-in counter.",
+    group: "Operations",
+    to: "/counters?mode=create",
+    icon: AddCircleRoundedIcon,
+    tone: "blue",
+    permission: {
+      pageSlug: PAGE_SLUGS.counters,
     },
   },
 ];

@@ -55,6 +55,24 @@
           "sizes": "192x192"
         }
       ]
+    },
+    {
+      "name": "Create counter",
+      "short_name": "Counter",
+      "description": "Open a new OmniLodge counter.",
+      "url": "/counters?mode=create",
+      "icons": [
+        {
+          "src": "icons/new-counter/icon-96.png",
+          "type": "image/png",
+          "sizes": "96x96"
+        },
+        {
+          "src": "icons/new-counter/icon-192.png",
+          "type": "image/png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ],
   "screenshots": [

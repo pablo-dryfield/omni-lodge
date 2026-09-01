@@ -44,6 +44,7 @@ import {
   Checkroom,
   Close,
   Delete,
+  Download,
   Edit,
   LocalBar,
   PhotoCamera,
@@ -107,6 +108,12 @@ import type {
   UnifiedOrder,
 } from '../store/bookingPlatformsTypes';
 import { WALK_IN_TICKET_LABEL_TO_KEY, WALK_IN_TICKET_TYPE_LABELS } from '../constants/walkInTicketTypes';
+import { getNewCounterPwaInstallUrl } from '../utils/newCounterPwa';
+import {
+  parseCounterUrlMode,
+  serializeCounterUrlState,
+  type CounterUrlMode,
+} from './counterUrlState';
 
 const COUNTER_DATE_FORMAT = 'YYYY-MM-DD';
 const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-26';
@@ -125,8 +132,6 @@ type BucketDescriptor = {
   label: string;
 };
 type CashCurrency = 'PLN' | 'EUR';
-type CounterUrlMode = 'view' | 'edit';
-
 const parseCounterIdParam = (value: string | null): number | null => {
   if (!value) {
     return null;
@@ -2172,10 +2177,10 @@ const Counters = (props: GenericPageProps) => {
     () => parseCounterIdParam(searchParams.get('counterId')),
     [searchParams],
   );
-  const requestedMode = useMemo<CounterUrlMode | null>(() => {
-    const mode = searchParams.get('mode');
-    return mode === 'view' || mode === 'edit' ? mode : null;
-  }, [searchParams]);
+  const requestedMode = useMemo<CounterUrlMode | null>(
+    () => parseCounterUrlMode(searchParams.get('mode')),
+    [searchParams],
+  );
   const requestedStep = useMemo(
     () => parseCounterStepParam(searchParams.get('step')),
     [searchParams],
@@ -2703,25 +2708,11 @@ const Counters = (props: GenericPageProps) => {
       options?: { replace?: boolean; step?: RegistryStep | null },
     ) => {
       setSearchParams((previous) => {
-        const next = new URLSearchParams(previous);
-        if (counterIdValue == null) {
-          next.delete('counterId');
-          next.delete('mode');
-          next.delete('step');
-        } else {
-          next.set('counterId', String(counterIdValue));
-          if (mode) {
-            next.set('mode', mode);
-          } else {
-            next.delete('mode');
-          }
-          if (options?.step) {
-            next.set('step', COUNTER_STEP_PARAM[options.step]);
-          } else {
-            next.delete('step');
-          }
-        }
-        return next;
+        return serializeCounterUrlState(previous, {
+          counterId: counterIdValue,
+          mode,
+          step: options?.step ? COUNTER_STEP_PARAM[options.step] : null,
+        });
       }, options);
     },
     [setSearchParams],
@@ -5212,9 +5203,9 @@ const loadCounterById = useCallback(
       blurActiveElement();
       setModalMode(mode);
       if (mode === 'create') {
-        urlOverlayModeRef.current = null;
+        urlOverlayModeRef.current = 'create';
         if (options?.syncUrl !== false) {
-          updateCounterUrl(null);
+          updateCounterUrl(null, 'create');
         }
         setActiveRegistryStep('details');
       } else if (mode === 'update') {
@@ -5265,6 +5256,49 @@ const loadCounterById = useCallback(
     updateCounterUrl(selectedCounterId);
     void loadCountersList();
   }, [loadCountersList, selectedCounterId, setActiveRegistryStep, updateCounterUrl]);
+
+  const openCreateCounter = useCallback(
+    (options?: { syncUrl?: boolean }) => {
+      const managerId = resolvedManagerId;
+      if (!managerId) {
+        shouldPrefillManagerRef.current = true;
+      }
+      if (!catalog.loaded && !catalog.loading) {
+        dispatch(
+          loadCatalog({
+            includeScheduledStaff: true,
+            date: dayjs().format(COUNTER_DATE_FORMAT),
+            productName: DEFAULT_PRODUCT_NAME,
+          }),
+        );
+      }
+
+      const today = dayjs();
+
+      setCounterListError(null);
+      setSelectedManagerId(managerId ?? null);
+      setSelectedDate(today);
+      setPendingProductId(null);
+      setPendingStaffIds([]);
+      setSelectedChannelIds([]);
+      setSelectedCashReservationChannelIds([]);
+      fetchCounterRequestRef.current = null;
+      setSelectedCounterId(null);
+      setExpandedCounterId(null);
+
+      dispatch(clearCounter());
+      dispatch(clearDirtyMetrics());
+
+      handleOpenModal('create', undefined, options);
+    },
+    [
+      resolvedManagerId,
+      catalog.loaded,
+      catalog.loading,
+      dispatch,
+      handleOpenModal,
+    ],
+  );
 
   useEffect(() => {
     if (isModalOpen && !catalog.loaded && !catalog.loading) {
@@ -5353,7 +5387,10 @@ const handleCounterListSelect = useCallback(
 
   useEffect(() => {
     if (requestedMode == null) {
-      if (urlOverlayModeRef.current === 'edit') {
+      if (
+        urlOverlayModeRef.current === 'create' ||
+        urlOverlayModeRef.current === 'edit'
+      ) {
         setIsModalOpen(false);
         setModalMode(null);
         setActiveRegistryStep('details');
@@ -5362,6 +5399,19 @@ const handleCounterListSelect = useCallback(
         setSummaryPreviewOpen(false);
       }
       urlOverlayModeRef.current = null;
+      return;
+    }
+
+    if (requestedMode === 'create') {
+      if (
+        urlOverlayModeRef.current === 'create' &&
+        isModalOpen &&
+        modalMode === 'create'
+      ) {
+        return;
+      }
+      setSummaryPreviewOpen(false);
+      openCreateCounter({ syncUrl: false });
       return;
     }
 
@@ -5407,6 +5457,7 @@ const handleCounterListSelect = useCallback(
     isModalOpen,
     loadCountersList,
     modalMode,
+    openCreateCounter,
     requestedCounterId,
     requestedMode,
     requestedStep,
@@ -5455,44 +5506,8 @@ useEffect(() => {
   }, [clearReservationDraft, counterId, dispatch, handleCloseModal, selectedCounterId, updateCounterUrl]);
 
   const handleAddNewCounter = useCallback(() => {
-    const managerId = resolvedManagerId;
-    if (!managerId) {
-      shouldPrefillManagerRef.current = true;
-    }
-    if (!catalog.loaded && !catalog.loading) {
-      dispatch(
-        loadCatalog({
-          includeScheduledStaff: true,
-          date: dayjs().format(COUNTER_DATE_FORMAT),
-          productName: DEFAULT_PRODUCT_NAME,
-        }),
-      );
-    }
-
-    const today = dayjs();
-
-    setCounterListError(null);
-    setSelectedManagerId(managerId ?? null);
-    setSelectedDate(today);
-    setPendingProductId(null);
-    setPendingStaffIds([]);
-    setSelectedChannelIds([]);
-    setSelectedCashReservationChannelIds([]);
-    fetchCounterRequestRef.current = null;
-    setSelectedCounterId(null);
-    setExpandedCounterId(null);
-
-    dispatch(clearCounter());
-    dispatch(clearDirtyMetrics());
-
-    handleOpenModal('create');
-  }, [
-    resolvedManagerId,
-    catalog.loaded,
-    catalog.loading,
-    dispatch,
-    handleOpenModal,
-  ]);
+    openCreateCounter();
+  }, [openCreateCounter]);
 
   const dirtyMetricCount = registry.dirtyMetricKeys.length;
   const hasDirtyMetrics = dirtyMetricCount > 0;
@@ -7939,6 +7954,17 @@ useEffect(() => {
       setPendingStaffDirty(false);
       setPendingProductId(null);
 
+      if (!counterRecord || modalMode === 'create') {
+        setModalMode('update');
+        setSelectedCounterId(payload.counter.id);
+        setExpandedCounterId(payload.counter.id);
+        urlOverlayModeRef.current = 'edit';
+        updateCounterUrl(payload.counter.id, 'edit', {
+          replace: true,
+          step: 'reservations',
+        });
+      }
+
       setSelectedChannelIds((prev) => {
         if (prev.length > 0) {
           return prev;
@@ -7966,7 +7992,9 @@ useEffect(() => {
     pendingStaffIds,
     registry.counter,
     registry.channels,
+    modalMode,
     setAndPersistCounterStep,
+    updateCounterUrl,
   ]);
 
   const handleProceedToReservations = useCallback(async () => {
@@ -11041,15 +11069,55 @@ type SummaryRowOptions = {
     };
   }, [isMobileScreen, theme]);
 
-  const counterActions = isMobileScreen ? (
-    <Tooltip title="Add">
-      <IconButton color="primary" size="small" onClick={handleAddNewCounter} aria-label="Add">
+  const counterInstallAction = isMobileScreen ? (
+    <Tooltip title="Install counter app">
+      <IconButton
+        component="a"
+        href={getNewCounterPwaInstallUrl(window.location)}
+        target="_blank"
+        rel="noopener"
+        color="primary"
+        size="small"
+        aria-label="Install counter app"
+      >
+        <Download fontSize="small" />
+      </IconButton>
+    </Tooltip>
+  ) : (
+    <Button
+      component="a"
+      href={getNewCounterPwaInstallUrl(window.location)}
+      target="_blank"
+      rel="noopener"
+      variant="outlined"
+      size="large"
+      startIcon={<Download />}
+      sx={{ borderRadius: 999, px: 2.5 }}
+    >
+      Install counter app
+    </Button>
+  );
+
+  const counterCreateAction = isMobileScreen ? (
+    <Tooltip title="Create counter">
+      <IconButton
+        color="primary"
+        size="small"
+        onClick={handleAddNewCounter}
+        aria-label="Create counter"
+      >
         <Add fontSize="small" />
       </IconButton>
     </Tooltip>
   ) : (
-    <Button variant="contained" size="large" startIcon={<Add />} onClick={handleAddNewCounter} sx={{ borderRadius: 999, px: 3 }}>
-      Add
+    <Button
+      variant="contained"
+      size="large"
+      startIcon={<Add />}
+      onClick={handleAddNewCounter}
+      sx={{ borderRadius: 999, px: 3 }}
+    >
+      Create counter
     </Button>
   );
 
@@ -11082,7 +11150,7 @@ type SummaryRowOptions = {
               gap: 1,
             }}
           >
-            <Box />
+            <Box sx={{ justifySelf: 'start' }}>{counterInstallAction}</Box>
             <Stack spacing={0.25} sx={{ textAlign: 'center', minWidth: 0 }}>
               <Typography variant="h6" component="span" sx={{ fontWeight: 900, lineHeight: 1.15 }}>
                 Counters
@@ -11093,7 +11161,7 @@ type SummaryRowOptions = {
                 </Typography>
               ) : null}
             </Stack>
-            <Box sx={{ justifySelf: 'end' }}>{counterActions}</Box>
+            <Box sx={{ justifySelf: 'end' }}>{counterCreateAction}</Box>
           </Box>
           <CardContent
             sx={{
