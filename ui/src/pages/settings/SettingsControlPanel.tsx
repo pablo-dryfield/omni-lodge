@@ -317,7 +317,10 @@ const SettingsControlPanel = () => {
     }
 
     try {
-      const refreshSessionConfig = activeEntry.key === "NOTIFICATION_INBOX_POLLING_ENABLED";
+      const refreshSessionConfig = [
+        "NOTIFICATION_INBOX_POLLING_ENABLED",
+        "BADGE_CAMPAIGN_BASE_URL",
+      ].includes(activeEntry.key);
       await updateConfig.mutateAsync({
         key: activeEntry.key,
         value: valuePayload,

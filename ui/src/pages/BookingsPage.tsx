@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Alert,
@@ -12,7 +12,6 @@ import {
   HoverCard,
   Loader,
   Modal,
-  MultiSelect,
   Paper,
   ScrollArea,
   SegmentedControl,
@@ -52,14 +51,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
 import { BookingsGrid } from "../components/BookingsGrid";
-import type {
-  BookingAddonDashboardRow,
-  BookingCostsSummary,
-  BookingCounterInsights,
-  VenueCommissionCurrencyTotal,
-  VenueCommissionVenueRow,
-} from "../components/bookings/BookingsExecutiveDashboard";
 import BookingsSanityCheck from "../components/bookings/BookingsSanityCheck";
+import BookingsSummaryWorkspace from "../components/bookings/BookingsSummaryWorkspace";
 import axiosInstance from "../utils/axiosInstance";
 import { UnifiedOrder, UnifiedProduct } from "../store/bookingPlatformsTypes";
 import { prepareBookingGrid, BookingGrid } from "../utils/prepareBookingGrid";
@@ -67,13 +60,21 @@ import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 import {
-  resolveBookingsSummaryProductTypeValues,
   serializeProductTypeSelection,
 } from "../utils/productTypeQuery";
-import type { BookingsSummaryDateField } from "../utils/bookingsSummaryDate";
+import {
+  parseBookingsSummaryDate,
+  parseBookingsSummaryDateField,
+  parseBookingsSummaryMetric,
+  parseBookingsSummaryPreset,
+  parseBookingsSummaryProductTypes,
+  type BookingsSummaryDateField,
+  type BookingsSummaryFilters,
+  type BookingsSummaryMetric,
+  type BookingsSummaryPreset,
+} from "../utils/bookingsSummaryQuery";
 
 const DATE_FORMAT = "YYYY-MM-DD";
-const BookingsExecutiveDashboard = lazy(() => import("../components/bookings/BookingsExecutiveDashboard"));
 
 type ViewMode = "week" | "month";
 
@@ -81,24 +82,10 @@ type FetchStatus = "idle" | "loading" | "error" | "success";
 
 type BookingFilter = "all" | "active" | "cancelled";
 type SummaryDateField = BookingsSummaryDateField;
-type SummaryMetricMode = "earnings" | "revenue" | "costs";
-type SummaryDatePreset =
-  | "today"
-  | "yesterday"
-  | "this_week"
-  | "last_week"
-  | "last_7_days"
-  | "last_14_days"
-  | "last_2_weeks"
-  | "this_month"
-  | "last_month"
-  | "this_year"
-  | "last_year"
-  | "all_time"
-  | "custom";
+type SummaryMetricMode = BookingsSummaryMetric;
+type SummaryDatePreset = BookingsSummaryPreset;
 type BookingsTab = "calendar" | "summary" | "emails" | "sanity";
 type BookingsTabOption = BookingsTab | "manifest" | "payment-links";
-type ProductTypeOption = { value: string; label: string };
 type BookingTabOption = { value: BookingsTabOption; label: string };
 
 type BookingEmailSummary = {
@@ -265,74 +252,6 @@ const parseTabParam = (value?: string | null): BookingsTabOption | null => {
     return normalized as BookingsTabOption;
   }
   return null;
-};
-
-const parseSummaryDateFieldParam = (value?: string | null): SummaryDateField => {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "source_received_at") {
-    return "source_received_at";
-  }
-  return "experience_date";
-};
-
-const parseSummaryProductTypeParam = (value?: string | null): string => {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!normalized || normalized === "all") {
-    return "all";
-  }
-  const parsed = Number.parseInt(normalized, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return "all";
-  }
-  return String(parsed);
-};
-
-const parseSummaryProductTypesParam = (...values: Array<string | null | undefined>): string[] => {
-  const parsed = values
-    .flatMap((value) => String(value ?? "").split(","))
-    .map((entry) => parseSummaryProductTypeParam(entry.trim()))
-    .filter((entry) => entry !== "all");
-  return Array.from(new Set(parsed));
-};
-
-const SUMMARY_DATE_PRESET_OPTIONS: Array<{ value: SummaryDatePreset; label: string }> = [
-  { value: "today", label: "Today" },
-  { value: "yesterday", label: "Yesterday" },
-  { value: "this_week", label: "This Week" },
-  { value: "last_week", label: "Last Week" },
-  { value: "last_7_days", label: "Last 7 Days" },
-  { value: "last_14_days", label: "Last 14 Days" },
-  { value: "last_2_weeks", label: "Last 2 Weeks" },
-  { value: "this_month", label: "This Month" },
-  { value: "last_month", label: "Last Month" },
-  { value: "this_year", label: "This Year" },
-  { value: "last_year", label: "Last Year" },
-  { value: "all_time", label: "All Time" },
-  { value: "custom", label: "Custom" },
-];
-
-const parseSummaryDatePresetParam = (value?: string | null): SummaryDatePreset => {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (SUMMARY_DATE_PRESET_OPTIONS.some((option) => option.value === normalized)) {
-    return normalized as SummaryDatePreset;
-  }
-  return "this_month";
-};
-
-const parseSummaryCustomDateParam = (value?: string | null): Date | null => {
-  if (!value) {
-    return null;
-  }
-  const parsed = dayjs(value, "YYYY-MM-DD", true);
-  return parsed.isValid() ? parsed.toDate() : null;
-};
-
-const parseSummaryMetricModeParam = (value?: string | null): SummaryMetricMode => {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "earnings" || normalized === "costs") {
-    return normalized;
-  }
-  return "revenue";
 };
 
 const resolveEmailStatusColor = (value?: string | null): string => {
@@ -692,19 +611,11 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const [summaryDatePreset, setSummaryDatePreset] = useState<SummaryDatePreset>("this_month");
   const [summaryCustomDateRange, setSummaryCustomDateRange] = useState<[Date | null, Date | null]>([null, null]);
   const [summaryProductTypeFilters, setSummaryProductTypeFilters] = useState<string[]>([]);
-  const [summaryProductTypeOptions, setSummaryProductTypeOptions] = useState<ProductTypeOption[]>([]);
-  const [summaryProductTypeCatalogLoaded, setSummaryProductTypeCatalogLoaded] = useState(false);
   const [rangeAnchor, setRangeAnchor] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [selectedDate, setSelectedDate] = useState<Dayjs>(() => dayjs().startOf("day"));
   const [calendarScrollDate, setCalendarScrollDate] = useState<string | null>(null);
   const [products, setProducts] = useState<UnifiedProduct[]>([]);
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
-  const [bookingAddons, setBookingAddons] = useState<BookingAddonDashboardRow[]>([]);
-  const [addonCatalog, setAddonCatalog] = useState<Array<{ id: number; name: string; basePrice: number }>>([]);
-  const [counterInsights, setCounterInsights] = useState<BookingCounterInsights | null>(null);
-  const [venueCommissionTotals, setVenueCommissionTotals] = useState<VenueCommissionCurrencyTotal[] | null>(null);
-  const [venueCommissionVenues, setVenueCommissionVenues] = useState<VenueCommissionVenueRow[] | null>(null);
-  const [costsSummary, setCostsSummary] = useState<BookingCostsSummary | null>(null);
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<BookingFilter>("active");
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -779,19 +690,46 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const emailPreviewParam = searchParams.get("emailPreview")?.trim() ?? "";
   const emailHasUrlPreview = Boolean(emailPreviewParam);
 
-  const summaryProductTypeValues = useMemo(
-    () => summaryProductTypeOptions.map((option) => option.value),
-    [summaryProductTypeOptions],
-  );
   const summaryProductTypeIdsParam = useMemo(
     () =>
       serializeProductTypeSelection(
         summaryProductTypeFilters,
-        summaryProductTypeCatalogLoaded ? summaryProductTypeValues : [],
+        [],
         { omitWhenAllSelected: false },
       ),
-    [summaryProductTypeCatalogLoaded, summaryProductTypeFilters, summaryProductTypeValues],
+    [summaryProductTypeFilters],
   );
+  const summaryFilters = useMemo<BookingsSummaryFilters>(
+    () => ({
+      summaryDateField,
+      summaryProductTypes: summaryProductTypeFilters,
+      summaryPreset: summaryDatePreset,
+      summaryMetric: summaryMetricMode,
+      summaryStart: summaryCustomDateRange[0]
+        ? dayjs(summaryCustomDateRange[0]).format(DATE_FORMAT)
+        : null,
+      summaryEnd: summaryCustomDateRange[1]
+        ? dayjs(summaryCustomDateRange[1]).format(DATE_FORMAT)
+        : null,
+    }),
+    [
+      summaryCustomDateRange,
+      summaryDateField,
+      summaryDatePreset,
+      summaryMetricMode,
+      summaryProductTypeFilters,
+    ],
+  );
+  const handleSummaryFiltersChange = useCallback((next: BookingsSummaryFilters) => {
+    setSummaryDateField(next.summaryDateField);
+    setSummaryProductTypeFilters(next.summaryProductTypes);
+    setSummaryDatePreset(next.summaryPreset);
+    setSummaryMetricMode(next.summaryMetric);
+    setSummaryCustomDateRange([
+      next.summaryStart ? dayjs(next.summaryStart).toDate() : null,
+      next.summaryEnd ? dayjs(next.summaryEnd).toDate() : null,
+    ]);
+  }, []);
 
   const openManifestForCurrentDate = useCallback(() => {
     const params = new URLSearchParams();
@@ -872,12 +810,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [emailPreviewParam, navigate, openManifestForCurrentDate, searchParams]);
 
   useEffect(() => {
-    const nextDateField = parseSummaryDateFieldParam(searchParams.get("summaryDateField"));
+    const nextDateField = parseBookingsSummaryDateField(searchParams.get("summaryDateField"));
     setSummaryDateField((prev) => (prev === nextDateField ? prev : nextDateField));
   }, [searchParams]);
 
   useEffect(() => {
-    const nextProductTypes = parseSummaryProductTypesParam(
+    const nextProductTypes = parseBookingsSummaryProductTypes(
       summaryProductTypesParam,
       summaryProductTypeParam,
     );
@@ -889,14 +827,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [summaryProductTypeParam, summaryProductTypesParam]);
 
   useEffect(() => {
-    const nextPreset = parseSummaryDatePresetParam(searchParams.get("summaryPreset"));
+    const nextPreset = parseBookingsSummaryPreset(searchParams.get("summaryPreset"));
     setSummaryDatePreset((prev) => (prev === nextPreset ? prev : nextPreset));
   }, [searchParams]);
 
   useEffect(() => {
+    const summaryStartParam = parseBookingsSummaryDate(searchParams.get("summaryStart"));
+    const summaryEndParam = parseBookingsSummaryDate(searchParams.get("summaryEnd"));
     const nextCustomRange: [Date | null, Date | null] = [
-      parseSummaryCustomDateParam(searchParams.get("summaryStart")),
-      parseSummaryCustomDateParam(searchParams.get("summaryEnd")),
+      summaryStartParam ? dayjs(summaryStartParam).toDate() : null,
+      summaryEndParam ? dayjs(summaryEndParam).toDate() : null,
     ];
     setSummaryCustomDateRange((prev) => {
       const sameRange =
@@ -907,7 +847,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   }, [searchParams]);
 
   useEffect(() => {
-    const nextMetricMode = parseSummaryMetricModeParam(searchParams.get("summaryMetric"));
+    const nextMetricMode = parseBookingsSummaryMetric(searchParams.get("summaryMetric"));
     setSummaryMetricMode((prev) => (prev === nextMetricMode ? prev : nextMetricMode));
   }, [searchParams]);
 
@@ -1100,69 +1040,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const dateRange = useMemo(() => createDateArray(rangeStart, rangeEnd), [rangeStart, rangeEnd]);
 
   const monthYearLabel = useMemo(() => rangeStart.format("MMMM YYYY"), [rangeStart]);
-  const summaryPresetRange = useMemo(() => {
-    const today = dayjs().startOf("day");
-    const thisMonthStart = today.startOf("month");
-    const thisMonthEnd = today.endOf("month");
-    const thisWeekStart = today.startOf("week");
-    const thisWeekEnd = today.endOf("week");
-    switch (summaryDatePreset) {
-      case "today":
-        return { start: today, end: today.endOf("day") };
-      case "yesterday": {
-        const yesterday = today.subtract(1, "day");
-        return { start: yesterday, end: yesterday.endOf("day") };
-      }
-      case "this_week":
-        return { start: thisWeekStart, end: thisWeekEnd };
-      case "last_week": {
-        const lastWeekStart = thisWeekStart.subtract(1, "week").startOf("week");
-        return { start: lastWeekStart, end: lastWeekStart.endOf("week") };
-      }
-      case "last_7_days":
-        return { start: today.subtract(6, "day"), end: today.endOf("day") };
-      case "last_14_days":
-        return { start: today.subtract(13, "day"), end: today.endOf("day") };
-      case "last_2_weeks": {
-        const lastTwoWeeksEnd = thisWeekStart.subtract(1, "day").endOf("day");
-        const lastTwoWeeksStart = thisWeekStart.subtract(2, "week").startOf("day");
-        return { start: lastTwoWeeksStart, end: lastTwoWeeksEnd };
-      }
-      case "last_month": {
-        const lastMonthStart = today.subtract(1, "month").startOf("month");
-        return { start: lastMonthStart, end: lastMonthStart.endOf("month") };
-      }
-      case "this_year": {
-        const thisYearStart = today.startOf("year");
-        return { start: thisYearStart, end: thisYearStart.endOf("year") };
-      }
-      case "last_year": {
-        const lastYearStart = today.subtract(1, "year").startOf("year");
-        return { start: lastYearStart, end: lastYearStart.endOf("year") };
-      }
-      case "all_time": {
-        const allTimeStart = dayjs("2000-01-01").startOf("day");
-        return { start: allTimeStart, end: today.endOf("day") };
-      }
-      case "custom": {
-        const customStart = summaryCustomDateRange[0] ? dayjs(summaryCustomDateRange[0]).startOf("day") : null;
-        const customEnd = summaryCustomDateRange[1] ? dayjs(summaryCustomDateRange[1]).endOf("day") : null;
-        if (customStart && customEnd && !customEnd.isBefore(customStart, "day")) {
-          return { start: customStart, end: customEnd };
-        }
-        return { start: thisMonthStart, end: thisMonthEnd };
-      }
-      case "this_month":
-      default:
-        return { start: thisMonthStart, end: thisMonthEnd };
-    }
-  }, [summaryCustomDateRange, summaryDatePreset]);
-  const summaryRangeStart = summaryPresetRange.start;
-  const summaryRangeEnd = summaryPresetRange.end;
-  const effectiveRangeStart = activeTab === "summary" ? summaryRangeStart : rangeStart;
-  const effectiveRangeEnd = activeTab === "summary" ? summaryRangeEnd : rangeEnd;
-  const bookingsDateField: SummaryDateField = activeTab === "summary" ? summaryDateField : "experience_date";
-
   const selectedDateKey = selectedDate.format(DATE_FORMAT);
 
   const handleViewModeChange = (mode: ViewMode) => {
@@ -1230,7 +1107,9 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     setErrorMessage(null);
     try {
       await axiosInstance.post("/bookings/ingest-emails", {}, { withCredentials: true });
-      setFetchStatus("loading");
+      if (activeTab === "calendar") {
+        setFetchStatus("loading");
+      }
       setReloadToken((token) => token + 1);
       setIngestStatus("success");
     } catch (error) {
@@ -1690,277 +1569,30 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   };
 
   useEffect(() => {
-    if (!modulePermissions.ready || !modulePermissions.canView) {
-      return;
-    }
-    if (activeTab !== "summary") {
+    if (!modulePermissions.ready || !modulePermissions.canView || activeTab !== "calendar") {
       return;
     }
 
     const controller = new AbortController();
-    setFetchStatus("loading");
-    setErrorMessage(null);
-
-    const fetchProductTypes = async () => {
-      const selectedFromUrl = parseSummaryProductTypesParam(
-        summaryProductTypesParam,
-        summaryProductTypeParam,
-      );
-      try {
-        const response = await axiosInstance.get("/productTypes", {
-          signal: controller.signal,
-          withCredentials: true,
-        });
-        const rows: Array<{ id?: unknown; name?: unknown }> = Array.isArray(response.data?.[0]?.data)
-          ? (response.data[0].data as Array<{ id?: unknown; name?: unknown }>)
-          : [];
-        const options = rows
-          .map((row) => {
-            const id = Number(row?.id);
-            const name = String(row?.name ?? "").trim();
-            if (!Number.isFinite(id) || id <= 0 || !name) {
-              return null;
-            }
-            return { value: String(id), label: name } satisfies ProductTypeOption;
-          })
-          .filter((row): row is ProductTypeOption => row !== null)
-          .sort((a: ProductTypeOption, b: ProductTypeOption) => a.label.localeCompare(b.label));
-        setSummaryProductTypeOptions(options);
-        const hasExplicitUrlSelection =
-          summaryProductTypesParam !== null || summaryProductTypeParam !== null;
-        setSummaryProductTypeFilters(
-          resolveBookingsSummaryProductTypeValues(
-            options,
-            selectedFromUrl,
-            hasExplicitUrlSelection,
-          ),
-        );
-        setSummaryProductTypeCatalogLoaded(true);
-      } catch {
-        if (!controller.signal.aborted) {
-          setSummaryProductTypeOptions((currentOptions) => {
-            const knownValues = new Set(currentOptions.map((option) => option.value));
-            const fallbackOptions = selectedFromUrl
-              .filter((value) => !knownValues.has(value))
-              .map((value) => ({ value, label: `Product type ${value}` }));
-            return fallbackOptions.length > 0
-              ? [...currentOptions, ...fallbackOptions]
-              : currentOptions;
-          });
-          if (selectedFromUrl.length > 0) {
-            setSummaryProductTypeFilters(selectedFromUrl);
-            setSummaryProductTypeCatalogLoaded(true);
-          } else {
-            setFetchStatus("error");
-            setErrorMessage("Failed to load product types for the Summary filter.");
-          }
-        }
-      }
-    };
-
-    fetchProductTypes();
-
-    return () => {
-      controller.abort();
-    };
-  }, [
-    modulePermissions.ready,
-    modulePermissions.canView,
-    activeTab,
-    summaryProductTypeParam,
-    summaryProductTypesParam,
-  ]);
-
-  useEffect(() => {
-    if (!modulePermissions.ready || !modulePermissions.canView) {
-      return;
-    }
-    if (activeTab !== "calendar" && activeTab !== "summary") {
-      return;
-    }
-    if (activeTab === "summary" && !summaryProductTypeCatalogLoaded) {
-      return;
-    }
-
-    const controller = new AbortController();
-    const startIso = effectiveRangeStart.startOf("day").format("YYYY-MM-DD");
-    const endIso = effectiveRangeEnd.endOf("day").format("YYYY-MM-DD");
+    const startIso = rangeStart.startOf("day").format(DATE_FORMAT);
+    const endIso = rangeEnd.endOf("day").format(DATE_FORMAT);
 
     const fetchOrders = async () => {
       setFetchStatus("loading");
       setErrorMessage(null);
-      setBookingAddons([]);
-      setAddonCatalog([]);
-      setCounterInsights(null);
-      setVenueCommissionTotals(null);
-      setVenueCommissionVenues(null);
-      setCostsSummary(null);
-
       try {
-        const summaryTabActive = activeTab === "summary";
-        const venueSummaryPromise = summaryTabActive
-          ? axiosInstance
-              .get("/venueNumbers/summary", {
-                params: {
-                  period: "custom",
-                  startDate: startIso,
-                  endDate: endIso,
-                },
-                signal: controller.signal,
-                withCredentials: true,
-              })
-              .catch(() => null)
-          : Promise.resolve(null);
-        const paysSummaryPromise = summaryTabActive
-          ? axiosInstance
-              .get("/reports/getCommissionByDateRange", {
-                params: {
-                  startDate: startIso,
-                  endDate: endIso,
-                  scope: "all",
-                },
-                signal: controller.signal,
-                withCredentials: true,
-              })
-              .catch(() => null)
-          : Promise.resolve(null);
         const response = await axiosInstance.get("/bookings", {
           params: {
             pickupFrom: startIso,
             pickupTo: endIso,
-            dateField: bookingsDateField,
-            productTypeIds: activeTab === "summary" ? summaryProductTypeIdsParam : undefined,
+            dateField: "experience_date",
             limit: 200,
           },
           signal: controller.signal,
-            withCredentials: true,
-          });
-        const productsPayload = Array.isArray(response.data?.products) ? response.data.products : [];
-        const ordersPayload = Array.isArray(response.data?.orders) ? response.data.orders : [];
-        const bookingAddonsPayload = Array.isArray(response.data?.bookingAddons) ? response.data.bookingAddons : [];
-        const addonCatalogPayload = Array.isArray(response.data?.addonCatalog) ? response.data.addonCatalog : [];
-        const counterInsightsPayload =
-          response.data?.counterInsights && typeof response.data.counterInsights === "object"
-            ? response.data.counterInsights
-            : null;
-        const venueSummaryResponse = await venueSummaryPromise;
-        const paysSummaryResponse = await paysSummaryPromise;
-        const venueSummaryRoot =
-          Array.isArray(venueSummaryResponse?.data) && venueSummaryResponse?.data[0]
-            ? venueSummaryResponse.data[0]
-            : null;
-        const venueSummaryData = venueSummaryRoot && typeof venueSummaryRoot === "object"
-          ? (venueSummaryRoot as { data?: unknown }).data
-          : null;
-        const venueSummary =
-          Array.isArray(venueSummaryData) && venueSummaryData.length > 0
-            ? venueSummaryData[0]
-            : venueSummaryData;
-        const venueTotalsRaw =
-          venueSummary && typeof venueSummary === "object"
-            ? (venueSummary as { totalsByCurrency?: unknown }).totalsByCurrency
-            : null;
-        const venueRowsRaw =
-          venueSummary && typeof venueSummary === "object"
-            ? (venueSummary as { venues?: unknown }).venues
-            : null;
-        const venueTotalsPayload: VenueCommissionCurrencyTotal[] | null = Array.isArray(venueTotalsRaw)
-          ? venueTotalsRaw.reduce<VenueCommissionCurrencyTotal[]>((acc, row) => {
-              if (!row || typeof row !== "object") {
-                return acc;
-              }
-              const raw = row as Record<string, unknown>;
-              acc.push({
-                currency: String(raw.currency ?? "PLN").toUpperCase(),
-                receivable: Number(raw.receivable ?? 0),
-                receivableCollected: Number(raw.receivableCollected ?? 0),
-                receivableOutstanding: Number(raw.receivableOutstanding ?? 0),
-                payable: Number(raw.payable ?? 0),
-                payableCollected: Number(raw.payableCollected ?? 0),
-                payableOutstanding: Number(raw.payableOutstanding ?? 0),
-              });
-              return acc;
-            }, [])
-          : null;
-        const venueRowsPayload: VenueCommissionVenueRow[] | null = Array.isArray(venueRowsRaw)
-          ? venueRowsRaw.reduce<VenueCommissionVenueRow[]>((acc, row) => {
-              if (!row || typeof row !== "object") {
-                return acc;
-              }
-              const raw = row as Record<string, unknown>;
-              acc.push({
-                venueId: raw.venueId == null ? null : Number(raw.venueId),
-                venueName: String(raw.venueName ?? "").trim() || "Unknown Venue",
-                currency: String(raw.currency ?? "PLN").toUpperCase(),
-                receivable: Number(raw.receivable ?? 0),
-                receivableCollected: Number(raw.receivableCollected ?? 0),
-                receivableOutstanding: Number(raw.receivableOutstanding ?? 0),
-                totalPeople: Number(raw.totalPeople ?? 0),
-              });
-              return acc;
-            }, [])
-          : null;
-
-        const paysRowsRaw =
-          Array.isArray(paysSummaryResponse?.data) && paysSummaryResponse?.data[0]
-            ? (paysSummaryResponse.data[0] as { data?: unknown }).data
-            : null;
-        const paysRows = Array.isArray(paysRowsRaw) ? (paysRowsRaw as Array<Record<string, unknown>>) : [];
-        const staffPaymentsTotal = paysRows.reduce((sum, item) => {
-          const dueAmount = Number(item?.dueAmount);
-          if (Number.isFinite(dueAmount)) {
-            return sum + dueAmount;
-          }
-          const totalPayout = Number(item?.totalPayout);
-          if (Number.isFinite(totalPayout)) {
-            return sum + totalPayout;
-          }
-          const totalCommission = Number(item?.totalCommission);
-          return sum + (Number.isFinite(totalCommission) ? totalCommission : 0);
-        }, 0);
-        const venueTotalsForCosts = venueTotalsPayload ?? [];
-        const openBarPayoutsTotal = venueTotalsForCosts.reduce((sum, row) => {
-          const amount = Number(row.payable ?? 0);
-          return sum + (Number.isFinite(amount) ? amount : 0);
-        }, 0);
-
-        setProducts(productsPayload as UnifiedProduct[]);
-        setOrders(ordersPayload as UnifiedOrder[]);
-        setBookingAddons(bookingAddonsPayload as BookingAddonDashboardRow[]);
-        setAddonCatalog(
-          addonCatalogPayload
-            .map((row: unknown) => {
-              const raw = row as Record<string, unknown>;
-              const id = Number(raw.id);
-              const name = String(raw.name ?? "").trim();
-              const basePrice = Number(raw.basePrice ?? 0);
-              if (!Number.isFinite(id) || id <= 0 || !name) {
-                return null;
-              }
-              return {
-                id,
-                name,
-                basePrice: Number.isFinite(basePrice) ? basePrice : 0,
-              };
-            })
-            .filter(
-              (row: { id: number; name: string; basePrice: number } | null): row is { id: number; name: string; basePrice: number } =>
-                row !== null,
-            ),
-        );
-        setCounterInsights(counterInsightsPayload as BookingCounterInsights | null);
-        setVenueCommissionTotals(summaryTabActive ? venueTotalsPayload : null);
-        setVenueCommissionVenues(summaryTabActive ? venueRowsPayload : null);
-        setCostsSummary(
-          summaryTabActive
-            ? {
-                currency: "PLN",
-                openBarPayouts: openBarPayoutsTotal,
-                staffPayments: staffPaymentsTotal,
-                miscellaneous: 3400,
-              }
-            : null,
-        );
+          withCredentials: true,
+        });
+        setProducts(Array.isArray(response.data?.products) ? response.data.products : []);
+        setOrders(Array.isArray(response.data?.orders) ? response.data.orders : []);
         setFetchStatus("success");
       } catch (error) {
         if (controller.signal.aborted) {
@@ -1968,10 +1600,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
         }
         setFetchStatus("error");
         setErrorMessage(deriveErrorMessage(error));
-        setAddonCatalog([]);
-        setVenueCommissionTotals(null);
-        setVenueCommissionVenues(null);
-        setCostsSummary(null);
       }
     };
 
@@ -1981,17 +1609,13 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       controller.abort();
     };
   }, [
-    modulePermissions.ready,
-    modulePermissions.canView,
-    effectiveRangeStart,
-    effectiveRangeEnd,
-    bookingsDateField,
     activeTab,
-    summaryProductTypeCatalogLoaded,
-    summaryProductTypeIdsParam,
+    modulePermissions.canView,
+    modulePermissions.ready,
+    rangeEnd,
+    rangeStart,
     reloadToken,
   ]);
-
   useEffect(() => {
     if (!modulePermissions.ready || !modulePermissions.canView) {
       return;
@@ -2083,17 +1707,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     }
     return filterOrdersByStatus(orders, activeStatusFilter);
   }, [orders, activeStatusFilter, activeTab]);
-  const filteredBookingAddons = useMemo(() => {
-    const bookingIds = new Set<number>();
-    filteredOrders.forEach((order) => {
-      const id = Number(order.id);
-      if (Number.isFinite(id) && id > 0) {
-        bookingIds.add(id);
-      }
-    });
-    return bookingAddons.filter((row) => bookingIds.has(Number(row.bookingId)));
-  }, [bookingAddons, filteredOrders]);
-
   const filteredProducts = useMemo(() => {
     if (activeStatusFilter === "all") {
       return products;
@@ -2344,31 +1957,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     size="sm"
                   />
                 )}
-                {activeTab === "summary" && (
-                  <SegmentedControl
-                    value={summaryDateField}
-                    onChange={(value) =>
-                      setSummaryDateField(parseSummaryDateFieldParam(value))
-                    }
-                    data={[
-                      { value: "experience_date", label: "Experience Date" },
-                      { value: "source_received_at", label: "Source Received At" },
-                    ]}
-                    size={isMobile ? "xs" : "sm"}
-                  />
-                )}
-                {activeTab === "summary" && (
-                  <MultiSelect
-                    value={summaryProductTypeFilters}
-                    onChange={setSummaryProductTypeFilters}
-                    data={summaryProductTypeOptions}
-                    placeholder="Select product types"
-                    clearable
-                    size={isMobile ? "xs" : "sm"}
-                    w={isMobile ? "100%" : 320}
-                    checkIconPosition="right"
-                  />
-                )}
                 {activeTab === "calendar" && (
                   <Button
                     size="sm"
@@ -2437,67 +2025,6 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>
                 </Tabs.List>
               )}
-              {activeTab === "summary" && (
-                <Stack gap="sm" mt="md" mx="auto" style={{ width: "100%", maxWidth: 860 }}>
-                  <Group gap="sm" wrap="wrap" align="center" justify="center">
-                    <Select
-                      value={summaryDatePreset}
-                      onChange={(value) =>
-                        setSummaryDatePreset(parseSummaryDatePresetParam(value))
-                      }
-                      data={SUMMARY_DATE_PRESET_OPTIONS}
-                      placeholder="This Month"
-                      size={isMobile ? "xs" : "sm"}
-                      w={isMobile ? "100%" : 220}
-                      checkIconPosition="right"
-                      allowDeselect={false}
-                      styles={{
-                        input: { textAlign: "center", fontWeight: 700 },
-                        dropdown: { textAlign: "center" },
-                        options: { textAlign: "center" },
-                        option: { justifyContent: "center", textAlign: "center", fontWeight: 600 },
-                      }}
-                    />
-                    {summaryDatePreset === "custom" && (
-                      <DatePickerInput
-                        type="range"
-                        allowSingleDateInRange
-                        value={summaryCustomDateRange}
-                        onChange={setSummaryCustomDateRange}
-                        placeholder="Select custom range"
-                        size={isMobile ? "xs" : "sm"}
-                        valueFormat="YYYY-MM-DD"
-                        clearable
-                        w={isMobile ? "100%" : 280}
-                        styles={{
-                          input: { textAlign: "center" },
-                        }}
-                      />
-                    )}
-                  </Group>
-                  <SegmentedControl
-                    value={summaryMetricMode}
-                    onChange={(value) =>
-                      setSummaryMetricMode(parseSummaryMetricModeParam(value))
-                    }
-                    data={[
-                      { value: "earnings", label: "Earnings" },
-                      { value: "revenue", label: "Revenue" },
-                      { value: "costs", label: "Costs" },
-                    ]}
-                    fullWidth
-                    radius="md"
-                    size={isMobile ? "sm" : "md"}
-                    color="blue"
-                    styles={{
-                      root: { backgroundColor: "#eef3f8", border: "1px solid #d7e3f0" },
-                      label: { fontWeight: 600, paddingTop: 8, paddingBottom: 8 },
-                      indicator: { boxShadow: "0 2px 10px rgba(24, 100, 171, 0.18)" },
-                    }}
-                  />
-                </Stack>
-              )}
-
               <Tabs.Panel value="calendar" pt="md">
                 {isLoading ? (
                   <Box style={{ minHeight: 320 }}>
@@ -2523,28 +2050,16 @@ const BookingsPage = ({ title }: GenericPageProps) => {
               </Tabs.Panel>
 
               <Tabs.Panel value="summary" pt="md">
-                <Stack gap="md">
-                  {fetchStatus === "loading" && orders.length === 0 ? (
-                    <Box style={{ minHeight: 320 }}>
-                      <Loader variant="bars" />
-                    </Box>
-                  ) : (
-                    <Suspense fallback={<Box style={{ minHeight: 320 }}><Loader variant="bars" /></Box>}>
-                      <BookingsExecutiveDashboard
-                        orders={filteredOrders}
-                        bookingAddons={filteredBookingAddons}
-                        addonCatalog={addonCatalog}
-                        counterInsights={counterInsights}
-                        venueCommissionTotals={venueCommissionTotals}
-                        venueCommissionVenues={venueCommissionVenues}
-                        metricMode={summaryMetricMode}
-                        costsSummary={costsSummary}
-                        dateField={summaryDateField}
-                        productTypeIds={summaryProductTypeIdsParam}
-                      />
-                    </Suspense>
-                  )}
-                </Stack>
+                <BookingsSummaryWorkspace
+                  filters={summaryFilters}
+                  onFiltersChange={handleSummaryFiltersChange}
+                  productTypesExplicit={
+                    summaryProductTypesParam !== null || summaryProductTypeParam !== null
+                  }
+                  filtersVisible={isFilterPanelVisible}
+                  onFiltersVisibleChange={setIsFilterPanelVisible}
+                  refreshToken={reloadToken}
+                />
               </Tabs.Panel>
 
               <Tabs.Panel value="emails" pt="md">

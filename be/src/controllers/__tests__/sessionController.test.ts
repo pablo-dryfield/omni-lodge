@@ -85,6 +85,7 @@ describe('session controller', () => {
         hasStoredProfilePhoto: true,
         profilePhotoVersion: '28-1788105600000',
         notificationInboxPollingEnabled: true,
+        badgeCampaignBaseUrl: 'https://krawlthroughkrakow.com/store2/pub-crawl-28/#book',
       }]);
       const payload = response.json.mock.calls[0][0][0] as Record<string, unknown>;
       expect(payload).not.toHaveProperty('profilePhotoPath');
@@ -109,6 +110,32 @@ describe('session controller', () => {
         expect.objectContaining({ notificationInboxPollingEnabled: false }),
       ]);
       expect(mockedGetConfigValue).toHaveBeenCalledWith('NOTIFICATION_INBOX_POLLING_ENABLED');
+    });
+
+    it('returns the configured badge campaign destination without an extra client request', () => {
+      mockedGetConfigValue.mockImplementation((key: string) => (
+        key === 'BADGE_CAMPAIGN_BASE_URL'
+          ? 'https://store.example.com/pub-crawl#booking'
+          : true
+      ));
+      const request = {
+        user: { id: 28 },
+        authContext: {
+          id: 28,
+          userTypeId: 3,
+          roleSlug: 'assistant-manager',
+        },
+      } as unknown as AuthenticatedRequest;
+      const response = createResponse();
+
+      checkSession(request, response);
+
+      expect(response.json).toHaveBeenCalledWith([
+        expect.objectContaining({
+          badgeCampaignBaseUrl: 'https://store.example.com/pub-crawl#booking',
+        }),
+      ]);
+      expect(mockedGetConfigValue).toHaveBeenCalledWith('BADGE_CAMPAIGN_BASE_URL');
     });
 
     it('returns 401 when no authenticated user is attached', () => {

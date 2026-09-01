@@ -37,6 +37,7 @@ import type { UserShiftRoleAssignment } from "../types/shiftRoles/UserShiftRoleA
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { compressImageFile } from "../utils/imageCompression";
 import { buildUserProfilePhotoUrl } from "../utils/profilePhoto";
+import { buildBadgeCampaignUrl } from "../utils/badgeCampaignUrl";
 import PhoneCodeSelectField from "../components/common/PhoneCodeSelectField";
 import { PRONOUN_OPTIONS } from "../constants/pronouns";
 import { DISCOVERY_SOURCE_OPTIONS } from "../constants/discoverySources";
@@ -114,8 +115,6 @@ const PROFILE_PHOTO_COMPRESSION_OPTIONS = {
 const BADGE_TEMPLATE_SRC = "/assets/badges/ktk-guide-badge.svg";
 const BADGE_MEDIA_TEMPLATE_SRC = "/assets/badges/ktk-media-badge.svg";
 const BADGE_BACKSIDE_TEMPLATE_SRC = "/assets/badges/ktk-backside-badge.png";
-const BADGE_CAMPAIGN_BASE_URL =
-  "https://krawlthroughkrakow.com/store/Krakow-Pub-Crawl-with-Krawl-Through-Krakow-p637047413/";
 const BADGE_BACKSIDE_QR_STYLE = {
   left: "30.7258%",
   top: "19.4508%",
@@ -298,14 +297,6 @@ const makeInitials = (name: string | undefined) => {
 
 const compareString = (value?: string | null) => value ?? "";
 
-const buildBadgeCampaignUrl = (sourceName: string) => {
-  const url = new URL(BADGE_CAMPAIGN_BASE_URL);
-  url.searchParams.set("utm_source", sourceName);
-  url.searchParams.set("utm_medium", "Badge");
-  url.searchParams.set("utm_campaign", "Staff");
-  return url.toString();
-};
-
 const derivePronounState = (value?: string | null) => {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) {
@@ -322,7 +313,7 @@ const derivePronounState = (value?: string | null) => {
 
 const MyAccount = () => {
   const dispatch = useAppDispatch();
-  const { loggedUserId } = useAppSelector((state) => state.session);
+  const { loggedUserId, badgeCampaignBaseUrl } = useAppSelector((state) => state.session);
   const usersState = useAppSelector((state) => state.users)[0];
   const staffProfilesState = useAppSelector((state) => state.staffProfiles)[0];
   const userTypesState = useAppSelector((state) => state.userTypes?.[0]);
@@ -1167,7 +1158,7 @@ const MyAccount = () => {
     let active = true;
     const qrSourceName = buildBadgeCampaignSourceName(currentUser?.firstName, currentUser?.id ?? loggedUserId);
 
-    QRCode.toDataURL(buildBadgeCampaignUrl(qrSourceName), {
+    QRCode.toDataURL(buildBadgeCampaignUrl(badgeCampaignBaseUrl, qrSourceName), {
       errorCorrectionLevel: "M",
       margin: 1,
       color: {
@@ -1189,7 +1180,7 @@ const MyAccount = () => {
     return () => {
       active = false;
     };
-  }, [currentUser?.firstName, currentUser?.id, loggedUserId]);
+  }, [badgeCampaignBaseUrl, currentUser?.firstName, currentUser?.id, loggedUserId]);
 
   if (!loggedUserId) {
     return (

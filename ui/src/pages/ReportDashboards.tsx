@@ -1,9 +1,10 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ActionIcon,
+  Alert,
   Badge,
   Box,
   Button,
@@ -17,7 +18,9 @@ import {
   NumberInput,
   Paper,
   ScrollArea,
+  SegmentedControl,
   Select,
+  SimpleGrid,
   Stack,
   Switch,
   Text,
@@ -26,6 +29,7 @@ import {
   Title,
   useMantineTheme,
 } from "@mantine/core";
+import { DatePickerInput } from "@mantine/dates";
 import {
   IconAdjustments,
   IconArrowLeft,
@@ -54,6 +58,10 @@ import {
   type DashboardPreviewPeriodPreset,
   type DashboardSpotlightCardViewConfig,
   type DashboardVisualCardViewConfig,
+  type BookingsSummaryDashboardDateField,
+  type BookingsSummaryDashboardFilters,
+  type BookingsSummaryDashboardMetric,
+  type BookingsSummaryDashboardPreset,
   type FilterOperator,
   type ReportDashboardDto,
   type ReportTemplateDto,
@@ -62,6 +70,13 @@ import {
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { SpotlightCard } from "../components/dashboard/SpotlightCardParts";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
+import axiosInstance from "../utils/axiosInstance";
+import {
+  BOOKINGS_SUMMARY_DASHBOARD_PAGE_CONFIG,
+  createDefaultBookingsSummaryDashboardFilters,
+  isBookingsSummaryDashboardPageConfig,
+  normalizeBookingsSummaryDashboardFilters,
+} from "../utils/dashboardPageConfig";
 import dayjs from "dayjs";
 import isoWeek from "dayjs/plugin/isoWeek";
 
@@ -81,6 +96,13 @@ type DashboardCardLayout = {
 };
 
 type LayoutMode = "desktop" | "mobile";
+
+type DashboardContentType = "report-cards" | "bookings-summary";
+
+type ProductTypeOption = {
+  value: string;
+  label: string;
+};
 
 type DashboardGridItem = {
   id: string;
@@ -194,6 +216,28 @@ ${buildGridStackColumnStyles(LAYOUT_EDITOR_COLUMN_COUNT_MOBILE, ".dashboard-layo
 `;
 
 const deepClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
+
+const parseProductTypeOptions = (payload: unknown): ProductTypeOption[] => {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+  const envelope = payload[0];
+  if (!envelope || typeof envelope !== "object" || !Array.isArray((envelope as { data?: unknown }).data)) {
+    return [];
+  }
+  return ((envelope as { data: Array<{ id?: unknown; name?: unknown }> }).data)
+    .map((row) => {
+      const id = Number(row.id);
+      const label = String(row.name ?? "").trim();
+      if (!Number.isSafeInteger(id) || id <= 0 || !label) {
+        return null;
+      }
+      return { value: String(id), label };
+    })
+    .filter((option): option is ProductTypeOption => option !== null)
+    .sort((left, right) => left.label.localeCompare(right.label));
+};
+
 const resolveNumericValue = (value: number | string | undefined): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -322,6 +366,47 @@ const PERIOD_PRESET_OPTIONS: Array<{ value: DashboardPreviewPeriodPreset; label:
   { value: "this_year", label: "This year" },
   { value: "this_quarter", label: "This quarter" },
   { value: "last_quarter", label: "Last quarter" },
+];
+
+const DASHBOARD_CONTENT_TYPE_OPTIONS: Array<{ value: DashboardContentType; label: string }> = [
+  { value: "report-cards", label: "Report cards" },
+  { value: "bookings-summary", label: "Booking Summary" },
+];
+
+const BOOKINGS_SUMMARY_DATE_FIELD_OPTIONS: Array<{
+  value: BookingsSummaryDashboardDateField;
+  label: string;
+}> = [
+  { value: "experience_date", label: "Experience Date" },
+  { value: "source_received_at", label: "Source Received At" },
+];
+
+const BOOKINGS_SUMMARY_PRESET_OPTIONS: Array<{
+  value: BookingsSummaryDashboardPreset;
+  label: string;
+}> = [
+  { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "this_week", label: "This Week" },
+  { value: "last_week", label: "Last Week" },
+  { value: "last_7_days", label: "Last 7 Days" },
+  { value: "last_14_days", label: "Last 14 Days" },
+  { value: "last_2_weeks", label: "Last 2 Weeks" },
+  { value: "this_month", label: "This Month" },
+  { value: "last_month", label: "Last Month" },
+  { value: "this_year", label: "This Year" },
+  { value: "last_year", label: "Last Year" },
+  { value: "all_time", label: "All Time" },
+  { value: "custom", label: "Custom" },
+];
+
+const BOOKINGS_SUMMARY_METRIC_OPTIONS: Array<{
+  value: BookingsSummaryDashboardMetric;
+  label: string;
+}> = [
+  { value: "earnings", label: "Earnings" },
+  { value: "revenue", label: "Revenue" },
+  { value: "costs", label: "Costs" },
 ];
 
 const FILTER_OPERATORS: FilterOperator[] = [
@@ -1510,6 +1595,48 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
   >({});
   const [pendingCardConfigChanges, setPendingCardConfigChanges] = useState<Record<string, true>>({});
   const [isSavingLayout, setIsSavingLayout] = useState(false);
+  const dashboardContentType: DashboardContentType = isBookingsSummaryDashboardPageConfig(
+    dashboardDraft?.config,
+  )
+    ? "bookings-summary"
+    : "report-cards";
+  const bookingsSummaryFilters = useMemo(
+    () => normalizeBookingsSummaryDashboardFilters(dashboardDraft?.filters),
+    [dashboardDraft?.filters],
+  );
+  const productTypesQuery = useQuery<ProductTypeOption[]>({
+    queryKey: ["product-types", "dashboard-bookings-summary"],
+    enabled: dashboardContentType === "bookings-summary",
+    queryFn: async () => {
+      const response = await axiosInstance.get("/productTypes");
+      return parseProductTypeOptions(response.data);
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const bookingsSummaryProductTypeOptions = useMemo(() => {
+    const options = [...(productTypesQuery.data ?? [])];
+    const knownValues = new Set(options.map((option) => option.value));
+    bookingsSummaryFilters.summaryProductTypes.forEach((value) => {
+      if (!knownValues.has(value)) {
+        options.push({ value, label: `Product type ${value}` });
+      }
+    });
+    return options;
+  }, [bookingsSummaryFilters.summaryProductTypes, productTypesQuery.data]);
+  const bookingsSummaryCustomRange = useMemo<[Date | null, Date | null]>(
+    () => [
+      bookingsSummaryFilters.summaryStart
+        ? dayjs(bookingsSummaryFilters.summaryStart).toDate()
+        : null,
+      bookingsSummaryFilters.summaryEnd
+        ? dayjs(bookingsSummaryFilters.summaryEnd).toDate()
+        : null,
+    ],
+    [bookingsSummaryFilters.summaryEnd, bookingsSummaryFilters.summaryStart],
+  );
+  const bookingsSummaryCustomRangeIncomplete = dashboardContentType === "bookings-summary"
+    && bookingsSummaryFilters.summaryPreset === "custom"
+    && (!bookingsSummaryFilters.summaryStart || !bookingsSummaryFilters.summaryEnd);
   const selectedCardTemplate = useMemo(
     () => (cardDraft ? templateLookup.get(cardDraft.templateId) ?? null : null),
     [cardDraft, templateLookup],
@@ -1875,6 +2002,57 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     setPendingCardConfigChanges({});
   }, [selectedDashboardId]);
 
+  const handleDashboardContentTypeChange = (value: string) => {
+    const nextContentType: DashboardContentType = value === "bookings-summary"
+      ? "bookings-summary"
+      : "report-cards";
+    setFeedback(null);
+    setCardModalOpen(false);
+    setLayoutEditorOpen(false);
+    setDashboardDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      if (nextContentType === "bookings-summary") {
+        if (isBookingsSummaryDashboardPageConfig(current.config)) {
+          return current;
+        }
+        return {
+          ...current,
+          config: { ...BOOKINGS_SUMMARY_DASHBOARD_PAGE_CONFIG },
+          filters: createDefaultBookingsSummaryDashboardFilters(),
+        };
+      }
+      if (!isBookingsSummaryDashboardPageConfig(current.config)) {
+        return current;
+      }
+      return {
+        ...current,
+        config: {},
+        filters: {},
+      };
+    });
+  };
+
+  const updateBookingsSummaryFilters = useCallback(
+    (patch: Partial<BookingsSummaryDashboardFilters>) => {
+      setFeedback(null);
+      setDashboardDraft((current) => {
+        if (!current || !isBookingsSummaryDashboardPageConfig(current.config)) {
+          return current;
+        }
+        return {
+          ...current,
+          filters: normalizeBookingsSummaryDashboardFilters({
+            ...normalizeBookingsSummaryDashboardFilters(current.filters),
+            ...patch,
+          }),
+        };
+      });
+    },
+    [],
+  );
+
   const createDashboardMutation = useCreateDashboard();
   const updateDashboardMutation = useUpdateDashboard();
   const deleteDashboardMutation = useDeleteDashboard();
@@ -1902,11 +2080,25 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
     if (!dashboardDraft) {
       return;
     }
+    if (bookingsSummaryCustomRangeIncomplete) {
+      setFeedback({
+        type: "error",
+        message: "Choose both a start and end date for the custom Booking Summary period.",
+      });
+      return;
+    }
     setFeedback(null);
     try {
+      const isBookingsSummary = isBookingsSummaryDashboardPageConfig(dashboardDraft.config);
       const payload = {
         name: dashboardDraft.name,
         description: dashboardDraft.description,
+        config: isBookingsSummary
+          ? { ...BOOKINGS_SUMMARY_DASHBOARD_PAGE_CONFIG }
+          : dashboardDraft.config,
+        filters: isBookingsSummary
+          ? normalizeBookingsSummaryDashboardFilters(dashboardDraft.filters)
+          : dashboardDraft.filters,
       };
       await updateDashboardMutation.mutateAsync({
         id: dashboardDraft.id,
@@ -2240,8 +2432,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                 <Title order={2}>Dashboards workspace</Title>
               </Group>
               <Text c="dimmed">
-                Curate dashboards composed of saved report templates. Configure card layouts, tailor presets, and export
-                the configuration for distribution.
+                Configure Home dashboards from saved report cards or complete operational pages.
               </Text>
             </Stack>
             <Group gap="sm">
@@ -2266,7 +2457,7 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
               <Button
                 leftSection={<IconDeviceFloppy size={16} />}
                 onClick={handleSaveDashboard}
-                disabled={!dashboardDraft}
+                disabled={!dashboardDraft || bookingsSummaryCustomRangeIncomplete}
                 loading={updateDashboardMutation.isPending}
               >
                 Save changes
@@ -2323,7 +2514,9 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                                 </Text>
                                 <Group gap={6}>
                                   <Badge size="xs" variant="light">
-                                    {dashboard.cards.length} cards
+                                    {isBookingsSummaryDashboardPageConfig(dashboard.config)
+                                      ? "Booking Summary"
+                                      : `${dashboard.cards.length} cards`}
                                   </Badge>
                                   <Badge size="xs" variant="light" color="gray">
                                     {dashboard.updatedAt ? new Date(dashboard.updatedAt).toLocaleString() : "Draft"}
@@ -2393,36 +2586,149 @@ const ReportDashboards = ({ title }: GenericPageProps) => {
                       />
                     </Stack>
 
-                    <Divider label="Cards" labelPosition="center" />
+                    <Divider label="Dashboard content" labelPosition="center" />
 
-                    <Group justify="space-between" align="center">
-                      <Text fw={600}>Dashboard cards</Text>
-                      <Group gap="sm">
-                        <Button
-                          variant="light"
-                          leftSection={<IconLayoutGrid size={16} />}
-                          onClick={() => setLayoutEditorOpen(true)}
-                        >
-                          Open layout editor
-                        </Button>
-                        <Button
-                          variant="light"
-                          leftSection={<IconPlus size={16} />}
-                          onClick={handleOpenCreateCard}
-                          disabled={templates.length === 0}
-                        >
-                          Add card
-                        </Button>
-                      </Group>
-                    </Group>
+                    <Stack gap="xs">
+                      <Text fw={600}>Content type</Text>
+                      <Text fz="sm" c="dimmed">
+                        Report cards use saved report templates. Booking Summary displays the complete summary page on
+                        Home without the Bookings navigation tabs.
+                      </Text>
+                      <SegmentedControl
+                        value={dashboardContentType}
+                        onChange={handleDashboardContentTypeChange}
+                        data={DASHBOARD_CONTENT_TYPE_OPTIONS}
+                        fullWidth
+                      />
+                    </Stack>
 
-                    <DashboardCardList
-                      cards={selectedDashboardCards}
-                      templateLookup={templateLookup}
-                      onEdit={handleOpenEditCard}
-                      onClone={handleCloneCard}
-                      onRemove={handleRemoveCard}
-                    />
+                    {dashboardContentType === "bookings-summary" ? (
+                      <Paper withBorder radius="md" p="md">
+                        <Stack gap="md">
+                          <div>
+                            <Text fw={600}>Booking Summary defaults</Text>
+                            <Text fz="sm" c="dimmed">
+                              These values replace the Booking Summary URL parameters when this dashboard appears on
+                              Home.
+                            </Text>
+                          </div>
+
+                          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+                            <Select
+                              label="Date basis"
+                              data={BOOKINGS_SUMMARY_DATE_FIELD_OPTIONS}
+                              value={bookingsSummaryFilters.summaryDateField}
+                              onChange={(value) => {
+                                if (value) {
+                                  updateBookingsSummaryFilters({
+                                    summaryDateField: value as BookingsSummaryDashboardDateField,
+                                  });
+                                }
+                              }}
+                              allowDeselect={false}
+                            />
+                            <MultiSelect
+                              label="Product types"
+                              description="The default selection is product types 1 and 2."
+                              placeholder={productTypesQuery.isLoading ? "Loading product types..." : "All product types"}
+                              data={bookingsSummaryProductTypeOptions}
+                              value={bookingsSummaryFilters.summaryProductTypes}
+                              onChange={(values) => updateBookingsSummaryFilters({ summaryProductTypes: values })}
+                              searchable
+                              clearable
+                              disabled={productTypesQuery.isLoading && bookingsSummaryProductTypeOptions.length === 0}
+                              nothingFoundMessage="No product types found"
+                            />
+                            <Select
+                              label="Period"
+                              data={BOOKINGS_SUMMARY_PRESET_OPTIONS}
+                              value={bookingsSummaryFilters.summaryPreset}
+                              onChange={(value) => {
+                                if (value) {
+                                  updateBookingsSummaryFilters({
+                                    summaryPreset: value as BookingsSummaryDashboardPreset,
+                                  });
+                                }
+                              }}
+                              allowDeselect={false}
+                            />
+                            <Select
+                              label="Metric"
+                              data={BOOKINGS_SUMMARY_METRIC_OPTIONS}
+                              value={bookingsSummaryFilters.summaryMetric}
+                              onChange={(value) => {
+                                if (value) {
+                                  updateBookingsSummaryFilters({
+                                    summaryMetric: value as BookingsSummaryDashboardMetric,
+                                  });
+                                }
+                              }}
+                              allowDeselect={false}
+                            />
+                          </SimpleGrid>
+
+                          {bookingsSummaryFilters.summaryPreset === "custom" && (
+                            <DatePickerInput
+                              type="range"
+                              label="Custom period"
+                              description="Click the same date twice for one day, or choose a start and end date."
+                              value={bookingsSummaryCustomRange}
+                              onChange={(range) => updateBookingsSummaryFilters({
+                                summaryStart: range[0] ? dayjs(range[0]).format("YYYY-MM-DD") : null,
+                                summaryEnd: range[1] ? dayjs(range[1]).format("YYYY-MM-DD") : null,
+                              })}
+                              valueFormat="YYYY-MM-DD"
+                              allowSingleDateInRange
+                              clearable
+                            />
+                          )}
+
+                          {productTypesQuery.isError && (
+                            <Alert color="yellow">
+                              Product type names could not be loaded. Saved product type IDs are still preserved.
+                            </Alert>
+                          )}
+                          {bookingsSummaryCustomRangeIncomplete && (
+                            <Alert color="yellow">
+                              Choose both a start and end date for the custom period before saving this dashboard.
+                            </Alert>
+                          )}
+                        </Stack>
+                      </Paper>
+                    ) : (
+                      <>
+                        <Divider label="Cards" labelPosition="center" />
+
+                        <Group justify="space-between" align="center">
+                          <Text fw={600}>Dashboard cards</Text>
+                          <Group gap="sm">
+                            <Button
+                              variant="light"
+                              leftSection={<IconLayoutGrid size={16} />}
+                              onClick={() => setLayoutEditorOpen(true)}
+                            >
+                              Open layout editor
+                            </Button>
+                            <Button
+                              variant="light"
+                              leftSection={<IconPlus size={16} />}
+                              onClick={handleOpenCreateCard}
+                              disabled={templates.length === 0}
+                            >
+                              Add card
+                            </Button>
+                          </Group>
+                        </Group>
+
+                        <DashboardCardList
+                          cards={selectedDashboardCards}
+                          templateLookup={templateLookup}
+                          onEdit={handleOpenEditCard}
+                          onClone={handleCloneCard}
+                          onRemove={handleRemoveCard}
+                        />
+                      </>
+                    )}
                   </Stack>
                 )}
               </Paper>

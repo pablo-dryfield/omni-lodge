@@ -12,7 +12,6 @@ import {
   reprocessEcwidSanityHints,
 } from '../controllers/bookingSanityController.js';
 import {
-  listBookings,
   listBookingEmails,
   listBookingMailboxEmails,
   getBookingEmailPreview,
@@ -47,10 +46,11 @@ import {
   completeBookingAddonRefundAction,
   deleteBookingAddonRefundAction,
 } from '../controllers/bookingController.js';
+import { listBookingsWithSummary } from '../controllers/bookingSummaryController.js';
 
 const router = Router();
 
-router.get(['/', ''], authMiddleware, listBookings);
+router.get(['/', ''], authMiddleware, listBookingsWithSummary);
 router.get('/emails', authMiddleware, listBookingEmails);
 router.get('/emails/mailbox', authMiddleware, listBookingMailboxEmails);
 router.get('/emails/tshirt-availability', authMiddleware, getBookingEmailTshirtAvailability);

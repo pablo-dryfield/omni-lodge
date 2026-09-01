@@ -14,6 +14,15 @@ import {
 
 export { isHomeQuickActionVisible } from './homeQuickActionAudience.js';
 
+/**
+ * Homepage sections share the shortcut audience configuration store so they
+ * can use the same enabled, user, user-type, shift-role, and staff-profile
+ * targeting rules without introducing a second source of truth.
+ *
+ * Keep this key in sync with the homepage section registry in the UI.
+ */
+export const HOME_PLANNED_PAYMENTS_CONFIG_KEY = 'home-planned-payments' as const;
+
 export const HOME_QUICK_ACTION_AUDIENCE_MODES = ['all', 'targeted'] as const;
 export const HOME_QUICK_ACTION_STAFF_PROFILE_TYPES = [
   'volunteer',

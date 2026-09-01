@@ -1,6 +1,9 @@
 import type { Response } from 'express';
 import NightReportVenue from '../../models/NightReportVenue';
+import VenueCompensationCollectionLog from '../../models/VenueCompensationCollectionLog';
 import VenueCompensationLedger from '../../models/VenueCompensationLedger';
+import VenueCompensationTerm from '../../models/VenueCompensationTerm';
+import VenueCompensationTermRate from '../../models/VenueCompensationTermRate';
 import { getAllowedProductTypeIds } from '../../services/productScopeService';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
 import { getNightReportVenueSummary } from '../nightReportController';
@@ -20,8 +23,14 @@ jest.mock('../../models/NightReportPhoto.js', () => ({ __esModule: true, default
 jest.mock('../../models/User.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/Venue.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/Product.js', () => ({ __esModule: true, default: {} }));
-jest.mock('../../models/VenueCompensationTerm.js', () => ({ __esModule: true, default: {} }));
-jest.mock('../../models/VenueCompensationTermRate.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/VenueCompensationTerm.js', () => ({
+  __esModule: true,
+  default: { findAll: jest.fn() },
+}));
+jest.mock('../../models/VenueCompensationTermRate.js', () => ({
+  __esModule: true,
+  default: { findAll: jest.fn() },
+}));
 jest.mock('../../models/VenueCompensationCollectionLog.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn() },
@@ -74,8 +83,11 @@ jest.mock('../../utils/logger.js', () => ({
 
 const mockFindVenueRows = NightReportVenue.findAll as jest.Mock;
 const mockGetAllowedProductTypeIds = getAllowedProductTypeIds as jest.Mock;
+const mockCollectionFindAll = VenueCompensationCollectionLog.findAll as jest.Mock;
 const mockLedgerFindAll = VenueCompensationLedger.findAll as jest.Mock;
 const mockLedgerUpsert = VenueCompensationLedger.upsert as jest.Mock;
+const mockTermFindAll = VenueCompensationTerm.findAll as jest.Mock;
+const mockRateFindAll = VenueCompensationTermRate.findAll as jest.Mock;
 
 const createResponse = () => {
   const response = {
@@ -94,6 +106,9 @@ describe('getNightReportVenueSummary', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetAllowedProductTypeIds.mockResolvedValue([12]);
+    mockCollectionFindAll.mockResolvedValue([]);
+    mockTermFindAll.mockResolvedValue([]);
+    mockRateFindAll.mockResolvedValue([]);
     mockFindVenueRows.mockResolvedValue([
       {
         venueId: 41,
@@ -148,11 +163,15 @@ describe('getNightReportVenueSummary', () => {
     );
 
     const responsePayload = res.json.mock.calls[0][0];
+    expect(responsePayload[0].data.collectionDataAvailable).toBe(false);
     expect(responsePayload[0].data.venues[0].daily).toEqual([
       expect.objectContaining({
         date: '2026-08-02',
         reportId: 701,
         stayDurationMinutes: 75,
+        normalCount: 9,
+        cocktailsCount: 0,
+        brunchCount: 0,
       }),
       expect.objectContaining({
         date: '2026-08-03',
@@ -162,5 +181,125 @@ describe('getNightReportVenueSummary', () => {
     ]);
     expect(mockLedgerFindAll).not.toHaveBeenCalled();
     expect(mockLedgerUpsert).not.toHaveBeenCalled();
+  });
+
+  it('marks collection data available for users without a product-type scope', async () => {
+    mockGetAllowedProductTypeIds.mockResolvedValue(null);
+    const req = {
+      query: {
+        period: 'custom',
+        startDate: '2026-08-02',
+        endDate: '2026-08-03',
+      },
+      authContext: { id: 1, userTypeId: 1, roleSlug: 'manager' },
+    } as unknown as AuthenticatedRequest;
+    const res = createResponse();
+
+    await getNightReportVenueSummary(req, res);
+
+    expect(mockCollectionFindAll).toHaveBeenCalledTimes(1);
+    const responsePayload = res.json.mock.calls[0][0];
+    expect(responsePayload[0].data.collectionDataAvailable).toBe(true);
+  });
+
+  it('does not read or rewrite full venue ledgers from product-scoped data', async () => {
+    const req = {
+      query: {
+        period: 'custom',
+        startDate: '2026-08-01',
+        endDate: '2026-08-31',
+      },
+      authContext: { id: 1, userTypeId: 1, roleSlug: 'manager' },
+    } as unknown as AuthenticatedRequest;
+    const res = createResponse();
+
+    await getNightReportVenueSummary(req, res);
+
+    const responsePayload = res.json.mock.calls[0][0];
+    expect(responsePayload[0].data.rangeIsCanonical).toBe(true);
+    expect(responsePayload[0].data.collectionDataAvailable).toBe(false);
+    expect(mockCollectionFindAll).not.toHaveBeenCalled();
+    expect(mockLedgerFindAll).not.toHaveBeenCalled();
+    expect(mockLedgerUpsert).not.toHaveBeenCalled();
+  });
+
+  it('returns the effective per-guest rate bands for payable Open Bar rows', async () => {
+    mockFindVenueRows.mockResolvedValue([
+      {
+        venueId: 51,
+        venueName: 'Open Bar One',
+        currencyCode: 'PLN',
+        direction: 'payable',
+        payoutAmount: 70,
+        totalPeople: 10,
+        normalCount: 6,
+        cocktailsCount: 4,
+        brunchCount: 0,
+        stayDurationMinutes: null,
+        compensationTermId: 501,
+        productId: 81,
+        activityDate: '2026-08-03',
+        reportId: 703,
+        allowsOpenBar: true,
+      },
+    ]);
+    mockTermFindAll.mockResolvedValue([
+      { id: 501, rateAmount: 5, rateUnit: 'per_person' },
+    ]);
+    mockRateFindAll.mockResolvedValue([
+      {
+        id: 601,
+        termId: 501,
+        productId: 81,
+        ticketType: 'normal',
+        rateAmount: 5,
+        rateUnit: 'per_person',
+        validFrom: '2026-01-01',
+        validTo: null,
+      },
+      {
+        id: 602,
+        termId: 501,
+        productId: 81,
+        ticketType: 'cocktail',
+        rateAmount: 10,
+        rateUnit: 'per_person',
+        validFrom: '2026-01-01',
+        validTo: null,
+      },
+    ]);
+    const req = {
+      query: {
+        period: 'custom',
+        startDate: '2026-08-03',
+        endDate: '2026-08-03',
+      },
+      authContext: { id: 1, userTypeId: 1, roleSlug: 'manager' },
+    } as unknown as AuthenticatedRequest;
+    const res = createResponse();
+
+    await getNightReportVenueSummary(req, res);
+
+    expect(mockTermFindAll).toHaveBeenCalledTimes(1);
+    expect(mockRateFindAll).toHaveBeenCalledTimes(1);
+    expect(mockRateFindAll.mock.calls[0][0].where).not.toHaveProperty('isActive');
+    const responsePayload = res.json.mock.calls[0][0];
+    expect(responsePayload[0].data.venues[0].daily[0]).toEqual(expect.objectContaining({
+      rateBreakdownMatchesPayout: true,
+      rateBands: [
+        expect.objectContaining({
+          ticketType: 'normal',
+          count: 6,
+          rateAmount: 5,
+          amount: 30,
+        }),
+        expect.objectContaining({
+          ticketType: 'cocktail',
+          count: 4,
+          rateAmount: 10,
+          amount: 40,
+        }),
+      ],
+    }));
   });
 });

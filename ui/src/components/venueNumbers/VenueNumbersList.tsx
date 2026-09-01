@@ -46,7 +46,11 @@ import { ChangeEvent, Fragment, SyntheticEvent, useCallback, useEffect, useMemo,
 import { useNavigate, useSearchParams } from "react-router-dom";
 import NightReportPhotoPreviewDialog from "./NightReportPhotoPreviewDialog";
 import NightReportPhotoPreviewPanel from "./NightReportPhotoPreviewPanel";
-import { resolvePhotoDownloadUrl, type NightReportPhotoPreview } from "../../utils/nightReportPhotoUtils";
+import {
+  isPreviewableInvoiceMimeType,
+  resolvePhotoDownloadUrl,
+  type NightReportPhotoPreview,
+} from "../../utils/nightReportPhotoUtils";
 import { alpha, useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 
@@ -310,11 +314,6 @@ const buildNightReportPhotoFileName = (
   const extension = extractFileExtension(originalName) ?? "jpg";
   const base = `${NIGHT_REPORT_FILE_PREFIX}_${dateSegment}_${productSegment}`;
   return `${base}.${extension}`;
-};
-
-const isPreviewableInvoiceMimeType = (mimeType: string | null | undefined): boolean => {
-  const normalized = (mimeType ?? "").toLowerCase();
-  return normalized.startsWith("image/") || normalized.includes("pdf");
 };
 
 const buildFinanceFileDownloadUrl = (fileId: number | null | undefined): string | null => {

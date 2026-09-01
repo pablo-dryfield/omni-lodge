@@ -132,6 +132,18 @@ const isTimezone = (value: string): boolean => {
   }
 };
 
+const isHttpsUrlWithoutCredentials = (value: string): boolean => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:'
+      && Boolean(parsed.hostname)
+      && !parsed.username
+      && !parsed.password;
+  } catch {
+    return false;
+  }
+};
+
 const isBase64Encoded32ByteKey = (value: string): boolean => {
   if (!/^[A-Za-z0-9+/]{43}=$/.test(value)) {
     return false;
@@ -256,6 +268,12 @@ const validateValue = (definition: ConfigDefinition, raw: string | null): void =
       if (!hasExplicitTimezone || Number.isNaN(parsed.getTime())) {
         throw new HttpError(400, `${definition.key} must be a valid ISO date and time`);
       }
+    }
+    if (rules.format === 'https-url' && !isHttpsUrlWithoutCredentials(raw)) {
+      throw new HttpError(
+        400,
+        `${definition.key} must be a valid HTTPS URL without embedded credentials`,
+      );
     }
     if (rules.format === 'base64-32-byte-key' && !isBase64Encoded32ByteKey(raw)) {
       throw new HttpError(400, `${definition.key} must be a base64-encoded 32-byte key`);

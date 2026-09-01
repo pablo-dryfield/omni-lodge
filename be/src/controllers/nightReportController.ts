@@ -43,6 +43,11 @@ import {
 } from '../services/assistantManagerTaskWaiverService.js';
 import { getConfigValue } from '../services/configService.js';
 import { getCommissionByDateRange } from './reportController.js';
+import {
+  computePersistedOpenBarPayout,
+  resolveOpenBarRateBands,
+  type OpenBarPayoutBand,
+} from '../services/openBarPayoutService.js';
 
 const resolvePayoutCurrency = (): string =>
   String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
@@ -93,6 +98,8 @@ type VenueDetailAggregate = {
   stayDurationMinutes: number | null;
   activityDate: string | null;
   reportId: number | null;
+  compensationTermId: number | null;
+  productId: number | null;
   allowsOpenBar?: boolean | null;
 };
 
@@ -1347,7 +1354,7 @@ async function serializeNightReport(report: NightReport, req: AuthenticatedReque
         venue.compensationTermId != null ? openBarTermMap.get(Number(venue.compensationTermId)) ?? null : null;
       const payoutBreakdown =
         term != null
-          ? computeOpenBarPayout(
+          ? computePersistedOpenBarPayout(
               term,
               openBarRatesByTerm.get(term.id) ?? [],
               {
@@ -1760,7 +1767,7 @@ async function resolveNightReportVenueRows(
     let payoutAmount = 0;
 
     if (entry.isOpenBar) {
-      const bucketContributions = computeOpenBarPayout(
+      const bucketContributions = computePersistedOpenBarPayout(
         term,
         ratesByTerm.get(term.id) ?? [],
         {
@@ -1820,132 +1827,6 @@ function mapReportVenuesToNormalized(venues: NightReportVenue[]): NormalizedVenu
       brunchCount: venue.brunchCount ?? null,
       stayDurationMinutes: venue.stayDurationMinutes ?? null,
     }));
-}
-
-type BucketCounts = {
-  normal: number;
-  cocktail: number;
-  brunch: number;
-};
-
-const bucketOrder: Array<keyof BucketCounts | 'generic'> = ['normal', 'cocktail', 'brunch', 'generic'];
-
-function computeOpenBarPayout(
-  term: VenueCompensationTerm,
-  rates: VenueCompensationTermRate[],
-  counts: BucketCounts,
-  productId: number | null,
-  referenceDate: string,
-) {
-  const dateValue = referenceDate;
-  const contributions: number[] = [];
-  const breakdown: Array<{
-    ticketType: 'normal' | 'cocktail' | 'brunch' | 'generic';
-    count: number;
-    rateAmount: number;
-    rateUnit: 'per_person' | 'flat';
-    source: 'ticket_rate' | 'generic_rate' | 'term_default';
-  }> = [];
-
-  const selectRate = (ticketType: string): VenueCompensationTermRate | null => {
-    const filtered = rates.filter((rate) => {
-      const matchesTicket =
-        rate.ticketType === ticketType ||
-        (ticketType !== 'generic' && rate.ticketType === 'generic');
-      if (!matchesTicket) {
-        return false;
-      }
-      const withinStart = !rate.validFrom || rate.validFrom <= dateValue;
-      const withinEnd = !rate.validTo || rate.validTo >= dateValue;
-      if (!withinStart || !withinEnd) {
-        return false;
-      }
-      return true;
-    });
-
-    if (filtered.length === 0) {
-      return null;
-    }
-
-    const productMatches = productId
-      ? filtered.filter((rate) => rate.productId === productId)
-      : [];
-    const fallbackMatches = filtered.filter((rate) => rate.productId == null);
-    const candidatePool = productMatches.length > 0 ? productMatches : fallbackMatches.length > 0 ? fallbackMatches : filtered;
-
-    return candidatePool[0] ?? null;
-  };
-
-  const applyRate = (ticketType: keyof BucketCounts, count: number) => {
-    if (!count || count <= 0) {
-      return;
-    }
-    const rate = selectRate(ticketType);
-    if (!rate) {
-      const genericRate = selectRate('generic');
-      if (!genericRate) {
-        return;
-      }
-      const units = genericRate.rateUnit === 'flat' ? 1 : count;
-      const rateAmount = roundToCents(Number(genericRate.rateAmount ?? 0));
-      contributions.push(roundToCents(rateAmount * units));
-      breakdown.push({
-        ticketType,
-        count,
-        rateAmount,
-        rateUnit: genericRate.rateUnit === 'flat' ? 'flat' : 'per_person',
-        source: 'generic_rate',
-      });
-      return;
-    }
-    const units = rate.rateUnit === 'flat' ? 1 : count;
-    const rateAmount = roundToCents(Number(rate.rateAmount ?? 0));
-    contributions.push(roundToCents(rateAmount * units));
-    breakdown.push({
-      ticketType,
-      count,
-      rateAmount,
-      rateUnit: rate.rateUnit === 'flat' ? 'flat' : 'per_person',
-      source: 'ticket_rate',
-    });
-  };
-
-  applyRate('normal', counts.normal);
-  applyRate('cocktail', counts.cocktail);
-  applyRate('brunch', counts.brunch);
-
-  if (contributions.length === 0) {
-    const fallbackRate = selectRate('generic');
-    if (fallbackRate) {
-      const units = fallbackRate.rateUnit === 'flat' ? 1 : Math.max(counts.normal + counts.cocktail + counts.brunch, 0);
-      const rateAmount = roundToCents(Number(fallbackRate.rateAmount ?? 0));
-      contributions.push(roundToCents(rateAmount * units));
-      breakdown.push({
-        ticketType: 'generic',
-        count: Math.max(counts.normal + counts.cocktail + counts.brunch, 0),
-        rateAmount,
-        rateUnit: fallbackRate.rateUnit === 'flat' ? 'flat' : 'per_person',
-        source: 'generic_rate',
-      });
-    } else {
-      const baseRateRaw = typeof term.rateAmount === 'number' ? term.rateAmount : Number(term.rateAmount ?? 0);
-      const rateApplied = roundToCents(baseRateRaw);
-      const units = term.rateUnit === 'flat' ? 1 : Math.max(counts.normal + counts.cocktail + counts.brunch, 0);
-      contributions.push(roundToCents(rateApplied * units));
-      breakdown.push({
-        ticketType: 'normal',
-        count: Math.max(counts.normal + counts.cocktail + counts.brunch, 0),
-        rateAmount: rateApplied,
-        rateUnit: term.rateUnit === 'flat' ? 'flat' : 'per_person',
-        source: 'term_default',
-      });
-    }
-  }
-
-  return {
-    total: contributions.reduce((sum, value) => sum + value, 0),
-    breakdown,
-  };
 }
 
 async function getNightReportById(reportId: number): Promise<NightReport | null> {
@@ -2851,7 +2732,9 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       start.year() === end.year();
     const startIso = start.format('YYYY-MM-DD');
     const endIso = end.format('YYYY-MM-DD');
-    const ledgerEligible = isCanonicalRange && !start.isBefore(resolveVenueLedgerStartDate(), 'day');
+    const ledgerEligible = allowedProductTypeIds === null
+      && isCanonicalRange
+      && !start.isBefore(resolveVenueLedgerStartDate(), 'day');
 
     const detailRows = (await NightReportVenue.findAll({
       attributes: [
@@ -2865,8 +2748,10 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         'cocktailsCount',
         'brunchCount',
         'stayDurationMinutes',
+        'compensationTermId',
         [col('report.activity_date'), 'activityDate'],
         [col('report.id'), 'reportId'],
+        [col('report.counter.product_id'), 'productId'],
         [col('nightReportVenueVenue.allows_open_bar'), 'allowsOpenBar'],
       ],
       include: [
@@ -2881,12 +2766,12 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
               [Op.between]: [startIso, endIso],
             },
           },
-          include: allowedProductTypeIds === null ? [] : [{
+          include: [{
             model: Counter,
             as: 'counter',
             attributes: [],
             required: true,
-            include: [{
+            include: allowedProductTypeIds === null ? [] : [{
               model: Product,
               as: 'product',
               attributes: [],
@@ -2904,6 +2789,39 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       ],
       raw: true,
     })) as unknown as VenueDetailAggregate[];
+
+    const openBarTermIds = Array.from(new Set(
+      detailRows
+        .filter((row) => row.direction === 'payable')
+        .map((row) => Number(row.compensationTermId))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ));
+    const openBarTerms = openBarTermIds.length > 0
+      ? await VenueCompensationTerm.findAll({
+          where: { id: { [Op.in]: openBarTermIds } },
+        })
+      : [];
+    const openBarTermMap = new Map<number, VenueCompensationTerm>();
+    openBarTerms.forEach((term) => openBarTermMap.set(term.id, term));
+    // Historical reports may reference a rate band that has since been made
+    // inactive. Date validity, not today's active flag, determines the band
+    // that explains a saved report row.
+    const openBarRates = openBarTermIds.length > 0
+      ? await VenueCompensationTermRate.findAll({
+          where: { termId: { [Op.in]: openBarTermIds } },
+          order: [
+            ['termId', 'ASC'],
+            ['validFrom', 'DESC'],
+            ['id', 'DESC'],
+          ],
+        })
+      : [];
+    const openBarRatesByTerm = new Map<number, VenueCompensationTermRate[]>();
+    openBarRates.forEach((rate) => {
+      const termRates = openBarRatesByTerm.get(rate.termId) ?? [];
+      termRates.push(rate);
+      openBarRatesByTerm.set(rate.termId, termRates);
+    });
 
     const collectionRows = allowedProductTypeIds === null ? (await VenueCompensationCollectionLog.findAll({
       attributes: [
@@ -3019,6 +2937,8 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           cocktailsCount: number;
           brunchCount: number;
           stayDurationMinutes: number | null;
+          rateBands: OpenBarPayoutBand[];
+          rateBreakdownMatchesPayout: boolean | null;
         }>;
         latestReceivableCollectionLogId: number | null;
         latestReceivableFinanceTransactionId: number | null;
@@ -3055,6 +2975,25 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
       const defaultName = venueId != null ? `Venue #${venueId}` : 'Unspecified Venue';
       const venueName = (row.venueName ?? '').trim() || defaultName;
       const allowsOpenBar = row.allowsOpenBar === true;
+      const compensationTermIdRaw = Number(row.compensationTermId);
+      const compensationTermId = Number.isInteger(compensationTermIdRaw) && compensationTermIdRaw > 0
+        ? compensationTermIdRaw
+        : null;
+      const productIdRaw = Number(row.productId);
+      const productId = Number.isInteger(productIdRaw) && productIdRaw > 0 ? productIdRaw : null;
+      const openBarTerm = compensationTermId == null ? null : openBarTermMap.get(compensationTermId) ?? null;
+      const rateBreakdown = direction === 'payable' && amount > 0 && openBarTerm != null
+        ? resolveOpenBarRateBands(
+            openBarTerm,
+            openBarRatesByTerm.get(openBarTerm.id) ?? [],
+            { normal: normalCount, cocktail: cocktailsCount, brunch: brunchCount },
+            productId,
+            activityDate,
+          )
+        : null;
+      const rateBreakdownMatchesPayout = rateBreakdown == null
+        ? null
+        : Math.abs(roundCurrencyValue(rateBreakdown.total) - roundCurrencyValue(amount)) < 0.005;
       const key = `${venueId ?? 'null'}|${venueName}|${currency}`;
 
       if (!venueMap.has(key)) {
@@ -3095,6 +3034,8 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
         cocktailsCount,
         brunchCount,
         stayDurationMinutes,
+        rateBands: rateBreakdown?.breakdown ?? [],
+        rateBreakdownMatchesPayout,
       });
 
       if (!totalsMap.has(currency)) {
@@ -3332,6 +3273,7 @@ export const getNightReportVenueSummary = async (req: AuthenticatedRequest, res:
           totalsByCurrency,
           venues,
           rangeIsCanonical: isCanonicalRange,
+          collectionDataAvailable: allowedProductTypeIds === null,
         },
         columns: [],
       },

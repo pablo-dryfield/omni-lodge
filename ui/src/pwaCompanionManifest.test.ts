@@ -12,6 +12,7 @@ type WebAppManifest = {
   name: string;
   start_url: string;
   scope: string;
+  orientation: string;
   icons: ManifestIcon[];
 };
 
@@ -29,6 +30,11 @@ describe("New Transaction companion PWA", () => {
     expect(mainManifest.id).toBe("/");
     expect(companionManifest.id).toBe("/pwa/new-transaction");
     expect(companionManifest.id).not.toBe(mainManifest.id);
+  });
+
+  it("allows both installed apps to follow the device orientation", () => {
+    expect(mainManifest.orientation).toBe("any");
+    expect(companionManifest.orientation).toBe("any");
   });
 
   it("launches the permission-guarded create transaction URL within its scope", () => {

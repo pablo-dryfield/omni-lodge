@@ -13,6 +13,11 @@ export const resolvePhotoDownloadUrl = (downloadUrl: string): string => {
   return downloadUrl;
 };
 
+export const isPreviewableInvoiceMimeType = (mimeType: string | null | undefined): boolean => {
+  const normalized = (mimeType ?? "").toLowerCase();
+  return normalized.startsWith("image/") || normalized.includes("pdf");
+};
+
 export type NightReportPhotoPreview = {
   src: string;
   name: string;

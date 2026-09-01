@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest';
 import { openProfilePhotoStream } from '../services/profilePhotoStorageService.js';
 import { getConfigValue } from '../services/configService.js';
+import { resolveBadgeCampaignBaseUrl } from '../services/badgeCampaignConfigService.js';
 
 const ALLOWED_PROFILE_PHOTO_MIME_TYPES = new Set([
   'image/jpeg',
@@ -28,6 +29,7 @@ export const checkSession = (req: AuthenticatedRequest, res: Response) => {
           profilePhotoVersion: req.authContext?.profilePhotoVersion ?? null,
           notificationInboxPollingEnabled:
             getConfigValue('NOTIFICATION_INBOX_POLLING_ENABLED') !== false,
+          badgeCampaignBaseUrl: resolveBadgeCampaignBaseUrl(),
         }]);
     } else {
         res.status(401).json([{ authenticated: false, message: "Invalid session or user not found." }]);

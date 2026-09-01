@@ -95,6 +95,11 @@ type RouteCase = {
 };
 
 const routeCases: RouteCase[] = [
+  {
+    method: 'get',
+    path: '/api/finance/files/19/download',
+    permissions: ['finance-transactions:view'],
+  },
   { method: 'get', path: '/api/finance/transactions', permissions: ['finance-transactions:view'] },
   {
     method: 'get',

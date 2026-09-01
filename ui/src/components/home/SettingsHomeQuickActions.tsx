@@ -30,7 +30,7 @@ import {
   type HomeQuickActionConfigDto,
 } from "../../api/homeQuickActions";
 import { useModuleAccess } from "../../hooks/useModuleAccess";
-import { HOME_QUICK_ACTIONS } from "./homeQuickActionRegistry";
+import { HOME_EXPERIENCE_CONFIGURABLE_ITEMS } from "./homeExperienceConfigRegistry";
 
 const defaultConfiguration = (actionId: string): HomeQuickActionConfigDto => ({
   actionId,
@@ -57,15 +57,17 @@ const mergeRegistryConfigurations = (
 ): Record<string, HomeQuickActionConfigDto> => {
   const saved = new Map(configurations.map((config) => [config.actionId, config]));
   return Object.fromEntries(
-    HOME_QUICK_ACTIONS.map((action) => [
-      action.id,
-      normalizeConfiguration(saved.get(action.id) ?? defaultConfiguration(action.id)),
+    HOME_EXPERIENCE_CONFIGURABLE_ITEMS.map((item) => [
+      item.id,
+      normalizeConfiguration(saved.get(item.id) ?? defaultConfiguration(item.id)),
     ]),
   );
 };
 
 const serializeDrafts = (drafts: Record<string, HomeQuickActionConfigDto>): string =>
-  JSON.stringify(HOME_QUICK_ACTIONS.map((action) => normalizeConfiguration(drafts[action.id])));
+  JSON.stringify(HOME_EXPERIENCE_CONFIGURABLE_ITEMS.map(
+    (item) => normalizeConfiguration(drafts[item.id]),
+  ));
 
 const numberValues = (values: string[]): number[] =>
   values.map(Number).filter((value) => Number.isInteger(value) && value > 0);
@@ -144,14 +146,14 @@ const SettingsHomeQuickActions = () => {
 
   const validationErrors = useMemo(() => {
     const errors = new Map<string, string>();
-    HOME_QUICK_ACTIONS.forEach((action) => {
-      const config = drafts[action.id];
+    HOME_EXPERIENCE_CONFIGURABLE_ITEMS.forEach((item) => {
+      const config = drafts[item.id];
       if (!config) {
         return;
       }
       const denied = new Set(config.denyUserIds);
       if (config.allowUserIds.some((userId) => denied.has(userId))) {
-        errors.set(action.id, "The same person cannot be both always shown and always hidden.");
+        errors.set(item.id, "The same person cannot be both always shown and always hidden.");
         return;
       }
       const targetCount = config.allowUserIds.length
@@ -159,7 +161,7 @@ const SettingsHomeQuickActions = () => {
         + config.shiftRoleIds.length
         + config.staffProfileTypes.length;
       if (config.enabled && config.audienceMode === "targeted" && targetCount === 0) {
-        errors.set(action.id, "Choose at least one audience for this targeted shortcut.");
+        errors.set(item.id, "Choose at least one audience for this targeted homepage item.");
       }
     });
     return errors;
@@ -198,7 +200,9 @@ const SettingsHomeQuickActions = () => {
     }
     try {
       const response = await updateMutation.mutateAsync({
-        configurations: HOME_QUICK_ACTIONS.map((action) => normalizeConfiguration(drafts[action.id])),
+        configurations: HOME_EXPERIENCE_CONFIGURABLE_ITEMS.map(
+          (item) => normalizeConfiguration(drafts[item.id]),
+        ),
       });
       const next = mergeRegistryConfigurations(response.configurations);
       isDirtyRef.current = false;
@@ -215,7 +219,7 @@ const SettingsHomeQuickActions = () => {
       <Card withBorder padding="lg" radius="md">
         <Group gap="xs">
           <Loader size="sm" />
-          <Text size="sm" c="dimmed">Checking shortcut settings access...</Text>
+          <Text size="sm" c="dimmed">Checking homepage settings access...</Text>
         </Group>
       </Card>
     );
@@ -234,10 +238,10 @@ const SettingsHomeQuickActions = () => {
               <IconBolt size={20} />
             </ThemeIcon>
             <Box>
-              <Text fw={700}>Homepage shortcuts</Text>
+              <Text fw={700}>Homepage content</Text>
               <Text size="sm" c="dimmed" maw={760}>
-                Decide who sees each shortcut using current user types, shift roles, staff profiles,
-                or individual exceptions.
+                Decide who sees homepage sections and shortcuts using current user types, shift
+                roles, staff profiles, or individual exceptions.
               </Text>
             </Box>
           </Group>
@@ -247,40 +251,40 @@ const SettingsHomeQuickActions = () => {
         </Group>
 
         <Alert color="blue" variant="light" icon={<IconShieldCheck size={17} />}>
-          Audience rules can hide a shortcut, but they never grant access to its destination.
-          A person must still have the required page and action permissions.
+          Audience rules can hide homepage content, but they never grant finance, page, or action
+          permissions. A person must still have the required access.
         </Alert>
 
         {!canUpdate && (
           <Alert color="yellow" variant="light" icon={<IconShieldCheck size={17} />}>
-            You can review these shortcut audiences, but you do not have permission to change them.
+            You can review these homepage audiences, but you do not have permission to change them.
           </Alert>
         )}
 
         {configurationQuery.isLoading && (
           <Group gap="xs">
             <Loader size="sm" />
-            <Text size="sm" c="dimmed">Loading shortcut configuration...</Text>
+            <Text size="sm" c="dimmed">Loading homepage configuration...</Text>
           </Group>
         )}
         {configurationQuery.isError && (
           <Alert color="red" icon={<IconAlertCircle size={16} />}>
             {configurationQuery.error.response?.data?.message
-              ?? "Unable to load homepage shortcut configuration."}
+              ?? "Unable to load homepage configuration."}
           </Alert>
         )}
 
-        {configurationQuery.isSuccess && HOME_QUICK_ACTIONS.map((action) => {
-          const config = drafts[action.id];
+        {configurationQuery.isSuccess && HOME_EXPERIENCE_CONFIGURABLE_ITEMS.map((item) => {
+          const config = drafts[item.id];
           if (!config) {
             return null;
           }
           const matchedUsers = (options?.users ?? []).filter((user) => matchesDraft(user, config)).length;
-          const error = validationErrors.get(action.id);
-          const headingId = `home-quick-action-${action.id}-title`;
+          const error = validationErrors.get(item.id);
+          const headingId = `home-experience-${item.id}-title`;
           return (
             <Card
-              key={action.id}
+              key={item.id}
               component="section"
               aria-labelledby={headingId}
               withBorder
@@ -292,15 +296,21 @@ const SettingsHomeQuickActions = () => {
                 <Group justify="space-between" align="flex-start" wrap="wrap">
                   <Box>
                     <Group gap="xs">
-                      <Text id={headingId} component="h3" fw={700} m={0}>{action.label}</Text>
-                      <Badge size="sm" variant="outline">{action.group}</Badge>
+                      <Text id={headingId} component="h3" fw={700} m={0}>{item.label}</Text>
+                      <Badge
+                        size="sm"
+                        variant={item.kind === "section" ? "light" : "outline"}
+                        color={item.kind === "section" ? "violet" : "blue"}
+                      >
+                        {item.kind === "section" ? "Homepage section" : item.group}
+                      </Badge>
                     </Group>
-                    <Text size="sm" c="dimmed" mt={4}>{action.description}</Text>
+                    <Text size="sm" c="dimmed" mt={4}>{item.description}</Text>
                   </Box>
                   <Switch
-                    aria-label={`${action.label}: enabled`}
+                    aria-label={`${item.label}: enabled`}
                     checked={config.enabled}
-                    onChange={(event) => updateDraft(action.id, { enabled: event.currentTarget.checked })}
+                    onChange={(event) => updateDraft(item.id, { enabled: event.currentTarget.checked })}
                     label={config.enabled ? "Enabled" : "Disabled"}
                     disabled={!canUpdate || updateMutation.isPending}
                   />
@@ -309,10 +319,10 @@ const SettingsHomeQuickActions = () => {
                 <Stack gap={6}>
                   <Text size="sm" fw={600}>Who should see it?</Text>
                   <SegmentedControl
-                    aria-label={`${action.label}: audience mode`}
+                    aria-label={`${item.label}: audience mode`}
                     fullWidth
                     value={config.audienceMode}
-                    onChange={(value) => updateDraft(action.id, {
+                    onChange={(value) => updateDraft(item.id, {
                       audienceMode: value === "targeted" ? "targeted" : "all",
                     })}
                     disabled={!canUpdate || !config.enabled || updateMutation.isPending}
@@ -330,47 +340,47 @@ const SettingsHomeQuickActions = () => {
                     </Text>
                     <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
                       <MultiSelect
-                        aria-label={`${action.label}: user types`}
+                        aria-label={`${item.label}: user types`}
                         label="User types"
                         placeholder="Choose user types"
                         data={userTypeOptions}
                         searchable
                         clearable
                         value={config.userTypeIds.map(String)}
-                        onChange={(values) => updateDraft(action.id, { userTypeIds: numberValues(values) })}
+                        onChange={(values) => updateDraft(item.id, { userTypeIds: numberValues(values) })}
                         disabled={!canUpdate || !config.enabled || updateMutation.isPending}
                       />
                       <MultiSelect
-                        aria-label={`${action.label}: shift roles`}
+                        aria-label={`${item.label}: shift roles`}
                         label="Shift roles"
                         placeholder="Choose shift roles"
                         data={shiftRoleOptions}
                         searchable
                         clearable
                         value={config.shiftRoleIds.map(String)}
-                        onChange={(values) => updateDraft(action.id, { shiftRoleIds: numberValues(values) })}
+                        onChange={(values) => updateDraft(item.id, { shiftRoleIds: numberValues(values) })}
                         disabled={!canUpdate || !config.enabled || updateMutation.isPending}
                       />
                       <MultiSelect
-                        aria-label={`${action.label}: staff profile types`}
+                        aria-label={`${item.label}: staff profile types`}
                         label="Staff profile types"
                         placeholder="Choose staff profile types"
                         data={options?.staffProfileTypes ?? []}
                         searchable
                         clearable
                         value={config.staffProfileTypes}
-                        onChange={(values) => updateDraft(action.id, { staffProfileTypes: values })}
+                        onChange={(values) => updateDraft(item.id, { staffProfileTypes: values })}
                         disabled={!canUpdate || !config.enabled || updateMutation.isPending}
                       />
                       <MultiSelect
-                        aria-label={`${action.label}: always show for specific users`}
+                        aria-label={`${item.label}: always show for specific users`}
                         label="Always show for specific users"
                         placeholder="Choose individual users"
                         data={userOptions}
                         searchable
                         clearable
                         value={config.allowUserIds.map(String)}
-                        onChange={(values) => updateDraft(action.id, { allowUserIds: numberValues(values) })}
+                        onChange={(values) => updateDraft(item.id, { allowUserIds: numberValues(values) })}
                         disabled={!canUpdate || !config.enabled || updateMutation.isPending}
                       />
                     </SimpleGrid>
@@ -378,7 +388,7 @@ const SettingsHomeQuickActions = () => {
                 )}
 
                 <MultiSelect
-                  aria-label={`${action.label}: always hide for specific users`}
+                  aria-label={`${item.label}: always hide for specific users`}
                   label="Always hide for specific users"
                   description="This exclusion wins even when the person matches another audience."
                   placeholder="Choose individual users"
@@ -386,7 +396,7 @@ const SettingsHomeQuickActions = () => {
                   searchable
                   clearable
                   value={config.denyUserIds.map(String)}
-                  onChange={(values) => updateDraft(action.id, { denyUserIds: numberValues(values) })}
+                  onChange={(values) => updateDraft(item.id, { denyUserIds: numberValues(values) })}
                   disabled={!canUpdate || !config.enabled || updateMutation.isPending}
                 />
 
@@ -409,12 +419,12 @@ const SettingsHomeQuickActions = () => {
         {updateMutation.isError && (
           <Alert color="red" icon={<IconAlertCircle size={16} />}>
             {updateMutation.error.response?.data?.message
-              ?? "Failed to save homepage shortcut configuration."}
+              ?? "Failed to save homepage configuration."}
           </Alert>
         )}
         {showSuccess && (
           <Alert color="green" icon={<IconShieldCheck size={16} />}>
-            Homepage shortcut audiences saved.
+            Homepage audiences saved.
           </Alert>
         )}
 
@@ -433,7 +443,7 @@ const SettingsHomeQuickActions = () => {
             disabled={!canUpdate || !hasChanges || validationErrors.size > 0 || updateMutation.isPending}
             loading={updateMutation.isPending}
           >
-            Save shortcut rules
+            Save homepage rules
           </Button>
         </Group>
       </Stack>

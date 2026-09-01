@@ -221,6 +221,17 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     validation: { maxLength: 255, required: true },
   },
   {
+    key: 'BADGE_CAMPAIGN_BASE_URL',
+    label: 'Badge campaign URL',
+    description:
+      'Public storefront destination encoded in staff badge QR codes. Campaign tracking parameters are added automatically.',
+    category: 'Badge Printing',
+    valueType: 'string',
+    defaultValue: 'https://krawlthroughkrakow.com/store2/pub-crawl-28/#book',
+    impact: 'medium',
+    validation: { required: true, maxLength: 2048, format: 'https-url' },
+  },
+  {
     key: 'BADGE_PRINT_EMAIL_BODY',
     label: 'Badge print email body',
     description: 'Body text used for badge print request emails. Plain text with line breaks preserved.',

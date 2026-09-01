@@ -4259,7 +4259,11 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       );
     }
 
-    res.status(200).json([{ data, columns: [] }]);
+    res.status(200).json([{
+      data,
+      columns: [],
+      accessScope: shouldLimitToSelf ? "self" : "all",
+    }]);
   } catch (error) {
     console.error("Error:", error);
     if (error instanceof HttpError) {

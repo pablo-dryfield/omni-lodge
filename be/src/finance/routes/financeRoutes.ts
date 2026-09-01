@@ -154,7 +154,7 @@ router.delete('/clients/:id', deleteClient);
 
 // Files
 router.get('/files', listFinanceFiles);
-router.get('/files/:id/download', downloadFinanceFileHandler);
+router.get('/files/:id/download', transactionViewGuard, downloadFinanceFileHandler);
 router.post('/files', upload.single('file'), uploadFinanceFileHandler);
 
 // Transactions

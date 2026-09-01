@@ -73,7 +73,7 @@ type QuickWeekCount = 2 | 4 | 8;
 const MAX_WEEK_COLUMNS = 104;
 const MAX_DAY_COLUMNS = 93;
 const DEFAULT_WEEK_COUNT: QuickWeekCount = 4;
-const DEFAULT_WEEK_START: PlatformComparisonWeekStartsOn = 0;
+const DEFAULT_WEEK_START: PlatformComparisonWeekStartsOn = 1;
 const WEEKDAY_OPTIONS: Array<{ value: PlatformComparisonWeekday; label: string }> = [
   { value: 0, label: "Sun" },
   { value: 1, label: "Mon" },

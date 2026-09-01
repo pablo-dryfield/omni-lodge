@@ -7,6 +7,7 @@ import QRCode from 'qrcode';
 import { sendMessage as sendGmailMessage } from './bookings/gmailClient.js';
 import { getConfigValue } from './configService.js';
 import { sendDirectEmail } from './notificationService.js';
+import { buildBadgeCampaignUrl } from './badgeCampaignConfigService.js';
 import logger from '../utils/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,9 +68,6 @@ const BADGE_BACKSIDE_QR = {
 };
 const BADGE_PAGE_CONTENT_TIMEOUT_MS = 15000;
 const BADGE_FONT_READY_TIMEOUT_MS = 5000;
-const BADGE_CAMPAIGN_BASE_URL =
-  'https://krawlthroughkrakow.com/store/Krakow-Pub-Crawl-with-Krawl-Through-Krakow-p637047413/';
-
 export type BadgeTemplateVariant = 'guide' | 'media';
 
 const escapeXml = (value: string): string =>
@@ -254,14 +252,6 @@ const normalizeBadgeSourceValue = (sourceName: string): string => {
 export const buildBadgeCampaignSourceName = (firstName?: string | null, userId?: number | null): string => {
   const normalizedFirstName = normalizeBadgeSourceValue(firstName ?? '');
   return userId ? `${normalizedFirstName}_${userId}` : normalizedFirstName;
-};
-
-const buildBadgeCampaignUrl = (sourceName: string): string => {
-  const url = new URL(BADGE_CAMPAIGN_BASE_URL);
-  url.searchParams.set('utm_source', sourceName);
-  url.searchParams.set('utm_medium', 'Badge');
-  url.searchParams.set('utm_campaign', 'Staff');
-  return url.toString();
 };
 
 const resolveBadgePrintRecipient = (): string => {

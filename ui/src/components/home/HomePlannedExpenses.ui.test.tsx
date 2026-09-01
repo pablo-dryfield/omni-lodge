@@ -111,6 +111,28 @@ describe("HomePlannedExpenses", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("keeps the finance request disabled when the homepage audience hides the section", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <HomePlannedExpenses configuredVisible={false} />
+      </MemoryRouter>,
+    );
+
+    expect(mockUseHomePlannedExpenses).toHaveBeenCalledWith({ enabled: false, limit: 8 });
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("waits for homepage audience resolution before loading finance data", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <HomePlannedExpenses audienceReady={false} />
+      </MemoryRouter>,
+    );
+
+    expect(mockUseHomePlannedExpenses).toHaveBeenCalledWith({ enabled: false, limit: 8 });
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("removes the entire section after a successful empty response", () => {
     mockUseHomePlannedExpenses.mockReturnValue({
       data: {

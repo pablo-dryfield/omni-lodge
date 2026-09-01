@@ -46,6 +46,8 @@ import { canLoadHomePlannedExpenses } from "./homePlannedExpenseAccess";
 
 type HomePlannedExpensesProps = {
   compact?: boolean;
+  configuredVisible?: boolean;
+  audienceReady?: boolean;
 };
 
 type PendingAction = {
@@ -136,18 +138,23 @@ const getRequestErrorMessage = (error: AxiosError | null): string => {
   return error.message || "Unable to update this planned expense.";
 };
 
-const HomePlannedExpenses = ({ compact = false }: HomePlannedExpensesProps) => {
+const HomePlannedExpenses = ({
+  compact = false,
+  configuredVisible = true,
+  audienceReady = true,
+}: HomePlannedExpensesProps) => {
   const accessLoaded = useAppSelector((state) => state.accessControl.loaded);
   const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
   const roleSlug = useAppSelector((state) => state.session.roleSlug);
   const transactionAccess = useModuleAccess(PAGE_SLUGS.financeTransactions);
   const recurringAccess = useModuleAccess(PAGE_SLUGS.financeRecurring);
-  const enabled = canLoadHomePlannedExpenses({
+  const hasFinanceAccess = canLoadHomePlannedExpenses({
     accessLoaded,
     financePageAllowed: allowedPageSlugs.has(PAGE_SLUGS.finance),
     canViewTransactions: transactionAccess.canView,
     roleSlug,
   });
+  const enabled = audienceReady && configuredVisible && hasFinanceAccess;
   const query = useHomePlannedExpenses({ enabled, limit: compact ? 4 : 8 });
   const actionMutation = usePlannedExpenseAction();
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);

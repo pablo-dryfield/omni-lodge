@@ -33,6 +33,7 @@ const hydrateSession = () =>
           hasStoredProfilePhoto: true,
           profilePhotoVersion: '28-1788105600000',
           notificationInboxPollingEnabled: true,
+          badgeCampaignBaseUrl: 'https://krawlthroughkrakow.com/store2/pub-crawl-28/#book',
         },
       ],
       'session-request',
@@ -57,6 +58,7 @@ describe('sessionReducer session profile hydration', () => {
       hasStoredProfilePhoto: true,
       profilePhotoVersion: '28-1788105600000',
       notificationInboxPollingEnabled: true,
+      badgeCampaignBaseUrl: 'https://krawlthroughkrakow.com/store2/pub-crawl-28/#book',
       error: null,
     });
   });
@@ -90,6 +92,7 @@ describe('sessionReducer session profile hydration', () => {
       hasStoredProfilePhoto: false,
       profilePhotoVersion: null,
       notificationInboxPollingEnabled: true,
+      badgeCampaignBaseUrl: 'https://krawlthroughkrakow.com/store2/pub-crawl-28/#book',
     });
   });
 
@@ -111,6 +114,7 @@ describe('sessionReducer session profile hydration', () => {
       hasStoredProfilePhoto: false,
       profilePhotoVersion: null,
       notificationInboxPollingEnabled: false,
+      badgeCampaignBaseUrl: null,
     });
   });
 
@@ -131,6 +135,7 @@ describe('sessionReducer session profile hydration', () => {
         hasStoredProfilePhoto: false,
         profilePhotoVersion: null,
         notificationInboxPollingEnabled: false,
+        badgeCampaignBaseUrl: null,
       });
     },
   );

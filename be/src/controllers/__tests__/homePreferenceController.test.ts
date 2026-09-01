@@ -59,4 +59,40 @@ describe('home preference shortcut audience resolution', () => {
     expect(response.status).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });
+
+  it('returns the resolved planned-payments section visibility with the preference', async () => {
+    (UserHomePreference.findOne as jest.Mock).mockResolvedValue(null);
+    (resolveHomeQuickActionVisibility as jest.Mock).mockResolvedValue({
+      'finance-record-transaction': true,
+      'home-planned-payments': false,
+    });
+    const request = {
+      authContext: {
+        id: 28,
+        userTypeId: 3,
+        roleSlug: 'assistant-manager',
+        shiftRoleIds: [2, 7],
+      },
+    } as unknown as AuthenticatedRequest;
+    const response = createResponse();
+
+    await getHomePreference(request, response);
+
+    expect(resolveHomeQuickActionVisibility).toHaveBeenCalledWith({
+      userId: 28,
+      userTypeId: 3,
+      shiftRoleIds: [2, 7],
+    });
+    expect(response.json).toHaveBeenCalledWith({
+      preference: {
+        viewMode: 'navigation',
+        savedDashboardIds: [],
+        activeDashboardId: null,
+        quickActionVisibility: {
+          'finance-record-transaction': true,
+          'home-planned-payments': false,
+        },
+      },
+    });
+  });
 });

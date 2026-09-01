@@ -11,6 +11,7 @@ export type SessionState = {
   hasStoredProfilePhoto: boolean;
   profilePhotoVersion?: string | null;
   notificationInboxPollingEnabled: boolean;
+  badgeCampaignBaseUrl: string | null;
   error: string | null;
 };
 
@@ -25,4 +26,5 @@ export type SessionResponse = {
   hasStoredProfilePhoto?: boolean;
   profilePhotoVersion?: string | null;
   notificationInboxPollingEnabled?: boolean;
+  badgeCampaignBaseUrl?: string | null;
 };

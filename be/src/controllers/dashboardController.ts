@@ -13,6 +13,10 @@ import {
 } from "./reportController.js";
 import { PreviewQueryError } from "../errors/PreviewQueryError.js";
 import dayjs from "dayjs";
+import {
+  DashboardPageConfigError,
+  normalizeDashboardConfiguration,
+} from "../utils/dashboardPageConfig.js";
 
 const sanitizeLayout = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -455,12 +459,23 @@ export const createDashboard = async (req: AuthenticatedRequest, res: Response):
       return;
     }
 
+    let normalizedConfiguration: ReturnType<typeof normalizeDashboardConfiguration>;
+    try {
+      normalizedConfiguration = normalizeDashboardConfiguration(config, filters);
+    } catch (error) {
+      if (error instanceof DashboardPageConfigError) {
+        res.status(400).json({ message: error.message });
+        return;
+      }
+      throw error;
+    }
+
     const dashboard = await ReportDashboard.create({
       ownerId: req.authContext?.id ?? null,
       name: name.trim(),
       description: typeof description === "string" ? description.trim() : null,
-      config: sanitizeConfig(config),
-      filters: sanitizeConfig(filters),
+      config: normalizedConfiguration.config,
+      filters: normalizedConfiguration.filters,
     });
 
     res.status(201).json({
@@ -507,11 +522,22 @@ export const updateDashboard = async (req: AuthenticatedRequest, res: Response):
       dashboard.description =
         typeof description === "string" && description.trim().length > 0 ? description.trim() : null;
     }
-    if (config !== undefined) {
-      dashboard.config = sanitizeConfig(config);
-    }
-    if (filters !== undefined) {
-      dashboard.filters = sanitizeConfig(filters);
+    if (config !== undefined || filters !== undefined) {
+      let normalizedConfiguration: ReturnType<typeof normalizeDashboardConfiguration>;
+      try {
+        normalizedConfiguration = normalizeDashboardConfiguration(
+          config !== undefined ? config : dashboard.config,
+          filters !== undefined ? filters : dashboard.filters,
+        );
+      } catch (error) {
+        if (error instanceof DashboardPageConfigError) {
+          res.status(400).json({ message: error.message });
+          return;
+        }
+        throw error;
+      }
+      dashboard.config = normalizedConfiguration.config;
+      dashboard.filters = normalizedConfiguration.filters;
     }
     if (shareToken !== undefined) {
       dashboard.shareToken =

@@ -458,6 +458,40 @@ export type DashboardCardDto = {
   updatedAt: string | null;
 };
 
+export type BookingsSummaryDashboardDateField = "experience_date" | "source_received_at";
+
+export type BookingsSummaryDashboardPreset =
+  | "today"
+  | "yesterday"
+  | "this_week"
+  | "last_week"
+  | "last_7_days"
+  | "last_14_days"
+  | "last_2_weeks"
+  | "this_month"
+  | "last_month"
+  | "this_year"
+  | "last_year"
+  | "all_time"
+  | "custom";
+
+export type BookingsSummaryDashboardMetric = "earnings" | "revenue" | "costs";
+
+export type BookingsSummaryDashboardPageConfig = {
+  schemaVersion: 1;
+  kind: "page";
+  pageId: "bookings-summary";
+};
+
+export type BookingsSummaryDashboardFilters = {
+  summaryDateField: BookingsSummaryDashboardDateField;
+  summaryProductTypes: string[];
+  summaryPreset: BookingsSummaryDashboardPreset;
+  summaryMetric: BookingsSummaryDashboardMetric;
+  summaryStart: string | null;
+  summaryEnd: string | null;
+};
+
 export type ReportDashboardDto = {
   id: string;
   name: string;

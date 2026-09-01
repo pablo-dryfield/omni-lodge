@@ -265,7 +265,7 @@ const SettingsHomeExperienceContent = () => {
         <Stack gap="xs">
           <Title order={3}>Home Experience</Title>
           <Text size="sm" c="dimmed">
-            Configure homepage shortcuts, default navigation, and the dashboards available to each user.
+            Configure homepage content, default navigation, and the dashboards available to each user.
           </Text>
         </Stack>
 

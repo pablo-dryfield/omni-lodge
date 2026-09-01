@@ -75,6 +75,12 @@ import {
 } from '../constants/bookings.js';
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
 import { getConfigValue } from '../services/configService.js';
+import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
+import { FINANCE_ALLOWED_ROLES } from '../finance/middleware/financeAccessMiddleware.js';
+import {
+  getBookingSummaryCostInsights,
+  type BookingSummaryCostInsights,
+} from '../finance/services/bookingSummaryExpenseService.js';
 import { customerEmailActionTargetsUser } from '../services/bookings/customerEmailActionRules.js';
 import type { EmailTemplateType } from '../models/EmailTemplate.js';
 import {
@@ -122,6 +128,7 @@ type QueryParams = {
   search?: string;
   dateField?: string;
   ordersOnly?: string;
+  includeCostInsights?: string;
 };
 
 type BookingsDateField = 'experience_date' | 'source_received_at';
@@ -351,6 +358,22 @@ const resolveBookingsDateField = (value?: string): BookingsDateField => {
     return 'source_received_at';
   }
   return 'experience_date';
+};
+
+const isFinanceRoleAllowed = (value: unknown): boolean => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
+  const collapsed = normalized.replace(/-/g, '');
+  const canonical = collapsed === 'administrator'
+    ? 'admin'
+    : collapsed === 'assistantmanager' || collapsed === 'assistmanager'
+      ? 'assistant-manager'
+      : collapsed === 'mgr' || collapsed === 'manager'
+        ? 'manager'
+        : normalized;
+  return FINANCE_ALLOWED_ROLES.includes(canonical);
 };
 
 const normalizeAliasLabel = (value: string): string => sanitizeProductSource(value).toLowerCase();
@@ -2280,6 +2303,8 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
     const query = req.query as QueryParams;
     const { start, end } = resolveRange(query);
     const dateField = resolveBookingsDateField(query.dateField);
+    const ordersOnly = String(query.ordersOnly ?? '').trim().toLowerCase() === 'true';
+    const includeCostInsights = String(query.includeCostInsights ?? '').trim().toLowerCase() === 'true';
     const productTypeIds = parseOptionalIntegerList(query.productTypeIds);
     const legacyProductTypeId = parseOptionalInteger(query.productTypeId);
     if (productTypeIds.length === 0 && legacyProductTypeId != null) {
@@ -2357,7 +2382,7 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
 
     const products = collectProducts(orders);
 
-    if (String(query.ordersOnly ?? '').trim().toLowerCase() === 'true') {
+    if (ordersOnly) {
       res.status(200).json({
         total: orders.length,
         count: orders.length,
@@ -2365,6 +2390,31 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
         orders,
       });
       return;
+    }
+
+    let costInsightsPromise: Promise<BookingSummaryCostInsights | null> = Promise.resolve(null);
+    if (
+      includeCostInsights
+      && start
+      && end
+      && isFinanceRoleAllowed(req.authContext?.roleSlug)
+    ) {
+      costInsightsPromise = (async () => {
+        try {
+          const canViewFinanceTransactions = await hasModuleActionPermission(
+            req,
+            'finance-transactions',
+            'view',
+          );
+          if (!canViewFinanceTransactions) {
+            return null;
+          }
+          return await getBookingSummaryCostInsights(start, end);
+        } catch (error) {
+          logger.error('Failed to load Booking Summary Other Expenses', error);
+          return null;
+        }
+      })();
     }
 
     const bookingIds = rows.map((booking) => Number(booking.id)).filter((id) => Number.isFinite(id) && id > 0);
@@ -2575,6 +2625,8 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
       }))
       .sort((a, b) => b.amount - a.amount || a.ticketType.localeCompare(b.ticketType) || a.currency.localeCompare(b.currency));
 
+    const costInsights = await costInsightsPromise;
+
     res.status(200).json({
       total: orders.length,
       count: orders.length,
@@ -2596,6 +2648,7 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
         freeTicketsTotal,
         freeTicketEntries,
       },
+      costInsights,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load bookings';

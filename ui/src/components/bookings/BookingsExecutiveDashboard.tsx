@@ -41,10 +41,16 @@ import {
 } from "recharts";
 import type { UnifiedOrder } from "../../store/bookingPlatformsTypes";
 import {
+  BOOKINGS_SUMMARY_TIMEZONE,
   buildBookingsRevenueTrend,
   type BookingsSummaryDateField,
 } from "../../utils/bookingsSummaryDate";
+import BookingDetailsModal, { getBookingIdFromOrder } from "./BookingDetailsModal";
 import PlatformRevenueComparisonModal from "./PlatformRevenueComparisonModal";
+import BookingCostsDashboard, { type BookingCostsSummary } from "./BookingCostsDashboard";
+import RevenueBookingsTable, { type RevenueBookingRow } from "./RevenueBookingsTable";
+
+export type { BookingCostsSummary } from "./BookingCostsDashboard";
 
 type BookingRawFinancial = {
   bookingId: number;
@@ -118,21 +124,40 @@ export type VenueCommissionVenueRow = {
   venueId: number | null;
   venueName: string;
   currency: string;
+  allowsOpenBar: boolean;
   receivable: number;
   receivableCollected: number;
   receivableOutstanding: number;
+  payable: number;
+  payableCollected: number;
+  payableOutstanding: number;
   totalPeople: number;
-};
-
-export type BookingCostsSummary = {
-  currency: string;
-  openBarPayouts: number;
-  staffPayments: number;
-  miscellaneous: number;
+  totalPeoplePayable: number;
+  daily: Array<{
+    date: string;
+    totalPeople: number;
+    amount: number;
+    direction: "receivable" | "payable";
+    normalCount: number;
+    cocktailsCount: number;
+    brunchCount: number;
+    rateBands: Array<{
+      ticketType: "normal" | "cocktail" | "brunch" | "generic";
+      configuredTicketType: "normal" | "cocktail" | "brunch" | "generic";
+      count: number;
+      rateBandId: number | null;
+      rateAmount: number;
+      rateUnit: "per_person" | "flat";
+      source: "ticket_rate" | "generic_rate" | "term_default";
+      amount: number;
+    }>;
+    rateBreakdownMatchesPayout: boolean | null;
+  }>;
 };
 
 type Props = {
   orders: UnifiedOrder[];
+  allOrders?: UnifiedOrder[];
   bookingAddons: BookingAddonDashboardRow[];
   addonCatalog?: AddonCatalogPriceRow[];
   counterInsights: BookingCounterInsights | null;
@@ -142,6 +167,7 @@ type Props = {
   costsSummary?: BookingCostsSummary | null;
   dateField: BookingsSummaryDateField;
   productTypeIds?: string;
+  onDataChanged?: () => void;
 };
 
 const CHART_COLORS = ["#214A66", "#2B7A78", "#345995", "#EF8354", "#B56576", "#6B705C", "#7D4E57", "#3D5A80"];
@@ -244,6 +270,38 @@ const formatCountryDisplay = (countryCode?: string | null): string => {
   }
   const label = COUNTRY_DISPLAY_NAMES?.of(code) ?? code;
   return `${label} (${code})`;
+};
+
+const SOURCE_RECEIVED_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: BOOKINGS_SUMMARY_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+const formatSourceReceivedDateTime = (value?: string | null): string => {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  const parts = new Map(
+    SOURCE_RECEIVED_DATE_TIME_FORMATTER
+      .formatToParts(parsed)
+      .map((part) => [part.type, part.value]),
+  );
+  const year = parts.get("year");
+  const month = parts.get("month");
+  const day = parts.get("day");
+  const hour = parts.get("hour");
+  const minute = parts.get("minute");
+  const second = parts.get("second");
+  if (!year || !month || !day || !hour || !minute || !second) {
+    return SOURCE_RECEIVED_DATE_TIME_FORMATTER.format(parsed);
+  }
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
 };
 
 type CanonicalAddonKey = "cocktails" | "tshirts" | "photos";
@@ -428,6 +486,7 @@ const KpiCard = ({
 
 const BookingsExecutiveDashboard = ({
   orders,
+  allOrders,
   bookingAddons,
   addonCatalog = [],
   counterInsights,
@@ -437,8 +496,10 @@ const BookingsExecutiveDashboard = ({
   costsSummary,
   dateField,
   productTypeIds,
+  onDataChanged,
 }: Props) => {
   const [platformComparisonOpen, setPlatformComparisonOpen] = useState(false);
+  const [detailsBookingId, setDetailsBookingId] = useState<number | null>(null);
   const toFinancialRow = useMemo(
     () => (order: UnifiedOrder) => {
       const raw = asRecord(order.rawData);
@@ -551,6 +612,41 @@ const BookingsExecutiveDashboard = ({
   );
 
   const bookingFinancialRows = useMemo(() => orders.map((order) => toFinancialRow(order)), [orders, toFinancialRow]);
+  const bookingTableOrders = allOrders ?? orders;
+  const bookingTableFinancialRows = useMemo(
+    () => bookingTableOrders.map((order) => toFinancialRow(order)),
+    [bookingTableOrders, toFinancialRow],
+  );
+  const bookingTableRows = useMemo<RevenueBookingRow[]>(
+    () => bookingTableOrders.map((order, index) => {
+      const financial = bookingTableFinancialRows[index];
+      const bookingId = getBookingIdFromOrder(order) ?? order.id;
+      return {
+        bookingId,
+        reference: String(order.platformBookingId || order.id),
+        customerName: String(order.customerName ?? "").trim() || "Unknown customer",
+        customerEmail: order.customerEmail ?? null,
+        platform: normalizePlatformLabel(order.platform),
+        productName: String(order.productName ?? "").trim() || "Unknown product",
+        sourceReceivedAt: order.sourceReceivedAt ?? null,
+        sourceReceivedAtLabel: formatSourceReceivedDateTime(order.sourceReceivedAt),
+        experienceDate: order.date,
+        experienceTime: order.timeslot,
+        guests: financial?.people ?? Math.max(0, Number(order.quantity) || 0),
+        status: String(order.status ?? "unknown"),
+        paymentStatus: financial?.paymentStatus ?? "unknown",
+        revenue: roundMoney(
+          (financial?.netRevenue ?? 0) - Math.max(0, Number(financial?.processingFee) || 0),
+        ),
+        currency: financial?.currency ?? "PLN",
+        onSeeDetails: () => {
+          const normalizedId = Number(bookingId);
+          setDetailsBookingId(Number.isSafeInteger(normalizedId) && normalizedId > 0 ? normalizedId : null);
+        },
+      };
+    }),
+    [bookingTableFinancialRows, bookingTableOrders],
+  );
   const orderIdSet = useMemo(() => {
     const next = new Set<number>();
     bookingFinancialRows.forEach((row) => {
@@ -963,20 +1059,20 @@ const BookingsExecutiveDashboard = ({
   const topPlatform = platformRevenue[0] ?? null;
   const topProduct = productPerformance[0] ?? null;
 
-  if (orders.length === 0) {
-    return (
-      <Alert color="blue" title="No bookings">
-        No bookings found for the selected range.
-      </Alert>
-    );
-  }
-
   const summaryCurrency = costsSummary?.currency ?? defaultCurrency;
-  const openBarPayouts = roundMoney(costsSummary?.openBarPayouts ?? 0);
-  const staffPayments = roundMoney(costsSummary?.staffPayments ?? 0);
-  const miscellaneous = roundMoney(costsSummary?.miscellaneous ?? 3400);
-  const totalCosts = roundMoney(openBarPayouts + staffPayments + miscellaneous);
-  const totalEarnings = roundMoney(totalRevenueCard - totalCosts);
+  const openBarPayouts = costsSummary?.openBarPayouts == null
+    ? null
+    : roundMoney(costsSummary.openBarPayouts);
+  const staffPayments = costsSummary?.staffPayments == null
+    ? null
+    : roundMoney(costsSummary.staffPayments);
+  const otherExpenses = costsSummary?.otherExpenses == null
+    ? null
+    : roundMoney(costsSummary.otherExpenses);
+  const totalCosts = openBarPayouts == null || staffPayments == null || otherExpenses == null
+    ? null
+    : roundMoney(openBarPayouts + staffPayments + otherExpenses);
+  const totalEarnings = totalCosts == null ? null : roundMoney(totalRevenueCard - totalCosts);
 
   if (metricMode === "earnings") {
     return (
@@ -985,7 +1081,7 @@ const BookingsExecutiveDashboard = ({
           <KpiCard
             icon={<IconReceipt2 size={20} />}
             label="Total Earnings"
-            value={formatMoney(totalEarnings, summaryCurrency)}
+            value={totalEarnings == null ? "Unavailable" : formatMoney(totalEarnings, summaryCurrency)}
             subtitle="Total Revenue - Total Costs"
             accent="#214A66"
           />
@@ -995,40 +1091,14 @@ const BookingsExecutiveDashboard = ({
   }
 
   if (metricMode === "costs") {
-    
+    return <BookingCostsDashboard summary={costsSummary} />;
+  }
+
+  if (orders.length === 0 && bookingTableOrders.length === 0) {
     return (
-      <Stack gap="md">
-        <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
-          <KpiCard
-            icon={<IconReceipt2 size={20} />}
-            label="Total Costs"
-            value={formatMoney(totalCosts, summaryCurrency)}
-            subtitle="Open bar + Staff payments + Miscellaneous"
-            accent="#214A66"
-          />
-          <KpiCard
-            icon={<IconTicket size={20} />}
-            label="Open bar"
-            value={formatMoney(openBarPayouts, summaryCurrency)}
-            subtitle="Venue Numbers open bar payouts"
-            accent="#2B7A78"
-          />
-          <KpiCard
-            icon={<IconUsersGroup size={20} />}
-            label="Staff Payments"
-            value={formatMoney(staffPayments, summaryCurrency)}
-            subtitle="Pays: New earnings"
-            accent="#345995"
-          />
-          <KpiCard
-            icon={<IconCash size={20} />}
-            label="Miscellaneous"
-            value={formatMoney(miscellaneous, summaryCurrency)}
-            subtitle="Flat value (temporary)"
-            accent="#6B705C"
-          />
-        </SimpleGrid>
-      </Stack>
+      <Alert color="blue" title="No bookings">
+        No bookings found for the selected range.
+      </Alert>
     );
   }
 
@@ -1649,10 +1719,10 @@ const BookingsExecutiveDashboard = ({
           <Stack gap="xs" align="center" mb="xs" style={{ paddingRight: 40, paddingLeft: 40 }}>
             <Group gap={6} align="center" justify="center" wrap="nowrap">
               <Text fw={700} ta="center">
-                Ecwid Demography
+                Demography
               </Text>
               <SectionInfo
-                title="Ecwid Demography"
+                title="Demography"
                 formula="Payment Country Metrics = Count(bookings), Sum(guests), Sum(revenue) grouped by payment_method_country"
                 variables={[
                   { name: "payment_method_country", description: "Country code from payment method data." },
@@ -1773,6 +1843,8 @@ const BookingsExecutiveDashboard = ({
         </Paper>
       </SimpleGrid>
 
+      <RevenueBookingsTable rows={bookingTableRows} />
+
       <Paper withBorder radius="lg" p="md" shadow="sm">
         <Group gap={6} align="center" justify="center" mb="xs">
           <Text fw={700} ta="center">
@@ -1834,6 +1906,12 @@ const BookingsExecutiveDashboard = ({
         productTypeIds={productTypeIds}
         defaultCurrency={defaultCurrency}
         mapOrder={toFinancialRow}
+      />
+      <BookingDetailsModal
+        opened={detailsBookingId !== null}
+        bookingId={detailsBookingId}
+        onClose={() => setDetailsBookingId(null)}
+        onReprocessed={onDataChanged}
       />
     </Stack>
   );

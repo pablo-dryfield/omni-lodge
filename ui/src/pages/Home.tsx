@@ -33,6 +33,8 @@ import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import HomeQuickActions from "../components/home/HomeQuickActions";
 import HomeModuleLauncher from "../components/home/HomeModuleLauncher";
 import HomePlannedExpenses from "../components/home/HomePlannedExpenses";
+import { HOME_PLANNED_PAYMENTS_VISIBILITY_KEY } from "../components/home/homeExperienceConfigRegistry";
+import { resolveHomeNativeDashboard } from "../components/home/homeNativeDashboard";
 import { isHomeQuickActionVisibilityMap } from "../components/home/homeQuickActionRegistry";
 import { isHomeManagementRole } from "../components/home/homeModuleRegistry";
 import type { VisualChartPoint } from "../components/dashboard/GraphicCard";
@@ -67,6 +69,9 @@ dayjs.extend(isoWeek);
 
 const GraphicCard = lazy(() =>
   import("../components/dashboard/GraphicCard").then((module) => ({ default: module.GraphicCard })),
+);
+const BookingsSummaryWorkspace = lazy(
+  () => import("../components/bookings/BookingsSummaryWorkspace"),
 );
 
 const PAGE_SLUG = PAGE_SLUGS.dashboard;
@@ -1592,10 +1597,12 @@ const Home = (props: GenericPageProps) => {
     ? preference.quickActionVisibility
     : null;
   const quickActionVisibility = resolvedQuickActionVisibility ?? {};
-  const quickActionAudienceReady =
+  const homeExperienceAudienceReady =
     homePreferenceQuery.isSuccess
     && !homePreferenceQuery.isFetching
     && resolvedQuickActionVisibility !== null;
+  const plannedPaymentsVisible =
+    quickActionVisibility[HOME_PLANNED_PAYMENTS_VISIBILITY_KEY] !== false;
   const normalizedSavedIds = preference.savedDashboardIds.filter((id) => typeof id === "string" && id.length > 0);
   const activeDashboardId = useMemo(() => {
     if (preference.activeDashboardId && normalizedSavedIds.includes(preference.activeDashboardId)) {
@@ -1607,7 +1614,14 @@ const Home = (props: GenericPageProps) => {
 
   const dashboards = dashboardsQuery.data?.dashboards ?? [];
   const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null;
-  const activeCards = useMemo(() => activeDashboard?.cards ?? [], [activeDashboard]);
+  const nativeDashboard = useMemo(
+    () => resolveHomeNativeDashboard(activeDashboard),
+    [activeDashboard],
+  );
+  const activeCards = useMemo(
+    () => (nativeDashboard ? [] : activeDashboard?.cards ?? []),
+    [activeDashboard, nativeDashboard],
+  );
   const orderedActiveCards = useMemo(
     () =>
       activeCards
@@ -1651,7 +1665,8 @@ const Home = (props: GenericPageProps) => {
       };
     });
   }, [gridColumns, gridRowHeight, layoutMode, orderedActiveCards]);
-  const shouldHydrateLiveData = canUseDashboards && effectiveViewMode === "dashboard";
+  const shouldHydrateLiveData =
+    canUseDashboards && effectiveViewMode === "dashboard" && nativeDashboard === null;
   const cardsSupportPeriod = useMemo(
     () => orderedActiveCards.some((card) => cardSupportsPeriodOverride((card.viewConfig as DashboardCardViewConfig) ?? null)),
     [orderedActiveCards],
@@ -3449,9 +3464,12 @@ const Home = (props: GenericPageProps) => {
         <Stack spacing={{ xs: 2.5, md: 3.5 }}>
           <HomeQuickActions
             quickActionVisibility={quickActionVisibility}
-            audienceReady={quickActionAudienceReady}
+            audienceReady={homeExperienceAudienceReady}
           />
-          <HomePlannedExpenses />
+          <HomePlannedExpenses
+            configuredVisible={plannedPaymentsVisible}
+            audienceReady={homeExperienceAudienceReady}
+          />
         </Stack>
       )}
     />
@@ -3490,6 +3508,28 @@ const Home = (props: GenericPageProps) => {
         <Alert severity="warning">
           The active dashboard is no longer available. Remove it or pick another dashboard to continue.
         </Alert>
+      );
+    }
+    if (nativeDashboard?.kind === "bookings-summary") {
+      return (
+        <Box
+          className="home-native-dashboard-page"
+          sx={{ width: "100%", minWidth: 0, overflow: "visible" }}
+        >
+          <Suspense
+            fallback={(
+              <Box sx={{ minHeight: 320, display: "grid", placeItems: "center" }}>
+                <CircularProgress size={28} />
+              </Box>
+            )}
+          >
+            <BookingsSummaryWorkspace
+              key={activeDashboard.id}
+              initialFilters={nativeDashboard.filters}
+              embedded
+            />
+          </Suspense>
+        </Box>
       );
     }
     if (gridLayoutCards.length === 0) {
@@ -3605,9 +3645,13 @@ const Home = (props: GenericPageProps) => {
                 <HomeQuickActions
                   compact
                   quickActionVisibility={quickActionVisibility}
-                  audienceReady={quickActionAudienceReady}
+                  audienceReady={homeExperienceAudienceReady}
                 />
-                <HomePlannedExpenses compact />
+                <HomePlannedExpenses
+                  compact
+                  configuredVisible={plannedPaymentsVisible}
+                  audienceReady={homeExperienceAudienceReady}
+                />
                 {renderDashboardSummary()}
               </Stack>
             ) : (
