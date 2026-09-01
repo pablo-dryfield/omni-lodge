@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { requireRoles } from '../../middleware/authorizationMiddleware.js';
+import {
+  authorizeModuleAction,
+  requireRoles,
+} from '../../middleware/authorizationMiddleware.js';
 import { financeAuthChain } from '../middleware/financeAccessMiddleware.js';
 import {
   listAccounts,
@@ -48,6 +51,10 @@ import {
   updateRecurringRule,
   deleteRecurringRule,
   executeRecurringRulesHandler,
+  getRecurringWorkspaceBootstrap,
+  listRecurringRuleOccurrences,
+  postRecurringRuleOccurrence,
+  voidRecurringRuleOccurrence,
 } from '../controllers/recurringRuleController.js';
 import {
   uploadFinanceFileHandler,
@@ -94,6 +101,13 @@ import {
 
 const router = Router();
 const settlementRuleWriteGuard = requireRoles(['admin', 'owner']);
+const recurringViewGuard = authorizeModuleAction('finance-recurring', 'view');
+const recurringCreateGuard = authorizeModuleAction('finance-recurring', 'create');
+const recurringUpdateGuard = authorizeModuleAction('finance-recurring', 'update');
+const recurringDeleteGuard = authorizeModuleAction('finance-recurring', 'delete');
+const transactionViewGuard = authorizeModuleAction('finance-transactions', 'view');
+const transactionCreateGuard = authorizeModuleAction('finance-transactions', 'create');
+const transactionUpdateGuard = authorizeModuleAction('finance-transactions', 'update');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -149,12 +163,36 @@ router.delete('/transactions/:id', deleteTransaction);
 router.post('/transfers', createTransferHandler);
 
 // Recurring Rules
-router.get('/recurring-rules', listRecurringRules);
-router.get('/recurring-rules/:id', getRecurringRule);
-router.post('/recurring-rules', createRecurringRule);
-router.put('/recurring-rules/:id', updateRecurringRule);
-router.delete('/recurring-rules/:id', deleteRecurringRule);
-router.post('/recurring-runs/execute', executeRecurringRulesHandler);
+router.get('/recurring-rules', recurringViewGuard, listRecurringRules);
+router.get('/recurring-rules/bootstrap', recurringViewGuard, getRecurringWorkspaceBootstrap);
+router.get(
+  '/recurring-rules/:id/occurrences',
+  recurringViewGuard,
+  transactionViewGuard,
+  listRecurringRuleOccurrences,
+);
+router.post(
+  '/recurring-rules/:id/occurrences/:transactionId/post',
+  recurringUpdateGuard,
+  transactionUpdateGuard,
+  postRecurringRuleOccurrence,
+);
+router.post(
+  '/recurring-rules/:id/occurrences/:transactionId/void',
+  recurringUpdateGuard,
+  transactionUpdateGuard,
+  voidRecurringRuleOccurrence,
+);
+router.get('/recurring-rules/:id', recurringViewGuard, getRecurringRule);
+router.post('/recurring-rules', recurringCreateGuard, createRecurringRule);
+router.put('/recurring-rules/:id', recurringUpdateGuard, updateRecurringRule);
+router.delete('/recurring-rules/:id', recurringDeleteGuard, deleteRecurringRule);
+router.post(
+  '/recurring-runs/execute',
+  recurringUpdateGuard,
+  transactionCreateGuard,
+  executeRecurringRulesHandler,
+);
 
 // Management Requests
 router.get('/management-requests', listManagementRequests);

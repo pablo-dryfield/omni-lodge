@@ -20,6 +20,10 @@ const resolveBaseCurrency = (): string =>
 const NON_REPORTABLE_STATUSES = ['void'];
 const PNL_KINDS = ['income', 'expense', 'refund'] as const;
 const UNCATEGORIZED_CATEGORY_NAME = 'Uncategorized';
+const ACTUAL_PNL_STATUSES = new Set(['paid', 'reimbursed', 'awaiting_reimbursement']);
+const ACTUAL_CASH_STATUSES = new Set(['paid']);
+const FORECAST_STATUSES = new Set(['planned', 'approved']);
+const AWAITING_REIMBURSEMENT_STATUS = 'awaiting_reimbursement';
 
 type MonthAggregation = {
   income: number;
@@ -32,10 +36,20 @@ type CashFlowAggregation = {
   outflow: number;
 };
 
-const OUTSTANDING_STATUSES = new Set(['planned', 'approved']);
-
 const formatMonthKey = (value: dayjs.Dayjs): string => value.format('YYYY-MM');
 const formatMonthLabel = (value: dayjs.Dayjs): string => value.format('MMM YYYY');
+
+const isStaffReimbursementSettlement = (transaction: FinanceTransaction): boolean => {
+  const meta = transaction.meta;
+  if (!meta || typeof meta !== 'object') {
+    return false;
+  }
+  const source = typeof meta.source === 'string' ? meta.source.trim().toLowerCase() : '';
+  const lineLabel = typeof meta.lineLabel === 'string' ? meta.lineLabel.trim().toLowerCase() : '';
+  const sourceKey = typeof meta.sourceKey === 'string' ? meta.sourceKey.trim().toLowerCase() : '';
+  return source === 'staff-payments'
+    && (sourceKey === 'reimbursement' || lineLabel === 'reimbursements');
+};
 
 export const getFinanceReports = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -96,46 +110,64 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       order: [['date', 'ASC']],
     });
 
-    const transactions = rangeTransactions.filter((transaction) =>
+    // Keep the in-memory guard even though the query filters void rows. It makes
+    // the accounting boundary explicit and protects callers/tests that supply a
+    // preloaded transaction collection.
+    const reportableTransactions = rangeTransactions.filter((transaction) =>
+      !NON_REPORTABLE_STATUSES.includes(transaction.status),
+    );
+    const transactions = reportableTransactions.filter((transaction) =>
       (PNL_KINDS as readonly string[]).includes(transaction.kind),
+    );
+    const actualPnlTransactions = transactions.filter((transaction) =>
+      ACTUAL_PNL_STATUSES.has(transaction.status) && !isStaffReimbursementSettlement(transaction),
+    );
+    const actualCashTransactions = transactions.filter((transaction) =>
+      ACTUAL_CASH_STATUSES.has(transaction.status),
+    );
+    const forecastTransactions = transactions.filter((transaction) =>
+      FORECAST_STATUSES.has(transaction.status),
     );
 
     const monthlyPnL = new Map<string, MonthAggregation>();
     const monthlyCashFlow = new Map<string, CashFlowAggregation>();
+    const monthlyForecastPnL = new Map<string, MonthAggregation>();
+    const monthlyForecastCashFlow = new Map<string, CashFlowAggregation>();
     monthKeys.forEach((key) => {
       monthlyPnL.set(key, { income: 0, expense: 0, net: 0 });
       monthlyCashFlow.set(key, { inflow: 0, outflow: 0 });
+      monthlyForecastPnL.set(key, { income: 0, expense: 0, net: 0 });
+      monthlyForecastCashFlow.set(key, { inflow: 0, outflow: 0 });
     });
 
     let incomeTotal = 0;
     let expenseTotal = 0;
     let inflowTotal = 0;
     let outflowTotal = 0;
+    let forecastIncomeTotal = 0;
+    let forecastExpenseTotal = 0;
+    let forecastInflowTotal = 0;
+    let forecastOutflowTotal = 0;
 
     const expenseByCategory = new Map<
       number | 'uncategorized',
       { categoryId: number | null; categoryName: string; total: number }
     >();
 
-    transactions.forEach((transaction) => {
+    actualPnlTransactions.forEach((transaction) => {
       const monthKey = formatMonthKey(dayjs(transaction.date));
       if (!monthlyPnL.has(monthKey)) {
         return;
       }
       const amount = (transaction.baseAmountMinor ?? 0) / 100;
       const pnlBucket = monthlyPnL.get(monthKey)!;
-      const cashBucket = monthlyCashFlow.get(monthKey)!;
 
       if (transaction.kind === 'income' || transaction.kind === 'refund') {
         pnlBucket.income += amount;
-        cashBucket.inflow += amount;
         incomeTotal += amount;
-        inflowTotal += amount;
       } else if (transaction.kind === 'expense') {
         pnlBucket.expense += amount;
-        cashBucket.outflow += amount;
         expenseTotal += amount;
-        outflowTotal += amount;
 
         const key = transaction.categoryId ?? 'uncategorized';
         const entry = expenseByCategory.get(key) ?? {
@@ -148,11 +180,67 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       }
     });
 
+    actualCashTransactions.forEach((transaction) => {
+      const monthKey = formatMonthKey(dayjs(transaction.date));
+      const cashBucket = monthlyCashFlow.get(monthKey);
+      if (!cashBucket) {
+        return;
+      }
+      const amount = (transaction.baseAmountMinor ?? 0) / 100;
+      if (transaction.kind === 'income' || transaction.kind === 'refund') {
+        cashBucket.inflow += amount;
+        inflowTotal += amount;
+      } else if (transaction.kind === 'expense') {
+        cashBucket.outflow += amount;
+        outflowTotal += amount;
+      }
+    });
+
+    const forecastExpenseByCategory = new Map<
+      number | 'uncategorized',
+      { categoryId: number | null; categoryName: string; total: number }
+    >();
+    forecastTransactions.forEach((transaction) => {
+      const monthKey = formatMonthKey(dayjs(transaction.date));
+      const pnlBucket = monthlyForecastPnL.get(monthKey);
+      const cashBucket = monthlyForecastCashFlow.get(monthKey);
+      if (!pnlBucket || !cashBucket) {
+        return;
+      }
+      const amount = (transaction.baseAmountMinor ?? 0) / 100;
+      if (transaction.kind === 'income' || transaction.kind === 'refund') {
+        pnlBucket.income += amount;
+        cashBucket.inflow += amount;
+        forecastIncomeTotal += amount;
+        forecastInflowTotal += amount;
+      } else if (transaction.kind === 'expense') {
+        pnlBucket.expense += amount;
+        cashBucket.outflow += amount;
+        forecastExpenseTotal += amount;
+        forecastOutflowTotal += amount;
+
+        const key = transaction.categoryId ?? 'uncategorized';
+        const entry = forecastExpenseByCategory.get(key) ?? {
+          categoryId: transaction.categoryId ?? null,
+          categoryName: transaction.category?.name ?? UNCATEGORIZED_CATEGORY_NAME,
+          total: 0,
+        };
+        entry.total += amount;
+        forecastExpenseByCategory.set(key, entry);
+      }
+    });
+
     monthlyPnL.forEach((bucket) => {
+      bucket.net = bucket.income - bucket.expense;
+    });
+    monthlyForecastPnL.forEach((bucket) => {
       bucket.net = bucket.income - bucket.expense;
     });
 
     const topCategories = Array.from(expenseByCategory.values())
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5);
+    const forecastTopCategories = Array.from(forecastExpenseByCategory.values())
       .sort((a, b) => b.total - a.total)
       .slice(0, 5);
 
@@ -183,7 +271,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       number | 'uncategorized',
       { categoryId: number | null; categoryName: string; actual: number }
     >();
-    transactions
+    actualPnlTransactions
       .filter((transaction) => transaction.kind === 'expense')
       .forEach((transaction) => {
         const amount = (transaction.baseAmountMinor ?? 0) / 100;
@@ -197,16 +285,54 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
         actualByCategory.set(key, entry);
       });
 
-    const categoryKeys = new Set([...budgetByCategory.keys(), ...actualByCategory.keys()]);
+    const forecastByCategory = new Map<
+      number | 'uncategorized',
+      { categoryId: number | null; categoryName: string; forecast: number }
+    >();
+    forecastTransactions
+      .filter((transaction) => transaction.kind === 'expense')
+      .forEach((transaction) => {
+        const amount = (transaction.baseAmountMinor ?? 0) / 100;
+        const key = transaction.categoryId ?? 'uncategorized';
+        const entry = forecastByCategory.get(key) ?? {
+          categoryId: transaction.categoryId ?? null,
+          categoryName: transaction.category?.name ?? UNCATEGORIZED_CATEGORY_NAME,
+          forecast: 0,
+        };
+        entry.forecast += amount;
+        forecastByCategory.set(key, entry);
+      });
+
+    const categoryKeys = new Set([
+      ...budgetByCategory.keys(),
+      ...actualByCategory.keys(),
+      ...forecastByCategory.keys(),
+    ]);
     const budgetRows = Array.from(categoryKeys).map((key) => {
       const budgetEntry = budgetByCategory.get(key);
       const actualEntry = actualByCategory.get(key);
-      const categoryId = budgetEntry?.categoryId ?? actualEntry?.categoryId ?? null;
-      const categoryName = budgetEntry?.categoryName ?? actualEntry?.categoryName ?? UNCATEGORIZED_CATEGORY_NAME;
+      const forecastEntry = forecastByCategory.get(key);
+      const categoryId = budgetEntry?.categoryId ?? actualEntry?.categoryId ?? forecastEntry?.categoryId ?? null;
+      const categoryName = budgetEntry?.categoryName
+        ?? actualEntry?.categoryName
+        ?? forecastEntry?.categoryName
+        ?? UNCATEGORIZED_CATEGORY_NAME;
       const budget = budgetEntry?.budget ?? 0;
       const actual = actualEntry?.actual ?? 0;
+      const forecast = forecastEntry?.forecast ?? 0;
+      const projected = actual + forecast;
       const variance = actual - budget;
-      return { categoryId, categoryName, budget, actual, variance };
+      const projectedVariance = projected - budget;
+      return {
+        categoryId,
+        categoryName,
+        budget,
+        actual,
+        forecast,
+        projected,
+        variance,
+        projectedVariance,
+      };
     });
 
     budgetRows.sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
@@ -215,11 +341,21 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       (acc, row) => {
         acc.budget += row.budget;
         acc.actual += row.actual;
+        acc.forecast += row.forecast;
+        acc.projected += row.projected;
         return acc;
       },
-      { budget: 0, actual: 0, variance: 0 }
+      {
+        budget: 0,
+        actual: 0,
+        forecast: 0,
+        projected: 0,
+        variance: 0,
+        projectedVariance: 0,
+      }
     );
     budgetTotals.variance = budgetTotals.actual - budgetTotals.budget;
+    budgetTotals.projectedVariance = budgetTotals.projected - budgetTotals.budget;
 
     const accounts = await FinanceAccount.findAll({
       attributes: ['id', 'name', 'currency', 'openingBalanceMinor', 'isActive'],
@@ -240,6 +376,10 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       outflow: number;
       net: number;
       closingBalance: number;
+      forecastInflow: number;
+      forecastOutflow: number;
+      forecastNet: number;
+      projectedClosingBalance: number;
       outstanding: number;
       isActive: boolean;
     };
@@ -256,6 +396,10 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
         outflow: 0,
         net: 0,
         closingBalance: opening,
+        forecastInflow: 0,
+        forecastOutflow: 0,
+        forecastNet: 0,
+        projectedClosingBalance: opening,
         outstanding: 0,
         isActive: account.isActive ?? true,
       });
@@ -291,20 +435,29 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       return 0;
     };
 
-    rangeTransactions.forEach((transaction) => {
+    reportableTransactions.forEach((transaction) => {
       const summary = accountSummaryMap.get(transaction.accountId);
       if (!summary) {
         return;
       }
       const signedAmount = determineSignedAmount(transaction);
-      if (signedAmount >= 0) {
-        summary.inflow += signedAmount;
-      } else {
-        summary.outflow += Math.abs(signedAmount);
-      }
-      summary.net += signedAmount;
-      summary.closingBalance += signedAmount;
-      if (OUTSTANDING_STATUSES.has(transaction.status)) {
+      if (ACTUAL_CASH_STATUSES.has(transaction.status)) {
+        if (signedAmount >= 0) {
+          summary.inflow += signedAmount;
+        } else {
+          summary.outflow += Math.abs(signedAmount);
+        }
+        summary.net += signedAmount;
+        summary.closingBalance += signedAmount;
+        summary.projectedClosingBalance += signedAmount;
+      } else if (FORECAST_STATUSES.has(transaction.status)) {
+        if (signedAmount >= 0) {
+          summary.forecastInflow += signedAmount;
+        } else {
+          summary.forecastOutflow += Math.abs(signedAmount);
+        }
+        summary.forecastNet += signedAmount;
+        summary.projectedClosingBalance += signedAmount;
         summary.outstanding += signedAmount;
       }
     });
@@ -321,8 +474,16 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       number | 'uncategorized',
       { categoryId: number | null; categoryName: string; amount: number }
     >();
+    const forecastCategoryIncomeMap = new Map<
+      number | 'uncategorized',
+      { categoryId: number | null; categoryName: string; amount: number }
+    >();
+    const forecastCategoryExpenseMap = new Map<
+      number | 'uncategorized',
+      { categoryId: number | null; categoryName: string; amount: number }
+    >();
 
-    rangeTransactions.forEach((transaction) => {
+    actualPnlTransactions.forEach((transaction) => {
       const amount = (transaction.baseAmountMinor ?? 0) / 100;
       const key = transaction.categoryId ?? 'uncategorized';
       const categoryName = transaction.category?.name ?? UNCATEGORIZED_CATEGORY_NAME;
@@ -345,9 +506,36 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       }
     });
 
+    forecastTransactions.forEach((transaction) => {
+      const amount = (transaction.baseAmountMinor ?? 0) / 100;
+      const key = transaction.categoryId ?? 'uncategorized';
+      const categoryName = transaction.category?.name ?? UNCATEGORIZED_CATEGORY_NAME;
+      if (transaction.kind === 'income' || transaction.kind === 'refund') {
+        const entry = forecastCategoryIncomeMap.get(key) ?? {
+          categoryId: transaction.categoryId ?? null,
+          categoryName,
+          amount: 0,
+        };
+        entry.amount += amount;
+        forecastCategoryIncomeMap.set(key, entry);
+      } else if (transaction.kind === 'expense') {
+        const entry = forecastCategoryExpenseMap.get(key) ?? {
+          categoryId: transaction.categoryId ?? null,
+          categoryName,
+          amount: 0,
+        };
+        entry.amount += amount;
+        forecastCategoryExpenseMap.set(key, entry);
+      }
+    });
+
     const categorySummary = {
       income: Array.from(categoryIncomeMap.values()).sort((a, b) => b.amount - a.amount),
       expense: Array.from(categoryExpenseMap.values()).sort((a, b) => b.amount - a.amount),
+      forecast: {
+        income: Array.from(forecastCategoryIncomeMap.values()).sort((a, b) => b.amount - a.amount),
+        expense: Array.from(forecastCategoryExpenseMap.values()).sort((a, b) => b.amount - a.amount),
+      },
     };
 
     type VendorSummaryRow = {
@@ -356,6 +544,9 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       total: number;
       settled: number;
       outstanding: number;
+      awaitingReimbursement: number;
+      forecast: number;
+      projectedTotal: number;
       lastActivity: string | null;
     };
 
@@ -364,7 +555,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
 
     const vendorSummaryMap = new Map<number, VendorSummaryRow>();
 
-    rangeTransactions.forEach((transaction) => {
+    reportableTransactions.forEach((transaction) => {
       if (transaction.counterpartyType !== 'vendor' || !transaction.counterpartyId) {
         return;
       }
@@ -381,6 +572,12 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
           return;
         }
       }
+      const isForecast = FORECAST_STATUSES.has(transaction.status);
+      const isActual = ACTUAL_PNL_STATUSES.has(transaction.status)
+        && !isStaffReimbursementSettlement(transaction);
+      if (!isActual && !isForecast) {
+        return;
+      }
 
       const entry =
         vendorSummaryMap.get(transaction.counterpartyId) ?? {
@@ -389,14 +586,24 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
           total: 0,
           settled: 0,
           outstanding: 0,
+          awaitingReimbursement: 0,
+          forecast: 0,
+          projectedTotal: 0,
           lastActivity: null,
         };
-      entry.total += amount;
-      if (OUTSTANDING_STATUSES.has(transaction.status)) {
+      if (isForecast) {
+        entry.forecast += amount;
         entry.outstanding += amount;
-      } else if (transaction.status === 'paid' || transaction.status === 'reimbursed') {
+      } else {
+        entry.total += amount;
+      }
+      if (transaction.status === AWAITING_REIMBURSEMENT_STATUS) {
+        entry.awaitingReimbursement += amount;
+        entry.settled += amount;
+      } else if (isActual) {
         entry.settled += amount;
       }
+      entry.projectedTotal = entry.total + entry.forecast;
       if (!entry.lastActivity || dayjs(transaction.date).isAfter(dayjs(entry.lastActivity))) {
         entry.lastActivity = transaction.date;
       }
@@ -409,6 +616,9 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       total: number;
       settled: number;
       outstanding: number;
+      awaitingReimbursement: number;
+      forecast: number;
+      projectedTotal: number;
       lastActivity: string | null;
     };
 
@@ -417,7 +627,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
 
     const clientSummaryMap = new Map<number, ClientSummaryRow>();
 
-    rangeTransactions.forEach((transaction) => {
+    reportableTransactions.forEach((transaction) => {
       if (transaction.counterpartyType !== 'client' || !transaction.counterpartyId) {
         return;
       }
@@ -428,6 +638,12 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       if (!['income', 'refund'].includes(transaction.kind)) {
         return;
       }
+      const isForecast = FORECAST_STATUSES.has(transaction.status);
+      const isActual = ACTUAL_PNL_STATUSES.has(transaction.status)
+        && !isStaffReimbursementSettlement(transaction);
+      if (!isActual && !isForecast) {
+        return;
+      }
       const signed = transaction.kind === 'refund' ? -amount : amount;
       const entry =
         clientSummaryMap.get(transaction.counterpartyId) ?? {
@@ -436,14 +652,24 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
           total: 0,
           settled: 0,
           outstanding: 0,
+          awaitingReimbursement: 0,
+          forecast: 0,
+          projectedTotal: 0,
           lastActivity: null,
         };
-      entry.total += signed;
-      if (OUTSTANDING_STATUSES.has(transaction.status)) {
+      if (isForecast) {
+        entry.forecast += signed;
         entry.outstanding += signed;
-      } else if (transaction.status === 'paid' || transaction.status === 'reimbursed') {
+      } else {
+        entry.total += signed;
+      }
+      if (transaction.status === AWAITING_REIMBURSEMENT_STATUS) {
+        entry.awaitingReimbursement += signed;
+        entry.settled += signed;
+      } else if (isActual) {
         entry.settled += signed;
       }
+      entry.projectedTotal = entry.total + entry.forecast;
       if (!entry.lastActivity || dayjs(transaction.date).isAfter(dayjs(entry.lastActivity))) {
         entry.lastActivity = transaction.date;
       }
@@ -480,6 +706,24 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
           };
         }),
         topCategories,
+        forecast: {
+          totals: {
+            income: forecastIncomeTotal,
+            expense: forecastExpenseTotal,
+            net: forecastIncomeTotal - forecastExpenseTotal,
+          },
+          monthly: monthKeys.map((key) => {
+            const bucket = monthlyForecastPnL.get(key)!;
+            return {
+              month: key,
+              label: monthLabels.get(key),
+              income: bucket.income,
+              expense: bucket.expense,
+              net: bucket.net,
+            };
+          }),
+          topCategories: forecastTopCategories,
+        },
       },
       cashFlow: {
         totals: {
@@ -496,6 +740,22 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
             outflow: bucket.outflow,
           };
         }),
+        forecast: {
+          totals: {
+            inflow: forecastInflowTotal,
+            outflow: forecastOutflowTotal,
+            net: forecastInflowTotal - forecastOutflowTotal,
+          },
+          timeline: monthKeys.map((key) => {
+            const bucket = monthlyForecastCashFlow.get(key)!;
+            return {
+              month: key,
+              label: monthLabels.get(key),
+              inflow: bucket.inflow,
+              outflow: bucket.outflow,
+            };
+          }),
+        },
       },
       budgetsVsActual: {
         rows: budgetRows,

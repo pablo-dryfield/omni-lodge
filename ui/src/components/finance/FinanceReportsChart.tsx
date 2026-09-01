@@ -28,6 +28,7 @@ type BudgetRow = {
   categoryName: string;
   budget: number;
   actual: number;
+  forecast?: number;
 };
 
 type FinanceReportsChartProps =
@@ -115,7 +116,8 @@ const FinanceReportsChart = (props: FinanceReportsChartProps) => {
         <Tooltip formatter={(value: number) => props.formatCurrency(value)} />
         <Legend />
         <Bar dataKey="budget" name="Budget" fill="#1c7ed6" />
-        <Bar dataKey="actual" name="Actual" fill="#f59f00" />
+        <Bar dataKey="actual" name="Actual" fill="#f59f00" stackId="spend" />
+        <Bar dataKey="forecast" name="Forecast" fill="#7950f2" stackId="spend" />
       </BarChart>
     </ResponsiveContainer>
   );

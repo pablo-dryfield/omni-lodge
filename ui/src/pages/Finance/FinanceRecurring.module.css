@@ -1,0 +1,92 @@
+.forecastInline {
+  display: inline-flex;
+  flex-direction: column;
+  font-size: 0.76rem;
+  font-weight: 750;
+  gap: 0.18rem;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.ruleCell {
+  max-width: 22rem;
+}
+
+.ruleTitleButton {
+  color: #172033;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 750;
+  max-width: 100%;
+  padding: 0;
+  text-align: left;
+}
+
+.ruleTitleButton:hover {
+  color: var(--mantine-color-blue-7);
+  text-decoration: underline;
+  text-underline-offset: 0.18rem;
+}
+
+.ruleSelected {
+  background: color-mix(in srgb, var(--mantine-color-blue-0) 68%, white);
+}
+
+.attentionBox {
+  background: var(--mantine-color-red-0);
+  border: 1px solid var(--mantine-color-red-2);
+  border-radius: var(--mantine-radius-md);
+  color: var(--mantine-color-red-9);
+  padding: 0.6rem 0.75rem;
+}
+
+.occurrencePanel {
+  border-color: var(--mantine-color-blue-2);
+  box-shadow: 0 12px 34px rgb(23 32 51 / 7%);
+}
+
+.occurrenceStatusCell {
+  min-width: 7rem;
+}
+
+.occurrenceActions {
+  min-width: 15rem;
+}
+
+.scheduleHint {
+  align-items: center;
+  background: var(--mantine-color-blue-0);
+  border: 1px solid var(--mantine-color-blue-1);
+  border-radius: var(--mantine-radius-md);
+  color: var(--mantine-color-blue-9);
+  display: flex;
+  font-size: var(--mantine-font-size-xs);
+  gap: 0.45rem;
+  line-height: 1.4;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.65rem;
+}
+
+.forecastNotice {
+  background: var(--mantine-color-gray-0);
+  border: 1px solid var(--mantine-color-gray-2);
+  border-radius: var(--mantine-radius-md);
+  padding: 0.65rem 0.8rem;
+}
+
+.modalKind {
+  border: 1px solid var(--mantine-color-gray-3);
+  border-radius: var(--mantine-radius-md);
+  padding: 0.25rem;
+}
+
+@media (max-width: 48em) {
+  .occurrenceActions {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .occurrenceActions > * {
+    flex: 1 1 auto;
+  }
+}

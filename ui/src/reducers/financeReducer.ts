@@ -25,6 +25,7 @@ import {
   fetchFinanceFiles,
   fetchFinanceManagementRequests,
   fetchFinanceRecurringRules,
+  fetchFinanceRecurringBootstrap,
   fetchFinanceTransactions,
   fetchFinanceVendors,
   rejectFinanceManagementRequest,
@@ -47,6 +48,8 @@ import {
   FinanceFile,
   FinanceManagementRequest,
   FinanceRecurringRule,
+  FinanceRecurringBootstrapResponse,
+  FinanceRecurringExecutionResult,
   FinanceTransaction,
   FinanceVendor,
 } from '../types/finance';
@@ -78,11 +81,7 @@ type FileUploadState = {
 
 type RecurringExecutionState = {
   loading: boolean;
-  result: {
-    processed: number;
-    createdTransactions: number;
-    skipped: number;
-  } | null;
+  result: FinanceRecurringExecutionResult | null;
   error: string | null;
 };
 
@@ -301,6 +300,18 @@ const financeSlice = createSlice({
 
     // Recurring rules
     builder
+      .addCase(fetchFinanceRecurringBootstrap.pending, (state) => {
+        state.recurringRules.loading = true;
+        state.recurringRules.error = null;
+      })
+      .addCase(fetchFinanceRecurringBootstrap.fulfilled, (state, action: PayloadAction<FinanceRecurringBootstrapResponse>) => {
+        state.recurringRules.loading = false;
+        state.recurringRules.data = action.payload.rules;
+      })
+      .addCase(fetchFinanceRecurringBootstrap.rejected, (state, action) => {
+        state.recurringRules.loading = false;
+        state.recurringRules.error = action.error.message ?? 'Failed to load recurring-rule workspace';
+      })
       .addCase(fetchFinanceRecurringRules.pending, (state) => {
         state.recurringRules.loading = true;
         state.recurringRules.error = null;
@@ -326,7 +337,7 @@ const financeSlice = createSlice({
         state.recurringExecution.loading = true;
         state.recurringExecution.error = null;
       })
-      .addCase(executeFinanceRecurringRules.fulfilled, (state, action: PayloadAction<{ processed: number; createdTransactions: number; skipped: number }>) => {
+      .addCase(executeFinanceRecurringRules.fulfilled, (state, action: PayloadAction<FinanceRecurringExecutionResult>) => {
         state.recurringExecution.loading = false;
         state.recurringExecution.result = action.payload;
       })

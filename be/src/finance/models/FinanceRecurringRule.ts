@@ -13,7 +13,7 @@ import {
 import User from '../../models/User.js';
 
 export type FinanceRecurringFrequency = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
-export type FinanceRecurringStatus = 'active' | 'paused';
+export type FinanceRecurringStatus = 'active' | 'paused' | 'completed';
 
 @Table({
   tableName: 'finance_recurring_rules',
@@ -40,11 +40,19 @@ export default class FinanceRecurringRule extends Model {
 
   @AllowNull(false)
   @Default(1)
-  @Column({ field: 'interval', type: DataType.INTEGER })
+  @Column({
+    field: 'interval',
+    type: DataType.INTEGER,
+    validate: { isInt: true, min: 1, max: 365 },
+  })
   declare interval: number;
 
   @AllowNull(true)
-  @Column({ field: 'by_month_day', type: DataType.INTEGER })
+  @Column({
+    field: 'by_month_day',
+    type: DataType.INTEGER,
+    validate: { isInt: true, min: 1, max: 31 },
+  })
   declare byMonthDay: number | null;
 
   @AllowNull(false)
@@ -69,8 +77,29 @@ export default class FinanceRecurringRule extends Model {
 
   @AllowNull(false)
   @Default('active')
-  @Column({ field: 'status', type: DataType.ENUM('active', 'paused') })
+  @Column({ field: 'status', type: DataType.ENUM('active', 'paused', 'completed') })
   declare status: FinanceRecurringStatus;
+
+  @AllowNull(true)
+  @Column({ field: 'completed_at', type: DataType.DATE })
+  declare completedAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'last_error', type: DataType.TEXT })
+  declare lastError: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'last_error_at', type: DataType.DATE })
+  declare lastErrorAt: Date | null;
+
+  @AllowNull(false)
+  @Default(0)
+  @Column({
+    field: 'consecutive_failures',
+    type: DataType.INTEGER,
+    validate: { isInt: true, min: 0 },
+  })
+  declare consecutiveFailures: number;
 
   @ForeignKey(() => User)
   @AllowNull(false)

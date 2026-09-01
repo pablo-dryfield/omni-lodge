@@ -9,6 +9,8 @@ import {
   FinanceFile,
   FinanceManagementRequest,
   FinanceRecurringRule,
+  FinanceRecurringBootstrapResponse,
+  FinanceRecurringExecutionResult,
   FinanceTransaction,
   FinanceTransactionListResponse,
   FinanceVendor,
@@ -266,6 +268,17 @@ export const createFinanceTransfer = createAsyncThunk<
 );
 
 // Recurring rules
+export const fetchFinanceRecurringBootstrap = createAsyncThunk<FinanceRecurringBootstrapResponse>(
+  'finance/recurring/bootstrap',
+  async () => {
+    const response = await axiosInstance.get<FinanceRecurringBootstrapResponse>(
+      buildFinanceUrl('/recurring-rules/bootstrap'),
+      withCredentials,
+    );
+    return response.data;
+  },
+);
+
 export const fetchFinanceRecurringRules = createAsyncThunk<FinanceRecurringRule[]>(
   'finance/recurring/fetch',
   async () => {
@@ -298,10 +311,10 @@ export const deleteFinanceRecurringRule = createAsyncThunk<number, number>(
   },
 );
 
-export const executeFinanceRecurringRules = createAsyncThunk<{ processed: number; createdTransactions: number; skipped: number }>(
+export const executeFinanceRecurringRules = createAsyncThunk<FinanceRecurringExecutionResult>(
   'finance/recurring/execute',
   async () => {
-    const response = await axiosInstance.post<{ processed: number; createdTransactions: number; skipped: number }>(
+    const response = await axiosInstance.post<FinanceRecurringExecutionResult>(
       buildFinanceUrl('/recurring-runs/execute'),
       {},
       withCredentials,

@@ -4,10 +4,10 @@ import FinanceBudget from '../models/FinanceBudget.js';
 import FinanceCategory from '../models/FinanceCategory.js';
 import FinanceClient from '../models/FinanceClient.js';
 import FinanceManagementRequest from '../models/FinanceManagementRequest.js';
-import FinanceRecurringRule from '../models/FinanceRecurringRule.js';
 import FinanceTransaction from '../models/FinanceTransaction.js';
 import FinanceVendor from '../models/FinanceVendor.js';
 import { recordFinanceAuditLog } from './auditLogService.js';
+import { createFinanceRecurringRule, updateFinanceRecurringRule } from './recurringRuleService.js';
 import { createFinanceTransaction, updateFinanceTransaction, FinanceTransactionInput } from './transactionService.js';
 
 type GenericPayload = Record<string, unknown>;
@@ -36,18 +36,9 @@ export async function applyManagementRequest(request: FinanceManagementRequest, 
       }
       case 'recurring_rule': {
         if (request.targetId) {
-          await FinanceRecurringRule.update(payload, {
-            where: { id: request.targetId },
-            transaction,
-          });
+          await updateFinanceRecurringRule(request.targetId, payload, managerId, { transaction });
         } else {
-          await FinanceRecurringRule.create(
-            {
-              ...payload,
-              createdBy: managerId,
-            },
-            { transaction },
-          );
+          await createFinanceRecurringRule(payload, managerId, { transaction });
         }
         break;
       }
@@ -107,4 +98,3 @@ export async function applyManagementRequest(request: FinanceManagementRequest, 
     });
   });
 }
-
