@@ -37,7 +37,10 @@ const receiptEvidenceUpload = multer({
     fileSize: 10 * 1024 * 1024,
     files: 1,
     fields: 4,
-    parts: 5,
+    // Busboy emits its partsLimit event when the configured count is reached,
+    // and Multer treats that event as an error. The valid request has exactly
+    // five parts (four fields plus one photo), so the sentinel must be six.
+    parts: 6,
     fieldNameSize: 64,
     // A valid 2 MB PNG signature expands to roughly 2.7 MB as base64.
     fieldSize: 3 * 1024 * 1024,

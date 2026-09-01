@@ -196,7 +196,6 @@ export const useConfirmStaffPayoutReceipt = () => {
         formData,
         {
           withCredentials: true,
-          headers: { "Content-Type": "multipart/form-data" },
         },
       );
       return response.data;

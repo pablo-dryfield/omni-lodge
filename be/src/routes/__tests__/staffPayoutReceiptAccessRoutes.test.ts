@@ -27,8 +27,19 @@ jest.mock('../../controllers/staffPayoutReceiptAccessController.js', () => ({
     res.status(201).json({ route: 'exchange' }),
   getStaffPayoutReceiptAccess: (_req: unknown, res: { status: (code: number) => { json: (value: unknown) => void } }) =>
     res.status(202).json({ route: 'access' }),
-  confirmStaffPayoutReceiptAccess: (_req: unknown, res: { status: (code: number) => { json: (value: unknown) => void } }) =>
-    res.status(203).json({ route: 'scoped-confirm' }),
+  confirmStaffPayoutReceiptAccess: (
+    req: {
+      body?: Record<string, string>;
+      file?: { fieldname?: string; originalname?: string };
+    },
+    res: { status: (code: number) => { json: (value: unknown) => void } },
+  ) => res.status(203).json({
+    route: 'scoped-confirm',
+    body: req.body,
+    file: req.file
+      ? { fieldname: req.file.fieldname, originalname: req.file.originalname }
+      : null,
+  }),
 }));
 jest.mock('../../controllers/requiredActionController.js', () => {
   const normalController = (_req: unknown, res: { status: (code: number) => { json: (value: unknown) => void } }) =>
@@ -66,6 +77,56 @@ describe('staff payout receipt-only route isolation', () => {
     expect((await request(app).post('/required-actions/staff-payout-receipts/access')).status).toBe(201);
     expect((await request(app).get('/required-actions/staff-payout-receipts/91/access')).status).toBe(202);
     expect((await request(app).post('/required-actions/staff-payout-receipts/91/access/confirm')).status).toBe(203);
+  });
+
+  it('accepts the complete five-part receipt evidence form', async () => {
+    const app = buildApp();
+
+    const response = await request(app)
+      .post('/required-actions/staff-payout-receipts/91/access/confirm')
+      .field('actionId', '101')
+      .field('signature', JSON.stringify({ dataUrl: 'data:image/png;base64,c2ln' }))
+      .field('acknowledgedAmount', '583.33')
+      .field('acknowledgedAt', '2026-09-02T10:00:00.000Z')
+      .attach('photo', Buffer.from('receipt-photo'), {
+        filename: 'receipt.jpg',
+        contentType: 'image/jpeg',
+      });
+
+    expect(response.status).toBe(203);
+    expect(response.body).toMatchObject({
+      route: 'scoped-confirm',
+      body: {
+        actionId: '101',
+        acknowledgedAmount: '583.33',
+        acknowledgedAt: '2026-09-02T10:00:00.000Z',
+      },
+      file: {
+        fieldname: 'photo',
+        originalname: 'receipt.jpg',
+      },
+    });
+  });
+
+  it('continues to reject receipt evidence with an extra field', async () => {
+    const app = buildApp();
+
+    const response = await request(app)
+      .post('/required-actions/staff-payout-receipts/91/access/confirm')
+      .field('actionId', '101')
+      .field('signature', JSON.stringify({ dataUrl: 'data:image/png;base64,c2ln' }))
+      .field('acknowledgedAmount', '583.33')
+      .field('acknowledgedAt', '2026-09-02T10:00:00.000Z')
+      .field('unexpected', 'not-allowed')
+      .attach('photo', Buffer.from('receipt-photo'), {
+        filename: 'receipt.jpg',
+        contentType: 'image/jpeg',
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual([{
+      message: 'Payout receipt evidence has an invalid multipart format.',
+    }]);
   });
 
   it('keeps the active-user action list and original confirm route behind normal auth', async () => {
