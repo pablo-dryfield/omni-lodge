@@ -12,8 +12,8 @@ import {
   Loader,
   Menu,
   Modal,
-  MultiSelect,
   Paper,
+  Progress,
   ScrollArea,
   Select,
   SimpleGrid,
@@ -27,24 +27,29 @@ import {
   Tooltip,
   useMantineTheme,
 } from "@mantine/core";
-import { DateTimePicker } from "@mantine/dates";
+import { DatePickerInput } from "@mantine/dates";
 import { useMediaQuery } from "@mantine/hooks";
 import {
   IconArchive,
   IconArrowRight,
+  IconBrandInstagram,
+  IconBrandTiktok,
   IconCalendar,
   IconCheck,
   IconClock,
   IconDotsVertical,
   IconExternalLink,
+  IconFile,
+  IconFolder,
   IconLayoutKanban,
-  IconLink,
+  IconMovie,
   IconPhoto,
   IconPlus,
   IconRefresh,
   IconSearch,
   IconTrash,
   IconUpload,
+  IconUser,
   IconX,
 } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -52,15 +57,23 @@ import { useSearchParams } from "react-router-dom";
 import { navigateToPage } from "../actions/navigationActions";
 import {
   SOCIAL_MEDIA_CONTENT_STATUSES,
+  type SocialMediaAssetKind,
+  type SocialMediaContentAsset,
   type SocialMediaContentItem,
-  type SocialMediaContentPayload,
   type SocialMediaContentStatus,
   useArchiveSocialMediaContent,
   useCreateSocialMediaContent,
+  useCreateSocialMediaProjectFolder,
+  useDeleteSocialMediaAsset,
+  useMarkSocialMediaReady,
+  usePlanSocialMediaContent,
+  usePublishSocialMediaContent,
   useRemoveSocialMediaThumbnail,
   useSocialMediaContentList,
+  useStartSocialMediaProduction,
   useUpdateSocialMediaContent,
   useUploadSocialMediaThumbnail,
+  useUploadSocialMediaAsset,
 } from "../api/socialMedia";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -68,12 +81,14 @@ import { useModuleAccess } from "../hooks/useModuleAccess";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import {
   buildSocialMediaEditorDraftStorageKey,
-  type SocialMediaBoardUrlState,
-  type SocialMediaEditorDraftValues,
+  canAccessSocialMediaEditor,
+  formatHashtag,
   normalizeHashtags,
   parseSocialMediaBoardUrlState,
   parseStoredSocialMediaEditorDraft,
-  resolveEditorAfterMediaFailure,
+  serializeSocialMediaEditorDraft,
+  toSocialMediaDateOnly,
+  type SocialMediaBoardUrlState,
   writeSocialMediaBoardUrlState,
 } from "../utils/socialMediaBoardState";
 
@@ -95,86 +110,46 @@ const STAGES: StageDefinition[] = [
   { value: "archived", label: "Archived", color: "dark", icon: IconArchive },
 ];
 
-const PLATFORM_OPTIONS = [
-  { value: "instagram", label: "Instagram" },
-  { value: "tiktok", label: "TikTok" },
-  { value: "youtube", label: "YouTube" },
-  { value: "facebook", label: "Facebook" },
-  { value: "x", label: "X" },
-  { value: "linkedin", label: "LinkedIn" },
-];
-
+const ACTIVE_STAGES = STAGES.filter((stage) => stage.value !== "archived");
 const STATUS_OPTIONS = STAGES.map(({ value, label }) => ({ value, label }));
-const TASK_READY_STATUSES = new Set<SocialMediaContentStatus>([
-  "planned",
-  "in_production",
-  "ready",
-  "published",
-]);
 
-const EMPTY_EDITOR_VALUES: SocialMediaEditorDraftValues = {
+type IdeaDraft = {
+  title: string;
+  idea: string;
+  onVideoCaptions: string;
+  platformCaption: string;
+  hashtags: string[];
+};
+
+const EMPTY_IDEA_DRAFT: IdeaDraft = {
   title: "",
   idea: "",
   onVideoCaptions: "",
   platformCaption: "",
   hashtags: [],
-  targetPlatforms: [],
-  status: "idea",
-  scheduledAt: null,
-  publishedAt: null,
-  driveProjectUrl: "",
-  platformLinks: {},
-  thumbnailUrl: "",
 };
 
-const editorKey = (editor: SocialMediaBoardUrlState["editor"]): string | null =>
-  editor === null ? null : String(editor);
+type WorkflowDialog =
+  | { type: "plan"; contentId: number }
+  | { type: "assets"; contentId: number }
+  | { type: "thumbnail"; contentId: number }
+  | { type: "publish"; contentId: number }
+  | null;
 
-const itemToEditorValues = (item: SocialMediaContentItem): SocialMediaEditorDraftValues => ({
+type UploadProgressState = Record<string, number | null>;
+
+const ideaDraftFromItem = (item: SocialMediaContentItem): IdeaDraft => ({
   title: item.title,
   idea: item.idea,
   onVideoCaptions: item.onVideoCaptions,
   platformCaption: item.platformCaption,
-  hashtags: normalizeHashtags(item.hashtags),
-  targetPlatforms: item.targetPlatforms,
-  status: item.status,
-  scheduledAt: item.scheduledAt,
-  publishedAt: item.publishedAt,
-  driveProjectUrl: item.driveProjectUrl ?? "",
-  platformLinks: item.platformLinks ?? {},
-  thumbnailUrl: item.thumbnailUrl ?? "",
+  hashtags: normalizeHashtags(item.hashtags).map(formatHashtag),
 });
 
-const toPayload = (
-  values: SocialMediaEditorDraftValues,
-  thumbnailUrlOverride?: string | null,
-): SocialMediaContentPayload => ({
-  title: values.title.trim(),
-  idea: values.idea.trim(),
-  onVideoCaptions: values.onVideoCaptions.trim(),
-  platformCaption: values.platformCaption.trim(),
-  hashtags: normalizeHashtags(values.hashtags),
-  targetPlatforms: Array.from(new Set(values.targetPlatforms.map((value) => value.trim()).filter(Boolean))),
-  status: values.status,
-  scheduledAt: values.scheduledAt,
-  publishedAt: values.publishedAt,
-  driveProjectUrl: values.driveProjectUrl.trim() || null,
-  platformLinks: Object.entries(values.platformLinks).reduce<Record<string, string>>(
-    (links, [platform, url]) => {
-      const normalizedUrl = url.trim();
-      if (values.targetPlatforms.includes(platform) && normalizedUrl) {
-        links[platform] = normalizedUrl;
-      }
-      return links;
-    },
-    {},
-  ),
-  thumbnailUrl: thumbnailUrlOverride === undefined
-    ? values.thumbnailUrl.trim() || null
-    : thumbnailUrlOverride,
-});
-
-const getErrorMessage = (error: unknown, fallback = "Something went wrong. Please try again."): string => {
+const getErrorMessage = (
+  error: unknown,
+  fallback = "Something went wrong. Please try again.",
+): string => {
   if (error && typeof error === "object") {
     const response = "response" in error
       ? (error as { response?: { data?: { message?: unknown } } }).response
@@ -189,7 +164,19 @@ const getErrorMessage = (error: unknown, fallback = "Something went wrong. Pleas
   return fallback;
 };
 
-const formatDateTime = (value: string | null): string | null => {
+const formatPlannedDate = (value: string | null): string | null => {
+  if (!value) return null;
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  const parsed = new Date(year, month - 1, day);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(parsed);
+};
+
+const formatPublishedDate = (value: string | null): string | null => {
   if (!value) return null;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
@@ -202,14 +189,12 @@ const formatDateTime = (value: string | null): string | null => {
   }).format(parsed);
 };
 
-const toDate = (value: string | null): Date | null => {
+const dateOnlyToPickerValue = (value: string | null): Date | null => {
   if (!value) return null;
-  const parsed = new Date(value);
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  const parsed = new Date(year, month - 1, day);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
-
-const platformLabel = (value: string): string =>
-  PLATFORM_OPTIONS.find((option) => option.value === value.toLowerCase())?.label ?? value;
 
 const isSafeHttpUrl = (value: string | null): boolean => {
   if (!value) return false;
@@ -221,59 +206,114 @@ const isSafeHttpUrl = (value: string | null): boolean => {
   }
 };
 
+const formatFileSize = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = bytes / 1024;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size >= 10 ? size.toFixed(0) : size.toFixed(1)} ${units[index]}`;
+};
+
+const nextActionLabel = (status: SocialMediaContentStatus): string | null => {
+  if (status === "idea") return "Move to Planned";
+  if (status === "planned") return "Start production";
+  if (status === "in_production") return "Upload files & mark ready";
+  if (status === "ready") return "Publish";
+  return null;
+};
+
+const AssetRow = ({
+  asset,
+  disabled,
+  onRemove,
+}: {
+  asset: SocialMediaContentAsset;
+  disabled: boolean;
+  onRemove: () => void;
+}) => (
+  <Paper withBorder radius="md" p="xs">
+    <Group justify="space-between" wrap="nowrap" gap="xs">
+      <Group wrap="nowrap" gap="xs" style={{ minWidth: 0 }}>
+        <ThemeIcon variant="light" color="gray" size="md"><IconFile size={15} /></ThemeIcon>
+        <Box style={{ minWidth: 0 }}>
+          <Text size="sm" fw={650} truncate>{asset.originalName}</Text>
+          <Text size="xs" c="dimmed">{formatFileSize(asset.sizeBytes)}</Text>
+        </Box>
+      </Group>
+      <Group gap={4} wrap="nowrap">
+        {isSafeHttpUrl(asset.webViewUrl) ? (
+          <Tooltip label="Open in Drive">
+            <ActionIcon
+              component="a"
+              href={asset.webViewUrl ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+              variant="subtle"
+              aria-label={`Open ${asset.originalName}`}
+            >
+              <IconExternalLink size={16} />
+            </ActionIcon>
+          </Tooltip>
+        ) : null}
+        <Tooltip label="Remove file">
+          <ActionIcon
+            color="red"
+            variant="subtle"
+            disabled={disabled}
+            onClick={onRemove}
+            aria-label={`Remove ${asset.originalName}`}
+          >
+            <IconTrash size={16} />
+          </ActionIcon>
+        </Tooltip>
+      </Group>
+    </Group>
+  </Paper>
+);
+
 const SocialContentCard = ({
   item,
   canUpdate,
   canDelete,
-  moving,
+  busy,
   onEdit,
-  onMove,
+  onNext,
+  onThumbnail,
   onArchive,
 }: {
   item: SocialMediaContentItem;
   canUpdate: boolean;
   canDelete: boolean;
-  moving: boolean;
+  busy: boolean;
   onEdit: () => void;
-  onMove: (status: SocialMediaContentStatus) => void;
+  onNext: () => void;
+  onThumbnail: () => void;
   onArchive: () => void;
 }) => {
-  const scheduledLabel = formatDateTime(item.scheduledAt);
-  const publishedLabel = item.status === "published" || item.status === "archived"
-    ? formatDateTime(item.publishedAt)
-    : null;
-  const publishedLinks = Object.entries(item.platformLinks ?? {}).filter(([, url]) => isSafeHttpUrl(url));
-  const driveLink = isSafeHttpUrl(item.driveProjectUrl) ? item.driveProjectUrl : null;
+  const plannedLabel = formatPlannedDate(item.scheduledAt);
+  const publishedLabel = formatPublishedDate(item.publishedAt);
   const displayedHashtags = normalizeHashtags(item.hashtags);
+  const publishedLinks = Object.entries(item.platformLinks ?? {})
+    .filter(([, url]) => isSafeHttpUrl(url));
+  const actionLabel = nextActionLabel(item.status);
 
   return (
-    <Paper
-      withBorder
-      radius="lg"
-      p="sm"
-      shadow="xs"
-      style={{ borderColor: "var(--mantine-color-gray-3)", overflow: "hidden" }}
-    >
+    <Paper withBorder radius="lg" p="sm" shadow="xs" style={{ overflow: "hidden" }}>
       <Stack gap="sm">
         {item.thumbnailUrl ? (
-          <Image
-            src={item.thumbnailUrl}
-            alt={`${item.title} thumbnail`}
-            h={142}
-            radius="md"
-            fit="cover"
-            fallbackSrc="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='180'%3E%3Crect width='100%25' height='100%25' fill='%23eef1f4'/%3E%3C/svg%3E"
-          />
+          <Image src={item.thumbnailUrl} alt={`${item.title} thumbnail`} h={140} radius="md" fit="cover" />
         ) : null}
-
         <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
           <Box style={{ minWidth: 0, flex: 1 }}>
             <Text fw={750} lineClamp={2}>{item.title}</Text>
-            {item.idea ? (
-              <Text size="sm" c="dimmed" lineClamp={2} mt={3}>{item.idea}</Text>
-            ) : null}
+            <Text size="sm" c="dimmed" lineClamp={3} mt={3}>{item.idea}</Text>
           </Box>
-          {(canUpdate || canDelete) ? (
+          {canUpdate || (canDelete && item.status !== "archived") ? (
             <Menu position="bottom-end" withinPortal>
               <Menu.Target>
                 <ActionIcon variant="subtle" color="gray" aria-label={`Actions for ${item.title}`}>
@@ -281,7 +321,12 @@ const SocialContentCard = ({
                 </ActionIcon>
               </Menu.Target>
               <Menu.Dropdown>
-                {canUpdate ? <Menu.Item onClick={onEdit}>Edit content</Menu.Item> : null}
+                {canUpdate ? <Menu.Item onClick={onEdit}>Edit idea</Menu.Item> : null}
+                {canUpdate ? (
+                  <Menu.Item leftSection={<IconPhoto size={15} />} onClick={onThumbnail}>
+                    {item.thumbnailUrl ? "Manage thumbnail" : "Add thumbnail"}
+                  </Menu.Item>
+                ) : null}
                 {canDelete && item.status !== "archived" ? (
                   <Menu.Item color="red" leftSection={<IconArchive size={15} />} onClick={onArchive}>
                     Archive
@@ -291,104 +336,84 @@ const SocialContentCard = ({
             </Menu>
           ) : null}
         </Group>
-
-        {item.targetPlatforms.length > 0 ? (
-          <Group gap={5}>
-            {item.targetPlatforms.slice(0, 3).map((platform) => (
-              <Badge key={platform} size="sm" variant="light" color="violet">
-                {platformLabel(platform)}
-              </Badge>
+        <Group gap={5}>
+          <Badge size="sm" variant="light" color="pink" leftSection={<IconBrandInstagram size={12} />}>
+            Instagram
+          </Badge>
+          <Badge size="sm" variant="light" color="dark" leftSection={<IconBrandTiktok size={12} />}>
+            TikTok
+          </Badge>
+        </Group>
+        {displayedHashtags.length > 0 ? (
+          <Text size="xs" c="dimmed" lineClamp={2}>
+            {displayedHashtags.map((tag) => `#${tag}`).join(" ")}
+          </Text>
+        ) : null}
+        <Stack gap={5}>
+          <Group gap={6} wrap="nowrap">
+            <IconUser size={15} color="var(--mantine-color-gray-6)" />
+            <Text size="xs" c="dimmed" truncate>
+              Created by {item.createdByName || "Unknown user"}
+            </Text>
+          </Group>
+          {plannedLabel || publishedLabel ? (
+            <Group gap={6} wrap="nowrap">
+              <IconCalendar size={15} color="var(--mantine-color-gray-6)" />
+              <Text size="xs" c="dimmed" truncate>
+                {publishedLabel ? `Published ${publishedLabel}` : `Planned for ${plannedLabel}`}
+              </Text>
+            </Group>
+          ) : null}
+          {item.status === "in_production" && item.assets.length > 0 ? (
+            <Group gap={5}>
+              <Badge size="xs" color="violet" variant="light">{item.assets.length} file{item.assets.length === 1 ? "" : "s"}</Badge>
+              {item.driveProjectUrl ? <Badge size="xs" color="blue" variant="light">Drive ready</Badge> : null}
+            </Group>
+          ) : null}
+        </Stack>
+        {canUpdate && actionLabel ? (
+          <Button
+            fullWidth
+            loading={busy}
+            color={item.status === "ready" ? "teal" : item.status === "in_production" ? "violet" : "blue"}
+            rightSection={<IconArrowRight size={16} />}
+            onClick={onNext}
+          >
+            {actionLabel}
+          </Button>
+        ) : null}
+        {(publishedLinks.length > 0 || isSafeHttpUrl(item.driveProjectUrl)) ? (
+          <Group grow gap="xs">
+            {publishedLinks.slice(0, 2).map(([platform, url]) => (
+              <Button
+                key={platform}
+                component="a"
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                size="xs"
+                variant="light"
+                leftSection={platform === "instagram" ? <IconBrandInstagram size={14} /> : <IconBrandTiktok size={14} />}
+              >
+                {platform === "instagram" ? "Instagram" : "TikTok"}
+              </Button>
             ))}
-            {item.targetPlatforms.length > 3 ? (
-              <Badge size="sm" variant="light" color="gray">+{item.targetPlatforms.length - 3}</Badge>
+            {isSafeHttpUrl(item.driveProjectUrl) ? (
+              <Button
+                component="a"
+                href={item.driveProjectUrl ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+                size="xs"
+                variant="light"
+                color="gray"
+                leftSection={<IconFolder size={14} />}
+              >
+                Drive
+              </Button>
             ) : null}
           </Group>
         ) : null}
-
-        {displayedHashtags.length > 0 ? (
-          <Text size="xs" c="dimmed" lineClamp={1}>
-            {displayedHashtags.slice(0, 4).map((tag) => `#${tag}`).join(" ")}
-          </Text>
-        ) : null}
-
-        {(scheduledLabel || publishedLabel) ? (
-          <Group gap={6} wrap="nowrap">
-            <IconCalendar size={15} color="var(--mantine-color-gray-6)" />
-            <Text size="xs" c="dimmed" lineClamp={1}>
-              {publishedLabel ? `Published ${publishedLabel}` : `Scheduled ${scheduledLabel}`}
-            </Text>
-          </Group>
-        ) : null}
-
-        <Group justify="space-between" gap="xs" wrap="nowrap">
-          {canUpdate && item.status !== "archived" ? (
-            <Select
-              aria-label={`Move ${item.title}`}
-              size="xs"
-              value={item.status}
-              data={STATUS_OPTIONS.filter((option) => option.value !== "archived")}
-              onChange={(value) => value && onMove(value as SocialMediaContentStatus)}
-              disabled={moving}
-              allowDeselect={false}
-              style={{ flex: 1 }}
-            />
-          ) : (
-            <Box />
-          )}
-          <Group gap={5} wrap="nowrap">
-          {publishedLinks.length === 1 ? (
-            <Tooltip label={`Open on ${platformLabel(publishedLinks[0][0])}`}>
-              <ActionIcon
-                component="a"
-                href={publishedLinks[0][1]}
-                target="_blank"
-                rel="noreferrer"
-                variant="light"
-                aria-label={`Open ${item.title} on ${platformLabel(publishedLinks[0][0])}`}
-              >
-                <IconExternalLink size={17} />
-              </ActionIcon>
-            </Tooltip>
-          ) : publishedLinks.length > 1 ? (
-            <Menu position="bottom-end" withinPortal>
-              <Menu.Target>
-                <ActionIcon variant="light" aria-label={`Open published links for ${item.title}`}>
-                  <IconExternalLink size={17} />
-                </ActionIcon>
-              </Menu.Target>
-              <Menu.Dropdown>
-                {publishedLinks.map(([platform, url]) => (
-                  <Menu.Item
-                    key={platform}
-                    component="a"
-                    href={url}
-                    target="_blank"
-                    rel="noreferrer"
-                    leftSection={<IconExternalLink size={14} />}
-                  >
-                    {platformLabel(platform)}
-                  </Menu.Item>
-                ))}
-              </Menu.Dropdown>
-            </Menu>
-          ) : null}
-          {driveLink ? (
-            <Tooltip label="Open Drive project">
-              <ActionIcon
-                component="a"
-                href={driveLink}
-                target="_blank"
-                rel="noreferrer"
-                variant="light"
-                color="gray"
-                aria-label={`Open Drive project for ${item.title}`}
-              >
-                <IconLink size={17} />
-              </ActionIcon>
-            </Tooltip>
-          ) : null}
-          </Group>
-        </Group>
       </Stack>
     </Paper>
   );
@@ -409,19 +434,28 @@ const SocialMediaContentBoard = () => {
   const createMutation = useCreateSocialMediaContent();
   const updateMutation = useUpdateSocialMediaContent();
   const archiveMutation = useArchiveSocialMediaContent();
+  const planMutation = usePlanSocialMediaContent();
+  const startProductionMutation = useStartSocialMediaProduction();
+  const folderMutation = useCreateSocialMediaProjectFolder();
+  const uploadAssetMutation = useUploadSocialMediaAsset();
+  const deleteAssetMutation = useDeleteSocialMediaAsset();
+  const readyMutation = useMarkSocialMediaReady();
+  const publishMutation = usePublishSocialMediaContent();
   const uploadThumbnailMutation = useUploadSocialMediaThumbnail();
   const removeThumbnailMutation = useRemoveSocialMediaThumbnail();
 
-  const [editorValues, setEditorValues] = useState<SocialMediaEditorDraftValues>(EMPTY_EDITOR_VALUES);
+  const [ideaDraft, setIdeaDraft] = useState<IdeaDraft>(EMPTY_IDEA_DRAFT);
   const [hydratedEditor, setHydratedEditor] = useState<string | null>(null);
-  const [selectedThumbnail, setSelectedThumbnail] = useState<File | null>(null);
-  const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
-  const [removeStoredThumbnail, setRemoveStoredThumbnail] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
-  const [movingId, setMovingId] = useState<number | null>(null);
-  const initialEditorValues = useRef<string>(JSON.stringify(EMPTY_EDITOR_VALUES));
-  const createdRecordAwaitingMedia = useRef<SocialMediaContentItem | null>(null);
-  const partialSaveError = useRef<string | null>(null);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [pageMessage, setPageMessage] = useState<string | null>(null);
+  const [workflowDialog, setWorkflowDialog] = useState<WorkflowDialog>(null);
+  const [plannedDate, setPlannedDate] = useState<Date | null>(null);
+  const [publishLinks, setPublishLinks] = useState({ instagram: "", tiktok: "" });
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState>({});
+  const [mobileStage, setMobileStage] = useState<SocialMediaContentStatus>("idea");
+  const initialIdeaDraft = useRef(JSON.stringify(EMPTY_IDEA_DRAFT));
   const draftStorageKey = useMemo(
     () => buildSocialMediaEditorDraftStorageKey(loggedUserId),
     [loggedUserId],
@@ -436,290 +470,392 @@ const SocialMediaContentBoard = () => {
     setSearchParams(writeSocialMediaBoardUrlState(searchParams, nextState), { replace: true });
   }, [boardState, searchParams, setSearchParams]);
 
+  const showMobileStage = useCallback((status: SocialMediaContentStatus) => {
+    if (!isMobile) return;
+    setMobileStage(status);
+    updateUrlState({ status });
+  }, [isMobile, updateUrlState]);
+
   const allItems = useMemo(() => listQuery.data?.items ?? [], [listQuery.data?.items]);
   const selectedItem = useMemo(() => (
     typeof boardState.editor === "number"
-      ? allItems.find((item) => item.id === boardState.editor)
-        ?? (createdRecordAwaitingMedia.current?.id === boardState.editor
-          ? createdRecordAwaitingMedia.current
-          : null)
+      ? allItems.find((item) => item.id === boardState.editor) ?? null
       : null
   ), [allItems, boardState.editor]);
+  const workflowItem = useMemo(() => (
+    workflowDialog
+      ? allItems.find((item) => item.id === workflowDialog.contentId) ?? null
+      : null
+  ), [allItems, workflowDialog]);
+
+  const editorAuthorized = canAccessSocialMediaEditor(boardState.editor, moduleAccess);
 
   useEffect(() => {
-    const currentKey = editorKey(boardState.editor);
-    if (!currentKey) {
-      createdRecordAwaitingMedia.current = null;
-      partialSaveError.current = null;
+    const editorKey = boardState.editor === null ? null : String(boardState.editor);
+    if (!editorKey) {
       setHydratedEditor(null);
-      setSelectedThumbnail(null);
-      setRemoveStoredThumbnail(false);
       setEditorError(null);
       return;
     }
-    if (hydratedEditor === currentKey) return;
+    if (moduleAccess.ready && !editorAuthorized) {
+      setHydratedEditor(editorKey);
+      setEditorError(null);
+      return;
+    }
+    if (hydratedEditor === editorKey) return;
     if (typeof boardState.editor === "number" && !selectedItem && listQuery.isLoading) return;
-
-    const baseValues = boardState.editor === "new"
-      ? EMPTY_EDITOR_VALUES
+    const base = boardState.editor === "new"
+      ? EMPTY_IDEA_DRAFT
       : selectedItem
-        ? itemToEditorValues(selectedItem)
-        : EMPTY_EDITOR_VALUES;
-    let nextValues = baseValues;
+        ? ideaDraftFromItem(selectedItem)
+        : EMPTY_IDEA_DRAFT;
+    let next = base;
     try {
       const stored = parseStoredSocialMediaEditorDraft(
         window.localStorage.getItem(draftStorageKey),
       );
-      if (stored && String(stored.editor) === currentKey) {
-        nextValues = stored.values;
+      if (stored && String(stored.editor) === editorKey) {
+        next = {
+          title: stored.values.title,
+          idea: stored.values.idea,
+          onVideoCaptions: stored.values.onVideoCaptions,
+          platformCaption: stored.values.platformCaption,
+          hashtags: normalizeHashtags(stored.values.hashtags).map(formatHashtag),
+        };
       }
     } catch {
-      // The editor remains usable when browser storage is unavailable.
+      // Draft persistence must never prevent opening the editor.
     }
-    setEditorValues(nextValues);
-    initialEditorValues.current = JSON.stringify(baseValues);
-    if (createdRecordAwaitingMedia.current?.id !== boardState.editor) {
-      setSelectedThumbnail(null);
-      setRemoveStoredThumbnail(false);
-    }
-    setEditorError(partialSaveError.current ?? (
+    setIdeaDraft(next);
+    initialIdeaDraft.current = JSON.stringify(base);
+    setEditorError(
       typeof boardState.editor === "number" && !selectedItem
-        ? "This content item no longer exists or is unavailable."
-        : null
-    ));
-    setHydratedEditor(currentKey);
-  }, [boardState.editor, draftStorageKey, hydratedEditor, listQuery.isLoading, selectedItem]);
+        ? "This content item is no longer available."
+        : null,
+    );
+    setHydratedEditor(editorKey);
+  }, [
+    boardState.editor,
+    draftStorageKey,
+    editorAuthorized,
+    hydratedEditor,
+    listQuery.isLoading,
+    moduleAccess.ready,
+    selectedItem,
+  ]);
 
   useEffect(() => {
-    if (!selectedThumbnail) {
-      setThumbnailPreview(null);
-      return undefined;
-    }
-    const objectUrl = URL.createObjectURL(selectedThumbnail);
-    setThumbnailPreview(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [selectedThumbnail]);
-
-  useEffect(() => {
-    const currentKey = editorKey(boardState.editor);
-    if (!currentKey || hydratedEditor !== currentKey) return;
+    const editorKey = boardState.editor === null ? null : String(boardState.editor);
+    if (!editorKey || hydratedEditor !== editorKey || !editorAuthorized) return;
     try {
-      window.localStorage.setItem(draftStorageKey, JSON.stringify({
-        version: 1,
-        editor: boardState.editor,
-        values: editorValues,
-        savedAt: new Date().toISOString(),
-      }));
+      window.localStorage.setItem(
+        draftStorageKey,
+        serializeSocialMediaEditorDraft(boardState.editor!, ideaDraft),
+      );
     } catch {
-      // Draft persistence is a convenience and must never block editing.
+      // Local drafts are a convenience only.
     }
-  }, [boardState.editor, draftStorageKey, editorValues, hydratedEditor]);
+  }, [boardState.editor, draftStorageKey, editorAuthorized, hydratedEditor, ideaDraft]);
 
-  const clearStoredDraft = useCallback(() => {
+  useEffect(() => {
+    if (!workflowItem || !workflowDialog) return;
+    setWorkflowError(null);
+    if (workflowDialog.type === "plan") {
+      setPlannedDate(dateOnlyToPickerValue(workflowItem.scheduledAt));
+    }
+    if (workflowDialog.type === "publish") {
+      setPublishLinks({
+        instagram: workflowItem.platformLinks.instagram ?? "",
+        tiktok: workflowItem.platformLinks.tiktok ?? "",
+      });
+    }
+    if (workflowDialog.type === "assets") setUploadProgress({});
+    // Item data refreshes while a dialog is open; reset inputs only when the dialog changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowDialog?.contentId, workflowDialog?.type]);
+
+  const clearDraft = useCallback(() => {
     try {
       window.localStorage.removeItem(draftStorageKey);
     } catch {
-      // Ignore storage failures.
+      // Ignore browser storage errors.
     }
   }, [draftStorageKey]);
 
-  const isEditorDirty = useMemo(
-    () => JSON.stringify(editorValues) !== initialEditorValues.current || Boolean(selectedThumbnail),
-    [editorValues, selectedThumbnail],
+  const editorDirty = useMemo(
+    () => JSON.stringify(ideaDraft) !== initialIdeaDraft.current,
+    [ideaDraft],
   );
 
   const closeEditor = useCallback((force = false) => {
-    if (!force && isEditorDirty && !window.confirm("Discard your unsaved social media changes?")) {
-      return;
-    }
-    clearStoredDraft();
-    createdRecordAwaitingMedia.current = null;
-    partialSaveError.current = null;
+    if (!force && editorDirty && !window.confirm("Discard your unsaved idea changes?")) return;
+    clearDraft();
     updateUrlState({ editor: null });
-  }, [clearStoredDraft, isEditorDirty, updateUrlState]);
+  }, [clearDraft, editorDirty, updateUrlState]);
 
-  const validateThumbnail = (file: File | null) => {
-    if (!file) return;
-    const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-    if (!allowedTypes.includes(file.type)) {
-      setEditorError("Use a JPG, PNG, WebP, or GIF thumbnail.");
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setEditorError("The thumbnail must be 5 MB or smaller.");
-      return;
-    }
-    setEditorError(null);
-    partialSaveError.current = null;
-    setSelectedThumbnail(file);
-    setRemoveStoredThumbnail(false);
-  };
-
-  const saveEditor = async () => {
+  const saveIdea = async () => {
     if (boardState.editor === null) return;
-    if (!editorValues.title.trim()) {
-      setEditorError("Add a title before saving this content.");
-      return;
-    }
-    if (!editorValues.idea.trim()) {
-      setEditorError("Add an idea or brief before saving this content.");
-      return;
-    }
-    if (TASK_READY_STATUSES.has(editorValues.status)) {
-      const missing = [
-        !editorValues.onVideoCaptions.trim() ? "on-video captions" : null,
-        !editorValues.platformCaption.trim() ? "platform caption" : null,
-        normalizeHashtags(editorValues.hashtags).length === 0 ? "hashtags" : null,
-        editorValues.targetPlatforms.length === 0 ? "target platforms" : null,
-      ].filter(Boolean);
-      if (missing.length > 0) {
-        setEditorError(`Complete ${missing.join(", ")} before moving this content to ${editorValues.status.replace("_", " ")}.`);
-        return;
-      }
-    }
-    if (
-      editorValues.status === "published"
-      && !Object.entries(editorValues.platformLinks).some(
-        ([platform, url]) => editorValues.targetPlatforms.includes(platform) && url.trim(),
-      )
-    ) {
-      setEditorError("Add a published URL for at least one target platform before publishing.");
-      return;
-    }
-    if (boardState.editor !== "new" && !selectedItem) {
-      setEditorError("This content item cannot be updated because it is unavailable.");
-      return;
-    }
-    setEditorError(null);
-    partialSaveError.current = null;
-    let savedRecord: SocialMediaContentItem | null = null;
-    let thumbnailChangeStarted = false;
-    try {
-      const existingThumbnail = selectedItem?.thumbnailUrl ?? null;
-      const payload = toPayload(
-        editorValues,
-        removeStoredThumbnail && existingThumbnail ? existingThumbnail : undefined,
+    if (!editorAuthorized) {
+      setEditorError(
+        boardState.editor === "new"
+          ? "You do not have permission to create Social Media ideas."
+          : "You do not have permission to edit Social Media ideas.",
       );
-      const saved = boardState.editor === "new"
-        ? await createMutation.mutateAsync(payload)
-        : await updateMutation.mutateAsync({ id: boardState.editor as number, changes: payload });
-      savedRecord = saved;
-      if (boardState.editor === "new") {
-        createdRecordAwaitingMedia.current = saved;
-      }
-
-      if (removeStoredThumbnail && existingThumbnail) {
-        thumbnailChangeStarted = true;
-        await removeThumbnailMutation.mutateAsync(saved.id);
-      }
-      if (selectedThumbnail) {
-        thumbnailChangeStarted = true;
-        await uploadThumbnailMutation.mutateAsync({ id: saved.id, file: selectedThumbnail });
-      }
-      clearStoredDraft();
-      createdRecordAwaitingMedia.current = null;
-      partialSaveError.current = null;
+      return;
+    }
+    if (!ideaDraft.title.trim()) {
+      setEditorError("Add a title before saving the idea.");
+      return;
+    }
+    if (!ideaDraft.idea.trim()) {
+      setEditorError("Add the idea or brief before saving.");
+      return;
+    }
+    const payload = {
+      title: ideaDraft.title.trim(),
+      idea: ideaDraft.idea.trim(),
+      onVideoCaptions: ideaDraft.onVideoCaptions.trim(),
+      platformCaption: ideaDraft.platformCaption.trim(),
+      hashtags: normalizeHashtags(ideaDraft.hashtags),
+    };
+    try {
+      setEditorError(null);
+      if (boardState.editor === "new") await createMutation.mutateAsync(payload);
+      else await updateMutation.mutateAsync({ id: boardState.editor, changes: payload });
+      clearDraft();
       closeEditor(true);
     } catch (error) {
-      if (savedRecord && thumbnailChangeStarted) {
-        updateUrlState({
-          editor: resolveEditorAfterMediaFailure(boardState.editor, savedRecord.id),
-        });
-        const detail = getErrorMessage(error, "");
-        const message = `The content record was saved, but its thumbnail change failed. Retry Save changes to finish the thumbnail without creating another record.${detail ? ` ${detail}` : ""}`;
-        partialSaveError.current = message;
-        setEditorError(message);
-      } else {
-        setEditorError(getErrorMessage(error, "Unable to save this content."));
-      }
+      setEditorError(getErrorMessage(error, "Unable to save this idea."));
     }
   };
 
-  const handleArchive = async (item: SocialMediaContentItem, fromEditor = false) => {
+  const handleArchive = async (item: SocialMediaContentItem) => {
     if (!window.confirm(`Archive "${item.title}"?`)) return;
     try {
+      setBusyId(item.id);
       await archiveMutation.mutateAsync(item.id);
-      if (fromEditor) {
-        clearStoredDraft();
-        closeEditor(true);
-      }
     } catch (error) {
-      setEditorError(getErrorMessage(error, "Unable to archive this content."));
+      setPageMessage(null);
+      setWorkflowError(getErrorMessage(error, "Unable to archive this content."));
+    } finally {
+      setBusyId(null);
     }
   };
 
-  const handleMove = async (item: SocialMediaContentItem, status: SocialMediaContentStatus) => {
-    if (status === item.status) return;
-    setMovingId(item.id);
+  const handleNext = async (item: SocialMediaContentItem) => {
+    setWorkflowError(null);
+    if (item.status === "idea") {
+      setWorkflowDialog({ type: "plan", contentId: item.id });
+      return;
+    }
+    if (item.status === "in_production") {
+      setWorkflowDialog({ type: "assets", contentId: item.id });
+      return;
+    }
+    if (item.status === "ready") {
+      setWorkflowDialog({ type: "publish", contentId: item.id });
+      return;
+    }
+    if (item.status !== "planned") return;
     try {
-      await updateMutation.mutateAsync({
-        id: item.id,
-        changes: {
-          status,
-          ...(status === "published" && !item.publishedAt
-            ? { publishedAt: new Date().toISOString() }
-            : {}),
+      setBusyId(item.id);
+      await startProductionMutation.mutateAsync(item.id);
+      showMobileStage("in_production");
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to start production."));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const submitPlan = async () => {
+    if (!workflowItem) return;
+    const scheduledDate = toSocialMediaDateOnly(plannedDate);
+    if (!scheduledDate) {
+      setWorkflowError("Choose the date when this content is planned.");
+      return;
+    }
+    try {
+      setBusyId(workflowItem.id);
+      setWorkflowError(null);
+      await planMutation.mutateAsync({ id: workflowItem.id, scheduledDate });
+      setWorkflowDialog(null);
+      showMobileStage("planned");
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to plan this idea."));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const createProjectFolder = async () => {
+    if (!workflowItem) return;
+    try {
+      setBusyId(workflowItem.id);
+      setWorkflowError(null);
+      await folderMutation.mutateAsync(workflowItem.id);
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to create the Drive folder."));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const uploadFiles = async (kind: SocialMediaAssetKind, files: File[]) => {
+    if (!workflowItem || files.length === 0) return;
+    setWorkflowError(null);
+    for (const file of files) {
+      const key = `${kind}:${file.name}:${file.lastModified}`;
+      try {
+        setUploadProgress((current) => ({ ...current, [key]: 0 }));
+        await uploadAssetMutation.mutateAsync({
+          id: workflowItem.id,
+          assetType: kind,
+          file,
+          onProgress: ({ percent }) => setUploadProgress((current) => ({ ...current, [key]: percent })),
+        });
+        setUploadProgress((current) => {
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+      } catch (error) {
+        setWorkflowError(getErrorMessage(error, `Unable to upload ${file.name}.`));
+        setUploadProgress((current) => {
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+        break;
+      }
+    }
+  };
+
+  const removeAsset = async (asset: SocialMediaContentAsset) => {
+    if (!workflowItem || !window.confirm(`Remove "${asset.originalName}" from this project?`)) return;
+    try {
+      setWorkflowError(null);
+      await deleteAssetMutation.mutateAsync({ id: workflowItem.id, assetId: asset.id });
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to remove this file."));
+    }
+  };
+
+  const uploadThumbnail = async (file: File) => {
+    if (!workflowItem) return;
+    try {
+      setWorkflowError(null);
+      await uploadThumbnailMutation.mutateAsync({ id: workflowItem.id, file });
+      setPageMessage("Thumbnail updated.");
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to upload this thumbnail."));
+    }
+  };
+
+  const removeThumbnail = async () => {
+    if (!workflowItem || !workflowItem.thumbnailUrl) return;
+    if (!window.confirm(`Remove the thumbnail from "${workflowItem.title}"?`)) return;
+    try {
+      setWorkflowError(null);
+      await removeThumbnailMutation.mutateAsync(workflowItem.id);
+      setPageMessage("Thumbnail removed.");
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to remove this thumbnail."));
+    }
+  };
+
+  const markReady = async () => {
+    if (!workflowItem) return;
+    try {
+      setBusyId(workflowItem.id);
+      setWorkflowError(null);
+      await readyMutation.mutateAsync(workflowItem.id);
+      setWorkflowDialog(null);
+      showMobileStage("ready");
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to mark this content ready."));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const publish = async () => {
+    if (!workflowItem) return;
+    if (!publishLinks.instagram.trim() || !publishLinks.tiktok.trim()) {
+      setWorkflowError("Add both the Instagram and TikTok links.");
+      return;
+    }
+    try {
+      setBusyId(workflowItem.id);
+      setWorkflowError(null);
+      const result = await publishMutation.mutateAsync({
+        id: workflowItem.id,
+        platformLinks: {
+          instagram: publishLinks.instagram.trim(),
+          tiktok: publishLinks.tiktok.trim(),
         },
       });
+      setWorkflowDialog(null);
+      setPageMessage(
+        result.taskCompletion
+          ? `Published and completed Task Planner task #${result.taskCompletion.taskLogId}.`
+          : "Published successfully.",
+      );
+      showMobileStage("published");
     } catch (error) {
-      setEditorError(getErrorMessage(error, "Unable to move this content."));
+      setWorkflowError(getErrorMessage(error, "Unable to publish this content."));
     } finally {
-      setMovingId(null);
+      setBusyId(null);
     }
   };
 
   const filteredItems = useMemo(() => {
     const search = boardState.search.trim().toLowerCase();
-    const platform = boardState.platform.trim().toLowerCase();
     return allItems.filter((item) => {
       if (boardState.status !== "all" && item.status !== boardState.status) return false;
       if (boardState.status === "all" && item.status === "archived") return false;
-      if (platform && !item.targetPlatforms.some((value) => value.toLowerCase() === platform)) return false;
       if (!search) return true;
-      const haystack = [
+      return [
         item.title,
         item.idea,
         item.onVideoCaptions,
         item.platformCaption,
+        item.createdByName ?? "",
         ...item.hashtags,
-        ...item.targetPlatforms,
-      ].join(" ").toLowerCase();
-      return haystack.includes(search);
-    }).sort((left, right) => {
-      const leftDate = left.scheduledAt ?? left.publishedAt ?? left.updatedAt;
-      const rightDate = right.scheduledAt ?? right.publishedAt ?? right.updatedAt;
-      return new Date(leftDate).getTime() - new Date(rightDate).getTime();
+      ].join(" ").toLowerCase().includes(search);
     });
-  }, [allItems, boardState.platform, boardState.search, boardState.status]);
+  }, [allItems, boardState.search, boardState.status]);
 
   const visibleStages = useMemo(() => {
-    if (boardState.status !== "all") {
-      return STAGES.filter((stage) => stage.value === boardState.status);
-    }
-    return STAGES.filter((stage) => stage.value !== "archived");
-  }, [boardState.status]);
+    if (boardState.status !== "all") return STAGES.filter((stage) => stage.value === boardState.status);
+    if (isMobile) return ACTIVE_STAGES.filter((stage) => stage.value === mobileStage);
+    return ACTIVE_STAGES;
+  }, [boardState.status, isMobile, mobileStage]);
 
   const statusCounts = useMemo(() => SOCIAL_MEDIA_CONTENT_STATUSES.reduce((counts, status) => {
     counts[status] = allItems.filter((item) => item.status === status).length;
     return counts;
   }, {} as Record<SocialMediaContentStatus, number>), [allItems]);
 
-  const isSaving = createMutation.isPending
-    || updateMutation.isPending
-    || uploadThumbnailMutation.isPending
-    || removeThumbnailMutation.isPending;
-  const activeCount = allItems.length - statusCounts.archived;
-  const upcomingCount = statusCounts.planned + statusCounts.in_production + statusCounts.ready;
-  const previewUrl = thumbnailPreview
-    || (!removeStoredThumbnail ? editorValues.thumbnailUrl.trim() : "")
-    || null;
+  const assetGroups = useMemo(() => {
+    const assets = workflowItem?.assets ?? [];
+    return {
+      final_video: assets.filter((asset) => asset.kind === "final_video"),
+      raw_material: assets.filter((asset) => asset.kind === "raw_material"),
+      project_file: assets.filter((asset) => asset.kind === "project_file"),
+    };
+  }, [workflowItem?.assets]);
+  const hasEveryRequiredAsset = assetGroups.final_video.length > 0
+    && assetGroups.raw_material.length > 0
+    && assetGroups.project_file.length > 0;
+  const uploadInProgress = Object.keys(uploadProgress).length > 0 || uploadAssetMutation.isPending;
+  const thumbnailPending = uploadThumbnailMutation.isPending || removeThumbnailMutation.isPending;
+  const savingIdea = createMutation.isPending || updateMutation.isPending;
 
   const pageContent = !moduleAccess.ready || moduleAccess.loading ? (
     <Center mih={320}><Loader variant="dots" /></Center>
   ) : !moduleAccess.canView ? (
-    <Alert color="yellow" title="No access">
-      You do not have permission to view social media content.
-    </Alert>
+    <Alert color="yellow" title="No access">You do not have permission to view Social Media content.</Alert>
   ) : (
     <Stack gap="lg" p={{ base: "sm", sm: "lg" }}>
       <Paper
@@ -738,7 +874,7 @@ const SocialMediaContentBoard = () => {
             </ThemeIcon>
             <Box>
               <Title order={isMobile ? 2 : 1} c="white">Social Media</Title>
-              <Text c="rgba(255,255,255,.76)" size="sm">Plan every idea from brief to published post.</Text>
+              <Text c="rgba(255,255,255,.76)" size="sm">Ideas, production files, and publishing in one flow.</Text>
             </Box>
           </Group>
           {moduleAccess.canCreate ? (
@@ -750,7 +886,7 @@ const SocialMediaContentBoard = () => {
               fullWidth={Boolean(isMobile)}
               style={{ flexBasis: isMobile ? "100%" : "auto" }}
             >
-              New content
+              New idea
             </Button>
           ) : null}
         </Group>
@@ -758,10 +894,10 @@ const SocialMediaContentBoard = () => {
 
       <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
         {[
-          { label: "Active", value: activeCount, color: "blue" },
-          { label: "In the pipeline", value: upcomingCount, color: "violet" },
-          { label: "Published", value: statusCounts.published, color: "teal" },
           { label: "Ideas", value: statusCounts.idea, color: "gray" },
+          { label: "Planned", value: statusCounts.planned, color: "blue" },
+          { label: "In production", value: statusCounts.in_production, color: "violet" },
+          { label: "Ready", value: statusCounts.ready, color: "orange" },
         ].map((metric) => (
           <Paper key={metric.label} withBorder radius="lg" p="md" ta="center">
             <Text size="xs" tt="uppercase" fw={700} c="dimmed">{metric.label}</Text>
@@ -771,10 +907,10 @@ const SocialMediaContentBoard = () => {
       </SimpleGrid>
 
       <Paper withBorder radius="lg" p="md">
-        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
           <TextInput
             aria-label="Search social content"
-            placeholder="Search ideas, captions, or hashtags"
+            placeholder="Search ideas, captions, hashtags, or creator"
             leftSection={<IconSearch size={17} />}
             value={boardState.search}
             onChange={(event) => updateUrlState({ search: event.currentTarget.value })}
@@ -784,36 +920,44 @@ const SocialMediaContentBoard = () => {
               </ActionIcon>
             ) : null}
           />
-          <Select
-            aria-label="Filter by status"
-            value={boardState.status}
-            onChange={(value) => updateUrlState({ status: (value || "all") as SocialMediaBoardUrlState["status"] })}
-            data={[{ value: "all", label: "All active stages" }, ...STATUS_OPTIONS]}
-            allowDeselect={false}
-          />
-          <Select
-            aria-label="Filter by platform"
-            placeholder="All platforms"
-            value={boardState.platform || null}
-            onChange={(value) => updateUrlState({ platform: value ?? "" })}
-            data={PLATFORM_OPTIONS}
-            clearable
-          />
+          {isMobile ? (
+            <Select
+              aria-label="Board stage"
+              value={boardState.status === "all" ? mobileStage : boardState.status}
+              onChange={(value) => {
+                if (!value) return;
+                const stage = value as SocialMediaContentStatus;
+                setMobileStage(stage);
+                updateUrlState({ status: stage });
+              }}
+              data={STATUS_OPTIONS}
+              allowDeselect={false}
+            />
+          ) : (
+            <Select
+              aria-label="Filter by stage"
+              value={boardState.status}
+              onChange={(value) => updateUrlState({ status: (value || "all") as SocialMediaBoardUrlState["status"] })}
+              data={[{ value: "all", label: "All active stages" }, ...STATUS_OPTIONS]}
+              allowDeselect={false}
+            />
+          )}
         </SimpleGrid>
       </Paper>
 
-      {editorError && boardState.editor === null ? (
-        <Alert color="red" withCloseButton onClose={() => setEditorError(null)}>{editorError}</Alert>
+      {pageMessage ? (
+        <Alert color="green" icon={<IconCheck size={18} />} withCloseButton onClose={() => setPageMessage(null)}>
+          {pageMessage}
+        </Alert>
+      ) : null}
+      {workflowError && workflowDialog === null ? (
+        <Alert color="red" withCloseButton onClose={() => setWorkflowError(null)}>{workflowError}</Alert>
       ) : null}
 
       {listQuery.isLoading ? (
         <Center mih={280}><Loader variant="dots" /></Center>
       ) : listQuery.isError ? (
-        <Alert
-          color="red"
-          title="Content could not be loaded"
-          icon={<IconRefresh size={18} />}
-        >
+        <Alert color="red" title="Content could not be loaded" icon={<IconRefresh size={18} />}>
           <Group justify="space-between" gap="sm">
             <Text size="sm">{getErrorMessage(listQuery.error)}</Text>
             <Button size="xs" variant="light" onClick={() => void listQuery.refetch()}>Try again</Button>
@@ -854,9 +998,10 @@ const SocialMediaContentBoard = () => {
                         item={item}
                         canUpdate={moduleAccess.canUpdate}
                         canDelete={moduleAccess.canDelete}
-                        moving={movingId === item.id}
+                        busy={busyId === item.id}
                         onEdit={() => updateUrlState({ editor: item.id })}
-                        onMove={(status) => void handleMove(item, status)}
+                        onNext={() => void handleNext(item)}
+                        onThumbnail={() => setWorkflowDialog({ type: "thumbnail", contentId: item.id })}
                         onArchive={() => void handleArchive(item)}
                       />
                     )) : (
@@ -877,227 +1022,374 @@ const SocialMediaContentBoard = () => {
 
       <Modal
         opened={boardState.editor !== null}
-        onClose={() => closeEditor()}
-        title={boardState.editor === "new" ? "Create social content" : "Edit social content"}
-        size="min(1120px, 94vw)"
+        onClose={() => editorAuthorized ? closeEditor() : updateUrlState({ editor: null })}
+        title={boardState.editor === "new" ? "Create idea" : "Edit idea"}
+        size="min(720px, 94vw)"
         fullScreen={Boolean(isMobile)}
         centered
-        closeOnClickOutside={!isEditorDirty}
+        closeOnClickOutside={!editorDirty}
         scrollAreaComponent={ScrollArea.Autosize}
         styles={{ title: { fontWeight: 750, fontSize: isMobile ? 18 : 22 } }}
       >
-        {!hydratedEditor || (typeof boardState.editor === "number" && listQuery.isLoading) ? (
-          <Center mih={320}><Loader variant="dots" /></Center>
+        {!editorAuthorized ? (
+          <Stack gap="md">
+            <Alert color="yellow" title="Editor access required">
+              {boardState.editor === "new"
+                ? "You can view this board, but you do not have permission to create Social Media ideas."
+                : "You can view this board, but you do not have permission to edit Social Media ideas."}
+            </Alert>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => updateUrlState({ editor: null })}>Close</Button>
+            </Group>
+          </Stack>
+        ) : !hydratedEditor || (typeof boardState.editor === "number" && listQuery.isLoading) ? (
+          <Center mih={300}><Loader variant="dots" /></Center>
         ) : (
           <Stack gap="md">
             {editorError ? <Alert color="red">{editorError}</Alert> : null}
-            <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-              <Stack gap="sm">
-                <TextInput
-                  label="Title"
-                  placeholder="Give this content a clear working title"
-                  required
-                  value={editorValues.title}
-                  onChange={(event) => setEditorValues((current) => ({ ...current, title: event.currentTarget.value }))}
-                  autoFocus
-                />
-                <Textarea
-                  label="Idea / brief"
-                  placeholder="Describe the hook, shots, people, and outcome"
-                  required
-                  minRows={4}
-                  autosize
-                  maxRows={9}
-                  value={editorValues.idea}
-                  onChange={(event) => setEditorValues((current) => ({ ...current, idea: event.currentTarget.value }))}
-                />
-                <Textarea
-                  label="On-video captions"
-                  placeholder="Text that should appear inside the video"
-                  minRows={3}
-                  autosize
-                  maxRows={8}
-                  value={editorValues.onVideoCaptions}
-                  onChange={(event) => setEditorValues((current) => ({ ...current, onVideoCaptions: event.currentTarget.value }))}
-                />
-                <Textarea
-                  label="Platform caption"
-                  placeholder="Final post caption or working copy"
-                  minRows={4}
-                  autosize
-                  maxRows={10}
-                  value={editorValues.platformCaption}
-                  onChange={(event) => setEditorValues((current) => ({ ...current, platformCaption: event.currentTarget.value }))}
-                />
-                <TagsInput
-                  label="Hashtags"
-                  placeholder="Type a hashtag and press Enter"
-                  value={editorValues.hashtags}
-                  onChange={(hashtags) => setEditorValues((current) => ({ ...current, hashtags }))}
-                  splitChars={[",", " "]}
-                  clearable
-                />
-              </Stack>
-
-              <Stack gap="sm">
-                <MultiSelect
-                  label="Target platforms"
-                  placeholder="Select every destination"
-                  data={PLATFORM_OPTIONS}
-                  searchable
-                  clearable
-                  value={editorValues.targetPlatforms}
-                  onChange={(targetPlatforms) => setEditorValues((current) => ({ ...current, targetPlatforms }))}
-                />
-                <Select
-                  label="Stage"
-                  data={STATUS_OPTIONS}
-                  value={editorValues.status}
-                  allowDeselect={false}
-                  onChange={(value) => value && setEditorValues((current) => ({
-                    ...current,
-                    status: value as SocialMediaContentStatus,
-                    publishedAt: value === "published" && !current.publishedAt
-                      ? new Date().toISOString()
-                      : current.publishedAt,
-                  }))}
-                />
-                <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="sm">
-                  <DateTimePicker
-                    label="Scheduled for"
-                    placeholder="Choose date and time"
-                    value={toDate(editorValues.scheduledAt)}
-                    onChange={(value) => setEditorValues((current) => ({
-                      ...current,
-                      scheduledAt: value ? value.toISOString() : null,
-                    }))}
-                    clearable
-                    valueFormat="DD MMM YYYY, HH:mm"
-                  />
-                  <DateTimePicker
-                    label="Published at"
-                    placeholder="Choose date and time"
-                    value={toDate(editorValues.publishedAt)}
-                    onChange={(value) => setEditorValues((current) => ({
-                      ...current,
-                      publishedAt: value ? value.toISOString() : null,
-                    }))}
-                    clearable
-                    valueFormat="DD MMM YYYY, HH:mm"
-                  />
-                </SimpleGrid>
-                <TextInput
-                  label="Drive project URL"
-                  placeholder="https://drive.google.com/..."
-                  leftSection={<IconLink size={16} />}
-                  value={editorValues.driveProjectUrl}
-                  onChange={(event) => setEditorValues((current) => ({ ...current, driveProjectUrl: event.currentTarget.value }))}
-                />
-                {editorValues.targetPlatforms.map((platform) => (
-                  <TextInput
-                    key={platform}
-                    label={`${platformLabel(platform)} published URL`}
-                    placeholder={`Paste the ${platformLabel(platform)} post URL`}
-                    leftSection={<IconExternalLink size={16} />}
-                    value={editorValues.platformLinks[platform] ?? ""}
-                    onChange={(event) => {
-                      const url = event.currentTarget.value;
-                      setEditorValues((current) => ({
-                        ...current,
-                        platformLinks: { ...current.platformLinks, [platform]: url },
-                      }));
-                    }}
-                  />
-                ))}
-
-                <Divider label="Thumbnail" labelPosition="center" />
-                <Paper withBorder radius="lg" p="sm">
-                  <Stack gap="sm">
-                    {previewUrl ? (
-                      <Image src={previewUrl} alt="Content thumbnail preview" h={210} radius="md" fit="cover" />
-                    ) : (
-                      <Center h={150} bg="gray.0" style={{ borderRadius: 10 }}>
-                        <Stack align="center" gap={5}>
-                          <IconPhoto size={30} color="var(--mantine-color-gray-5)" />
-                          <Text size="sm" c="dimmed">No thumbnail selected</Text>
-                        </Stack>
-                      </Center>
-                    )}
-                    <TextInput
-                      label="External thumbnail URL"
-                      placeholder="https://..."
-                      value={editorValues.thumbnailUrl}
-                      disabled={Boolean(selectedThumbnail)}
-                      onChange={(event) => {
-                        setRemoveStoredThumbnail(false);
-                        setEditorValues((current) => ({ ...current, thumbnailUrl: event.currentTarget.value }));
-                      }}
-                    />
-                    <Group grow={Boolean(isMobile)} gap="xs">
-                      <FileButton
-                        onChange={validateThumbnail}
-                        accept="image/jpeg,image/png,image/webp,image/gif"
-                      >
-                        {(props) => (
-                          <Button {...props} variant="light" leftSection={<IconUpload size={17} />}>
-                            Upload
-                          </Button>
-                        )}
-                      </FileButton>
-                      {previewUrl ? (
-                        <Button
-                          variant="light"
-                          color="red"
-                          leftSection={<IconTrash size={17} />}
-                          onClick={() => {
-                            setSelectedThumbnail(null);
-                            setRemoveStoredThumbnail(Boolean(selectedItem?.thumbnailUrl));
-                            setEditorValues((current) => ({ ...current, thumbnailUrl: "" }));
-                          }}
-                        >
-                          Remove
-                        </Button>
-                      ) : null}
-                    </Group>
-                    <Text size="xs" c="dimmed" ta="center">JPG, PNG, WebP, or GIF - max 5 MB</Text>
-                  </Stack>
-                </Paper>
-              </Stack>
-            </SimpleGrid>
-
+            <TextInput
+              label="Title"
+              placeholder="Working title"
+              required
+              value={ideaDraft.title}
+              onChange={(event) => setIdeaDraft((current) => ({ ...current, title: event.currentTarget.value }))}
+              autoFocus
+            />
+            <Textarea
+              label="Idea"
+              placeholder="Hook, shots, people, and outcome"
+              required
+              minRows={4}
+              autosize
+              maxRows={9}
+              value={ideaDraft.idea}
+              onChange={(event) => setIdeaDraft((current) => ({ ...current, idea: event.currentTarget.value }))}
+            />
+            <Textarea
+              label="On-video captions"
+              placeholder="Text shown inside the video"
+              minRows={3}
+              autosize
+              maxRows={7}
+              value={ideaDraft.onVideoCaptions}
+              onChange={(event) => setIdeaDraft((current) => ({ ...current, onVideoCaptions: event.currentTarget.value }))}
+            />
+            <Textarea
+              label="Platform caption"
+              placeholder="Caption for Instagram and TikTok"
+              minRows={4}
+              autosize
+              maxRows={9}
+              value={ideaDraft.platformCaption}
+              onChange={(event) => setIdeaDraft((current) => ({ ...current, platformCaption: event.currentTarget.value }))}
+            />
+            <TagsInput
+              label="Hashtags"
+              placeholder="Type a hashtag and press Enter"
+              value={ideaDraft.hashtags}
+              onChange={(values) => setIdeaDraft((current) => ({
+                ...current,
+                hashtags: normalizeHashtags(values).map(formatHashtag),
+              }))}
+              splitChars={[",", " "]}
+              clearable
+            />
             <Divider />
-            <Group
-              justify={moduleAccess.canDelete && selectedItem?.status !== "archived" ? "space-between" : "flex-end"}
-              gap="sm"
-              wrap="wrap"
-            >
-              {moduleAccess.canDelete && selectedItem && selectedItem.status !== "archived" ? (
-                <Button
-                  color="red"
-                  variant="subtle"
-                  leftSection={<IconArchive size={17} />}
-                  disabled={isSaving}
-                  fullWidth={Boolean(isMobile)}
-                  onClick={() => void handleArchive(selectedItem, true)}
-                >
-                  Archive
-                </Button>
-              ) : null}
-              <Group grow={Boolean(isMobile)} gap="sm" style={{ width: isMobile ? "100%" : "auto" }}>
-                <Button variant="default" onClick={() => closeEditor()} disabled={isSaving}>Cancel</Button>
-                {(boardState.editor === "new" ? moduleAccess.canCreate : moduleAccess.canUpdate) ? (
-                  <Button
-                    onClick={() => void saveEditor()}
-                    loading={isSaving}
-                    rightSection={<IconArrowRight size={17} />}
-                  >
-                    {boardState.editor === "new" ? "Create content" : "Save changes"}
-                  </Button>
-                ) : null}
-              </Group>
+            <Group justify="flex-end" grow={Boolean(isMobile)}>
+              <Button variant="default" onClick={() => closeEditor()} disabled={savingIdea}>Cancel</Button>
+              <Button onClick={() => void saveIdea()} loading={savingIdea}>
+                {boardState.editor === "new" ? "Create idea" : "Save changes"}
+              </Button>
             </Group>
           </Stack>
         )}
+      </Modal>
+
+      <Modal
+        opened={workflowDialog?.type === "thumbnail"}
+        onClose={() => !thumbnailPending && setWorkflowDialog(null)}
+        title="Thumbnail"
+        size="min(720px, 94vw)"
+        fullScreen={Boolean(isMobile)}
+        centered
+        closeOnClickOutside={!thumbnailPending}
+      >
+        {!workflowItem ? (
+          <Center mih={260}><Loader variant="dots" /></Center>
+        ) : (
+          <Stack gap="lg">
+            {workflowError ? <Alert color="red">{workflowError}</Alert> : null}
+            <Paper
+              withBorder
+              radius="lg"
+              p="sm"
+              bg="gray.0"
+              mih={220}
+              style={{ display: "grid", placeItems: "center", overflow: "hidden" }}
+            >
+              {workflowItem.thumbnailUrl ? (
+                <Image
+                  src={workflowItem.thumbnailUrl}
+                  alt={`${workflowItem.title} thumbnail`}
+                  fit="contain"
+                  mah={isMobile ? "55vh" : 420}
+                  radius="md"
+                />
+              ) : (
+                <Stack align="center" gap="xs" c="dimmed">
+                  <ThemeIcon size={54} radius="xl" color="gray" variant="light">
+                    <IconPhoto size={28} />
+                  </ThemeIcon>
+                  <Text size="sm">No thumbnail yet</Text>
+                </Stack>
+              )}
+            </Paper>
+            <Group justify="center" grow={Boolean(isMobile)}>
+              <FileButton
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                onChange={(file) => file && void uploadThumbnail(file)}
+              >
+                {(props) => (
+                  <Button
+                    {...props}
+                    loading={uploadThumbnailMutation.isPending}
+                    disabled={removeThumbnailMutation.isPending}
+                    leftSection={<IconUpload size={17} />}
+                  >
+                    {workflowItem.thumbnailUrl ? "Replace thumbnail" : "Upload thumbnail"}
+                  </Button>
+                )}
+              </FileButton>
+              {workflowItem.thumbnailUrl ? (
+                <Button
+                  color="red"
+                  variant="light"
+                  loading={removeThumbnailMutation.isPending}
+                  disabled={uploadThumbnailMutation.isPending}
+                  leftSection={<IconTrash size={17} />}
+                  onClick={() => void removeThumbnail()}
+                >
+                  Remove
+                </Button>
+              ) : null}
+            </Group>
+            <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={thumbnailPending}>
+              Done
+            </Button>
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={workflowDialog?.type === "plan"}
+        onClose={() => !planMutation.isPending && setWorkflowDialog(null)}
+        title="Move to Planned"
+        size="min(560px, 94vw)"
+        fullScreen={Boolean(isMobile)}
+        centered
+      >
+        <Stack gap="lg">
+          {workflowError ? <Alert color="red">{workflowError}</Alert> : null}
+          <DatePickerInput
+            label="Planned date"
+            placeholder="Choose a date"
+            value={plannedDate}
+            onChange={setPlannedDate}
+            valueFormat="DD MMM YYYY"
+            required
+            clearable
+            size="md"
+          />
+          <Group justify="flex-end" grow={Boolean(isMobile)}>
+            <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={planMutation.isPending}>Cancel</Button>
+            <Button onClick={() => void submitPlan()} loading={planMutation.isPending}>Move to Planned</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={workflowDialog?.type === "assets"}
+        onClose={() => !uploadInProgress && setWorkflowDialog(null)}
+        title="Production files"
+        size="min(920px, 96vw)"
+        fullScreen={Boolean(isMobile)}
+        centered
+        closeOnClickOutside={!uploadInProgress}
+        scrollAreaComponent={ScrollArea.Autosize}
+      >
+        <Stack gap="lg">
+          {workflowError ? <Alert color="red">{workflowError}</Alert> : null}
+          {!workflowItem ? (
+            <Center mih={180}><Loader variant="dots" /></Center>
+          ) : (
+            <>
+              <Paper withBorder radius="lg" p="md">
+                <Group justify="space-between" align="center" gap="sm" wrap="wrap">
+                  <Group gap="sm" wrap="nowrap">
+                    <ThemeIcon color={workflowItem.driveProjectUrl ? "green" : "blue"} variant="light" size="lg">
+                      <IconFolder size={20} />
+                    </ThemeIcon>
+                    <Box>
+                      <Text fw={700}>Drive project folder</Text>
+                      <Text size="xs" c="dimmed">
+                        {workflowItem.driveProjectUrl ? "Folder ready" : "Create it before uploading files"}
+                      </Text>
+                    </Box>
+                  </Group>
+                  {workflowItem.driveProjectUrl ? (
+                    <Button
+                      component="a"
+                      href={workflowItem.driveProjectUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      variant="light"
+                      leftSection={<IconExternalLink size={16} />}
+                    >
+                      Open folder
+                    </Button>
+                  ) : (
+                    <Button
+                      onClick={() => void createProjectFolder()}
+                      loading={folderMutation.isPending}
+                      leftSection={<IconPlus size={16} />}
+                    >
+                      Create folder
+                    </Button>
+                  )}
+                </Group>
+              </Paper>
+
+              {workflowItem.driveProjectUrl ? (
+                <SimpleGrid cols={{ base: 1, md: 3 }} spacing="md">
+                  <Paper withBorder radius="lg" p="md">
+                    <Stack gap="sm">
+                      <Group justify="space-between">
+                        <Text fw={750}>Final video</Text>
+                        <Badge color={assetGroups.final_video.length ? "green" : "red"} variant="light">
+                          {assetGroups.final_video.length ? "Ready" : "Required"}
+                        </Badge>
+                      </Group>
+                      {assetGroups.final_video.map((asset) => (
+                        <AssetRow key={asset.id} asset={asset} disabled={deleteAssetMutation.isPending} onRemove={() => void removeAsset(asset)} />
+                      ))}
+                      {assetGroups.final_video.length === 0 ? (
+                        <FileButton accept="video/*,.mkv,.avi" onChange={(file) => file && void uploadFiles("final_video", [file])}>
+                          {(props) => (
+                            <Button {...props} variant="light" leftSection={<IconMovie size={16} />} disabled={uploadInProgress}>
+                              Upload video
+                            </Button>
+                          )}
+                        </FileButton>
+                      ) : null}
+                    </Stack>
+                  </Paper>
+
+                  <Paper withBorder radius="lg" p="md">
+                    <Stack gap="sm">
+                      <Group justify="space-between">
+                        <Text fw={750}>Raw material</Text>
+                        <Badge color={assetGroups.raw_material.length ? "green" : "red"} variant="light">
+                          {assetGroups.raw_material.length || "Required"}
+                        </Badge>
+                      </Group>
+                      {assetGroups.raw_material.map((asset) => (
+                        <AssetRow key={asset.id} asset={asset} disabled={deleteAssetMutation.isPending} onRemove={() => void removeAsset(asset)} />
+                      ))}
+                      <FileButton multiple onChange={(files) => files && void uploadFiles("raw_material", files)}>
+                        {(props) => (
+                          <Button {...props} variant="light" leftSection={<IconUpload size={16} />} disabled={uploadInProgress}>
+                            Add files
+                          </Button>
+                        )}
+                      </FileButton>
+                    </Stack>
+                  </Paper>
+
+                  <Paper withBorder radius="lg" p="md">
+                    <Stack gap="sm">
+                      <Group justify="space-between">
+                        <Text fw={750}>Project files</Text>
+                        <Badge color={assetGroups.project_file.length ? "green" : "red"} variant="light">
+                          {assetGroups.project_file.length || "Required"}
+                        </Badge>
+                      </Group>
+                      {assetGroups.project_file.map((asset) => (
+                        <AssetRow key={asset.id} asset={asset} disabled={deleteAssetMutation.isPending} onRemove={() => void removeAsset(asset)} />
+                      ))}
+                      <FileButton multiple onChange={(files) => files && void uploadFiles("project_file", files)}>
+                        {(props) => (
+                          <Button {...props} variant="light" leftSection={<IconUpload size={16} />} disabled={uploadInProgress}>
+                            Add files
+                          </Button>
+                        )}
+                      </FileButton>
+                    </Stack>
+                  </Paper>
+                </SimpleGrid>
+              ) : null}
+
+              {Object.entries(uploadProgress).map(([key, percent]) => (
+                <Box key={key}>
+                  <Group justify="space-between" mb={4} wrap="nowrap">
+                    <Text size="xs" truncate>{key.split(":")[1]}</Text>
+                    <Text size="xs" c="dimmed">{percent == null ? "Uploading…" : `${percent}%`}</Text>
+                  </Group>
+                  <Progress value={percent ?? 100} animated={percent == null} />
+                </Box>
+              ))}
+
+              <Divider />
+              <Group justify="flex-end" grow={Boolean(isMobile)}>
+                <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={uploadInProgress}>Close</Button>
+                <Button
+                  color="violet"
+                  leftSection={<IconCheck size={17} />}
+                  disabled={!workflowItem.driveProjectUrl || !hasEveryRequiredAsset || uploadInProgress}
+                  loading={readyMutation.isPending}
+                  onClick={() => void markReady()}
+                >
+                  Mark ready
+                </Button>
+              </Group>
+            </>
+          )}
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={workflowDialog?.type === "publish"}
+        onClose={() => !publishMutation.isPending && setWorkflowDialog(null)}
+        title="Publish content"
+        size="min(620px, 94vw)"
+        fullScreen={Boolean(isMobile)}
+        centered
+      >
+        <Stack gap="lg">
+          {workflowError ? <Alert color="red">{workflowError}</Alert> : null}
+          <TextInput
+            label="Instagram link"
+            placeholder="https://www.instagram.com/reel/..."
+            leftSection={<IconBrandInstagram size={17} />}
+            value={publishLinks.instagram}
+            onChange={(event) => setPublishLinks((current) => ({ ...current, instagram: event.currentTarget.value }))}
+            required
+          />
+          <TextInput
+            label="TikTok link"
+            placeholder="https://www.tiktok.com/@.../video/..."
+            leftSection={<IconBrandTiktok size={17} />}
+            value={publishLinks.tiktok}
+            onChange={(event) => setPublishLinks((current) => ({ ...current, tiktok: event.currentTarget.value }))}
+            required
+          />
+          <Text size="sm" c="dimmed" ta="center">
+            The publish time is recorded automatically. Your matching Task Planner task will be completed with these links and the project notes.
+          </Text>
+          <Group justify="flex-end" grow={Boolean(isMobile)}>
+            <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={publishMutation.isPending}>Cancel</Button>
+            <Button color="teal" onClick={() => void publish()} loading={publishMutation.isPending}>Publish</Button>
+          </Group>
+        </Stack>
       </Modal>
     </Stack>
   );

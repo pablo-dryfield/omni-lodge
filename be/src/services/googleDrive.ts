@@ -30,7 +30,7 @@ const resolveCredentials = (): { clientId: string; clientSecret: string; refresh
   return { clientId, clientSecret, refreshToken };
 };
 
-const buildOauthClient = (): OAuth2Client => {
+export const getDriveAuthClient = (): OAuth2Client => {
   const { clientId, clientSecret, refreshToken } = resolveCredentials();
   const client = new google.auth.OAuth2(clientId, clientSecret);
   client.setCredentials({ refresh_token: refreshToken });
@@ -38,7 +38,7 @@ const buildOauthClient = (): OAuth2Client => {
 };
 
 export async function getDriveClient(): Promise<drive_v3.Drive> {
-  const oauthClient = buildOauthClient();
+  const oauthClient = getDriveAuthClient();
   return google.drive({ version: 'v3', auth: oauthClient });
 }
 

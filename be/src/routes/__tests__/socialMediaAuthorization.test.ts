@@ -44,12 +44,38 @@ jest.mock('../../controllers/socialMediaContentController.js', () => {
   };
 });
 
+jest.mock('../../controllers/socialMediaWorkflowController.js', () => {
+  const respond = jest.fn((_req: AuthenticatedRequest, res: Response) => res.status(204).send());
+  return {
+    createSocialMediaProjectFolder: jest.fn(respond),
+    finalizeSocialMediaAssetUpload: jest.fn(respond),
+    initiateSocialMediaAssetUpload: jest.fn(respond),
+    markSocialMediaReady: jest.fn(respond),
+    planSocialMediaContent: jest.fn(respond),
+    publishSocialMediaContent: jest.fn(respond),
+    removeSocialMediaAsset: jest.fn(respond),
+    startSocialMediaProduction: jest.fn(respond),
+    uploadSocialMediaAsset: jest.fn(respond),
+  };
+});
+
 import {
   createSocialMediaContent,
   listSelectableSocialMediaContent,
   listSocialMediaContent,
   updateSocialMediaContent,
 } from '../../controllers/socialMediaContentController';
+import {
+  createSocialMediaProjectFolder,
+  finalizeSocialMediaAssetUpload,
+  initiateSocialMediaAssetUpload,
+  markSocialMediaReady,
+  planSocialMediaContent,
+  publishSocialMediaContent,
+  removeSocialMediaAsset,
+  startSocialMediaProduction,
+  uploadSocialMediaAsset,
+} from '../../controllers/socialMediaWorkflowController';
 import socialMediaRoutes from '../socialMediaRoutes';
 
 const buildApp = () => {
@@ -110,5 +136,62 @@ describe('Social Media route authorization', () => {
     expect(updateAllowed.status).toBe(204);
     expect(createSocialMediaContent).toHaveBeenCalledTimes(1);
     expect(updateSocialMediaContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires update permission for every production workflow endpoint', async () => {
+    const app = buildApp();
+    const forbidden = await Promise.all([
+      request(app).post('/api/social-media/content/41/plan'),
+      request(app).post('/api/social-media/content/41/start-production'),
+      request(app).post('/api/social-media/content/41/project-folder'),
+      request(app).post('/api/social-media/content/41/assets/resumable-session'),
+      request(app).post('/api/social-media/content/41/assets/resumable-complete'),
+      request(app).post('/api/social-media/content/41/assets'),
+      request(app).delete('/api/social-media/content/41/assets/91'),
+      request(app).post('/api/social-media/content/41/ready'),
+      request(app).post('/api/social-media/content/41/publish'),
+    ].map((pendingRequest) => pendingRequest
+      .set('x-test-user', '9')
+      .set('x-test-actions', 'view')));
+
+    expect(forbidden.map((response) => response.status)).toEqual([
+      403, 403, 403, 403, 403, 403, 403, 403, 403,
+    ]);
+    expect(planSocialMediaContent).not.toHaveBeenCalled();
+    expect(startSocialMediaProduction).not.toHaveBeenCalled();
+    expect(createSocialMediaProjectFolder).not.toHaveBeenCalled();
+    expect(initiateSocialMediaAssetUpload).not.toHaveBeenCalled();
+    expect(finalizeSocialMediaAssetUpload).not.toHaveBeenCalled();
+    expect(uploadSocialMediaAsset).not.toHaveBeenCalled();
+    expect(removeSocialMediaAsset).not.toHaveBeenCalled();
+    expect(markSocialMediaReady).not.toHaveBeenCalled();
+    expect(publishSocialMediaContent).not.toHaveBeenCalled();
+
+    const allowed = await Promise.all([
+      request(app).post('/api/social-media/content/41/plan'),
+      request(app).post('/api/social-media/content/41/start-production'),
+      request(app).post('/api/social-media/content/41/project-folder'),
+      request(app).post('/api/social-media/content/41/assets/resumable-session'),
+      request(app).post('/api/social-media/content/41/assets/resumable-complete'),
+      request(app).post('/api/social-media/content/41/assets'),
+      request(app).delete('/api/social-media/content/41/assets/91'),
+      request(app).post('/api/social-media/content/41/ready'),
+      request(app).post('/api/social-media/content/41/publish'),
+    ].map((pendingRequest) => pendingRequest
+      .set('x-test-user', '9')
+      .set('x-test-actions', 'update')));
+
+    expect(allowed.map((response) => response.status)).toEqual([
+      204, 204, 204, 204, 204, 204, 204, 204, 204,
+    ]);
+    expect(planSocialMediaContent).toHaveBeenCalledTimes(1);
+    expect(startSocialMediaProduction).toHaveBeenCalledTimes(1);
+    expect(createSocialMediaProjectFolder).toHaveBeenCalledTimes(1);
+    expect(initiateSocialMediaAssetUpload).toHaveBeenCalledTimes(1);
+    expect(finalizeSocialMediaAssetUpload).toHaveBeenCalledTimes(1);
+    expect(uploadSocialMediaAsset).toHaveBeenCalledTimes(1);
+    expect(removeSocialMediaAsset).toHaveBeenCalledTimes(1);
+    expect(markSocialMediaReady).toHaveBeenCalledTimes(1);
+    expect(publishSocialMediaContent).toHaveBeenCalledTimes(1);
   });
 });

@@ -15,6 +15,7 @@ jest.mock('../../models/SocialMediaContent.js', () => ({
   },
 }));
 jest.mock('../../models/User.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/SocialMediaContentAsset.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../services/socialMediaThumbnailStorageService.js', () => ({
   SocialMediaThumbnailUnsafeContentError: class SocialMediaThumbnailUnsafeContentError extends Error {},
   SocialMediaThumbnailValidationError: class SocialMediaThumbnailValidationError extends Error {},
@@ -42,6 +43,7 @@ import {
   createSocialMediaContent,
   listSelectableSocialMediaContent,
   streamSocialMediaThumbnail,
+  updateSocialMediaContent,
   uploadSocialMediaThumbnail,
 } from '../socialMediaContentController';
 
@@ -118,13 +120,11 @@ describe('Social Media content controller', () => {
     jest.clearAllMocks();
   });
 
-  it('stores bare deduplicated hashtags and normalized per-platform links', async () => {
+  it('stores bare deduplicated hashtags and owns the initial workflow defaults', async () => {
     const record = buildRecord({
       hashtags: ['krakow', 'nightlife'],
-      platformLinks: {
-        instagram: 'https://www.instagram.com/reel/example',
-        tiktok: 'https://www.tiktok.com/@example/video/123',
-      },
+      status: 'idea',
+      platformLinks: {},
     });
     mockCreate.mockResolvedValue(record);
     mockFindByPk.mockResolvedValue(record);
@@ -141,10 +141,10 @@ describe('Social Media content controller', () => {
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
       hashtags: ['krakow', 'nightlife'],
       targetPlatforms: ['instagram', 'tiktok'],
-      platformLinks: {
-        instagram: 'https://www.instagram.com/reel/example',
-        tiktok: 'https://www.tiktok.com/@example/video/123',
-      },
+      status: 'idea',
+      scheduledAt: null,
+      publishedAt: null,
+      platformLinks: {},
       createdBy: 7,
       updatedBy: 7,
     }));
@@ -152,7 +152,7 @@ describe('Social Media content controller', () => {
     expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
       item: expect.objectContaining({
         hashtags: ['krakow', 'nightlife'],
-        platformLinks: expect.objectContaining({ instagram: expect.any(String), tiktok: expect.any(String) }),
+        platformLinks: {},
       }),
     }));
     expect((response.json.mock.calls[0][0] as { item: Record<string, unknown> }).item).not.toHaveProperty(
@@ -160,7 +160,15 @@ describe('Social Media content controller', () => {
     );
   });
 
-  it('blocks planned content until the complete publishing plan exists', async () => {
+  it('allows an idea draft while planning requirements are still incomplete', async () => {
+    const record = buildRecord({
+      status: 'idea',
+      onVideoCaptions: '',
+      hashtags: [],
+      targetPlatforms: ['instagram', 'tiktok'],
+    });
+    mockCreate.mockResolvedValue(record);
+    mockFindByPk.mockResolvedValue(record);
     const response = createResponse();
 
     await createSocialMediaContent(
@@ -171,66 +179,42 @@ describe('Social Media content controller', () => {
       response,
     );
 
-    expect(response.status).toHaveBeenCalledWith(400);
-    expect(response.json).toHaveBeenCalledWith({
-      message: expect.stringContaining('on-video captions, hashtags'),
-    });
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(201);
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'idea',
+      onVideoCaptions: '',
+      hashtags: [],
+      targetPlatforms: ['instagram', 'tiktok'],
+    }));
   });
 
-  it('requires a platform link and automatically timestamps published content', async () => {
-    const mismatchedResponse = createResponse();
-    await createSocialMediaContent(
-      {
-        body: completeBody({
-          status: 'published',
-          targetPlatforms: ['Instagram'],
-          platformLinks: { TikTok: 'https://www.tiktok.com/@example/video/123' },
-        }),
-        authContext: { id: 7 },
-      } as unknown as AuthenticatedRequest,
-      mismatchedResponse,
-    );
-    expect(mismatchedResponse.status).toHaveBeenCalledWith(400);
-    expect(mismatchedResponse.json).toHaveBeenCalledWith({
-      message: 'Platform links can only be added for selected target platforms: tiktok.',
+  it('ignores client attempts to create content in a later workflow stage', async () => {
+    const idea = buildRecord({
+      status: 'idea',
+      publishedAt: null,
+      platformLinks: {},
     });
-
-    const invalidResponse = createResponse();
-    await createSocialMediaContent(
-      {
-        body: completeBody({ status: 'published', platformLinks: {} }),
-        authContext: { id: 7 },
-      } as unknown as AuthenticatedRequest,
-      invalidResponse,
-    );
-    expect(invalidResponse.status).toHaveBeenCalledWith(400);
-    expect(invalidResponse.json).toHaveBeenCalledWith({
-      message: 'Add at least one published platform link before marking this content as published.',
-    });
-
-    const published = buildRecord({
-      status: 'published',
-      publishedAt: new Date('2026-09-01T10:00:00.000Z'),
-      platformLinks: { instagram: 'https://www.instagram.com/reel/example' },
-    });
-    mockCreate.mockResolvedValue(published);
-    mockFindByPk.mockResolvedValue(published);
+    mockCreate.mockResolvedValue(idea);
+    mockFindByPk.mockResolvedValue(idea);
     const response = createResponse();
     await createSocialMediaContent(
       {
         body: completeBody({
           status: 'published',
-          publishedAt: null,
-          platformLinks: { instagram: 'https://www.instagram.com/reel/example' },
+          publishedAt: '2026-09-01T10:00:00.000Z',
+          platformLinks: {
+            instagram: 'https://www.instagram.com/reel/example',
+            tiktok: 'https://www.tiktok.com/@example/video/123',
+          },
         }),
         authContext: { id: 7 },
       } as unknown as AuthenticatedRequest,
       response,
     );
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'published',
-      publishedAt: expect.any(Date),
+      status: 'idea',
+      publishedAt: null,
+      platformLinks: {},
     }));
   });
 
@@ -274,6 +258,28 @@ describe('Social Media content controller', () => {
       updatedBy: 22,
     }));
     expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('does not allow a published brief to be edited after it became task audit evidence', async () => {
+    const record = buildRecord({
+      status: 'published',
+      publishedAt: new Date('2026-09-02T10:00:00.000Z'),
+      publishedTaskLogId: 88,
+    });
+    mockFindByPk.mockResolvedValue(record);
+    const response = createResponse();
+
+    await updateSocialMediaContent({
+      params: { id: '41' },
+      body: { title: 'Changed after publishing' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(record.update).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.json).toHaveBeenCalledWith({
+      message: 'Published Social Media content cannot be edited because its brief is part of the completed task audit.',
+    });
   });
 
   it('returns the stable authenticated thumbnail URL after a Drive upload', async () => {

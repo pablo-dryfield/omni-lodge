@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
+import { uploadFileToResumableDriveSession } from "../utils/resumableDriveUpload";
 import type {
   SocialMediaAssetKind,
   SocialMediaContentAsset,
@@ -113,6 +114,12 @@ export type UploadSocialMediaAssetInput = {
   assetType: SocialMediaAssetKind;
   file: File;
   onProgress?: (progress: SocialMediaAssetUploadProgress) => void;
+};
+
+type SocialMediaResumableSessionResponse = {
+  uploadUrl: string;
+  uploadToken: string;
+  chunkSizeBytes: number;
 };
 
 type ItemResponse = { item: SocialMediaContentItem };
@@ -276,27 +283,49 @@ export const useUploadSocialMediaAsset = () => {
   const invalidate = useInvalidateSocialMediaContent();
   return useMutation<SocialMediaContentItem, ApiError, UploadSocialMediaAssetInput>({
     mutationFn: async ({ id, assetType, file, onProgress }) => {
-      const body = new FormData();
-      body.append("assetType", assetType);
-      body.append("file", file);
-      const response = await axiosInstance.post<ItemResponse>(
-        `/social-media/content/${id}/assets`,
-        body,
+      const mimeType = file.type || "application/octet-stream";
+      const sessionResponse = await axiosInstance.post<SocialMediaResumableSessionResponse>(
+        `/social-media/content/${id}/assets/resumable-session`,
         {
-          onUploadProgress: ({ loaded, total }) => {
-            if (!onProgress) return;
-            const normalizedTotal = typeof total === "number" && total > 0 ? total : null;
-            onProgress({
-              loaded,
-              total: normalizedTotal,
-              percent: normalizedTotal === null
-                ? null
-                : Math.min(100, Math.round((loaded / normalizedTotal) * 100)),
-            });
-          },
+          assetType,
+          originalName: file.name,
+          mimeType,
+          sizeBytes: file.size,
         },
       );
-      return response.data.item;
+      const session = sessionResponse.data;
+      const driveFile = await uploadFileToResumableDriveSession({
+        uploadUrl: session.uploadUrl,
+        file,
+        chunkSizeBytes: session.chunkSizeBytes,
+        onProgress: onProgress
+          ? ({ loaded, total, percent }) => onProgress({ loaded, total, percent })
+          : undefined,
+      });
+
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const response = await axiosInstance.post<ItemResponse>(
+            `/social-media/content/${id}/assets/resumable-complete`,
+            {
+              assetType,
+              driveFileId: driveFile.id,
+              uploadToken: session.uploadToken,
+              originalName: file.name,
+              mimeType,
+              sizeBytes: file.size,
+            },
+          );
+          return response.data.item;
+        } catch (error) {
+          lastError = error;
+          const status = (error as ApiError).response?.status;
+          if ((status != null && status < 500) || attempt === 2) throw error;
+          await new Promise((resolve) => window.setTimeout(resolve, 400 * (2 ** attempt)));
+        }
+      }
+      throw lastError;
     },
     onSuccess: invalidate,
   });

@@ -134,6 +134,7 @@ type ScheduledWorkdayPlacement = 'start' | 'middle' | 'end';
 type BulkTemplateOptionMode = 'unchanged' | 'scheduled_only' | 'off_days_allowed';
 type BulkRequiredShiftMode = 'unchanged' | 'replace' | 'remove';
 type BulkSocialMediaPlanMode = 'unchanged' | 'required' | 'optional';
+type BulkSocialMediaPublishMode = 'unchanged' | 'enabled' | 'disabled';
 type BulkScheduledWorkdayPlacement = 'unchanged' | ScheduledWorkdayPlacement;
 
 type TemplateFormState = {
@@ -156,6 +157,7 @@ type TemplateFormState = {
   defaultPoints: string;
   requireShift: boolean;
   requireSocialMediaPlan: boolean;
+  completeOnSocialMediaPublish: boolean;
   reminderMinutesBeforeStart: string;
   notifyAtStart: boolean;
   evidenceRules: EvidenceRuleDraft[];
@@ -178,6 +180,7 @@ type AssignmentFormState = {
 type BulkTemplateOptionsFormState = {
   assigneeSchedule: BulkTemplateOptionMode;
   socialMediaPlan: BulkSocialMediaPlanMode;
+  socialMediaPublishCompletion: BulkSocialMediaPublishMode;
   requiredShiftMode: BulkRequiredShiftMode;
   requiredShiftTemplateIds: string[];
   scheduledWorkdayPlacement: BulkScheduledWorkdayPlacement;
@@ -321,6 +324,7 @@ const defaultTemplateFormState: TemplateFormState = {
   defaultPoints: '',
   requireShift: true,
   requireSocialMediaPlan: false,
+  completeOnSocialMediaPublish: false,
   reminderMinutesBeforeStart: '',
   notifyAtStart: true,
   evidenceRules: [],
@@ -343,6 +347,7 @@ const defaultAssignmentFormState: AssignmentFormState = {
 const defaultBulkTemplateOptionsFormState: BulkTemplateOptionsFormState = {
   assigneeSchedule: 'unchanged',
   socialMediaPlan: 'unchanged',
+  socialMediaPublishCompletion: 'unchanged',
   requiredShiftMode: 'unchanged',
   requiredShiftTemplateIds: [],
   scheduledWorkdayPlacement: 'unchanged',
@@ -555,6 +560,14 @@ const doesTaskRequireSocialMediaPlan = (
   typeof log?.meta?.requireSocialMediaPlan === 'boolean'
     ? log.meta.requireSocialMediaPlan
     : template?.scheduleConfig?.requireSocialMediaPlan === true;
+
+const doesTaskCompleteOnSocialMediaPublish = (
+  log?: AssistantManagerTaskLog | null,
+  template?: AssistantManagerTaskTemplate | null,
+): boolean =>
+  typeof log?.meta?.completeOnSocialMediaPublish === 'boolean'
+    ? log.meta.completeOnSocialMediaPublish
+    : template?.scheduleConfig?.completeOnSocialMediaPublish === true;
 
 const isSatisfiedTaskStatus = (status: AssistantManagerTaskLog['status']) =>
   status === 'completed' || status === 'waived';
@@ -958,6 +971,7 @@ const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate |
   delete nextConfig.points;
   delete nextConfig.requireShift;
   delete nextConfig.requireSocialMediaPlan;
+  delete nextConfig.completeOnSocialMediaPublish;
   delete nextConfig.requireScheduledShift;
   delete nextConfig.allowOffDays;
   delete nextConfig.completionWindowMode;
@@ -1500,9 +1514,35 @@ const resolveTemplateDefaults = (template?: AssistantManagerTaskTemplate | null)
       config.requireScheduledShift === false ||
       config.allowOffDays === true
     ),
-    requireSocialMediaPlan: config.requireSocialMediaPlan === true,
+    requireSocialMediaPlan:
+      config.completeOnSocialMediaPublish === true ||
+      config.requireSocialMediaPlan === true,
+    completeOnSocialMediaPublish: config.completeOnSocialMediaPublish === true,
     tags: normalizeTags(config.tags),
   };
+};
+
+const canTemplateUseSocialMediaPublishCompletion = (
+  template: AssistantManagerTaskTemplate,
+): boolean => {
+  const config = template.scheduleConfig ?? {};
+  if (normalizeTaskCompletionWindowMode(config.completionWindowMode) !== 'day') {
+    return false;
+  }
+  if (Array.isArray(config.shiftEvidenceSources) && config.shiftEvidenceSources.length > 0) {
+    return false;
+  }
+  if (!Array.isArray(config.evidenceRules)) {
+    return true;
+  }
+  return !config.evidenceRules.some((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return true;
+    }
+    const rule = entry as Record<string, unknown>;
+    const minItems = Number(rule.minItems ?? (rule.required === false ? 0 : 1));
+    return rule.required !== false || (Number.isFinite(minItems) && minItems > 0);
+  });
 };
 
 const buildDashboardTaskEditFormState = (
@@ -3545,6 +3585,15 @@ const AssistantManagerTaskPlanner = () => {
         })),
     [templateFormState.evidenceRules],
   );
+  const templateHasPublishBlockingEvidence = useMemo(
+    () =>
+      templateFormState.shiftEvidenceSources.length > 0 ||
+      templateFormState.evidenceRules.some((rule) => {
+        const minItems = Number(rule.minItems.trim() || (rule.required ? '1' : '0'));
+        return rule.required || (Number.isFinite(minItems) && minItems > 0);
+      }),
+    [templateFormState.evidenceRules, templateFormState.shiftEvidenceSources.length],
+  );
   const [templateFormError, setTemplateFormError] = useState<string | null>(null);
   const [editingTemplate, setEditingTemplate] =
     useState<AssistantManagerTaskTemplate | null>(null);
@@ -3681,6 +3730,11 @@ const AssistantManagerTaskPlanner = () => {
     });
 
     summary.push({
+      label: 'Publish completion',
+      value: templateFormState.completeOnSocialMediaPublish ? 'Automatic' : 'Manual',
+    });
+
+    summary.push({
       label: 'Shift evidence',
       value: `${templateFormState.shiftEvidenceSources.length} configured`,
     });
@@ -3711,6 +3765,7 @@ const AssistantManagerTaskPlanner = () => {
     templateFormState.nightReportWaiverRules.length,
     templateFormState.requireShift,
     templateFormState.requireSocialMediaPlan,
+    templateFormState.completeOnSocialMediaPublish,
     templateFormState.requiredShiftTemplateIds.length,
     templateFormState.scheduledWorkdayPlacement,
     templateFormState.timesPerWeekPerAssignedUser,
@@ -4162,11 +4217,16 @@ const AssistantManagerTaskPlanner = () => {
       !selectedLogIsCurrentDay ||
       dashboardTaskEditOpen,
   );
+  const selectedLogCompletesOnSocialMediaPublish = doesTaskCompleteOnSocialMediaPublish(
+    selectedLog,
+    selectedLogTemplate,
+  );
   const selectedLogCanComplete = Boolean(
     selectedLog &&
       selectedLog.status !== 'completed' &&
       selectedLogIsCurrentDay &&
-      !selectedLogStrictCompletionExpired,
+      !selectedLogStrictCompletionExpired &&
+      !selectedLogCompletesOnSocialMediaPublish,
   );
   const selectedLogCanReopen = Boolean(
     selectedLog &&
@@ -4255,6 +4315,16 @@ const AssistantManagerTaskPlanner = () => {
   const allBulkTargetsSupportPlacement =
     bulkTemplateOptionsTargetTemplates.length > 0 &&
     bulkPlacementCompatibleTemplateCount === bulkTemplateOptionsTargetTemplates.length;
+  const bulkPublishCompletionCompatibleTemplateCount = useMemo(
+    () =>
+      bulkTemplateOptionsTargetTemplates.filter(canTemplateUseSocialMediaPublishCompletion)
+        .length,
+    [bulkTemplateOptionsTargetTemplates],
+  );
+  const allBulkTargetsSupportPublishCompletion =
+    bulkTemplateOptionsTargetTemplates.length > 0 &&
+    bulkPublishCompletionCompatibleTemplateCount ===
+      bulkTemplateOptionsTargetTemplates.length;
   const bulkTemplateOptionsCurrentSummary = useMemo(() => {
     const scheduleValues = new Set(
       bulkTemplateOptionsTargetTemplates.map(
@@ -4264,6 +4334,11 @@ const AssistantManagerTaskPlanner = () => {
     const socialMediaPlanValues = new Set(
       bulkTemplateOptionsTargetTemplates.map(
         (template) => resolveTemplateDefaults(template).requireSocialMediaPlan,
+      ),
+    );
+    const socialMediaPublishCompletionValues = new Set(
+      bulkTemplateOptionsTargetTemplates.map(
+        (template) => resolveTemplateDefaults(template).completeOnSocialMediaPublish,
       ),
     );
     const shiftGateValues = new Set(
@@ -4281,6 +4356,9 @@ const AssistantManagerTaskPlanner = () => {
 
     const onlyScheduleValue = Array.from(scheduleValues)[0];
     const onlySocialMediaPlanValue = Array.from(socialMediaPlanValues)[0];
+    const onlySocialMediaPublishCompletionValue = Array.from(
+      socialMediaPublishCompletionValues,
+    )[0];
     const onlyShiftGateValue = Array.from(shiftGateValues)[0] ?? '';
     const onlyPlacementValue = Array.from(placementValues)[0];
     const shiftTemplateNameById = new Map(
@@ -4314,6 +4392,12 @@ const AssistantManagerTaskPlanner = () => {
           ? onlySocialMediaPlanValue
             ? 'Required before completion'
             : 'Optional'
+          : 'Mixed',
+      socialMediaPublishCompletion:
+        socialMediaPublishCompletionValues.size === 1
+          ? onlySocialMediaPublishCompletionValue
+            ? 'Complete automatically'
+            : 'Keep pending'
           : 'Mixed',
       requiredShiftGate:
         shiftGateValues.size === 1
@@ -5065,6 +5149,7 @@ const AssistantManagerTaskPlanner = () => {
         defaultPoints: defaults.points != null ? String(defaults.points) : '',
         requireShift: defaults.requireShift,
         requireSocialMediaPlan: defaults.requireSocialMediaPlan,
+        completeOnSocialMediaPublish: defaults.completeOnSocialMediaPublish,
         reminderMinutesBeforeStart:
           defaults.reminderMinutesBeforeStart != null
             ? String(defaults.reminderMinutesBeforeStart)
@@ -5173,7 +5258,11 @@ const AssistantManagerTaskPlanner = () => {
       delete nextScheduleConfig.requireScheduledShift;
       delete nextScheduleConfig.allowOffDays;
       nextScheduleConfig.requireShift = templateFormState.requireShift;
-      nextScheduleConfig.requireSocialMediaPlan = templateFormState.requireSocialMediaPlan;
+      nextScheduleConfig.requireSocialMediaPlan =
+        templateFormState.completeOnSocialMediaPublish ||
+        templateFormState.requireSocialMediaPlan;
+      nextScheduleConfig.completeOnSocialMediaPublish =
+        templateFormState.completeOnSocialMediaPublish;
       nextScheduleConfig.notifyAtStart = templateFormState.notifyAtStart;
       nextScheduleConfig.completionWindowMode = templateFormState.completionWindowMode;
 
@@ -5372,6 +5461,27 @@ const AssistantManagerTaskPlanner = () => {
         nextScheduleConfig.shiftEvidenceSources = shiftEvidenceSources;
       } else {
         delete nextScheduleConfig.shiftEvidenceSources;
+      }
+
+      if (templateFormState.completeOnSocialMediaPublish) {
+        if (templateFormState.completionWindowMode !== 'day') {
+          setTemplateFormError(
+            'Automatic Social Media publish completion requires the End of day completion window.',
+          );
+          return;
+        }
+        if (evidenceRules.some((rule) => rule.required || Number(rule.minItems ?? 0) > 0)) {
+          setTemplateFormError(
+            'Automatic Social Media publish completion cannot be combined with required evidence rules.',
+          );
+          return;
+        }
+        if (shiftEvidenceSources.length > 0) {
+          setTemplateFormError(
+            'Automatic Social Media publish completion cannot be combined with shift-based evidence.',
+          );
+          return;
+        }
       }
 
       const nightReportWaiverRules: Array<{
@@ -5875,6 +5985,21 @@ const AssistantManagerTaskPlanner = () => {
         bulkTemplateOptionsFormState.socialMediaPlan === 'required';
     }
 
+    if (bulkTemplateOptionsFormState.socialMediaPublishCompletion !== 'unchanged') {
+      const enablePublishCompletion =
+        bulkTemplateOptionsFormState.socialMediaPublishCompletion === 'enabled';
+      if (enablePublishCompletion && !allBulkTargetsSupportPublishCompletion) {
+        setBulkTemplateOptionsError(
+          'Automatic publish completion requires every selected template to use an End of day completion window with no required or shift-based evidence.',
+        );
+        return;
+      }
+      options.completeOnSocialMediaPublish = enablePublishCompletion;
+      if (enablePublishCompletion) {
+        options.requireSocialMediaPlan = true;
+      }
+    }
+
     if (bulkTemplateOptionsFormState.requiredShiftMode === 'replace') {
       const requiredShiftTemplateIds = bulkTemplateOptionsFormState.requiredShiftTemplateIds
         .map((value) => Number(value))
@@ -5944,6 +6069,7 @@ const AssistantManagerTaskPlanner = () => {
     }
   }, [
     allBulkTargetsSupportPlacement,
+    allBulkTargetsSupportPublishCompletion,
     bulkTemplateOptionsFormState,
     bulkTemplateOptionsTargetIds,
     bulkTemplateOptionsTargetTemplates,
@@ -8701,12 +8827,17 @@ const AssistantManagerTaskPlanner = () => {
                   />
                   <Select
                     label="Completion Window"
-                    description="Choose whether the task can be completed until end of day or only until its scheduled end time."
+                    description={
+                      templateFormState.completeOnSocialMediaPublish
+                        ? 'End of day is required because publication completes this task automatically.'
+                        : 'Choose whether the task can be completed until end of day or only until its scheduled end time.'
+                    }
                     data={Object.entries(TASK_COMPLETION_WINDOW_MODE_LABELS).map(([value, label]) => ({
                       value,
                       label,
                     }))}
                     value={templateFormState.completionWindowMode}
+                    disabled={templateFormState.completeOnSocialMediaPublish}
                     onChange={(value) =>
                       setTemplateFormState((prev) => ({
                         ...prev,
@@ -8859,17 +8990,60 @@ const AssistantManagerTaskPlanner = () => {
               <Accordion.Panel pt="xs" pb="sm">
                 <Stack gap="xs">
                   <Paper withBorder radius="lg" p="sm" bg="blue.0">
-                    <Switch
-                      label="Require a planned Social Media item before completion"
-                      description="The assignee can link an idea at any stage, but this task can only be completed once that item reaches Planned, In production, Ready, or Published."
-                      checked={templateFormState.requireSocialMediaPlan}
-                      onChange={(event) =>
-                        setTemplateFormState((prev) => ({
-                          ...prev,
-                          requireSocialMediaPlan: event.currentTarget.checked,
-                        }))
-                      }
-                    />
+                    <Stack gap="sm">
+                      <Switch
+                        label="Require a planned Social Media item before completion"
+                        description={
+                          templateFormState.completeOnSocialMediaPublish
+                            ? 'Required because publishing the linked item completes this task.'
+                            : 'The assignee can link an idea at any stage, but this task can only be completed once that item reaches Planned, In production, Ready, or Published.'
+                        }
+                        checked={templateFormState.requireSocialMediaPlan}
+                        disabled={templateFormState.completeOnSocialMediaPublish}
+                        onChange={(event) =>
+                          setTemplateFormState((prev) => ({
+                            ...prev,
+                            requireSocialMediaPlan: event.currentTarget.checked,
+                          }))
+                        }
+                      />
+                      <Switch
+                        label="Complete the linked task when the content is published"
+                        description="Publishing the linked Social Media item completes this user's pending task automatically. This requires an end-of-day window and cannot be combined with required or shift-based evidence."
+                        checked={templateFormState.completeOnSocialMediaPublish}
+                        disabled={
+                          templateHasPublishBlockingEvidence &&
+                          !templateFormState.completeOnSocialMediaPublish
+                        }
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
+                          setTemplateFormState((prev) => ({
+                            ...prev,
+                            completeOnSocialMediaPublish: checked,
+                            requireSocialMediaPlan: checked
+                              ? true
+                              : prev.requireSocialMediaPlan,
+                            completionWindowMode: checked
+                              ? 'day'
+                              : prev.completionWindowMode,
+                          }));
+                        }}
+                      />
+                      {templateHasPublishBlockingEvidence &&
+                        !templateFormState.completeOnSocialMediaPublish && (
+                          <Alert color="yellow" title="Remove required evidence first">
+                            Automatic publish completion is available only when no required evidence
+                            or shift-based evidence is configured.
+                          </Alert>
+                        )}
+                      {templateHasPublishBlockingEvidence &&
+                        templateFormState.completeOnSocialMediaPublish && (
+                          <Alert color="red" title="Incompatible evidence configuration">
+                            Remove all required and shift-based evidence, or turn off automatic
+                            publish completion before saving.
+                          </Alert>
+                        )}
+                    </Stack>
                   </Paper>
                   <Stack gap={4}>
                     <Text size="sm" fw={600}>
@@ -9726,14 +9900,21 @@ const AssistantManagerTaskPlanner = () => {
 
               <Select
                 label="Social Media Plan Gate"
-                description={`Current selection: ${bulkTemplateOptionsCurrentSummary.socialMediaPlan}`}
+                description={
+                  bulkTemplateOptionsFormState.socialMediaPublishCompletion === 'enabled'
+                    ? 'Required because the linked publication will complete these tasks.'
+                    : `Current selection: ${bulkTemplateOptionsCurrentSummary.socialMediaPlan}`
+                }
                 data={[
                   { value: 'unchanged', label: 'Keep current values' },
                   { value: 'required', label: 'Require a planned Social Media item' },
                   { value: 'optional', label: 'Do not require a Social Media item' },
                 ]}
                 value={bulkTemplateOptionsFormState.socialMediaPlan}
-                disabled={bulkTemplateOptionsSubmitting}
+                disabled={
+                  bulkTemplateOptionsSubmitting ||
+                  bulkTemplateOptionsFormState.socialMediaPublishCompletion === 'enabled'
+                }
                 onChange={(value) =>
                   setBulkTemplateOptionsFormState((prev) => ({
                     ...prev,
@@ -9741,6 +9922,41 @@ const AssistantManagerTaskPlanner = () => {
                   }))
                 }
               />
+
+              <Select
+                label="Complete on Social Media Publish"
+                description={`Current selection: ${bulkTemplateOptionsCurrentSummary.socialMediaPublishCompletion}`}
+                data={[
+                  { value: 'unchanged', label: 'Keep current values' },
+                  {
+                    value: 'enabled',
+                    label: 'Complete linked tasks automatically',
+                    disabled: !allBulkTargetsSupportPublishCompletion,
+                  },
+                  { value: 'disabled', label: 'Keep linked tasks pending' },
+                ]}
+                value={bulkTemplateOptionsFormState.socialMediaPublishCompletion}
+                disabled={bulkTemplateOptionsSubmitting}
+                onChange={(value) => {
+                  const nextValue =
+                    (value as BulkSocialMediaPublishMode) ?? 'unchanged';
+                  setBulkTemplateOptionsFormState((prev) => ({
+                    ...prev,
+                    socialMediaPublishCompletion: nextValue,
+                    socialMediaPlan:
+                      nextValue === 'enabled' ? 'required' : prev.socialMediaPlan,
+                  }));
+                }}
+              />
+
+              {!allBulkTargetsSupportPublishCompletion && (
+                <Alert color="yellow" title="Some templates are not eligible">
+                  {bulkPublishCompletionCompatibleTemplateCount} of{' '}
+                  {bulkTemplateOptionsTargetTemplates.length} selected templates use an End of day
+                  window with no required or shift-based evidence. Automatic publish completion can
+                  only be enabled when every selected template is eligible.
+                </Alert>
+              )}
 
               <Select
                 label="Operational Shift Condition"
@@ -10858,7 +11074,7 @@ const AssistantManagerTaskPlanner = () => {
                               ))}
                               {selectedSocialMediaPlanOption.scheduledAt && (
                                 <Badge size="sm" variant="light" color="blue">
-                                  {dayjs(selectedSocialMediaPlanOption.scheduledAt).format('MMM D, h:mm A')}
+                                  {dayjs(selectedSocialMediaPlanOption.scheduledAt).format('MMM D, YYYY')}
                                 </Badge>
                               )}
                             </Group>
@@ -11669,6 +11885,14 @@ const AssistantManagerTaskPlanner = () => {
                 </Paper>
               ) : null}
             </Group>
+            {!dashboardTaskEditOpen &&
+              selectedLog?.status === 'pending' &&
+              selectedLogCompletesOnSocialMediaPublish && (
+                <Alert color="blue" title="Completion happens when the content is published">
+                  This task cannot be completed manually. Link its Social Media item, then publish
+                  that item from the Social Media board. The task will be completed automatically.
+                </Alert>
+              )}
             {!dashboardTaskEditOpen && selectedLogCanComplete && !selectedLogRequiredEvidenceSatisfied && (
               <Text size="sm" c="dimmed" ta="center">
                 Complete all required evidence first: {selectedLogMissingRequiredEvidenceLabels.join(', ')}.

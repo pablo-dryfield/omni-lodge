@@ -100,6 +100,7 @@ import CerebroQuiz from './CerebroQuiz.js';
 import CerebroQuizAttempt from './CerebroQuizAttempt.js';
 import CerebroAcknowledgement from './CerebroAcknowledgement.js';
 import SocialMediaContent from './SocialMediaContent.js';
+import SocialMediaContentAsset from './SocialMediaContentAsset.js';
 
 export function defineAssociations() {
   // User Associations
@@ -135,6 +136,8 @@ export function defineAssociations() {
   User.hasMany(AffiliatePayoutLog, { foreignKey: 'created_by', as: 'affiliatePayoutLogsCreated' });
   User.hasMany(SocialMediaContent, { foreignKey: 'created_by', as: 'socialMediaContentCreated' });
   User.hasMany(SocialMediaContent, { foreignKey: 'updated_by', as: 'socialMediaContentUpdated' });
+  User.hasMany(SocialMediaContent, { foreignKey: 'published_by', as: 'socialMediaContentPublished' });
+  User.hasMany(SocialMediaContentAsset, { foreignKey: 'uploaded_by', as: 'socialMediaContentUploads' });
   User.belongsTo(FinanceVendor, { foreignKey: 'finance_vendor_id', as: 'financeVendor' });
 
   // UserType Associations
@@ -228,6 +231,10 @@ export function defineAssociations() {
   AssistantManagerTaskAssignment.belongsTo(ShiftRole, { foreignKey: 'shift_role_id', as: 'assignmentShiftRole' });
   User.hasMany(AssistantManagerTaskLog, { foreignKey: 'user_id', as: 'assistantManagerTaskLogs' });
   AssistantManagerTaskLog.belongsTo(User, { foreignKey: 'user_id', as: 'logUser' });
+  AssistantManagerTaskLog.hasOne(SocialMediaContent, {
+    foreignKey: 'published_task_log_id',
+    as: 'publishedSocialMediaContent',
+  });
   User.hasMany(AssistantManagerTaskPushSubscription, {
     foreignKey: 'user_id',
     as: 'assistantManagerTaskPushSubscriptions',

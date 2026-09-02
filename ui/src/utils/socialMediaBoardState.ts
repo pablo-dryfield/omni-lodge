@@ -19,13 +19,6 @@ export type SocialMediaEditorDraftValues = {
   onVideoCaptions: string;
   platformCaption: string;
   hashtags: string[];
-  targetPlatforms: string[];
-  status: SocialMediaContentStatus;
-  scheduledAt: string | null;
-  publishedAt: string | null;
-  driveProjectUrl: string;
-  platformLinks: Record<string, string>;
-  thumbnailUrl: string;
 };
 
 export type StoredSocialMediaEditorDraft = {
@@ -89,15 +82,21 @@ export const resolveEditorAfterMediaFailure = (
   savedId: number,
 ): number => editor === "new" ? savedId : editor;
 
-const normalizeStringArray = (value: unknown): string[] =>
-  Array.isArray(value)
-    ? Array.from(new Set(value.map((entry) => String(entry ?? "").trim()).filter(Boolean)))
-    : [];
+export const canAccessSocialMediaEditor = (
+  editor: SocialMediaEditorSelection,
+  permissions: { canCreate: boolean; canUpdate: boolean },
+): boolean => {
+  if (editor === null) return false;
+  return editor === "new" ? permissions.canCreate : permissions.canUpdate;
+};
 
-const normalizeOptionalIso = (value: unknown): string | null => {
-  if (typeof value !== "string" || !value.trim()) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+const normalizeStringArray = (value: unknown): string[] => {
+  const entries = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\s,]+/u)
+      : [];
+  return Array.from(new Set(entries.map((entry) => String(entry ?? "").trim()).filter(Boolean)));
 };
 
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
@@ -132,19 +131,6 @@ export const toSocialMediaDateOnly = (
   return isValidDateOnly(candidate) ? candidate : null;
 };
 
-const normalizePlatformLinks = (value: unknown): Record<string, string> => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>(
-    (links, [platform, url]) => {
-      const normalizedPlatform = platform.trim().toLowerCase();
-      const normalizedUrl = typeof url === "string" ? url.trim() : "";
-      if (normalizedPlatform && normalizedUrl) links[normalizedPlatform] = normalizedUrl;
-      return links;
-    },
-    {},
-  );
-};
-
 export const parseStoredSocialMediaEditorDraft = (
   raw: string | null,
 ): StoredSocialMediaEditorDraft | null => {
@@ -159,7 +145,10 @@ export const parseStoredSocialMediaEditorDraft = (
     const source = value.values && typeof value.values === "object" && !Array.isArray(value.values)
       ? (value.values as Record<string, unknown>)
       : null;
-    if (value.version !== 1 || editor === null || !source || !isStatus(source.status)) {
+    // The first workflow UI wrote versionless drafts and string editor ids. Keep
+    // those recoverable while rejecting unknown future schemas.
+    const supportedVersion = value.version == null || value.version === 1 || value.version === "1";
+    if (!supportedVersion || editor === null || !source) {
       return null;
     }
     return {
@@ -171,13 +160,6 @@ export const parseStoredSocialMediaEditorDraft = (
         onVideoCaptions: String(source.onVideoCaptions ?? ""),
         platformCaption: String(source.platformCaption ?? ""),
         hashtags: normalizeHashtags(normalizeStringArray(source.hashtags)),
-        targetPlatforms: normalizeStringArray(source.targetPlatforms),
-        status: source.status,
-        scheduledAt: toSocialMediaDateOnly(source.scheduledAt),
-        publishedAt: normalizeOptionalIso(source.publishedAt),
-        driveProjectUrl: String(source.driveProjectUrl ?? source.driveUrl ?? ""),
-        platformLinks: normalizePlatformLinks(source.platformLinks),
-        thumbnailUrl: String(source.thumbnailUrl ?? ""),
       },
       savedAt: typeof value.savedAt === "string" ? value.savedAt : "",
     };
@@ -185,6 +167,23 @@ export const parseStoredSocialMediaEditorDraft = (
     return null;
   }
 };
+
+export const serializeSocialMediaEditorDraft = (
+  editor: Exclude<SocialMediaEditorSelection, null>,
+  values: SocialMediaEditorDraftValues,
+  savedAt = new Date().toISOString(),
+): string => JSON.stringify({
+  version: 1,
+  editor,
+  values: {
+    title: String(values.title ?? ""),
+    idea: String(values.idea ?? ""),
+    onVideoCaptions: String(values.onVideoCaptions ?? ""),
+    platformCaption: String(values.platformCaption ?? ""),
+    hashtags: normalizeHashtags(values.hashtags),
+  },
+  savedAt,
+} satisfies StoredSocialMediaEditorDraft);
 
 const normalizeHashtag = (value: string): string =>
   value.trim().replace(/^#+/u, "").trim().toLowerCase();

@@ -103,6 +103,7 @@ describe('bulkUpdateAmTaskTemplateOptions', () => {
       templateIds: [7, 11],
       options: {
         requireShift: false,
+        completeOnSocialMediaPublish: true,
         notifyAtStart: false,
         requiredShiftTemplateIds: [],
         scheduledWorkdayPlacement: 'end',
@@ -115,6 +116,7 @@ describe('bulkUpdateAmTaskTemplateOptions', () => {
         templateIds: [7, 11],
         options: {
           requireShift: false,
+          completeOnSocialMediaPublish: true,
           notifyAtStart: false,
           requiredShiftTemplateIds: [],
           scheduledWorkdayPlacement: 'end',

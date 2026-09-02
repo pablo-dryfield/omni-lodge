@@ -1,10 +1,12 @@
 import {
   buildSocialMediaEditorDraftStorageKey,
+  canAccessSocialMediaEditor,
   formatHashtag,
   normalizeHashtags,
   parseSocialMediaBoardUrlState,
   parseStoredSocialMediaEditorDraft,
   resolveEditorAfterMediaFailure,
+  serializeSocialMediaEditorDraft,
   toSocialMediaDateOnly,
   writeSocialMediaBoardUrlState,
 } from "./socialMediaBoardState";
@@ -39,6 +41,13 @@ describe("social media board URL state", () => {
     expect(resolveEditorAfterMediaFailure("new", 84)).toBe(84);
     expect(resolveEditorAfterMediaFailure(42, 84)).toBe(42);
   });
+
+  it("uses the permission that matches the requested editor mode", () => {
+    expect(canAccessSocialMediaEditor("new", { canCreate: true, canUpdate: false })).toBe(true);
+    expect(canAccessSocialMediaEditor("new", { canCreate: false, canUpdate: true })).toBe(false);
+    expect(canAccessSocialMediaEditor(42, { canCreate: true, canUpdate: false })).toBe(false);
+    expect(canAccessSocialMediaEditor(42, { canCreate: false, canUpdate: true })).toBe(true);
+  });
 });
 
 describe("social media editor draft persistence", () => {
@@ -51,7 +60,7 @@ describe("social media editor draft persistence", () => {
     );
   });
 
-  it("recovers a valid refresh-safe draft", () => {
+  it("recovers a valid refresh-safe draft while ignoring retired workflow fields", () => {
     const draft = parseStoredSocialMediaEditorDraft(JSON.stringify({
       version: 1,
       editor: "new",
@@ -72,8 +81,47 @@ describe("social media editor draft persistence", () => {
     expect(draft?.editor).toBe("new");
     expect(draft?.values.title).toBe("Weekend reel");
     expect(draft?.values.hashtags).toEqual(["krakow"]);
-    expect(draft?.values.scheduledAt).toBe("2026-09-04");
-    expect(draft?.values.platformLinks).toEqual({ instagram: "https://instagram.com/example" });
+    expect(draft?.values).toEqual({
+      title: "Weekend reel",
+      idea: "Fast cuts",
+      onVideoCaptions: "Friday / Saturday",
+      platformCaption: "Meet us in Krakow",
+      hashtags: ["krakow"],
+    });
+  });
+
+  it("accepts legacy versionless drafts, numeric-string ids, and string versions", () => {
+    const legacy = parseStoredSocialMediaEditorDraft(JSON.stringify({
+      editor: "42",
+      values: { title: "Legacy", hashtags: "#Krakow, #Nightlife" },
+    }));
+    const stringVersion = parseStoredSocialMediaEditorDraft(JSON.stringify({
+      version: "1",
+      editor: 42,
+      values: { title: "Current" },
+    }));
+
+    expect(legacy?.editor).toBe(42);
+    expect(legacy?.values.hashtags).toEqual(["krakow", "nightlife"]);
+    expect(stringVersion?.editor).toBe(42);
+    expect(parseStoredSocialMediaEditorDraft(JSON.stringify({
+      version: 2,
+      editor: 42,
+      values: {},
+    }))).toBeNull();
+  });
+
+  it("serializes the five-field brief with a versioned round-trip schema", () => {
+    const raw = serializeSocialMediaEditorDraft(42, {
+      title: "New hook",
+      idea: "A short idea",
+      onVideoCaptions: "Look here",
+      platformCaption: "Join us",
+      hashtags: ["#Krakow", "##krakow", "#Party"],
+    }, "2026-09-02T12:00:00.000Z");
+
+    expect(JSON.parse(raw)).toMatchObject({ version: 1, editor: 42 });
+    expect(parseStoredSocialMediaEditorDraft(raw)?.values.hashtags).toEqual(["krakow", "party"]);
   });
 
   it("normalizes hashtags for the API", () => {

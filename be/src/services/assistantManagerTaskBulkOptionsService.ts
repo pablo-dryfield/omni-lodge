@@ -3,6 +3,7 @@ import HttpError from '../errors/HttpError.js';
 export type AssistantManagerTaskBulkOptions = {
   requireShift?: boolean;
   requireSocialMediaPlan?: boolean;
+  completeOnSocialMediaPublish?: boolean;
   completionWindowMode?: 'day' | 'strict';
   priority?: 'high' | 'medium' | 'low';
   notifyAtStart?: boolean;
@@ -20,6 +21,7 @@ const BODY_KEYS = new Set(['templateIds', 'options']);
 const OPTION_KEYS = new Set<keyof AssistantManagerTaskBulkOptions>([
   'requireShift',
   'requireSocialMediaPlan',
+  'completeOnSocialMediaPublish',
   'completionWindowMode',
   'priority',
   'notifyAtStart',
@@ -103,6 +105,12 @@ export const parseAssistantManagerTaskBulkOptionsPayload = (
     }
     options.requireSocialMediaPlan = body.options.requireSocialMediaPlan;
   }
+  if (hasOwn(body.options, 'completeOnSocialMediaPublish')) {
+    if (typeof body.options.completeOnSocialMediaPublish !== 'boolean') {
+      throw new HttpError(400, 'options.completeOnSocialMediaPublish must be a boolean');
+    }
+    options.completeOnSocialMediaPublish = body.options.completeOnSocialMediaPublish;
+  }
   if (hasOwn(body.options, 'completionWindowMode')) {
     if (body.options.completionWindowMode !== 'day' && body.options.completionWindowMode !== 'strict') {
       throw new HttpError(400, 'options.completionWindowMode must be day or strict');
@@ -159,6 +167,12 @@ export const mergeAssistantManagerTaskBulkOptions = (
   }
   if (options.requireSocialMediaPlan !== undefined) {
     scheduleConfig.requireSocialMediaPlan = options.requireSocialMediaPlan;
+  }
+  if (options.completeOnSocialMediaPublish !== undefined) {
+    scheduleConfig.completeOnSocialMediaPublish = options.completeOnSocialMediaPublish;
+  }
+  if (scheduleConfig.completeOnSocialMediaPublish === true) {
+    scheduleConfig.requireSocialMediaPlan = true;
   }
   if (options.completionWindowMode !== undefined) {
     scheduleConfig.completionWindowMode = options.completionWindowMode;

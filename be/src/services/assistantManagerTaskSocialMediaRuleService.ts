@@ -1,6 +1,8 @@
 import HttpError from '../errors/HttpError.js';
 
 export const SOCIAL_MEDIA_PLAN_CONFIG_KEY = 'requireSocialMediaPlan';
+export const SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY =
+  'completeOnSocialMediaPublish';
 export const SOCIAL_MEDIA_CONTENT_ID_META_KEY = 'socialMediaContentId';
 export const SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY = 'socialMediaContentSnapshot';
 
@@ -88,6 +90,94 @@ export const resolveRequireSocialMediaPlan = (
     return snapshottedValue;
   }
   return scheduleConfig?.[SOCIAL_MEDIA_PLAN_CONFIG_KEY] === true;
+};
+
+export const normalizeCompleteOnSocialMediaPublish = (value: unknown): boolean =>
+  value === true;
+
+export const resolveCompleteOnSocialMediaPublish = (
+  meta: Record<string, unknown> | null | undefined,
+  scheduleConfig: Record<string, unknown> | null | undefined,
+): boolean => {
+  const snapshottedValue = meta?.[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY];
+  if (typeof snapshottedValue === 'boolean') {
+    return snapshottedValue;
+  }
+  return normalizeCompleteOnSocialMediaPublish(
+    scheduleConfig?.[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY],
+  );
+};
+
+const hasRequiredEvidenceRule = (value: unknown): boolean => {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+
+  return value.some((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return true;
+    }
+    const rule = entry as Record<string, unknown>;
+    const minItems = Number(rule.minItems ?? (rule.required === false ? 0 : 1));
+    return rule.required !== false || (Number.isFinite(minItems) && minItems > 0);
+  });
+};
+
+/**
+ * Keeps publish-driven completion safe: the publication itself is the only
+ * completion proof, so it cannot bypass a strict time window or required
+ * evidence configured on the task.
+ */
+export const normalizeAndValidateSocialMediaPublishAutomationConfig = (
+  value: Record<string, unknown> | null | undefined,
+): Record<string, unknown> => {
+  const scheduleConfig = { ...(value ?? {}) };
+  if (scheduleConfig[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] !== true) {
+    return scheduleConfig;
+  }
+
+  const completionWindowMode =
+    typeof scheduleConfig.completionWindowMode === 'string'
+      ? scheduleConfig.completionWindowMode.trim().toLowerCase()
+      : 'day';
+  if (completionWindowMode !== 'day') {
+    throw new HttpError(
+      400,
+      'Automatic Social Media publish completion requires the End of day completion window',
+    );
+  }
+  if (hasRequiredEvidenceRule(scheduleConfig.evidenceRules)) {
+    throw new HttpError(
+      400,
+      'Automatic Social Media publish completion cannot be used with required evidence rules',
+    );
+  }
+  if (
+    Array.isArray(scheduleConfig.shiftEvidenceSources) &&
+    scheduleConfig.shiftEvidenceSources.length > 0
+  ) {
+    throw new HttpError(
+      400,
+      'Automatic Social Media publish completion cannot be used with shift-based evidence',
+    );
+  }
+
+  // A publish-completed log must always be linked to the Social Media item
+  // whose publication will complete it.
+  scheduleConfig[SOCIAL_MEDIA_PLAN_CONFIG_KEY] = true;
+  return scheduleConfig;
+};
+
+export const assertManualSocialMediaPublishTaskCompletionAllowed = (
+  meta: Record<string, unknown> | null | undefined,
+  scheduleConfig: Record<string, unknown> | null | undefined,
+): void => {
+  if (resolveCompleteOnSocialMediaPublish(meta, scheduleConfig)) {
+    throw new HttpError(
+      400,
+      'This task completes automatically when its linked Social Media content is published',
+    );
+  }
 };
 
 export const isSocialMediaContentTaskReady = (status: unknown): boolean =>

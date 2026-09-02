@@ -79,6 +79,7 @@ import SeoActionLog from "../models/SeoActionLog.js";
 import BookingUtmCatalog from "../models/BookingUtmCatalog.js";
 import AffiliatePayoutLog from "../models/AffiliatePayoutLog.js";
 import SocialMediaContent from "../models/SocialMediaContent.js";
+import SocialMediaContentAsset from "../models/SocialMediaContentAsset.js";
 import ShiftRole from "../models/ShiftRole.js";
 import UserShiftRole from "../models/UserShiftRole.js";
 import UserTypeMembershipPeriod from "../models/UserTypeMembershipPeriod.js";
@@ -312,6 +313,7 @@ const sequelize = new Sequelize({
     BookingUtmCatalog,
     AffiliatePayoutLog,
     SocialMediaContent,
+    SocialMediaContentAsset,
     ShiftRole,
     UserShiftRole,
     UserTypeMembershipPeriod,

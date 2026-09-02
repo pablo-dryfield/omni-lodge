@@ -4,6 +4,7 @@ export type AssistantManagerTaskScheduleConfig = Record<string, unknown> & {
   requiredShiftTemplateIds?: number[];
   scheduledWorkdayPlacement?: 'start' | 'middle' | 'end';
   requireSocialMediaPlan?: boolean;
+  completeOnSocialMediaPublish?: boolean;
 };
 
 export type AssistantManagerTaskSocialMediaContentStatus =
@@ -116,6 +117,7 @@ export type AssistantManagerTaskLogMeta = {
   shiftTimeStart?: string | null;
   shiftTimeEnd?: string | null;
   requireSocialMediaPlan?: boolean;
+  completeOnSocialMediaPublish?: boolean;
   socialMediaContentId?: number | null;
   socialMediaContentSnapshot?: AssistantManagerTaskSocialMediaContentSummary | null;
   [key: string]: unknown;

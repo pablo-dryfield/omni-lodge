@@ -71,13 +71,16 @@ import {
 import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
 import { resolveAssistantManagerTaskPlannerRange } from '../utils/assistantManagerTaskPlannerRange.js';
 import {
+  SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY,
   SOCIAL_MEDIA_CONTENT_ID_META_KEY,
   SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY,
   SOCIAL_MEDIA_PLAN_CONFIG_KEY,
+  assertManualSocialMediaPublishTaskCompletionAllowed,
   buildAssistantManagerTaskSocialMediaSnapshot,
   getStoredSocialMediaContentId,
   getStoredSocialMediaSnapshot,
   parseSocialMediaContentId,
+  normalizeAndValidateSocialMediaPublishAutomationConfig,
   requireTaskReadySocialMediaContent,
   resolveRequireSocialMediaPlan,
   type AssistantManagerTaskSocialMediaContentRecord,
@@ -112,6 +115,7 @@ const TEMPLATE_CONFIG_MANAGED_META_KEYS = [
   'shiftTimeEnd',
   'expectedEvidenceItems',
   'requireSocialMediaPlan',
+  'completeOnSocialMediaPublish',
 ] as const;
 
 const startOfPlannerWeek = (value?: string | dayjs.Dayjs | Date | null) => {
@@ -733,6 +737,20 @@ const sanitizeTemplatePayload = (body: Record<string, unknown>) => {
         throw new HttpError(400, 'scheduleConfig.requireSocialMediaPlan must be a boolean');
       }
     }
+    if (SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY in next.scheduleConfig) {
+      if (
+        typeof next.scheduleConfig[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] !==
+        'boolean'
+      ) {
+        throw new HttpError(
+          400,
+          'scheduleConfig.completeOnSocialMediaPublish must be a boolean',
+        );
+      }
+    }
+    next.scheduleConfig = normalizeAndValidateSocialMediaPublishAutomationConfig(
+      next.scheduleConfig,
+    );
   }
   if (body.isActive != null) {
     next.isActive = Boolean(body.isActive);
@@ -1124,6 +1142,8 @@ const sanitizeScheduleConfigMeta = (config: Record<string, unknown>, shiftTime?:
     meta.tags = config.tags.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
   }
   meta[SOCIAL_MEDIA_PLAN_CONFIG_KEY] = config[SOCIAL_MEDIA_PLAN_CONFIG_KEY] === true;
+  meta[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] =
+    config[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] === true;
   return meta;
 };
 
@@ -2728,6 +2748,14 @@ const generateLogsForAssignments = async (
         baseMeta[SOCIAL_MEDIA_PLAN_CONFIG_KEY] === true;
       shouldUpdateMeta = true;
     }
+    if (
+      typeof existingMeta[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] !==
+      'boolean'
+    ) {
+      existingMeta[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] =
+        baseMeta[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] === true;
+      shouldUpdateMeta = true;
+    }
     Object.entries(shiftMeta).forEach(([key, value]) => {
       if (existingMeta[key] !== value) {
         existingMeta[key] = value;
@@ -3064,12 +3092,12 @@ export const bulkUpdateTaskTemplateOptions = async (
       }
 
       for (const template of templates) {
+        const scheduleConfig = normalizeAndValidateSocialMediaPublishAutomationConfig(
+          mergeAssistantManagerTaskBulkOptions(template.scheduleConfig, options),
+        );
         await template.update(
           {
-            scheduleConfig: mergeAssistantManagerTaskBulkOptions(
-              template.scheduleConfig,
-              options,
-            ),
+            scheduleConfig,
             updatedBy: actorId,
           },
           { transaction },
@@ -4320,6 +4348,10 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
 
       if (status) {
         if (status === 'completed') {
+          assertManualSocialMediaPublishTaskCompletionAllowed(
+            nextMeta,
+            template.scheduleConfig,
+          );
           if (!isTaskLogOnCurrentDay(log, timezoneName)) {
             throw new HttpError(400, 'Task can only be completed on its scheduled day');
           }
@@ -4552,6 +4584,8 @@ export const createManualTaskLog = async (req: AuthenticatedRequest, res: Respon
       ...payload.meta,
       [SOCIAL_MEDIA_PLAN_CONFIG_KEY]:
         template.scheduleConfig?.[SOCIAL_MEDIA_PLAN_CONFIG_KEY] === true,
+      [SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY]:
+        template.scheduleConfig?.[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] === true,
     };
     const linkedSocialMediaContentId = getStoredSocialMediaContentId(meta);
     if (linkedSocialMediaContentId) {

@@ -1,9 +1,13 @@
 import {
   buildAssistantManagerTaskSocialMediaSnapshot,
+  assertManualSocialMediaPublishTaskCompletionAllowed,
   getStoredSocialMediaSnapshot,
   isSocialMediaContentTaskReady,
+  normalizeCompleteOnSocialMediaPublish,
+  normalizeAndValidateSocialMediaPublishAutomationConfig,
   parseSocialMediaContentId,
   requireTaskReadySocialMediaContent,
+  resolveCompleteOnSocialMediaPublish,
   resolveRequireSocialMediaPlan,
   type AssistantManagerTaskSocialMediaContentRecord,
 } from '../assistantManagerTaskSocialMediaRuleService';
@@ -27,6 +31,86 @@ describe('assistant-manager Social Media plan task rule', () => {
       {},
       { requireSocialMediaPlan: true },
     )).toBe(true);
+  });
+
+  it('normalizes and resolves publish auto-completion without coercing truthy values', () => {
+    expect(normalizeCompleteOnSocialMediaPublish(true)).toBe(true);
+    expect(normalizeCompleteOnSocialMediaPublish(false)).toBe(false);
+    expect(normalizeCompleteOnSocialMediaPublish('true')).toBe(false);
+
+    expect(resolveCompleteOnSocialMediaPublish(
+      { completeOnSocialMediaPublish: false },
+      { completeOnSocialMediaPublish: true },
+    )).toBe(false);
+    expect(resolveCompleteOnSocialMediaPublish(
+      {},
+      { completeOnSocialMediaPublish: true },
+    )).toBe(true);
+    expect(resolveCompleteOnSocialMediaPublish(undefined, undefined)).toBe(false);
+  });
+
+  it('makes the Social Media plan gate mandatory for publish-driven completion', () => {
+    expect(normalizeAndValidateSocialMediaPublishAutomationConfig({
+      completeOnSocialMediaPublish: true,
+      requireSocialMediaPlan: false,
+      completionWindowMode: 'day',
+    })).toEqual({
+      completeOnSocialMediaPublish: true,
+      requireSocialMediaPlan: true,
+      completionWindowMode: 'day',
+    });
+  });
+
+  it.each([
+    [
+      { completeOnSocialMediaPublish: true, completionWindowMode: 'strict' },
+      'requires the End of day completion window',
+    ],
+    [
+      {
+        completeOnSocialMediaPublish: true,
+        evidenceRules: [{ key: 'photo', required: true, minItems: 1 }],
+      },
+      'cannot be used with required evidence rules',
+    ],
+    [
+      {
+        completeOnSocialMediaPublish: true,
+        evidenceRules: [{ key: 'link', required: false, minItems: 1 }],
+      },
+      'cannot be used with required evidence rules',
+    ],
+    [
+      {
+        completeOnSocialMediaPublish: true,
+        shiftEvidenceSources: [{ key: 'promotion_staff' }],
+      },
+      'cannot be used with shift-based evidence',
+    ],
+  ])('rejects an unsafe publish automation configuration %#', (config, message) => {
+    expect(() => normalizeAndValidateSocialMediaPublishAutomationConfig(config)).toThrow(message);
+  });
+
+  it('allows optional evidence that is not required for completion', () => {
+    expect(normalizeAndValidateSocialMediaPublishAutomationConfig({
+      completeOnSocialMediaPublish: true,
+      evidenceRules: [{ key: 'reference', required: false, minItems: 0 }],
+    })).toMatchObject({
+      completeOnSocialMediaPublish: true,
+      requireSocialMediaPlan: true,
+    });
+  });
+
+  it('blocks only manual completion for publish-completed task logs', () => {
+    expect(() => assertManualSocialMediaPublishTaskCompletionAllowed(
+      { completeOnSocialMediaPublish: true },
+      {},
+    )).toThrow('completes automatically when its linked Social Media content is published');
+
+    expect(() => assertManualSocialMediaPublishTaskCompletionAllowed(
+      { completeOnSocialMediaPublish: false },
+      { completeOnSocialMediaPublish: true },
+    )).not.toThrow();
   });
 
   it('accepts only positive integer content ids or null', () => {

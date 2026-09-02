@@ -212,6 +212,8 @@ app.use(
         'https://graph.facebook.com',
         'https://www.facebook.com',
         'https://web.facebook.com',
+        'https://www.googleapis.com',
+        'https://content.googleapis.com',
       ],
       frameSrc: ['https://www.facebook.com', 'https://web.facebook.com'],
     },

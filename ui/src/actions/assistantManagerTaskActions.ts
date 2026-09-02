@@ -219,6 +219,7 @@ export const updateAmTaskTemplate = createAsyncThunk(
 export type BulkAmTaskTemplateOptions = {
   requireShift?: boolean;
   requireSocialMediaPlan?: boolean;
+  completeOnSocialMediaPublish?: boolean;
   completionWindowMode?: 'day' | 'strict';
   priority?: 'high' | 'medium' | 'low';
   notifyAtStart?: boolean;

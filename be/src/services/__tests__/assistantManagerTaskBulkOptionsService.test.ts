@@ -10,6 +10,7 @@ describe('assistant-manager task bulk options payload validation', () => {
       options: {
         requireShift: false,
         requireSocialMediaPlan: true,
+        completeOnSocialMediaPublish: true,
         completionWindowMode: 'strict',
         priority: 'high',
         notifyAtStart: true,
@@ -21,6 +22,7 @@ describe('assistant-manager task bulk options payload validation', () => {
       options: {
         requireShift: false,
         requireSocialMediaPlan: true,
+        completeOnSocialMediaPublish: true,
         completionWindowMode: 'strict',
         priority: 'high',
         notifyAtStart: true,
@@ -47,6 +49,7 @@ describe('assistant-manager task bulk options payload validation', () => {
     [{ templateIds: [3], options: {} }, 'At least one option is required'],
     [{ templateIds: [3], options: { requireShift: 'true' } }, 'options.requireShift must be a boolean'],
     [{ templateIds: [3], options: { requireSocialMediaPlan: 'true' } }, 'options.requireSocialMediaPlan must be a boolean'],
+    [{ templateIds: [3], options: { completeOnSocialMediaPublish: 'true' } }, 'options.completeOnSocialMediaPublish must be a boolean'],
     [{ templateIds: [3], options: { priority: 'urgent' } }, 'options.priority must be high, medium, or low'],
     [{ templateIds: [3], options: { scheduledWorkdayPlacement: 'later' } }, 'options.scheduledWorkdayPlacement must be start, middle, or end'],
     [{ templateIds: [3], options: { requiredShiftTemplateIds: [0] } }, 'options.requiredShiftTemplateIds must contain only positive integer ids'],
@@ -77,6 +80,7 @@ describe('assistant-manager task bulk options merge', () => {
       {
         requireShift: false,
         requireSocialMediaPlan: true,
+        completeOnSocialMediaPublish: true,
         priority: 'low',
         notifyAtStart: false,
         scheduledWorkdayPlacement: 'middle',
@@ -87,6 +91,7 @@ describe('assistant-manager task bulk options merge', () => {
       time: '09:00',
       requireShift: false,
       requireSocialMediaPlan: true,
+      completeOnSocialMediaPublish: true,
       priority: 'low',
       notifyAtStart: false,
       scheduledWorkdayPlacement: 'middle',
@@ -99,6 +104,26 @@ describe('assistant-manager task bulk options merge', () => {
       { cadenceAnchor: '2026-08-24', requiredShiftTemplateIds: [5] },
       { requiredShiftTemplateIds: [] },
     )).toEqual({ cadenceAnchor: '2026-08-24' });
+  });
+
+  it('automatically enables the Social Media plan gate with publish completion', () => {
+    expect(mergeAssistantManagerTaskBulkOptions(
+      { requireSocialMediaPlan: false },
+      { completeOnSocialMediaPublish: true },
+    )).toEqual({
+      requireSocialMediaPlan: true,
+      completeOnSocialMediaPublish: true,
+    });
+  });
+
+  it('does not allow a bulk edit to remove the plan gate while publish completion remains enabled', () => {
+    expect(mergeAssistantManagerTaskBulkOptions(
+      { requireSocialMediaPlan: true, completeOnSocialMediaPublish: true },
+      { requireSocialMediaPlan: false },
+    )).toEqual({
+      requireSocialMediaPlan: true,
+      completeOnSocialMediaPublish: true,
+    });
   });
 
   it('leaves legacy shift flags untouched when requireShift is omitted', () => {

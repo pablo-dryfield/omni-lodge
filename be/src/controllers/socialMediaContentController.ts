@@ -1,10 +1,11 @@
 import type { Response } from 'express';
-import { Op } from 'sequelize';
+import { Op, type Includeable } from 'sequelize';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import SocialMediaContent, {
   SOCIAL_MEDIA_CONTENT_STATUSES,
   type SocialMediaContentStatus,
 } from '../models/SocialMediaContent.js';
+import SocialMediaContentAsset from '../models/SocialMediaContentAsset.js';
 import User from '../models/User.js';
 import {
   deleteSocialMediaThumbnail,
@@ -25,9 +26,28 @@ const STATUS_ORDER = new Map<SocialMediaContentStatus, number>(
   SOCIAL_MEDIA_CONTENT_STATUSES.map((status, index) => [status, index]),
 );
 const THUMBNAIL_MIME_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
+const DEFAULT_TARGET_PLATFORMS = ['instagram', 'tiktok'];
+const WORKFLOW_CONTROLLED_FIELDS = new Set([
+  'status',
+  'targetPlatforms',
+  'scheduledAt',
+  'publishedAt',
+  'driveProjectUrl',
+  'driveUrl',
+  'platformLinks',
+]);
 const USER_INCLUDE = [
   { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName', 'username'] },
   { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName', 'username'] },
+];
+const CONTENT_INCLUDE: Includeable[] = [
+  ...USER_INCLUDE,
+  {
+    model: SocialMediaContentAsset,
+    as: 'assets',
+    separate: true,
+    order: [['createdAt', 'ASC']],
+  },
 ];
 
 class SocialMediaContentValidationError extends Error {}
@@ -43,7 +63,7 @@ type NormalizedContentPayload = {
     hashtags: string[];
     targetPlatforms: string[];
     status: SocialMediaContentStatus;
-    scheduledAt: Date | null;
+    scheduledAt: string | null;
     publishedAt: Date | null;
     driveProjectUrl: string | null;
     platformLinks: Record<string, string>;
@@ -146,6 +166,24 @@ const normalizeDate = (value: unknown, label: string): Date | null => {
     throw new SocialMediaContentValidationError(`${label} must be a valid date and time.`);
   }
   return parsed;
+};
+
+const normalizeDateOnly = (value: unknown, label: string): string | null => {
+  if (value == null || value === '') return null;
+  const normalized = typeof value === 'string' ? value.trim().slice(0, 10) : '';
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) {
+    throw new SocialMediaContentValidationError(`${label} must be a valid calendar date.`);
+  }
+  const [year, month, day] = normalized.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+  ) {
+    throw new SocialMediaContentValidationError(`${label} must be a valid calendar date.`);
+  }
+  return normalized;
 };
 
 const normalizeUrl = (value: unknown, label: string): string | null => {
@@ -286,7 +324,7 @@ const normalizePayload = (
       { maxItems: 12 },
     ),
     status,
-    scheduledAt: normalizeDate(scheduledAt, 'Scheduled date'),
+    scheduledAt: normalizeDateOnly(scheduledAt, 'Scheduled date'),
     publishedAt: normalizeDate(publishedAt, 'Published date'),
     driveProjectUrl: normalizeUrl(driveProjectUrl, 'Drive project file or folder URL'),
     platformLinks: normalizePlatformLinks(bodyOrExisting('platformLinks', existing?.platformLinks ?? {})),
@@ -326,22 +364,38 @@ export const serializeSocialMediaContent = (content: SocialMediaContent) => ({
   hashtags: Array.isArray(content.hashtags) ? content.hashtags : [],
   targetPlatforms: Array.isArray(content.targetPlatforms) ? content.targetPlatforms : [],
   status: content.status,
-  scheduledAt: isoDate(content.scheduledAt),
+  scheduledAt: content.scheduledAt ?? null,
+  productionStartedAt: isoDate(content.productionStartedAt),
+  readyAt: isoDate(content.readyAt),
   publishedAt: isoDate(content.publishedAt),
   driveProjectUrl: content.driveProjectUrl,
   platformLinks: content.platformLinks && typeof content.platformLinks === 'object' ? content.platformLinks : {},
   thumbnailUrl: content.thumbnailUrl,
+  assets: (content.assets ?? []).map((asset) => ({
+    id: asset.id,
+    contentId: asset.contentId,
+    kind: asset.kind,
+    originalName: asset.originalName,
+    mimeType: asset.mimeType,
+    sizeBytes: Number(asset.sizeBytes),
+    webViewUrl: asset.webViewUrl,
+    uploadedBy: asset.uploadedBy,
+    createdAt: isoDate(asset.createdAt),
+    updatedAt: isoDate(asset.updatedAt),
+  })),
   archivedAt: isoDate(content.archivedAt),
   createdBy: content.createdBy,
   updatedBy: content.updatedBy,
+  publishedBy: content.publishedBy,
+  publishedTaskLogId: content.publishedTaskLogId,
   createdByName: displayName(content.createdByUser as UserSummary | null | undefined),
   updatedByName: displayName(content.updatedByUser as UserSummary | null | undefined),
   createdAt: isoDate(content.createdAt),
   updatedAt: isoDate(content.updatedAt),
 });
 
-const loadContent = (id: number): Promise<SocialMediaContent | null> =>
-  SocialMediaContent.findByPk(id, { include: USER_INCLUDE });
+export const loadSocialMediaContent = (id: number): Promise<SocialMediaContent | null> =>
+  SocialMediaContent.findByPk(id, { include: CONTENT_INCLUDE });
 
 const parseId = (value: unknown): number => {
   const id = Number(value);
@@ -403,14 +457,18 @@ export const listSocialMediaContent = async (
 
     const rows = await SocialMediaContent.findAll({
       where,
-      include: USER_INCLUDE,
+      include: CONTENT_INCLUDE,
       order: [['updatedAt', 'DESC'], ['id', 'DESC']],
     });
     rows.sort((left, right) => {
       const statusDifference = (STATUS_ORDER.get(left.status) ?? 99) - (STATUS_ORDER.get(right.status) ?? 99);
       if (statusDifference !== 0) return statusDifference;
-      const leftSchedule = left.scheduledAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      const rightSchedule = right.scheduledAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      const leftSchedule = left.scheduledAt
+        ? Date.parse(`${left.scheduledAt}T00:00:00.000Z`)
+        : Number.MAX_SAFE_INTEGER;
+      const rightSchedule = right.scheduledAt
+        ? Date.parse(`${right.scheduledAt}T00:00:00.000Z`)
+        : Number.MAX_SAFE_INTEGER;
       if (leftSchedule !== rightSchedule) return leftSchedule - rightSchedule;
       return right.updatedAt.getTime() - left.updatedAt.getTime();
     });
@@ -461,7 +519,7 @@ export const listSelectableSocialMediaContent = async (
         status: row.status,
         targetPlatforms: Array.isArray(row.targetPlatforms) ? row.targetPlatforms : [],
         thumbnailUrl: row.thumbnailUrl,
-        scheduledAt: isoDate(row.scheduledAt),
+        scheduledAt: row.scheduledAt ?? null,
         isTaskReady: isSocialMediaContentTaskReady(row),
       })),
     });
@@ -475,7 +533,7 @@ export const getSocialMediaContent = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const content = await loadContent(parseId(req.params.id));
+    const content = await loadSocialMediaContent(parseId(req.params.id));
     if (!content) {
       res.status(404).json({ message: 'Social Media content was not found.' });
       return;
@@ -492,13 +550,24 @@ export const createSocialMediaContent = async (
 ): Promise<void> => {
   try {
     const actorId = req.authContext?.id ?? null;
-    const { values } = normalizePayload(req.body);
+    const body = req.body && typeof req.body === 'object'
+      ? req.body as Record<string, unknown>
+      : {};
+    const { values } = normalizePayload({
+      ...body,
+      targetPlatforms: DEFAULT_TARGET_PLATFORMS,
+      status: 'idea',
+      scheduledAt: null,
+      publishedAt: null,
+      driveProjectUrl: null,
+      platformLinks: {},
+    });
     const created = await SocialMediaContent.create({
       ...values,
       createdBy: actorId,
       updatedBy: actorId,
     });
-    const content = await loadContent(created.id) ?? created;
+    const content = await loadSocialMediaContent(created.id) ?? created;
     res.status(201).json({ item: serializeSocialMediaContent(content) });
   } catch (error) {
     respondError(res, error, 'Failed to create Social Media content.');
@@ -510,15 +579,29 @@ export const updateSocialMediaContent = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const content = await loadContent(parseId(req.params.id));
+    const content = await loadSocialMediaContent(parseId(req.params.id));
     if (!content) {
       res.status(404).json({ message: 'Social Media content was not found.' });
       return;
     }
+    if (content.status === 'published' || content.publishedAt || content.publishedTaskLogId) {
+      throw new SocialMediaContentValidationError(
+        'Published Social Media content cannot be edited because its brief is part of the completed task audit.',
+      );
+    }
+    const body = req.body && typeof req.body === 'object'
+      ? req.body as Record<string, unknown>
+      : {};
+    const controlledField = Object.keys(body).find((key) => WORKFLOW_CONTROLLED_FIELDS.has(key));
+    if (controlledField) {
+      throw new SocialMediaContentValidationError(
+        'Use the guided workflow actions to change stage, dates, Drive folder, or publication links.',
+      );
+    }
     const { values, storedThumbnailToDelete } = normalizePayload(req.body, content);
     await content.update({ ...values, updatedBy: req.authContext?.id ?? null });
     await safelyDeleteStoredThumbnail(storedThumbnailToDelete);
-    const updated = await loadContent(content.id) ?? content;
+    const updated = await loadSocialMediaContent(content.id) ?? content;
     res.status(200).json({ item: serializeSocialMediaContent(updated) });
   } catch (error) {
     respondError(res, error, 'Failed to update Social Media content.');
@@ -530,7 +613,7 @@ export const archiveSocialMediaContent = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const content = await loadContent(parseId(req.params.id));
+    const content = await loadSocialMediaContent(parseId(req.params.id));
     if (!content) {
       res.status(404).json({ message: 'Social Media content was not found.' });
       return;
@@ -542,7 +625,7 @@ export const archiveSocialMediaContent = async (
         updatedBy: req.authContext?.id ?? null,
       });
     }
-    const archived = await loadContent(content.id) ?? content;
+    const archived = await loadSocialMediaContent(content.id) ?? content;
     res.status(200).json({ item: serializeSocialMediaContent(archived) });
   } catch (error) {
     respondError(res, error, 'Failed to archive Social Media content.');
@@ -555,7 +638,7 @@ export const uploadSocialMediaThumbnail = async (
 ): Promise<void> => {
   let newlyUploadedFileId: string | null = null;
   try {
-    const content = await loadContent(parseId(req.params.id));
+    const content = await loadSocialMediaContent(parseId(req.params.id));
     if (!content) {
       res.status(404).json({ message: 'Social Media content was not found.' });
       return;
@@ -586,7 +669,7 @@ export const uploadSocialMediaThumbnail = async (
     if (previousFileId && previousFileId !== stored.driveFileId) {
       await safelyDeleteStoredThumbnail(previousFileId);
     }
-    const updated = await loadContent(content.id) ?? content;
+    const updated = await loadSocialMediaContent(content.id) ?? content;
     res.status(200).json({ item: serializeSocialMediaContent(updated) });
   } catch (error) {
     await safelyDeleteStoredThumbnail(newlyUploadedFileId);
@@ -599,7 +682,7 @@ export const removeSocialMediaThumbnail = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const content = await loadContent(parseId(req.params.id));
+    const content = await loadSocialMediaContent(parseId(req.params.id));
     if (!content) {
       res.status(404).json({ message: 'Social Media content was not found.' });
       return;
@@ -613,7 +696,7 @@ export const removeSocialMediaThumbnail = async (
       updatedBy: req.authContext?.id ?? null,
     });
     await safelyDeleteStoredThumbnail(storedFileId);
-    const updated = await loadContent(content.id) ?? content;
+    const updated = await loadSocialMediaContent(content.id) ?? content;
     res.status(200).json({ item: serializeSocialMediaContent(updated) });
   } catch (error) {
     respondError(res, error, 'Failed to remove the Social Media thumbnail.');
