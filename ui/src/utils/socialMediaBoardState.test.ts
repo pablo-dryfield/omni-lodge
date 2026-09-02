@@ -1,9 +1,11 @@
 import {
   buildSocialMediaEditorDraftStorageKey,
+  formatHashtag,
   normalizeHashtags,
   parseSocialMediaBoardUrlState,
   parseStoredSocialMediaEditorDraft,
   resolveEditorAfterMediaFailure,
+  toSocialMediaDateOnly,
   writeSocialMediaBoardUrlState,
 } from "./socialMediaBoardState";
 
@@ -70,18 +72,34 @@ describe("social media editor draft persistence", () => {
     expect(draft?.editor).toBe("new");
     expect(draft?.values.title).toBe("Weekend reel");
     expect(draft?.values.hashtags).toEqual(["krakow"]);
+    expect(draft?.values.scheduledAt).toBe("2026-09-04");
     expect(draft?.values.platformLinks).toEqual({ instagram: "https://instagram.com/example" });
   });
 
   it("normalizes hashtags for the API", () => {
     expect(normalizeHashtags(["#Krakow", " Krakow ", "##pubcrawl", ""])).toEqual([
-      "Krakow",
+      "krakow",
       "pubcrawl",
     ]);
   });
 
-  it("stores tags without a leading hash so rendering never produces double hashes", () => {
-    const normalized = normalizeHashtags(["##krakow", "#nightlife"]);
-    expect(normalized.map((tag) => `#${tag}`)).toEqual(["#krakow", "#nightlife"]);
+  it("deduplicates tags case-insensitively and renders exactly one leading hash", () => {
+    const normalized = normalizeHashtags(["##Krakow", "#krakow", "#NightLife"]);
+    expect(normalized).toEqual(["krakow", "nightlife"]);
+    expect(normalized.map(formatHashtag)).toEqual(["#krakow", "#nightlife"]);
+    expect(formatHashtag("###AlreadyTagged")).toBe("#alreadytagged");
+    expect(formatHashtag("###")).toBe("");
+  });
+});
+
+describe("social media planned dates", () => {
+  it("keeps scheduling date-only and removes time from legacy ISO values", () => {
+    expect(toSocialMediaDateOnly("2026-09-04T23:30:00.000Z")).toBe("2026-09-04");
+    expect(toSocialMediaDateOnly("2026-09-04")).toBe("2026-09-04");
+  });
+
+  it("rejects impossible calendar dates", () => {
+    expect(toSocialMediaDateOnly("2026-02-29")).toBeNull();
+    expect(toSocialMediaDateOnly("not-a-date")).toBeNull();
   });
 });

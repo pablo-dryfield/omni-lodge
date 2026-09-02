@@ -1,10 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
-import type { SocialMediaContentStatus } from "../types/socialMedia";
+import type {
+  SocialMediaAssetKind,
+  SocialMediaContentAsset,
+  SocialMediaContentStatus,
+  SocialMediaTaskCompletion,
+} from "../types/socialMedia";
 
-export { SOCIAL_MEDIA_CONTENT_STATUSES } from "../types/socialMedia";
-export type { SocialMediaContentStatus } from "../types/socialMedia";
+export {
+  SOCIAL_MEDIA_ASSET_KINDS,
+  SOCIAL_MEDIA_CONTENT_STATUSES,
+} from "../types/socialMedia";
+export type {
+  SocialMediaAssetKind,
+  SocialMediaContentAsset,
+  SocialMediaContentStatus,
+  SocialMediaTaskCompletion,
+} from "../types/socialMedia";
 
 export type SocialMediaContentItem = {
   id: number;
@@ -20,8 +33,15 @@ export type SocialMediaContentItem = {
   driveProjectUrl: string | null;
   platformLinks: Record<string, string>;
   thumbnailUrl: string | null;
+  assets: SocialMediaContentAsset[];
+  productionStartedAt: string | null;
+  readyAt: string | null;
+  publishedBy: number | null;
+  publishedTaskLogId: number | null;
   createdBy: number | null;
+  createdByName: string | null;
   updatedBy: number | null;
+  updatedByName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -52,19 +72,47 @@ export type SocialMediaContentSelectableResponse = {
   items: SocialMediaContentSelectableItem[];
 };
 
-export type SocialMediaContentPayload = {
+export type SocialMediaContentBriefPayload = {
   title: string;
   idea: string;
   onVideoCaptions: string;
   platformCaption: string;
   hashtags: string[];
-  targetPlatforms: string[];
-  status: SocialMediaContentStatus;
-  scheduledAt: string | null;
-  publishedAt: string | null;
-  driveProjectUrl: string | null;
+};
+
+export type CreateSocialMediaContentPayload = SocialMediaContentBriefPayload;
+export type EditSocialMediaContentPayload = Partial<SocialMediaContentBriefPayload>;
+
+/**
+ * Backward-compatible name for callers that edit the idea brief. Workflow state
+ * is intentionally changed through the dedicated transition mutations below.
+ */
+export type SocialMediaContentPayload = SocialMediaContentBriefPayload;
+
+export type PlanSocialMediaContentPayload = {
+  scheduledDate: string;
+};
+
+export type PublishSocialMediaContentPayload = {
   platformLinks: Record<string, string>;
-  thumbnailUrl: string | null;
+};
+
+export type SocialMediaPublishResult = {
+  item: SocialMediaContentItem;
+  taskCompletion: SocialMediaTaskCompletion | null;
+};
+
+export type SocialMediaAssetUploadProgress = {
+  loaded: number;
+  total: number | null;
+  percent: number | null;
+};
+
+export type UploadSocialMediaAssetInput = {
+  id: number;
+  assetType: SocialMediaAssetKind;
+  file: File;
+  onProgress?: (progress: SocialMediaAssetUploadProgress) => void;
 };
 
 type ItemResponse = { item: SocialMediaContentItem };
@@ -152,7 +200,7 @@ const useInvalidateSocialMediaContent = () => {
 
 export const useCreateSocialMediaContent = () => {
   const invalidate = useInvalidateSocialMediaContent();
-  return useMutation<SocialMediaContentItem, ApiError, SocialMediaContentPayload>({
+  return useMutation<SocialMediaContentItem, ApiError, CreateSocialMediaContentPayload>({
     mutationFn: async (payload) => {
       const response = await axiosInstance.post<ItemResponse>("/social-media/content", payload);
       return response.data.item;
@@ -166,7 +214,7 @@ export const useUpdateSocialMediaContent = () => {
   return useMutation<
     SocialMediaContentItem,
     ApiError,
-    { id: number; changes: Partial<SocialMediaContentPayload> }
+    { id: number; changes: EditSocialMediaContentPayload }
   >({
     mutationFn: async ({ id, changes }) => {
       const response = await axiosInstance.patch<ItemResponse>(
@@ -176,6 +224,130 @@ export const useUpdateSocialMediaContent = () => {
       return response.data.item;
     },
     onSuccess: invalidate,
+  });
+};
+
+export const usePlanSocialMediaContent = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<
+    SocialMediaContentItem,
+    ApiError,
+    { id: number; scheduledDate: string }
+  >({
+    mutationFn: async ({ id, scheduledDate }) => {
+      const payload: PlanSocialMediaContentPayload = { scheduledDate };
+      const response = await axiosInstance.post<ItemResponse>(
+        `/social-media/content/${id}/plan`,
+        payload,
+      );
+      return response.data.item;
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const useStartSocialMediaProduction = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<SocialMediaContentItem, ApiError, number>({
+    mutationFn: async (id) => {
+      const response = await axiosInstance.post<ItemResponse>(
+        `/social-media/content/${id}/start-production`,
+      );
+      return response.data.item;
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const useCreateSocialMediaProjectFolder = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<SocialMediaContentItem, ApiError, number>({
+    mutationFn: async (id) => {
+      const response = await axiosInstance.post<ItemResponse>(
+        `/social-media/content/${id}/project-folder`,
+      );
+      return response.data.item;
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const useUploadSocialMediaAsset = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<SocialMediaContentItem, ApiError, UploadSocialMediaAssetInput>({
+    mutationFn: async ({ id, assetType, file, onProgress }) => {
+      const body = new FormData();
+      body.append("assetType", assetType);
+      body.append("file", file);
+      const response = await axiosInstance.post<ItemResponse>(
+        `/social-media/content/${id}/assets`,
+        body,
+        {
+          onUploadProgress: ({ loaded, total }) => {
+            if (!onProgress) return;
+            const normalizedTotal = typeof total === "number" && total > 0 ? total : null;
+            onProgress({
+              loaded,
+              total: normalizedTotal,
+              percent: normalizedTotal === null
+                ? null
+                : Math.min(100, Math.round((loaded / normalizedTotal) * 100)),
+            });
+          },
+        },
+      );
+      return response.data.item;
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const useDeleteSocialMediaAsset = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<
+    SocialMediaContentItem,
+    ApiError,
+    { id: number; assetId: number }
+  >({
+    mutationFn: async ({ id, assetId }) => {
+      const response = await axiosInstance.delete<ItemResponse>(
+        `/social-media/content/${id}/assets/${assetId}`,
+      );
+      return response.data.item;
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const useMarkSocialMediaReady = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<SocialMediaContentItem, ApiError, number>({
+    mutationFn: async (id) => {
+      const response = await axiosInstance.post<ItemResponse>(
+        `/social-media/content/${id}/ready`,
+      );
+      return response.data.item;
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const usePublishSocialMediaContent = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<
+    SocialMediaPublishResult,
+    ApiError,
+    { id: number; platformLinks: Record<string, string> }
+  >({
+    mutationFn: async ({ id, platformLinks }) => {
+      const payload: PublishSocialMediaContentPayload = { platformLinks };
+      const response = await axiosInstance.post<SocialMediaPublishResult>(
+        `/social-media/content/${id}/publish`,
+        payload,
+      );
+      return response.data;
+    },
+    onSuccess: async ({ item }) => invalidate(item),
   });
 };
 

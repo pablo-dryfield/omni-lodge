@@ -100,6 +100,38 @@ const normalizeOptionalIso = (value: unknown): string | null => {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 };
 
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
+
+const isValidDateOnly = (value: string): boolean => {
+  const match = DATE_ONLY_PATTERN.exec(value);
+  if (!match) return false;
+  const [, yearValue, monthValue, dayValue] = match;
+  const year = Number(yearValue);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+};
+
+/** Converts picker values and legacy ISO timestamps to the API's date-only value. */
+export const toSocialMediaDateOnly = (
+  value: unknown,
+): string | null => {
+  if (value == null || value === "") return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const year = String(value.getFullYear()).padStart(4, "0");
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  if (typeof value !== "string") return null;
+  const candidate = value.trim().slice(0, 10);
+  return isValidDateOnly(candidate) ? candidate : null;
+};
+
 const normalizePlatformLinks = (value: unknown): Record<string, string> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>(
@@ -141,7 +173,7 @@ export const parseStoredSocialMediaEditorDraft = (
         hashtags: normalizeHashtags(normalizeStringArray(source.hashtags)),
         targetPlatforms: normalizeStringArray(source.targetPlatforms),
         status: source.status,
-        scheduledAt: normalizeOptionalIso(source.scheduledAt),
+        scheduledAt: toSocialMediaDateOnly(source.scheduledAt),
         publishedAt: normalizeOptionalIso(source.publishedAt),
         driveProjectUrl: String(source.driveProjectUrl ?? source.driveUrl ?? ""),
         platformLinks: normalizePlatformLinks(source.platformLinks),
@@ -154,11 +186,23 @@ export const parseStoredSocialMediaEditorDraft = (
   }
 };
 
-export const normalizeHashtags = (values: readonly string[]): string[] =>
-  Array.from(
-    new Set(
-      values
-        .map((value) => value.trim().replace(/^#+/, ""))
-        .filter(Boolean),
-    ),
-  );
+const normalizeHashtag = (value: string): string =>
+  value.trim().replace(/^#+/u, "").trim().toLowerCase();
+
+/** Stores tags without `#` and removes duplicates regardless of casing. */
+export const normalizeHashtags = (values: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  return values.reduce<string[]>((result, value) => {
+    const normalized = normalizeHashtag(value);
+    if (!normalized || seen.has(normalized)) return result;
+    seen.add(normalized);
+    result.push(normalized);
+    return result;
+  }, []);
+};
+
+/** Presents a normalized tag with exactly one leading hash. */
+export const formatHashtag = (value: string): string => {
+  const normalized = normalizeHashtag(value);
+  return normalized ? `#${normalized}` : "";
+};
