@@ -16,6 +16,7 @@ jest.mock('../../models/SocialMediaContentAsset.js', () => ({
   ],
   default: {
     create: jest.fn(),
+    destroy: jest.fn(),
     findAll: jest.fn(),
     findOne: jest.fn(),
   },
@@ -27,6 +28,9 @@ jest.mock('../socialMediaContentController.js', () => ({
 jest.mock('../../services/socialMediaAssetStorageService.js', () => ({
   SocialMediaAssetStorageValidationError:
     class SocialMediaAssetStorageValidationError extends Error {},
+  SocialMediaProjectFolderCheckUnavailableError:
+    class SocialMediaProjectFolderCheckUnavailableError extends Error {},
+  checkSocialMediaProjectFolder: jest.fn(),
   deleteSocialMediaAsset: jest.fn(),
   ensureSocialMediaProjectFolder: jest.fn(),
   storeSocialMediaAsset: jest.fn(),
@@ -35,6 +39,7 @@ jest.mock('../../services/socialMediaPublishTaskService.js', () => ({
   SocialMediaPublishTaskConflictError:
     class SocialMediaPublishTaskConflictError extends Error {},
   completeTaskForSocialMediaPublication: jest.fn(),
+  syncPublishedSocialMediaTaskEvidence: jest.fn(),
 }));
 jest.mock('../../services/socialMediaResumableUploadService.js', () => ({
   finalizeSocialMediaResumableUpload: jest.fn(),
@@ -47,15 +52,21 @@ jest.mock('../../utils/logger.js', () => ({
 
 import type { Response } from 'express';
 import { UniqueConstraintError } from 'sequelize';
+import UserModelStub from '../../__mocks__/sequelizeModelStub';
 import SocialMediaContent from '../../models/SocialMediaContent';
 import SocialMediaContentAsset from '../../models/SocialMediaContentAsset';
 import {
+  checkSocialMediaProjectFolder,
   deleteSocialMediaAsset,
   ensureSocialMediaProjectFolder,
   SocialMediaAssetStorageValidationError,
+  SocialMediaProjectFolderCheckUnavailableError,
   storeSocialMediaAsset,
 } from '../../services/socialMediaAssetStorageService';
-import { completeTaskForSocialMediaPublication } from '../../services/socialMediaPublishTaskService';
+import {
+  completeTaskForSocialMediaPublication,
+  syncPublishedSocialMediaTaskEvidence,
+} from '../../services/socialMediaPublishTaskService';
 import {
   finalizeSocialMediaResumableUpload,
   initiateSocialMediaResumableUpload,
@@ -67,6 +78,7 @@ import {
 } from '../socialMediaContentController';
 import {
   createSocialMediaProjectFolder,
+  checkSocialMediaProjectFolderHealth,
   finalizeSocialMediaAssetUpload,
   initiateSocialMediaAssetUpload,
   markSocialMediaReady,
@@ -74,6 +86,7 @@ import {
   publishSocialMediaContent,
   removeSocialMediaAsset,
   startSocialMediaProduction,
+  updatePublishedSocialMediaLinks,
   uploadSocialMediaAsset,
 } from '../socialMediaWorkflowController';
 
@@ -82,10 +95,15 @@ const mockTransaction = SocialMediaContent.sequelize?.transaction as jest.Mock;
 const mockFindAssets = SocialMediaContentAsset.findAll as jest.Mock;
 const mockFindAsset = SocialMediaContentAsset.findOne as jest.Mock;
 const mockCreateAsset = SocialMediaContentAsset.create as jest.Mock;
+const mockDestroyAssets = SocialMediaContentAsset.destroy as jest.Mock;
+const mockFindUserByPk = jest.fn();
+(UserModelStub as unknown as { findByPk: jest.Mock }).findByPk = mockFindUserByPk;
 const mockDeleteAssetFromDrive = deleteSocialMediaAsset as jest.Mock;
+const mockCheckProjectFolder = checkSocialMediaProjectFolder as jest.Mock;
 const mockEnsureProjectFolder = ensureSocialMediaProjectFolder as jest.Mock;
 const mockStoreAsset = storeSocialMediaAsset as jest.Mock;
 const mockCompleteTask = completeTaskForSocialMediaPublication as jest.Mock;
+const mockSyncPublishedTaskEvidence = syncPublishedSocialMediaTaskEvidence as jest.Mock;
 const mockInitiateUpload = initiateSocialMediaResumableUpload as jest.Mock;
 const mockFinalizeUpload = finalizeSocialMediaResumableUpload as jest.Mock;
 const mockLoadContent = loadSocialMediaContent as jest.Mock;
@@ -140,6 +158,11 @@ describe('Social Media production workflow controller', () => {
     jest.clearAllMocks();
     mockTransaction.mockImplementation(async (callback: (tx: unknown) => unknown) =>
       callback(transaction));
+    mockCheckProjectFolder.mockResolvedValue({
+      available: true,
+      folderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
     mockSerializeContent.mockImplementation((content: Record<string, unknown>) => ({
       id: content.id,
       status: content.status,
@@ -173,7 +196,7 @@ describe('Social Media production workflow controller', () => {
     });
   });
 
-  it('treats an exact Plan retry as success but rejects a different planned date', async () => {
+  it('treats an exact Plan retry as success', async () => {
     const content = buildContent({ status: 'planned', scheduledAt: '2026-09-11' });
     mockFindByPk.mockResolvedValue(content);
     mockLoadContent.mockResolvedValue(content);
@@ -187,15 +210,72 @@ describe('Social Media production workflow controller', () => {
 
     expect(content.update).not.toHaveBeenCalled();
     expect(retryResponse.status).toHaveBeenCalledWith(200);
+  });
 
-    const conflictResponse = createResponse();
+  it.each(['planned', 'in_production', 'ready'] as const)(
+    'updates the planned date without changing the %s stage',
+    async (status) => {
+      const content = buildContent({ status, scheduledAt: '2026-09-11' });
+      mockFindByPk.mockResolvedValue(content);
+      mockLoadContent.mockResolvedValue(content);
+      const response = createResponse();
+
+      await planSocialMediaContent({
+        params: { id: '41' },
+        body: { scheduledDate: '2026-09-12' },
+        authContext: { id: 7 },
+      } as unknown as AuthenticatedRequest, response);
+
+      expect(content.update).toHaveBeenCalledWith({
+        scheduledAt: '2026-09-12',
+        updatedBy: 7,
+      }, { transaction });
+      expect(content.status).toBe(status);
+      expect(response.status).toHaveBeenCalledWith(200);
+    },
+  );
+
+  it('updates the planned date and linked task evidence for published content', async () => {
+    const content = buildContent({
+      status: 'published',
+      scheduledAt: '2026-09-11',
+      publishedTaskLogId: 88,
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
     await planSocialMediaContent({
       params: { id: '41' },
       body: { scheduledDate: '2026-09-12' },
       authContext: { id: 7 },
-    } as unknown as AuthenticatedRequest, conflictResponse);
+    } as unknown as AuthenticatedRequest, response);
 
-    expect(conflictResponse.status).toHaveBeenCalledWith(409);
+    expect(content.update).toHaveBeenCalledWith({
+      scheduledAt: '2026-09-12',
+      updatedBy: 7,
+    }, { transaction });
+    expect(mockSyncPublishedTaskEvidence).toHaveBeenCalledWith({
+      content,
+      actorId: 7,
+      transaction,
+    });
+    expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('does not allow an archived item to change its planned date', async () => {
+    const content = buildContent({ status: 'archived', scheduledAt: '2026-09-11' });
+    mockFindByPk.mockResolvedValue(content);
+    const response = createResponse();
+
+    await planSocialMediaContent({
+      params: { id: '41' },
+      body: { scheduledDate: '2026-09-12' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(content.update).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(409);
   });
 
   it.each([
@@ -270,8 +350,16 @@ describe('Social Media production workflow controller', () => {
     expect(response.status).toHaveBeenCalledWith(200);
   });
 
-  it('creates the Drive project folder while holding the content row lock', async () => {
-    const content = buildContent({ status: 'in_production' });
+  it.each(['in_production', 'ready'] as const)(
+    'creates or repairs the Drive project folder for %s content while holding the row lock',
+    async (status) => {
+    const content = buildContent({
+      status,
+      ...(status === 'ready' ? {
+        driveProjectFolderId: 'folder-1',
+        driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+      } : {}),
+    });
     mockFindByPk.mockResolvedValue(content);
     mockLoadContent.mockResolvedValue(content);
     mockEnsureProjectFolder.mockResolvedValue({
@@ -291,17 +379,197 @@ describe('Social Media production workflow controller', () => {
     });
     expect(mockEnsureProjectFolder).toHaveBeenCalledWith(expect.objectContaining({
       contentId: 41,
-      existingFolderId: null,
+      existingFolderId: status === 'ready' ? 'folder-1' : null,
     }));
+    if (status === 'in_production') {
+      expect(mockCheckProjectFolder).not.toHaveBeenCalled();
+    }
     expect(content.update).toHaveBeenCalledWith(expect.objectContaining({
       driveProjectFolderId: 'folder-1',
     }), { transaction });
     expect(response.status).toHaveBeenCalledWith(200);
-  });
+    },
+  );
 
-  it('serializes asset upload and persists its metadata in the same transaction', async () => {
+  it('checks an active saved folder without changing the workflow stage', async () => {
     const content = buildContent({
       status: 'in_production',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/old-folder-url',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await checkSocialMediaProjectFolderHealth({
+      params: { id: '41' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockCheckProjectFolder).toHaveBeenCalledWith('folder-1');
+    expect(content.update).toHaveBeenCalledWith({
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+      updatedBy: 7,
+    }, { transaction });
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(response.json).toHaveBeenCalledWith({
+      item: { id: 41, status: 'in_production' },
+      folderAvailable: true,
+      reset: false,
+    });
+  });
+
+  it('does not reset newly started production before its first folder is created', async () => {
+    const content = buildContent({
+      status: 'in_production',
+      scheduledAt: '2026-09-11',
+      productionStartedAt: new Date('2026-09-02T09:00:00.000Z'),
+      driveProjectFolderId: null,
+      driveProjectUrl: null,
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await checkSocialMediaProjectFolderHealth({
+      params: { id: '41' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockCheckProjectFolder).not.toHaveBeenCalled();
+    expect(mockDestroyAssets).not.toHaveBeenCalled();
+    expect(content.update).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(response.json).toHaveBeenCalledWith({
+      item: { id: 41, status: 'in_production' },
+      folderAvailable: false,
+      reset: false,
+    });
+  });
+
+  it.each(['planned', 'in_production', 'ready'] as const)(
+    'atomically resets %s content when Drive confirms its saved folder is gone',
+    async (status) => {
+      const scheduledAt = '2026-09-11';
+      const content = buildContent({
+        status,
+        scheduledAt,
+        productionStartedAt: new Date('2026-09-02T09:00:00.000Z'),
+        readyAt: new Date('2026-09-02T10:00:00.000Z'),
+        driveProjectFolderId: 'deleted-folder',
+        driveProjectUrl: 'https://drive.google.com/drive/folders/deleted-folder',
+      });
+      mockFindByPk.mockResolvedValue(content);
+      mockLoadContent.mockResolvedValue(content);
+      mockCheckProjectFolder.mockResolvedValue({ available: false });
+      const response = createResponse();
+
+      await checkSocialMediaProjectFolderHealth({
+        params: { id: '41' },
+        authContext: { id: 7 },
+      } as unknown as AuthenticatedRequest, response);
+
+      expect(mockDestroyAssets).toHaveBeenCalledWith({
+        where: { contentId: 41 },
+        transaction,
+      });
+      expect(content.update).toHaveBeenCalledWith({
+        status: 'planned',
+        driveProjectFolderId: null,
+        driveProjectUrl: null,
+        productionStartedAt: null,
+        readyAt: null,
+        updatedBy: 7,
+      }, { transaction });
+      expect(content.scheduledAt).toBe(scheduledAt);
+      expect(response.status).toHaveBeenCalledWith(200);
+      expect(response.json).toHaveBeenCalledWith({
+        item: { id: 41, status: 'planned' },
+        folderAvailable: false,
+        reset: true,
+      });
+    },
+  );
+
+  it('does not roll back or clear published content whose folder is missing', async () => {
+    const content = buildContent({
+      status: 'published',
+      driveProjectFolderId: 'deleted-folder',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/deleted-folder',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockCheckProjectFolder.mockResolvedValue({ available: false });
+    const response = createResponse();
+
+    await checkSocialMediaProjectFolderHealth({
+      params: { id: '41' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockDestroyAssets).not.toHaveBeenCalled();
+    expect(content.update).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(response.json).toHaveBeenCalledWith({
+      message: expect.stringContaining('Published content was not changed'),
+    });
+  });
+
+  it('does not mistake an indeterminate Drive failure for deletion', async () => {
+    const content = buildContent({
+      status: 'ready',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockCheckProjectFolder.mockRejectedValue(
+      new SocialMediaProjectFolderCheckUnavailableError('Drive check unavailable'),
+    );
+    const response = createResponse();
+
+    await checkSocialMediaProjectFolderHealth({
+      params: { id: '41' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockDestroyAssets).not.toHaveBeenCalled();
+    expect(content.update).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(503);
+    expect(response.json).toHaveBeenCalledWith({ message: 'Drive check unavailable' });
+  });
+
+  it('uses the idea creator full name when creating the project hierarchy', async () => {
+    const content = buildContent({ status: 'in_production', createdBy: 23 });
+    mockFindByPk.mockResolvedValue(content);
+    mockFindUserByPk.mockResolvedValue({ firstName: 'Maia', lastName: 'Wagemann' });
+    mockLoadContent.mockResolvedValue(content);
+    mockEnsureProjectFolder.mockResolvedValue({
+      folderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    const response = createResponse();
+
+    await createSocialMediaProjectFolder({
+      params: { id: '41' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockFindUserByPk).toHaveBeenCalledWith(23, {
+      attributes: ['firstName', 'lastName'],
+      transaction,
+    });
+    expect(mockEnsureProjectFolder).toHaveBeenCalledWith(expect.objectContaining({
+      contentId: 41,
+      creatorUserId: 23,
+      creatorFullName: 'Maia Wagemann',
+    }));
+    expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it.each(['in_production', 'ready'] as const)(
+    'serializes an asset upload for %s content and persists metadata in the same transaction',
+    async (status) => {
+    const content = buildContent({
+      status,
       driveProjectFolderId: 'folder-1',
       driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
     });
@@ -341,7 +609,8 @@ describe('Social Media production workflow controller', () => {
     }), { transaction });
     expect(content.update).toHaveBeenCalledWith({ updatedBy: 7 }, { transaction });
     expect(response.status).toHaveBeenCalledWith(200);
-  });
+    },
+  );
 
   it('maps the final-video unique index race to 409 and cleans up the Drive upload', async () => {
     const content = buildContent({
@@ -409,8 +678,94 @@ describe('Social Media production workflow controller', () => {
     expect(response.status).toHaveBeenCalledWith(200);
   });
 
+  it('returns Ready content to In Production when its last required asset is removed', async () => {
+    const content = buildContent({
+      status: 'ready',
+      readyAt: new Date('2026-09-02T10:00:00.000Z'),
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    const asset = {
+      kind: 'final_video',
+      driveFileId: 'drive-final-1',
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+    mockFindByPk.mockResolvedValue(content);
+    mockFindAsset
+      .mockResolvedValueOnce(asset)
+      .mockResolvedValueOnce(null);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await removeSocialMediaAsset({
+      params: { id: '41', assetId: '91' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockFindAsset).toHaveBeenNthCalledWith(2, {
+      where: { contentId: 41, kind: 'final_video' },
+      transaction,
+    });
+    expect(content.update).toHaveBeenCalledWith({
+      status: 'in_production',
+      readyAt: null,
+      updatedBy: 7,
+    }, { transaction });
+    expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('keeps content Ready when another asset of the removed required kind remains', async () => {
+    const readyAt = new Date('2026-09-02T10:00:00.000Z');
+    const content = buildContent({
+      status: 'ready',
+      readyAt,
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    const asset = {
+      kind: 'raw_material',
+      driveFileId: 'drive-raw-1',
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+    mockFindByPk.mockResolvedValue(content);
+    mockFindAsset
+      .mockResolvedValueOnce(asset)
+      .mockResolvedValueOnce({ id: 92, kind: 'raw_material' });
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await removeSocialMediaAsset({
+      params: { id: '41', assetId: '91' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(content.update).toHaveBeenCalledWith({ updatedBy: 7 }, { transaction });
+    expect(content.status).toBe('ready');
+    expect(content.readyAt).toBe(readyAt);
+    expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('keeps published production assets immutable', async () => {
+    const content = buildContent({ status: 'published' });
+    mockFindByPk.mockResolvedValue(content);
+    const response = createResponse();
+
+    await removeSocialMediaAsset({
+      params: { id: '41', assetId: '91' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockFindAsset).not.toHaveBeenCalled();
+    expect(content.update).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(409);
+  });
+
   it('never deletes the Drive file when metadata removal fails', async () => {
-    const content = buildContent({ status: 'in_production' });
+    const content = buildContent({
+      status: 'in_production',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
     const asset = {
       driveFileId: 'drive-project-1',
       destroy: jest.fn().mockRejectedValue(new Error('DB write failed')),
@@ -483,9 +838,11 @@ describe('Social Media production workflow controller', () => {
     expect(completeResponse.status).toHaveBeenCalledWith(200);
   });
 
-  it('starts a resumable upload only for an in-production item with a Drive folder', async () => {
+  it.each(['in_production', 'ready'] as const)(
+    'starts a resumable upload for a %s item with a Drive folder',
+    async (status) => {
     const content = buildContent({
-      status: 'in_production',
+      status,
       driveProjectFolderId: 'folder-1',
       driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
     });
@@ -518,11 +875,14 @@ describe('Social Media production workflow controller', () => {
     expect(response.status).toHaveBeenCalledWith(201);
     expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
     expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ uploadToken: 'receipt-1' }));
-  });
+    },
+  );
 
-  it('verifies and records a completed resumable upload inside the content lock', async () => {
+  it.each(['in_production', 'ready'] as const)(
+    'verifies and records a completed resumable upload for %s content inside the content lock',
+    async (status) => {
     const content = buildContent({
-      status: 'in_production',
+      status,
       driveProjectFolderId: 'folder-1',
       driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
     });
@@ -564,7 +924,8 @@ describe('Social Media production workflow controller', () => {
       uploadedBy: 7,
     }), { transaction });
     expect(response.status).toHaveBeenCalledWith(200);
-  });
+    },
+  );
 
   it('checks resumable completion idempotency inside the content lock before any cleanup', async () => {
     const content = buildContent({
@@ -655,7 +1016,12 @@ describe('Social Media production workflow controller', () => {
 
   it('treats an exact Ready retry as success without revalidating or changing its timestamp', async () => {
     const readyAt = new Date('2026-09-02T10:00:00.000Z');
-    const content = buildContent({ status: 'ready', readyAt });
+    const content = buildContent({
+      status: 'ready',
+      readyAt,
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
     mockFindByPk.mockResolvedValue(content);
     mockLoadContent.mockResolvedValue(content);
     const response = createResponse();
@@ -669,6 +1035,43 @@ describe('Social Media production workflow controller', () => {
     expect(content.update).not.toHaveBeenCalled();
     expect(content.readyAt).toBe(readyAt);
     expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('commits folder recovery before rejecting a Ready-to-Publish action', async () => {
+    const content = buildContent({
+      status: 'ready',
+      scheduledAt: '2026-09-03',
+      productionStartedAt: new Date('2026-09-02T09:00:00.000Z'),
+      readyAt: new Date('2026-09-02T10:00:00.000Z'),
+      driveProjectFolderId: 'deleted-folder',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/deleted-folder',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockCheckProjectFolder.mockResolvedValue({ available: false });
+    const response = createResponse();
+
+    await publishSocialMediaContent({
+      params: { id: '41' },
+      body: {
+        platformLinks: {
+          instagram: 'https://www.instagram.com/reel/example',
+          tiktok: 'https://www.tiktok.com/@example/video/123',
+        },
+      },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockDestroyAssets).toHaveBeenCalledWith({
+      where: { contentId: 41 },
+      transaction,
+    });
+    expect(content.status).toBe('planned');
+    expect(content.scheduledAt).toBe('2026-09-03');
+    expect(mockCompleteTask).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(response.json).toHaveBeenCalledWith({
+      message: expect.stringContaining('moved back to Planned'),
+    });
   });
 
   it('publishes both platform links and completes the task in the same transaction', async () => {
@@ -737,5 +1140,99 @@ describe('Social Media production workflow controller', () => {
     expect(response.json).toHaveBeenCalledWith({ message: 'TikTok link is required.' });
     expect(mockTransaction).not.toHaveBeenCalled();
     expect(mockCompleteTask).not.toHaveBeenCalled();
+  });
+
+  it('edits published links and synchronizes Task Planner evidence in one transaction', async () => {
+    const previousPlatformLinks = {
+      instagram: 'https://www.instagram.com/reel/old',
+      tiktok: 'https://www.tiktok.com/@example/video/old',
+    };
+    const platformLinks = {
+      instagram: 'https://www.instagram.com/reel/corrected',
+      tiktok: 'https://www.tiktok.com/@example/video/corrected',
+    };
+    const content = buildContent({
+      status: 'published',
+      publishedAt: new Date('2026-09-02T12:00:00.000Z'),
+      publishedBy: 7,
+      publishedTaskLogId: 88,
+      platformLinks: previousPlatformLinks,
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await updatePublishedSocialMediaLinks({
+      params: { id: '41' },
+      body: { platformLinks },
+      authContext: { id: 9 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(content.update).toHaveBeenCalledWith({
+      platformLinks,
+      updatedBy: 9,
+    }, { transaction });
+    expect(mockSyncPublishedTaskEvidence).toHaveBeenCalledWith({
+      content,
+      actorId: 9,
+      transaction,
+      linkEdit: {
+        editedAt: expect.any(Date),
+        previousPlatformLinks,
+      },
+    });
+    expect((content.update as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      mockSyncPublishedTaskEvidence.mock.invocationCallOrder[0],
+    );
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(response.json).toHaveBeenCalledWith({
+      item: { id: 41, status: 'published' },
+    });
+  });
+
+  it('treats an exact published-link retry as idempotent and repairs task evidence', async () => {
+    const platformLinks = {
+      instagram: 'https://www.instagram.com/reel/example',
+      tiktok: 'https://www.tiktok.com/@example/video/123',
+    };
+    const content = buildContent({ status: 'published', platformLinks });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await updatePublishedSocialMediaLinks({
+      params: { id: '41' },
+      body: { platformLinks },
+      authContext: { id: 9 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(content.update).not.toHaveBeenCalled();
+    expect(mockSyncPublishedTaskEvidence).toHaveBeenCalledWith({
+      content,
+      actorId: 9,
+      transaction,
+    });
+    expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('does not allow publication-link edits before content is published', async () => {
+    const content = buildContent({ status: 'ready' });
+    mockFindByPk.mockResolvedValue(content);
+    const response = createResponse();
+
+    await updatePublishedSocialMediaLinks({
+      params: { id: '41' },
+      body: {
+        platformLinks: {
+          instagram: 'https://www.instagram.com/reel/example',
+          tiktok: 'https://www.tiktok.com/@example/video/123',
+        },
+      },
+      authContext: { id: 9 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(content.update).not.toHaveBeenCalled();
+    expect(mockSyncPublishedTaskEvidence).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(409);
   });
 });

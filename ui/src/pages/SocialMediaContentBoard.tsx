@@ -60,8 +60,10 @@ import {
   type SocialMediaAssetKind,
   type SocialMediaContentAsset,
   type SocialMediaContentItem,
+  type SocialMediaProjectFolderCheckResult,
   type SocialMediaContentStatus,
   useArchiveSocialMediaContent,
+  useCheckSocialMediaProjectFolder,
   useCreateSocialMediaContent,
   useCreateSocialMediaProjectFolder,
   useDeleteSocialMediaAsset,
@@ -72,6 +74,7 @@ import {
   useSocialMediaContentList,
   useStartSocialMediaProduction,
   useUpdateSocialMediaContent,
+  useUpdateSocialMediaPublicationLinks,
   useUploadSocialMediaThumbnail,
   useUploadSocialMediaAsset,
 } from "../api/socialMedia";
@@ -283,6 +286,9 @@ const SocialContentCard = ({
   busy,
   onEdit,
   onNext,
+  onEditPlannedDate,
+  onManageAssets,
+  onEditPublicationLinks,
   onThumbnail,
   onArchive,
 }: {
@@ -292,6 +298,9 @@ const SocialContentCard = ({
   busy: boolean;
   onEdit: () => void;
   onNext: () => void;
+  onEditPlannedDate: () => void;
+  onManageAssets: () => void;
+  onEditPublicationLinks: () => void;
   onThumbnail: () => void;
   onArchive: () => void;
 }) => {
@@ -301,6 +310,9 @@ const SocialContentCard = ({
   const publishedLinks = Object.entries(item.platformLinks ?? {})
     .filter(([, url]) => isSafeHttpUrl(url));
   const actionLabel = nextActionLabel(item.status);
+  const canEditPlannedDate = ["planned", "in_production", "ready", "published"]
+    .includes(item.status);
+  const canManageAssets = item.status === "in_production" || item.status === "ready";
 
   return (
     <Paper withBorder radius="lg" p="sm" shadow="xs" style={{ overflow: "hidden" }}>
@@ -321,7 +333,28 @@ const SocialContentCard = ({
                 </ActionIcon>
               </Menu.Target>
               <Menu.Dropdown>
-                {canUpdate ? <Menu.Item onClick={onEdit}>Edit idea</Menu.Item> : null}
+                {canUpdate && item.status !== "published" ? (
+                  <Menu.Item onClick={onEdit}>Edit idea</Menu.Item>
+                ) : null}
+                {canUpdate && canEditPlannedDate ? (
+                  <Menu.Item leftSection={<IconCalendar size={15} />} onClick={onEditPlannedDate}>
+                    Change planned date
+                  </Menu.Item>
+                ) : null}
+                {canUpdate && canManageAssets ? (
+                  <Menu.Item
+                    leftSection={<IconFolder size={15} />}
+                    onClick={onManageAssets}
+                    disabled={busy}
+                  >
+                    Manage production files
+                  </Menu.Item>
+                ) : null}
+                {canUpdate && item.status === "published" ? (
+                  <Menu.Item leftSection={<IconExternalLink size={15} />} onClick={onEditPublicationLinks}>
+                    Edit published links
+                  </Menu.Item>
+                ) : null}
                 {canUpdate ? (
                   <Menu.Item leftSection={<IconPhoto size={15} />} onClick={onThumbnail}>
                     {item.thumbnailUrl ? "Manage thumbnail" : "Add thumbnail"}
@@ -356,15 +389,23 @@ const SocialContentCard = ({
               Created by {item.createdByName || "Unknown user"}
             </Text>
           </Group>
-          {plannedLabel || publishedLabel ? (
+          {plannedLabel ? (
             <Group gap={6} wrap="nowrap">
               <IconCalendar size={15} color="var(--mantine-color-gray-6)" />
               <Text size="xs" c="dimmed" truncate>
-                {publishedLabel ? `Published ${publishedLabel}` : `Planned for ${plannedLabel}`}
+                Planned for {plannedLabel}
               </Text>
             </Group>
           ) : null}
-          {item.status === "in_production" && item.assets.length > 0 ? (
+          {publishedLabel ? (
+            <Group gap={6} wrap="nowrap">
+              <IconExternalLink size={15} color="var(--mantine-color-gray-6)" />
+              <Text size="xs" c="dimmed" truncate>
+                Published {publishedLabel}
+              </Text>
+            </Group>
+          ) : null}
+          {(item.status === "in_production" || item.status === "ready") && item.assets.length > 0 ? (
             <Group gap={5}>
               <Badge size="xs" color="violet" variant="light">{item.assets.length} file{item.assets.length === 1 ? "" : "s"}</Badge>
               {item.driveProjectUrl ? <Badge size="xs" color="blue" variant="light">Drive ready</Badge> : null}
@@ -437,10 +478,12 @@ const SocialMediaContentBoard = () => {
   const planMutation = usePlanSocialMediaContent();
   const startProductionMutation = useStartSocialMediaProduction();
   const folderMutation = useCreateSocialMediaProjectFolder();
+  const folderCheckMutation = useCheckSocialMediaProjectFolder();
   const uploadAssetMutation = useUploadSocialMediaAsset();
   const deleteAssetMutation = useDeleteSocialMediaAsset();
   const readyMutation = useMarkSocialMediaReady();
   const publishMutation = usePublishSocialMediaContent();
+  const updatePublicationLinksMutation = useUpdateSocialMediaPublicationLinks();
   const uploadThumbnailMutation = useUploadSocialMediaThumbnail();
   const removeThumbnailMutation = useRemoveSocialMediaThumbnail();
 
@@ -642,6 +685,55 @@ const SocialMediaContentBoard = () => {
     }
   };
 
+  const handleMissingProjectFolder = useCallback((
+    result: SocialMediaProjectFolderCheckResult,
+  ): boolean => {
+    if (!result.reset) return false;
+    setWorkflowDialog(null);
+    setWorkflowError(null);
+    setPageMessage(
+      "The Drive project folder was deleted. This content was moved back to Planned so you can start production and create the folder again.",
+    );
+    showMobileStage("planned");
+    return true;
+  }, [showMobileStage]);
+
+  const openProductionFiles = async (item: SocialMediaContentItem) => {
+    try {
+      setBusyId(item.id);
+      setWorkflowError(null);
+      const result = await folderCheckMutation.mutateAsync(item.id);
+      if (handleMissingProjectFolder(result)) return;
+      setWorkflowDialog({ type: "assets", contentId: result.item.id });
+    } catch (error) {
+      setWorkflowDialog(null);
+      setWorkflowError(getErrorMessage(
+        error,
+        "Unable to verify the Drive project folder. Please try again.",
+      ));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const openPublishDialog = async (item: SocialMediaContentItem) => {
+    try {
+      setBusyId(item.id);
+      setWorkflowError(null);
+      const result = await folderCheckMutation.mutateAsync(item.id);
+      if (handleMissingProjectFolder(result)) return;
+      setWorkflowDialog({ type: "publish", contentId: result.item.id });
+    } catch (error) {
+      setWorkflowDialog(null);
+      setWorkflowError(getErrorMessage(
+        error,
+        "Unable to verify the Drive project folder. Please try again.",
+      ));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleNext = async (item: SocialMediaContentItem) => {
     setWorkflowError(null);
     if (item.status === "idea") {
@@ -649,11 +741,11 @@ const SocialMediaContentBoard = () => {
       return;
     }
     if (item.status === "in_production") {
-      setWorkflowDialog({ type: "assets", contentId: item.id });
+      await openProductionFiles(item);
       return;
     }
     if (item.status === "ready") {
-      setWorkflowDialog({ type: "publish", contentId: item.id });
+      await openPublishDialog(item);
       return;
     }
     if (item.status !== "planned") return;
@@ -678,9 +770,11 @@ const SocialMediaContentBoard = () => {
     try {
       setBusyId(workflowItem.id);
       setWorkflowError(null);
-      await planMutation.mutateAsync({ id: workflowItem.id, scheduledDate });
+      const previousStatus = workflowItem.status;
+      const updatedItem = await planMutation.mutateAsync({ id: workflowItem.id, scheduledDate });
       setWorkflowDialog(null);
-      showMobileStage("planned");
+      if (previousStatus !== "idea") setPageMessage("Planned date updated.");
+      showMobileStage(updatedItem.status);
     } catch (error) {
       setWorkflowError(getErrorMessage(error, "Unable to plan this idea."));
     } finally {
@@ -735,7 +829,14 @@ const SocialMediaContentBoard = () => {
     if (!workflowItem || !window.confirm(`Remove "${asset.originalName}" from this project?`)) return;
     try {
       setWorkflowError(null);
-      await deleteAssetMutation.mutateAsync({ id: workflowItem.id, assetId: asset.id });
+      const updatedItem = await deleteAssetMutation.mutateAsync({
+        id: workflowItem.id,
+        assetId: asset.id,
+      });
+      if (workflowItem.status === "ready" && updatedItem.status === "in_production") {
+        setPageMessage("A required file was removed, so this item returned to Production.");
+        showMobileStage("in_production");
+      }
     } catch (error) {
       setWorkflowError(getErrorMessage(error, "Unable to remove this file."));
     }
@@ -769,6 +870,8 @@ const SocialMediaContentBoard = () => {
     try {
       setBusyId(workflowItem.id);
       setWorkflowError(null);
+      const folderCheck = await folderCheckMutation.mutateAsync(workflowItem.id);
+      if (handleMissingProjectFolder(folderCheck)) return;
       await readyMutation.mutateAsync(workflowItem.id);
       setWorkflowDialog(null);
       showMobileStage("ready");
@@ -788,6 +891,20 @@ const SocialMediaContentBoard = () => {
     try {
       setBusyId(workflowItem.id);
       setWorkflowError(null);
+      if (workflowItem.status === "published") {
+        await updatePublicationLinksMutation.mutateAsync({
+          id: workflowItem.id,
+          platformLinks: {
+            instagram: publishLinks.instagram.trim(),
+            tiktok: publishLinks.tiktok.trim(),
+          },
+        });
+        setWorkflowDialog(null);
+        setPageMessage("Published links updated.");
+        return;
+      }
+      const folderCheck = await folderCheckMutation.mutateAsync(workflowItem.id);
+      if (handleMissingProjectFolder(folderCheck)) return;
       const result = await publishMutation.mutateAsync({
         id: workflowItem.id,
         platformLinks: {
@@ -803,7 +920,12 @@ const SocialMediaContentBoard = () => {
       );
       showMobileStage("published");
     } catch (error) {
-      setWorkflowError(getErrorMessage(error, "Unable to publish this content."));
+      setWorkflowError(getErrorMessage(
+        error,
+        workflowItem.status === "published"
+          ? "Unable to update the published links."
+          : "Unable to publish this content.",
+      ));
     } finally {
       setBusyId(null);
     }
@@ -850,6 +972,10 @@ const SocialMediaContentBoard = () => {
     && assetGroups.project_file.length > 0;
   const uploadInProgress = Object.keys(uploadProgress).length > 0 || uploadAssetMutation.isPending;
   const thumbnailPending = uploadThumbnailMutation.isPending || removeThumbnailMutation.isPending;
+  const readyTransitionPending = readyMutation.isPending || folderCheckMutation.isPending;
+  const publicationLinksPending = publishMutation.isPending
+    || updatePublicationLinksMutation.isPending
+    || folderCheckMutation.isPending;
   const savingIdea = createMutation.isPending || updateMutation.isPending;
 
   const pageContent = !moduleAccess.ready || moduleAccess.loading ? (
@@ -1001,6 +1127,9 @@ const SocialMediaContentBoard = () => {
                         busy={busyId === item.id}
                         onEdit={() => updateUrlState({ editor: item.id })}
                         onNext={() => void handleNext(item)}
+                        onEditPlannedDate={() => setWorkflowDialog({ type: "plan", contentId: item.id })}
+                        onManageAssets={() => void openProductionFiles(item)}
+                        onEditPublicationLinks={() => setWorkflowDialog({ type: "publish", contentId: item.id })}
                         onThumbnail={() => setWorkflowDialog({ type: "thumbnail", contentId: item.id })}
                         onArchive={() => void handleArchive(item)}
                       />
@@ -1183,7 +1312,7 @@ const SocialMediaContentBoard = () => {
       <Modal
         opened={workflowDialog?.type === "plan"}
         onClose={() => !planMutation.isPending && setWorkflowDialog(null)}
-        title="Move to Planned"
+        title={workflowItem?.status === "idea" ? "Move to Planned" : "Change planned date"}
         size="min(560px, 94vw)"
         fullScreen={Boolean(isMobile)}
         centered
@@ -1202,19 +1331,21 @@ const SocialMediaContentBoard = () => {
           />
           <Group justify="flex-end" grow={Boolean(isMobile)}>
             <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={planMutation.isPending}>Cancel</Button>
-            <Button onClick={() => void submitPlan()} loading={planMutation.isPending}>Move to Planned</Button>
+            <Button onClick={() => void submitPlan()} loading={planMutation.isPending}>
+              {workflowItem?.status === "idea" ? "Move to Planned" : "Save date"}
+            </Button>
           </Group>
         </Stack>
       </Modal>
 
       <Modal
         opened={workflowDialog?.type === "assets"}
-        onClose={() => !uploadInProgress && setWorkflowDialog(null)}
+        onClose={() => !uploadInProgress && !readyTransitionPending && setWorkflowDialog(null)}
         title="Production files"
         size="min(920px, 96vw)"
         fullScreen={Boolean(isMobile)}
         centered
-        closeOnClickOutside={!uploadInProgress}
+        closeOnClickOutside={!uploadInProgress && !readyTransitionPending}
         scrollAreaComponent={ScrollArea.Autosize}
       >
         <Stack gap="lg">
@@ -1332,7 +1463,7 @@ const SocialMediaContentBoard = () => {
                 <Box key={key}>
                   <Group justify="space-between" mb={4} wrap="nowrap">
                     <Text size="xs" truncate>{key.split(":")[1]}</Text>
-                    <Text size="xs" c="dimmed">{percent == null ? "Uploading…" : `${percent}%`}</Text>
+                    <Text size="xs" c="dimmed">{percent == null ? "Uploading..." : `${percent}%`}</Text>
                   </Group>
                   <Progress value={percent ?? 100} animated={percent == null} />
                 </Box>
@@ -1340,16 +1471,27 @@ const SocialMediaContentBoard = () => {
 
               <Divider />
               <Group justify="flex-end" grow={Boolean(isMobile)}>
-                <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={uploadInProgress}>Close</Button>
                 <Button
-                  color="violet"
-                  leftSection={<IconCheck size={17} />}
-                  disabled={!workflowItem.driveProjectUrl || !hasEveryRequiredAsset || uploadInProgress}
-                  loading={readyMutation.isPending}
-                  onClick={() => void markReady()}
+                  variant="default"
+                  onClick={() => setWorkflowDialog(null)}
+                  disabled={uploadInProgress || readyTransitionPending}
                 >
-                  Mark ready
+                  Close
                 </Button>
+                {workflowItem.status === "in_production" ? (
+                  <Button
+                    color="violet"
+                    leftSection={<IconCheck size={17} />}
+                    disabled={!workflowItem.driveProjectUrl
+                      || !hasEveryRequiredAsset
+                      || uploadInProgress
+                      || readyTransitionPending}
+                    loading={readyTransitionPending}
+                    onClick={() => void markReady()}
+                  >
+                    Mark ready
+                  </Button>
+                ) : null}
               </Group>
             </>
           )}
@@ -1358,8 +1500,8 @@ const SocialMediaContentBoard = () => {
 
       <Modal
         opened={workflowDialog?.type === "publish"}
-        onClose={() => !publishMutation.isPending && setWorkflowDialog(null)}
-        title="Publish content"
+        onClose={() => !publicationLinksPending && setWorkflowDialog(null)}
+        title={workflowItem?.status === "published" ? "Edit published links" : "Publish content"}
         size="min(620px, 94vw)"
         fullScreen={Boolean(isMobile)}
         centered
@@ -1382,12 +1524,20 @@ const SocialMediaContentBoard = () => {
             onChange={(event) => setPublishLinks((current) => ({ ...current, tiktok: event.currentTarget.value }))}
             required
           />
-          <Text size="sm" c="dimmed" ta="center">
-            The publish time is recorded automatically. Your matching Task Planner task will be completed with these links and the project notes.
-          </Text>
+          {workflowItem?.status === "published" ? (
+            <Text size="sm" c="dimmed" ta="center">
+              Saving updates the links in the linked Task Planner evidence without changing the original publication time.
+            </Text>
+          ) : (
+            <Text size="sm" c="dimmed" ta="center">
+              The publish time is recorded automatically. Your matching Task Planner task will be completed with these links and the project notes.
+            </Text>
+          )}
           <Group justify="flex-end" grow={Boolean(isMobile)}>
-            <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={publishMutation.isPending}>Cancel</Button>
-            <Button color="teal" onClick={() => void publish()} loading={publishMutation.isPending}>Publish</Button>
+            <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={publicationLinksPending}>Cancel</Button>
+            <Button color="teal" onClick={() => void publish()} loading={publicationLinksPending}>
+              {workflowItem?.status === "published" ? "Save links" : "Publish"}
+            </Button>
           </Group>
         </Stack>
       </Modal>

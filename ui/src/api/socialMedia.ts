@@ -103,6 +103,12 @@ export type SocialMediaPublishResult = {
   taskCompletion: SocialMediaTaskCompletion | null;
 };
 
+export type SocialMediaProjectFolderCheckResult = {
+  item: SocialMediaContentItem;
+  folderAvailable: boolean;
+  reset: boolean;
+};
+
 export type SocialMediaAssetUploadProgress = {
   loaded: number;
   total: number | null;
@@ -279,6 +285,23 @@ export const useCreateSocialMediaProjectFolder = () => {
   });
 };
 
+export const checkSocialMediaProjectFolder = async (
+  id: number,
+): Promise<SocialMediaProjectFolderCheckResult> => {
+  const response = await axiosInstance.post<SocialMediaProjectFolderCheckResult>(
+    `/social-media/content/${id}/project-folder/check`,
+  );
+  return response.data;
+};
+
+export const useCheckSocialMediaProjectFolder = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<SocialMediaProjectFolderCheckResult, ApiError, number>({
+    mutationFn: checkSocialMediaProjectFolder,
+    onSuccess: async ({ item }) => invalidate(item),
+  });
+};
+
 export const useUploadSocialMediaAsset = () => {
   const invalidate = useInvalidateSocialMediaContent();
   return useMutation<SocialMediaContentItem, ApiError, UploadSocialMediaAssetInput>({
@@ -377,6 +400,25 @@ export const usePublishSocialMediaContent = () => {
       return response.data;
     },
     onSuccess: async ({ item }) => invalidate(item),
+  });
+};
+
+export const useUpdateSocialMediaPublicationLinks = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<
+    SocialMediaContentItem,
+    ApiError,
+    { id: number; platformLinks: Record<string, string> }
+  >({
+    mutationFn: async ({ id, platformLinks }) => {
+      const payload: PublishSocialMediaContentPayload = { platformLinks };
+      const response = await axiosInstance.patch<ItemResponse>(
+        `/social-media/content/${id}/publication-links`,
+        payload,
+      );
+      return response.data.item;
+    },
+    onSuccess: invalidate,
   });
 };
 

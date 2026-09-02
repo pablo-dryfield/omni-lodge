@@ -47,6 +47,7 @@ jest.mock('../../controllers/socialMediaContentController.js', () => {
 jest.mock('../../controllers/socialMediaWorkflowController.js', () => {
   const respond = jest.fn((_req: AuthenticatedRequest, res: Response) => res.status(204).send());
   return {
+    checkSocialMediaProjectFolderHealth: jest.fn(respond),
     createSocialMediaProjectFolder: jest.fn(respond),
     finalizeSocialMediaAssetUpload: jest.fn(respond),
     initiateSocialMediaAssetUpload: jest.fn(respond),
@@ -55,6 +56,7 @@ jest.mock('../../controllers/socialMediaWorkflowController.js', () => {
     publishSocialMediaContent: jest.fn(respond),
     removeSocialMediaAsset: jest.fn(respond),
     startSocialMediaProduction: jest.fn(respond),
+    updatePublishedSocialMediaLinks: jest.fn(respond),
     uploadSocialMediaAsset: jest.fn(respond),
   };
 });
@@ -66,6 +68,7 @@ import {
   updateSocialMediaContent,
 } from '../../controllers/socialMediaContentController';
 import {
+  checkSocialMediaProjectFolderHealth,
   createSocialMediaProjectFolder,
   finalizeSocialMediaAssetUpload,
   initiateSocialMediaAssetUpload,
@@ -74,6 +77,7 @@ import {
   publishSocialMediaContent,
   removeSocialMediaAsset,
   startSocialMediaProduction,
+  updatePublishedSocialMediaLinks,
   uploadSocialMediaAsset,
 } from '../../controllers/socialMediaWorkflowController';
 import socialMediaRoutes from '../socialMediaRoutes';
@@ -143,6 +147,7 @@ describe('Social Media route authorization', () => {
     const forbidden = await Promise.all([
       request(app).post('/api/social-media/content/41/plan'),
       request(app).post('/api/social-media/content/41/start-production'),
+      request(app).post('/api/social-media/content/41/project-folder/check'),
       request(app).post('/api/social-media/content/41/project-folder'),
       request(app).post('/api/social-media/content/41/assets/resumable-session'),
       request(app).post('/api/social-media/content/41/assets/resumable-complete'),
@@ -150,15 +155,17 @@ describe('Social Media route authorization', () => {
       request(app).delete('/api/social-media/content/41/assets/91'),
       request(app).post('/api/social-media/content/41/ready'),
       request(app).post('/api/social-media/content/41/publish'),
+      request(app).patch('/api/social-media/content/41/publication-links'),
     ].map((pendingRequest) => pendingRequest
       .set('x-test-user', '9')
       .set('x-test-actions', 'view')));
 
     expect(forbidden.map((response) => response.status)).toEqual([
-      403, 403, 403, 403, 403, 403, 403, 403, 403,
+      403, 403, 403, 403, 403, 403, 403, 403, 403, 403, 403,
     ]);
     expect(planSocialMediaContent).not.toHaveBeenCalled();
     expect(startSocialMediaProduction).not.toHaveBeenCalled();
+    expect(checkSocialMediaProjectFolderHealth).not.toHaveBeenCalled();
     expect(createSocialMediaProjectFolder).not.toHaveBeenCalled();
     expect(initiateSocialMediaAssetUpload).not.toHaveBeenCalled();
     expect(finalizeSocialMediaAssetUpload).not.toHaveBeenCalled();
@@ -166,10 +173,12 @@ describe('Social Media route authorization', () => {
     expect(removeSocialMediaAsset).not.toHaveBeenCalled();
     expect(markSocialMediaReady).not.toHaveBeenCalled();
     expect(publishSocialMediaContent).not.toHaveBeenCalled();
+    expect(updatePublishedSocialMediaLinks).not.toHaveBeenCalled();
 
     const allowed = await Promise.all([
       request(app).post('/api/social-media/content/41/plan'),
       request(app).post('/api/social-media/content/41/start-production'),
+      request(app).post('/api/social-media/content/41/project-folder/check'),
       request(app).post('/api/social-media/content/41/project-folder'),
       request(app).post('/api/social-media/content/41/assets/resumable-session'),
       request(app).post('/api/social-media/content/41/assets/resumable-complete'),
@@ -177,15 +186,17 @@ describe('Social Media route authorization', () => {
       request(app).delete('/api/social-media/content/41/assets/91'),
       request(app).post('/api/social-media/content/41/ready'),
       request(app).post('/api/social-media/content/41/publish'),
+      request(app).patch('/api/social-media/content/41/publication-links'),
     ].map((pendingRequest) => pendingRequest
       .set('x-test-user', '9')
       .set('x-test-actions', 'update')));
 
     expect(allowed.map((response) => response.status)).toEqual([
-      204, 204, 204, 204, 204, 204, 204, 204, 204,
+      204, 204, 204, 204, 204, 204, 204, 204, 204, 204, 204,
     ]);
     expect(planSocialMediaContent).toHaveBeenCalledTimes(1);
     expect(startSocialMediaProduction).toHaveBeenCalledTimes(1);
+    expect(checkSocialMediaProjectFolderHealth).toHaveBeenCalledTimes(1);
     expect(createSocialMediaProjectFolder).toHaveBeenCalledTimes(1);
     expect(initiateSocialMediaAssetUpload).toHaveBeenCalledTimes(1);
     expect(finalizeSocialMediaAssetUpload).toHaveBeenCalledTimes(1);
@@ -193,5 +204,6 @@ describe('Social Media route authorization', () => {
     expect(removeSocialMediaAsset).toHaveBeenCalledTimes(1);
     expect(markSocialMediaReady).toHaveBeenCalledTimes(1);
     expect(publishSocialMediaContent).toHaveBeenCalledTimes(1);
+    expect(updatePublishedSocialMediaLinks).toHaveBeenCalledTimes(1);
   });
 });

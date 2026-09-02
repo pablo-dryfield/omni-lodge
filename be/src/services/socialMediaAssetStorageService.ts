@@ -13,6 +13,8 @@ import { getDriveClient } from './googleDrive.js';
 const SOCIAL_MEDIA_PARENT_CONFIG = 'GOOGLE_DRIVE_SOCIAL_MEDIA_PARENT_ID';
 const SCHEDULES_PARENT_CONFIG = 'GOOGLE_DRIVE_SCHEDULES_PARENT_ID';
 const SOCIAL_MEDIA_FALLBACK_ROOT = 'Social Media';
+const CREATOR_ID_APP_PROPERTY = 'omniLodgeSocialMediaCreatorId';
+const CONTENT_ID_APP_PROPERTY = 'omniLodgeSocialMediaContentId';
 
 const ASSET_FOLDER_NAMES: Record<SocialMediaContentAssetKind, string> = {
   final_video: 'Final Video',
@@ -26,12 +28,24 @@ export type EnsureSocialMediaProjectFolderParams = {
   contentId: number;
   title: string;
   existingFolderId?: string | null;
+  creatorUserId?: number | null;
+  creatorFullName?: string | null;
 };
 
 export type EnsureSocialMediaProjectFolderResult = {
   folderId: string;
   driveProjectUrl: string;
 };
+
+export type SocialMediaProjectFolderHealth =
+  | {
+    available: true;
+    folderId: string;
+    driveProjectUrl: string;
+  }
+  | {
+    available: false;
+  };
 
 export type StoreSocialMediaAssetParams = {
   contentId: number;
@@ -53,6 +67,17 @@ export type StoreSocialMediaAssetResult = {
 };
 
 export class SocialMediaAssetStorageValidationError extends Error {}
+
+/**
+ * Signals that Drive could not be queried reliably. Callers must never treat
+ * this as proof that a persisted folder was deleted.
+ */
+export class SocialMediaProjectFolderCheckUnavailableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'SocialMediaProjectFolderCheckUnavailableError';
+  }
+}
 
 type DriveClient = Awaited<ReturnType<typeof getDriveClient>>;
 
@@ -98,6 +123,16 @@ const driveFolderUrl = (folderId: string): string =>
 const driveFileUrl = (fileId: string): string =>
   `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`;
 
+const googleApiStatus = (error: unknown): number | null => {
+  const candidate = error as {
+    response?: { status?: unknown };
+    code?: unknown;
+  };
+  const rawStatus = candidate?.response?.status ?? candidate?.code;
+  const parsed = Number(rawStatus);
+  return Number.isInteger(parsed) ? parsed : null;
+};
+
 const assertPositiveContentId = (contentId: number): void => {
   if (!Number.isInteger(contentId) || contentId <= 0) {
     throw new SocialMediaAssetStorageValidationError('Social Media content ID must be a positive integer.');
@@ -132,6 +167,47 @@ const loadFolder = async (
   return { id: record.id, webViewLink: record.webViewLink ?? null };
 };
 
+/**
+ * Checks a previously persisted project folder without creating or repairing
+ * anything. A 404, trashed entry, or non-folder entry is a confirmed missing
+ * folder. Authentication, authorization, quota, server, and network failures
+ * remain indeterminate and are surfaced to the caller.
+ */
+export async function checkSocialMediaProjectFolder(
+  folderId: string,
+): Promise<SocialMediaProjectFolderHealth> {
+  const normalizedFolderId = normalizeConfigString(folderId);
+  if (!normalizedFolderId) return { available: false };
+
+  try {
+    const drive = await getDriveClient();
+    const response = await drive.files.get({
+      fileId: normalizedFolderId,
+      fields: 'id,mimeType,trashed,webViewLink',
+      supportsAllDrives: true,
+    });
+    const record = response.data;
+    if (
+      !record.id
+      || record.trashed === true
+      || record.mimeType !== 'application/vnd.google-apps.folder'
+    ) {
+      return { available: false };
+    }
+    return {
+      available: true,
+      folderId: record.id,
+      driveProjectUrl: record.webViewLink ?? driveFolderUrl(record.id),
+    };
+  } catch (error) {
+    if (googleApiStatus(error) === 404) return { available: false };
+    throw new SocialMediaProjectFolderCheckUnavailableError(
+      'Google Drive could not verify the Social Media project folder. Try again before continuing.',
+      { cause: error },
+    );
+  }
+}
+
 export const ensureGoogleDriveChildFolder = async (
   drive: DriveClient,
   name: string,
@@ -163,6 +239,54 @@ export const ensureGoogleDriveChildFolder = async (
       name: safeName,
       mimeType: 'application/vnd.google-apps.folder',
       parents: [parentId],
+    },
+    fields: 'id,webViewLink',
+    supportsAllDrives: true,
+  });
+  if (!created.data.id) {
+    throw new Error(`Google Drive did not return an ID for the ${safeName} folder.`);
+  }
+  return {
+    id: created.data.id,
+    webViewLink: created.data.webViewLink ?? null,
+  };
+};
+
+const ensureIdentifiedGoogleDriveChildFolder = async (
+  drive: DriveClient,
+  name: string,
+  parentId: string,
+  identity: { key: string; value: string },
+): Promise<{ id: string; webViewLink: string | null }> => {
+  const safeName = sanitizeFolderName(name);
+  const existing = await drive.files.list({
+    q: [
+      "mimeType = 'application/vnd.google-apps.folder'",
+      'trashed = false',
+      `'${escapeDriveQueryValue(parentId)}' in parents`,
+      `appProperties has { key='${escapeDriveQueryValue(identity.key)}' and value='${
+        escapeDriveQueryValue(identity.value)
+      }' }`,
+    ].join(' and '),
+    fields: 'files(id,webViewLink)',
+    pageSize: 1,
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true,
+  });
+  const existingFolder = existing.data.files?.[0];
+  if (existingFolder?.id) {
+    return {
+      id: existingFolder.id,
+      webViewLink: existingFolder.webViewLink ?? null,
+    };
+  }
+
+  const created = await drive.files.create({
+    requestBody: {
+      name: safeName,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentId],
+      appProperties: { [identity.key]: identity.value },
     },
     fields: 'id,webViewLink',
     supportsAllDrives: true,
@@ -219,10 +343,23 @@ export async function ensureSocialMediaProjectFolder(
   }
 
   const rootFolderId = await resolveSocialMediaRootFolder(drive);
-  const projectFolder = await ensureGoogleDriveChildFolder(
+  const creatorUserId = Number.isInteger(params.creatorUserId) && Number(params.creatorUserId) > 0
+    ? Number(params.creatorUserId)
+    : null;
+  const creatorName = normalizeConfigString(params.creatorFullName)
+    ?? (creatorUserId ? `User ${creatorUserId}` : `Unknown Creator ${params.contentId}`);
+  const creatorIdentity = creatorUserId ? String(creatorUserId) : `content-${params.contentId}`;
+  const creatorFolder = await ensureIdentifiedGoogleDriveChildFolder(
     drive,
-    `${params.contentId} - ${sanitizeFolderName(params.title)}`,
+    `${creatorName} - Social Media`,
     rootFolderId,
+    { key: CREATOR_ID_APP_PROPERTY, value: creatorIdentity },
+  );
+  const projectFolder = await ensureIdentifiedGoogleDriveChildFolder(
+    drive,
+    params.title,
+    creatorFolder.id,
+    { key: CONTENT_ID_APP_PROPERTY, value: String(params.contentId) },
   );
   return {
     folderId: projectFolder.id,

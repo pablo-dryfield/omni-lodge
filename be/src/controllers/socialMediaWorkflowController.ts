@@ -7,19 +7,23 @@ import SocialMediaContentAsset, {
   SOCIAL_MEDIA_CONTENT_ASSET_KINDS,
   type SocialMediaContentAssetKind,
 } from '../models/SocialMediaContentAsset.js';
+import User from '../models/User.js';
 import {
   loadSocialMediaContent,
   serializeSocialMediaContent,
 } from './socialMediaContentController.js';
 import {
+  checkSocialMediaProjectFolder,
   deleteSocialMediaAsset,
   ensureSocialMediaProjectFolder,
   SocialMediaAssetStorageValidationError,
+  SocialMediaProjectFolderCheckUnavailableError,
   storeSocialMediaAsset,
 } from '../services/socialMediaAssetStorageService.js';
 import {
   completeTaskForSocialMediaPublication,
   SocialMediaPublishTaskConflictError,
+  syncPublishedSocialMediaTaskEvidence,
   type SocialMediaTaskCompletionResult,
 } from '../services/socialMediaPublishTaskService.js';
 import {
@@ -42,6 +46,15 @@ const FINAL_VIDEO_EXTENSIONS = new Set([
   '.avi', '.m4v', '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.webm',
 ]);
 const FINAL_VIDEO_UNIQUE_INDEX = 'social_media_content_assets_one_final_video_uq';
+const FOLDER_RECOVERABLE_STATUSES = new Set<SocialMediaContent['status']>([
+  'planned',
+  'in_production',
+  'ready',
+]);
+const MISSING_FOLDER_RESET_MESSAGE =
+  'The saved Google Drive project folder no longer exists. This content was moved back to Planned and its stale file records were cleared. Start production and create the folder again.';
+const MISSING_PUBLISHED_FOLDER_MESSAGE =
+  'The Google Drive project folder for this published content is missing or deleted. Published content was not changed. Restore the folder in Drive or contact an administrator before continuing.';
 
 class SocialMediaWorkflowError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -133,6 +146,18 @@ const assertStatus = (
   }
 };
 
+const assertProductionAssetsEditable = (
+  content: SocialMediaContent,
+  action: string,
+): void => {
+  if (!['in_production', 'ready'].includes(content.status)) {
+    throw new SocialMediaWorkflowError(
+      `Only in production or ready content can ${action}. Refresh the board and try again.`,
+      409,
+    );
+  }
+};
+
 const isFinalVideoUniqueConflict = (error: unknown): boolean => {
   if (!(error instanceof UniqueConstraintError)) return false;
   const databaseError = error as UniqueConstraintError & {
@@ -158,11 +183,109 @@ const loadLockedContent = async (
   return content;
 };
 
+type ProjectFolderGuardResult = {
+  folderAvailable: boolean;
+  reset: boolean;
+};
+
+const resetMissingProjectFolder = async (
+  content: SocialMediaContent,
+  actorId: number,
+  transaction: Transaction,
+): Promise<ProjectFolderGuardResult> => {
+  await SocialMediaContentAsset.destroy({
+    where: { contentId: content.id },
+    transaction,
+  });
+  await content.update({
+    status: 'planned',
+    driveProjectFolderId: null,
+    driveProjectUrl: null,
+    productionStartedAt: null,
+    readyAt: null,
+    updatedBy: actorId,
+  }, { transaction });
+  return { folderAvailable: false, reset: true };
+};
+
+/**
+ * Verifies persisted Drive state while the content row is locked. When Drive
+ * confirms a folder is gone, all DB recovery changes occur in this same
+ * transaction. Indeterminate Drive failures are thrown and leave DB state
+ * untouched.
+ */
+const guardPersistedProjectFolder = async (
+  content: SocialMediaContent,
+  actorId: number,
+  transaction: Transaction,
+): Promise<ProjectFolderGuardResult> => {
+  const folderId = content.driveProjectFolderId?.trim() ?? '';
+  if (!folderId) {
+    if (content.status === 'published') {
+      throw new SocialMediaWorkflowError(MISSING_PUBLISHED_FOLDER_MESSAGE, 409);
+    }
+    // Starting production intentionally precedes folder creation, so an item
+    // with no persisted folder metadata is not evidence of deletion. A stale
+    // URL without its private ID is recoverable corruption and is reset.
+    if (
+      content.status === 'ready'
+      || (FOLDER_RECOVERABLE_STATUSES.has(content.status) && Boolean(content.driveProjectUrl))
+    ) {
+      return resetMissingProjectFolder(content, actorId, transaction);
+    }
+    return { folderAvailable: false, reset: false };
+  }
+
+  const health = await checkSocialMediaProjectFolder(folderId);
+  if (health.available) {
+    if (content.driveProjectUrl !== health.driveProjectUrl) {
+      await content.update({
+        driveProjectUrl: health.driveProjectUrl,
+        updatedBy: actorId,
+      }, { transaction });
+    }
+    return { folderAvailable: true, reset: false };
+  }
+
+  if (content.status === 'published') {
+    throw new SocialMediaWorkflowError(MISSING_PUBLISHED_FOLDER_MESSAGE, 409);
+  }
+  if (FOLDER_RECOVERABLE_STATUSES.has(content.status)) {
+    return resetMissingProjectFolder(content, actorId, transaction);
+  }
+  return { folderAvailable: false, reset: false };
+};
+
+const throwWhenFolderWasReset = (result: ProjectFolderGuardResult): void => {
+  if (result.reset) {
+    throw new SocialMediaWorkflowError(MISSING_FOLDER_RESET_MESSAGE, 409);
+  }
+};
+
 const requireSequelize = () => {
   if (!SocialMediaContent.sequelize) {
     throw new SocialMediaWorkflowError('Database connection is unavailable.', 500);
   }
   return SocialMediaContent.sequelize;
+};
+
+const loadCreatorFolderIdentity = async (
+  content: SocialMediaContent,
+  transaction: Transaction,
+): Promise<{ creatorUserId: number | null; creatorFullName: string | null }> => {
+  const creatorUserId = Number.isInteger(content.createdBy) && Number(content.createdBy) > 0
+    ? Number(content.createdBy)
+    : null;
+  if (!creatorUserId) return { creatorUserId: null, creatorFullName: null };
+  const creator = await User.findByPk(creatorUserId, {
+    attributes: ['firstName', 'lastName'],
+    transaction,
+  });
+  const creatorFullName = [creator?.firstName, creator?.lastName]
+    .map((value) => String(value ?? '').trim())
+    .filter(Boolean)
+    .join(' ') || null;
+  return { creatorUserId, creatorFullName };
 };
 
 const respondWithItem = async (res: Response, contentId: number): Promise<void> => {
@@ -175,10 +298,13 @@ const respondError = (res: Response, error: unknown, fallback: string): void => 
   if (
     error instanceof SocialMediaWorkflowError
     || error instanceof SocialMediaAssetStorageValidationError
+    || error instanceof SocialMediaProjectFolderCheckUnavailableError
     || error instanceof SocialMediaPublishTaskConflictError
   ) {
     const status = error instanceof SocialMediaWorkflowError
       ? error.status
+      : error instanceof SocialMediaProjectFolderCheckUnavailableError
+        ? 503
       : error instanceof SocialMediaPublishTaskConflictError
         ? 409
         : 400;
@@ -199,16 +325,28 @@ export const planSocialMediaContent = async (
     const scheduledAt = parseDateOnly(req.body?.scheduledDate);
     await requireSequelize().transaction(async (transaction) => {
       const content = await loadLockedContent(contentId, transaction);
-      if (content.status === 'planned' && content.scheduledAt === scheduledAt) {
+      if (content.status !== 'idea' && content.scheduledAt === scheduledAt) {
         return;
       }
-      assertStatus(content, 'idea', 'be planned');
-      assertPlanningBrief(content);
-      await content.update({
-        status: 'planned',
-        scheduledAt,
-        updatedBy: actorId,
-      }, { transaction });
+      if (content.status === 'idea') {
+        assertPlanningBrief(content);
+        await content.update({
+          status: 'planned',
+          scheduledAt,
+          updatedBy: actorId,
+        }, { transaction });
+        return;
+      }
+      if (!['planned', 'in_production', 'ready', 'published'].includes(content.status)) {
+        throw new SocialMediaWorkflowError(
+          'Only planned or later active content can change its planned date.',
+          409,
+        );
+      }
+      await content.update({ scheduledAt, updatedBy: actorId }, { transaction });
+      if (content.status === 'published') {
+        await syncPublishedSocialMediaTaskEvidence({ content, actorId, transaction });
+      }
     });
     await respondWithItem(res, contentId);
   } catch (error) {
@@ -248,9 +386,12 @@ export const createSocialMediaProjectFolder = async (
   try {
     const contentId = parseId(req.params.id);
     const actorId = requireActorId(req);
-    await requireSequelize().transaction(async (transaction) => {
+    const folderGuard = await requireSequelize().transaction(async (transaction) => {
       const content = await loadLockedContent(contentId, transaction);
-      assertStatus(content, 'in_production', 'create a project folder');
+      const guard = await guardPersistedProjectFolder(content, actorId, transaction);
+      if (guard.reset) return guard;
+      assertProductionAssetsEditable(content, 'create a project folder');
+      const creatorIdentity = await loadCreatorFolderIdentity(content, transaction);
       // Keep the content row locked while Drive resolves/creates the stable
       // folder. That serializes this external side effect with Ready/publish
       // transitions and concurrent folder requests.
@@ -258,16 +399,42 @@ export const createSocialMediaProjectFolder = async (
         contentId,
         title: content.title,
         existingFolderId: content.driveProjectFolderId,
+        ...creatorIdentity,
       });
       await content.update({
         driveProjectFolderId: folder.folderId,
         driveProjectUrl: folder.driveProjectUrl,
         updatedBy: actorId,
       }, { transaction });
+      return { folderAvailable: true, reset: false };
     });
+    throwWhenFolderWasReset(folderGuard);
     await respondWithItem(res, contentId);
   } catch (error) {
     respondError(res, error, 'Failed to create the Social Media Drive folder.');
+  }
+};
+
+export const checkSocialMediaProjectFolderHealth = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const contentId = parseId(req.params.id);
+    const actorId = requireActorId(req);
+    const result = await requireSequelize().transaction(async (transaction) => {
+      const content = await loadLockedContent(contentId, transaction);
+      return guardPersistedProjectFolder(content, actorId, transaction);
+    });
+    const content = await loadSocialMediaContent(contentId);
+    if (!content) throw new SocialMediaWorkflowError('Social Media content was not found.', 404);
+    res.status(200).json({
+      item: serializeSocialMediaContent(content),
+      folderAvailable: result.folderAvailable,
+      reset: result.reset,
+    });
+  } catch (error) {
+    respondError(res, error, 'Failed to verify the Social Media Drive folder.');
   }
 };
 
@@ -381,16 +548,18 @@ export const initiateSocialMediaAssetUpload = async (
 ): Promise<void> => {
   try {
     const contentId = parseId(req.params.id);
-    requireActorId(req);
+    const actorId = requireActorId(req);
     const metadata = parseAssetUploadMetadata(req.body);
-    const result = await requireSequelize().transaction(async (transaction) => {
+    const outcome = await requireSequelize().transaction(async (transaction) => {
       const content = await loadLockedContent(contentId, transaction);
-      assertStatus(content, 'in_production', 'receive production assets');
+      const folderGuard = await guardPersistedProjectFolder(content, actorId, transaction);
+      if (folderGuard.reset) return { folderGuard, upload: null };
+      assertProductionAssetsEditable(content, 'receive production assets');
       if (!content.driveProjectFolderId || !content.driveProjectUrl) {
         throw new SocialMediaWorkflowError('Create the Drive project folder before uploading assets.');
       }
       await assertFinalVideoAvailable(contentId, metadata.kind, transaction);
-      return initiateSocialMediaResumableUpload({
+      const upload = await initiateSocialMediaResumableUpload({
         contentId,
         title: content.title,
         folderId: content.driveProjectFolderId,
@@ -399,9 +568,14 @@ export const initiateSocialMediaAssetUpload = async (
         mimeType: metadata.mimeType,
         sizeBytes: metadata.sizeBytes,
       });
+      return { folderGuard, upload };
     });
+    throwWhenFolderWasReset(outcome.folderGuard);
+    if (!outcome.upload) {
+      throw new SocialMediaWorkflowError('Create the Drive project folder before uploading assets.');
+    }
     res.setHeader('Cache-Control', 'no-store');
-    res.status(201).json(result);
+    res.status(201).json(outcome.upload);
   } catch (error) {
     respondError(res, error, 'Failed to start the Social Media asset upload.');
   }
@@ -427,8 +601,10 @@ export const finalizeSocialMediaAssetUpload = async (
     }
 
     try {
-      await requireSequelize().transaction(async (transaction) => {
+      const folderGuard = await requireSequelize().transaction(async (transaction) => {
         const content = await loadLockedContent(contentId, transaction);
+        const guard = await guardPersistedProjectFolder(content, actorId, transaction);
+        if (guard.reset) return guard;
         if (!content.driveProjectFolderId || !content.driveProjectUrl) {
           throw new SocialMediaWorkflowError('Create the Drive project folder before uploading assets.');
         }
@@ -452,10 +628,10 @@ export const finalizeSocialMediaAssetUpload = async (
         });
         if (existing) {
           assertRegisteredAssetMatches(existing, stored, metadata.kind);
-          return;
+          return guard;
         }
         driveFileIdToClean = stored.driveFileId;
-        assertStatus(content, 'in_production', 'receive production assets');
+        assertProductionAssetsEditable(content, 'receive production assets');
         await assertFinalVideoAvailable(contentId, metadata.kind, transaction);
         await SocialMediaContentAsset.create({
           contentId,
@@ -468,7 +644,9 @@ export const finalizeSocialMediaAssetUpload = async (
           uploadedBy: actorId,
         }, { transaction });
         await content.update({ updatedBy: actorId }, { transaction });
+        return guard;
       });
+      throwWhenFolderWasReset(folderGuard);
     } catch (error) {
       if (metadata.kind === 'final_video' && isFinalVideoUniqueConflict(error)) {
         throw new SocialMediaWorkflowError(
@@ -516,9 +694,11 @@ export const uploadSocialMediaAsset = async (
     validateAssetFile(uploadFile, kind);
 
     try {
-      await requireSequelize().transaction(async (transaction) => {
+      const folderGuard = await requireSequelize().transaction(async (transaction) => {
         const content = await loadLockedContent(contentId, transaction);
-        assertStatus(content, 'in_production', 'receive production assets');
+        const guard = await guardPersistedProjectFolder(content, actorId, transaction);
+        if (guard.reset) return guard;
+        assertProductionAssetsEditable(content, 'receive production assets');
         if (!content.driveProjectFolderId || !content.driveProjectUrl) {
           throw new SocialMediaWorkflowError('Create the Drive project folder before uploading assets.');
         }
@@ -559,7 +739,9 @@ export const uploadSocialMediaAsset = async (
           uploadedBy: actorId,
         }, { transaction });
         await content.update({ updatedBy: actorId }, { transaction });
+        return guard;
       });
+      throwWhenFolderWasReset(folderGuard);
     } catch (error) {
       if (kind === 'final_video' && isFinalVideoUniqueConflict(error)) {
         throw new SocialMediaWorkflowError(
@@ -601,9 +783,17 @@ export const removeSocialMediaAsset = async (
     const contentId = parseId(req.params.id);
     const assetId = parseId(req.params.assetId, 'Asset ID');
     const actorId = requireActorId(req);
-    await requireSequelize().transaction(async (transaction) => {
+    const folderGuard = await requireSequelize().transaction(async (transaction) => {
       const content = await loadLockedContent(contentId, transaction);
-      assertStatus(content, 'in_production', 'remove production assets');
+      const guard = await guardPersistedProjectFolder(content, actorId, transaction);
+      if (guard.reset) return guard;
+      assertProductionAssetsEditable(content, 'remove production assets');
+      if (!guard.folderAvailable) {
+        throw new SocialMediaWorkflowError(
+          'Create the Drive project folder before managing production assets.',
+          409,
+        );
+      }
       const asset = await SocialMediaContentAsset.findOne({
         where: { id: assetId, contentId },
         transaction,
@@ -615,8 +805,22 @@ export const removeSocialMediaAsset = async (
       // inconsistency is an unreferenced orphan, never a DB row pointing to a
       // file that has already disappeared.
       await asset.destroy({ transaction });
-      await content.update({ updatedBy: actorId }, { transaction });
+      const remainingSameKind = content.status === 'ready' && REQUIRED_ASSET_KINDS.has(asset.kind)
+        ? await SocialMediaContentAsset.findOne({
+          where: { contentId, kind: asset.kind },
+          transaction,
+        })
+        : null;
+      const losesReadyRequirement = content.status === 'ready'
+        && REQUIRED_ASSET_KINDS.has(asset.kind)
+        && !remainingSameKind;
+      await content.update({
+        ...(losesReadyRequirement ? { status: 'in_production', readyAt: null } : {}),
+        updatedBy: actorId,
+      }, { transaction });
+      return guard;
     });
+    throwWhenFolderWasReset(folderGuard);
     if (driveFileIdToDelete) {
       try {
         await deleteSocialMediaAsset(driveFileIdToDelete);
@@ -641,10 +845,12 @@ export const markSocialMediaReady = async (
   try {
     const contentId = parseId(req.params.id);
     const actorId = requireActorId(req);
-    await requireSequelize().transaction(async (transaction) => {
+    const folderGuard = await requireSequelize().transaction(async (transaction) => {
       const content = await loadLockedContent(contentId, transaction);
+      const guard = await guardPersistedProjectFolder(content, actorId, transaction);
+      if (guard.reset) return guard;
       if (content.status === 'ready') {
-        return;
+        return guard;
       }
       assertStatus(content, 'in_production', 'be marked ready');
       if (!content.driveProjectFolderId || !content.driveProjectUrl) {
@@ -668,7 +874,9 @@ export const markSocialMediaReady = async (
         readyAt: new Date(),
         updatedBy: actorId,
       }, { transaction });
+      return guard;
     });
+    throwWhenFolderWasReset(folderGuard);
     await respondWithItem(res, contentId);
   } catch (error) {
     respondError(res, error, 'Failed to mark the Social Media content ready.');
@@ -684,12 +892,20 @@ export const publishSocialMediaContent = async (
     const actorId = requireActorId(req);
     const platformLinks = normalizePublishLinks(req.body?.platformLinks);
     let taskCompletion: SocialMediaTaskCompletionResult | null = null;
-    await requireSequelize().transaction(async (transaction) => {
+    const folderGuard = await requireSequelize().transaction(async (transaction) => {
       const content = await SocialMediaContent.findByPk(contentId, {
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
       if (!content) throw new SocialMediaWorkflowError('Social Media content was not found.', 404);
+      const guard = await guardPersistedProjectFolder(content, actorId, transaction);
+      if (guard.reset) return guard;
+      if (!guard.folderAvailable) {
+        throw new SocialMediaWorkflowError(
+          'Create the Drive project folder before publishing this content.',
+          409,
+        );
+      }
 
       if (content.status === 'published') {
         if (
@@ -706,7 +922,7 @@ export const publishSocialMediaContent = async (
           platformLinks,
           transaction,
         });
-        return;
+        return guard;
       }
 
       assertStatus(content, 'ready', 'be published');
@@ -726,7 +942,9 @@ export const publishSocialMediaContent = async (
         platformLinks,
         updatedBy: actorId,
       }, { transaction });
+      return guard;
     });
+    throwWhenFolderWasReset(folderGuard);
     const content = await loadSocialMediaContent(contentId);
     if (!content) throw new SocialMediaWorkflowError('Social Media content was not found.', 404);
     res.status(200).json({
@@ -735,5 +953,46 @@ export const publishSocialMediaContent = async (
     });
   } catch (error) {
     respondError(res, error, 'Failed to publish the Social Media content.');
+  }
+};
+
+export const updatePublishedSocialMediaLinks = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const contentId = parseId(req.params.id);
+    const actorId = requireActorId(req);
+    const platformLinks = normalizePublishLinks(req.body?.platformLinks);
+    await requireSequelize().transaction(async (transaction) => {
+      const content = await loadLockedContent(contentId, transaction);
+      assertStatus(content, 'published', 'have its publication links edited');
+      const previousPlatformLinks = {
+        instagram: content.platformLinks?.instagram ?? '',
+        tiktok: content.platformLinks?.tiktok ?? '',
+      };
+      const changed = previousPlatformLinks.instagram !== platformLinks.instagram
+        || previousPlatformLinks.tiktok !== platformLinks.tiktok;
+      if (changed) {
+        const editedAt = new Date();
+        await content.update({
+          platformLinks,
+          updatedBy: actorId,
+        }, { transaction });
+        await syncPublishedSocialMediaTaskEvidence({
+          content,
+          actorId,
+          transaction,
+          linkEdit: { editedAt, previousPlatformLinks },
+        });
+        return;
+      }
+      // An exact retry remains idempotent while also repairing stale linked
+      // snapshots left by an interrupted legacy workflow.
+      await syncPublishedSocialMediaTaskEvidence({ content, actorId, transaction });
+    });
+    await respondWithItem(res, contentId);
+  } catch (error) {
+    respondError(res, error, 'Failed to update the Social Media publication links.');
   }
 };

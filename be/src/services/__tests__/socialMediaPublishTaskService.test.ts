@@ -18,6 +18,7 @@ import type SocialMediaContent from '../../models/SocialMediaContent';
 import {
   completeTaskForSocialMediaPublication,
   SocialMediaPublishTaskConflictError,
+  syncPublishedSocialMediaTaskEvidence,
 } from '../socialMediaPublishTaskService';
 
 const mockFindAll = AssistantManagerTaskLog.findAll as jest.Mock;
@@ -205,5 +206,194 @@ describe('Social Media publication Task Planner completion', () => {
     await expect(callService(buildContent({ publishedTaskLogId: 88 }))).rejects.toThrow(
       'This publication is already linked to a different Task Planner result.',
     );
+  });
+
+  it('updates published links in the managed notes block and keeps an audit history in meta', async () => {
+    const log = buildLog({
+      notes: 'Editor checked the final cut.',
+      meta: {
+        completeOnSocialMediaPublish: true,
+        socialMediaContentId: 41,
+      },
+    });
+    mockFindAll.mockResolvedValue([log]);
+    await callService();
+
+    const newLinks = {
+      instagram: 'https://www.instagram.com/reel/corrected',
+      tiktok: 'https://www.tiktok.com/@example/video/456',
+    };
+    const content = buildContent({
+      status: 'published',
+      publishedAt: new Date('2026-09-02T12:00:00.000Z'),
+      publishedBy: 7,
+      publishedTaskLogId: 88,
+      platformLinks: newLinks,
+    });
+    mockFindByPk.mockResolvedValue(log);
+
+    await expect(syncPublishedSocialMediaTaskEvidence({
+      content,
+      actorId: 9,
+      transaction: transaction as never,
+      linkEdit: {
+        editedAt: new Date('2026-09-03T09:30:00.000Z'),
+        previousPlatformLinks: platformLinks,
+      },
+    })).resolves.toEqual({
+      taskLogId: 88,
+      userId: 7,
+      taskDate: '2026-09-02',
+      status: 'completed',
+    });
+
+    expect(mockFindByPk).toHaveBeenCalledWith(88, {
+      transaction,
+      lock: 'UPDATE',
+    });
+    const update = (log.update as jest.Mock).mock.calls.at(-1)?.[0];
+    expect(update.updatedBy).toBe(9);
+    expect(update.notes).toContain('Instagram: https://www.instagram.com/reel/corrected');
+    expect(update.notes).toContain('TikTok: https://www.tiktok.com/@example/video/456');
+    expect(update.notes).not.toContain('Instagram: https://www.instagram.com/reel/example');
+    expect(update.notes.match(/Social Media publication evidence #41 - START/gu)).toHaveLength(1);
+    expect(update.meta.socialMediaPublicationSnapshot).toEqual(expect.objectContaining({
+      publishedAt: '2026-09-02T12:00:00.000Z',
+      publishedBy: 7,
+      originalPlatformLinks: platformLinks,
+      platformLinks: newLinks,
+      linksEditedAt: '2026-09-03T09:30:00.000Z',
+      linksEditedBy: 9,
+      platformLinkEditHistory: [{
+        editedAt: '2026-09-03T09:30:00.000Z',
+        editedBy: 9,
+        previousPlatformLinks: platformLinks,
+        platformLinks: newLinks,
+      }],
+    }));
+  });
+
+  it('preserves legacy notes and appends a replaceable correction block', async () => {
+    const oldLinks = {
+      instagram: 'https://www.instagram.com/reel/old',
+      tiktok: 'https://www.tiktok.com/@example/video/old',
+    };
+    const newLinks = {
+      instagram: 'https://www.instagram.com/reel/new',
+      tiktok: 'https://www.tiktok.com/@example/video/new',
+    };
+    const log = buildLog({
+      status: 'completed',
+      notes: `Legacy publication notes\nInstagram: ${oldLinks.instagram}`,
+      meta: {
+        socialMediaContentId: 41,
+        socialMediaPublicationSnapshot: {
+          publishedBy: 7,
+          publishedAt: '2026-09-02T12:00:00.000Z',
+          platformLinks: oldLinks,
+        },
+      },
+    });
+    mockFindByPk.mockResolvedValue(log);
+    const content = buildContent({
+      status: 'published',
+      publishedAt: new Date('2026-09-02T12:00:00.000Z'),
+      publishedBy: 7,
+      publishedTaskLogId: 88,
+      platformLinks: newLinks,
+    });
+
+    await syncPublishedSocialMediaTaskEvidence({
+      content,
+      actorId: 9,
+      transaction: transaction as never,
+      linkEdit: {
+        editedAt: new Date('2026-09-03T09:30:00.000Z'),
+        previousPlatformLinks: oldLinks,
+      },
+    });
+
+    const update = (log.update as jest.Mock).mock.calls[0][0];
+    expect(update.notes).toContain('Legacy publication notes');
+    expect(update.notes).toContain(`Instagram: ${oldLinks.instagram}`);
+    expect(update.notes).toContain('[Social Media publication link correction #41 - START]');
+    expect(update.notes).toContain(`Updated Instagram: ${newLinks.instagram}`);
+
+    const latestLinks = {
+      instagram: 'https://www.instagram.com/reel/latest',
+      tiktok: 'https://www.tiktok.com/@example/video/latest',
+    };
+    Object.assign(content, { platformLinks: latestLinks });
+    await syncPublishedSocialMediaTaskEvidence({
+      content,
+      actorId: 10,
+      transaction: transaction as never,
+      linkEdit: {
+        editedAt: new Date('2026-09-04T10:00:00.000Z'),
+        previousPlatformLinks: newLinks,
+      },
+    });
+    const secondUpdate = (log.update as jest.Mock).mock.calls[1][0];
+    expect(secondUpdate.notes.match(/publication link correction #41 - START/gu)).toHaveLength(1);
+    expect(secondUpdate.notes).not.toContain(`Updated Instagram: ${newLinks.instagram}`);
+    expect(secondUpdate.notes).toContain(`Updated Instagram: ${latestLinks.instagram}`);
+    expect(
+      secondUpdate.meta.socialMediaPublicationSnapshot.platformLinkEditHistory,
+    ).toHaveLength(2);
+  });
+
+  it('refreshes a published planned date without rewriting task notes', async () => {
+    const log = buildLog({
+      status: 'completed',
+      notes: 'Keep these task notes exactly.',
+      meta: {
+        socialMediaContentId: 41,
+        socialMediaPublicationSnapshot: {
+          publishedBy: 7,
+          publishedAt: '2026-09-02T12:00:00.000Z',
+          platformLinks,
+          platformLinkEditHistory: [{ editedBy: 8 }],
+        },
+      },
+    });
+    mockFindByPk.mockResolvedValue(log);
+
+    await syncPublishedSocialMediaTaskEvidence({
+      content: buildContent({
+        status: 'published',
+        scheduledAt: '2026-09-09',
+        publishedAt: new Date('2026-09-02T12:00:00.000Z'),
+        publishedBy: 7,
+        publishedTaskLogId: 88,
+        platformLinks,
+      }),
+      actorId: 9,
+      transaction: transaction as never,
+    });
+
+    const update = (log.update as jest.Mock).mock.calls[0][0];
+    expect(update.notes).toBe('Keep these task notes exactly.');
+    expect(update.meta.socialMediaContentSnapshot.scheduledAt).toBe(
+      '2026-09-09T00:00:00.000Z',
+    );
+    expect(update.meta.socialMediaPublicationSnapshot).toEqual(expect.objectContaining({
+      scheduledAt: '2026-09-09',
+      platformLinkEditHistory: [{ editedBy: 8 }],
+    }));
+  });
+
+  it('allows legacy published content without a linked Task Planner log', async () => {
+    await expect(syncPublishedSocialMediaTaskEvidence({
+      content: buildContent({
+        status: 'published',
+        publishedAt: new Date('2026-09-02T12:00:00.000Z'),
+        publishedBy: 7,
+        publishedTaskLogId: null,
+        platformLinks,
+      }),
+      actorId: 9,
+      transaction: transaction as never,
+    })).resolves.toBeNull();
+    expect(mockFindByPk).not.toHaveBeenCalled();
   });
 });

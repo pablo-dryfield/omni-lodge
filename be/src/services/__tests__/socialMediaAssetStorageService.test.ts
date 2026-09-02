@@ -23,8 +23,10 @@ import { createReadStream, promises as fs } from 'fs';
 import { getConfigValue } from '../configService';
 import { getDriveClient } from '../googleDrive';
 import {
+  checkSocialMediaProjectFolder,
   deleteSocialMediaAsset,
   ensureSocialMediaProjectFolder,
+  SocialMediaProjectFolderCheckUnavailableError,
   storeSocialMediaAsset,
 } from '../socialMediaAssetStorageService';
 
@@ -70,6 +72,66 @@ describe('Social Media production asset storage', () => {
     });
     expect(drive.files.list).not.toHaveBeenCalled();
     expect(drive.files.create).not.toHaveBeenCalled();
+  });
+
+  it('reports an active persisted project folder with a canonical URL', async () => {
+    const drive = makeDrive();
+    drive.files.get.mockResolvedValue({
+      data: {
+        id: 'project-folder-7',
+        mimeType: 'application/vnd.google-apps.folder',
+        trashed: false,
+        webViewLink: null,
+      },
+    });
+    mockGetDriveClient.mockResolvedValue(drive);
+
+    await expect(checkSocialMediaProjectFolder('project-folder-7')).resolves.toEqual({
+      available: true,
+      folderId: 'project-folder-7',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/project-folder-7',
+    });
+  });
+
+  it.each([
+    ['a 404', () => Promise.reject({ response: { status: 404 } })],
+    ['a trashed folder', () => Promise.resolve({
+      data: {
+        id: 'project-folder-7',
+        mimeType: 'application/vnd.google-apps.folder',
+        trashed: true,
+      },
+    })],
+    ['a non-folder resource', () => Promise.resolve({
+      data: {
+        id: 'project-folder-7',
+        mimeType: 'video/mp4',
+        trashed: false,
+      },
+    })],
+  ])('reports a definitively missing project folder for %s', async (_label, driveResult) => {
+    const drive = makeDrive();
+    drive.files.get.mockImplementation(driveResult);
+    mockGetDriveClient.mockResolvedValue(drive);
+
+    await expect(checkSocialMediaProjectFolder('project-folder-7')).resolves.toEqual({
+      available: false,
+    });
+  });
+
+  it.each([
+    ['authentication', { response: { status: 401 } }],
+    ['authorization', { response: { status: 403 } }],
+    ['server', { response: { status: 503 } }],
+    ['network', new Error('socket closed')],
+  ])('keeps %s Drive failures distinct from folder deletion', async (_label, driveError) => {
+    const drive = makeDrive();
+    drive.files.get.mockRejectedValue(driveError);
+    mockGetDriveClient.mockResolvedValue(drive);
+
+    await expect(checkSocialMediaProjectFolder('project-folder-7')).rejects.toBeInstanceOf(
+      SocialMediaProjectFolderCheckUnavailableError,
+    );
   });
 
   it('streams disk-backed uploads into the folder for their asset kind', async () => {
@@ -146,7 +208,7 @@ describe('Social Media production asset storage', () => {
     await expect(deleteSocialMediaAsset('missing-file')).resolves.toBeUndefined();
   });
 
-  it('uses the dedicated social media root when creating a project', async () => {
+  it('creates creator and project folders under the dedicated Social Media root', async () => {
     const drive = makeDrive();
     mockGetConfigValue.mockImplementation((key: string) =>
       key === 'GOOGLE_DRIVE_SOCIAL_MEDIA_PARENT_ID' ? 'social-root' : null,
@@ -160,24 +222,122 @@ describe('Social Media production asset storage', () => {
       },
     });
     drive.files.list.mockResolvedValue({ data: { files: [] } });
-    drive.files.create.mockResolvedValue({
-      data: { id: 'project-folder-8', webViewLink: null },
-    });
+    drive.files.create
+      .mockResolvedValueOnce({ data: { id: 'creator-folder-23', webViewLink: null } })
+      .mockResolvedValueOnce({ data: { id: 'project-folder-8', webViewLink: null } });
     mockGetDriveClient.mockResolvedValue(drive);
 
     const result = await ensureSocialMediaProjectFolder({
       contentId: 8,
       title: 'Krakow / After Dark',
+      creatorUserId: 23,
+      creatorFullName: 'Maia Wagemann',
     });
 
-    expect(drive.files.create).toHaveBeenCalledWith(expect.objectContaining({
+    expect(drive.files.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
       requestBody: expect.objectContaining({
-        name: '8 - Krakow After Dark',
+        name: 'Maia Wagemann - Social Media',
         parents: ['social-root'],
+        appProperties: { omniLodgeSocialMediaCreatorId: '23' },
       }),
     }));
+    expect(drive.files.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      requestBody: expect.objectContaining({
+        name: 'Krakow After Dark',
+        parents: ['creator-folder-23'],
+        appProperties: { omniLodgeSocialMediaContentId: '8' },
+      }),
+    }));
+    expect(drive.files.list.mock.calls[0][0].q).toContain(
+      "appProperties has { key='omniLodgeSocialMediaCreatorId' and value='23' }",
+    );
+    expect(drive.files.list.mock.calls[1][0].q).toContain(
+      "appProperties has { key='omniLodgeSocialMediaContentId' and value='8' }",
+    );
     expect(result.driveProjectUrl).toBe(
       'https://drive.google.com/drive/folders/project-folder-8',
     );
+  });
+
+  it('reuses the creator folder by user ID and separates duplicate idea titles by content ID', async () => {
+    const drive = makeDrive();
+    mockGetConfigValue.mockImplementation((key: string) =>
+      key === 'GOOGLE_DRIVE_SOCIAL_MEDIA_PARENT_ID' ? 'social-root' : null,
+    );
+    drive.files.get.mockResolvedValue({
+      data: {
+        id: 'social-root',
+        mimeType: 'application/vnd.google-apps.folder',
+        trashed: false,
+        webViewLink: null,
+      },
+    });
+    drive.files.list
+      .mockResolvedValueOnce({ data: { files: [{ id: 'creator-folder-23' }] } })
+      .mockResolvedValueOnce({ data: { files: [] } })
+      .mockResolvedValueOnce({ data: { files: [{ id: 'creator-folder-23' }] } })
+      .mockResolvedValueOnce({ data: { files: [] } });
+    drive.files.create
+      .mockResolvedValueOnce({ data: { id: 'project-folder-8', webViewLink: null } })
+      .mockResolvedValueOnce({ data: { id: 'project-folder-9', webViewLink: null } });
+    mockGetDriveClient.mockResolvedValue(drive);
+
+    await ensureSocialMediaProjectFolder({
+      contentId: 8,
+      title: 'Same idea',
+      creatorUserId: 23,
+      creatorFullName: 'Maia Wagemann',
+    });
+    await ensureSocialMediaProjectFolder({
+      contentId: 9,
+      title: 'Same idea',
+      creatorUserId: 23,
+      creatorFullName: 'Maia Wagemann',
+    });
+
+    expect(drive.files.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      requestBody: expect.objectContaining({
+        name: 'Same idea',
+        parents: ['creator-folder-23'],
+        appProperties: { omniLodgeSocialMediaContentId: '8' },
+      }),
+    }));
+    expect(drive.files.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      requestBody: expect.objectContaining({
+        name: 'Same idea',
+        parents: ['creator-folder-23'],
+        appProperties: { omniLodgeSocialMediaContentId: '9' },
+      }),
+    }));
+  });
+
+  it('uses a deterministic creator-folder fallback when the creator record is unavailable', async () => {
+    const drive = makeDrive();
+    mockGetConfigValue.mockImplementation((key: string) =>
+      key === 'GOOGLE_DRIVE_SOCIAL_MEDIA_PARENT_ID' ? 'social-root' : null,
+    );
+    drive.files.get.mockResolvedValue({
+      data: {
+        id: 'social-root',
+        mimeType: 'application/vnd.google-apps.folder',
+        trashed: false,
+        webViewLink: null,
+      },
+    });
+    drive.files.list.mockResolvedValue({ data: { files: [] } });
+    drive.files.create
+      .mockResolvedValueOnce({ data: { id: 'unknown-creator-folder', webViewLink: null } })
+      .mockResolvedValueOnce({ data: { id: 'project-folder-12', webViewLink: null } });
+    mockGetDriveClient.mockResolvedValue(drive);
+
+    await ensureSocialMediaProjectFolder({ contentId: 12, title: 'Fallback idea' });
+
+    expect(drive.files.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      requestBody: expect.objectContaining({
+        name: 'Unknown Creator 12 - Social Media',
+        parents: ['social-root'],
+        appProperties: { omniLodgeSocialMediaCreatorId: 'content-12' },
+      }),
+    }));
   });
 });

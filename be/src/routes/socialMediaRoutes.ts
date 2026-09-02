@@ -16,6 +16,7 @@ import {
   uploadSocialMediaThumbnail,
 } from '../controllers/socialMediaContentController.js';
 import {
+  checkSocialMediaProjectFolderHealth,
   createSocialMediaProjectFolder,
   finalizeSocialMediaAssetUpload,
   initiateSocialMediaAssetUpload,
@@ -24,6 +25,7 @@ import {
   publishSocialMediaContent,
   removeSocialMediaAsset,
   startSocialMediaProduction,
+  updatePublishedSocialMediaLinks,
   uploadSocialMediaAsset,
 } from '../controllers/socialMediaWorkflowController.js';
 
@@ -88,6 +90,7 @@ router.put('/content/:id', updateGuard, updateSocialMediaContent);
 router.patch('/content/:id', updateGuard, updateSocialMediaContent);
 router.post('/content/:id/plan', updateGuard, planSocialMediaContent);
 router.post('/content/:id/start-production', updateGuard, startSocialMediaProduction);
+router.post('/content/:id/project-folder/check', updateGuard, checkSocialMediaProjectFolderHealth);
 router.post('/content/:id/project-folder', updateGuard, createSocialMediaProjectFolder);
 router.post('/content/:id/assets/resumable-session', updateGuard, initiateSocialMediaAssetUpload);
 router.post('/content/:id/assets/resumable-complete', updateGuard, finalizeSocialMediaAssetUpload);
@@ -95,6 +98,7 @@ router.post('/content/:id/assets', updateGuard, receiveAsset, uploadSocialMediaA
 router.delete('/content/:id/assets/:assetId', updateGuard, removeSocialMediaAsset);
 router.post('/content/:id/ready', updateGuard, markSocialMediaReady);
 router.post('/content/:id/publish', updateGuard, publishSocialMediaContent);
+router.patch('/content/:id/publication-links', updateGuard, updatePublishedSocialMediaLinks);
 router.delete('/content/:id/thumbnail', updateGuard, removeSocialMediaThumbnail);
 router.post('/content/:id/thumbnail', updateGuard, receiveThumbnail, uploadSocialMediaThumbnail);
 router.delete('/content/:id', deleteGuard, archiveSocialMediaContent);

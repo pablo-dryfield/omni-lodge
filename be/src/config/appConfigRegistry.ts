@@ -615,7 +615,7 @@ Best,
   {
     key: 'GOOGLE_DRIVE_SOCIAL_MEDIA_PARENT_ID',
     label: 'Google Drive social media folder',
-    description: 'Root folder ID where Social Media project folders and production files are stored.',
+    description: 'Root folder ID where each creator\'s "Full Name - Social Media" folder is stored.',
     category: 'Google API',
     valueType: 'string',
     defaultValue: null,

@@ -22,6 +22,7 @@ dayjs.extend(customParseFormat);
 const DEFAULT_TIMEZONE = 'Europe/Warsaw';
 const PUBLICATION_META_KEY = 'socialMediaPublicationSnapshot';
 const AUTO_COMPLETION_META_KEY = 'completedBySocialMediaPublish';
+const MAX_TASK_NOTES_LENGTH = 100_000;
 
 export type SocialMediaTaskCompletionResult = {
   taskLogId: number;
@@ -38,6 +39,16 @@ type PublishTaskParams = {
   publishedAt: Date;
   platformLinks: Record<string, string>;
   transaction: Transaction;
+};
+
+type PublishedTaskEvidenceSyncParams = {
+  content: SocialMediaContent;
+  actorId: number;
+  transaction: Transaction;
+  linkEdit?: {
+    editedAt: Date;
+    previousPlatformLinks: Record<string, string>;
+  };
 };
 
 type CandidateLog = AssistantManagerTaskLog & {
@@ -72,10 +83,102 @@ const buildTaskNotes = (
   ].filter((line): line is string => Boolean(line)).join('\n');
 };
 
-const appendNotesOnce = (existing: string | null, publicationNotes: string): string => {
-  const marker = publicationNotes.split('\n')[0];
-  if (existing?.includes(marker)) return existing;
-  return [existing?.trim(), publicationNotes].filter(Boolean).join('\n\n').slice(0, 100_000);
+const evidenceMarkers = (contentId: number, correction = false) => {
+  const label = correction
+    ? `Social Media publication link correction #${contentId}`
+    : `Social Media publication evidence #${contentId}`;
+  return {
+    start: `[${label} - START]`,
+    end: `[${label} - END]`,
+  };
+};
+
+const buildManagedEvidenceBlock = (
+  content: SocialMediaContent,
+  platformLinks: Record<string, string>,
+  options: { correction?: boolean; editedAt?: Date; editedBy?: number } = {},
+): string => {
+  const markers = evidenceMarkers(content.id, options.correction === true);
+  const detail = options.correction
+    ? [
+      `Updated Instagram: ${platformLinks.instagram}`,
+      `Updated TikTok: ${platformLinks.tiktok}`,
+      options.editedAt && options.editedBy
+        ? `Links corrected at ${options.editedAt.toISOString()} by user #${options.editedBy}.`
+        : null,
+    ].filter((line): line is string => Boolean(line)).join('\n')
+    : [
+      buildTaskNotes(content, platformLinks),
+      options.editedAt && options.editedBy
+        ? `Publication links updated at ${options.editedAt.toISOString()} by user #${options.editedBy}.`
+        : null,
+    ].filter((line): line is string => Boolean(line)).join('\n');
+  return [markers.start, detail, markers.end].join('\n');
+};
+
+const fitNotesWithBlock = (prefix: string, block: string, suffix = ''): string => {
+  const separatorBefore = prefix.trim() ? '\n\n' : '';
+  const separatorAfter = suffix.trim() ? '\n\n' : '';
+  const reserved = block.length + separatorBefore.length + separatorAfter.length + suffix.length;
+  const allowedPrefixLength = Math.max(0, MAX_TASK_NOTES_LENGTH - reserved);
+  const fittedPrefix = prefix.slice(0, allowedPrefixLength).trimEnd();
+  return `${fittedPrefix}${fittedPrefix ? separatorBefore : ''}${block}${separatorAfter}${suffix}`
+    .slice(0, MAX_TASK_NOTES_LENGTH);
+};
+
+const appendManagedEvidenceOnce = (
+  existing: string | null,
+  content: SocialMediaContent,
+  platformLinks: Record<string, string>,
+): string => {
+  const markers = evidenceMarkers(content.id);
+  if (existing?.includes(markers.start)) return existing;
+  return fitNotesWithBlock(
+    existing?.trim() ?? '',
+    buildManagedEvidenceBlock(content, platformLinks),
+  );
+};
+
+const replaceManagedEvidence = (
+  existing: string | null,
+  content: SocialMediaContent,
+  platformLinks: Record<string, string>,
+  editedAt: Date,
+  editedBy: number,
+): string => {
+  const notes = existing ?? '';
+  const fullMarkers = evidenceMarkers(content.id);
+  const correctionMarkers = evidenceMarkers(content.id, true);
+  const replaceBlock = (
+    markers: ReturnType<typeof evidenceMarkers>,
+    correction: boolean,
+  ): string | null => {
+    const startIndex = notes.indexOf(markers.start);
+    if (startIndex < 0) return null;
+    const endIndex = notes.indexOf(markers.end, startIndex + markers.start.length);
+    if (endIndex < 0) return null;
+    const suffixStart = endIndex + markers.end.length;
+    return fitNotesWithBlock(
+      notes.slice(0, startIndex).trimEnd(),
+      buildManagedEvidenceBlock(content, platformLinks, {
+        correction,
+        editedAt,
+        editedBy,
+      }),
+      notes.slice(suffixStart).trimStart(),
+    );
+  };
+
+  return replaceBlock(fullMarkers, false)
+    ?? replaceBlock(correctionMarkers, true)
+    ?? fitNotesWithBlock(
+      notes.trim(),
+      buildManagedEvidenceBlock(content, platformLinks, {
+        correction: true,
+        editedAt,
+        editedBy,
+      }),
+    );
 };
 
 const taskResult = (log: AssistantManagerTaskLog): SocialMediaTaskCompletionResult => ({
@@ -169,7 +272,7 @@ export async function completeTaskForSocialMediaPublication(
     thumbnailUrl: params.content.thumbnailUrl,
   });
   nextMeta[PUBLICATION_META_KEY] = {
-    version: 1,
+    version: 2,
     contentId: params.content.id,
     publishedBy: params.actorId,
     publishedAt: params.publishedAt.toISOString(),
@@ -179,6 +282,7 @@ export async function completeTaskForSocialMediaPublication(
     platformCaption: params.content.platformCaption,
     hashtags: params.content.hashtags,
     driveProjectUrl: params.content.driveProjectUrl,
+    scheduledAt: params.content.scheduledAt,
     platformLinks: params.platformLinks,
   };
   nextMeta[AUTO_COMPLETION_META_KEY] = true;
@@ -186,7 +290,122 @@ export async function completeTaskForSocialMediaPublication(
   await log.update({
     status: 'completed',
     completedAt: params.publishedAt,
-    notes: appendNotesOnce(log.notes, buildTaskNotes(params.content, params.platformLinks)),
+    notes: appendManagedEvidenceOnce(log.notes, params.content, params.platformLinks),
+    meta: nextMeta,
+    updatedBy: params.actorId,
+  }, { transaction: params.transaction });
+
+  return taskResult(log);
+}
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+
+/**
+ * Refreshes the evidence stored on the already-completed Task Planner log.
+ * Call this in the same transaction as an edit to published content so the
+ * content and its compensation-affecting task evidence can never diverge.
+ */
+export async function syncPublishedSocialMediaTaskEvidence(
+  params: PublishedTaskEvidenceSyncParams,
+): Promise<SocialMediaTaskCompletionResult | null> {
+  if (params.content.status !== 'published') {
+    throw new SocialMediaPublishTaskConflictError(
+      'Only published Social Media content can refresh publication evidence.',
+    );
+  }
+  // Content created before Task Planner publication automation has no linked
+  // evidence record. Its published fields can still be corrected safely.
+  if (!params.content.publishedTaskLogId) return null;
+  if (!params.content.publishedAt || !params.content.publishedBy) {
+    throw new SocialMediaPublishTaskConflictError(
+      'Published Social Media content is missing its Task Planner publication record.',
+    );
+  }
+
+  const log = await AssistantManagerTaskLog.findByPk(
+    params.content.publishedTaskLogId,
+    { transaction: params.transaction, lock: params.transaction.LOCK.UPDATE },
+  );
+  if (
+    !log
+    || log.status !== 'completed'
+    || log.userId !== params.content.publishedBy
+    || getStoredSocialMediaContentId(log.meta) !== params.content.id
+  ) {
+    throw new SocialMediaPublishTaskConflictError(
+      'The linked Task Planner publication evidence could not be verified.',
+    );
+  }
+
+  const nextMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
+  nextMeta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY] = buildAssistantManagerTaskSocialMediaSnapshot({
+    id: params.content.id,
+    title: params.content.title,
+    status: 'published',
+    targetPlatforms: params.content.targetPlatforms,
+    scheduledAt: params.content.scheduledAt,
+    thumbnailUrl: params.content.thumbnailUrl,
+  });
+
+  const previousPublication = asRecord(nextMeta[PUBLICATION_META_KEY]);
+  const previousHistory = Array.isArray(previousPublication.platformLinkEditHistory)
+    ? previousPublication.platformLinkEditHistory
+    : [];
+  const platformLinkEditHistory = params.linkEdit
+    ? [
+      ...previousHistory,
+      {
+        editedAt: params.linkEdit.editedAt.toISOString(),
+        editedBy: params.actorId,
+        previousPlatformLinks: params.linkEdit.previousPlatformLinks,
+        platformLinks: params.content.platformLinks,
+      },
+    ]
+    : previousHistory;
+  nextMeta[PUBLICATION_META_KEY] = {
+    ...previousPublication,
+    version: 2,
+    contentId: params.content.id,
+    // These are the immutable original publication facts. Prefer the stored
+    // values so evidence remains accurate even if legacy data is repaired.
+    publishedBy: previousPublication.publishedBy ?? params.content.publishedBy,
+    publishedAt:
+      previousPublication.publishedAt ?? params.content.publishedAt.toISOString(),
+    title: params.content.title,
+    idea: params.content.idea,
+    onVideoCaptions: params.content.onVideoCaptions,
+    platformCaption: params.content.platformCaption,
+    hashtags: params.content.hashtags,
+    driveProjectUrl: params.content.driveProjectUrl,
+    scheduledAt: params.content.scheduledAt,
+    originalPlatformLinks:
+      previousPublication.originalPlatformLinks
+      ?? params.linkEdit?.previousPlatformLinks
+      ?? previousPublication.platformLinks
+      ?? params.content.platformLinks,
+    platformLinks: params.content.platformLinks,
+    ...(params.linkEdit
+      ? {
+        linksEditedAt: params.linkEdit.editedAt.toISOString(),
+        linksEditedBy: params.actorId,
+      }
+      : {}),
+    ...(platformLinkEditHistory.length > 0 ? { platformLinkEditHistory } : {}),
+  };
+
+  await log.update({
+    notes: params.linkEdit
+      ? replaceManagedEvidence(
+        log.notes,
+        params.content,
+        params.content.platformLinks,
+        params.linkEdit.editedAt,
+        params.actorId,
+      )
+      : log.notes,
     meta: nextMeta,
     updatedBy: params.actorId,
   }, { transaction: params.transaction });
