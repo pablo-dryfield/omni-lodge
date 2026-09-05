@@ -1365,12 +1365,13 @@ describe('Social Media production workflow controller', () => {
     await publishSocialMediaContent({
       params: { id: '41' },
       body: { platformLinks },
-      authContext: { id: 7 },
+      authContext: { id: 7, roleSlug: 'owner' },
     } as unknown as AuthenticatedRequest, response);
 
     expect(mockCompleteTask).toHaveBeenCalledWith(expect.objectContaining({
       content,
       actorId: 7,
+      allowCrossUserCompletion: true,
       platformLinks,
       publishedAt: expect.any(Date),
       transaction,
@@ -1388,6 +1389,40 @@ describe('Social Media production workflow controller', () => {
       item: { id: 41, status: 'published' },
       taskCompletion,
     });
+  });
+
+  it('does not authorize an assistant manager to complete another user task while publishing', async () => {
+    const content = buildContent({
+      status: 'ready',
+      createdBy: 51,
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    mockCompleteTask.mockResolvedValue({
+      taskLogId: 88,
+      userId: 7,
+      taskDate: '2026-09-02',
+      status: 'completed',
+    });
+    const response = createResponse();
+
+    await publishSocialMediaContent({
+      params: { id: '41' },
+      body: {
+        platformLinks: {
+          instagram: 'https://www.instagram.com/reel/example',
+          tiktok: 'https://www.tiktok.com/@example/video/123',
+        },
+      },
+      authContext: { id: 7, roleSlug: 'assistant-manager' },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockCompleteTask).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 7,
+      allowCrossUserCompletion: false,
+    }));
   });
 
   it('does not publish unless valid Instagram and TikTok links are both supplied', async () => {

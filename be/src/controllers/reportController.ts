@@ -103,6 +103,7 @@ import {
   calculateAssistantManagerSalaryTaskCompletion,
   mergeAssistantManagerSalaryDailyBreakdowns,
   partitionAssistantManagerSalaryDaysForTaskProration,
+  shouldIncludeAssistantManagerTaskLogInCompensationScore,
   type AssistantManagerSalaryDailyBase,
   type AssistantManagerSalaryDailyBreakdown,
   type AssistantManagerSalaryDailyTaskProgress,
@@ -8725,6 +8726,9 @@ const buildTaskScoreContext = async (
     const meta = metaValue && typeof metaValue === "object"
       ? metaValue as Record<string, unknown>
       : {};
+    if (!shouldIncludeAssistantManagerTaskLogInCompensationScore(status, meta)) {
+      return;
+    }
     const points = resolveTaskLogPoints(
       metaValue,
       template?.scheduleConfig,

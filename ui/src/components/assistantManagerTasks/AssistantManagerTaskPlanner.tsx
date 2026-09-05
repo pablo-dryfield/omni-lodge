@@ -9000,12 +9000,13 @@ const AssistantManagerTaskPlanner = () => {
                         }
                         checked={templateFormState.requireSocialMediaPlan}
                         disabled={templateFormState.completeOnSocialMediaPublish}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
                           setTemplateFormState((prev) => ({
                             ...prev,
-                            requireSocialMediaPlan: event.currentTarget.checked,
-                          }))
-                        }
+                            requireSocialMediaPlan: checked,
+                          }));
+                        }}
                       />
                       <Switch
                         label="Complete the linked task when the content is published"
@@ -10462,12 +10463,13 @@ const AssistantManagerTaskPlanner = () => {
               label="Assignment ID"
               description="Optional"
               value={manualFormState.assignmentId}
-              onChange={(event) =>
+              onChange={(event) => {
+                const value = event.currentTarget.value;
                 setManualFormState((prev) => ({
                   ...prev,
-                  assignmentId: event.currentTarget.value,
-                }))
-              }
+                  assignmentId: value,
+                }));
+              }}
             />
           </SimpleGrid>
           <DatePickerInput
@@ -10487,23 +10489,25 @@ const AssistantManagerTaskPlanner = () => {
               label="Start Time"
               placeholder="08:00"
               value={manualFormState.time}
-              onChange={(event) =>
+              onChange={(event) => {
+                const value = event.currentTarget.value;
                 setManualFormState((prev) => ({
                   ...prev,
-                  time: event.currentTarget.value,
-                }))
-              }
+                  time: value,
+                }));
+              }}
             />
             <TextInput
               label="Duration (hours)"
               placeholder="1.5"
               value={manualFormState.durationHours}
-              onChange={(event) =>
+              onChange={(event) => {
+                const value = event.currentTarget.value;
                 setManualFormState((prev) => ({
                   ...prev,
-                  durationHours: event.currentTarget.value,
-                }))
-              }
+                  durationHours: value,
+                }));
+              }}
             />
           </SimpleGrid>
           <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
@@ -10524,57 +10528,62 @@ const AssistantManagerTaskPlanner = () => {
             <TextInput
               label="Points"
               value={manualFormState.points}
-              onChange={(event) =>
+              onChange={(event) => {
+                const value = event.currentTarget.value;
                 setManualFormState((prev) => ({
                   ...prev,
-                  points: event.currentTarget.value,
-                }))
-              }
+                  points: value,
+                }));
+              }}
             />
           </SimpleGrid>
           <TextInput
             label="Tags"
             description="Comma separated"
             value={manualFormState.tags}
-            onChange={(event) =>
+            onChange={(event) => {
+              const value = event.currentTarget.value;
               setManualFormState((prev) => ({
                 ...prev,
-                tags: event.currentTarget.value,
-              }))
-            }
+                tags: value,
+              }));
+            }}
           />
           <Textarea
             label="Notes"
             minRows={2}
             value={manualFormState.notes}
-            onChange={(event) =>
+            onChange={(event) => {
+              const value = event.currentTarget.value;
               setManualFormState((prev) => ({
                 ...prev,
-                notes: event.currentTarget.value,
-              }))
-            }
+                notes: value,
+              }));
+            }}
           />
           <Textarea
             label="Comment"
             minRows={2}
             value={manualFormState.comment}
-            onChange={(event) =>
+            onChange={(event) => {
+              const value = event.currentTarget.value;
               setManualFormState((prev) => ({
                 ...prev,
-                comment: event.currentTarget.value,
-              }))
-            }
+                comment: value,
+              }));
+            }}
           />
           <Switch
             label="Warn when assignee is off shift"
             description="The manual task is still created. When enabled, it is marked Needs attention if the selected person has no scheduled shift on that date."
             checked={manualFormState.requireShift}
-            onChange={(event) =>
+            onChange={(event) => {
+              const checked = event.currentTarget.checked;
               setManualFormState((prev) => ({
                 ...prev,
-                requireShift: event.currentTarget.checked,
-              }))
-            }
+                requireShift: checked,
+              }));
+            }}
           />
           {manualFormError && (
             <Alert color="red" title="Unable to save">
@@ -10868,24 +10877,26 @@ const AssistantManagerTaskPlanner = () => {
                       description="Leave blank to use the shift or template start time."
                       type="time"
                       value={dashboardTaskEditFormState.time}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         setDashboardTaskEditFormState((prev) => ({
                           ...prev,
-                          time: event.currentTarget.value,
-                        }))
-                      }
+                          time: value,
+                        }));
+                      }}
                       disabled={dashboardTaskEditSubmitting}
                     />
                     <TextInput
                       label="Duration (hours)"
                       placeholder="1.5"
                       value={dashboardTaskEditFormState.durationHours}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         setDashboardTaskEditFormState((prev) => ({
                           ...prev,
-                          durationHours: event.currentTarget.value,
-                        }))
-                      }
+                          durationHours: value,
+                        }));
+                      }}
                       disabled={dashboardTaskEditSubmitting}
                     />
                     <Select
@@ -10907,12 +10918,13 @@ const AssistantManagerTaskPlanner = () => {
                       label="Points"
                       placeholder="1"
                       value={dashboardTaskEditFormState.points}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         setDashboardTaskEditFormState((prev) => ({
                           ...prev,
-                          points: event.currentTarget.value,
-                        }))
-                      }
+                          points: value,
+                        }));
+                      }}
                       disabled={dashboardTaskEditSubmitting}
                     />
                   </SimpleGrid>
@@ -10922,12 +10934,13 @@ const AssistantManagerTaskPlanner = () => {
                     description="Separate tags with commas."
                     placeholder="cleaning, weekly"
                     value={dashboardTaskEditFormState.tags}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
                       setDashboardTaskEditFormState((prev) => ({
                         ...prev,
-                        tags: event.currentTarget.value,
-                      }))
-                    }
+                        tags: value,
+                      }));
+                    }}
                     disabled={dashboardTaskEditSubmitting}
                   />
 
@@ -10935,12 +10948,13 @@ const AssistantManagerTaskPlanner = () => {
                     label="Notes"
                     minRows={3}
                     value={dashboardTaskEditFormState.notes}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
                       setDashboardTaskEditFormState((prev) => ({
                         ...prev,
-                        notes: event.currentTarget.value,
-                      }))
-                    }
+                        notes: value,
+                      }));
+                    }}
                     disabled={dashboardTaskEditSubmitting}
                   />
 
@@ -10948,12 +10962,13 @@ const AssistantManagerTaskPlanner = () => {
                     label="Warn when assignee is off shift"
                     description="When enabled, the task is marked Needs attention if the selected person has no scheduled shift on that date."
                     checked={dashboardTaskEditFormState.requireShift}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked;
                       setDashboardTaskEditFormState((prev) => ({
                         ...prev,
-                        requireShift: event.currentTarget.checked,
-                      }))
-                    }
+                        requireShift: checked,
+                      }));
+                    }}
                     disabled={dashboardTaskEditSubmitting}
                   />
 

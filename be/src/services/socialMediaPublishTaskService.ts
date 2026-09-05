@@ -2,11 +2,15 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
-import type { Transaction } from 'sequelize';
+import { Op, UniqueConstraintError, type Transaction } from 'sequelize';
 import AssistantManagerTaskLog from '../models/AssistantManagerTaskLog.js';
 import AssistantManagerTaskTemplate from '../models/AssistantManagerTaskTemplate.js';
 import type SocialMediaContent from '../models/SocialMediaContent.js';
 import { getConfigValue } from './configService.js';
+import {
+  applyManagerTaskOverride,
+  buildAssistantManagerTaskGenerationSourceKey,
+} from './assistantManagerTaskLogManagementService.js';
 import {
   SOCIAL_MEDIA_CONTENT_ID_META_KEY,
   SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY,
@@ -36,6 +40,7 @@ export class SocialMediaPublishTaskConflictError extends Error {}
 type PublishTaskParams = {
   content: SocialMediaContent;
   actorId: number;
+  allowCrossUserCompletion?: boolean;
   publishedAt: Date;
   platformLinks: Record<string, string>;
   transaction: Transaction;
@@ -188,72 +193,110 @@ const taskResult = (log: AssistantManagerTaskLog): SocialMediaTaskCompletionResu
   status: 'completed',
 });
 
-/**
- * Completes exactly one publish-enabled Task Planner log for the authenticated
- * publisher. This is intentionally stricter than the generic social-plan gate:
- * an ambiguous task must never change compensation completion percentages.
- */
-export async function completeTaskForSocialMediaPublication(
-  params: PublishTaskParams,
-): Promise<SocialMediaTaskCompletionResult> {
-  if (params.content.publishedTaskLogId) {
-    const existing = await AssistantManagerTaskLog.findByPk(
-      params.content.publishedTaskLogId,
-      { transaction: params.transaction, lock: params.transaction.LOCK.SHARE },
-    );
-    if (
-      existing
-      && existing.userId === params.actorId
-      && existing.status === 'completed'
-      && getStoredSocialMediaContentId(existing.meta) === params.content.id
-    ) {
-      return taskResult(existing);
-    }
+const candidateInclude = [{
+  model: AssistantManagerTaskTemplate,
+  as: 'template',
+  attributes: ['id', 'name', 'scheduleConfig'],
+  required: true,
+}];
+
+const isPublishEnabled = (log: CandidateLog): boolean =>
+  resolveCompleteOnSocialMediaPublish(log.meta, log.template?.scheduleConfig);
+
+const assertCrossUserCompletionAllowed = (
+  log: CandidateLog,
+  actorId: number,
+  allowCrossUserCompletion: boolean,
+): void => {
+  if (log.userId !== actorId && !allowCrossUserCompletion) {
     throw new SocialMediaPublishTaskConflictError(
-      'This publication is already linked to a different Task Planner result.',
+      'Only an authorized manager can publish content that completes another user\'s Task Planner task.',
     );
   }
+};
 
-  const timezoneName = normalizeTimezone();
-  const taskDate = dayjs(params.publishedAt).tz(timezoneName).format('YYYY-MM-DD');
-  const candidates = await AssistantManagerTaskLog.findAll({
-    where: {
-      userId: params.actorId,
-      taskDate,
-      status: 'pending',
-    },
-    include: [{
-      model: AssistantManagerTaskTemplate,
-      as: 'template',
-      attributes: ['id', 'name', 'scheduleConfig'],
-      required: true,
-    }],
-    order: [['id', 'ASC']],
-    transaction: params.transaction,
-    lock: params.transaction.LOCK.UPDATE,
-  }) as CandidateLog[];
+const chooseUniqueTaskForUser = (
+  candidates: CandidateLog[],
+  userId: number,
+  contentId: number,
+  label: string,
+): CandidateLog | null => {
+  const userCandidates = candidates.filter((log) => log.userId === userId && isPublishEnabled(log));
+  const eligible = userCandidates.filter((log) => {
+    const linkedContentId = getStoredSocialMediaContentId(log.meta);
+    return linkedContentId == null || linkedContentId === contentId;
+  });
 
-  const enabled = candidates.filter((log) =>
-    resolveCompleteOnSocialMediaPublish(log.meta, log.template?.scheduleConfig),
-  );
-  const linked = enabled.filter(
-    (log) => getStoredSocialMediaContentId(log.meta) === params.content.id,
-  );
-  const unlinked = enabled.filter((log) => getStoredSocialMediaContentId(log.meta) == null);
-  const eligible = linked.length > 0 ? linked : unlinked;
-
-  if (eligible.length === 0) {
-    throw new SocialMediaPublishTaskConflictError(
-      'No pending publish-enabled Social Media task exists for you today. Generate or assign the task, then link this idea before publishing.',
-    );
-  }
   if (eligible.length > 1) {
     throw new SocialMediaPublishTaskConflictError(
-      'More than one publish-enabled Social Media task matches today. Link this idea to the correct task before publishing.',
+      `More than one publish-enabled Social Media task matches ${label} today. Link this idea to the correct task before publishing.`,
     );
   }
+  if (eligible.length === 1) return eligible[0];
 
-  const log = eligible[0];
+  if (userCandidates.some((log) => getStoredSocialMediaContentId(log.meta) != null)) {
+    throw new SocialMediaPublishTaskConflictError(
+      `The publish-enabled Social Media task for ${label} today is already linked to another idea.`,
+    );
+  }
+  return null;
+};
+
+const assertPublicationRescheduleAllowed = (
+  log: CandidateLog,
+  publicationDate: string,
+): void => {
+  const sourceDate = String(log.taskDate);
+  // Staff payouts are write-enabled only for full calendar months. Staying in
+  // the publication month permits late same-month completion while crossing
+  // backward into an earlier month would rewrite a closed payout source.
+  if (
+    sourceDate < publicationDate
+    && sourceDate.slice(0, 7) !== publicationDate.slice(0, 7)
+  ) {
+    throw new SocialMediaPublishTaskConflictError(
+      'The linked Social Media task belongs to a previous closed payroll month and cannot be moved automatically. Ask a manager to resolve that historical task before publishing.',
+    );
+  }
+};
+
+const waiveSupersededTask = async (
+  log: CandidateLog,
+  replacement: CandidateLog,
+  params: PublishTaskParams,
+  taskDate: string,
+): Promise<void> => {
+  assertPublicationRescheduleAllowed(log, taskDate);
+  const supersededMeta = {
+    ...(log.meta ?? {}),
+    socialMediaPublishSupersession: {
+      version: 1,
+      contentId: params.content.id,
+      supersededByTaskLogId: replacement.id,
+      previousTaskDate: String(log.taskDate),
+      previousStatus: log.status,
+      publicationDate: taskDate,
+      appliedAt: params.publishedAt.toISOString(),
+      appliedBy: params.actorId,
+    },
+  } as Record<string, unknown>;
+  const supersededNote =
+    `Waived because Social Media content #${params.content.id} was published through `
+    + `the existing ${taskDate} task #${replacement.id}.`;
+  await log.update({
+    status: 'waived',
+    completedAt: null,
+    notes: fitNotesWithBlock(log.notes?.trim() ?? '', supersededNote),
+    meta: supersededMeta,
+    updatedBy: params.actorId,
+  }, { transaction: params.transaction });
+};
+
+const completeCandidateTask = async (
+  log: CandidateLog,
+  params: PublishTaskParams,
+  taskDate: string,
+): Promise<SocialMediaTaskCompletionResult> => {
   const existingLink = getStoredSocialMediaContentId(log.meta);
   if (existingLink != null && existingLink !== params.content.id) {
     throw new SocialMediaPublishTaskConflictError(
@@ -261,7 +304,56 @@ export async function completeTaskForSocialMediaPublication(
     );
   }
 
-  const nextMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
+  const previousTaskDate = String(log.taskDate);
+  let nextMeta = { ...(log.meta ?? {}) } as Record<string, unknown>;
+  if (previousTaskDate !== taskDate) {
+    assertPublicationRescheduleAllowed(log, taskDate);
+    const collision = await AssistantManagerTaskLog.findOne({
+      where: {
+        id: { [Op.ne]: log.id },
+        templateId: log.templateId,
+        userId: log.userId,
+        taskDate,
+      },
+      include: candidateInclude,
+      transaction: params.transaction,
+      lock: params.transaction.LOCK.UPDATE,
+    }) as CandidateLog | null;
+    if (collision) {
+      const collisionContentId = getStoredSocialMediaContentId(collision.meta);
+      if (
+        collision.status === 'pending'
+        && isPublishEnabled(collision)
+        && (collisionContentId == null || collisionContentId === params.content.id)
+      ) {
+        // The generated same-day task already occupies the unique key. It is
+        // the correct row for today's completion, while the older linked row
+        // must be waived so it cannot later become a missed duplicate.
+        await waiveSupersededTask(log, collision, params, taskDate);
+        return completeCandidateTask(collision, params, taskDate);
+      }
+      throw new SocialMediaPublishTaskConflictError(
+        'The linked Social Media task cannot use the publication date because another non-eligible task from the same template already exists for that user today.',
+      );
+    }
+    if (!Boolean(nextMeta.manual)) {
+      nextMeta = applyManagerTaskOverride(
+        nextMeta,
+        buildAssistantManagerTaskGenerationSourceKey(log.templateId, log.userId, previousTaskDate),
+        params.actorId,
+        params.publishedAt.toISOString(),
+      );
+    }
+    nextMeta.socialMediaPublishReschedule = {
+      version: 1,
+      previousTaskDate,
+      publicationDate: taskDate,
+      previousStatus: log.status,
+      appliedAt: params.publishedAt.toISOString(),
+      appliedBy: params.actorId,
+    };
+  }
+
   nextMeta[SOCIAL_MEDIA_CONTENT_ID_META_KEY] = params.content.id;
   nextMeta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY] = buildAssistantManagerTaskSocialMediaSnapshot({
     id: params.content.id,
@@ -287,15 +379,172 @@ export async function completeTaskForSocialMediaPublication(
   };
   nextMeta[AUTO_COMPLETION_META_KEY] = true;
 
-  await log.update({
-    status: 'completed',
-    completedAt: params.publishedAt,
-    notes: appendManagedEvidenceOnce(log.notes, params.content, params.platformLinks),
-    meta: nextMeta,
-    updatedBy: params.actorId,
-  }, { transaction: params.transaction });
+  try {
+    await log.update({
+      ...(previousTaskDate !== taskDate ? { taskDate } : {}),
+      status: 'completed',
+      completedAt: params.publishedAt,
+      notes: appendManagedEvidenceOnce(log.notes, params.content, params.platformLinks),
+      meta: nextMeta,
+      updatedBy: params.actorId,
+    }, { transaction: params.transaction });
+  } catch (error) {
+    if (previousTaskDate !== taskDate && error instanceof UniqueConstraintError) {
+      throw new SocialMediaPublishTaskConflictError(
+        'A publication-date task was created at the same time. Try publishing again so the existing task can be used safely.',
+      );
+    }
+    throw error;
+  }
 
   return taskResult(log);
+};
+
+/**
+ * Completes exactly one publish-enabled Task Planner log for the responsible
+ * user. A privileged publisher may complete the creator's explicitly linked
+ * or same-day task, but ambiguity never changes compensation percentages.
+ */
+export async function completeTaskForSocialMediaPublication(
+  params: PublishTaskParams,
+): Promise<SocialMediaTaskCompletionResult> {
+  const allowCrossUserCompletion = params.allowCrossUserCompletion === true;
+  if (params.content.publishedTaskLogId) {
+    const existing = await AssistantManagerTaskLog.findByPk(
+      params.content.publishedTaskLogId,
+      { transaction: params.transaction, lock: params.transaction.LOCK.SHARE },
+    );
+    if (
+      existing
+      && existing.status === 'completed'
+      && getStoredSocialMediaContentId(existing.meta) === params.content.id
+    ) {
+      assertCrossUserCompletionAllowed(existing, params.actorId, allowCrossUserCompletion);
+      return taskResult(existing);
+    }
+    throw new SocialMediaPublishTaskConflictError(
+      'This publication is already linked to a different Task Planner result.',
+    );
+  }
+
+  const timezoneName = normalizeTimezone();
+  const taskDate = dayjs(params.publishedAt).tz(timezoneName).format('YYYY-MM-DD');
+  const creatorId = Number(params.content.createdBy);
+  const hasCreator = Number.isInteger(creatorId) && creatorId > 0;
+  const relevantUserIds = Array.from(new Set([
+    params.actorId,
+    ...(hasCreator && (creatorId === params.actorId || allowCrossUserCompletion) ? [creatorId] : []),
+  ]));
+
+  // An explicit task-to-content link is authoritative. It may have been
+  // created on the planned date, so locate it before applying today's date
+  // fallback and move it atomically to the actual publication date. Only the
+  // publisher and, for an authorized cross-user publication, the creator are
+  // eligible; another staff member cannot claim or block this content by
+  // linking it from their own task.
+  const linkedCandidates = (await AssistantManagerTaskLog.findAll({
+    where: {
+      userId: { [Op.in]: relevantUserIds },
+      status: { [Op.in]: ['pending', 'missed'] },
+      meta: {
+        [Op.contains]: { [SOCIAL_MEDIA_CONTENT_ID_META_KEY]: params.content.id },
+      },
+    },
+    include: candidateInclude,
+    order: [['taskDate', 'ASC'], ['id', 'ASC']],
+    transaction: params.transaction,
+    lock: params.transaction.LOCK.UPDATE,
+  })) as CandidateLog[];
+  const exactLinked = linkedCandidates.filter((log) =>
+    getStoredSocialMediaContentId(log.meta) === params.content.id
+    && (
+      log.status === 'pending'
+      || (log.status === 'missed' && String(log.taskDate) < taskDate)
+    ));
+  if (exactLinked.length > 1) {
+    const sameDayLinked = exactLinked.filter(
+      (log) => String(log.taskDate) === taskDate && isPublishEnabled(log),
+    );
+    const allLinkedArePublishEnabled = exactLinked.every(isPublishEnabled);
+    const publicationDayTask = sameDayLinked[0];
+    const allLinkedAreTheSameObligation = publicationDayTask != null && exactLinked.every(
+      (log) =>
+        log.userId === publicationDayTask.userId
+        && log.templateId === publicationDayTask.templateId,
+    );
+    if (
+      publicationDayTask != null
+      && sameDayLinked.length === 1
+      && allLinkedArePublishEnabled
+      && allLinkedAreTheSameObligation
+    ) {
+      exactLinked.forEach((log) =>
+        assertCrossUserCompletionAllowed(log, params.actorId, allowCrossUserCompletion));
+      for (const olderTask of exactLinked) {
+        if (olderTask.id !== publicationDayTask.id) {
+          await waiveSupersededTask(olderTask, publicationDayTask, params, taskDate);
+        }
+      }
+      return completeCandidateTask(publicationDayTask, params, taskDate);
+    }
+    throw new SocialMediaPublishTaskConflictError(
+      'More than one Task Planner task is linked to this Social Media item. Keep only the correct link before publishing.',
+    );
+  }
+  if (exactLinked.length === 1) {
+    const linked = exactLinked[0];
+    if (!isPublishEnabled(linked)) {
+      throw new SocialMediaPublishTaskConflictError(
+        'The Task Planner task linked to this content is not enabled for automatic completion when published.',
+      );
+    }
+    assertCrossUserCompletionAllowed(linked, params.actorId, allowCrossUserCompletion);
+    return completeCandidateTask(linked, params, taskDate);
+  }
+
+  const sameDayCandidates = (await AssistantManagerTaskLog.findAll({
+    where: {
+      userId: { [Op.in]: relevantUserIds },
+      taskDate,
+      status: 'pending',
+    },
+    include: candidateInclude,
+    order: [['id', 'ASC']],
+    transaction: params.transaction,
+    lock: params.transaction.LOCK.UPDATE,
+  })) as CandidateLog[];
+
+  if (hasCreator && (creatorId === params.actorId || allowCrossUserCompletion)) {
+    const creatorTask = chooseUniqueTaskForUser(
+      sameDayCandidates,
+      creatorId,
+      params.content.id,
+      creatorId === params.actorId ? 'you' : 'the content creator',
+    );
+    if (creatorTask) {
+      assertCrossUserCompletionAllowed(creatorTask, params.actorId, allowCrossUserCompletion);
+      return completeCandidateTask(creatorTask, params, taskDate);
+    }
+  }
+
+  if (!hasCreator || creatorId !== params.actorId) {
+    const actorTask = chooseUniqueTaskForUser(
+      sameDayCandidates,
+      params.actorId,
+      params.content.id,
+      'you',
+    );
+    if (actorTask) return completeCandidateTask(actorTask, params, taskDate);
+  }
+
+  if (hasCreator && creatorId !== params.actorId && !allowCrossUserCompletion) {
+    throw new SocialMediaPublishTaskConflictError(
+      'No pending publish-enabled Social Media task exists for you today. Only an authorized manager can publish on behalf of the content creator.',
+    );
+  }
+  throw new SocialMediaPublishTaskConflictError(
+    'No pending publish-enabled Social Media task exists for the responsible user today. Generate or assign the task, then link this idea before publishing.',
+  );
 }
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -332,7 +581,6 @@ export async function syncPublishedSocialMediaTaskEvidence(
   if (
     !log
     || log.status !== 'completed'
-    || log.userId !== params.content.publishedBy
     || getStoredSocialMediaContentId(log.meta) !== params.content.id
   ) {
     throw new SocialMediaPublishTaskConflictError(

@@ -3,9 +3,31 @@ import {
   calculateAssistantManagerSalaryTaskCompletion,
   mergeAssistantManagerSalaryDailyBreakdowns,
   partitionAssistantManagerSalaryDaysForTaskProration,
+  shouldIncludeAssistantManagerTaskLogInCompensationScore,
 } from '../assistantManagerSalaryTaskCompletionService.js';
 
 describe('Assistant Manager Salary daily task completion', () => {
+  it('excludes Social Media tasks retained only as supersession audit records', () => {
+    const supersededMeta = {
+      socialMediaPublishSupersession: {
+        version: 1,
+        contentId: 41,
+        supersededByTaskLogId: 89,
+      },
+    };
+    expect(shouldIncludeAssistantManagerTaskLogInCompensationScore(
+      'waived',
+      supersededMeta,
+    )).toBe(false);
+    expect(shouldIncludeAssistantManagerTaskLogInCompensationScore(
+      'pending',
+      supersededMeta,
+    )).toBe(true);
+    expect(shouldIncludeAssistantManagerTaskLogInCompensationScore('waived', {
+      socialMediaContentId: 41,
+    })).toBe(true);
+  });
+
   it('allocates the rounded salary total without losing remainder cents', () => {
     const dates = Array.from({ length: 15 }, (_, index) => `2026-08-${String(index + 1).padStart(2, '0')}`);
     const rows = allocateAssistantManagerSalaryAcrossDays(1_250, dates);

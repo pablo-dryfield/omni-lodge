@@ -3,6 +3,36 @@ export type AssistantManagerSalaryDailyBase = {
   baseAmount: number;
 };
 
+/**
+ * A task superseded while moving Social Media publication credit is retained
+ * for audit only. It is not an additional obligation and must never affect a
+ * compensation numerator or denominator.
+ */
+export const shouldIncludeAssistantManagerTaskLogInCompensationScore = (
+  status: string,
+  metaValue: unknown,
+): boolean => {
+  if (status !== "waived") {
+    return true;
+  }
+  if (!metaValue || typeof metaValue !== "object" || Array.isArray(metaValue)) {
+    return true;
+  }
+  const supersession = (metaValue as Record<string, unknown>)
+    .socialMediaPublishSupersession;
+  if (!supersession || typeof supersession !== "object" || Array.isArray(supersession)) {
+    return true;
+  }
+  const marker = supersession as Record<string, unknown>;
+  return !(
+    marker.version === 1
+    && Number.isInteger(Number(marker.contentId))
+    && Number(marker.contentId) > 0
+    && Number.isInteger(Number(marker.supersededByTaskLogId))
+    && Number(marker.supersededByTaskLogId) > 0
+  );
+};
+
 export type AssistantManagerSalaryDailyTaskProgress = {
   totalTasks: number;
   completedTasks: number;

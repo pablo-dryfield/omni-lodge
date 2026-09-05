@@ -79,6 +79,28 @@ const requireActorId = (req: AuthenticatedRequest): number => {
   return actorId;
 };
 
+const CROSS_USER_TASK_COMPLETION_ROLES = new Set(['admin', 'owner', 'manager']);
+
+const normalizeRoleSlug = (value: string | null | undefined): string | null => {
+  const normalized = value?.trim().toLowerCase().replace(/[\s_]+/gu, '-') ?? '';
+  if (!normalized) return null;
+  const collapsed = normalized.replace(/-/gu, '');
+  if (collapsed === 'administrator') return 'admin';
+  if (collapsed === 'mgr') return 'manager';
+  return normalized;
+};
+
+const canCompleteAnotherUsersTask = (req: AuthenticatedRequest): boolean => {
+  const roleCandidates = [
+    req.authContext?.roleSlug,
+    req.authContext?.userTypeSlug,
+  ];
+  return roleCandidates.some((value) => {
+    const normalized = normalizeRoleSlug(value);
+    return normalized != null && CROSS_USER_TASK_COMPLETION_ROLES.has(normalized);
+  });
+};
+
 const parseDateOnly = (value: unknown): string => {
   const normalized = typeof value === 'string' ? value.trim() : '';
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) {
@@ -1002,6 +1024,7 @@ export const publishSocialMediaContent = async (
         taskCompletion = await completeTaskForSocialMediaPublication({
           content,
           actorId,
+          allowCrossUserCompletion: canCompleteAnotherUsersTask(req),
           publishedAt: content.publishedAt ?? new Date(),
           platformLinks,
           transaction,
@@ -1014,6 +1037,7 @@ export const publishSocialMediaContent = async (
       taskCompletion = await completeTaskForSocialMediaPublication({
         content,
         actorId,
+        allowCrossUserCompletion: canCompleteAnotherUsersTask(req),
         publishedAt,
         platformLinks,
         transaction,
