@@ -1,4 +1,7 @@
-import { uploadFileToResumableDriveSession } from "./resumableDriveUpload";
+import {
+  isResumableDriveUploadCompletionUncertainError,
+  uploadFileToResumableDriveSession,
+} from "./resumableDriveUpload";
 
 const response = (
   status: number,
@@ -98,5 +101,58 @@ describe("resumable Google Drive uploads", () => {
       percent: 99,
     });
     expect(progress).toHaveBeenLastCalledWith({ loaded: 1_000, total: 1_000, percent: 100 });
+  });
+
+  it("reports an uncertain completion when the final PUT and its status probe cannot be read", async () => {
+    const file = new File([new Uint8Array(1_000)], "final-video.mp4", { type: "video/mp4" });
+    const fetchImpl = jest
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    let uploadError: unknown;
+    try {
+      await uploadFileToResumableDriveSession({
+        uploadUrl: "https://www.googleapis.com/upload/final-response-blocked",
+        file,
+        chunkSizeBytes: 256 * 1024,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+    } catch (error) {
+      uploadError = error;
+    }
+
+    expect(isResumableDriveUploadCompletionUncertainError(uploadError)).toBe(true);
+    expect(uploadError).toEqual(expect.objectContaining({
+      message: expect.stringContaining("completion response could not be verified"),
+      uploadMayHaveCompleted: true,
+    }));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not classify an interrupted non-final chunk as a completed upload", async () => {
+    const chunkSize = 256 * 1024;
+    const file = new File([new Uint8Array(chunkSize + 1)], "raw-video.mov", {
+      type: "video/quicktime",
+    });
+    const fetchImpl = jest
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    let uploadError: unknown;
+    try {
+      await uploadFileToResumableDriveSession({
+        uploadUrl: "https://www.googleapis.com/upload/non-final-response-blocked",
+        file,
+        chunkSizeBytes: chunkSize,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+    } catch (error) {
+      uploadError = error;
+    }
+
+    expect(uploadError).toBeInstanceOf(TypeError);
+    expect(isResumableDriveUploadCompletionUncertainError(uploadError)).toBe(false);
   });
 });

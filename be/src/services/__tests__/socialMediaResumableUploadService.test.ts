@@ -18,13 +18,17 @@ import {
   ensureSocialMediaProjectFolder,
 } from '../socialMediaAssetStorageService';
 import {
+  findRecoverableSocialMediaResumableUploads,
   finalizeSocialMediaResumableUpload,
   initiateSocialMediaResumableUpload,
+  resolveTrustedSocialMediaUploadOrigin,
+  SocialMediaResumableUploadPendingError,
   SOCIAL_MEDIA_RESUMABLE_CHUNK_SIZE_BYTES,
 } from '../socialMediaResumableUploadService';
 
 const request = jest.fn();
 const filesGet = jest.fn();
+const filesList = jest.fn();
 
 const common = {
   contentId: 41,
@@ -47,7 +51,9 @@ describe('Social Media resumable Drive uploads', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (getDriveAuthClient as jest.Mock).mockReturnValue({ request });
-    (getDriveClient as jest.Mock).mockResolvedValue({ files: { get: filesGet } });
+    (getDriveClient as jest.Mock).mockResolvedValue({
+      files: { get: filesGet, list: filesList },
+    });
     (ensureSocialMediaProjectFolder as jest.Mock).mockResolvedValue({
       folderId: 'project-folder',
       driveProjectUrl: 'https://drive.google.com/drive/folders/project-folder',
@@ -63,7 +69,9 @@ describe('Social Media resumable Drive uploads', () => {
       headers: { location: 'https://www.googleapis.com/upload/drive/session-1' },
     });
 
-    const result = await initiateSocialMediaResumableUpload(common);
+    const result = await initiateSocialMediaResumableUpload(common, {
+      browserOrigin: 'https://omni-lodge.com',
+    });
 
     expect(result).toEqual({
       uploadUrl: 'https://www.googleapis.com/upload/drive/session-1',
@@ -76,6 +84,7 @@ describe('Social Media resumable Drive uploads', () => {
       headers: expect.objectContaining({
         'X-Upload-Content-Type': 'video/quicktime',
         'X-Upload-Content-Length': String(common.sizeBytes),
+        Origin: 'https://omni-lodge.com',
       }),
       data: expect.objectContaining({
         name: 'stored-raw clip.mov',
@@ -88,6 +97,31 @@ describe('Social Media resumable Drive uploads', () => {
         }),
       }),
     }));
+  });
+
+  it('uses the canonical app origin instead of reflecting an untrusted origin', async () => {
+    request.mockResolvedValue({
+      headers: { location: 'https://www.googleapis.com/upload/drive/session-1' },
+    });
+
+    await initiateSocialMediaResumableUpload(common, {
+      browserOrigin: 'https://attacker.example',
+    });
+
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      headers: expect.objectContaining({ Origin: 'http://localhost:3000' }),
+    }));
+  });
+
+  it('accepts a trusted referrer origin and otherwise uses a safe canonical fallback', () => {
+    expect(resolveTrustedSocialMediaUploadOrigin(
+      undefined,
+      'https://omni-lodge.com/social-media?tab=planned',
+    )).toBe('https://omni-lodge.com');
+    expect(resolveTrustedSocialMediaUploadOrigin(
+      'https://attacker.example',
+      'https://also-attacker.example/path',
+    )).toBe('http://localhost:3000');
   });
 
   it('accepts only a completed file carrying the matching private receipt', async () => {
@@ -143,5 +177,73 @@ describe('Social Media resumable Drive uploads', () => {
       driveFileId: 'drive-file-1',
       uploadToken: 'receipt-1',
     })).rejects.toThrow('does not match this Social Media upload session');
+  });
+
+  it('recovers a completed upload by private token when the browser lost the final file ID', async () => {
+    filesList.mockResolvedValue({
+      data: {
+        files: [{
+          id: 'drive-file-1',
+          mimeType: common.mimeType,
+          size: String(common.sizeBytes),
+          parents: ['raw-folder'],
+          appProperties: {
+            omniSocialContentId: '41',
+            omniSocialAssetKind: 'raw_material',
+            omniSocialUploadToken: 'receipt-1',
+            omniSocialMetadataHash: metadataHash,
+          },
+          webViewLink: 'https://drive.google.com/file/d/drive-file-1/view',
+          trashed: false,
+        }],
+      },
+    });
+
+    await expect(finalizeSocialMediaResumableUpload({
+      ...common,
+      uploadToken: 'receipt-1',
+    })).resolves.toEqual(expect.objectContaining({ driveFileId: 'drive-file-1' }));
+
+    expect(filesGet).not.toHaveBeenCalled();
+    expect(filesList).toHaveBeenCalledWith(expect.objectContaining({
+      q: expect.stringContaining("omniSocialUploadToken' and value='receipt-1"),
+      pageSize: 2,
+    }));
+  });
+
+  it('reports a retryable pending result when Drive has not listed the token yet', async () => {
+    filesList.mockResolvedValue({ data: { files: [] } });
+
+    await expect(finalizeSocialMediaResumableUpload({
+      ...common,
+      uploadToken: 'receipt-1',
+    })).rejects.toBeInstanceOf(SocialMediaResumableUploadPendingError);
+  });
+
+  it('finds exact app-created metadata matches for reload-time orphan recovery', async () => {
+    filesList.mockResolvedValue({
+      data: {
+        files: [{
+          id: 'drive-file-1',
+          mimeType: common.mimeType,
+          size: String(common.sizeBytes),
+          parents: ['raw-folder'],
+          appProperties: {
+            omniSocialContentId: '41',
+            omniSocialAssetKind: 'raw_material',
+            omniSocialUploadToken: 'private-token',
+            omniSocialMetadataHash: metadataHash,
+          },
+          trashed: false,
+        }],
+      },
+    });
+
+    await expect(findRecoverableSocialMediaResumableUploads(common)).resolves.toEqual([
+      expect.objectContaining({ driveFileId: 'drive-file-1' }),
+    ]);
+    const query = filesList.mock.calls[0][0].q as string;
+    expect(query).toContain("omniSocialMetadataHash' and value='");
+    expect(query).not.toContain("key='omniSocialUploadToken'");
   });
 });

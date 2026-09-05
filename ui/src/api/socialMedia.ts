@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import axiosInstance from "../utils/axiosInstance";
-import { uploadFileToResumableDriveSession } from "../utils/resumableDriveUpload";
+import {
+  isResumableDriveUploadCompletionUncertainError,
+  uploadFileToResumableDriveSession,
+} from "../utils/resumableDriveUpload";
 import type {
   SocialMediaAssetKind,
   SocialMediaContentAsset,
@@ -122,11 +125,25 @@ export type UploadSocialMediaAssetInput = {
   onProgress?: (progress: SocialMediaAssetUploadProgress) => void;
 };
 
-type SocialMediaResumableSessionResponse = {
+type SocialMediaResumableUploadSession = {
   uploadUrl: string;
   uploadToken: string;
   chunkSizeBytes: number;
+  item?: never;
+  recoveredUpload?: never;
 };
+
+type SocialMediaRecoveredUploadResponse = {
+  item: SocialMediaContentItem;
+  recoveredUpload: true;
+  uploadUrl?: never;
+  uploadToken?: never;
+  chunkSizeBytes?: never;
+};
+
+type SocialMediaResumableSessionResponse =
+  | SocialMediaResumableUploadSession
+  | SocialMediaRecoveredUploadResponse;
 
 type ItemResponse = { item: SocialMediaContentItem };
 type ApiError = AxiosError<{ message?: string }>;
@@ -302,54 +319,93 @@ export const useCheckSocialMediaProjectFolder = () => {
   });
 };
 
-export const useUploadSocialMediaAsset = () => {
-  const invalidate = useInvalidateSocialMediaContent();
-  return useMutation<SocialMediaContentItem, ApiError, UploadSocialMediaAssetInput>({
-    mutationFn: async ({ id, assetType, file, onProgress }) => {
-      const mimeType = file.type || "application/octet-stream";
-      const sessionResponse = await axiosInstance.post<SocialMediaResumableSessionResponse>(
-        `/social-media/content/${id}/assets/resumable-session`,
+const uncertainUploadRegistrationError = (): Error => new Error(
+  "Google Drive may have received the file, but OmniLodge could not verify it yet. "
+  + "Refresh this item before uploading again to avoid creating a duplicate.",
+);
+
+export const uploadSocialMediaAsset = async ({
+  id,
+  assetType,
+  file,
+  onProgress,
+}: UploadSocialMediaAssetInput): Promise<SocialMediaContentItem> => {
+  const mimeType = file.type || "application/octet-stream";
+  const sessionResponse = await axiosInstance.post<SocialMediaResumableSessionResponse>(
+    `/social-media/content/${id}/assets/resumable-session`,
+    {
+      assetType,
+      originalName: file.name,
+      mimeType,
+      sizeBytes: file.size,
+    },
+  );
+  const session = sessionResponse.data;
+  if (session.recoveredUpload === true) {
+    onProgress?.({ loaded: file.size, total: file.size, percent: 100 });
+    return session.item;
+  }
+
+  let driveFileId: string | undefined;
+  let completionUncertain = false;
+  try {
+    const driveFile = await uploadFileToResumableDriveSession({
+      uploadUrl: session.uploadUrl,
+      file,
+      chunkSizeBytes: session.chunkSizeBytes,
+      onProgress: onProgress
+        ? ({ loaded, total, percent }) => onProgress({ loaded, total, percent })
+        : undefined,
+    });
+    driveFileId = driveFile.id;
+  } catch (error) {
+    if (!isResumableDriveUploadCompletionUncertainError(error)) throw error;
+    completionUncertain = true;
+    onProgress?.({
+      loaded: Math.max(0, file.size - 1),
+      total: file.size,
+      percent: 99,
+    });
+  }
+
+  const maxCompletionAttempts = completionUncertain ? 5 : 3;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxCompletionAttempts; attempt += 1) {
+    try {
+      const response = await axiosInstance.post<ItemResponse>(
+        `/social-media/content/${id}/assets/resumable-complete`,
         {
           assetType,
+          ...(driveFileId ? { driveFileId } : {}),
+          uploadToken: session.uploadToken,
           originalName: file.name,
           mimeType,
           sizeBytes: file.size,
         },
       );
-      const session = sessionResponse.data;
-      const driveFile = await uploadFileToResumableDriveSession({
-        uploadUrl: session.uploadUrl,
-        file,
-        chunkSizeBytes: session.chunkSizeBytes,
-        onProgress: onProgress
-          ? ({ loaded, total, percent }) => onProgress({ loaded, total, percent })
-          : undefined,
-      });
-
-      let lastError: unknown;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          const response = await axiosInstance.post<ItemResponse>(
-            `/social-media/content/${id}/assets/resumable-complete`,
-            {
-              assetType,
-              driveFileId: driveFile.id,
-              uploadToken: session.uploadToken,
-              originalName: file.name,
-              mimeType,
-              sizeBytes: file.size,
-            },
-          );
-          return response.data.item;
-        } catch (error) {
-          lastError = error;
-          const status = (error as ApiError).response?.status;
-          if ((status != null && status < 500) || attempt === 2) throw error;
-          await new Promise((resolve) => window.setTimeout(resolve, 400 * (2 ** attempt)));
-        }
+      onProgress?.({ loaded: file.size, total: file.size, percent: 100 });
+      return response.data.item;
+    } catch (error) {
+      lastError = error;
+      const status = (error as ApiError).response?.status;
+      const retryable = status == null
+        || status >= 500
+        || (completionUncertain && status === 409);
+      if (!retryable || attempt === maxCompletionAttempts - 1) {
+        if (completionUncertain) throw uncertainUploadRegistrationError();
+        throw error;
       }
-      throw lastError;
-    },
+      await new Promise((resolve) => window.setTimeout(resolve, 400 * (2 ** attempt)));
+    }
+  }
+  if (completionUncertain) throw uncertainUploadRegistrationError();
+  throw lastError;
+};
+
+export const useUploadSocialMediaAsset = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<SocialMediaContentItem, ApiError, UploadSocialMediaAssetInput>({
+    mutationFn: uploadSocialMediaAsset,
     onSuccess: invalidate,
   });
 };

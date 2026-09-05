@@ -27,8 +27,11 @@ import {
   type SocialMediaTaskCompletionResult,
 } from '../services/socialMediaPublishTaskService.js';
 import {
+  findRecoverableSocialMediaResumableUploads,
   finalizeSocialMediaResumableUpload,
   initiateSocialMediaResumableUpload,
+  resolveTrustedSocialMediaUploadOrigin,
+  SocialMediaResumableUploadPendingError,
 } from '../services/socialMediaResumableUploadService.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
@@ -297,12 +300,15 @@ const respondWithItem = async (res: Response, contentId: number): Promise<void> 
 const respondError = (res: Response, error: unknown, fallback: string): void => {
   if (
     error instanceof SocialMediaWorkflowError
+    || error instanceof SocialMediaResumableUploadPendingError
     || error instanceof SocialMediaAssetStorageValidationError
     || error instanceof SocialMediaProjectFolderCheckUnavailableError
     || error instanceof SocialMediaPublishTaskConflictError
   ) {
     const status = error instanceof SocialMediaWorkflowError
       ? error.status
+      : error instanceof SocialMediaResumableUploadPendingError
+        ? 409
       : error instanceof SocialMediaProjectFolderCheckUnavailableError
         ? 503
       : error instanceof SocialMediaPublishTaskConflictError
@@ -558,6 +564,64 @@ export const initiateSocialMediaAssetUpload = async (
       if (!content.driveProjectFolderId || !content.driveProjectUrl) {
         throw new SocialMediaWorkflowError('Create the Drive project folder before uploading assets.');
       }
+      const recoverableUploads = await findRecoverableSocialMediaResumableUploads({
+        contentId,
+        title: content.title,
+        folderId: content.driveProjectFolderId,
+        kind: metadata.kind,
+        originalName: metadata.originalName,
+        mimeType: metadata.mimeType,
+        sizeBytes: metadata.sizeBytes,
+      });
+      const unregisteredRecoveries: Array<
+        Awaited<ReturnType<typeof finalizeSocialMediaResumableUpload>>
+      > = [];
+      let registeredRecoveryFound = false;
+      for (const stored of recoverableUploads) {
+        const existing = await SocialMediaContentAsset.findOne({
+          where: { driveFileId: stored.driveFileId },
+          transaction,
+        });
+        if (existing) {
+          assertRegisteredAssetMatches(existing, stored, metadata.kind);
+          if (existing.contentId !== contentId) {
+            throw new SocialMediaWorkflowError(
+              'This recovered Google Drive file is registered to different Social Media content.',
+              409,
+            );
+          }
+          registeredRecoveryFound = true;
+          continue;
+        }
+        unregisteredRecoveries.push(stored);
+      }
+
+      const recoverable = unregisteredRecoveries[0];
+      if (recoverable) {
+        assertProductionAssetsEditable(content, 'receive production assets');
+        await assertFinalVideoAvailable(contentId, metadata.kind, transaction);
+        await SocialMediaContentAsset.create({
+          contentId,
+          kind: metadata.kind,
+          originalName: recoverable.originalName,
+          mimeType: recoverable.mimeType,
+          sizeBytes: recoverable.sizeBytes,
+          driveFileId: recoverable.driveFileId,
+          webViewUrl: recoverable.webViewUrl,
+          uploadedBy: actorId,
+        }, { transaction });
+        await content.update({ updatedBy: actorId }, { transaction });
+        return { folderGuard, upload: null, recovered: true };
+      }
+
+      // An exact app-tagged file already registered for this content makes a
+      // repeated session-start request idempotent. Unregistered matches above
+      // take priority because they represent the interrupted completion this
+      // recovery path exists to repair.
+      if (registeredRecoveryFound) {
+        return { folderGuard, upload: null, recovered: true };
+      }
+
       await assertFinalVideoAvailable(contentId, metadata.kind, transaction);
       const upload = await initiateSocialMediaResumableUpload({
         contentId,
@@ -567,10 +631,24 @@ export const initiateSocialMediaAssetUpload = async (
         originalName: metadata.originalName,
         mimeType: metadata.mimeType,
         sizeBytes: metadata.sizeBytes,
+      }, {
+        browserOrigin: resolveTrustedSocialMediaUploadOrigin(
+          typeof req.get === 'function' ? req.get('origin') : undefined,
+          typeof req.get === 'function' ? req.get('referer') : undefined,
+        ),
       });
-      return { folderGuard, upload };
+      return { folderGuard, upload, recovered: false };
     });
     throwWhenFolderWasReset(outcome.folderGuard);
+    if (outcome.recovered) {
+      const content = await loadSocialMediaContent(contentId);
+      if (!content) throw new SocialMediaWorkflowError('Social Media content was not found.', 404);
+      res.status(200).json({
+        item: serializeSocialMediaContent(content),
+        recoveredUpload: true,
+      });
+      return;
+    }
     if (!outcome.upload) {
       throw new SocialMediaWorkflowError('Create the Drive project folder before uploading assets.');
     }
@@ -596,7 +674,7 @@ export const finalizeSocialMediaAssetUpload = async (
     const uploadToken = typeof req.body?.uploadToken === 'string'
       ? req.body.uploadToken.trim()
       : '';
-    if (!driveFileId || !uploadToken) {
+    if (!uploadToken) {
       throw new SocialMediaWorkflowError('The resumable upload receipt is incomplete.');
     }
 
@@ -623,11 +701,17 @@ export const finalizeSocialMediaAssetUpload = async (
         // idempotent. The lookup is also inside the parent row lock so two
         // concurrent completions cannot both miss it.
         const existing = await SocialMediaContentAsset.findOne({
-          where: { contentId, driveFileId },
+          where: { driveFileId: stored.driveFileId },
           transaction,
         });
         if (existing) {
           assertRegisteredAssetMatches(existing, stored, metadata.kind);
+          if (existing.contentId !== contentId) {
+            throw new SocialMediaWorkflowError(
+              'This Google Drive file is already registered to different Social Media content.',
+              409,
+            );
+          }
           return guard;
         }
         driveFileIdToClean = stored.driveFileId;

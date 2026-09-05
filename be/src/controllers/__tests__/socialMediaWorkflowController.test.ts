@@ -42,8 +42,17 @@ jest.mock('../../services/socialMediaPublishTaskService.js', () => ({
   syncPublishedSocialMediaTaskEvidence: jest.fn(),
 }));
 jest.mock('../../services/socialMediaResumableUploadService.js', () => ({
+  SocialMediaResumableUploadPendingError:
+    class SocialMediaResumableUploadPendingError extends Error {},
+  findRecoverableSocialMediaResumableUploads: jest.fn(),
   finalizeSocialMediaResumableUpload: jest.fn(),
   initiateSocialMediaResumableUpload: jest.fn(),
+  resolveTrustedSocialMediaUploadOrigin: jest.fn(
+    (origin: string | undefined, referer: string | undefined) => {
+      const candidate = origin ?? referer ?? 'https://omni-lodge.com';
+      return new URL(candidate).origin;
+    },
+  ),
 }));
 jest.mock('../../utils/logger.js', () => ({
   __esModule: true,
@@ -68,8 +77,11 @@ import {
   syncPublishedSocialMediaTaskEvidence,
 } from '../../services/socialMediaPublishTaskService';
 import {
+  findRecoverableSocialMediaResumableUploads,
   finalizeSocialMediaResumableUpload,
   initiateSocialMediaResumableUpload,
+  resolveTrustedSocialMediaUploadOrigin,
+  SocialMediaResumableUploadPendingError,
 } from '../../services/socialMediaResumableUploadService';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
 import {
@@ -105,7 +117,9 @@ const mockStoreAsset = storeSocialMediaAsset as jest.Mock;
 const mockCompleteTask = completeTaskForSocialMediaPublication as jest.Mock;
 const mockSyncPublishedTaskEvidence = syncPublishedSocialMediaTaskEvidence as jest.Mock;
 const mockInitiateUpload = initiateSocialMediaResumableUpload as jest.Mock;
+const mockFindRecoverableUploads = findRecoverableSocialMediaResumableUploads as jest.Mock;
 const mockFinalizeUpload = finalizeSocialMediaResumableUpload as jest.Mock;
+const mockResolveUploadOrigin = resolveTrustedSocialMediaUploadOrigin as jest.Mock;
 const mockLoadContent = loadSocialMediaContent as jest.Mock;
 const mockSerializeContent = serializeSocialMediaContent as jest.Mock;
 
@@ -163,6 +177,7 @@ describe('Social Media production workflow controller', () => {
       folderId: 'folder-1',
       driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
     });
+    mockFindRecoverableUploads.mockResolvedValue([]);
     mockSerializeContent.mockImplementation((content: Record<string, unknown>) => ({
       id: content.id,
       status: content.status,
@@ -390,6 +405,186 @@ describe('Social Media production workflow controller', () => {
     expect(response.status).toHaveBeenCalledWith(200);
     },
   );
+
+  it('passes a trusted referrer-derived origin when the request Origin header is absent', async () => {
+    const content = buildContent({
+      status: 'in_production',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockInitiateUpload.mockResolvedValue({
+      uploadUrl: 'https://www.googleapis.com/upload/drive/session-1',
+      uploadToken: 'receipt-1',
+      chunkSizeBytes: 8 * 1024 * 1024,
+    });
+    const getHeader = jest.fn((name: string) =>
+      name === 'referer' ? 'https://omni-lodge.com/social-media' : undefined);
+    const response = createResponse();
+
+    await initiateSocialMediaAssetUpload({
+      params: { id: '41' },
+      body: {
+        assetType: 'raw_material',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      },
+      authContext: { id: 7 },
+      get: getHeader,
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockResolveUploadOrigin).toHaveBeenCalledWith(
+      undefined,
+      'https://omni-lodge.com/social-media',
+    );
+    expect(mockInitiateUpload).toHaveBeenCalledWith(expect.any(Object), {
+      browserOrigin: 'https://omni-lodge.com',
+    });
+  });
+
+  it('registers an exact unregistered Drive orphan instead of creating a duplicate session', async () => {
+    const content = buildContent({
+      status: 'in_production',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockFindRecoverableUploads.mockResolvedValue([{
+      driveFileId: 'orphan-file-1',
+      webViewUrl: 'https://drive.google.com/file/d/orphan-file-1/view',
+      originalName: 'raw.mov',
+      mimeType: 'video/quicktime',
+      sizeBytes: 1_000_000,
+    }]);
+    mockFindAsset.mockResolvedValue(null);
+    mockCreateAsset.mockResolvedValue({ id: 91 });
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await initiateSocialMediaAssetUpload({
+      params: { id: '41' },
+      body: {
+        assetType: 'raw_material',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockCreateAsset).toHaveBeenCalledWith(expect.objectContaining({
+      contentId: 41,
+      driveFileId: 'orphan-file-1',
+    }), { transaction });
+    expect(mockInitiateUpload).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(response.json).toHaveBeenCalledWith({
+      item: { id: 41, status: 'in_production' },
+      recoveredUpload: true,
+    });
+  });
+
+  it('prefers an unregistered orphan when an older registered metadata match also exists', async () => {
+    const content = buildContent({
+      status: 'in_production',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockFindRecoverableUploads.mockResolvedValue([
+      {
+        driveFileId: 'registered-file-1',
+        webViewUrl: 'https://drive.google.com/file/d/registered-file-1/view',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      },
+      {
+        driveFileId: 'orphan-file-2',
+        webViewUrl: 'https://drive.google.com/file/d/orphan-file-2/view',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      },
+    ]);
+    mockFindAsset
+      .mockResolvedValueOnce({
+        id: 91,
+        contentId: 41,
+        driveFileId: 'registered-file-1',
+        kind: 'raw_material',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      })
+      .mockResolvedValueOnce(null);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await initiateSocialMediaAssetUpload({
+      params: { id: '41' },
+      body: {
+        assetType: 'raw_material',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockCreateAsset).toHaveBeenCalledWith(expect.objectContaining({
+      driveFileId: 'orphan-file-2',
+    }), { transaction });
+    expect(mockInitiateUpload).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('treats a registered exact metadata match as an idempotent session-start retry', async () => {
+    const content = buildContent({
+      status: 'in_production',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockFindRecoverableUploads.mockResolvedValue([{
+      driveFileId: 'registered-file-1',
+      webViewUrl: 'https://drive.google.com/file/d/registered-file-1/view',
+      originalName: 'raw.mov',
+      mimeType: 'video/quicktime',
+      sizeBytes: 1_000_000,
+    }]);
+    mockFindAsset.mockResolvedValue({
+      id: 91,
+      contentId: 41,
+      driveFileId: 'registered-file-1',
+      kind: 'raw_material',
+      originalName: 'raw.mov',
+      mimeType: 'video/quicktime',
+      sizeBytes: 1_000_000,
+    });
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await initiateSocialMediaAssetUpload({
+      params: { id: '41' },
+      body: {
+        assetType: 'raw_material',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockCreateAsset).not.toHaveBeenCalled();
+    expect(mockInitiateUpload).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(response.json).toHaveBeenCalledWith({
+      item: { id: 41, status: 'in_production' },
+      recoveredUpload: true,
+    });
+  });
 
   it('checks an active saved folder without changing the workflow stage', async () => {
     const content = buildContent({
@@ -871,7 +1066,7 @@ describe('Social Media production workflow controller', () => {
       folderId: 'folder-1',
       kind: 'raw_material',
       sizeBytes: 1_000_000,
-    }));
+    }), { browserOrigin: 'https://omni-lodge.com' });
     expect(response.status).toHaveBeenCalledWith(201);
     expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
     expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ uploadToken: 'receipt-1' }));
@@ -968,7 +1163,7 @@ describe('Social Media production workflow controller', () => {
 
     expect(mockFindByPk).toHaveBeenCalledWith(41, { transaction, lock: 'UPDATE' });
     expect(mockFindAsset).toHaveBeenCalledWith({
-      where: { contentId: 41, driveFileId: 'drive-file-1' },
+      where: { driveFileId: 'drive-file-1' },
       transaction,
     });
     expect(mockFindByPk.mock.invocationCallOrder[0]).toBeLessThan(
@@ -981,6 +1176,78 @@ describe('Social Media production workflow controller', () => {
     expect(mockCreateAsset).not.toHaveBeenCalled();
     expect(mockDeleteAssetFromDrive).not.toHaveBeenCalled();
     expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('finalizes by private token when Google accepted the file but no file ID was readable', async () => {
+    const content = buildContent({
+      status: 'in_production',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockFindAsset.mockResolvedValue(null);
+    mockFinalizeUpload.mockResolvedValue({
+      driveFileId: 'recovered-drive-file',
+      webViewUrl: 'https://drive.google.com/file/d/recovered-drive-file/view',
+      originalName: 'raw.mov',
+      mimeType: 'video/quicktime',
+      sizeBytes: 1_000_000,
+    });
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await finalizeSocialMediaAssetUpload({
+      params: { id: '41' },
+      body: {
+        assetType: 'raw_material',
+        uploadToken: 'receipt-1',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(mockFinalizeUpload).toHaveBeenCalledWith(expect.objectContaining({
+      driveFileId: '',
+      uploadToken: 'receipt-1',
+    }));
+    expect(mockFindAsset).toHaveBeenCalledWith({
+      where: { driveFileId: 'recovered-drive-file' },
+      transaction,
+    });
+    expect(mockCreateAsset).toHaveBeenCalledWith(expect.objectContaining({
+      driveFileId: 'recovered-drive-file',
+    }), { transaction });
+    expect(response.status).toHaveBeenCalledWith(200);
+  });
+
+  it('returns a retryable conflict while the completed token is not visible in Drive', async () => {
+    const content = buildContent({
+      status: 'in_production',
+      driveProjectFolderId: 'folder-1',
+      driveProjectUrl: 'https://drive.google.com/drive/folders/folder-1',
+    });
+    mockFindByPk.mockResolvedValue(content);
+    mockFinalizeUpload.mockRejectedValue(new SocialMediaResumableUploadPendingError(
+      'Google Drive has not exposed the completed upload yet. Try again shortly.',
+    ));
+    const response = createResponse();
+
+    await finalizeSocialMediaAssetUpload({
+      params: { id: '41' },
+      body: {
+        assetType: 'raw_material',
+        uploadToken: 'receipt-1',
+        originalName: 'raw.mov',
+        mimeType: 'video/quicktime',
+        sizeBytes: 1_000_000,
+      },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(mockCreateAsset).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid receipt even when its Drive file ID is already registered', async () => {

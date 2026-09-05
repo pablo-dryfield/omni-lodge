@@ -18,6 +18,35 @@ type UploadOptions = {
   fetchImpl?: typeof fetch;
 };
 
+/**
+ * The final chunk was sent, but the browser could not read Google's response.
+ * Google may already have committed the file and closed the resumable session,
+ * so callers should reconcile the upload through the application backend
+ * before asking the user to upload the file again.
+ */
+export class ResumableDriveUploadCompletionUncertainError extends Error {
+  readonly uploadMayHaveCompleted = true;
+
+  constructor() {
+    super(
+      "The file reached Google Drive, but its completion response could not be verified.",
+    );
+    this.name = "ResumableDriveUploadCompletionUncertainError";
+  }
+}
+
+export const isResumableDriveUploadCompletionUncertainError = (
+  error: unknown,
+): error is ResumableDriveUploadCompletionUncertainError => (
+  error instanceof ResumableDriveUploadCompletionUncertainError
+  || (
+    error !== null
+    && typeof error === "object"
+    && "uploadMayHaveCompleted" in error
+    && (error as { uploadMayHaveCompleted?: unknown }).uploadMayHaveCompleted === true
+  )
+);
+
 const MIN_DRIVE_CHUNK_SIZE = 256 * 1024;
 const MAX_RETRIES = 3;
 
@@ -172,10 +201,24 @@ export const uploadFileToResumableDriveSession = async ({
         throw new Error(`Google Drive is temporarily unavailable (${response.status}).`);
       } catch (error) {
         if (signal?.aborted) throw error;
-        if (attempt >= MAX_RETRIES) throw error;
+        const finalChunkMayHaveCompleted = endExclusive === file.size && error instanceof TypeError;
+        if (attempt >= MAX_RETRIES) {
+          if (finalChunkMayHaveCompleted) {
+            throw new ResumableDriveUploadCompletionUncertainError();
+          }
+          throw error;
+        }
         attempt += 1;
         await delay(500 * (2 ** attempt), signal);
-        const probe = await probeUpload(fetchImpl, uploadUrl, file.size, signal);
+        let probe: ProbeResult;
+        try {
+          probe = await probeUpload(fetchImpl, uploadUrl, file.size, signal);
+        } catch (probeError) {
+          if (finalChunkMayHaveCompleted) {
+            throw new ResumableDriveUploadCompletionUncertainError();
+          }
+          throw probeError;
+        }
         if (probe.complete) {
           reportProgress(file.size, file.size, onProgress);
           return probe.result;
