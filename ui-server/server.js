@@ -20,7 +20,7 @@ const NO_CACHE_HEADERS = {
 
 const UI_CONTENT_SECURITY_POLICY = [
   "script-src 'self' https://connect.facebook.net",
-  "connect-src 'self' https://omni-lodge.com https://connect.facebook.net https://graph.facebook.com https://www.facebook.com https://web.facebook.com",
+  "connect-src 'self' https://omni-lodge.com https://connect.facebook.net https://graph.facebook.com https://www.facebook.com https://web.facebook.com https://www.googleapis.com https://content.googleapis.com",
   "frame-src 'self' blob: data: https://www.facebook.com https://web.facebook.com",
 ].join('; ');
 
