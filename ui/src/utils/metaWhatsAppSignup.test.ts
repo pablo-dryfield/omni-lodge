@@ -1,5 +1,6 @@
 import {
   META_WHATSAPP_SESSION_INFO_VERSION,
+  META_WHATSAPP_SIGNUP_DEFAULT_FINISH_EVENT,
   META_WHATSAPP_SIGNUP_FINISH_EVENT,
   META_WHATSAPP_SIGNUP_TYPE,
   parseWhatsAppEmbeddedSignupMessage,
@@ -53,12 +54,29 @@ describe("parseWhatsAppEmbeddedSignupMessage", () => {
     });
   });
 
+  it("accepts Meta's documented default finish payload for server-side Coexistence verification", () => {
+    expect(parseWhatsAppEmbeddedSignupMessage({
+      origin: "https://business.facebook.com",
+      data: {
+        type: META_WHATSAPP_SIGNUP_TYPE,
+        event: META_WHATSAPP_SIGNUP_DEFAULT_FINISH_EVENT,
+        version: "3",
+        data: { waba_id: "123456789012345", phone_number_id: null },
+      },
+    })).toEqual({
+      type: META_WHATSAPP_SIGNUP_TYPE,
+      event: META_WHATSAPP_SIGNUP_DEFAULT_FINISH_EVENT,
+      version: 3,
+      data: { waba_id: "123456789012345" },
+    });
+  });
+
   it.each([
     ["untrusted origin", "https://example.com", validPayload],
     ["lookalike origin", "https://evilfacebook.com", validPayload],
     ["insecure Meta origin", "http://business.facebook.com", validPayload],
     ["wrong type", "https://www.facebook.com", { ...validPayload, type: "OTHER" }],
-    ["wrong event", "https://www.facebook.com", { ...validPayload, event: "FINISH" }],
+    ["wrong event", "https://www.facebook.com", { ...validPayload, event: "UNKNOWN_FINISH" }],
     ["wrong version", "https://www.facebook.com", { ...validPayload, version: 4 }],
     [
       "non-numeric WABA id",

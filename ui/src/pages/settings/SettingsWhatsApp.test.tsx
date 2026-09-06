@@ -10,7 +10,9 @@ import {
 } from "../../api/whatsappAdmin";
 import {
   loadMetaFacebookSdk,
+  META_WHATSAPP_EMBEDDED_SIGNUP_VERSION,
   META_WHATSAPP_SESSION_INFO_VERSION,
+  META_WHATSAPP_SESSION_INFO_VERSION_PARAMETER,
   META_WHATSAPP_SIGNUP_FEATURE,
   META_WHATSAPP_SIGNUP_FINISH_EVENT,
   META_WHATSAPP_SIGNUP_TYPE,
@@ -158,7 +160,8 @@ describe("SettingsWhatsApp", () => {
       extras: {
         setup: {},
         featureType: META_WHATSAPP_SIGNUP_FEATURE,
-        sessionInfoVersion: META_WHATSAPP_SESSION_INFO_VERSION,
+        sessionInfoVersion: META_WHATSAPP_SESSION_INFO_VERSION_PARAMETER,
+        version: META_WHATSAPP_EMBEDDED_SIGNUP_VERSION,
       },
     });
 

@@ -1,7 +1,10 @@
 export const META_WHATSAPP_SIGNUP_TYPE = "WA_EMBEDDED_SIGNUP" as const;
 export const META_WHATSAPP_SIGNUP_FINISH_EVENT = "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" as const;
+export const META_WHATSAPP_SIGNUP_DEFAULT_FINISH_EVENT = "FINISH" as const;
 export const META_WHATSAPP_SIGNUP_FEATURE = "whatsapp_business_app_onboarding" as const;
 export const META_WHATSAPP_SESSION_INFO_VERSION = 3 as const;
+export const META_WHATSAPP_SESSION_INFO_VERSION_PARAMETER = "3" as const;
+export const META_WHATSAPP_EMBEDDED_SIGNUP_VERSION = "v4" as const;
 
 const META_SDK_ID = "facebook-jssdk";
 const META_SDK_URL = "https://connect.facebook.net/en_US/sdk.js";
@@ -49,54 +52,80 @@ const normalizeSessionVersion = (value: unknown): number | null => {
 
 export type WhatsAppEmbeddedSignupSession = {
   type: typeof META_WHATSAPP_SIGNUP_TYPE;
-  event: typeof META_WHATSAPP_SIGNUP_FINISH_EVENT;
-  version: typeof META_WHATSAPP_SESSION_INFO_VERSION;
+  event: typeof META_WHATSAPP_SIGNUP_FINISH_EVENT | typeof META_WHATSAPP_SIGNUP_DEFAULT_FINISH_EVENT;
+  version: number | null;
   data: {
     waba_id: string;
     phone_number_id?: string;
   };
 };
 
-export const parseWhatsAppEmbeddedSignupMessage = (
+export type WhatsAppEmbeddedSignupDiagnosticCode =
+  | "accepted"
+  | "rejected_event"
+  | "rejected_data"
+  | "rejected_version"
+  | "rejected_waba"
+  | "rejected_phone";
+
+export type WhatsAppEmbeddedSignupInspection = {
+  session: WhatsAppEmbeddedSignupSession | null;
+  diagnosticCode: WhatsAppEmbeddedSignupDiagnosticCode;
+};
+
+export const inspectWhatsAppEmbeddedSignupMessage = (
   message: Pick<MessageEvent<unknown>, "origin" | "data">,
-): WhatsAppEmbeddedSignupSession | null => {
+): WhatsAppEmbeddedSignupInspection | null => {
   if (!isTrustedMetaMessageOrigin(message.origin)) {
     return null;
   }
 
   const payload = parseMessageData(message.data);
-  if (
-    !payload
-    || payload.type !== META_WHATSAPP_SIGNUP_TYPE
-    || payload.event !== META_WHATSAPP_SIGNUP_FINISH_EVENT
-    || !isRecord(payload.data)
-  ) {
+  if (!payload || payload.type !== META_WHATSAPP_SIGNUP_TYPE) {
     return null;
+  }
+
+  const finishEvent = payload?.event;
+  if (finishEvent !== META_WHATSAPP_SIGNUP_FINISH_EVENT
+    && finishEvent !== META_WHATSAPP_SIGNUP_DEFAULT_FINISH_EVENT) {
+    return { session: null, diagnosticCode: "rejected_event" };
+  }
+  if (!isRecord(payload.data)) {
+    return { session: null, diagnosticCode: "rejected_data" };
   }
 
   const version = normalizeSessionVersion(payload.version);
   const wabaId = payload.data.waba_id;
   const phoneNumberId = payload.data.phone_number_id;
-  if (
-    version !== META_WHATSAPP_SESSION_INFO_VERSION
-    || typeof wabaId !== "string"
-    || !META_ID_PATTERN.test(wabaId)
-    || (phoneNumberId !== undefined
-      && (typeof phoneNumberId !== "string" || !META_ID_PATTERN.test(phoneNumberId)))
-  ) {
-    return null;
+  if (version !== META_WHATSAPP_SESSION_INFO_VERSION) {
+    return { session: null, diagnosticCode: "rejected_version" };
+  }
+  if (typeof wabaId !== "string" || !META_ID_PATTERN.test(wabaId)) {
+    return { session: null, diagnosticCode: "rejected_waba" };
+  }
+  if (phoneNumberId !== undefined && phoneNumberId !== null
+    && (typeof phoneNumberId !== "string" || !META_ID_PATTERN.test(phoneNumberId))) {
+    return { session: null, diagnosticCode: "rejected_phone" };
   }
 
   return {
-    type: META_WHATSAPP_SIGNUP_TYPE,
-    event: META_WHATSAPP_SIGNUP_FINISH_EVENT,
-    version: META_WHATSAPP_SESSION_INFO_VERSION,
-    data: {
-      waba_id: wabaId,
-      ...(typeof phoneNumberId === "string" ? { phone_number_id: phoneNumberId } : {}),
+    diagnosticCode: "accepted",
+    session: {
+      type: META_WHATSAPP_SIGNUP_TYPE,
+      event: finishEvent,
+      version: META_WHATSAPP_SESSION_INFO_VERSION,
+      data: {
+        waba_id: wabaId,
+        ...(typeof phoneNumberId === "string" ? { phone_number_id: phoneNumberId } : {}),
+      },
     },
   };
 };
+
+export const parseWhatsAppEmbeddedSignupMessage = (
+  message: Pick<MessageEvent<unknown>, "origin" | "data">,
+): WhatsAppEmbeddedSignupSession | null =>
+  inspectWhatsAppEmbeddedSignupMessage(message)?.session ?? null;
 
 let sdkLoadPromise: Promise<MetaFacebookSdk> | null = null;
 

@@ -35,9 +35,11 @@ import {
 } from "../../api/whatsappAdmin";
 import {
   loadMetaFacebookSdk,
-  META_WHATSAPP_SESSION_INFO_VERSION,
+  META_WHATSAPP_EMBEDDED_SIGNUP_VERSION,
+  META_WHATSAPP_SESSION_INFO_VERSION_PARAMETER,
   META_WHATSAPP_SIGNUP_FEATURE,
-  parseWhatsAppEmbeddedSignupMessage,
+  inspectWhatsAppEmbeddedSignupMessage,
+  type WhatsAppEmbeddedSignupDiagnosticCode,
   type WhatsAppEmbeddedSignupSession,
 } from "../../utils/metaWhatsAppSignup";
 
@@ -45,6 +47,28 @@ const PAGE_SLUG = PAGE_SLUGS.settingsControlPanel;
 const MAX_PAIRING_WAIT_MS = 10 * 60_000;
 const AUTHORIZATION_CODE_PAIRING_WAIT_MS = 25_000;
 const MANUAL_RECOVERY_MESSAGE = "The latest one-time setup attempt has an ambiguous outcome. Do not retry or prepare a fresh connection; use the explicit manual recovery or offboarding process.";
+
+export const getWhatsAppConfirmationTimeoutMessage = (
+  diagnosticCode: WhatsAppEmbeddedSignupDiagnosticCode | null,
+): string => {
+  const prefix = "Meta did not return a usable WhatsApp Business account confirmation before the authorization expired.";
+  switch (diagnosticCode) {
+    case "rejected_event":
+      return `${prefix} Meta sent a WhatsApp session event, but it was not a supported completion event.`;
+    case "rejected_data":
+      return `${prefix} Meta's completion event did not contain the expected account data.`;
+    case "rejected_version":
+      return `${prefix} Meta's completion event used an unsupported session version.`;
+    case "rejected_waba":
+      return `${prefix} Meta's completion event did not contain a valid business account reference.`;
+    case "rejected_phone":
+      return `${prefix} Meta's completion event contained an invalid phone reference.`;
+    case "accepted":
+      return `${prefix} A valid completion event was observed but could not be paired.`;
+    default:
+      return `${prefix} No trusted WhatsApp session event reached this page.`;
+  }
+};
 
 export const getWhatsAppPairingWaitMs = (
   expiresAt: string,
@@ -153,6 +177,7 @@ const SettingsWhatsApp = () => {
   const sdkRef = useRef<MetaFacebookSdk | null>(null);
   const codeRef = useRef<string | null>(null);
   const sessionRef = useRef<WhatsAppEmbeddedSignupSession | null>(null);
+  const sessionDiagnosticRef = useRef<WhatsAppEmbeddedSignupDiagnosticCode | null>(null);
   const completionStartedRef = useRef(false);
   const flowActiveRef = useRef(false);
   const pairingTimeoutRef = useRef<number | null>(null);
@@ -169,6 +194,7 @@ const SettingsWhatsApp = () => {
     clearPairingTimeout();
     codeRef.current = null;
     sessionRef.current = null;
+    sessionDiagnosticRef.current = null;
     completionStartedRef.current = false;
     flowActiveRef.current = false;
     if (clearAttempt) {
@@ -200,7 +226,7 @@ const SettingsWhatsApp = () => {
     }
     pairingTimeoutRef.current = window.setTimeout(() => {
       failFlow(authorizationCodeReceived
-        ? "Meta did not return the WhatsApp Business account confirmation before the authorization expired. Prepare a new connection and try again."
+        ? getWhatsAppConfirmationTimeoutMessage(sessionDiagnosticRef.current)
         : "Meta did not return a usable authorization before the secure attempt expired. Prepare a new connection and try again.");
     }, pairingWaitMs);
   }, [failFlow]);
@@ -278,7 +304,10 @@ const SettingsWhatsApp = () => {
   useEffect(() => {
     const handleMessage = (event: MessageEvent<unknown>) => {
       if (!flowActiveRef.current || completionStartedRef.current) return;
-      const session = parseWhatsAppEmbeddedSignupMessage(event);
+      const inspection = inspectWhatsAppEmbeddedSignupMessage(event);
+      if (!inspection) return;
+      sessionDiagnosticRef.current = inspection.diagnosticCode;
+      const session = inspection.session;
       if (!session) return;
       sessionRef.current = session;
       startPairingTimeout();
@@ -300,6 +329,7 @@ const SettingsWhatsApp = () => {
       clearPairingTimeout();
       codeRef.current = null;
       sessionRef.current = null;
+      sessionDiagnosticRef.current = null;
       attemptRef.current = null;
       sdkRef.current = null;
       completionStartedRef.current = false;
@@ -369,6 +399,7 @@ const SettingsWhatsApp = () => {
 
     codeRef.current = null;
     sessionRef.current = null;
+    sessionDiagnosticRef.current = null;
     completionStartedRef.current = false;
     flowActiveRef.current = true;
     setFeedback("Complete the Meta flow and confirm the connection in your WhatsApp Business app.");
@@ -382,7 +413,8 @@ const SettingsWhatsApp = () => {
       extras: {
         setup: {},
         featureType: META_WHATSAPP_SIGNUP_FEATURE,
-        sessionInfoVersion: META_WHATSAPP_SESSION_INFO_VERSION,
+        sessionInfoVersion: META_WHATSAPP_SESSION_INFO_VERSION_PARAMETER,
+        version: META_WHATSAPP_EMBEDDED_SIGNUP_VERSION,
       },
     });
   };

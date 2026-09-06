@@ -53,7 +53,7 @@ type JsonRecord = Record<string, unknown>;
 
 export interface WhatsAppEmbeddedSignupSession {
   type: 'WA_EMBEDDED_SIGNUP';
-  event: 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING';
+  event: 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING' | 'FINISH';
   version: string | number;
   data: {
     wabaId: string;
@@ -180,20 +180,23 @@ export const parseWhatsAppEmbeddedSignupSession = (
   const wabaId = data?.waba_id;
   const phoneNumberId = data?.phone_number_id;
   const version = session?.version;
+  const finishEvent = session?.event;
+  const hasValidVersion = (finishEvent === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'
+    || finishEvent === 'FINISH')
+    && (version === 3 || version === '3');
   if (
     session?.type !== 'WA_EMBEDDED_SIGNUP'
-    || session.event !== 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'
-    || (version !== 3 && version !== '3')
+    || !hasValidVersion
     || typeof wabaId !== 'string'
     || !NUMERIC_META_ID.test(wabaId)
-    || (phoneNumberId !== undefined
+    || (phoneNumberId !== undefined && phoneNumberId !== null
       && (typeof phoneNumberId !== 'string' || !NUMERIC_META_ID.test(phoneNumberId)))
   ) {
     throw new HttpError(400, 'Invalid Embedded Signup completion session.');
   }
   return {
     type: 'WA_EMBEDDED_SIGNUP',
-    event: 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',
+    event: finishEvent,
     version,
     data: {
       wabaId,

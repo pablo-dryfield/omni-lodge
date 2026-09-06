@@ -191,7 +191,7 @@ describe('WhatsApp Embedded Signup service', () => {
     sourceStateModel.upsert.mockResolvedValue(undefined);
   });
 
-  it('accepts only the Coexistence completion event at session version 3', () => {
+  it('accepts the Coexistence event at version 3 and the documented default finish fallback', () => {
     expect(parseWhatsAppEmbeddedSignupSession(session)).toEqual({
       type: session.type,
       event: session.event,
@@ -202,6 +202,20 @@ describe('WhatsApp Embedded Signup service', () => {
       'Invalid Embedded Signup completion session',
     );
     expect(() => parseWhatsAppEmbeddedSignupSession({ ...session, version: ' 3' })).toThrow(
+      'Invalid Embedded Signup completion session',
+    );
+    expect(parseWhatsAppEmbeddedSignupSession({
+      type: 'WA_EMBEDDED_SIGNUP',
+      event: 'FINISH',
+      version: '3',
+      data: { waba_id: '111222333', phone_number_id: null },
+    })).toEqual({
+      type: 'WA_EMBEDDED_SIGNUP',
+      event: 'FINISH',
+      version: '3',
+      data: { wabaId: '111222333', phoneNumberId: null },
+    });
+    expect(() => parseWhatsAppEmbeddedSignupSession({ ...session, event: 'FINISH_ONLY_WABA' })).toThrow(
       'Invalid Embedded Signup completion session',
     );
   });
