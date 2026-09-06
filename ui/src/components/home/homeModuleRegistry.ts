@@ -102,6 +102,13 @@ export const HOME_MODULE_PRESENTATIONS: Record<string, HomeModulePresentation> =
     tone: "amber",
     icon: StarRoundedIcon,
   },
+  [PAGE_SLUGS.volunteerProgress]: {
+    description: "Review volunteer milestones, attendance evidence, and monthly feedback.",
+    staffDescription: "Follow your five-star monthly goals, progress, and supporting evidence.",
+    group: "team",
+    tone: "amber",
+    icon: StarRoundedIcon,
+  },
   [PAGE_SLUGS.pays]: {
     description: "Calculate, process, and confirm staff compensation.",
     staffDescription: "Review your compensation, payment status, and receipts.",

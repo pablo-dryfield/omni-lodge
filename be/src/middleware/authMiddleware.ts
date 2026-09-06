@@ -64,6 +64,7 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       include: [
         { model: UserType, as: 'role', attributes: ['id', 'slug', 'name'] },
         { model: ShiftRole, as: 'shiftRoles', through: { attributes: [] }, attributes: ['id', 'slug'] },
+        { association: 'staffProfile', attributes: ['staffType', 'active'], required: false },
       ],
     });
 
@@ -78,6 +79,9 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     }
 
     const role = (user as unknown as { role?: UserType | null }).role ?? null;
+    const staffProfile = (user as unknown as {
+      staffProfile?: { staffType?: 'volunteer' | 'long_term' | 'assistant_manager' | 'manager' | 'guide'; active?: boolean } | null;
+    }).staffProfile ?? null;
     const shiftRoles = (user as unknown as { shiftRoles?: Array<Pick<ShiftRole, 'id' | 'slug'>> }).shiftRoles ?? [];
     const explicitRole = (user as unknown as { roleKey?: string | null }).roleKey ?? null;
     const roleSlug = normalizeRoleSlug(role?.slug ?? explicitRole ?? null);
@@ -106,6 +110,7 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       roleSlug,
       userTypeSlug: role?.slug ?? null,
       roleName: role?.name ?? null,
+      staffType: staffProfile?.active ? staffProfile.staffType : null,
       firstName: user.firstName ?? null,
       lastName: user.lastName ?? null,
       profilePhotoPath,

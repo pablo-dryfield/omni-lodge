@@ -1,5 +1,6 @@
 import { Request } from 'express';
 import { JwtPayload } from 'jsonwebtoken';
+import type { StaffType } from '../models/StaffProfile.js';
 
 export interface AuthorizationContext {
   id: number;
@@ -7,6 +8,8 @@ export interface AuthorizationContext {
   roleSlug: string | null;
   userTypeSlug?: string | null;
   roleName?: string | null;
+  /** Active staff profile type; null when the user has no active staff profile. */
+  staffType?: StaffType | null;
   firstName?: string | null;
   lastName?: string | null;
   /** Internal storage locator. Never include this value in an API response. */

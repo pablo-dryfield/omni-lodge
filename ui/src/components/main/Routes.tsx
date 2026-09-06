@@ -105,6 +105,7 @@ const FinanceSettings = lazy(() => import("../../pages/Finance/FinanceSettings")
 const FinanceRefunds = lazy(() => import("../../pages/Finance/FinanceRefunds"));
 const FinanceInventory = lazy(() => import("../../pages/Finance/FinanceInventory"));
 const NotificationsCenter = lazy(() => import("../../pages/NotificationsCenter"));
+const VolunteerProgress = lazy(() => import("../../pages/VolunteerProgress"));
 
 const RouteFallback = () => (
   <Center mih="40vh">
@@ -147,6 +148,7 @@ const Routes = () => {
         <Route path="/reports/dashboards" element={<ReportDashboards title="Dashboards" />} />
         <Route path="/account" element={<MyAccount />} />
         <Route path="/notifications" element={<NotificationsCenter title="Notifications" />} />
+        <Route path="/volunteer-progress" element={<VolunteerProgress />} />
         <Route path="/scheduling" element={<SchedulingLayout />}>
           <Route index element={<AvailabilityPage />} />
           <Route path="availability" element={<AvailabilityPage />} />

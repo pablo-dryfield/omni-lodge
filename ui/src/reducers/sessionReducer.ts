@@ -11,6 +11,7 @@ const initialState: SessionState = {
   roleSlug: null,
   roleName: null,
   userTypeId: null,
+  staffType: null,
   firstName: null,
   lastName: null,
   hasStoredProfilePhoto: false,
@@ -61,6 +62,7 @@ const sessionSlice = createSlice({
         state.roleSlug = null;
         state.roleName = null;
         state.userTypeId = null;
+        state.staffType = null;
         state.firstName = null;
         state.lastName = null;
         state.hasStoredProfilePhoto = false;
@@ -76,6 +78,7 @@ const sessionSlice = createSlice({
         state.roleSlug = null;
         state.roleName = null;
         state.userTypeId = null;
+        state.staffType = null;
         state.firstName = null;
         state.lastName = null;
         state.hasStoredProfilePhoto = false;
@@ -91,6 +94,7 @@ const sessionSlice = createSlice({
         state.roleSlug = null;
         state.roleName = null;
         state.userTypeId = null;
+        state.staffType = null;
         state.firstName = null;
         state.lastName = null;
         state.hasStoredProfilePhoto = false;
@@ -109,6 +113,7 @@ const sessionSlice = createSlice({
         state.roleSlug = action.payload[0].roleSlug ?? null;
         state.roleName = action.payload[0].roleName ?? null;
         state.userTypeId = action.payload[0].userTypeId ?? null;
+        state.staffType = action.payload[0].staffType ?? null;
         state.firstName = action.payload[0].firstName ?? null;
         state.lastName = action.payload[0].lastName ?? null;
         state.user = [state.firstName, state.lastName].filter(Boolean).join(' ').trim();
@@ -127,6 +132,7 @@ const sessionSlice = createSlice({
         state.roleSlug = null;
         state.roleName = null;
         state.userTypeId = null;
+        state.staffType = null;
         state.firstName = null;
         state.lastName = null;
         state.hasStoredProfilePhoto = false;

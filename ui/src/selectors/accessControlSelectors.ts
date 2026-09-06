@@ -5,6 +5,29 @@ import { RootState } from "../store/store";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 
 const selectAccessControlState = (state: RootState) => state.accessControl;
+const selectSessionState = (state: RootState) => state.session;
+
+const VOLUNTEER_PROGRESS_MANAGEMENT_ROLES = new Set([
+  "owner",
+  "admin",
+  "manager",
+  "assistant-manager",
+]);
+
+const normalizeRoleSlug = (roleSlug: string | null | undefined): string => {
+  const normalized = String(roleSlug ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+  const collapsed = normalized.replace(/-/g, "");
+  if (collapsed === "administrator") return "admin";
+  if (collapsed === "assistantmanager" || collapsed === "assistmanager") return "assistant-manager";
+  return normalized;
+};
+
+export const canShowVolunteerProgressNavigation = (
+  roleSlug: string | null | undefined,
+  staffType: string | null | undefined,
+): boolean =>
+  VOLUNTEER_PROGRESS_MANAGEMENT_ROLES.has(normalizeRoleSlug(roleSlug)) ||
+  String(staffType ?? "").trim().toLowerCase() === "volunteer";
 
 const MODULE_SLUG_TO_PAGE_SLUG: Record<string, string> = {
   "am-task-management": PAGE_SLUGS.assistantManagerTasks,
@@ -52,12 +75,18 @@ export const selectAllowedPageSlugs = createSelector(selectAccessControlState, (
 export const selectAllowedNavigationPages = createSelector(
   selectAccessControlState,
   selectAllowedPageSlugs,
-  ({ loaded }, allowedSlugs): NavigationPage[] => {
+  selectSessionState,
+  ({ loaded }, allowedSlugs, session): NavigationPage[] => {
     if (!loaded) {
       return [];
     }
 
-    return baseNavigationPages.filter((page) => allowedSlugs.has(page.slug));
+    return baseNavigationPages.filter(
+      (page) =>
+        allowedSlugs.has(page.slug) &&
+        (page.slug !== PAGE_SLUGS.volunteerProgress ||
+          canShowVolunteerProgressNavigation(session.roleSlug, session.staffType)),
+    );
   },
 );
 

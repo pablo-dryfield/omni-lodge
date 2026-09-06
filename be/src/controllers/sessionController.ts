@@ -25,6 +25,7 @@ export const checkSession = (req: AuthenticatedRequest, res: Response) => {
           roleSlug: req.authContext?.roleSlug ?? null,
           roleName: req.authContext?.roleName ?? null,
           userTypeId: req.authContext?.userTypeId ?? null,
+          staffType: req.authContext?.staffType ?? null,
           hasStoredProfilePhoto: Boolean(req.authContext?.profilePhotoPath),
           profilePhotoVersion: req.authContext?.profilePhotoVersion ?? null,
           notificationInboxPollingEnabled:

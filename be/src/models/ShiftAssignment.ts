@@ -9,12 +9,14 @@ import {
   ForeignKey,
   BelongsTo,
   HasMany,
+  HasOne,
 } from 'sequelize-typescript';
 import type { NonAttribute } from 'sequelize';
 import ShiftInstance from './ShiftInstance.js';
 import User from './User.js';
 import SwapRequest from './SwapRequest.js';
 import ShiftRole from './ShiftRole.js';
+import VolunteerShiftAttendance from './VolunteerShiftAttendance.js';
 
 @Table({
   tableName: 'shift_assignments',
@@ -60,4 +62,7 @@ export default class ShiftAssignment extends Model {
 
   @HasMany(() => SwapRequest, { foreignKey: 'toAssignmentId', as: 'incomingSwapRequests' })
   declare incomingSwapRequests?: SwapRequest[];
+
+  @HasOne(() => VolunteerShiftAttendance, { foreignKey: 'shift_assignment_id', as: 'volunteerAttendance' })
+  declare volunteerAttendance?: NonAttribute<VolunteerShiftAttendance | null>;
 }

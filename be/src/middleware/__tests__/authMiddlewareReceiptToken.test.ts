@@ -78,6 +78,7 @@ describe('normal auth receipt-token isolation', () => {
       updatedAt,
       role: { slug: 'assistant-manager', name: 'Assistant Manager' },
       shiftRoles: [{ id: 7, slug: 'manager' }],
+      staffProfile: { staffType: 'volunteer', active: true },
     });
     const token = jwt.sign({ id: 28 }, process.env.JWT_SECRET as string, { expiresIn: '1h' });
     const req = {
@@ -93,6 +94,7 @@ describe('normal auth receipt-token isolation', () => {
       id: 28,
       userTypeId: 3,
       roleSlug: 'assistant-manager',
+      staffType: 'volunteer',
       profilePhotoPath: 'drive:private-file-id',
       profilePhotoVersion: `28-${updatedAt.getTime()}`,
       shiftRoleIds: [7],

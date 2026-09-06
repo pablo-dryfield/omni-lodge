@@ -54,6 +54,7 @@ const defaultPages = [
   { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 8 },
   { slug: 'cerebro', name: 'Cerebro', description: 'Operational knowledge base, role quizzes, and policy acknowledgements', sortOrder: 9 },
   { slug: 'scheduling', name: 'Scheduling', description: 'Manage weekly staff scheduling', sortOrder: 9 },
+  { slug: 'volunteer-progress', name: 'Volunteer Milestones', description: 'Track transparent monthly volunteer star progress and management feedback', sortOrder: 10 },
   { slug: 'finance', name: 'Finance', description: 'Finance operations and reporting', sortOrder: 10 },
   { slug: 'settings-products', name: 'Products', description: 'Manage saleable products', sortOrder: 7 },
   { slug: 'settings-product-aliases', name: 'Product Aliases', description: 'Map booking labels to products', sortOrder: 7 },
@@ -106,6 +107,7 @@ const defaultModules = [
   { slug: 'scheduling-my-shifts', name: 'Scheduling My Shifts', pageSlug: 'scheduling', description: 'Review personal shift assignments', componentRef: 'SchedulingMyShifts', sortOrder: 3 },
   { slug: 'scheduling-swaps', name: 'Scheduling Shift Requests', pageSlug: 'scheduling', description: 'Manage swap, takeover, and drop requests', componentRef: 'SchedulingSwaps', sortOrder: 4 },
   { slug: 'scheduling-history', name: 'Scheduling History', pageSlug: 'scheduling', description: 'View scheduling exports and history', componentRef: 'SchedulingHistory', sortOrder: 5 },
+  { slug: 'volunteer-progress', name: 'Volunteer Milestones', pageSlug: 'volunteer-progress', description: 'Review personal progress and manage volunteer attendance and feedback', componentRef: 'VolunteerProgress', sortOrder: 1 },
   { slug: 'finance-dashboard', name: 'Finance Dashboard', pageSlug: 'finance', description: 'Overview of finance KPIs', componentRef: 'FinanceDashboard', sortOrder: 1 },
   { slug: 'finance-transactions', name: 'Finance Transactions', pageSlug: 'finance', description: 'Manage finance transactions', componentRef: 'FinanceTransactions', sortOrder: 2 },
   { slug: 'finance-accounts', name: 'Finance Accounts', pageSlug: 'finance', description: 'Manage financial accounts', componentRef: 'FinanceAccounts', sortOrder: 3 },
@@ -142,7 +144,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'requests', 'performance', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-storefront-promotions', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'requests', 'performance', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-storefront-promotions', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -159,11 +161,11 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-control-panel',
 'settings-google-api',
 'settings-maintenance'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience', 'settings-product-aliases'],
-  manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks'],
-  'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'assistant-manager-tasks'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience', 'settings-product-aliases'],
+  manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks'],
+  'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks'],
   affiliate: ['affiliates'],
-  guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'pays', 'cerebro', 'scheduling'],
+  guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'pays', 'cerebro', 'scheduling', 'volunteer-progress'],
   'social-media': ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'social-media', 'pays', 'cerebro', 'scheduling'],
 };
 
@@ -203,6 +205,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'scheduling-my-shifts': ['view'],
       'scheduling-swaps': ['view', 'create', 'update', 'delete'],
       'scheduling-history': ['view', 'create', 'update', 'delete'],
+      'volunteer-progress': ['view', 'update'],
       'finance-dashboard': ['view', 'create', 'update', 'delete'],
     'finance-transactions': ['view', 'create', 'update', 'delete'],
     'finance-accounts': ['view', 'create', 'update', 'delete'],
@@ -259,6 +262,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'scheduling-my-shifts': ['view'],
       'scheduling-swaps': ['view', 'create', 'update', 'delete'],
       'scheduling-history': ['view', 'create', 'update', 'delete'],
+      'volunteer-progress': ['view', 'update'],
       'finance-dashboard': ['view', 'create', 'update', 'delete'],
     'finance-transactions': ['view', 'create', 'update', 'delete'],
     'finance-accounts': ['view', 'create', 'update', 'delete'],
@@ -297,6 +301,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'scheduling-my-shifts': ['view'],
       'scheduling-swaps': ['view', 'create', 'update'],
       'scheduling-history': ['view', 'create', 'update'],
+      'volunteer-progress': ['view', 'update'],
       'finance-dashboard': ['view', 'create', 'update', 'delete'],
     'finance-transactions': ['view', 'create', 'update', 'delete'],
     'finance-accounts': ['view', 'create', 'update', 'delete'],
@@ -332,6 +337,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
       'scheduling-builder': ['view'],
       'scheduling-my-shifts': ['view'],
       'scheduling-history': ['view', 'create', 'update'],
+      'volunteer-progress': ['view', 'update'],
       'finance-dashboard': ['view', 'create', 'update', 'delete'],
     'finance-transactions': ['view', 'create', 'update', 'delete'],
     'finance-accounts': ['view', 'create', 'update', 'delete'],
@@ -359,6 +365,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'scheduling-availability': ['view', 'create', 'update'],
     'scheduling-builder': ['view'],
     'scheduling-my-shifts': ['view'],
+    'volunteer-progress': ['view'],
   },
 };
 
