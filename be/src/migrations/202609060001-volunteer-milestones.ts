@@ -6,8 +6,52 @@ const ATTENDANCE_TABLE = 'volunteer_shift_attendance';
 const FEEDBACK_TABLE = 'volunteer_milestone_feedback';
 const PAGE_SLUG = 'volunteer-progress';
 const MODULE_SLUG = 'volunteer-progress';
-const VIEW_ROLES = ['admin', 'administrator', 'owner', 'manager', 'assistant-manager', 'guide'];
 const MANAGEMENT_ROLES = ['admin', 'administrator', 'owner', 'manager', 'assistant-manager'];
+const VOLUNTEER_VIEW_ROLES = ['guide', 'pub-crawl-guide'];
+const VIEW_ROLES = [...MANAGEMENT_ROLES, ...VOLUNTEER_VIEW_ROLES];
+
+const quoteIdentifier = (value: string): string => `"${value.replace(/"/gu, '""')}"`;
+
+async function addCheckConstraints(
+  context: QueryInterface,
+  transaction: Transaction,
+  tableName: string,
+  constraints: ReadonlyArray<{ name: string; expression: string }>,
+): Promise<void> {
+  for (const constraint of constraints) {
+    // Verification happens after up() commits. If it fails, Umzug leaves the
+    // migration unrecorded even though the schema exists. These guards make the
+    // raw CHECK DDL safe on the recovery run; the runner already guards tables
+    // and indexes created through QueryInterface.
+    const qualifiedTableName = `public.${tableName}`;
+    const [rows] = await context.sequelize.query(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM pg_constraint
+          WHERE conname = :constraintName
+            AND conrelid = to_regclass(:qualifiedTableName)
+       ) AS constraint_exists;`,
+      {
+        transaction,
+        replacements: {
+          constraintName: constraint.name,
+          qualifiedTableName,
+        },
+      },
+    );
+    const exists = Boolean((rows as Array<{ constraint_exists: boolean }>)[0]?.constraint_exists);
+    if (exists) {
+      continue;
+    }
+
+    await context.sequelize.query(
+      `ALTER TABLE ${quoteIdentifier('public')}.${quoteIdentifier(tableName)}
+         ADD CONSTRAINT ${quoteIdentifier(constraint.name)}
+         CHECK (${constraint.expression});`,
+      { transaction },
+    );
+  }
+}
 
 async function upsertAccessControl(context: QueryInterface, transaction: Transaction): Promise<void> {
   await context.sequelize.query(
@@ -129,14 +173,16 @@ export async function up({ context }: MigrationParams): Promise<void> {
       { transaction },
     );
 
-    await context.sequelize.query(
-      `ALTER TABLE ${ATTENDANCE_TABLE}
-         ADD CONSTRAINT volunteer_shift_attendance_status_ck
-         CHECK (status IN ('attended', 'late', 'absent', 'excused')),
-         ADD CONSTRAINT volunteer_shift_attendance_notes_ck
-         CHECK (notes IS NULL OR length(notes) <= 2000);`,
-      { transaction },
-    );
+    await addCheckConstraints(context, transaction, ATTENDANCE_TABLE, [
+      {
+        name: 'volunteer_shift_attendance_status_ck',
+        expression: "status IN ('attended', 'late', 'absent', 'excused')",
+      },
+      {
+        name: 'volunteer_shift_attendance_notes_ck',
+        expression: 'notes IS NULL OR length(notes) <= 2000',
+      },
+    ]);
     await context.addIndex(ATTENDANCE_TABLE, ['shift_assignment_id'], {
       name: 'volunteer_shift_attendance_assignment_uq',
       unique: true,
@@ -194,21 +240,25 @@ export async function up({ context }: MigrationParams): Promise<void> {
       { transaction },
     );
 
-    await context.sequelize.query(
-      `ALTER TABLE ${FEEDBACK_TABLE}
-         ADD CONSTRAINT volunteer_milestone_feedback_period_start_ck
-         CHECK (EXTRACT(DAY FROM period_start) = 1),
-         ADD CONSTRAINT volunteer_milestone_feedback_text_ck
-         CHECK (feedback IS NULL OR length(feedback) <= 5000),
-         ADD CONSTRAINT volunteer_milestone_feedback_approval_ck
-         CHECK (
-           (approved = false AND approved_by IS NULL AND approved_at IS NULL)
-           OR
-           (approved = true AND approved_at IS NOT NULL
-            AND feedback IS NOT NULL AND length(btrim(feedback)) > 0)
-         );`,
-      { transaction },
-    );
+    await addCheckConstraints(context, transaction, FEEDBACK_TABLE, [
+      {
+        name: 'volunteer_milestone_feedback_period_start_ck',
+        expression: 'EXTRACT(DAY FROM period_start) = 1',
+      },
+      {
+        name: 'volunteer_milestone_feedback_text_ck',
+        expression: 'feedback IS NULL OR length(feedback) <= 5000',
+      },
+      {
+        name: 'volunteer_milestone_feedback_approval_ck',
+        expression: `
+          (approved = false AND approved_by IS NULL AND approved_at IS NULL)
+          OR
+          (approved = true AND approved_at IS NOT NULL
+           AND feedback IS NOT NULL AND length(btrim(feedback)) > 0)
+        `,
+      },
+    ]);
     await context.addIndex(FEEDBACK_TABLE, ['volunteer_user_id', 'period_start'], {
       name: 'volunteer_milestone_feedback_user_period_uq',
       unique: true,
@@ -271,19 +321,51 @@ export async function verify({ context }: MigrationParams): Promise<{ ok: boolea
        EXISTS (SELECT 1 FROM modules WHERE slug = :moduleSlug) AS module_exists,
        EXISTS (
          SELECT 1
-           FROM "roleModulePermissions" rmp
-           JOIN "userTypes" ut ON ut.id = rmp."userTypeId"
-           JOIN modules m ON m.id = rmp."moduleId"
-           JOIN actions a ON a.id = rmp."actionId"
-          WHERE ut.slug = 'guide' AND m.slug = :moduleSlug AND a.key = 'view'
-            AND rmp.allowed = true AND rmp.status = true
-       ) AS guide_view_exists;`,
-    { replacements: { pageSlug: PAGE_SLUG, moduleSlug: MODULE_SLUG } },
+           FROM "userTypes" ut
+          WHERE ut.slug IN (:volunteerRoleSlugs)
+       ) AS volunteer_role_exists,
+       NOT EXISTS (
+         SELECT 1
+           FROM "userTypes" ut
+          WHERE ut.slug IN (:volunteerRoleSlugs)
+            AND (
+              NOT EXISTS (
+                SELECT 1
+                  FROM "rolePagePermissions" rpp
+                  JOIN pages p ON p.id = rpp."pageId"
+                 WHERE rpp."userTypeId" = ut.id
+                   AND p.slug = :pageSlug
+                   AND p.status = true
+                   AND rpp."canView" = true
+                   AND rpp.status = true
+              )
+              OR NOT EXISTS (
+                SELECT 1
+                  FROM "roleModulePermissions" rmp
+                  JOIN modules m ON m.id = rmp."moduleId"
+                  JOIN actions a ON a.id = rmp."actionId"
+                 WHERE rmp."userTypeId" = ut.id
+                   AND m.slug = :moduleSlug
+                   AND m.status = true
+                   AND a.key = 'view'
+                   AND rmp.allowed = true
+                   AND rmp.status = true
+              )
+            )
+       ) AS all_volunteer_roles_have_view;`,
+    {
+      replacements: {
+        pageSlug: PAGE_SLUG,
+        moduleSlug: MODULE_SLUG,
+        volunteerRoleSlugs: VOLUNTEER_VIEW_ROLES,
+      },
+    },
   );
   const access = (rows as Array<{
     page_exists: boolean;
     module_exists: boolean;
-    guide_view_exists: boolean;
+    volunteer_role_exists: boolean;
+    all_volunteer_roles_have_view: boolean;
   }>)[0];
   const attendanceColumns = ['shift_assignment_id', 'status', 'recorded_by', 'recorded_at'];
   const feedbackColumns = ['volunteer_user_id', 'period_start', 'feedback', 'approved', 'approved_by', 'approved_at'];
@@ -296,7 +378,8 @@ export async function verify({ context }: MigrationParams): Promise<{ ok: boolea
       && missingFeedbackColumns.length === 0
       && Boolean(access?.page_exists)
       && Boolean(access?.module_exists)
-      && Boolean(access?.guide_view_exists),
+      && Boolean(access?.volunteer_role_exists)
+      && Boolean(access?.all_volunteer_roles_have_view),
     details: { missingAttendanceColumns, missingFeedbackColumns, access },
   };
 }

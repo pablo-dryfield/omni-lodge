@@ -1266,7 +1266,10 @@ const umzug = new Umzug({
                         verifyStatus = combinedVerify.status;
                         verifyDetails = combinedVerify.details;
                         if (combinedVerify.shouldFail) {
-                            throw new Error(`Verification failed for ${name}`);
+                            throw new Error(
+                                `Verification failed for ${name} `
+                                + `(auto=${autoVerify.status}, manual=${manualVerify.status})`,
+                            );
                         }
                         await finishMigrationStep(runId, direction, name, 'success', undefined, verifyStatus, verifyDetails);
                     }

@@ -170,6 +170,7 @@ const rolePageMatrix: Record<string, string[]> = {
 };
 
 rolePageMatrix['administrator'] = [...rolePageMatrix.admin];
+rolePageMatrix['pub-crawl-guide'] = [...rolePageMatrix.guide];
 
 const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   admin: {
