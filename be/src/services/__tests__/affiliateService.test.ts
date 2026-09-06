@@ -22,6 +22,9 @@ jest.mock('../configService.js', () => ({
 jest.mock('../bookings/bookingUtmCatalogService.js', () => ({
   fetchBookingUtmCatalog: jest.fn(),
 }));
+jest.mock('../affiliateBookingHistoryService.js', () => ({
+  fetchAffiliateBookingsWithPriorPubCrawl: jest.fn(),
+}));
 
 import AffiliatePayoutLog from '../../models/AffiliatePayoutLog';
 import Booking from '../../models/Booking';
@@ -30,12 +33,14 @@ import { Op } from 'sequelize';
 import { fetchBookingUtmCatalog } from '../bookings/bookingUtmCatalogService';
 import { getConfigValue } from '../configService';
 import { getAffiliateCommissionEligibility, getAffiliateOverview } from '../affiliateService';
+import { fetchAffiliateBookingsWithPriorPubCrawl } from '../affiliateBookingHistoryService';
 
 const bookingFindAll = Booking.findAll as jest.Mock;
 const userFindAll = User.findAll as jest.Mock;
 const payoutLogFindAll = AffiliatePayoutLog.findAll as jest.Mock;
 const configValue = getConfigValue as jest.Mock;
 const utmCatalog = fetchBookingUtmCatalog as jest.Mock;
+const previousPubCrawlBookings = fetchAffiliateBookingsWithPriorPubCrawl as jest.Mock;
 
 const buildCristianBookings = () =>
   [
@@ -88,21 +93,21 @@ describe('getAffiliateCommissionEligibility', () => {
     const originalTimezone = process.env.TZ;
     process.env.TZ = 'America/New_York';
     try {
-      expect(getAffiliateCommissionEligibility('2026-07-20T18:44:59.000Z')).toEqual({
+      expect(getAffiliateCommissionEligibility('2026-07-20T18:44:59.000Z', '2026-07-20')).toEqual({
         eligible: true,
         reason: null,
       });
-      expect(getAffiliateCommissionEligibility('2026-07-20T18:45:00.000Z')).toEqual({
+      expect(getAffiliateCommissionEligibility('2026-07-20T18:45:00.000Z', '2026-07-20')).toEqual({
         eligible: false,
-        reason: 'Booked after 20:45',
+        reason: 'Same-day booking at or after 20:45',
       });
-      expect(getAffiliateCommissionEligibility('2026-01-20T19:44:59.000Z')).toEqual({
+      expect(getAffiliateCommissionEligibility('2026-01-20T19:44:59.000Z', '2026-01-20')).toEqual({
         eligible: true,
         reason: null,
       });
-      expect(getAffiliateCommissionEligibility('2026-01-20T19:45:00.000Z')).toEqual({
+      expect(getAffiliateCommissionEligibility('2026-01-20T19:45:00.000Z', '2026-01-20')).toEqual({
         eligible: false,
-        reason: 'Booked after 20:45',
+        reason: 'Same-day booking at or after 20:45',
       });
     } finally {
       if (originalTimezone == null) {
@@ -113,8 +118,48 @@ describe('getAffiliateCommissionEligibility', () => {
     }
   });
 
+  it.each([
+    ['2026-07-20T20:00:00.000Z', '2026-07-21'],
+    ['2026-01-20T21:00:00.000Z', '2026-01-21'],
+    ['2026-07-31T21:59:59.000Z', '2026-08-01'],
+    ['2026-07-20T20:00:00.000Z', '2026-08-20'],
+  ])('allows a late booking for a later experience: %s / %s', (receivedAt, experienceDate) => {
+    expect(getAffiliateCommissionEligibility(receivedAt, experienceDate)).toEqual({
+      eligible: true,
+      reason: null,
+    });
+  });
+
+  it('uses the Warsaw calendar date and clock around UTC midnight', () => {
+    expect(getAffiliateCommissionEligibility('2026-07-20T22:30:00.000Z', '2026-07-21')).toEqual({
+      eligible: true,
+      reason: null,
+    });
+    expect(getAffiliateCommissionEligibility('2026-01-20T23:30:00.000Z', '2026-01-21')).toEqual({
+      eligible: true,
+      reason: null,
+    });
+  });
+
+  it.each([
+    [null, '2026-07-20'],
+    ['invalid', '2026-07-20'],
+    ['2026-07-20T20:00:00.000Z', null],
+  ])('does not infer a same-day cutoff from missing or invalid dates', (receivedAt, experienceDate) => {
+    expect(getAffiliateCommissionEligibility(receivedAt, experienceDate)).toEqual({ eligible: true, reason: null });
+  });
+
+  it('excludes repeat customers even when they book ahead or before the cutoff', () => {
+    for (const receivedAt of ['2026-07-20T20:00:00.000Z', '2026-07-20T10:00:00.000Z']) {
+      expect(getAffiliateCommissionEligibility(receivedAt, '2026-07-21', false, true)).toEqual({
+        eligible: false,
+        reason: 'Previous Pub Crawl booking (matching email or phone)',
+      });
+    }
+  });
+
   it('does not retroactively invalidate a commission that has already been paid', () => {
-    expect(getAffiliateCommissionEligibility('2026-07-20T19:04:13.000Z', true)).toEqual({
+    expect(getAffiliateCommissionEligibility('2026-07-20T19:04:13.000Z', '2026-07-20', true, true)).toEqual({
       eligible: true,
       reason: null,
     });
@@ -149,18 +194,23 @@ describe('getAffiliateOverview affiliate payout history', () => {
       },
     ]);
     bookingFindAll.mockResolvedValue(buildCristianBookings());
+    previousPubCrawlBookings.mockResolvedValue(new Set());
     utmCatalog.mockResolvedValue({ utmSource: [], utmMedium: [], utmCampaign: [] });
   });
 
-  it('excludes an unpaid booking received after the Warsaw cutoff', async () => {
+  it('excludes an unpaid same-day booking received after the Warsaw cutoff', async () => {
     payoutLogFindAll.mockResolvedValue([]);
+    bookingFindAll.mockResolvedValue(buildCristianBookings().map((booking) => ({
+      ...booking,
+      experienceDate: '2026-07-20',
+    })));
 
     const overview = await loadOverview();
 
     expect(overview.bookings[0]).toEqual(
       expect.objectContaining({
         affiliateCommissionEligible: false,
-        affiliateCommissionIneligibleReason: 'Booked after 20:45',
+        affiliateCommissionIneligibleReason: 'Same-day booking at or after 20:45',
         affiliateCommissionAmount: 0,
         isCommissionPaid: false,
       }),
@@ -172,8 +222,45 @@ describe('getAffiliateOverview affiliate payout history', () => {
     expect(bookingQuery.where.sourceReceivedAt[Op.lt]).toBe('2026-07-31T22:00:00.000Z');
   });
 
+  it('includes new-customer bookings received after the cutoff for the next day', async () => {
+    payoutLogFindAll.mockResolvedValue([]);
+
+    const overview = await loadOverview();
+
+    expect(overview.bookings.every((booking) => booking.affiliateCommissionEligible)).toBe(true);
+    expect(overview.bookings.map((booking) => booking.affiliateCommissionAmount)).toEqual([30, 60, 30]);
+    expect(overview.summary.commissionOutstandingTotal).toBe(120);
+    expect(previousPubCrawlBookings).toHaveBeenCalledTimes(1);
+    expect(previousPubCrawlBookings).toHaveBeenCalledWith([9513, 9514, 9515], undefined);
+  });
+
+  it('excludes historical customer matches from commissions and report totals', async () => {
+    payoutLogFindAll.mockResolvedValue([]);
+    bookingFindAll.mockResolvedValue(buildCristianBookings().map((booking) => ({
+      ...booking,
+      // BIGINT values can be returned as strings by the database driver.
+      id: String(booking.id),
+    })));
+    previousPubCrawlBookings.mockResolvedValue(new Set([9514]));
+
+    const overview = await loadOverview();
+
+    expect(overview.bookings[1]).toEqual(expect.objectContaining({
+      affiliateCommissionEligible: false,
+      affiliateCommissionIneligibleReason: 'Previous Pub Crawl booking (matching email or phone)',
+      affiliateCommissionAmount: 0,
+    }));
+    expect(overview.summary.commissionOutstandingTotal).toBe(60);
+    expect(overview.dailySeries[0].commission).toBe(60);
+    expect(overview.affiliateBreakdown[0].outstandingCommission).toBe(60);
+  });
+
   it('keeps the payout-log amount as historical earnings even after the rate or cutoff changes', async () => {
     payoutLogFindAll.mockResolvedValue([buildCristianPayoutLog()]);
+    bookingFindAll.mockResolvedValue(buildCristianBookings().map((booking) => ({
+      ...booking,
+      id: String(booking.id),
+    })));
 
     const overview = await loadOverview();
 
@@ -195,5 +282,22 @@ describe('getAffiliateOverview affiliate payout history', () => {
         commissionOutstandingTotal: 0,
       }),
     );
+    expect(previousPubCrawlBookings).toHaveBeenCalledWith([], undefined);
+  });
+
+  it('preserves a payout allocation when some paid bookings are outside the selected range', async () => {
+    payoutLogFindAll.mockResolvedValue([buildCristianPayoutLog()]);
+    bookingFindAll
+      .mockResolvedValueOnce([{ ...buildCristianBookings()[0], id: '9513' }])
+      .mockResolvedValueOnce([
+        { id: '9514', partySizeTotal: 2 },
+        { id: '9515', partySizeTotal: 1 },
+      ]);
+
+    const overview = await loadOverview();
+
+    expect(overview.bookings[0].affiliateCommissionAmount).toBe(20);
+    expect(overview.summary.commissionPaidTotal).toBe(20);
+    expect(overview.summary.commissionOutstandingTotal).toBe(0);
   });
 });

@@ -99,6 +99,10 @@ import {
 } from "../services/staffPayoutLedgerReconciliationService.js";
 import { buildStaffPayoutStaffIdentity } from "../services/staffPayoutStaffIdentityService.js";
 import {
+  assertStaffPayoutTaskCorrectionVersionUnchanged,
+  loadStaffPayoutTaskCorrectionVersions,
+} from "../services/staffPayoutTaskCorrectionFreshnessService.js";
+import {
   allocateAssistantManagerSalaryAcrossDays,
   calculateAssistantManagerSalaryTaskCompletion,
   mergeAssistantManagerSalaryDailyBreakdowns,
@@ -2085,6 +2089,9 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       start.isSame(end, "month") &&
       start.year() === end.year();
     const isLedgerEligible = isCanonicalRange && !start.isBefore(resolveStaffLedgerStartDate(), "day");
+    const taskCorrectionVersions = isLedgerEligible
+      ? await loadStaffPayoutTaskCorrectionVersions()
+      : new Map<number, string>();
 
     const commissionDataByUser = new Map<number, CommissionSummary>();
     const productBucketsByUser: ProductBucketLookup = new Map();
@@ -4172,6 +4179,13 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             transaction,
             lock: transaction.LOCK.UPDATE,
           });
+          // Task corrections use the same User lock and invalidate provisional
+          // snapshots. Do not restore a stale snapshot calculated before one.
+          await assertStaffPayoutTaskCorrectionVersionUnchanged(
+            summary.userId,
+            taskCorrectionVersions,
+            transaction,
+          );
           await reconcilePersistedStaffPayoutLedgers({
             staffUserId: summary.userId,
             affectedRangeStart: rangeStartIso,

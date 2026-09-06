@@ -137,6 +137,11 @@ export default class SocialMediaContent extends Model {
 
   @ForeignKey(() => User)
   @AllowNull(true)
+  @Column({ field: 'produced_by', type: DataType.INTEGER })
+  declare producedBy: number | null;
+
+  @ForeignKey(() => User)
+  @AllowNull(true)
   @Column({ field: 'published_by', type: DataType.INTEGER })
   declare publishedBy: number | null;
 
@@ -150,6 +155,9 @@ export default class SocialMediaContent extends Model {
 
   @BelongsTo(() => User, { foreignKey: 'updated_by', as: 'updatedByUser' })
   declare updatedByUser?: NonAttribute<User | null>;
+
+  @BelongsTo(() => User, { foreignKey: 'produced_by', as: 'producedByUser' })
+  declare producedByUser?: NonAttribute<User | null>;
 
   @BelongsTo(() => User, { foreignKey: 'published_by', as: 'publishedByUser' })
   declare publishedByUser?: NonAttribute<User | null>;

@@ -35,10 +35,18 @@ const WORKFLOW_CONTROLLED_FIELDS = new Set([
   'driveProjectUrl',
   'driveUrl',
   'platformLinks',
+  'createdBy',
+  'producedBy',
+  'publishedBy',
 ]);
+export const SOCIAL_MEDIA_USER_ATTRIBUTES = [
+  'id', 'firstName', 'lastName', 'username', 'profilePhotoUrl', 'profilePhotoPath', 'updatedAt',
+];
 const USER_INCLUDE = [
-  { model: User, as: 'createdByUser', attributes: ['id', 'firstName', 'lastName', 'username'] },
+  { model: User, as: 'createdByUser', attributes: SOCIAL_MEDIA_USER_ATTRIBUTES },
   { model: User, as: 'updatedByUser', attributes: ['id', 'firstName', 'lastName', 'username'] },
+  { model: User, as: 'producedByUser', attributes: SOCIAL_MEDIA_USER_ATTRIBUTES },
+  { model: User, as: 'publishedByUser', attributes: SOCIAL_MEDIA_USER_ATTRIBUTES },
 ];
 const CONTENT_INCLUDE: Includeable[] = [
   ...USER_INCLUDE,
@@ -352,6 +360,16 @@ const isoDate = (value: Date | string | null | undefined): string | null => {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
+export const serializeSocialMediaUser = (user: User | null | undefined) => user ? ({
+  id: user.id,
+  firstName: user.firstName,
+  lastName: user.lastName,
+  username: user.username,
+  profilePhotoUrl: user.profilePhotoUrl ?? null,
+  hasStoredProfilePhoto: Boolean(user.profilePhotoPath),
+  updatedAt: isoDate(user.updatedAt),
+}) : null;
+
 export const isSocialMediaContentTaskReady = (content: Pick<SocialMediaContent, 'status'>): boolean =>
   TASK_READY_STATUSES.includes(content.status);
 
@@ -387,9 +405,15 @@ export const serializeSocialMediaContent = (content: SocialMediaContent) => ({
   createdBy: content.createdBy,
   updatedBy: content.updatedBy,
   publishedBy: content.publishedBy,
+  producedBy: content.producedBy ?? null,
   publishedTaskLogId: content.publishedTaskLogId,
   createdByName: displayName(content.createdByUser as UserSummary | null | undefined),
   updatedByName: displayName(content.updatedByUser as UserSummary | null | undefined),
+  producedByName: displayName(content.producedByUser),
+  publishedByName: displayName(content.publishedByUser),
+  createdByUser: serializeSocialMediaUser(content.createdByUser),
+  producedByUser: serializeSocialMediaUser(content.producedByUser),
+  publishedByUser: serializeSocialMediaUser(content.publishedByUser),
   createdAt: isoDate(content.createdAt),
   updatedAt: isoDate(content.updatedAt),
 });

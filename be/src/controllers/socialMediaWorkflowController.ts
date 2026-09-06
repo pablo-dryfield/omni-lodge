@@ -1,7 +1,9 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { Response } from 'express';
-import { UniqueConstraintError, type Transaction } from 'sequelize';
+import { Op, UniqueConstraintError, type Transaction } from 'sequelize';
+import HttpError from '../errors/HttpError.js';
+import AuditLog from '../models/AuditLog.js';
 import SocialMediaContent from '../models/SocialMediaContent.js';
 import SocialMediaContentAsset, {
   SOCIAL_MEDIA_CONTENT_ASSET_KINDS,
@@ -11,6 +13,8 @@ import User from '../models/User.js';
 import {
   loadSocialMediaContent,
   serializeSocialMediaContent,
+  serializeSocialMediaUser,
+  SOCIAL_MEDIA_USER_ATTRIBUTES,
 } from './socialMediaContentController.js';
 import {
   checkSocialMediaProjectFolder,
@@ -22,6 +26,7 @@ import {
 } from '../services/socialMediaAssetStorageService.js';
 import {
   completeTaskForSocialMediaPublication,
+  reassignPublishedSocialMediaTaskDate,
   SocialMediaPublishTaskConflictError,
   syncPublishedSocialMediaTaskEvidence,
   type SocialMediaTaskCompletionResult,
@@ -101,10 +106,23 @@ const canCompleteAnotherUsersTask = (req: AuthenticatedRequest): boolean => {
   });
 };
 
-const parseDateOnly = (value: unknown): string => {
+const assertCanManageAttribution = (req: AuthenticatedRequest): void => {
+  if (!canCompleteAnotherUsersTask(req)) {
+    throw new SocialMediaWorkflowError('Only an Admin, Administrator, Manager, or Owner can reassign contributors.', 403);
+  }
+};
+
+const assertCanPublish = (req: AuthenticatedRequest): void => {
+  const roles = [req.authContext?.roleSlug, req.authContext?.userTypeSlug, req.authContext?.roleName];
+  if (roles.some((role) => normalizeRoleSlug(role)?.replace(/-/gu, '') === 'socialmedia')) {
+    throw new SocialMediaWorkflowError('The Social Media role can create and produce ideas, but cannot publish content.', 403);
+  }
+};
+
+const parseDateOnly = (value: unknown, label = 'planned date'): string => {
   const normalized = typeof value === 'string' ? value.trim() : '';
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) {
-    throw new SocialMediaWorkflowError('Choose a valid planned date.');
+    throw new SocialMediaWorkflowError(`Choose a valid ${label}.`);
   }
   const [year, month, day] = normalized.split('-').map(Number);
   const parsed = new Date(Date.UTC(year, month - 1, day));
@@ -113,7 +131,7 @@ const parseDateOnly = (value: unknown): string => {
     || parsed.getUTCMonth() !== month - 1
     || parsed.getUTCDate() !== day
   ) {
-    throw new SocialMediaWorkflowError('Choose a valid planned date.');
+    throw new SocialMediaWorkflowError(`Choose a valid ${label}.`);
   }
   return normalized;
 };
@@ -227,6 +245,7 @@ const resetMissingProjectFolder = async (
     driveProjectFolderId: null,
     driveProjectUrl: null,
     productionStartedAt: null,
+    producedBy: null,
     readyAt: null,
     updatedBy: actorId,
   }, { transaction });
@@ -322,12 +341,13 @@ const respondWithItem = async (res: Response, contentId: number): Promise<void> 
 const respondError = (res: Response, error: unknown, fallback: string): void => {
   if (
     error instanceof SocialMediaWorkflowError
+    || error instanceof HttpError
     || error instanceof SocialMediaResumableUploadPendingError
     || error instanceof SocialMediaAssetStorageValidationError
     || error instanceof SocialMediaProjectFolderCheckUnavailableError
     || error instanceof SocialMediaPublishTaskConflictError
   ) {
-    const status = error instanceof SocialMediaWorkflowError
+    const status = error instanceof SocialMediaWorkflowError || error instanceof HttpError
       ? error.status
       : error instanceof SocialMediaResumableUploadPendingError
         ? 409
@@ -398,6 +418,7 @@ export const startSocialMediaProduction = async (
       await content.update({
         status: 'in_production',
         productionStartedAt: new Date(),
+        producedBy: actorId,
         updatedBy: actorId,
       }, { transaction });
     });
@@ -996,6 +1017,7 @@ export const publishSocialMediaContent = async (
   try {
     const contentId = parseId(req.params.id);
     const actorId = requireActorId(req);
+    assertCanPublish(req);
     const platformLinks = normalizePublishLinks(req.body?.platformLinks);
     let taskCompletion: SocialMediaTaskCompletionResult | null = null;
     const folderGuard = await requireSequelize().transaction(async (transaction) => {
@@ -1071,6 +1093,7 @@ export const updatePublishedSocialMediaLinks = async (
   try {
     const contentId = parseId(req.params.id);
     const actorId = requireActorId(req);
+    assertCanPublish(req);
     const platformLinks = normalizePublishLinks(req.body?.platformLinks);
     await requireSequelize().transaction(async (transaction) => {
       const content = await loadLockedContent(contentId, transaction);
@@ -1102,5 +1125,152 @@ export const updatePublishedSocialMediaLinks = async (
     await respondWithItem(res, contentId);
   } catch (error) {
     respondError(res, error, 'Failed to update the Social Media publication links.');
+  }
+};
+
+export const updateSocialMediaPublicationDate = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    // Module update permission alone is not enough for historical corrections.
+    if (!canCompleteAnotherUsersTask(req)) {
+      throw new SocialMediaWorkflowError(
+        'Only an Admin, Administrator, Manager, or Owner can edit the publish date.',
+        403,
+      );
+    }
+    const contentId = parseId(req.params.id);
+    const publishedDate = parseDateOnly(req.body?.publishedDate, 'publish date');
+    const expectedPublishedAt = typeof req.body?.expectedPublishedAt === 'string'
+      ? new Date(req.body.expectedPublishedAt).getTime()
+      : NaN;
+    if (!Number.isFinite(expectedPublishedAt)) {
+      throw new SocialMediaWorkflowError('Refresh the board before editing the publish date.', 400);
+    }
+
+    const result = await requireSequelize().transaction(async (transaction) => {
+      const content = await loadLockedContent(contentId, transaction);
+      assertStatus(content, 'published', 'have its publish date edited');
+      if (!content.publishedAt || content.publishedAt.getTime() !== expectedPublishedAt) {
+        throw new SocialMediaWorkflowError(
+          'The publish date has changed since you opened this item. Refresh the board and try again.',
+          409,
+        );
+      }
+      const correction = await reassignPublishedSocialMediaTaskDate({
+        content,
+        actorId,
+        publishedDate,
+        transaction,
+      });
+      if (
+        content.publishedAt.getTime() !== correction.publishedAt.getTime()
+        || content.publishedTaskLogId !== correction.taskCompletion.taskLogId
+      ) {
+        await content.update({
+          publishedAt: correction.publishedAt,
+          publishedTaskLogId: correction.taskCompletion.taskLogId,
+          updatedBy: actorId,
+        }, { transaction });
+      }
+      return correction;
+    });
+    const content = await loadSocialMediaContent(contentId);
+    if (!content) throw new SocialMediaWorkflowError('Social Media content was not found.', 404);
+    res.status(200).json({
+      item: serializeSocialMediaContent(content),
+      previousTaskLogId: result.previousTaskLogId,
+      taskCompletion: result.taskCompletion,
+    });
+  } catch (error) {
+    respondError(res, error, 'Failed to update the Social Media publish date.');
+  }
+};
+
+export const listSocialMediaAttributionUsers = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    requireActorId(req);
+    assertCanManageAttribution(req);
+    const users = await User.findAll({
+      where: { status: true, approved: true },
+      attributes: SOCIAL_MEDIA_USER_ATTRIBUTES,
+      order: [['firstName', 'ASC'], ['lastName', 'ASC'], ['id', 'ASC']],
+    });
+    res.status(200).json({ items: users.map(serializeSocialMediaUser) });
+  } catch (error) {
+    respondError(res, error, 'Failed to load Social Media contributors.');
+  }
+};
+
+export const updateSocialMediaAttribution = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    assertCanManageAttribution(req);
+    const contentId = parseId(req.params.id);
+    const expectedUpdatedAt = typeof req.body?.expectedUpdatedAt === 'string'
+      ? new Date(req.body.expectedUpdatedAt).getTime()
+      : NaN;
+    if (!Number.isFinite(expectedUpdatedAt)) {
+      throw new SocialMediaWorkflowError('Refresh the board before reassigning contributors.');
+    }
+    const fields = ['createdBy', 'producedBy', 'publishedBy'] as const;
+    const changes: Partial<Record<typeof fields[number], number | null>> = {};
+    for (const field of fields) {
+      if (!Object.prototype.hasOwnProperty.call(req.body, field)) continue;
+      changes[field] = field === 'producedBy' && req.body[field] === null
+        ? null
+        : parseId(req.body[field], field);
+    }
+    await requireSequelize().transaction(async (transaction) => {
+      const content = await loadLockedContent(contentId, transaction);
+      if (content.updatedAt.getTime() !== expectedUpdatedAt) {
+        throw new SocialMediaWorkflowError('This idea has changed. Refresh the board before reassigning contributors.', 409);
+      }
+      if (content.status === 'archived') {
+        throw new SocialMediaWorkflowError('Archived content cannot be reassigned.', 409);
+      }
+      if ('producedBy' in changes && !content.productionStartedAt) {
+        throw new SocialMediaWorkflowError('Start production before assigning production credit.', 409);
+      }
+      if ('publishedBy' in changes && (content.status !== 'published' || !content.publishedAt)) {
+        throw new SocialMediaWorkflowError('Publish the content before assigning publication credit.', 409);
+      }
+      const previous = { createdBy: content.createdBy, producedBy: content.producedBy ?? null, publishedBy: content.publishedBy };
+      for (const field of fields) {
+        if (changes[field] === previous[field]) delete changes[field];
+      }
+      if (!Object.keys(changes).length) return;
+      const ids = [...new Set(Object.values(changes).filter((id): id is number => id != null))];
+      if (ids.length > 0) {
+        const users = await User.findAll({
+          where: { id: { [Op.in]: ids }, status: true, approved: true },
+          attributes: ['id'], transaction, lock: transaction.LOCK.SHARE,
+        });
+        if (users.length !== ids.length) {
+          throw new SocialMediaWorkflowError('Choose an active, approved user for each contributor.');
+        }
+      }
+      // Attribution is separate from who performed the authenticated action
+      // and from task/payroll ownership. Preserve both in the audit trail.
+      await content.update({ ...changes, updatedBy: actorId }, { transaction });
+      await AuditLog.create({
+        actorId,
+        action: 'social_media.attribution_changed',
+        entity: 'social_media_content',
+        entityId: String(content.id),
+        metaJson: { previous, current: { ...previous, ...changes }, publishedTaskLogId: content.publishedTaskLogId },
+      }, { transaction });
+    });
+    await respondWithItem(res, contentId);
+  } catch (error) {
+    respondError(res, error, 'Failed to reassign Social Media contributors.');
   }
 };

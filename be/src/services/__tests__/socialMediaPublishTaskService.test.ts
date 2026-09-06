@@ -10,6 +10,10 @@ jest.mock('../../models/AssistantManagerTaskTemplate.js', () => ({
   __esModule: true,
   default: {},
 }));
+jest.mock('../../models/AuditLog.js', () => ({ __esModule: true, default: { create: jest.fn() } }));
+jest.mock('../../models/StaffPayoutCollectionLog.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
+jest.mock('../../models/StaffPayoutLedger.js', () => ({ __esModule: true, default: { findOne: jest.fn(), update: jest.fn() } }));
+jest.mock('../../finance/models/VolunteerFundEntry.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../configService.js', () => ({
   getConfigValue: jest.fn(() => 'Europe/Warsaw'),
 }));

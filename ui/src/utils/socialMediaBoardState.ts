@@ -90,6 +90,34 @@ export const canAccessSocialMediaEditor = (
   return editor === "new" ? permissions.canCreate : permissions.canUpdate;
 };
 
+export const canEditSocialMediaPublicationDate = (
+  role: string | null | undefined,
+  canUpdate: boolean,
+): boolean => canUpdate && ["admin", "administrator", "manager", "owner"]
+  .includes(String(role ?? "").trim().toLowerCase());
+
+export const SOCIAL_MEDIA_PUBLICATION_TIMEZONE = "Europe/Warsaw";
+
+export const canPublishSocialMediaContent = (
+  role: string | null | undefined,
+  canUpdate: boolean,
+): boolean => canUpdate && String(role ?? "").trim().toLowerCase().replace(/[\s_-]+/gu, "") !== "socialmedia";
+
+/** Publication timestamps belong to the Task Planner's calendar day, not the browser's. */
+export const toSocialMediaPublicationDate = (value: string | Date | null): string | null => {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: SOCIAL_MEDIA_PUBLICATION_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const part = (type: string) => parts.find((entry) => entry.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
+};
+
 const normalizeStringArray = (value: unknown): string[] => {
   const entries = Array.isArray(value)
     ? value

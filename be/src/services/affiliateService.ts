@@ -10,6 +10,7 @@ import AffiliatePayoutLog from '../models/AffiliatePayoutLog.js';
 import StaffProfile from '../models/StaffProfile.js';
 import { getConfigValue, updateConfigValue } from './configService.js';
 import { fetchBookingUtmCatalog } from './bookings/bookingUtmCatalogService.js';
+import { fetchAffiliateBookingsWithPriorPubCrawl } from './affiliateBookingHistoryService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -188,14 +189,19 @@ const AFFILIATE_COMMISSION_TIMEZONE = 'Europe/Warsaw';
 
 export const getAffiliateCommissionEligibility = (
   sourceReceivedAt: string | null,
+  experienceDate: string | null,
   isCommissionPaid = false,
+  hasPriorPubCrawlBooking = false,
 ): { eligible: boolean; reason: string | null } => {
   // A recorded payout is an accounting fact. Later eligibility-rule changes must
   // not remove previously earned commission from historical payout reports.
   if (isCommissionPaid) {
     return { eligible: true, reason: null };
   }
-  if (!sourceReceivedAt) {
+  if (hasPriorPubCrawlBooking) {
+    return { eligible: false, reason: 'Previous Pub Crawl booking (matching email or phone)' };
+  }
+  if (!sourceReceivedAt || !experienceDate) {
     return { eligible: true, reason: null };
   }
   const parsed = dayjs(sourceReceivedAt).tz(AFFILIATE_COMMISSION_TIMEZONE);
@@ -203,8 +209,11 @@ export const getAffiliateCommissionEligibility = (
     return { eligible: true, reason: null };
   }
   const minutes = parsed.hour() * 60 + parsed.minute();
-  if (minutes >= AFFILIATE_COMMISSION_CUTOFF_MINUTES) {
-    return { eligible: false, reason: 'Booked after 20:45' };
+  if (
+    parsed.format('YYYY-MM-DD') === experienceDate &&
+    minutes >= AFFILIATE_COMMISSION_CUTOFF_MINUTES
+  ) {
+    return { eligible: false, reason: 'Same-day booking at or after 20:45' };
   }
   return { eligible: true, reason: null };
 };
@@ -688,7 +697,7 @@ const fetchAffiliateBookings = async (
   });
 
   return rows.map((row) => ({
-    id: row.id,
+    id: Number(row.id),
     platformBookingId: row.platformBookingId,
     platform: row.platform,
     productName: normalizeText(row.product?.name) ?? normalizeText(row.productName) ?? null,
@@ -816,7 +825,7 @@ export const getAffiliateOverview = async (params: {
       transaction: params.transaction,
     });
     payoutBookingRows.forEach((booking) => {
-      partySizeByBookingId.set(booking.id, resolvePartySizeTotal(booking));
+      partySizeByBookingId.set(Number(booking.id), resolvePartySizeTotal(booking));
     });
   }
 
@@ -836,11 +845,23 @@ export const getAffiliateOverview = async (params: {
     });
   });
 
+  const bookingsWithPriorPubCrawl = await fetchAffiliateBookingsWithPriorPubCrawl(
+    attributedBookings
+      .filter((booking) => !bookingPayoutMap.has(toAffiliateBookingKey(booking.affiliateUserId, booking.id)))
+      .map((booking) => booking.id),
+    params.transaction,
+  );
+
   const bookingsWithPayoutState = attributedBookings.map((booking) => {
     const payoutState = bookingPayoutMap.get(toAffiliateBookingKey(booking.affiliateUserId, booking.id)) ?? null;
     const payoutLogId = payoutState?.payoutLogId ?? null;
     const isCommissionPaid = payoutState != null;
-    const commissionEligibility = getAffiliateCommissionEligibility(booking.sourceReceivedAt, isCommissionPaid);
+    const commissionEligibility = getAffiliateCommissionEligibility(
+      booking.sourceReceivedAt,
+      booking.experienceDate,
+      isCommissionPaid,
+      bookingsWithPriorPubCrawl.has(Number(booking.id)),
+    );
     const calculatedCommissionAmount =
       booking.affiliateCommissionPerPerson != null && commissionEligibility.eligible
         ? normalizeMoney(booking.partySizeTotal * booking.affiliateCommissionPerPerson)

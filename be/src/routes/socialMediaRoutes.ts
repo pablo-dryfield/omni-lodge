@@ -4,6 +4,7 @@ import os from 'os';
 import { randomUUID } from 'crypto';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { authorizeModuleAction } from '../middleware/authorizationMiddleware.js';
+import { streamSocialMediaContributorPhoto } from '../controllers/socialMediaContributorPhotoController.js';
 import {
   archiveSocialMediaContent,
   createSocialMediaContent,
@@ -20,12 +21,15 @@ import {
   createSocialMediaProjectFolder,
   finalizeSocialMediaAssetUpload,
   initiateSocialMediaAssetUpload,
+  listSocialMediaAttributionUsers,
   markSocialMediaReady,
   planSocialMediaContent,
   publishSocialMediaContent,
   removeSocialMediaAsset,
   startSocialMediaProduction,
   updatePublishedSocialMediaLinks,
+  updateSocialMediaPublicationDate,
+  updateSocialMediaAttribution,
   uploadSocialMediaAsset,
 } from '../controllers/socialMediaWorkflowController.js';
 
@@ -82,6 +86,8 @@ const receiveAsset = (req: Request, res: Response, next: NextFunction): void => 
 
 router.use(authMiddleware);
 router.get('/content', viewGuard, listSocialMediaContent);
+router.get('/users/:id/profile-photo', viewGuard, streamSocialMediaContributorPhoto);
+router.get('/attribution-users', updateGuard, listSocialMediaAttributionUsers);
 router.get('/content/selectable', viewGuard, listSelectableSocialMediaContent);
 router.get('/content/:id/thumbnail', viewGuard, streamSocialMediaThumbnail);
 router.get('/content/:id', viewGuard, getSocialMediaContent);
@@ -99,6 +105,8 @@ router.delete('/content/:id/assets/:assetId', updateGuard, removeSocialMediaAsse
 router.post('/content/:id/ready', updateGuard, markSocialMediaReady);
 router.post('/content/:id/publish', updateGuard, publishSocialMediaContent);
 router.patch('/content/:id/publication-links', updateGuard, updatePublishedSocialMediaLinks);
+router.patch('/content/:id/publication-date', updateGuard, updateSocialMediaPublicationDate);
+router.patch('/content/:id/attribution', updateGuard, updateSocialMediaAttribution);
 router.delete('/content/:id/thumbnail', updateGuard, removeSocialMediaThumbnail);
 router.post('/content/:id/thumbnail', updateGuard, receiveThumbnail, uploadSocialMediaThumbnail);
 router.delete('/content/:id', deleteGuard, archiveSocialMediaContent);

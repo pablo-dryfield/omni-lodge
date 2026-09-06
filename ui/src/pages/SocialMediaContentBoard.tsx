@@ -72,25 +72,32 @@ import {
   usePublishSocialMediaContent,
   useRemoveSocialMediaThumbnail,
   useSocialMediaContentList,
+  useSocialMediaAttributionUsers,
   useStartSocialMediaProduction,
   useUpdateSocialMediaContent,
+  useUpdateSocialMediaAttribution,
+  useUpdateSocialMediaPublicationDate,
   useUpdateSocialMediaPublicationLinks,
   useUploadSocialMediaThumbnail,
   useUploadSocialMediaAsset,
 } from "../api/socialMedia";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
+import SocialMediaAttribution, { socialMediaPersonName } from "../components/socialMedia/SocialMediaAttribution";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import {
   buildSocialMediaEditorDraftStorageKey,
   canAccessSocialMediaEditor,
+  canEditSocialMediaPublicationDate,
+  canPublishSocialMediaContent,
   formatHashtag,
   normalizeHashtags,
   parseSocialMediaBoardUrlState,
   parseStoredSocialMediaEditorDraft,
   serializeSocialMediaEditorDraft,
   toSocialMediaDateOnly,
+  toSocialMediaPublicationDate,
   type SocialMediaBoardUrlState,
   writeSocialMediaBoardUrlState,
 } from "../utils/socialMediaBoardState";
@@ -137,7 +144,20 @@ type WorkflowDialog =
   | { type: "assets"; contentId: number }
   | { type: "thumbnail"; contentId: number }
   | { type: "publish"; contentId: number }
+  | { type: "publication-date"; contentId: number; expectedPublishedAt: string }
+  | {
+    type: "attribution";
+    contentId: number;
+    expectedUpdatedAt: string;
+    original: AttributionDraft;
+  }
   | null;
+
+type AttributionDraft = {
+  createdBy: string | null;
+  producedBy: string | null;
+  publishedBy: string | null;
+};
 
 type UploadProgressState = Record<string, number | null>;
 
@@ -176,19 +196,6 @@ const formatPlannedDate = (value: string | null): string | null => {
     day: "numeric",
     month: "short",
     year: "numeric",
-  }).format(parsed);
-};
-
-const formatPublishedDate = (value: string | null): string | null => {
-  if (!value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
   }).format(parsed);
 };
 
@@ -283,33 +290,40 @@ const SocialContentCard = ({
   item,
   canUpdate,
   canDelete,
+  canEditPublicationDate,
+  canPublish,
   busy,
   onEdit,
   onNext,
   onEditPlannedDate,
   onManageAssets,
   onEditPublicationLinks,
+  onEditPublicationDate,
+  onEditAttribution,
   onThumbnail,
   onArchive,
 }: {
   item: SocialMediaContentItem;
   canUpdate: boolean;
   canDelete: boolean;
+  canEditPublicationDate: boolean;
+  canPublish: boolean;
   busy: boolean;
   onEdit: () => void;
   onNext: () => void;
   onEditPlannedDate: () => void;
   onManageAssets: () => void;
   onEditPublicationLinks: () => void;
+  onEditPublicationDate: () => void;
+  onEditAttribution: () => void;
   onThumbnail: () => void;
   onArchive: () => void;
 }) => {
   const plannedLabel = formatPlannedDate(item.scheduledAt);
-  const publishedLabel = formatPublishedDate(item.publishedAt);
   const displayedHashtags = normalizeHashtags(item.hashtags);
   const publishedLinks = Object.entries(item.platformLinks ?? {})
     .filter(([, url]) => isSafeHttpUrl(url));
-  const actionLabel = nextActionLabel(item.status);
+  const actionLabel = item.status === "ready" && !canPublish ? null : nextActionLabel(item.status);
   const canEditPlannedDate = ["planned", "in_production", "ready", "published"]
     .includes(item.status);
   const canManageAssets = item.status === "in_production" || item.status === "ready";
@@ -350,9 +364,23 @@ const SocialContentCard = ({
                     Manage production files
                   </Menu.Item>
                 ) : null}
-                {canUpdate && item.status === "published" ? (
+                {canPublish && item.status === "published" ? (
                   <Menu.Item leftSection={<IconExternalLink size={15} />} onClick={onEditPublicationLinks}>
                     Edit published links
+                  </Menu.Item>
+                ) : null}
+                {canEditPublicationDate && item.status === "published" && item.publishedAt ? (
+                  <Menu.Item
+                    leftSection={<IconCalendar size={15} />}
+                    onClick={onEditPublicationDate}
+                    disabled={busy}
+                  >
+                    Edit publish date
+                  </Menu.Item>
+                ) : null}
+                {canEditPublicationDate && item.status !== "archived" ? (
+                  <Menu.Item leftSection={<IconUser size={15} />} onClick={onEditAttribution} disabled={busy}>
+                    Reassign people
                   </Menu.Item>
                 ) : null}
                 {canUpdate ? (
@@ -383,25 +411,11 @@ const SocialContentCard = ({
           </Text>
         ) : null}
         <Stack gap={5}>
-          <Group gap={6} wrap="nowrap">
-            <IconUser size={15} color="var(--mantine-color-gray-6)" />
-            <Text size="xs" c="dimmed" truncate>
-              Created by {item.createdByName || "Unknown user"}
-            </Text>
-          </Group>
           {plannedLabel ? (
             <Group gap={6} wrap="nowrap">
               <IconCalendar size={15} color="var(--mantine-color-gray-6)" />
               <Text size="xs" c="dimmed" truncate>
                 Planned for {plannedLabel}
-              </Text>
-            </Group>
-          ) : null}
-          {publishedLabel ? (
-            <Group gap={6} wrap="nowrap">
-              <IconExternalLink size={15} color="var(--mantine-color-gray-6)" />
-              <Text size="xs" c="dimmed" truncate>
-                Published {publishedLabel}
               </Text>
             </Group>
           ) : null}
@@ -412,6 +426,7 @@ const SocialContentCard = ({
             </Group>
           ) : null}
         </Stack>
+        <SocialMediaAttribution item={item} />
         {canUpdate && actionLabel ? (
           <Button
             fullWidth
@@ -463,7 +478,10 @@ const SocialContentCard = ({
 const SocialMediaContentBoard = () => {
   const dispatch = useAppDispatch();
   const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
+  const loggedUserRole = useAppSelector((state) => state.session.roleSlug || state.session.roleName);
   const moduleAccess = useModuleAccess(MODULE_SLUG);
+  const canEditPublicationDate = canEditSocialMediaPublicationDate(loggedUserRole, moduleAccess.canUpdate);
+  const canPublish = canPublishSocialMediaContent(loggedUserRole, moduleAccess.canUpdate);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -484,6 +502,8 @@ const SocialMediaContentBoard = () => {
   const readyMutation = useMarkSocialMediaReady();
   const publishMutation = usePublishSocialMediaContent();
   const updatePublicationLinksMutation = useUpdateSocialMediaPublicationLinks();
+  const updatePublicationDateMutation = useUpdateSocialMediaPublicationDate();
+  const updateAttributionMutation = useUpdateSocialMediaAttribution();
   const uploadThumbnailMutation = useUploadSocialMediaThumbnail();
   const removeThumbnailMutation = useRemoveSocialMediaThumbnail();
 
@@ -494,6 +514,15 @@ const SocialMediaContentBoard = () => {
   const [pageMessage, setPageMessage] = useState<string | null>(null);
   const [workflowDialog, setWorkflowDialog] = useState<WorkflowDialog>(null);
   const [plannedDate, setPlannedDate] = useState<Date | null>(null);
+  const [publicationDate, setPublicationDate] = useState<Date | null>(null);
+  const [attributionDraft, setAttributionDraft] = useState<AttributionDraft>({
+    createdBy: null,
+    producedBy: null,
+    publishedBy: null,
+  });
+  const attributionUsersQuery = useSocialMediaAttributionUsers({
+    enabled: canEditPublicationDate && workflowDialog?.type === "attribution",
+  });
   const [publishLinks, setPublishLinks] = useState({ instagram: "", tiktok: "" });
   const [busyId, setBusyId] = useState<number | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>({});
@@ -532,6 +561,25 @@ const SocialMediaContentBoard = () => {
   ), [allItems, workflowDialog]);
 
   const editorAuthorized = canAccessSocialMediaEditor(boardState.editor, moduleAccess);
+
+  const attributionUserOptions = useMemo(() => {
+    const options = new Map((attributionUsersQuery.data ?? []).map((person) => [
+      String(person.id),
+      { value: String(person.id), label: socialMediaPersonName(person) },
+    ]));
+    if (workflowItem) {
+      [
+        { id: workflowItem.createdBy, person: workflowItem.createdByUser, name: workflowItem.createdByName },
+        { id: workflowItem.producedBy, person: workflowItem.producedByUser, name: workflowItem.producedByName },
+        { id: workflowItem.publishedBy, person: workflowItem.publishedByUser, name: workflowItem.publishedByName },
+      ].forEach(({ id, person, name }) => {
+        if (id && !options.has(String(id))) {
+          options.set(String(id), { value: String(id), label: socialMediaPersonName(person, name || `User #${id}`) });
+        }
+      });
+    }
+    return Array.from(options.values()).sort((first, second) => first.label.localeCompare(second.label));
+  }, [attributionUsersQuery.data, workflowItem]);
 
   useEffect(() => {
     const editorKey = boardState.editor === null ? null : String(boardState.editor);
@@ -717,6 +765,7 @@ const SocialMediaContentBoard = () => {
   };
 
   const openPublishDialog = async (item: SocialMediaContentItem) => {
+    if (!canPublish) return;
     try {
       setBusyId(item.id);
       setWorkflowError(null);
@@ -777,6 +826,104 @@ const SocialMediaContentBoard = () => {
       showMobileStage(updatedItem.status);
     } catch (error) {
       setWorkflowError(getErrorMessage(error, "Unable to plan this idea."));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const openPublicationDateDialog = (item: SocialMediaContentItem) => {
+    if (!canEditPublicationDate || item.status !== "published" || !item.publishedAt) return;
+    // Capture the original timestamp once so background refreshes cannot overwrite
+    // the draft or silently accept another administrator's date change.
+    setPublicationDate(dateOnlyToPickerValue(toSocialMediaPublicationDate(item.publishedAt)));
+    setWorkflowDialog({
+      type: "publication-date",
+      contentId: item.id,
+      expectedPublishedAt: item.publishedAt,
+    });
+  };
+
+  const submitPublicationDate = async () => {
+    if (!workflowItem || workflowDialog?.type !== "publication-date") return;
+    if (!canEditPublicationDate) {
+      setWorkflowError("You do not have permission to edit publish dates.");
+      return;
+    }
+    const publishedDate = toSocialMediaDateOnly(publicationDate);
+    if (!publishedDate) {
+      setWorkflowError("Choose a publish date.");
+      return;
+    }
+    if (publishedDate > toSocialMediaPublicationDate(new Date())!) {
+      setWorkflowError("The publish date cannot be in the future.");
+      return;
+    }
+    try {
+      setBusyId(workflowItem.id);
+      setWorkflowError(null);
+      const result = await updatePublicationDateMutation.mutateAsync({
+        id: workflowItem.id,
+        publishedDate,
+        expectedPublishedAt: workflowDialog.expectedPublishedAt,
+      });
+      setWorkflowDialog(null);
+      setPageMessage(result.taskCompletion
+        ? `Publish date updated and linked to Task Planner task #${result.taskCompletion.taskLogId}.${
+          result.previousTaskLogId && result.previousTaskLogId !== result.taskCompletion.taskLogId
+            ? ` Previous task #${result.previousTaskLogId} reopened.`
+            : ""
+        }`
+        : "Publish date updated.");
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to update the publish date."));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const openAttributionDialog = (item: SocialMediaContentItem) => {
+    if (!canEditPublicationDate || item.status === "archived") return;
+    const original = {
+      createdBy: item.createdBy ? String(item.createdBy) : null,
+      producedBy: item.producedBy ? String(item.producedBy) : null,
+      publishedBy: item.publishedBy ? String(item.publishedBy) : null,
+    };
+    setAttributionDraft(original);
+    setWorkflowDialog({
+      type: "attribution",
+      contentId: item.id,
+      expectedUpdatedAt: item.updatedAt,
+      original,
+    });
+  };
+
+  const submitAttribution = async () => {
+    if (!workflowItem || workflowDialog?.type !== "attribution" || !canEditPublicationDate) return;
+    if (!attributionDraft.createdBy || (workflowItem.status === "published" && !attributionDraft.publishedBy)) {
+      setWorkflowError("Choose the creator and, for published content, the publisher.");
+      return;
+    }
+    try {
+      setBusyId(workflowItem.id);
+      setWorkflowError(null);
+      const { original } = workflowDialog;
+      await updateAttributionMutation.mutateAsync({
+        id: workflowItem.id,
+        expectedUpdatedAt: workflowDialog.expectedUpdatedAt,
+        ...(attributionDraft.createdBy !== original.createdBy
+          ? { createdBy: Number(attributionDraft.createdBy) }
+          : {}),
+        ...(workflowItem.productionStartedAt && attributionDraft.producedBy !== original.producedBy
+          ? { producedBy: attributionDraft.producedBy ? Number(attributionDraft.producedBy) : null }
+          : {}),
+        ...(workflowItem.status === "published" && attributionDraft.publishedBy !== original.publishedBy
+          ? { publishedBy: Number(attributionDraft.publishedBy) }
+          : {}),
+      });
+      setWorkflowDialog(null);
+      setPageMessage("Content contributors updated.");
+    } catch (error) {
+      setWorkflowError(getErrorMessage(error, "Unable to reassign the content contributors."));
     } finally {
       setBusyId(null);
     }
@@ -884,6 +1031,10 @@ const SocialMediaContentBoard = () => {
 
   const publish = async () => {
     if (!workflowItem) return;
+    if (!canPublish) {
+      setWorkflowError("Your role can prepare content, but cannot publish or edit published links.");
+      return;
+    }
     if (!publishLinks.instagram.trim() || !publishLinks.tiktok.trim()) {
       setWorkflowError("Add both the Instagram and TikTok links.");
       return;
@@ -943,6 +1094,8 @@ const SocialMediaContentBoard = () => {
         item.onVideoCaptions,
         item.platformCaption,
         item.createdByName ?? "",
+        item.producedByName ?? "",
+        item.publishedByName ?? "",
         ...item.hashtags,
       ].join(" ").toLowerCase().includes(search);
     });
@@ -1036,7 +1189,7 @@ const SocialMediaContentBoard = () => {
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
           <TextInput
             aria-label="Search social content"
-            placeholder="Search ideas, captions, hashtags, or creator"
+            placeholder="Search ideas, captions, hashtags, or people"
             leftSection={<IconSearch size={17} />}
             value={boardState.search}
             onChange={(event) => updateUrlState({ search: event.currentTarget.value })}
@@ -1124,12 +1277,16 @@ const SocialMediaContentBoard = () => {
                         item={item}
                         canUpdate={moduleAccess.canUpdate}
                         canDelete={moduleAccess.canDelete}
+                        canEditPublicationDate={canEditPublicationDate}
+                        canPublish={canPublish}
                         busy={busyId === item.id}
                         onEdit={() => updateUrlState({ editor: item.id })}
                         onNext={() => void handleNext(item)}
                         onEditPlannedDate={() => setWorkflowDialog({ type: "plan", contentId: item.id })}
                         onManageAssets={() => void openProductionFiles(item)}
                         onEditPublicationLinks={() => setWorkflowDialog({ type: "publish", contentId: item.id })}
+                        onEditPublicationDate={() => openPublicationDateDialog(item)}
+                        onEditAttribution={() => openAttributionDialog(item)}
                         onThumbnail={() => setWorkflowDialog({ type: "thumbnail", contentId: item.id })}
                         onArchive={() => void handleArchive(item)}
                       />
@@ -1333,6 +1490,134 @@ const SocialMediaContentBoard = () => {
             <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={planMutation.isPending}>Cancel</Button>
             <Button onClick={() => void submitPlan()} loading={planMutation.isPending}>
               {workflowItem?.status === "idea" ? "Move to Planned" : "Save date"}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={workflowDialog?.type === "attribution"}
+        onClose={() => !updateAttributionMutation.isPending && setWorkflowDialog(null)}
+        title="Reassign people"
+        size="min(460px, 94vw)"
+        centered
+        closeOnClickOutside={!updateAttributionMutation.isPending}
+        closeOnEscape={!updateAttributionMutation.isPending}
+        withCloseButton={!updateAttributionMutation.isPending}
+      >
+        <Stack gap="md">
+          {workflowError ? <Alert color="red">{workflowError}</Alert> : null}
+          <Text size="sm" fw={600}>{workflowItem?.title}</Text>
+          {attributionUsersQuery.isError ? (
+            <Alert color="red">
+              <Stack gap="xs">
+                <Text size="sm">Unable to load people for reassignment.</Text>
+                <Button variant="light" size="xs" onClick={() => void attributionUsersQuery.refetch()}>
+                  Try again
+                </Button>
+              </Stack>
+            </Alert>
+          ) : null}
+          <Select
+            label="Created by"
+            placeholder="Choose the creator"
+            data={attributionUserOptions}
+            value={attributionDraft.createdBy}
+            onChange={(createdBy) => setAttributionDraft((current) => ({ ...current, createdBy }))}
+            searchable
+            required
+            allowDeselect={false}
+            disabled={updateAttributionMutation.isPending || attributionUsersQuery.isLoading}
+            rightSection={attributionUsersQuery.isLoading ? <Loader size="xs" /> : undefined}
+            comboboxProps={{ withinPortal: true }}
+          />
+          <Select
+            label="Produced by"
+            placeholder={workflowItem?.productionStartedAt ? "Not assigned" : "Production has not started"}
+            data={attributionUserOptions}
+            value={attributionDraft.producedBy}
+            onChange={(producedBy) => setAttributionDraft((current) => ({ ...current, producedBy }))}
+            searchable
+            clearable
+            disabled={!workflowItem?.productionStartedAt || updateAttributionMutation.isPending || attributionUsersQuery.isLoading}
+            comboboxProps={{ withinPortal: true }}
+          />
+          <Select
+            label="Published by"
+            placeholder={workflowItem?.status === "published" ? "Choose the publisher" : "Not published yet"}
+            data={attributionUserOptions}
+            value={attributionDraft.publishedBy}
+            onChange={(publishedBy) => setAttributionDraft((current) => ({ ...current, publishedBy }))}
+            searchable
+            required={workflowItem?.status === "published"}
+            allowDeselect={false}
+            disabled={workflowItem?.status !== "published" || updateAttributionMutation.isPending || attributionUsersQuery.isLoading}
+            comboboxProps={{ withinPortal: true }}
+          />
+          <Text size="sm" c="dimmed">
+            This changes attribution only, not Task Planner ownership. The original stage dates are kept.
+          </Text>
+          <Group justify="flex-end" grow={Boolean(isMobile)}>
+            <Button variant="default" onClick={() => setWorkflowDialog(null)} disabled={updateAttributionMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void submitAttribution()}
+              loading={updateAttributionMutation.isPending}
+              disabled={!canEditPublicationDate || !workflowItem || !attributionDraft.createdBy
+                || (workflowItem.status === "published" && !attributionDraft.publishedBy)
+                || (workflowDialog?.type === "attribution"
+                  && JSON.stringify(attributionDraft) === JSON.stringify(workflowDialog.original))}
+            >
+              Save people
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={workflowDialog?.type === "publication-date"}
+        onClose={() => !updatePublicationDateMutation.isPending && setWorkflowDialog(null)}
+        title="Edit publish date"
+        size="min(460px, 94vw)"
+        centered
+        closeOnClickOutside={!updatePublicationDateMutation.isPending}
+        closeOnEscape={!updatePublicationDateMutation.isPending}
+        withCloseButton={!updatePublicationDateMutation.isPending}
+      >
+        <Stack gap="md">
+          {workflowError ? <Alert color="red">{workflowError}</Alert> : null}
+          <Text size="sm" fw={600}>{workflowItem?.title}</Text>
+          <DatePickerInput
+            label="Publish date"
+            placeholder="Choose a date"
+            value={publicationDate}
+            onChange={setPublicationDate}
+            maxDate={dateOnlyToPickerValue(toSocialMediaPublicationDate(new Date())) ?? undefined}
+            valueFormat="DD MMM YYYY"
+            required
+            clearable
+            disabled={updatePublicationDateMutation.isPending}
+          />
+          <Text size="sm" c="dimmed">
+            A matching social media task for the same person must exist on the new date.
+            Saving reopens the previous task, moves this content's notes and links,
+            and completes the matching task.
+          </Text>
+          <Group justify="flex-end" grow={Boolean(isMobile)}>
+            <Button
+              variant="default"
+              onClick={() => setWorkflowDialog(null)}
+              disabled={updatePublicationDateMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void submitPublicationDate()}
+              loading={updatePublicationDateMutation.isPending}
+              disabled={!canEditPublicationDate || !publicationDate || !workflowItem}
+            >
+              Save date
             </Button>
           </Group>
         </Stack>

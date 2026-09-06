@@ -7,6 +7,7 @@ jest.mock('../../models/SocialMediaContent.js', () => ({
     },
   },
 }));
+jest.mock('../../models/AuditLog.js', () => ({ __esModule: true, default: { create: jest.fn() } }));
 jest.mock('../../models/SocialMediaContentAsset.js', () => ({
   __esModule: true,
   SOCIAL_MEDIA_CONTENT_ASSET_KINDS: [
@@ -24,6 +25,8 @@ jest.mock('../../models/SocialMediaContentAsset.js', () => ({
 jest.mock('../socialMediaContentController.js', () => ({
   loadSocialMediaContent: jest.fn(),
   serializeSocialMediaContent: jest.fn(),
+  serializeSocialMediaUser: jest.fn((user) => ({ id: user.id })),
+  SOCIAL_MEDIA_USER_ATTRIBUTES: ['id', 'firstName', 'lastName'],
 }));
 jest.mock('../../services/socialMediaAssetStorageService.js', () => ({
   SocialMediaAssetStorageValidationError:
@@ -39,6 +42,7 @@ jest.mock('../../services/socialMediaPublishTaskService.js', () => ({
   SocialMediaPublishTaskConflictError:
     class SocialMediaPublishTaskConflictError extends Error {},
   completeTaskForSocialMediaPublication: jest.fn(),
+  reassignPublishedSocialMediaTaskDate: jest.fn(),
   syncPublishedSocialMediaTaskEvidence: jest.fn(),
 }));
 jest.mock('../../services/socialMediaResumableUploadService.js', () => ({
@@ -61,8 +65,10 @@ jest.mock('../../utils/logger.js', () => ({
 
 import type { Response } from 'express';
 import { UniqueConstraintError } from 'sequelize';
+import HttpError from '../../errors/HttpError';
 import UserModelStub from '../../__mocks__/sequelizeModelStub';
 import SocialMediaContent from '../../models/SocialMediaContent';
+import AuditLog from '../../models/AuditLog';
 import SocialMediaContentAsset from '../../models/SocialMediaContentAsset';
 import {
   checkSocialMediaProjectFolder,
@@ -74,6 +80,8 @@ import {
 } from '../../services/socialMediaAssetStorageService';
 import {
   completeTaskForSocialMediaPublication,
+  reassignPublishedSocialMediaTaskDate,
+  SocialMediaPublishTaskConflictError,
   syncPublishedSocialMediaTaskEvidence,
 } from '../../services/socialMediaPublishTaskService';
 import {
@@ -99,6 +107,9 @@ import {
   removeSocialMediaAsset,
   startSocialMediaProduction,
   updatePublishedSocialMediaLinks,
+  updateSocialMediaPublicationDate,
+  updateSocialMediaAttribution,
+  listSocialMediaAttributionUsers,
   uploadSocialMediaAsset,
 } from '../socialMediaWorkflowController';
 
@@ -109,12 +120,15 @@ const mockFindAsset = SocialMediaContentAsset.findOne as jest.Mock;
 const mockCreateAsset = SocialMediaContentAsset.create as jest.Mock;
 const mockDestroyAssets = SocialMediaContentAsset.destroy as jest.Mock;
 const mockFindUserByPk = jest.fn();
+const mockFindUsers = jest.fn();
 (UserModelStub as unknown as { findByPk: jest.Mock }).findByPk = mockFindUserByPk;
+(UserModelStub as unknown as { findAll: jest.Mock }).findAll = mockFindUsers;
 const mockDeleteAssetFromDrive = deleteSocialMediaAsset as jest.Mock;
 const mockCheckProjectFolder = checkSocialMediaProjectFolder as jest.Mock;
 const mockEnsureProjectFolder = ensureSocialMediaProjectFolder as jest.Mock;
 const mockStoreAsset = storeSocialMediaAsset as jest.Mock;
 const mockCompleteTask = completeTaskForSocialMediaPublication as jest.Mock;
+const mockReassignPublication = reassignPublishedSocialMediaTaskDate as jest.Mock;
 const mockSyncPublishedTaskEvidence = syncPublishedSocialMediaTaskEvidence as jest.Mock;
 const mockInitiateUpload = initiateSocialMediaResumableUpload as jest.Mock;
 const mockFindRecoverableUploads = findRecoverableSocialMediaResumableUploads as jest.Mock;
@@ -151,6 +165,7 @@ const buildContent = (overrides: Record<string, unknown> = {}) => {
     scheduledAt: null,
     productionStartedAt: null,
     readyAt: null,
+    producedBy: null,
     publishedAt: null,
     publishedBy: null,
     publishedTaskLogId: null,
@@ -158,6 +173,8 @@ const buildContent = (overrides: Record<string, unknown> = {}) => {
     driveProjectUrl: null,
     platformLinks: {},
     thumbnailUrl: null,
+    createdBy: 7,
+    updatedAt: new Date('2026-09-05T10:00:00.000Z'),
     ...overrides,
   };
   content.update = jest.fn(async (values: Record<string, unknown>) => {
@@ -166,6 +183,242 @@ const buildContent = (overrides: Record<string, unknown> = {}) => {
   });
   return content;
 };
+
+describe('Social Media publication-date correction', () => {
+  const originalDate = new Date('2026-09-05T14:30:00.000Z');
+  const correctedDate = new Date('2026-09-04T14:30:00.000Z');
+  const taskCompletion = { taskLogId: 102, userId: 7, taskDate: '2026-09-04', status: 'completed' };
+  const makeRequest = (
+    body: Record<string, unknown> = {},
+    auth: Record<string, unknown> | null = { roleSlug: 'manager' },
+  ) => ({
+    params: { id: '41' },
+    body: { publishedDate: '2026-09-04', expectedPublishedAt: originalDate.toISOString(), ...body },
+    ...(auth ? { authContext: { id: 9, ...auth } } : {}),
+  } as unknown as AuthenticatedRequest);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockReassignPublication.mockReset();
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback(transaction));
+    mockReassignPublication.mockResolvedValue({
+      previousTaskLogId: 101, taskCompletion, publishedAt: correctedDate,
+    });
+    mockSerializeContent.mockImplementation((content) => ({ id: content.id, publishedAt: content.publishedAt }));
+  });
+
+  it.each(['admin', 'administrator', 'manager', 'owner'])('allows %s to correct the date atomically', async (roleSlug) => {
+    const content = buildContent({ status: 'published', publishedAt: originalDate, publishedBy: 7, publishedTaskLogId: 101 });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+
+    await updateSocialMediaPublicationDate(makeRequest({}, { roleSlug }), response);
+
+    expect(mockReassignPublication).toHaveBeenCalledWith({ content, actorId: 9, publishedDate: '2026-09-04', transaction });
+    expect(content.update).toHaveBeenCalledWith({ publishedAt: correctedDate, publishedTaskLogId: 102, updatedBy: 9 }, { transaction });
+    expect(content.publishedBy).toBe(7);
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(response.json).toHaveBeenCalledWith({
+      item: { id: 41, publishedAt: correctedDate }, previousTaskLogId: 101, taskCompletion,
+    });
+  });
+
+  it.each(['assistant-manager', 'pub-crawl-guide', 'staff', ''])('denies %s despite module update access', async (roleSlug) => {
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest({}, { roleSlug }), response);
+    expect(response.status).toHaveBeenCalledWith(403);
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockReassignPublication).not.toHaveBeenCalled();
+  });
+
+  it('requires authentication', async () => {
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest({}, null), response);
+    expect(response.status).toHaveBeenCalledWith(401);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['2026-02-30', '2026-09-04T12:00:00Z', '', null])('rejects invalid publish date %s', async (publishedDate) => {
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest({ publishedDate }), response);
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, '', null, 1234, 'invalid'])('requires an original publication timestamp: %s', async (expectedPublishedAt) => {
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest({ expectedPublishedAt }), response);
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(mockReassignPublication).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale edits before changing either task or the content', async () => {
+    const content = buildContent({ status: 'published', publishedAt: correctedDate, publishedTaskLogId: 102 });
+    mockFindByPk.mockResolvedValue(content);
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest(), response);
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(mockReassignPublication).not.toHaveBeenCalled();
+    expect(content.update).not.toHaveBeenCalled();
+  });
+
+  it('does not correct unpublished content', async () => {
+    const content = buildContent({ status: 'ready' });
+    mockFindByPk.mockResolvedValue(content);
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest(), response);
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(mockReassignPublication).not.toHaveBeenCalled();
+    expect(content.update).not.toHaveBeenCalled();
+  });
+
+  it('does not save when no matching task exists', async () => {
+    const content = buildContent({ status: 'published', publishedAt: originalDate, publishedTaskLogId: 101 });
+    mockFindByPk.mockResolvedValue(content);
+    mockReassignPublication.mockRejectedValue(new SocialMediaPublishTaskConflictError('A matching task is required.'));
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest(), response);
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(response.json).toHaveBeenCalledWith({ message: 'A matching task is required.' });
+    expect(content.update).not.toHaveBeenCalled();
+  });
+
+  it('returns service validation errors without hiding them as server failures', async () => {
+    const content = buildContent({ status: 'published', publishedAt: originalDate, publishedTaskLogId: 101 });
+    mockFindByPk.mockResolvedValue(content);
+    mockReassignPublication.mockRejectedValue(new HttpError(400, 'The publish date cannot be in the future.'));
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest(), response);
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(content.update).not.toHaveBeenCalled();
+  });
+
+  it('leaves an unchanged date untouched', async () => {
+    const content = buildContent({ status: 'published', publishedAt: originalDate, publishedTaskLogId: 101 });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    mockReassignPublication.mockResolvedValue({
+      previousTaskLogId: 101, taskCompletion: { ...taskCompletion, taskLogId: 101, taskDate: '2026-09-05' }, publishedAt: originalDate,
+    });
+    const response = createResponse();
+    await updateSocialMediaPublicationDate(makeRequest({ publishedDate: '2026-09-05' }), response);
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(content.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('Social Media attribution and producer permissions', () => {
+  const updatedAt = '2026-09-05T10:00:00.000Z';
+  const requestFor = (body: Record<string, unknown> = {}, roleSlug = 'manager') => ({
+    params: { id: '41' }, body: { expectedUpdatedAt: updatedAt, ...body },
+    authContext: { id: 9, roleSlug },
+  } as unknown as AuthenticatedRequest);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback(transaction));
+    mockFindUsers.mockResolvedValue([{ id: 12 }]);
+  });
+
+  it.each(['admin', 'administrator', 'manager', 'owner'])('allows %s to reassign contributors with an audit, without moving task ownership', async (role) => {
+    const content = buildContent({ status: 'published', publishedAt: new Date(updatedAt), producedBy: 7,
+      publishedBy: 7, publishedTaskLogId: 101, productionStartedAt: new Date(updatedAt) });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+    await updateSocialMediaAttribution(requestFor({ createdBy: 12, producedBy: 12, publishedBy: 12 }, role), response);
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(content.update).toHaveBeenCalledWith({ createdBy: 12, producedBy: 12, publishedBy: 12, updatedBy: 9 }, { transaction });
+    expect(content.publishedTaskLogId).toBe(101);
+    expect(mockReassignPublication).not.toHaveBeenCalled();
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 9, action: 'social_media.attribution_changed',
+      metaJson: { previous: { createdBy: 7, producedBy: 7, publishedBy: 7 },
+        current: { createdBy: 12, producedBy: 12, publishedBy: 12 }, publishedTaskLogId: 101 },
+    }), { transaction });
+  });
+
+  it.each(['social-media', 'assistant-manager', 'guide'])('blocks %s from contributor reassignment and the user selector', async (role) => {
+    for (const handler of [updateSocialMediaAttribution, listSocialMediaAttributionUsers]) {
+      const response = createResponse();
+      await handler(requestFor({ createdBy: 12 }, role), response);
+      expect(response.status).toHaveBeenCalledWith(403);
+    }
+    expect(mockFindUsers).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('returns minimal user options only to a manager', async () => {
+    const response = createResponse();
+    await listSocialMediaAttributionUsers(requestFor(), response);
+    expect(mockFindUsers).toHaveBeenCalledWith(expect.objectContaining({ where: { status: true, approved: true } }));
+    expect(response.json).toHaveBeenCalledWith({ items: [{ id: 12 }] });
+  });
+
+  it('rejects stale attribution drafts without changing the item', async () => {
+    const content = buildContent({ updatedAt: new Date('2026-09-05T11:00:00Z') });
+    mockFindByPk.mockResolvedValue(content);
+    const response = createResponse();
+    await updateSocialMediaAttribution(requestFor({ createdBy: 12 }), response);
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(content.update).not.toHaveBeenCalled();
+    expect(AuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each([{ producedBy: 12 }, { publishedBy: 12 }])('does not invent credits for a workflow stage not reached: %j', async (changes) => {
+    const content = buildContent();
+    mockFindByPk.mockResolvedValue(content);
+    const response = createResponse();
+    await updateSocialMediaAttribution(requestFor(changes), response);
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(content.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects nonexistent or inactive contributors', async () => {
+    const content = buildContent();
+    mockFindByPk.mockResolvedValue(content);
+    mockFindUsers.mockResolvedValue([]);
+    const response = createResponse();
+    await updateSocialMediaAttribution(requestFor({ createdBy: 12 }), response);
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(content.update).not.toHaveBeenCalled();
+  });
+
+  it('allows an unchanged inactive contributor without requiring them to be selected again', async () => {
+    const content = buildContent();
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+    await updateSocialMediaAttribution(requestFor({ createdBy: 7 }), response);
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(content.update).not.toHaveBeenCalled();
+    expect(mockFindUsers).not.toHaveBeenCalled();
+  });
+
+  it('records the Social Media user producing another user’s idea and preserves that producer on retries', async () => {
+    const content = buildContent({ status: 'planned', createdBy: 7 });
+    mockFindByPk.mockResolvedValue(content);
+    mockLoadContent.mockResolvedValue(content);
+    const response = createResponse();
+    await startSocialMediaProduction(requestFor({}, 'social-media'), response);
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(content.producedBy).toBe(9);
+    expect(content.createdBy).toBe(7);
+    await startSocialMediaProduction(requestFor({}, 'manager'), createResponse());
+    expect(content.update).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['social-media', 'Social Media', 'social_media', 'socialmedia'])('blocks %s from publishing and changing live links', async (role) => {
+    for (const handler of [publishSocialMediaContent, updatePublishedSocialMediaLinks]) {
+      const response = createResponse();
+      await handler(requestFor({}, role), response);
+      expect(response.status).toHaveBeenCalledWith(403);
+    }
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockCompleteTask).not.toHaveBeenCalled();
+  });
+});
 
 describe('Social Media production workflow controller', () => {
   beforeEach(() => {
@@ -673,6 +926,7 @@ describe('Social Media production workflow controller', () => {
         driveProjectFolderId: null,
         driveProjectUrl: null,
         productionStartedAt: null,
+        producedBy: null,
         readyAt: null,
         updatedBy: 7,
       }, { transaction });

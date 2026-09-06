@@ -43,6 +43,9 @@ jest.mock('../../controllers/socialMediaContentController.js', () => {
     uploadSocialMediaThumbnail: jest.fn(respond),
   };
 });
+jest.mock('../../controllers/socialMediaContributorPhotoController.js', () => ({
+  streamSocialMediaContributorPhoto: jest.fn((_req: AuthenticatedRequest, res: Response) => res.status(204).send()),
+}));
 
 jest.mock('../../controllers/socialMediaWorkflowController.js', () => {
   const respond = jest.fn((_req: AuthenticatedRequest, res: Response) => res.status(204).send());
@@ -51,12 +54,15 @@ jest.mock('../../controllers/socialMediaWorkflowController.js', () => {
     createSocialMediaProjectFolder: jest.fn(respond),
     finalizeSocialMediaAssetUpload: jest.fn(respond),
     initiateSocialMediaAssetUpload: jest.fn(respond),
+    listSocialMediaAttributionUsers: jest.fn(respond),
     markSocialMediaReady: jest.fn(respond),
     planSocialMediaContent: jest.fn(respond),
     publishSocialMediaContent: jest.fn(respond),
     removeSocialMediaAsset: jest.fn(respond),
     startSocialMediaProduction: jest.fn(respond),
     updatePublishedSocialMediaLinks: jest.fn(respond),
+    updateSocialMediaPublicationDate: jest.fn(respond),
+    updateSocialMediaAttribution: jest.fn(respond),
     uploadSocialMediaAsset: jest.fn(respond),
   };
 });
@@ -78,6 +84,9 @@ import {
   removeSocialMediaAsset,
   startSocialMediaProduction,
   updatePublishedSocialMediaLinks,
+  updateSocialMediaPublicationDate,
+  updateSocialMediaAttribution,
+  listSocialMediaAttributionUsers,
   uploadSocialMediaAsset,
 } from '../../controllers/socialMediaWorkflowController';
 import socialMediaRoutes from '../socialMediaRoutes';
@@ -91,6 +100,28 @@ const buildApp = () => {
 
 describe('Social Media route authorization', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it('requires update access for attribution changes and contributor options', async () => {
+    const app = buildApp();
+    for (const actions of ['view', 'update']) {
+      const results = await Promise.all([
+        request(app).patch('/api/social-media/content/41/attribution'),
+        request(app).get('/api/social-media/attribution-users'),
+      ].map((pending) => pending.set('x-test-user', '9').set('x-test-actions', actions)));
+      expect(results.map((result) => result.status)).toEqual(actions === 'update' ? [204, 204] : [403, 403]);
+    }
+    expect(updateSocialMediaAttribution).toHaveBeenCalledTimes(1);
+    expect(listSocialMediaAttributionUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses Social Media view permission for contributor avatars, without granting user-directory access', async () => {
+    const app = buildApp();
+    const forbidden = await request(app).get('/api/social-media/users/9/profile-photo').set('x-test-user', '9');
+    const allowed = await request(app).get('/api/social-media/users/9/profile-photo')
+      .set('x-test-user', '9').set('x-test-actions', 'view');
+    expect(forbidden.status).toBe(403);
+    expect(allowed.status).toBe(204);
+  });
 
   it('requires an authenticated session before checking permissions', async () => {
     const response = await request(buildApp()).get('/api/social-media/content');
@@ -156,12 +187,13 @@ describe('Social Media route authorization', () => {
       request(app).post('/api/social-media/content/41/ready'),
       request(app).post('/api/social-media/content/41/publish'),
       request(app).patch('/api/social-media/content/41/publication-links'),
+      request(app).patch('/api/social-media/content/41/publication-date'),
     ].map((pendingRequest) => pendingRequest
       .set('x-test-user', '9')
       .set('x-test-actions', 'view')));
 
     expect(forbidden.map((response) => response.status)).toEqual([
-      403, 403, 403, 403, 403, 403, 403, 403, 403, 403, 403,
+      403, 403, 403, 403, 403, 403, 403, 403, 403, 403, 403, 403,
     ]);
     expect(planSocialMediaContent).not.toHaveBeenCalled();
     expect(startSocialMediaProduction).not.toHaveBeenCalled();
@@ -174,6 +206,7 @@ describe('Social Media route authorization', () => {
     expect(markSocialMediaReady).not.toHaveBeenCalled();
     expect(publishSocialMediaContent).not.toHaveBeenCalled();
     expect(updatePublishedSocialMediaLinks).not.toHaveBeenCalled();
+    expect(updateSocialMediaPublicationDate).not.toHaveBeenCalled();
 
     const allowed = await Promise.all([
       request(app).post('/api/social-media/content/41/plan'),
@@ -187,12 +220,13 @@ describe('Social Media route authorization', () => {
       request(app).post('/api/social-media/content/41/ready'),
       request(app).post('/api/social-media/content/41/publish'),
       request(app).patch('/api/social-media/content/41/publication-links'),
+      request(app).patch('/api/social-media/content/41/publication-date'),
     ].map((pendingRequest) => pendingRequest
       .set('x-test-user', '9')
       .set('x-test-actions', 'update')));
 
     expect(allowed.map((response) => response.status)).toEqual([
-      204, 204, 204, 204, 204, 204, 204, 204, 204, 204, 204,
+      204, 204, 204, 204, 204, 204, 204, 204, 204, 204, 204, 204,
     ]);
     expect(planSocialMediaContent).toHaveBeenCalledTimes(1);
     expect(startSocialMediaProduction).toHaveBeenCalledTimes(1);
@@ -205,5 +239,6 @@ describe('Social Media route authorization', () => {
     expect(markSocialMediaReady).toHaveBeenCalledTimes(1);
     expect(publishSocialMediaContent).toHaveBeenCalledTimes(1);
     expect(updatePublishedSocialMediaLinks).toHaveBeenCalledTimes(1);
+    expect(updateSocialMediaPublicationDate).toHaveBeenCalledTimes(1);
   });
 });

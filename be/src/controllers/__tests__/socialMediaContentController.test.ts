@@ -42,6 +42,8 @@ import {
   archiveSocialMediaContent,
   createSocialMediaContent,
   listSelectableSocialMediaContent,
+  serializeSocialMediaContent,
+  serializeSocialMediaUser,
   streamSocialMediaThumbnail,
   updateSocialMediaContent,
   uploadSocialMediaThumbnail,
@@ -216,6 +218,105 @@ describe('Social Media content controller', () => {
       publishedAt: null,
       platformLinks: {},
     }));
+  });
+
+  it('attributes a new idea to the authenticated creator despite forged identity fields', async () => {
+    const record = buildRecord({ status: 'idea', producedBy: null, publishedBy: null });
+    mockCreate.mockResolvedValue(record);
+    mockFindByPk.mockResolvedValue(record);
+    const response = createResponse();
+    await createSocialMediaContent({
+      body: completeBody({
+        createdBy: 44,
+        producedBy: 45,
+        publishedBy: 46,
+        updatedBy: 47,
+        productionStartedAt: '2026-08-01T12:00:00Z',
+        readyAt: '2026-08-02T12:00:00Z',
+        publishedAt: '2026-08-03T12:00:00Z',
+        createdByUser: { id: 44, firstName: 'Forged creator' },
+      }),
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(response.status).toHaveBeenCalledWith(201);
+    const createdValues = mockCreate.mock.calls[0][0];
+    expect(createdValues).toEqual(expect.objectContaining({ createdBy: 7, updatedBy: 7, publishedAt: null }));
+    for (const key of ['producedBy', 'publishedBy', 'productionStartedAt', 'readyAt', 'createdByUser']) {
+      expect(createdValues).not.toHaveProperty(key);
+    }
+  });
+
+  it.each(['createdBy', 'producedBy', 'publishedBy'])('rejects generic edits to %s attribution', async (field) => {
+    const record = buildRecord({ status: 'ready', producedBy: 8, publishedBy: null });
+    mockFindByPk.mockResolvedValue(record);
+    const response = createResponse();
+
+    await updateSocialMediaContent({
+      params: { id: '41' },
+      body: { title: 'Revised title', [field]: 44 },
+      authContext: { id: 99, roleSlug: 'owner' },
+    } as unknown as AuthenticatedRequest, response);
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(record.update).not.toHaveBeenCalled();
+  });
+
+  it('returns creator, producer, and publisher identities with safe photo metadata and workflow timestamps', () => {
+    const user = (id: number, overrides: Record<string, unknown> = {}) => ({
+      id, firstName: `Person ${id}`, lastName: 'Staff', username: `user-${id}`,
+      profilePhotoUrl: `https://images.example/user-${id}.jpg`,
+      profilePhotoPath: `private/profile-photos/${id}/original.jpg`,
+      password: 'private-password-hash', email: `private-${id}@example.com`,
+      updatedAt: new Date('2026-09-01T09:00:00.000Z'),
+      ...overrides,
+    });
+    const record = buildRecord({
+      createdBy: 7, producedBy: 8, publishedBy: 9,
+      createdByUser: user(7),
+      producedByUser: user(8, { profilePhotoPath: null }),
+      publishedByUser: user(9, { firstName: '', lastName: '', profilePhotoUrl: null }),
+      productionStartedAt: new Date('2026-09-01T10:00:00.000Z'),
+      readyAt: '2026-09-02T12:00:00+02:00',
+      publishedAt: new Date('2026-09-03T10:00:00.000Z'),
+    });
+
+    const serialized = serializeSocialMediaContent(record as unknown as SocialMediaContent);
+    expect(serialized).toEqual(expect.objectContaining({
+      createdBy: 7, producedBy: 8, publishedBy: 9,
+      createdByName: 'Person 7 Staff', producedByName: 'Person 8 Staff', publishedByName: 'user-9',
+      createdAt: '2026-09-01T08:00:00.000Z', updatedAt: '2026-09-01T08:00:00.000Z',
+      productionStartedAt: '2026-09-01T10:00:00.000Z', readyAt: '2026-09-02T10:00:00.000Z',
+      publishedAt: '2026-09-03T10:00:00.000Z',
+    }));
+    expect(serialized.createdByUser).toEqual({
+      id: 7, firstName: 'Person 7', lastName: 'Staff', username: 'user-7',
+      profilePhotoUrl: 'https://images.example/user-7.jpg', hasStoredProfilePhoto: true,
+      updatedAt: '2026-09-01T09:00:00.000Z',
+    });
+    expect(serialized.producedByUser).toEqual(expect.objectContaining({ hasStoredProfilePhoto: false }));
+    expect(serialized.publishedByUser).toEqual(expect.objectContaining({ profilePhotoUrl: null, hasStoredProfilePhoto: true }));
+    for (const identity of [serialized.createdByUser, serialized.producedByUser, serialized.publishedByUser]) {
+      expect(identity).not.toHaveProperty('profilePhotoPath');
+      expect(identity).not.toHaveProperty('password');
+      expect(identity).not.toHaveProperty('email');
+    }
+    expect(JSON.stringify(serialized)).not.toContain('private/profile-photos/');
+  });
+
+  it('keeps unknown legacy producer identity and unavailable user records null without guessing', () => {
+    const record = buildRecord({
+      createdBy: 7, producedBy: null, publishedBy: 9,
+      createdByUser: null, producedByUser: undefined, publishedByUser: null,
+      productionStartedAt: null, readyAt: null, publishedAt: null,
+    });
+    expect(serializeSocialMediaContent(record as unknown as SocialMediaContent)).toEqual(expect.objectContaining({
+      createdBy: 7, producedBy: null, publishedBy: 9,
+      createdByUser: null, producedByUser: null, publishedByUser: null,
+      createdByName: null, producedByName: null, publishedByName: null,
+      productionStartedAt: null, readyAt: null, publishedAt: null,
+    }));
+    expect(serializeSocialMediaUser(undefined)).toBeNull();
   });
 
   it('includes ideas in selector results and marks them as not ready for task completion', async () => {

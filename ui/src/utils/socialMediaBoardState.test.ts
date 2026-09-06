@@ -1,6 +1,8 @@
 import {
   buildSocialMediaEditorDraftStorageKey,
   canAccessSocialMediaEditor,
+  canEditSocialMediaPublicationDate,
+  canPublishSocialMediaContent,
   formatHashtag,
   normalizeHashtags,
   parseSocialMediaBoardUrlState,
@@ -8,6 +10,7 @@ import {
   resolveEditorAfterMediaFailure,
   serializeSocialMediaEditorDraft,
   toSocialMediaDateOnly,
+  toSocialMediaPublicationDate,
   writeSocialMediaBoardUrlState,
 } from "./socialMediaBoardState";
 
@@ -149,5 +152,45 @@ describe("social media planned dates", () => {
   it("rejects impossible calendar dates", () => {
     expect(toSocialMediaDateOnly("2026-02-29")).toBeNull();
     expect(toSocialMediaDateOnly("not-a-date")).toBeNull();
+  });
+});
+
+describe("social media publication date editing", () => {
+  it.each(["Admin", "administrator", " Manager ", "owner"])(
+    "allows %s only with Social Media update permission",
+    (role) => {
+      expect(canEditSocialMediaPublicationDate(role, true)).toBe(true);
+      expect(canEditSocialMediaPublicationDate(role, false)).toBe(false);
+    },
+  );
+
+  it.each([null, undefined, "", "assistant-manager", "staff", "volunteer"])(
+    "rejects non-management role %s even with update permission",
+    (role) => expect(canEditSocialMediaPublicationDate(role, true)).toBe(false),
+  );
+
+  it("uses the Warsaw task day near UTC midnight in summer and winter", () => {
+    expect(toSocialMediaPublicationDate("2026-09-04T22:30:00.000Z")).toBe("2026-09-05");
+    expect(toSocialMediaPublicationDate("2026-01-04T22:30:00.000Z")).toBe("2026-01-04");
+    expect(toSocialMediaPublicationDate("2026-01-04T23:30:00.000Z")).toBe("2026-01-05");
+  });
+
+  it("uses the same Warsaw date conversion for today and saved publication timestamps", () => {
+    const instant = "2026-09-04T22:30:00.000Z";
+    expect(toSocialMediaPublicationDate(new Date(instant))).toBe(toSocialMediaPublicationDate(instant));
+    expect(toSocialMediaPublicationDate(null)).toBeNull();
+    expect(toSocialMediaPublicationDate("not-a-date")).toBeNull();
+  });
+});
+
+describe("social media publishing access", () => {
+  it.each(["Social Media", "social-media", "social_media", "SOCIALMEDIA"])(
+    "prevents %s from publishing even with general update permission",
+    (role) => expect(canPublishSocialMediaContent(role, true)).toBe(false),
+  );
+
+  it("retains publishing for other roles with update permission", () => {
+    expect(canPublishSocialMediaContent("manager", true)).toBe(true);
+    expect(canPublishSocialMediaContent("manager", false)).toBe(false);
   });
 });

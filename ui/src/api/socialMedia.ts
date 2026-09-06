@@ -23,6 +23,16 @@ export type {
   SocialMediaTaskCompletion,
 } from "../types/socialMedia";
 
+export type SocialMediaContentPerson = {
+  id: number;
+  firstName: string;
+  lastName: string;
+  username: string;
+  profilePhotoUrl: string | null;
+  hasStoredProfilePhoto?: boolean;
+  updatedAt?: string | null;
+};
+
 export type SocialMediaContentItem = {
   id: number;
   title: string;
@@ -41,9 +51,15 @@ export type SocialMediaContentItem = {
   productionStartedAt: string | null;
   readyAt: string | null;
   publishedBy: number | null;
+  producedBy: number | null;
+  producedByName: string | null;
+  publishedByName: string | null;
+  producedByUser: SocialMediaContentPerson | null;
+  publishedByUser: SocialMediaContentPerson | null;
   publishedTaskLogId: number | null;
   createdBy: number | null;
   createdByName: string | null;
+  createdByUser: SocialMediaContentPerson | null;
   updatedBy: number | null;
   updatedByName: string | null;
   createdAt: string;
@@ -104,6 +120,22 @@ export type PublishSocialMediaContentPayload = {
 export type SocialMediaPublishResult = {
   item: SocialMediaContentItem;
   taskCompletion: SocialMediaTaskCompletion | null;
+};
+
+export type UpdateSocialMediaPublicationDatePayload = {
+  publishedDate: string;
+  expectedPublishedAt: string;
+};
+
+export type SocialMediaPublicationDateResult = SocialMediaPublishResult & {
+  previousTaskLogId: number | null;
+};
+
+export type UpdateSocialMediaAttributionPayload = {
+  createdBy?: number;
+  producedBy?: number | null;
+  publishedBy?: number;
+  expectedUpdatedAt: string;
 };
 
 export type SocialMediaProjectFolderCheckResult = {
@@ -475,6 +507,80 @@ export const useUpdateSocialMediaPublicationLinks = () => {
       return response.data.item;
     },
     onSuccess: invalidate,
+  });
+};
+
+export const updateSocialMediaPublicationDate = async ({
+  id,
+  publishedDate,
+  expectedPublishedAt,
+}: UpdateSocialMediaPublicationDatePayload & { id: number }): Promise<SocialMediaPublicationDateResult> => {
+  const response = await axiosInstance.patch<SocialMediaPublicationDateResult>(
+    `/social-media/content/${id}/publication-date`,
+    { publishedDate, expectedPublishedAt },
+  );
+  return response.data;
+};
+
+export const useUpdateSocialMediaPublicationDate = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  const queryClient = useQueryClient();
+  return useMutation<
+    SocialMediaPublicationDateResult,
+    ApiError,
+    UpdateSocialMediaPublicationDatePayload & { id: number }
+  >({
+    mutationFn: updateSocialMediaPublicationDate,
+    onSuccess: async ({ item }) => {
+      await Promise.all([
+        invalidate(item),
+        queryClient.invalidateQueries({ queryKey: ["required-actions", "me"] }),
+      ]);
+    },
+    onError: async (error) => {
+      if (error.response?.status === 409) await invalidate();
+    },
+  });
+};
+
+export const useSocialMediaAttributionUsers = (options: { enabled: boolean }) => useQuery<
+  SocialMediaContentPerson[],
+  ApiError
+>({
+  queryKey: ["social-media", "attribution-users"],
+  queryFn: async () => {
+    const response = await axiosInstance.get<{ items: SocialMediaContentPerson[] }>(
+      "/social-media/attribution-users",
+    );
+    return response.data.items;
+  },
+  enabled: options.enabled,
+  staleTime: 30 * 1000,
+});
+
+export const updateSocialMediaAttribution = async ({
+  id,
+  ...payload
+}: UpdateSocialMediaAttributionPayload & { id: number }): Promise<SocialMediaContentItem> => {
+  const response = await axiosInstance.patch<ItemResponse>(
+    `/social-media/content/${id}/attribution`,
+    payload,
+  );
+  return response.data.item;
+};
+
+export const useUpdateSocialMediaAttribution = () => {
+  const invalidate = useInvalidateSocialMediaContent();
+  return useMutation<
+    SocialMediaContentItem,
+    ApiError,
+    UpdateSocialMediaAttributionPayload & { id: number }
+  >({
+    mutationFn: updateSocialMediaAttribution,
+    onSuccess: invalidate,
+    onError: async (error) => {
+      if (error.response?.status === 409) await invalidate();
+    },
   });
 };
 
