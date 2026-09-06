@@ -3,6 +3,7 @@ import {
   META_WHATSAPP_SIGNUP_DEFAULT_FINISH_EVENT,
   META_WHATSAPP_SIGNUP_FINISH_EVENT,
   META_WHATSAPP_SIGNUP_TYPE,
+  inspectWhatsAppEmbeddedSignupMessage,
   parseWhatsAppEmbeddedSignupMessage,
 } from "./metaWhatsAppSignup";
 
@@ -72,6 +73,27 @@ describe("parseWhatsAppEmbeddedSignupMessage", () => {
   });
 
   it.each([
+    ["unsupported event", { ...validPayload, event: "FINISH_ONLY_WABA" }, "rejected_event"],
+    ["cancel event", { ...validPayload, event: "CANCEL" }, "rejected_event"],
+    ["error event", { ...validPayload, event: "ERROR" }, "rejected_event"],
+    ["missing data", { ...validPayload, data: null }, "rejected_data"],
+    ["missing version", { ...validPayload, version: undefined }, "rejected_version"],
+    ["wrong version", { ...validPayload, version: 4 }, "rejected_version"],
+    ["invalid WABA", { ...validPayload, data: { waba_id: "waba-1" } }, "rejected_waba"],
+    [
+      "invalid phone",
+      { ...validPayload, data: { waba_id: "123", phone_number_id: "phone-1" } },
+      "rejected_phone",
+    ],
+  ])("returns only a sanitized diagnostic for %s", (_label, data, diagnosticCode) => {
+    expect(inspectWhatsAppEmbeddedSignupMessage({
+      origin: "https://business.facebook.com",
+      data,
+    })).toEqual({ session: null, diagnosticCode });
+  });
+
+  it.each([
+    ["opaque origin", "null", validPayload],
     ["untrusted origin", "https://example.com", validPayload],
     ["lookalike origin", "https://evilfacebook.com", validPayload],
     ["insecure Meta origin", "http://business.facebook.com", validPayload],

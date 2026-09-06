@@ -191,7 +191,7 @@ describe('WhatsApp Embedded Signup service', () => {
     sourceStateModel.upsert.mockResolvedValue(undefined);
   });
 
-  it('accepts the Coexistence event at version 3 and the documented default finish fallback', () => {
+  it('accepts the Coexistence event at version 3 and the default finish fallback', () => {
     expect(parseWhatsAppEmbeddedSignupSession(session)).toEqual({
       type: session.type,
       event: session.event,
@@ -216,6 +216,18 @@ describe('WhatsApp Embedded Signup service', () => {
       data: { wabaId: '111222333', phoneNumberId: null },
     });
     expect(() => parseWhatsAppEmbeddedSignupSession({ ...session, event: 'FINISH_ONLY_WABA' })).toThrow(
+      'Invalid Embedded Signup completion session',
+    );
+  });
+
+  it.each([
+    ['FINISH_ONLY_WABA', 3],
+    ['CANCEL', 3],
+    ['ERROR', 3],
+    ['FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING', undefined],
+    ['FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING', 4],
+  ])('rejects event %s at session version %s', (event, version) => {
+    expect(() => parseWhatsAppEmbeddedSignupSession({ ...session, event, version })).toThrow(
       'Invalid Embedded Signup completion session',
     );
   });
@@ -428,6 +440,95 @@ describe('WhatsApp Embedded Signup service', () => {
       graphClient: graphClient as any,
     });
     expect(graphClient.dispatchCoexistenceSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves and verifies a default finish session without a phone id before storing config', async () => {
+    const created = makeAttempt();
+    currentAttempt = created.attempt;
+    const graphClient = makeGraphClient();
+
+    await completeWhatsAppEmbeddedSignupAttempt({
+      attemptId: created.attempt.id,
+      adminUserId: 7,
+      nonce: created.nonce,
+      code: 'code',
+      session: {
+        type: 'WA_EMBEDDED_SIGNUP',
+        event: 'FINISH',
+        version: '3',
+        data: { waba_id: '111222333', phone_number_id: null },
+      },
+      graphClient: graphClient as any,
+    });
+
+    expect(graphClient.listWabaPhoneNumberIds).toHaveBeenCalledWith(
+      't'.repeat(64),
+      '111222333',
+    );
+    expect(graphClient.assertCoexistencePhone).toHaveBeenCalledWith(
+      't'.repeat(64),
+      '444555666',
+    );
+    expect(graphClient.assertCoexistencePhone.mock.invocationCallOrder[0]).toBeLessThan(
+      mockUpdateSystemConfigValues.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not store config when a phone-less finish session resolves ambiguously', async () => {
+    const created = makeAttempt();
+    currentAttempt = created.attempt;
+    const graphClient = makeGraphClient();
+    graphClient.listWabaPhoneNumberIds.mockResolvedValue(['444555666', '777888999']);
+
+    await expect(completeWhatsAppEmbeddedSignupAttempt({
+      attemptId: created.attempt.id,
+      adminUserId: 7,
+      nonce: created.nonce,
+      code: 'code',
+      session: {
+        type: 'WA_EMBEDDED_SIGNUP',
+        event: 'FINISH',
+        version: '3',
+        data: { waba_id: '111222333' },
+      },
+      graphClient: graphClient as any,
+    })).rejects.toMatchObject({
+      status: 502,
+      details: { code: 'META_PHONE_AMBIGUOUS' },
+    });
+
+    expect(graphClient.assertCoexistencePhone).not.toHaveBeenCalled();
+    expect(mockUpdateSystemConfigValues).not.toHaveBeenCalled();
+    expect(created.attempt.status).toBe('failed');
+  });
+
+  it('does not store config when Meta does not confirm Coexistence', async () => {
+    const created = makeAttempt();
+    currentAttempt = created.attempt;
+    const graphClient = makeGraphClient();
+    graphClient.assertCoexistencePhone.mockRejectedValue(
+      new WhatsAppMetaGraphError('META_PHONE_NOT_COEXISTENCE', 200, false),
+    );
+
+    await expect(completeWhatsAppEmbeddedSignupAttempt({
+      attemptId: created.attempt.id,
+      adminUserId: 7,
+      nonce: created.nonce,
+      code: 'code',
+      session: {
+        type: 'WA_EMBEDDED_SIGNUP',
+        event: 'FINISH',
+        version: '3',
+        data: { waba_id: '111222333', phone_number_id: null },
+      },
+      graphClient: graphClient as any,
+    })).rejects.toMatchObject({
+      status: 502,
+      details: { code: 'META_PHONE_NOT_COEXISTENCE' },
+    });
+
+    expect(mockUpdateSystemConfigValues).not.toHaveBeenCalled();
+    expect(created.attempt.status).toBe('failed');
   });
 
   it('leaves a failed subscription staged but disconnected and sends no one-shot sync', async () => {

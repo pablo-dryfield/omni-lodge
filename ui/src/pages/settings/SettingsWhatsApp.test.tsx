@@ -17,7 +17,10 @@ import {
   META_WHATSAPP_SIGNUP_FINISH_EVENT,
   META_WHATSAPP_SIGNUP_TYPE,
 } from "../../utils/metaWhatsAppSignup";
-import SettingsWhatsApp, { getWhatsAppPairingWaitMs } from "./SettingsWhatsApp";
+import SettingsWhatsApp, {
+  getWhatsAppConfirmationTimeoutMessage,
+  getWhatsAppPairingWaitMs,
+} from "./SettingsWhatsApp";
 
 jest.mock("../../components/access/PageAccessGuard", () => ({
   PageAccessGuard: ({ children }: { children: ReactNode }) => children,
@@ -220,6 +223,21 @@ describe("SettingsWhatsApp", () => {
     expect(getWhatsAppPairingWaitMs("2026-09-06T10:05:00.000Z", true, now)).toBe(25_000);
     expect(getWhatsAppPairingWaitMs("2026-09-06T10:00:00.000Z", false, now)).toBeNull();
     expect(getWhatsAppPairingWaitMs("not-a-date", false, now)).toBeNull();
+  });
+
+  it("keeps timeout diagnostics structural and free of Meta identifiers", () => {
+    expect(getWhatsAppConfirmationTimeoutMessage(null)).toContain(
+      "No trusted WhatsApp session event reached this page",
+    );
+    expect(getWhatsAppConfirmationTimeoutMessage("rejected_event")).toContain(
+      "not a supported completion event",
+    );
+    expect(getWhatsAppConfirmationTimeoutMessage("rejected_version")).toContain(
+      "unsupported session version",
+    );
+    expect(getWhatsAppConfirmationTimeoutMessage("rejected_phone")).toContain(
+      "invalid phone reference",
+    );
   });
 
   it("reconciles status after an uncertain completion response without replaying the code", async () => {
