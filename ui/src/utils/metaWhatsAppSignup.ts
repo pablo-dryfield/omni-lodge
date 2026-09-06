@@ -97,7 +97,10 @@ export const inspectWhatsAppEmbeddedSignupMessage = (
   const version = normalizeSessionVersion(payload.version);
   const wabaId = payload.data.waba_id;
   const phoneNumberId = payload.data.phone_number_id;
-  if (version !== META_WHATSAPP_SESSION_INFO_VERSION) {
+  // Meta's Coexistence guide shows version 3, while its generic completion
+  // schema and current reference client omit the field. Accept omission only;
+  // explicit unknown versions remain rejected.
+  if (payload.version !== undefined && version !== META_WHATSAPP_SESSION_INFO_VERSION) {
     return { session: null, diagnosticCode: "rejected_version" };
   }
   if (typeof wabaId !== "string" || !META_ID_PATTERN.test(wabaId)) {

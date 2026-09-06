@@ -54,7 +54,7 @@ type JsonRecord = Record<string, unknown>;
 export interface WhatsAppEmbeddedSignupSession {
   type: 'WA_EMBEDDED_SIGNUP';
   event: 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING' | 'FINISH';
-  version: string | number;
+  version: 3;
   data: {
     wabaId: string;
     phoneNumberId: string | null;
@@ -183,7 +183,7 @@ export const parseWhatsAppEmbeddedSignupSession = (
   const finishEvent = session?.event;
   const hasValidVersion = (finishEvent === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'
     || finishEvent === 'FINISH')
-    && (version === 3 || version === '3');
+    && (version === undefined || version === 3 || version === '3');
   if (
     session?.type !== 'WA_EMBEDDED_SIGNUP'
     || !hasValidVersion
@@ -197,7 +197,7 @@ export const parseWhatsAppEmbeddedSignupSession = (
   return {
     type: 'WA_EMBEDDED_SIGNUP',
     event: finishEvent,
-    version,
+    version: 3,
     data: {
       wabaId,
       phoneNumberId: typeof phoneNumberId === 'string' ? phoneNumberId : null,

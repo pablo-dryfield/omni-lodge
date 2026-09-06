@@ -72,12 +72,28 @@ describe("parseWhatsAppEmbeddedSignupMessage", () => {
     });
   });
 
+  it("accepts Meta's generic completion shape when the version field is omitted", () => {
+    const { version: _version, ...payloadWithoutVersion } = validPayload;
+    expect(parseWhatsAppEmbeddedSignupMessage({
+      origin: "https://www.facebook.com",
+      data: payloadWithoutVersion,
+    })).toEqual({
+      type: META_WHATSAPP_SIGNUP_TYPE,
+      event: META_WHATSAPP_SIGNUP_FINISH_EVENT,
+      version: META_WHATSAPP_SESSION_INFO_VERSION,
+      data: {
+        waba_id: "123456789012345",
+        phone_number_id: "987654321098765",
+      },
+    });
+  });
+
   it.each([
     ["unsupported event", { ...validPayload, event: "FINISH_ONLY_WABA" }, "rejected_event"],
     ["cancel event", { ...validPayload, event: "CANCEL" }, "rejected_event"],
     ["error event", { ...validPayload, event: "ERROR" }, "rejected_event"],
     ["missing data", { ...validPayload, data: null }, "rejected_data"],
-    ["missing version", { ...validPayload, version: undefined }, "rejected_version"],
+    ["null version", { ...validPayload, version: null }, "rejected_version"],
     ["wrong version", { ...validPayload, version: 4 }, "rejected_version"],
     ["invalid WABA", { ...validPayload, data: { waba_id: "waba-1" } }, "rejected_waba"],
     [

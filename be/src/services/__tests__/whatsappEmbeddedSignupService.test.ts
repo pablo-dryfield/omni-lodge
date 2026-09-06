@@ -212,7 +212,17 @@ describe('WhatsApp Embedded Signup service', () => {
     })).toEqual({
       type: 'WA_EMBEDDED_SIGNUP',
       event: 'FINISH',
-      version: '3',
+      version: 3,
+      data: { wabaId: '111222333', phoneNumberId: null },
+    });
+    expect(parseWhatsAppEmbeddedSignupSession({
+      type: 'WA_EMBEDDED_SIGNUP',
+      event: 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',
+      data: { waba_id: '111222333' },
+    })).toEqual({
+      type: 'WA_EMBEDDED_SIGNUP',
+      event: 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',
+      version: 3,
       data: { wabaId: '111222333', phoneNumberId: null },
     });
     expect(() => parseWhatsAppEmbeddedSignupSession({ ...session, event: 'FINISH_ONLY_WABA' })).toThrow(
@@ -224,7 +234,7 @@ describe('WhatsApp Embedded Signup service', () => {
     ['FINISH_ONLY_WABA', 3],
     ['CANCEL', 3],
     ['ERROR', 3],
-    ['FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING', undefined],
+    ['FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING', null],
     ['FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING', 4],
   ])('rejects event %s at session version %s', (event, version) => {
     expect(() => parseWhatsAppEmbeddedSignupSession({ ...session, event, version })).toThrow(
