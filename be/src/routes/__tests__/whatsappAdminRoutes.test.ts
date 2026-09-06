@@ -90,6 +90,21 @@ describe('WhatsApp admin routes', () => {
     expect(response.headers['cache-control']).toBe('no-store');
   });
 
+  it('accepts only a boolean offboarding confirmation flag', async () => {
+    const app = buildApp();
+    const accepted = await request(app)
+      .post(`${basePath}/embedded-signup/attempts`)
+      .set('x-test-admin-id', '801')
+      .send({ password: 'confirmed-password', reconnectAfterOffboarding: true });
+    const rejected = await request(app)
+      .post(`${basePath}/embedded-signup/attempts`)
+      .set('x-test-admin-id', '802')
+      .send({ password: 'confirmed-password', reconnectAfterOffboarding: 'true' });
+
+    expect(accepted.status).toBe(201);
+    expect(rejected.status).toBe(400);
+  });
+
   it('does not echo invalid completion material from validation errors', async () => {
     const app = buildApp();
     const sensitiveInput = 'authorization-code-that-must-not-be-echoed';

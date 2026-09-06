@@ -189,8 +189,12 @@ export const fetchWhatsAppAdminStatus = async (): Promise<WhatsAppAdminStatus> =
 
 export const prepareWhatsAppEmbeddedSignup = async (
   password: string,
+  reconnectAfterOffboarding = false,
 ): Promise<WhatsAppEmbeddedSignupAttempt> => {
-  const response = await axiosInstance.post(`${ADMIN_BASE_PATH}/embedded-signup/attempts`, { password });
+  const response = await axiosInstance.post(`${ADMIN_BASE_PATH}/embedded-signup/attempts`, {
+    password,
+    reconnectAfterOffboarding,
+  });
   return normalizeEmbeddedSignupAttempt(response.data);
 };
 

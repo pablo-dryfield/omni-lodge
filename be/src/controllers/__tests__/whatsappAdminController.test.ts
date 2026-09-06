@@ -68,10 +68,25 @@ describe('WhatsApp admin controller', () => {
 
     expect(userModel.findByPk).toHaveBeenCalledWith(7);
     expect(mockCompare).toHaveBeenCalledWith('confirmed-password', 'password-hash');
-    expect(mockCreate).toHaveBeenCalledWith(7);
+    expect(mockCreate).toHaveBeenCalledWith(7, undefined, false);
     expect(res.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(payload);
+  });
+
+  it('forwards an explicit offboarding confirmation after password re-authentication', async () => {
+    mockCreate.mockResolvedValue({ attempt: { id: 'attempt-id' }, launch: {} });
+    const req = {
+      authContext: { id: 7, roleSlug: 'admin' },
+      body: { password: 'confirmed-password', reconnectAfterOffboarding: true },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await createWhatsAppEmbeddedSignupAttemptController(req, res as unknown as Response);
+
+    expect(mockCompare).toHaveBeenCalledWith('confirmed-password', 'password-hash');
+    expect(mockCreate).toHaveBeenCalledWith(7, undefined, true);
+    expect(res.status).toHaveBeenCalledWith(201);
   });
 
   it('does not create an attempt when password confirmation fails', async () => {

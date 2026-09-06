@@ -74,7 +74,11 @@ export const createWhatsAppEmbeddedSignupAttemptController = async (
       res.status(401).json([{ message: 'Unauthorized.' }]);
       return;
     }
-    const payload = await createWhatsAppEmbeddedSignupAttempt(adminUserId);
+    const payload = await createWhatsAppEmbeddedSignupAttempt(
+      adminUserId,
+      undefined,
+      req.body?.reconnectAfterOffboarding === true,
+    );
     res.status(201).json(payload);
   } catch (error) {
     handleError(res, error);

@@ -58,6 +58,7 @@ router.post(
   '/embedded-signup/attempts',
   attemptLimiter,
   body('password').isString().isLength({ min: 1, max: 512 }),
+  body('reconnectAfterOffboarding').optional().isBoolean({ strict: true }),
   validate,
   createWhatsAppEmbeddedSignupAttemptController,
 );

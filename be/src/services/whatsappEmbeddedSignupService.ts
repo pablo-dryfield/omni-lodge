@@ -267,6 +267,7 @@ export const getWhatsAppAdminStatus = async (): Promise<WhatsAppAdminStatus> => 
 export const createWhatsAppEmbeddedSignupAttempt = async (
   adminUserId: number,
   now = new Date(),
+  reconnectAfterOffboarding = false,
 ): Promise<{
   attempt: { id: string; nonce: string; expiresAt: string };
   launch: { appId: string; configId: string; graphApiVersion: string };
@@ -291,7 +292,13 @@ export const createWhatsAppEmbeddedSignupAttempt = async (
   const existingWabaId = getConfigValueRaw('WHATSAPP_WABA_ID')?.trim() || null;
   const existingPhoneNumberId = getConfigValueRaw('WHATSAPP_PHONE_NUMBER_ID')?.trim() || null;
   const existingGeneration = getConfigValueRaw('WHATSAPP_ONBOARDING_GENERATION')?.trim() || null;
-  if (existingToken && existingWabaId && existingPhoneNumberId && existingGeneration) {
+  if (
+    existingToken
+    && existingWabaId
+    && existingPhoneNumberId
+    && existingGeneration
+    && reconnectAfterOffboarding !== true
+  ) {
     const activationAttempt = await WhatsAppEmbeddedSignupAttempt.findOne({
       where: {
         onboardingGeneration: existingGeneration,

@@ -115,7 +115,31 @@ describe("WhatsApp admin API", () => {
     });
     expect(mockPost).toHaveBeenCalledWith(
       "/integrations/whatsapp/admin/embedded-signup/attempts",
-      { password: "admin-password" },
+      { password: "admin-password", reconnectAfterOffboarding: false },
+    );
+  });
+
+  it("explicitly requests a reconnect attempt only after offboarding confirmation", async () => {
+    mockPost.mockResolvedValue({
+      data: {
+        attempt: {
+          id: "attempt-2",
+          nonce: "nonce-2",
+          expiresAt: "2026-08-27T08:00:00.000Z",
+        },
+        launch: {
+          appId: "111222333",
+          configId: "444555666",
+          graphApiVersion: "v25.0",
+        },
+      },
+    });
+
+    await prepareWhatsAppEmbeddedSignup("admin-password", true);
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/integrations/whatsapp/admin/embedded-signup/attempts",
+      { password: "admin-password", reconnectAfterOffboarding: true },
     );
   });
 

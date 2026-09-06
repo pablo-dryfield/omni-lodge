@@ -267,12 +267,19 @@ describe('WhatsApp Embedded Signup service', () => {
     ]));
   });
 
-  it('rejects another attempt while the partial-index protected attempt is active', async () => {
-    attemptModel.findOne.mockResolvedValue({ status: 'processing' });
+  it.each([false, true])(
+    'rejects another attempt while one is active when recovery is %s',
+    async (reconnectAfterOffboarding) => {
+      attemptModel.findOne.mockResolvedValue({ status: 'processing' });
 
-    await expect(createWhatsAppEmbeddedSignupAttempt(7)).rejects.toMatchObject({ status: 409 });
-    expect(attemptModel.create).not.toHaveBeenCalled();
-  });
+      await expect(createWhatsAppEmbeddedSignupAttempt(
+        7,
+        undefined,
+        reconnectAfterOffboarding,
+      )).rejects.toMatchObject({ status: 409 });
+      expect(attemptModel.create).not.toHaveBeenCalled();
+    },
+  );
 
   it('expires a cancelled pending attempt owned by the same admin before replacing it', async () => {
     const prior = makeAttempt().attempt;
@@ -303,26 +310,70 @@ describe('WhatsApp Embedded Signup service', () => {
     expect(attemptModel.create).not.toHaveBeenCalled();
   });
 
-  it('blocks local re-onboarding for an established tuple whose one-shot sync was consumed', async () => {
+  it.each([undefined, false])(
+    'blocks local re-onboarding by default or when recovery is %s',
+    async (reconnectAfterOffboarding) => {
+      configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
+      configValues.set('WHATSAPP_WABA_ID', '111222333');
+      configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
+      configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'connected-generation');
+      attemptModel.findOne.mockResolvedValue(makeAttempt({
+        status: 'completed',
+        wabaId: '111222333',
+        phoneNumberId: '444555666',
+        onboardingGeneration: 'connected-generation',
+        subscriptionStatus: 'succeeded',
+        appStateSyncStatus: 'succeeded',
+        historySyncStatus: 'unknown',
+      }).attempt);
+
+      await expect(createWhatsAppEmbeddedSignupAttempt(
+        7,
+        undefined,
+        reconnectAfterOffboarding,
+      )).rejects.toMatchObject({
+        status: 409,
+        message: expect.stringContaining('offboarding or recovery'),
+      });
+      expect(attemptModel.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('prepares a fresh attempt after explicit offboarding without changing connection config', async () => {
+    const now = new Date('2026-08-27T10:00:00.000Z');
     configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
     configValues.set('WHATSAPP_WABA_ID', '111222333');
     configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
     configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'connected-generation');
-    attemptModel.findOne.mockResolvedValue(makeAttempt({
+    const connectedAttempt = makeAttempt({
       status: 'completed',
       wabaId: '111222333',
       phoneNumberId: '444555666',
       onboardingGeneration: 'connected-generation',
       subscriptionStatus: 'succeeded',
       appStateSyncStatus: 'succeeded',
-      historySyncStatus: 'unknown',
-    }).attempt);
+      historySyncStatus: 'succeeded',
+    }).attempt;
+    attemptModel.findOne.mockImplementation(async (options: any) => (
+      options?.where?.onboardingGeneration ? connectedAttempt : null
+    ));
+    attemptModel.create.mockImplementation(async (values: Record<string, unknown>) => values);
 
-    await expect(createWhatsAppEmbeddedSignupAttempt(7)).rejects.toMatchObject({
-      status: 409,
-      message: expect.stringContaining('offboarding or recovery'),
-    });
-    expect(attemptModel.create).not.toHaveBeenCalled();
+    const result = await createWhatsAppEmbeddedSignupAttempt(7, now, true);
+
+    expect(result.attempt.expiresAt).toBe('2026-08-27T10:10:00.000Z');
+    expect(attemptModel.create).toHaveBeenCalledWith(expect.objectContaining({
+      adminUserId: 7,
+      status: 'pending',
+      subscriptionStatus: 'not_started',
+      appStateSyncStatus: 'not_started',
+      historySyncStatus: 'not_started',
+    }));
+    expect(mockUpdateSystemConfigValues).not.toHaveBeenCalled();
+    expect(configValues.get('WHATSAPP_BUSINESS_ACCESS_TOKEN')).toBe('t'.repeat(64));
+    expect(configValues.get('WHATSAPP_WABA_ID')).toBe('111222333');
+    expect(configValues.get('WHATSAPP_PHONE_NUMBER_ID')).toBe('444555666');
+    expect(configValues.get('WHATSAPP_ONBOARDING_GENERATION')).toBe('connected-generation');
   });
 
   it('returns a safe configuration conflict when webhook readiness is incomplete', async () => {

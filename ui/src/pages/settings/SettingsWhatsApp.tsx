@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Group,
   List,
   PasswordInput,
@@ -172,6 +173,7 @@ const SettingsWhatsApp = () => {
   const [stage, setStage] = useState<FlowStage>("idle");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [preparedExpiresAt, setPreparedExpiresAt] = useState<string | null>(null);
+  const [reconnectAfterOffboarding, setReconnectAfterOffboarding] = useState(false);
 
   const attemptRef = useRef<WhatsAppEmbeddedSignupAttempt | null>(null);
   const sdkRef = useRef<MetaFacebookSdk | null>(null);
@@ -234,6 +236,7 @@ const SettingsWhatsApp = () => {
   const applyCompletionStatus = useCallback((status: WhatsAppAdminStatus) => {
     queryClient.setQueryData(WHATSAPP_ADMIN_STATUS_QUERY_KEY, status);
     if (!mountedRef.current) return;
+    setReconnectAfterOffboarding(false);
     if (completedWithoutWarnings(status)) {
       setFeedback("WhatsApp Business is connected. App-state and history sync requests were submitted safely.");
       setStage("complete");
@@ -273,6 +276,7 @@ const SettingsWhatsApp = () => {
         applyCompletionStatus(status);
       })
       .catch(async () => {
+        if (mountedRef.current) setReconnectAfterOffboarding(false);
         try {
           const status = await fetchWhatsAppAdminStatus();
           queryClient.setQueryData(WHATSAPP_ADMIN_STATUS_QUERY_KEY, status);
@@ -339,6 +343,7 @@ const SettingsWhatsApp = () => {
 
   const handlePrepare = async () => {
     const passwordValue = password.trim();
+    const isReconnectAttempt = reconnectAfterOffboarding;
     if (!passwordValue) {
       setFeedback("Enter your administrator password to prepare the connection.");
       setStage("error");
@@ -350,7 +355,7 @@ const SettingsWhatsApp = () => {
     setFeedback(null);
     setStage("preparing");
     try {
-      const attempt = await prepareWhatsAppEmbeddedSignup(passwordValue);
+      const attempt = await prepareWhatsAppEmbeddedSignup(passwordValue, isReconnectAttempt);
       if (new Date(attempt.expiresAt).getTime() <= Date.now()) {
         throw new Error("The connection attempt expired before it was ready. Please prepare a new one.");
       }
@@ -362,7 +367,9 @@ const SettingsWhatsApp = () => {
       attemptRef.current = attempt;
       sdkRef.current = sdk;
       setPreparedExpiresAt(attempt.expiresAt);
-      setFeedback("Ready. Continue with Meta while this secure attempt is active.");
+      setFeedback(isReconnectAttempt
+        ? "Ready. Continue with Meta to reconnect the offboarded WhatsApp Business number."
+        : "Ready. Continue with Meta while this secure attempt is active.");
       setStage("ready");
     } catch (error) {
       failFlow(extractErrorMessage(error));
@@ -421,6 +428,7 @@ const SettingsWhatsApp = () => {
 
   const handleReset = () => {
     clearSensitiveFlowData(true);
+    setReconnectAfterOffboarding(false);
     setFeedback(null);
     setStage("idle");
   };
@@ -558,6 +566,13 @@ const SettingsWhatsApp = () => {
                 Re-enter your administrator password. The server creates a short-lived, single-use attempt and returns only
                 safe Meta launch settings.
               </Text>
+              <Checkbox
+                label="I disconnected this number from Business Platform in the WhatsApp Business app"
+                description="Select this only after offboarding the number in the mobile app. Leave it unchecked for a normal connection attempt."
+                checked={reconnectAfterOffboarding}
+                onChange={(event) => setReconnectAfterOffboarding(event.currentTarget.checked)}
+                disabled={isBusy || stage === "ready"}
+              />
               <PasswordInput
                 label="Administrator password"
                 placeholder="Enter your current password"
@@ -573,7 +588,7 @@ const SettingsWhatsApp = () => {
                 loading={stage === "preparing"}
                 disabled={isBusy || stage === "ready"}
               >
-                Prepare connection
+                {reconnectAfterOffboarding ? "Prepare re-onboarding" : "Prepare connection"}
               </Button>
             </Stack>
           </Card>
@@ -597,7 +612,7 @@ const SettingsWhatsApp = () => {
                 onClick={handleLaunch}
                 disabled={!canLaunch}
               >
-                Continue with Meta
+                {reconnectAfterOffboarding ? "Continue re-onboarding with Meta" : "Continue with Meta"}
               </Button>
               {stage === "opening" || stage === "waiting" ? (
                 <Button variant="subtle" color="gray" onClick={handleReset}>

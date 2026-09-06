@@ -151,7 +151,7 @@ describe("SettingsWhatsApp", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Prepare connection" }));
 
-    await waitFor(() => expect(mockPrepare).toHaveBeenCalledWith("admin-password"));
+    await waitFor(() => expect(mockPrepare).toHaveBeenCalledWith("admin-password", false));
     await waitFor(() => expect(screen.getByRole("button", { name: "Continue with Meta" })).toBeEnabled());
     expect(sdk.login).not.toHaveBeenCalled();
 
@@ -213,6 +213,28 @@ describe("SettingsWhatsApp", () => {
     });
     expect(screen.queryByText("single-use-code")).not.toBeInTheDocument();
     expect(await screen.findByText(/WhatsApp Business is connected/i)).toBeInTheDocument();
+  });
+
+  it("requires explicit mobile-app offboarding confirmation before preparing re-onboarding", async () => {
+    renderPage();
+    await screen.findByText("unavailable");
+
+    const offboardingConfirmation = screen.getByRole("checkbox", {
+      name: "I disconnected this number from Business Platform in the WhatsApp Business app",
+    });
+    expect(offboardingConfirmation).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Prepare connection" })).toBeInTheDocument();
+
+    fireEvent.click(offboardingConfirmation);
+    expect(offboardingConfirmation).toBeChecked();
+    fireEvent.change(screen.getByLabelText("Administrator password"), {
+      target: { value: "admin-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare re-onboarding" }));
+
+    await waitFor(() => expect(mockPrepare).toHaveBeenCalledWith("admin-password", true));
+    expect(await screen.findByText(/reconnect the offboarded WhatsApp Business number/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue re-onboarding with Meta" })).toBeEnabled();
   });
 
   it("uses the remaining secure-attempt lifetime instead of a 25-second pairing deadline", () => {
