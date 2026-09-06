@@ -33,6 +33,7 @@ dayjs.extend(customParseFormat);
 const DEFAULT_TIMEZONE = 'Europe/Warsaw';
 const PUBLICATION_META_KEY = 'socialMediaPublicationSnapshot';
 const AUTO_COMPLETION_META_KEY = 'completedBySocialMediaPublish';
+const DATE_REASSIGNMENT_COMPLETION_BASELINE_META_KEY = 'socialMediaPublicationDateCompletionBaseline';
 const MAX_TASK_NOTES_LENGTH = 100_000;
 
 export type SocialMediaTaskCompletionResult = {
@@ -720,6 +721,7 @@ export async function reassignPublishedSocialMediaTaskDate(
   });
   const previousPublication = asRecord(source?.meta?.[PUBLICATION_META_KEY]);
   const previousSnapshot = asRecord(source?.meta?.[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY]);
+  const sourceCompletionBaseline = asRecord(source?.meta?.[DATE_REASSIGNMENT_COMPLETION_BASELINE_META_KEY]);
   if (
     !source
     || source.status !== 'completed'
@@ -753,7 +755,7 @@ export async function reassignPublishedSocialMediaTaskDate(
     log.userId === source.userId && String(log.taskDate) === publishedDate && isPublishEnabled(log));
   const linked = publishTasks.filter((log) => getStoredSocialMediaContentId(log.meta) === content.id);
   const available = publishTasks.filter((log) =>
-    getStoredSocialMediaContentId(log.meta) == null && ['pending', 'missed'].includes(log.status));
+    getStoredSocialMediaContentId(log.meta) == null && ['pending', 'missed', 'completed'].includes(log.status));
   const matches = linked.length > 0 ? linked : available;
   if (matches.length > 1) {
     throw new SocialMediaPublishTaskConflictError(
@@ -764,14 +766,15 @@ export async function reassignPublishedSocialMediaTaskDate(
   if (!target) {
     throw new SocialMediaPublishTaskConflictError(
       publishTasks.length > 0
-        ? 'The publish-enabled task on the new date is already completed, waived, or linked to another idea.'
+        ? 'The publish-enabled task on the new date is waived or linked to another idea.'
         : 'Assign a publish-enabled Social Media task to the same person on the new date before changing the publish date.',
     );
   }
   const targetPublication = asRecord(target.meta?.[PUBLICATION_META_KEY]);
   const targetSnapshot = asRecord(target.meta?.[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY]);
+  const targetCompletionBaseline = asRecord(target.meta?.[DATE_REASSIGNMENT_COMPLETION_BASELINE_META_KEY]);
   if (
-    !['pending', 'missed'].includes(target.status)
+    !['pending', 'missed', 'completed'].includes(target.status)
     || (targetPublication.contentId != null && targetPublication.contentId !== content.id)
     || (targetSnapshot.id != null && targetSnapshot.id !== content.id)
     || (
@@ -780,8 +783,21 @@ export async function reassignPublishedSocialMediaTaskDate(
     )
   ) {
     throw new SocialMediaPublishTaskConflictError(
-      'The matching task on the new date is already completed, waived, or contains another publication. Choose an available task first.',
+      'The matching task on the new date is waived or contains another publication. Choose an available task first.',
     );
+  }
+
+  for (const [log, baseline] of [[source, sourceCompletionBaseline], [target, targetCompletionBaseline]] as const) {
+    if (log.meta?.[DATE_REASSIGNMENT_COMPLETION_BASELINE_META_KEY] == null) continue;
+    if (
+      baseline.contentId !== content.id || baseline.taskLogId !== log.id || baseline.status !== 'completed'
+      || typeof baseline.hadAutoCompletionFlag !== 'boolean'
+      || (baseline.completedAt !== null && (typeof baseline.completedAt !== 'string' || !dayjs(baseline.completedAt).isValid()))
+    ) {
+      throw new SocialMediaPublishTaskConflictError(
+        'The saved original task completion could not be verified. Review the task before changing the publish date.',
+      );
+    }
   }
 
   const publishedAt = dayjs.tz(
@@ -805,6 +821,13 @@ export async function reassignPublishedSocialMediaTaskDate(
   delete sourceMeta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY];
   delete sourceMeta[PUBLICATION_META_KEY];
   delete sourceMeta[AUTO_COMPLETION_META_KEY];
+  delete sourceMeta[DATE_REASSIGNMENT_COMPLETION_BASELINE_META_KEY];
+  // A destination may already have been completed independently. If the idea
+  // is moved again, remove its evidence without undoing that earlier work.
+  const preserveSourceCompletion = sourceCompletionBaseline.status === 'completed';
+  if (preserveSourceCompletion && sourceCompletionBaseline.hadAutoCompletionFlag) {
+    sourceMeta[AUTO_COMPLETION_META_KEY] = sourceCompletionBaseline.autoCompletionFlag;
+  }
   delete sourceMeta.socialMediaPublishReschedule;
   delete sourceMeta.socialMediaPublishSupersession;
   const dateEdit = {
@@ -815,12 +838,30 @@ export async function reassignPublishedSocialMediaTaskDate(
     previousTaskLogId: source.id,
     taskLogId: target.id,
     userId: source.userId,
+    targetPreviousStatus: target.status,
+    targetPreviousCompletedAt: target.completedAt?.toISOString() ?? null,
+    sourceResultStatus: preserveSourceCompletion ? 'completed' : 'pending',
   };
   const previousDateHistory = Array.isArray(previousPublication.publishDateEditHistory)
     ? previousPublication.publishDateEditHistory
     : [];
   const targetMeta = {
     ...(target.meta ?? {}),
+    // This belongs to the destination task, not the publication snapshot that
+    // moves between tasks. Never carry another task's baseline forward.
+    [DATE_REASSIGNMENT_COMPLETION_BASELINE_META_KEY]: target.status === 'completed'
+      && (targetCompletionBaseline.status === 'completed' || target.meta?.[AUTO_COMPLETION_META_KEY] !== true)
+      ? (targetCompletionBaseline.status === 'completed' ? targetCompletionBaseline : {
+        contentId: content.id,
+        taskLogId: target.id,
+        status: 'completed',
+        completedAt: target.completedAt?.toISOString() ?? null,
+        hadAutoCompletionFlag: Object.prototype.hasOwnProperty.call(target.meta ?? {}, AUTO_COMPLETION_META_KEY),
+        ...(Object.prototype.hasOwnProperty.call(target.meta ?? {}, AUTO_COMPLETION_META_KEY)
+          ? { autoCompletionFlag: target.meta[AUTO_COMPLETION_META_KEY] }
+          : {}),
+      })
+      : null,
     [SOCIAL_MEDIA_CONTENT_ID_META_KEY]: content.id,
     [SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY]: buildAssistantManagerTaskSocialMediaSnapshot(content),
     [AUTO_COMPLETION_META_KEY]: true,
@@ -844,10 +885,15 @@ export async function reassignPublishedSocialMediaTaskDate(
   };
 
   await source.update({
-    status: 'pending', completedAt: null, notes: sourceNotes, meta: sourceMeta, updatedBy: actorId,
+    status: preserveSourceCompletion ? 'completed' : 'pending',
+    completedAt: preserveSourceCompletion && typeof sourceCompletionBaseline.completedAt === 'string'
+      ? new Date(sourceCompletionBaseline.completedAt)
+      : null,
+    notes: sourceNotes, meta: sourceMeta, updatedBy: actorId,
   }, { transaction });
   await target.update({
-    status: 'completed', completedAt: publishedAt, notes: targetNotes, meta: targetMeta, updatedBy: actorId,
+    status: 'completed', completedAt: target.status === 'completed' ? target.completedAt : publishedAt,
+    notes: targetNotes, meta: targetMeta, updatedBy: actorId,
   }, { transaction });
   // A cached Pays preview may already contain settlement intents based on the
   // old completion. Clear unpaid authority for affected and subsequent carry

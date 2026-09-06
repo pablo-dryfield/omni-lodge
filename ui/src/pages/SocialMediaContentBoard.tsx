@@ -870,7 +870,7 @@ const SocialMediaContentBoard = () => {
       setPageMessage(result.taskCompletion
         ? `Publish date updated and linked to Task Planner task #${result.taskCompletion.taskLogId}.${
           result.previousTaskLogId && result.previousTaskLogId !== result.taskCompletion.taskLogId
-            ? ` Previous task #${result.previousTaskLogId} reopened.`
+            ? ` Publication unlinked from previous task #${result.previousTaskLogId}.`
             : ""
         }`
         : "Publish date updated.");
@@ -1600,9 +1600,10 @@ const SocialMediaContentBoard = () => {
             disabled={updatePublicationDateMutation.isPending}
           />
           <Text size="sm" c="dimmed">
-            A matching social media task for the same person must exist on the new date.
-            Saving reopens the previous task, moves this content's notes and links,
-            and completes the matching task.
+            A pending or completed matching social media task for the same person must exist on the new date.
+            Saving moves this content's notes and links to the matching task.
+            It reopens the previous task if this publication completed it.
+            Pending tasks are completed; existing notes, evidence, and completion times are preserved.
           </Text>
           <Group justify="flex-end" grow={Boolean(isMobile)}>
             <Button

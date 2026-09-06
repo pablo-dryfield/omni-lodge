@@ -152,8 +152,10 @@ describe('published Social Media date task reassignment', () => {
   it.each([
     [[], 'Assign a publish-enabled'],
     [[{ meta: { socialMediaContentId: 66, completeOnSocialMediaPublish: true } }], 'another idea'],
-    [[{ status: 'completed' }], 'already completed'],
-    [[{ status: 'waived' }], 'already completed'],
+    [[{ status: 'waived' }], 'waived'],
+    [[{ status: 'completed', meta: { socialMediaContentId: 66, completeOnSocialMediaPublish: true } }], 'another idea'],
+    [[{ status: 'completed', meta: { socialMediaPublicationSnapshot: { contentId: 66 }, completeOnSocialMediaPublish: true } }], 'another publication'],
+    [[{ status: 'completed', meta: { socialMediaContentId: 41, socialMediaContentSnapshot: { id: 66 }, completeOnSocialMediaPublish: true } }], 'another publication'],
     [[{ meta: { socialMediaContentSnapshot: { id: 66 }, completeOnSocialMediaPublish: true } }], 'another publication'],
     [[{ meta: { socialMediaContentId: '66', completeOnSocialMediaPublish: true } }], 'another publication'],
     [[{}, { id: 90 }], 'More than one'],
@@ -171,13 +173,117 @@ describe('published Social Media date task reassignment', () => {
     expect(StaffPayoutLedger.update).not.toHaveBeenCalled();
   });
 
-  it('ignores an already completed unlinked task when one pending task is available', async () => {
+  it('rejects ambiguity between a pending and already completed unlinked task', async () => {
+    const source = oldTask();
     const target = task();
     const completed = task({ id: 90, status: 'completed' });
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(source);
     (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([completed, target]);
-    await reassign();
-    expect(target.status).toBe('completed');
+    await expect(reassign()).rejects.toThrow('More than one');
+    expect(source.update).not.toHaveBeenCalled();
+    expect(target.update).not.toHaveBeenCalled();
     expect(completed.update).not.toHaveBeenCalled();
+    expect(AuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('accepts an already completed target preserving its work (explicit link: %s)', async (explicitLink) => {
+    const completedAt = new Date('2026-09-02T19:45:00.000Z');
+    const target = task({ status: 'completed', completedAt });
+    if (explicitLink) target.meta.socialMediaContentId = 41;
+    const other = task({ id: 90 });
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue(explicitLink ? [other, target] : [target]);
+
+    await expect(reassign()).resolves.toEqual(expect.objectContaining({
+      taskCompletion: { taskLogId: 89, userId: 7, taskDate: '2026-09-02', status: 'completed' },
+    }));
+    expect(target.completedAt).toEqual(completedAt);
+    expect(target.taskDate).toBe('2026-09-02');
+    expect(target.notes).toContain('Destination staff note.');
+    expect(target.notes).toContain('Idea: Start in the square');
+    expect(target.notes).toContain(links.instagram);
+    expect(target.meta.evidenceItems).toEqual([{ id: 'user-proof' }]);
+    expect(target.meta.socialMediaPublicationSnapshot.publishedAt).toBe('2026-09-01T22:30:12.123Z');
+    expect(target.meta.socialMediaPublicationDateCompletionBaseline).toEqual(expect.objectContaining({
+      contentId: 41, taskLogId: 89, status: 'completed', completedAt: completedAt.toISOString(),
+      hadAutoCompletionFlag: false,
+    }));
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      metaJson: expect.objectContaining({
+        targetPreviousStatus: 'completed', targetPreviousCompletedAt: completedAt.toISOString(),
+        sourceResultStatus: 'pending',
+      }),
+    }), { transaction });
+    expect(other.update).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, false])('restores independent completion across repeated moves without transferring its baseline (prior flag: %s)', async (priorAutoFlag) => {
+    const original = oldTask();
+    const completedAt = new Date('2026-09-02T19:45:00.000Z');
+    const independent = task({ status: 'completed', completedAt });
+    if (priorAutoFlag !== undefined) independent.meta.completedBySocialMediaPublish = priorAutoFlag;
+    const pending = task({ id: 90, taskDate: '2026-09-03', notes: 'Third task note.' });
+    const item = content();
+    const move = async (from: Record<string, any>, to: Record<string, any>) => {
+      (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(from);
+      (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([to]);
+      const result = await reassign(item, to.taskDate);
+      Object.assign(item, { publishedTaskLogId: to.id, publishedAt: result.publishedAt });
+    };
+
+    await move(original, independent);
+    expect(original.status).toBe('pending');
+    expect(independent.completedAt).toEqual(completedAt);
+
+    await move(independent, pending);
+    expect(independent.status).toBe('completed');
+    expect(independent.completedAt).toEqual(completedAt);
+    expect(independent.notes).toBe('Destination staff note.');
+    expect(independent.meta.evidenceItems).toEqual([{ id: 'user-proof' }]);
+    expect(independent.meta).not.toHaveProperty('socialMediaContentId');
+    expect(independent.meta).not.toHaveProperty('socialMediaPublicationSnapshot');
+    expect(independent.meta).not.toHaveProperty('socialMediaPublicationDateCompletionBaseline');
+    if (priorAutoFlag === undefined) expect(independent.meta).not.toHaveProperty('completedBySocialMediaPublish');
+    else expect(independent.meta.completedBySocialMediaPublish).toBe(false);
+    expect(pending.status).toBe('completed');
+    expect(pending.completedAt).toEqual(item.publishedAt);
+    expect(pending.meta.socialMediaPublicationDateCompletionBaseline).toBeFalsy();
+    expect(pending.meta.socialMediaPublicationSnapshot).not.toHaveProperty('socialMediaPublicationDateCompletionBaseline');
+    expect((AuditLog.create as jest.Mock).mock.calls.at(-1)?.[0].metaJson.sourceResultStatus).toBe('completed');
+
+    await move(pending, independent);
+    expect(pending.status).toBe('pending');
+    expect(pending.completedAt).toBeNull();
+    expect(pending.notes).toBe('Third task note.');
+    expect(independent.completedAt).toEqual(completedAt);
+    expect(independent.meta.socialMediaPublicationDateCompletionBaseline.taskLogId).toBe(independent.id);
+
+    await move(independent, original);
+    expect(independent.status).toBe('completed');
+    expect(independent.completedAt).toEqual(completedAt);
+    expect(independent.notes).toBe('Destination staff note.');
+    expect(original.status).toBe('completed');
+    expect(original.meta.socialMediaPublicationDateCompletionBaseline).toBeFalsy();
+    expect(original.meta.socialMediaPublicationSnapshot.publishDateEditHistory).toHaveLength(4);
+    expect(original.notes.match(/evidence #41 - START/gu)).toHaveLength(1);
+  });
+
+  it('does not preserve a duplicate automatic completion as independent work when moving again', async () => {
+    const duplicate = oldTask({ id: 89, taskDate: '2026-09-02' });
+    const item = content();
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([duplicate]);
+    const firstMove = await reassign(item);
+    Object.assign(item, { publishedTaskLogId: duplicate.id, publishedAt: firstMove.publishedAt });
+    expect(duplicate.meta.socialMediaPublicationDateCompletionBaseline).toBeFalsy();
+
+    const pending = task({ id: 90, taskDate: '2026-09-03' });
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(duplicate);
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([pending]);
+    await reassign(item, pending.taskDate);
+    expect(duplicate.status).toBe('pending');
+    expect(duplicate.completedAt).toBeNull();
+    expect(duplicate.meta).not.toHaveProperty('completedBySocialMediaPublish');
+    expect(duplicate.notes).not.toContain('#41');
+    expect(pending.meta.socialMediaPublicationDateCompletionBaseline).toBeFalsy();
   });
 
   it('honors a unique explicit idea link ahead of another unlinked task', async () => {
