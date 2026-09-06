@@ -356,6 +356,10 @@ async function bulkUpsert(rows: StoredMessageValues[]): Promise<number> {
   for (const rowChunk of chunksOf(rows)) {
     await WhatsAppMessage.bulkCreate(rowChunk, {
       updateOnDuplicate: MESSAGE_UPDATE_FIELDS as string[],
+      // sequelize-typescript stores composite @Index fields as metadata objects.
+      // Sequelize 6's PostgreSQL bulk-upsert fallback expects string conflict
+      // attributes, so provide them explicitly instead of relying on discovery.
+      conflictAttributes: ['phoneNumberId', 'providerMessageId'],
     });
   }
   return rows.length;

@@ -133,6 +133,9 @@ describe('whatsappMessageService', () => {
       contactPhoneSuffix: '4567',
       textContent: 'Latest text',
     });
+    expect(messageModel.bulkCreate.mock.calls[0][1]).toMatchObject({
+      conflictAttributes: ['phoneNumberId', 'providerMessageId'],
+    });
     expect(rows[0].contactKey).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(rows[0])).not.toContain('481234567');
   });
