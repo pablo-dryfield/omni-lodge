@@ -53,7 +53,7 @@ const normalizeSessionVersion = (value: unknown): number | null => {
 export type WhatsAppEmbeddedSignupSession = {
   type: typeof META_WHATSAPP_SIGNUP_TYPE;
   event: typeof META_WHATSAPP_SIGNUP_FINISH_EVENT | typeof META_WHATSAPP_SIGNUP_DEFAULT_FINISH_EVENT;
-  version: number | null;
+  version: typeof META_WHATSAPP_SESSION_INFO_VERSION;
   data: {
     waba_id: string;
     phone_number_id?: string;

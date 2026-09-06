@@ -469,6 +469,12 @@ describe('WhatsApp Embedded Signup service', () => {
       't'.repeat(64),
       '444555666',
     );
+    expect(graphClient.validateAccessToken.mock.invocationCallOrder[0]).toBeLessThan(
+      mockUpdateSystemConfigValues.mock.invocationCallOrder[0],
+    );
+    expect(graphClient.listWabaPhoneNumberIds.mock.invocationCallOrder[0]).toBeLessThan(
+      mockUpdateSystemConfigValues.mock.invocationCallOrder[0],
+    );
     expect(graphClient.assertCoexistencePhone.mock.invocationCallOrder[0]).toBeLessThan(
       mockUpdateSystemConfigValues.mock.invocationCallOrder[0],
     );
