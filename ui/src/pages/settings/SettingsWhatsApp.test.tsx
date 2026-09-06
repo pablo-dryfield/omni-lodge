@@ -5,7 +5,9 @@ import type { ReactNode } from "react";
 import {
   completeWhatsAppEmbeddedSignup,
   fetchWhatsAppAdminStatus,
+  fetchWhatsAppOutboundTemplates,
   prepareWhatsAppEmbeddedSignup,
+  sendWhatsAppTemplateMessage,
   type WhatsAppAdminStatus,
 } from "../../api/whatsappAdmin";
 import {
@@ -28,9 +30,12 @@ jest.mock("../../components/access/PageAccessGuard", () => ({
 
 jest.mock("../../api/whatsappAdmin", () => ({
   WHATSAPP_ADMIN_STATUS_QUERY_KEY: ["whatsapp-admin-status"],
+  WHATSAPP_OUTBOUND_TEMPLATES_QUERY_KEY: ["whatsapp-outbound-templates"],
   fetchWhatsAppAdminStatus: jest.fn(),
+  fetchWhatsAppOutboundTemplates: jest.fn(),
   prepareWhatsAppEmbeddedSignup: jest.fn(),
   completeWhatsAppEmbeddedSignup: jest.fn(),
+  sendWhatsAppTemplateMessage: jest.fn(),
 }));
 
 jest.mock("../../utils/metaWhatsAppSignup", () => {
@@ -42,8 +47,10 @@ jest.mock("../../utils/metaWhatsAppSignup", () => {
 });
 
 const mockFetchStatus = fetchWhatsAppAdminStatus as jest.MockedFunction<typeof fetchWhatsAppAdminStatus>;
+const mockFetchTemplates = fetchWhatsAppOutboundTemplates as jest.MockedFunction<typeof fetchWhatsAppOutboundTemplates>;
 const mockPrepare = prepareWhatsAppEmbeddedSignup as jest.MockedFunction<typeof prepareWhatsAppEmbeddedSignup>;
 const mockComplete = completeWhatsAppEmbeddedSignup as jest.MockedFunction<typeof completeWhatsAppEmbeddedSignup>;
+const mockSendTemplate = sendWhatsAppTemplateMessage as jest.MockedFunction<typeof sendWhatsAppTemplateMessage>;
 const mockLoadSdk = loadMetaFacebookSdk as jest.MockedFunction<typeof loadMetaFacebookSdk>;
 
 const unavailableStatus: WhatsAppAdminStatus = {
@@ -103,6 +110,15 @@ describe("SettingsWhatsApp", () => {
   let sdk: MetaFacebookSdk;
 
   beforeEach(() => {
+    Object.defineProperty(global, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: class ResizeObserverMock {
+        observe = jest.fn();
+        unobserve = jest.fn();
+        disconnect = jest.fn();
+      },
+    });
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: jest.fn().mockImplementation((query: string) => ({
@@ -136,6 +152,10 @@ describe("SettingsWhatsApp", () => {
     });
     mockLoadSdk.mockResolvedValue(sdk);
     mockComplete.mockResolvedValue(connectedStatus);
+    mockFetchTemplates.mockResolvedValue([
+      { name: "hello_world", language: "en_US", category: "UTILITY" },
+    ]);
+    mockSendTemplate.mockResolvedValue({ messageId: "wamid.accepted-message-1" });
   });
 
   afterEach(() => {
@@ -404,5 +424,43 @@ describe("SettingsWhatsApp", () => {
 
     expect(await screen.findByText(/WhatsApp Business is connected/i)).toBeInTheDocument();
     expect(screen.queryByText("Initial sync needs attention")).not.toBeInTheDocument();
+  });
+
+  it("normalizes and sends a real template only after explicit password authorization", async () => {
+    mockFetchStatus.mockResolvedValue(connectedStatus);
+    renderPage();
+    await screen.findByText("connected");
+    await screen.findByRole("textbox", { name: "Approved parameter-free template" });
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Send template message" }),
+    ).toBeEnabled());
+
+    fireEvent.change(screen.getByLabelText("Recipient phone (E.164)"), {
+      target: { value: "+48 502 484 066" },
+    });
+    fireEvent.change(screen.getByLabelText("Administrator password for sending"), {
+      target: { value: "admin-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send template message" }));
+
+    await waitFor(() => expect(mockSendTemplate).toHaveBeenCalledWith({
+      password: "admin-password",
+      recipient: "+48502484066",
+      templateName: "hello_world",
+      languageCode: "en_US",
+    }));
+    expect(screen.getByLabelText("Recipient phone (E.164)")).toHaveValue("+48502484066");
+    expect(screen.getByLabelText("Administrator password for sending")).toHaveValue("");
+    expect(await screen.findByText(/Meta accepted the WhatsApp message for delivery/i)).toBeInTheDocument();
+    expect(screen.getByText(/not yet a delivery confirmation/i)).toBeInTheDocument();
+  });
+
+  it("does not enable outbound sending when the coexistence connection is unavailable", async () => {
+    renderPage();
+    await screen.findByText("unavailable");
+
+    expect(screen.getByRole("button", { name: "Send template message" })).toBeDisabled();
+    expect(screen.getByText("WhatsApp connection required")).toBeInTheDocument();
+    expect(mockSendTemplate).not.toHaveBeenCalled();
   });
 });

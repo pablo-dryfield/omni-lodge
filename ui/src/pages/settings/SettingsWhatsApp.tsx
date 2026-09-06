@@ -8,9 +8,11 @@ import {
   Group,
   List,
   PasswordInput,
+  Select,
   SimpleGrid,
   Stack,
   Text,
+  TextInput,
   ThemeIcon,
   Title,
 } from "@mantine/core";
@@ -21,6 +23,7 @@ import {
   IconCheck,
   IconClock,
   IconRefresh,
+  IconSend,
   IconShieldLock,
 } from "@tabler/icons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,11 +32,16 @@ import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import {
   completeWhatsAppEmbeddedSignup,
   fetchWhatsAppAdminStatus,
+  fetchWhatsAppOutboundTemplates,
   prepareWhatsAppEmbeddedSignup,
+  sendWhatsAppTemplateMessage,
   WHATSAPP_ADMIN_STATUS_QUERY_KEY,
+  WHATSAPP_OUTBOUND_TEMPLATES_QUERY_KEY,
   type WhatsAppAdminStatus,
   type WhatsAppEmbeddedSignupAttempt,
+  type WhatsAppOutboundTemplate,
 } from "../../api/whatsappAdmin";
+import { isPhoneNumberValid, normalizePhoneNumber } from "../../utils/contactValidation";
 import {
   loadMetaFacebookSdk,
   META_WHATSAPP_EMBEDDED_SIGNUP_VERSION,
@@ -94,6 +102,8 @@ type FlowStage =
   | "complete"
   | "warning"
   | "error";
+
+type OutboundStage = "idle" | "sending" | "accepted" | "error";
 
 const extractErrorMessage = (error: unknown): string => {
   if (typeof error === "object" && error !== null) {
@@ -169,11 +179,28 @@ const SettingsWhatsApp = () => {
     queryKey: WHATSAPP_ADMIN_STATUS_QUERY_KEY,
     queryFn: fetchWhatsAppAdminStatus,
   });
+  const outboundTemplateQuery = useQuery<WhatsAppOutboundTemplate[]>({
+    queryKey: WHATSAPP_OUTBOUND_TEMPLATES_QUERY_KEY,
+    queryFn: fetchWhatsAppOutboundTemplates,
+    enabled: Boolean(
+      statusQuery.data?.connectionStatus === "connected"
+      && statusQuery.data.coexistenceVerified
+      && statusQuery.data.tokenConfigured
+      && statusQuery.data.phoneNumberConfigured,
+    ),
+    staleTime: 60_000,
+  });
   const [password, setPassword] = useState("");
   const [stage, setStage] = useState<FlowStage>("idle");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [preparedExpiresAt, setPreparedExpiresAt] = useState<string | null>(null);
   const [reconnectAfterOffboarding, setReconnectAfterOffboarding] = useState(false);
+  const [outboundRecipient, setOutboundRecipient] = useState("");
+  const [outboundTemplateName, setOutboundTemplateName] = useState("");
+  const [outboundLanguageCode, setOutboundLanguageCode] = useState("");
+  const [outboundPassword, setOutboundPassword] = useState("");
+  const [outboundStage, setOutboundStage] = useState<OutboundStage>("idle");
+  const [outboundFeedback, setOutboundFeedback] = useState<string | null>(null);
 
   const attemptRef = useRef<WhatsAppEmbeddedSignupAttempt | null>(null);
   const sdkRef = useRef<MetaFacebookSdk | null>(null);
@@ -341,6 +368,24 @@ const SettingsWhatsApp = () => {
     };
   }, [clearPairingTimeout]);
 
+  useEffect(() => {
+    const templates = outboundTemplateQuery.data ?? [];
+    if (templates.length === 0) {
+      setOutboundTemplateName("");
+      setOutboundLanguageCode("");
+      return;
+    }
+    const currentSelectionExists = templates.some((template) => (
+      template.name === outboundTemplateName && template.language === outboundLanguageCode
+    ));
+    if (currentSelectionExists) return;
+    const preferredTemplate = templates.find((template) => (
+      template.name === "hello_world" && template.language === "en_US"
+    )) ?? templates[0];
+    setOutboundTemplateName(preferredTemplate.name);
+    setOutboundLanguageCode(preferredTemplate.language);
+  }, [outboundLanguageCode, outboundTemplateName, outboundTemplateQuery.data]);
+
   const handlePrepare = async () => {
     const passwordValue = password.trim();
     const isReconnectAttempt = reconnectAfterOffboarding;
@@ -433,9 +478,68 @@ const SettingsWhatsApp = () => {
     setStage("idle");
   };
 
+  const handleSendTemplateMessage = async () => {
+    const recipient = normalizePhoneNumber(outboundRecipient);
+    const templateName = outboundTemplateName.trim();
+    const languageCode = outboundLanguageCode.trim();
+    const passwordValue = outboundPassword;
+
+    if (!isPhoneNumberValid(recipient) || !/^\+[1-9]\d{6,14}$/.test(recipient)) {
+      setOutboundFeedback("Enter the recipient in international format, for example +48502484066.");
+      setOutboundStage("error");
+      return;
+    }
+    if (!/^[a-z0-9_]{1,512}$/.test(templateName)) {
+      setOutboundFeedback("Enter a valid approved Meta template name.");
+      setOutboundStage("error");
+      return;
+    }
+    if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(languageCode)) {
+      setOutboundFeedback("Enter a valid template language code, for example en_US.");
+      setOutboundStage("error");
+      return;
+    }
+    if (!passwordValue.trim()) {
+      setOutboundFeedback("Enter your administrator password to authorize this message.");
+      setOutboundStage("error");
+      return;
+    }
+
+    setOutboundRecipient(recipient);
+    setOutboundPassword("");
+    setOutboundFeedback(null);
+    setOutboundStage("sending");
+    try {
+      await sendWhatsAppTemplateMessage({
+        password: passwordValue,
+        recipient,
+        templateName,
+        languageCode,
+      });
+      setOutboundFeedback("Meta accepted the WhatsApp message for delivery. This is not yet a delivery confirmation.");
+      setOutboundStage("accepted");
+    } catch (error) {
+      setOutboundFeedback(extractErrorMessage(error));
+      setOutboundStage("error");
+    }
+  };
+
   const status = statusQuery.data;
   const isBusy = ["preparing", "opening", "waiting", "submitting"].includes(stage);
   const canLaunch = stage === "ready" && Boolean(attemptRef.current && sdkRef.current);
+  const outboundConfigured = Boolean(
+    status?.connectionStatus === "connected"
+    && status.coexistenceVerified
+    && status.tokenConfigured
+    && status.phoneNumberConfigured,
+  );
+  const outboundTemplateOptions = (outboundTemplateQuery.data ?? []).map((template) => ({
+    value: `${template.name}|${template.language}`,
+    label: `${template.name} (${template.language}, ${template.category.toLowerCase()})`,
+  }));
+  const selectedOutboundTemplate = outboundTemplateOptions.find(
+    (template) => template.value === `${outboundTemplateName}|${outboundLanguageCode}`,
+  )?.value ?? null;
   const flowAlertColor = stage === "complete"
     ? "teal"
     : stage === "warning"
@@ -463,7 +567,8 @@ const SettingsWhatsApp = () => {
             </Group>
             <Text size="sm" c="dimmed" maw={720}>
               Connect the existing WhatsApp Business app number to Meta Cloud API while continuing to use the mobile app.
-              OmniLodge receives messages for the private morning brief and does not add an outbound messaging control here.
+              OmniLodge receives messages for the private morning brief and can send an approved Meta template when you
+              explicitly authorize it below.
             </Text>
           </Stack>
           <Button
@@ -550,6 +655,87 @@ const SettingsWhatsApp = () => {
             {status?.lastErrorCode ? (
               <Alert color="orange" title="Latest sanitized Meta error">
                 {status.lastErrorCode}
+              </Alert>
+            ) : null}
+          </Stack>
+        </Card>
+
+        <Card withBorder radius="md" padding="lg">
+          <Stack gap="md">
+            <Group gap="sm">
+              <IconSend size={20} />
+              <Title order={4}>Send a template message</Title>
+            </Group>
+            <Text size="sm" c="dimmed">
+              This sends a real WhatsApp message immediately through the connected Meta Cloud API number. For a new
+              conversation, use an approved template and only contact recipients who opted in. Meta acceptance does not
+              guarantee delivery.
+            </Text>
+            {!outboundConfigured ? (
+              <Alert color="yellow" title="WhatsApp connection required" icon={<IconAlertCircle size={18} />}>
+                Complete and verify the WhatsApp Business connection before sending.
+              </Alert>
+            ) : null}
+            {outboundConfigured && outboundTemplateQuery.isError ? (
+              <Alert color="red" title="Unable to load approved templates" icon={<IconAlertCircle size={18} />}>
+                {extractErrorMessage(outboundTemplateQuery.error)}
+              </Alert>
+            ) : null}
+            {outboundConfigured
+              && !outboundTemplateQuery.isLoading
+              && !outboundTemplateQuery.isError
+              && outboundTemplateOptions.length === 0 ? (
+                <Alert color="yellow" title="No sendable template found" icon={<IconAlertCircle size={18} />}>
+                  Create or approve a parameter-free message template in Meta before sending a new conversation.
+                </Alert>
+              ) : null}
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+              <TextInput
+                label="Recipient phone (E.164)"
+                placeholder="+48502484066"
+                value={outboundRecipient}
+                onChange={(event) => setOutboundRecipient(event.currentTarget.value)}
+                disabled={outboundStage === "sending"}
+              />
+              <Select
+                label="Approved parameter-free template"
+                placeholder={outboundTemplateQuery.isLoading ? "Loading approved templates…" : "Select a template"}
+                data={outboundTemplateOptions}
+                value={selectedOutboundTemplate}
+                onChange={(value) => {
+                  const selected = (outboundTemplateQuery.data ?? []).find(
+                    (template) => `${template.name}|${template.language}` === value,
+                  );
+                  setOutboundTemplateName(selected?.name ?? "");
+                  setOutboundLanguageCode(selected?.language ?? "");
+                }}
+                disabled={!outboundConfigured || outboundTemplateQuery.isLoading || outboundStage === "sending"}
+              />
+              <PasswordInput
+                label="Administrator password for sending"
+                placeholder="Enter your current password"
+                value={outboundPassword}
+                onChange={(event) => setOutboundPassword(event.currentTarget.value)}
+                autoComplete="current-password"
+                disabled={outboundStage === "sending"}
+              />
+            </SimpleGrid>
+            <Button
+              color="teal"
+              leftSection={<IconSend size={16} />}
+              onClick={() => void handleSendTemplateMessage()}
+              loading={outboundStage === "sending"}
+              disabled={!outboundConfigured || !selectedOutboundTemplate || outboundStage === "sending"}
+            >
+              Send template message
+            </Button>
+            {outboundFeedback ? (
+              <Alert
+                color={outboundStage === "accepted" ? "teal" : "red"}
+                title={outboundStage === "accepted" ? "Message accepted" : "Message not confirmed"}
+                icon={outboundStage === "accepted" ? <IconCheck size={18} /> : <IconAlertCircle size={18} />}
+              >
+                {outboundFeedback}
               </Alert>
             ) : null}
           </Stack>

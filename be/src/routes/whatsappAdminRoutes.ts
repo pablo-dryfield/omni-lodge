@@ -5,6 +5,8 @@ import {
   completeWhatsAppEmbeddedSignupAttemptController,
   createWhatsAppEmbeddedSignupAttemptController,
   getWhatsAppAdminStatusController,
+  getWhatsAppMessageTemplatesController,
+  sendWhatsAppTemplateMessageController,
 } from '../controllers/whatsappAdminController.js';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { requireRoles } from '../middleware/authorizationMiddleware.js';
@@ -35,6 +37,15 @@ const completionLimiter = rateLimit({
   message: [{ message: 'Too many WhatsApp onboarding completions. Try again later.' }],
 });
 
+const outboundMessageLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: adminRateLimitKey,
+  message: [{ message: 'Too many WhatsApp message attempts. Try again later.' }],
+});
+
 const validate = (req: Request, res: Response, next: NextFunction): void => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -54,6 +65,17 @@ router.use((_req, res, next) => {
 });
 
 router.get('/status', getWhatsAppAdminStatusController);
+router.get('/messages/templates', getWhatsAppMessageTemplatesController);
+router.post(
+  '/messages/template',
+  outboundMessageLimiter,
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  body('recipient').isString().matches(/^\+[1-9]\d{7,14}$/),
+  body('templateName').isString().matches(/^[a-z0-9_]{1,512}$/),
+  body('languageCode').isString().matches(/^[a-z]{2,3}(?:_[A-Z]{2})?$/),
+  validate,
+  sendWhatsAppTemplateMessageController,
+);
 router.post(
   '/embedded-signup/attempts',
   attemptLimiter,

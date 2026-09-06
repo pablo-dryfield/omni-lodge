@@ -68,6 +68,25 @@ export type CompleteWhatsAppEmbeddedSignupPayload = {
   session: WhatsAppEmbeddedSignupSession;
 };
 
+export type SendWhatsAppTemplateMessagePayload = {
+  password: string;
+  recipient: string;
+  templateName: string;
+  languageCode: string;
+};
+
+export type WhatsAppTemplateMessageAcceptance = {
+  messageId: string;
+};
+
+export type WhatsAppOutboundTemplate = {
+  name: string;
+  language: string;
+  category: string;
+};
+
+export const WHATSAPP_OUTBOUND_TEMPLATES_QUERY_KEY = ["whatsapp-outbound-templates"] as const;
+
 export const normalizeWhatsAppAdminStatus = (payload: unknown): WhatsAppAdminStatus => {
   const response = asRecord(payload);
   const root = isRecord(response.status) ? response.status : response;
@@ -207,4 +226,34 @@ export const completeWhatsAppEmbeddedSignup = async (
     payload,
   );
   return normalizeWhatsAppAdminStatus(response.data);
+};
+
+export const sendWhatsAppTemplateMessage = async (
+  payload: SendWhatsAppTemplateMessagePayload,
+): Promise<WhatsAppTemplateMessageAcceptance> => {
+  const response = await axiosInstance.post(`${ADMIN_BASE_PATH}/messages/template`, payload);
+  const root = asRecord(response.data);
+  const messageId = firstString(root.messageId);
+  if (!messageId || messageId.length > 512 || /[\u0000-\u001f\u007f]/.test(messageId)) {
+    throw new Error("Meta accepted the request but returned an invalid message reference. Check WhatsApp before retrying.");
+  }
+  return { messageId };
+};
+
+export const fetchWhatsAppOutboundTemplates = async (): Promise<WhatsAppOutboundTemplate[]> => {
+  const response = await axiosInstance.get(`${ADMIN_BASE_PATH}/messages/templates`);
+  const root = asRecord(response.data);
+  if (!Array.isArray(root.templates)) {
+    throw new Error("The approved WhatsApp template list is unavailable.");
+  }
+  return root.templates.map((value) => {
+    const template = asRecord(value);
+    const name = firstString(template.name);
+    const language = firstString(template.language);
+    const category = firstString(template.category);
+    if (!name || !language || !category) {
+      throw new Error("The approved WhatsApp template list is invalid.");
+    }
+    return { name, language, category };
+  });
 };

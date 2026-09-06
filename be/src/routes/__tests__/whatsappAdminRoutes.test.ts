@@ -27,6 +27,14 @@ jest.mock('../../controllers/whatsappAdminController.js', () => ({
   completeWhatsAppEmbeddedSignupAttemptController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
     res.json({ status: { connected: true } });
   }),
+  sendWhatsAppTemplateMessageController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.status(202).json({ messageId: 'wamid.accepted-message-id' });
+  }),
+  getWhatsAppMessageTemplatesController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({
+      templates: [{ name: 'simple_notice', language: 'en_US', category: 'UTILITY' }],
+    });
+  }),
 }));
 
 import whatsappAdminRoutes from '../whatsappAdminRoutes';
@@ -115,6 +123,52 @@ describe('WhatsApp admin routes', () => {
 
     expect(response.status).toBe(400);
     expect(JSON.stringify(response.body)).not.toContain(sensitiveInput);
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  it('accepts a strictly validated E.164 template request from an administrator', async () => {
+    const app = buildApp();
+    const response = await request(app)
+      .post(`${basePath}/messages/template`)
+      .set('x-test-admin-id', '901')
+      .send({
+        password: 'confirmed-password',
+        recipient: '+48502484066',
+        templateName: 'hello_world',
+        languageCode: 'en_US',
+      });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ messageId: 'wamid.accepted-message-id' });
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  it('lists safe sendable templates for an administrator', async () => {
+    const app = buildApp();
+    const response = await request(app)
+      .get(`${basePath}/messages/templates`)
+      .set('x-test-admin-id', '903');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      templates: [{ name: 'simple_notice', language: 'en_US', category: 'UTILITY' }],
+    });
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  it.each([
+    { recipient: '48502484066', templateName: 'hello_world', languageCode: 'en_US' },
+    { recipient: '+48502484066 ', templateName: 'hello_world', languageCode: 'en_US' },
+    { recipient: '+48502484066', templateName: 'Hello World', languageCode: 'en_US' },
+    { recipient: '+48502484066', templateName: 'hello_world', languageCode: 'EN-us' },
+  ])('rejects malformed template requests before the controller runs', async (input) => {
+    const app = buildApp();
+    const response = await request(app)
+      .post(`${basePath}/messages/template`)
+      .set('x-test-admin-id', '902')
+      .send({ password: 'confirmed-password', ...input });
+
+    expect(response.status).toBe(400);
     expect(response.headers['cache-control']).toBe('no-store');
   });
 });

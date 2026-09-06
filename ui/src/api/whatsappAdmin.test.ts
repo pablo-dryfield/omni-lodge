@@ -2,7 +2,9 @@ import axiosInstance from "../utils/axiosInstance";
 import {
   completeWhatsAppEmbeddedSignup,
   fetchWhatsAppAdminStatus,
+  fetchWhatsAppOutboundTemplates,
   prepareWhatsAppEmbeddedSignup,
+  sendWhatsAppTemplateMessage,
 } from "./whatsappAdmin";
 import {
   META_WHATSAPP_SESSION_INFO_VERSION,
@@ -162,5 +164,50 @@ describe("WhatsApp admin API", () => {
       "/integrations/whatsapp/admin/embedded-signup/attempts/attempt-1/complete",
       { nonce: "nonce-1", code: "single-use-code", session },
     );
+  });
+
+  it("posts the exact template-message contract and validates Meta's message reference", async () => {
+    mockPost.mockResolvedValue({ data: { messageId: "wamid.accepted-message-1" } });
+
+    await expect(sendWhatsAppTemplateMessage({
+      password: "admin-password",
+      recipient: "+48502484066",
+      templateName: "hello_world",
+      languageCode: "en_US",
+    })).resolves.toEqual({ messageId: "wamid.accepted-message-1" });
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/integrations/whatsapp/admin/messages/template",
+      {
+        password: "admin-password",
+        recipient: "+48502484066",
+        templateName: "hello_world",
+        languageCode: "en_US",
+      },
+    );
+  });
+
+  it("treats a malformed message reference as an uncertain outcome", async () => {
+    mockPost.mockResolvedValue({ data: { messageId: "bad\nreference" } });
+
+    await expect(sendWhatsAppTemplateMessage({
+      password: "admin-password",
+      recipient: "+48502484066",
+      templateName: "hello_world",
+      languageCode: "en_US",
+    })).rejects.toThrow(/Check WhatsApp before retrying/i);
+  });
+
+  it("loads the server-filtered approved parameter-free templates", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        templates: [{ name: "hello_world", language: "en_US", category: "UTILITY" }],
+      },
+    });
+
+    await expect(fetchWhatsAppOutboundTemplates()).resolves.toEqual([
+      { name: "hello_world", language: "en_US", category: "UTILITY" },
+    ]);
+    expect(mockGet).toHaveBeenCalledWith("/integrations/whatsapp/admin/messages/templates");
   });
 });

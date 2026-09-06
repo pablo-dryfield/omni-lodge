@@ -7,6 +7,10 @@ jest.mock('../../services/whatsappEmbeddedSignupService.js', () => ({
   createWhatsAppEmbeddedSignupAttempt: jest.fn(),
   completeWhatsAppEmbeddedSignupAttempt: jest.fn(),
 }));
+jest.mock('../../services/whatsappOutboundMessageService.js', () => ({
+  listWhatsAppMessageTemplates: jest.fn(),
+  sendWhatsAppTemplateMessage: jest.fn(),
+}));
 
 import bcrypt from 'bcryptjs';
 import type { Response } from 'express';
@@ -17,11 +21,17 @@ import {
   createWhatsAppEmbeddedSignupAttempt,
   getWhatsAppAdminStatus,
 } from '../../services/whatsappEmbeddedSignupService';
+import {
+  listWhatsAppMessageTemplates,
+  sendWhatsAppTemplateMessage,
+} from '../../services/whatsappOutboundMessageService';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
 import {
   completeWhatsAppEmbeddedSignupAttemptController,
   createWhatsAppEmbeddedSignupAttemptController,
   getWhatsAppAdminStatusController,
+  getWhatsAppMessageTemplatesController,
+  sendWhatsAppTemplateMessageController,
 } from '../whatsappAdminController';
 
 const response = () => ({
@@ -36,6 +46,8 @@ userModel.findByPk = jest.fn();
 const mockCreate = createWhatsAppEmbeddedSignupAttempt as jest.Mock;
 const mockComplete = completeWhatsAppEmbeddedSignupAttempt as jest.Mock;
 const mockStatus = getWhatsAppAdminStatus as jest.Mock;
+const mockListTemplates = listWhatsAppMessageTemplates as jest.Mock;
+const mockSendTemplate = sendWhatsAppTemplateMessage as jest.Mock;
 
 describe('WhatsApp admin controller', () => {
   beforeEach(() => {
@@ -175,5 +187,103 @@ describe('WhatsApp admin controller', () => {
       unsafeRes as unknown as Response,
     );
     expect(unsafeRes.json).toHaveBeenCalledWith([{ message: 'Safe onboarding failure.' }]);
+  });
+
+  it('password-gates template sends and returns only the accepted message ID', async () => {
+    mockSendTemplate.mockResolvedValue({ messageId: 'wamid.accepted-message-id' });
+    const req = {
+      authContext: { id: 7, roleSlug: 'admin' },
+      body: {
+        password: 'confirmed-password',
+        recipient: '+48502484066',
+        templateName: 'hello_world',
+        languageCode: 'en_US',
+      },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await sendWhatsAppTemplateMessageController(req, res as unknown as Response);
+
+    expect(mockCompare).toHaveBeenCalledWith('confirmed-password', 'password-hash');
+    expect(mockSendTemplate).toHaveBeenCalledWith({
+      recipient: '+48502484066',
+      templateName: 'hello_world',
+      languageCode: 'en_US',
+    });
+    expect(res.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(res.json).toHaveBeenCalledWith({ messageId: 'wamid.accepted-message-id' });
+  });
+
+  it('returns only safe approved template metadata', async () => {
+    mockListTemplates.mockResolvedValue([{
+      name: 'simple_notice',
+      language: 'en_US',
+      category: 'UTILITY',
+    }]);
+    const res = response();
+
+    await getWhatsAppMessageTemplatesController(
+      {} as AuthenticatedRequest,
+      res as unknown as Response,
+    );
+
+    expect(res.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
+    expect(res.json).toHaveBeenCalledWith({
+      templates: [{ name: 'simple_notice', language: 'en_US', category: 'UTILITY' }],
+    });
+  });
+
+  it('does not send a template when password confirmation fails', async () => {
+    mockCompare.mockResolvedValue(false);
+    const req = {
+      authContext: { id: 7, roleSlug: 'admin' },
+      body: {
+        password: 'wrong',
+        recipient: '+48502484066',
+        templateName: 'hello_world',
+        languageCode: 'en_US',
+      },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await sendWhatsAppTemplateMessageController(req, res as unknown as Response);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith([{
+      message: 'Password confirmation is required to send a WhatsApp message.',
+    }]);
+    expect(mockSendTemplate).not.toHaveBeenCalled();
+  });
+
+  it('returns only a safe ambiguity warning for an uncertain template send', async () => {
+    mockSendTemplate.mockRejectedValue(new HttpError(
+      502,
+      'Meta did not confirm whether the WhatsApp message was accepted. Check the destination chat before retrying.',
+      {
+        code: 'META_TIMEOUT',
+        ambiguous: true,
+        providerBody: 'secret response material',
+      },
+    ));
+    const req = {
+      authContext: { id: 7, roleSlug: 'admin' },
+      body: {
+        password: 'confirmed-password',
+        recipient: '+48502484066',
+        templateName: 'hello_world',
+        languageCode: 'en_US',
+      },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await sendWhatsAppTemplateMessageController(req, res as unknown as Response);
+
+    expect(res.status).toHaveBeenCalledWith(502);
+    expect(res.json).toHaveBeenCalledWith([{
+      message: 'Meta did not confirm whether the WhatsApp message was accepted. Check the destination chat before retrying.',
+      details: { code: 'META_TIMEOUT', ambiguous: true },
+    }]);
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain('secret response material');
   });
 });

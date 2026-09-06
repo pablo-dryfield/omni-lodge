@@ -7,6 +7,10 @@ import {
   createWhatsAppEmbeddedSignupAttempt,
   getWhatsAppAdminStatus,
 } from '../services/whatsappEmbeddedSignupService.js';
+import {
+  listWhatsAppMessageTemplates,
+  sendWhatsAppTemplateMessage,
+} from '../services/whatsappOutboundMessageService.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 
 const noStore = (res: Response): void => {
@@ -24,9 +28,13 @@ const handleError = (res: Response, error: unknown): void => {
     const code = typeof details?.code === 'string' && SAFE_ERROR_CODE.test(details.code)
       ? details.code
       : null;
+    const safeDetails = {
+      ...(code === null ? {} : { code }),
+      ...(details?.ambiguous === true ? { ambiguous: true } : {}),
+    };
     res.status(error.status).json([{
       message: error.message,
-      ...(code === null ? {} : { details: { code } }),
+      ...(Object.keys(safeDetails).length === 0 ? {} : { details: safeDetails }),
     }]);
     return;
   }
@@ -105,6 +113,41 @@ export const completeWhatsAppEmbeddedSignupAttemptController = async (
       session: req.body?.session,
     });
     res.json({ status });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const sendWhatsAppTemplateMessageController = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  noStore(res);
+  try {
+    if (!await passwordConfirmed(req, req.body?.password)) {
+      res.status(403).json([{
+        message: 'Password confirmation is required to send a WhatsApp message.',
+      }]);
+      return;
+    }
+    const result = await sendWhatsAppTemplateMessage({
+      recipient: req.body?.recipient,
+      templateName: req.body?.templateName,
+      languageCode: req.body?.languageCode,
+    });
+    res.status(202).json(result);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const getWhatsAppMessageTemplatesController = async (
+  _req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  noStore(res);
+  try {
+    res.json({ templates: await listWhatsAppMessageTemplates() });
   } catch (error) {
     handleError(res, error);
   }

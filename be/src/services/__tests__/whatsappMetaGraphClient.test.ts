@@ -154,4 +154,109 @@ describe('WhatsApp Meta Graph client', () => {
       ambiguous: false,
     });
   });
+
+  it('sends a template message without the E.164 plus sign and returns only the provider ID', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(200, {
+      messaging_product: 'whatsapp',
+      contacts: [{ input: '48502484066', wa_id: '48502484066' }],
+      messages: [{ id: 'wamid.accepted-message-id' }],
+    }));
+    const client = new WhatsAppMetaGraphClient({
+      appId,
+      appSecret,
+      graphApiVersion: 'v25.0',
+      fetchImpl,
+    });
+
+    await expect(client.sendTemplateMessage(accessToken, '987654321', {
+      recipient: '+48502484066',
+      templateName: 'hello_world',
+      languageCode: 'en_US',
+    })).resolves.toBe('wamid.accepted-message-id');
+
+    const [url, request] = fetchImpl.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe('https://graph.facebook.com/v25.0/987654321/messages');
+    expect(request.method).toBe('POST');
+    expect(request.headers).toEqual({
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    });
+    expect(JSON.parse(String(request.body))).toEqual({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: '48502484066',
+      type: 'template',
+      template: {
+        name: 'hello_world',
+        language: { code: 'en_US' },
+      },
+    });
+  });
+
+  it('treats a successful template response without a message ID as ambiguous', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(200, { messages: [] }));
+    const client = new WhatsAppMetaGraphClient({
+      appId,
+      appSecret,
+      graphApiVersion: 'v25.0',
+      fetchImpl,
+    });
+
+    await expect(client.sendTemplateMessage(accessToken, '987654321', {
+      recipient: '+48502484066',
+      templateName: 'hello_world',
+      languageCode: 'en_US',
+    })).rejects.toMatchObject({
+      safeCode: 'META_MESSAGE_RESPONSE_INVALID',
+      ambiguous: true,
+    });
+  });
+
+  it('lists message templates with the bounded documented field selection', async () => {
+    const template = {
+      id: '123456789',
+      name: 'simple_notice',
+      status: 'APPROVED',
+      language: 'en_US',
+      category: 'UTILITY',
+      components: [{ type: 'BODY', text: 'This is a fixed notice.' }],
+    };
+    const fetchImpl = jest.fn().mockResolvedValue(response(200, { data: [template] }));
+    const client = new WhatsAppMetaGraphClient({
+      appId,
+      appSecret,
+      graphApiVersion: 'v25.0',
+      fetchImpl,
+    });
+
+    await expect(client.listMessageTemplates(accessToken, '123456789')).resolves.toEqual([template]);
+
+    const [url, request] = fetchImpl.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(
+      'https://graph.facebook.com/v25.0/123456789/message_templates'
+      + '?fields=id%2Cname%2Cstatus%2Clanguage%2Ccategory%2Ccomponents&limit=100',
+    );
+    expect(request.method).toBe('GET');
+    expect(request.headers).toEqual({ Authorization: `Bearer ${accessToken}` });
+  });
+
+  it('rejects malformed template-list responses without returning provider data', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(200, {
+      data: [{ id: '123', name: 'unsafe name', provider_secret: 'do-not-expose' }],
+    }));
+    const client = new WhatsAppMetaGraphClient({
+      appId,
+      appSecret,
+      graphApiVersion: 'v25.0',
+      fetchImpl,
+    });
+
+    const failure = await client.listMessageTemplates(accessToken, '123456789')
+      .catch((error) => error);
+    expect(failure).toMatchObject({
+      safeCode: 'META_TEMPLATE_LIST_INVALID',
+      ambiguous: false,
+    });
+    expect(JSON.stringify(failure)).not.toContain('do-not-expose');
+  });
 });

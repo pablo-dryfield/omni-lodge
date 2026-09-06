@@ -1,5 +1,20 @@
 export type WhatsAppCoexistenceSyncType = 'smb_app_state_sync' | 'history';
 
+export interface WhatsAppTemplateMessageRequest {
+  recipient: string;
+  templateName: string;
+  languageCode: string;
+}
+
+export interface WhatsAppMessageTemplateRecord {
+  id: string;
+  name: string;
+  status: string;
+  language: string;
+  category: string;
+  components: JsonRecord[];
+}
+
 type JsonRecord = Record<string, unknown>;
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -248,5 +263,92 @@ export class WhatsAppMetaGraphClient {
       throw new WhatsAppMetaGraphError('META_SYNC_RESPONSE_INVALID', 200, true);
     }
     return requestId;
+  }
+
+  async sendTemplateMessage(
+    accessToken: string,
+    phoneNumberId: string,
+    request: WhatsAppTemplateMessageRequest,
+  ): Promise<string> {
+    const payload = await this.requestJson(`${encodeURIComponent(phoneNumberId)}/messages`, {
+      method: 'POST',
+      accessToken,
+      body: {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: request.recipient.replace(/^\+/, ''),
+        type: 'template',
+        template: {
+          name: request.templateName,
+          language: { code: request.languageCode },
+        },
+      },
+      // Meta does not provide an idempotency key for this write. Never replay a
+      // request whose outcome could already have been accepted by the provider.
+      atMostOnceWrite: true,
+    });
+    const messages = Array.isArray(payload.messages) ? payload.messages : [];
+    const messageId = asRecord(messages[0])?.id;
+    if (
+      typeof messageId !== 'string'
+      || messageId.length === 0
+      || messageId.length > 256
+      || /[\u0000-\u001f\u007f]/.test(messageId)
+    ) {
+      throw new WhatsAppMetaGraphError('META_MESSAGE_RESPONSE_INVALID', 200, true);
+    }
+    return messageId;
+  }
+
+  async listMessageTemplates(
+    accessToken: string,
+    wabaId: string,
+  ): Promise<WhatsAppMessageTemplateRecord[]> {
+    const payload = await this.requestJson(`${encodeURIComponent(wabaId)}/message_templates`, {
+      accessToken,
+      query: {
+        fields: 'id,name,status,language,category,components',
+        limit: '100',
+      },
+    });
+    if (!Array.isArray(payload.data)) {
+      throw new WhatsAppMetaGraphError('META_TEMPLATE_LIST_INVALID', 200, false);
+    }
+    return payload.data.map((value) => {
+      const record = asRecord(value);
+      const id = record?.id;
+      const name = record?.name;
+      const status = record?.status;
+      const language = record?.language;
+      const category = record?.category;
+      const rawComponents = record?.components;
+      const components = Array.isArray(rawComponents)
+        ? rawComponents.map(asRecord)
+        : null;
+      if (
+        typeof id !== 'string'
+        || !/^\d{1,64}$/.test(id)
+        || typeof name !== 'string'
+        || !/^[a-z0-9_]{1,512}$/.test(name)
+        || typeof status !== 'string'
+        || !/^[A-Z_]{1,64}$/.test(status)
+        || typeof language !== 'string'
+        || !/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(language)
+        || typeof category !== 'string'
+        || !/^[A-Z_]{1,64}$/.test(category)
+        || components === null
+        || components.some((component) => component === null)
+      ) {
+        throw new WhatsAppMetaGraphError('META_TEMPLATE_LIST_INVALID', 200, false);
+      }
+      return {
+        id,
+        name,
+        status,
+        language,
+        category,
+        components: components as JsonRecord[],
+      };
+    });
   }
 }
