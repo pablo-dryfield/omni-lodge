@@ -15,7 +15,7 @@ import {
   META_WHATSAPP_SIGNUP_FINISH_EVENT,
   META_WHATSAPP_SIGNUP_TYPE,
 } from "../../utils/metaWhatsAppSignup";
-import SettingsWhatsApp from "./SettingsWhatsApp";
+import SettingsWhatsApp, { getWhatsAppPairingWaitMs } from "./SettingsWhatsApp";
 
 jest.mock("../../components/access/PageAccessGuard", () => ({
   PageAccessGuard: ({ children }: { children: ReactNode }) => children,
@@ -207,6 +207,15 @@ describe("SettingsWhatsApp", () => {
     });
     expect(screen.queryByText("single-use-code")).not.toBeInTheDocument();
     expect(await screen.findByText(/WhatsApp Business is connected/i)).toBeInTheDocument();
+  });
+
+  it("uses the remaining secure-attempt lifetime instead of a 25-second pairing deadline", () => {
+    const now = Date.parse("2026-09-06T10:00:00.000Z");
+
+    expect(getWhatsAppPairingWaitMs("2026-09-06T10:05:00.000Z", now)).toBe(5 * 60_000);
+    expect(getWhatsAppPairingWaitMs("2026-09-06T10:20:00.000Z", now)).toBe(10 * 60_000);
+    expect(getWhatsAppPairingWaitMs("2026-09-06T10:00:00.000Z", now)).toBeNull();
+    expect(getWhatsAppPairingWaitMs("not-a-date", now)).toBeNull();
   });
 
   it("reconciles status after an uncertain completion response without replaying the code", async () => {

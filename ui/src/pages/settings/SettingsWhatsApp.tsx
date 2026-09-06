@@ -42,8 +42,14 @@ import {
 } from "../../utils/metaWhatsAppSignup";
 
 const PAGE_SLUG = PAGE_SLUGS.settingsControlPanel;
-const PAIRING_TIMEOUT_MS = 25_000;
+const MAX_PAIRING_WAIT_MS = 10 * 60_000;
 const MANUAL_RECOVERY_MESSAGE = "The latest one-time setup attempt has an ambiguous outcome. Do not retry or prepare a fresh connection; use the explicit manual recovery or offboarding process.";
+
+export const getWhatsAppPairingWaitMs = (expiresAt: string, now = Date.now()): number | null => {
+  const remainingAttemptMs = new Date(expiresAt).getTime() - now;
+  if (!Number.isFinite(remainingAttemptMs) || remainingAttemptMs <= 0) return null;
+  return Math.min(remainingAttemptMs, MAX_PAIRING_WAIT_MS);
+};
 
 type FlowStage =
   | "idle"
@@ -173,9 +179,19 @@ const SettingsWhatsApp = () => {
 
   const startPairingTimeout = useCallback(() => {
     if (pairingTimeoutRef.current !== null || completionStartedRef.current) return;
+    const attempt = attemptRef.current;
+    if (!attempt) {
+      failFlow("Prepare a fresh connection before completing Meta signup.");
+      return;
+    }
+    const pairingWaitMs = getWhatsAppPairingWaitMs(attempt.expiresAt);
+    if (pairingWaitMs === null) {
+      failFlow("This secure connection attempt expired. Prepare a new one and try again.");
+      return;
+    }
     pairingTimeoutRef.current = window.setTimeout(() => {
-      failFlow("Meta did not return both completion signals in time. Prepare a new connection and try again.");
-    }, PAIRING_TIMEOUT_MS);
+      failFlow("Meta did not return both completion signals before the secure attempt expired. Prepare a new connection and try again.");
+    }, pairingWaitMs);
   }, [failFlow]);
 
   const applyCompletionStatus = useCallback((status: WhatsAppAdminStatus) => {
