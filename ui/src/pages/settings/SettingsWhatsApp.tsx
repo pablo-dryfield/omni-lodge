@@ -43,12 +43,20 @@ import {
 
 const PAGE_SLUG = PAGE_SLUGS.settingsControlPanel;
 const MAX_PAIRING_WAIT_MS = 10 * 60_000;
+const AUTHORIZATION_CODE_PAIRING_WAIT_MS = 25_000;
 const MANUAL_RECOVERY_MESSAGE = "The latest one-time setup attempt has an ambiguous outcome. Do not retry or prepare a fresh connection; use the explicit manual recovery or offboarding process.";
 
-export const getWhatsAppPairingWaitMs = (expiresAt: string, now = Date.now()): number | null => {
+export const getWhatsAppPairingWaitMs = (
+  expiresAt: string,
+  authorizationCodeReceived: boolean,
+  now = Date.now(),
+): number | null => {
   const remainingAttemptMs = new Date(expiresAt).getTime() - now;
   if (!Number.isFinite(remainingAttemptMs) || remainingAttemptMs <= 0) return null;
-  return Math.min(remainingAttemptMs, MAX_PAIRING_WAIT_MS);
+  const maximumWaitMs = authorizationCodeReceived
+    ? AUTHORIZATION_CODE_PAIRING_WAIT_MS
+    : MAX_PAIRING_WAIT_MS;
+  return Math.min(remainingAttemptMs, maximumWaitMs);
 };
 
 type FlowStage =
@@ -184,13 +192,16 @@ const SettingsWhatsApp = () => {
       failFlow("Prepare a fresh connection before completing Meta signup.");
       return;
     }
-    const pairingWaitMs = getWhatsAppPairingWaitMs(attempt.expiresAt);
+    const authorizationCodeReceived = Boolean(codeRef.current);
+    const pairingWaitMs = getWhatsAppPairingWaitMs(attempt.expiresAt, authorizationCodeReceived);
     if (pairingWaitMs === null) {
       failFlow("This secure connection attempt expired. Prepare a new one and try again.");
       return;
     }
     pairingTimeoutRef.current = window.setTimeout(() => {
-      failFlow("Meta did not return both completion signals before the secure attempt expired. Prepare a new connection and try again.");
+      failFlow(authorizationCodeReceived
+        ? "Meta did not return the WhatsApp Business account confirmation before the authorization expired. Prepare a new connection and try again."
+        : "Meta did not return a usable authorization before the secure attempt expired. Prepare a new connection and try again.");
     }, pairingWaitMs);
   }, [failFlow]);
 

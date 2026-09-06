@@ -3,10 +3,6 @@ export const META_WHATSAPP_SIGNUP_FINISH_EVENT = "FINISH_WHATSAPP_BUSINESS_APP_O
 export const META_WHATSAPP_SIGNUP_FEATURE = "whatsapp_business_app_onboarding" as const;
 export const META_WHATSAPP_SESSION_INFO_VERSION = 3 as const;
 
-const META_MESSAGE_ORIGINS = new Set([
-  "https://www.facebook.com",
-  "https://web.facebook.com",
-]);
 const META_SDK_ID = "facebook-jssdk";
 const META_SDK_URL = "https://connect.facebook.net/en_US/sdk.js";
 const META_ID_PATTERN = /^\d{1,64}$/;
@@ -16,6 +12,16 @@ type UnknownRecord = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is UnknownRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isTrustedMetaMessageOrigin = (origin: string): boolean => {
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol === "https:"
+      && (parsed.hostname === "facebook.com" || parsed.hostname.endsWith(".facebook.com"));
+  } catch {
+    return false;
+  }
+};
 
 const parseMessageData = (value: unknown): UnknownRecord | null => {
   if (isRecord(value)) {
@@ -54,7 +60,7 @@ export type WhatsAppEmbeddedSignupSession = {
 export const parseWhatsAppEmbeddedSignupMessage = (
   message: Pick<MessageEvent<unknown>, "origin" | "data">,
 ): WhatsAppEmbeddedSignupSession | null => {
-  if (!META_MESSAGE_ORIGINS.has(message.origin)) {
+  if (!isTrustedMetaMessageOrigin(message.origin)) {
     return null;
   }
 

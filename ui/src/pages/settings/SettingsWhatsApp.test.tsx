@@ -212,10 +212,11 @@ describe("SettingsWhatsApp", () => {
   it("uses the remaining secure-attempt lifetime instead of a 25-second pairing deadline", () => {
     const now = Date.parse("2026-09-06T10:00:00.000Z");
 
-    expect(getWhatsAppPairingWaitMs("2026-09-06T10:05:00.000Z", now)).toBe(5 * 60_000);
-    expect(getWhatsAppPairingWaitMs("2026-09-06T10:20:00.000Z", now)).toBe(10 * 60_000);
-    expect(getWhatsAppPairingWaitMs("2026-09-06T10:00:00.000Z", now)).toBeNull();
-    expect(getWhatsAppPairingWaitMs("not-a-date", now)).toBeNull();
+    expect(getWhatsAppPairingWaitMs("2026-09-06T10:05:00.000Z", false, now)).toBe(5 * 60_000);
+    expect(getWhatsAppPairingWaitMs("2026-09-06T10:20:00.000Z", false, now)).toBe(10 * 60_000);
+    expect(getWhatsAppPairingWaitMs("2026-09-06T10:05:00.000Z", true, now)).toBe(25_000);
+    expect(getWhatsAppPairingWaitMs("2026-09-06T10:00:00.000Z", false, now)).toBeNull();
+    expect(getWhatsAppPairingWaitMs("not-a-date", false, now)).toBeNull();
   });
 
   it("reconciles status after an uncertain completion response without replaying the code", async () => {

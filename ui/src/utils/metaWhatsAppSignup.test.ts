@@ -43,8 +43,20 @@ describe("parseWhatsAppEmbeddedSignupMessage", () => {
     })?.data).toEqual({ waba_id: "123456789012345" });
   });
 
+  it("accepts session messages from Meta's business.facebook.com surface", () => {
+    expect(parseWhatsAppEmbeddedSignupMessage({
+      origin: "https://business.facebook.com",
+      data: validPayload,
+    })?.data).toEqual({
+      waba_id: "123456789012345",
+      phone_number_id: "987654321098765",
+    });
+  });
+
   it.each([
     ["untrusted origin", "https://example.com", validPayload],
+    ["lookalike origin", "https://evilfacebook.com", validPayload],
+    ["insecure Meta origin", "http://business.facebook.com", validPayload],
     ["wrong type", "https://www.facebook.com", { ...validPayload, type: "OTHER" }],
     ["wrong event", "https://www.facebook.com", { ...validPayload, event: "FINISH" }],
     ["wrong version", "https://www.facebook.com", { ...validPayload, version: 4 }],
