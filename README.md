@@ -5,8 +5,8 @@ Omni-lodge is a full-stack operations console for the nightly pub-crawl business
 ## Getting Started
 
 ### Requirements
-- Node.js 18+
-- npm 9+
+- Node.js 22.x LTS
+- npm 10+
 - PostgreSQL 14+
 
 ### Backend
