@@ -9,6 +9,11 @@ import VolunteerProgressPage, { LegacyVolunteerProgress as VolunteerProgress } f
 let mockRoleSlug = "owner";
 let mockStaffType: string | null = null;
 
+jest.mock("../utils/axiosInstance", () => ({
+  __esModule: true,
+  default: { defaults: { baseURL: "https://api.example.test/api/" } },
+}));
+
 jest.mock("../store/hooks", () => ({
   useAppSelector: (selector: (state: unknown) => unknown) =>
     selector({ session: { roleSlug: mockRoleSlug, staffType: mockStaffType } }),
@@ -338,7 +343,7 @@ describe("VolunteerProgress permissions", () => {
     expect(screen.getByText("Approval recorded 1 Sep 2026, 00:30 by Omar Owner")).toBeInTheDocument();
   });
 
-  it("defaults to a full-stay report with both guide targets and keeps calendar history explicit", async () => {
+  it("shows only the full-stay report with both guide targets", async () => {
     mockRoleSlug = "guide";
     mockStaffType = "volunteer";
     const monthlyTargets = { reviews: 5, guidingShifts: 8, promotionShifts: 8, socialMediaShifts: 16, cleaningTasks: 5, attendancePercent: 90 };
@@ -381,8 +386,10 @@ describe("VolunteerProgress permissions", () => {
     expect(screen.queryByText("Expected to date: 1 approval")).not.toBeInTheDocument();
     expect(mockUseMyProgress).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("radio", { name: "Calendar history" }));
-    expect(await screen.findByText("Stars reset and are earned independently each month.")).toBeInTheDocument();
-    expect(mockUseMyProgress).toHaveBeenCalledWith(expect.any(String), true);
+    expect(screen.queryByRole("radio", { name: "Calendar history" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Calendar history")).not.toBeInTheDocument();
+    expect(mockUseMyProgress).not.toHaveBeenCalled();
+    expect(mockUseList).not.toHaveBeenCalled();
+    expect(mockUseDetail).not.toHaveBeenCalled();
   });
 });

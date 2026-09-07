@@ -9,11 +9,13 @@ import {
   createVolunteerStay,
   updateVolunteerStay,
   putVolunteerStayFeedback,
+  streamVolunteerProfilePhoto,
 } from '../controllers/volunteerMilestoneController.js';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { authorizeModuleAction, requireRoles } from '../middleware/authorizationMiddleware.js';
+import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { VOLUNTEER_ATTENDANCE_STATUSES } from '../models/VolunteerShiftAttendance.js';
-import { MANAGER_ROLES } from './schedulingRoles.js';
+import { isSchedulingManagerRole, MANAGER_ROLES } from './schedulingRoles.js';
 
 const router = Router();
 const MODULE_SLUG = 'volunteer-progress';
@@ -65,6 +67,16 @@ const stayIdQueryValidator = query('stayId').optional().isInt({ gt: 0 }).withMes
 const stayIdValidator = param('stayId').isInt({ gt: 0 }).withMessage('stayId must be a positive integer').toInt();
 const revisionValidator = body('expectedRevision').isInt({ gt: 0 }).withMessage('expectedRevision must be a positive integer').toInt();
 const stayFields = ['startDate', 'endDate', 'position', 'monthlyTargets', 'shiftTypeIds', 'changeReason'] as const;
+
+const selfOrManagerGuard = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  const requestedUserId = Number(req.params.userId);
+  const context = req.authContext;
+  if (context?.id === requestedUserId || isSchedulingManagerRole(context?.roleSlug, context?.userTypeSlug)) {
+    next();
+    return;
+  }
+  res.status(403).json([{ message: 'Forbidden' }]);
+};
 
 router.get(
   '/me',
@@ -155,6 +167,16 @@ router.patch(
     .toBoolean(),
   validate,
   putVolunteerManagementFeedback,
+);
+
+router.get(
+  '/:userId/profile-photo',
+  authMiddleware,
+  authorizeModuleAction(MODULE_SLUG, 'view'),
+  userIdValidator,
+  validate,
+  selfOrManagerGuard,
+  streamVolunteerProfilePhoto,
 );
 
 router.get(

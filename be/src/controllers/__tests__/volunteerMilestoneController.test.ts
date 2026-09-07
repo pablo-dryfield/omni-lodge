@@ -14,10 +14,26 @@ jest.mock('../../services/volunteerStayService.js', () => ({
   saveVolunteerStay: jest.fn(),
   saveVolunteerStayFeedback: jest.fn(),
 }));
+jest.mock('../../services/volunteerProfilePhotoService.js', () => ({
+  getVolunteerProfilePhotoRecord: jest.fn(),
+}));
+jest.mock('../../services/profilePhotoStorageService.js', () => ({
+  openProfilePhotoStream: jest.fn(),
+}));
 
 import { getVolunteerMilestoneProgress, listActiveVolunteerMilestoneProgress } from '../../services/volunteerMilestoneService.js';
 import { getVolunteerStayProgress, listVolunteerStayProgress, saveVolunteerStay, saveVolunteerStayFeedback } from '../../services/volunteerStayService.js';
-import { createVolunteerStay, getMyVolunteerMilestones, getVolunteerMilestones, listVolunteerMilestones, putVolunteerStayFeedback, updateVolunteerStay } from '../volunteerMilestoneController.js';
+import { getVolunteerProfilePhotoRecord } from '../../services/volunteerProfilePhotoService.js';
+import { openProfilePhotoStream } from '../../services/profilePhotoStorageService.js';
+import {
+  createVolunteerStay,
+  getMyVolunteerMilestones,
+  getVolunteerMilestones,
+  listVolunteerMilestones,
+  putVolunteerStayFeedback,
+  streamVolunteerProfilePhoto,
+  updateVolunteerStay,
+} from '../volunteerMilestoneController.js';
 
 const response = (): Response => {
   const res = {} as Response;
@@ -93,6 +109,73 @@ describe('volunteer milestone controller ownership', () => {
       authContext: { id: 99 }, params: { userId: '42' }, query: { stayId: '12' },
     } as unknown as AuthenticatedRequest, response());
     expect(getVolunteerStayProgress).toHaveBeenCalledWith(42, { stayId: 12 });
+  });
+
+  it('streams an eligible volunteer photo with private, image-safe headers', async () => {
+    const stream = {
+      once: jest.fn(), unpipe: jest.fn(), destroy: jest.fn(), pipe: jest.fn(),
+    };
+    (getVolunteerProfilePhotoRecord as jest.Mock).mockResolvedValue({
+      storagePath: 'drive:private-file-id', profilePhotoVersion: '42-1788775200000',
+    });
+    (openProfilePhotoStream as jest.Mock).mockResolvedValue({ stream, mimeType: 'image/jpeg' });
+    const res = response();
+    res.setHeader = jest.fn().mockReturnValue(res);
+    res.vary = jest.fn().mockReturnValue(res);
+    res.once = jest.fn().mockReturnValue(res);
+    Object.defineProperties(res, {
+      destroyed: { value: false, configurable: true },
+      headersSent: { value: false, configurable: true },
+    });
+
+    await streamVolunteerProfilePhoto({
+      authContext: { id: 99 }, params: { userId: '42' }, query: {},
+    } as unknown as AuthenticatedRequest, res);
+
+    expect(getVolunteerProfilePhotoRecord).toHaveBeenCalledWith(42);
+    expect(openProfilePhotoStream).toHaveBeenCalledWith('drive:private-file-id');
+    expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'image/jpeg');
+    expect(res.setHeader).toHaveBeenCalledWith('X-Content-Type-Options', 'nosniff');
+    expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, max-age=3600, must-revalidate');
+    expect(res.vary).toHaveBeenCalledWith('Cookie');
+    expect(res.vary).toHaveBeenCalledWith('Authorization');
+    expect(stream.pipe).toHaveBeenCalledWith(res);
+  });
+
+  it('does not stream unsupported stored content as a profile photo', async () => {
+    const stream = { once: jest.fn(), unpipe: jest.fn(), destroy: jest.fn(), pipe: jest.fn() };
+    (getVolunteerProfilePhotoRecord as jest.Mock).mockResolvedValue({
+      storagePath: 'drive:private-file-id', profilePhotoVersion: '42-1',
+    });
+    (openProfilePhotoStream as jest.Mock).mockResolvedValue({ stream, mimeType: 'image/svg+xml' });
+    const res = response();
+    res.setHeader = jest.fn().mockReturnValue(res);
+    Object.defineProperties(res, {
+      destroyed: { value: false, configurable: true },
+      headersSent: { value: false, configurable: true },
+    });
+
+    await streamVolunteerProfilePhoto({ params: { userId: '42' } } as unknown as AuthenticatedRequest, res);
+
+    expect(stream.destroy).toHaveBeenCalled();
+    expect(stream.pipe).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(415);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Stored profile photo is not a supported image.' });
+  });
+
+  it('returns a generic not-found response without leaking a stored path', async () => {
+    (getVolunteerProfilePhotoRecord as jest.Mock).mockRejectedValue(
+      new HttpError(404, 'Volunteer profile photo was not found.'),
+    );
+    const res = response();
+    res.setHeader = jest.fn().mockReturnValue(res);
+    Object.defineProperty(res, 'headersSent', { value: false, configurable: true });
+
+    await streamVolunteerProfilePhoto({ params: { userId: '42' } } as unknown as AuthenticatedRequest, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Volunteer profile photo was not found.' });
+    expect(openProfilePhotoStream).not.toHaveBeenCalled();
   });
 
   it('takes stay ownership and actor identity from the route and authentication', async () => {

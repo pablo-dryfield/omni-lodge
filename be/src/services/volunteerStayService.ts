@@ -63,7 +63,10 @@ export type VolunteerStayMilestone = VolunteerMilestone & {
   subtargets?: MilestoneSubtarget[];
 };
 
-const userAttributes = ['id', 'firstName', 'lastName', 'email', 'profilePhotoUrl', 'arrivalDate', 'departureDate', 'status'];
+const userAttributes = [
+  'id', 'firstName', 'lastName', 'email', 'profilePhotoUrl', 'profilePhotoPath',
+  'arrivalDate', 'departureDate', 'status', 'updatedAt',
+];
 const dateOnly = (value: unknown): string | null => {
   if (value == null || value === '') return null;
   const text = value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
@@ -80,6 +83,11 @@ const isInStay = (date: string, stay: Pick<VolunteerStay, 'startDate' | 'endDate
   date >= stay.startDate && date < stay.endDate;
 const round = (value: number): number => Math.round(value * 10000) / 10000;
 const percent = (current: number, target: number): number => target <= 0 ? 100 : Math.min(100, Math.max(0, Math.round(current / target * 100)));
+const storedProfilePhotoVersion = (user: UserRecord): string | null => {
+  if (!user.profilePhotoPath) return null;
+  const updatedAt = user.updatedAt instanceof Date ? user.updatedAt.getTime() : new Date(user.updatedAt ?? 0).getTime();
+  return `${user.id}-${Number.isFinite(updatedAt) ? updatedAt : 0}`;
+};
 
 export const serializeVolunteerStay = (stay: VolunteerStay) => ({
   id: stay.id, userId: stay.userId, startDate: stay.startDate, endDate: stay.endDate,
@@ -326,7 +334,10 @@ const buildProgress = (
   const common = {
     mode: 'stay' as const,
     user: { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email,
-      profilePhotoUrl: user.profilePhotoUrl ?? null, arrivalDate: dateOnly(user.arrivalDate), departureDate: dateOnly(user.departureDate) },
+      profilePhotoUrl: user.profilePhotoUrl ?? null,
+      hasStoredProfilePhoto: Boolean(user.profilePhotoPath),
+      profilePhotoVersion: storedProfilePhotoVersion(user),
+      arrivalDate: dateOnly(user.arrivalDate), departureDate: dateOnly(user.departureDate) },
     active: user.status && user.volunteerProfileActive === true,
     stay: stay ? serializeVolunteerStay(stay) : null,
     stays: allStays.map(serializeVolunteerStay), setupRequired: stay == null,
@@ -469,7 +480,7 @@ const buildProgress = (
   const milestones = [...measurable, management];
   return { ...common, targetSummary, starsEarned: milestones.filter((milestone) => milestone.earned).length,
     milestones, attendanceAssignments, managementFeedback,
-    warnings: excludedLegacy ? ['Monthly-only legacy review totals from partial or ongoing calendar months are excluded because individual review dates are unavailable. Complete calendar months contained within this stay are included; check Calendar history for excluded credits.'] : [],
+    warnings: excludedLegacy ? ['Monthly-only legacy review totals from partial or ongoing calendar months are excluded because individual review dates are unavailable. Complete calendar months contained within this stay are included.'] : [],
   };
 };
 

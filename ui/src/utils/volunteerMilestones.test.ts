@@ -5,11 +5,22 @@ import {
   formatVolunteerProgressNumber,
   formatVolunteerProgressTimestamp,
   getCurrentMonth,
+  getVolunteerProfilePhotoUrl,
   moveVolunteerProgressMonth,
   normalizeVolunteerProgressRole,
   orderVolunteerMilestones,
 } from "./volunteerMilestones";
 import type { VolunteerMilestone } from "../api/volunteerMilestones";
+import axiosInstance from "./axiosInstance";
+
+jest.mock("./axiosInstance", () => ({
+  __esModule: true,
+  default: {
+    defaults: {
+      baseURL: "https://api.example.test/api/",
+    },
+  },
+}));
 
 const milestone = (key: VolunteerMilestone["key"], title = key): VolunteerMilestone => ({
   key,
@@ -105,6 +116,26 @@ describe("volunteer milestone helpers", () => {
     expect(
       formatMilestoneAmount({ ...milestone("attendance"), current: 90, target: 90, unit: "%" }),
     ).toBe("90% (target 90%)");
+  });
+
+  it("builds the authenticated volunteer profile-photo URL with its stable version", () => {
+    const previousBaseUrl = axiosInstance.defaults.baseURL;
+    axiosInstance.defaults.baseURL = "https://api.example.test/api/";
+    try {
+      expect(getVolunteerProfilePhotoUrl({
+        id: 42,
+        firstName: "Ada",
+        lastName: "Creator",
+        email: "ada@example.test",
+        profilePhotoUrl: "https://drive.google.com/file/d/fallback/view",
+        hasStoredProfilePhoto: true,
+        profilePhotoVersion: "42-1788105600000",
+      })).toBe(
+        "https://api.example.test/api/volunteerMilestones/42/profile-photo?v=42-1788105600000",
+      );
+    } finally {
+      axiosInstance.defaults.baseURL = previousBaseUrl;
+    }
   });
 
   it("keeps fractional stay goals readable without rounding stored values", () => {

@@ -9,12 +9,12 @@ const calculate = (overrides: Partial<VolunteerStayTargetInput> = {}) => calcula
 });
 
 describe('volunteer stay targets', () => {
-  it('uses 1.5 months for August 15 through September 30 and preserves fractional review credits', () => {
+  it('uses 1.5 months for August 15 through September 30 and rounds review requirements upward', () => {
     const result = calculate();
     expect(result.equivalentMonths).toBe(1.5);
     expect(result.elapsedMonths).toBe(1.5);
     expect(result.targets).toEqual({
-      reviews: 22.5, guidingShifts: 18, promotionShifts: 18, socialMediaShifts: 0,
+      reviews: 23, guidingShifts: 18, promotionShifts: 18, socialMediaShifts: 0,
       cleaningTasks: 8, attendancePercent: 90,
     });
     expect(result.expectedToDate).toEqual(result.targets);
@@ -41,6 +41,12 @@ describe('volunteer stay targets', () => {
     expect(result.expectedToDate).toMatchObject({ reviews: 5, guidingShifts: 4, cleaningTasks: 2 });
   });
 
+  it('rounds the full-stay and expected-to-date review requirements independently', () => {
+    const result = calculate({ asOfDate: '2026-09-01' });
+    expect(result.targets.reviews).toBe(23);
+    expect(result.expectedToDate.reviews).toBe(9);
+  });
+
   it('derives January 31 anniversaries from arrival without February drift', () => {
     expect(calculate({ startDate: '2026-01-31', endDate: '2026-02-28', asOfDate: '2026-02-28' }).equivalentMonths).toBe(1);
     const result = calculate({ startDate: '2026-01-31', endDate: '2026-03-31', asOfDate: '2026-03-28' });
@@ -57,7 +63,7 @@ describe('volunteer stay targets', () => {
 
   it('uses role-specific shifts and keeps common targets', () => {
     expect(calculate({ position: 'social_media' }).targets).toEqual({
-      reviews: 22.5, guidingShifts: 0, promotionShifts: 0, socialMediaShifts: 24,
+      reviews: 23, guidingShifts: 0, promotionShifts: 0, socialMediaShifts: 24,
       cleaningTasks: 8, attendancePercent: 90,
     });
   });
@@ -76,23 +82,24 @@ describe('volunteer stay targets', () => {
   it('uses an explicit exclusive as-of boundary and handles a one-day stay', () => {
     const result = calculate({ startDate: '2026-08-15', endDate: '2026-08-16', asOfDate: '2026-08-16' });
     expect(result.equivalentMonths).toBeCloseTo(1 / 31, 14);
-    expect(result.targets.reviews).toBeCloseTo(15 / 31, 14);
+    expect(result.targets.reviews).toBe(1);
     expect(result.targets).toMatchObject({ guidingShifts: 1, promotionShifts: 1, cleaningTasks: 1 });
   });
 
   it('removes only floating-point noise when ceiling whole-task targets', () => {
     const result = calculate({
       startDate: '2026-08-01', endDate: '2026-09-01', asOfDate: '2026-09-01',
-      monthlyTargets: { guidingShifts: 12 + Number.EPSILON * 8, cleaningTasks: 5.00001, promotionShifts: 1e-15 },
+      monthlyTargets: { reviews: 15 + Number.EPSILON * 8, guidingShifts: 12 + Number.EPSILON * 8, cleaningTasks: 5.00001, promotionShifts: 1e-15 },
     });
+    expect(result.targets.reviews).toBe(15);
     expect(result.targets.guidingShifts).toBe(12);
     expect(result.targets.cleaningTasks).toBe(6);
     expect(result.targets.promotionShifts).toBe(1);
   });
 
-  it('supports explicit zero targets and retains tiny fractional review targets', () => {
+  it('supports explicit zero targets and rounds any positive review requirement upward', () => {
     const result = calculate({ monthlyTargets: { reviews: 1e-12, guidingShifts: 0, promotionShifts: 0, cleaningTasks: 0 } });
-    expect(result.targets.reviews).toBe(1.5e-12);
+    expect(result.targets.reviews).toBe(1);
     expect(result.targets).toMatchObject({ guidingShifts: 0, promotionShifts: 0, cleaningTasks: 0 });
     expect(DEFAULT_VOLUNTEER_MONTHLY_TARGETS.reviews).toBe(15);
   });

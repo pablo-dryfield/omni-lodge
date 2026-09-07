@@ -8,6 +8,7 @@ import {
   type VolunteerMilestoneDetail,
   type VolunteerMilestoneList,
   fetchVolunteerStayProgress,
+  fetchVolunteerStayList,
   saveVolunteerStay,
   updateVolunteerStayFeedback,
   shouldRetryVolunteerStayQuery,
@@ -93,6 +94,16 @@ describe("volunteer milestones API", () => {
     expect(mockGet).toHaveBeenNthCalledWith(1, "/volunteerMilestones/me", { params: {} });
     expect(mockGet).toHaveBeenNthCalledWith(2, "/volunteerMilestones/42", { params: { stayId: 8 } });
     expect(axiosInstance.post).not.toHaveBeenCalled();
+  });
+
+  it("loads every volunteer stay summary in one bulk request", async () => {
+    const response = { mode: "stay" as const, volunteers: [], shiftTypes: [] };
+    mockGet.mockResolvedValue({ data: response });
+
+    await expect(fetchVolunteerStayList()).resolves.toBe(response);
+
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(mockGet).toHaveBeenCalledWith("/volunteerMilestones");
   });
 
   it("saves dates, position, targets and mappings with the captured stay revision", async () => {

@@ -14,7 +14,13 @@ import {
   saveVolunteerStayFeedback,
 } from '../services/volunteerStayService.js';
 import type { VolunteerAttendanceStatus } from '../models/VolunteerShiftAttendance.js';
+import { openProfilePhotoStream } from '../services/profilePhotoStorageService.js';
+import { getVolunteerProfilePhotoRecord } from '../services/volunteerProfilePhotoService.js';
 import logger from '../utils/logger.js';
+
+const ALLOWED_PROFILE_PHOTO_MIME_TYPES = new Set([
+  'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+]);
 
 const actorId = (req: AuthenticatedRequest): number => {
   const id = req.authContext?.id;
@@ -94,6 +100,65 @@ export const getVolunteerMilestones = async (
     res.json(progress);
   } catch (error) {
     sendError(res, error, 'Unable to load volunteer milestone progress.');
+  }
+};
+
+export const streamVolunteerProfilePhoto = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const userId = positiveId(req.params.userId, 'userId');
+    const photo = await getVolunteerProfilePhotoRecord(userId);
+    const { stream, mimeType } = await openProfilePhotoStream(photo.storagePath);
+    if (res.destroyed) {
+      stream.destroy();
+      return;
+    }
+
+    const normalizedMimeType = mimeType.trim().toLowerCase();
+    if (!ALLOWED_PROFILE_PHOTO_MIME_TYPES.has(normalizedMimeType)) {
+      stream.destroy();
+      res.status(415).json({ message: 'Stored profile photo is not a supported image.' });
+      return;
+    }
+
+    res.setHeader('Content-Type', normalizedMimeType);
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+    res.setHeader('Cache-Control', 'private, max-age=3600, must-revalidate');
+    res.vary('Cookie');
+    res.vary('Authorization');
+    stream.once('error', (error: NodeJS.ErrnoException) => {
+      stream.unpipe(res);
+      stream.destroy();
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      const notFound = error.code === 'ENOENT';
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.status(notFound ? 404 : 500).json({
+        message: notFound ? 'Volunteer profile photo was not found.' : 'Unable to read the volunteer profile photo.',
+      });
+    });
+    res.once('close', () => stream.destroy());
+    stream.pipe(res);
+  } catch (error) {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === 'ENOENT' || code === 404) {
+      res.status(404).json({ message: 'Volunteer profile photo was not found.' });
+      return;
+    }
+    sendError(res, error, 'Unable to read the volunteer profile photo.');
   }
 };
 

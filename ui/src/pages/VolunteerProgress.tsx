@@ -14,7 +14,6 @@ import {
   Paper,
   Progress,
   Select,
-  SegmentedControl,
   SimpleGrid,
   Stack,
   Switch,
@@ -68,6 +67,7 @@ import {
   formatVolunteerProgressTimestamp,
   formatVolunteerProgressMonth,
   getCurrentMonth,
+  getVolunteerProfilePhotoUrl,
   moveVolunteerProgressMonth,
   orderVolunteerMilestones,
   getVolunteerReportContext,
@@ -365,7 +365,7 @@ const ProgressHero = ({ detail }: { detail: VolunteerProgressReport }) => {
       <Group justify="space-between" align="center" gap="xl">
         <Group gap="lg" wrap="nowrap">
           <Avatar
-            src={detail.user.profilePhotoUrl ?? undefined}
+            src={getVolunteerProfilePhotoUrl(detail.user) ?? undefined}
             size={72}
             radius="xl"
             color="teal"
@@ -1100,36 +1100,23 @@ export const LegacyVolunteerProgress = () => {
   );
 };
 
-const VolunteerProgress = () => {
-  const [mode, setMode] = useState("stay");
-  return (
-    <PageAccessGuard pageSlug={PAGE_SLUGS.volunteerProgress}>
-      <Box maw={1440} w="100%" mx="auto" pb="xl">
-        <Stack gap="lg">
-          <SegmentedControl
-            value={mode}
-            onChange={setMode}
-            data={[{ value: "stay", label: "Stay progress" }, { value: "calendar", label: "Calendar history" }]}
-            aria-label="Progress view"
-          />
-          {mode === "calendar" ? <LegacyVolunteerProgress /> : (
-            <VolunteerStayProgress renderProgress={(detail, canEdit) => (
-              <>
-                <ProgressHero detail={detail} />
-                <SimpleGrid cols={{ base: 1, md: 2, xl: 5 }} spacing="md">
-                  {orderVolunteerMilestones(detail.milestones).map((milestone, index) => (
-                    <MilestoneCard key={`${detail.stay?.id}-${milestone.key}`} milestone={milestone} index={index} periodTimezone={detail.timezone} />
-                  ))}
-                </SimpleGrid>
-                <VolunteerFeedbackSummary detail={detail} />
-                {canEdit ? <ManagementWorkspace key={`stay-${detail.stay?.id}`} detail={detail} /> : null}
-              </>
-            )} />
-          )}
-        </Stack>
-      </Box>
-    </PageAccessGuard>
-  );
-};
+const VolunteerProgress = () => (
+  <PageAccessGuard pageSlug={PAGE_SLUGS.volunteerProgress}>
+    <Box maw={1440} w="100%" mx="auto" pb="xl">
+      <VolunteerStayProgress renderProgress={(detail, canEdit) => (
+        <>
+          <ProgressHero detail={detail} />
+          <SimpleGrid cols={{ base: 1, md: 2, xl: 5 }} spacing="md">
+            {orderVolunteerMilestones(detail.milestones).map((milestone, index) => (
+              <MilestoneCard key={`${detail.stay?.id}-${milestone.key}`} milestone={milestone} index={index} periodTimezone={detail.timezone} />
+            ))}
+          </SimpleGrid>
+          <VolunteerFeedbackSummary detail={detail} />
+          {canEdit ? <ManagementWorkspace key={`stay-${detail.stay?.id}`} detail={detail} /> : null}
+        </>
+      )} />
+    </Box>
+  </PageAccessGuard>
+);
 
 export default VolunteerProgress;

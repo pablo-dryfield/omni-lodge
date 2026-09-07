@@ -1,7 +1,13 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
-import type { VolunteerMilestone, VolunteerProgressReport, VolunteerStay } from "../api/volunteerMilestones";
+import type {
+  VolunteerMilestone,
+  VolunteerMilestoneUser,
+  VolunteerProgressReport,
+  VolunteerStay,
+} from "../api/volunteerMilestones";
+import { buildUserProfilePhotoUrl } from "./profilePhoto";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -111,6 +117,13 @@ export const formatMilestoneAmount = (milestone: VolunteerMilestone): string => 
 
 export const formatVolunteerStayRange = (stay: Pick<VolunteerStay, "startDate" | "endDate">): string =>
   `${dayjs(stay.startDate).format("D MMM YYYY")} – ${dayjs(stay.endDate).format("D MMM YYYY")}`;
+
+export const getVolunteerProfilePhotoUrl = (user: VolunteerMilestoneUser): string | null =>
+  buildUserProfilePhotoUrl({
+    user,
+    cacheOverride: user.profilePhotoVersion ?? undefined,
+    resourcePath: `/volunteerMilestones/${user.id}/profile-photo`,
+  });
 
 export const getVolunteerReportContext = (detail: VolunteerProgressReport) => {
   if ("mode" in detail && detail.mode === "stay") {

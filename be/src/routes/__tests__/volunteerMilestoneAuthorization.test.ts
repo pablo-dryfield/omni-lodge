@@ -59,6 +59,7 @@ jest.mock('../../controllers/volunteerMilestoneController.js', () => {
     createVolunteerStay: jest.fn(respond),
     updateVolunteerStay: jest.fn(respond),
     putVolunteerStayFeedback: jest.fn(respond),
+    streamVolunteerProfilePhoto: jest.fn(respond),
   };
 });
 
@@ -71,6 +72,7 @@ import {
   createVolunteerStay,
   updateVolunteerStay,
   putVolunteerStayFeedback,
+  streamVolunteerProfilePhoto,
 } from '../../controllers/volunteerMilestoneController.js';
 import volunteerMilestoneRoutes from '../volunteerMilestoneRoutes.js';
 
@@ -115,6 +117,47 @@ describe('volunteer milestone route authorization and contract', () => {
       .set('x-test-role', role)
       .set('x-test-actions', 'view');
     expect(response.status).toBe(204);
+  });
+
+  it('allows a volunteer to load only their own progress photo', async () => {
+    const app = buildApp();
+    const own = await request(app)
+      .get('/api/volunteerMilestones/91/profile-photo')
+      .set('x-test-role', 'guide')
+      .set('x-test-actions', 'view');
+    const other = await request(app)
+      .get('/api/volunteerMilestones/42/profile-photo')
+      .set('x-test-role', 'guide')
+      .set('x-test-actions', 'view');
+
+    expect([own.status, other.status]).toEqual([204, 403]);
+    expect(streamVolunteerProfilePhoto).toHaveBeenCalledTimes(1);
+    expect((streamVolunteerProfilePhoto as jest.Mock).mock.calls[0][0].params.userId).toBe(91);
+    expect(getVolunteerMilestones).not.toHaveBeenCalled();
+  });
+
+  it.each(['admin', 'owner', 'manager', 'assistant_manager'])(
+    'allows %s to load another volunteer photo with view permission',
+    async (role) => {
+      const response = await request(buildApp())
+        .get('/api/volunteerMilestones/42/profile-photo')
+        .set('x-test-role', role)
+        .set('x-test-actions', 'view');
+      expect(response.status).toBe(204);
+    },
+  );
+
+  it('requires view permission and validates the photo subject before dispatch', async () => {
+    const app = buildApp();
+    const noPermission = await request(app)
+      .get('/api/volunteerMilestones/91/profile-photo')
+      .set('x-test-role', 'guide');
+    const invalid = await request(app)
+      .get('/api/volunteerMilestones/not-a-user/profile-photo')
+      .set('x-test-role', 'manager')
+      .set('x-test-actions', 'view');
+    expect([noPermission.status, invalid.status]).toEqual([403, 400]);
+    expect(streamVolunteerProfilePhoto).not.toHaveBeenCalled();
   });
 
   it('requires both a management role and update permission for attendance', async () => {

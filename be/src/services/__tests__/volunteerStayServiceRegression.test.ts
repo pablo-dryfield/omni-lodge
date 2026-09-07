@@ -54,7 +54,9 @@ import {
 const userModel = Object.assign(UserModelStub, { findByPk: jest.fn(), findAll: jest.fn() });
 const transaction = { LOCK: { UPDATE: 'UPDATE' } };
 const user = { id: 7, firstName: 'Volunteer', lastName: 'Seven', email: 'seven@example.test', status: true,
-  arrivalDate: '2026-08-15', departureDate: '2026-09-30', role: { slug: 'guide' } };
+  arrivalDate: '2026-08-15', departureDate: '2026-09-30', role: { slug: 'guide' },
+  profilePhotoUrl: null, profilePhotoPath: 'drive:private-volunteer-photo',
+  updatedAt: new Date('2026-09-05T14:30:00.000Z') };
 const types = [{ id: 1, key: 'pub_crawl', name: 'Pub Crawl' }, { id: 2, key: 'promotion', name: 'Promotion' },
   { id: 3, key: 'social_media', name: 'Social Media' }];
 const makeStay = (overrides: Record<string, unknown> = {}) => {
@@ -110,13 +112,32 @@ describe('volunteer stay integration regressions', () => {
       row.reviewCreatedAt >= where.reviewCreatedAt[Op.gte] && row.reviewCreatedAt < where.reviewCreatedAt[Op.lt]));
     (ReviewAssignment.findAll as jest.Mock).mockResolvedValue(rows.map((row) => ({ id: row.id, reviewId: row.id, userId: 7 })));
     const progress = await report();
-    expect(milestone(progress, 'reviews')).toMatchObject({ current: 2, target: 22.5 });
+    expect(milestone(progress, 'reviews')).toMatchObject({ current: 2, target: 23, expectedToDate: 12 });
     expect(milestone(progress, 'reviews').evidence.map((entry) => entry.occurredAt)).toEqual(['2026-08-15', '2026-09-06']);
     expect((ReviewArchive.findAll as jest.Mock).mock.calls[0][0].where.reviewCreatedAt).toEqual({
       [Op.gte]: new Date('2026-08-14T22:00:00Z'), [Op.lt]: new Date('2026-09-06T22:00:00Z'),
     });
     await report(new Date('2026-10-01T12:00:00Z'));
     expect((ReviewArchive.findAll as jest.Mock).mock.calls[1][0].where.reviewCreatedAt[Op.lt]).toEqual(new Date('2026-09-29T22:00:00Z'));
+  });
+
+  it('exposes cache-safe photo metadata in detail and bulk reports without leaking storage paths', async () => {
+    const detail = await report();
+    expect(detail.user).toMatchObject({
+      id: 7,
+      hasStoredProfilePhoto: true,
+      profilePhotoVersion: `7-${new Date('2026-09-05T14:30:00.000Z').getTime()}`,
+    });
+    expect(detail.user).not.toHaveProperty('profilePhotoPath');
+
+    (StaffProfile.findAll as jest.Mock).mockResolvedValue([{ userId: 7, active: true }]);
+    userModel.findAll.mockResolvedValue([user]);
+    const overview = await listVolunteerStayProgress({ now: new Date('2026-09-06T12:00:00Z') });
+    expect(overview.volunteers[0].user).toMatchObject({
+      hasStoredProfilePhoto: true,
+      profilePhotoVersion: `7-${new Date('2026-09-05T14:30:00.000Z').getTime()}`,
+    });
+    expect(JSON.stringify(overview)).not.toContain('drive:private-volunteer-photo');
   });
 
   it('honors credit-month snapshot membership and retains deleted locked reviews without duplicate shared credit', async () => {
@@ -131,7 +152,7 @@ describe('volunteer stay integration regressions', () => {
       { reviewId: 11, userId: 7 }, { reviewId: 12, userId: 7 }, { reviewId: 13, userId: 7 },
     ]);
     const progress = await report();
-    expect(milestone(progress, 'reviews').current).toBe(1.5);
+    expect(milestone(progress, 'reviews')).toMatchObject({ current: 1.5, target: 23, expectedToDate: 12 });
     expect(milestone(progress, 'reviews').evidence.map((entry) => entry.id)).toEqual(['archive-10-7', 'archive-13-7']);
     expect((ReviewMonthLock.findAll as jest.Mock).mock.calls[0][0].where.periodStart[Op.in]).toEqual(expect.arrayContaining(['2026-07-01', '2026-08-01']));
   });

@@ -6,6 +6,10 @@ import { useModuleAccess } from "../../hooks/useModuleAccess";
 import VolunteerStayProgress from "./VolunteerStayProgress";
 
 let mockRole = "owner";
+jest.mock("../../utils/axiosInstance", () => ({
+  __esModule: true,
+  default: { defaults: { baseURL: "https://api.example.test/api/" } },
+}));
 jest.mock("../../store/hooks", () => ({
   useAppSelector: (selector: (state: unknown) => unknown) => selector({ session: { roleSlug: mockRole, staffType: null } }),
 }));
@@ -35,6 +39,34 @@ const report: StayReport = {
   warnings: ["Some legacy review credits do not have an exact activity date."],
   shiftTypes: [{ id: 2, key: "guide", name: "Pub Crawl" }, { id: 3, key: "promotion", name: "Promotion" }, { id: 4, key: "social-media", name: "Social Media" }],
 };
+const upcomingReport: StayReport = {
+  ...report,
+  user: {
+    ...report.user,
+    id: 84,
+    firstName: "Ada",
+    lastName: "Creator",
+    email: "ada@example.test",
+    profilePhotoUrl: "https://cdn.example.test/ada.jpg",
+  },
+  stay: {
+    ...stay,
+    id: 12,
+    userId: 84,
+    startDate: "2026-10-01",
+    endDate: "2026-11-01",
+    position: "social_media",
+  },
+  stays: [{
+    ...stay,
+    id: 12,
+    userId: 84,
+    startDate: "2026-10-01",
+    endDate: "2026-11-01",
+    position: "social_media",
+  }],
+  starsEarned: 2,
+};
 const query = (data: unknown) => ({ data, isLoading: false, isFetching: false, error: null, refetch: jest.fn() });
 const save = jest.fn();
 const renderProgress = jest.fn(() => <div>Calculated stay milestones</div>);
@@ -60,12 +92,35 @@ describe("Volunteer stay progress", () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it("keeps saved previous stays visible and shows source warnings and exclusive departure", () => {
+  it("shows every volunteer from the bulk roster with profile photos before loading an individual detail", () => {
+    (api.useVolunteerStayList as jest.Mock).mockReturnValue(query({
+      volunteers: [{ ...report, active: false }, upcomingReport],
+      shiftTypes: report.shiftTypes,
+    }));
+
     render(view());
-    expect(screen.getByLabelText("Volunteer", { selector: "input" })).toHaveValue("Former Volunteer (inactive)");
-    expect(screen.getByText(/Departure date is the end boundary/)).toBeInTheDocument();
-    expect(screen.getByText(report.warnings[0])).toBeInTheDocument();
-    expect(screen.getByText(/Full stay: 1.5 months/)).toBeInTheDocument();
+
+    expect(screen.getByRole("button", { name: "View Former Volunteer volunteer progress" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View Ada Creator volunteer progress" })).toBeInTheDocument();
+    expect(screen.getByAltText("Ada Creator profile photo")).toHaveAttribute(
+      "src",
+      "https://cdn.example.test/ada.jpg",
+    );
+    expect(screen.getByRole("region", { name: "Current & upcoming" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Previous & inactive" })).toBeInTheDocument();
+    expect(api.useVolunteerStayProgress).toHaveBeenLastCalledWith(null, null, false);
+    expect(renderProgress).not.toHaveBeenCalled();
+  });
+
+  it("keeps saved previous stays visible and shows source warnings after opening the volunteer", async () => {
+    render(view());
+
+    fireEvent.click(screen.getByRole("button", { name: "View Former Volunteer volunteer progress" }));
+
+    expect(api.useVolunteerStayProgress).toHaveBeenLastCalledWith(42, 8, true);
+    expect(await screen.findByText(report.warnings[0])).toBeInTheDocument();
+    expect(screen.getByText(/1.5 months equivalent/)).toBeInTheDocument();
+    expect(screen.getByText(/through the day before departure/)).toBeInTheDocument();
     expect(renderProgress).toHaveBeenCalledWith(report, true);
     expect(screen.getByText(/Photo-managed cleaning shifts count only after every required photo is approved/)).toBeInTheDocument();
   });
@@ -79,24 +134,33 @@ describe("Volunteer stay progress", () => {
     expect(screen.queryByLabelText("Volunteer")).not.toBeInTheDocument();
   });
 
-  it("shows setup without calculating or creating a stay from profile suggestions", () => {
-    (api.useVolunteerStayProgress as jest.Mock).mockReturnValue(query({ ...report, stay: null, stays: [], targetSummary: null, setupRequired: true }));
+  it("shows setup without calculating or creating a stay from profile suggestions", async () => {
+    const setupReport = { ...report, stay: null, stays: [], targetSummary: null, setupRequired: true };
+    (api.useVolunteerStayList as jest.Mock).mockReturnValue(query({ volunteers: [setupReport], shiftTypes: report.shiftTypes }));
+    (api.useVolunteerStayProgress as jest.Mock).mockReturnValue(query(setupReport));
     render(view());
-    expect(screen.getByRole("heading", { name: "Stay setup required" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "View Former Volunteer volunteer progress" }));
+
+    expect(await screen.findByRole("heading", { name: "Stay setup required" })).toBeInTheDocument();
     expect(renderProgress).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
   });
 
-  it("keeps a view-only manager out of stay editing", () => {
+  it("keeps a view-only manager out of stay editing", async () => {
     (useModuleAccess as jest.Mock).mockReturnValue({ ready: true, canView: true, canUpdate: false });
     render(view());
-    expect(screen.getByText("You have read-only access to volunteer progress.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "View Former Volunteer volunteer progress" }));
+
+    expect(await screen.findByText("You have read-only access to volunteer progress.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit stay and targets" })).not.toBeInTheDocument();
   });
 
   it("preserves the draft and captured revision when the server refreshes during an edit", async () => {
     const { rerender } = render(view());
-    fireEvent.click(screen.getByRole("button", { name: "Edit stay and targets" }));
+    fireEvent.click(screen.getByRole("button", { name: "View Former Volunteer volunteer progress" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit stay" }));
     expect(screen.getByLabelText(/Attendance & punctuality threshold/)).toBeInTheDocument();
     expect(screen.getByText(/use a fair blended monthly rate/i)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/Reviews per month/), { target: { value: "4" } });
@@ -110,9 +174,13 @@ describe("Volunteer stay progress", () => {
   });
 
   it.each([4, 6])("requires a reason for any custom seasonal target on a new stay (%s reviews)", async (reviews) => {
-    (api.useVolunteerStayProgress as jest.Mock).mockReturnValue(query({ ...report, stay: null, stays: [], targetSummary: null, setupRequired: true }));
+    const setupReport = { ...report, stay: null, stays: [], targetSummary: null, setupRequired: true };
+    (api.useVolunteerStayList as jest.Mock).mockReturnValue(query({ volunteers: [setupReport], shiftTypes: report.shiftTypes }));
+    (api.useVolunteerStayProgress as jest.Mock).mockReturnValue(query(setupReport));
     render(view());
-    fireEvent.click(screen.getByRole("button", { name: "Set up stay" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "View Former Volunteer volunteer progress" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up stay" }));
     fireEvent.change(screen.getByLabelText(/Reviews per month/), { target: { value: String(reviews) } });
     fireEvent.click(screen.getByRole("button", { name: "Save stay" }));
     expect(await screen.findByText("Explain why you are changing this stay or its targets.")).toBeInTheDocument();

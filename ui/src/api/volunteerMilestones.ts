@@ -85,6 +85,8 @@ export type VolunteerMilestoneUser = {
   lastName: string;
   email: string;
   profilePhotoUrl: string | null;
+  hasStoredProfilePhoto?: boolean;
+  profilePhotoVersion?: string | null;
 };
 
 export type VolunteerAttendanceAssignment = {

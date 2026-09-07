@@ -97,7 +97,7 @@ const scale = (rate: number, months: number): number => {
   return target === 0 ? 0 : target;
 };
 
-const wholeTaskTarget = (rate: number, months: number): number => {
+const wholeCountTarget = (rate: number, months: number): number => {
   const target = scale(rate, months);
   const nearest = Math.round(target);
   const tolerance = Math.min(1e-9, Number.EPSILON * Math.max(1, target) * 8);
@@ -111,12 +111,13 @@ const targetsForMonths = (
   months: number,
   position: VolunteerPosition,
 ): VolunteerMonthlyTargets => ({
-  // Keep fractional review credits; callers may format the display separately.
-  reviews: scale(monthly.reviews, months),
-  guidingShifts: position === 'guide' ? wholeTaskTarget(monthly.guidingShifts, months) : 0,
-  promotionShifts: position === 'guide' ? wholeTaskTarget(monthly.promotionShifts, months) : 0,
-  socialMediaShifts: position === 'social_media' ? wholeTaskTarget(monthly.socialMediaShifts, months) : 0,
-  cleaningTasks: wholeTaskTarget(monthly.cleaningTasks, months),
+  // Requirements are whole activities. Earned review credits remain fractional
+  // in the stay service and are compared against this rounded-up target.
+  reviews: wholeCountTarget(monthly.reviews, months),
+  guidingShifts: position === 'guide' ? wholeCountTarget(monthly.guidingShifts, months) : 0,
+  promotionShifts: position === 'guide' ? wholeCountTarget(monthly.promotionShifts, months) : 0,
+  socialMediaShifts: position === 'social_media' ? wholeCountTarget(monthly.socialMediaShifts, months) : 0,
+  cleaningTasks: wholeCountTarget(monthly.cleaningTasks, months),
   // Attendance is a percentage threshold, not a count prorated by stay length.
   attendancePercent: monthly.attendancePercent,
 });
