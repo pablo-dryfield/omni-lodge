@@ -33,6 +33,7 @@ import {
 } from '../services/staffPayoutReceiptService.js';
 import { StaffPayoutReceiptSafeError } from '../errors/StaffPayoutReceiptError.js';
 import logger from '../utils/logger.js';
+import { ensureDefaultVolunteerStay } from '../services/volunteerStayService.js';
 
 type UserFieldKey =
   | 'phone'
@@ -881,6 +882,14 @@ export const completeProfileFieldsAction = async (req: Request, res: Response): 
     }
 
     await user.update(updatePayload);
+    if (Object.prototype.hasOwnProperty.call(updatePayload, 'arrivalDate')
+      || Object.prototype.hasOwnProperty.call(updatePayload, 'departureDate')) {
+      await ensureDefaultVolunteerStay({
+        userId: user.id,
+        actorId: userId,
+        source: 'required_profile_fields',
+      });
+    }
     await saveRequiredActionCompletion({
       requiredActionId: action.id,
       userId,

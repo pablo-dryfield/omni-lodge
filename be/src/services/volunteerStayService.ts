@@ -89,11 +89,43 @@ export const serializeVolunteerStay = (stay: VolunteerStay) => ({
 });
 
 const shiftOptions = (types: ShiftType[]) => types.map(({ id, key, name }) => ({ id, key, name }));
-const suggestMappings = (types: ShiftType[]): ShiftMappings => ({
-  guiding: types.filter((type) => ['pub_crawl', 'pub-crawl', 'private_pub_crawl', 'guiding', 'guide'].includes(type.key.toLowerCase())).map((type) => type.id),
-  promotion: types.filter((type) => ['promotion', 'promotions', 'promo'].includes(type.key.toLowerCase())).map((type) => type.id),
-  socialMedia: types.filter((type) => ['social_media', 'social-media'].includes(type.key.toLowerCase())).map((type) => type.id),
-});
+const normalizedIdentity = (...values: Array<string | null | undefined>): string => values
+  .filter((value): value is string => typeof value === 'string')
+  .join(' ')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/gu, '_')
+  .replace(/^_+|_+$/gu, '');
+const hasIdentityToken = (identity: string, token: string): boolean =>
+  (`_${identity}_`).includes(`_${token}_`);
+
+export const resolveVolunteerStayPosition = (roleSlug: string | null | undefined): Position | null => {
+  const role = normalizedIdentity(roleSlug);
+  if (role === 'social_media' || role === 'socialmedia') return 'social_media';
+  if (role === 'guide' || role === 'pub_crawl_guide' || role === 'pubcrawl_guide') return 'guide';
+  return null;
+};
+
+/**
+ * Resolve the default milestone buckets from operational shift-type identity.
+ * The name is included so named variants such as "Kazimierz Pub Crawl" are
+ * classified even when their key is not one of the original seed keys.
+ */
+export const suggestVolunteerShiftMappings = (types: ShiftType[]): ShiftMappings => {
+  const mappings: ShiftMappings = { guiding: [], promotion: [], socialMedia: [] };
+  for (const type of types) {
+    const identity = normalizedIdentity(type.key, type.name);
+    // Buckets are intentionally exclusive, matching manual stay validation.
+    if (identity.includes('social_media') || hasIdentityToken(identity, 'socialmedia')) {
+      mappings.socialMedia.push(type.id);
+    } else if (identity.includes('promotion') || hasIdentityToken(identity, 'promo')) {
+      mappings.promotion.push(type.id);
+    } else if (identity.includes('pub_crawl') || hasIdentityToken(identity, 'guide') || hasIdentityToken(identity, 'guiding')) {
+      mappings.guiding.push(type.id);
+    }
+  }
+  return mappings;
+};
 
 const selectedStay = (stays: VolunteerStay[], today: string, requestedId?: number): VolunteerStay | null => {
   if (requestedId != null) {
@@ -290,7 +322,7 @@ const buildProgress = (
   names: Map<number, string | null>,
 ) => {
   const today = dayjs(now).tz(VOLUNTEER_MILESTONE_TIMEZONE).format('YYYY-MM-DD');
-  const position: Position = user.role?.slug?.replace(/-/gu, '_') === 'social_media' ? 'social_media' : 'guide';
+  const position: Position = resolveVolunteerStayPosition(user.role?.slug) ?? 'guide';
   const common = {
     mode: 'stay' as const,
     user: { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email,
@@ -299,7 +331,7 @@ const buildProgress = (
     stay: stay ? serializeVolunteerStay(stay) : null,
     stays: allStays.map(serializeVolunteerStay), setupRequired: stay == null,
     suggestedStay: { startDate: dateOnly(user.arrivalDate), endDate: dateOnly(user.departureDate), position,
-      monthlyTargets: { ...DEFAULT_VOLUNTEER_MONTHLY_TARGETS }, shiftTypeIds: suggestMappings(types) },
+      monthlyTargets: { ...DEFAULT_VOLUNTEER_MONTHLY_TARGETS }, shiftTypeIds: suggestVolunteerShiftMappings(types) },
     asOfDate: today, timezone: VOLUNTEER_MILESTONE_TIMEZONE,
     shiftTypes: shiftOptions(types), totalStars: 5 as const,
   };
@@ -569,11 +601,122 @@ const assertExpectedRevision = (value: unknown, stay: VolunteerStay): void => {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) throw new HttpError(400, 'expectedRevision must be a positive integer.');
   if (value !== stay.revision) throw new HttpError(409, 'This stay changed since it was opened. Refresh it before saving.');
 };
-const writeRevision = async (stay: VolunteerStay, actorId: number, reason: string | null, action: string, transaction: Transaction, approvalEvidence?: Record<string, unknown>) => {
+const writeRevision = async (
+  stay: VolunteerStay,
+  actorId: number | null,
+  reason: string | null,
+  action: string,
+  transaction: Transaction,
+  approvalEvidence?: Record<string, unknown>,
+  auditMeta?: Record<string, unknown>,
+) => {
   await VolunteerStayRevision.create({ stayId: stay.id, revision: stay.revision,
     snapshot: { ...serializeVolunteerStay(stay), ...(approvalEvidence ? { approvalEvidence } : {}) }, reason, actorId }, { transaction });
   await AuditLog.create({ actorId, action, entity: 'volunteer_stay', entityId: String(stay.id),
-    metaJson: { userId: stay.userId, stayId: stay.id, revision: stay.revision, reason } }, { transaction });
+    metaJson: { userId: stay.userId, stayId: stay.id, revision: stay.revision, reason, ...auditMeta } }, { transaction });
+};
+
+export type EnsureVolunteerStayResult = {
+  status: 'created' | 'existing' | 'skipped';
+  stayId: number | null;
+  reason?: 'user_not_found' | 'inactive_user' | 'unapproved_user' | 'inactive_volunteer_profile'
+    | 'missing_or_invalid_dates' | 'past_stay' | 'unsupported_position' | 'missing_shift_mapping';
+};
+
+const AUTO_STAY_REASON = 'Automatically created from the active Volunteer profile.';
+
+/**
+ * Create the default stay once all lifecycle prerequisites exist. This is
+ * deliberately create-only: later profile, role, or date edits never rewrite
+ * an audited stay, and managers retain the existing revisioned editor.
+ */
+export const ensureDefaultVolunteerStay = async (params: {
+  userId: number;
+  actorId?: number | null;
+  source?: string;
+  transaction?: Transaction;
+  now?: Date;
+  /** Management-controlled profile/user mutations may activate a stay before account approval. */
+  allowUnapproved?: boolean;
+}): Promise<EnsureVolunteerStayResult> => {
+  const work = async (transaction: Transaction): Promise<EnsureVolunteerStayResult> => {
+    const user = await User.findByPk(params.userId, {
+      attributes: ['id', 'status', 'approved', 'arrivalDate', 'departureDate', 'userTypeId'],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!user) return { status: 'skipped', stayId: null, reason: 'user_not_found' };
+    if (user.status !== true) return { status: 'skipped', stayId: null, reason: 'inactive_user' };
+    if (user.approved !== true && params.allowUnapproved !== true) {
+      return { status: 'skipped', stayId: null, reason: 'unapproved_user' };
+    }
+
+    const profile = await StaffProfile.findOne({
+      where: { userId: params.userId, staffType: 'volunteer', active: true },
+      attributes: ['userId'],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!profile) return { status: 'skipped', stayId: null, reason: 'inactive_volunteer_profile' };
+
+    const startDate = dateOnly(user.arrivalDate);
+    const endDate = dateOnly(user.departureDate);
+    if (!startDate || !endDate || endDate <= startDate) {
+      return { status: 'skipped', stayId: null, reason: 'missing_or_invalid_dates' };
+    }
+    const today = dayjs(params.now ?? new Date()).tz(VOLUNTEER_MILESTONE_TIMEZONE).format('YYYY-MM-DD');
+    if (endDate <= today) return { status: 'skipped', stayId: null, reason: 'past_stay' };
+
+    const role = user.userTypeId ? await UserType.findByPk(user.userTypeId, {
+      attributes: ['slug'], transaction,
+    }) : null;
+    const position = resolveVolunteerStayPosition(role?.slug);
+    if (!position) return { status: 'skipped', stayId: null, reason: 'unsupported_position' };
+
+    // Locking the user above serializes all application writers for this person.
+    const overlapping = await VolunteerStay.findOne({
+      where: {
+        userId: params.userId,
+        startDate: { [Op.lt]: endDate },
+        endDate: { [Op.gt]: startDate },
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (overlapping) return { status: 'existing', stayId: overlapping.id };
+
+    const shiftTypes = await ShiftType.findAll({
+      attributes: ['id', 'key', 'name'],
+      order: [['id', 'ASC']],
+      transaction,
+    });
+    const shiftTypeIds = suggestVolunteerShiftMappings(shiftTypes);
+    const hasRequiredMappings = position === 'guide'
+      ? shiftTypeIds.guiding.length > 0 && shiftTypeIds.promotion.length > 0
+      : shiftTypeIds.socialMedia.length > 0;
+    if (!hasRequiredMappings) return { status: 'skipped', stayId: null, reason: 'missing_shift_mapping' };
+
+    const actorId = params.actorId ?? null;
+    const created = await VolunteerStay.create({
+      userId: params.userId,
+      startDate,
+      endDate,
+      position,
+      monthlyTargets: { ...DEFAULT_VOLUNTEER_MONTHLY_TARGETS },
+      shiftTypeIds,
+      feedback: null,
+      changeReason: AUTO_STAY_REASON,
+      revision: 1,
+      createdBy: actorId,
+      updatedBy: actorId,
+    }, { transaction });
+    await writeRevision(created, actorId, AUTO_STAY_REASON, 'volunteer_stay.auto_created', transaction, undefined, {
+      source: params.source ?? 'application',
+    });
+    return { status: 'created', stayId: created.id };
+  };
+
+  return params.transaction ? work(params.transaction) : sequelize.transaction(work);
 };
 
 export const saveVolunteerStay = async (params: { userId: number; stayId?: number; body: unknown; actorId: number }): Promise<VolunteerStayProgress> => {

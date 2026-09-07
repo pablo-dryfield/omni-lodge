@@ -2,9 +2,9 @@
 
 ## Scope
 
-The default Volunteer Progress report uses a manager-confirmed stay, not calendar-month resets. Explicit `period=YYYY-MM` reports retain the existing monthly calculations and feedback for historical inspection.
+The default Volunteer Progress report uses a saved stay, not calendar-month resets. Explicit `period=YYYY-MM` reports retain the existing monthly calculations and feedback for historical inspection.
 
-A stay stores its own arrival/departure dates, position, monthly target rates and eligible shift-type IDs. Changing the user's current staff profile or arrival/departure fields does not silently rewrite a saved stay. Profile dates are suggestions when a manager creates an agreement, not an automatic migration of existing people.
+A stay stores its own arrival/departure dates, position, monthly target rates and eligible shift-type IDs. The system automatically creates the initial stay when the user and Volunteer staff profile are active, current/future arrival and departure dates are valid, and the user type resolves to Guide or Social Media. Public self-signups wait for account approval; a Volunteer profile explicitly created or activated by management is treated as operational even if the legacy approval flag has not been updated. Changing the user's current staff profile, role, or dates does not silently rewrite a saved stay; managers use the revisioned editor for later corrections.
 
 ## Calculation
 
@@ -34,17 +34,18 @@ Expected progress by today uses the same calculation capped at the stay boundari
 
 ## Configuration and history
 
-- Managers confirm a stay and its shift mappings before targets become active.
+- Eligible current and future volunteers receive a stay automatically with the standard targets and inferred shift mappings. Named Pub Crawl variants (including location-specific variants), Promotion and Social Media shift types are classified from their configured key/name.
+- If a prerequisite is initially missing, creation is retried when the user, approval, dates, role, staff type or staff-profile activation is updated. Existing and overlapping stays are preserved rather than merged or overwritten.
 - Seasonal/staffing adjustments use a fair blended monthly rate agreed for that individual stay rather than a global month calendar. Any custom initial target and every later edit require a recorded reason; an edit recalculates the whole stay.
 - Overlapping stays are rejected. Updates use a revision check to prevent silently overwriting another manager's work.
 - Saved revisions retain the agreement and feedback history. Material agreement edits invalidate approval so the edited goals can be reviewed again.
-- Inactive former volunteers remain selectable for historical stay setup and people with saved stays remain available for management review. If the current profile has since changed to Long-Term, a manager can still record the missing stay when its dates overlap the preserved volunteer staff-type history; the system never guesses dates from that history.
+- Inactive or already-departed former volunteers remain selectable for historical stay setup and people with saved stays remain available for management review. Historical stays are not inferred automatically. If the current profile has since changed to Long-Term, a manager can still record the missing stay when its dates overlap the preserved volunteer staff-type history; the system never guesses dates from that history.
 - Monthly-only legacy review totals count when the entire closed calendar month is contained within the stay. Totals from overlapping partial or unfinished months are disclosed as unavailable; the system does not fabricate daily prorations or change payroll/review ledgers. Existing dated archive reviews use their actual Warsaw creation dates and respect locked-month inclusion rules.
 - Approval evaluates the evidence in one consistent database snapshot and preserves that evidence in the revision history. Later corrections can still put the visible final star on hold; the historical approval record is not erased.
 
 ## Deployment
 
-Apply `202609060004-volunteer-stays` before serving the new backend/UI. The original Volunteer Progress migrations `202609060001` and `202609060002` are prerequisites. The new migration adds stay/revision tables and Social Media view access, without creating volunteer stays or modifying existing financial/review records.
+Apply `202609060004-volunteer-stays` before serving the new backend/UI. The original Volunteer Progress migrations `202609060001` and `202609060002` are prerequisites. Apply `202609070007-auto-create-volunteer-stays` after the stay schema migration. It idempotently creates default stays and initial revision/audit records for active current/future volunteers that have valid dates, a supported role, required shift mappings and no overlapping stay. It does not modify financial or review records.
 
 Rollback refuses to drop populated stay tables, preserving agreements and audit history. Take a normal database backup and deploy the backend and UI together.
 
@@ -80,4 +81,4 @@ Apply `202609060005-volunteer-evidence-workflows` after the stay migrations, fol
 
 Existing attendance rows receive their currently assigned subject ID as an identity snapshot; historical statuses are not changed. Existing photo-linked rows without a trustworthy physical-shift snapshot remain visible but no longer count until a manager reconfirms them from the original task. Rollback refuses to discard saved submissions or photo-linked attendance. Uploaded cleaning images are decoded and normalized on the backend, with 10 MiB and 24-megapixel limits. Authenticated, assignment-scoped preview endpoints serve the evidence.
 
-Local work status: stay migrations and `202609060005` have been applied and verified on the loopback development database only. No production deployment or production configuration change has been performed. Template opt-ins and shift mappings still need manager confirmation before real staff use the new workflows.
+Template opt-ins and their operational attendance/cleaning mappings still need manager confirmation before real staff use the evidence workflows.

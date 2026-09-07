@@ -12,6 +12,7 @@ import {
   closeStaffProfileTypeHistoryForDeletion,
   StaffEligibilityHistoryError,
 } from '../services/staffEligibilityHistoryService.js';
+import { ensureDefaultVolunteerStay } from '../services/volunteerStayService.js';
 
 const STAFF_TYPE_OPTIONS: Array<StaffProfile['staffType']> = ['volunteer', 'long_term'];
 
@@ -301,6 +302,15 @@ export const createStaffProfile = async (req: Request, res: Response): Promise<v
         metadata: { initialization: true },
         transaction,
       });
+      if (staffType === 'volunteer') {
+        await ensureDefaultVolunteerStay({
+          userId,
+          actorId: request.authContext?.id ?? null,
+          source: 'staff_profile_creation',
+          transaction,
+          allowUnapproved: true,
+        });
+      }
       return created;
     });
 
@@ -402,6 +412,15 @@ export const updateStaffProfile = async (req: Request, res: Response): Promise<v
           actorId: request.authContext?.id ?? null,
           reason: req.body?.reason,
           transaction,
+        });
+      }
+      if (hasStaffTypeChange || updates.active !== undefined) {
+        await ensureDefaultVolunteerStay({
+          userId,
+          actorId: request.authContext?.id ?? null,
+          source: 'staff_profile_update',
+          transaction,
+          allowUnapproved: true,
         });
       }
     });

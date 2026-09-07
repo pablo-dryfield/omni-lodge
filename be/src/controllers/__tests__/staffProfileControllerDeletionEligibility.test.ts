@@ -39,6 +39,9 @@ jest.mock('../../services/staffEligibilityHistoryService.js', () => ({
     }
   },
 }));
+jest.mock('../../services/volunteerStayService.js', () => ({
+  ensureDefaultVolunteerStay: jest.fn(),
+}));
 
 import type { Response } from 'express';
 import StaffProfile from '../../models/StaffProfile';

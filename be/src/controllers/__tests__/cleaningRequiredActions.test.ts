@@ -10,6 +10,7 @@ jest.mock('../../services/scheduleService.js', () => ({ listShiftChangeRequests:
 jest.mock('../../services/profilePhotoStorageService.js', () => ({}));
 jest.mock('../../services/staffPayoutReceiptService.js', () => ({}));
 jest.mock('../../services/cleaningSubmissionService.js', () => ({ getCleaningReviewActionPayload: jest.fn() }));
+jest.mock('../../services/volunteerStayService.js', () => ({ ensureDefaultVolunteerStay: jest.fn() }));
 jest.mock('../../utils/logger.js', () => ({ __esModule: true, default: { error: jest.fn() } }));
 import type { Request, Response } from 'express';
 import ModelStub from '../../__mocks__/sequelizeModelStub';
@@ -61,4 +62,3 @@ it('cannot fabricate cleaning requests through the generic create endpoint', asy
   expect(res.status).toHaveBeenCalledWith(400);
   expect(RequiredAction.create).not.toHaveBeenCalled();
 });
-

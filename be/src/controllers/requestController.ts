@@ -19,6 +19,7 @@ import {
   recordUserAuditLog,
   sendApprovedUserBadgeToPrint,
 } from './userController.js';
+import { ensureDefaultVolunteerStay } from '../services/volunteerStayService.js';
 
 const REQUEST_USER_ATTRIBUTES = [
   'id',
@@ -388,6 +389,11 @@ export const approveUserRequest = async (req: Request, res: Response): Promise<v
     }
     user.updatedBy = actorId;
     await user.save();
+    await ensureDefaultVolunteerStay({
+      userId: user.id,
+      actorId,
+      source: 'user_approval_request',
+    });
 
     await recordUserAuditLog({
       actorId,

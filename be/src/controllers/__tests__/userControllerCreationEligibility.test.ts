@@ -7,6 +7,7 @@ jest.mock('../../__mocks__/sequelizeModelStub', () => ({
       )),
     },
     findOne: jest.fn(),
+    findByPk: jest.fn(),
     create: jest.fn(),
     destroy: jest.fn(),
     getAttributes: jest.fn(() => ({})),
@@ -55,6 +56,9 @@ jest.mock('../../services/staffEligibilityHistoryService.js', () => ({
   applyUserTypeChange: jest.fn(),
   StaffEligibilityHistoryError: class StaffEligibilityHistoryError extends Error {},
 }));
+jest.mock('../../services/volunteerStayService.js', () => ({
+  ensureDefaultVolunteerStay: jest.fn(),
+}));
 jest.mock('../../utils/logger.js', () => ({
   __esModule: true,
   default: { warn: jest.fn(), error: jest.fn() },
@@ -75,11 +79,13 @@ import {
   applyUserShiftRolesChange,
   applyUserTypeChange,
 } from '../../services/staffEligibilityHistoryService';
+import { ensureDefaultVolunteerStay } from '../../services/volunteerStayService';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
-import { deleteUser, registerUser } from '../userController';
+import { deleteUser, registerUser, updateUser } from '../userController';
 
 const userAndTypeModel = jest.requireMock('../../__mocks__/sequelizeModelStub').default as {
   findOne: jest.Mock;
+  findByPk: jest.Mock;
   create: jest.Mock;
   destroy: jest.Mock;
 };
@@ -106,6 +112,7 @@ describe('registerUser eligibility initialization', () => {
     (applyUserTypeChange as jest.Mock).mockResolvedValue({ changed: true, periodId: 101 });
     (applyStaffProfileTypeChange as jest.Mock).mockResolvedValue({ changed: true, periodId: 102 });
     (applyUserShiftRolesChange as jest.Mock).mockResolvedValue({ changed: true, next: [3, 5] });
+    (ensureDefaultVolunteerStay as jest.Mock).mockResolvedValue({ status: 'skipped', stayId: null });
     (ShiftRole.findAll as jest.Mock).mockResolvedValue([
       { id: 3, slug: 'guide' },
       { id: 5, slug: 'host' },
@@ -172,6 +179,42 @@ describe('registerUser eligibility initialization', () => {
       transaction: activeTransaction,
     });
     expect(response.status).toHaveBeenCalledWith(201);
+    expect(ensureDefaultVolunteerStay).not.toHaveBeenCalled();
+  });
+
+  it('attempts default stay creation for a Volunteer signup in the signup transaction', async () => {
+    const createdUser = {
+      id: 29,
+      username: 'future-guide',
+      email: 'future-guide@example.test',
+      userTypeId: 4,
+    };
+    userAndTypeModel.create.mockResolvedValue(createdUser);
+    (StaffProfile.create as jest.Mock).mockResolvedValue({ userId: 29, staffType: 'volunteer' });
+    const request = {
+      body: {
+        username: 'future-guide',
+        email: 'future-guide@example.test',
+        password: 'secret',
+        firstName: 'Future',
+        lastName: 'Guide',
+        arrivalDate: '2026-10-01',
+        departureDate: '2026-11-01',
+        staffType: 'volunteer',
+      },
+    } as unknown as AuthenticatedRequest;
+    const response = createResponse();
+
+    await registerUser(request, response);
+
+    const activeTransaction = (StaffProfile.create as jest.Mock).mock.calls[0][1].transaction;
+    expect(ensureDefaultVolunteerStay).toHaveBeenCalledWith({
+      userId: 29,
+      actorId: null,
+      source: 'user_signup',
+      transaction: activeTransaction,
+    });
+    expect(response.status).toHaveBeenCalledWith(201);
   });
 });
 
@@ -196,5 +239,48 @@ describe('deleteUser payroll history protection', () => {
       message: 'This user has payroll eligibility history and cannot be deleted. Deactivate the user instead.',
     }]);
     expect(userAndTypeModel.destroy).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateUser volunteer stay lifecycle', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (ensureDefaultVolunteerStay as jest.Mock).mockResolvedValue({ status: 'created', stayId: 73 });
+  });
+
+  it('retries default stay creation after dates or other user prerequisites are updated', async () => {
+    const existingUser = {
+      id: 28,
+      approved: true,
+      status: true,
+      userTypeId: 4,
+      profilePhotoPath: null,
+      update: jest.fn(),
+      reload: jest.fn(),
+    };
+    userAndTypeModel.findByPk.mockResolvedValue(existingUser);
+    const request = {
+      params: { id: '28' },
+      body: { arrivalDate: '2026-10-01', departureDate: '2026-11-01' },
+      authContext: { id: 7 },
+    } as unknown as AuthenticatedRequest;
+    const response = createResponse();
+
+    await updateUser(request, response);
+
+    const activeTransaction = existingUser.update.mock.calls[0][1].transaction;
+    expect(existingUser.update).toHaveBeenCalledWith({
+      arrivalDate: '2026-10-01',
+      departureDate: '2026-11-01',
+    }, { transaction: activeTransaction });
+    expect(ensureDefaultVolunteerStay).toHaveBeenCalledWith({
+      userId: 28,
+      actorId: 7,
+      source: 'user_update',
+      transaction: activeTransaction,
+      allowUnapproved: true,
+    });
+    expect(existingUser.reload).toHaveBeenCalledTimes(1);
+    expect(response.status).toHaveBeenCalledWith(200);
   });
 });

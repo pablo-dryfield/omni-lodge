@@ -41,7 +41,15 @@ import StaffProfileTypePeriod from '../../models/StaffProfileTypePeriod.js';
 import VolunteerStay from '../../models/VolunteerStay.js';
 import VolunteerStayRevision from '../../models/VolunteerStayRevision.js';
 import { DEFAULT_VOLUNTEER_MONTHLY_TARGETS } from '../../utils/volunteerStayTargets.js';
-import { getVolunteerStayProgress, listVolunteerStayProgress, saveVolunteerStay, saveVolunteerStayFeedback } from '../volunteerStayService.js';
+import {
+  ensureDefaultVolunteerStay,
+  getVolunteerStayProgress,
+  listVolunteerStayProgress,
+  resolveVolunteerStayPosition,
+  saveVolunteerStay,
+  saveVolunteerStayFeedback,
+  suggestVolunteerShiftMappings,
+} from '../volunteerStayService.js';
 
 const userModel = Object.assign(UserModelStub, { findByPk: jest.fn(), findAll: jest.fn() });
 const transaction = { LOCK: { UPDATE: 'UPDATE' } };
@@ -469,6 +477,167 @@ describe('volunteer stay integration regressions', () => {
       lock: 'UPDATE',
     }));
     expect(VolunteerStay.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('recognizes only supported volunteer positions and keeps default shift buckets exclusive', () => {
+    expect(resolveVolunteerStayPosition('pub-crawl-guide')).toBe('guide');
+    expect(resolveVolunteerStayPosition('Social Media')).toBe('social_media');
+    expect(resolveVolunteerStayPosition('assistant-manager')).toBeNull();
+
+    expect(suggestVolunteerShiftMappings([
+      { id: 1, key: 'pub_crawl', name: 'Pub Crawl' },
+      { id: 2, key: 'private', name: 'Private Pub Crawl' },
+      { id: 3, key: 'promotion', name: 'Promotion' },
+      { id: 4, key: 'social_media', name: 'Social Media' },
+      { id: 5, key: 'cleaning', name: 'Cleaning' },
+      { id: 6, key: 'social_media_promotion', name: 'Social Media Promotion' },
+    ] as ShiftType[])).toEqual({
+      guiding: [1, 2],
+      promotion: [3],
+      socialMedia: [4, 6],
+    });
+  });
+
+  it.each([
+    ['current guide', 'pub-crawl-guide', 'guide', '2026-08-15', '2026-09-30'],
+    ['future social-media volunteer', 'social-media', 'social_media', '2026-10-01', '2026-11-01'],
+  ])('auto-creates one default stay for an eligible %s', async (_label, roleSlug, position, startDate, endDate) => {
+    const eligibleUser = {
+      ...user,
+      status: true,
+      approved: true,
+      userTypeId: 4,
+      arrivalDate: startDate,
+      departureDate: endDate,
+    };
+    userModel.findByPk
+      .mockResolvedValueOnce(eligibleUser)
+      .mockResolvedValueOnce({ id: 4, slug: roleSlug });
+    (VolunteerStay.create as jest.Mock).mockImplementation(async (values) => makeStay({ id: 81, ...values }));
+
+    const result = await ensureDefaultVolunteerStay({
+      userId: 7,
+      actorId: 9,
+      source: 'test_lifecycle',
+      transaction: transaction as never,
+      now: new Date('2026-09-06T12:00:00Z'),
+    });
+
+    expect(result).toEqual({ status: 'created', stayId: 81 });
+    expect(userModel.findByPk).toHaveBeenNthCalledWith(1, 7, expect.objectContaining({
+      transaction,
+      lock: 'UPDATE',
+    }));
+    expect(VolunteerStay.create).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 7,
+      startDate,
+      endDate,
+      position,
+      monthlyTargets: DEFAULT_VOLUNTEER_MONTHLY_TARGETS,
+      shiftTypeIds: { guiding: [1], promotion: [2], socialMedia: [3] },
+      feedback: null,
+      revision: 1,
+      createdBy: 9,
+      updatedBy: 9,
+    }), { transaction });
+    expect(VolunteerStayRevision.create).toHaveBeenCalledWith(expect.objectContaining({
+      stayId: 81,
+      revision: 1,
+      actorId: 9,
+      reason: 'Automatically created from the active Volunteer profile.',
+    }), { transaction });
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 9,
+      action: 'volunteer_stay.auto_created',
+      entityId: '81',
+      metaJson: expect.objectContaining({ source: 'test_lifecycle' }),
+    }), { transaction });
+  });
+
+  it('is idempotent and never rewrites an existing overlapping stay', async () => {
+    userModel.findByPk
+      .mockResolvedValueOnce({ ...user, status: true, approved: true, userTypeId: 4 })
+      .mockResolvedValueOnce({ id: 4, slug: 'guide' });
+    (VolunteerStay.findOne as jest.Mock).mockResolvedValue(stay);
+
+    await expect(ensureDefaultVolunteerStay({
+      userId: 7,
+      transaction: transaction as never,
+      now: new Date('2026-09-06T12:00:00Z'),
+    })).resolves.toEqual({ status: 'existing', stayId: 70 });
+
+    expect(ShiftType.findAll).not.toHaveBeenCalled();
+    expect(VolunteerStay.create).not.toHaveBeenCalled();
+    expect(stay.update).not.toHaveBeenCalled();
+    expect(VolunteerStayRevision.create).not.toHaveBeenCalled();
+    expect(AuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['inactive user', { status: false, approved: true }, 'inactive_user'],
+    ['unapproved user', { status: true, approved: false }, 'unapproved_user'],
+    ['missing dates', { status: true, approved: true, arrivalDate: null }, 'missing_or_invalid_dates'],
+    ['completed past stay', { status: true, approved: true, departureDate: '2026-09-06' }, 'past_stay'],
+  ])('skips %s without creating partial audit records', async (_label, overrides, reason) => {
+    userModel.findByPk.mockResolvedValueOnce({ ...user, userTypeId: 4, ...overrides });
+
+    await expect(ensureDefaultVolunteerStay({
+      userId: 7,
+      transaction: transaction as never,
+      now: new Date('2026-09-06T12:00:00Z'),
+    })).resolves.toEqual({ status: 'skipped', stayId: null, reason });
+
+    expect(VolunteerStay.create).not.toHaveBeenCalled();
+    expect(VolunteerStayRevision.create).not.toHaveBeenCalled();
+    expect(AuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a management-controlled active profile to create a stay before legacy account approval', async () => {
+    userModel.findByPk
+      .mockResolvedValueOnce({ ...user, status: true, approved: false, userTypeId: 4 })
+      .mockResolvedValueOnce({ id: 4, slug: 'guide' });
+    (VolunteerStay.create as jest.Mock).mockImplementation(async (values) => makeStay({ id: 82, ...values }));
+
+    await expect(ensureDefaultVolunteerStay({
+      userId: 7,
+      actorId: 9,
+      source: 'staff_profile_update',
+      allowUnapproved: true,
+      transaction: transaction as never,
+      now: new Date('2026-09-06T12:00:00Z'),
+    })).resolves.toEqual({ status: 'created', stayId: 82 });
+
+    expect(VolunteerStay.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips unsupported roles or incomplete shift mappings without creating a stay', async () => {
+    const eligible = { ...user, status: true, approved: true, userTypeId: 4 };
+    userModel.findByPk
+      .mockResolvedValueOnce(eligible)
+      .mockResolvedValueOnce({ id: 4, slug: 'assistant-manager' });
+
+    await expect(ensureDefaultVolunteerStay({
+      userId: 7,
+      transaction: transaction as never,
+      now: new Date('2026-09-06T12:00:00Z'),
+    })).resolves.toEqual({ status: 'skipped', stayId: null, reason: 'unsupported_position' });
+
+    jest.clearAllMocks();
+    userModel.findByPk
+      .mockResolvedValueOnce(eligible)
+      .mockResolvedValueOnce({ id: 4, slug: 'guide' });
+    (StaffProfile.findOne as jest.Mock).mockResolvedValue({ userId: 7, staffType: 'volunteer', active: true });
+    (VolunteerStay.findOne as jest.Mock).mockResolvedValue(null);
+    (ShiftType.findAll as jest.Mock).mockResolvedValue([{ id: 1, key: 'pub_crawl', name: 'Pub Crawl' }]);
+
+    await expect(ensureDefaultVolunteerStay({
+      userId: 7,
+      transaction: transaction as never,
+      now: new Date('2026-09-06T12:00:00Z'),
+    })).resolves.toEqual({ status: 'skipped', stayId: null, reason: 'missing_shift_mapping' });
+    expect(VolunteerStay.create).not.toHaveBeenCalled();
+    expect(VolunteerStayRevision.create).not.toHaveBeenCalled();
+    expect(AuditLog.create).not.toHaveBeenCalled();
   });
 
   it('rejects a first historical stay when no recorded volunteer period overlaps its dates', async () => {

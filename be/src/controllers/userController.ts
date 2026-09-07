@@ -29,6 +29,7 @@ import {
   applyUserTypeChange,
   StaffEligibilityHistoryError,
 } from '../services/staffEligibilityHistoryService.js';
+import { ensureDefaultVolunteerStay } from '../services/volunteerStayService.js';
 
 const NAME_TO_SLUG: Record<string, string[]> = {
   guide: ['guide', 'pub-crawl-guide'],
@@ -445,6 +446,15 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
           transaction,
         });
       }
+
+      if (staffType === 'volunteer') {
+        await ensureDefaultVolunteerStay({
+          userId: newUser.id,
+          actorId: null,
+          source: 'user_signup',
+          transaction,
+        });
+      }
     });
 
     uploadedPhotoShouldCleanup = false;
@@ -844,6 +854,18 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
           actorId,
           reason: eligibilityReason,
           transaction,
+        });
+      }
+      const shouldEnsureVolunteerStay = hasUserTypeChange || hasApprovedChange || hasStatusChange
+        || Object.prototype.hasOwnProperty.call(data, 'arrivalDate')
+        || Object.prototype.hasOwnProperty.call(data, 'departureDate');
+      if (shouldEnsureVolunteerStay) {
+        await ensureDefaultVolunteerStay({
+          userId: existingUser.id,
+          actorId,
+          source: 'user_update',
+          transaction,
+          allowUnapproved: true,
         });
       }
     });

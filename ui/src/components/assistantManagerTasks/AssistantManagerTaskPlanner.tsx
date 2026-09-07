@@ -99,6 +99,10 @@ import {
 import { CerebroRichTextContent } from '../cerebro/CerebroRichTextContent';
 import TaskAttendanceCheck from './TaskAttendanceCheck';
 import { canManuallyManageTask, getSubjectImageEvidenceItems, isCleaningManagedTask } from './cleaningTaskPlannerState';
+import {
+  normalizeTemplateTimeInput,
+  TASK_TIME_INPUT_FORMATS,
+} from './assistantManagerTaskTimeUtils';
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { compressImageFile } from '../../utils/imageCompression';
@@ -1183,7 +1187,7 @@ const parseTaskStartDateTime = (
     return null;
   }
 
-  const parsedTime = dayjs(rawTime, TIME_INPUT_FORMATS, true);
+  const parsedTime = dayjs(rawTime, TASK_TIME_INPUT_FORMATS, true);
   if (!parsedTime.isValid()) {
     return null;
   }
@@ -1276,7 +1280,6 @@ const PLANNER_START_HOUR = 6;
 const PLANNER_END_HOUR = 22;
 const PLANNER_SLOT_HEIGHT = 56;
 const DEFAULT_PLANNER_DAYS = 7;
-const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
 const TASK_COMPLETION_WINDOW_MODE_LABELS: Record<TaskCompletionWindowMode, string> = {
   day: 'End of day',
   strict: 'Strict to schedule',
@@ -1413,16 +1416,6 @@ const formatTaskDetailTimeRange = (time: string, durationHours: string) => {
 
   const endTime = parsedTime.add(parsedDuration, 'hour');
   return `${parsedTime.format('HH:mm')} to ${endTime.format('HH:mm')} (${durationHours}h)`;
-};
-
-const normalizeTemplateTimeInput = (value: string): string | null => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parsed = dayjs(trimmed, TIME_INPUT_FORMATS, true);
-  return parsed.isValid() ? parsed.format('HH:mm') : null;
 };
 
 const parseHourValue = (input: unknown): number | null => {
