@@ -234,7 +234,10 @@ export const sendWhatsAppTemplateMessage = async (
   const response = await axiosInstance.post(`${ADMIN_BASE_PATH}/messages/template`, payload);
   const root = asRecord(response.data);
   const messageId = firstString(root.messageId);
-  if (!messageId || messageId.length > 512 || /[\u0000-\u001f\u007f]/.test(messageId)) {
+  const hasControlCharacter = messageId
+    ?.split("")
+    .some((character) => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f);
+  if (!messageId || messageId.length > 512 || hasControlCharacter) {
     throw new Error("Meta accepted the request but returned an invalid message reference. Check WhatsApp before retrying.");
   }
   return { messageId };
