@@ -38,7 +38,7 @@ describe('Task attendance photo check', () => {
     (api.useAttendanceCheck as jest.Mock).mockReturnValue({ data: { ...check, evidence: [] }, refetch: jest.fn() });
     view();
     expect(screen.getByRole('button', { name: 'Save attendance' })).toBeDisabled();
-    expect(screen.getByText(/Upload the required task photo below/)).toBeInTheDocument();
+    expect(screen.getByText(/Upload the required task photo above/)).toBeInTheDocument();
   });
   it('disables the query instead of making forbidden requests', () => {
     (useModuleAccess as jest.Mock).mockReturnValue({ ready: true, canView: false, canUpdate: false });

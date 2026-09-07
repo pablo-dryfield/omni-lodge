@@ -55,9 +55,9 @@ export default function TaskAttendanceCheck({ taskLogId, evidenceVersion }: { ta
       {query.isLoading && access.canView && <Loader size="sm" />}
       {query.error && <Alert color="red">{attendanceCheckError(query.error)}</Alert>}
       {check && <>
-        <Text size="sm" c="dimmed">{check.checkKind === 'meeting_point' ? 'Meeting point' : 'Promotion chat'} · {check.expectedTime} Warsaw time. Confirm each person against the task photo below.</Text>
-        {!check.evidence.length && <Alert color="blue">Upload the required task photo below before recording attendance.</Alert>}
-        {!check.assignments.length && <Text size="sm" c="dimmed">No staff are assigned to these shift types in the published schedule for this day.</Text>}
+        <Text size="sm" c="dimmed">{check.checkKind === 'meeting_point' ? 'Meeting point' : 'Promotion chat'} · {check.expectedTime} Warsaw time. Confirm each person against the task photo above.</Text>
+        {!check.evidence.length && <Alert color="blue">Upload the required task photo above before recording attendance.</Alert>}
+        {!check.assignments.length && <Text size="sm" c="dimmed">No other staff are assigned to these shift types in the published schedule for this day.</Text>}
         {check.assignments.map((assignment) => <AttendanceRow key={`${assignment.assignmentId}:${assignment.revision}:${check.evidence.map((item) => item.id).join(',')}`} assignment={assignment} check={check} canUpdate={access.canUpdate} />)}
       </>}
     </Stack>
