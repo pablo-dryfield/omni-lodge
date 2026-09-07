@@ -107,6 +107,31 @@ describe('photo-linked attendance', () => {
     await expect(ensureTaskAttendanceCheckSatisfied(log as never, log.meta)).resolves.toBeUndefined();
     expect((await getVolunteerAttendanceCheck(10, actor)).assignments).toHaveLength(1);
   });
+  it('excludes the task assignee from both the visible roster and completion requirements', async () => {
+    const taskAssignee = { ...assignment, id: 21, userId: log.userId,
+      assignee: { firstName: 'Jamie', lastName: 'Manager' }, volunteerAttendance: undefined };
+    (ShiftAssignment.findAll as jest.Mock).mockResolvedValue([
+      taskAssignee,
+      { ...assignment, volunteerAttendance: attendance },
+    ]);
+
+    const result = await getVolunteerAttendanceCheck(10, actor);
+    expect(result.assignments).toHaveLength(1);
+    expect(result.assignments[0]).toMatchObject({ userId: assignment.userId, name: 'A Guide' });
+    await expect(ensureTaskAttendanceCheckSatisfied(log as never, log.meta)).resolves.toBeUndefined();
+  });
+  it('rejects a direct attendance save for the task assignee, including from an administrator', async () => {
+    (ShiftAssignment.findByPk as jest.Mock).mockResolvedValue({ ...assignment, userId: log.userId });
+
+    await expect(saveVolunteerAttendanceCheck({
+      actorId: 8,
+      roleSlug: 'administrator',
+      taskLogId: log.id,
+      assignmentId: assignment.id,
+      body: input,
+    })).rejects.toMatchObject({ status: 409 });
+    expect(VolunteerShiftAttendance.create).not.toHaveBeenCalled();
+  });
   it('protects old photos even after current attendance has been corrected to another photo', async () => {
     (AuditLog.findAll as jest.Mock).mockResolvedValue([{ metaJson: { evidence } }]);
     await expect(assertAttendanceEvidencePreserved(10, log.meta, null)).rejects.toMatchObject({ status: 409 });

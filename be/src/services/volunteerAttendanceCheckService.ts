@@ -137,6 +137,9 @@ const roster = async (log: AssistantManagerTaskLog, config: VolunteerAttendanceC
   // One decision per person and physical shift, even when they hold several shift roles.
   const byPersonShift = new Map<string, Assignment>();
   for (const assignment of assignments) {
+    // The task owner is taking the evidence and must not assess or block the
+    // task on their own attendance. Another manager/task can assess them.
+    if (assignment.userId === log.userId) continue;
     const key = `${assignment.userId}:${assignment.shiftInstanceId}`;
     const previous = byPersonShift.get(key);
     const recordedAt = attendanceIdentityMatches(assignment.volunteerAttendance, assignment)
@@ -204,6 +207,9 @@ export const saveVolunteerAttendanceCheck = async (params: AttendanceCheckActor 
       transaction, lock: transaction.LOCK.UPDATE });
     if (!assignment) throw new HttpError(404, 'The scheduled assignment was not found.');
     if (assignment.userId === params.actorId) throw new HttpError(403, 'Another manager must confirm your own attendance.');
+    if (assignment.userId === log.userId) {
+      throw new HttpError(409, 'The person assigned to this task is excluded from its attendance check.');
+    }
     const instance = await ShiftInstance.findByPk(assignment.shiftInstanceId, { transaction, lock: transaction.LOCK.UPDATE });
     if (!instance || instance.date !== log.taskDate || !config.shiftTypeIds.includes(instance.shiftTypeId)) {
       throw new HttpError(409, 'This person is not scheduled for the configured check.');

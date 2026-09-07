@@ -11231,9 +11231,6 @@ const AssistantManagerTaskPlanner = () => {
                 </Stack>
               </Alert>
             )}
-            {selectedLog && selectedLogTemplate?.scheduleConfig.volunteerAttendance && (
-              <TaskAttendanceCheck taskLogId={selectedLog.id} evidenceVersion={JSON.stringify(logDetailFormState.evidenceItems.map((item) => item.id))} />
-            )}
             {selectedLogEvidenceRules.length > 0 ? (
               <Stack gap="sm">
                 {selectedLogEvidenceRules.map((rule) => {
@@ -11952,6 +11949,9 @@ const AssistantManagerTaskPlanner = () => {
               <Text size="sm" c="dimmed" ta="center">
                 No evidence rules configured for this task yet.
               </Text>
+            )}
+            {selectedLog && selectedLogTemplate?.scheduleConfig.volunteerAttendance && (
+              <TaskAttendanceCheck taskLogId={selectedLog.id} evidenceVersion={JSON.stringify(logDetailFormState.evidenceItems.map((item) => item.id))} />
             )}
             {logDetailError && (
               <Alert color="red" title="Unable to save">
