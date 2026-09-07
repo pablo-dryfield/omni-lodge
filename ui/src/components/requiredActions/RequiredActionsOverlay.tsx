@@ -42,6 +42,9 @@ import { CerebroRichTextContent } from "../cerebro/CerebroRichTextContent";
 import { compressImageFile } from "../../utils/imageCompression";
 import axiosInstance from "../../utils/axiosInstance";
 import { normalizeStaffPayoutReceipt } from "./staffPayoutReceiptUtils";
+import CleaningReviewAction from "../volunteerCleaning/CleaningReviewAction";
+import { useAppSelector } from "../../store/hooks";
+import { cleaningReviewDeferralKey, readDeferredCleaningReviews, saveDeferredCleaningReviews } from "./cleaningReviewDeferral";
 import {
   ESignaturePad,
   StaffPayoutReceiptConfirmation,
@@ -1010,6 +1013,8 @@ const QuizAction = ({
 };
 
 export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
+  const userId = useAppSelector((state) => state.session.loggedUserId);
+  const [deferredReviews, setDeferredReviews] = useState(readDeferredCleaningReviews);
   const actionsQuery = useMyRequiredActions(enabled);
   const queryClient = useQueryClient();
   const completeAction = useCompleteRequiredAction();
@@ -1026,8 +1031,21 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
   const [signature, setSignature] = useState<ESignaturePayload | null>(null);
   const [signatureError, setSignatureError] = useState<string | null>(null);
 
-  const actions = actionsQuery.data?.actions ?? [];
+  const actions = (actionsQuery.data?.actions ?? []).filter((item) => {
+    const key = cleaningReviewDeferralKey(item, userId);
+    return !key || !deferredReviews.has(key);
+  });
   const action = actions[0] ?? null;
+  const deferCleaningReview = () => {
+    const key = action && cleaningReviewDeferralKey(action, userId);
+    if (!key) return;
+    setDeferredReviews((current) => {
+      const next = new Set(current);
+      next.add(key);
+      saveDeferredCleaningReviews(next);
+      return next;
+    });
+  };
   const customerEmailActionSignature = actions
     .filter((item) => item.type === "customer_email")
     .map((item) => item.id)
@@ -1102,7 +1120,7 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
   ) : null;
 
   const handleComplete = async () => {
-    if (!action || action.source !== "required_action") {
+    if (!action || action.source !== "required_action" || action.type === "cleaning_review") {
       return;
     }
     const eSignature = getSignatureForSubmit();
@@ -1358,6 +1376,12 @@ export const RequiredActionsOverlay = ({ enabled }: { enabled: boolean }) => {
 
               {isScheduleRequestAction(action) ? (
                 <SwapAction action={action} onRespond={handleSwapResponse} loading={isBusy} />
+              ) : action.type === "cleaning_review" ? (
+                <Stack gap="md">
+                  {action.payload.cleaningSubmission?.submissionId ? <CleaningReviewAction key={action.payload.cleaningSubmission.submissionId} submissionId={action.payload.cleaningSubmission.submissionId} />
+                    : <Alert color="yellow">This review is unavailable. Check Cleaning on the homepage.</Alert>}
+                  {cleaningReviewDeferralKey(action, userId) ? <Button variant="default" onClick={deferCleaningReview}>Review later</Button> : null}
+                </Stack>
               ) : action.type === "staff_payout_receipt" ? (
                 <StaffPayoutReceiptAction
                   action={action}

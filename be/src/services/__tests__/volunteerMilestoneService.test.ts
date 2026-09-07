@@ -24,12 +24,12 @@ jest.mock('../../models/ReviewMonthLock.js', () => ({
   __esModule: true,
   default: { findOne: jest.fn() },
 }));
-jest.mock('../../models/ScheduleWeek.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/ScheduleWeek.js', () => ({ __esModule: true, default: { findByPk: jest.fn() } }));
 jest.mock('../../models/ShiftAssignment.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn(), findByPk: jest.fn() },
 }));
-jest.mock('../../models/ShiftInstance.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/ShiftInstance.js', () => ({ __esModule: true, default: { findByPk: jest.fn() } }));
 jest.mock('../../models/ShiftTemplate.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ShiftType.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/StaffProfile.js', () => ({
@@ -44,7 +44,7 @@ jest.mock('../../models/VolunteerMilestoneFeedback.js', () => ({
 jest.mock('../../models/VolunteerShiftAttendance.js', () => ({
   __esModule: true,
   VOLUNTEER_ATTENDANCE_STATUSES: ['attended', 'late', 'absent', 'excused'],
-  default: { findOrCreate: jest.fn() },
+  default: { findOrCreate: jest.fn(), sequelize: { transaction: jest.fn() } },
 }));
 
 import AssistantManagerTaskLog from '../../models/AssistantManagerTaskLog.js';
@@ -54,11 +54,14 @@ import ReviewCounterEntry from '../../models/ReviewCounterEntry.js';
 import ReviewManualCredit from '../../models/ReviewManualCredit.js';
 import ReviewMonthLock from '../../models/ReviewMonthLock.js';
 import ShiftAssignment from '../../models/ShiftAssignment.js';
+import ShiftInstance from '../../models/ShiftInstance.js';
+import ScheduleWeek from '../../models/ScheduleWeek.js';
 import StaffProfile from '../../models/StaffProfile.js';
 import VolunteerMilestoneFeedback from '../../models/VolunteerMilestoneFeedback.js';
 import VolunteerShiftAttendance from '../../models/VolunteerShiftAttendance.js';
 import {
   calculateVolunteerMilestones,
+  currentVolunteerAttendance,
   deduplicateVolunteerAttendanceAssignments,
   isCleaningTaskTemplate,
   isPastShift,
@@ -73,10 +76,25 @@ import {
 describe('volunteer milestone calculations', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (ShiftInstance.findByPk as jest.Mock).mockResolvedValue({ id: 19, scheduleWeekId: 5, shiftTypeId: 1, date: '2026-08-01', timeStart: '18:00:00', timeEnd: '22:00:00' });
+    (ScheduleWeek.findByPk as jest.Mock).mockResolvedValue({ id: 5, state: 'published' });
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([]);
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it('keeps genuine legacy confirmations but binds photo checks to source task date and physical shift identity', () => {
+    const row = { userId: 7, shiftInstance: { id: 21, shiftTypeId: 2, date: '2026-08-20' }, volunteerAttendance: { status: 'attended', subjectUserId: 7 } };
+    expect(currentVolunteerAttendance(row as never)).toBe(row.volunteerAttendance);
+    const bound = { ...row.volunteerAttendance, evidenceTaskLogId: 91, evidenceShiftInstanceId: 21, evidenceShiftTypeId: 2,
+      evidenceTaskLog: { id: 91, taskDate: '2026-08-20' } };
+    expect(currentVolunteerAttendance({ ...row, volunteerAttendance: bound } as never)).toBe(bound);
+    for (const changes of [{ subjectUserId: 8 }, { evidenceShiftInstanceId: 22 }, { evidenceShiftTypeId: 3 },
+      { evidenceTaskLog: { id: 91, taskDate: '2026-08-21' } }, { evidenceTaskLog: undefined }, { evidenceShiftInstanceId: null, evidenceShiftTypeId: null }]) {
+      expect(currentVolunteerAttendance({ ...row, volunteerAttendance: { ...bound, ...changes } } as never)).toBeUndefined();
+    }
   });
 
   it('uses calendar-month DATEONLY boundaries and caps asOfDate to a past period', () => {
@@ -366,6 +384,55 @@ describe('volunteer milestone calculations', () => {
       actorId: 3,
     })).rejects.toMatchObject({ status: 409 });
     expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('protects evidence-linked attendance from the legacy confirmation endpoint', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    (VolunteerShiftAttendance.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    jest.spyOn(ShiftAssignment, 'findByPk').mockResolvedValue({ id: 82, userId: 7, shiftInstanceId: 19,
+      shiftInstance: { id: 19, date: '2026-08-01', timeStart: '18:00:00', timeEnd: '22:00:00', scheduleWeek: { id: 5, state: 'published' } } } as never);
+    jest.spyOn(StaffProfile, 'findOne').mockResolvedValue({ userId: 7, staffType: 'volunteer', user: { id: 7 } } as never);
+    const update = jest.fn();
+    jest.spyOn(VolunteerShiftAttendance, 'findOrCreate').mockResolvedValue([{ evidenceTaskLogId: 10, revision: 3, update }, false] as never);
+    await expect(recordVolunteerAttendance({ shiftAssignmentId: 82, status: 'attended', notes: null, actorId: 3 })).rejects.toMatchObject({ status: 409 });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('increments legacy attendance revisions under the assignment lock', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    (VolunteerShiftAttendance.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    jest.spyOn(ShiftAssignment, 'findByPk').mockResolvedValue({ id: 82, userId: 7, shiftInstanceId: 19,
+      shiftInstance: { id: 19, date: '2026-08-01', timeStart: '18:00:00', timeEnd: '22:00:00', scheduleWeek: { id: 5, state: 'published' } } } as never);
+    jest.spyOn(StaffProfile, 'findOne').mockResolvedValue({ userId: 7, staffType: 'volunteer', user: { id: 7 } } as never);
+    const update = jest.fn();
+    jest.spyOn(VolunteerShiftAttendance, 'findOrCreate').mockResolvedValue([{ evidenceTaskLogId: null, revision: 3, update }, false] as never);
+    await recordVolunteerAttendance({ shiftAssignmentId: 82, status: 'attended', notes: null, actorId: 3 });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ revision: 4 }), { transaction });
+    expect(ShiftAssignment.findByPk).toHaveBeenCalledWith(82, { transaction, lock: 'UPDATE' });
+  });
+
+  it('blocks legacy creation or updates for shifts with a matching photo-managed task, regardless of task owner', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    (VolunteerShiftAttendance.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    jest.spyOn(ShiftAssignment, 'findByPk').mockResolvedValue({ id: 82, userId: 7, shiftInstanceId: 19,
+      shiftInstance: { id: 19, date: '2026-08-01', timeStart: '18:00:00', timeEnd: '22:00:00', scheduleWeek: { id: 5, state: 'published' } } } as never);
+    jest.spyOn(StaffProfile, 'findOne').mockResolvedValue({ userId: 7, staffType: 'volunteer', user: { id: 7 } } as never);
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([{ id: 10, userId: 9, template: { scheduleConfig: { volunteerAttendance: { shiftTypeIds: [1] } } } }]);
+    await expect(recordVolunteerAttendance({ shiftAssignmentId: 82, status: 'attended', notes: null, actorId: 7 })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('photo-based attendance task') });
+    expect(AssistantManagerTaskLog.findAll).toHaveBeenCalledWith(expect.objectContaining({ where: { taskDate: '2026-08-01' }, transaction }));
+    expect(VolunteerShiftAttendance.findOrCreate).not.toHaveBeenCalled();
+  });
+
+  it('retains legacy recording when only unrelated photo-check shift types exist that day', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    (VolunteerShiftAttendance.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    jest.spyOn(ShiftAssignment, 'findByPk').mockResolvedValue({ id: 82, userId: 7, shiftInstanceId: 19,
+      shiftInstance: { id: 19, date: '2026-08-01', timeStart: '18:00:00', timeEnd: '22:00:00', scheduleWeek: { id: 5, state: 'published' } } } as never);
+    jest.spyOn(StaffProfile, 'findOne').mockResolvedValue({ userId: 7, staffType: 'volunteer', user: { id: 7 } } as never);
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([{ id: 10, template: { scheduleConfig: { volunteerAttendance: { shiftTypeIds: [2] } } } }]);
+    jest.spyOn(VolunteerShiftAttendance, 'findOrCreate').mockResolvedValue([{ id: 17 }, true] as never);
+    await expect(recordVolunteerAttendance({ shiftAssignmentId: 82, status: 'attended', notes: null, actorId: 3 })).resolves.toMatchObject({ volunteerUserId: 7 });
+    expect(VolunteerShiftAttendance.findOrCreate).toHaveBeenCalled();
   });
 
   it('rejects final management approval while measurable milestones are incomplete', async () => {

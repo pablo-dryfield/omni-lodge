@@ -89,6 +89,39 @@ describe('published Social Media date task reassignment', () => {
   });
   afterEach(() => jest.useRealTimers());
 
+  it('does not reopen a cleaning-managed source even for an unchanged publication date', async () => {
+    const source = oldTask();
+    source.meta.cleaningPhotoWorkflow = { managed: true };
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(source);
+    await expect(reassign(content(), '2026-09-05')).rejects.toThrow('managed by cleaning photo approvals');
+    expect(source.update).not.toHaveBeenCalled();
+    expect(StaffPayoutLedger.findOne).not.toHaveBeenCalled();
+  });
+
+  it('does not use a cleaning-managed destination or change either task', async () => {
+    const source = oldTask();
+    const target = task();
+    target.meta.cleaningPhotoWorkflow = { managed: true };
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(source);
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([target]);
+    await expect(reassign()).rejects.toThrow('Assign a publish-enabled Social Media task');
+    expect(source.update).not.toHaveBeenCalled();
+    expect(target.update).not.toHaveBeenCalled();
+    expect(StaffPayoutLedger.update).not.toHaveBeenCalled();
+  });
+
+  it('ignores a cleaning destination when a separate valid publication task exists', async () => {
+    const source = oldTask();
+    const cleaning = task({ id: 90 });
+    cleaning.meta.cleaningPhotoWorkflow = { managed: true };
+    const target = task();
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(source);
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([cleaning, target]);
+    await expect(reassign()).resolves.toMatchObject({ taskCompletion: { taskLogId: 89 } });
+    expect(cleaning.update).not.toHaveBeenCalled();
+    expect(target.update).toHaveBeenCalledTimes(1);
+  });
+
   it('reopens only the old task and completes the original assignee task with transferred publication evidence', async () => {
     const source = oldTask();
     const target = task();

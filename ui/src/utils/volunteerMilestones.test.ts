@@ -2,6 +2,7 @@ import {
   canManageVolunteerProgress,
   clampProgressPercent,
   formatMilestoneAmount,
+  formatVolunteerProgressNumber,
   formatVolunteerProgressTimestamp,
   getCurrentMonth,
   moveVolunteerProgressMonth,
@@ -104,5 +105,13 @@ describe("volunteer milestone helpers", () => {
     expect(
       formatMilestoneAmount({ ...milestone("attendance"), current: 90, target: 90, unit: "%" }),
     ).toBe("90% (target 90%)");
+  });
+
+  it("keeps fractional stay goals readable without rounding stored values", () => {
+    const fractional = { ...milestone("reviews"), current: 1 / 3, target: 5 / 3, unit: "reviews" };
+    expect(formatMilestoneAmount(fractional)).toBe("0.3333 of 1.6667 reviews");
+    expect(fractional.target).toBe(5 / 3);
+    expect(formatVolunteerProgressNumber(1234.56789)).toBe("1,234.5679");
+    expect(formatVolunteerProgressNumber(15 * (23 / 31))).toBe("11.129");
   });
 });

@@ -33,6 +33,7 @@ import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import HomeQuickActions from "../components/home/HomeQuickActions";
 import HomeModuleLauncher from "../components/home/HomeModuleLauncher";
 import HomePlannedExpenses from "../components/home/HomePlannedExpenses";
+import HomeCleaningTasks from "../components/volunteerCleaning/HomeCleaningTasks";
 import { HOME_PLANNED_PAYMENTS_VISIBILITY_KEY } from "../components/home/homeExperienceConfigRegistry";
 import { resolveHomeNativeDashboard } from "../components/home/homeNativeDashboard";
 import { isHomeQuickActionVisibilityMap } from "../components/home/homeQuickActionRegistry";
@@ -3462,6 +3463,7 @@ const Home = (props: GenericPageProps) => {
       onOpenMiniGame={handleOpenMiniGame}
       quickActions={(
         <Stack spacing={{ xs: 2.5, md: 3.5 }}>
+          <HomeCleaningTasks />
           <HomeQuickActions
             quickActionVisibility={quickActionVisibility}
             audienceReady={homeExperienceAudienceReady}
@@ -3642,6 +3644,7 @@ const Home = (props: GenericPageProps) => {
           >
             {effectiveViewMode === "dashboard" ? (
               <Stack gap={1.5}>
+                <HomeCleaningTasks />
                 <HomeQuickActions
                   compact
                   quickActionVisibility={quickActionVisibility}

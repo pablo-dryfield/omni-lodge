@@ -5,6 +5,10 @@ export type AssistantManagerTaskScheduleConfig = Record<string, unknown> & {
   scheduledWorkdayPlacement?: 'start' | 'middle' | 'end';
   requireSocialMediaPlan?: boolean;
   completeOnSocialMediaPublish?: boolean;
+  cleaningPhotoApprovalEnabled?: boolean;
+  volunteerAttendance?: {
+    checkKind: 'meeting_point' | 'promotion_chat'; shiftTypeIds: number[]; evidenceRuleKey: string; expectedTime: string;
+  };
 };
 
 export type AssistantManagerTaskSocialMediaContentStatus =

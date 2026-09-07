@@ -6,6 +6,9 @@ import Counter from '../models/Counter.js';
 import Product from '../models/Product.js';
 import NightReport from '../models/NightReport.js';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports.js';
+import HttpError from '../errors/HttpError.js';
+import { assertAttendanceEvidencePreserved } from './volunteerAttendanceCheckService.js';
+import { assertCleaningEvidencePreserved, assertCleaningTaskLogMutable, isCleaningTaskCompletionManaged } from './cleaningSubmissionService.js';
 import type { Transaction } from 'sequelize';
 
 const NIGHT_REPORT_RULES_KEY = 'nightReportRules';
@@ -178,9 +181,10 @@ const buildWaiverSource = (
   ruleIndex,
 });
 
-const getTemplatesWithRules = async () => {
+const getTemplatesWithRules = async (transaction: Transaction) => {
   const templates = await AssistantManagerTaskTemplate.findAll({
     attributes: ['id', 'name', 'scheduleConfig'],
+    transaction,
   });
 
   return templates
@@ -196,10 +200,16 @@ const reconcileReportTargetLogs = async (
   mode: 'sync' | 'restore' = 'sync',
   transaction?: Transaction | null,
 ): Promise<NightReportTaskWaiverSummary> => {
+  // All callers, including background/range reconciliation, use the same row-locking path.
+  if (!transaction) {
+    const database = AssistantManagerTaskLog.sequelize;
+    if (!database) throw new Error('Database connection is not available for task waiver reconciliation.');
+    return database.transaction((activeTransaction) => reconcileReportTargetLogs(report, mode, activeTransaction));
+  }
   const note = (report.notes ?? '').trim();
   const productId = report.counter?.productId ?? null;
   const productName = report.counter?.product?.name ?? null;
-  const templatesWithRules = await getTemplatesWithRules();
+  const templatesWithRules = await getTemplatesWithRules(transaction);
   const affectedTemplates = templatesWithRules.filter(({ rules }) =>
     rules.some((rule) => productMatchesRule(rule, productId, productName)),
   );
@@ -225,12 +235,23 @@ const reconcileReportTargetLogs = async (
           taskDate: targetTaskDate,
           status: { [Op.ne]: 'completed' },
         },
-        transaction: transaction ?? undefined,
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+        order: [['id', 'ASC']],
       });
 
       for (const log of logs) {
         const meta = readMeta(log.meta);
-        if (meta.manual === true) {
+        if (meta.manual === true || log.status === 'completed' || isCleaningTaskCompletionManaged(template.scheduleConfig, meta)) {
+          unchangedCount += 1;
+          continue;
+        }
+        // Existing submissions also protect the task when a template has since been changed.
+        // Never strand pending reviews by waiving/restoring their owning task automatically.
+        try {
+          await assertCleaningTaskLogMutable(log.id, transaction);
+        } catch (error) {
+          if (!(error instanceof HttpError) || error.status !== 409) throw error;
           unchangedCount += 1;
           continue;
         }
@@ -253,13 +274,15 @@ const reconcileReportTargetLogs = async (
           delete nextMeta.waiverAppliedAt;
           delete nextMeta.waiverSource;
 
-          await AssistantManagerTaskLog.update(
+          await assertAttendanceEvidencePreserved(log.id, meta, nextMeta, transaction);
+          await assertCleaningEvidencePreserved(log.id, meta, nextMeta, transaction);
+          await log.update(
             {
               status: restoredStatus,
               completedAt: restoredStatus === 'completed' ? log.completedAt ?? new Date() : null,
               meta: nextMeta,
             },
-            { where: { id: log.id }, transaction: transaction ?? undefined },
+            { transaction },
           );
           restoredCount += 1;
           continue;
@@ -283,13 +306,15 @@ const reconcileReportTargetLogs = async (
           waiverSource: buildWaiverSource(report, targetTaskDate, ruleIndex),
         };
 
-        await AssistantManagerTaskLog.update(
+        await assertAttendanceEvidencePreserved(log.id, meta, nextMeta, transaction);
+        await assertCleaningEvidencePreserved(log.id, meta, nextMeta, transaction);
+        await log.update(
           {
             status: 'waived',
             completedAt: null,
             meta: nextMeta,
           },
-          { where: { id: log.id }, transaction: transaction ?? undefined },
+          { transaction },
         );
         waivedCount += 1;
       }
@@ -327,6 +352,7 @@ export const reconcileNightReportTaskWaiversForRange = async (
         include: [{ model: Product, as: 'product', required: false, attributes: ['id', 'name'] }],
       },
     ],
+    transaction: options?.transaction ?? undefined,
   });
 
   const summary: NightReportTaskWaiverSummary = {

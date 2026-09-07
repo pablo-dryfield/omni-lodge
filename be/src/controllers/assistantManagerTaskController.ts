@@ -21,6 +21,21 @@ import CerebroEntry from '../models/CerebroEntry.js';
 import CerebroQuiz from '../models/CerebroQuiz.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import HttpError from '../errors/HttpError.js';
+import {
+  assertAttendanceEvidencePreserved, ensureTaskAttendanceCheckSatisfied,
+  validateAttendanceCheckConfig, validateAttendanceCheckShiftTypes,
+} from '../services/volunteerAttendanceCheckService.js';
+import {
+  assertCleaningEvidencePreserved, assertCleaningTaskLogMutable, isCleaningTaskCompletionManaged,
+} from '../services/cleaningSubmissionService.js';
+import {
+  CLEANING_WORKFLOW_META_KEY,
+  objectValue,
+  readCleaningPhotoSources,
+} from '../services/cleaningSubmissionRulesService.js';
+import {
+  assertStoredTaskImagesUnchanged, assertWorkflowMetadataUnchanged,
+} from '../services/assistantManagerTaskEvidenceIntegrityService.js';
 import logger from '../utils/logger.js';
 import {
   deleteAssistantManagerTaskEvidenceImage,
@@ -711,6 +726,8 @@ const sanitizeTemplatePayload = (body: Record<string, unknown>) => {
       ? (next.scheduleConfig[SHIFT_EVIDENCE_SOURCES_CONFIG_KEY] as ShiftEvidenceSourceConfig[])
       : [];
     validateShiftEvidenceSourcesAgainstRules(evidenceRules, shiftEvidenceSources);
+    validateAttendanceCheckConfig(next.scheduleConfig);
+    readCleaningPhotoSources(next.scheduleConfig);
     if ('requiredShiftTemplateIds' in next.scheduleConfig) {
       const requiredShiftTemplateIds = normalizeRequiredShiftTemplateIds(
         next.scheduleConfig.requiredShiftTemplateIds,
@@ -1174,6 +1191,7 @@ const ensureRequiredShiftTemplatesExist = async (
   scheduleConfig?: Record<string, unknown>,
   transaction?: Transaction,
 ) => {
+  await validateAttendanceCheckShiftTypes(scheduleConfig, transaction);
   const requiredShiftTemplateIds = normalizeRequiredShiftTemplateIds(
     scheduleConfig?.requiredShiftTemplateIds,
   );
@@ -2742,6 +2760,13 @@ const generateLogsForAssignments = async (
       unchangedCount += 1;
       continue;
     }
+    // Once a cleaning submission exists, its task metadata is workflow-owned.
+    // Generation may discover newer template/shift settings, but applying them
+    // here could erase evidence state or silently change the live checklist.
+    if (objectValue(existingMeta[CLEANING_WORKFLOW_META_KEY]).managed === true) {
+      unchangedCount += 1;
+      continue;
+    }
     let shouldUpdateMeta = false;
     if (typeof existingMeta[SOCIAL_MEDIA_PLAN_CONFIG_KEY] !== 'boolean') {
       existingMeta[SOCIAL_MEDIA_PLAN_CONFIG_KEY] =
@@ -2771,8 +2796,10 @@ const generateLogsForAssignments = async (
     }
     if (Object.keys(updatePayload).length > 0) {
       updatePayload.updatedBy = actorId;
-      await AssistantManagerTaskLog.update(updatePayload, { where: { id: log.id } });
-      updatedCount += 1;
+      const [changed] = await AssistantManagerTaskLog.update(updatePayload, { where: { id: log.id, updatedAt: log.updatedAt } });
+      // A concurrent upload/review owns its newer metadata; generation must not overwrite it.
+      if (changed) updatedCount += 1;
+      else unchangedCount += 1;
       continue;
     }
 
@@ -3221,7 +3248,17 @@ export const deleteTaskTemplate = async (req: AuthenticatedRequest, res: Respons
       res.status(400).json([{ message: 'Invalid template id' }]);
       return;
     }
-    const deleted = await AssistantManagerTaskTemplate.destroy({ where: { id } });
+    const sequelize = AssistantManagerTaskLog.sequelize;
+    if (!sequelize) throw new HttpError(500, 'Database connection is not available');
+    const deleted = await sequelize.transaction(async (transaction) => {
+      const logs = await AssistantManagerTaskLog.findAll({ where: { templateId: id }, transaction,
+        lock: transaction.LOCK.UPDATE, order: [['id', 'ASC']] });
+      for (const log of logs) {
+        await assertAttendanceEvidencePreserved(log.id, log.meta, null, transaction);
+        await assertCleaningTaskLogMutable(log.id, transaction);
+      }
+      return AssistantManagerTaskTemplate.destroy({ where: { id }, transaction });
+    });
     if (!deleted) {
       res.status(404).json([{ message: 'Task template not found' }]);
       return;
@@ -3229,7 +3266,8 @@ export const deleteTaskTemplate = async (req: AuthenticatedRequest, res: Respons
     res.status(204).send();
   } catch (error) {
     console.error('Failed to delete task template', error);
-    res.status(500).json([{ message: 'Failed to delete task template' }]);
+    res.status(error instanceof HttpError ? error.status : 500)
+      .json([{ message: error instanceof HttpError ? error.message : 'Failed to delete task template' }]);
   }
 };
 
@@ -3329,6 +3367,13 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
         skippedManagerOverrideCount += 1;
         continue;
       }
+      // Active cleaning metadata is a durable snapshot maintained by the
+      // cleaning workflow. Keep sync from rewriting it underneath uploads and
+      // approvals; future task logs still inherit the edited template.
+      if (objectValue(existingMeta[CLEANING_WORKFLOW_META_KEY]).managed === true) {
+        unchangedCount += 1;
+        continue;
+      }
       if (Boolean(existingMeta.manual)) {
         skippedManualCount += 1;
         continue;
@@ -3401,14 +3446,15 @@ export const syncTaskLogsWithCurrentTemplateConfig = async (
         continue;
       }
 
-      await AssistantManagerTaskLog.update(
+      const [changed] = await AssistantManagerTaskLog.update(
         {
           meta: nextMeta,
           updatedBy: actorId,
         },
-        { where: { id: log.id } },
+        { where: { id: log.id, updatedAt: log.updatedAt } },
       );
-      updatedCount += 1;
+      if (changed) updatedCount += 1;
+      else unchangedCount += 1;
     }
 
     await reconcileNightReportTaskWaiversForRange(effectiveStart, end);
@@ -3678,8 +3724,18 @@ export const clearTaskLogsForRange = async (
       },
     };
 
-    const totalCount = await AssistantManagerTaskLog.count({ where });
-    const deletedCount = await AssistantManagerTaskLog.destroy({ where });
+    const sequelize = AssistantManagerTaskLog.sequelize;
+    if (!sequelize) throw new HttpError(500, 'Database connection is not available');
+    const { totalCount, deletedCount } = await sequelize.transaction(async (transaction) => {
+      const logs = await AssistantManagerTaskLog.findAll({ where, transaction, lock: transaction.LOCK.UPDATE, order: [['id', 'ASC']] });
+      for (const log of logs) {
+        await assertAttendanceEvidencePreserved(log.id, log.meta, null, transaction);
+        await assertCleaningTaskLogMutable(log.id, transaction);
+      }
+      return { totalCount: logs.length, deletedCount: await AssistantManagerTaskLog.destroy({
+        where: { id: logs.map((log) => log.id) }, transaction,
+      }) };
+    });
 
     res.status(200).json([
       {
@@ -3694,7 +3750,8 @@ export const clearTaskLogsForRange = async (
     ]);
   } catch (error) {
     console.error('Failed to clear assistant manager task logs', error);
-    res.status(500).json([{ message: 'Failed to clear weekly tasks' }]);
+    res.status(error instanceof HttpError ? error.status : 500)
+      .json([{ message: error instanceof HttpError ? error.message : 'Failed to clear weekly tasks' }]);
   }
 };
 
@@ -4346,8 +4403,13 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
         shouldUpdateMeta = true;
       }
 
-      if (status) {
+      // A retry on an already completed managed task is a no-op, not a second completion.
+      if (status && (!isCleaningTaskCompletionManaged(template.scheduleConfig, nextMeta) || status !== log.status)) {
+        if (status !== log.status && isCleaningTaskCompletionManaged(template.scheduleConfig, nextMeta)) {
+          throw new HttpError(409, 'This task is completed automatically after all cleaning photos are approved. Use the cleaning review workflow.');
+        }
         if (status === 'completed') {
+          await ensureTaskAttendanceCheckSatisfied(log, nextMeta, transaction);
           assertManualSocialMediaPublishTaskCompletionAllowed(
             nextMeta,
             template.scheduleConfig,
@@ -4404,6 +4466,10 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
         payload.meta = nextMeta;
       }
       payload.updatedBy = actorId;
+      assertStoredTaskImagesUnchanged(log.meta, nextMeta);
+      assertWorkflowMetadataUnchanged(log.meta, nextMeta);
+      await assertAttendanceEvidencePreserved(log.id, log.meta, nextMeta, transaction);
+      await assertCleaningEvidencePreserved(log.id, log.meta, nextMeta, transaction);
       await log.update(payload, { transaction });
       const nextEvidenceItems = hasEvidenceItems
         ? sanitizeEvidenceItems(nextMeta.evidenceItems)
@@ -4470,44 +4536,20 @@ export const deleteTaskLog = async (req: AuthenticatedRequest, res: Response): P
       return;
     }
 
-    const log = await AssistantManagerTaskLog.findByPk(logId, {
-      attributes: ['id', 'meta'],
+    const sequelize = AssistantManagerTaskLog.sequelize;
+    if (!sequelize) throw new HttpError(500, 'Database connection is not available');
+    const images = await sequelize.transaction(async (transaction) => {
+      const log = await AssistantManagerTaskLog.findByPk(logId, { transaction, lock: transaction.LOCK.UPDATE });
+      if (!log) throw new HttpError(404, 'Task log not found');
+      await assertAttendanceEvidencePreserved(log.id, log.meta, null, transaction);
+      await assertCleaningTaskLogMutable(log.id, transaction);
+      const stored = sanitizeEvidenceItems(log.meta?.evidenceItems)
+        .filter((item) => item.type === 'image' && Boolean(item.storagePath || item.driveFileId));
+      await log.destroy({ transaction });
+      return stored;
     });
-    if (!log) {
-      res.status(404).json([{ message: 'Task log not found' }]);
-      return;
-    }
-
-    const evidenceItems = sanitizeEvidenceItems((log.meta ?? {})['evidenceItems']);
-    const imageEvidenceWithStorage = evidenceItems.filter(
-      (item) => item.type === 'image' && Boolean(item.storagePath || item.driveFileId),
-    );
-
-    const uniqueDeleteTargets = new Map<string, { storagePath?: string | null; driveFileId?: string | null }>();
-    imageEvidenceWithStorage.forEach((item) => {
-      const driveFileId = typeof item.driveFileId === 'string' ? item.driveFileId.trim() : '';
-      const storagePath = typeof item.storagePath === 'string' ? item.storagePath.trim() : '';
-      const dedupeKey = `${driveFileId}::${storagePath}`;
-      if (!uniqueDeleteTargets.has(dedupeKey)) {
-        uniqueDeleteTargets.set(dedupeKey, {
-          storagePath: storagePath || null,
-          driveFileId: driveFileId || null,
-        });
-      }
-    });
-
-    if (uniqueDeleteTargets.size > 0) {
-      await Promise.all(
-        Array.from(uniqueDeleteTargets.values()).map((target) =>
-          deleteAssistantManagerTaskEvidenceImage({
-            storagePath: target.storagePath ?? null,
-            driveFileId: target.driveFileId ?? null,
-          }),
-        ),
-      );
-    }
-
-    await AssistantManagerTaskLog.destroy({ where: { id: logId } });
+    // Never delete Drive evidence before the database has accepted the deletion.
+    await deleteEvidenceImagesBestEffort(images, `deleted task ${logId}`);
     res.status(204).send();
   } catch (error) {
     if (error instanceof HttpError) {
@@ -4587,6 +4629,12 @@ export const createManualTaskLog = async (req: AuthenticatedRequest, res: Respon
       [SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY]:
         template.scheduleConfig?.[SOCIAL_MEDIA_AUTO_COMPLETE_ON_PUBLISH_CONFIG_KEY] === true,
     };
+    assertStoredTaskImagesUnchanged({}, meta);
+    assertWorkflowMetadataUnchanged({}, meta);
+    if (payload.status === 'completed' && (validateAttendanceCheckConfig(template.scheduleConfig)
+      || isCleaningTaskCompletionManaged(template.scheduleConfig, meta))) {
+      throw new HttpError(409, 'Create this task as pending, then complete its evidence checks.');
+    }
     const linkedSocialMediaContentId = getStoredSocialMediaContentId(meta);
     if (linkedSocialMediaContentId) {
       await applySocialMediaContentLink(meta, linkedSocialMediaContentId);
@@ -4724,6 +4772,9 @@ export const uploadTaskLogEvidenceImage = async (
     }
     if (!canEditTaskLogEvidence(log)) {
       throw new HttpError(400, 'Evidence can only be edited for pending tasks on the current day');
+    }
+    if (isCleaningTaskCompletionManaged(log.template?.scheduleConfig, log.meta)) {
+      throw new HttpError(409, 'Upload these photos from the assigned person’s cleaning task.');
     }
 
     const file = req.file;
@@ -4883,6 +4934,11 @@ export const uploadTaskLogEvidenceImage = async (
       }
 
       meta['evidenceItems'] = normalizedItems;
+      if (isCleaningTaskCompletionManaged(currentTemplate.scheduleConfig, lockedLog.meta)) {
+        throw new HttpError(409, 'Upload these photos from the assigned person’s cleaning task.');
+      }
+      await assertAttendanceEvidencePreserved(lockedLog.id, lockedLog.meta, meta, transaction);
+      await assertCleaningEvidencePreserved(lockedLog.id, lockedLog.meta, meta, transaction);
       await lockedLog.update(
         {
           meta,
@@ -5049,6 +5105,10 @@ export const manageTaskLog = async (
       const nextTaskDate = payload.taskDate ?? log.taskDate;
       const userChanged = nextUserId !== log.userId;
       const taskDateChanged = nextTaskDate !== log.taskDate;
+      if (userChanged || taskDateChanged) {
+        await assertAttendanceEvidencePreserved(log.id, log.meta, null, transaction);
+        await assertCleaningTaskLogMutable(log.id, transaction);
+      }
 
       const targetUser = await User.findOne({
         where: { id: nextUserId, status: true, approved: true },
@@ -5193,22 +5253,24 @@ export const manageTaskLog = async (
 };
 
 export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  let metadataTransaction: Transaction | undefined;
   try {
     const logId = Number(req.params.id);
     if (!Number.isInteger(logId) || logId <= 0) {
       res.status(400).json([{ message: 'Invalid task log id' }]);
       return;
     }
+    const sequelize = AssistantManagerTaskLog.sequelize;
+    if (!sequelize) throw new HttpError(500, 'Database connection is not available');
+    metadataTransaction = await sequelize.transaction();
     const log = await AssistantManagerTaskLog.findByPk(logId, {
-      include: [
-        { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig', 'isActive'] },
-        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName'] },
-      ],
+      transaction: metadataTransaction, lock: metadataTransaction.LOCK.UPDATE,
     });
     if (!log) {
       res.status(404).json([{ message: 'Task log not found' }]);
       return;
     }
+    log.template = await AssistantManagerTaskTemplate.findByPk(log.templateId, { transaction: metadataTransaction }) ?? undefined;
     const actorId = getActorId(req);
     const allowGlobalEdit = canViewAllTaskLogs(req);
     if (!allowGlobalEdit && actorId !== log.userId) {
@@ -5246,31 +5308,39 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
     const previousEvidenceItems = sanitizeEvidenceItems((log.meta ?? {})['evidenceItems']);
     const meta = { ...(log.meta ?? {}) } as Record<string, unknown>;
     Object.assign(meta, payload.metaPatch);
+    assertWorkflowMetadataUnchanged(log.meta, meta);
+    assertStoredTaskImagesUnchanged(log.meta, meta);
     if (isSocialMediaLinkUpdate) {
       await applySocialMediaContentLink(
         meta,
         parseSocialMediaContentId(meta[SOCIAL_MEDIA_CONTENT_ID_META_KEY]),
+        metadataTransaction,
       );
     }
-    const { errors, normalizedItems } = validateEvidenceItemsAgainstRules(
+    const { errors, normalizedItems } = isEvidenceUpdate ? validateEvidenceItemsAgainstRules(
       getEvidenceRules(log.template),
       sanitizeEvidenceItems(meta['evidenceItems']),
       {
         enforceRequired: false,
         shiftEvidenceRuleKeys: getShiftEvidenceRuleKeys(log.template),
       },
-    );
+    ) : { errors: [] as string[], normalizedItems: previousEvidenceItems };
     if (errors.length > 0) {
       res.status(400).json([{ message: errors.join(' ') }]);
       return;
     }
-    meta['evidenceItems'] = normalizedItems;
+    // Preserve the exact approved workflow evidence for comments/notes-only edits.
+    if (isEvidenceUpdate) meta['evidenceItems'] = normalizedItems;
     const removedImageEvidenceItems = isEvidenceUpdate
       ? findRemovedStoredImageEvidenceItems(previousEvidenceItems, normalizedItems)
       : [];
     let nextTaskDate = log.taskDate;
     if (payload.taskDate) {
       nextTaskDate = payload.taskDate;
+    }
+    if (nextTaskDate !== log.taskDate) {
+      await assertAttendanceEvidencePreserved(log.id, log.meta, null, metadataTransaction);
+      await assertCleaningTaskLogMutable(log.id, metadataTransaction);
     }
     if (allowGlobalEdit) {
       const day = dayjs(nextTaskDate);
@@ -5328,17 +5398,15 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
     if (payload.notes !== undefined) {
       updatePayload.notes = payload.notes;
     }
-    await AssistantManagerTaskLog.update(updatePayload, { where: { id: logId } });
-    if (removedImageEvidenceItems.length > 0) {
-      await Promise.all(
-        removedImageEvidenceItems.map((item) =>
-          deleteAssistantManagerTaskEvidenceImage({
-            storagePath: item.storagePath ?? null,
-            driveFileId: item.driveFileId ?? null,
-          }),
-        ),
-      );
-    }
+    await assertAttendanceEvidencePreserved(log.id, log.meta, meta, metadataTransaction);
+    await assertCleaningEvidencePreserved(log.id, log.meta, meta, metadataTransaction);
+    await log.update(updatePayload, { transaction: metadataTransaction });
+    const transactionToCommit = metadataTransaction;
+    // Sequelize finalizes a transaction even if COMMIT loses its acknowledgement.
+    // Do not issue ROLLBACK (or delete evidence) after that uncertain outcome.
+    metadataTransaction = undefined;
+    await transactionToCommit.commit();
+    await deleteEvidenceImagesBestEffort(removedImageEvidenceItems, `updated task ${logId}`);
     const refreshed = await AssistantManagerTaskLog.findByPk(logId, {
       include: [
         { model: AssistantManagerTaskTemplate, as: 'template', attributes: ['id', 'name', 'description', 'cadence', 'scheduleConfig'] },
@@ -5369,5 +5437,9 @@ export const updateTaskLogMeta = async (req: AuthenticatedRequest, res: Response
     }
     console.error('Failed to update assistant manager task meta', error);
     res.status(500).json([{ message: 'Failed to update task log metadata' }]);
+  } finally {
+    if (metadataTransaction) await metadataTransaction.rollback().catch((error) => {
+      logger.error('Failed to roll back task metadata update', error);
+    });
   }
 };

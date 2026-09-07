@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
-import type { VolunteerMilestone } from "../api/volunteerMilestones";
+import type { VolunteerMilestone, VolunteerProgressReport, VolunteerStay } from "../api/volunteerMilestones";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -94,11 +94,42 @@ export const orderVolunteerMilestones = (milestones: VolunteerMilestone[]): Volu
     (left, right) => (milestoneOrder.get(left.key) ?? 99) - (milestoneOrder.get(right.key) ?? 99),
   );
 
+export const formatVolunteerProgressNumber = (value: number): string => Number.isFinite(value)
+  ? value.toLocaleString("en-GB", { maximumFractionDigits: 4 })
+  : "—";
+
 export const formatMilestoneAmount = (milestone: VolunteerMilestone): string => {
   const unit = milestone.unit.trim();
+  const current = formatVolunteerProgressNumber(milestone.current);
+  const target = formatVolunteerProgressNumber(milestone.target);
   if (unit === "%" || unit.toLowerCase() === "percent" || unit.toLowerCase() === "percentage") {
-    return `${milestone.current}% (target ${milestone.target}%)`;
+    return `${current}% (target ${target}%)`;
   }
   const pluralizedUnit = milestone.target === 1 ? unit.replace(/s$/, "") : unit;
-  return `${milestone.current} of ${milestone.target}${pluralizedUnit ? ` ${pluralizedUnit}` : ""}`;
+  return `${current} of ${target}${pluralizedUnit ? ` ${pluralizedUnit}` : ""}`;
+};
+
+export const formatVolunteerStayRange = (stay: Pick<VolunteerStay, "startDate" | "endDate">): string =>
+  `${dayjs(stay.startDate).format("D MMM YYYY")} – ${dayjs(stay.endDate).format("D MMM YYYY")}`;
+
+export const getVolunteerReportContext = (detail: VolunteerProgressReport) => {
+  if ("mode" in detail && detail.mode === "stay") {
+    return {
+      key: `stay-${detail.stay?.id ?? "setup"}`,
+      label: detail.stay ? formatVolunteerStayRange(detail.stay) : "Stay setup",
+      periodLabel: "this stay",
+      timezone: detail.timezone,
+      asOfDate: detail.asOfDate,
+      stay: detail.stay,
+    };
+  }
+  const calendar = detail as import("../api/volunteerMilestones").VolunteerMilestoneDetail;
+  return {
+    key: calendar.period.month,
+    label: formatVolunteerProgressMonth(calendar.period.month),
+    periodLabel: "this month",
+    timezone: calendar.period.timezone,
+    asOfDate: calendar.period.asOfDate,
+    stay: null,
+  };
 };

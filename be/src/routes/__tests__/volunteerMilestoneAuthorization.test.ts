@@ -56,6 +56,9 @@ jest.mock('../../controllers/volunteerMilestoneController.js', () => {
     listVolunteerMilestones: jest.fn(respond),
     putVolunteerAttendance: jest.fn(respond),
     putVolunteerManagementFeedback: jest.fn(respond),
+    createVolunteerStay: jest.fn(respond),
+    updateVolunteerStay: jest.fn(respond),
+    putVolunteerStayFeedback: jest.fn(respond),
   };
 });
 
@@ -65,6 +68,9 @@ import {
   listVolunteerMilestones,
   putVolunteerAttendance,
   putVolunteerManagementFeedback,
+  createVolunteerStay,
+  updateVolunteerStay,
+  putVolunteerStayFeedback,
 } from '../../controllers/volunteerMilestoneController.js';
 import volunteerMilestoneRoutes from '../volunteerMilestoneRoutes.js';
 
@@ -161,5 +167,59 @@ describe('volunteer milestone route authorization and contract', () => {
       .set('x-test-actions', 'update')
       .send({ approved: false, rating: 5 });
     expect([invalidPeriod.status, invalidStatus.status, unknownField.status]).toEqual([400, 400, 400]);
+  });
+
+  it('lets Social Media volunteers view saved stays but rejects invalid or mixed selectors', async () => {
+    const app = buildApp();
+    const own = await request(app).get('/api/volunteerMilestones/me?stayId=12')
+      .set('x-test-role', 'social-media').set('x-test-actions', 'view');
+    const invalid = await request(app).get('/api/volunteerMilestones/me?stayId=-2')
+      .set('x-test-role', 'guide').set('x-test-actions', 'view');
+    const mixed = await request(app).get('/api/volunteerMilestones/me?stayId=12&period=2026-08')
+      .set('x-test-role', 'guide').set('x-test-actions', 'view');
+    expect([own.status, invalid.status, mixed.status]).toEqual([204, 400, 400]);
+    expect(getMyVolunteerMilestones).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['guide', 'social-media'])('denies %s all stay management writes even with update module permission', async (role) => {
+    const app = buildApp();
+    const create = await request(app).post('/api/volunteerMilestones/91/stays')
+      .set('x-test-role', role).set('x-test-actions', 'update').send({});
+    const update = await request(app).patch('/api/volunteerMilestones/91/stays/12')
+      .set('x-test-role', role).set('x-test-actions', 'update').send({ expectedRevision: 1 });
+    const feedback = await request(app).patch('/api/volunteerMilestones/91/stays/12/feedback')
+      .set('x-test-role', role).set('x-test-actions', 'update').send({ expectedRevision: 1, approved: true });
+    expect([create.status, update.status, feedback.status]).toEqual([403, 403, 403]);
+    expect(createVolunteerStay).not.toHaveBeenCalled();
+    expect(updateVolunteerStay).not.toHaveBeenCalled();
+    expect(putVolunteerStayFeedback).not.toHaveBeenCalled();
+  });
+
+  it('requires module update and expectedRevision for manager stay edits', async () => {
+    const app = buildApp();
+    const readOnly = await request(app).post('/api/volunteerMilestones/42/stays')
+      .set('x-test-role', 'manager').set('x-test-actions', 'view').send({});
+    const missingRevision = await request(app).patch('/api/volunteerMilestones/42/stays/12')
+      .set('x-test-role', 'manager').set('x-test-actions', 'update').send({ changeReason: 'Extend stay' });
+    const updated = await request(app).patch('/api/volunteerMilestones/42/stays/12')
+      .set('x-test-role', 'manager').set('x-test-actions', 'update')
+      .send({ expectedRevision: 1, changeReason: 'Extend stay', endDate: '2026-12-05' });
+    expect([readOnly.status, missingRevision.status, updated.status]).toEqual([403, 400, 204]);
+    expect(updateVolunteerStay).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates stays and approves feedback using their separate manager endpoints', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/volunteerMilestones/42/stays')
+      .set('x-test-role', 'owner').set('x-test-actions', 'update')
+      .send({ startDate: '2026-08-05', endDate: '2026-11-05', position: 'guide' });
+    const approved = await request(app).patch('/api/volunteerMilestones/42/stays/12/feedback')
+      .set('x-test-role', 'administrator').set('x-test-actions', 'update')
+      .send({ expectedRevision: 1, approved: true, feedback: 'All stay targets met' });
+    const forged = await request(app).post('/api/volunteerMilestones/42/stays')
+      .set('x-test-role', 'owner').set('x-test-actions', 'update').send({ createdBy: 1 });
+    expect([created.status, approved.status, forged.status]).toEqual([204, 204, 400]);
+    expect(createVolunteerStay).toHaveBeenCalledTimes(1);
+    expect(putVolunteerStayFeedback).toHaveBeenCalledTimes(1);
   });
 });

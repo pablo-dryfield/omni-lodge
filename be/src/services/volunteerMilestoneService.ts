@@ -420,6 +420,17 @@ const findVolunteer = async (
   return profile;
 };
 
+/** Photo checks belong to the original person, physical shift/type and evidence task date. */
+export const currentVolunteerAttendance = (assignment: Pick<AssignmentWithRelations, 'userId' | 'shiftInstance' | 'volunteerAttendance'>) => {
+  const attendance = assignment.volunteerAttendance;
+  if (!attendance || (attendance.subjectUserId != null && attendance.subjectUserId !== assignment.userId)) return undefined;
+  if (attendance.evidenceTaskLogId == null) return attendance;
+  const shift = assignment.shiftInstance;
+  if (!shift || attendance.evidenceTaskLog?.id !== attendance.evidenceTaskLogId || attendance.evidenceTaskLog.taskDate !== shift.date
+    || attendance.evidenceShiftInstanceId !== shift.id || attendance.evidenceShiftTypeId !== shift.shiftTypeId) return undefined;
+  return attendance;
+};
+
 const attendanceAssignmentPayload = (
   assignment: AssignmentWithRelations,
   now: Date,
@@ -428,7 +439,7 @@ const attendanceAssignmentPayload = (
   if (!instance) {
     return null;
   }
-  const attendance = assignment.volunteerAttendance;
+  const attendance = currentVolunteerAttendance(assignment);
   const shiftName = instance.template?.name
     || instance.shiftType?.name
     || instance.shiftType?.key
@@ -681,8 +692,9 @@ const loadProgressForProfiles = async (
           model: VolunteerShiftAttendance,
           as: 'volunteerAttendance',
           required: false,
-          attributes: ['id', 'status', 'notes', 'recordedAt', 'recordedBy'],
-          include: [{ model: User, as: 'recordedByUser', attributes: ['id', 'firstName', 'lastName', 'email'] }],
+          attributes: ['id', 'status', 'notes', 'recordedAt', 'recordedBy', 'subjectUserId', 'evidenceTaskLogId', 'evidenceShiftInstanceId', 'evidenceShiftTypeId'],
+          include: [{ model: User, as: 'recordedByUser', attributes: ['id', 'firstName', 'lastName', 'email'] },
+            { model: AssistantManagerTaskLog, as: 'evidenceTaskLog', required: false, attributes: ['id', 'taskDate'] }],
         },
       ],
       order: [[{ model: ShiftInstance, as: 'shiftInstance' }, 'date', 'ASC']],
@@ -886,7 +898,7 @@ export const listActiveVolunteerMilestoneProgress = async (
   const profiles = await StaffProfile.findAll({
     where: { staffType: 'volunteer', active: true },
     include: [{
-      model: User,
+            model: User,
       as: 'user',
       required: true,
       where: { status: true },
@@ -941,25 +953,58 @@ export const recordVolunteerAttendance = async (params: {
     throw new HttpError(409, 'Attendance can be confirmed only after the shift has ended.');
   }
 
+  return VolunteerShiftAttendance.sequelize!.transaction(async (transaction) => {
+  const lockedAssignment = await ShiftAssignment.findByPk(assignment.id, { transaction, lock: transaction.LOCK.UPDATE });
+  if (!lockedAssignment || lockedAssignment.userId !== assignment.userId || lockedAssignment.shiftInstanceId !== assignment.shiftInstanceId) {
+    throw new HttpError(409, 'The scheduled assignment changed. Refresh before recording attendance.');
+  }
+  const lockedShift = await ShiftInstance.findByPk(lockedAssignment.shiftInstanceId, { transaction, lock: transaction.LOCK.UPDATE });
+  const lockedWeek = lockedShift ? await ScheduleWeek.findByPk(lockedShift.scheduleWeekId, { attributes: ['id', 'state'], transaction, lock: transaction.LOCK.UPDATE }) : null;
+  if (!lockedShift || lockedWeek?.state !== 'published' || !isPastShift(lockedShift)) {
+    throw new HttpError(409, 'Attendance can be recorded only after the currently published shift has ended.');
+  }
+  const sameDayTasks = await AssistantManagerTaskLog.findAll({
+    where: { taskDate: lockedShift.date }, attributes: ['id', 'templateId'],
+    include: [{ model: AssistantManagerTaskTemplate, as: 'template', required: true, attributes: ['id', 'scheduleConfig'] }],
+    transaction,
+  }) as TaskLogWithTemplate[];
+  const photoManaged = sameDayTasks.some((task) => {
+    const configured = task.template?.scheduleConfig?.volunteerAttendance;
+    if (!configured || typeof configured !== 'object' || Array.isArray(configured)) return false;
+    const ids = (configured as Record<string, unknown>).shiftTypeIds;
+    return Array.isArray(ids) && ids.includes(lockedShift.shiftTypeId);
+  });
+  if (photoManaged) {
+    throw new HttpError(409, 'This scheduled shift has a photo-based attendance task. Record attendance through that task’s photo check in Task Planner.');
+  }
   const [attendance, created] = await VolunteerShiftAttendance.findOrCreate({
     where: { shiftAssignmentId: assignment.id },
     defaults: {
       shiftAssignmentId: assignment.id,
+      subjectUserId: assignment.userId,
       status: params.status,
       notes: params.notes,
       recordedBy: params.actorId,
       recordedAt: new Date(),
+      revision: 1,
     },
+    transaction,
   });
   if (!created) {
+    if (attendance.evidenceTaskLogId != null) {
+      throw new HttpError(409, 'This attendance is linked to a task photo. Make corrections through the attendance check in Task Planner.');
+    }
     await attendance.update({
       status: params.status,
       notes: params.notes,
       recordedBy: params.actorId,
       recordedAt: new Date(),
-    });
+      revision: (attendance.revision ?? 1) + 1,
+      subjectUserId: assignment.userId,
+    }, { transaction });
   }
   return { attendance, volunteerUserId: assignment.userId };
+  });
 };
 
 export const saveVolunteerManagementFeedback = async (params: {

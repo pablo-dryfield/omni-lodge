@@ -3,8 +3,8 @@ import { MantineProvider } from "@mantine/core";
 import { fireEvent, render, screen } from "@testing-library/react";
 import * as milestoneApi from "../api/volunteerMilestones";
 import { useModuleAccess } from "../hooks/useModuleAccess";
-import type { VolunteerMilestoneDetail, VolunteerMilestoneList } from "../api/volunteerMilestones";
-import VolunteerProgress from "./VolunteerProgress";
+import type { VolunteerMilestoneDetail, VolunteerMilestoneList, VolunteerStayProgress as StayReport } from "../api/volunteerMilestones";
+import VolunteerProgressPage, { LegacyVolunteerProgress as VolunteerProgress } from "./VolunteerProgress";
 
 let mockRoleSlug = "owner";
 let mockStaffType: string | null = null;
@@ -31,6 +31,10 @@ jest.mock("../api/volunteerMilestones", () => {
     useVolunteerMilestoneDetail: jest.fn(),
     useUpdateVolunteerAttendance: jest.fn(),
     useUpdateVolunteerFeedback: jest.fn(),
+    useUpdateVolunteerStayFeedback: jest.fn(),
+    useVolunteerStayList: jest.fn(),
+    useVolunteerStayProgress: jest.fn(),
+    useSaveVolunteerStay: jest.fn(),
   };
 });
 
@@ -215,6 +219,11 @@ describe("VolunteerProgress permissions", () => {
       isError: false,
       error: null,
     });
+    (milestoneApi.useUpdateVolunteerStayFeedback as jest.Mock).mockReturnValue({
+      mutateAsync: jest.fn(), isPending: false, isError: false, error: null,
+    });
+    (milestoneApi.useVolunteerStayList as jest.Mock).mockReturnValue(queryResult({ volunteers: [] }));
+    (milestoneApi.useVolunteerStayProgress as jest.Mock).mockReturnValue(queryResult(undefined));
   });
 
   afterEach(() => {
@@ -327,5 +336,53 @@ describe("VolunteerProgress permissions", () => {
       screen.getByText(/The final star is on hold because one or more measurable milestones/i),
     ).toBeInTheDocument();
     expect(screen.getByText("Approval recorded 1 Sep 2026, 00:30 by Omar Owner")).toBeInTheDocument();
+  });
+
+  it("defaults to a full-stay report with both guide targets and keeps calendar history explicit", async () => {
+    mockRoleSlug = "guide";
+    mockStaffType = "volunteer";
+    const monthlyTargets = { reviews: 5, guidingShifts: 8, promotionShifts: 8, socialMediaShifts: 16, cleaningTasks: 5, attendancePercent: 90 };
+    const stay = {
+      id: 8, userId: 42, startDate: "2026-08-15", endDate: "2026-09-30", position: "guide" as const,
+      monthlyTargets, shiftTypeIds: { guiding: [2], promotion: [3], socialMedia: [4] },
+      changeReason: null, revision: 1, createdAt: "2026-08-14T10:00:00Z", updatedAt: "2026-08-14T10:00:00Z",
+    };
+    const stayReport: StayReport = {
+      ...detail,
+      mode: "stay",
+      user: { ...detail.user, arrivalDate: stay.startDate, departureDate: stay.endDate },
+      active: true,
+      stay, stays: [stay], setupRequired: false,
+      suggestedStay: stay,
+      targetSummary: { equivalentMonths: 1.5, elapsedMonths: 1, targets: monthlyTargets, expectedToDate: monthlyTargets },
+      asOfDate: "2026-09-06", timezone: "Europe/Warsaw", warnings: [], shiftTypes: [],
+      milestones: detail.milestones.map((item) => item.key === "monthly_shifts" ? {
+        ...item,
+        title: "Stay shifts",
+        expectedToDate: 8,
+        subtargets: [
+          { key: "guidingShifts", title: "Guiding shifts", current: 2, target: 12, expectedToDate: 4, unit: "shifts" },
+          { key: "promotionShifts", title: "Promotion shifts", current: 3, target: 12, expectedToDate: 4, unit: "shifts" },
+        ],
+      } : item.key === "attendance" ? { ...item, target: 90, expectedToDate: 90, unit: "%" }
+        : item.key === "management_feedback" ? { ...item, expectedToDate: 1, unit: "approval" }
+          : item),
+    };
+    (milestoneApi.useVolunteerStayProgress as jest.Mock).mockReturnValue(queryResult(stayReport));
+    mockUseMyProgress.mockReturnValue(queryResult(detail));
+    render(<MantineProvider><VolunteerProgressPage /></MantineProvider>);
+
+    expect(await screen.findByText("Guiding shifts")).toBeInTheDocument();
+    expect(screen.getByText("Promotion shifts")).toBeInTheDocument();
+    expect(screen.getByText("2 of 12 shifts for the stay")).toBeInTheDocument();
+    expect(screen.getByText("3 of 12 shifts for the stay")).toBeInTheDocument();
+    expect(screen.getAllByText("Expected to date: 4")).toHaveLength(2);
+    expect(screen.queryByText("Expected to date: 90%")).not.toBeInTheDocument();
+    expect(screen.queryByText("Expected to date: 1 approval")).not.toBeInTheDocument();
+    expect(mockUseMyProgress).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Calendar history" }));
+    expect(await screen.findByText("Stars reset and are earned independently each month.")).toBeInTheDocument();
+    expect(mockUseMyProgress).toHaveBeenCalledWith(expect.any(String), true);
   });
 });

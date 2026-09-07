@@ -36,7 +36,7 @@ import {
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import { useMediaQuery } from '@mantine/hooks';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import axiosInstance from '../../utils/axiosInstance';
 import {
   IconArrowDown,
@@ -97,6 +97,8 @@ import {
   updateAmTaskTemplate,
 } from '../../actions/assistantManagerTaskActions';
 import { CerebroRichTextContent } from '../cerebro/CerebroRichTextContent';
+import TaskAttendanceCheck from './TaskAttendanceCheck';
+import { canManuallyManageTask, getSubjectImageEvidenceItems, isCleaningManagedTask } from './cleaningTaskPlannerState';
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { compressImageFile } from '../../utils/imageCompression';
@@ -158,6 +160,12 @@ type TemplateFormState = {
   requireShift: boolean;
   requireSocialMediaPlan: boolean;
   completeOnSocialMediaPublish: boolean;
+  cleaningPhotoApprovalEnabled: boolean;
+  attendanceEnabled: boolean;
+  attendanceCheckKind: 'meeting_point' | 'promotion_chat';
+  attendanceShiftTypeIds: string[];
+  attendanceEvidenceRuleKey: string;
+  attendanceExpectedTime: string;
   reminderMinutesBeforeStart: string;
   notifyAtStart: boolean;
   evidenceRules: EvidenceRuleDraft[];
@@ -278,6 +286,7 @@ type PlannerDisplayTask = {
   notes: string | null;
   status: AssistantManagerTaskLog['status'];
   manual: boolean;
+  cleaningManaged: boolean;
   requiresShift: boolean;
   scheduleConflict: boolean;
   onShift: boolean;
@@ -325,6 +334,12 @@ const defaultTemplateFormState: TemplateFormState = {
   requireShift: true,
   requireSocialMediaPlan: false,
   completeOnSocialMediaPublish: false,
+  cleaningPhotoApprovalEnabled: false,
+  attendanceEnabled: false,
+  attendanceCheckKind: 'meeting_point',
+  attendanceShiftTypeIds: [],
+  attendanceEvidenceRuleKey: '',
+  attendanceExpectedTime: '20:45',
   reminderMinutesBeforeStart: '',
   notifyAtStart: true,
   evidenceRules: [],
@@ -972,6 +987,8 @@ const getAdvancedScheduleConfigText = (template?: AssistantManagerTaskTemplate |
   delete nextConfig.requireShift;
   delete nextConfig.requireSocialMediaPlan;
   delete nextConfig.completeOnSocialMediaPublish;
+  delete nextConfig.cleaningPhotoApprovalEnabled;
+  delete nextConfig.volunteerAttendance;
   delete nextConfig.requireScheduledShift;
   delete nextConfig.allowOffDays;
   delete nextConfig.completionWindowMode;
@@ -1874,6 +1891,7 @@ const buildPlannerTasks = ({
       notes: typeof meta.notes === 'string' ? meta.notes : log.notes ?? null,
       status: log.status,
       manual: Boolean(meta.manual),
+      cleaningManaged: isCleaningManagedTask(log, template),
       requiresShift: meta.requireShift === undefined ? true : Boolean(meta.requireShift),
       scheduleConflict: Boolean(meta.scheduleConflict),
       onShift: meta.onShift === undefined ? true : Boolean(meta.onShift),
@@ -2509,7 +2527,7 @@ const PlannerTaskCard = ({
               <Badge size="xs" color={STATUS_COLORS[task.status]} variant="outline">
                 {task.status}
               </Badge>
-              {canDelete && onDelete && (
+              {canDelete && !task.cleaningManaged && onDelete && (
                 <Tooltip label="Delete task">
                   <ActionIcon
                     size="sm"
@@ -2652,7 +2670,7 @@ const MobilePlannerDayCard = ({
                       <Badge color={STATUS_COLORS[task.status]} variant="light">
                         {task.status}
                       </Badge>
-                      {canDeleteLogs && onDeleteLog && (
+                      {canDeleteLogs && !task.cleaningManaged && onDeleteLog && (
                         <ActionIcon
                           size="sm"
                           variant="light"
@@ -2819,7 +2837,7 @@ const DesktopOwnerGroupedDayColumn = ({
                                 >
                                   {task.status}
                                 </Badge>
-                                {canDeleteLogs && onDeleteLog && (
+                                {canDeleteLogs && !task.cleaningManaged && onDeleteLog && (
                                   <ActionIcon
                                     size="sm"
                                     variant="light"
@@ -3020,7 +3038,7 @@ const DayTaskBucketsBoard = ({
                           <Badge size="xs" color={STATUS_COLORS[log.status]} variant="light">
                             {log.status}
                           </Badge>
-                          {canDeleteLogs && onDeleteLog && (
+                          {canManuallyManageTask(Boolean(canDeleteLogs), log, template) && onDeleteLog && (
                             <ActionIcon
                               size="sm"
                               variant="light"
@@ -4003,7 +4021,9 @@ const AssistantManagerTaskPlanner = () => {
     [selectedLog, templateMap],
   );
   const selectedLogId = selectedLog?.id ?? null;
-  const selectedLogRequiresSocialMediaPlan = doesTaskRequireSocialMediaPlan(
+  const selectedLogCleaningManaged = isCleaningManagedTask(selectedLog, selectedLogTemplate);
+  const selectedLogCanEditSchedule = canManuallyManageTask(canEditTaskLogs, selectedLog, selectedLogTemplate);
+  const selectedLogRequiresSocialMediaPlan = !selectedLogCleaningManaged && doesTaskRequireSocialMediaPlan(
     selectedLog,
     selectedLogTemplate,
   );
@@ -4213,16 +4233,18 @@ const AssistantManagerTaskPlanner = () => {
   }, [selectedLog, templateMap]);
   const selectedLogEvidenceReadOnly = Boolean(
     !selectedLog ||
+      selectedLogCleaningManaged ||
       selectedLog.status === 'completed' ||
       !selectedLogIsCurrentDay ||
       dashboardTaskEditOpen,
   );
-  const selectedLogCompletesOnSocialMediaPublish = doesTaskCompleteOnSocialMediaPublish(
+  const selectedLogCompletesOnSocialMediaPublish = !selectedLogCleaningManaged && doesTaskCompleteOnSocialMediaPublish(
     selectedLog,
     selectedLogTemplate,
   );
   const selectedLogCanComplete = Boolean(
     selectedLog &&
+      !selectedLogCleaningManaged &&
       selectedLog.status !== 'completed' &&
       selectedLogIsCurrentDay &&
       !selectedLogStrictCompletionExpired &&
@@ -4230,12 +4252,14 @@ const AssistantManagerTaskPlanner = () => {
   );
   const selectedLogCanReopen = Boolean(
     selectedLog &&
+      !selectedLogCleaningManaged &&
       selectedLog.status === 'completed' &&
       selectedLogIsCurrentDay &&
       !isTaskCompletionWindowExpired(selectedLog, templateMap),
   );
   const selectedLogCompletionLocked = Boolean(
     selectedLog &&
+      !selectedLogCleaningManaged &&
       selectedLog.status !== 'completed' &&
       (selectedLogIsPastDay || selectedLogStrictCompletionExpired),
   );
@@ -5150,6 +5174,12 @@ const AssistantManagerTaskPlanner = () => {
         requireShift: defaults.requireShift,
         requireSocialMediaPlan: defaults.requireSocialMediaPlan,
         completeOnSocialMediaPublish: defaults.completeOnSocialMediaPublish,
+        cleaningPhotoApprovalEnabled: template.scheduleConfig.cleaningPhotoApprovalEnabled === true,
+        attendanceEnabled: Boolean(template.scheduleConfig.volunteerAttendance),
+        attendanceCheckKind: template.scheduleConfig.volunteerAttendance?.checkKind ?? 'meeting_point',
+        attendanceShiftTypeIds: template.scheduleConfig.volunteerAttendance?.shiftTypeIds?.map(String) ?? [],
+        attendanceEvidenceRuleKey: template.scheduleConfig.volunteerAttendance?.evidenceRuleKey ?? '',
+        attendanceExpectedTime: template.scheduleConfig.volunteerAttendance?.expectedTime ?? '20:45',
         reminderMinutesBeforeStart:
           defaults.reminderMinutesBeforeStart != null
             ? String(defaults.reminderMinutesBeforeStart)
@@ -5464,6 +5494,10 @@ const AssistantManagerTaskPlanner = () => {
       }
 
       if (templateFormState.completeOnSocialMediaPublish) {
+        if (templateFormState.attendanceEnabled || templateFormState.cleaningPhotoApprovalEnabled) {
+          setTemplateFormError('Social Media publish completion cannot be combined with attendance or cleaning approval.');
+          return;
+        }
         if (templateFormState.completionWindowMode !== 'day') {
           setTemplateFormError(
             'Automatic Social Media publish completion requires the End of day completion window.',
@@ -5483,6 +5517,33 @@ const AssistantManagerTaskPlanner = () => {
           return;
         }
       }
+
+      if (templateFormState.attendanceEnabled) {
+        const attendanceRule = evidenceRules.find((rule) => rule.key === templateFormState.attendanceEvidenceRuleKey);
+        if (!attendanceRule || attendanceRule.type !== 'image' || (attendanceRule.required === false && !Number(attendanceRule.minItems))) {
+          setTemplateFormError('Attendance requires a required image evidence rule.');
+          return;
+        }
+        if (!templateFormState.attendanceShiftTypeIds.length || !/^([01]\d|2[0-3]):[0-5]\d$/.test(templateFormState.attendanceExpectedTime)) {
+          setTemplateFormError('Choose attendance shift types and a valid HH:mm check time.');
+          return;
+        }
+        nextScheduleConfig.volunteerAttendance = {
+          checkKind: templateFormState.attendanceCheckKind,
+          shiftTypeIds: templateFormState.attendanceShiftTypeIds.map(Number),
+          evidenceRuleKey: templateFormState.attendanceEvidenceRuleKey,
+          expectedTime: templateFormState.attendanceExpectedTime,
+        };
+      } else delete nextScheduleConfig.volunteerAttendance;
+      if (templateFormState.cleaningPhotoApprovalEnabled) {
+        if (templateFormState.attendanceEnabled || templateFormState.requireSocialMediaPlan || !shiftEvidenceSources.length
+          || evidenceRules.some((rule) => (rule.required !== false || Number(rule.minItems) > 0)
+            && (rule.type !== 'image' || !shiftEvidenceSources.some((source) => source.evidenceRuleKey === rule.key)))) {
+          setTemplateFormError('Cleaning approval requires only required image rules mapped to shift-based evidence. Use a separate template for attendance or Social Media.');
+          return;
+        }
+        nextScheduleConfig.cleaningPhotoApprovalEnabled = true;
+      } else delete nextScheduleConfig.cleaningPhotoApprovalEnabled;
 
       const nightReportWaiverRules: Array<{
         action: 'waive';
@@ -6380,7 +6441,7 @@ const AssistantManagerTaskPlanner = () => {
   }, [searchParams, setSearchParams]);
 
   const openDashboardTaskEdit = useCallback(() => {
-    if (!canEditTaskLogs || !selectedLog) {
+    if (!selectedLogCanEditSchedule || !selectedLog) {
       return;
     }
     setDashboardTaskEditFormState(
@@ -6388,7 +6449,7 @@ const AssistantManagerTaskPlanner = () => {
     );
     setDashboardTaskEditError(null);
     setDashboardTaskEditOpen(true);
-  }, [canEditTaskLogs, selectedLog, selectedLogTemplate]);
+  }, [selectedLogCanEditSchedule, selectedLog, selectedLogTemplate]);
 
   const cancelDashboardTaskEdit = useCallback(() => {
     if (dashboardTaskEditSubmitting) {
@@ -6400,8 +6461,8 @@ const AssistantManagerTaskPlanner = () => {
   }, [dashboardTaskEditSubmitting]);
 
   const handleDashboardTaskEditSubmit = useCallback(async () => {
-    if (!canEditTaskLogs || !selectedLog) {
-      setDashboardTaskEditError('You do not have permission to edit this task');
+    if (!selectedLogCanEditSchedule || !selectedLog) {
+      setDashboardTaskEditError('This task cannot be edited here. Cleaning-managed tasks are locked to their photo approval workflow.');
       return;
     }
 
@@ -6479,7 +6540,7 @@ const AssistantManagerTaskPlanner = () => {
       setDashboardTaskEditSubmitting(false);
     }
   }, [
-    canEditTaskLogs,
+    selectedLogCanEditSchedule,
     dashboardTaskEditFormState,
     dispatch,
     refreshLogs,
@@ -6628,7 +6689,7 @@ const AssistantManagerTaskPlanner = () => {
 
   const handleTaskLogDelete = useCallback(
     async (log: AssistantManagerTaskLog) => {
-      if (!canDeleteTaskLogs) {
+      if (!canManuallyManageTask(canDeleteTaskLogs, log, templateMap.get(log.templateId))) {
         return;
       }
 
@@ -6658,7 +6719,7 @@ const AssistantManagerTaskPlanner = () => {
         setLogDeletePendingId((prev) => (prev === log.id ? null : prev));
       }
     },
-    [canDeleteTaskLogs, closeLogDetailModal, dispatch, refreshLogs, selectedLog?.id],
+    [canDeleteTaskLogs, closeLogDetailModal, dispatch, refreshLogs, selectedLog?.id, templateMap],
   );
 
   const handleEvidenceRuleDraftChange = useCallback(
@@ -7191,7 +7252,7 @@ const AssistantManagerTaskPlanner = () => {
   );
 
   const handleLogDetailSave = useCallback(async () => {
-    if (!selectedLog) {
+    if (!selectedLog || !selectedLogCanComplete) {
       return;
     }
 
@@ -7236,7 +7297,7 @@ const AssistantManagerTaskPlanner = () => {
       setLogDetailCompleting(false);
       setLogDetailSubmitting(false);
     }
-  }, [dispatch, logDetailFormState.evidenceItems, logDetailFormState.socialMediaContentId, refreshLogs, searchParams, selectedLog, setSearchParams]);
+  }, [dispatch, logDetailFormState.evidenceItems, logDetailFormState.socialMediaContentId, refreshLogs, searchParams, selectedLog, selectedLogCanComplete, setSearchParams]);
 
   const handleLogDetailReopen = useCallback(async () => {
     if (!selectedLog || !selectedLogCanReopen) {
@@ -9046,6 +9107,30 @@ const AssistantManagerTaskPlanner = () => {
                         )}
                     </Stack>
                   </Paper>
+                  <Paper withBorder radius="lg" p="sm">
+                    <Stack gap="sm">
+                      <Switch label="Confirm attendance from task photos" checked={templateFormState.attendanceEnabled}
+                        onChange={(event) => { const checked = event.currentTarget.checked; setTemplateFormState((prev) => ({ ...prev, attendanceEnabled: checked })); }} />
+                      {templateFormState.attendanceEnabled && <>
+                        <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                          <Select label="Attendance check" data={[{ value: 'meeting_point', label: 'Meeting point' }, { value: 'promotion_chat', label: 'Promotion chat' }]}
+                            value={templateFormState.attendanceCheckKind} allowDeselect={false}
+                            onChange={(value) => setTemplateFormState((prev) => ({ ...prev, attendanceCheckKind: value === 'promotion_chat' ? 'promotion_chat' : 'meeting_point' }))} />
+                          <TextInput label="Check time (Warsaw)" type="time" value={templateFormState.attendanceExpectedTime}
+                            onChange={(event) => { const value = event.currentTarget.value; setTemplateFormState((prev) => ({ ...prev, attendanceExpectedTime: value })); }} />
+                        </SimpleGrid>
+                        <MultiSelect label="Staff on these shift types" data={shiftTypeOptions} searchable value={templateFormState.attendanceShiftTypeIds}
+                          onChange={(value) => setTemplateFormState((prev) => ({ ...prev, attendanceShiftTypeIds: value }))} />
+                        <Select label="Attendance evidence photo rule" data={templateFormState.evidenceRules.filter((rule) => rule.type === 'image' && rule.key.trim())
+                          .map((rule) => ({ value: rule.key, label: rule.label || rule.key }))} value={templateFormState.attendanceEvidenceRuleKey || null}
+                          onChange={(value) => setTemplateFormState((prev) => ({ ...prev, attendanceEvidenceRuleKey: value ?? '' }))} />
+                        <Text size="xs" c="dimmed">The assigned manager checks each scheduled person against an uploaded photo. This check is required to complete the task.</Text>
+                      </>}
+                      <Switch label="Cleaning photos from staff, with manager approval" checked={templateFormState.cleaningPhotoApprovalEnabled}
+                        onChange={(event) => { const checked = event.currentTarget.checked; setTemplateFormState((prev) => ({ ...prev, cleaningPhotoApprovalEnabled: checked })); }} />
+                      {templateFormState.cleaningPhotoApprovalEnabled && <Alert color="blue">Create required image rules for each cleaning area and map them to the cleaning shift types below. Staff upload from the homepage; every required photo must be approved before this task completes.</Alert>}
+                    </Stack>
+                  </Paper>
                   <Stack gap={4}>
                     <Text size="sm" fw={600}>
                       Quick Presets
@@ -10645,7 +10730,7 @@ const AssistantManagerTaskPlanner = () => {
                         )}
                       </Group>
                       <Group justify="flex-end" gap={6} wrap="nowrap">
-                        {canDeleteTaskLogs && (
+                        {canDeleteTaskLogs && !selectedLogCleaningManaged && (
                           <Tooltip label="Delete task">
                             <ActionIcon
                               variant="subtle"
@@ -10682,7 +10767,7 @@ const AssistantManagerTaskPlanner = () => {
                         templateMap.get(selectedLog.templateId)?.description ??
                         'No task description provided.'}
                     </Text>
-                    {canEditTaskLogs && !dashboardTaskEditOpen && (
+                    {selectedLogCanEditSchedule && !dashboardTaskEditOpen && (
                       <Button
                         size="xs"
                         variant="light"
@@ -10828,7 +10913,7 @@ const AssistantManagerTaskPlanner = () => {
               </Stack>
             </Paper>
 
-            {dashboardTaskEditOpen && (
+            {dashboardTaskEditOpen && selectedLogCanEditSchedule && (
               <Paper
                 withBorder
                 radius="xl"
@@ -11003,7 +11088,7 @@ const AssistantManagerTaskPlanner = () => {
             )}
 
             {!dashboardTaskEditOpen &&
-              (selectedLogRequiresSocialMediaPlan || logDetailFormState.socialMediaContentId) && (
+              !selectedLogCleaningManaged && (selectedLogRequiresSocialMediaPlan || logDetailFormState.socialMediaContentId) && (
                 <Paper
                   withBorder
                   radius="xl"
@@ -11138,6 +11223,24 @@ const AssistantManagerTaskPlanner = () => {
               )}
 
             <Divider label="Evidence" labelPosition="center" />
+            {selectedLogCleaningManaged && (
+              <Alert color="blue" title="Cleaning photo approvals">
+                <Stack gap="sm">
+                  <Text size="sm">
+                    Staff upload their assigned photos from Cleaning on the homepage. Managers review
+                    those photos there. This task completes automatically once everyone's required
+                    photos are approved. Its assignee, date, time, evidence, and status are locked
+                    to the cleaning workflow and cannot be changed here. It cannot be deleted; use
+                    the audited cancellation option in homepage Cleaning when no cleaners remain.
+                    Comments are still available.
+                  </Text>
+                  <Group justify="center"><Button component={Link} to="/" variant="light" size="sm">Open homepage cleaning</Button></Group>
+                </Stack>
+              </Alert>
+            )}
+            {selectedLog && selectedLogTemplate?.scheduleConfig.volunteerAttendance && (
+              <TaskAttendanceCheck taskLogId={selectedLog.id} evidenceVersion={JSON.stringify(logDetailFormState.evidenceItems.map((item) => item.id))} />
+            )}
             {selectedLogEvidenceRules.length > 0 ? (
               <Stack gap="sm">
                 {selectedLogEvidenceRules.map((rule) => {
@@ -11459,16 +11562,9 @@ const AssistantManagerTaskPlanner = () => {
                           <Stack gap="sm">
                             {expectedItemsForRule.length > 0 ? (
                               <Stack gap="sm">
-                                {expectedItemsForRule.map((expectedItem) => {
-                                  const matchingItem = ruleItems.find(
-                                    (item) =>
-                                      item.ruleKey === rule.key &&
-                                      item.type === 'image' &&
-                                      Number(item.subjectUserId ?? -1) === expectedItem.subjectUserId,
-                                  );
-
-                                  return (
-                                    <Paper key={expectedItem.id} withBorder radius="md" p="sm" bg={matchingItem ? 'gray.0' : undefined}>
+                                {expectedItemsForRule.flatMap((expectedItem) =>
+                                  getSubjectImageEvidenceItems(ruleItems, rule.key, expectedItem.subjectUserId).map((matchingItem) => (
+                                    <Paper key={`${expectedItem.id}-${matchingItem?.id ?? 'missing'}`} withBorder radius="md" p="sm" bg={matchingItem ? 'gray.0' : undefined}>
                                       <Stack gap="sm">
                                         <Group justify="space-between" align="flex-start" wrap="wrap">
                                           <Stack gap={2}>
@@ -11610,8 +11706,8 @@ const AssistantManagerTaskPlanner = () => {
                                         )}
                                       </Stack>
                                     </Paper>
-                                  );
-                                })}
+                                  )),
+                                )}
                                 {additionalImageRuleItems.length > 0 && (
                                   <Stack gap="xs">
                                     <Text size="xs" c="dimmed" ta="center">

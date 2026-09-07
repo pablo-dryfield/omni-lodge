@@ -18,6 +18,9 @@ dayjs.extend(timezone);
 
 const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
 const PUSH_SENT_META_KEY = 'pushNotificationEvents';
+// Prevent overlapping ticks in this process from sending the same event twice. Across processes,
+// the stable push tag still coalesces delivery; exactly-once delivery would require an outbox.
+const inFlightReminderEvents = new Set<string>();
 
 type ReminderEvent = {
   type: 'reminder' | 'start';
@@ -192,9 +195,7 @@ export const processAmTaskPushReminderTick = async (): Promise<number> => {
       continue;
     }
 
-    const currentMeta = ((log.meta ?? {}) as Record<string, unknown>) ?? {};
-    const sentEventMap = getSentEventMap(currentMeta);
-    let didUpdateEventMap = false;
+    const sentEventMap = getSentEventMap((log.meta ?? {}) as Record<string, unknown>);
 
     for (const event of events) {
       if (event.at.isBefore(latestAllowedPastEvent) || event.at.isAfter(windowEnd)) {
@@ -202,11 +203,24 @@ export const processAmTaskPushReminderTick = async (): Promise<number> => {
       }
 
       const eventKey = buildEventKey(event);
-      if (sentEventMap[eventKey]) {
+      const inFlightKey = `${log.id}:${eventKey}`;
+      if (sentEventMap[eventKey] || inFlightReminderEvents.has(inFlightKey)) {
         continue;
       }
+      inFlightReminderEvents.add(inFlightKey);
+      try {
+        const sequelize = AssistantManagerTaskLog.sequelize;
+        if (!sequelize) throw new Error('Database connection is not available for task reminder tracking.');
+        // A tick can hold a stale task while another user completes or reschedules it.
+        const current = await AssistantManagerTaskLog.findByPk(log.id, { include: [{ model: AssistantManagerTaskTemplate,
+          as: 'template', attributes: ['id', 'name', 'scheduleConfig'] }] });
+        if (!current || current.status !== 'pending' || current.userId !== log.userId) continue;
+        const currentTemplate = current.template ?? null;
+        const currentStart = getTaskStartDateTime(current, currentTemplate, scheduleTimezone);
+        if (!currentStart || !buildReminderEvents(current, currentStart, currentTemplate).some((candidate) => buildEventKey(candidate) === eventKey)
+          || getSentEventMap(current.meta ?? {})[eventKey]) continue;
 
-      const wasSent = await sendAmTaskPushNotificationToUser({
+        const wasSent = await sendAmTaskPushNotificationToUser({
         userId: log.userId,
         payload: {
           title: event.title,
@@ -218,27 +232,24 @@ export const processAmTaskPushReminderTick = async (): Promise<number> => {
           taskLogId: log.id,
           eventType: event.type,
         },
-      });
-
-      if (!wasSent) {
-        continue;
+        });
+        if (!wasSent) continue;
+        // Do not keep a database lock during a network push. Re-read under a row lock afterwards,
+        // merging only this successful event into the latest evidence/workflow metadata.
+        await sequelize.transaction(async (transaction) => {
+          const latest = await AssistantManagerTaskLog.findByPk(log.id, { transaction, lock: transaction.LOCK.UPDATE });
+          if (!latest) return;
+          const latestMeta = (latest.meta ?? {}) as Record<string, unknown>;
+          const latestEvents = getSentEventMap(latestMeta);
+          if (latestEvents[eventKey]) return;
+          await latest.update({ meta: { ...latestMeta, [PUSH_SENT_META_KEY]: { ...latestEvents, [eventKey]: now.toISOString() } } }, { transaction });
+        });
+        sentEventMap[eventKey] = now.toISOString();
+        sentCount += 1;
+      } finally {
+        inFlightReminderEvents.delete(inFlightKey);
       }
-
-      sentEventMap[eventKey] = now.toISOString();
-      didUpdateEventMap = true;
-      sentCount += 1;
     }
-
-    if (!didUpdateEventMap) {
-      continue;
-    }
-
-    await log.update({
-      meta: {
-        ...currentMeta,
-        [PUSH_SENT_META_KEY]: sentEventMap,
-      },
-    });
   }
 
   return sentCount;

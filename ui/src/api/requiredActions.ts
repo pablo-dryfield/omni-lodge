@@ -33,6 +33,7 @@ export type RequiredActionItem = {
     | "assistant_manager_task"
     | "customer_email"
     | "staff_payout_receipt"
+    | "cleaning_review"
     | "custom"
     | "schedule_swap_partner"
     | "schedule_swap_manager"
@@ -66,6 +67,15 @@ export type RequiredActionItem = {
       }>;
     };
     staffPayoutReceipt?: StaffPayoutReceiptPayload;
+    cleaningSubmission?: {
+      submissionId: number;
+      revision: number;
+      taskLogId?: number;
+      taskDate?: string;
+      title?: string;
+      subjectName?: string;
+      pendingPhotos?: number;
+    };
   };
 };
 

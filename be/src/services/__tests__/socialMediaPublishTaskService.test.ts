@@ -99,6 +99,58 @@ describe('Social Media publication Task Planner completion', () => {
     mockFindOne.mockResolvedValue(null);
   });
 
+  it('rejects an explicitly linked cleaning workflow even after its template is switched to Social Media', async () => {
+    const cleaning = buildLog({ meta: { cleaningPhotoWorkflow: { managed: true }, completeOnSocialMediaPublish: true, socialMediaContentId: 41 } });
+    mockFindAll.mockResolvedValue([cleaning]);
+    await expect(callService()).rejects.toThrow('managed by cleaning photo approvals');
+    expect(cleaning.update).not.toHaveBeenCalled();
+  });
+
+  it('skips saved cleaning obligations when choosing an unlinked same-day Social Media task', async () => {
+    const cleaning = buildLog({ id: 87, meta: { cleaningPhotoWorkflow: { managed: true }, completeOnSocialMediaPublish: true } });
+    const publicationTask = buildLog();
+    mockFindAll.mockResolvedValueOnce([]).mockResolvedValueOnce([cleaning, publicationTask]);
+    await expect(callService()).resolves.toMatchObject({ taskLogId: 88 });
+    expect(cleaning.update).not.toHaveBeenCalled();
+    expect(publicationTask.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not waive a historical cleaning obligation in favor of a same-day linked publication', async () => {
+    const cleaning = buildLog({ id: 87, taskDate: '2026-09-01', status: 'missed', meta: { cleaningPhotoWorkflow: { managed: true }, completeOnSocialMediaPublish: true, socialMediaContentId: 41 } });
+    const publicationTask = buildLog({ meta: { completeOnSocialMediaPublish: true, socialMediaContentId: 41 } });
+    mockFindAll.mockResolvedValue([cleaning, publicationTask]);
+    await expect(callService()).rejects.toThrow('managed by cleaning photo approvals');
+    expect(cleaning.update).not.toHaveBeenCalled();
+    expect(publicationTask.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a cleaning collision without waiving the older linked publication task', async () => {
+    const older = buildLog({ taskDate: '2026-09-01', meta: { completeOnSocialMediaPublish: true, socialMediaContentId: 41 } });
+    const cleaning = buildLog({ id: 89, meta: { cleaningPhotoWorkflow: { managed: true }, completeOnSocialMediaPublish: true } });
+    mockFindAll.mockResolvedValue([older]);
+    mockFindOne.mockResolvedValue(cleaning);
+    await expect(callService()).rejects.toThrow('non-eligible task');
+    expect(older.update).not.toHaveBeenCalled();
+    expect(cleaning.update).not.toHaveBeenCalled();
+  });
+
+  it('does not accept an idempotent publication result pointing at an approved cleaning task', async () => {
+    const cleaning = buildLog({ status: 'completed', meta: { cleaningPhotoWorkflow: { managed: true }, socialMediaContentId: 41 } });
+    mockFindByPk.mockResolvedValue(cleaning);
+    await expect(callService(buildContent({ publishedTaskLogId: 88 }))).rejects.toThrow('managed by cleaning photo approvals');
+    expect(cleaning.update).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite cleaning evidence through published-content synchronization', async () => {
+    const cleaning = buildLog({ status: 'completed', meta: { cleaningPhotoWorkflow: { managed: true }, socialMediaContentId: 41 } });
+    mockFindByPk.mockResolvedValue(cleaning);
+    await expect(syncPublishedSocialMediaTaskEvidence({
+      content: buildContent({ status: 'published', publishedTaskLogId: 88, publishedAt: new Date('2026-09-02T12:00:00Z'), publishedBy: 7, platformLinks }),
+      actorId: 7, transaction: transaction as never,
+    })).rejects.toThrow('managed by cleaning photo approvals');
+    expect(cleaning.update).not.toHaveBeenCalled();
+  });
+
   it('prefers the one task explicitly linked to this idea and records the publication once', async () => {
     const linked = buildLog({
       id: 88,

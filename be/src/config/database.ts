@@ -115,6 +115,10 @@ import AssistantManagerTaskLog from "../models/AssistantManagerTaskLog.js";
 import AssistantManagerTaskPushSubscription from "../models/AssistantManagerTaskPushSubscription.js";
 import VolunteerMilestoneFeedback from "../models/VolunteerMilestoneFeedback.js";
 import VolunteerShiftAttendance from "../models/VolunteerShiftAttendance.js";
+import VolunteerStay from "../models/VolunteerStay.js";
+import VolunteerStayRevision from "../models/VolunteerStayRevision.js";
+import CleaningSubmission from "../models/CleaningSubmission.js";
+import CleaningPhotoVersion from "../models/CleaningPhotoVersion.js";
 import OpenBarIngredient from "../models/OpenBarIngredient.js";
 import OpenBarIngredientCategory from "../models/OpenBarIngredientCategory.js";
 import OpenBarIngredientVariant from "../models/OpenBarIngredientVariant.js";
@@ -224,6 +228,10 @@ const sequelize = new Sequelize({
     AssistantManagerTaskPushSubscription,
     VolunteerMilestoneFeedback,
     VolunteerShiftAttendance,
+    VolunteerStay,
+    VolunteerStayRevision,
+    CleaningSubmission,
+    CleaningPhotoVersion,
     OpenBarIngredient,
     OpenBarIngredientCategory,
     OpenBarIngredientVariant,

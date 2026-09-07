@@ -7,6 +7,12 @@ import {
   recordVolunteerAttendance,
   saveVolunteerManagementFeedback,
 } from '../services/volunteerMilestoneService.js';
+import {
+  getVolunteerStayProgress,
+  listVolunteerStayProgress,
+  saveVolunteerStay,
+  saveVolunteerStayFeedback,
+} from '../services/volunteerStayService.js';
 import type { VolunteerAttendanceStatus } from '../models/VolunteerShiftAttendance.js';
 import logger from '../utils/logger.js';
 
@@ -33,6 +39,9 @@ const positiveId = (value: unknown, label: string): number => {
   return parsed;
 };
 
+const requestedStayId = (req: AuthenticatedRequest): number | undefined =>
+  req.query.stayId == null ? undefined : positiveId(req.query.stayId, 'stayId');
+
 const sendError = (res: Response, error: unknown, fallback: string): void => {
   if (error instanceof HttpError) {
     res.status(error.status).json({
@@ -50,9 +59,10 @@ export const getMyVolunteerMilestones = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const progress = await getVolunteerMilestoneProgress(actorId(req), requestedPeriod(req), {
-      selfAccess: true,
-    });
+    const period = requestedPeriod(req);
+    const progress = period
+      ? await getVolunteerMilestoneProgress(actorId(req), period, { selfAccess: true })
+      : await getVolunteerStayProgress(actorId(req), { selfAccess: true, stayId: requestedStayId(req) });
     res.json(progress);
   } catch (error) {
     sendError(res, error, 'Unable to load volunteer milestone progress.');
@@ -64,7 +74,8 @@ export const listVolunteerMilestones = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const payload = await listActiveVolunteerMilestoneProgress(requestedPeriod(req));
+    const period = requestedPeriod(req);
+    const payload = period ? await listActiveVolunteerMilestoneProgress(period) : await listVolunteerStayProgress();
     res.json(payload);
   } catch (error) {
     sendError(res, error, 'Unable to load volunteer milestone summaries.');
@@ -77,7 +88,9 @@ export const getVolunteerMilestones = async (
 ): Promise<void> => {
   try {
     const userId = positiveId(req.params.userId, 'userId');
-    const progress = await getVolunteerMilestoneProgress(userId, requestedPeriod(req));
+    const period = requestedPeriod(req);
+    const progress = period ? await getVolunteerMilestoneProgress(userId, period)
+      : await getVolunteerStayProgress(userId, { stayId: requestedStayId(req) });
     res.json(progress);
   } catch (error) {
     sendError(res, error, 'Unable to load volunteer milestone progress.');
@@ -97,7 +110,9 @@ export const putVolunteerAttendance = async (
       notes,
       actorId: actorId(req),
     });
-    const progress = await getVolunteerMilestoneProgress(volunteerUserId, requestedPeriod(req));
+    const period = requestedPeriod(req);
+    const progress = period ? await getVolunteerMilestoneProgress(volunteerUserId, period)
+      : await getVolunteerStayProgress(volunteerUserId, { stayId: requestedStayId(req) });
     res.json({
       attendance: {
         id: attendance.id,
@@ -132,5 +147,40 @@ export const putVolunteerManagementFeedback = async (
     res.json(progress);
   } catch (error) {
     sendError(res, error, 'Unable to save volunteer management feedback.');
+  }
+};
+
+export const createVolunteerStay = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const progress = await saveVolunteerStay({
+      userId: positiveId(req.params.userId, 'userId'), body: req.body, actorId: actorId(req),
+    });
+    res.status(201).json(progress);
+  } catch (error) {
+    sendError(res, error, 'Unable to create the volunteer stay.');
+  }
+};
+
+export const updateVolunteerStay = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const progress = await saveVolunteerStay({
+      userId: positiveId(req.params.userId, 'userId'), stayId: positiveId(req.params.stayId, 'stayId'),
+      body: req.body, actorId: actorId(req),
+    });
+    res.json(progress);
+  } catch (error) {
+    sendError(res, error, 'Unable to update the volunteer stay.');
+  }
+};
+
+export const putVolunteerStayFeedback = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const progress = await saveVolunteerStayFeedback({
+      userId: positiveId(req.params.userId, 'userId'), stayId: positiveId(req.params.stayId, 'stayId'),
+      body: req.body, actorId: actorId(req),
+    });
+    res.json(progress);
+  } catch (error) {
+    sendError(res, error, 'Unable to save volunteer stay feedback.');
   }
 };

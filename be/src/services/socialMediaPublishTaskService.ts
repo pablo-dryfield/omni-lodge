@@ -221,8 +221,21 @@ const candidateInclude = [{
   required: true,
 }];
 
+const isCleaningManagedTask = (log: CandidateLog): boolean => {
+  const workflow = log.meta?.cleaningPhotoWorkflow;
+  return Boolean(workflow && typeof workflow === 'object' && !Array.isArray(workflow)
+    && (workflow as Record<string, unknown>).managed === true)
+    || log.template?.scheduleConfig?.cleaningPhotoApprovalEnabled === true;
+};
+
+const assertNotCleaningManagedTask = (log: CandidateLog): void => {
+  if (isCleaningManagedTask(log)) throw new SocialMediaPublishTaskConflictError(
+    'This task is managed by cleaning photo approvals and cannot be completed, moved, or changed through Social Media publication.',
+  );
+};
+
 const isPublishEnabled = (log: CandidateLog): boolean =>
-  resolveCompleteOnSocialMediaPublish(log.meta, log.template?.scheduleConfig);
+  !isCleaningManagedTask(log) && resolveCompleteOnSocialMediaPublish(log.meta, log.template?.scheduleConfig);
 
 const assertCrossUserCompletionAllowed = (
   log: CandidateLog,
@@ -287,6 +300,8 @@ const waiveSupersededTask = async (
   params: PublishTaskParams,
   taskDate: string,
 ): Promise<void> => {
+  assertNotCleaningManagedTask(log);
+  assertNotCleaningManagedTask(replacement);
   assertPublicationRescheduleAllowed(log, taskDate);
   const supersededMeta = {
     ...(log.meta ?? {}),
@@ -318,6 +333,7 @@ const completeCandidateTask = async (
   params: PublishTaskParams,
   taskDate: string,
 ): Promise<SocialMediaTaskCompletionResult> => {
+  assertNotCleaningManagedTask(log);
   const existingLink = getStoredSocialMediaContentId(log.meta);
   if (existingLink != null && existingLink !== params.content.id) {
     throw new SocialMediaPublishTaskConflictError(
@@ -435,6 +451,7 @@ export async function completeTaskForSocialMediaPublication(
       params.content.publishedTaskLogId,
       { transaction: params.transaction, lock: params.transaction.LOCK.SHARE },
     );
+    if (existing) assertNotCleaningManagedTask(existing);
     if (
       existing
       && existing.status === 'completed'
@@ -482,6 +499,8 @@ export async function completeTaskForSocialMediaPublication(
       log.status === 'pending'
       || (log.status === 'missed' && String(log.taskDate) < taskDate)
     ));
+  // Explicit links never redirect a saved cleaning obligation into another completion workflow.
+  exactLinked.forEach(assertNotCleaningManagedTask);
   if (exactLinked.length > 1) {
     const sameDayLinked = exactLinked.filter(
       (log) => String(log.taskDate) === taskDate && isPublishEnabled(log),
@@ -719,6 +738,7 @@ export async function reassignPublishedSocialMediaTaskDate(
     transaction,
     lock: transaction.LOCK.UPDATE,
   });
+  if (source) assertNotCleaningManagedTask(source);
   const previousPublication = asRecord(source?.meta?.[PUBLICATION_META_KEY]);
   const previousSnapshot = asRecord(source?.meta?.[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY]);
   const sourceCompletionBaseline = asRecord(source?.meta?.[DATE_REASSIGNMENT_COMPLETION_BASELINE_META_KEY]);
@@ -770,6 +790,7 @@ export async function reassignPublishedSocialMediaTaskDate(
         : 'Assign a publish-enabled Social Media task to the same person on the new date before changing the publish date.',
     );
   }
+  assertNotCleaningManagedTask(target);
   const targetPublication = asRecord(target.meta?.[PUBLICATION_META_KEY]);
   const targetSnapshot = asRecord(target.meta?.[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY]);
   const targetCompletionBaseline = asRecord(target.meta?.[DATE_REASSIGNMENT_COMPLETION_BASELINE_META_KEY]);
@@ -942,6 +963,7 @@ export async function syncPublishedSocialMediaTaskEvidence(
     params.content.publishedTaskLogId,
     { transaction: params.transaction, lock: params.transaction.LOCK.UPDATE },
   );
+  if (log) assertNotCleaningManagedTask(log);
   if (
     !log
     || log.status !== 'completed'

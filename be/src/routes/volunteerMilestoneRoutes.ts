@@ -6,6 +6,9 @@ import {
   listVolunteerMilestones,
   putVolunteerAttendance,
   putVolunteerManagementFeedback,
+  createVolunteerStay,
+  updateVolunteerStay,
+  putVolunteerStayFeedback,
 } from '../controllers/volunteerMilestoneController.js';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { authorizeModuleAction, requireRoles } from '../middleware/authorizationMiddleware.js';
@@ -17,6 +20,10 @@ const MODULE_SLUG = 'volunteer-progress';
 const managerGuard = requireRoles(MANAGER_ROLES);
 
 const validate = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.query.period != null && req.query.stayId != null) {
+    res.status(400).json({ message: 'Choose either a saved stay or a calendar period.' });
+    return;
+  }
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     res.status(400).json({ errors: errors.array() });
@@ -54,11 +61,17 @@ const userIdValidator = param('userId')
   .withMessage('userId must be a positive integer')
   .toInt();
 
+const stayIdQueryValidator = query('stayId').optional().isInt({ gt: 0 }).withMessage('stayId must be a positive integer').toInt();
+const stayIdValidator = param('stayId').isInt({ gt: 0 }).withMessage('stayId must be a positive integer').toInt();
+const revisionValidator = body('expectedRevision').isInt({ gt: 0 }).withMessage('expectedRevision must be a positive integer').toInt();
+const stayFields = ['startDate', 'endDate', 'position', 'monthlyTargets', 'shiftTypeIds', 'changeReason'] as const;
+
 router.get(
   '/me',
   authMiddleware,
   authorizeModuleAction(MODULE_SLUG, 'view'),
   periodQueryValidator,
+  stayIdQueryValidator,
   validate,
   getMyVolunteerMilestones,
 );
@@ -71,6 +84,28 @@ router.get(
   periodQueryValidator,
   validate,
   listVolunteerMilestones,
+);
+
+router.post(
+  '/:userId/stays',
+  authMiddleware, managerGuard, authorizeModuleAction(MODULE_SLUG, 'update'),
+  validateBodyKeys(stayFields), userIdValidator, validate, createVolunteerStay,
+);
+
+router.patch(
+  '/:userId/stays/:stayId',
+  authMiddleware, managerGuard, authorizeModuleAction(MODULE_SLUG, 'update'),
+  validateBodyKeys([...stayFields, 'expectedRevision']), userIdValidator, stayIdValidator,
+  revisionValidator, validate, updateVolunteerStay,
+);
+
+router.patch(
+  '/:userId/stays/:stayId/feedback',
+  authMiddleware, managerGuard, authorizeModuleAction(MODULE_SLUG, 'update'),
+  validateBodyKeys(['feedback', 'approved', 'expectedRevision']), userIdValidator, stayIdValidator,
+  revisionValidator,
+  body('feedback').optional({ nullable: true }).isString().isLength({ max: 5000 }),
+  body('approved').isBoolean().toBoolean(), validate, putVolunteerStayFeedback,
 );
 
 router.put(
@@ -92,6 +127,7 @@ router.put(
     .isLength({ max: 2000 })
     .withMessage('notes must be at most 2000 characters'),
   periodQueryValidator,
+  stayIdQueryValidator,
   validate,
   putVolunteerAttendance,
 );
@@ -128,6 +164,7 @@ router.get(
   authorizeModuleAction(MODULE_SLUG, 'view'),
   userIdValidator,
   periodQueryValidator,
+  stayIdQueryValidator,
   validate,
   getVolunteerMilestones,
 );

@@ -40,6 +40,43 @@ export type VolunteerMilestone = {
   remainingText: string;
   reason: string;
   evidence: VolunteerMilestoneEvidence[];
+  expectedToDate?: number;
+  subtargets?: Array<{
+    key: string;
+    title: string;
+    current: number;
+    target: number;
+    expectedToDate: number;
+    unit: string;
+  }>;
+};
+
+export type VolunteerStayPosition = "guide" | "social_media";
+export type VolunteerStayTargets = {
+  reviews: number;
+  guidingShifts: number;
+  promotionShifts: number;
+  socialMediaShifts: number;
+  cleaningTasks: number;
+  attendancePercent: number;
+};
+export type VolunteerStayShiftTypes = {
+  guiding: number[];
+  promotion: number[];
+  socialMedia: number[];
+};
+export type VolunteerStay = {
+  id: number;
+  userId: number;
+  startDate: string;
+  endDate: string;
+  position: VolunteerStayPosition;
+  monthlyTargets: VolunteerStayTargets;
+  shiftTypeIds: VolunteerStayShiftTypes;
+  changeReason: string | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type VolunteerMilestoneUser = {
@@ -101,8 +138,65 @@ export type VolunteerMilestoneList = {
   volunteers: VolunteerMilestoneSummary[];
 };
 
+export type VolunteerStayProgress = {
+  mode: "stay";
+  user: VolunteerMilestoneUser & { arrivalDate: string | null; departureDate: string | null };
+  active: boolean;
+  stay: VolunteerStay | null;
+  stays: VolunteerStay[];
+  setupRequired: boolean;
+  suggestedStay: {
+    startDate: string | null;
+    endDate: string | null;
+    position: VolunteerStayPosition;
+    monthlyTargets: VolunteerStayTargets;
+    shiftTypeIds: VolunteerStayShiftTypes;
+  };
+  targetSummary: {
+    equivalentMonths: number;
+    elapsedMonths: number;
+    targets: VolunteerStayTargets;
+    expectedToDate: VolunteerStayTargets;
+  } | null;
+  asOfDate: string;
+  timezone: string;
+  starsEarned: number;
+  totalStars: 5;
+  milestones: VolunteerMilestone[];
+  attendanceAssignments: VolunteerAttendanceAssignment[];
+  managementFeedback: VolunteerManagementFeedback | null;
+  warnings: string[];
+  shiftTypes: Array<{ id: number; key: string; name: string }>;
+};
+
+export type VolunteerStayList = {
+  mode: "stay";
+  volunteers: VolunteerStayProgress[];
+  shiftTypes: Array<{ id: number; key: string; name: string }>;
+};
+
+export type VolunteerProgressReport = VolunteerMilestoneDetail | VolunteerStayProgress;
+
+export type SaveVolunteerStayInput = {
+  userId: number;
+  stayId?: number;
+  expectedRevision?: number;
+  startDate: string;
+  endDate: string;
+  position: VolunteerStayPosition;
+  monthlyTargets: VolunteerStayTargets;
+  shiftTypeIds: VolunteerStayShiftTypes;
+  changeReason?: string;
+};
+
 type ApiErrorBody = { error?: string; message?: string } | Array<{ error?: string; message?: string }>;
 export type VolunteerMilestoneApiError = AxiosError<ApiErrorBody>;
+
+export const shouldRetryVolunteerStayQuery = (failureCount: number, error: VolunteerMilestoneApiError): boolean => {
+  const status = error.response?.status;
+  if (status !== undefined && status >= 400 && status < 500) return false;
+  return failureCount < 1;
+};
 
 export const volunteerMilestoneKeys = {
   all: ["volunteer-milestones"] as const,
@@ -110,6 +204,89 @@ export const volunteerMilestoneKeys = {
   list: (period: string) => ["volunteer-milestones", "list", period] as const,
   detail: (userId: number, period: string) =>
     ["volunteer-milestones", "detail", userId, period] as const,
+  stays: ["volunteer-milestones", "stays"] as const,
+  stayDetail: (userId: number | null, stayId?: number | null) =>
+    ["volunteer-milestones", "stay", userId ?? "me", stayId ?? "current"] as const,
+};
+
+export const fetchVolunteerStayList = async (): Promise<VolunteerStayList> => {
+  const response = await axiosInstance.get<VolunteerStayList>("/volunteerMilestones");
+  return response.data;
+};
+
+export const fetchVolunteerStayProgress = async (
+  userId: number | null,
+  stayId?: number | null,
+): Promise<VolunteerStayProgress> => {
+  const response = await axiosInstance.get<VolunteerStayProgress>(
+    userId === null ? "/volunteerMilestones/me" : `/volunteerMilestones/${userId}`,
+    { params: stayId ? { stayId } : {} },
+  );
+  return response.data;
+};
+
+export const useVolunteerStayList = (enabled: boolean) => useQuery<VolunteerStayList, VolunteerMilestoneApiError>({
+  queryKey: volunteerMilestoneKeys.stays,
+  queryFn: fetchVolunteerStayList,
+  enabled,
+  retry: shouldRetryVolunteerStayQuery,
+  staleTime: 30_000,
+});
+
+export const useVolunteerStayProgress = (userId: number | null, stayId: number | null, enabled: boolean) => useQuery<
+  VolunteerStayProgress,
+  VolunteerMilestoneApiError
+>({
+  queryKey: volunteerMilestoneKeys.stayDetail(userId, stayId),
+  queryFn: () => fetchVolunteerStayProgress(userId, stayId),
+  enabled,
+  retry: shouldRetryVolunteerStayQuery,
+  staleTime: 30_000,
+});
+
+export const saveVolunteerStay = async ({ userId, stayId, ...payload }: SaveVolunteerStayInput): Promise<VolunteerStayProgress> => {
+  const response = stayId
+    ? await axiosInstance.patch<VolunteerStayProgress>(`/volunteerMilestones/${userId}/stays/${stayId}`, payload)
+    : await axiosInstance.post<VolunteerStayProgress>(`/volunteerMilestones/${userId}/stays`, payload);
+  return response.data;
+};
+
+export const useSaveVolunteerStay = () => {
+  const queryClient = useQueryClient();
+  return useMutation<VolunteerStayProgress, VolunteerMilestoneApiError, SaveVolunteerStayInput>({
+    mutationFn: saveVolunteerStay,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: volunteerMilestoneKeys.all }),
+    onError: async (error) => {
+      if (error.response?.status === 409) await queryClient.invalidateQueries({ queryKey: volunteerMilestoneKeys.all });
+    },
+  });
+};
+
+export const updateVolunteerStayFeedback = async ({
+  userId,
+  stayId,
+  ...payload
+}: { userId: number; stayId: number; expectedRevision: number; approved: boolean; feedback: string }): Promise<VolunteerStayProgress> => {
+  const response = await axiosInstance.patch<VolunteerStayProgress>(
+    `/volunteerMilestones/${userId}/stays/${stayId}/feedback`,
+    payload,
+  );
+  return response.data;
+};
+
+export const useUpdateVolunteerStayFeedback = () => {
+  const queryClient = useQueryClient();
+  return useMutation<
+    VolunteerStayProgress,
+    VolunteerMilestoneApiError,
+    Parameters<typeof updateVolunteerStayFeedback>[0]
+  >({
+    mutationFn: updateVolunteerStayFeedback,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: volunteerMilestoneKeys.all }),
+    onError: async (error) => {
+      if (error.response?.status === 409) await queryClient.invalidateQueries({ queryKey: volunteerMilestoneKeys.all });
+    },
+  });
 };
 
 export const getVolunteerMilestoneErrorMessage = (
@@ -191,17 +368,23 @@ export type AttendanceMutationInput = {
   assignmentId: number;
   status: VolunteerAttendanceStatus;
   notes?: string;
+  stayId?: number;
 };
 
 export const updateVolunteerAttendanceRecord = async ({
   assignmentId,
   status,
   notes,
+  stayId,
 }: AttendanceMutationInput): Promise<unknown> => {
-  const response = await axiosInstance.put(`/volunteerMilestones/attendance/${assignmentId}`, {
+  const payload = {
     status,
     ...(notes !== undefined ? { notes: notes.trim() } : {}),
-  });
+  };
+  const path = `/volunteerMilestones/attendance/${assignmentId}`;
+  const response = stayId
+    ? await axiosInstance.put(path, payload, { params: { stayId } })
+    : await axiosInstance.put(path, payload);
   return response.data;
 };
 

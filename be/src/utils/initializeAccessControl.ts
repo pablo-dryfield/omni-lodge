@@ -54,7 +54,7 @@ const defaultPages = [
   { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 8 },
   { slug: 'cerebro', name: 'Cerebro', description: 'Operational knowledge base, role quizzes, and policy acknowledgements', sortOrder: 9 },
   { slug: 'scheduling', name: 'Scheduling', description: 'Manage weekly staff scheduling', sortOrder: 9 },
-  { slug: 'volunteer-progress', name: 'Volunteer Milestones', description: 'Track transparent monthly volunteer star progress and management feedback', sortOrder: 10 },
+  { slug: 'volunteer-progress', name: 'Volunteer Milestones', description: 'Track volunteer stay targets, progress and management feedback', sortOrder: 10 },
   { slug: 'finance', name: 'Finance', description: 'Finance operations and reporting', sortOrder: 10 },
   { slug: 'settings-products', name: 'Products', description: 'Manage saleable products', sortOrder: 7 },
   { slug: 'settings-product-aliases', name: 'Product Aliases', description: 'Map booking labels to products', sortOrder: 7 },
@@ -166,7 +166,7 @@ const rolePageMatrix: Record<string, string[]> = {
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks'],
   affiliate: ['affiliates'],
   guide: ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'pays', 'cerebro', 'scheduling', 'volunteer-progress'],
-  'social-media': ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'social-media', 'pays', 'cerebro', 'scheduling'],
+  'social-media': ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'social-media', 'pays', 'cerebro', 'scheduling', 'volunteer-progress'],
 };
 
 rolePageMatrix['administrator'] = [...rolePageMatrix.admin];

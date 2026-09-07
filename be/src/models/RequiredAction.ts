@@ -19,6 +19,7 @@ export type RequiredActionType =
   | 'assistant_manager_task'
   | 'customer_email'
   | 'staff_payout_receipt'
+  | 'cleaning_review'
   | 'custom';
 
 @Table({

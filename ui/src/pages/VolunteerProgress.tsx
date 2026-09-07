@@ -14,6 +14,7 @@ import {
   Paper,
   Progress,
   Select,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Switch,
@@ -45,13 +46,16 @@ import {
   useMyVolunteerMilestones,
   useUpdateVolunteerAttendance,
   useUpdateVolunteerFeedback,
+  useUpdateVolunteerStayFeedback,
   useVolunteerMilestoneDetail,
   useVolunteerMilestoneList,
   type VolunteerAttendanceAssignment,
   type VolunteerAttendanceStatus,
   type VolunteerMilestone,
   type VolunteerMilestoneDetail,
+  type VolunteerProgressReport,
 } from "../api/volunteerMilestones";
+import VolunteerStayProgress from "../components/volunteer/VolunteerStayProgress";
 import { useAppSelector } from "../store/hooks";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -60,11 +64,13 @@ import {
   canManageVolunteerProgress,
   clampProgressPercent,
   formatMilestoneAmount,
+  formatVolunteerProgressNumber,
   formatVolunteerProgressTimestamp,
   formatVolunteerProgressMonth,
   getCurrentMonth,
   moveVolunteerProgressMonth,
   orderVolunteerMilestones,
+  getVolunteerReportContext,
 } from "../utils/volunteerMilestones";
 
 const MILESTONE_ICONS: Record<VolunteerMilestone["key"], typeof IconStar> = {
@@ -221,6 +227,23 @@ const MilestoneCard = ({
           <Text size="sm" mt="xs" c={milestone.earned ? "teal.8" : "dark.6"} fw={600}>
             {milestone.remainingText}
           </Text>
+          {milestone.expectedToDate !== undefined && ["reviews", "monthly_shifts", "cleaning"].includes(milestone.key) ? (
+            <Text size="xs" c="dimmed" mt={4}>
+              Expected to date: {formatVolunteerProgressNumber(milestone.expectedToDate)}{milestone.unit === "%" ? "%" : ` ${milestone.unit}`}
+            </Text>
+          ) : null}
+          {milestone.subtargets?.length ? (
+            <Stack gap="xs" mt="sm">
+              {milestone.subtargets.map((target) => (
+                <Paper key={target.key} withBorder radius="md" p="xs">
+                  <Text size="sm" fw={700}>{target.title}</Text>
+                  <Text size="sm">{target.unit === '%' ? `${formatVolunteerProgressNumber(target.current)}% · target ${formatVolunteerProgressNumber(target.target)}%`
+                    : `${formatVolunteerProgressNumber(target.current)} of ${formatVolunteerProgressNumber(target.target)} ${target.unit} for the stay`}</Text>
+                  {target.unit !== '%' && <Text size="xs" c="dimmed">Expected to date: {formatVolunteerProgressNumber(target.expectedToDate)}</Text>}
+                </Paper>
+              ))}
+            </Stack>
+          ) : null}
         </Box>
 
         <Paper radius="md" p="sm" bg="gray.0" withBorder>
@@ -322,8 +345,9 @@ const MilestoneCard = ({
   );
 };
 
-const ProgressHero = ({ detail }: { detail: VolunteerMilestoneDetail }) => {
+const ProgressHero = ({ detail }: { detail: VolunteerProgressReport }) => {
   const orderedMilestones = orderVolunteerMilestones(detail.milestones);
+  const context = getVolunteerReportContext(detail);
   const fullName = `${detail.user.firstName} ${detail.user.lastName}`.trim() || detail.user.email;
   const allEarned = detail.starsEarned === detail.totalStars;
 
@@ -358,8 +382,8 @@ const ProgressHero = ({ detail }: { detail: VolunteerMilestoneDetail }) => {
             </Title>
             <Text c="rgba(255,255,255,0.78)" mt={4}>
               {allEarned
-                ? "All five stars are earned for this month. Brilliant work."
-                : `${detail.totalStars - detail.starsEarned} star${detail.totalStars - detail.starsEarned === 1 ? "" : "s"} left to complete this month.`}
+                ? `All five stars are earned for ${context.periodLabel}.`
+                : `${detail.totalStars - detail.starsEarned} star${detail.totalStars - detail.starsEarned === 1 ? "" : "s"} left to complete ${context.periodLabel}.`}
             </Text>
           </Box>
         </Group>
@@ -406,7 +430,8 @@ const ProgressHero = ({ detail }: { detail: VolunteerMilestoneDetail }) => {
   );
 };
 
-const VolunteerFeedbackSummary = ({ detail }: { detail: VolunteerMilestoneDetail }) => {
+const VolunteerFeedbackSummary = ({ detail }: { detail: VolunteerProgressReport }) => {
+  const context = getVolunteerReportContext(detail);
   const feedback = detail.managementFeedback;
   const isApproved = feedback?.approved ?? false;
   const finalMilestone = detail.milestones.find(
@@ -453,7 +478,7 @@ const VolunteerFeedbackSummary = ({ detail }: { detail: VolunteerMilestoneDetail
         </Paper>
       ) : (
         <Text size="sm" c="dimmed">
-          Management has not added written feedback for this month yet.
+          Management has not added written feedback for {context.periodLabel} yet.
         </Text>
       )}
 
@@ -462,7 +487,7 @@ const VolunteerFeedbackSummary = ({ detail }: { detail: VolunteerMilestoneDetail
           <Text size="sm" c={approvalIsCurrent ? "teal.7" : "yellow.8"} fw={650}>
             {approvalIsCurrent ? "Approved" : "Approval recorded"} {formatVolunteerProgressTimestamp(
               feedback.approvedAt,
-              detail.period.timezone,
+              context.timezone,
               "D MMM YYYY, HH:mm",
             )}
             {feedback.approvedByName ? ` by ${feedback.approvedByName}` : ""}
@@ -477,7 +502,7 @@ const VolunteerFeedbackSummary = ({ detail }: { detail: VolunteerMilestoneDetail
         <Text size="xs" c="dimmed" mt="sm">
           Draft updated {formatVolunteerProgressTimestamp(
             feedback.updatedAt,
-            detail.period.timezone,
+            context.timezone,
             "D MMM YYYY, HH:mm",
           )}
           {feedback.updatedByName ? ` by ${feedback.updatedByName}` : ""}
@@ -490,9 +515,11 @@ const VolunteerFeedbackSummary = ({ detail }: { detail: VolunteerMilestoneDetail
 const AttendanceEditor = ({
   assignment,
   periodTimezone,
+  stayId,
 }: {
   assignment: VolunteerAttendanceAssignment;
   periodTimezone: string;
+  stayId?: number;
 }) => {
   const updateAttendance = useUpdateVolunteerAttendance();
   const [status, setStatus] = useState<VolunteerAttendanceStatus | null>(assignment.status);
@@ -514,7 +541,7 @@ const AttendanceEditor = ({
     }
     setSaved(false);
     try {
-      await updateAttendance.mutateAsync({ assignmentId: assignment.assignmentId, status, notes });
+      await updateAttendance.mutateAsync({ assignmentId: assignment.assignmentId, status, notes, ...(stayId ? { stayId } : {}) });
       setSaved(true);
     } catch {
       // The mutation exposes a contextual inline error below.
@@ -601,8 +628,13 @@ const AttendanceEditor = ({
   );
 };
 
-const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) => {
+const ManagementWorkspace = ({ detail }: { detail: VolunteerProgressReport }) => {
   const saveFeedback = useUpdateVolunteerFeedback();
+  const saveStayFeedback = useUpdateVolunteerStayFeedback();
+  const context = getVolunteerReportContext(detail);
+  const selectedFeedbackMutation = context.stay ? saveStayFeedback : saveFeedback;
+  const [feedbackRevision, setFeedbackRevision] = useState(context.stay?.revision ?? 0);
+  const [feedbackScope, setFeedbackScope] = useState(`${detail.user.id}:${context.key}`);
   const [approved, setApproved] = useState(detail.managementFeedback?.approved ?? false);
   const [feedback, setFeedback] = useState(detail.managementFeedback?.feedback ?? "");
   const [saved, setSaved] = useState(false);
@@ -624,20 +656,34 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) =
     Boolean(detail.managementFeedback?.approved) && measurableStarsEarned < 4;
 
   useEffect(() => {
+    const nextScope = `${detail.user.id}:${context.key}`;
+    if (feedbackScope === nextScope && feedbackDirty) return;
     setApproved(detail.managementFeedback?.approved ?? false);
     setFeedback(detail.managementFeedback?.feedback ?? "");
+    setFeedbackRevision(context.stay?.revision ?? 0);
+    setFeedbackScope(nextScope);
     setSaved(false);
-  }, [detail.managementFeedback, detail.user.id, detail.period.month]);
+  }, [detail.managementFeedback, detail.user.id, context.key, context.stay?.revision, feedbackScope, feedbackDirty]);
 
   const handleFeedbackSave = async () => {
     setSaved(false);
     try {
-      await saveFeedback.mutateAsync({
-        userId: detail.user.id,
-        period: detail.period.month,
-        approved,
-        feedback,
-      });
+      if (context.stay) {
+        await saveStayFeedback.mutateAsync({
+          userId: detail.user.id,
+          stayId: context.stay.id,
+          expectedRevision: feedbackRevision,
+          approved,
+          feedback,
+        });
+      } else {
+        await saveFeedback.mutateAsync({
+          userId: detail.user.id,
+          period: (detail as VolunteerMilestoneDetail).period.month,
+          approved,
+          feedback,
+        });
+      }
       setSaved(true);
     } catch {
       // The mutation exposes a contextual inline error below.
@@ -671,7 +717,9 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) =
             Past shift attendance
           </Title>
           <Text size="sm" c="dimmed" mb="md">
-            On-time attendance counts toward the attendance star. Late, absent, and excused shifts stay visible as transparent evidence.
+            {context.stay
+              ? "Attendance is attended shifts divided by non-excused shifts; punctuality is on-time arrivals divided by attended shifts. Both must meet the saved threshold, and pending confirmations block the star. An absence lowers attendance instead of automatically vetoing the result."
+              : "On-time attendance counts toward the attendance star. Late, absent, and excused shifts stay visible as transparent evidence."}
           </Text>
           {pastAssignments.length > 0 ? (
             <Stack gap="sm">
@@ -679,13 +727,14 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) =
                 <AttendanceEditor
                   key={assignment.assignmentId}
                   assignment={assignment}
-                  periodTimezone={detail.period.timezone}
+                  periodTimezone={context.timezone}
+                  stayId={context.stay?.id}
                 />
               ))}
             </Stack>
           ) : (
             <Alert color="blue" variant="light" icon={<IconInfoCircle size={18} />}>
-              There are no past shift assignments to confirm for this volunteer in {formatVolunteerProgressMonth(detail.period.month)}.
+              There are no past shift assignments to confirm for this volunteer in {context.label}.
             </Alert>
           )}
         </Box>
@@ -699,7 +748,7 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) =
                 Final management feedback
               </Title>
               <Text size="sm" c="dimmed" mt={4}>
-                This is the fifth star and the final quality confirmation for the month.
+                This is the fifth star and the final quality confirmation for {context.periodLabel}.
               </Text>
             </Box>
             <Badge color={measurableStarsEarned === 4 ? "teal" : "yellow"} variant="light" size="lg">
@@ -752,7 +801,7 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) =
               <Text size="sm" c="teal.7" fw={650}>
                 Approved {formatVolunteerProgressTimestamp(
                   detail.managementFeedback.approvedAt,
-                  detail.period.timezone,
+                  context.timezone,
                   "D MMM YYYY, HH:mm",
                 )}
                 {detail.managementFeedback.approvedByName
@@ -764,7 +813,7 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) =
               <Text size="xs" c="dimmed">
                 Last updated {formatVolunteerProgressTimestamp(
                   detail.managementFeedback.updatedAt,
-                  detail.period.timezone,
+                  context.timezone,
                   "D MMM YYYY, HH:mm",
                 )}
                 {detail.managementFeedback.updatedByName
@@ -782,15 +831,15 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) =
                 color="teal"
                 onClick={handleFeedbackSave}
                 disabled={!feedbackDirty || approvalBlocked}
-                loading={saveFeedback.isPending}
+                loading={selectedFeedbackMutation.isPending}
               >
                 Save final feedback
               </Button>
             </Group>
-            {saveFeedback.isError && (
+            {selectedFeedbackMutation.isError && (
               <Alert color="red" icon={<IconAlertCircle size={18} />}>
                 {getVolunteerMilestoneErrorMessage(
-                  saveFeedback.error,
+                  selectedFeedbackMutation.error,
                   "Management feedback could not be saved. Please try again.",
                 )}
               </Alert>
@@ -802,7 +851,7 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerMilestoneDetail }) =
   );
 };
 
-const VolunteerProgress = () => {
+export const LegacyVolunteerProgress = () => {
   const roleSlug = useAppSelector((state) => state.session.roleSlug);
   const staffType = useAppSelector((state) => state.session.staffType);
   const isManagementRole = canManageVolunteerProgress(roleSlug);
@@ -1047,6 +1096,38 @@ const VolunteerProgress = () => {
         ) : null}
       </Stack>
     </Box>
+    </PageAccessGuard>
+  );
+};
+
+const VolunteerProgress = () => {
+  const [mode, setMode] = useState("stay");
+  return (
+    <PageAccessGuard pageSlug={PAGE_SLUGS.volunteerProgress}>
+      <Box maw={1440} w="100%" mx="auto" pb="xl">
+        <Stack gap="lg">
+          <SegmentedControl
+            value={mode}
+            onChange={setMode}
+            data={[{ value: "stay", label: "Stay progress" }, { value: "calendar", label: "Calendar history" }]}
+            aria-label="Progress view"
+          />
+          {mode === "calendar" ? <LegacyVolunteerProgress /> : (
+            <VolunteerStayProgress renderProgress={(detail, canEdit) => (
+              <>
+                <ProgressHero detail={detail} />
+                <SimpleGrid cols={{ base: 1, md: 2, xl: 5 }} spacing="md">
+                  {orderVolunteerMilestones(detail.milestones).map((milestone, index) => (
+                    <MilestoneCard key={`${detail.stay?.id}-${milestone.key}`} milestone={milestone} index={index} periodTimezone={detail.timezone} />
+                  ))}
+                </SimpleGrid>
+                <VolunteerFeedbackSummary detail={detail} />
+                {canEdit ? <ManagementWorkspace key={`stay-${detail.stay?.id}`} detail={detail} /> : null}
+              </>
+            )} />
+          )}
+        </Stack>
+      </Box>
     </PageAccessGuard>
   );
 };

@@ -219,6 +219,19 @@ const getPolicyAcceptedVersion = (entry: CerebroEntry): string =>
 
 const serializeStoredAction = async (action: RequiredAction, user: User) => {
   const payload = normalizeRequiredActionPayload(action.payload);
+  if (action.type === 'cleaning_review') {
+    const submission = normalizeRequiredActionPayload(payload.cleaningSubmission);
+    const submissionId = normalizePositiveInteger(submission.submissionId);
+    if (!submissionId) return null;
+    const { getCleaningReviewActionPayload } = await import('../services/cleaningSubmissionService.js');
+    const cleaningSubmission = await getCleaningReviewActionPayload(action.id, submissionId, user.id);
+    if (!cleaningSubmission) return null;
+    return {
+      id: `required:${action.id}`, source: 'required_action', recordId: action.id,
+      type: action.type, title: action.title, body: action.body, blocking: false,
+      requiresSignature: false, dueAt: action.dueAt, payload: { cleaningSubmission },
+    };
+  }
   if (action.type === 'staff_payout_receipt') {
     const receiptId = normalizePositiveInteger(payload.receiptId);
     if (!receiptId) {
@@ -501,7 +514,7 @@ export const listMyRequiredActions = async (req: Request, res: Response): Promis
 
     const completedActionIds = new Set(completions.map((completion) => completion.requiredActionId));
     const candidateStoredActions = storedActions
-      .filter((action) => action.requiresCompletion)
+      .filter((action) => action.requiresCompletion || action.type === 'cleaning_review')
       .filter((action) => !completedActionIds.has(action.id))
       .filter((action) => actionTargetsUser(action, user, userShiftRoleIds));
     const actionItems = (
@@ -580,6 +593,10 @@ export const createRequiredAction = async (req: Request, res: Response): Promise
       res.status(400).json([{ message: 'Payout receipt requests are created automatically when a staff payment is recorded.' }]);
       return;
     }
+    if (type === 'cleaning_review') {
+      res.status(400).json([{ message: 'Cleaning review requests are created automatically when photos are submitted.' }]);
+      return;
+    }
 
     const action = await RequiredAction.create({
       type,
@@ -614,6 +631,10 @@ export const updateRequiredActionStatus = async (req: Request, res: Response): P
       res.status(404).json([{ message: 'Required action not found' }]);
       return;
     }
+    if (action.type === 'cleaning_review') {
+      res.status(400).json([{ message: 'Review the cleaning photos to resolve this request.' }]);
+      return;
+    }
     if (action.type === 'staff_payout_receipt') {
       res.status(400).json([{ message: 'Payout receipt requests can only be cancelled through the related payout adjustment.' }]);
       return;
@@ -641,6 +662,10 @@ export const completeRequiredAction = async (req: Request, res: Response): Promi
     const action = await RequiredAction.findByPk(req.params.id);
     if (!action) {
       res.status(404).json([{ message: 'Required action not found' }]);
+      return;
+    }
+    if (action.type === 'cleaning_review') {
+      res.status(400).json([{ message: 'Use the cleaning photo review form to complete this request.' }]);
       return;
     }
     if (action.type === 'staff_payout_receipt') {
