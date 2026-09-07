@@ -173,6 +173,12 @@ import {
 } from "../services/legacySettledPayoutSnapshotService.js";
 import { findRecoverableInterruptedPayoutBatches } from "../services/staffPayoutSettlementDeletionService.js";
 import { isStaffPayoutReimbursementCollection } from "../services/staffPayoutCollectionClassificationService.js";
+import {
+  calculateGrossStaffCompensation,
+  calculatePersonalStaffPayoutLiability,
+  filterStaffPayoutLedgerSources,
+  isStaffPayoutLedgerSource,
+} from "../services/staffPayoutLiabilityService.js";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -625,7 +631,12 @@ const buildStaffPayoutSettlementSnapshot = (
   rangeStart: string,
   rangeEnd: string,
 ): StaffPayoutSettlementSnapshot => {
-  const isSegmented = sources.length > 0 && sources.every((source) => (
+  // Reimbursements settle Finance expenses and may share the same receipt as
+  // compensation, but they are not part of the compensation-liability ledger.
+  // Keeping them out of the immutable snapshot ensures the due and paid sides
+  // of that ledger use the same accounting boundary.
+  const ledgerSources = filterStaffPayoutLedgerSources(sources);
+  const isSegmented = ledgerSources.length > 0 && ledgerSources.every((source) => (
     source.segmentKey !== null
     && source.earningStart !== null
     && source.earningEnd !== null
@@ -634,7 +645,7 @@ const buildStaffPayoutSettlementSnapshot = (
   ));
   if (isSegmented) {
     return buildStaffPayoutSettlementSnapshotV2(
-      sources.map((source) => ({
+      ledgerSources.map((source) => ({
         sourceKey: source.sourceKey,
         componentId: source.componentId,
         category: source.category,
@@ -656,7 +667,7 @@ const buildStaffPayoutSettlementSnapshot = (
 
   return {
     version: 1,
-    sources: sortStaffPayoutSettlementSnapshotSources(sources.map((source) => ({
+    sources: sortStaffPayoutSettlementSnapshotSources(ledgerSources.map((source) => ({
       sourceKey: source.sourceKey,
       componentId: source.componentId,
       category: source.category,
@@ -2833,16 +2844,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
 
       const reimbursementSummary = createReimbursementSummary(rows);
       summary.reimbursements = reimbursementSummary;
-
-      const reimbursementPayoutAmount = roundCurrencyValue(
-        reimbursementSummary.awaitingAmount + reimbursementSummary.reimbursedAmount,
-      );
-
-      if (reimbursementPayoutAmount > 0) {
-        summary.bucketTotals.reimbursement =
-          (summary.bucketTotals.reimbursement ?? 0) + reimbursementPayoutAmount;
-        summary.totalPayout += reimbursementPayoutAmount;
-      }
     };
 
     commissionDataByUser.forEach((summary, userId) => {
@@ -3423,7 +3424,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           settlementIntent: null,
         });
 
-        if (destination === "staff_vendor") {
+        if (destination === "staff_vendor" && isStaffPayoutLedgerSource({ sourceKey: input.sourceKey })) {
           personalBucketTotals[input.category] =
             (personalBucketTotals[input.category] ?? 0) + amount;
         } else if (destination === "volunteer_fund") {
@@ -3477,21 +3478,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           .filter(({ booking }) => !booking.isCommissionPaid && booking.affiliateCommissionAmount > 0)
           .map(({ booking, date }) => ({ id: booking.id, date })),
       });
-      await addSettlementSource({
-        sourceKey: "reimbursement",
-        label: "Reimbursements",
-        category: "reimbursement",
-        amount:
-          summary.reimbursements.awaitingAmount + summary.reimbursements.reimbursedAmount,
-        earnings: buildExactDatedMinorEarnings(
-          summary.reimbursements.awaitingAmount + summary.reimbursements.reimbursedAmount,
-          summary.reimbursements.entries.map((entry) => ({
-            date: entry.date,
-            amount: entry.amount,
-          })),
-        ),
-      });
-
       // Deductions are signed compensation sources but the fund ledger records
       // only the net amount reserved for the volunteer. Cap positive source
       // allocations to that net outstanding total so +100 / -20 cannot create
@@ -3560,7 +3546,8 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       // Calculated personal compensation is authorized per source as well.
       // Distribute only the net remaining amount across positive sources so
       // deductions cannot be bypassed by submitting their gross rows. Staff
-      // reimbursements retain their separate transaction-ID validation path.
+      // Reimbursements are Finance expenses and retain their separate
+      // transaction-ID validation path; they are not settlement sources.
       const personalSources = sources
         .filter(
           (source) => source.destination === "staff_vendor" && source.sourceKey !== "reimbursement",
@@ -3619,9 +3606,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         }
       });
 
-      const personalPayableTotal = sources
-        .filter((source) => source.destination === "staff_vendor")
-        .reduce((sum, source) => sum + source.amount, 0);
+      const personalPayableTotal = calculatePersonalStaffPayoutLiability(sources);
       const fundAllocationTotal = sources
         .filter((source) => source.destination === "volunteer_fund")
         .reduce((sum, source) => sum + source.amount, 0);
@@ -3654,7 +3639,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         Object.entries(fundBucketTotals).map(([key, value]) => [key, roundCurrencyValue(value)]),
       );
       summary.grossCompensationTotal = roundCurrencyValue(
-        sources.reduce((sum, source) => sum + source.amount, 0),
+        calculateGrossStaffCompensation(sources),
       );
       summary.personalPayableTotal = roundCurrencyValue(personalPayableTotal);
       summary.volunteerFundAllocationTotal = roundCurrencyValue(fundAllocationTotal);
@@ -3933,7 +3918,9 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           });
           const storedPersonalDueMinor = storedSnapshot
             ? storedSnapshot.sources
-                .filter((source) => source.destination === "staff_vendor")
+                .filter(
+                  (source) => source.destination === "staff_vendor" && source.sourceKey !== "reimbursement",
+                )
                 .reduce((sum, source) => sum + source.grossAmountMinor, 0)
             : null;
           const authoritativeLegacySnapshot = resolveAuthoritativeLegacySettledPayoutSnapshot({

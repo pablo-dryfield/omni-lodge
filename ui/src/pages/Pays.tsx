@@ -1143,14 +1143,10 @@ export const buildDefaultPaymentLines = (
       }];
     });
 
-    const currentReimbursementOutstanding = roundLineAmount(
-      Math.max(staff.reimbursements?.awaitingAmount ?? 0, 0),
-    );
     const selectedCurrentTotal = computeSelectedLineTotal(lines);
     const fullOutstanding = roundLineAmount(
       Math.max(
-        (staff.closingBalance ?? staff.payouts?.payableOutstanding ?? selectedCurrentTotal)
-          - currentReimbursementOutstanding,
+        staff.closingBalance ?? staff.payouts?.payableOutstanding ?? selectedCurrentTotal,
         0,
       ),
     );
@@ -1671,12 +1667,8 @@ export const buildDefaultPaymentLines = (
   // authoritative current-period outstanding so a negative component cannot
   // make the modal pay more than the report says is due.
   // Reimbursements use their own server-validated transaction flow below.
-  // Keep them out of the ordinary compensation-line cap and carry-forward
-  // calculation or the same awaiting reimbursement appears once as a payout
-  // line and again as a reimbursement.
-  const currentReimbursementOutstanding = roundLineAmount(
-    Math.max(staff.reimbursements?.awaitingAmount ?? 0, 0),
-  );
+  // The server's payable outstanding is already compensation-only, so it can
+  // cap ordinary lines directly without counting the reimbursement twice.
   const currentPersonalOutstanding =
     staff.payouts?.payableOutstanding
     ?? staff.personalPayableTotal
@@ -1684,7 +1676,7 @@ export const buildDefaultPaymentLines = (
     ?? staff.totalCommission
     ?? 0;
   let remainingCurrentOutstanding = roundLineAmount(
-    Math.max(currentPersonalOutstanding - currentReimbursementOutstanding, 0),
+    Math.max(currentPersonalOutstanding, 0),
   );
   const remainingByIntent = new Map(
     settlementSources
@@ -1717,8 +1709,7 @@ export const buildDefaultPaymentLines = (
   const selectedCurrentTotal = computeSelectedLineTotal(lines);
   const fullOutstanding = roundLineAmount(
     Math.max(
-      (staff.closingBalance ?? staff.payouts?.payableOutstanding ?? selectedCurrentTotal)
-        - currentReimbursementOutstanding,
+      staff.closingBalance ?? staff.payouts?.payableOutstanding ?? selectedCurrentTotal,
       0,
     ),
   );
@@ -3149,12 +3140,14 @@ const resolveStaffCounterpartyDefaults = useCallback(
         const grossActivity = summary.grossCompensationTotal ?? 0;
         const fundActivity = summary.volunteerFundAllocationTotal ?? 0;
         const fundOutstanding = summary.volunteerFundOutstandingTotal ?? 0;
+        const reimbursementOutstanding = summary.reimbursements?.awaitingAmount ?? 0;
         return currentPayout > 0
           || openingBalance !== 0
           || outstanding !== 0
           || grossActivity !== 0
           || fundActivity > 0
-          || fundOutstanding > 0;
+          || fundOutstanding > 0
+          || reimbursementOutstanding > 0;
       }),
     [responseData],
   );
@@ -3731,6 +3724,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
   const renderRecordAction = (item: Pay, options?: { fullWidth?: boolean }) => {
     const outstanding = Math.max(item.closingBalance ?? item.payouts?.payableOutstanding ?? 0, 0);
     const fundOutstanding = item.volunteerFundOutstandingTotal ?? 0;
+    const reimbursementOutstanding = Math.max(item.reimbursements?.awaitingAmount ?? 0, 0);
     const hasRecordedEntries = (item.paidEntries?.length ?? 0) > 0;
     const recordedReceipts = (item.paidEntries ?? [])
       .map((entry) => entry.receipt)
@@ -3803,7 +3797,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
         </Stack>
       );
     }
-    if (outstanding > 0 || fundOutstanding > 0) {
+    if (outstanding > 0 || fundOutstanding > 0 || reimbursementOutstanding > 0) {
       if (canRecordStaffPayments) {
         return (
           <Stack gap={6} align={fullWidth ? 'stretch' : 'flex-start'} style={fullWidth ? { width: '100%' } : undefined}>
@@ -5928,7 +5922,7 @@ const renderVolunteerFundSnapshot = (
                       <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
                         <Stack gap={2} align="center">
                           <Text size="xs" c="dimmed">
-                            Personal outstanding
+                            Compensation outstanding
                           </Text>
                           <Text fw={600}>
                             {formatCurrency(
@@ -5966,7 +5960,7 @@ const renderVolunteerFundSnapshot = (
                       <Card padding="sm" radius="md" withBorder shadow="xs" style={{ textAlign: 'center' }}>
                         <Stack gap={2} align="center">
                           <Text size="xs" c="dimmed">
-                            Personal remaining
+                            Compensation remaining
                           </Text>
                           <Text fw={600}>
                             {formatCurrency(
@@ -5976,7 +5970,7 @@ const renderVolunteerFundSnapshot = (
                                     ?? entryModal.staff.payouts?.payableOutstanding
                                     ?? 0,
                                   0,
-                                ) - modalTotalAmount,
+                                ) - entryModal.amount,
                                 0,
                               ),
                               entryModal.currency,

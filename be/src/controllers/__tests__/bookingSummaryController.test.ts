@@ -185,6 +185,61 @@ describe('listBookingsWithSummary', () => {
     });
   });
 
+  it('keeps Finance reimbursements out of the staff compensation breakdown', async () => {
+    mockCommissionSummary.mockImplementation(replyWith([{
+      data: [{
+        userId: 5,
+        fullName: 'Aimee Kelly',
+        staffType: 'Long-Term',
+        dueAmount: 125,
+        payouts: { currency: 'PLN', payableDue: 125, payablePaid: 100, payableOutstanding: 25 },
+        settlementReconciliationRequired: false,
+        settlementSources: [{
+          sourceKey: 'guide_commission',
+          label: 'Guide commission',
+          category: 'commission',
+          amount: 125,
+          destination: 'staff_vendor',
+          earningStart: '2026-08-01',
+          earningEnd: '2026-08-31',
+          staffType: 'long_term',
+        }, {
+          sourceKey: 'reimbursement',
+          label: 'Reimbursements',
+          category: 'reimbursement',
+          amount: 33.20,
+          destination: 'staff_vendor',
+          earningStart: '2026-08-01',
+          earningEnd: '2026-08-31',
+          staffType: 'long_term',
+        }],
+      }],
+      accessScope: 'all',
+    }]));
+    const req = makeRequest({
+      pickupFrom: '2026-08-01',
+      pickupTo: '2026-08-31',
+      includeSummaryInsights: 'true',
+    });
+    const res = makeResponse();
+
+    await listBookingsWithSummary(req, res);
+
+    const payload = (res.json as jest.Mock).mock.calls[0][0];
+    expect(payload.summaryInsights.staffPayments).toEqual([expect.objectContaining({
+      userId: 5,
+      amount: 125,
+      breakdown: [{
+        label: 'Guide commission',
+        category: 'commission',
+        amount: 125,
+        earningStart: '2026-08-01',
+        earningEnd: '2026-08-31',
+        staffType: 'long_term',
+      }],
+    })]);
+  });
+
   it('merges adjacent display segments with identical compensation and routing identity', async () => {
     const staffVendorSource = {
       sourceKey: 'compensation_component',

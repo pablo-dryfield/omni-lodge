@@ -649,7 +649,6 @@ const validateBatchSettlementRouting = async (params: {
   rangeEnd: string;
   lines: NormalizedStaffPayoutBatchLine[];
   fundAllocations: NormalizedStaffPayoutFundAllocation[];
-  reimbursement: NormalizedStaffPayoutBatchReimbursement | null;
   transaction?: SequelizeTransaction;
 }): Promise<Map<number, VolunteerFund>> => {
   const settlementIntents = [
@@ -660,6 +659,12 @@ const validateBatchSettlementRouting = async (params: {
     direction: params.direction,
     intents: settlementIntents,
   });
+  // Reimbursements are Finance-only expenses paid directly to the staff
+  // vendor. A reimbursement-only batch therefore has no compensation route
+  // to resolve or validate.
+  if (params.lines.length === 0 && params.fundAllocations.length === 0) {
+    return new Map<number, VolunteerFund>();
+  }
   const componentIds = Array.from(
     new Set(
       [...params.lines, ...params.fundAllocations]
@@ -957,17 +962,6 @@ const validateBatchSettlementRouting = async (params: {
         409,
         `${line.label} was already allocated or its amount changed. Refresh Pays and try again.`,
       );
-    }
-  }
-
-  if (params.reimbursement) {
-    const route = settlementRouter.resolve({
-      userId: params.staffUserId,
-      staffType: params.staffType,
-      systemSource: 'reimbursement',
-    });
-    if (route.destination !== 'staff_vendor') {
-      throw new HttpError(409, 'Reimbursements must remain payable to the staff vendor.');
     }
   }
 
@@ -1681,7 +1675,6 @@ export const createStaffPayoutBatch = async (
       rangeEnd: rangeEnd.format('YYYY-MM-DD'),
       lines: existing ? [] : lines,
       fundAllocations: existingFundBatchComplete ? [] : fundAllocations,
-      reimbursement: existing ? null : reimbursement,
     });
 
     const batchResult = await sequelize.transaction(async (transaction) => {
@@ -1776,7 +1769,6 @@ export const createStaffPayoutBatch = async (
         rangeEnd: rangeEnd.format('YYYY-MM-DD'),
         lines: shouldCreatePersonalSettlement ? lines : [],
         fundAllocations,
-        reimbursement: shouldCreatePersonalSettlement ? reimbursement : null,
         transaction,
       });
 

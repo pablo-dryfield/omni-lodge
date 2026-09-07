@@ -68,10 +68,13 @@ const MATCH_KIND_OPTIONS = [
 const SYSTEM_SOURCE_OPTIONS = [
   { value: "guide_commission", label: "Guide Commission" },
   { value: "promotion_sales", label: "Promotion Sales" },
-  { value: "reimbursement", label: "Reimbursements" },
   { value: "carry_forward_personal", label: "Previous Personal Balance" },
   { value: "manual_adjustment", label: "Manual Adjustments" },
 ];
+
+const LEGACY_SYSTEM_SOURCE_LABELS: Record<string, string> = {
+  reimbursement: "Reimbursements (legacy)",
+};
 
 const isStartedRule = (rule: FinanceSettlementRule) =>
   !rule.effectiveStart || rule.effectiveStart <= dayjs().endOf("month").format("YYYY-MM-DD");
@@ -253,7 +256,10 @@ const PayoutRoutingPanel = () => {
     if (rule.matchKind === "component_category") {
       return `Category: ${rule.matchKey ?? "Not selected"}`;
     }
-    return SYSTEM_SOURCE_OPTIONS.find((option) => option.value === rule.matchKey)?.label ?? rule.matchKey ?? "System source";
+    return SYSTEM_SOURCE_OPTIONS.find((option) => option.value === rule.matchKey)?.label
+      ?? (rule.matchKey ? LEGACY_SYSTEM_SOURCE_LABELS[rule.matchKey] : null)
+      ?? rule.matchKey
+      ?? "System source";
   };
 
   const describeTarget = (rule: FinanceSettlementRule) => {
@@ -480,7 +486,8 @@ const PayoutRoutingPanel = () => {
 
       <Alert color="blue" title="Recommended volunteer policy">
         Set the Volunteer default to Volunteer fund, then add Staff vendor exceptions for Reviews and Promotion Sales.
-        Reimbursements should stay routed to the staff vendor. Specific-user rules override staff-type defaults.
+        Reimbursements are Finance expenses and are always paid directly to the staff vendor; payout routing does not apply to them.
+        Specific-user rules override staff-type defaults.
       </Alert>
 
       {rulesQuery.isError && (
@@ -555,7 +562,7 @@ const PayoutRoutingPanel = () => {
             <Text fw={600}>{rules.length === 0 ? "No payout routing rules yet" : "No rules match these filters"}</Text>
             <Text size="sm" c="dimmed" ta="center">
               {rules.length === 0
-                ? "Create the Volunteer default first, then add exceptions for Reviews, Promotion Sales, and Reimbursements."
+                ? "Create the Volunteer default first, then add exceptions for Reviews and Promotion Sales."
                 : "Change or clear the filters to see more rules."}
             </Text>
           </Stack>

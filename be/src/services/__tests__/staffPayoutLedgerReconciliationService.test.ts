@@ -175,6 +175,72 @@ describe('staff payout ledger reconciliation', () => {
     });
   });
 
+  it('does not carry a paid reimbursement into the next compensation period', async () => {
+    const julyUpdate = jest.fn().mockResolvedValue(undefined);
+    const augustUpdate = jest.fn().mockResolvedValue(undefined);
+    (StaffPayoutLedger.findAll as jest.Mock).mockResolvedValue([
+      {
+        id: 568,
+        staffUserId: 188,
+        rangeStart: '2026-07-01',
+        rangeEnd: '2026-07-31',
+        currencyCode: 'PLN',
+        dueAmountMinor: 264_910,
+        closingBalanceMinor: 0,
+        update: julyUpdate,
+      },
+      {
+        id: 612,
+        staffUserId: 188,
+        rangeStart: '2026-08-01',
+        rangeEnd: '2026-08-31',
+        currencyCode: 'PLN',
+        dueAmountMinor: 0,
+        closingBalanceMinor: 0,
+        update: augustUpdate,
+      },
+    ]);
+    (StaffPayoutCollectionLog.findAll as jest.Mock).mockImplementation(async ({ where }) => (
+      where.rangeStart === '2026-07-01'
+        ? [
+            { amountMinor: 264_910, financeTransactionId: 801, note: 'Staff compensation' },
+            { amountMinor: 3_320, financeTransactionId: 802, note: 'Staff reimbursements payout' },
+          ]
+        : []
+    ));
+    (FinanceTransaction.findAll as jest.Mock).mockResolvedValue([
+      {
+        id: 801,
+        description: 'Staff compensation',
+        meta: { source: 'staff-payments', lineLabel: 'Compensation' },
+      },
+      {
+        id: 802,
+        description: 'Staff reimbursements payout',
+        meta: { source: 'staff-payments', settlementKind: 'reimbursement' },
+      },
+    ]);
+    (AffiliatePayoutLog.findAll as jest.Mock).mockResolvedValue([]);
+
+    await reconcilePersistedStaffPayoutLedgers({
+      staffUserId: 188,
+      affectedRangeStart: '2026-07-01',
+      affectedRangeEnd: '2026-07-31',
+      transaction,
+    });
+
+    expect(julyUpdate).toHaveBeenCalledWith({
+      openingBalanceMinor: 0,
+      paidAmountMinor: 264_910,
+      closingBalanceMinor: 0,
+    }, { transaction });
+    expect(augustUpdate).toHaveBeenCalledWith({
+      openingBalanceMinor: 0,
+      paidAmountMinor: 0,
+      closingBalanceMinor: 0,
+    }, { transaction });
+  });
+
   it('does not load payout data when no persisted ledger period overlaps the affected range', async () => {
     (StaffPayoutLedger.findAll as jest.Mock).mockResolvedValue([]);
 

@@ -163,7 +163,7 @@ export const resolveAuthoritativeLegacySettledPayoutSnapshot = (
     if (source.destination === 'volunteer_fund' && source.grossAmountMinor !== 0) {
       return null;
     }
-    if (source.destination === 'staff_vendor') {
+    if (source.destination === 'staff_vendor' && source.sourceKey !== 'reimbursement') {
       const nextPersonalDueMinor = addSafeMinor(personalDueMinor, source.grossAmountMinor);
       if (nextPersonalDueMinor === null) {
         return null;
@@ -291,6 +291,12 @@ export const buildLegacySettledPayoutSnapshotPresentation = (
   let guideCommissionMinor = 0;
 
   for (const source of normalized.sources) {
+    // Older snapshots may still contain the Finance reimbursement source.
+    // It is receipt evidence, not compensation, so it must not participate in
+    // the authoritative compensation presentation or its ledger totals.
+    if (source.sourceKey === 'reimbursement') {
+      continue;
+    }
     const component = source.componentId === null
       ? null
       : componentsById.get(source.componentId) ?? null;

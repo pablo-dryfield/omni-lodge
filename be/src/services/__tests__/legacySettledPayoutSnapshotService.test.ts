@@ -121,6 +121,33 @@ describe('legacy settled payout snapshot authority', () => {
       settlementSnapshot: v2Snapshot,
     }))).toBeNull();
   });
+
+  it('ignores a legacy reimbursement source when proving compensation liability', () => {
+    const reimbursementSource = {
+      sourceKey: 'reimbursement',
+      componentId: null,
+      category: 'reimbursement',
+      grossAmountMinor: 3_320,
+      destination: 'staff_vendor',
+      fundId: null,
+      ruleId: 1,
+      currency: 'PLN',
+    } as const;
+
+    const resolved = resolveAuthoritativeLegacySettledPayoutSnapshot(validInput({
+      settlementSnapshot: {
+        version: 1,
+        sources: [...sources, reimbursementSource],
+      },
+    }));
+
+    expect(resolved).not.toBeNull();
+    const presentation = buildLegacySettledPayoutSnapshotPresentation(resolved!, []);
+    expect(presentation?.totalPayout).toBe(1_439);
+    expect(presentation?.settlementSources.some(
+      (source) => source.sourceKey === 'reimbursement',
+    )).toBe(false);
+  });
 });
 
 describe('legacy settled payout snapshot presentation', () => {

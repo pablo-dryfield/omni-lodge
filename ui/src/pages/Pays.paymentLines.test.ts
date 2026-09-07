@@ -207,6 +207,34 @@ describe('buildDefaultPaymentLines', () => {
     expect(lines.find((line) => line.label === 'Bonus')?.amount).toBe(60);
   });
 
+  it('does not subtract an awaiting reimbursement from compensation-only outstanding', () => {
+    const staff = createStaff({
+      totalPayout: 100,
+      personalPayableTotal: 100,
+      bucketTotals: { bonus: 100 },
+      closingBalance: 100,
+      payouts: {
+        currency: 'PLN',
+        payableDue: 100,
+        payablePaid: 0,
+        payableOutstanding: 100,
+        receivableDue: 0,
+        receivableCollected: 0,
+        receivableOutstanding: 0,
+      },
+      reimbursements: {
+        awaitingAmount: 25,
+        reimbursedAmount: 0,
+        entries: [],
+      },
+    });
+
+    const lines = buildDefaultPaymentLines(staff, new Map(), '', new Map());
+
+    expect(lines.find((line) => line.label === 'Bonus')?.amount).toBe(100);
+    expect(lines.find((line) => line.label === 'Previous personal balance')).toBeUndefined();
+  });
+
   it('keeps an explicitly routed historical Volunteer liability payable to staff', () => {
     const staff = volunteerCommissionStaff({
       range: { startDate: '2026-07-01', endDate: '2026-07-31' },

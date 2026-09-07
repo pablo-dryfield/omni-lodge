@@ -268,6 +268,7 @@ const projectStaffPaymentBreakdown = (
     const source = asRecord(value);
     if (!source) return null;
     if (source.destination !== 'staff_vendor') continue;
+    if (asNullableText(source.sourceKey)?.toLowerCase() === 'reimbursement') continue;
 
     const sourceAmount = asNullableFiniteNumber(source.amount);
     const label = asNullableText(source.label);
