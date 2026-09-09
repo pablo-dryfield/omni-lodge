@@ -11,6 +11,7 @@ import StaffProfile from '../models/StaffProfile.js';
 import { getConfigValue, updateConfigValue } from './configService.js';
 import { fetchBookingUtmCatalog } from './bookings/bookingUtmCatalogService.js';
 import { fetchAffiliateBookingsWithPriorPubCrawl } from './affiliateBookingHistoryService.js';
+import { isBookingRevenueRecognized } from './bookings/bookingRevenuePolicy.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -52,6 +53,7 @@ export type AffiliateBookingRow = {
   sourceReceivedAt: string | null;
   partySizeTotal: number;
   baseAmount: number;
+  paymentStatus: string | null;
   currency: string | null;
   utmSource: string | null;
   utmMedium: string | null;
@@ -684,6 +686,7 @@ const fetchAffiliateBookings = async (
       'partySizeChildren',
       'baseAmount',
       'currency',
+      'paymentStatus',
       'utmSource',
       'utmMedium',
       'utmCampaign',
@@ -705,7 +708,8 @@ const fetchAffiliateBookings = async (
     experienceDate: row.experienceDate ?? null,
     sourceReceivedAt: row.sourceReceivedAt ? dayjs(row.sourceReceivedAt).toISOString() : null,
     partySizeTotal: resolvePartySizeTotal(row),
-    baseAmount: normalizeMoney(row.baseAmount),
+    baseAmount: isBookingRevenueRecognized(row) ? normalizeMoney(row.baseAmount) : 0,
+    paymentStatus: row.paymentStatus ?? null,
     currency: row.currency ?? null,
     utmSource: normalizeText(row.utmSource),
     utmMedium: normalizeText(row.utmMedium),
@@ -856,21 +860,26 @@ export const getAffiliateOverview = async (params: {
     const payoutState = bookingPayoutMap.get(toAffiliateBookingKey(booking.affiliateUserId, booking.id)) ?? null;
     const payoutLogId = payoutState?.payoutLogId ?? null;
     const isCommissionPaid = payoutState != null;
-    const commissionEligibility = getAffiliateCommissionEligibility(
-      booking.sourceReceivedAt,
-      booking.experienceDate,
-      isCommissionPaid,
-      bookingsWithPriorPubCrawl.has(Number(booking.id)),
-    );
+    const recognizesRevenue = isBookingRevenueRecognized(booking);
+    const commissionEligibility = recognizesRevenue
+      ? getAffiliateCommissionEligibility(
+          booking.sourceReceivedAt,
+          booking.experienceDate,
+          isCommissionPaid,
+          bookingsWithPriorPubCrawl.has(Number(booking.id)),
+        )
+      : { eligible: false, reason: 'Booking is unpaid' };
     const calculatedCommissionAmount =
       booking.affiliateCommissionPerPerson != null && commissionEligibility.eligible
         ? normalizeMoney(booking.partySizeTotal * booking.affiliateCommissionPerPerson)
         : 0;
-    const affiliateCommissionAmount = payoutState?.commissionAmount ?? calculatedCommissionAmount;
+    const affiliateCommissionAmount = recognizesRevenue
+      ? payoutState?.commissionAmount ?? calculatedCommissionAmount
+      : 0;
     return {
       ...booking,
       affiliateCommissionPerPerson:
-        payoutState?.commissionAmount != null && booking.partySizeTotal > 0
+        recognizesRevenue && payoutState?.commissionAmount != null && booking.partySizeTotal > 0
           ? normalizeMoney(payoutState.commissionAmount / booking.partySizeTotal)
           : booking.affiliateCommissionPerPerson,
       affiliateCommissionEligible: commissionEligibility.eligible,

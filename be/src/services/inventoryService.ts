@@ -4,6 +4,7 @@ import Counter from '../models/Counter.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import InventoryMovement from '../models/InventoryMovement.js';
 import InventoryFulfillment from '../models/InventoryFulfillment.js';
+import StorefrontOrderResourceReservation from '../models/StorefrontOrderResourceReservation.js';
 import Booking from '../models/Booking.js';
 import Addon from '../models/Addon.js';
 import InventoryItem from '../models/InventoryItem.js';
@@ -39,7 +40,8 @@ const compareTshirtVariants = (left: string, right: string): number => {
 export async function getAvailableStock(inventoryItemId:number, transaction?:Transaction):Promise<number>{
   const onHand=Number(await InventoryMovement.sum('quantityDelta',{where:{inventoryItemId},transaction})??0);
   const reserved=Number(await InventoryFulfillment.sum('quantity',{where:{inventoryItemId,status:{[Op.in]:['ready','packed']}},transaction})??0);
-  return onHand-reserved;
+  const storefrontReserved=Number(await StorefrontOrderResourceReservation.sum('quantity',{where:{resourceType:'inventory',inventoryItemId,status:{[Op.in]:['held','consumed']},expiresAt:{[Op.gt]:new Date()}},transaction})??0);
+  return onHand-reserved-storefrontReserved;
 }
 
 export async function getAddonInventoryAvailability(
@@ -158,6 +160,7 @@ export async function getTshirtVariantAvailability(transaction?: Transaction): P
 }
 
 export async function allocateWaitingFulfillments(inventoryItemId:number, actorId:number, transaction:Transaction):Promise<void>{
+  await InventoryItem.findByPk(inventoryItemId,{attributes:['id'],transaction,lock:transaction.LOCK.UPDATE});
   let available=await getAvailableStock(inventoryItemId,transaction);
   const queue=await InventoryFulfillment.findAll({where:{inventoryItemId,status:'waiting_stock'},order:[['createdAt','ASC'],['id','ASC']],transaction,lock:transaction.LOCK.UPDATE});
   for(const row of queue){const qty=Number(row.quantity);if(qty<=available){await row.update({status:'ready',updatedBy:actorId},{transaction});available-=qty;}}

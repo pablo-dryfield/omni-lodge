@@ -388,6 +388,17 @@ const resolvePromotions = async (
     },
     transaction,
   });
+  // Loaded only for carts that actually use discount codes. This keeps the
+  // standalone quote validators independent from the reservation model while
+  // still making every promotion quote reservation-aware.
+  const { getActivePromotionReservationCounts } = await import(
+    './storefrontResourceReservationAvailabilityService.js'
+  );
+  const activeReservationCounts = await getActivePromotionReservationCounts(
+    promotions.map((promotion) => Number(promotion.id)),
+    transaction,
+    now,
+  );
   const byCode = new Map(promotions.map((promotion) => [promotion.code.toUpperCase(), promotion]));
   const missing = codes.find((code) => !byCode.has(code));
   if (missing) throw new HttpError(400, `Discount code ${missing} is invalid or expired.`);
@@ -407,7 +418,11 @@ const resolvePromotions = async (
     if (promotion.currency && promotion.currency !== STOREFRONT_CURRENCY) {
       throw new HttpError(400, `Discount code ${code} is not available for this currency.`);
     }
-    if (promotion.maxRedemptions !== null && promotion.redemptionCount >= promotion.maxRedemptions) {
+    if (
+      promotion.maxRedemptions !== null
+      && Number(promotion.redemptionCount) + (activeReservationCounts.get(Number(promotion.id)) ?? 0)
+        >= promotion.maxRedemptions
+    ) {
       throw new HttpError(400, `Discount code ${code} has reached its redemption limit.`);
     }
     if (promotion.minSubtotal !== null && merchandiseSubtotal < Number(promotion.minSubtotal)) {

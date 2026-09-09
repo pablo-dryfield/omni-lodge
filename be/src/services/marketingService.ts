@@ -5,6 +5,7 @@ import { Op } from 'sequelize';
 import Booking from '../models/Booking.js';
 import Product from '../models/Product.js';
 import { getConfigValue } from './configService.js';
+import { isBookingRevenueRecognized } from './bookings/bookingRevenuePolicy.js';
 
 type MarketingSource = 'Google Ads' | 'Meta Ads';
 
@@ -812,6 +813,7 @@ const fetchMarketingBookings = async (startDate: string, endDate: string): Promi
       'sourceReceivedAt',
       'baseAmount',
       'currency',
+      'paymentStatus',
       'utmSource',
       'utmMedium',
       'utmCampaign',
@@ -833,7 +835,7 @@ const fetchMarketingBookings = async (startDate: string, endDate: string): Promi
       experienceDate: row.experienceDate ?? null,
       experienceStartAt: row.experienceStartAt ?? null,
       sourceReceivedAt: row.sourceReceivedAt ?? null,
-      baseAmount: parseAmount(row.baseAmount),
+      baseAmount: isBookingRevenueRecognized(row) ? parseAmount(row.baseAmount) : 0,
       currency: row.currency ?? null,
       utmSource: normalizeText(row.utmSource),
       utmMedium: normalizeText(row.utmMedium),

@@ -10,12 +10,11 @@ import {
   isStorefrontStripeConfigured,
 } from '../finance/services/stripeClient.js';
 import Booking from '../models/Booking.js';
-import BookingAddon from '../models/BookingAddon.js';
-import Guest from '../models/Guest.js';
+import BookingEvent from '../models/BookingEvent.js';
+import AuditLog from '../models/AuditLog.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
 import StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
-import StorefrontPromotion from '../models/StorefrontPromotion.js';
 import StorefrontSavedCart from '../models/StorefrontSavedCart.js';
 import {
   quoteStorefrontCart,
@@ -25,11 +24,12 @@ import {
 } from '../services/storefrontCommerceService.js';
 import { deliverStorefrontOrderEmails } from '../services/storefrontOrderEmailService.js';
 import { findLockedStorefrontOrderWithItems } from '../services/storefrontOrderPersistenceService.js';
+import { projectStorefrontOrderBookings } from '../services/storefrontOrderProjectionService.js';
+import { resolvePaidOrderFulfillmentPolicy } from '../services/storefrontOrderFulfillmentPolicy.js';
 import {
-  buildStorefrontAddonsSnapshot,
-  getStorefrontExperienceStartAt,
-  mergeStorefrontAddonsSnapshot,
-} from '../services/storefrontBookingProjectionService.js';
+  consumeStorefrontOrderResourceReservations,
+  incrementStorefrontPromotionRedemptions,
+} from '../services/storefrontOrderResourceReservationService.js';
 import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
 import { getStorefrontPublicConfig } from '../services/storefrontPublicConfigService.js';
 import {
@@ -57,10 +57,7 @@ type CheckoutCustomer = {
 
 const SYSTEM_USER_ID = Number(process.env.STOREFRONT_SYSTEM_USER_ID || 1);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const SETTLED_PAYMENT_STATUSES = new Set(['paid', 'partial', 'refunded']);
 const CONFIRMATION_TOKEN_HASH_KEY = 'confirmationTokenHash';
-
-const roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
 const text = (value: unknown, maxLength: number): string =>
   typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
@@ -170,6 +167,15 @@ const serializeOrder = async (order: StorefrontOrder) => {
 
 type StorefrontStripePayment = Stripe.Checkout.Session | Stripe.PaymentIntent;
 
+export type FulfillPaidOrderOptions = {
+  actorId?: number;
+  paymentMethod?: string;
+  paymentReceivedByUserId?: number | null;
+  paymentNote?: string | null;
+  receivedPaymentReference?: string | null;
+  clientRequestId?: string | null;
+};
+
 const paymentIntentId = (payment: StorefrontStripePayment): string | null => {
   if (payment.object === 'payment_intent') return payment.id;
   return typeof payment.payment_intent === 'string'
@@ -180,172 +186,23 @@ const paymentIntentId = (payment: StorefrontStripePayment): string | null => {
 const persistPaidOrder = async (
   publicId: string,
   stripePayment: StorefrontStripePayment | null,
+  options: FulfillPaidOrderOptions = {},
 ): Promise<StorefrontOrder> =>
   sequelize.transaction(async (transaction) => {
     const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
     if (!order) throw new HttpError(404, 'Storefront order not found.');
-
-    const existingBookings = await Booking.findAll({
-      where: { platform: 'omnilodge', platformOrderId: order.publicId },
-      transaction,
-      lock: transaction.LOCK.UPDATE,
-    });
-    if (existingBookings.length > 0) {
-      for (const booking of existingBookings) {
-        const item = (order.items || []).find(
-          (candidate) => `${order.publicId}-${candidate.id}` === booking.platformBookingId,
-        );
-        if (!item) continue;
-
-        const updates: Record<string, unknown> = {};
-        if (!booking.experienceStartAt) {
-          const experienceStartAt = getStorefrontExperienceStartAt(item.experienceDate, item.experienceTime);
-          if (experienceStartAt) updates.experienceStartAt = experienceStartAt;
-        }
-        const nextSnapshot = mergeStorefrontAddonsSnapshot(
-          booking.addonsSnapshot,
-          Array.isArray(item.addons) ? item.addons : [],
-          item.options,
-          item.quantity,
-        );
-        if (JSON.stringify(nextSnapshot) !== JSON.stringify(booking.addonsSnapshot)) {
-          updates.addonsSnapshot = nextSnapshot;
-        }
-        if (Object.keys(updates).length > 0) await booking.update(updates, { transaction });
-      }
-      if (!SETTLED_PAYMENT_STATUSES.has(order.paymentStatus)) {
-        await order.update(
-          {
-            status: 'confirmed',
-            paymentStatus: 'paid',
-            stripePaymentIntentId: stripePayment ? paymentIntentId(stripePayment) : order.stripePaymentIntentId,
-            paidAt: order.paidAt || new Date(),
-          },
-          { transaction },
-        );
-      }
-      await StorefrontSavedCart.update(
-        { status: 'paid', paidAt: order.paidAt || new Date() },
-        { where: { orderId: order.id }, transaction },
-      );
-      await markOngoingCartConverted(order.id, order.paidAt || new Date(), transaction);
-      return order;
-    }
-
     const now = new Date();
-    await order.update(
-      {
-        status: 'confirmed',
-        paymentStatus: 'paid',
-        stripePaymentIntentId: stripePayment ? paymentIntentId(stripePayment) : order.stripePaymentIntentId,
-        paidAt: order.paidAt || now,
-      },
-      { transaction },
-    );
-    await StorefrontSavedCart.update(
-      { status: 'paid', paidAt: order.paidAt || now },
-      { where: { orderId: order.id }, transaction },
-    );
-    await markOngoingCartConverted(order.id, order.paidAt || now, transaction);
-
-    const guest = await Guest.create(
-      {
-        name: `${order.customerFirstName} ${order.customerLastName}`.trim(),
-        email: order.customerEmail,
-        phoneNumber: order.customerPhone,
-        address: null,
-        paymentStatus: 'paid',
-        deposit: Number(order.total),
-        notes: `Storefront order ${order.publicId}`,
-        createdBy: SYSTEM_USER_ID,
-        updatedBy: SYSTEM_USER_ID,
-      } as never,
-      { transaction },
-    );
-
-    const grossBeforeDiscount = Number(order.subtotal) + Number(order.addonTotal);
-    const orderDiscount = Number(order.discountTotal);
-
-    for (const item of order.items || []) {
-      const itemGross = Number(item.total);
-      const allocatedDiscount =
-        grossBeforeDiscount > 0 ? roundMoney(orderDiscount * (itemGross / grossBeforeDiscount)) : 0;
-      const itemNet = Math.max(0, roundMoney(itemGross - allocatedDiscount));
-      const addons = Array.isArray(item.addons) ? item.addons : [];
-      const stripePaymentIntentId = stripePayment ? paymentIntentId(stripePayment) : order.stripePaymentIntentId;
-      const bookingNotes = [
-        `Storefront order ${order.publicId}`,
-        stripePaymentIntentId ? `Stripe payment_intent: ${stripePaymentIntentId}` : null,
-        stripePayment ? `Stripe livemode: ${stripePayment.livemode}` : null,
-        'Checkout source: storefront',
-      ].filter((value): value is string => Boolean(value));
-
-      const booking = await Booking.create(
-        {
-          platform: 'omnilodge',
-          platformBookingId: `${order.publicId}-${item.id}`,
-          platformOrderId: order.publicId,
-          guestId: guest.id,
-          status: 'confirmed',
-          statusChangedAt: now,
-          paymentStatus: 'paid',
-          paymentMethod: stripePayment ? 'stripe' : 'free',
-          paymentMethodCountry: order.customerCountryCode,
-          utmSource: order.attribution?.utm_source || null,
-          utmMedium: order.attribution?.utm_medium || null,
-          utmCampaign: order.attribution?.utm_campaign || null,
-          experienceDate: item.experienceDate,
-          experienceStartAt: getStorefrontExperienceStartAt(item.experienceDate, item.experienceTime),
-          productId: item.productId,
-          productName: item.productName,
-          guestFirstName: order.customerFirstName,
-          guestLastName: order.customerLastName,
-          guestEmail: order.customerEmail,
-          guestPhone: order.customerPhone,
-          partySizeTotal: item.quantity,
-          partySizeAdults: item.quantity,
-          partySizeChildren: 0,
-          currency: order.currency,
-          baseAmount: itemNet,
-          addonsAmount: Number(item.addonTotal),
-          discountAmount: allocatedDiscount,
-          discountCode: order.discountCode,
-          priceGross: itemGross,
-          priceNet: itemNet,
-          commissionAmount: 0,
-          commissionRate: 0,
-          addonsSnapshot: buildStorefrontAddonsSnapshot(addons, item.options, item.quantity),
-          notes: bookingNotes.join(' | '),
-          sourceReceivedAt: now,
-          processedAt: now,
-          createdBy: SYSTEM_USER_ID,
-          updatedBy: SYSTEM_USER_ID,
-        } as never,
-        { transaction },
-      );
-
-      for (const addon of addons) {
-        await BookingAddon.create(
-          {
-            bookingId: booking.id,
-            addonId: Number(addon.addonId) || null,
-            platformAddonId: String(addon.addonId || ''),
-            platformAddonName: String(addon.name || ''),
-            quantity: Number(addon.quantity) || 1,
-            unitPrice: String(addon.unitPrice || 0),
-            totalPrice: String(addon.total || 0),
-            currency: order.currency,
-            isIncluded: false,
-            metadata: {
-              source: 'storefront',
-              variants: Array.isArray(addon.variants) ? addon.variants : [],
-            },
-          } as never,
-          { transaction },
-        );
-      }
-    }
-
+    const requestedStripePaymentIntentId = stripePayment
+      ? paymentIntentId(stripePayment)
+      : order.stripePaymentIntentId;
+    const policy = resolvePaidOrderFulfillmentPolicy(order, {
+      ...options,
+      stripePaymentIntentId: requestedStripePaymentIntentId,
+      fallbackPaymentMethod: stripePayment ? 'stripe' : Number(order.total) === 0 ? 'free' : 'unknown',
+      systemUserId: SYSTEM_USER_ID,
+    });
+    if (!policy.shouldProcess) return order;
+    const paidAt = order.paidAt || now;
     const promotionIds = Array.from(
       new Set(
         [
@@ -356,12 +213,85 @@ const persistPaidOrder = async (
           .filter((promotionId) => Number.isInteger(promotionId) && promotionId > 0),
       ),
     );
-    if (promotionIds.length > 0) {
-      await StorefrontPromotion.increment('redemptionCount', {
-        by: 1,
-        where: { id: { [Op.in]: promotionIds } },
-        transaction,
-      });
+    const reservedPromotionIds = policy.firstSettlement && policy.paymentMethod === 'bank_transfer'
+      ? new Set((await consumeStorefrontOrderResourceReservations({
+          orderId: Number(order.id),
+          promotionIds,
+          now,
+          transaction,
+        })).consumedPromotionIds)
+      : new Set<number>();
+
+    await order.update(
+      {
+        status: 'confirmed',
+        paymentStatus: 'paid',
+        paymentMethod: policy.paymentMethod,
+        stripePaymentIntentId: policy.firstSettlement
+          ? policy.stripePaymentIntentId
+          : order.stripePaymentIntentId,
+        paidAt,
+        metadata: policy.metadata,
+        ...policy.receiptUpdates,
+      },
+      { transaction },
+    );
+    await StorefrontSavedCart.update(
+      { status: 'paid', paidAt },
+      { where: { orderId: order.id }, transaction },
+    );
+    await markOngoingCartConverted(order.id, paidAt, transaction);
+
+    const projection = await projectStorefrontOrderBookings(
+      order,
+      {
+        bookingStatus: 'confirmed',
+        paymentStatus: 'paid',
+        paymentMethod: policy.paymentMethod,
+        actorId: policy.actorId,
+        now,
+        stripePaymentIntentId: policy.firstSettlement
+          ? policy.stripePaymentIntentId
+          : order.stripePaymentIntentId,
+        preserveExistingBookingState: !policy.firstSettlement,
+      },
+      transaction,
+    );
+
+    if (policy.firstSettlement && policy.paymentMethod === 'bank_transfer') {
+      await AuditLog.create({
+        actorId: policy.actorId,
+        action: 'storefront.bank_transfer_payment_received',
+        entity: 'storefront_order',
+        entityId: String(order.id),
+        metaJson: {
+          publicId: order.publicId,
+          paymentReference: order.paymentReference,
+          receivedPaymentReference: options.receivedPaymentReference || null,
+          total: Number(order.total),
+          currency: order.currency,
+          bookingIds: projection.bookings.map((booking) => Number(booking.id)),
+        },
+      }, { transaction });
+      await BookingEvent.bulkCreate(projection.bookings.map((booking) => ({
+        bookingId: booking.id,
+        emailId: null,
+        eventType: 'amended',
+        platform: 'omnilodge',
+        statusAfter: 'confirmed',
+        eventPayload: {
+          source: 'bank_transfer_payment_received',
+          orderPublicId: order.publicId,
+          paymentReference: order.paymentReference,
+        },
+        occurredAt: now,
+        processedAt: now,
+      })) as never[], { transaction });
+    }
+
+    const unconsumedPromotionIds = promotionIds.filter((promotionId) => !reservedPromotionIds.has(promotionId));
+    if (policy.firstSettlement && unconsumedPromotionIds.length > 0) {
+      await incrementStorefrontPromotionRedemptions(unconsumedPromotionIds, transaction);
     }
 
     return order;
@@ -370,19 +300,27 @@ const persistPaidOrder = async (
 export const fulfillPaidOrder = async (
   publicId: string,
   stripePayment: StorefrontStripePayment | null,
+  options: FulfillPaidOrderOptions = {},
 ): Promise<StorefrontOrder> => {
   const paymentId = stripePayment?.id || 'none';
   logger.info(`[storefront-fulfillment] Started order=${publicId} payment=${paymentId}`);
 
   let order: StorefrontOrder;
   try {
-    order = await persistPaidOrder(publicId, stripePayment);
+    order = await persistPaidOrder(publicId, stripePayment, options);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error(
       `[storefront-fulfillment] Failed order=${publicId} payment=${paymentId} error=${message}`,
     );
     throw error;
+  }
+
+  if (order.status !== 'confirmed' || order.paymentStatus !== 'paid') {
+    logger.info(
+      `[storefront-fulfillment] Skipped terminal order=${publicId} status=${order.status} paymentStatus=${order.paymentStatus}`,
+    );
+    return order;
   }
 
   try {
@@ -643,6 +581,8 @@ export const createCheckout = async (request: Request, response: Response, next:
       const orderValues = {
         status: 'pending_payment',
         paymentStatus: 'unpaid',
+        orderSource: 'storefront',
+        paymentMethod: quote.total === 0 ? 'free' : 'stripe',
         stripeCheckoutSessionId: null,
         stripePaymentIntentId: reusablePaymentIntent?.id || null,
         currency: quote.currency,

@@ -19,7 +19,7 @@ import { getStorefrontPublicConfig } from '../services/storefrontPublicConfigSer
 const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
 
-type StorefrontProduct = {
+export type StorefrontProduct = {
   id: number;
   slug: string;
   name: string;
@@ -262,33 +262,48 @@ const parseProductId = (slug: string): number | null => {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
 
+export const loadStorefrontProducts = async (
+  allowedProductTypeIds: number[] | null = null,
+): Promise<StorefrontProduct[]> => {
+  const productTypeIds = allowedProductTypeIds === null
+    ? null
+    : [...new Set(allowedProductTypeIds
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0))];
+  if (productTypeIds !== null && productTypeIds.length === 0) return [];
+  const products = await Product.findAll({
+    where: {
+      status: { [Op.ne]: false },
+      ...(productTypeIds === null ? {} : { productTypeId: { [Op.in]: productTypeIds } }),
+    },
+    attributes: ['id', 'name', 'price', 'productTypeId', 'storefrontConfig', 'imageUrl', 'images'],
+    include: productIncludes,
+    order: [['name', 'ASC']],
+  });
+  const productIds = products.map((product) => product.id);
+  const addonIds = Array.from(
+    new Set(
+      products.flatMap((product) =>
+        (product.productAddons ?? []).map((productAddon) => productAddon.addonId),
+      ),
+    ),
+  );
+  const [effectivePrices, channelPrices, inventoryByAddon] = await Promise.all([
+    loadEffectiveProductPrices(productIds),
+    loadStorefrontChannelPrices(productIds),
+    getAddonInventoryAvailability(addonIds),
+  ]);
+
+  return products.map((product) =>
+    serializeProduct(product, effectivePrices, channelPrices, inventoryByAddon),
+  );
+};
+
 export const listStorefrontProducts = async (_req: Request, res: Response): Promise<void> => {
   try {
-    const products = await Product.findAll({
-      where: { status: { [Op.ne]: false } },
-      attributes: ['id', 'name', 'price', 'productTypeId', 'storefrontConfig', 'imageUrl', 'images'],
-      include: productIncludes,
-      order: [['name', 'ASC']],
-    });
-    const productIds = products.map((product) => product.id);
-    const addonIds = Array.from(
-      new Set(
-        products.flatMap((product) =>
-          (product.productAddons ?? []).map((productAddon) => productAddon.addonId),
-        ),
-      ),
-    );
-    const [effectivePrices, channelPrices, inventoryByAddon] = await Promise.all([
-      loadEffectiveProductPrices(productIds),
-      loadStorefrontChannelPrices(productIds),
-      getAddonInventoryAvailability(addonIds),
-    ]);
-
     res.status(200).json({
       version: 3,
-      products: products.map((product) =>
-        serializeProduct(product, effectivePrices, channelPrices, inventoryByAddon),
-      ),
+      products: await loadStorefrontProducts(),
     });
   } catch (error) {
     console.error('Unable to load storefront products:', error);

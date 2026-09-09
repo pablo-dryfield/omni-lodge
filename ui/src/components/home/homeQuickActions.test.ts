@@ -28,6 +28,59 @@ describe("Home quick actions", () => {
     expect(action?.state).toBeUndefined();
   });
 
+  it("opens the permission-aware bank transfer booking flow", () => {
+    const action = HOME_QUICK_ACTIONS.find(({ id }) => id === "bookings-create-bank-transfer");
+
+    expect(action).toMatchObject({
+      id: "bookings-create-bank-transfer",
+      to: "/bookings/payment-links?tab=bank-transfers&action=create-bank-transfer",
+      permission: {
+        pageSlug: PAGE_SLUGS.bookings,
+        moduleSlug: "bank-transfer-booking-management",
+        moduleAction: "create",
+        additionalModuleActions: [
+          { moduleSlug: "bank-transfer-booking-management", moduleAction: "view" },
+        ],
+      },
+    });
+  });
+
+  it("does not expose bank-transfer creation through generic booking access", () => {
+    const action = HOME_QUICK_ACTIONS.find(({ id }) => id === "bookings-create-bank-transfer");
+    expect(action).toBeDefined();
+    if (!action) return;
+
+    expect(
+      filterVisibleHomeQuickActions(
+        [action],
+        new Set([PAGE_SLUGS.bookings]),
+        new Map([["booking-management", new Set(["view", "create", "update"])]]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("requires both view and create access for the bank-transfer shortcut", () => {
+    const action = HOME_QUICK_ACTIONS.find(({ id }) => id === "bookings-create-bank-transfer");
+    expect(action).toBeDefined();
+    if (!action) return;
+
+    const allowedPages = new Set([PAGE_SLUGS.bookings]);
+    expect(filterVisibleHomeQuickActions(
+      [action],
+      allowedPages,
+      new Map([
+        ["bank-transfer-booking-management", new Set(["create"])],
+      ]),
+    )).toEqual([]);
+    expect(filterVisibleHomeQuickActions(
+      [action],
+      allowedPages,
+      new Map([
+        ["bank-transfer-booking-management", new Set(["view", "create"])],
+      ]),
+    )).toEqual([action]);
+  });
+
   it("shows actions only when their page and module action are allowed", () => {
     const action = HOME_QUICK_ACTIONS[0];
     const allowedPages = new Set([PAGE_SLUGS.finance]);

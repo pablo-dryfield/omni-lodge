@@ -64,6 +64,7 @@ import storefrontRoutes from './routes/storefrontRoutes.js';
 import storefrontSavedCartRoutes from './routes/storefrontSavedCartRoutes.js';
 import storefrontOngoingCartRoutes from './routes/storefrontOngoingCartRoutes.js';
 import storefrontPromotionRoutes from './routes/storefrontPromotionRoutes.js';
+import storefrontBankTransferOrderRoutes from './routes/storefrontBankTransferOrderRoutes.js';
 import { storefrontStripeWebhook } from './controllers/storefrontWebhookController.js';
 import whatsappBriefRoutes from './routes/whatsappBriefRoutes.js';
 import whatsappAdminRoutes from './routes/whatsappAdminRoutes.js';
@@ -99,6 +100,7 @@ import { startAmTaskPushNotificationsJob } from './jobs/amTaskPushNotifications.
 import { startDailyMidnightClosureJob } from './jobs/dailyMidnightClosure.cron.js';
 import { startReviewFullSyncJob } from './jobs/reviewFullSync.cron.js';
 import { startStorefrontAbandonedCartJob } from './jobs/storefrontAbandonedCart.cron.js';
+import { startStorefrontBankTransferExpiryJob } from './jobs/storefrontBankTransferExpiry.cron.js';
 import { startWhatsAppRetentionJob } from './jobs/whatsappRetention.cron.js';
 import { startWhatsAppWebhookQueueJob } from './jobs/whatsappWebhookQueue.cron.js';
 
@@ -275,6 +277,7 @@ app.use('/api/storefront', storefrontRoutes);
 app.use('/api/storefront-saved-carts', storefrontSavedCartRoutes);
 app.use('/api/storefront-ongoing-carts', storefrontOngoingCartRoutes);
 app.use('/api/storefront-promotions', storefrontPromotionRoutes);
+app.use('/api/storefront-bank-transfer-orders', storefrontBankTransferOrderRoutes);
 app.use('/api/schedules', schedulesRoutes);
 app.use('/api/sql-helper', sqlHelperRoutes);
 app.use('/api/db-backups', dbBackupRoutes);
@@ -392,6 +395,7 @@ async function bootstrap(): Promise<void> {
         startDailyMidnightClosureJob();
         startReviewFullSyncJob();
         startStorefrontAbandonedCartJob();
+        startStorefrontBankTransferExpiryJob();
         startWhatsAppRetentionJob();
         startWhatsAppWebhookQueueJob();
       });
@@ -410,6 +414,7 @@ async function bootstrap(): Promise<void> {
         startDailyMidnightClosureJob();
         startReviewFullSyncJob();
         startStorefrontAbandonedCartJob();
+        startStorefrontBankTransferExpiryJob();
         startWhatsAppRetentionJob();
         startWhatsAppWebhookQueueJob();
       });

@@ -82,6 +82,15 @@ import {
   type BookingSummaryCostInsights,
 } from '../finance/services/bookingSummaryExpenseService.js';
 import { customerEmailActionTargetsUser } from '../services/bookings/customerEmailActionRules.js';
+import {
+  assertStorefrontConfirmationEligiblePayment,
+  assertStripeRefundEligiblePayment,
+} from '../services/bookings/bookingPaymentActionPolicy.js';
+import {
+  canAmendLockedStorefrontSchedule,
+  isBackofficeBankTransferOrder,
+} from '../services/bookings/storefrontBookingAmendmentPolicy.js';
+import { isBookingRevenueRecognized } from '../services/bookings/bookingRevenuePolicy.js';
 import type { EmailTemplateType } from '../models/EmailTemplate.js';
 import {
   buildDirectBookingActionEmail,
@@ -103,6 +112,7 @@ import CounterRegistryService from '../services/counterRegistryService.js';
 import { recordCustomerEmailThreadParticipant } from '../services/bookings/customerEmailThreadService.js';
 import { resolveCustomerEmailActionsForReply } from '../services/bookings/customerEmailActionService.js';
 import { getTshirtVariantAvailability } from '../services/inventoryService.js';
+import { refreshStorefrontOrderInventoryReservationExpiries } from '../services/storefrontOrderResourceReservationService.js';
 import { buildManifestBookingSearchWhere } from '../utils/manifestBookingSearch.js';
 
 dayjs.extend(utc);
@@ -1893,6 +1903,8 @@ const bookingToUnifiedOrder = (
     isAddonOnly,
     bookingKind: isAddonOnly ? 'addon_only' : 'reservation',
     status: booking.status,
+    paymentStatus: booking.paymentStatus,
+    paymentMethod: booking.paymentMethod ?? null,
     attendanceStatus: normalizeAttendanceStatus(booking.attendanceStatus),
     rawData: {
       bookingId: booking.id,
@@ -1900,6 +1912,7 @@ const bookingToUnifiedOrder = (
       channelId: booking.channelId,
       currency: booking.currency ?? null,
       paymentStatus: booking.paymentStatus,
+      paymentMethod: booking.paymentMethod ?? null,
       baseAmount: booking.baseAmount,
       addonsAmount: booking.addonsAmount,
       discountAmount: booking.discountAmount,
@@ -2088,6 +2101,16 @@ const buildCommissionEnrichmentMap = async (
       return;
     }
     const channelCommissionRate = Math.min(Math.max(rawRate, 0), 1);
+    if (!isBookingRevenueRecognized(booking)) {
+      map.set(bookingId, {
+        channelCommissionRate: roundRate(channelCommissionRate),
+        channelCommissionAmount: 0,
+        baseAmountAfterChannelCommission: 0,
+        channelCommissionDateBasis: dateField,
+        channelCommissionEffectiveDate: effectiveDate,
+      });
+      return;
+    }
     const hasBaseAmount = booking.baseAmount !== null && booking.baseAmount !== undefined;
     const baseAmount = hasBaseAmount ? parseMoneyLikeNumber(booking.baseAmount) : null;
     if (baseAmount === null) {
@@ -5216,10 +5239,15 @@ const requireDirectManifestActionBooking = async (bookingId: number): Promise<Bo
 const findStorefrontOrderForBooking = async (
   booking: Booking,
   transaction?: Transaction,
+  lock = false,
 ): Promise<StorefrontOrder> => {
   const publicId = String(booking.platformOrderId ?? '').trim();
   const order = publicId
-    ? await StorefrontOrder.findOne({ where: { publicId }, transaction })
+    ? await StorefrontOrder.findOne({
+        where: { publicId },
+        transaction,
+        ...(transaction && lock ? { lock: transaction.LOCK.UPDATE } : {}),
+      })
     : null;
   if (!order) throw new HttpError(404, 'Storefront order not found for this booking.');
   return order;
@@ -5229,11 +5257,16 @@ const findStorefrontOrderItemForBooking = async (
   booking: Booking,
   order: StorefrontOrder,
   transaction?: Transaction,
+  lock = false,
 ): Promise<StorefrontOrderItem> => {
   const itemIdMatch = String(booking.platformBookingId ?? '').match(/-(\d+)$/);
   const itemId = itemIdMatch?.[1] ? Number.parseInt(itemIdMatch[1], 10) : null;
   const item = itemId
-    ? await StorefrontOrderItem.findOne({ where: { id: itemId, orderId: order.id }, transaction })
+    ? await StorefrontOrderItem.findOne({
+        where: { id: itemId, orderId: order.id },
+        transaction,
+        ...(transaction && lock ? { lock: transaction.LOCK.UPDATE } : {}),
+      })
     : null;
   if (!item) throw new HttpError(404, 'Storefront order item not found for this booking.');
   return item;
@@ -5244,11 +5277,29 @@ const syncStorefrontBookingSchedule = async (
   experienceDate: string,
   experienceTime: string,
   transaction: Transaction,
+  canUpdateBankTransferBookings: boolean,
 ): Promise<void> => {
   if (!isStorefrontBooking(booking)) return;
-  const order = await findStorefrontOrderForBooking(booking, transaction);
-  const item = await findStorefrontOrderItemForBooking(booking, order, transaction);
+  // The order row is the shared mutex for payment, cancellation, expiry and
+  // schedule changes. Re-check both terminal states while holding that lock so
+  // a stale Manifest page can never revive a booking that was just cancelled.
+  const order = await findStorefrontOrderForBooking(booking, transaction, true);
+  const lockedBooking = await Booking.findByPk(booking.id, {
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  if (!lockedBooking) {
+    throw new HttpError(404, 'Booking not found');
+  }
+  if (!canAmendLockedStorefrontSchedule(order.status, lockedBooking.status)) {
+    throw new HttpError(409, 'Cancelled bookings cannot be amended');
+  }
+  if (isBackofficeBankTransferOrder(order) && !canUpdateBankTransferBookings) {
+    throw new HttpError(403, 'You do not have permission to amend bank-transfer bookings.');
+  }
+  const item = await findStorefrontOrderItemForBooking(booking, order, transaction, true);
   await item.update({ experienceDate, experienceTime }, { transaction });
+  await refreshStorefrontOrderInventoryReservationExpiries(order, transaction);
 };
 
 const extractDirectStripeTransactionId = (booking: Booking): string | null => {
@@ -5317,8 +5368,10 @@ const resolveDirectStripeTransaction = async (booking: Booking): Promise<{
   stripeClient: Stripe;
   stripeMode: DirectStripeMode;
 }> => {
+  assertStripeRefundEligiblePayment(booking);
   if (isStorefrontBooking(booking)) {
     const order = await findStorefrontOrderForBooking(booking);
+    assertStripeRefundEligiblePayment(order);
     const externalTransactionId = String(order.stripePaymentIntentId ?? '').trim();
     if (!externalTransactionId) {
       throw new HttpError(400, 'Storefront order is missing its Stripe payment intent ID.');
@@ -6142,6 +6195,11 @@ export const resendDirectFoodTourConfirmation = async (req: AuthenticatedRequest
     }
 
     const booking = await requireDirectManifestActionBooking(bookingIdParam);
+    if (isStorefrontBooking(booking)) {
+      assertStorefrontConfirmationEligiblePayment(booking);
+      const storefrontOrder = await findStorefrontOrderForBooking(booking);
+      assertStorefrontConfirmationEligiblePayment(storefrontOrder);
+    }
     const emailOptions: DirectBookingActionEmailOptions = { kind: 'confirmation' };
     const email = await sendDirectActionEmailWithStatus(booking, emailOptions);
     const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
@@ -6202,6 +6260,18 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
       return;
     }
 
+    let canUpdateBankTransferBookings = false;
+    if (isStorefrontBooking(booking)) {
+      const storefrontOrder = await findStorefrontOrderForBooking(booking);
+      if (isBackofficeBankTransferOrder(storefrontOrder)) {
+        canUpdateBankTransferBookings = await hasModuleActionPermission(
+          req,
+          'bank-transfer-booking-management',
+          'update',
+        );
+      }
+    }
+
     const previousExperienceStartAt = booking.experienceStartAt ?? null;
     const nextStartAt = dayjs.tz(`${nextDate.format(DATE_FORMAT)} ${normalizedTime}`, 'YYYY-MM-DD HH:mm', STORE_TIMEZONE);
     const now = new Date();
@@ -6217,13 +6287,14 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
     }
 
     await sequelizeClient.transaction(async (transaction) => {
-      await booking.save({ transaction });
       await syncStorefrontBookingSchedule(
         booking,
         nextDate.format(DATE_FORMAT),
         normalizedTime,
         transaction,
+        canUpdateBankTransferBookings,
       );
+      await booking.save({ transaction });
       await saveDirectBookingEvent(booking, 'amended', req.authContext?.id ?? null, {
         action: isStorefrontBooking(booking) ? 'amend-storefront-booking' : 'amend-direct-food-tour',
         previousExperienceStartAt: previousExperienceStartAt ? previousExperienceStartAt.toISOString() : null,
@@ -6653,6 +6724,10 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
       })),
     } satisfies PartialRefundPreview);
   } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
     const message = error instanceof Error ? error.message : 'Failed to load partial refund preview';
     res.status(500).json({ message });
   }

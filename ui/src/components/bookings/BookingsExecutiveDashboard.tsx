@@ -41,6 +41,10 @@ import {
 } from "recharts";
 import type { UnifiedOrder } from "../../store/bookingPlatformsTypes";
 import {
+  getBookingPaymentStatus,
+  isExplicitlyUnpaidBooking,
+} from "../../utils/bookingPayment";
+import {
   BOOKINGS_SUMMARY_TIMEZONE,
   buildBookingsRevenueTrend,
   type BookingsSummaryDateField,
@@ -448,6 +452,7 @@ const KpiCard = ({
     radius="lg"
     p="md"
     shadow="sm"
+    aria-label={`${label} metric`}
     style={{
       position: "relative",
       background: `linear-gradient(135deg, ${accent}16 0%, #ffffff 100%)`,
@@ -503,19 +508,23 @@ const BookingsExecutiveDashboard = ({
   const toFinancialRow = useMemo(
     () => (order: UnifiedOrder) => {
       const raw = asRecord(order.rawData);
-      const baseAmountValue = asNullableNumber(raw.baseAmount);
+      const explicitlyUnpaid = isExplicitlyUnpaidBooking(order);
+      const paymentStatus = getBookingPaymentStatus(order);
+      const baseAmountValue = explicitlyUnpaid ? 0 : asNullableNumber(raw.baseAmount);
       const baseAmount = baseAmountValue ?? 0;
-      const baseAmountAfterChannelCommissionValue = asNullableNumber(raw.baseAmountAfterChannelCommission);
+      const baseAmountAfterChannelCommissionValue = explicitlyUnpaid
+        ? 0
+        : asNullableNumber(raw.baseAmountAfterChannelCommission);
       const channelCommissionRateValue = asNullableNumber(raw.channelCommissionRate);
-      const channelCommissionAmountValue = asNullableNumber(raw.channelCommissionAmount);
-      const tipAmount = asNumber(raw.tipAmount);
-      const addonsAmount = asNumber(raw.addonsAmount);
-      const discountAmount = asNumber(raw.discountAmount);
-      const refundedAmount = asNumber(raw.refundedAmount);
+      const channelCommissionAmountValue = explicitlyUnpaid ? 0 : asNullableNumber(raw.channelCommissionAmount);
+      const tipAmount = explicitlyUnpaid ? 0 : asNumber(raw.tipAmount);
+      const addonsAmount = explicitlyUnpaid ? 0 : asNumber(raw.addonsAmount);
+      const discountAmount = explicitlyUnpaid ? 0 : asNumber(raw.discountAmount);
+      const refundedAmount = explicitlyUnpaid ? 0 : asNumber(raw.refundedAmount);
       const derivedGross = Math.max(baseAmount + addonsAmount - discountAmount, 0);
-      const priceGross = asNumber(raw.priceGross);
+      const priceGross = explicitlyUnpaid ? 0 : asNumber(raw.priceGross);
       const grossRevenue = roundMoney(priceGross > 0 ? priceGross : derivedGross);
-      const priceNetValue = asNullableNumber(raw.priceNet);
+      const priceNetValue = explicitlyUnpaid ? 0 : asNullableNumber(raw.priceNet);
       const priceNet = priceNetValue ?? 0;
       const recognizedBaseWithoutChannelCommission = baseAmountValue ?? priceNetValue ?? 0;
       const recognizedRevenueWithoutChannelCommission = roundMoney(
@@ -523,11 +532,13 @@ const BookingsExecutiveDashboard = ({
       );
       const recognizedBase = baseAmountAfterChannelCommissionValue ?? baseAmountValue ?? priceNetValue ?? 0;
       const recognizedRevenue = roundMoney(Math.max(recognizedBase + tipAmount, 0));
-      const commissionAmount = asNumber(raw.commissionAmount);
-      const processingFee = Math.max(
-        0,
-        asNumber(raw.processingFee ?? raw.processing_fee ?? asRecord(order).processingFee ?? asRecord(order).processing_fee),
-      );
+      const commissionAmount = explicitlyUnpaid ? 0 : asNumber(raw.commissionAmount);
+      const processingFee = explicitlyUnpaid
+        ? 0
+        : Math.max(
+            0,
+            asNumber(raw.processingFee ?? raw.processing_fee ?? asRecord(order).processingFee ?? asRecord(order).processing_fee),
+          );
       const processingFeeCurrencyRaw = String(
         raw.processingFeeCurrency ??
           raw.processing_fee_currency ??
@@ -556,7 +567,7 @@ const BookingsExecutiveDashboard = ({
         bookingId: Number(order.id) || asNumber(raw.bookingId),
         platform: String(raw.platform ?? order.platform ?? "unknown"),
         currency: String(raw.currency ?? "PLN").toUpperCase(),
-        paymentStatus: String(raw.paymentStatus ?? "unknown").toLowerCase(),
+        paymentStatus,
         baseAmount: roundMoney(baseAmount),
         tipAmount: roundMoney(tipAmount),
         addonsAmount: roundMoney(addonsAmount),
@@ -821,6 +832,7 @@ const BookingsExecutiveDashboard = ({
     });
 
     orders.forEach((order) => {
+      const contributesRevenue = !isExplicitlyUnpaidBooking(order);
       const snapshot = order.extras ?? { cocktails: 0, tshirts: 0, photos: 0 };
       const snapshotQty = {
         cocktails: Math.max(0, Number(snapshot.cocktails) || 0),
@@ -829,7 +841,9 @@ const BookingsExecutiveDashboard = ({
       };
       const snapshotHasValues = snapshotQty.cocktails + snapshotQty.tshirts + snapshotQty.photos > 0;
       if (snapshotHasValues) {
-        const rawAddonsAmount = roundMoney(Math.max(0, asNumber(asRecord(order.rawData).addonsAmount)));
+        const rawAddonsAmount = contributesRevenue
+          ? roundMoney(Math.max(0, asNumber(asRecord(order.rawData).addonsAmount)))
+          : 0;
         const snapshotKeys = (Object.keys(snapshotQty) as CanonicalAddonKey[]).filter((key) => snapshotQty[key] > 0);
         const knownKeys = snapshotKeys.filter((key) => buckets[key].unitPrice > 0);
         const unknownKeys = snapshotKeys.filter((key) => buckets[key].unitPrice <= 0);
@@ -857,7 +871,9 @@ const BookingsExecutiveDashboard = ({
           }
           const unitPrice = buckets[key].unitPrice;
           buckets[key].quantity += quantity;
-          buckets[key].revenue += quantity * unitPrice;
+          if (contributesRevenue) {
+            buckets[key].revenue += quantity * unitPrice;
+          }
         });
         return;
       }
@@ -879,7 +895,9 @@ const BookingsExecutiveDashboard = ({
         const revenue = explicitTotal > 0 ? explicitTotal : quantity * unitPrice;
         buckets[key].unitPrice = unitPrice > 0 ? unitPrice : buckets[key].unitPrice;
         buckets[key].quantity += quantity;
-        buckets[key].revenue += revenue;
+        if (contributesRevenue) {
+          buckets[key].revenue += revenue;
+        }
       });
     });
 

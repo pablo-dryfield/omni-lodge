@@ -64,6 +64,10 @@ import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 
 import axiosInstance from "../utils/axiosInstance";
+import {
+  canUseStripeRefundActions,
+  isExplicitlyUnpaidBooking,
+} from "../utils/bookingPayment";
 import { getManifestTshirtSizeLabels } from "../utils/manifestTshirtSizes";
 import BookingDetailsModal, {
   getBookingIdFromOrder,
@@ -2310,6 +2314,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const openPartialRefundModal = (order: UnifiedOrder) => {
+    if (!canUseStripeRefundActions(order)) {
+      return;
+    }
     setPartialRefundEmailPreviewState(createDefaultPartialRefundEmailPreviewState());
     const bookingId = getBookingIdFromOrder(order);
     if (!bookingId) {
@@ -2623,6 +2630,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const storefrontOrder = isStorefrontOrder(order);
     const civitatisOrder = isCivitatisOrder(order);
     const xperienceOrder = isXperiencePolandOrder(order);
+    if ((ecwidOrder || storefrontOrder) && !canUseStripeRefundActions(order)) {
+      return;
+    }
     const civitatisAllowed =
       civitatisOrder &&
       isOrderExperienceDateOnOrBeforeToday(order) &&
@@ -3494,6 +3504,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const handleDirectCancellation = async (order: UnifiedOrder) => {
+    if (!canUseStripeRefundActions(order)) {
+      return;
+    }
     const bookingId = getBookingIdFromOrder(order);
     if (!bookingId) {
       window.alert("Unable to locate OmniLodge booking reference for this order.");
@@ -5014,6 +5027,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const mobileActionsCanDirectConfirmation = Boolean(
     mobileActionsOrder &&
       isDirectFoodTourOrder(mobileActionsOrder) &&
+      !isExplicitlyUnpaidBooking(mobileActionsOrder) &&
       mobileActionsBookingId,
   );
   const mobileActionsCanAmend = Boolean(
@@ -5024,9 +5038,11 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const mobileActionsCanCancel = Boolean(
     mobileActionsOrder &&
       (
-        isEcwidOrder(mobileActionsOrder) ||
+        (
+          (isEcwidOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder)) &&
+          canUseStripeRefundActions(mobileActionsOrder)
+        ) ||
         isXperiencePolandOrder(mobileActionsOrder) ||
-        isDirectManifestActionOrder(mobileActionsOrder) ||
         (
           isCivitatisOrder(mobileActionsOrder) &&
           isOrderExperienceDateOnOrBeforeToday(mobileActionsOrder) &&
@@ -5039,6 +5055,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const mobileActionsCanPartialRefund = Boolean(
     mobileActionsOrder &&
       (isEcwidOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder)) &&
+      canUseStripeRefundActions(mobileActionsOrder) &&
       mobileActionsBookingId &&
       mobileActionsOrder.status !== "cancelled",
   );

@@ -234,6 +234,33 @@ describe('getAffiliateOverview affiliate payout history', () => {
     expect(previousPubCrawlBookings).toHaveBeenCalledWith([9513, 9514, 9515], undefined);
   });
 
+  it('keeps an explicitly unpaid booking in counts while excluding its revenue and commission', async () => {
+    payoutLogFindAll.mockResolvedValue([]);
+    bookingFindAll.mockResolvedValue(buildCristianBookings().map((booking, index) => ({
+      ...booking,
+      paymentStatus: index === 0 ? 'unpaid' : 'paid',
+    })));
+
+    const overview = await loadOverview();
+
+    expect(overview.summary.bookingCount).toBe(3);
+    expect(overview.dailySeries[0]).toEqual(expect.objectContaining({
+      bookingCount: 3,
+      peopleCount: 4,
+      revenue: 940,
+      commission: 90,
+    }));
+    expect(overview.bookings[0]).toEqual(expect.objectContaining({
+      baseAmount: 0,
+      paymentStatus: 'unpaid',
+      affiliateCommissionEligible: false,
+      affiliateCommissionIneligibleReason: 'Booking is unpaid',
+      affiliateCommissionAmount: 0,
+    }));
+    expect(overview.summary.revenueTotal).toBe(940);
+    expect(overview.summary.commissionOutstandingTotal).toBe(90);
+  });
+
   it('excludes historical customer matches from commissions and report totals', async () => {
     payoutLogFindAll.mockResolvedValue([]);
     bookingFindAll.mockResolvedValue(buildCristianBookings().map((booking) => ({

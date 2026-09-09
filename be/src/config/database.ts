@@ -27,6 +27,7 @@ import Addon from "../models/Addon.js";
 import ProductAddon from "../models/ProductAddon.js";
 import StorefrontOrder from "../models/StorefrontOrder.js";
 import StorefrontOrderItem from "../models/StorefrontOrderItem.js";
+import StorefrontOrderResourceReservation from "../models/StorefrontOrderResourceReservation.js";
 import StorefrontPromotion from "../models/StorefrontPromotion.js";
 import StorefrontSavedCart from "../models/StorefrontSavedCart.js";
 import StorefrontOngoingCart from "../models/StorefrontOngoingCart.js";
@@ -267,6 +268,7 @@ const sequelize = new Sequelize({
     Addon,
     StorefrontOrder,
     StorefrontOrderItem,
+    StorefrontOrderResourceReservation,
     StorefrontPromotion,
     StorefrontSavedCart,
     StorefrontOngoingCart,

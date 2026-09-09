@@ -48,6 +48,7 @@ import {
   resolveOpenBarRateBands,
   type OpenBarPayoutBand,
 } from '../services/openBarPayoutService.js';
+import { isBookingRevenueRecognized } from '../services/bookings/bookingRevenuePolicy.js';
 
 const resolvePayoutCurrency = (): string =>
   String(getConfigValue('FINANCE_BASE_CURRENCY') ?? 'PLN')
@@ -513,6 +514,7 @@ async function loadNightReportRevenueSummary(report: NightReport): Promise<{
       'tipAmount',
       'processingFee',
       'currency',
+      'paymentStatus',
     ],
     order: [
       ['platformOrderId', 'ASC'],
@@ -530,15 +532,16 @@ async function loadNightReportRevenueSummary(report: NightReport): Promise<{
     resolvePayoutCurrency();
 
   const items = bookings.map((booking) => {
-    const baseAmount = parseMajorCurrency(booking.baseAmount);
-    const tipAmount = parseMajorCurrency(booking.tipAmount);
-    const processingFee = parseMajorCurrency(booking.processingFee);
+    const recognizesRevenue = isBookingRevenueRecognized(booking);
+    const baseAmount = recognizesRevenue ? parseMajorCurrency(booking.baseAmount) : 0;
+    const tipAmount = recognizesRevenue ? parseMajorCurrency(booking.tipAmount) : 0;
+    const processingFee = recognizesRevenue ? parseMajorCurrency(booking.processingFee) : 0;
     const amount = roundCurrencyValue(baseAmount + tipAmount - processingFee);
     const guestName = `${booking.guestFirstName ?? ''} ${booking.guestLastName ?? ''}`.trim() || null;
     const bookingRef = booking.platformOrderId?.trim() || booking.platformBookingId?.trim() || `Booking #${booking.id}`;
     const subtitle = [
       guestName,
-      `Base ${currency} ${baseAmount.toFixed(2)}`,
+      recognizesRevenue ? `Base ${currency} ${baseAmount.toFixed(2)}` : 'Awaiting payment',
       tipAmount > 0 ? `Tip ${currency} ${tipAmount.toFixed(2)}` : null,
       processingFee > 0 ? `Fee ${currency} ${processingFee.toFixed(2)}` : null,
     ]

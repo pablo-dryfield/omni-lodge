@@ -36,6 +36,22 @@ export type BookingAttendanceStatus =
   | 'checked_in_full'
   | 'no_show';
 
+export type BookingPaymentStatus =
+  | 'unpaid'
+  | 'pending'
+  | 'paid'
+  | 'partially_paid'
+  | 'refunded'
+  | 'partially_refunded'
+  | 'unknown'
+  | (string & {});
+
+export type BookingPaymentMethod =
+  | 'stripe'
+  | 'bank_transfer'
+  | 'free'
+  | (string & {});
+
 export interface UnifiedOrder {
   id: string;
   platformBookingId: string;
@@ -65,6 +81,8 @@ export interface UnifiedOrder {
   bookingKind?: 'reservation' | 'addon_only';
   status: BookingStatus;
   attendanceStatus?: BookingAttendanceStatus;
+  paymentStatus?: BookingPaymentStatus | null;
+  paymentMethod?: BookingPaymentMethod | null;
   rawData?: any;
 }
 

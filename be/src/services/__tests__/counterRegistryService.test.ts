@@ -2,12 +2,18 @@ jest.mock('../../config/database.js', () => ({
   __esModule: true,
   default: { transaction: jest.fn() },
 }));
-jest.mock('../../models/Counter.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/Counter.js', () => ({
+  __esModule: true,
+  default: { findByPk: jest.fn() },
+}));
 jest.mock('../../models/CounterChannelMetric.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn(), bulkCreate: jest.fn() },
 }));
-jest.mock('../../models/CounterUser.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/CounterUser.js', () => ({
+  __esModule: true,
+  default: { count: jest.fn() },
+}));
 jest.mock('../../models/Channel.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn() },
@@ -35,13 +41,23 @@ jest.mock('../../models/Booking.js', () => ({
 jest.mock('../inventoryService.js', () => ({
   reconcileCounterInventory: jest.fn(),
 }));
+jest.mock('../storefrontOrderResourceReservationService.js', () => ({
+  lockStorefrontInventoryReservationsForCounter: jest.fn().mockResolvedValue({ reservationIds: [] }),
+  releaseReconciledStorefrontInventoryReservations: jest.fn().mockResolvedValue(0),
+}));
 
 import sequelize from '../../config/database';
 import Addon from '../../models/Addon';
 import Booking from '../../models/Booking';
 import Channel from '../../models/Channel';
+import Counter from '../../models/Counter';
 import CounterChannelMetric from '../../models/CounterChannelMetric';
+import CounterUser from '../../models/CounterUser';
 import CounterRegistryService from '../counterRegistryService';
+import { reconcileCounterInventory } from '../inventoryService';
+import {
+  lockStorefrontInventoryReservationsForCounter,
+} from '../storefrontOrderResourceReservationService';
 
 const mockTransaction = sequelize.transaction as jest.Mock;
 const mockAddonFindAll = Addon.findAll as jest.Mock;
@@ -49,6 +65,10 @@ const mockBookingFindAll = Booking.findAll as jest.Mock;
 const mockChannelFindAll = Channel.findAll as jest.Mock;
 const mockMetricFindAll = CounterChannelMetric.findAll as jest.Mock;
 const mockMetricBulkCreate = CounterChannelMetric.bulkCreate as jest.Mock;
+const mockCounterFindByPk = Counter.findByPk as jest.Mock;
+const mockCounterUserCount = CounterUser.count as jest.Mock;
+const mockReconcileCounterInventory = reconcileCounterInventory as jest.Mock;
+const mockLockCounterReservations = lockStorefrontInventoryReservationsForCounter as jest.Mock;
 
 describe('CounterRegistryService.upsertMetrics', () => {
   beforeEach(() => {
@@ -151,5 +171,62 @@ describe('CounterRegistryService.upsertMetrics', () => {
         }),
       ]),
     );
+  });
+});
+
+describe('CounterRegistryService.updateCounterMetadata', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockTransaction.mockImplementation(async (callback: (transaction: object) => unknown) => callback({
+      LOCK: { UPDATE: 'UPDATE' },
+    }));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('does not finalize twice when another request won the Counter row lock', async () => {
+    const staleCounter = {
+      id: 920,
+      date: '2026-08-20',
+      productId: 28,
+      userId: 191,
+      status: 'draft',
+    };
+    const lockedCounter = {
+      ...staleCounter,
+      status: 'final',
+      updatedBy: 191,
+      set: jest.fn(),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+    const refreshedCounter = { ...lockedCounter };
+    jest.spyOn(CounterRegistryService, 'loadCounterById')
+      .mockResolvedValueOnce(staleCounter as never)
+      .mockResolvedValueOnce(refreshedCounter as never);
+    jest.spyOn(CounterRegistryService, 'buildContext').mockResolvedValue({} as never);
+    const expectedPayload = { counter: { id: 920, status: 'final' } };
+    jest.spyOn(CounterRegistryService, 'buildPayload').mockResolvedValue(expectedPayload as never);
+    const finalizeAttendance = jest.spyOn(
+      CounterRegistryService,
+      'finalizeBookingAttendanceForCounter',
+    );
+    mockCounterUserCount.mockResolvedValue(1);
+    mockCounterFindByPk.mockResolvedValue(lockedCounter);
+
+    await expect(CounterRegistryService.updateCounterMetadata(
+      920,
+      { status: 'final' },
+      191,
+    )).resolves.toBe(expectedPayload);
+
+    expect(mockCounterFindByPk).toHaveBeenCalledWith(920, expect.objectContaining({
+      lock: 'UPDATE',
+    }));
+    expect(lockedCounter.save).not.toHaveBeenCalled();
+    expect(finalizeAttendance).not.toHaveBeenCalled();
+    expect(mockReconcileCounterInventory).not.toHaveBeenCalled();
+    expect(mockLockCounterReservations).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -18,11 +18,15 @@ import {
   Tabs,
   Text,
   TextInput,
+  Textarea,
   Title,
   Tooltip,
 } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import {
   IconBan,
+  IconBuildingBank,
+  IconCircleCheck,
   IconCopy,
   IconExternalLink,
   IconLink,
@@ -44,6 +48,7 @@ import {
   storefrontJourneyEventSummary,
 } from "../components/storefront/StorefrontActivityTimeline";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
+import { useModuleAccess } from "../hooks/useModuleAccess";
 
 type AddonConfig = {
   selectionMode?: "boolean" | "quantity" | "range" | "options";
@@ -171,6 +176,41 @@ type OngoingCart = {
   }>;
 };
 
+type BankTransferOrderActor = {
+  id: number;
+  fullName: string;
+};
+
+type BankTransferOrder = {
+  publicId: string;
+  status: "awaiting_transfer" | "payment_received" | "cancelled";
+  paymentStatus: string;
+  paymentReference: string | null;
+  receivedPaymentReference: string | null;
+  paymentDueAt: string | null;
+  paymentNote: string | null;
+  total: number;
+  currency: string;
+  customer: {
+    fullName: string;
+    email: string;
+    phoneCountry: string | null;
+    phone: string | null;
+  };
+  items: OngoingCart["quote"]["items"];
+  createdBy: BankTransferOrderActor | null;
+  receivedBy: BankTransferOrderActor | null;
+  createdAt: string;
+  paidAt: string | null;
+  customerEmailSentAt: string | null;
+  internalEmailSentAt: string | null;
+  confirmationEmailComplete: boolean;
+  bankTransferInstructionsEmailSentAt: string | null;
+  bankTransferCancellationEmailSentAt: string | null;
+  cancellationReason: string | null;
+  cancelledAt: string | null;
+};
+
 type RecoveryEmailPreview = {
   cart: OngoingCart;
   to: string;
@@ -207,9 +247,21 @@ type CartActivity = {
   legacyEvents: OngoingCart["events"];
 };
 
-type StorefrontCartTab = "prepared" | "ongoing" | "recovered";
+type StorefrontCartTab = "prepared" | "bank-transfers" | "ongoing" | "recovered";
+type CreatorMode = "payment-link" | "bank-transfer";
+type BankTransferNotice = {
+  color: "green" | "red" | "yellow";
+  title: string;
+  message: string;
+};
 
-const storefrontCartTabs = new Set<StorefrontCartTab>(["prepared", "ongoing", "recovered"]);
+const storefrontCartTabs = new Set<StorefrontCartTab>([
+  "prepared",
+  "bank-transfers",
+  "ongoing",
+  "recovered",
+]);
+const BANK_TRANSFER_BOOKINGS_MODULE = "bank-transfer-booking-management";
 
 const storefrontCartTab = (value: string | null): StorefrontCartTab => (
   value && storefrontCartTabs.has(value as StorefrontCartTab)
@@ -286,7 +338,10 @@ const customerCountry = (countryCode: string): string => (
   countryCode ? regionNames.of(countryCode) || countryCode : ""
 );
 
-const customerPhone = (customer: OngoingCart["customer"]): string => {
+const customerPhone = (customer: {
+  phoneCountry?: string | null;
+  phone?: string | null;
+}): string => {
   const phone = String(customer.phone || "").trim();
   if (!phone || phone.startsWith("+")) return phone;
   try {
@@ -346,6 +401,29 @@ const ExperienceDetails = ({ item }: { item: OngoingCartQuoteItem }) => (
   </Stack>
 );
 
+const BankTransferStatusDetails = ({
+  order,
+  align = "flex-start",
+}: {
+  order: BankTransferOrder;
+  align?: "flex-start" | "flex-end";
+}) => {
+  const dueState = bankTransferDueState(order);
+  return (
+    <Stack gap={4} align={align}>
+      <Badge color={bankTransferStatusColor(order.status)} variant="light">
+        {order.status === "cancelled" && order.cancellationReason === "payment_deadline_expired"
+          ? "Expired"
+          : bankTransferStatusLabel(order.status)}
+      </Badge>
+      {order.paymentReference && (
+        <Text size="xs" c="dimmed">Ref {order.paymentReference}</Text>
+      )}
+      {dueState && <Text size="xs" fw={dueState.color === "red" ? 700 : 500} c={dueState.color}>{dueState.label}</Text>}
+    </Stack>
+  );
+};
+
 const copyText = async (value: string): Promise<void> => {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -359,6 +437,59 @@ const copyText = async (value: string): Promise<void> => {
   input.select();
   document.execCommand("copy");
   input.remove();
+};
+
+const createClientRequestId = (): string => {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === "x" ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+};
+
+const bankTransferStatusColor = (status: BankTransferOrder["status"]): string => (
+  status === "payment_received" ? "green" : status === "cancelled" ? "gray" : "orange"
+);
+
+const bankTransferStatusLabel = (status: BankTransferOrder["status"]): string => (
+  status === "payment_received" ? "Payment received" : status === "cancelled" ? "Cancelled" : "Awaiting transfer"
+);
+
+const bankTransferDueState = (order: BankTransferOrder): { color: string; label: string } | null => {
+  if (order.status !== "awaiting_transfer" || !order.paymentDueAt) return null;
+  const dueAt = dayjs(order.paymentDueAt);
+  if (!dueAt.isValid()) return null;
+  if (dayjs().isAfter(dueAt)) {
+    return { color: "red", label: `Overdue since ${dueAt.format("D MMM YYYY, HH:mm")}` };
+  }
+  if (dueAt.isSame(dayjs(), "day")) {
+    return { color: "orange", label: `Due today, ${dueAt.format("HH:mm")}` };
+  }
+  return { color: "dimmed", label: `Due ${dueAt.format("D MMM YYYY, HH:mm")}` };
+};
+
+const bankTransferEmailState = (order: BankTransferOrder): { color: string; label: string } => {
+  if (order.status === "cancelled") {
+    return order.bankTransferCancellationEmailSentAt
+      ? { color: "gray", label: "Cancellation sent" }
+      : { color: "orange", label: "Cancellation pending" };
+  }
+  if (order.status === "payment_received") {
+    return order.confirmationEmailComplete
+      ? { color: "green", label: "Confirmation sent" }
+      : { color: "orange", label: "Confirmation pending" };
+  }
+  return order.bankTransferInstructionsEmailSentAt
+    ? { color: "green", label: "Instructions sent" }
+    : { color: "orange", label: "Instructions pending" };
+};
+
+const shortOrderReference = (publicId: string): string => {
+  const normalized = publicId.trim();
+  return normalized.length > 12 ? normalized.slice(0, 8).toUpperCase() : normalized.toUpperCase();
 };
 
 const errorMessage = (error: unknown): string => {
@@ -377,20 +508,49 @@ const addonCap = (addon: StorefrontAddon, participants: number): number => {
 const PaymentLinksPage = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [products, setProducts] = useState<StorefrontProduct[]>([]);
+  const modulePermissions = useModuleAccess("booking-management");
+  const bankTransferPermissions = useModuleAccess(BANK_TRANSFER_BOOKINGS_MODULE);
+  const isMobile = useMediaQuery("(max-width: 48em)");
+  const [paymentLinkProducts, setPaymentLinkProducts] = useState<StorefrontProduct[]>([]);
+  const [bankTransferProducts, setBankTransferProducts] = useState<StorefrontProduct[]>([]);
+  const [paymentLinkCatalogLoading, setPaymentLinkCatalogLoading] = useState(true);
+  const [paymentLinkCatalogError, setPaymentLinkCatalogError] = useState("");
+  const [bankTransferCatalogLoading, setBankTransferCatalogLoading] = useState(true);
+  const [bankTransferCatalogError, setBankTransferCatalogError] = useState("");
   const [links, setLinks] = useState<SavedCart[]>([]);
   const [ongoingCarts, setOngoingCarts] = useState<OngoingCart[]>([]);
   const [recoveredCarts, setRecoveredCarts] = useState<OngoingCart[]>([]);
+  const [bankTransferOrders, setBankTransferOrders] = useState<BankTransferOrder[]>([]);
+  const [bankTransferLoading, setBankTransferLoading] = useState(true);
+  const [bankTransferError, setBankTransferError] = useState("");
+  const [bankTransferNotice, setBankTransferNotice] = useState<BankTransferNotice | null>(null);
+  const [showCancelledBankTransfers, setShowCancelledBankTransfers] = useState(false);
+  const [resendingOrderId, setResendingOrderId] = useState<string | null>(null);
+  const [retryingConfirmationOrderId, setRetryingConfirmationOrderId] = useState<string | null>(null);
+  const [resendingCancellationOrderId, setResendingCancellationOrderId] = useState<string | null>(null);
   const [sendingRecoveryId, setSendingRecoveryId] = useState<string | null>(null);
   const [previewingRecoveryId, setPreviewingRecoveryId] = useState<string | null>(null);
   const [recoveryEmailPreview, setRecoveryEmailPreview] = useState<RecoveryEmailPreview | null>(null);
   const [activityCart, setActivityCart] = useState<OngoingCart | null>(null);
   const [activity, setActivity] = useState<CartActivity | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
-  const activeTab = storefrontCartTab(searchParams.get("tab"));
+  const requestedTab = storefrontCartTab(searchParams.get("tab"));
+  const activeTab = requestedTab === "bank-transfers"
+    ? bankTransferPermissions.canView
+      ? "bank-transfers"
+      : modulePermissions.canView
+        ? "prepared"
+        : "bank-transfers"
+    : modulePermissions.canView
+      ? requestedTab
+      : bankTransferPermissions.canView
+        ? "bank-transfers"
+        : requestedTab;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const [creatorMode, setCreatorMode] = useState<CreatorMode>("payment-link");
+  const [clientRequestId, setClientRequestId] = useState(createClientRequestId);
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [formError, setFormError] = useState("");
@@ -400,18 +560,26 @@ const PaymentLinksPage = () => {
   const [discountCodes, setDiscountCodes] = useState("");
   const [customer, setCustomer] = useState({ fullName: "", email: "", phoneCountry: "", phone: "" });
   const [items, setItems] = useState<CartItemDraft[]>([emptyItem()]);
+  const [receivingOrder, setReceivingOrder] = useState<BankTransferOrder | null>(null);
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentNote, setPaymentNote] = useState("");
+  const [paymentReceivedRequestId, setPaymentReceivedRequestId] = useState(createClientRequestId);
+  const [paymentReceivedSaving, setPaymentReceivedSaving] = useState(false);
+  const [paymentReceivedError, setPaymentReceivedError] = useState("");
+  const [cancellingOrder, setCancellingOrder] = useState<BankTransferOrder | null>(null);
+  const [cancellationNote, setCancellationNote] = useState("");
+  const [cancellationSaving, setCancellationSaving] = useState(false);
+  const [cancellationError, setCancellationError] = useState("");
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [catalogResponse, linksResponse, ongoingResponse, recoveredResponse] = await Promise.all([
-        axiosInstance.get<{ products: StorefrontProduct[] }>("/storefront/products"),
+      const [linksResponse, ongoingResponse, recoveredResponse] = await Promise.all([
         axiosInstance.get<{ data: SavedCart[] }>("/storefront-saved-carts"),
         axiosInstance.get<{ data: OngoingCart[] }>("/storefront-ongoing-carts"),
         axiosInstance.get<{ data: OngoingCart[] }>("/storefront-ongoing-carts/recovered"),
       ]);
-      setProducts(catalogResponse.data.products || []);
       setLinks(linksResponse.data.data || []);
       setOngoingCarts(ongoingResponse.data.data || []);
       setRecoveredCarts(recoveredResponse.data.data || []);
@@ -420,32 +588,129 @@ const PaymentLinksPage = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    void load();
   }, []);
 
+  const loadPaymentLinkCatalog = useCallback(async () => {
+    setPaymentLinkCatalogLoading(true);
+    setPaymentLinkCatalogError("");
+    try {
+      const response = await axiosInstance.get<{ products: StorefrontProduct[] }>("/storefront/products");
+      setPaymentLinkProducts(response.data.products || []);
+    } catch (requestError) {
+      setPaymentLinkCatalogError(errorMessage(requestError));
+    } finally {
+      setPaymentLinkCatalogLoading(false);
+    }
+  }, []);
+
+  const loadBankTransferCatalog = useCallback(async () => {
+    setBankTransferCatalogLoading(true);
+    setBankTransferCatalogError("");
+    try {
+      const response = await axiosInstance.get<{ products: StorefrontProduct[] }>(
+        "/storefront-bank-transfer-orders/catalog",
+      );
+      setBankTransferProducts(response.data.products || []);
+    } catch (requestError) {
+      setBankTransferCatalogError(errorMessage(requestError));
+    } finally {
+      setBankTransferCatalogLoading(false);
+    }
+  }, []);
+
+  const loadBankTransferOrders = useCallback(async () => {
+    setBankTransferLoading(true);
+    setBankTransferError("");
+    try {
+      const response = await axiosInstance.get<{ data: BankTransferOrder[] }>(
+        `/storefront-bank-transfer-orders${showCancelledBankTransfers ? "?includeCancelled=true" : ""}`,
+      );
+      setBankTransferOrders(response.data.data || []);
+    } catch (requestError) {
+      setBankTransferError(errorMessage(requestError));
+    } finally {
+      setBankTransferLoading(false);
+    }
+  }, [showCancelledBankTransfers]);
+
   useEffect(() => {
-    if (searchParams.get("tab") === activeTab) return;
+    if (!modulePermissions.ready || !modulePermissions.canView) return;
+    void load();
+    void loadPaymentLinkCatalog();
+  }, [load, loadPaymentLinkCatalog, modulePermissions.canView, modulePermissions.ready]);
+
+  useEffect(() => {
+    if (
+      !bankTransferPermissions.ready
+      || !bankTransferPermissions.canView
+      || activeTab !== "bank-transfers"
+    ) return;
+    void loadBankTransferOrders();
+  }, [
+    activeTab,
+    bankTransferPermissions.canView,
+    bankTransferPermissions.ready,
+    loadBankTransferOrders,
+  ]);
+
+  useEffect(() => {
+    if (
+      !bankTransferPermissions.ready
+      || !bankTransferPermissions.canView
+      || activeTab !== "bank-transfers"
+    ) return;
+    void loadBankTransferCatalog();
+  }, [
+    activeTab,
+    bankTransferPermissions.canView,
+    bankTransferPermissions.ready,
+    loadBankTransferCatalog,
+  ]);
+
+  useEffect(() => {
     const nextParams = new URLSearchParams(searchParams);
-    nextParams.set("tab", activeTab);
+    let changed = false;
+    if (searchParams.get("tab") !== activeTab) {
+      nextParams.set("tab", activeTab);
+      changed = true;
+    }
+    if (
+      bankTransferPermissions.ready
+      && searchParams.get("action") === "create-bank-transfer"
+      && (!bankTransferPermissions.canView || !bankTransferPermissions.canCreate)
+    ) {
+      nextParams.delete("action");
+      changed = true;
+    }
+    if (!changed) return;
     setSearchParams(nextParams, { replace: true });
-  }, [activeTab, searchParams, setSearchParams]);
+  }, [
+    activeTab,
+    bankTransferPermissions.canCreate,
+    bankTransferPermissions.canView,
+    bankTransferPermissions.ready,
+    searchParams,
+    setSearchParams,
+  ]);
 
   const changeTab = (value: string | null) => {
     if (!value || !storefrontCartTabs.has(value as StorefrontCartTab)) return;
+    if (value === "bank-transfers" && !bankTransferPermissions.canView) return;
+    if (value !== "bank-transfers" && !modulePermissions.canView) return;
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("tab", value);
     setSearchParams(nextParams, { replace: false });
   };
 
+  const creatorProducts = creatorMode === "bank-transfer"
+    ? bankTransferProducts
+    : paymentLinkProducts;
   const productById = useMemo(
-    () => new Map(products.map((product) => [product.id, product])),
-    [products],
+    () => new Map(creatorProducts.map((product) => [product.id, product])),
+    [creatorProducts],
   );
 
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setName("");
     setExpiresInDays(7);
     setDiscountCodes("");
@@ -453,12 +718,44 @@ const PaymentLinksPage = () => {
     setItems([emptyItem()]);
     setQuote(null);
     setFormError("");
-  };
+    setClientRequestId(createClientRequestId());
+  }, []);
 
-  const openCreator = () => {
+  const openCreator = useCallback(() => {
     resetForm();
+    setCreatorMode("payment-link");
     setModalOpen(true);
-  };
+  }, [resetForm]);
+
+  const openBankTransferCreator = useCallback(() => {
+    resetForm();
+    setBankTransferNotice(null);
+    setCreatorMode("bank-transfer");
+    setModalOpen(true);
+  }, [resetForm]);
+
+  useEffect(() => {
+    if (
+      searchParams.get("action") !== "create-bank-transfer"
+      || !bankTransferPermissions.ready
+      || !bankTransferPermissions.canView
+      || !bankTransferPermissions.canCreate
+    ) {
+      return;
+    }
+    openBankTransferCreator();
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("tab", "bank-transfers");
+    nextParams.delete("action");
+    setSearchParams(nextParams, { replace: true });
+  }, [
+    bankTransferPermissions.canCreate,
+    bankTransferPermissions.canView,
+    bankTransferPermissions.ready,
+    openBankTransferCreator,
+    searchParams,
+    setSearchParams,
+  ]);
 
   const updateItem = (key: string, patch: Partial<CartItemDraft>) => {
     setItems((current) => current.map((item) => item.key === key ? { ...item, ...patch } : item));
@@ -555,6 +852,42 @@ const PaymentLinksPage = () => {
     setSaving(true);
     setFormError("");
     try {
+      if (creatorMode === "bank-transfer") {
+        if (!customer.fullName.trim()) {
+          throw new Error("Enter the customer's full name.");
+        }
+        if (!customer.email.trim()) {
+          throw new Error("Enter the customer's email address so confirmation can be delivered.");
+        }
+        const response = await axiosInstance.post<{ data: BankTransferOrder; warning?: string }>(
+          "/storefront-bank-transfer-orders",
+          {
+            customer: {
+              fullName: customer.fullName.trim(),
+              email: customer.email.trim(),
+              phoneCountry: customer.phoneCountry,
+              phone: customer.phone.trim(),
+            },
+            cart: cartPayload(),
+            clientRequestId,
+          },
+        );
+        setBankTransferOrders((current) => [
+          response.data.data,
+          ...current.filter((order) => order.publicId !== response.data.data.publicId),
+        ]);
+        setBankTransferNotice(response.data.warning ? {
+          color: "yellow",
+          title: "Booking created, but email needs attention",
+          message: response.data.warning,
+        } : {
+          color: "green",
+          title: "Booking created",
+          message: `Bank transfer instructions were sent to ${response.data.data.customer.email}.`,
+        });
+        setModalOpen(false);
+        return;
+      }
       const response = await axiosInstance.post<{ data: SavedCart }>("/storefront-saved-carts", {
         name,
         expiresInDays: Number(expiresInDays),
@@ -572,6 +905,170 @@ const PaymentLinksPage = () => {
       setFormError(errorMessage(requestError));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openPaymentReceived = (order: BankTransferOrder) => {
+    setBankTransferNotice(null);
+    setReceivingOrder(order);
+    setPaymentReference("");
+    setPaymentNote("");
+    setPaymentReceivedRequestId(createClientRequestId());
+    setPaymentReceivedError("");
+  };
+
+  const closePaymentReceived = () => {
+    if (paymentReceivedSaving) return;
+    setReceivingOrder(null);
+    setPaymentReceivedError("");
+  };
+
+  const markPaymentReceived = async () => {
+    if (!receivingOrder) return;
+    setPaymentReceivedSaving(true);
+    setPaymentReceivedError("");
+    try {
+      const response = await axiosInstance.patch<{ data: BankTransferOrder }>(
+        `/storefront-bank-transfer-orders/${encodeURIComponent(receivingOrder.publicId)}/payment-received`,
+        {
+          ...(paymentReference.trim() ? { paymentReference: paymentReference.trim() } : {}),
+          ...(paymentNote.trim() ? { note: paymentNote.trim() } : {}),
+          clientRequestId: paymentReceivedRequestId,
+        },
+      );
+      setBankTransferOrders((current) => current.map((order) => (
+        order.publicId === response.data.data.publicId ? response.data.data : order
+      )));
+      setBankTransferNotice({
+        color: "green",
+        title: "Payment recorded",
+        message: `${response.data.data.customer.fullName}'s booking is now paid.`,
+      });
+      setReceivingOrder(null);
+    } catch (requestError) {
+      setPaymentReceivedError(errorMessage(requestError));
+    } finally {
+      setPaymentReceivedSaving(false);
+    }
+  };
+
+  const resendBankTransferInstructions = async (order: BankTransferOrder) => {
+    setResendingOrderId(order.publicId);
+    setBankTransferNotice(null);
+    try {
+      const response = await axiosInstance.post<{ data: BankTransferOrder }>(
+        `/storefront-bank-transfer-orders/${encodeURIComponent(order.publicId)}/resend-instructions`,
+      );
+      setBankTransferOrders((current) => current.map((currentOrder) => (
+        currentOrder.publicId === response.data.data.publicId ? response.data.data : currentOrder
+      )));
+      setBankTransferNotice({
+        color: "green",
+        title: "Instructions sent",
+        message: `Bank transfer instructions were sent to ${response.data.data.customer.email}.`,
+      });
+    } catch (requestError) {
+      setBankTransferNotice({
+        color: "red",
+        title: "Unable to send instructions",
+        message: errorMessage(requestError),
+      });
+    } finally {
+      setResendingOrderId(null);
+    }
+  };
+
+  const retryBankTransferConfirmation = async (order: BankTransferOrder) => {
+    setRetryingConfirmationOrderId(order.publicId);
+    setBankTransferNotice(null);
+    try {
+      const response = await axiosInstance.post<{ data: BankTransferOrder }>(
+        `/storefront-bank-transfer-orders/${encodeURIComponent(order.publicId)}/retry-confirmation`,
+      );
+      setBankTransferOrders((current) => current.map((currentOrder) => (
+        currentOrder.publicId === response.data.data.publicId ? response.data.data : currentOrder
+      )));
+      setBankTransferNotice({
+        color: "green",
+        title: "Confirmation sent",
+        message: `The booking confirmation was sent to ${response.data.data.customer.email}.`,
+      });
+    } catch (requestError) {
+      setBankTransferNotice({
+        color: "red",
+        title: "Unable to send confirmation",
+        message: errorMessage(requestError),
+      });
+    } finally {
+      setRetryingConfirmationOrderId(null);
+    }
+  };
+
+  const openBankTransferCancellation = (order: BankTransferOrder) => {
+    setBankTransferNotice(null);
+    setCancellingOrder(order);
+    setCancellationNote("");
+    setCancellationError("");
+  };
+
+  const closeBankTransferCancellation = () => {
+    if (cancellationSaving) return;
+    setCancellingOrder(null);
+    setCancellationError("");
+  };
+
+  const cancelBankTransferReservation = async () => {
+    if (!cancellingOrder) return;
+    setCancellationSaving(true);
+    setCancellationError("");
+    try {
+      const response = await axiosInstance.patch<{ data: BankTransferOrder; warning?: string }>(
+        `/storefront-bank-transfer-orders/${encodeURIComponent(cancellingOrder.publicId)}/cancel`,
+        cancellationNote.trim() ? { note: cancellationNote.trim() } : {},
+      );
+      setBankTransferOrders((current) => showCancelledBankTransfers
+        ? current.map((order) => order.publicId === response.data.data.publicId ? response.data.data : order)
+        : current.filter((order) => order.publicId !== response.data.data.publicId));
+      setBankTransferNotice(response.data.warning ? {
+        color: "yellow",
+        title: "Reservation cancelled, but email needs attention",
+        message: `${response.data.warning} Show cancelled bookings to retry it.`,
+      } : {
+        color: "green",
+        title: "Reservation cancelled",
+        message: `${response.data.data.customer.fullName}'s unpaid reservation was cancelled and the customer was notified.`,
+      });
+      setCancellingOrder(null);
+    } catch (requestError) {
+      setCancellationError(errorMessage(requestError));
+    } finally {
+      setCancellationSaving(false);
+    }
+  };
+
+  const resendBankTransferCancellation = async (order: BankTransferOrder) => {
+    setResendingCancellationOrderId(order.publicId);
+    setBankTransferNotice(null);
+    try {
+      const response = await axiosInstance.post<{ data: BankTransferOrder }>(
+        `/storefront-bank-transfer-orders/${encodeURIComponent(order.publicId)}/resend-cancellation`,
+      );
+      setBankTransferOrders((current) => current.map((currentOrder) => (
+        currentOrder.publicId === response.data.data.publicId ? response.data.data : currentOrder
+      )));
+      setBankTransferNotice({
+        color: "green",
+        title: "Cancellation email sent",
+        message: `The cancellation notice was sent to ${response.data.data.customer.email}.`,
+      });
+    } catch (requestError) {
+      setBankTransferNotice({
+        color: "red",
+        title: "Unable to send cancellation email",
+        message: errorMessage(requestError),
+      });
+    } finally {
+      setResendingCancellationOrderId(null);
     }
   };
 
@@ -654,48 +1151,186 @@ const PaymentLinksPage = () => {
     }
   };
 
+  const sortedBankTransferOrders = useMemo(
+    () => [...bankTransferOrders].sort((left, right) => {
+      if (left.status !== right.status) {
+        const rank: Record<BankTransferOrder["status"], number> = {
+          awaiting_transfer: 0,
+          payment_received: 1,
+          cancelled: 2,
+        };
+        return rank[left.status] - rank[right.status];
+      }
+      if (left.status === "awaiting_transfer") {
+        const leftDueAt = left.paymentDueAt ? dayjs(left.paymentDueAt) : null;
+        const rightDueAt = right.paymentDueAt ? dayjs(right.paymentDueAt) : null;
+        const leftDueValue = leftDueAt?.isValid() ? leftDueAt.valueOf() : Number.POSITIVE_INFINITY;
+        const rightDueValue = rightDueAt?.isValid() ? rightDueAt.valueOf() : Number.POSITIVE_INFINITY;
+        if (leftDueValue !== rightDueValue) return leftDueValue - rightDueValue;
+      }
+      return dayjs(right.createdAt).valueOf() - dayjs(left.createdAt).valueOf();
+    }),
+    [bankTransferOrders],
+  );
+
+  if (
+    !modulePermissions.ready
+    || modulePermissions.loading
+    || !bankTransferPermissions.ready
+    || bankTransferPermissions.loading
+  ) {
+    return (
+      <PageAccessGuard pageSlug={PAGE_SLUGS.bookings}>
+        <Box mih={260} style={{ display: "grid", placeItems: "center" }}>
+          <Loader />
+        </Box>
+      </PageAccessGuard>
+    );
+  }
+
+  if (!modulePermissions.canView && !bankTransferPermissions.canView) {
+    return (
+      <PageAccessGuard pageSlug={PAGE_SLUGS.bookings}>
+        <Alert m={{ base: "md", md: "xl" }} color="yellow" title="No access">
+          You do not have permission to view direct-sales booking information.
+        </Alert>
+      </PageAccessGuard>
+    );
+  }
+
   return (
     <PageAccessGuard pageSlug={PAGE_SLUGS.bookings}>
       <Stack gap="lg" p={{ base: "md", md: "xl" }}>
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <Box>
             <Text size="xs" fw={700} c="dimmed" tt="uppercase">Bookings</Text>
-            <Title order={1} size="h2">Storefront carts</Title>
-            <Text c="dimmed">Manage prepared links, ongoing carts, and sales recovered by email.</Text>
+            <Title order={1} size="h2">Direct sales</Title>
+            <Text c="dimmed">Create direct bookings and manage customer payment journeys.</Text>
           </Box>
           <Group>
             <Tooltip label="Refresh statuses">
-              <Button variant="default" px="sm" onClick={() => void load()} aria-label="Refresh payment links">
+              <Button
+                variant="default"
+                px="sm"
+                onClick={() => {
+                  if (activeTab === "bank-transfers" && bankTransferPermissions.canView) {
+                    void loadBankTransferOrders();
+                    void loadBankTransferCatalog();
+                  } else if (modulePermissions.canView) {
+                    void load();
+                    void loadPaymentLinkCatalog();
+                  }
+                }}
+                aria-label="Refresh direct sales"
+              >
                 <IconRefresh size={18} />
               </Button>
             </Tooltip>
-            {activeTab === "prepared" && <Button leftSection={<IconPlus size={18} />} onClick={openCreator}>New payment link</Button>}
+            {activeTab === "prepared" && modulePermissions.canCreate && (
+              <Button
+                leftSection={<IconPlus size={18} />}
+                onClick={openCreator}
+                disabled={paymentLinkCatalogLoading || Boolean(paymentLinkCatalogError)}
+              >
+                New payment link
+              </Button>
+            )}
+            {activeTab === "bank-transfers" && bankTransferPermissions.canCreate && (
+              <Button
+                leftSection={<IconBuildingBank size={18} />}
+                onClick={openBankTransferCreator}
+                disabled={bankTransferCatalogLoading || Boolean(bankTransferCatalogError)}
+              >
+                New booking
+              </Button>
+            )}
           </Group>
         </Group>
 
         <Group gap="xs">
           <Button variant="subtle" onClick={() => navigate("/bookings")}>Calendar</Button>
-          <Button variant="light" leftSection={<IconLink size={17} />}>Payment links</Button>
+          <Button variant="light" leftSection={<IconLink size={17} />}>Direct sales</Button>
         </Group>
 
         <Tabs value={activeTab} onChange={changeTab}>
-          <Tabs.List>
-            <Tabs.Tab value="prepared" leftSection={<IconLink size={16} />}>Prepared links</Tabs.Tab>
-            <Tabs.Tab value="ongoing" leftSection={<IconShoppingCart size={16} />}>Ongoing carts</Tabs.Tab>
-            <Tabs.Tab value="recovered" leftSection={<IconShoppingCart size={16} />}>Recovered sales</Tabs.Tab>
+          <Tabs.List style={{ flexWrap: "nowrap", overflowX: "auto", overflowY: "hidden" }}>
+            {modulePermissions.canView && (
+              <Tabs.Tab style={{ flexShrink: 0 }} value="prepared" leftSection={<IconLink size={16} />}>Prepared links</Tabs.Tab>
+            )}
+            {bankTransferPermissions.canView && (
+              <Tabs.Tab style={{ flexShrink: 0 }} value="bank-transfers" leftSection={<IconBuildingBank size={16} />}>
+                Bank transfers
+              </Tabs.Tab>
+            )}
+            {modulePermissions.canView && (
+              <>
+                <Tabs.Tab style={{ flexShrink: 0 }} value="ongoing" leftSection={<IconShoppingCart size={16} />}>Ongoing carts</Tabs.Tab>
+                <Tabs.Tab style={{ flexShrink: 0 }} value="recovered" leftSection={<IconShoppingCart size={16} />}>Recovered sales</Tabs.Tab>
+              </>
+            )}
           </Tabs.List>
         </Tabs>
 
-        {error && <Alert color="red" title="Payment links unavailable">{error}</Alert>}
+        {activeTab === "bank-transfers" && (
+          <Group justify="flex-end">
+            <Switch
+              label="Show cancelled bookings"
+              checked={showCancelledBankTransfers}
+              onChange={(event) => setShowCancelledBankTransfers(event.currentTarget.checked)}
+            />
+          </Group>
+        )}
 
-        {loading ? (
+        {activeTab !== "bank-transfers" && error && (
+          <Alert color="red" title="Direct sales data unavailable">{error}</Alert>
+        )}
+        {activeTab !== "bank-transfers" && paymentLinkCatalogError && (
+          <Alert color="red" title="Experience catalog unavailable">
+            <Group justify="space-between" align="center" wrap="wrap">
+              <Text size="sm">{paymentLinkCatalogError}</Text>
+              <Button variant="light" color="red" size="xs" onClick={() => void loadPaymentLinkCatalog()}>
+                Try again
+              </Button>
+            </Group>
+          </Alert>
+        )}
+        {activeTab === "bank-transfers" && bankTransferCatalogError && (
+          <Alert color="red" title="Experience catalog unavailable">
+            <Group justify="space-between" align="center" wrap="wrap">
+              <Text size="sm">{bankTransferCatalogError}</Text>
+              <Button variant="light" color="red" size="xs" onClick={() => void loadBankTransferCatalog()}>
+                Try again
+              </Button>
+            </Group>
+          </Alert>
+        )}
+        {activeTab === "bank-transfers" && bankTransferNotice && (
+          <Alert
+            color={bankTransferNotice.color}
+            title={bankTransferNotice.title}
+            withCloseButton
+            onClose={() => setBankTransferNotice(null)}
+          >
+            {bankTransferNotice.message}
+          </Alert>
+        )}
+
+        {activeTab !== "bank-transfers" && loading ? (
           <Box mih={260} style={{ display: "grid", placeItems: "center" }}><Loader /></Box>
         ) : activeTab === "prepared" && links.length === 0 ? (
           <Box py={80} ta="center">
             <IconLink size={34} color="var(--mantine-color-gray-5)" />
             <Title order={3} mt="sm">No payment links yet</Title>
             <Text c="dimmed" mb="lg">Create a prepared booking when a customer is ready to pay.</Text>
-            <Button leftSection={<IconPlus size={18} />} onClick={openCreator}>New payment link</Button>
+            {modulePermissions.canCreate && (
+              <Button
+                leftSection={<IconPlus size={18} />}
+                onClick={openCreator}
+                disabled={paymentLinkCatalogLoading || Boolean(paymentLinkCatalogError)}
+              >
+                New payment link
+              </Button>
+            )}
           </Box>
         ) : activeTab === "prepared" ? (
           <Box style={{ overflowX: "auto" }}>
@@ -737,6 +1372,282 @@ const PaymentLinksPage = () => {
               </Table.Tbody>
             </Table>
           </Box>
+        ) : activeTab === "bank-transfers" && bankTransferLoading ? (
+          <Box mih={260} style={{ display: "grid", placeItems: "center" }}>
+            <Loader />
+          </Box>
+        ) : activeTab === "bank-transfers" && bankTransferError ? (
+          <Alert
+            color="red"
+            title="Bank transfer bookings unavailable"
+            withCloseButton={false}
+          >
+            <Stack gap="sm" align="flex-start">
+              <Text size="sm">{bankTransferError}</Text>
+              <Button variant="light" color="red" size="xs" onClick={() => void loadBankTransferOrders()}>
+                Try again
+              </Button>
+            </Stack>
+          </Alert>
+        ) : activeTab === "bank-transfers" && sortedBankTransferOrders.length === 0 ? (
+          <Box py={80} ta="center">
+            <IconBuildingBank size={38} color="var(--mantine-color-gray-5)" />
+            <Title order={3} mt="sm">No bank transfer bookings</Title>
+            <Text c="dimmed" mb="lg">Create a reserved booking and send the customer transfer instructions.</Text>
+            {bankTransferPermissions.canCreate && (
+              <Button
+                leftSection={<IconBuildingBank size={18} />}
+                onClick={openBankTransferCreator}
+                disabled={bankTransferCatalogLoading || Boolean(bankTransferCatalogError)}
+              >
+                New booking
+              </Button>
+            )}
+          </Box>
+        ) : activeTab === "bank-transfers" ? (
+          <>
+            <Box visibleFrom="sm" style={{ overflowX: "auto" }}>
+              <Table verticalSpacing="md" horizontalSpacing="md" striped highlightOnHover miw={1180}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Customer</Table.Th>
+                    <Table.Th>Experiences</Table.Th>
+                    <Table.Th>Status</Table.Th>
+                    <Table.Th>Total</Table.Th>
+                    <Table.Th>Email</Table.Th>
+                    <Table.Th>Created</Table.Th>
+                    <Table.Th>Received</Table.Th>
+                    <Table.Th ta="right">Action</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {sortedBankTransferOrders.map((order) => (
+                    <Table.Tr key={order.publicId}>
+                      <Table.Td>
+                        <Text fw={700}>{order.customer.fullName}</Text>
+                        <Text size="xs" c="dimmed">{order.customer.email}</Text>
+                        {customerPhone(order.customer) && (
+                          <Text size="xs" c="dimmed">{customerPhone(order.customer)}</Text>
+                        )}
+                        <Text size="xs" c="dimmed">Order {shortOrderReference(order.publicId)}</Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Stack gap="sm">
+                          {order.items.map((item, itemIndex) => (
+                            <ExperienceDetails
+                              key={`${order.publicId}-${item.productName}-${itemIndex}`}
+                              item={item}
+                            />
+                          ))}
+                        </Stack>
+                      </Table.Td>
+                      <Table.Td>
+                        <BankTransferStatusDetails order={order} />
+                      </Table.Td>
+                      <Table.Td fw={700}>{money(order.total, order.currency)}</Table.Td>
+                      <Table.Td>
+                        <Badge
+                          size="sm"
+                          variant="light"
+                          color={bankTransferEmailState(order).color}
+                        >
+                          {bankTransferEmailState(order).label}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm">{dayjs(order.createdAt).format("D MMM YYYY, HH:mm")}</Text>
+                        {order.createdBy && <Text size="xs" c="dimmed">by {order.createdBy.fullName}</Text>}
+                      </Table.Td>
+                      <Table.Td>
+                        {order.paidAt ? (
+                          <>
+                            <Text size="sm">{dayjs(order.paidAt).format("D MMM YYYY, HH:mm")}</Text>
+                            {order.receivedBy && <Text size="xs" c="dimmed">by {order.receivedBy.fullName}</Text>}
+                            {order.receivedPaymentReference && (
+                              <Text size="xs" c="dimmed">Bank ref: {order.receivedPaymentReference}</Text>
+                            )}
+                            {order.paymentNote && (
+                              <Text size="xs" c="dimmed" lineClamp={2}>Note: {order.paymentNote}</Text>
+                            )}
+                          </>
+                        ) : <Text size="sm" c="dimmed">-</Text>}
+                      </Table.Td>
+                      <Table.Td>
+                        {order.status === "awaiting_transfer" && bankTransferPermissions.canUpdate ? (
+                          <Stack gap="xs" miw={145}>
+                            <Button
+                              size="xs"
+                              leftSection={<IconCircleCheck size={16} />}
+                              onClick={() => openPaymentReceived(order)}
+                            >
+                              Mark received
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="light"
+                              leftSection={<IconSend size={16} />}
+                              loading={resendingOrderId === order.publicId}
+                              onClick={() => void resendBankTransferInstructions(order)}
+                            >
+                              {order.bankTransferInstructionsEmailSentAt ? "Resend" : "Send instructions"}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              color="red"
+                              leftSection={<IconBan size={16} />}
+                              onClick={() => openBankTransferCancellation(order)}
+                            >
+                              Cancel booking
+                            </Button>
+                          </Stack>
+                        ) : order.status === "payment_received"
+                          && !order.confirmationEmailComplete
+                          && bankTransferPermissions.canUpdate ? (
+                            <Button
+                              size="xs"
+                              variant="light"
+                              leftSection={<IconSend size={16} />}
+                              loading={retryingConfirmationOrderId === order.publicId}
+                              onClick={() => void retryBankTransferConfirmation(order)}
+                            >
+                              Retry confirmation
+                            </Button>
+                          ) : order.status === "cancelled"
+                            && !order.bankTransferCancellationEmailSentAt
+                            && bankTransferPermissions.canUpdate ? (
+                              <Button
+                                size="xs"
+                                variant="light"
+                                leftSection={<IconSend size={16} />}
+                                loading={resendingCancellationOrderId === order.publicId}
+                                onClick={() => void resendBankTransferCancellation(order)}
+                              >
+                                Retry cancellation email
+                              </Button>
+                          ) : null}
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Box>
+
+            <Stack hiddenFrom="sm" gap="md">
+              {sortedBankTransferOrders.map((order) => (
+                <Paper key={order.publicId} withBorder radius="lg" p="md" shadow="xs">
+                  <Stack gap="md">
+                    <Group justify="space-between" align="flex-start" wrap="nowrap">
+                      <Box style={{ minWidth: 0 }}>
+                        <Text fw={700} truncate>{order.customer.fullName}</Text>
+                        <Text size="xs" c="dimmed" truncate>{order.customer.email}</Text>
+                        {customerPhone(order.customer) && (
+                          <Text size="xs" c="dimmed">{customerPhone(order.customer)}</Text>
+                        )}
+                        <Text size="xs" c="dimmed">Order {shortOrderReference(order.publicId)}</Text>
+                      </Box>
+                      <BankTransferStatusDetails order={order} align="flex-end" />
+                    </Group>
+
+                    <Stack gap="sm">
+                      {order.items.map((item, itemIndex) => (
+                        <ExperienceDetails
+                          key={`${order.publicId}-${item.productName}-${itemIndex}`}
+                          item={item}
+                        />
+                      ))}
+                    </Stack>
+
+                    <Divider />
+                    <Group justify="space-between">
+                      <Text size="sm" c="dimmed">Total</Text>
+                      <Text size="xl" fw={800}>{money(order.total, order.currency)}</Text>
+                    </Group>
+                    <Group justify="space-between" align="flex-start" wrap="nowrap">
+                      <Text size="xs" c="dimmed">
+                        Created {dayjs(order.createdAt).format("D MMM, HH:mm")}
+                        {order.createdBy ? ` by ${order.createdBy.fullName}` : ""}
+                      </Text>
+                      <Badge
+                        size="xs"
+                        variant="light"
+                        color={bankTransferEmailState(order).color}
+                      >
+                        {bankTransferEmailState(order).label}
+                      </Badge>
+                    </Group>
+                    {order.paidAt && (
+                      <Text size="xs" c="dimmed">
+                        Received {dayjs(order.paidAt).format("D MMM YYYY, HH:mm")}
+                        {order.receivedBy ? ` by ${order.receivedBy.fullName}` : ""}
+                      </Text>
+                    )}
+                    {order.paidAt && order.receivedPaymentReference && (
+                      <Text size="xs" c="dimmed">Bank ref: {order.receivedPaymentReference}</Text>
+                    )}
+                    {order.paidAt && order.paymentNote && (
+                      <Text size="xs" c="dimmed">Note: {order.paymentNote}</Text>
+                    )}
+                    {order.status === "awaiting_transfer" && bankTransferPermissions.canUpdate && (
+                      <Stack gap="xs">
+                        <Button
+                          fullWidth
+                          leftSection={<IconCircleCheck size={18} />}
+                          onClick={() => openPaymentReceived(order)}
+                        >
+                          Mark payment received
+                        </Button>
+                        <Button
+                          fullWidth
+                          variant="light"
+                          leftSection={<IconSend size={18} />}
+                          loading={resendingOrderId === order.publicId}
+                          onClick={() => void resendBankTransferInstructions(order)}
+                        >
+                          {order.bankTransferInstructionsEmailSentAt ? "Resend instructions" : "Send instructions"}
+                        </Button>
+                        <Button
+                          fullWidth
+                          variant="subtle"
+                          color="red"
+                          leftSection={<IconBan size={18} />}
+                          onClick={() => openBankTransferCancellation(order)}
+                        >
+                          Cancel booking
+                        </Button>
+                      </Stack>
+                    )}
+                    {order.status === "payment_received"
+                      && !order.confirmationEmailComplete
+                      && bankTransferPermissions.canUpdate && (
+                        <Button
+                          fullWidth
+                          variant="light"
+                          leftSection={<IconSend size={18} />}
+                          loading={retryingConfirmationOrderId === order.publicId}
+                          onClick={() => void retryBankTransferConfirmation(order)}
+                        >
+                          Retry confirmation
+                        </Button>
+                      )}
+                    {order.status === "cancelled"
+                      && !order.bankTransferCancellationEmailSentAt
+                      && bankTransferPermissions.canUpdate && (
+                        <Button
+                          fullWidth
+                          variant="light"
+                          leftSection={<IconSend size={18} />}
+                          loading={resendingCancellationOrderId === order.publicId}
+                          onClick={() => void resendBankTransferCancellation(order)}
+                        >
+                          Retry cancellation email
+                        </Button>
+                      )}
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          </>
         ) : activeTab === "recovered" && recoveredCarts.length === 0 ? (
           <Box py={80} ta="center">
             <IconShoppingCart size={34} color="var(--mantine-color-gray-5)" />
@@ -1027,12 +1938,47 @@ const PaymentLinksPage = () => {
         )}
       </Modal>
 
-      <Modal opened={modalOpen} onClose={() => setModalOpen(false)} title="Create payment link" size="xl" centered>
+      <Modal
+        opened={modalOpen}
+        onClose={() => {
+          if (!saving) setModalOpen(false);
+        }}
+        title={creatorMode === "bank-transfer" ? "Create bank transfer booking" : "Create payment link"}
+        size="xl"
+        centered
+        fullScreen={isMobile}
+        closeOnClickOutside={!saving}
+        closeOnEscape={!saving}
+      >
         <Stack gap="lg">
-          <SimpleGrid cols={{ base: 1, sm: 2 }}>
-            <TextInput label="Internal name" placeholder="Customer or group name" value={name} onChange={(event) => setName(event.currentTarget.value)} />
-            <NumberInput label="Expires after" suffix=" days" min={1} max={90} value={expiresInDays} onChange={setExpiresInDays} />
-          </SimpleGrid>
+          {creatorMode === "bank-transfer" ? (
+            <>
+              <Alert color="blue" icon={<IconBuildingBank size={18} />}>
+                The booking is reserved immediately. The customer receives the booking summary and bank transfer instructions by email.
+              </Alert>
+              {bankTransferCatalogLoading && (
+                <Group justify="center" gap="sm">
+                  <Loader size="sm" />
+                  <Text size="sm" c="dimmed">Loading available experiences...</Text>
+                </Group>
+              )}
+              {bankTransferCatalogError && (
+                <Alert color="red" title="Experience catalog unavailable">
+                  <Stack gap="sm" align="flex-start">
+                    <Text size="sm">{bankTransferCatalogError}</Text>
+                    <Button variant="light" color="red" size="xs" onClick={() => void loadBankTransferCatalog()}>
+                      Try again
+                    </Button>
+                  </Stack>
+                </Alert>
+              )}
+            </>
+          ) : (
+            <SimpleGrid cols={{ base: 1, sm: 2 }}>
+              <TextInput label="Internal name" placeholder="Customer or group name" value={name} onChange={(event) => setName(event.currentTarget.value)} />
+              <NumberInput label="Expires after" suffix=" days" min={1} max={90} value={expiresInDays} onChange={setExpiresInDays} />
+            </SimpleGrid>
+          )}
 
           <Divider label="Experiences" labelPosition="center" />
           {items.map((item, itemIndex) => {
@@ -1043,12 +1989,12 @@ const PaymentLinksPage = () => {
                 <Stack gap="md">
                   <Group justify="space-between">
                     <Text fw={700}>Experience {itemIndex + 1}</Text>
-                    {items.length > 1 && <Tooltip label="Remove experience"><Button color="red" variant="subtle" px="xs" onClick={() => setItems((current) => current.filter((candidate) => candidate.key !== item.key))} aria-label="Remove experience"><IconTrash size={18} /></Button></Tooltip>}
+                    {items.length > 1 && <Tooltip label="Remove experience"><Button color="red" variant="subtle" px="xs" onClick={() => { setItems((current) => current.filter((candidate) => candidate.key !== item.key)); setQuote(null); }} aria-label="Remove experience"><IconTrash size={18} /></Button></Tooltip>}
                   </Group>
                   <Select
                     label="Product"
                     searchable
-                    data={products.map((candidate) => ({ value: String(candidate.id), label: candidate.name }))}
+                    data={creatorProducts.map((candidate) => ({ value: String(candidate.id), label: candidate.name }))}
                     value={item.productId ? String(item.productId) : null}
                     onChange={(value) => selectProduct(item, value)}
                   />
@@ -1122,14 +2068,40 @@ const PaymentLinksPage = () => {
               </Paper>
             );
           })}
-          <Button variant="default" leftSection={<IconPlus size={17} />} onClick={() => setItems((current) => [...current, emptyItem()])}>Add experience</Button>
+          <Button variant="default" leftSection={<IconPlus size={17} />} onClick={() => { setItems((current) => [...current, emptyItem()]); setQuote(null); }}>Add experience</Button>
 
           <Divider label="Customer and pricing" labelPosition="center" />
           <SimpleGrid cols={{ base: 1, sm: 2 }}>
-            <TextInput label="Full name" description="Optional prefill" value={customer.fullName} onChange={(event) => setCustomer((current) => ({ ...current, fullName: event.currentTarget.value }))} />
-            <TextInput label="Email" description="Optional prefill" type="email" value={customer.email} onChange={(event) => setCustomer((current) => ({ ...current, email: event.currentTarget.value }))} />
-            <Select label="Country code" description="Optional prefill" searchable clearable data={countryOptions} value={customer.phoneCountry || null} onChange={(value) => setCustomer((current) => ({ ...current, phoneCountry: value || "" }))} />
-            <TextInput label="Phone" description="Optional prefill" value={customer.phone} onChange={(event) => setCustomer((current) => ({ ...current, phone: event.currentTarget.value }))} />
+            <TextInput
+              label="Full name"
+              description={creatorMode === "payment-link" ? "Optional prefill" : undefined}
+              required={creatorMode === "bank-transfer"}
+              value={customer.fullName}
+              onChange={(event) => setCustomer((current) => ({ ...current, fullName: event.currentTarget.value }))}
+            />
+            <TextInput
+              label="Email"
+              description={creatorMode === "payment-link" ? "Optional prefill" : undefined}
+              required={creatorMode === "bank-transfer"}
+              type="email"
+              value={customer.email}
+              onChange={(event) => setCustomer((current) => ({ ...current, email: event.currentTarget.value }))}
+            />
+            <Select
+              label="Country code"
+              description={creatorMode === "payment-link" ? "Optional prefill" : undefined}
+              searchable
+              clearable
+              data={countryOptions}
+              value={customer.phoneCountry || null}
+              onChange={(value) => setCustomer((current) => ({ ...current, phoneCountry: value || "" }))}
+            />
+            <TextInput
+              label="Phone"
+              description={creatorMode === "payment-link" ? "Optional prefill" : undefined}
+              value={customer.phone}
+              onChange={(event) => setCustomer((current) => ({ ...current, phone: event.currentTarget.value }))}
+            />
           </SimpleGrid>
           <TextInput label="Discount codes" description="Separate multiple codes with commas" value={discountCodes} onChange={(event) => { setDiscountCodes(event.currentTarget.value); setQuote(null); }} />
 
@@ -1142,12 +2114,165 @@ const PaymentLinksPage = () => {
             </Box>
           )}
           {formError && <Alert color="red">{formError}</Alert>}
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button variant="light" loading={previewing} onClick={() => void preview()}>Review total</Button>
-            <Button leftSection={<IconLink size={17} />} loading={saving} onClick={() => void create()}>Create and copy link</Button>
+          <Group
+            justify="flex-end"
+            style={isMobile ? {
+              position: "sticky",
+              bottom: 0,
+              zIndex: 2,
+              paddingTop: 12,
+              paddingBottom: 4,
+              background: "var(--mantine-color-body)",
+            } : undefined}
+          >
+            <Button variant="default" disabled={saving} onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button
+              variant="light"
+              loading={previewing}
+              disabled={saving || (creatorMode === "bank-transfer"
+                ? bankTransferCatalogLoading || Boolean(bankTransferCatalogError)
+                : paymentLinkCatalogLoading || Boolean(paymentLinkCatalogError))}
+              onClick={() => void preview()}
+            >
+              Review total
+            </Button>
+            <Button
+              leftSection={creatorMode === "bank-transfer"
+                ? <IconBuildingBank size={17} />
+                : <IconLink size={17} />}
+              loading={saving}
+              disabled={creatorMode === "bank-transfer"
+                ? bankTransferCatalogLoading || Boolean(bankTransferCatalogError)
+                : paymentLinkCatalogLoading || Boolean(paymentLinkCatalogError)}
+              onClick={() => void create()}
+            >
+              {creatorMode === "bank-transfer" ? "Create booking & send email" : "Create and copy link"}
+            </Button>
           </Group>
         </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(receivingOrder)}
+        onClose={closePaymentReceived}
+        title="Confirm payment received"
+        size="md"
+        centered
+        fullScreen={isMobile}
+        closeOnClickOutside={!paymentReceivedSaving}
+        closeOnEscape={!paymentReceivedSaving}
+      >
+        {receivingOrder && (
+          <Stack gap="lg">
+            <Paper withBorder radius="md" p="lg" ta="center">
+              <Badge color="orange" variant="light" mb="sm">Awaiting transfer</Badge>
+              <Text fw={700}>{receivingOrder.customer.fullName}</Text>
+              <Text size="xs" c="dimmed">Order {shortOrderReference(receivingOrder.publicId)}</Text>
+              <Text size="xl" fw={800} mt="md">
+                {money(receivingOrder.total, receivingOrder.currency)}
+              </Text>
+              {receivingOrder.paymentReference && (
+                <Text size="sm" fw={600} mt="xs">
+                  Transfer reference: {receivingOrder.paymentReference}
+                </Text>
+              )}
+            </Paper>
+
+            <Alert color="blue" icon={<IconCircleCheck size={18} />}>
+              Confirm only after the transfer is visible in the bank account. The booking will be marked paid and the customer confirmation will be sent.
+            </Alert>
+
+            <TextInput
+              label="Payment reference"
+              description="Optional"
+              placeholder="Bank statement or transfer reference"
+              value={paymentReference}
+              onChange={(event) => setPaymentReference(event.currentTarget.value)}
+            />
+            <Textarea
+              label="Internal note"
+              description="Optional"
+              minRows={3}
+              autosize
+              value={paymentNote}
+              onChange={(event) => setPaymentNote(event.currentTarget.value)}
+            />
+
+            {paymentReceivedError && <Alert color="red">{paymentReceivedError}</Alert>}
+
+            <Group justify="flex-end" mt="sm">
+              <Button variant="default" onClick={closePaymentReceived} disabled={paymentReceivedSaving}>
+                Cancel
+              </Button>
+              <Button
+                color="green"
+                leftSection={<IconCircleCheck size={18} />}
+                loading={paymentReceivedSaving}
+                onClick={() => void markPaymentReceived()}
+              >
+                Confirm payment received
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={Boolean(cancellingOrder)}
+        onClose={closeBankTransferCancellation}
+        title="Cancel bank transfer booking"
+        size="md"
+        centered
+        fullScreen={isMobile}
+        closeOnClickOutside={!cancellationSaving}
+        closeOnEscape={!cancellationSaving}
+      >
+        {cancellingOrder && (
+          <Stack gap="lg">
+            <Paper withBorder radius="md" p="lg" ta="center">
+              <Badge color="orange" variant="light" mb="sm">Awaiting transfer</Badge>
+              <Text fw={700}>{cancellingOrder.customer.fullName}</Text>
+              <Text size="xs" c="dimmed">Order {shortOrderReference(cancellingOrder.publicId)}</Text>
+              <Text size="xl" fw={800} mt="md">
+                {money(cancellingOrder.total, cancellingOrder.currency)}
+              </Text>
+              {cancellingOrder.paymentReference && (
+                <Text size="sm" fw={600} mt="xs">
+                  Transfer reference: {cancellingOrder.paymentReference}
+                </Text>
+              )}
+            </Paper>
+
+            <Alert color="red" icon={<IconBan size={18} />} title="Cancel this unpaid reservation?">
+              Its reserved bookings will be cancelled and removed from the active bank-transfer queue. No Stripe refund is created. The customer will receive a cancellation email.
+            </Alert>
+
+            <Textarea
+              label="Internal cancellation note"
+              description="Optional — saved in the audit record and not included in the customer email"
+              minRows={3}
+              autosize
+              value={cancellationNote}
+              onChange={(event) => setCancellationNote(event.currentTarget.value)}
+            />
+
+            {cancellationError && <Alert color="red">{cancellationError}</Alert>}
+
+            <Group justify="flex-end" mt="sm">
+              <Button variant="default" onClick={closeBankTransferCancellation} disabled={cancellationSaving}>
+                Keep booking
+              </Button>
+              <Button
+                color="red"
+                leftSection={<IconBan size={18} />}
+                loading={cancellationSaving}
+                onClick={() => void cancelBankTransferReservation()}
+              >
+                Cancel booking
+              </Button>
+            </Group>
+          </Stack>
+        )}
       </Modal>
     </PageAccessGuard>
   );

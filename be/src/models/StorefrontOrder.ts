@@ -1,10 +1,12 @@
 import {
   AllowNull,
   AutoIncrement,
+  BelongsTo,
   Column,
   CreatedAt,
   DataType,
   Default,
+  ForeignKey,
   HasMany,
   Model,
   PrimaryKey,
@@ -15,6 +17,7 @@ import {
 import type { NonAttribute } from 'sequelize';
 
 import StorefrontOrderItem from './StorefrontOrderItem.js';
+import User from './User.js';
 
 @Table({
   timestamps: true,
@@ -42,6 +45,16 @@ export default class StorefrontOrder extends Model {
   @Default('unpaid')
   @Column({ field: 'payment_status', type: DataType.STRING(32) })
   declare paymentStatus: string;
+
+  @AllowNull(false)
+  @Default('storefront')
+  @Column({ field: 'order_source', type: DataType.STRING(32) })
+  declare orderSource: string;
+
+  @AllowNull(false)
+  @Default('unknown')
+  @Column({ field: 'payment_method', type: DataType.STRING(32) })
+  declare paymentMethod: string;
 
   @AllowNull(true)
   @Unique
@@ -112,6 +125,52 @@ export default class StorefrontOrder extends Model {
   @AllowNull(true)
   @Column({ field: 'paid_at', type: DataType.DATE })
   declare paidAt: Date | null;
+
+  @ForeignKey(() => User)
+  @AllowNull(true)
+  @Column({ field: 'created_by_user_id', type: DataType.INTEGER })
+  declare createdByUserId: number | null;
+
+  @BelongsTo(() => User, { foreignKey: 'created_by_user_id', as: 'createdByUser' })
+  declare createdByUser?: NonAttribute<User>;
+
+  @ForeignKey(() => User)
+  @AllowNull(true)
+  @Column({ field: 'payment_received_by_user_id', type: DataType.INTEGER })
+  declare paymentReceivedByUserId: number | null;
+
+  @BelongsTo(() => User, { foreignKey: 'payment_received_by_user_id', as: 'paymentReceivedByUser' })
+  declare paymentReceivedByUser?: NonAttribute<User>;
+
+  @AllowNull(true)
+  @Unique
+  @Column({ field: 'payment_reference', type: DataType.STRING(64) })
+  declare paymentReference: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'payment_due_at', type: DataType.DATE })
+  declare paymentDueAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'bank_transfer_email_sent_at', type: DataType.DATE })
+  declare bankTransferEmailSentAt: Date | null;
+
+  @AllowNull(true)
+  @Column({ field: 'bank_transfer_cancellation_email_sent_at', type: DataType.DATE })
+  declare bankTransferCancellationEmailSentAt: Date | null;
+
+  @AllowNull(true)
+  @Unique
+  @Column({ field: 'idempotency_key', type: DataType.UUID })
+  declare idempotencyKey: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'idempotency_request_hash', type: DataType.STRING(64) })
+  declare idempotencyRequestHash: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'payment_note', type: DataType.TEXT })
+  declare paymentNote: string | null;
 
   @AllowNull(true)
   @Column({ field: 'customer_email_sent_at', type: DataType.DATE })

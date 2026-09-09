@@ -7,6 +7,10 @@ import sequelize from '../config/database.js';
 import Counter, { type CounterStatus } from '../models/Counter.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import { reconcileCounterInventory } from './inventoryService.js';
+import {
+  lockStorefrontInventoryReservationsForCounter,
+  releaseReconciledStorefrontInventoryReservations,
+} from './storefrontOrderResourceReservationService.js';
 import CounterUser, { type CounterStaffRole } from '../models/CounterUser.js';
 import Channel from '../models/Channel.js';
 import PaymentMethod from '../models/PaymentMethod.js';
@@ -717,21 +721,44 @@ export default class CounterRegistryService {
       }
     }
 
-    const shouldFinalizeBookingAttendance = delta.status === 'final' && counter.status !== 'final';
-
     if (Object.keys(delta).length === 0) {
       const context = await this.buildContext(counter);
       return this.buildPayload(context);
     }
 
     await sequelize.transaction(async (transaction) => {
-      delta.updatedBy = actorUserId;
-      counter.set(delta);
-      await counter.save({ transaction });
+      const lockedCounter = await Counter.findByPk(counterId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!lockedCounter) {
+        throw new HttpError(404, 'Counter not found');
+      }
+      // Re-evaluate the one-way final transition against the locked row. Two
+      // simultaneous finalize requests may both have loaded the same draft
+      // before entering this transaction, but only the lock winner performs
+      // attendance/inventory reconciliation.
+      if (lockedCounter.status === 'final' && delta.status !== undefined) {
+        delete delta.status;
+      }
+      const shouldFinalizeBookingAttendance = delta.status === 'final'
+        && lockedCounter.status !== 'final';
+      lockedCounter.set(delta);
+      const reservationSettlement = shouldFinalizeBookingAttendance
+        ? await lockStorefrontInventoryReservationsForCounter(lockedCounter, transaction)
+        : { reservationIds: [] };
+      if (Object.keys(delta).length > 0) {
+        lockedCounter.updatedBy = actorUserId;
+        await lockedCounter.save({ transaction });
+      }
 
       if (shouldFinalizeBookingAttendance) {
-        await this.finalizeBookingAttendanceForCounter(counter, actorUserId, transaction);
-        await reconcileCounterInventory(counter, actorUserId, transaction);
+        await this.finalizeBookingAttendanceForCounter(lockedCounter, actorUserId, transaction);
+        await reconcileCounterInventory(lockedCounter, actorUserId, transaction);
+        await releaseReconciledStorefrontInventoryReservations(
+          reservationSettlement,
+          transaction,
+        );
       }
     });
 

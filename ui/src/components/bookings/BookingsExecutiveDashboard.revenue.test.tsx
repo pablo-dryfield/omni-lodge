@@ -125,6 +125,41 @@ const cancelledOrder: UnifiedOrder = {
   },
 };
 
+const unpaidBankTransferOrder: UnifiedOrder = {
+  id: "94004",
+  platformBookingId: "BANK-TRANSFER-94004",
+  productId: "crawl-pub",
+  productName: "Pub Crawl",
+  date: "2026-09-04",
+  timeslot: "21:00",
+  quantity: 3,
+  menCount: 2,
+  womenCount: 1,
+  customerName: "Pending Transfer Guest",
+  customerEmail: "pending@example.com",
+  platform: "omnilodge",
+  sourceReceivedAt: "2026-09-01T12:00:00.000Z",
+  status: "pending",
+  paymentStatus: "unpaid",
+  paymentMethod: "bank_transfer",
+  extras: { cocktails: 2, tshirts: 0, photos: 0 },
+  rawData: {
+    bookingId: 94004,
+    currency: "PLN",
+    paymentStatus: "unpaid",
+    paymentMethod: "bank_transfer",
+    baseAmount: 300,
+    baseAmountAfterChannelCommission: 275,
+    tipAmount: 50,
+    addonsAmount: 40,
+    discountAmount: 10,
+    priceGross: 380,
+    priceNet: 340,
+    commissionAmount: 25,
+    processingFee: 9,
+  },
+};
+
 describe("BookingsExecutiveDashboard revenue bookings", () => {
   beforeEach(() => {
     Object.defineProperty(window, "matchMedia", {
@@ -207,5 +242,52 @@ describe("BookingsExecutiveDashboard revenue bookings", () => {
       "data-booking-id",
       "82518",
     );
+  });
+
+  it("keeps an unpaid bank-transfer booking in operational counts while excluding every monetary contribution", () => {
+    render(
+      <MantineProvider>
+        <BookingsExecutiveDashboard
+          orders={[unpaidBankTransferOrder]}
+          bookingAddons={[
+            {
+              id: 1,
+              bookingId: 94004,
+              addonId: 7,
+              addonName: "Cocktails",
+              platformAddonId: null,
+              platformAddonName: null,
+              quantity: 2,
+              unitPrice: 20,
+              totalPrice: 40,
+              addonBasePrice: 20,
+              currency: "PLN",
+              isIncluded: false,
+            },
+          ]}
+          addonCatalog={[{ id: 7, name: "Cocktails", basePrice: 20 }]}
+          counterInsights={null}
+          metricMode="revenue"
+          dateField="experience_date"
+        />
+      </MantineProvider>,
+    );
+
+    const table = screen.getByRole("table", { name: "Bookings revenue table" });
+    const pendingRow = within(table).getByRole("row", { name: /BANK-TRANSFER-94004/ });
+    expect(within(pendingRow).getByText("Pending Transfer Guest")).toBeInTheDocument();
+    expect(within(pendingRow).getByText("3")).toBeInTheDocument();
+    expect(within(pendingRow).getByText("Unpaid")).toBeInTheDocument();
+    expect(within(pendingRow).getByText(/0\.00/)).toBeInTheDocument();
+
+    const bookingCountMetric = screen.getByLabelText("Bookings & Guests metric");
+    expect(within(bookingCountMetric).getByText("3 Guests")).toBeInTheDocument();
+    expect(within(bookingCountMetric).getByText("1")).toBeInTheDocument();
+
+    const onlineRevenueMetric = screen.getByLabelText("Online Revenue metric");
+    expect(within(onlineRevenueMetric).getAllByText(/^0\.00/).length).toBeGreaterThan(0);
+
+    const addonsMetric = screen.getByLabelText("Add-Ons metric");
+    expect(within(addonsMetric).getByText(/2 qty - 0\.00/)).toBeInTheDocument();
   });
 });

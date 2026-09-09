@@ -86,6 +86,7 @@ const defaultPages = [
 const defaultModules = [
   { slug: 'dashboard-overview', name: 'Dashboard Overview', pageSlug: 'dashboard', description: 'Key platform metrics', componentRef: 'DashboardOverview', sortOrder: 1 },
   { slug: 'booking-management', name: 'Booking Management', pageSlug: 'bookings', description: 'Create and manage bookings', componentRef: 'BookingTable', sortOrder: 1 },
+  { slug: 'bank-transfer-booking-management', name: 'Bank Transfer Bookings', pageSlug: 'bookings', description: 'Create bank-transfer reservations and reconcile received payments', componentRef: 'BankTransferBookingManagement', sortOrder: 2 },
   { slug: 'booking-manifest', name: 'Booking Manifest', pageSlug: 'bookings-manifest', description: 'View manifest by pickup date', componentRef: 'BookingManifest', sortOrder: 1 },
   { slug: 'user-directory', name: 'User Directory', pageSlug: 'users', description: 'Manage platform users', componentRef: 'UserTable', sortOrder: 1 },
   { slug: 'reporting', name: 'Reporting', pageSlug: 'reports', description: 'Generate platform reports', componentRef: 'ReportBuilder', sortOrder: 1 },
@@ -176,6 +177,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   admin: {
     'dashboard-overview': ['view', 'update'],
     'booking-management': ['view', 'create', 'update', 'delete'],
+    'bank-transfer-booking-management': ['view', 'create', 'update'],
     'booking-manifest': ['view'],
     'user-directory': ['view', 'create', 'update', 'delete'],
     'staff-profile-directory': ['view', 'create', 'update', 'delete'],
@@ -241,6 +243,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   owner: {
     'dashboard-overview': ['view', 'update'],
     'booking-management': ['view', 'create', 'update', 'delete'],
+    'bank-transfer-booking-management': ['view', 'create', 'update'],
     'booking-manifest': ['view'],
     'user-directory': ['view', 'create', 'update', 'delete'],
     'staff-profile-directory': ['view', 'create', 'update', 'delete'],
@@ -286,6 +289,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   manager: {
     'dashboard-overview': ['view'],
     'booking-management': ['view', 'create', 'update'],
+    'bank-transfer-booking-management': ['view', 'create', 'update'],
     'booking-manifest': ['view'],
       reporting: ['view', 'create'],
       'open-bar-control-console': ['view', 'create', 'update', 'delete'],

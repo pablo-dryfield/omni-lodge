@@ -1,12 +1,17 @@
 import type { SvgIconComponent } from "@mui/icons-material";
 import AddCardRoundedIcon from "@mui/icons-material/AddCardRounded";
 import AddCircleRoundedIcon from "@mui/icons-material/AddCircleRounded";
+import AccountBalanceRoundedIcon from "@mui/icons-material/AccountBalanceRounded";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 
 export type QuickActionPermission = {
   pageSlug?: string;
   moduleSlug?: string;
   moduleAction?: "view" | "create" | "update" | "delete";
+  additionalModuleActions?: Array<{
+    moduleSlug: string;
+    moduleAction: "view" | "create" | "update" | "delete";
+  }>;
 };
 
 export type QuickActionTone = "blue" | "emerald" | "amber" | "violet" | "rose";
@@ -54,6 +59,24 @@ export const HOME_QUICK_ACTIONS: HomeQuickAction[] = [
       pageSlug: PAGE_SLUGS.counters,
     },
   },
+  {
+    id: "bookings-create-bank-transfer",
+    label: "Create booking",
+    description: "Reserve a booking paid by bank transfer.",
+    group: "Bookings",
+    to: "/bookings/payment-links?tab=bank-transfers&action=create-bank-transfer",
+    icon: AccountBalanceRoundedIcon,
+    tone: "violet",
+    permission: {
+      pageSlug: PAGE_SLUGS.bookings,
+      moduleSlug: "bank-transfer-booking-management",
+      moduleAction: "create",
+      additionalModuleActions: [{
+        moduleSlug: "bank-transfer-booking-management",
+        moduleAction: "view",
+      }],
+    },
+  },
 ];
 
 export const isHomeQuickActionVisibilityMap = (
@@ -84,6 +107,13 @@ export const filterVisibleHomeQuickActions = (
         && permission.moduleAction
         && !(modulePermissions.get(permission.moduleSlug)?.has(permission.moduleAction) ?? false)
       ) {
+        return false;
+      }
+      if ((permission.additionalModuleActions || []).some(
+        ({ moduleSlug, moduleAction }) => (
+          !(modulePermissions.get(moduleSlug)?.has(moduleAction) ?? false)
+        ),
+      )) {
         return false;
       }
     }

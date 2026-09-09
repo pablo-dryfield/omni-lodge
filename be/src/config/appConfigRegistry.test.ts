@@ -24,4 +24,20 @@ describe('application configuration registry', () => {
     });
     expect(CONFIG_DEFINITION_MAP.get('BADGE_CAMPAIGN_BASE_URL')?.isSecret).not.toBe(true);
   });
+
+  it('registers configurable bank-transfer accounts and payment deadline', () => {
+    expect(CONFIG_DEFINITION_MAP.get('STOREFRONT_BANK_TRANSFER_ACCOUNTS')).toMatchObject({
+      category: 'Storefront',
+      valueType: 'json',
+      defaultValue: '{}',
+      impact: 'high',
+      validation: { maxLength: 10000 },
+    });
+    expect(CONFIG_DEFINITION_MAP.get('STOREFRONT_BANK_TRANSFER_DUE_HOURS')).toMatchObject({
+      category: 'Storefront',
+      valueType: 'number',
+      defaultValue: 48,
+      validation: { required: true, integer: true, min: 1, max: 336 },
+    });
+  });
 });

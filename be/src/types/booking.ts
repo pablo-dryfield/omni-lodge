@@ -1,4 +1,8 @@
-import type { BookingAttendanceStatus, BookingStatus } from '../constants/bookings.js';
+import type {
+  BookingAttendanceStatus,
+  BookingPaymentStatus,
+  BookingStatus,
+} from '../constants/bookings.js';
 
 export type UnifiedProduct = {
   id: string;
@@ -48,6 +52,8 @@ export type UnifiedOrder = {
   isAddonOnly?: boolean;
   bookingKind?: 'reservation' | 'addon_only';
   status: BookingStatus;
+  paymentStatus?: BookingPaymentStatus;
+  paymentMethod?: string | null;
   attendanceStatus?: BookingAttendanceStatus;
   rawData?: unknown;
 };

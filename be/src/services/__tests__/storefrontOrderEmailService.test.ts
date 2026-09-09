@@ -1,6 +1,9 @@
 import {
+  buildCustomerBankTransferCancellationEmail,
+  buildCustomerBankTransferInstructionsEmail,
   buildCustomerStorefrontEmail,
   buildInternalStorefrontEmail,
+  isStorefrontOrderConfirmationEmailComplete,
 } from '../storefrontOrderEmailService';
 import { getConfigValue } from '../configService';
 import type StorefrontOrder from '../../models/StorefrontOrder';
@@ -177,5 +180,91 @@ describe('storefront paid-order emails', () => {
     const email = buildCustomerStorefrontEmail(unsafe, bookingIds);
     expect(email.htmlBody).not.toContain('<img src=x');
     expect(email.htmlBody).toContain('&lt;img src=x');
+  });
+
+  it('builds reserved-booking instructions without claiming payment was received', () => {
+    const pendingOrder = {
+      ...order,
+      paymentStatus: 'unpaid',
+      paymentMethod: 'bank_transfer',
+      paymentReference: 'KTK-BT-000321',
+      paymentDueAt: new Date('2026-08-14T18:00:00.000Z'),
+    } as unknown as StorefrontOrder;
+    const email = buildCustomerBankTransferInstructionsEmail(
+      pendingOrder,
+      {
+        beneficiary: 'Krawl Through Krakow Sp. z o.o.',
+        iban: 'PL00123456789012345678901234',
+        bic: 'BANKPLPW',
+        bankName: 'Example Bank',
+        instructions: 'Use the exact reference.',
+      },
+      bookingIds,
+      productDetails,
+    );
+
+    expect(email.subject).toContain('Bank transfer details');
+    expect(email.htmlBody).toContain('Awaiting bank transfer');
+    expect(email.htmlBody).toContain('KTK-BT-000321');
+    expect(email.htmlBody).toContain('PL00123456789012345678901234');
+    expect(email.htmlBody).toContain('Krawl Through Krakow Sp. z o.o.');
+    expect(email.textBody).toContain('Your final booking confirmation will be sent');
+    expect(email.htmlBody).not.toContain('Paid in full');
+    expect(email.textBody).not.toContain('Payment received');
+  });
+
+  it('builds a distinct cancellation notice for an unpaid bank-transfer reservation', () => {
+    const cancelledOrder = {
+      ...order,
+      status: 'cancelled',
+      paymentStatus: 'unpaid',
+      paymentMethod: 'bank_transfer',
+      paymentReference: 'KTK-BT-000321',
+    } as unknown as StorefrontOrder;
+
+    const email = buildCustomerBankTransferCancellationEmail(
+      cancelledOrder,
+      bookingIds,
+      productDetails,
+    );
+
+    expect(email.subject).toContain('Booking cancelled');
+    expect(email.htmlBody).toContain('Reservation cancelled');
+    expect(email.htmlBody).toContain('41001');
+    expect(email.textBody).toContain('no refund is due');
+    expect(email.htmlBody).not.toContain('Payment confirmed');
+    expect(email.textBody).not.toContain('Total paid');
+  });
+
+  it('explains when an unpaid bank-transfer hold expired at its deadline', () => {
+    const expiredOrder = {
+      ...order,
+      status: 'cancelled',
+      paymentStatus: 'unpaid',
+      paymentMethod: 'bank_transfer',
+      metadata: { bankTransferCancellationReason: 'payment_deadline_expired' },
+    } as unknown as StorefrontOrder;
+
+    const email = buildCustomerBankTransferCancellationEmail(expiredOrder, bookingIds);
+
+    expect(email.subject).toContain('Booking reservation expired');
+    expect(email.htmlBody).toContain('Reservation expired');
+    expect(email.textBody).toContain('deadline passed before payment was recorded');
+  });
+
+  it('requires the internal confirmation marker only when an internal recipient is configured', () => {
+    mockedGetConfigValue.mockReturnValueOnce('bookings@example.com');
+    expect(isStorefrontOrderConfirmationEmailComplete({
+      ...order,
+      customerEmailSentAt: new Date(),
+      internalEmailSentAt: null,
+    } as StorefrontOrder)).toBe(false);
+
+    mockedGetConfigValue.mockReturnValueOnce('');
+    expect(isStorefrontOrderConfirmationEmailComplete({
+      ...order,
+      customerEmailSentAt: new Date(),
+      internalEmailSentAt: null,
+    } as StorefrontOrder)).toBe(true);
   });
 });

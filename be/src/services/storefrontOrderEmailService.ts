@@ -1,4 +1,6 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import { getCountryCallingCode, type CountryCode } from 'libphonenumber-js/min';
 import { Op } from 'sequelize';
 import sequelize from '../config/database.js';
@@ -10,12 +12,16 @@ import { sendMessage } from './bookings/gmailClient.js';
 import { getConfigValue } from './configService.js';
 import { findLockedStorefrontOrderWithItems } from './storefrontOrderPersistenceService.js';
 import { getStorefrontCancellationPolicy } from './storefrontPublicConfigService.js';
+import type { StorefrontBankTransferAccount } from './storefrontBankTransferConfigService.js';
 import logger from '../utils/logger.js';
 import type {
   StorefrontCancellationPolicy,
   StorefrontMeetingPoint,
   StorefrontProductContent,
 } from '../types/storefront.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 const SUPPORT_PHONE = '+48791847981';
 const SUPPORT_EMAIL = 'pubthroughkrakow@gmail.com';
@@ -313,7 +319,7 @@ const customerHtml = (order: StorefrontOrder): string => {
     </table>`;
 };
 
-const coreHtml = (
+const bookingDetailsHtml = (
   order: StorefrontOrder,
   bookingIdsByItemId: BookingIdByItemId,
   productDetailsByProductId: ProductDetailsByProductId,
@@ -329,10 +335,17 @@ const coreHtml = (
       bookingIdsByItemId,
       items.length > 1,
       productDetailsByProductId.get(Number(item.productId)) ?? null,
-    )).join('')}
+    )).join('')}`;
+};
+
+const coreHtml = (
+  order: StorefrontOrder,
+  bookingIdsByItemId: BookingIdByItemId,
+  productDetailsByProductId: ProductDetailsByProductId,
+): string => `
+    ${bookingDetailsHtml(order, bookingIdsByItemId, productDetailsByProductId)}
     ${paymentHtml(order)}
     ${customerHtml(order)}`;
-};
 
 const itemText = (
   item: StorefrontOrderItem,
@@ -377,7 +390,7 @@ const itemText = (
   ];
 };
 
-const coreText = (
+const bookingDetailsText = (
   order: StorefrontOrder,
   bookingIdsByItemId: BookingIdByItemId,
   productDetailsByProductId: ProductDetailsByProductId,
@@ -395,6 +408,15 @@ const coreText = (
       items.length > 1,
       productDetailsByProductId.get(Number(item.productId)) ?? null,
     )),
+  ];
+};
+
+const coreText = (
+  order: StorefrontOrder,
+  bookingIdsByItemId: BookingIdByItemId,
+  productDetailsByProductId: ProductDetailsByProductId,
+): string[] => [
+    ...bookingDetailsText(order, bookingIdsByItemId, productDetailsByProductId),
     'PAYMENT',
     'Status: Paid in full',
     `Experiences: ${money(order.subtotal, order.currency)}`,
@@ -408,6 +430,128 @@ const coreText = (
     `Phone: ${order.customerPhone || 'Not provided'}`,
     `Country: ${countryLabel(order.customerCountryCode)}`,
   ];
+
+const dueAtLabel = (value: Date | null): string => {
+  if (!value) return 'As soon as possible';
+  const parsed = dayjs(value).tz('Europe/Warsaw');
+  return parsed.isValid() ? parsed.format('dddd, D MMMM YYYY [at] HH:mm') : 'As soon as possible';
+};
+
+const bankTransferPaymentHtml = (
+  order: StorefrontOrder,
+  account: StorefrontBankTransferAccount,
+): string => `
+  <div style="margin:26px 0 8px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase">Bank transfer</div>
+  <div style="margin-bottom:10px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:30px;font-weight:900;text-transform:uppercase">Payment required</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #49353f;border-bottom:1px solid #49353f">
+    ${detailRow('Experiences', money(order.subtotal, order.currency))}
+    ${detailRow('Add-ons', money(order.addonTotal, order.currency))}
+    ${Number(order.discountTotal) > 0 ? detailRow('Discount', `-${money(order.discountTotal, order.currency)}`) : ''}
+    ${detailRow('Amount to transfer', money(order.total, order.currency))}
+    ${detailRow('Payment reference', order.paymentReference || order.publicId)}
+    ${detailRow('Pay by', dueAtLabel(order.paymentDueAt))}
+    ${detailRow('Beneficiary', account.beneficiary)}
+    ${detailRow('IBAN / account', account.iban)}
+    ${account.bankName ? detailRow('Bank', account.bankName) : ''}
+    ${account.bic ? detailRow('BIC / SWIFT', account.bic) : ''}
+  </table>
+  ${account.instructions ? `<div style="margin-top:14px;padding:16px;background:#171315;border-left:4px solid #ffd438;color:#ded4d8;font-family:Arial,sans-serif;font-size:14px;line-height:1.6">${escapeHtml(account.instructions)}</div>` : ''}`;
+
+export const buildCustomerBankTransferInstructionsEmail = (
+  order: StorefrontOrder,
+  account: StorefrontBankTransferAccount,
+  bookingIdsByItemId: BookingIdByItemId = new Map(),
+  productDetailsByProductId: ProductDetailsByProductId = new Map(),
+) => {
+  const firstName = order.customerFirstName || 'there';
+  const firstItem = (order.items || [])[0];
+  const preheader = `Your booking is reserved. Complete the bank transfer to confirm it.`;
+  const content = `
+    <div style="text-align:center;color:#ffd438;font-family:Arial,sans-serif;font-size:12px;font-weight:800;letter-spacing:1.7px;text-transform:uppercase">Krawl Through Krakow</div>
+    <div style="margin-top:13px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2.2px;text-transform:uppercase">Awaiting bank transfer</div>
+    <h1 style="margin:10px 0 11px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:43px;font-weight:900;line-height:1.05;text-transform:uppercase">Booking reserved, ${escapeHtml(firstName)}</h1>
+    <p style="margin:0 auto 25px;max-width:510px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:16px;line-height:1.65">We saved your place. Use the exact amount and payment reference below. Your final confirmation will arrive after our team verifies the transfer.</p>
+    ${bookingDetailsHtml(order, bookingIdsByItemId, productDetailsByProductId)}
+    ${bankTransferPaymentHtml(order, account)}
+    ${customerHtml(order)}
+    ${contactHtml}
+    <p style="margin:24px 0 0;text-align:center;color:#8f8288;font-family:Arial,sans-serif;font-size:13px;line-height:1.6">Krawl Through Krakow</p>`;
+  const textBody = [
+    `BOOKING RESERVED, ${firstName}`,
+    '',
+    preheader,
+    '',
+    ...bookingDetailsText(order, bookingIdsByItemId, productDetailsByProductId),
+    'BANK TRANSFER',
+    `Experiences: ${money(order.subtotal, order.currency)}`,
+    `Add-ons: ${money(order.addonTotal, order.currency)}`,
+    ...(Number(order.discountTotal) > 0 ? [`Discount: -${money(order.discountTotal, order.currency)}`] : []),
+    `Amount to transfer: ${money(order.total, order.currency)}`,
+    `Payment reference: ${order.paymentReference || order.publicId}`,
+    `Pay by: ${dueAtLabel(order.paymentDueAt)}`,
+    `Beneficiary: ${account.beneficiary}`,
+    `IBAN / account: ${account.iban}`,
+    ...(account.bankName ? [`Bank: ${account.bankName}`] : []),
+    ...(account.bic ? [`BIC / SWIFT: ${account.bic}`] : []),
+    ...(account.instructions ? [`Instructions: ${account.instructions}`] : []),
+    '',
+    'Your final booking confirmation will be sent after the transfer is verified.',
+    `Questions? Call ${SUPPORT_PHONE} or email ${SUPPORT_EMAIL}.`,
+  ].join('\n');
+
+  return {
+    subject: `Bank transfer details - ${header(firstItem?.productName ?? 'Krakow experience')}`,
+    htmlBody: shell(preheader, content),
+    textBody,
+  };
+};
+
+export const buildCustomerBankTransferCancellationEmail = (
+  order: StorefrontOrder,
+  bookingIdsByItemId: BookingIdByItemId = new Map(),
+  productDetailsByProductId: ProductDetailsByProductId = new Map(),
+) => {
+  const firstName = order.customerFirstName || 'there';
+  const firstItem = (order.items || [])[0];
+  const expired = order.metadata?.bankTransferCancellationReason === 'payment_deadline_expired';
+  const preheader = expired
+    ? 'Your bank-transfer reservation expired before payment was received.'
+    : 'Your reserved booking has been cancelled.';
+  const statusLabel = expired ? 'Reservation expired' : 'Booking cancelled';
+  const heading = expired ? 'Reservation expired' : 'Reservation cancelled';
+  const introduction = expired
+    ? `Hi ${escapeHtml(firstName)}, the bank-transfer deadline passed before payment was recorded, so the places below are no longer being held.`
+    : `Hi ${escapeHtml(firstName)}, your reserved booking below has been cancelled and the places are no longer being held.`;
+  const content = `
+    <div style="text-align:center;color:#ffd438;font-family:Arial,sans-serif;font-size:12px;font-weight:800;letter-spacing:1.7px;text-transform:uppercase">Krawl Through Krakow</div>
+    <div style="margin-top:13px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2.2px;text-transform:uppercase">${statusLabel}</div>
+    <h1 style="margin:10px 0 11px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:43px;font-weight:900;line-height:1.05;text-transform:uppercase">${heading}</h1>
+    <p style="margin:0 auto 25px;max-width:510px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:16px;line-height:1.65">${introduction}</p>
+    ${bookingDetailsHtml(order, bookingIdsByItemId, productDetailsByProductId)}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;background:#171315;border-left:4px solid #ffd438">
+      <tr><td style="padding:18px;color:#ded4d8;font-family:Arial,sans-serif;font-size:14px;line-height:1.65;text-align:center">
+        No payment was recorded for this bank-transfer reservation, so no refund is due.
+      </td></tr>
+    </table>
+    ${contactHtml}
+    <p style="margin:24px 0 0;text-align:center;color:#8f8288;font-family:Arial,sans-serif;font-size:13px;line-height:1.6">Krawl Through Krakow</p>`;
+
+  return {
+    subject: `${expired ? 'Booking reservation expired' : 'Booking cancelled'} - ${header(firstItem?.productName ?? 'Krakow experience')}`,
+    htmlBody: shell(preheader, content),
+    textBody: [
+      expired ? 'BOOKING RESERVATION EXPIRED' : 'BOOKING CANCELLED',
+      '',
+      expired
+        ? `Hi ${firstName}, the bank-transfer deadline passed before payment was recorded, so the places are no longer being held.`
+        : `Hi ${firstName}, your reserved booking has been cancelled and the places are no longer being held.`,
+      '',
+      ...bookingDetailsText(order, bookingIdsByItemId, productDetailsByProductId),
+      'No payment was recorded for this bank-transfer reservation, so no refund is due.',
+      '',
+      `Questions? Call ${SUPPORT_PHONE} or email ${SUPPORT_EMAIL}.`,
+    ].join('\n'),
+  };
 };
 
 export const buildCustomerStorefrontEmail = (
@@ -543,4 +687,128 @@ export const deliverStorefrontOrderEmails = async (publicId: string): Promise<vo
   });
 
   logger.info(`[storefront-email] Completed paid-order email delivery for ${publicId}`);
+};
+
+export const isStorefrontOrderConfirmationEmailComplete = (order: StorefrontOrder): boolean => {
+  const internalTo = header(getConfigValue('STOREFRONT_NOTIFICATION_EMAIL'));
+  return Boolean(order.customerEmailSentAt && (!internalTo || order.internalEmailSentAt));
+};
+
+export const deliverStorefrontBankTransferInstructionsEmail = async (
+  publicId: string,
+  account: StorefrontBankTransferAccount,
+  options: { force?: boolean } = {},
+): Promise<boolean> => {
+  const sent = await sequelize.transaction(async (transaction): Promise<boolean> => {
+    const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
+    if (!order) return false;
+    if (
+      order.paymentMethod !== 'bank_transfer'
+      || order.paymentStatus !== 'unpaid'
+      || order.status !== 'pending_payment'
+    ) return false;
+    if (order.bankTransferEmailSentAt && !options.force) return false;
+
+    const bookings = await Booking.findAll({
+      where: { platform: 'omnilodge', platformOrderId: order.publicId },
+      attributes: ['id', 'platformBookingId'],
+      transaction,
+    });
+    const bookingIdsByItemId = new Map<number, number>();
+    for (const item of order.items || []) {
+      const booking = bookings.find(
+        (candidate) => candidate.platformBookingId === `${order.publicId}-${item.id}`,
+      );
+      if (booking) bookingIdsByItemId.set(Number(item.id), Number(booking.id));
+    }
+
+    const productIds = Array.from(new Set((order.items || []).map((item) => Number(item.productId))));
+    const products = productIds.length > 0
+      ? await Product.findAll({
+          where: { id: { [Op.in]: productIds } },
+          attributes: ['id', 'storefrontConfig'],
+          transaction,
+        })
+      : [];
+    const productDetailsByProductId = new Map<number, StorefrontEmailProductDetails>(
+      products.map((product) => [
+        Number(product.id),
+        normalizeProductDetails(product.storefrontConfig?.content),
+      ]),
+    );
+
+    const email = buildCustomerBankTransferInstructionsEmail(
+      order,
+      account,
+      bookingIdsByItemId,
+      productDetailsByProductId,
+    );
+    await sendMessage({ to: order.customerEmail, from: fromAddress(), ...email });
+    await order.update({ bankTransferEmailSentAt: new Date() }, { transaction });
+    return true;
+  });
+
+  if (sent) {
+    logger.info(`[storefront-email] Completed bank-transfer instruction delivery for ${publicId}`);
+  }
+  return sent;
+};
+
+export const deliverStorefrontBankTransferCancellationEmail = async (
+  publicId: string,
+  options: { force?: boolean } = {},
+): Promise<boolean> => {
+  const sent = await sequelize.transaction(async (transaction): Promise<boolean> => {
+    const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
+    if (!order) return false;
+    if (
+      order.orderSource !== 'backoffice'
+      || order.paymentMethod !== 'bank_transfer'
+      || order.paymentStatus !== 'unpaid'
+      || order.status !== 'cancelled'
+    ) return false;
+    if (order.bankTransferCancellationEmailSentAt && !options.force) return false;
+
+    const bookings = await Booking.findAll({
+      where: { platform: 'omnilodge', platformOrderId: order.publicId },
+      attributes: ['id', 'platformBookingId'],
+      transaction,
+    });
+    const bookingIdsByItemId = new Map<number, number>();
+    for (const item of order.items || []) {
+      const booking = bookings.find(
+        (candidate) => candidate.platformBookingId === `${order.publicId}-${item.id}`,
+      );
+      if (booking) bookingIdsByItemId.set(Number(item.id), Number(booking.id));
+    }
+
+    const productIds = Array.from(new Set((order.items || []).map((item) => Number(item.productId))));
+    const products = productIds.length > 0
+      ? await Product.findAll({
+          where: { id: { [Op.in]: productIds } },
+          attributes: ['id', 'storefrontConfig'],
+          transaction,
+        })
+      : [];
+    const productDetailsByProductId = new Map<number, StorefrontEmailProductDetails>(
+      products.map((product) => [
+        Number(product.id),
+        normalizeProductDetails(product.storefrontConfig?.content),
+      ]),
+    );
+
+    const email = buildCustomerBankTransferCancellationEmail(
+      order,
+      bookingIdsByItemId,
+      productDetailsByProductId,
+    );
+    await sendMessage({ to: order.customerEmail, from: fromAddress(), ...email });
+    await order.update({ bankTransferCancellationEmailSentAt: new Date() }, { transaction });
+    return true;
+  });
+
+  if (sent) {
+    logger.info(`[storefront-email] Completed bank-transfer cancellation delivery for ${publicId}`);
+  }
+  return sent;
 };
