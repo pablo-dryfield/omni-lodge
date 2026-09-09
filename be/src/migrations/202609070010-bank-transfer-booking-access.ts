@@ -153,7 +153,11 @@ export async function verify({ context }: MigrationParams): Promise<{ ok: boolea
   const ok = Boolean(
     access?.module_exists
     && Number(access.action_count) === ACTION_KEYS.length
-    && Number(access.default_role_count) === ROLE_SLUGS.length
+    // Role rows are configuration data and production may not contain every
+    // supported alias (notably the legacy `administrator` role). Verify the
+    // grants for every matching role that actually exists without requiring
+    // optional role records to be present.
+    && Number(access.default_role_count) > 0
     && access.default_roles_have_access,
   );
 

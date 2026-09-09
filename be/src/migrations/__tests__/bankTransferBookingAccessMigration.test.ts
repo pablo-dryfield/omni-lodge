@@ -68,13 +68,13 @@ describe('bank-transfer booking access migration', () => {
     expect(setup.transaction.commit).toHaveBeenCalledTimes(1);
   });
 
-  it('verifies the module, its three actions, and default management grants', async () => {
+  it('verifies the module, its three actions, and every existing management grant', async () => {
     const setup = createContext();
     setup.query.mockResolvedValueOnce([[
       {
         module_exists: true,
         action_count: 3,
-        default_role_count: 4,
+        default_role_count: 3,
         default_roles_have_access: true,
       },
     ]]);
@@ -85,7 +85,31 @@ describe('bank-transfer booking access migration', () => {
         access: {
           module_exists: true,
           action_count: 3,
-          default_role_count: 4,
+          default_role_count: 3,
+          default_roles_have_access: true,
+        },
+      },
+    });
+  });
+
+  it('does not pass vacuously when no supported management role exists', async () => {
+    const setup = createContext();
+    setup.query.mockResolvedValueOnce([[
+      {
+        module_exists: true,
+        action_count: 3,
+        default_role_count: 0,
+        default_roles_have_access: true,
+      },
+    ]]);
+
+    await expect(verify({ context: setup.context })).resolves.toEqual({
+      ok: false,
+      details: {
+        access: {
+          module_exists: true,
+          action_count: 3,
+          default_role_count: 0,
           default_roles_have_access: true,
         },
       },
