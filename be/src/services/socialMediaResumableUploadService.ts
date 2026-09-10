@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import path from 'path';
 import type { drive_v3 } from 'googleapis';
 import {
   type SocialMediaContentAssetKind,
@@ -168,6 +169,37 @@ const escapeDriveQueryValue = (value: string): string =>
 const DRIVE_FILE_FIELDS =
   'id,name,mimeType,size,parents,appProperties,webViewLink,trashed';
 
+/**
+ * Premiere project files are gzip containers. Google Drive may identify their
+ * contents and replace the MIME type supplied when the resumable session was
+ * created. Keep this exception deliberately limited to project assets with a
+ * recognized Premiere extension and the two standard gzip MIME names.
+ */
+const DRIVE_SNIFFED_PREMIERE_PROJECT_MIME_TYPES = new Set([
+  'application/gzip',
+  'application/x-gzip',
+]);
+const DRIVE_SNIFFED_PREMIERE_PROJECT_EXTENSIONS = new Set([
+  '.prin',
+  '.prproj',
+]);
+
+const completedDriveFileMimeMatches = (
+  fileMimeType: string | null | undefined,
+  params: CommonUploadMetadata,
+): boolean => {
+  const expectedMimeType = normalizeMimeType(params.mimeType);
+  const actualMimeType = fileMimeType ?? 'application/octet-stream';
+  if (actualMimeType === expectedMimeType) return true;
+  if (params.kind !== 'project_file') return false;
+
+  const extension = path.extname(
+    sanitizeSocialMediaAssetOriginalName(params.originalName),
+  ).toLowerCase();
+  return DRIVE_SNIFFED_PREMIERE_PROJECT_EXTENSIONS.has(extension)
+    && DRIVE_SNIFFED_PREMIERE_PROJECT_MIME_TYPES.has(actualMimeType.trim().toLowerCase());
+};
+
 const validateCompletedDriveFile = (
   file: drive_v3.Schema$File,
   params: CommonUploadMetadata,
@@ -194,7 +226,7 @@ const validateCompletedDriveFile = (
   }
 
   const expectedMimeType = normalizeMimeType(params.mimeType);
-  if ((file.mimeType ?? 'application/octet-stream') !== expectedMimeType) {
+  if (!completedDriveFileMimeMatches(file.mimeType, params)) {
     return null;
   }
 

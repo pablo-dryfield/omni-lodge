@@ -47,6 +47,15 @@ const metadataHash = crypto.createHash('sha256').update(JSON.stringify([
   String(common.sizeBytes),
 ])).digest('hex');
 
+const buildMetadataHash = (metadata: typeof common): string =>
+  crypto.createHash('sha256').update(JSON.stringify([
+    String(metadata.contentId),
+    metadata.kind,
+    metadata.originalName,
+    metadata.mimeType,
+    String(metadata.sizeBytes),
+  ])).digest('hex');
+
 describe('Social Media resumable Drive uploads', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -155,6 +164,115 @@ describe('Social Media resumable Drive uploads', () => {
     });
   });
 
+  it.each([
+    ['Premiere project', 'edit.prproj', 'application/x-gzip'],
+    ['Premiere index', 'edit.prin', 'application/gzip'],
+  ])(
+    'accepts Drive-sniffed gzip for a %s upload while retaining the declared MIME type',
+    async (_label, originalName, driveMimeType) => {
+      const projectUpload = {
+        ...common,
+        kind: 'project_file' as const,
+        originalName,
+        mimeType: 'application/octet-stream',
+      };
+      filesGet.mockResolvedValue({
+        data: {
+          id: 'drive-file-1',
+          mimeType: driveMimeType,
+          size: String(projectUpload.sizeBytes),
+          parents: ['raw-folder'],
+          appProperties: {
+            omniSocialContentId: '41',
+            omniSocialAssetKind: 'project_file',
+            omniSocialUploadToken: 'receipt-1',
+            omniSocialMetadataHash: buildMetadataHash(projectUpload),
+          },
+          trashed: false,
+        },
+      });
+
+      await expect(finalizeSocialMediaResumableUpload({
+        ...projectUpload,
+        driveFileId: 'drive-file-1',
+        uploadToken: 'receipt-1',
+      })).resolves.toEqual(expect.objectContaining({
+        driveFileId: 'drive-file-1',
+        originalName,
+        mimeType: projectUpload.mimeType,
+      }));
+    },
+  );
+
+  it.each([
+    ['the asset kind is not project_file', { kind: 'raw_material' as const, originalName: 'edit.prproj' }],
+    ['the extension is not a recognized Premiere project', { kind: 'project_file' as const, originalName: 'archive.zip' }],
+  ])('rejects Drive-sniffed gzip when %s', async (_label, override) => {
+    const upload = {
+      ...common,
+      ...override,
+      mimeType: 'application/octet-stream',
+    };
+    filesGet.mockResolvedValue({
+      data: {
+        id: 'drive-file-1',
+        mimeType: 'application/x-gzip',
+        size: String(upload.sizeBytes),
+        parents: ['raw-folder'],
+        appProperties: {
+          omniSocialContentId: '41',
+          omniSocialAssetKind: upload.kind,
+          omniSocialUploadToken: 'receipt-1',
+          omniSocialMetadataHash: buildMetadataHash(upload),
+        },
+        trashed: false,
+      },
+    });
+
+    await expect(finalizeSocialMediaResumableUpload({
+      ...upload,
+      driveFileId: 'drive-file-1',
+      uploadToken: 'receipt-1',
+    })).rejects.toThrow('does not match this Social Media upload session');
+  });
+
+  it.each([
+    ['upload token', { uploadToken: 'different-receipt' }],
+    ['metadata hash', { metadataHash: 'different-hash' }],
+    ['content ID', { contentId: '42' }],
+    ['asset kind', { assetKind: 'raw_material' }],
+    ['parent folder', { parents: ['different-folder'] }],
+    ['exact size', { size: String(common.sizeBytes + 1) }],
+  ])('does not let the Premiere MIME exception bypass the %s check', async (_label, override) => {
+    const projectUpload = {
+      ...common,
+      kind: 'project_file' as const,
+      originalName: 'edit.prproj',
+      mimeType: 'application/octet-stream',
+    };
+    filesGet.mockResolvedValue({
+      data: {
+        id: 'drive-file-1',
+        mimeType: 'application/x-gzip',
+        size: override.size ?? String(projectUpload.sizeBytes),
+        parents: override.parents ?? ['raw-folder'],
+        appProperties: {
+          omniSocialContentId: override.contentId ?? '41',
+          omniSocialAssetKind: override.assetKind ?? 'project_file',
+          omniSocialUploadToken: override.uploadToken ?? 'receipt-1',
+          omniSocialMetadataHash: override.metadataHash ?? buildMetadataHash(projectUpload),
+        },
+        trashed: false,
+      },
+    });
+
+    await expect(finalizeSocialMediaResumableUpload({
+      ...projectUpload,
+      driveFileId: 'drive-file-1',
+      uploadToken: 'receipt-1',
+    })).rejects.toThrow('does not match this Social Media upload session');
+  });
+
   it('rejects a Drive file whose private upload receipt was tampered with', async () => {
     filesGet.mockResolvedValue({
       data: {
@@ -245,5 +363,41 @@ describe('Social Media resumable Drive uploads', () => {
     const query = filesList.mock.calls[0][0].q as string;
     expect(query).toContain("omniSocialMetadataHash' and value='");
     expect(query).not.toContain("key='omniSocialUploadToken'");
+  });
+
+  it('recovers an orphaned Drive-sniffed Premiere project after reload without starting another upload', async () => {
+    const projectUpload = {
+      ...common,
+      kind: 'project_file' as const,
+      originalName: 'edit.prproj',
+      mimeType: 'application/octet-stream',
+    };
+    filesList.mockResolvedValue({
+      data: {
+        files: [{
+          id: 'orphaned-premiere-file',
+          mimeType: 'application/x-gzip',
+          size: String(projectUpload.sizeBytes),
+          parents: ['raw-folder'],
+          appProperties: {
+            omniSocialContentId: '41',
+            omniSocialAssetKind: 'project_file',
+            omniSocialUploadToken: 'private-token',
+            omniSocialMetadataHash: buildMetadataHash(projectUpload),
+          },
+          trashed: false,
+        }],
+      },
+    });
+
+    await expect(findRecoverableSocialMediaResumableUploads(projectUpload)).resolves.toEqual([
+      expect.objectContaining({
+        driveFileId: 'orphaned-premiere-file',
+        originalName: 'edit.prproj',
+        mimeType: 'application/octet-stream',
+      }),
+    ]);
+    expect(filesList).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
   });
 });

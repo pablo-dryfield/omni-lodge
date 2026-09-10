@@ -41,6 +41,7 @@ import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import { fetchLogFile, fetchPm2ProcessLogs, usePm2Processes, useRestartPm2Process } from "../../api/pm2";
 import { clearCachedAppFilesAndReload } from "../../utils/refreshApp";
+import { canAccessPm2Controls, canQueryPm2Processes } from "../../utils/pm2Access";
 
 type SettingsSection = {
   label: string;
@@ -216,7 +217,10 @@ const SettingsLanding = () => {
   const [gygTestError, setGygTestError] = useState<string | null>(null);
   const [gygTestRequestJson, setGygTestRequestJson] = useState<string>("");
   const [gygTestResponseJson, setGygTestResponseJson] = useState<string>("");
-  const pm2ProcessesQuery = usePm2Processes({ enabled: isProduction });
+  const canManagePm2 = canAccessPm2Controls(roleSlug);
+  const pm2ProcessesQuery = usePm2Processes({
+    enabled: canQueryPm2Processes(process.env.NODE_ENV, roleSlug),
+  });
   const restartPm2Process = useRestartPm2Process();
   const canRunGygSelfTest = ["admin", "owner", "manager"].includes(compareString(roleSlug).toLowerCase());
 
@@ -255,6 +259,17 @@ const SettingsLanding = () => {
     setLogsOutput(null);
   }, [selectedProcessId]);
 
+  useEffect(() => {
+    if (canManagePm2) {
+      return;
+    }
+
+    setSelectedProcessId(null);
+    setLogsOpened(false);
+    setLogsError(null);
+    setLogsOutput(null);
+  }, [canManagePm2]);
+
   const handleRefreshApp = async () => {
     if (refreshing) {
       return;
@@ -270,6 +285,10 @@ const SettingsLanding = () => {
   };
 
   const handleRestartBackend = async () => {
+    if (!canManagePm2) {
+      setRestartError("Your account does not have access to PM2 controls.");
+      return;
+    }
     if (!isProduction) {
       setRestartError("PM2 controls are only available in production.");
       return;
@@ -297,6 +316,10 @@ const SettingsLanding = () => {
   };
 
   const handleOpenLogs = async () => {
+    if (!canManagePm2) {
+      setLogsOpened(false);
+      return;
+    }
     if (!isProduction) {
       setLogsError("PM2 logs are only available in production.");
       setLogsOpened(true);
@@ -410,82 +433,84 @@ const SettingsLanding = () => {
             </Button>
           </Stack>
         </Card>
-        <Card withBorder radius="md" padding="lg">
-          <Stack gap="xs">
-            <ActionIcon variant="light" color="teal" size="lg" aria-label="Restart backend">
-              <IconBolt size={22} />
-            </ActionIcon>
-            <Title order={4}>Restart backend</Title>
-            <Text size="sm" c="dimmed">
-              Choose a PM2 process to restart the backend service.
-            </Text>
-            {!isProduction ? (
-              <Alert color="yellow" title="Available in production only">
-                PM2 process controls are disabled outside the production environment.
-              </Alert>
-            ) : null}
-            {pm2ProcessesQuery.isError && isProduction ? (
-              <Alert color="red" title="Unable to load PM2 processes">
-                {extractErrorMessage(pm2ProcessesQuery.error)}
-              </Alert>
-            ) : null}
-            {restartError ? (
-              <Alert color="red" title="Restart failed">
-                {restartError}
-              </Alert>
-            ) : null}
-            {restartFeedback ? (
-              <Alert color="green" title="Restart requested">
-                {restartFeedback}
-              </Alert>
-            ) : null}
-            <Select
-              label="PM2 process"
-              placeholder={
-                !isProduction
-                  ? "Available in production only"
-                  : pm2ProcessesQuery.isLoading
-                  ? "Loading PM2 processes..."
-                  : processOptions.length > 0
-                    ? "Select a PM2 process"
-                    : "No active PM2 processes"
-              }
-              data={processOptions}
-              value={selectedProcessId}
-              onChange={setSelectedProcessId}
-              searchable
-              clearable
-              disabled={!isProduction || pm2ProcessesQuery.isLoading || pm2ProcessesQuery.isError || restartPm2Process.isPending}
-              nothingFoundMessage="No active PM2 processes"
-            />
-            <Button
-              variant="light"
-              color="teal"
-              onClick={handleRestartBackend}
-              loading={restartPm2Process.isPending}
-              disabled={
-                !isProduction ||
-                !selectedProcessId ||
-                pm2ProcessesQuery.isLoading ||
-                pm2ProcessesQuery.isError
-              }
-            >
-              Restart now
-            </Button>
-            <Button
-              variant="default"
-              onClick={handleOpenLogs}
-              disabled={
-                !isProduction ||
-                !selectedProcessId ||
-                pm2ProcessesQuery.isLoading ||
-                pm2ProcessesQuery.isError
-              }
-            >
-              View logs
-            </Button>
-          </Stack>
-        </Card>
+        {canManagePm2 ? (
+          <Card withBorder radius="md" padding="lg">
+            <Stack gap="xs">
+              <ActionIcon variant="light" color="teal" size="lg" aria-label="Restart backend">
+                <IconBolt size={22} />
+              </ActionIcon>
+              <Title order={4}>Restart backend</Title>
+              <Text size="sm" c="dimmed">
+                Choose a PM2 process to restart the backend service.
+              </Text>
+              {!isProduction ? (
+                <Alert color="yellow" title="Available in production only">
+                  PM2 process controls are disabled outside the production environment.
+                </Alert>
+              ) : null}
+              {pm2ProcessesQuery.isError && isProduction ? (
+                <Alert color="red" title="Unable to load PM2 processes">
+                  {extractErrorMessage(pm2ProcessesQuery.error)}
+                </Alert>
+              ) : null}
+              {restartError ? (
+                <Alert color="red" title="Restart failed">
+                  {restartError}
+                </Alert>
+              ) : null}
+              {restartFeedback ? (
+                <Alert color="green" title="Restart requested">
+                  {restartFeedback}
+                </Alert>
+              ) : null}
+              <Select
+                label="PM2 process"
+                placeholder={
+                  !isProduction
+                    ? "Available in production only"
+                    : pm2ProcessesQuery.isLoading
+                    ? "Loading PM2 processes..."
+                    : processOptions.length > 0
+                      ? "Select a PM2 process"
+                      : "No active PM2 processes"
+                }
+                data={processOptions}
+                value={selectedProcessId}
+                onChange={setSelectedProcessId}
+                searchable
+                clearable
+                disabled={!isProduction || pm2ProcessesQuery.isLoading || pm2ProcessesQuery.isError || restartPm2Process.isPending}
+                nothingFoundMessage="No active PM2 processes"
+              />
+              <Button
+                variant="light"
+                color="teal"
+                onClick={handleRestartBackend}
+                loading={restartPm2Process.isPending}
+                disabled={
+                  !isProduction ||
+                  !selectedProcessId ||
+                  pm2ProcessesQuery.isLoading ||
+                  pm2ProcessesQuery.isError
+                }
+              >
+                Restart now
+              </Button>
+              <Button
+                variant="default"
+                onClick={handleOpenLogs}
+                disabled={
+                  !isProduction ||
+                  !selectedProcessId ||
+                  pm2ProcessesQuery.isLoading ||
+                  pm2ProcessesQuery.isError
+                }
+              >
+                View logs
+              </Button>
+            </Stack>
+          </Card>
+        ) : null}
         {canRunGygSelfTest && (
           <Card withBorder radius="md" padding="lg">
             <Stack gap="xs">
@@ -505,7 +530,7 @@ const SettingsLanding = () => {
       </SimpleGrid>
 
       <Modal
-        opened={logsOpened}
+        opened={canManagePm2 && logsOpened}
         onClose={() => setLogsOpened(false)}
         title="PM2 logs"
         centered
