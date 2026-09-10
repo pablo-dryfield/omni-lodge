@@ -24,6 +24,7 @@ export const PAGE_SLUGS = {
   affiliates: "affiliates",
   requests: "requests",
   performance: "performance",
+  errorMonitoring: "error-monitoring",
   reviews: "reviews",
   volunteerProgress: "volunteer-progress",
   scheduling: "scheduling",

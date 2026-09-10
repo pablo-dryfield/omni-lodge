@@ -5,6 +5,10 @@ import {
   dispatchServerAvailabilityCandidate,
   type ServerAvailabilityCandidateDetail,
 } from './serverAvailability';
+import {
+  captureAxiosError,
+  markAxiosRequestForErrorMonitoring,
+} from './errorMonitoring';
 
 const config = process.env.NODE_ENV === 'production' ? prodConfig : devConfig;
 
@@ -20,9 +24,10 @@ instance.interceptors.request.use(
     if (token) {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
-    return config;
+    return markAxiosRequestForErrorMonitoring(config);
   },
   (error) => {
+    captureAxiosError(error);
     return Promise.reject(error);
   }
 );
@@ -85,6 +90,7 @@ instance.interceptors.response.use(
     if (isRequestCanceled(error)) {
       return Promise.reject(error);
     }
+    captureAxiosError(error);
     const detail = getCandidateDetail(error);
     const { status, isNetworkError } = detail;
     const isServerError = typeof status === "number" && status >= 500;

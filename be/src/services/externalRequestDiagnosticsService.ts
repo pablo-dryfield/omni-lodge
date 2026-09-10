@@ -3,6 +3,7 @@ import https from 'https';
 import { URL } from 'url';
 import { getRequestContextValue } from './requestContextService.js';
 import logger from '../utils/logger.js';
+import { captureExternalRequestFailureSafe } from './errorMonitoringService.js';
 
 type ExternalCallAggregate = {
   protocol: 'http' | 'https';
@@ -91,7 +92,7 @@ export type ExternalRequestDiagnosticsSnapshot = {
   }>;
 };
 
-type NormalizedTarget = {
+export type NormalizedTarget = {
   protocol: 'http' | 'https';
   method: string;
   host: string;
@@ -100,6 +101,7 @@ type NormalizedTarget = {
 };
 
 type HttpRequestInput = string | URL | HttpRequestOptions | undefined;
+type FetchRequestInput = Parameters<typeof fetch>[0];
 
 const WINDOW_LIMIT = 200;
 const RECENT_LIMIT = 100;
@@ -155,14 +157,17 @@ const resolvePort = (options: URL | HttpRequestOptions, protocol: 'http' | 'http
   return protocol === 'https' ? '443' : '80';
 };
 
-const normalizeTarget = (
+export const normalizeExternalHttpTarget = (
   protocol: 'http' | 'https',
   input: HttpRequestInput,
+  overrideOptions?: HttpRequestOptions,
 ): NormalizedTarget | null => {
   try {
     if (input instanceof URL) {
       const host = input.hostname;
-      const method = 'GET';
+      const method = typeof overrideOptions?.method === 'string' && overrideOptions.method.trim()
+        ? overrideOptions.method.toUpperCase()
+        : 'GET';
       const path = input.pathname || '/';
       return {
         protocol,
@@ -175,7 +180,9 @@ const normalizeTarget = (
 
     if (typeof input === 'string') {
       const url = new URL(input);
-      const method = 'GET';
+      const method = typeof overrideOptions?.method === 'string' && overrideOptions.method.trim()
+        ? overrideOptions.method.toUpperCase()
+        : 'GET';
       const path = url.pathname || '/';
       return {
         protocol,
@@ -218,6 +225,31 @@ const normalizeTarget = (
   return null;
 };
 
+const normalizeFetchTarget = (
+  input: FetchRequestInput,
+  init?: RequestInit,
+): NormalizedTarget | null => {
+  try {
+    const isRequest = typeof Request !== 'undefined' && input instanceof Request;
+    const url = new URL(isRequest ? (input as Request).url : String(input));
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    const protocol = url.protocol === 'https:' ? 'https' : 'http';
+    const method = String(init?.method ?? (isRequest ? (input as Request).method : 'GET')).toUpperCase();
+    const defaultPort = protocol === 'https' ? '443' : '80';
+    const host = url.port && url.port !== defaultPort ? `${url.hostname}:${url.port}` : url.hostname;
+    const path = url.pathname || '/';
+    return { protocol, method, host, path, pathLabel: normalizePathLabel(path) };
+  } catch {
+    return null;
+  }
+};
+
+export const classifyExternalRequestClose = (responseReceived: boolean): string | null =>
+  responseReceived ? null : 'REQUEST_CLOSED';
+
+export const classifyExternalResponseClose = (complete: boolean): string | null =>
+  complete ? null : 'INCOMPLETE_RESPONSE';
+
 class ExternalRequestDiagnosticsService {
   private readonly slowExternalCallThresholdMs =
     Number(process.env.PERFORMANCE_SLOW_EXTERNAL_CALL_MS) || DEFAULT_SLOW_EXTERNAL_CALL_MS;
@@ -234,6 +266,7 @@ class ExternalRequestDiagnosticsService {
     }
     this.patchModule(http, 'http');
     this.patchModule(https, 'https');
+    this.patchFetch();
     this.installed = true;
   }
 
@@ -306,7 +339,10 @@ class ExternalRequestDiagnosticsService {
       ...args: Parameters<typeof http.request>
     ): ClientRequest {
       const request = originalRequest(...args);
-      service.observeRequest(request, protocol, args[0]);
+      const overrideOptions = args[1] && typeof args[1] === 'object'
+        ? args[1] as HttpRequestOptions
+        : undefined;
+      service.observeRequest(request, protocol, args[0], overrideOptions);
       return request;
     };
 
@@ -324,12 +360,55 @@ class ExternalRequestDiagnosticsService {
     (moduleRef.get as typeof http.get & { __omniInstrumented?: boolean }).__omniInstrumented = true;
   }
 
+  private patchFetch(): void {
+    const fetchRef = globalThis.fetch as typeof fetch & { __omniInstrumented?: boolean };
+    if (typeof fetchRef !== 'function' || fetchRef.__omniInstrumented) return;
+    const originalFetch = fetchRef.bind(globalThis);
+    const service = this;
+    const instrumentedFetch = async function instrumentedFetch(
+      input: FetchRequestInput,
+      init?: RequestInit,
+    ): Promise<Response> {
+      const target = normalizeFetchTarget(input, init);
+      if (!target) return originalFetch(input, init);
+      const startedAtMs = Date.now();
+      const call = {
+        ...target,
+        requestId: getRequestContextValue('requestId'),
+        routeKey: getRequestContextValue('routeKey'),
+        userId: getRequestContextValue('userId') ?? null,
+        userTypeId: getRequestContextValue('userTypeId') ?? null,
+        firstName: getRequestContextValue('firstName') ?? null,
+        lastName: getRequestContextValue('lastName') ?? null,
+        roleName: getRequestContextValue('roleName') ?? null,
+        startedAt: new Date(startedAtMs).toISOString(),
+      };
+      try {
+        const response = await originalFetch(input, init);
+        service.recordCompletedCall(call, Date.now() - startedAtMs, response.status, null);
+        return response;
+      } catch (error) {
+        const failure = error as Error & { code?: string; cause?: { code?: string } };
+        service.recordCompletedCall(
+          call,
+          Date.now() - startedAtMs,
+          null,
+          failure.code ?? failure.cause?.code ?? failure.name ?? 'FETCH_ERROR',
+        );
+        throw error;
+      }
+    } as typeof fetch & { __omniInstrumented?: boolean };
+    instrumentedFetch.__omniInstrumented = true;
+    globalThis.fetch = instrumentedFetch;
+  }
+
   private observeRequest(
     request: ClientRequest,
     protocol: 'http' | 'https',
     input: HttpRequestInput,
+    overrideOptions?: HttpRequestOptions,
   ): void {
-    const target = normalizeTarget(protocol, input);
+    const target = normalizeExternalHttpTarget(protocol, input, overrideOptions);
     if (!target) {
       return;
     }
@@ -359,6 +438,7 @@ class ExternalRequestDiagnosticsService {
     });
 
     let completed = false;
+    let responseReceived = false;
     const finalize = (response: IncomingMessage | null, errorCode: string | null): void => {
       if (completed) {
         return;
@@ -386,12 +466,17 @@ class ExternalRequestDiagnosticsService {
     };
 
     request.on('response', (response) => {
+      responseReceived = true;
       response.on('end', () => finalize(response, null));
-      response.on('close', () => finalize(response, null));
+      response.on('aborted', () => finalize(response, 'INCOMPLETE_RESPONSE'));
+      response.on('close', () => finalize(response, classifyExternalResponseClose(response.complete)));
     });
     request.on('timeout', () => finalize(null, 'TIMEOUT'));
     request.on('error', (error: Error & { code?: string }) => finalize(null, error.code ?? error.name ?? 'ERROR'));
-    request.on('close', () => finalize(null, null));
+    request.on('close', () => {
+      const closeError = classifyExternalRequestClose(responseReceived);
+      if (closeError) finalize(null, closeError);
+    });
   }
 
   private recordCompletedCall(
@@ -439,6 +524,21 @@ class ExternalRequestDiagnosticsService {
     }
     pushLimited(aggregate.durationWindowMs, durationMs, WINDOW_LIMIT);
     this.aggregates.set(key, aggregate);
+
+    if ((statusCode != null && statusCode >= 400) || errorCode) {
+      captureExternalRequestFailureSafe({
+        protocol: call.protocol,
+        method: call.method,
+        host: call.host,
+        path: call.path,
+        statusCode,
+        errorCode,
+        durationMs,
+        requestId: call.requestId,
+        route: call.routeKey,
+        userId: call.userId,
+      });
+    }
 
     if (call.routeKey) {
       const routeAggregate = this.routeAggregates.get(call.routeKey) ?? {

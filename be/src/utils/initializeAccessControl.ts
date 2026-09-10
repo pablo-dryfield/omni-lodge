@@ -50,6 +50,7 @@ const defaultPages = [
   { slug: 'affiliates', name: 'Affiliates', description: 'Affiliate sales and UTM attribution portal', sortOrder: 8 },
   { slug: 'requests', name: 'Requests', description: 'Review operational requests and approvals', sortOrder: 9 },
   { slug: 'performance', name: 'Performance', description: 'Server and application performance diagnostics', sortOrder: 8 },
+  { slug: 'error-monitoring', name: 'Error Monitor', description: 'Investigate browser, API, and server errors', sortOrder: 9 },
   { slug: 'reviews', name: 'Reviews', description: 'Track review credits and staff allocations', sortOrder: 7 },
   { slug: 'pays', name: 'Staff Payment', description: 'Staff commission overview', sortOrder: 8 },
   { slug: 'cerebro', name: 'Cerebro', description: 'Operational knowledge base, role quizzes, and policy acknowledgements', sortOrder: 9 },
@@ -99,6 +100,7 @@ const defaultModules = [
   { slug: 'affiliate-overview', name: 'Affiliate Overview', pageSlug: 'affiliates', description: 'Review affiliate-tagged booking sales and attribution', componentRef: 'AffiliatesPage', sortOrder: 1 },
   { slug: 'requests-center', name: 'Requests Center', pageSlug: 'requests', description: 'Review pending signup, schedule, and finance requests', componentRef: 'RequestsPage', sortOrder: 1 },
   { slug: 'performance-overview', name: 'Performance Overview', pageSlug: 'performance', description: 'Inspect live server, process, and request performance diagnostics', componentRef: 'PerformanceOverview', sortOrder: 1 },
+  { slug: 'error-monitoring-dashboard', name: 'Error Monitoring Dashboard', pageSlug: 'error-monitoring', description: 'Investigate, triage, and resolve application errors', componentRef: 'ErrorMonitoringPage', sortOrder: 1 },
   { slug: 'staff-payouts-all', name: 'Staff Payments (All)', pageSlug: 'pays', description: 'View commission data for all staff', componentRef: 'StaffPayoutsAll', sortOrder: 1 },
   { slug: 'staff-payouts-self', name: 'Staff Payments (Self)', pageSlug: 'pays', description: 'View personal commission data', componentRef: 'StaffPayoutsSelf', sortOrder: 2 },
   { slug: 'cerebro-library', name: 'Cerebro Library', pageSlug: 'cerebro', description: 'Browse operational knowledge, complete quizzes, and accept policies', componentRef: 'CerebroLibrary', sortOrder: 1 },
@@ -145,7 +147,7 @@ const defaultModules = [
 ];
 
 const rolePageMatrix: Record<string, string[]> = {
-  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'requests', 'performance', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-storefront-promotions', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
+  admin: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'requests', 'performance', 'error-monitoring', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks', 'settings-products', 'settings-product-aliases', 'settings-product-types', 'settings-product-prices', 'settings-venues', 'settings-addons', 'settings-product-addons', 'settings-storefront-promotions', 'settings-payment-methods', 'settings-channel-product-prices', 'settings-channel-commissions', 'settings-review-platforms', 'settings-compensation-components', 'settings-actions', 'settings-channels', 'settings',
 'settings-users',
 'settings-user-types',
 'settings-pages',
@@ -162,7 +164,7 @@ const rolePageMatrix: Record<string, string[]> = {
 'settings-control-panel',
 'settings-google-api',
 'settings-maintenance'],
-  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience', 'settings-product-aliases'],
+  owner: ['dashboard', 'bookings', 'bookings-manifest', 'users', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'error-monitoring', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks', 'settings-staff-profiles', 'settings-shift-roles', 'settings-user-shift-roles', 'settings-shift-types', 'settings-review-platforms', 'settings-compensation-components', 'settings-home-experience', 'settings-product-aliases'],
   manager: ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks'],
   'assistant-manager': ['dashboard', 'bookings', 'bookings-manifest', 'reports', 'open-bar-control', 'venue-numbers', 'channel-numbers', 'marketing', 'social-media', 'search-console', 'affiliates', 'requests', 'reviews', 'finance', 'pays', 'cerebro', 'scheduling', 'volunteer-progress', 'assistant-manager-tasks'],
   affiliate: ['affiliates'],
@@ -176,6 +178,7 @@ rolePageMatrix['pub-crawl-guide'] = [...rolePageMatrix.guide];
 const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   admin: {
     'dashboard-overview': ['view', 'update'],
+    'error-monitoring-dashboard': ['view', 'update'],
     'booking-management': ['view', 'create', 'update', 'delete'],
     'bank-transfer-booking-management': ['view', 'create', 'update'],
     'booking-manifest': ['view'],
@@ -242,6 +245,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   },
   owner: {
     'dashboard-overview': ['view', 'update'],
+    'error-monitoring-dashboard': ['view', 'update'],
     'booking-management': ['view', 'create', 'update', 'delete'],
     'bank-transfer-booking-management': ['view', 'create', 'update'],
     'booking-manifest': ['view'],

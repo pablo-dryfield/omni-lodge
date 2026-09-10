@@ -4,6 +4,7 @@ import AssessmentRoundedIcon from "@mui/icons-material/AssessmentRounded";
 import AssignmentRoundedIcon from "@mui/icons-material/AssignmentRounded";
 import AssignmentTurnedInRoundedIcon from "@mui/icons-material/AssignmentTurnedInRounded";
 import BarChartRoundedIcon from "@mui/icons-material/BarChartRounded";
+import BugReportRoundedIcon from "@mui/icons-material/BugReportRounded";
 import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import CampaignRoundedIcon from "@mui/icons-material/CampaignRounded";
 import EventAvailableRoundedIcon from "@mui/icons-material/EventAvailableRounded";
@@ -94,6 +95,13 @@ export const HOME_MODULE_PRESENTATIONS: Record<string, HomeModulePresentation> =
     group: "team",
     tone: "emerald",
     icon: TrendingUpRoundedIcon,
+  },
+  [PAGE_SLUGS.errorMonitoring]: {
+    description: "Find, prioritize, and resolve application errors across every device.",
+    staffDescription: "Review application errors available to your role.",
+    group: "administration",
+    tone: "rose",
+    icon: BugReportRoundedIcon,
   },
   [PAGE_SLUGS.reviews]: {
     description: "Manage review credits, status, and platform history.",

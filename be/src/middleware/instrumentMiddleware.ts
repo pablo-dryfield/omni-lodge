@@ -2,13 +2,16 @@ import { Request, Response, NextFunction } from 'express';
 import logger from '../utils/logger.js';
 import { performanceMonitorService } from '../services/performanceMonitorService.js';
 import { runInRequestContext, setRequestContextValue } from '../services/requestContextService.js';
+import { captureHttpFailureSafe, sanitizeUrlPath } from '../services/errorMonitoringService.js';
 
 const instrumentMiddleware = (req: Request, res: Response, next: NextFunction): void => {
   const requestContext = performanceMonitorService.startRequest(req);
   const startedAt = process.hrtime.bigint();
   let completed = false;
 
-  const finalize = (): void => {
+  res.setHeader('X-Request-Id', requestContext.id);
+
+  const finalize = (connectionClosedEarly = false): void => {
     if (completed) {
       return;
     }
@@ -24,11 +27,21 @@ const instrumentMiddleware = (req: Request, res: Response, next: NextFunction): 
           : null;
     const responseBodySize = Number.isFinite(parsedContentLength ?? NaN) ? parsedContentLength : null;
 
-    performanceMonitorService.finishRequest(requestContext, res.statusCode, durationMs, responseBodySize);
+    const statusCode = connectionClosedEarly && !res.writableEnded ? 499 : res.statusCode;
+    performanceMonitorService.finishRequest(requestContext, statusCode, durationMs, responseBodySize);
+    if (statusCode >= 400 && !res.locals.errorMonitoringExceptionCaptured) {
+      captureHttpFailureSafe(req, {
+        statusCode,
+        durationMs,
+        responseSizeBytes: responseBodySize,
+        responseMessage: connectionClosedEarly ? 'Client closed the connection before completion' : null,
+        requestId: requestContext.id,
+      });
+    }
   };
 
-  res.on('finish', finalize);
-  res.on('close', finalize);
+  res.on('finish', () => finalize(false));
+  res.on('close', () => finalize(true));
 
   runInRequestContext(() => {
     setRequestContextValue('requestId', requestContext.id);
@@ -39,7 +52,7 @@ const instrumentMiddleware = (req: Request, res: Response, next: NextFunction): 
     setRequestContextValue('firstName', requestContext.firstName);
     setRequestContextValue('lastName', requestContext.lastName);
     setRequestContextValue('roleName', requestContext.roleName);
-    logger.info(`Request received: ${req.method} ${req.url}`);
+    logger.info(`Request received: ${req.method} ${sanitizeUrlPath(req.originalUrl ?? req.url) ?? '/'}`);
     next();
   });
 };

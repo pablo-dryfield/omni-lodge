@@ -91,6 +91,8 @@ import requestRoutes from './routes/requestRoutes.js';
 import requiredActionRoutes from './routes/requiredActionRoutes.js';
 import healthRoutes from './routes/healthRoutes.js';
 import socialMediaRoutes from './routes/socialMediaRoutes.js';
+import clientErrorRoutes from './routes/clientErrorRoutes.js';
+import errorMonitoringRoutes from './routes/errorMonitoringRoutes.js';
 import { financeRouter } from './finance/index.js';
 import { startFinanceRecurringJob } from './finance/jobs/recurringJob.js';
 import { startScheduleJobs } from './jobs/schedules.cron.js';
@@ -103,6 +105,8 @@ import { startStorefrontAbandonedCartJob } from './jobs/storefrontAbandonedCart.
 import { startStorefrontBankTransferExpiryJob } from './jobs/storefrontBankTransferExpiry.cron.js';
 import { startWhatsAppRetentionJob } from './jobs/whatsappRetention.cron.js';
 import { startWhatsAppWebhookQueueJob } from './jobs/whatsappWebhookQueue.cron.js';
+import { startErrorMonitoringRetentionJob } from './jobs/errorMonitoringRetention.cron.js';
+import { startErrorMonitoringSpoolReplayJob } from './jobs/errorMonitoringSpoolReplay.cron.js';
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
@@ -116,6 +120,47 @@ import { getConfigValue, initializeConfigRegistry } from './services/configServi
 import { externalRequestDiagnosticsService } from './services/externalRequestDiagnosticsService.js';
 import { runSeedOnce } from './services/seedRunService.js';
 import { seedBookingUtmCatalogFromExistingBookings } from './services/bookings/bookingUtmCatalogService.js';
+import {
+  captureAbnormalProcessExitSafe,
+  captureProcessErrorSafe,
+  terminateAfterBootstrapFailure,
+} from './services/errorMonitoringService.js';
+import { installConsoleErrorMonitoringBridge } from './services/consoleErrorMonitoringBridge.js';
+import { resolveProductionTrustProxyHops } from './utils/trustProxy.js';
+
+const WINSTON_LEVEL = Symbol.for('level');
+const WINSTON_SPLAT = Symbol.for('splat');
+
+// Jobs and integrations commonly catch failures and log them instead of
+// reaching Express. Mirror errors and failure-shaped warnings into the same
+// issue stream without changing the logger or creating a monitoring loop.
+logger.on('data', (entry: unknown) => {
+  try {
+    const record = entry && typeof entry === 'object'
+      ? entry as Record<string | symbol, unknown>
+      : {};
+    const level = record[WINSTON_LEVEL];
+    const message = typeof record.message === 'string' ? record.message : 'Backend logged an error';
+    if (/^\[(?:request-error|error-monitoring|performance|startup-fatal)\]/i.test(message)) {
+      return;
+    }
+    const metadata = Array.isArray(record[WINSTON_SPLAT]) ? record[WINSTON_SPLAT] as unknown[] : [];
+    const loggedError = metadata.find((value): value is Error => value instanceof Error);
+    const isError = level === 'error';
+    const isFailureWarning = level === 'warn'
+      && (Boolean(loggedError) || /\b(?:fail(?:ed|ure)?|error|exception|unable|timeout|timed out|rejected)\b/i.test(message));
+    if (!isError && !isFailureWarning) {
+      return;
+    }
+    captureProcessErrorSafe(
+      isError ? 'logged_error' : 'logged_warning',
+      loggedError ?? new Error(message),
+    );
+  } catch {
+    // Diagnostics must never interfere with application logging.
+  }
+});
+installConsoleErrorMonitoringBridge();
 
 // Scrapers
 // import { scrapeTripAdvisor } from './scrapers/tripAdvisorScraper.js';
@@ -180,13 +225,18 @@ const corsOptions: cors.CorsOptions = {
   origin: allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Authorization', 'Content-Type'],
+  allowedHeaders: ['Authorization', 'Content-Type', 'X-OmniLodge-Telemetry'],
+  exposedHeaders: ['X-Request-Id'],
 };
 
 // Production exceptions are limited to the separately installable companion
 // PWAs. Ordinary OmniLodge traffic remains same-origin.
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
+// Start correlation and response monitoring before body parsers and webhook
+// handlers so malformed payloads and early webhook responses are observable.
+app.use(instrumentMiddleware);
 
 app.post(
   '/api/storefront/webhooks/stripe',
@@ -200,6 +250,11 @@ app.post(
   express.raw({ type: 'application/json', limit: '3mb' }),
   receiveWhatsAppWebhook,
 );
+
+// Mount telemetry before the global JSON parser so its stricter 64 KiB limit
+// also applies to chunked and compressed requests without Content-Length. Raw
+// payment/WhatsApp webhooks above retain their byte-exact parsers.
+app.use('/api/client-errors', clientErrorRoutes);
 
 app.use(express.json());
 
@@ -221,16 +276,17 @@ app.use(
         'https://content.googleapis.com',
       ],
       frameSrc: ['https://www.facebook.com', 'https://web.facebook.com'],
+      reportUri: ['/api/client-errors/browser-reports'],
     },
   })
 );
-
-app.use(instrumentMiddleware);
 
 // Keep this public and independent so clients can verify backend availability.
 app.use('/api/health', healthRoutes);
 
 app.use('/api/', apiLimiter);
+
+app.use('/api/error-monitoring', errorMonitoringRoutes);
 
 app.use('/api/guests', guestRoutes);
 app.use('/api/bookings', bookingRoutes);
@@ -380,7 +436,7 @@ async function bootstrap(): Promise<void> {
     }
 
     if (process.env.NODE_ENV === 'production') {
-      app.set('trust proxy', 1);
+      app.set('trust proxy', resolveProductionTrustProxyHops(process.env.TRUST_PROXY_HOPS));
       app.listen(PORT, '127.0.0.1', () => {
         logger.info(`backend listening on http://127.0.0.1:${PORT}`);
         startFinanceRecurringJob();
@@ -398,6 +454,8 @@ async function bootstrap(): Promise<void> {
         startStorefrontBankTransferExpiryJob();
         startWhatsAppRetentionJob();
         startWhatsAppWebhookQueueJob();
+        startErrorMonitoringRetentionJob();
+        startErrorMonitoringSpoolReplayJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
@@ -417,16 +475,39 @@ async function bootstrap(): Promise<void> {
         startStorefrontBankTransferExpiryJob();
         startWhatsAppRetentionJob();
         startWhatsAppWebhookQueueJob();
+        startErrorMonitoringRetentionJob();
+        startErrorMonitoringSpoolReplayJob();
       });
     }
   } catch (err) {
-    if (err instanceof ValidationError) {
-      logger.error(`Validation error: ${JSON.stringify(err.errors, null, 2)}`);
-    } else {
-      logger.error('Database synchronization failed', err);
-    }
+    // The helper fsyncs a redacted fatal event before terminating nonzero.
+    // Its fatal marker also prevents the exit listener from adding a duplicate.
+    terminateAfterBootstrapFailure(err, {
+      beforeExit: (startupError) => {
+        if (err instanceof ValidationError) {
+          logger.error(`[startup-fatal] Validation error: ${JSON.stringify(err.errors, null, 2)}`);
+        } else {
+          logger.error('[startup-fatal] Database synchronization failed', startupError);
+        }
+      },
+    });
   }
 }
+
+// Observing (rather than handling) uncaught exceptions preserves Node's normal
+// fatal-exit behavior so PM2 can restart a compromised process.
+process.on('uncaughtExceptionMonitor', (error, origin) => {
+  captureProcessErrorSafe(
+    origin === 'unhandledRejection' ? 'unhandled_rejection' : 'uncaught_exception',
+    error,
+  );
+});
+process.on('warning', (warning) => {
+  captureProcessErrorSafe('runtime_warning', warning);
+});
+process.on('exit', (code) => {
+  captureAbnormalProcessExitSafe(code);
+});
 
 void bootstrap();
 

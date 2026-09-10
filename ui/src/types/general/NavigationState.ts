@@ -7,6 +7,7 @@ export type NavigationIconKey =
   | 'accountBalance'
   | 'formatListNumbered'
   | 'barChart'
+  | 'errorOutline'
   | 'star';
 
 export type NavigationPage = {

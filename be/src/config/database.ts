@@ -79,6 +79,9 @@ import ConfigSeedRun from "../models/ConfigSeedRun.js";
 import SeoActionLog from "../models/SeoActionLog.js";
 import BookingUtmCatalog from "../models/BookingUtmCatalog.js";
 import AffiliatePayoutLog from "../models/AffiliatePayoutLog.js";
+import ErrorMonitoringIssue from "../models/ErrorMonitoringIssue.js";
+import ErrorMonitoringOccurrence from "../models/ErrorMonitoringOccurrence.js";
+import ErrorMonitoringNote from "../models/ErrorMonitoringNote.js";
 import SocialMediaContent from "../models/SocialMediaContent.js";
 import SocialMediaContentAsset from "../models/SocialMediaContentAsset.js";
 import ShiftRole from "../models/ShiftRole.js";
@@ -326,6 +329,9 @@ const sequelize = new Sequelize({
     SeoActionLog,
     BookingUtmCatalog,
     AffiliatePayoutLog,
+    ErrorMonitoringIssue,
+    ErrorMonitoringOccurrence,
+    ErrorMonitoringNote,
     SocialMediaContent,
     SocialMediaContentAsset,
     ShiftRole,

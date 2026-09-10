@@ -36,6 +36,7 @@ const DataDeletionPage = lazy(() => import("../../pages/DataDeletionPage"));
 const TermsPage = lazy(() => import("../../pages/TermsPage"));
 const PayoutReceiptAccessPage = lazy(() => import("../../pages/PayoutReceiptAccessPage"));
 const PerformancePage = lazy(() => import("../../pages/PerformancePage"));
+const ErrorMonitoringPage = lazy(() => import("../../pages/ErrorMonitoringPage"));
 const Pays = lazyRoute(() => import("../../pages/Pays"), loadPaysReducers);
 const ReviewCounters = lazyRoute(() => import("../../pages/ReviewCounters"), loadReviewCountersReducers);
 const Reports = lazyRoute(() => import("../../pages/Reports"), loadReportsReducers);
@@ -137,6 +138,7 @@ const Routes = () => {
         <Route path="/terms-and-conditions" element={<Navigate to="/terms" replace />} />
         <Route path="/payout-receipt/:receiptId" element={<PayoutReceiptAccessPage />} />
         <Route path="/performance" element={<PerformancePage title="Performance" />} />
+        <Route path="/error-monitoring" element={<ErrorMonitoringPage />} />
         <Route path="/reviews" element={<ReviewCounters />} />
         <Route path="/pays" element={<Pays />} />
         <Route path="/cerebro" element={<Cerebro />} />

@@ -10,7 +10,7 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
       description="OmniLodge mobile, web, and connected operational workflows."
     >
       <Stack gap="lg">
-        <Text c="dimmed">Effective date: August 27, 2026</Text>
+        <Text c="dimmed">Effective date: September 9, 2026</Text>
 
         <Text style={{ lineHeight: 1.75 }}>
           OmniLodge provides mobile and web tools for authorized staff and internal users. It may
@@ -32,6 +32,8 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
             <List.Item>For a connected WhatsApp Business number, recent normalized message content, provider message and reply-context identifiers, message type and direction, timestamps, delivery, edit, or revocation state, contact display name, a keyed pseudonymous contact identifier, and the last four digits of the contact&apos;s phone number</List.Item>
             <List.Item>During webhook processing, sender and recipient WhatsApp identifiers and normalized message events may be held temporarily in an encrypted processing queue; after successful processing, the retained message record replaces the full contact identifier with the keyed contact identifier and phone-number suffix</List.Item>
             <List.Item>WhatsApp connection metadata such as the selected WhatsApp Business Account and phone-number identifiers, webhook delivery hashes, synchronization request identifiers and status, connection health, and encrypted access credentials</List.Item>
+            <List.Item>Technical diagnostics such as error messages and stack traces, failed API method and path, HTTP status, request reference, app release, page route, timestamps, browser and device information, and a short sequence of navigation or interface actions immediately before a failure</List.Item>
+            <List.Item>For authenticated users, error diagnostics may be linked to the internal user account that experienced the problem. Session and network identifiers used for diagnostics are stored as keyed pseudonymous hashes</List.Item>
           </List>
         </Stack>
 
@@ -46,6 +48,7 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
             <List.Item>If the administrator elects Meta&apos;s history-sharing option, process eligible recent message history for the same operational summaries</List.Item>
             <List.Item>Maintain and diagnose the administrator-authorized WhatsApp connection, including webhook and synchronization status</List.Item>
             <List.Item>Protect the service and investigate technical issues or misuse</List.Item>
+            <List.Item>Detect, group, prioritize, reproduce, and resolve browser, API, background-process, and server failures</List.Item>
           </List>
         </Stack>
 
@@ -53,7 +56,11 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
           <Title order={3}>3. Data Stored on Device</Title>
           <Text style={{ lineHeight: 1.75 }}>
             The Android app stores a session token in app-private device storage so the user can
-            remain signed in between launches. The app does not include advertising SDKs or
+            remain signed in between launches. The web app may temporarily queue a limited number
+            of sanitized technical error reports in browser storage when a report cannot be sent;
+            queued reports are retried and removed after successful delivery. The diagnostic queue
+            does not intentionally store form values, passwords, authentication tokens, cookies,
+            uploaded file contents, or request bodies. The app does not include advertising SDKs or
             third-party analytics SDKs in the current codebase.
           </Text>
         </Stack>
@@ -81,7 +88,8 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
             message data is provided to OpenAI Ireland Ltd. solely to generate the requested private
             operational summary. These providers process data under their applicable service terms
             and data-protection commitments. OmniLodge does not sell WhatsApp message data or use it
-            for advertising.
+            for advertising. Access to the detailed technical error-monitoring workspace is restricted
+            to authorized administrative roles.
           </Text>
         </Stack>
 
@@ -109,6 +117,9 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
             and webhook delivery records may be retained separately when needed to protect or operate
             the service. Data removed from the live database may remain in Google Drive backup copies
             until those backup copies are deleted; backup copies are used for service recovery.
+            Individual technical error occurrences are normally retained in the live database for
+            90 days, while grouped issue status and audit history may be retained longer to identify
+            regressions. Administrators may run the configured cleanup process sooner when appropriate.
             Locally stored session data may remain on a device until the user signs out, the app
             clears the session, or the app data is removed.
           </Text>
@@ -172,7 +183,7 @@ const PrivacyPolicyPage = ({ title }: GenericPageProps) => {
           }}
         >
           This page reflects the current OmniLodge application and WhatsApp integration behavior as
-          of August 27, 2026.
+          of September 9, 2026.
         </Text>
       </Stack>
     </LegalPageLayout>

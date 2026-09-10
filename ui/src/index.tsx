@@ -1,4 +1,5 @@
 import ReactDOM from 'react-dom/client';
+import axios from 'axios';
 import { Provider } from 'react-redux';
 import './index.css';
 import App from './App';
@@ -12,11 +13,28 @@ import 'mantine-react-table/styles.css'; //import MRT styles
 import { MantineProvider } from '@mantine/core';
 import type { MantineTheme } from '@mantine/core';
 import { clearCachedAppFilesAndReload } from './utils/refreshApp';
+import AppErrorBoundary from './components/errorMonitoring/AppErrorBoundary';
+import { initializeErrorMonitoring } from './utils/errorMonitoring';
+
+initializeErrorMonitoring({
+  defaultAxiosClient: axios,
+  getUserContext: () => {
+    const session = store.getState().session;
+    return {
+      id: session.loggedUserId || null,
+      authenticated: session.authenticated,
+      roleSlug: session.roleSlug,
+      userTypeId: session.userTypeId,
+      staffType: session.staffType,
+    };
+  },
+});
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
-  <Provider store={store}>
-    <MantineProvider theme={{
+  <AppErrorBoundary>
+    <Provider store={store}>
+      <MantineProvider theme={{
       fontFamily: 'Open Sans, sans-serif',
       fontFamilyMonospace: 'Fira Code, monospace',
       headings: { fontFamily: 'Roboto Slab, serif' },
@@ -55,10 +73,11 @@ root.render(
           }),
         },
       },
-    }}>
-      <App />
-    </MantineProvider>
-  </Provider>
+      }}>
+        <App />
+      </MantineProvider>
+    </Provider>
+  </AppErrorBoundary>
 );
 
 // If you want to start measuring performance in your app, pass a function
