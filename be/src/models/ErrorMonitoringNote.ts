@@ -9,6 +9,7 @@ import {
   PrimaryKey,
   Table,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 
 import User from './User.js';
 import ErrorMonitoringIssue from './ErrorMonitoringIssue.js';
@@ -47,8 +48,8 @@ export default class ErrorMonitoringNote extends Model {
   declare updatedAt: Date;
 
   @BelongsTo(() => ErrorMonitoringIssue, { foreignKey: 'issueId', as: 'issue' })
-  declare issue?: ErrorMonitoringIssue;
+  declare issue?: NonAttribute<ErrorMonitoringIssue>;
 
   @BelongsTo(() => User, { foreignKey: 'authorUserId', as: 'author' })
-  declare author?: User | null;
+  declare author?: NonAttribute<User | null>;
 }

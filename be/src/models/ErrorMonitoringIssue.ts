@@ -10,6 +10,7 @@ import {
   PrimaryKey,
   Table,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 
 import User from './User.js';
 import ErrorMonitoringNote from './ErrorMonitoringNote.js';
@@ -134,17 +135,17 @@ export default class ErrorMonitoringIssue extends Model {
   declare updatedAt: Date;
 
   @BelongsTo(() => User, { foreignKey: 'lastUserId', as: 'lastUser' })
-  declare lastUser?: User | null;
+  declare lastUser?: NonAttribute<User | null>;
 
   @BelongsTo(() => User, { foreignKey: 'assignedToUserId', as: 'assignedTo' })
-  declare assignedTo?: User | null;
+  declare assignedTo?: NonAttribute<User | null>;
 
   @BelongsTo(() => User, { foreignKey: 'statusChangedByUserId', as: 'statusChangedBy' })
-  declare statusChangedBy?: User | null;
+  declare statusChangedBy?: NonAttribute<User | null>;
 
   @HasMany(() => ErrorMonitoringOccurrence, { foreignKey: 'issueId', as: 'occurrences' })
-  declare occurrences?: ErrorMonitoringOccurrence[];
+  declare occurrences?: NonAttribute<ErrorMonitoringOccurrence[]>;
 
   @HasMany(() => ErrorMonitoringNote, { foreignKey: 'issueId', as: 'notes' })
-  declare notes?: ErrorMonitoringNote[];
+  declare notes?: NonAttribute<ErrorMonitoringNote[]>;
 }

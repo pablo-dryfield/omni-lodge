@@ -9,6 +9,7 @@ import {
   PrimaryKey,
   Table,
 } from 'sequelize-typescript';
+import type { NonAttribute } from 'sequelize';
 
 import User from './User.js';
 import ErrorMonitoringIssue, { type ErrorMonitoringLevel, type ErrorMonitoringSource } from './ErrorMonitoringIssue.js';
@@ -151,8 +152,8 @@ export default class ErrorMonitoringOccurrence extends Model {
   declare createdAt: Date;
 
   @BelongsTo(() => ErrorMonitoringIssue, { foreignKey: 'issueId', as: 'issue' })
-  declare issue?: ErrorMonitoringIssue;
+  declare issue?: NonAttribute<ErrorMonitoringIssue>;
 
   @BelongsTo(() => User, { foreignKey: 'userId', as: 'user' })
-  declare user?: User | null;
+  declare user?: NonAttribute<User | null>;
 }
