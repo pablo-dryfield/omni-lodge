@@ -912,10 +912,20 @@ async function listTableConstraints(schema: string, table: string, transaction?:
         ccu.column_name AS foreign_column
       FROM information_schema.table_constraints tc
       LEFT JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-      LEFT JOIN information_schema.constraint_column_usage ccu
-        ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
-      WHERE tc.table_schema = :schema AND tc.table_name = :table;
+        ON tc.constraint_catalog = kcu.constraint_catalog
+       AND tc.constraint_schema = kcu.constraint_schema
+       AND tc.constraint_name = kcu.constraint_name
+      LEFT JOIN information_schema.referential_constraints rc
+        ON tc.constraint_catalog = rc.constraint_catalog
+       AND tc.constraint_schema = rc.constraint_schema
+       AND tc.constraint_name = rc.constraint_name
+      LEFT JOIN information_schema.key_column_usage ccu
+        ON rc.unique_constraint_catalog = ccu.constraint_catalog
+       AND rc.unique_constraint_schema = ccu.constraint_schema
+       AND rc.unique_constraint_name = ccu.constraint_name
+       AND kcu.position_in_unique_constraint = ccu.ordinal_position
+      WHERE tc.table_schema = :schema AND tc.table_name = :table
+      ORDER BY tc.constraint_name, kcu.ordinal_position;
     `,
     { schema, table },
     transaction,
@@ -928,7 +938,9 @@ async function listTableConstraints(schema: string, table: string, transaction?:
       columns: [],
       references: row.foreign_table || row.foreign_column ? { table: row.foreign_table, column: row.foreign_column } : undefined,
     };
-    if (row.column_name) {
+    if (row.column_name && !existing.columns.some(
+      (column) => column.name === row.column_name && column.position === (row.ordinal_position ?? 0),
+    )) {
       existing.columns.push({ name: row.column_name, position: row.ordinal_position ?? 0 });
     }
     constraints.set(row.constraint_name, existing);
