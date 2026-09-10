@@ -1411,8 +1411,27 @@ export type HttpFailureCapture = {
 export const captureHttpFailureSafe = (req: Request, details: HttpFailureCapture): void => {
   if (!Number.isInteger(details.statusCode) || details.statusCode < 400) return;
   if (/\/api\/client-errors(?:\/|$)/i.test(req.originalUrl ?? req.url)) return;
-  const identity = getRequestIdentity(req);
   const requestedPath = sanitizeUrlPath(req.originalUrl ?? req.url, 500);
+  const normalizedRequestedPath = requestedPath?.replace(/\/+$/, '') || '/';
+  const authorizationHeader = req.headers?.authorization;
+  const hasBearerCredential = typeof authorizationHeader === 'string'
+    && /^Bearer\s+\S+/i.test(authorizationHeader.trim());
+  const cookieToken = req.cookies?.token;
+  const hasCookieCredential = typeof cookieToken === 'string'
+    ? Boolean(cookieToken.trim())
+    : Boolean(cookieToken);
+  // A logged-out browser probes this endpoint to establish that there is no
+  // current session. Its 401 is the endpoint's normal control flow, not an
+  // operational failure. Credential-bearing 401s still indicate a stale or
+  // invalid account/session state and remain observable on the backend.
+  if (
+    details.statusCode === 401
+    && req.method.toUpperCase() === 'GET'
+    && normalizedRequestedPath === '/api/session'
+    && !hasBearerCredential
+    && !hasCookieCredential
+  ) return;
+  const identity = getRequestIdentity(req);
   // Unknown 404 paths are attacker-controlled. A synthetic route prevents bot
   // scans from creating one issue group per random URL while retaining a
   // redacted sample only inside the bounded occurrence context.

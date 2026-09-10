@@ -1,7 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildBrowserReportUrl, resolvePublicReportingOrigin } from './reportingSecurity.js';
+import {
+  buildBrowserReportUrl,
+  resolvePublicReportingOrigin,
+  UI_CONTENT_SECURITY_POLICY,
+} from './reportingSecurity.js';
+
+test('allows both base and versioned automatic Cloudflare Web Analytics scripts', () => {
+  const directives = new Map(
+    UI_CONTENT_SECURITY_POLICY.split('; ').map((directive) => {
+      const [name, ...sources] = directive.split(' ');
+      return [name, sources];
+    }),
+  );
+
+  assert.deepEqual(directives.get('script-src'), [
+    "'self'",
+    'https://connect.facebook.net',
+    'https://static.cloudflareinsights.com/beacon.min.js',
+    'https://static.cloudflareinsights.com/beacon.min.js/',
+  ]);
+  assert.ok(!directives.get('script-src').includes('https://static.cloudflareinsights.com'));
+  assert.ok(directives.get('connect-src').includes("'self'"));
+  assert.ok(!directives.get('connect-src').includes('https://cloudflareinsights.com'));
+});
 
 test('uses a canonical configured origin and never a request Host header', () => {
   assert.equal(

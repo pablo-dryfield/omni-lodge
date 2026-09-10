@@ -2,6 +2,14 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const DEFAULT_PUBLIC_ORIGIN = 'https://omni-lodge.com';
 const DEFAULT_DEVELOPMENT_ORIGIN = 'http://localhost:3005';
 
+export const UI_CONTENT_SECURITY_POLICY = [
+  "script-src 'self' https://connect.facebook.net https://static.cloudflareinsights.com/beacon.min.js https://static.cloudflareinsights.com/beacon.min.js/",
+  "connect-src 'self' https://omni-lodge.com https://connect.facebook.net https://graph.facebook.com https://www.facebook.com https://web.facebook.com https://www.googleapis.com https://content.googleapis.com",
+  "frame-src 'self' blob: data: https://www.facebook.com https://web.facebook.com",
+  'report-uri /api/client-errors/browser-reports',
+  'report-to csp-endpoint',
+].join('; ');
+
 const normalizeHostname = (value) => String(value || '')
   .toLowerCase()
   .replace(/^\[|\]$/g, '');

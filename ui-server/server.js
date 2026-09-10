@@ -24,7 +24,10 @@ import {
   archiveSourceMaps,
   denyPublicSourceMaps,
 } from './sourceMapArchive.js';
-import { buildBrowserReportUrl } from './reportingSecurity.js';
+import {
+  buildBrowserReportUrl,
+  UI_CONTENT_SECURITY_POLICY,
+} from './reportingSecurity.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -79,14 +82,6 @@ const NO_CACHE_HEADERS = {
   Pragma: 'no-cache',
   Expires: '0',
 };
-
-const UI_CONTENT_SECURITY_POLICY = [
-  "script-src 'self' https://connect.facebook.net",
-  "connect-src 'self' https://omni-lodge.com https://connect.facebook.net https://graph.facebook.com https://www.facebook.com https://web.facebook.com https://www.googleapis.com https://content.googleapis.com",
-  "frame-src 'self' blob: data: https://www.facebook.com https://web.facebook.com",
-  "report-uri /api/client-errors/browser-reports",
-  'report-to csp-endpoint',
-].join('; ');
 
 const UI_SERVER_TELEMETRY_MAX_QUEUE = 50;
 const UI_SERVER_TELEMETRY_MAX_BATCH = 10;

@@ -810,8 +810,30 @@ const isHealthProbe = (url: string | undefined): boolean => {
   }
 };
 
+const isExpectedUnauthenticatedSessionCheck = (failure: ApiFailureCapture): boolean => {
+  if (
+    failure.status !== 401 ||
+    failure.method?.trim().toUpperCase() !== "GET" ||
+    !failure.url
+  ) {
+    return false;
+  }
+  try {
+    const base = typeof window !== "undefined" ? window.location.origin : "https://local.invalid";
+    const pathname = new URL(failure.url, base).pathname.replace(/\/+$/, "");
+    return pathname === "/api/session";
+  } catch {
+    return false;
+  }
+};
+
 const shouldIgnoreApiFailure = (failure: ApiFailureCapture): boolean => {
-  if (failure.isCanceled || isTelemetryUrl(failure.url) || isHealthProbe(failure.url)) {
+  if (
+    failure.isCanceled ||
+    isTelemetryUrl(failure.url) ||
+    isHealthProbe(failure.url) ||
+    isExpectedUnauthenticatedSessionCheck(failure)
+  ) {
     return true;
   }
   if (failure.status === 308 || failure.expectedStatuses?.includes(failure.status ?? -1)) {

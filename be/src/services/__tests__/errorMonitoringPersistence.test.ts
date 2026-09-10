@@ -446,6 +446,79 @@ describe('error monitoring persistence', () => {
     }));
   });
 
+  it('does not persist expected logged-out GET /api/session 401s', async () => {
+    for (const [method, originalUrl, routePath] of [
+      ['GET', '/api/session', '/session'],
+      ['get', '/api/session/?fresh=true', '/session/'],
+    ]) {
+      const req = {
+        method,
+        originalUrl,
+        url: originalUrl,
+        headers: {},
+        cookies: {},
+        path: originalUrl,
+        baseUrl: '/api',
+        route: { path: routePath },
+        ip: '192.0.2.7',
+        socket: { remoteAddress: '192.0.2.7' },
+        get: jest.fn().mockReturnValue('Browser'),
+      } as never;
+
+      captureHttpFailureSafe(req, { statusCode: 401 });
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(database.transaction).not.toHaveBeenCalled();
+    expect(occurrenceModel.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['POST', 401, '/api/session', '/session', {}, {}],
+    ['GET', 403, '/api/session', '/session', {}, {}],
+    ['GET', 401, '/api/session/profile-photo', '/session/profile-photo', {}, {}],
+    ['GET', 401, '/api/session', '/session', { authorization: 'Bearer active-session' }, {}],
+    ['GET', 401, '/api/session', '/session', {}, { token: 'active-session' }],
+  ])(
+    'persists near-miss session failures: %s %s %s',
+    async (method, statusCode, originalUrl, routePath, headers, cookies) => {
+      database.query
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce([{
+          id: 34,
+          occurrence_count: 1,
+          reopened_count: 0,
+          is_new: true,
+          regressed: false,
+        }]);
+      const req = {
+        method,
+        originalUrl,
+        url: originalUrl,
+        headers,
+        cookies,
+        path: originalUrl,
+        baseUrl: '/api',
+        route: { path: routePath },
+        ip: '192.0.2.7',
+        socket: { remoteAddress: '192.0.2.7' },
+        get: jest.fn().mockReturnValue('Browser'),
+      } as never;
+
+      captureHttpFailureSafe(req, { statusCode });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(database.transaction).toHaveBeenCalledTimes(1);
+      expect(occurrenceModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          httpMethod: method,
+          httpStatus: statusCode,
+        }),
+        expect.any(Object),
+      );
+    },
+  );
+
   it('sorts severity by an explicit fatal-to-info rank instead of alphabetically', async () => {
     await listErrorMonitoringIssues({ sort: 'severity', direction: 'desc' });
 

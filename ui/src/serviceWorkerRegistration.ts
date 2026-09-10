@@ -6,6 +6,9 @@ type Config = {
 };
 
 const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 1000;
+const GOOGLE_PLAY_RENDERER_USER_AGENT_TOKEN =
+  /(?:^|[^A-Za-z0-9_-])PlayStore-Google(?:$|[^A-Za-z0-9_-])/;
+const GOOGLE_PLAY_SERVICE_WORKER_STACK_MARKER = 'wrsParams.serviceWorkers';
 
 const isLocalhost = Boolean(
   window.location.hostname === 'localhost' ||
@@ -14,6 +17,37 @@ const isLocalhost = Boolean(
       /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/,
     ),
 );
+
+export const isGooglePlayServiceWorkerRegistrationRejection = (
+  error: unknown,
+  userAgent: string,
+): boolean => {
+  if (!GOOGLE_PLAY_RENDERER_USER_AGENT_TOKEN.test(userAgent)) {
+    return false;
+  }
+
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  const errorLike = error as { message?: unknown; stack?: unknown };
+  return (
+    errorLike.message === 'Rejected' &&
+    typeof errorLike.stack === 'string' &&
+    errorLike.stack.includes(GOOGLE_PLAY_SERVICE_WORKER_STACK_MARKER)
+  );
+};
+
+export const reportServiceWorkerRegistrationError = (
+  error: unknown,
+  userAgent = navigator.userAgent,
+): void => {
+  if (isGooglePlayServiceWorkerRegistrationRejection(error, userAgent)) {
+    return;
+  }
+
+  console.error('Error during service worker registration:', error);
+};
 
 export function register(config?: Config) {
   if (process.env.NODE_ENV === 'production' && 'serviceWorker' in navigator) {
@@ -64,7 +98,7 @@ function registerValidSW(swUrl: string, config?: Config) {
       };
     })
     .catch((error) => {
-      console.error('Error during service worker registration:', error);
+      reportServiceWorkerRegistrationError(error);
     });
 }
 

@@ -669,6 +669,48 @@ describe("browser error monitoring", () => {
     expect(JSON.stringify(event)).toContain("VALIDATION_FAILED");
   });
 
+  it("ignores only unauthenticated GET session checks across URL forms", async () => {
+    configureWithoutHandlers();
+
+    expect(captureApiFailure({
+      method: "GET",
+      url: "/api/session",
+      status: 401,
+    })).toBeNull();
+    expect(captureApiFailure({
+      method: "get",
+      url: "https://omni-lodge.com/api/session/?cache=private",
+      status: 401,
+    })).toBeNull();
+
+    expect(captureApiFailure({
+      method: "POST",
+      url: "/api/session",
+      status: 401,
+    })).not.toBeNull();
+    expect(captureApiFailure({
+      method: "GET",
+      url: "/api/session/profile-photo",
+      status: 401,
+    })).not.toBeNull();
+    expect(captureApiFailure({
+      method: "GET",
+      url: "/api/bookings",
+      status: 401,
+    })).not.toBeNull();
+
+    await waitForQueuedCount(store, 3);
+    await flushErrorMonitoring();
+
+    const events = readSentEvents(transport);
+    expect(events).toHaveLength(3);
+    expect(events.map((event) => event.http)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ method: "POST", url: "/api/session", status: 401 }),
+      expect.objectContaining({ method: "GET", url: "/api/session/profile-photo", status: 401 }),
+      expect.objectContaining({ method: "GET", url: "/api/bookings", status: 401 }),
+    ]));
+  });
+
   it("keeps console capture non-throwing for revoked proxy arguments", async () => {
     const originalConsoleError = console.error;
     console.error = jest.fn();
