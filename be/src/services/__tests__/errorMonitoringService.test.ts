@@ -151,6 +151,21 @@ describe('error monitoring sanitization and grouping', () => {
     expect(sanitizeCorrelationId('4111111111111111')).toBeNull();
   });
 
+  it('preserves safe dated release tokens for client, trusted, and server events', () => {
+    const release = 'omnilodge-2026-09-10-error-monitoring-r1.5';
+    const base = { type: 'exception', message: 'Release regression' };
+
+    expect(sanitizeClientEvent({ ...base, release }, {}).release).toBe(release);
+    expect(sanitizeClientEvent({ ...base, release }, { trustedInternal: true }).release).toBe(release);
+    expect(prepareCaptureEventForSpool({
+      source: 'server',
+      kind: 'exception',
+      level: 'error',
+      message: 'Release regression',
+      release,
+    }).release).toBe(release);
+  });
+
   it('decodes and redacts sensitive path data while pseudonymizing record ids', () => {
     const path = sanitizeUrlPath(
       'https://omni-lodge.com/bookings/pablo%2540example.com/9d2f3f4c-4a6a-4f13-8d36-9aa073dc9355/12345?token=secret',

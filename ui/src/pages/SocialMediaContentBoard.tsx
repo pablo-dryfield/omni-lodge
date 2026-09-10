@@ -286,7 +286,7 @@ const AssetRow = ({
   </Paper>
 );
 
-const SocialContentCard = ({
+export const SocialContentCard = ({
   item,
   canUpdate,
   canDelete,
@@ -427,6 +427,18 @@ const SocialContentCard = ({
           ) : null}
         </Stack>
         <SocialMediaAttribution item={item} />
+        {canUpdate && item.status === "ready" ? (
+          <Button
+            fullWidth
+            variant="light"
+            color="violet"
+            leftSection={<IconFolder size={16} />}
+            disabled={busy}
+            onClick={onManageAssets}
+          >
+            Edit files
+          </Button>
+        ) : null}
         {canUpdate && actionLabel ? (
           <Button
             fullWidth

@@ -18,6 +18,7 @@ import {
   safeUiServerRequestPath,
   sanitizeUiServerContext,
   sanitizeUiServerCorrelationId,
+  sanitizeUiServerRelease,
   sanitizeUiServerText,
 } from './telemetryPayload.js';
 import {
@@ -47,7 +48,7 @@ if (!uiServerTelemetrySecret) {
 } else if (!uiServerTelemetryEndpointIsSecure) {
   logger.warn('[ui] Trusted error telemetry is paused: its endpoint must use HTTPS or loopback HTTP and cannot contain credentials.');
 }
-const uiServerRelease =
+const configuredUiServerRelease =
   process.env.REACT_APP_BUILD_VERSION
   ?? process.env.REACT_APP_RELEASE
   ?? process.env.APP_VERSION
@@ -55,6 +56,7 @@ const uiServerRelease =
   ?? process.env.GIT_SHA
   ?? process.env.COMMIT_SHA
   ?? 'ui-server';
+const uiServerRelease = sanitizeUiServerRelease(configuredUiServerRelease) ?? 'ui-server';
 const resolveUiSourceMapRelease = () => {
   const configured = process.env.REACT_APP_RELEASE
     ?? process.env.REACT_APP_BUILD_VERSION
@@ -166,8 +168,8 @@ const restoreUiServerTelemetryQueue = () => {
         pageUrl: pathValue,
         route: pathValue,
         release: typeof candidate.release === 'string'
-          ? sanitizeUiServerCorrelationId(candidate.release)
-          : sanitizeUiServerCorrelationId(uiServerRelease),
+          ? sanitizeUiServerRelease(candidate.release)
+          : uiServerRelease,
         environment: candidate.environment === 'development'
           || candidate.environment === 'test'
           || candidate.environment === 'staging'
@@ -307,7 +309,7 @@ const enqueueUiServerError = (input = {}) => {
       occurredAt: new Date().toISOString(),
       pageUrl: pathValue,
       route: pathValue,
-      release: sanitizeUiServerCorrelationId(uiServerRelease) || 'ui-server',
+      release: uiServerRelease,
       environment: ['production', 'development', 'test', 'staging'].includes(process.env.NODE_ENV)
         ? process.env.NODE_ENV
         : 'production',

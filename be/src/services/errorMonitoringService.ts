@@ -591,9 +591,7 @@ export const sanitizeClientEvent = (
     durationMs: http.durationMs,
     pageUrl: sanitizeUrlPath(input.pageUrl),
     route: sanitizeUrlPath(input.route, 500),
-    release: trustedInternal
-      ? clampAndRedact(input.release, 120)
-      : sanitizeClientRelease(input.release),
+    release: sanitizeClientRelease(input.release),
     environment: trustedInternal
       ? clampAndRedact(input.environment, 50)
       : sanitizeClientEnvironment(input.environment),
@@ -702,7 +700,10 @@ const normalizeCaptureEvent = (rawEvent: CaptureEvent): CaptureEvent => {
     route: sanitizeUrlPath(rawEvent.route, 500),
     pageUrl: sanitizeUrlPath(rawEvent.pageUrl),
     httpUrl: sanitizeUrlPath(rawEvent.httpUrl),
-    release: clampAndRedact(rawEvent.release, 120),
+    // Release identifiers are bounded machine tokens. Generic free-text
+    // redaction mistakes ISO-style dates inside labels for phone numbers and
+    // makes exact release filtering impossible.
+    release: sanitizeClientRelease(rawEvent.release),
     environment: clampAndRedact(rawEvent.environment, 50),
     requestId: sanitizeCorrelationId(rawEvent.requestId, 100),
     userAgent: clampAndRedact(rawEvent.userAgent, 1_000),

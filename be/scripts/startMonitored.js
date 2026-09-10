@@ -21,6 +21,9 @@ import { randomUUID } from 'node:crypto';
 
 const MAX_BOOTSTRAP_SPOOL_BYTES = 1024 * 1024;
 const MAX_BOOTSTRAP_RECORD_BYTES = 64 * 1024;
+const RELEASE_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,119}$/;
+const JWT_RELEASE_PATTERN = /^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/i;
+const FINANCIAL_RELEASE_PATTERN = /^(?:\d{13,34}|[A-Z]{2}\d{2}[A-Z0-9]{11,30})$/i;
 
 const safeRead = (value, key) => {
   try {
@@ -55,6 +58,18 @@ const sanitizeText = (value, maxLength) => {
     .slice(0, maxLength);
 };
 
+const sanitizeReleaseToken = (value) => {
+  let candidate;
+  try {
+    candidate = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+  } catch {
+    return null;
+  }
+  if (!RELEASE_TOKEN_PATTERN.test(candidate)) return null;
+  if (JWT_RELEASE_PATTERN.test(candidate) || FINANCIAL_RELEASE_PATTERN.test(candidate)) return null;
+  return candidate;
+};
+
 const resolveSpoolPath = () => {
   const configured = String(process.env.ERROR_MONITORING_SPOOL_PATH ?? '').trim();
   return path.resolve(configured || path.join(process.cwd(), 'runtime', 'error-monitoring', 'failed-events.ndjson'));
@@ -85,7 +100,7 @@ const appendBootstrapFailure = (error, targetLabel) => {
         stack: stack || null,
         occurredAt: now,
         environment: sanitizeText(process.env.NODE_ENV || 'production', 50),
-        release: sanitizeText(process.env.APP_VERSION || process.env.GIT_COMMIT_SHA || '', 120) || null,
+        release: sanitizeReleaseToken(process.env.APP_VERSION || process.env.GIT_COMMIT_SHA || ''),
         context: {
           bootstrapLauncher: true,
           target: sanitizeText(targetLabel, 240),

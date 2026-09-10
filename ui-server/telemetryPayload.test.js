@@ -7,6 +7,7 @@ import {
   safeUiServerRequestPath,
   sanitizeUiServerContext,
   sanitizeUiServerCorrelationId,
+  sanitizeUiServerRelease,
   sanitizeUiServerText,
   uiServerTelemetryByteLength,
 } from './telemetryPayload.js';
@@ -46,6 +47,16 @@ test('redacts sensitive correlation IDs before applying the allowlist', () => {
     '[redacted-number]',
   );
   assert.equal(sanitizeUiServerCorrelationId('request-123'), 'request-123');
+});
+
+test('preserves dated release tokens while rejecting unsafe release values', () => {
+  const release = 'omnilodge-2026-09-10-error-monitoring-r1.5';
+  const jwt = 'eyJabcdefghijk.abcdefghijk.abcdefghijk';
+
+  assert.equal(sanitizeUiServerRelease(release), release);
+  assert.equal(sanitizeUiServerRelease('release with arbitrary free text'), null);
+  assert.equal(sanitizeUiServerRelease(jwt), null);
+  assert.equal(sanitizeUiServerRelease('4111111111111111'), null);
 });
 
 test('enforces the spool limit in UTF-8 bytes and preserves fatal events first', () => {

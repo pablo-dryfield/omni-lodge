@@ -244,13 +244,24 @@ const normalizeFetchTarget = (
   }
 };
 
-export const classifyExternalRequestClose = (responseReceived: boolean): string | null =>
-  responseReceived ? null : 'REQUEST_CLOSED';
+export const classifyExternalRequestClose = (
+  responseReceived: boolean,
+  timeoutObserved = false,
+): string | null => {
+  if (responseReceived) return null;
+  return timeoutObserved ? 'TIMEOUT' : 'REQUEST_CLOSED';
+};
+
+export const classifyExternalRequestError = (
+  errorCode: string | undefined,
+  errorName: string | undefined,
+  timeoutObserved: boolean,
+): string => errorCode ?? (timeoutObserved ? 'TIMEOUT' : errorName ?? 'ERROR');
 
 export const classifyExternalResponseClose = (complete: boolean): string | null =>
   complete ? null : 'INCOMPLETE_RESPONSE';
 
-class ExternalRequestDiagnosticsService {
+export class ExternalRequestDiagnosticsService {
   private readonly slowExternalCallThresholdMs =
     Number(process.env.PERFORMANCE_SLOW_EXTERNAL_CALL_MS) || DEFAULT_SLOW_EXTERNAL_CALL_MS;
   private readonly aggregates = new Map<string, ExternalCallAggregate>();
@@ -439,6 +450,7 @@ class ExternalRequestDiagnosticsService {
 
     let completed = false;
     let responseReceived = false;
+    let timeoutObserved = false;
     const finalize = (response: IncomingMessage | null, errorCode: string | null): void => {
       if (completed) {
         return;
@@ -471,10 +483,33 @@ class ExternalRequestDiagnosticsService {
       response.on('aborted', () => finalize(response, 'INCOMPLETE_RESPONSE'));
       response.on('close', () => finalize(response, classifyExternalResponseClose(response.complete)));
     });
-    request.on('timeout', () => finalize(null, 'TIMEOUT'));
-    request.on('error', (error: Error & { code?: string }) => finalize(null, error.code ?? error.name ?? 'ERROR'));
+    // Successful protocol switches (for example Puppeteer's WebSocket/CDP
+    // connection) emit `upgrade` rather than `response`. CONNECT tunnels use
+    // the analogous `connect` event. Both have received valid response
+    // headers and must not become REQUEST_CLOSED issues when the HTTP request
+    // object subsequently closes.
+    request.on('upgrade', (response) => {
+      responseReceived = true;
+      finalize(response, null);
+    });
+    request.on('connect', (response) => {
+      responseReceived = true;
+      finalize(response, null);
+    });
+    // A ClientRequest timeout is only an inactivity notification. Node does
+    // not abort the request automatically, and a response can still arrive.
+    // Record TIMEOUT only if the request subsequently fails or closes before
+    // receiving response headers; otherwise this would report successful slow
+    // Google Drive downloads as failures after the global agent's 5-second timeout.
+    request.on('timeout', () => {
+      timeoutObserved = true;
+    });
+    request.on('error', (error: Error & { code?: string }) => finalize(
+      null,
+      classifyExternalRequestError(error.code, error.name, timeoutObserved),
+    ));
     request.on('close', () => {
-      const closeError = classifyExternalRequestClose(responseReceived);
+      const closeError = classifyExternalRequestClose(responseReceived, timeoutObserved);
       if (closeError) finalize(null, closeError);
     });
   }

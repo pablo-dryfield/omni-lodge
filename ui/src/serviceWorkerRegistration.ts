@@ -6,8 +6,8 @@ type Config = {
 };
 
 const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 1000;
-const GOOGLE_PLAY_RENDERER_USER_AGENT_TOKEN =
-  /(?:^|[^A-Za-z0-9_-])PlayStore-Google(?:$|[^A-Za-z0-9_-])/;
+const GOOGLE_AUTOMATED_RENDERER_USER_AGENT_TOKEN =
+  /(?:^|[^A-Za-z0-9_-])(?:PlayStore-Google|Google-Read-Aloud)(?:$|[^A-Za-z0-9_-])/;
 const GOOGLE_PLAY_SERVICE_WORKER_STACK_MARKER = 'wrsParams.serviceWorkers';
 
 const isLocalhost = Boolean(
@@ -22,7 +22,7 @@ export const isGooglePlayServiceWorkerRegistrationRejection = (
   error: unknown,
   userAgent: string,
 ): boolean => {
-  if (!GOOGLE_PLAY_RENDERER_USER_AGENT_TOKEN.test(userAgent)) {
+  if (!GOOGLE_AUTOMATED_RENDERER_USER_AGENT_TOKEN.test(userAgent)) {
     return false;
   }
 
@@ -47,6 +47,22 @@ export const reportServiceWorkerRegistrationError = (
   }
 
   console.error('Error during service worker registration:', error);
+};
+
+export const isStaleServiceWorkerRegistrationError = (error: unknown): boolean =>
+  typeof error === 'object' &&
+  error !== null &&
+  (error as { name?: unknown }).name === 'InvalidStateError';
+
+export const reportServiceWorkerUpdateError = (error: unknown): void => {
+  // update() rejects with InvalidStateError after this particular registration
+  // object has been unregistered/replaced. Continuing the per-minute poll only
+  // repeats noise; a reload will register the current worker normally.
+  if (isStaleServiceWorkerRegistrationError(error)) {
+    return;
+  }
+
+  console.error('Error checking for app update:', error);
 };
 
 export function register(config?: Config) {
@@ -103,17 +119,29 @@ function registerValidSW(swUrl: string, config?: Config) {
 }
 
 function scheduleUpdateChecks(registration: ServiceWorkerRegistration) {
+  let intervalId: number | null = null;
+  const stopUpdateChecks = () => {
+    window.removeEventListener('focus', checkForUpdate);
+    if (intervalId !== null) {
+      window.clearInterval(intervalId);
+      intervalId = null;
+    }
+  };
   const checkForUpdate = () => {
     if (document.visibilityState !== 'visible') {
       return;
     }
     registration.update().catch((error) => {
-      console.error('Error checking for app update:', error);
+      if (isStaleServiceWorkerRegistrationError(error)) {
+        stopUpdateChecks();
+        return;
+      }
+      reportServiceWorkerUpdateError(error);
     });
   };
 
   window.addEventListener('focus', checkForUpdate);
-  window.setInterval(checkForUpdate, APP_UPDATE_CHECK_INTERVAL_MS);
+  intervalId = window.setInterval(checkForUpdate, APP_UPDATE_CHECK_INTERVAL_MS);
 }
 
 function checkValidServiceWorker(swUrl: string, config?: Config) {

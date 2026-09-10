@@ -3,6 +3,9 @@ const DEFAULT_CONTEXT_BUDGET = 8_000;
 const MAX_PATH_SEGMENT_LENGTH = 512;
 const MAX_PERCENT_DECODE_PASSES = 6;
 const SENSITIVE_KEY = /(?:authorization|cookie|password|passwd|secret|token|api[_-]?key|session|credential|card|iban|bank[_-]?(?:account|number)|swift|bic)/i;
+const RELEASE_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,119}$/;
+const JWT_RELEASE_PATTERN = /^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/i;
+const FINANCIAL_RELEASE_PATTERN = /^(?:\d{13,34}|[A-Z]{2}\d{2}[A-Z0-9]{11,30})$/i;
 
 export const safeUiServerRead = (value, key) => {
   try {
@@ -61,6 +64,16 @@ export const sanitizeUiServerCorrelationId = (value) => {
   const stringValue = sanitizeUiServerPersonalText(value, 200);
   if (/^[A-Za-z0-9._:-]{1,200}$/.test(stringValue)) return stringValue;
   return stringValue.replace(/[^A-Za-z0-9._:[\]-]/g, '-').slice(0, 200);
+};
+
+// Release identifiers are trusted machine tokens, not free text. Keeping this
+// path separate from the personal-text redactor prevents ISO-style dates in a
+// deployment tag from being mistaken for phone numbers.
+export const sanitizeUiServerRelease = (value) => {
+  const candidate = safeUiServerString(value).trim();
+  if (!RELEASE_TOKEN_PATTERN.test(candidate)) return null;
+  if (JWT_RELEASE_PATTERN.test(candidate) || FINANCIAL_RELEASE_PATTERN.test(candidate)) return null;
+  return candidate;
 };
 
 const decodePathSegment = (value) => {

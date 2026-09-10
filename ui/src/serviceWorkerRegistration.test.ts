@@ -1,6 +1,8 @@
 import {
   isGooglePlayServiceWorkerRegistrationRejection,
+  isStaleServiceWorkerRegistrationError,
   reportServiceWorkerRegistrationError,
+  reportServiceWorkerUpdateError,
 } from './serviceWorkerRegistration';
 
 const buildRegistrationError = (
@@ -23,17 +25,20 @@ describe('Google Play service-worker registration rejection', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('quietly ignores the exact automated-renderer rejection signature', () => {
+  it.each([
+    'Mozilla/5.0 PlayStore-Google',
+    'Mozilla/5.0 (compatible; Google-Read-Aloud; +https://support.google.com/webmasters/answer/1061943)',
+  ])('quietly ignores the exact automated-renderer rejection signature for %s', (userAgent) => {
     const error = buildRegistrationError();
 
     expect(
       isGooglePlayServiceWorkerRegistrationRejection(
         error,
-        'Mozilla/5.0 PlayStore-Google',
+        userAgent,
       ),
     ).toBe(true);
 
-    reportServiceWorkerRegistrationError(error, 'PlayStore-Google');
+    reportServiceWorkerRegistrationError(error, userAgent);
 
     expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
@@ -77,6 +82,41 @@ describe('Google Play service-worker registration rejection', () => {
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       'Error during service worker registration:',
+      error,
+    );
+  });
+});
+
+describe('service-worker update failures', () => {
+  let consoleErrorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('quietly stops reporting a stale registration InvalidStateError', () => {
+    const error = Object.assign(new Error('The object is in an invalid state.'), {
+      name: 'InvalidStateError',
+    });
+
+    expect(isStaleServiceWorkerRegistrationError(error)).toBe(true);
+    reportServiceWorkerUpdateError(error);
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it('continues reporting other update failures', () => {
+    const error = new TypeError('Network unavailable');
+
+    expect(isStaleServiceWorkerRegistrationError(error)).toBe(false);
+    reportServiceWorkerUpdateError(error);
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      'Error checking for app update:',
       error,
     );
   });
