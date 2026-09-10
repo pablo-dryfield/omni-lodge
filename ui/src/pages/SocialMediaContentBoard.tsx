@@ -25,6 +25,7 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
+  UnstyledButton,
   useMantineTheme,
 } from "@mantine/core";
 import { DatePickerInput } from "@mantine/dates";
@@ -83,6 +84,7 @@ import {
 } from "../api/socialMedia";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import SocialMediaAttribution, { socialMediaPersonName } from "../components/socialMedia/SocialMediaAttribution";
+import SocialMediaIdeaViewModal from "../components/socialMedia/SocialMediaIdeaViewModal";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
@@ -293,6 +295,7 @@ export const SocialContentCard = ({
   canEditPublicationDate,
   canPublish,
   busy,
+  onView,
   onEdit,
   onNext,
   onEditPlannedDate,
@@ -309,6 +312,7 @@ export const SocialContentCard = ({
   canEditPublicationDate: boolean;
   canPublish: boolean;
   busy: boolean;
+  onView: () => void;
   onEdit: () => void;
   onNext: () => void;
   onEditPlannedDate: () => void;
@@ -334,70 +338,85 @@ export const SocialContentCard = ({
         {item.thumbnailUrl ? (
           <Image src={item.thumbnailUrl} alt={`${item.title} thumbnail`} h={140} radius="md" fit="cover" />
         ) : null}
-        <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
-          <Box style={{ minWidth: 0, flex: 1 }}>
-            <Text fw={750} lineClamp={2}>{item.title}</Text>
-            <Text size="sm" c="dimmed" lineClamp={3} mt={3}>{item.idea}</Text>
-          </Box>
+        <Box pos="relative">
+          <UnstyledButton
+            onClick={onView}
+            aria-label={`View details for ${item.title}`}
+            style={{ display: "block", width: "100%", padding: "2px 38px 0" }}
+          >
+            <Text
+              fw={750}
+              c="blue.7"
+              ta="center"
+              td="underline"
+              lineClamp={2}
+              style={{ textUnderlineOffset: 3 }}
+            >
+              {item.title}
+            </Text>
+          </UnstyledButton>
           {canUpdate || (canDelete && item.status !== "archived") ? (
-            <Menu position="bottom-end" withinPortal>
-              <Menu.Target>
-                <ActionIcon variant="subtle" color="gray" aria-label={`Actions for ${item.title}`}>
-                  <IconDotsVertical size={18} />
-                </ActionIcon>
-              </Menu.Target>
-              <Menu.Dropdown>
-                {canUpdate && item.status !== "published" ? (
-                  <Menu.Item onClick={onEdit}>Edit idea</Menu.Item>
-                ) : null}
-                {canUpdate && canEditPlannedDate ? (
-                  <Menu.Item leftSection={<IconCalendar size={15} />} onClick={onEditPlannedDate}>
-                    Change planned date
-                  </Menu.Item>
-                ) : null}
-                {canUpdate && canManageAssets ? (
-                  <Menu.Item
-                    leftSection={<IconFolder size={15} />}
-                    onClick={onManageAssets}
-                    disabled={busy}
-                  >
-                    Manage production files
-                  </Menu.Item>
-                ) : null}
-                {canPublish && item.status === "published" ? (
-                  <Menu.Item leftSection={<IconExternalLink size={15} />} onClick={onEditPublicationLinks}>
-                    Edit published links
-                  </Menu.Item>
-                ) : null}
-                {canEditPublicationDate && item.status === "published" && item.publishedAt ? (
-                  <Menu.Item
-                    leftSection={<IconCalendar size={15} />}
-                    onClick={onEditPublicationDate}
-                    disabled={busy}
-                  >
-                    Edit publish date
-                  </Menu.Item>
-                ) : null}
-                {canEditPublicationDate && item.status !== "archived" ? (
-                  <Menu.Item leftSection={<IconUser size={15} />} onClick={onEditAttribution} disabled={busy}>
-                    Reassign people
-                  </Menu.Item>
-                ) : null}
-                {canUpdate ? (
-                  <Menu.Item leftSection={<IconPhoto size={15} />} onClick={onThumbnail}>
-                    {item.thumbnailUrl ? "Manage thumbnail" : "Add thumbnail"}
-                  </Menu.Item>
-                ) : null}
-                {canDelete && item.status !== "archived" ? (
-                  <Menu.Item color="red" leftSection={<IconArchive size={15} />} onClick={onArchive}>
-                    Archive
-                  </Menu.Item>
-                ) : null}
-              </Menu.Dropdown>
-            </Menu>
+            <Box pos="absolute" top={-5} right={-5}>
+              <Menu position="bottom-end" withinPortal>
+                <Menu.Target>
+                  <ActionIcon variant="subtle" color="gray" aria-label={`Actions for ${item.title}`}>
+                    <IconDotsVertical size={18} />
+                  </ActionIcon>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  {canUpdate && item.status !== "published" ? (
+                    <Menu.Item onClick={onEdit}>Edit idea</Menu.Item>
+                  ) : null}
+                  {canUpdate && canEditPlannedDate ? (
+                    <Menu.Item leftSection={<IconCalendar size={15} />} onClick={onEditPlannedDate}>
+                      Change planned date
+                    </Menu.Item>
+                  ) : null}
+                  {canUpdate && canManageAssets ? (
+                    <Menu.Item
+                      leftSection={<IconFolder size={15} />}
+                      onClick={onManageAssets}
+                      disabled={busy}
+                    >
+                      Manage production files
+                    </Menu.Item>
+                  ) : null}
+                  {canPublish && item.status === "published" ? (
+                    <Menu.Item leftSection={<IconExternalLink size={15} />} onClick={onEditPublicationLinks}>
+                      Edit published links
+                    </Menu.Item>
+                  ) : null}
+                  {canEditPublicationDate && item.status === "published" && item.publishedAt ? (
+                    <Menu.Item
+                      leftSection={<IconCalendar size={15} />}
+                      onClick={onEditPublicationDate}
+                      disabled={busy}
+                    >
+                      Edit publish date
+                    </Menu.Item>
+                  ) : null}
+                  {canEditPublicationDate && item.status !== "archived" ? (
+                    <Menu.Item leftSection={<IconUser size={15} />} onClick={onEditAttribution} disabled={busy}>
+                      Reassign people
+                    </Menu.Item>
+                  ) : null}
+                  {canUpdate ? (
+                    <Menu.Item leftSection={<IconPhoto size={15} />} onClick={onThumbnail}>
+                      {item.thumbnailUrl ? "Manage thumbnail" : "Add thumbnail"}
+                    </Menu.Item>
+                  ) : null}
+                  {canDelete && item.status !== "archived" ? (
+                    <Menu.Item color="red" leftSection={<IconArchive size={15} />} onClick={onArchive}>
+                      Archive
+                    </Menu.Item>
+                  ) : null}
+                </Menu.Dropdown>
+              </Menu>
+            </Box>
           ) : null}
-        </Group>
-        <Group gap={5}>
+          <Text size="sm" c="dimmed" lineClamp={3} mt="xs" ta="center">{item.idea}</Text>
+        </Box>
+        <Group gap={5} justify="center">
           <Badge size="sm" variant="light" color="pink" leftSection={<IconBrandInstagram size={12} />}>
             Instagram
           </Badge>
@@ -406,13 +425,13 @@ export const SocialContentCard = ({
           </Badge>
         </Group>
         {displayedHashtags.length > 0 ? (
-          <Text size="xs" c="dimmed" lineClamp={2}>
+          <Text size="xs" c="dimmed" lineClamp={2} ta="center">
             {displayedHashtags.map((tag) => `#${tag}`).join(" ")}
           </Text>
         ) : null}
-        <Stack gap={5}>
+        <Stack gap={5} align="center">
           {plannedLabel ? (
-            <Group gap={6} wrap="nowrap">
+            <Group gap={6} wrap="nowrap" justify="center">
               <IconCalendar size={15} color="var(--mantine-color-gray-6)" />
               <Text size="xs" c="dimmed" truncate>
                 Planned for {plannedLabel}
@@ -420,7 +439,7 @@ export const SocialContentCard = ({
             </Group>
           ) : null}
           {(item.status === "in_production" || item.status === "ready") && item.assets.length > 0 ? (
-            <Group gap={5}>
+            <Group gap={5} justify="center">
               <Badge size="xs" color="violet" variant="light">{item.assets.length} file{item.assets.length === 1 ? "" : "s"}</Badge>
               {item.driveProjectUrl ? <Badge size="xs" color="blue" variant="light">Drive ready</Badge> : null}
             </Group>
@@ -539,6 +558,7 @@ const SocialMediaContentBoard = () => {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>({});
   const [mobileStage, setMobileStage] = useState<SocialMediaContentStatus>("idea");
+  const [viewItemId, setViewItemId] = useState<number | null>(null);
   const initialIdeaDraft = useRef(JSON.stringify(EMPTY_IDEA_DRAFT));
   const draftStorageKey = useMemo(
     () => buildSocialMediaEditorDraftStorageKey(loggedUserId),
@@ -571,6 +591,11 @@ const SocialMediaContentBoard = () => {
       ? allItems.find((item) => item.id === workflowDialog.contentId) ?? null
       : null
   ), [allItems, workflowDialog]);
+  const viewItem = useMemo(() => (
+    viewItemId === null
+      ? null
+      : allItems.find((item) => item.id === viewItemId) ?? null
+  ), [allItems, viewItemId]);
 
   const editorAuthorized = canAccessSocialMediaEditor(boardState.editor, moduleAccess);
 
@@ -1292,6 +1317,7 @@ const SocialMediaContentBoard = () => {
                         canEditPublicationDate={canEditPublicationDate}
                         canPublish={canPublish}
                         busy={busyId === item.id}
+                        onView={() => setViewItemId(item.id)}
                         onEdit={() => updateUrlState({ editor: item.id })}
                         onNext={() => void handleNext(item)}
                         onEditPlannedDate={() => setWorkflowDialog({ type: "plan", contentId: item.id })}
@@ -1317,6 +1343,13 @@ const SocialMediaContentBoard = () => {
           </Box>
         </ScrollArea>
       )}
+
+      <SocialMediaIdeaViewModal
+        item={viewItem}
+        opened={viewItemId !== null}
+        onClose={() => setViewItemId(null)}
+        fullScreen={Boolean(isMobile)}
+      />
 
       <Modal
         opened={boardState.editor !== null}

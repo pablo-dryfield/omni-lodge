@@ -54,6 +54,7 @@ const buildProps = (overrides: Partial<React.ComponentProps<typeof SocialContent
   canEditPublicationDate: false,
   canPublish: true,
   busy: false,
+  onView: jest.fn(),
   onEdit: jest.fn(),
   onNext: jest.fn(),
   onEditPlannedDate: jest.fn(),
@@ -100,6 +101,33 @@ describe("Social Media ready-stage file editing", () => {
     expect(props.onManageAssets).toHaveBeenCalledTimes(1);
     expect(props.onNext).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Publish" })).toBeInTheDocument();
+  });
+
+  it("opens the read-only detail view from the centered idea title", () => {
+    const props = buildProps();
+    renderCard(props);
+
+    fireEvent.click(screen.getByRole("button", { name: `View details for ${readyItem.title}` }));
+
+    expect(props.onView).toHaveBeenCalledTimes(1);
+    expect(props.onEdit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the detail view available without mutation permissions", () => {
+    const props = buildProps({
+      canUpdate: false,
+      canDelete: false,
+      canEditPublicationDate: false,
+      canPublish: false,
+    });
+    renderCard(props);
+
+    const viewButton = screen.getByRole("button", { name: `View details for ${readyItem.title}` });
+    expect(viewButton).toBeEnabled();
+    expect(screen.queryByRole("button", { name: `Actions for ${readyItem.title}` })).not.toBeInTheDocument();
+
+    fireEvent.click(viewButton);
+    expect(props.onView).toHaveBeenCalledTimes(1);
   });
 
   it("keeps Edit files available to an updater who is not allowed to publish", () => {
