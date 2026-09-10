@@ -20,6 +20,12 @@ Production startup uses `be/scripts/startMonitored.js`, a built-in-only launcher
 
 The production UI server also reports proxy failures, uncaught request failures, missing build assets, and fatal process errors. Its bounded private disk queue survives UI-server restarts and replays to the API when it becomes reachable again. The queue is capped by UTF-8 bytes, preserves fatal entries ahead of lower-severity noise, and redacts again before writing to disk. Trusted UI-server delivery requires the matching private secrets documented below; without them, the queue is retained on disk rather than being downgraded to anonymous browser telemetry.
 
+## Restart and UI-release noise
+
+Production ingestion acknowledges without storing only the secondary first-party `/api` availability symptoms that occurred from ten minutes before the current API process started through thirty seconds after it started. This covers browser 502/503/504 and clear network failures, the matching trusted UI-server proxy failures, and delayed Network Error Logging reports. The original occurrence time, rather than delivery time, is compared with that startup window, so queues reconnecting later in the process lifetime do not recreate a burst of deployment issues.
+
+This grace window does not silence backend request errors, process/startup failures, fatal events, migrations, application-generated 500s, external integrations, or browser/React exceptions. Those remain visible even during a restart. UI releases are likewise not blanket-muted: known harmless stale service-worker transitions are filtered at their source, while genuine failures in a new build remain reportable. Queue coalescing is release-scoped so a delayed event from an old build cannot be relabeled as the current release.
+
 ## Privacy and retention
 
 Monitoring never intentionally records request bodies, form values, cookies, authorization headers, tokens, uploaded files, or URL query values. Sensitive object keys and common credentials, email addresses, phone numbers, and payment-card-like values are redacted again by the API before persistence. Session and IP values are stored only as keyed hashes.
@@ -114,7 +120,7 @@ From the repository root:
 Set-Location be
 npm run check
 node --check scripts/startMonitored.js
-npx jest --runInBand src/services/__tests__/errorMonitoringService.test.ts src/services/__tests__/errorMonitoringPersistence.test.ts src/services/__tests__/errorMonitoringSpoolService.test.ts src/services/__tests__/consoleErrorMonitoringBridge.test.ts src/services/__tests__/externalRequestDiagnosticsService.test.ts src/services/__tests__/browserStackSymbolicationService.test.ts src/utils/__tests__/trustProxy.test.ts src/controllers/__tests__/clientErrorController.test.ts src/middleware/__tests__/optionalErrorMonitoringAuth.test.ts src/migrations/__tests__/errorMonitoringFoundationMigration.test.ts src/migrations/__tests__/errorMonitoringAccessMigration.test.ts
+npx jest --runInBand src/services/__tests__/errorMonitoringService.test.ts src/services/__tests__/errorMonitoringPersistence.test.ts src/services/__tests__/errorMonitoringNoisePolicy.test.ts src/services/__tests__/errorMonitoringSpoolService.test.ts src/services/__tests__/consoleErrorMonitoringBridge.test.ts src/services/__tests__/externalRequestDiagnosticsService.test.ts src/services/__tests__/browserStackSymbolicationService.test.ts src/utils/__tests__/trustProxy.test.ts src/controllers/__tests__/clientErrorController.test.ts src/middleware/__tests__/optionalErrorMonitoringAuth.test.ts src/migrations/__tests__/errorMonitoringFoundationMigration.test.ts src/migrations/__tests__/errorMonitoringAccessMigration.test.ts
 
 Set-Location ..\ui
 npm run check

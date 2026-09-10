@@ -32,9 +32,11 @@ import {
   captureHttpFailureSafe,
   cleanupErrorMonitoringOccurrences,
   ingestBrowserReports,
+  ingestClientErrorBatch,
   listErrorMonitoringIssues,
   updateErrorMonitoringIssue,
 } from '../errorMonitoringService.js';
+import { API_PROCESS_STARTED_AT_MS } from '../errorMonitoringNoisePolicy.js';
 
 const database = sequelize as unknown as {
   transaction: jest.Mock;
@@ -346,6 +348,151 @@ describe('error monitoring persistence', () => {
       rejected: 1,
       retryableRejected: 0,
     });
+  });
+
+  it('acknowledges restart-only client batches without creating monitoring records', async () => {
+    const previousEnvironment = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    try {
+      await expect(ingestClientErrorBatch([{
+        eventId: 'restart-noise-1',
+        type: 'api_error',
+        level: 'error',
+        name: 'XMLHttpRequestError',
+        message: 'XMLHttpRequest failed with status 502',
+        occurredAt: new Date(API_PROCESS_STARTED_AT_MS).toISOString(),
+        http: {
+          method: 'GET',
+          url: '/api/schedules/weeks',
+          status: 502,
+        },
+      }], {})).resolves.toEqual({
+        accepted: 1,
+        rejected: 0,
+        eventIds: [],
+        errors: [],
+      });
+
+      expect(database.transaction).not.toHaveBeenCalled();
+      expect(occurrenceModel.create).not.toHaveBeenCalled();
+    } finally {
+      if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousEnvironment;
+    }
+  });
+
+  it('acknowledges the trusted UI-server copy of an API restart failure', async () => {
+    const previousEnvironment = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    try {
+      await expect(ingestClientErrorBatch([{
+        eventId: 'ui-server-restart-noise-1',
+        type: 'api_error',
+        level: 'error',
+        name: 'Error',
+        message: 'connect ECONNREFUSED 127.0.0.1:3001',
+        occurredAt: new Date(API_PROCESS_STARTED_AT_MS).toISOString(),
+        http: {
+          method: 'GET',
+          url: '/api/schedules/weeks',
+          status: 502,
+        },
+        context: { source: 'api-proxy', runtime: 'ui-server' },
+      }], { trustedInternal: true })).resolves.toEqual({
+        accepted: 1,
+        rejected: 0,
+        eventIds: [],
+        errors: [],
+      });
+
+      expect(database.transaction).not.toHaveBeenCalled();
+      expect(occurrenceModel.create).not.toHaveBeenCalled();
+    } finally {
+      if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousEnvironment;
+    }
+  });
+
+  it('suppresses deployment noise while persisting genuine errors from the same batch', async () => {
+    const previousEnvironment = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    database.query
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce([{
+        id: 32,
+        occurrence_count: 1,
+        reopened_count: 0,
+        is_new: true,
+        regressed: false,
+      }]);
+
+    try {
+      const result = await ingestClientErrorBatch([{
+        eventId: 'restart-noise-2',
+        type: 'api_error',
+        level: 'error',
+        name: 'TypeError',
+        message: 'Failed to fetch',
+        occurredAt: new Date(API_PROCESS_STARTED_AT_MS).toISOString(),
+        http: {
+          method: 'GET',
+          url: '/api/schedules/shift-instances',
+        },
+      }, {
+        eventId: 'genuine-ui-error',
+        type: 'react_error',
+        level: 'error',
+        name: 'TypeError',
+        message: 'Cannot read properties of null',
+        occurredAt: new Date(API_PROCESS_STARTED_AT_MS).toISOString(),
+        route: '/assistant-manager-tasks',
+      }], {});
+
+      expect(result).toEqual({
+        accepted: 2,
+        rejected: 0,
+        eventIds: [expect.any(String)],
+        errors: [],
+      });
+      expect(database.transaction).toHaveBeenCalledTimes(1);
+      expect(occurrenceModel.create).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousEnvironment;
+    }
+  });
+
+  it('uses a native network report occurrence time when suppressing delayed restart noise', async () => {
+    const previousEnvironment = process.env.NODE_ENV;
+    const previousPublicAppOrigin = process.env.PUBLIC_APP_ORIGIN;
+    const now = jest.spyOn(Date, 'now');
+    process.env.NODE_ENV = 'production';
+    process.env.PUBLIC_APP_ORIGIN = 'https://omni-lodge.com';
+    now.mockReturnValue(API_PROCESS_STARTED_AT_MS + 60 * 60_000);
+
+    try {
+      await expect(ingestBrowserReports({
+        type: 'network-error',
+        age: 60 * 60_000,
+        url: 'https://omni-lodge.com/api/schedules/weeks',
+        body: { type: 'tcp.refused' },
+      }, { userAgent: 'Browser', ip: '192.0.2.5' })).resolves.toEqual({
+        accepted: 1,
+        rejected: 0,
+        retryableRejected: 0,
+      });
+
+      expect(database.transaction).not.toHaveBeenCalled();
+      expect(occurrenceModel.create).not.toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+      if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousEnvironment;
+      if (previousPublicAppOrigin === undefined) delete process.env.PUBLIC_APP_ORIGIN;
+      else process.env.PUBLIC_APP_ORIGIN = previousPublicAppOrigin;
+    }
   });
 
   it('derives a stable id for a timed native browser-report retry', async () => {

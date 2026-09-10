@@ -14,6 +14,7 @@ import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { symbolicateBrowserStack } from './browserStackSymbolicationService.js';
+import { shouldSuppressExpectedRestartNoise } from './errorMonitoringNoisePolicy.js';
 import { getRequestContextValue } from './requestContextService.js';
 import logger from '../utils/logger.js';
 import {
@@ -1121,11 +1122,32 @@ export const ingestClientErrorBatch = async (
   if (events.length > MAX_BATCH_SIZE) throw new Error(`A maximum of ${MAX_BATCH_SIZE} events is allowed per batch.`);
 
   const eventIds: string[] = [];
+  let accepted = 0;
   const errors: Array<{ index: number; message: string; retryable: boolean }> = [];
   for (let index = 0; index < events.length; index += 1) {
     let sanitized: CaptureEvent;
     try {
-      sanitized = sanitizeClientEvent(events[index] as ClientErrorEventInput, serverContext);
+      const input = events[index] as ClientErrorEventInput;
+      sanitized = sanitizeClientEvent(input, serverContext);
+      const rawHttp = input.http && typeof input.http === 'object' && !Array.isArray(input.http)
+        ? input.http as Record<string, unknown>
+        : null;
+      if (shouldSuppressExpectedRestartNoise({
+        ...sanitized,
+        // Classify delayed queue entries by their original timestamp. Passing
+        // the raw value also makes missing/malformed timestamps fail open
+        // instead of inheriting sanitizeClientEvent's safe `now` fallback.
+        occurredAt: input.occurredAt,
+        // Preserve an absolute external origin long enough for the policy to
+        // reject it; normal first-party API diagnostics use relative paths.
+        httpUrl: rawHttp?.url ?? sanitized.httpUrl,
+        pageUrl: input.pageUrl ?? sanitized.pageUrl,
+      })) {
+        // A suppressed deployment symptom is acknowledged so durable browser
+        // and UI-server queues remove it instead of retrying forever.
+        accepted += 1;
+        continue;
+      }
       if (sanitized.source === 'client' && sanitized.stack) {
         sanitized.stack = symbolicateBrowserStack(sanitized.stack, sanitized.release);
       }
@@ -1136,13 +1158,14 @@ export const ingestClientErrorBatch = async (
     try {
       const captured = await persistCapture(sanitized);
       eventIds.push(captured.eventId);
+      accepted += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.warn(`[error-monitoring] client event persistence failed: ${redactSensitiveText(message).slice(0, 500)}`);
       errors.push({ index, message: 'Event could not be stored.', retryable: true });
     }
   }
-  return { accepted: eventIds.length, rejected: errors.length, eventIds, errors };
+  return { accepted, rejected: errors.length, eventIds, errors };
 };
 
 const parseBrowserReportTimestamp = (value: unknown): number | null => {
@@ -1252,7 +1275,15 @@ export const ingestBrowserReports = async (
       continue;
     }
     try {
-      await persistCapture(sanitizeClientEvent(converted, serverContext));
+      const sanitized = sanitizeClientEvent(converted, serverContext);
+      if (shouldSuppressExpectedRestartNoise({
+        ...sanitized,
+        pageUrl: converted.pageUrl ?? sanitized.pageUrl,
+      })) {
+        accepted += 1;
+        continue;
+      }
+      await persistCapture(sanitized);
       accepted += 1;
     } catch (error) {
       rejected += 1;

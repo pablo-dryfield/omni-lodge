@@ -619,6 +619,7 @@ const enqueueEvent = (event: ClientErrorEvent): Promise<void> =>
       (item) =>
         item.fingerprint === fingerprint &&
         item.event.capturedUserId === event.capturedUserId &&
+        item.event.release === event.release &&
         !inFlightEventIds.has(item.id) &&
         now - item.enqueuedAt <= options.dedupeWindowMs,
     );

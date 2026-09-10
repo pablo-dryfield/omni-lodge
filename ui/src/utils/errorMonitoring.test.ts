@@ -101,18 +101,49 @@ describe("browser error monitoring", () => {
     expect(await store.getAll()).toEqual([]);
   });
 
-  it("deduplicates a burst before transport and records its local occurrence count", async () => {
+  it("deduplicates a same-release burst before transport and records its local occurrence count", async () => {
     configureWithoutHandlers();
     captureClientError({ type: "manual", message: "same failure" });
     captureClientError({ type: "manual", message: "same failure" });
     captureClientError({ type: "manual", message: "same failure" });
     await waitForQueuedCount(store, 1);
 
+    expect((await store.getAll())[0].event.release).toBe("web-test1234");
+
     await flushErrorMonitoring();
 
     const events = readSentEvents(transport);
     expect(events).toHaveLength(1);
     expect(events[0].tags).toEqual(expect.objectContaining({ localOccurrences: 3 }));
+  });
+
+  it("does not coalesce identical failures captured by different releases", async () => {
+    configureWithoutHandlers();
+    captureClientError({
+      type: "manual",
+      message: "same cross-release failure",
+      release: "web-release-a",
+    });
+    captureClientError({
+      type: "manual",
+      message: "same cross-release failure",
+      release: "web-release-b",
+    });
+    await waitForQueuedCount(store, 2);
+
+    const queuedReleases = (await store.getAll())
+      .map((item) => item.event.release)
+      .sort();
+    expect(queuedReleases).toEqual(["web-release-a", "web-release-b"]);
+
+    await flushErrorMonitoring();
+
+    const events = readSentEvents(transport);
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.release).sort()).toEqual([
+      "web-release-a",
+      "web-release-b",
+    ]);
   });
 
   it("coalesces duplicate API diagnostics reported by overlapping transports", async () => {

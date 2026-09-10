@@ -61,6 +61,24 @@ describe('client error ingestion controller', () => {
     expect(status).toHaveBeenCalledWith(202);
   });
 
+  it('acknowledges a fully suppressed restart-noise batch without asking the queue to retry', async () => {
+    ingest.mockResolvedValue({
+      accepted: 1,
+      rejected: 0,
+      eventIds: [],
+      errors: [],
+    });
+    const { req, res, status, json } = setup();
+
+    await ingestClientErrors(req, res);
+
+    expect(status).toHaveBeenCalledWith(202);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({
+      accepted: 1,
+      rejected: 0,
+    }));
+  });
+
   it('asks browsers to retry when a valid report could not be persisted', async () => {
     ingestReports.mockResolvedValue({ accepted: 0, rejected: 1, retryableRejected: 1 });
     const { req, res, status } = setup();
