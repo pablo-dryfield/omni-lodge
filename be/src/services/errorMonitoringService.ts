@@ -611,6 +611,12 @@ export const sanitizeClientEvent = (
 const severityRankSql = (column: string): string => `CASE ${column}
   WHEN 'fatal' THEN 4 WHEN 'error' THEN 3 WHEN 'warning' THEN 2 WHEN 'info' THEN 1 ELSE 0 END`;
 
+const issueStatusRankSql = (column: string): string => `CASE LOWER(${column})
+  WHEN 'open' THEN 1 WHEN 'investigating' THEN 2 WHEN 'resolved' THEN 3 WHEN 'ignored' THEN 4 ELSE 5 END`;
+
+const issueSourceDisplayRankSql = (column: string): string => `CASE LOWER(${column})
+  WHEN 'request' THEN 1 WHEN 'server' THEN 2 WHEN 'process' THEN 3 WHEN 'client' THEN 4 ELSE 5 END`;
+
 const runtimeKindRankSql = (column: string): string => `CASE ${column}
   WHEN 'react_error' THEN 4 WHEN 'exception' THEN 3 WHEN 'unhandled_rejection' THEN 2
   WHEN 'console_error' THEN 1 ELSE 0 END`;
@@ -1779,18 +1785,36 @@ export const listErrorMonitoringIssues = async (query: IssueListQuery): Promise<
   }
   if (andConditions.length > 0) where[Op.and] = andConditions;
 
-  const sortMap: Record<string, string> = {
-    lastSeenAt: 'lastSeenAt',
-    firstSeenAt: 'firstSeenAt',
-    occurrenceCount: 'occurrenceCount',
-    affectedUserCount: 'affectedUserCount',
-  };
+  const directSortMap = new Map<string, string>([
+    ['id', 'id'],
+    ['lastSeenAt', 'lastSeenAt'],
+    ['firstSeenAt', 'firstSeenAt'],
+    ['occurrenceCount', 'occurrenceCount'],
+    ['affectedUserCount', 'affectedUserCount'],
+  ]);
+  const caseInsensitiveSortMap = new Map<string, string>([
+    ['title', 'title'],
+  ]);
   const requestedSort = clampString(query.sort, 40) ?? 'lastSeenAt';
-  const sort = sortMap[requestedSort] ?? 'lastSeenAt';
   const direction = String(query.direction).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-  const order: Order = requestedSort === 'severity'
-    ? [[literal(severityRankSql('"ErrorMonitoringIssue"."severity"')), direction], ['id', 'DESC']]
-    : [[sort, direction], ['id', 'DESC']];
+  const caseInsensitiveSort = caseInsensitiveSortMap.get(requestedSort);
+  let order: Order;
+  if (requestedSort === 'severity') {
+    order = [[literal(severityRankSql('"ErrorMonitoringIssue"."severity"')), direction], ['id', 'DESC']];
+  } else if (requestedSort === 'status') {
+    order = [[literal(issueStatusRankSql('"ErrorMonitoringIssue"."status"')), direction], ['id', 'DESC']];
+  } else if (requestedSort === 'source') {
+    order = [[literal(issueSourceDisplayRankSql('"ErrorMonitoringIssue"."source"')), direction], ['id', 'DESC']];
+  } else if (caseInsensitiveSort) {
+    order = [[literal(`LOWER("ErrorMonitoringIssue"."${caseInsensitiveSort}")`), direction], ['id', 'DESC']];
+  } else {
+    const sort = directSortMap.get(requestedSort) ?? 'lastSeenAt';
+    // The primary key is already a complete, deterministic ordering. Avoid a
+    // duplicate `id DESC` clause that would contradict an ascending ID sort.
+    order = sort === 'id'
+      ? [[sort, direction]]
+      : [[sort, direction], ['id', 'DESC']];
+  }
 
   const { rows, count } = await ErrorMonitoringIssue.findAndCountAll({
     where,

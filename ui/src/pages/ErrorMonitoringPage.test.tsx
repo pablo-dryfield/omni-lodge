@@ -196,12 +196,61 @@ describe("ErrorMonitoringPage", () => {
     expect(screen.getByText("Active issues")).toBeInTheDocument();
     expect(screen.getByText("Weighted events · 24h")).toBeInTheDocument();
     expect(screen.getByText(/18 stored samples/)).toBeInTheDocument();
+    expect(screen.getAllByText("#42").length).toBeGreaterThan(0);
     expect(screen.getAllByText("12").length).toBeGreaterThan(0);
     expect(mockedIssues).toHaveBeenCalledWith(expect.objectContaining({
       status: ["open", "investigating"],
       page: 1,
       limit: 25,
     }));
+  });
+
+  it("sorts issue columns server-side and exposes the active order accessibly", async () => {
+    renderPage();
+
+    const table = await screen.findByRole("table");
+    const lastSeenHeader = within(table).getByRole("columnheader", { name: /Last seen/ });
+    expect(lastSeenHeader).toHaveAttribute("aria-sort", "descending");
+
+    fireEvent.click(within(table).getByRole("button", { name: /Sort by Issue title/ }));
+    await waitFor(() => {
+      expect(mockedIssues).toHaveBeenLastCalledWith(expect.objectContaining({
+        page: 1,
+        sort: "title",
+        direction: "asc",
+      }));
+    });
+    await waitFor(() => {
+      const updatedTable = screen.getByRole("table");
+      expect(within(updatedTable).getByRole("columnheader", { name: /Issue title/ })).toHaveAttribute("aria-sort", "ascending");
+    });
+    expect(within(screen.getByRole("table")).getByRole("columnheader", { name: /Last seen/ })).not.toHaveAttribute("aria-sort");
+
+    fireEvent.click(within(screen.getByRole("table")).getByRole("button", { name: /Sort by Issue title/ }));
+    await waitFor(() => {
+      expect(mockedIssues).toHaveBeenLastCalledWith(expect.objectContaining({
+        sort: "title",
+        direction: "desc",
+      }));
+    });
+    await waitFor(() => {
+      expect(within(screen.getByRole("table")).getByRole("columnheader", { name: /Issue title/ })).toHaveAttribute("aria-sort", "descending");
+    });
+  });
+
+  it("sorts a newly selected numeric ID column high-to-low first", async () => {
+    renderPage();
+
+    const table = await screen.findByRole("table");
+    fireEvent.click(within(table).getByRole("button", { name: /Sort by ID/ }));
+
+    await waitFor(() => {
+      expect(mockedIssues).toHaveBeenLastCalledWith(expect.objectContaining({
+        page: 1,
+        sort: "id",
+        direction: "desc",
+      }));
+    });
   });
 
   it("warns administrators when the server capture queue dropped events", async () => {

@@ -666,14 +666,126 @@ describe('error monitoring persistence', () => {
     },
   );
 
-  it('sorts severity by an explicit fatal-to-info rank instead of alphabetically', async () => {
-    await listErrorMonitoringIssues({ sort: 'severity', direction: 'desc' });
+  it.each([
+    ['lastSeenAt', 'asc', 'ASC'],
+    ['lastSeenAt', 'desc', 'DESC'],
+    ['firstSeenAt', 'asc', 'ASC'],
+    ['firstSeenAt', 'desc', 'DESC'],
+    ['occurrenceCount', 'asc', 'ASC'],
+    ['occurrenceCount', 'desc', 'DESC'],
+    ['affectedUserCount', 'asc', 'ASC'],
+    ['affectedUserCount', 'desc', 'DESC'],
+  ])('sorts %s in the %s direction with a stable ID tie-breaker', async (sort, direction, sqlDirection) => {
+    await listErrorMonitoringIssues({ sort, direction });
+
+    expect(issueModel.findAndCountAll.mock.calls[0][0].order).toEqual([
+      [sort, sqlDirection],
+      ['id', 'DESC'],
+    ]);
+  });
+
+  it.each([
+    ['asc', 'ASC'],
+    ['desc', 'DESC'],
+  ])('sorts IDs in the %s direction without a duplicate contradictory tie-breaker', async (direction, sqlDirection) => {
+    await listErrorMonitoringIssues({ sort: 'id', direction });
+
+    expect(issueModel.findAndCountAll.mock.calls[0][0].order).toEqual([
+      ['id', sqlDirection],
+    ]);
+  });
+
+  it.each([
+    ['asc', 'ASC'],
+    ['desc', 'DESC'],
+  ])('sorts titles case-insensitively in the %s direction', async (direction, sqlDirection) => {
+    await listErrorMonitoringIssues({ sort: 'title', direction });
+
+    const order = issueModel.findAndCountAll.mock.calls[0][0].order;
+    expect(order).toHaveLength(2);
+    expect(order[0][0]).toEqual(expect.objectContaining({
+      val: 'LOWER("ErrorMonitoringIssue"."title")',
+    }));
+    expect(order[0][1]).toBe(sqlDirection);
+    expect(order[1]).toEqual(['id', 'DESC']);
+  });
+
+  it.each([
+    ['asc', 'ASC'],
+    ['desc', 'DESC'],
+  ])(
+    'sorts sources by the API request, Backend, Background process, Browser UI label order in the %s direction',
+    async (direction, sqlDirection) => {
+      await listErrorMonitoringIssues({ sort: 'source', direction });
+
+      const order = issueModel.findAndCountAll.mock.calls[0][0].order;
+      expect(order[0][0]).toEqual(expect.objectContaining({
+        val: `CASE LOWER("ErrorMonitoringIssue"."source")
+  WHEN 'request' THEN 1 WHEN 'server' THEN 2 WHEN 'process' THEN 3 WHEN 'client' THEN 4 ELSE 5 END`,
+      }));
+      expect(order[0][1]).toBe(sqlDirection);
+      expect(order[1]).toEqual(['id', 'DESC']);
+    },
+  );
+
+  it.each([
+    ['asc', 'ASC'],
+    ['desc', 'DESC'],
+  ])('sorts statuses by workflow rank in the %s direction', async (direction, sqlDirection) => {
+    await listErrorMonitoringIssues({ sort: 'status', direction });
+
+    const order = issueModel.findAndCountAll.mock.calls[0][0].order;
+    expect(order[0][0]).toEqual(expect.objectContaining({
+      val: `CASE LOWER("ErrorMonitoringIssue"."status")
+  WHEN 'open' THEN 1 WHEN 'investigating' THEN 2 WHEN 'resolved' THEN 3 WHEN 'ignored' THEN 4 ELSE 5 END`,
+    }));
+    expect(order[0][1]).toBe(sqlDirection);
+    expect(order[1]).toEqual(['id', 'DESC']);
+  });
+
+  it.each([
+    ['asc', 'ASC'],
+    ['desc', 'DESC'],
+  ])('sorts severity by an explicit fatal-to-info rank in the %s direction', async (direction, sqlDirection) => {
+    await listErrorMonitoringIssues({ sort: 'severity', direction });
 
     const order = issueModel.findAndCountAll.mock.calls[0][0].order;
     expect(order[0][0]).toEqual(expect.objectContaining({
       val: expect.stringMatching(/fatal[\s\S]*error[\s\S]*warning[\s\S]*info/),
     }));
-    expect(order[0][1]).toBe('DESC');
+    expect(order[0][1]).toBe(sqlDirection);
+    expect(order[1]).toEqual(['id', 'DESC']);
+  });
+
+  it('uses last seen descending with a stable ID tie-breaker by default', async () => {
+    await listErrorMonitoringIssues({});
+
+    expect(issueModel.findAndCountAll.mock.calls[0][0].order).toEqual([
+      ['lastSeenAt', 'DESC'],
+      ['id', 'DESC'],
+    ]);
+  });
+
+  it.each([
+    'title DESC; DROP TABLE error_monitoring_issues',
+    'constructor',
+    'toString',
+  ])('falls back to last seen for invalid sort field %s without using it in SQL', async (sort) => {
+    await listErrorMonitoringIssues({ sort, direction: 'asc' });
+
+    expect(issueModel.findAndCountAll.mock.calls[0][0].order).toEqual([
+      ['lastSeenAt', 'ASC'],
+      ['id', 'DESC'],
+    ]);
+  });
+
+  it('falls back to descending for an invalid sort direction', async () => {
+    await listErrorMonitoringIssues({ sort: 'firstSeenAt', direction: 'ascending' });
+
+    expect(issueModel.findAndCountAll.mock.calls[0][0].order).toEqual([
+      ['firstSeenAt', 'DESC'],
+      ['id', 'DESC'],
+    ]);
   });
 
   it('retention is cluster-locked and rebuilds affected-user projections', async () => {

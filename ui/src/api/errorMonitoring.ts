@@ -164,6 +164,19 @@ export type ErrorMonitoringIssueDetailResponse = {
   occurrencePagination: ErrorMonitoringPagination;
 };
 
+export type ErrorMonitoringIssueSort =
+  | "id"
+  | "title"
+  | "source"
+  | "status"
+  | "lastSeenAt"
+  | "firstSeenAt"
+  | "occurrenceCount"
+  | "affectedUserCount"
+  | "severity";
+
+export type ErrorMonitoringSortDirection = "asc" | "desc";
+
 export type ErrorMonitoringIssueFilters = {
   page?: number;
   limit?: number;
@@ -178,8 +191,8 @@ export type ErrorMonitoringIssueFilters = {
   pagePath?: string;
   from?: string | null;
   to?: string | null;
-  sort?: "lastSeenAt" | "firstSeenAt" | "occurrenceCount" | "affectedUserCount" | "severity";
-  direction?: "asc" | "desc";
+  sort?: ErrorMonitoringIssueSort;
+  direction?: ErrorMonitoringSortDirection;
 };
 
 const compactParams = (params: Record<string, unknown>): Record<string, unknown> =>

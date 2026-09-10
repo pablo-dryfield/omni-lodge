@@ -59,6 +59,8 @@ describe("error monitoring API", () => {
         search: " null ",
         pagePath: "",
         userId: null,
+        sort: "id",
+        direction: "asc",
       }),
     ).toEqual({
       page: 2,
@@ -67,6 +69,8 @@ describe("error monitoring API", () => {
       severity: "fatal,error",
       source: "browser,server",
       search: " null ",
+      sort: "id",
+      direction: "asc",
     });
   });
 

@@ -34,6 +34,9 @@ import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
 import {
   IconAlertCircle,
   IconAlertTriangle,
+  IconArrowDown,
+  IconArrowsSort,
+  IconArrowUp,
   IconBellExclamation,
   IconBug,
   IconCheck,
@@ -65,10 +68,12 @@ import {
   updateErrorMonitoringIssue,
   type ErrorMonitoringIssueDetailResponse,
   type ErrorMonitoringIssueFilters,
+  type ErrorMonitoringIssueSort,
   type ErrorMonitoringIssueSummary,
   type ErrorMonitoringOccurrence,
   type ErrorMonitoringSeverity,
   type ErrorMonitoringStatus,
+  type ErrorMonitoringSortDirection,
   type ErrorMonitoringUser,
 } from "../api/errorMonitoring";
 import { useActiveUsers } from "../api/users";
@@ -105,13 +110,62 @@ const SEVERITY_OPTIONS: Array<{ value: ErrorMonitoringSeverity; label: string }>
   { value: "warning", label: "Warning" },
 ];
 
-const SORT_OPTIONS = [
-  { value: "lastSeenAt:desc", label: "Recently seen" },
-  { value: "firstSeenAt:desc", label: "Recently created" },
-  { value: "occurrenceCount:desc", label: "Most frequent" },
-  { value: "affectedUserCount:desc", label: "Most users affected" },
-  { value: "severity:desc", label: "Highest severity" },
-] as const;
+const SORT_FIELD_OPTIONS: Array<{ value: ErrorMonitoringIssueSort; label: string }> = [
+  { value: "id", label: "Issue ID" },
+  { value: "title", label: "Issue title" },
+  { value: "source", label: "Source" },
+  { value: "status", label: "Status" },
+  { value: "occurrenceCount", label: "Weighted events" },
+  { value: "affectedUserCount", label: "Affected users" },
+  { value: "firstSeenAt", label: "First seen" },
+  { value: "lastSeenAt", label: "Last seen" },
+  { value: "severity", label: "Severity" },
+];
+
+const DEFAULT_SORT_DIRECTIONS: Record<ErrorMonitoringIssueSort, ErrorMonitoringSortDirection> = {
+  id: "desc",
+  title: "asc",
+  source: "asc",
+  status: "asc",
+  occurrenceCount: "desc",
+  affectedUserCount: "desc",
+  firstSeenAt: "desc",
+  lastSeenAt: "desc",
+  severity: "desc",
+};
+
+const getSortDirectionOptions = (
+  sort: ErrorMonitoringIssueSort,
+): Array<{ value: ErrorMonitoringSortDirection; label: string }> => {
+  if (sort === "title" || sort === "source") {
+    return [
+      { value: "asc", label: "A to Z" },
+      { value: "desc", label: "Z to A" },
+    ];
+  }
+  if (sort === "status") {
+    return [
+      { value: "asc", label: "Open to ignored" },
+      { value: "desc", label: "Ignored to open" },
+    ];
+  }
+  if (sort === "firstSeenAt" || sort === "lastSeenAt") {
+    return [
+      { value: "desc", label: "Newest first" },
+      { value: "asc", label: "Oldest first" },
+    ];
+  }
+  if (sort === "severity") {
+    return [
+      { value: "desc", label: "Highest first" },
+      { value: "asc", label: "Lowest first" },
+    ];
+  }
+  return [
+    { value: "desc", label: "Highest first" },
+    { value: "asc", label: "Lowest first" },
+  ];
+};
 
 const STATUS_META: Record<ErrorMonitoringStatus, { label: string; color: string }> = {
   open: { label: "Open", color: "red" },
@@ -221,6 +275,57 @@ const SourceBadge = ({ source }: { source: string }) => (
     {formatSource(source)}
   </Badge>
 );
+
+type SortableIssueHeaderProps = {
+  label: string;
+  sortKey: ErrorMonitoringIssueSort;
+  activeSort: ErrorMonitoringIssueSort;
+  direction: ErrorMonitoringSortDirection;
+  align?: "left" | "center" | "right";
+  className?: string;
+  onSort: (sort: ErrorMonitoringIssueSort) => void;
+};
+
+const SortableIssueHeader = ({
+  label,
+  sortKey,
+  activeSort,
+  direction,
+  align = "left",
+  className,
+  onSort,
+}: SortableIssueHeaderProps) => {
+  const active = activeSort === sortKey;
+  const nextDirection = active
+    ? direction === "asc" ? "desc" : "asc"
+    : DEFAULT_SORT_DIRECTIONS[sortKey];
+  const SortIcon = !active ? IconArrowsSort : direction === "asc" ? IconArrowUp : IconArrowDown;
+
+  return (
+    <Table.Th
+      scope="col"
+      ta={align}
+      className={className}
+      aria-sort={active ? direction === "asc" ? "ascending" : "descending" : undefined}
+    >
+      <UnstyledButton
+        type="button"
+        className={styles.sortHeaderButton}
+        data-active={active || undefined}
+        aria-label={`Sort by ${label}; ${active ? `currently ${direction === "asc" ? "ascending" : "descending"}` : "not currently sorted"}. Activate for ${nextDirection === "asc" ? "ascending" : "descending"} order.`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSort(sortKey);
+        }}
+      >
+        <Group gap={6} wrap="nowrap" justify={align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start"}>
+          <span>{label}</span>
+          <SortIcon size={15} stroke={active ? 2.4 : 1.7} aria-hidden="true" />
+        </Group>
+      </UnstyledButton>
+    </Table.Th>
+  );
+};
 
 type IssueStatusAction = {
   status: ErrorMonitoringStatus;
@@ -367,6 +472,9 @@ const MobileIssueCard = ({
       <Stack gap="sm" style={{ textAlign: "left" }}>
         <Group justify="space-between" align="flex-start" wrap="nowrap">
           <Group gap={6} wrap="wrap">
+            <Badge color="blue" variant="light" radius="sm" className={styles.issueId}>
+              #{issue.id}
+            </Badge>
             <SeverityBadge severity={issue.severity} />
             <StatusBadge status={issue.status} />
             <SourceBadge source={issue.source} />
@@ -621,6 +729,9 @@ const IssueDrawer = ({ issueId, onClose, activeUserOptions, onChanged, canUpdate
         <Stack gap="lg" pb="xl">
           <Box>
             <Group gap="xs" mb="sm" wrap="wrap">
+              <Badge color="blue" variant="light" radius="sm" className={styles.issueId}>
+                Issue #{issue.id}
+              </Badge>
               <SeverityBadge severity={issue.severity} />
               <StatusBadge status={issue.status} />
               <SourceBadge source={issue.source} />
@@ -889,17 +1000,13 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
   const [debouncedEnvironment] = useDebouncedValue(environment, 300);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [sortValue, setSortValue] = useState<string>("lastSeenAt:desc");
+  const [sort, setSort] = useState<ErrorMonitoringIssueSort>("lastSeenAt");
+  const [direction, setDirection] = useState<ErrorMonitoringSortDirection>("desc");
   const [refreshToken, setRefreshToken] = useState(0);
   const [listActionError, setListActionError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedIssueId = normalizeIssueId(searchParams.get("issue"));
   const { data: activeUsers = [] } = useActiveUsers();
-
-  const [sort, direction] = sortValue.split(":") as [
-    NonNullable<ErrorMonitoringIssueFilters["sort"]>,
-    NonNullable<ErrorMonitoringIssueFilters["direction"]>,
-  ];
 
   const filters = useMemo<ErrorMonitoringIssueFilters>(
     () => ({
@@ -1019,7 +1126,8 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
       environment ||
       dateFrom ||
       dateTo ||
-      sortValue !== "lastSeenAt:desc",
+      sort !== "lastSeenAt" ||
+      direction !== "desc",
   );
 
   const clearFilters = () => {
@@ -1034,13 +1142,30 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
     setEnvironment("");
     setDateFrom("");
     setDateTo("");
-    setSortValue("lastSeenAt:desc");
+    setSort("lastSeenAt");
+    setDirection("desc");
     setPage(1);
   };
 
   const changeFilter = <T,>(setter: (value: T) => void, value: T) => {
     setPage(1);
     setter(value);
+  };
+
+  const changeSortField = (nextSort: ErrorMonitoringIssueSort) => {
+    setPage(1);
+    setSort(nextSort);
+    setDirection(DEFAULT_SORT_DIRECTIONS[nextSort]);
+  };
+
+  const sortByColumn = (nextSort: ErrorMonitoringIssueSort) => {
+    setPage(1);
+    if (nextSort === sort) {
+      setDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSort(nextSort);
+    setDirection(DEFAULT_SORT_DIRECTIONS[nextSort]);
   };
 
   const refresh = useCallback(() => setRefreshToken((current) => current + 1), []);
@@ -1196,7 +1321,20 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
             <TextInput label="Environment" placeholder="production" value={environment} onChange={(event) => changeFilter(setEnvironment, event.currentTarget.value)} />
             <TextInput label="From" type="date" value={dateFrom} onChange={(event) => changeFilter(setDateFrom, event.currentTarget.value)} />
             <TextInput label="To" type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => changeFilter(setDateTo, event.currentTarget.value)} />
-            <Select label="Sort" data={[...SORT_OPTIONS]} value={sortValue} allowDeselect={false} onChange={(value) => changeFilter(setSortValue, value ?? "lastSeenAt:desc")} />
+            <Select
+              label="Sort by"
+              data={SORT_FIELD_OPTIONS}
+              value={sort}
+              allowDeselect={false}
+              onChange={(value) => value && changeSortField(value as ErrorMonitoringIssueSort)}
+            />
+            <Select
+              label="Order"
+              data={getSortDirectionOptions(sort)}
+              value={direction}
+              allowDeselect={false}
+              onChange={(value) => value && changeFilter(setDirection, value as ErrorMonitoringSortDirection)}
+            />
           </div>
           {kindOptions.length > 1 ? (
             <MultiSelect label="Error kind" placeholder="All error kinds" data={kindOptions} value={kinds} onChange={(value) => changeFilter(setKinds, value)} clearable searchable />
@@ -1262,13 +1400,21 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
                 <Table highlightOnHover verticalSpacing="md" horizontalSpacing="lg" className={styles.issuesTable}>
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>Issue</Table.Th>
-                      <Table.Th>Source</Table.Th>
-                      <Table.Th>Status</Table.Th>
-                      <Table.Th ta="center">Weighted events</Table.Th>
-                      <Table.Th ta="center">Users</Table.Th>
-                      <Table.Th>First seen</Table.Th>
-                      <Table.Th>Last seen</Table.Th>
+                      <SortableIssueHeader
+                        label="ID"
+                        sortKey="id"
+                        activeSort={sort}
+                        direction={direction}
+                        className={styles.idHeader}
+                        onSort={sortByColumn}
+                      />
+                      <SortableIssueHeader label="Issue title" sortKey="title" activeSort={sort} direction={direction} onSort={sortByColumn} />
+                      <SortableIssueHeader label="Source" sortKey="source" activeSort={sort} direction={direction} onSort={sortByColumn} />
+                      <SortableIssueHeader label="Status" sortKey="status" activeSort={sort} direction={direction} onSort={sortByColumn} />
+                      <SortableIssueHeader label="Weighted events" sortKey="occurrenceCount" activeSort={sort} direction={direction} align="center" onSort={sortByColumn} />
+                      <SortableIssueHeader label="Users" sortKey="affectedUserCount" activeSort={sort} direction={direction} align="center" onSort={sortByColumn} />
+                      <SortableIssueHeader label="First seen" sortKey="firstSeenAt" activeSort={sort} direction={direction} onSort={sortByColumn} />
+                      <SortableIssueHeader label="Last seen" sortKey="lastSeenAt" activeSort={sort} direction={direction} onSort={sortByColumn} />
                       {moduleAccess.canUpdate ? (
                         <Table.Th ta="center" className={styles.actionsHeader}>Actions</Table.Th>
                       ) : null}
@@ -1282,6 +1428,9 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
                         className={styles.issueRow}
                         onClick={() => openIssue(issue.id)}
                       >
+                        <Table.Td className={styles.idCell}>
+                          <Text size="sm" fw={800} className={styles.issueId}>#{issue.id}</Text>
+                        </Table.Td>
                         <Table.Td>
                           <Group gap="sm" wrap="nowrap">
                             <SeverityBadge severity={issue.severity} />

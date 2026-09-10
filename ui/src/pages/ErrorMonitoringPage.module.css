@@ -65,7 +65,49 @@
 }
 
 .issuesTable {
-  min-width: 1420px;
+  min-width: 1500px;
+}
+
+.sortHeaderButton {
+  width: 100%;
+  padding: 7px 3px;
+  border-radius: var(--mantine-radius-sm);
+  color: var(--mantine-color-gray-7);
+  font: inherit;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.sortHeaderButton:hover {
+  color: var(--mantine-color-blue-7);
+  background: var(--mantine-color-blue-0);
+}
+
+.sortHeaderButton[data-active] {
+  color: var(--mantine-color-blue-7);
+}
+
+.sortHeaderButton:focus-visible {
+  outline: 2px solid var(--mantine-color-blue-6);
+  outline-offset: 1px;
+}
+
+.idHeader,
+.idCell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 78px;
+  min-width: 78px;
+  background: var(--mantine-color-white);
+  box-shadow: 8px 0 14px -14px rgba(15, 23, 42, 0.45);
+}
+
+.idHeader {
+  z-index: 4;
+}
+
+.issueId {
+  font-variant-numeric: tabular-nums;
 }
 
 .actionsHeader,
@@ -98,7 +140,8 @@
 }
 
 .issueRow:hover .actionsCell,
-.issueRow:hover .openCell {
+.issueRow:hover .openCell,
+.issueRow:hover .idCell {
   background: var(--mantine-color-gray-0);
 }
 
