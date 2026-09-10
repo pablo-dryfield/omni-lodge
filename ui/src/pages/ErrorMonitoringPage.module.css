@@ -65,7 +65,41 @@
 }
 
 .issuesTable {
-  min-width: 1040px;
+  min-width: 1420px;
+}
+
+.actionsHeader,
+.actionsCell {
+  position: sticky;
+  right: 48px;
+  z-index: 2;
+  min-width: 288px;
+  background: var(--mantine-color-white);
+  box-shadow: -8px 0 14px -14px rgba(15, 23, 42, 0.45);
+}
+
+.actionsHeader {
+  z-index: 4;
+}
+
+.openHeader,
+.openCell {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  width: 48px;
+  min-width: 48px;
+  padding-inline: 8px;
+  background: var(--mantine-color-white);
+}
+
+.openHeader {
+  z-index: 5;
+}
+
+.issueRow:hover .actionsCell,
+.issueRow:hover .openCell {
+  background: var(--mantine-color-gray-0);
 }
 
 .issueRow {
@@ -127,21 +161,37 @@
 }
 
 .mobileIssueCard {
-  appearance: none;
-  cursor: pointer;
+  overflow: hidden;
   background: #fff;
   color: inherit;
   border-left-width: 4px;
+}
+
+.mobileIssueOpenButton {
+  width: 100%;
+  padding: var(--mantine-spacing-md);
+  color: inherit;
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
-.mobileIssueCard:active {
+.mobileIssueOpenButton:active {
   transform: scale(0.995);
 }
 
-.mobileIssueCard:focus-visible {
+.mobileIssueOpenButton:focus-visible {
   outline: 2px solid var(--mantine-color-blue-6);
-  outline-offset: 2px;
+  outline-offset: -2px;
+}
+
+.mobileIssueActions {
+  padding: 10px var(--mantine-spacing-sm);
+  overflow-x: auto;
+  border-top: 1px solid var(--mantine-color-gray-2);
+  background: var(--mantine-color-gray-0);
+}
+
+.mobileQuickAction {
+  min-height: 44px;
 }
 
 .desktopOnly {

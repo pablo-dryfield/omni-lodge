@@ -28,6 +28,7 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import { useDebouncedValue, useMediaQuery } from "@mantine/hooks";
 import {
@@ -221,6 +222,80 @@ const SourceBadge = ({ source }: { source: string }) => (
   </Badge>
 );
 
+type IssueStatusAction = {
+  status: ErrorMonitoringStatus;
+  label: string;
+  color: string;
+  icon: typeof IconCheck;
+};
+
+const getIssueStatusActions = (status: ErrorMonitoringStatus): IssueStatusAction[] => {
+  if (status === "resolved" || status === "ignored") {
+    return [{ status: "open", label: "Reopen", color: "blue", icon: IconRefresh }];
+  }
+
+  return [
+    ...(status === "open"
+      ? [{ status: "investigating" as const, label: "Investigate", color: "blue", icon: IconEye }]
+      : [{ status: "open" as const, label: "Reopen", color: "blue", icon: IconRefresh }]),
+    { status: "resolved", label: "Resolve", color: "teal", icon: IconCheck },
+    { status: "ignored", label: "Ignore", color: "gray", icon: IconX },
+  ];
+};
+
+type IssueQuickActionsProps = {
+  issue: ErrorMonitoringIssueSummary;
+  canUpdate: boolean;
+  disabled?: boolean;
+  mobile?: boolean;
+  pendingStatus: ErrorMonitoringStatus | null;
+  onStatusChange: (status: ErrorMonitoringStatus) => void;
+};
+
+const IssueQuickActions = ({
+  issue,
+  canUpdate,
+  disabled = false,
+  mobile = false,
+  pendingStatus,
+  onStatusChange,
+}: IssueQuickActionsProps) => {
+  if (!canUpdate) {
+    return null;
+  }
+
+  const busy = disabled || pendingStatus !== null;
+  return (
+    <Group
+      gap={6}
+      wrap="nowrap"
+      justify="center"
+      grow={mobile}
+      w={mobile ? "100%" : undefined}
+      aria-label={`Actions for ${issue.title}`}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      {getIssueStatusActions(issue.status).map(({ status, label, color, icon: Icon }) => (
+        <Button
+          key={status}
+          size="compact-sm"
+          variant={status === "resolved" ? "filled" : "light"}
+          color={color}
+          leftSection={<Icon size={15} aria-hidden="true" />}
+          loading={pendingStatus === status}
+          disabled={busy}
+          className={mobile ? styles.mobileQuickAction : undefined}
+          aria-label={`${label} issue: ${issue.title}`}
+          onClick={() => onStatusChange(status)}
+        >
+          {label}
+        </Button>
+      ))}
+    </Group>
+  );
+};
+
 type MetricCardProps = {
   label: string;
   value: number;
@@ -264,48 +339,71 @@ const IssueLocation = ({ issue }: { issue: ErrorMonitoringIssueSummary }) => {
 const MobileIssueCard = ({
   issue,
   onOpen,
+  canUpdate,
+  actionsDisabled,
+  pendingStatus,
+  onStatusChange,
 }: {
   issue: ErrorMonitoringIssueSummary;
   onOpen: () => void;
+  canUpdate: boolean;
+  actionsDisabled: boolean;
+  pendingStatus: ErrorMonitoringStatus | null;
+  onStatusChange: (status: ErrorMonitoringStatus) => void;
 }) => (
   <Paper
     withBorder
     radius="lg"
-    p="md"
     className={styles.mobileIssueCard}
     style={{ borderLeftColor: `var(--mantine-color-${SEVERITY_META[issue.severity]?.color ?? "gray"}-6)` }}
-    component="button"
-    type="button"
-    onClick={onOpen}
+    component="article"
     w="100%"
   >
-    <Stack gap="sm" style={{ textAlign: "left" }}>
-      <Group justify="space-between" align="flex-start" wrap="nowrap">
-        <Group gap={6} wrap="wrap">
-          <SeverityBadge severity={issue.severity} />
-          <StatusBadge status={issue.status} />
-          <SourceBadge source={issue.source} />
+    <UnstyledButton
+      className={styles.mobileIssueOpenButton}
+      onClick={onOpen}
+      aria-label={`Open ${issue.title}`}
+    >
+      <Stack gap="sm" style={{ textAlign: "left" }}>
+        <Group justify="space-between" align="flex-start" wrap="nowrap">
+          <Group gap={6} wrap="wrap">
+            <SeverityBadge severity={issue.severity} />
+            <StatusBadge status={issue.status} />
+            <SourceBadge source={issue.source} />
+          </Group>
+          <IconChevronRight size={18} color="#868e96" aria-hidden="true" />
         </Group>
-        <IconChevronRight size={18} color="#868e96" aria-hidden="true" />
-      </Group>
-      <Box>
-        <Text fw={750} lineClamp={2} className={styles.breakAnywhere}>
-          {issue.title}
-        </Text>
-        <IssueLocation issue={issue} />
-      </Box>
-      <Group justify="space-between" gap="xs">
-        <Group gap={5}>
-          <IconHistory size={14} color="#868e96" aria-hidden="true" />
-          <Text size="xs" c="dimmed">
-            {formatShortTimestamp(issue.lastSeenAt)}
+        <Box>
+          <Text fw={750} lineClamp={2} className={styles.breakAnywhere}>
+            {issue.title}
+          </Text>
+          <IssueLocation issue={issue} />
+        </Box>
+        <Group justify="space-between" gap="xs">
+          <Group gap={5}>
+            <IconHistory size={14} color="#868e96" aria-hidden="true" />
+            <Text size="xs" c="dimmed">
+              {formatShortTimestamp(issue.lastSeenAt)}
+            </Text>
+          </Group>
+          <Text size="xs" fw={700}>
+            {formatCount(issue.occurrenceCount)} weighted events · {formatCount(issue.affectedUserCount)} users
           </Text>
         </Group>
-        <Text size="xs" fw={700}>
-          {formatCount(issue.occurrenceCount)} weighted events · {formatCount(issue.affectedUserCount)} users
-        </Text>
-      </Group>
-    </Stack>
+      </Stack>
+    </UnstyledButton>
+    {canUpdate ? (
+      <Box className={styles.mobileIssueActions}>
+        <IssueQuickActions
+          issue={issue}
+          canUpdate={canUpdate}
+          disabled={actionsDisabled}
+          mobile
+          pendingStatus={pendingStatus}
+          onStatusChange={onStatusChange}
+        />
+      </Box>
+    ) : null}
   </Paper>
 );
 
@@ -481,17 +579,7 @@ const IssueDrawer = ({ issueId, onClose, activeUserOptions, onChanged, canUpdate
   const issue = detail?.issue;
   const busy = updateMutation.isPending || noteMutation.isPending || deleteNoteMutation.isPending;
 
-  const statusActions = issue
-    ? issue.status === "resolved" || issue.status === "ignored"
-      ? [{ status: "open" as const, label: "Reopen", color: "blue", icon: IconRefresh }]
-      : [
-          ...(issue.status === "open"
-            ? [{ status: "investigating" as const, label: "Investigate", color: "blue", icon: IconEye }]
-            : [{ status: "open" as const, label: "Reopen", color: "blue", icon: IconRefresh }]),
-          { status: "resolved" as const, label: "Resolve", color: "teal", icon: IconCheck },
-          { status: "ignored" as const, label: "Ignore", color: "gray", icon: IconX },
-        ]
-    : [];
+  const statusActions = issue ? getIssueStatusActions(issue.status) : [];
 
   return (
     <Drawer
@@ -607,7 +695,16 @@ const IssueDrawer = ({ issueId, onClose, activeUserOptions, onChanged, canUpdate
                       leftSection={<Icon size={15} />}
                       loading={updateMutation.isPending}
                       disabled={busy || !canUpdate}
-                      onClick={() => updateMutation.mutate({ status })}
+                      onClick={() => {
+                        if (
+                          status !== "ignored"
+                          || window.confirm(
+                            "Ignore this issue? Future occurrences will stay grouped as ignored until you reopen it.",
+                          )
+                        ) {
+                          updateMutation.mutate({ status });
+                        }
+                      }}
                     >
                       {label}
                     </Button>
@@ -775,6 +872,7 @@ const IssueDrawer = ({ issueId, onClose, activeUserOptions, onChanged, canUpdate
 const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
   const isMobile = useMediaQuery("(max-width: 48em)") ?? false;
   const moduleAccess = useModuleAccess("error-monitoring-dashboard");
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebouncedValue(search, 300);
@@ -793,6 +891,7 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
   const [dateTo, setDateTo] = useState("");
   const [sortValue, setSortValue] = useState<string>("lastSeenAt:desc");
   const [refreshToken, setRefreshToken] = useState(0);
+  const [listActionError, setListActionError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedIssueId = normalizeIssueId(searchParams.get("issue"));
   const { data: activeUsers = [] } = useActiveUsers();
@@ -840,6 +939,36 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
     refetchIntervalInBackground: false,
     enabled: moduleAccess.ready && moduleAccess.canView,
   });
+
+  const quickStatusMutation = useMutation({
+    mutationFn: ({ issueId, status }: { issueId: string; status: ErrorMonitoringStatus }) =>
+      updateErrorMonitoringIssue(issueId, { status }),
+    onSuccess: async (_updatedIssue, { issueId }) => {
+      setListActionError(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["error-monitoring", "issues"] }),
+        queryClient.invalidateQueries({ queryKey: ["error-monitoring", "summary"] }),
+        queryClient.invalidateQueries({ queryKey: ["error-monitoring", "issue", issueId] }),
+      ]);
+    },
+    onError: (error) => setListActionError(getErrorMessage(error)),
+  });
+
+  const requestQuickStatusChange = (
+    issue: ErrorMonitoringIssueSummary,
+    status: ErrorMonitoringStatus,
+  ) => {
+    if (
+      status === "ignored"
+      && !window.confirm(
+        "Ignore this issue? Future occurrences will stay grouped as ignored until you reopen it.",
+      )
+    ) {
+      return;
+    }
+    setListActionError(null);
+    quickStatusMutation.mutate({ issueId: issue.id, status });
+  };
 
   const summary = summaryQuery.data;
   const issues = useMemo(() => issuesQuery.data?.issues ?? [], [issuesQuery.data?.issues]);
@@ -1092,6 +1221,20 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
           ) : null}
         </Group>
 
+        {listActionError ? (
+          <Alert
+            mx={isMobile ? "md" : "lg"}
+            mb="sm"
+            color="red"
+            icon={<IconAlertCircle size={18} />}
+            title="Unable to update issue"
+            withCloseButton
+            onClose={() => setListActionError(null)}
+          >
+            {listActionError}
+          </Alert>
+        ) : null}
+
         {issuesQuery.isLoading ? (
           <Center mih={260}><Loader variant="dots" /></Center>
         ) : issuesQuery.isError ? (
@@ -1126,7 +1269,10 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
                       <Table.Th ta="center">Users</Table.Th>
                       <Table.Th>First seen</Table.Th>
                       <Table.Th>Last seen</Table.Th>
-                      <Table.Th aria-label="Open" />
+                      {moduleAccess.canUpdate ? (
+                        <Table.Th ta="center" className={styles.actionsHeader}>Actions</Table.Th>
+                      ) : null}
+                      <Table.Th aria-label="Open" className={styles.openHeader} />
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
@@ -1134,14 +1280,7 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
                       <Table.Tr
                         key={issue.id}
                         className={styles.issueRow}
-                        tabIndex={0}
                         onClick={() => openIssue(issue.id)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            openIssue(issue.id);
-                          }
-                        }}
                       >
                         <Table.Td>
                           <Group gap="sm" wrap="nowrap">
@@ -1158,7 +1297,34 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
                         <Table.Td ta="center"><Text fw={750}>{formatCount(issue.affectedUserCount)}</Text></Table.Td>
                         <Table.Td><Text size="sm" style={{ whiteSpace: "nowrap" }}>{formatShortTimestamp(issue.firstSeenAt)}</Text></Table.Td>
                         <Table.Td><Text size="sm" fw={650} style={{ whiteSpace: "nowrap" }}>{formatShortTimestamp(issue.lastSeenAt)}</Text></Table.Td>
-                        <Table.Td><ActionIcon variant="subtle" aria-label={`Open ${issue.title}`}><IconChevronRight size={18} /></ActionIcon></Table.Td>
+                        {moduleAccess.canUpdate ? (
+                          <Table.Td className={styles.actionsCell}>
+                            <IssueQuickActions
+                              issue={issue}
+                              canUpdate={moduleAccess.canUpdate}
+                              disabled={quickStatusMutation.isPending}
+                              pendingStatus={
+                                quickStatusMutation.isPending
+                                && quickStatusMutation.variables?.issueId === issue.id
+                                  ? quickStatusMutation.variables.status
+                                  : null
+                              }
+                              onStatusChange={(status) => requestQuickStatusChange(issue, status)}
+                            />
+                          </Table.Td>
+                        ) : null}
+                        <Table.Td className={styles.openCell}>
+                          <ActionIcon
+                            variant="subtle"
+                            aria-label={`Open ${issue.title}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openIssue(issue.id);
+                            }}
+                          >
+                            <IconChevronRight size={18} />
+                          </ActionIcon>
+                        </Table.Td>
                       </Table.Tr>
                     ))}
                   </Table.Tbody>
@@ -1167,7 +1333,22 @@ const ErrorMonitoringDashboard = ({ title }: GenericPageProps) => {
             </div>
             <div className={styles.mobileOnly}>
               <Stack p="md" pt={0} gap="sm">
-                {issues.map((issue) => <MobileIssueCard key={issue.id} issue={issue} onOpen={() => openIssue(issue.id)} />)}
+                {issues.map((issue) => (
+                  <MobileIssueCard
+                    key={issue.id}
+                    issue={issue}
+                    onOpen={() => openIssue(issue.id)}
+                    canUpdate={moduleAccess.canUpdate}
+                    actionsDisabled={quickStatusMutation.isPending}
+                    pendingStatus={
+                      quickStatusMutation.isPending
+                      && quickStatusMutation.variables?.issueId === issue.id
+                        ? quickStatusMutation.variables.status
+                        : null
+                    }
+                    onStatusChange={(status) => requestQuickStatusChange(issue, status)}
+                  />
+                ))}
               </Stack>
             </div>
           </>

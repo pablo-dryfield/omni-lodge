@@ -158,6 +158,7 @@ const renderPage = (entry = "/error-monitoring") => {
 describe("ErrorMonitoringPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockModuleAccess.canUpdate = true;
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: jest.fn().mockImplementation((query: string) => ({
@@ -236,6 +237,99 @@ describe("ErrorMonitoringPage", () => {
     await waitFor(() => {
       expect(mockedUpdate).toHaveBeenCalledWith("42", { status: "resolved" });
     });
+  });
+
+  it("triages an issue directly from the desktop list without opening its details", async () => {
+    mockedUpdate.mockResolvedValueOnce({ ...issue, status: "investigating" });
+    renderPage();
+
+    const table = await screen.findByRole("table");
+    fireEvent.click(within(table).getByRole("button", {
+      name: `Investigate issue: ${issue.title}`,
+    }));
+
+    await waitFor(() => {
+      expect(mockedUpdate).toHaveBeenCalledWith("42", { status: "investigating" });
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(new URLSearchParams(screen.getByTestId("location-search").textContent ?? "").has("issue")).toBe(false);
+  });
+
+  it("confirms before ignoring an issue from the list", async () => {
+    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
+    renderPage();
+
+    const table = await screen.findByRole("table");
+    fireEvent.click(within(table).getByRole("button", {
+      name: `Ignore issue: ${issue.title}`,
+    }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Ignore this issue? Future occurrences will stay grouped as ignored until you reopen it.",
+    );
+    expect(mockedUpdate).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    fireEvent.click(within(table).getByRole("button", {
+      name: `Ignore issue: ${issue.title}`,
+    }));
+    await waitFor(() => {
+      expect(mockedUpdate).toHaveBeenCalledWith("42", { status: "ignored" });
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it("shows only Reopen for a closed issue in the list", async () => {
+    const resolvedIssue = { ...issue, status: "resolved" as const };
+    mockedIssues.mockResolvedValueOnce({
+      issues: [resolvedIssue],
+      pagination: { page: 1, limit: 25, total: 1, totalPages: 1 },
+    });
+    mockedUpdate.mockResolvedValueOnce({ ...issue, status: "open" });
+    renderPage();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).queryByRole("button", { name: `Resolve issue: ${issue.title}` })).not.toBeInTheDocument();
+    expect(within(table).queryByRole("button", { name: `Ignore issue: ${issue.title}` })).not.toBeInTheDocument();
+    fireEvent.click(within(table).getByRole("button", { name: `Reopen issue: ${issue.title}` }));
+
+    await waitFor(() => {
+      expect(mockedUpdate).toHaveBeenCalledWith("42", { status: "open" });
+    });
+  });
+
+  it("keeps mobile issue actions separate from the details button", async () => {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: jest.fn().mockImplementation((query: string) => ({
+        matches: query === "(max-width: 48em)",
+        media: query,
+        onchange: null,
+        addListener: jest.fn(),
+        removeListener: jest.fn(),
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
+        dispatchEvent: jest.fn(),
+      })),
+    });
+    renderPage();
+
+    const card = await screen.findByRole("article");
+    fireEvent.click(within(card).getByRole("button", { name: `Resolve issue: ${issue.title}` }));
+    await waitFor(() => {
+      expect(mockedUpdate).toHaveBeenCalledWith("42", { status: "resolved" });
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("hides list triage actions when access is read only", async () => {
+    mockModuleAccess.canUpdate = false;
+    renderPage();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).queryByText("Actions")).not.toBeInTheDocument();
+    expect(within(table).queryByRole("button", { name: `Resolve issue: ${issue.title}` })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: `Open ${issue.title}` }).length).toBeGreaterThan(0);
   });
 
   it("opens a linked issue directly from the URL", async () => {
