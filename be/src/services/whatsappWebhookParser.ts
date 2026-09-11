@@ -23,10 +23,22 @@ export class WhatsAppWebhookSignatureError extends Error {
   }
 }
 
+export type WhatsAppWebhookValidationCode =
+  | 'INVALID_JSON'
+  | 'INVALID_OBJECT'
+  | 'MISSING_WABA_ID'
+  | 'UNEXPECTED_WABA_ID'
+  | 'MISSING_CHANGE_VALUE'
+  | 'MISSING_PHONE_NUMBER_ID'
+  | 'UNEXPECTED_PHONE_NUMBER_ID';
+
 export class WhatsAppWebhookValidationError extends Error {
-  constructor(message: string) {
+  readonly safeCode: WhatsAppWebhookValidationCode;
+
+  constructor(safeCode: WhatsAppWebhookValidationCode, message: string) {
     super(message);
     this.name = 'WhatsAppWebhookValidationError';
+    this.safeCode = safeCode;
   }
 }
 
@@ -420,7 +432,10 @@ const parseAccountUpdateChange = (
 ): NormalizedWhatsAppAccountStateEvent[] => {
   const metadataPhoneNumberId = nonEmptyString(nestedRecord(value, 'metadata')?.phone_number_id);
   if (metadataPhoneNumberId && metadataPhoneNumberId !== expectedPhoneNumberId) {
-    throw new WhatsAppWebhookValidationError('WhatsApp webhook has an unexpected phone number id');
+    throw new WhatsAppWebhookValidationError(
+      'UNEXPECTED_PHONE_NUMBER_ID',
+      'WhatsApp webhook has an unexpected phone number id',
+    );
   }
 
   const event = nonEmptyString(value.event)
@@ -435,8 +450,44 @@ const parseAccountUpdateChange = (
     // account-level events are scoped to that configured number.
     phoneNumberId: metadataPhoneNumberId ?? expectedPhoneNumberId,
     event,
-    unavailable: /(partner_removed|removed|disabled|blocked|banned|deleted|disconnected)/i.test(event),
+    unavailable: /(partner_removed|partner_app_uninstalled|offboarded|removed|disabled|blocked|banned|deleted|disconnected)/i.test(event),
   }];
+};
+
+const validateEntryWabaScope = (
+  entryId: string,
+  options: WhatsAppWebhookParserOptions,
+): string => {
+  if (entryId !== options.expectedWabaId) {
+    throw new WhatsAppWebhookValidationError(
+      'UNEXPECTED_WABA_ID',
+      'WhatsApp webhook has an unexpected WABA id',
+    );
+  }
+  return options.expectedWabaId;
+};
+
+const validateAccountUpdateWabaScope = (
+  entryId: string,
+  value: UnknownRecord,
+  options: WhatsAppWebhookParserOptions,
+): string => {
+  // Meta's account_update lifecycle events are not uniform with message
+  // events: entry.id can be the Business Portfolio ID while the affected WABA
+  // is carried in value.waba_info.waba_id. Never trust the portfolio ID as the
+  // WABA. If a nested WABA is present, it must exactly match this connector;
+  // older events without waba_info retain the strict entry.id check.
+  const nestedWabaId = nonEmptyString(nestedRecord(value, 'waba_info')?.waba_id);
+  if (nestedWabaId) {
+    if (nestedWabaId !== options.expectedWabaId) {
+      throw new WhatsAppWebhookValidationError(
+        'UNEXPECTED_WABA_ID',
+        'WhatsApp webhook has an unexpected WABA id',
+      );
+    }
+    return options.expectedWabaId;
+  }
+  return validateEntryWabaScope(entryId, options);
 };
 
 const validateChangeScope = (
@@ -446,10 +497,16 @@ const validateChangeScope = (
   const metadata = nestedRecord(value, 'metadata');
   const phoneNumberId = nonEmptyString(metadata?.phone_number_id);
   if (!phoneNumberId) {
-    throw new WhatsAppWebhookValidationError('WhatsApp webhook is missing its phone number id');
+    throw new WhatsAppWebhookValidationError(
+      'MISSING_PHONE_NUMBER_ID',
+      'WhatsApp webhook is missing its phone number id',
+    );
   }
   if (phoneNumberId !== options.expectedPhoneNumberId) {
-    throw new WhatsAppWebhookValidationError('WhatsApp webhook has an unexpected phone number id');
+    throw new WhatsAppWebhookValidationError(
+      'UNEXPECTED_PHONE_NUMBER_ID',
+      'WhatsApp webhook has an unexpected phone number id',
+    );
   }
   return phoneNumberId;
 };
@@ -460,6 +517,7 @@ export const parseWhatsAppWebhookPayload = (
 ): NormalizedWhatsAppWebhookEvent[] => {
   if (!isRecord(payload) || payload.object !== 'whatsapp_business_account') {
     throw new WhatsAppWebhookValidationError(
+      'INVALID_OBJECT',
       'Webhook object must be whatsapp_business_account',
     );
   }
@@ -468,10 +526,10 @@ export const parseWhatsAppWebhookPayload = (
   for (const entry of records(payload.entry)) {
     const wabaId = nonEmptyString(entry.id);
     if (!wabaId) {
-      throw new WhatsAppWebhookValidationError('WhatsApp webhook entry is missing its WABA id');
-    }
-    if (wabaId !== options.expectedWabaId) {
-      throw new WhatsAppWebhookValidationError('WhatsApp webhook has an unexpected WABA id');
+      throw new WhatsAppWebhookValidationError(
+        'MISSING_WABA_ID',
+        'WhatsApp webhook entry is missing its WABA id',
+      );
     }
 
     for (const change of records(entry.changes)) {
@@ -480,12 +538,21 @@ export const parseWhatsAppWebhookPayload = (
 
       const value = nestedRecord(change, 'value');
       if (!value) {
-        throw new WhatsAppWebhookValidationError('WhatsApp webhook change is missing its value');
+        throw new WhatsAppWebhookValidationError(
+          'MISSING_CHANGE_VALUE',
+          'WhatsApp webhook change is missing its value',
+        );
       }
       if (field === 'account_update') {
-        events.push(...parseAccountUpdateChange(value, wabaId, options.expectedPhoneNumberId));
+        const accountWabaId = validateAccountUpdateWabaScope(wabaId, value, options);
+        events.push(...parseAccountUpdateChange(
+          value,
+          accountWabaId,
+          options.expectedPhoneNumberId,
+        ));
         continue;
       }
+      validateEntryWabaScope(wabaId, options);
       const phoneNumberId = validateChangeScope(value, options);
 
       if (field === 'smb_app_state_sync') {
@@ -546,7 +613,10 @@ export const parseMetaWebhook = (
   try {
     payload = JSON.parse(rawBody.toString('utf8')) as unknown;
   } catch {
-    throw new WhatsAppWebhookValidationError('WhatsApp webhook body is not valid JSON');
+    throw new WhatsAppWebhookValidationError(
+      'INVALID_JSON',
+      'WhatsApp webhook body is not valid JSON',
+    );
   }
 
   return {

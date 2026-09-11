@@ -22,7 +22,11 @@ import {
   WhatsAppMetaGraphError,
   type WhatsAppCoexistenceSyncType,
 } from './whatsappMetaGraphClient.js';
-import { getWhatsAppSourceStatus, type WhatsAppSourceStatus } from './whatsappMessageService.js';
+import {
+  getWhatsAppSourceStatus,
+  restoreWhatsAppSourceAfterSubscriptionRepair,
+  type WhatsAppSourceStatus,
+} from './whatsappMessageService.js';
 
 const ATTEMPT_TTL_MS = 10 * 60 * 1000;
 const PROCESSING_STALE_MS = 15 * 60 * 1000;
@@ -91,6 +95,7 @@ export interface WhatsAppAdminStatus {
   wabaId: string | null;
   phoneNumberId: string | null;
   onboardingGeneration: string | null;
+  webhookSubscriptionStatus: 'verified' | 'missing' | 'unknown';
   latestAttempt: WhatsAppAdminSafeAttempt | null;
   source: WhatsAppSourceStatus;
 }
@@ -205,13 +210,17 @@ export const parseWhatsAppEmbeddedSignupSession = (
   };
 };
 
-export const getWhatsAppAdminStatus = async (): Promise<WhatsAppAdminStatus> => {
+export const getWhatsAppAdminStatus = async (options: {
+  checkWebhookSubscription?: boolean;
+  graphClient?: WhatsAppMetaGraphClient;
+} = {}): Promise<WhatsAppAdminStatus> => {
   await refreshConfigCacheKeys([
     ...LAUNCH_CONFIG_KEYS,
     ...WEBHOOK_QUEUE_CONFIG_KEYS,
     ...CONNECTION_CONFIG_KEYS,
   ]);
-  const tokenConfigured = configured('WHATSAPP_BUSINESS_ACCESS_TOKEN');
+  const accessToken = getConfigValueRaw('WHATSAPP_BUSINESS_ACCESS_TOKEN')?.trim() || null;
+  const tokenConfigured = Boolean(accessToken);
   const wabaId = getConfigValueRaw('WHATSAPP_WABA_ID')?.trim() || null;
   const phoneNumberId = getConfigValueRaw('WHATSAPP_PHONE_NUMBER_ID')?.trim() || null;
   const onboardingGeneration = getConfigValueRaw('WHATSAPP_ONBOARDING_GENERATION')?.trim() || null;
@@ -238,6 +247,30 @@ export const getWhatsAppAdminStatus = async (): Promise<WhatsAppAdminStatus> => 
     && configured('WHATSAPP_META_GRAPH_API_VERSION')
     && configured('WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID')
     && configured('WHATSAPP_WEBHOOK_VERIFY_TOKEN');
+  let webhookSubscriptionStatus: WhatsAppAdminStatus['webhookSubscriptionStatus'] = 'unknown';
+  if (
+    options.checkWebhookSubscription
+    && launchConfigured
+    && accessToken
+    && wabaId
+    && phoneNumberId
+    && onboardingGeneration
+    && NUMERIC_META_ID.test(wabaId)
+    && NUMERIC_META_ID.test(phoneNumberId)
+  ) {
+    try {
+      const client = options.graphClient
+        ?? new WhatsAppMetaGraphClient(getWhatsAppEmbeddedSignupConfig());
+      webhookSubscriptionStatus = await client.isAppSubscribedToWaba(accessToken, wabaId)
+        ? 'verified'
+        : 'missing';
+    } catch {
+      // Status remains usable when Meta is temporarily unreachable. Unknown is
+      // deliberately distinct from missing so an outage never suggests that an
+      // administrator should reconnect or mutate a healthy subscription.
+      webhookSubscriptionStatus = 'unknown';
+    }
+  }
   const latestSafeAttempt = safeAttempt(latestAttempt);
   const activationSafeAttempt = safeAttempt(activationAttempt);
   const activationAllowsConnection = activationSafeAttempt?.subscriptionStatus === 'succeeded';
@@ -259,9 +292,130 @@ export const getWhatsAppAdminStatus = async (): Promise<WhatsAppAdminStatus> => 
     wabaId,
     phoneNumberId,
     onboardingGeneration,
+    webhookSubscriptionStatus,
     latestAttempt: latestSafeAttempt,
     source,
   };
+};
+
+export interface WhatsAppWebhookSubscriptionRepairResult {
+  repaired: boolean;
+  status: WhatsAppAdminStatus;
+}
+
+type WhatsAppConnectionSnapshot = {
+  accessToken: string;
+  wabaId: string;
+  phoneNumberId: string;
+  onboardingGeneration: string;
+};
+
+const connectionSnapshotIsCurrent = (snapshot: WhatsAppConnectionSnapshot): boolean =>
+  getConfigValueRaw('WHATSAPP_BUSINESS_ACCESS_TOKEN')?.trim() === snapshot.accessToken
+  && getConfigValueRaw('WHATSAPP_WABA_ID')?.trim() === snapshot.wabaId
+  && getConfigValueRaw('WHATSAPP_PHONE_NUMBER_ID')?.trim() === snapshot.phoneNumberId
+  && getConfigValueRaw('WHATSAPP_ONBOARDING_GENERATION')?.trim()
+    === snapshot.onboardingGeneration;
+
+const webhookSubscriptionRepairFailure = (error: unknown): HttpError => {
+  if (error instanceof HttpError) return error;
+  if (error instanceof WhatsAppMetaGraphError) {
+    return new HttpError(502, 'WhatsApp webhook subscription could not be verified or repaired.', {
+      code: error.safeCode,
+      ambiguous: error.ambiguous,
+    });
+  }
+  return new HttpError(500, 'WhatsApp webhook subscription repair failed.');
+};
+
+export const repairWhatsAppWebhookSubscription = async (options: {
+  graphClient?: WhatsAppMetaGraphClient;
+} = {}): Promise<WhatsAppWebhookSubscriptionRepairResult> => {
+  try {
+    await refreshConfigCacheKeys([...LAUNCH_CONFIG_KEYS, ...CONNECTION_CONFIG_KEYS]);
+    const config = getWhatsAppEmbeddedSignupConfig();
+    const accessToken = getConfigValueRaw('WHATSAPP_BUSINESS_ACCESS_TOKEN')?.trim() || null;
+    const wabaId = getConfigValueRaw('WHATSAPP_WABA_ID')?.trim() || null;
+    const phoneNumberId = getConfigValueRaw('WHATSAPP_PHONE_NUMBER_ID')?.trim() || null;
+    const onboardingGeneration = getConfigValueRaw('WHATSAPP_ONBOARDING_GENERATION')?.trim() || null;
+    if (
+      !accessToken
+      || !wabaId
+      || !phoneNumberId
+      || !onboardingGeneration
+      || !NUMERIC_META_ID.test(wabaId)
+      || !NUMERIC_META_ID.test(phoneNumberId)
+    ) {
+      throw new HttpError(409, 'Complete the WhatsApp Business connection before repairing its webhook subscription.');
+    }
+
+    const client = options.graphClient ?? new WhatsAppMetaGraphClient(config);
+
+    // Re-establish every part of the stored trust tuple before making the
+    // idempotent subscription write. A valid app token alone is insufficient:
+    // it must target this WABA, contain this phone, and still represent a
+    // Cloud API coexistence number.
+    await client.validateAccessToken(accessToken, wabaId);
+    const phoneNumberIds = await client.listWabaPhoneNumberIds(accessToken, wabaId);
+    if (!phoneNumberIds.includes(phoneNumberId)) {
+      throw new WhatsAppMetaGraphError('META_PHONE_WABA_MISMATCH', 200, false);
+    }
+    await client.assertCoexistencePhone(accessToken, phoneNumberId);
+
+    const snapshot: WhatsAppConnectionSnapshot = {
+      accessToken,
+      wabaId,
+      phoneNumberId,
+      onboardingGeneration,
+    };
+
+    const alreadySubscribed = await client.isAppSubscribedToWaba(accessToken, wabaId);
+    let repaired = false;
+    if (!alreadySubscribed) {
+      try {
+        await client.subscribeWaba(accessToken, wabaId);
+      } catch (error) {
+        if (!(error instanceof WhatsAppMetaGraphError) || !error.ambiguous) {
+          throw error;
+        }
+        // A lost response does not prove the idempotent write failed. Verify
+        // provider state before presenting an ambiguous failure to the admin.
+        if (!await client.isAppSubscribedToWaba(accessToken, wabaId)) {
+          throw error;
+        }
+      }
+      repaired = true;
+      if (!await client.isAppSubscribedToWaba(accessToken, wabaId)) {
+        throw new WhatsAppMetaGraphError('META_SUBSCRIPTION_NOT_CONFIRMED', 200, true);
+      }
+    }
+
+    // Never apply the provider result to a connection that was rotated while
+    // the Graph calls were in flight.
+    await refreshConfigCacheKeys(CONNECTION_CONFIG_KEYS);
+    if (!connectionSnapshotIsCurrent(snapshot)) {
+      throw new HttpError(409, 'The WhatsApp connection changed during subscription repair. Refresh and try again.');
+    }
+    const restored = await restoreWhatsAppSourceAfterSubscriptionRepair(onboardingGeneration);
+    if (!restored) {
+      throw new HttpError(409, 'The WhatsApp connection changed during subscription repair. Refresh and try again.');
+    }
+    const status = await getWhatsAppAdminStatus();
+    if (
+      status.wabaId !== wabaId
+      || status.phoneNumberId !== phoneNumberId
+      || status.onboardingGeneration !== onboardingGeneration
+      || !connectionSnapshotIsCurrent(snapshot)
+    ) {
+      throw new HttpError(409, 'The WhatsApp connection changed during subscription repair. Refresh and try again.');
+    }
+    return {
+      repaired,
+      status: { ...status, webhookSubscriptionStatus: 'verified' },
+    };
+  } catch (error) {
+    throw webhookSubscriptionRepairFailure(error);
+  }
 };
 
 export const createWhatsAppEmbeddedSignupAttempt = async (
@@ -673,7 +827,10 @@ const finishSubscribedAttempt = async (params: {
   if (completedCount !== 1) {
     throw new HttpError(409, 'Embedded Signup attempt requires recovery.');
   }
-  return getWhatsAppAdminStatus();
+  return {
+    ...await getWhatsAppAdminStatus(),
+    webhookSubscriptionStatus: 'verified',
+  };
 };
 
 const resumeSubscribedAttempt = async (params: {

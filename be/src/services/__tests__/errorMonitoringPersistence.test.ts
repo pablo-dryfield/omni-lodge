@@ -350,6 +350,123 @@ describe('error monitoring persistence', () => {
     });
   });
 
+  it('persists native network reports with the failed request and NEL diagnostics', async () => {
+    database.query
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce([{
+        id: 30,
+        occurrence_count: 1,
+        reopened_count: 0,
+        is_new: true,
+        regressed: false,
+      }]);
+
+    await expect(ingestBrowserReports({
+      type: 'network-error',
+      age: 25,
+      url: 'https://omni-lodge.com/api/social-media/content/42?token=private',
+      body: {
+        type: 'tcp.timed_out',
+        phase: 'connection',
+        protocol: 'h2',
+        method: 'POST',
+        status_code: 503,
+        elapsed_time: 912,
+        sampling_fraction: 1,
+        referrer: 'https://omni-lodge.com/social-media?draft=private',
+        server_ip_address: '192.0.2.10',
+      },
+    }, { userAgent: 'Browser', ip: '192.0.2.5' })).resolves.toEqual({
+      accepted: 1,
+      rejected: 0,
+      retryableRejected: 0,
+    });
+
+    expect(occurrenceModel.create).toHaveBeenCalledTimes(1);
+    expect(occurrenceModel.create.mock.calls[0][0]).toEqual(expect.objectContaining({
+      source: 'client',
+      kind: 'api_error',
+      level: 'warning',
+      errorName: 'NetworkError:tcp.timed_out',
+      message: 'Network request failed: tcp.timed_out',
+      httpMethod: 'POST',
+      httpUrlPath: '/api/social-media/content/:id',
+      httpStatus: 503,
+      durationMs: 912,
+      pageUrlPath: '/social-media',
+      context: expect.objectContaining({
+        reportType: 'network-error',
+        networkErrorType: 'tcp.timed_out',
+        phase: 'connection',
+        protocol: 'h2',
+        statusCode: 503,
+        elapsedTimeMs: 912,
+        samplingFraction: 1,
+      }),
+    }));
+    expect(occurrenceModel.create.mock.calls[0][0].context).not.toHaveProperty('server_ip_address');
+  });
+
+  it('acknowledges only non-actionable or recursive native network reports', async () => {
+    await expect(ingestBrowserReports([{
+      type: 'network-error',
+      url: 'https://omni-lodge.com/api/bookings',
+      body: { type: 'abandoned', method: 'GET' },
+    }, {
+      type: 'network-error',
+      url: 'https://omni-lodge.com/api/client-errors/batch',
+      body: { type: 'tcp.refused', method: 'POST' },
+    }, {
+      type: 'network-error',
+      url: 'https://omni-lodge.com/static/js/main.js.map',
+      body: { type: 'http.error', method: 'GET', status_code: 404 },
+    }, {
+      type: 'network-error',
+      url: 'https://omni-lodge.com/api/health/',
+      body: { type: 'tcp.refused', method: 'GET' },
+    }], { userAgent: 'Browser', ip: '192.0.2.5' })).resolves.toEqual({
+      accepted: 4,
+      rejected: 0,
+      retryableRejected: 0,
+    });
+
+    expect(database.transaction).not.toHaveBeenCalled();
+    expect(occurrenceModel.create).not.toHaveBeenCalled();
+  });
+
+  it('retains a genuine non-map resource network failure', async () => {
+    database.query
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce([{
+        id: 31,
+        occurrence_count: 1,
+        reopened_count: 0,
+        is_new: true,
+        regressed: false,
+      }]);
+
+    await expect(ingestBrowserReports({
+      type: 'network-error',
+      url: 'https://omni-lodge.com/static/js/application.js',
+      body: {
+        type: 'dns.name_not_resolved',
+        phase: 'dns',
+        protocol: '',
+        method: 'GET',
+        elapsed_time: 1250,
+      },
+    }, { userAgent: 'Browser', ip: '192.0.2.5' })).resolves.toMatchObject({ accepted: 1 });
+
+    expect(occurrenceModel.create).toHaveBeenCalledTimes(1);
+    expect(occurrenceModel.create.mock.calls[0][0]).toEqual(expect.objectContaining({
+      kind: 'resource_error',
+      errorName: 'NetworkError:dns.name_not_resolved',
+      httpMethod: 'GET',
+      httpUrlPath: '/static/js/application.js',
+      durationMs: 1250,
+    }));
+  });
+
   it('acknowledges restart-only client batches without creating monitoring records', async () => {
     const previousEnvironment = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';

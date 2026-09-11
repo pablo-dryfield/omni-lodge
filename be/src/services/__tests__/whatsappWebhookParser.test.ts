@@ -387,6 +387,76 @@ describe('parseWhatsAppWebhookPayload', () => {
     }]);
   });
 
+  it('scopes portfolio-level account updates through their nested WABA id', () => {
+    const payload = {
+      object: 'whatsapp_business_account',
+      entry: [{
+        // Meta can put the Business Portfolio ID here for lifecycle events.
+        id: 'business-portfolio-1',
+        changes: [{
+          field: 'account_update',
+          value: {
+            event: 'ACCOUNT_OFFBOARDED',
+            waba_info: {
+              owner_business_id: 'business-portfolio-1',
+              waba_id: options.expectedWabaId,
+            },
+          },
+        }],
+      }],
+    };
+
+    expect(parseWhatsAppWebhookPayload(payload, options)).toEqual([{
+      kind: 'account_state',
+      source: 'account_update',
+      wabaId: options.expectedWabaId,
+      phoneNumberId: options.expectedPhoneNumberId,
+      event: 'ACCOUNT_OFFBOARDED',
+      unavailable: true,
+    }]);
+  });
+
+  it.each([
+    'business-portfolio-1',
+    options.expectedWabaId,
+  ])('rejects account updates for another nested WABA when entry id is %s', (entryId) => {
+    expect(() => parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: entryId,
+        changes: [{
+          field: 'account_update',
+          value: {
+            event: 'PARTNER_REMOVED',
+            waba_info: { waba_id: 'another-waba' },
+          },
+        }],
+      }],
+    }, options)).toThrow('unexpected WABA id');
+  });
+
+  it('does not let a scoped account update authorize message data from a portfolio entry', () => {
+    expect(() => parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: 'business-portfolio-1',
+        changes: [
+          {
+            field: 'account_update',
+            value: {
+              event: 'PARTNER_ADDED',
+              waba_info: { waba_id: options.expectedWabaId },
+            },
+          },
+          {
+            field: 'messages',
+            value: { metadata },
+          },
+        ],
+      }],
+    }, options)).toThrow('unexpected WABA id');
+  });
+
   it('normalizes message echoes, including edit and revoke events', () => {
     const payload = {
       object: 'whatsapp_business_account',

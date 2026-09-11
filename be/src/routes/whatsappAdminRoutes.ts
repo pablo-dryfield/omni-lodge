@@ -6,6 +6,7 @@ import {
   createWhatsAppEmbeddedSignupAttemptController,
   getWhatsAppAdminStatusController,
   getWhatsAppMessageTemplatesController,
+  repairWhatsAppWebhookSubscriptionController,
   sendWhatsAppTemplateMessageController,
 } from '../controllers/whatsappAdminController.js';
 import authMiddleware from '../middleware/authMiddleware.js';
@@ -46,6 +47,15 @@ const outboundMessageLimiter = rateLimit({
   message: [{ message: 'Too many WhatsApp message attempts. Try again later.' }],
 });
 
+const subscriptionRepairLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: adminRateLimitKey,
+  message: [{ message: 'Too many WhatsApp subscription repair attempts. Try again later.' }],
+});
+
 const validate = (req: Request, res: Response, next: NextFunction): void => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -66,6 +76,13 @@ router.use((_req, res, next) => {
 
 router.get('/status', getWhatsAppAdminStatusController);
 router.get('/messages/templates', getWhatsAppMessageTemplatesController);
+router.post(
+  '/webhook-subscription/repair',
+  subscriptionRepairLimiter,
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  validate,
+  repairWhatsAppWebhookSubscriptionController,
+);
 router.post(
   '/messages/template',
   outboundMessageLimiter,

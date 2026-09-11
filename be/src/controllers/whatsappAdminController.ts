@@ -6,6 +6,7 @@ import {
   completeWhatsAppEmbeddedSignupAttempt,
   createWhatsAppEmbeddedSignupAttempt,
   getWhatsAppAdminStatus,
+  repairWhatsAppWebhookSubscription,
 } from '../services/whatsappEmbeddedSignupService.js';
 import {
   listWhatsAppMessageTemplates,
@@ -59,7 +60,27 @@ export const getWhatsAppAdminStatusController = async (
 ): Promise<void> => {
   noStore(res);
   try {
-    res.json({ status: await getWhatsAppAdminStatus() });
+    res.json({
+      status: await getWhatsAppAdminStatus({ checkWebhookSubscription: true }),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+export const repairWhatsAppWebhookSubscriptionController = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  noStore(res);
+  try {
+    if (!await passwordConfirmed(req, req.body?.password)) {
+      res.status(403).json([{
+        message: 'Password confirmation is required to repair the WhatsApp webhook subscription.',
+      }]);
+      return;
+    }
+    res.json(await repairWhatsAppWebhookSubscription());
   } catch (error) {
     handleError(res, error);
   }

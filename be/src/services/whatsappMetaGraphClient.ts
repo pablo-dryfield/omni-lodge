@@ -229,10 +229,43 @@ export class WhatsAppMetaGraphClient {
     }
   }
 
+  async isAppSubscribedToWaba(accessToken: string, wabaId: string): Promise<boolean> {
+    const payload = await this.requestJson(`${encodeURIComponent(wabaId)}/subscribed_apps`, {
+      accessToken,
+      query: { limit: '100' },
+    });
+    if (!Array.isArray(payload.data)) {
+      throw new WhatsAppMetaGraphError('META_SUBSCRIPTION_LIST_INVALID', 200, false);
+    }
+
+    let malformedEntry = false;
+    for (const value of payload.data) {
+      const subscription = asRecord(value);
+      const app = subscription && asRecord(subscription.whatsapp_business_api_data);
+      // Graph versions have returned both a top-level app object and a nested
+      // whatsapp_business_api_data object for this edge. Accept only an exact,
+      // syntactically valid app id from either documented envelope.
+      const subscribedAppId = app?.id ?? subscription?.id;
+      if (typeof subscribedAppId !== 'string' || !/^\d{1,64}$/.test(subscribedAppId)) {
+        malformedEntry = true;
+        continue;
+      }
+      if (subscribedAppId === this.appId) return true;
+    }
+    if (malformedEntry) {
+      // A partial or future response shape must not be interpreted as a
+      // definitive missing subscription. A valid match above is sufficient;
+      // otherwise surface an unknown provider response for safe retry.
+      throw new WhatsAppMetaGraphError('META_SUBSCRIPTION_LIST_INVALID', 200, false);
+    }
+    return false;
+  }
+
   async subscribeWaba(accessToken: string, wabaId: string): Promise<void> {
     const payload = await this.requestJson(`${encodeURIComponent(wabaId)}/subscribed_apps`, {
       method: 'POST',
       accessToken,
+      atMostOnceWrite: true,
     });
     if (payload.success !== true && payload.success !== 'true') {
       throw new WhatsAppMetaGraphError('META_SUBSCRIPTION_RESPONSE_INVALID', 200, false);

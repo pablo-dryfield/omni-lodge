@@ -3,7 +3,9 @@ import {
   completeWhatsAppEmbeddedSignup,
   fetchWhatsAppAdminStatus,
   fetchWhatsAppOutboundTemplates,
+  normalizeWhatsAppAdminStatus,
   prepareWhatsAppEmbeddedSignup,
+  repairWhatsAppWebhookSubscription,
   sendWhatsAppTemplateMessage,
 } from "./whatsappAdmin";
 import {
@@ -25,6 +27,7 @@ const mockPost = axiosInstance.post as jest.MockedFunction<typeof axiosInstance.
 
 const backendStatus = {
   connected: true,
+  webhookSubscriptionStatus: "verified",
   coexistenceVerified: true,
   configuration: {
     launchConfigured: true,
@@ -68,6 +71,7 @@ describe("WhatsApp admin API", () => {
     await expect(fetchWhatsAppAdminStatus()).resolves.toEqual({
       available: true,
       connectionStatus: "connected",
+      webhookSubscriptionStatus: "verified",
       coexistenceVerified: true,
       launchConfigured: true,
       webhookVerifyTokenConfigured: true,
@@ -87,6 +91,38 @@ describe("WhatsApp admin API", () => {
       updatedAt: "2026-08-27T07:35:00.000Z",
     });
     expect(mockGet).toHaveBeenCalledWith("/integrations/whatsapp/admin/status");
+  });
+
+  it("defaults an absent or unsupported webhook subscription result to unknown", () => {
+    const withoutSubscriptionStatus = { ...backendStatus };
+    delete (withoutSubscriptionStatus as { webhookSubscriptionStatus?: string }).webhookSubscriptionStatus;
+
+    expect(normalizeWhatsAppAdminStatus(withoutSubscriptionStatus).webhookSubscriptionStatus).toBe("unknown");
+    expect(normalizeWhatsAppAdminStatus({
+      ...backendStatus,
+      webhookSubscriptionStatus: "unexpected",
+    }).webhookSubscriptionStatus).toBe("unknown");
+  });
+
+  it("repairs the WABA webhook subscription with password confirmation", async () => {
+    mockPost.mockResolvedValue({
+      data: {
+        repaired: true,
+        status: backendStatus,
+      },
+    });
+
+    await expect(repairWhatsAppWebhookSubscription("admin-password")).resolves.toEqual({
+      repaired: true,
+      status: expect.objectContaining({
+        connectionStatus: "connected",
+        webhookSubscriptionStatus: "verified",
+      }),
+    });
+    expect(mockPost).toHaveBeenCalledWith(
+      "/integrations/whatsapp/admin/webhook-subscription/repair",
+      { password: "admin-password" },
+    );
   });
 
   it("prepares an admin-bound launch attempt with password confirmation", async () => {

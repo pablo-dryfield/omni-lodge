@@ -45,6 +45,7 @@ jest.mock('../configService.js', () => ({
 }));
 jest.mock('../whatsappMessageService.js', () => ({
   getWhatsAppSourceStatus: jest.fn(),
+  restoreWhatsAppSourceAfterSubscriptionRepair: jest.fn(),
 }));
 
 import WhatsAppEmbeddedSignupAttempt from '../../models/WhatsAppEmbeddedSignupAttempt';
@@ -63,9 +64,13 @@ import {
   createWhatsAppEmbeddedSignupAttempt,
   getWhatsAppAdminStatus,
   parseWhatsAppEmbeddedSignupSession,
+  repairWhatsAppWebhookSubscription,
 } from '../whatsappEmbeddedSignupService';
 import { WhatsAppMetaGraphError } from '../whatsappMetaGraphClient';
-import { getWhatsAppSourceStatus } from '../whatsappMessageService';
+import {
+  getWhatsAppSourceStatus,
+  restoreWhatsAppSourceAfterSubscriptionRepair,
+} from '../whatsappMessageService';
 
 const attemptModel = WhatsAppEmbeddedSignupAttempt as unknown as {
   update: jest.Mock;
@@ -79,6 +84,7 @@ const sourceStateModel = WhatsAppSourceState as unknown as { upsert: jest.Mock }
 const mockGetConfigValueRaw = getConfigValueRaw as jest.Mock;
 const mockUpdateSystemConfigValues = updateSystemConfigValues as jest.Mock;
 const mockGetWhatsAppSourceStatus = getWhatsAppSourceStatus as jest.Mock;
+const mockRestoreWhatsAppSource = restoreWhatsAppSourceAfterSubscriptionRepair as jest.Mock;
 const mockGetWhatsAppWebhookQueueConfig = getWhatsAppWebhookQueueConfig as jest.Mock;
 
 const configValues = new Map<string, string | null>();
@@ -158,6 +164,7 @@ const makeGraphClient = () => ({
   validateAccessToken: jest.fn().mockResolvedValue(undefined),
   listWabaPhoneNumberIds: jest.fn().mockResolvedValue(['444555666']),
   assertCoexistencePhone: jest.fn().mockResolvedValue(undefined),
+  isAppSubscribedToWaba: jest.fn().mockResolvedValue(true),
   subscribeWaba: jest.fn().mockResolvedValue(undefined),
   dispatchCoexistenceSync: jest.fn()
     .mockResolvedValueOnce('app-state-request')
@@ -180,6 +187,7 @@ describe('WhatsApp Embedded Signup service', () => {
       Object.entries(values).forEach(([key, value]) => configValues.set(key, String(value)));
     });
     mockGetWhatsAppSourceStatus.mockResolvedValue(safeSourceStatus);
+    mockRestoreWhatsAppSource.mockResolvedValue(true);
     attemptModel.findByPk.mockImplementation(async () => currentAttempt);
     attemptModel.findOne.mockImplementation(async () => currentAttempt);
     attemptModel.update.mockImplementation(async (values: Record<string, unknown>, options: any) => {
@@ -415,6 +423,210 @@ describe('WhatsApp Embedded Signup service', () => {
     expect(status.connected).toBe(true);
     expect(status.coexistenceVerified).toBe(true);
     expect(status.latestAttempt?.id).toBe(pending.id);
+  });
+
+  it('checks provider subscription health only when explicitly requested', async () => {
+    configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
+    configValues.set('WHATSAPP_WABA_ID', '111222333');
+    configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
+    configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'connected-generation');
+    currentAttempt = makeAttempt({
+      status: 'completed',
+      wabaId: '111222333',
+      phoneNumberId: '444555666',
+      onboardingGeneration: 'connected-generation',
+      subscriptionStatus: 'succeeded',
+      completedAt: new Date(),
+    }).attempt;
+    const graphClient = makeGraphClient();
+    graphClient.isAppSubscribedToWaba.mockResolvedValue(false);
+
+    await expect(getWhatsAppAdminStatus({
+      checkWebhookSubscription: true,
+      graphClient: graphClient as any,
+    })).resolves.toMatchObject({ webhookSubscriptionStatus: 'missing' });
+    expect(graphClient.isAppSubscribedToWaba).toHaveBeenCalledWith(
+      't'.repeat(64),
+      '111222333',
+    );
+
+    graphClient.isAppSubscribedToWaba.mockRejectedValue(
+      new WhatsAppMetaGraphError('META_TIMEOUT', null, true),
+    );
+    await expect(getWhatsAppAdminStatus({
+      checkWebhookSubscription: true,
+      graphClient: graphClient as any,
+    })).resolves.toMatchObject({ webhookSubscriptionStatus: 'unknown' });
+  });
+
+  it('verifies an existing subscription without writing or dispatching sync', async () => {
+    configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
+    configValues.set('WHATSAPP_WABA_ID', '111222333');
+    configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
+    configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'repair-generation');
+    currentAttempt = makeAttempt({
+      status: 'completed',
+      wabaId: '111222333',
+      phoneNumberId: '444555666',
+      onboardingGeneration: 'repair-generation',
+      subscriptionStatus: 'succeeded',
+      completedAt: new Date(),
+    }).attempt;
+    const graphClient = makeGraphClient();
+
+    const result = await repairWhatsAppWebhookSubscription({
+      graphClient: graphClient as any,
+    });
+
+    expect(result).toMatchObject({
+      repaired: false,
+      status: { webhookSubscriptionStatus: 'verified' },
+    });
+    expect(graphClient.validateAccessToken).toHaveBeenCalledWith(
+      't'.repeat(64),
+      '111222333',
+    );
+    expect(graphClient.listWabaPhoneNumberIds).toHaveBeenCalledWith(
+      't'.repeat(64),
+      '111222333',
+    );
+    expect(graphClient.assertCoexistencePhone).toHaveBeenCalledWith(
+      't'.repeat(64),
+      '444555666',
+    );
+    expect(graphClient.subscribeWaba).not.toHaveBeenCalled();
+    expect(graphClient.dispatchCoexistenceSync).not.toHaveBeenCalled();
+    expect(mockRestoreWhatsAppSource).toHaveBeenCalledWith('repair-generation');
+  });
+
+  it('subscribes only when missing, verifies the write, and never starts history sync', async () => {
+    configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
+    configValues.set('WHATSAPP_WABA_ID', '111222333');
+    configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
+    configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'repair-generation');
+    currentAttempt = makeAttempt({
+      status: 'completed',
+      wabaId: '111222333',
+      phoneNumberId: '444555666',
+      onboardingGeneration: 'repair-generation',
+      subscriptionStatus: 'succeeded',
+      completedAt: new Date(),
+    }).attempt;
+    const graphClient = makeGraphClient();
+    graphClient.isAppSubscribedToWaba
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const result = await repairWhatsAppWebhookSubscription({
+      graphClient: graphClient as any,
+    });
+
+    expect(result).toMatchObject({
+      repaired: true,
+      status: { webhookSubscriptionStatus: 'verified' },
+    });
+    expect(graphClient.subscribeWaba).toHaveBeenCalledTimes(1);
+    expect(graphClient.subscribeWaba).toHaveBeenCalledWith(
+      't'.repeat(64),
+      '111222333',
+    );
+    expect(graphClient.isAppSubscribedToWaba).toHaveBeenCalledTimes(2);
+    expect(graphClient.dispatchCoexistenceSync).not.toHaveBeenCalled();
+    expect(mockRestoreWhatsAppSource).toHaveBeenCalledWith('repair-generation');
+  });
+
+  it('resolves an ambiguous subscription POST with GET verification and never retries it', async () => {
+    configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
+    configValues.set('WHATSAPP_WABA_ID', '111222333');
+    configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
+    configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'repair-generation');
+    currentAttempt = makeAttempt({
+      status: 'completed',
+      wabaId: '111222333',
+      phoneNumberId: '444555666',
+      onboardingGeneration: 'repair-generation',
+      subscriptionStatus: 'succeeded',
+      completedAt: new Date(),
+    }).attempt;
+    const graphClient = makeGraphClient();
+    graphClient.isAppSubscribedToWaba
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true);
+    graphClient.subscribeWaba.mockRejectedValue(
+      new WhatsAppMetaGraphError('META_TIMEOUT', null, true),
+    );
+
+    await expect(repairWhatsAppWebhookSubscription({
+      graphClient: graphClient as any,
+    })).resolves.toMatchObject({
+      repaired: true,
+      status: { webhookSubscriptionStatus: 'verified' },
+    });
+
+    expect(graphClient.subscribeWaba).toHaveBeenCalledTimes(1);
+    expect(graphClient.isAppSubscribedToWaba).toHaveBeenCalledTimes(3);
+    expect(graphClient.dispatchCoexistenceSync).not.toHaveBeenCalled();
+    expect(mockRestoreWhatsAppSource).toHaveBeenCalledWith('repair-generation');
+  });
+
+  it('does not restore local state when Meta does not confirm the subscription write', async () => {
+    configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
+    configValues.set('WHATSAPP_WABA_ID', '111222333');
+    configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
+    configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'repair-generation');
+    const graphClient = makeGraphClient();
+    graphClient.isAppSubscribedToWaba.mockResolvedValue(false);
+
+    await expect(repairWhatsAppWebhookSubscription({
+      graphClient: graphClient as any,
+    })).rejects.toMatchObject({
+      status: 502,
+      details: { code: 'META_SUBSCRIPTION_NOT_CONFIRMED', ambiguous: true },
+    });
+
+    expect(graphClient.subscribeWaba).toHaveBeenCalledTimes(1);
+    expect(mockRestoreWhatsAppSource).not.toHaveBeenCalled();
+    expect(graphClient.dispatchCoexistenceSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stored phone outside the WABA before any subscription write', async () => {
+    configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
+    configValues.set('WHATSAPP_WABA_ID', '111222333');
+    configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
+    configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'repair-generation');
+    const graphClient = makeGraphClient();
+    graphClient.listWabaPhoneNumberIds.mockResolvedValue(['777888999']);
+
+    await expect(repairWhatsAppWebhookSubscription({
+      graphClient: graphClient as any,
+    })).rejects.toMatchObject({
+      status: 502,
+      details: { code: 'META_PHONE_WABA_MISMATCH' },
+    });
+
+    expect(graphClient.assertCoexistencePhone).not.toHaveBeenCalled();
+    expect(graphClient.isAppSubscribedToWaba).not.toHaveBeenCalled();
+    expect(graphClient.subscribeWaba).not.toHaveBeenCalled();
+    expect(mockRestoreWhatsAppSource).not.toHaveBeenCalled();
+  });
+
+  it('does not apply a verified result after the configured connection rotates', async () => {
+    configValues.set('WHATSAPP_BUSINESS_ACCESS_TOKEN', 't'.repeat(64));
+    configValues.set('WHATSAPP_WABA_ID', '111222333');
+    configValues.set('WHATSAPP_PHONE_NUMBER_ID', '444555666');
+    configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'repair-generation');
+    const graphClient = makeGraphClient();
+    graphClient.isAppSubscribedToWaba.mockImplementationOnce(async () => {
+      configValues.set('WHATSAPP_ONBOARDING_GENERATION', 'new-generation');
+      return true;
+    });
+
+    await expect(repairWhatsAppWebhookSubscription({
+      graphClient: graphClient as any,
+    })).rejects.toMatchObject({ status: 409 });
+
+    expect(mockRestoreWhatsAppSource).not.toHaveBeenCalled();
   });
 
   it('binds completion to the creating admin, nonce, and expiry', async () => {

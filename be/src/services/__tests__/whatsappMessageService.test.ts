@@ -39,6 +39,7 @@ import {
   getWhatsAppSourceStatus,
   ingestWhatsAppWebhook,
   markWhatsAppSourceError,
+  restoreWhatsAppSourceAfterSubscriptionRepair,
   searchWhatsAppMessages,
 } from '../whatsappMessageService';
 
@@ -410,6 +411,96 @@ describe('whatsappMessageService', () => {
       onboardingGeneration: 'generation-1',
       disconnectedGeneration: 'generation-1',
     }));
+  });
+
+  it('restores a repaired subscription without changing history or activity timestamps', async () => {
+    const lastWebhookAt = new Date('2026-08-27T07:00:00.000Z');
+    const lastSuccessfulIngestAt = new Date('2026-08-27T07:00:01.000Z');
+    const lastMessageAt = new Date('2026-08-27T07:00:02.000Z');
+    sourceStateModel.findByPk.mockResolvedValue({
+      status: 'unavailable',
+      onboardingGeneration: 'generation-1',
+      disconnectedGeneration: 'generation-1',
+      historySyncStatus: 'complete',
+      historySyncProgress: 100,
+      lastWebhookAt,
+      lastSuccessfulIngestAt,
+      lastMessageAt,
+      lastErrorAt: new Date('2026-08-27T07:00:03.000Z'),
+      lastErrorCode: 'partner_removed',
+    });
+
+    await expect(
+      restoreWhatsAppSourceAfterSubscriptionRepair('generation-1'),
+    ).resolves.toBe(true);
+
+    const values = sourceStateModel.upsert.mock.calls[0]?.[0];
+    expect(values).toEqual(expect.objectContaining({
+      id: 1,
+      status: 'connected',
+      onboardingGeneration: 'generation-1',
+      disconnectedGeneration: null,
+      lastErrorAt: null,
+      lastErrorCode: null,
+    }));
+    expect(values).not.toHaveProperty('historySyncStatus');
+    expect(values).not.toHaveProperty('historySyncProgress');
+    expect(values).not.toHaveProperty('lastWebhookAt');
+    expect(values).not.toHaveProperty('lastSuccessfulIngestAt');
+    expect(values).not.toHaveProperty('lastMessageAt');
+  });
+
+  it('keeps repaired subscription state degraded while history is incomplete', async () => {
+    sourceStateModel.findByPk.mockResolvedValue({
+      status: 'unavailable',
+      onboardingGeneration: 'generation-1',
+      disconnectedGeneration: 'generation-1',
+      historySyncStatus: 'in_progress',
+      historySyncProgress: 65,
+      lastErrorAt: now,
+      lastErrorCode: 'account_offboarded',
+    });
+
+    await restoreWhatsAppSourceAfterSubscriptionRepair('generation-1');
+
+    expect(sourceStateModel.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'degraded',
+      disconnectedGeneration: null,
+      lastErrorAt: null,
+      lastErrorCode: null,
+    }));
+    expect(sourceStateModel.upsert.mock.calls[0]?.[0]).not.toHaveProperty('historySyncProgress');
+  });
+
+  it('preserves unrelated source errors and status after subscription verification', async () => {
+    const unrelatedErrorAt = new Date('2026-08-27T07:00:03.000Z');
+    sourceStateModel.findByPk.mockResolvedValue({
+      status: 'unavailable',
+      onboardingGeneration: 'generation-1',
+      disconnectedGeneration: 'generation-1',
+      historySyncStatus: 'complete',
+      historySyncProgress: 100,
+      lastWebhookAt: now,
+      lastSuccessfulIngestAt: now,
+      lastMessageAt: now,
+      lastErrorAt: unrelatedErrorAt,
+      lastErrorCode: 'blocked',
+    });
+
+    await expect(
+      restoreWhatsAppSourceAfterSubscriptionRepair('generation-1'),
+    ).resolves.toBe(true);
+
+    expect(sourceStateModel.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not restore source state for a stale onboarding generation', async () => {
+    await expect(
+      restoreWhatsAppSourceAfterSubscriptionRepair('generation-2'),
+    ).resolves.toBe(false);
+
+    expect(sourceStateModel.findByPk).not.toHaveBeenCalled();
+    expect(sourceStateModel.upsert).not.toHaveBeenCalled();
   });
 
   it('clears sticky removal only after a configured generation change', async () => {

@@ -32,6 +32,7 @@ const firstBoolean = (...values: unknown[]): boolean | null => {
 export type WhatsAppAdminStatus = {
   available: boolean;
   connectionStatus: string;
+  webhookSubscriptionStatus: "verified" | "missing" | "unknown";
   coexistenceVerified: boolean;
   launchConfigured: boolean;
   webhookVerifyTokenConfigured: boolean;
@@ -79,6 +80,11 @@ export type WhatsAppTemplateMessageAcceptance = {
   messageId: string;
 };
 
+export type WhatsAppWebhookSubscriptionRepairResult = {
+  repaired: boolean;
+  status: WhatsAppAdminStatus;
+};
+
 export type WhatsAppOutboundTemplate = {
   name: string;
   language: string;
@@ -110,10 +116,22 @@ export const normalizeWhatsAppAdminStatus = (payload: unknown): WhatsAppAdminSta
     connection.phoneNumberId,
     configuration.phoneNumberId,
   );
+  const rawWebhookSubscriptionStatus = firstString(
+    root.webhookSubscriptionStatus,
+    connection.webhookSubscriptionStatus,
+    configuration.webhookSubscriptionStatus,
+  )?.toLowerCase();
+  const webhookSubscriptionStatus = (
+    rawWebhookSubscriptionStatus === "verified"
+    || rawWebhookSubscriptionStatus === "missing"
+  )
+    ? rawWebhookSubscriptionStatus
+    : "unknown";
 
   return {
     available: firstBoolean(source.available, root.available, root.connected) ?? connectionStatus === "connected",
     connectionStatus: connected ? "connected" : connectionStatus,
+    webhookSubscriptionStatus,
     coexistenceVerified: firstBoolean(root.coexistenceVerified) ?? false,
     launchConfigured: firstBoolean(configuration.launchConfigured) ?? false,
     webhookVerifyTokenConfigured:
@@ -204,6 +222,19 @@ const normalizeEmbeddedSignupAttempt = (payload: unknown): WhatsAppEmbeddedSignu
 export const fetchWhatsAppAdminStatus = async (): Promise<WhatsAppAdminStatus> => {
   const response = await axiosInstance.get(`${ADMIN_BASE_PATH}/status`);
   return normalizeWhatsAppAdminStatus(response.data);
+};
+
+export const repairWhatsAppWebhookSubscription = async (
+  password: string,
+): Promise<WhatsAppWebhookSubscriptionRepairResult> => {
+  const response = await axiosInstance.post(`${ADMIN_BASE_PATH}/webhook-subscription/repair`, {
+    password,
+  });
+  const root = asRecord(response.data);
+  return {
+    repaired: firstBoolean(root.repaired) ?? false,
+    status: normalizeWhatsAppAdminStatus(root.status),
+  };
 };
 
 export const prepareWhatsAppEmbeddedSignup = async (

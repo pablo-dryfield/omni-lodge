@@ -29,6 +29,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TEXT_LENGTH = 4_000;
 const PERSISTENCE_BATCH_SIZE = 500;
 const WHATSAPP_QUEUE_HEALTH_GRACE_MS = 5 * 60 * 1000;
+const REPAIRABLE_SUBSCRIPTION_ERROR = /^(?:partner_removed|partner_app_uninstalled|account_offboarded|account_disconnected|account_unavailable|offboarded|removed|disconnected)$/i;
 
 type StoredMessageValues = {
   phoneNumberId: string;
@@ -467,6 +468,55 @@ export async function markWhatsAppSourceError(
     lastErrorAt: latestDate(existing?.lastErrorAt, at),
     lastErrorCode: normalizedCode,
   });
+}
+
+export async function restoreWhatsAppSourceAfterSubscriptionRepair(
+  onboardingGeneration = resolveWhatsAppOnboardingGeneration(),
+): Promise<boolean> {
+  if (onboardingGeneration !== resolveWhatsAppOnboardingGeneration()) return false;
+  const existing = await WhatsAppSourceState.findByPk(WHATSAPP_SOURCE_STATE_ID);
+  if (
+    existing?.onboardingGeneration
+    && existing.onboardingGeneration !== onboardingGeneration
+  ) return false;
+  if (onboardingGeneration !== resolveWhatsAppOnboardingGeneration()) return false;
+
+  if (!existing) {
+    await updateWhatsAppSourceState({
+      status: 'degraded',
+      onboardingGeneration,
+      lastErrorAt: null,
+      lastErrorCode: null,
+    });
+    return true;
+  }
+
+  const lastErrorCode = existing?.lastErrorCode ?? null;
+  const clearSubscriptionError = Boolean(
+    lastErrorCode && REPAIRABLE_SUBSCRIPTION_ERROR.test(lastErrorCode),
+  );
+  if (!clearSubscriptionError) {
+    // Provider subscription health and source health are separate concerns.
+    // A verified subscription must not erase an unrelated ingest/history error
+    // or claim that traffic resumed before a real webhook is received.
+    return true;
+  }
+
+  await updateWhatsAppSourceState({
+    status: existing.historySyncStatus === 'complete'
+      || existing.historySyncStatus === 'declined'
+      ? 'connected'
+      : 'degraded',
+    onboardingGeneration,
+    disconnectedGeneration: existing.disconnectedGeneration === onboardingGeneration
+      ? null
+      : undefined,
+    lastErrorAt: null,
+    lastErrorCode: null,
+    // Do not move webhook or ingest timestamps forward. Repair verifies Meta's
+    // subscription, but only a real delivery proves webhook traffic resumed.
+  });
+  return true;
 }
 
 export async function ingestWhatsAppWebhook(

@@ -7,6 +7,7 @@ import {
   fetchWhatsAppAdminStatus,
   fetchWhatsAppOutboundTemplates,
   prepareWhatsAppEmbeddedSignup,
+  repairWhatsAppWebhookSubscription,
   sendWhatsAppTemplateMessage,
   type WhatsAppAdminStatus,
 } from "../../api/whatsappAdmin";
@@ -35,6 +36,7 @@ jest.mock("../../api/whatsappAdmin", () => ({
   fetchWhatsAppOutboundTemplates: jest.fn(),
   prepareWhatsAppEmbeddedSignup: jest.fn(),
   completeWhatsAppEmbeddedSignup: jest.fn(),
+  repairWhatsAppWebhookSubscription: jest.fn(),
   sendWhatsAppTemplateMessage: jest.fn(),
 }));
 
@@ -50,12 +52,14 @@ const mockFetchStatus = fetchWhatsAppAdminStatus as jest.MockedFunction<typeof f
 const mockFetchTemplates = fetchWhatsAppOutboundTemplates as jest.MockedFunction<typeof fetchWhatsAppOutboundTemplates>;
 const mockPrepare = prepareWhatsAppEmbeddedSignup as jest.MockedFunction<typeof prepareWhatsAppEmbeddedSignup>;
 const mockComplete = completeWhatsAppEmbeddedSignup as jest.MockedFunction<typeof completeWhatsAppEmbeddedSignup>;
+const mockRepairSubscription = repairWhatsAppWebhookSubscription as jest.MockedFunction<typeof repairWhatsAppWebhookSubscription>;
 const mockSendTemplate = sendWhatsAppTemplateMessage as jest.MockedFunction<typeof sendWhatsAppTemplateMessage>;
 const mockLoadSdk = loadMetaFacebookSdk as jest.MockedFunction<typeof loadMetaFacebookSdk>;
 
 const unavailableStatus: WhatsAppAdminStatus = {
   available: false,
   connectionStatus: "unavailable",
+  webhookSubscriptionStatus: "unknown",
   coexistenceVerified: false,
   launchConfigured: true,
   webhookVerifyTokenConfigured: true,
@@ -79,6 +83,7 @@ const connectedStatus: WhatsAppAdminStatus = {
   ...unavailableStatus,
   available: true,
   connectionStatus: "connected",
+  webhookSubscriptionStatus: "verified",
   coexistenceVerified: true,
   tokenConfigured: true,
   wabaConfigured: true,
@@ -152,6 +157,7 @@ describe("SettingsWhatsApp", () => {
     });
     mockLoadSdk.mockResolvedValue(sdk);
     mockComplete.mockResolvedValue(connectedStatus);
+    mockRepairSubscription.mockResolvedValue({ repaired: true, status: connectedStatus });
     mockFetchTemplates.mockResolvedValue([
       { name: "hello_world", language: "en_US", category: "UTILITY" },
     ]);
@@ -462,5 +468,68 @@ describe("SettingsWhatsApp", () => {
     expect(screen.getByRole("button", { name: "Send template message" })).toBeDisabled();
     expect(screen.getByText("WhatsApp connection required")).toBeInTheDocument();
     expect(mockSendTemplate).not.toHaveBeenCalled();
+  });
+
+  it("repairs a missing webhook subscription with explicit administrator confirmation", async () => {
+    const missingSubscriptionStatus: WhatsAppAdminStatus = {
+      ...connectedStatus,
+      webhookSubscriptionStatus: "missing",
+    };
+    mockFetchStatus
+      .mockResolvedValueOnce(missingSubscriptionStatus)
+      .mockResolvedValue(connectedStatus);
+
+    renderPage();
+
+    expect(await screen.findByText("Webhook subscription missing")).toBeInTheDocument();
+    expect(screen.getByText("Not subscribed")).toBeInTheDocument();
+    expect(screen.queryByText(/re-onboard/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Repair subscription" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Administrator password for webhook repair"), {
+      target: { value: "admin-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Repair subscription" }));
+
+    await waitFor(() => expect(mockRepairSubscription).toHaveBeenCalledWith("admin-password"));
+    expect(await screen.findByText("Webhook subscription healthy")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Administrator password for webhook repair")).not.toBeInTheDocument();
+    await waitFor(() => expect(mockFetchStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it("reports an unknown subscription separately from a disconnected connection and allows retry", async () => {
+    mockFetchStatus.mockResolvedValue({
+      ...connectedStatus,
+      webhookSubscriptionStatus: "unknown",
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Webhook subscription could not be verified")).toBeInTheDocument();
+    expect(screen.getByText(/does not mean the WhatsApp connection is disconnected/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repair subscription" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry verification" }));
+    await waitFor(() => expect(mockFetchStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows a webhook repair failure and clears the submitted password", async () => {
+    mockFetchStatus.mockResolvedValue({
+      ...connectedStatus,
+      webhookSubscriptionStatus: "missing",
+    });
+    mockRepairSubscription.mockRejectedValue({
+      response: { data: { message: "Administrator password is incorrect." } },
+    });
+
+    renderPage();
+    await screen.findByText("Webhook subscription missing");
+    const passwordInput = screen.getByLabelText("Administrator password for webhook repair");
+    fireEvent.change(passwordInput, { target: { value: "wrong-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Repair subscription" }));
+
+    expect(await screen.findByText("Administrator password is incorrect.")).toBeInTheDocument();
+    expect(passwordInput).toHaveValue("");
+    expect(screen.getByText("Not subscribed")).toBeInTheDocument();
   });
 });

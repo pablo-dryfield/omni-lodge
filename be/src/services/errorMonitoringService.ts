@@ -1184,6 +1184,47 @@ const parseBrowserReportTimestamp = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const parseBrowserReportNumber = (
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): number | null => {
+  if (value == null || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum
+    ? parsed
+    : null;
+};
+
+const isApiPath = (value: string | null): boolean => (
+  value === '/api' || Boolean(value?.startsWith('/api/'))
+);
+
+const isHealthProbePath = (value: string | null | undefined): boolean => (
+  Boolean(value && /\/(?:health|healthcheck|ready|readiness|live|liveness)\/?$/i.test(value))
+);
+
+/**
+ * Native Network Error Logging includes cancellations and failures from the
+ * monitoring transport itself. Persisting either creates noise (a navigation
+ * cancellation is not an application failure) or a recursive telemetry loop.
+ * Source-map fetches are developer tooling and never affect the running UI.
+ */
+const shouldAcknowledgeBrowserNetworkReport = (
+  failureType: string | null,
+  targetPath: string | null | undefined,
+): boolean => {
+  if (failureType === 'abandoned') return true;
+  if (
+    targetPath === '/api/client-errors/batch'
+    || targetPath === '/api/client-errors/browser-reports'
+    || isHealthProbePath(targetPath)
+  ) {
+    return true;
+  }
+  return Boolean(targetPath?.toLowerCase().endsWith('.map'));
+};
+
 const browserReportToClientEvent = (
   raw: unknown,
   serverContext: ClientErrorServerContext,
@@ -1202,6 +1243,11 @@ const browserReportToClientEvent = (
     ? 'csp-violation'
     : clampString(report.type, 64)?.toLowerCase() ?? 'browser-report';
   const isCsp = reportType === 'csp-violation' || reportType === 'csp_report';
+  const isNetworkError = reportType === 'network-error';
+  const networkErrorType = isNetworkError
+    ? clampString(reportBody.type, 120)?.toLowerCase() ?? 'unknown'
+    : null;
+  const networkTargetPath = isNetworkError ? sanitizeUrlPath(report.url) : null;
   const directive = clampString(
     reportBody.effectiveDirective ?? reportBody['effective-directive']
       ?? reportBody.violatedDirective ?? reportBody['violated-directive'],
@@ -1210,7 +1256,9 @@ const browserReportToClientEvent = (
   const blockedUrl = sanitizeUrlPath(reportBody.blockedURL ?? reportBody['blocked-uri']);
   const message = isCsp
     ? `CSP violation${directive ? `: ${directive}` : ''}${blockedUrl ? ` blocked ${blockedUrl}` : ''}`
-    : `Browser report: ${reportType}`;
+    : isNetworkError
+      ? `Network request failed: ${networkErrorType}`
+      : `Browser report: ${reportType}`;
   const age = typeof report.age === 'number' ? report.age : Number.NaN;
   const explicitTimestamp = parseBrowserReportTimestamp(report.timestamp ?? reportBody.timestamp);
   const hasReportAge = Number.isFinite(age) && age >= 0;
@@ -1220,6 +1268,24 @@ const browserReportToClientEvent = (
       : receivedAtMs);
   const occurredAt = new Date(occurredAtMs).toISOString();
   const level: ErrorMonitoringLevel = reportType === 'crash' ? 'fatal' : 'warning';
+  const statusCode = isNetworkError
+    ? parseBrowserReportNumber(
+      reportBody.statusCode ?? reportBody['status-code'] ?? reportBody.status_code,
+      100,
+      599,
+    )
+    : null;
+  const elapsedTimeMs = isNetworkError
+    ? parseBrowserReportNumber(
+      reportBody.elapsedTime ?? reportBody['elapsed-time'] ?? reportBody.elapsed_time,
+      0,
+      86_400_000,
+    )
+    : null;
+  const networkMethod = isNetworkError
+    ? clampString(reportBody.method, 12)?.toUpperCase() ?? null
+    : null;
+  const referrer = isNetworkError ? reportBody.referrer : null;
   const explicitReportId = clampString(report.id ?? report.reportId ?? reportBody.id, 256);
   // Reporting API deliveries do not always include a UUID. When they include a
   // stable id, timestamp, or age, derive an idempotency key from the sanitized
@@ -1245,21 +1311,48 @@ const browserReportToClientEvent = (
     // Native reports can be queued by the browser across sign-out/account
     // changes; delivery-time cookies must never claim their identity.
     capturedUserId: null,
-    type: isCsp ? 'csp_violation' : 'manual',
+    type: isCsp
+      ? 'csp_violation'
+      : isNetworkError
+        ? (isApiPath(networkTargetPath) ? 'api_error' : 'resource_error')
+        : 'manual',
     level,
     message,
-    name: reportType,
+    name: isNetworkError ? `NetworkError:${networkErrorType}` : reportType,
     occurredAt,
-    pageUrl: report.url ?? reportBody.documentURL ?? reportBody['document-uri'],
+    pageUrl: isNetworkError
+      ? referrer
+      : report.url ?? reportBody.documentURL ?? reportBody['document-uri'],
     route: reportBody.sourceFile ?? reportBody['source-file'],
+    http: isNetworkError
+      ? {
+        method: networkMethod,
+        url: report.url,
+        status: statusCode,
+        durationMs: elapsedTimeMs,
+      }
+      : undefined,
     context: {
       reportType,
+      networkErrorType,
+      phase: isNetworkError ? clampString(reportBody.phase, 80)?.toLowerCase() : null,
+      protocol: isNetworkError ? clampString(reportBody.protocol, 80)?.toLowerCase() : null,
       directive,
       blockedUrl,
       disposition: reportBody.disposition,
       lineNumber: reportBody.lineNumber ?? reportBody['line-number'],
       columnNumber: reportBody.columnNumber ?? reportBody['column-number'],
-      statusCode: reportBody.statusCode ?? reportBody['status-code'],
+      statusCode,
+      elapsedTimeMs,
+      samplingFraction: isNetworkError
+        ? parseBrowserReportNumber(
+          reportBody.samplingFraction
+            ?? reportBody['sampling-fraction']
+            ?? reportBody.sampling_fraction,
+          0,
+          1,
+        )
+        : null,
     },
   };
 };
@@ -1282,8 +1375,22 @@ export const ingestBrowserReports = async (
     }
     try {
       const sanitized = sanitizeClientEvent(converted, serverContext);
+      const context = sanitized.context && typeof sanitized.context === 'object' && !Array.isArray(sanitized.context)
+        ? sanitized.context as Record<string, unknown>
+        : null;
+      if (
+        clampString(context?.reportType, 64)?.toLowerCase() === 'network-error'
+        && shouldAcknowledgeBrowserNetworkReport(
+          clampString(context?.networkErrorType, 120)?.toLowerCase() ?? null,
+          sanitized.httpUrl,
+        )
+      ) {
+        accepted += 1;
+        continue;
+      }
       if (shouldSuppressExpectedRestartNoise({
         ...sanitized,
+        httpUrl: sanitized.httpUrl,
         pageUrl: converted.pageUrl ?? sanitized.pageUrl,
       })) {
         accepted += 1;

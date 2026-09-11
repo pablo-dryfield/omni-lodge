@@ -155,6 +155,54 @@ describe('WhatsApp Meta Graph client', () => {
     });
   });
 
+  it('checks whether this app is present in the WABA subscription list', async () => {
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce(response(200, {
+        data: [{ id: '111222333', name: 'Another app' }],
+      }))
+      .mockResolvedValueOnce(response(200, {
+        data: [
+          { future_provider_shape: true },
+          { whatsapp_business_api_data: { id: appId } },
+        ],
+      }));
+    const client = new WhatsAppMetaGraphClient({
+      appId,
+      appSecret,
+      graphApiVersion: 'v25.0',
+      fetchImpl,
+    });
+
+    await expect(client.isAppSubscribedToWaba(accessToken, '987654321')).resolves.toBe(false);
+    await expect(client.isAppSubscribedToWaba(accessToken, '987654321')).resolves.toBe(true);
+
+    const [url, request] = fetchImpl.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe('https://graph.facebook.com/v25.0/987654321/subscribed_apps?limit=100');
+    expect(request.method).toBe('GET');
+    expect(request.headers).toEqual({ Authorization: `Bearer ${accessToken}` });
+  });
+
+  it('rejects malformed WABA subscription lists without exposing provider data', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(200, {
+      data: [{ whatsapp_business_api_data: { provider_secret: 'do-not-expose' } }],
+    }));
+    const client = new WhatsAppMetaGraphClient({
+      appId,
+      appSecret,
+      graphApiVersion: 'v25.0',
+      fetchImpl,
+    });
+
+    const failure = await client.isAppSubscribedToWaba(accessToken, '987654321')
+      .catch((error) => error);
+
+    expect(failure).toMatchObject({
+      safeCode: 'META_SUBSCRIPTION_LIST_INVALID',
+      ambiguous: false,
+    });
+    expect(JSON.stringify(failure)).not.toContain('do-not-expose');
+  });
+
   it('sends a template message without the E.164 plus sign and returns only the provider ID', async () => {
     const fetchImpl = jest.fn().mockResolvedValue(response(200, {
       messaging_product: 'whatsapp',

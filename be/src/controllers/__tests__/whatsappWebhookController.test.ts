@@ -12,10 +12,25 @@ jest.mock('../../services/whatsappWebhookQueueService.js', () => ({
 jest.mock('../../jobs/whatsappWebhookQueue.cron.js', () => ({
   kickWhatsAppWebhookQueue: jest.fn(),
 }));
-jest.mock('../../services/whatsappWebhookParser.js', () => ({
-  parseMetaWebhook: jest.fn(),
-  verifyMetaWebhookSignature: jest.fn(),
+jest.mock('../../services/errorMonitoringService.js', () => ({
+  captureBackendExceptionSafe: jest.fn(),
 }));
+jest.mock('../../services/whatsappWebhookParser.js', () => {
+  class MockWhatsAppWebhookValidationError extends Error {
+    readonly safeCode: string;
+
+    constructor(safeCode: string, message: string) {
+      super(message);
+      this.name = 'WhatsAppWebhookValidationError';
+      this.safeCode = safeCode;
+    }
+  }
+  return {
+    parseMetaWebhook: jest.fn(),
+    verifyMetaWebhookSignature: jest.fn(),
+    WhatsAppWebhookValidationError: MockWhatsAppWebhookValidationError,
+  };
+});
 jest.mock('../../utils/logger.js', () => ({
   __esModule: true,
   default: { info: jest.fn(), error: jest.fn() },
@@ -27,7 +42,12 @@ import {
   getWhatsAppWebhookVerificationConfig,
 } from '../../config/whatsappConfig';
 import { kickWhatsAppWebhookQueue } from '../../jobs/whatsappWebhookQueue.cron';
-import { parseMetaWebhook, verifyMetaWebhookSignature } from '../../services/whatsappWebhookParser';
+import { captureBackendExceptionSafe } from '../../services/errorMonitoringService';
+import {
+  parseMetaWebhook,
+  verifyMetaWebhookSignature,
+  WhatsAppWebhookValidationError,
+} from '../../services/whatsappWebhookParser';
 import {
   enqueueWhatsAppWebhook,
   hashWhatsAppWebhookDelivery,
@@ -39,10 +59,12 @@ const mockVerificationConfig = getWhatsAppWebhookVerificationConfig as jest.Mock
 const mockEnqueue = enqueueWhatsAppWebhook as jest.Mock;
 const mockHash = hashWhatsAppWebhookDelivery as jest.Mock;
 const mockKick = kickWhatsAppWebhookQueue as jest.Mock;
+const mockCapture = captureBackendExceptionSafe as jest.Mock;
 const mockParse = parseMetaWebhook as jest.Mock;
 const mockSignature = verifyMetaWebhookSignature as jest.Mock;
 
 const response = () => ({
+  locals: {} as Record<string, unknown>,
   status: jest.fn().mockReturnThis(),
   type: jest.fn().mockReturnThis(),
   send: jest.fn().mockReturnThis(),
@@ -135,5 +157,56 @@ describe('WhatsApp webhook controller', () => {
     expect(res.status).toHaveBeenCalledWith(401);
     expect(mockParse).not.toHaveBeenCalled();
     expect(mockEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('captures a static validation code without retaining the webhook payload', async () => {
+    const validationError = new WhatsAppWebhookValidationError(
+      'UNEXPECTED_WABA_ID',
+      'WhatsApp webhook has an unexpected WABA id',
+    );
+    mockSignature.mockReturnValue(true);
+    mockParse.mockImplementation(() => {
+      throw validationError;
+    });
+    const req = {
+      body: Buffer.from('{"private":"payload"}'),
+      get: jest.fn().mockReturnValue('sha256=valid'),
+    } as unknown as Request;
+    const res = response();
+
+    await receiveWhatsAppWebhook(req, res as unknown as Response);
+
+    expect(mockCapture).toHaveBeenCalledWith(validationError, req, {
+      statusCode: 400,
+      reference: 'WHATSAPP_WEBHOOK_UNEXPECTED_WABA_ID',
+    });
+    expect(validationError.message).not.toContain('private');
+    expect(validationError.safeCode).toBe('UNEXPECTED_WABA_ID');
+    expect(res.locals.errorMonitoringExceptionCaptured).toBe(true);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.send).toHaveBeenCalledWith('Invalid webhook payload.');
+    expect(mockEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('reports unexpected parser failures as server errors', async () => {
+    const parserError = new Error('Parser invariant failed');
+    mockSignature.mockReturnValue(true);
+    mockParse.mockImplementation(() => {
+      throw parserError;
+    });
+    const req = {
+      body: Buffer.from('{}'),
+      get: jest.fn().mockReturnValue('sha256=valid'),
+    } as unknown as Request;
+    const res = response();
+
+    await receiveWhatsAppWebhook(req, res as unknown as Response);
+
+    expect(mockCapture).toHaveBeenCalledWith(parserError, req, {
+      statusCode: 500,
+      reference: 'WHATSAPP_WEBHOOK_PARSE_FAILURE',
+    });
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.send).toHaveBeenCalledWith('Webhook parsing failed.');
   });
 });

@@ -26,7 +26,7 @@ import {
   IconSend,
   IconShieldLock,
 } from "@tabler/icons-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import {
@@ -34,6 +34,7 @@ import {
   fetchWhatsAppAdminStatus,
   fetchWhatsAppOutboundTemplates,
   prepareWhatsAppEmbeddedSignup,
+  repairWhatsAppWebhookSubscription,
   sendWhatsAppTemplateMessage,
   WHATSAPP_ADMIN_STATUS_QUERY_KEY,
   WHATSAPP_OUTBOUND_TEMPLATES_QUERY_KEY,
@@ -158,6 +159,7 @@ const completedWithoutWarnings = (status: WhatsAppAdminStatus): boolean =>
   && status.tokenConfigured
   && status.wabaConfigured
   && status.phoneNumberConfigured
+  && status.webhookSubscriptionStatus === "verified"
   && syncRequestSucceeded(status.appStateSyncStatus)
   && syncRequestSucceeded(status.historyDispatchStatus)
   && !status.recoveryRequired
@@ -201,6 +203,28 @@ const SettingsWhatsApp = () => {
   const [outboundPassword, setOutboundPassword] = useState("");
   const [outboundStage, setOutboundStage] = useState<OutboundStage>("idle");
   const [outboundFeedback, setOutboundFeedback] = useState<string | null>(null);
+  const [webhookRepairPassword, setWebhookRepairPassword] = useState("");
+  const [webhookRepairFeedback, setWebhookRepairFeedback] = useState<string | null>(null);
+
+  const webhookRepairMutation = useMutation({
+    mutationFn: (passwordValue: string) => repairWhatsAppWebhookSubscription(passwordValue),
+    onMutate: () => {
+      setWebhookRepairPassword("");
+      setWebhookRepairFeedback(null);
+    },
+    onSuccess: async ({ repaired, status }) => {
+      queryClient.setQueryData(WHATSAPP_ADMIN_STATUS_QUERY_KEY, status);
+      setWebhookRepairFeedback(
+        status.webhookSubscriptionStatus === "verified"
+          ? repaired
+            ? "The WhatsApp webhook subscription was repaired and verified."
+            : "The WhatsApp webhook subscription is verified. No repair was needed."
+          : "Meta accepted the repair request, but the subscription is not verified yet. Retry the status check before taking another action.",
+      );
+      await queryClient.invalidateQueries({ queryKey: WHATSAPP_ADMIN_STATUS_QUERY_KEY });
+    },
+    onError: (error) => setWebhookRepairFeedback(extractErrorMessage(error)),
+  });
 
   const attemptRef = useRef<WhatsAppEmbeddedSignupAttempt | null>(null);
   const sdkRef = useRef<MetaFacebookSdk | null>(null);
@@ -553,6 +577,7 @@ const SettingsWhatsApp = () => {
       ? <IconAlertCircle size={18} />
       : <IconClock size={18} />;
   const statusUpdatedLabel = useMemo(() => formatDateTime(status?.updatedAt ?? null), [status?.updatedAt]);
+  const webhookSubscriptionStatus = status?.webhookSubscriptionStatus ?? "unknown";
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUG}>
@@ -644,7 +669,93 @@ const SettingsWhatsApp = () => {
                   {displayStatus(status?.historySyncStatus ?? null)}
                 </Badge>
               </Stack>
+              <Stack gap={3}>
+                <Text size="xs" c="dimmed">Webhook event delivery</Text>
+                <Badge
+                  color={webhookSubscriptionStatus === "verified" ? "teal" : webhookSubscriptionStatus === "missing" ? "red" : "yellow"}
+                  variant="light"
+                >
+                  {webhookSubscriptionStatus === "verified"
+                    ? "Subscribed"
+                    : webhookSubscriptionStatus === "missing"
+                      ? "Not subscribed"
+                      : "Verification unavailable"}
+                </Badge>
+              </Stack>
             </SimpleGrid>
+
+            {!statusQuery.isLoading && !statusQuery.isError && webhookSubscriptionStatus === "verified" ? (
+              <Alert color="teal" title="Webhook subscription healthy" icon={<IconCheck size={18} />}>
+                Meta confirms that this WhatsApp Business account is subscribed to OmniLodge webhook events.
+                {webhookRepairFeedback ? (
+                  <Text size="sm" mt="xs">{webhookRepairFeedback}</Text>
+                ) : null}
+              </Alert>
+            ) : null}
+
+            {!statusQuery.isLoading && !statusQuery.isError && webhookSubscriptionStatus === "missing" ? (
+              <Alert color="red" title="Webhook subscription missing" icon={<IconAlertCircle size={18} />}>
+                <Stack gap="sm">
+                  <Text size="sm">
+                    Meta reports that this WhatsApp Business account is not subscribed to OmniLodge webhook events.
+                    Incoming messages and delivery updates may not arrive until the subscription is repaired.
+                  </Text>
+                  <PasswordInput
+                    label="Administrator password for webhook repair"
+                    placeholder="Enter your current password"
+                    value={webhookRepairPassword}
+                    onChange={(event) => setWebhookRepairPassword(event.currentTarget.value)}
+                    autoComplete="current-password"
+                    disabled={webhookRepairMutation.isPending}
+                  />
+                  <Group gap="sm" wrap="wrap">
+                    <Button
+                      color="red"
+                      leftSection={<IconShieldLock size={16} />}
+                      loading={webhookRepairMutation.isPending}
+                      disabled={!webhookRepairPassword.trim() || webhookRepairMutation.isPending}
+                      onClick={() => webhookRepairMutation.mutate(webhookRepairPassword)}
+                    >
+                      Repair subscription
+                    </Button>
+                    <Button
+                      variant="default"
+                      leftSection={<IconRefresh size={16} />}
+                      loading={statusQuery.isFetching && !webhookRepairMutation.isPending}
+                      disabled={webhookRepairMutation.isPending}
+                      onClick={() => void statusQuery.refetch()}
+                    >
+                      Recheck subscription
+                    </Button>
+                  </Group>
+                  {webhookRepairFeedback ? (
+                    <Text size="sm" c={webhookRepairMutation.isError ? "red" : "yellow.9"}>
+                      {webhookRepairFeedback}
+                    </Text>
+                  ) : null}
+                </Stack>
+              </Alert>
+            ) : null}
+
+            {!statusQuery.isLoading && !statusQuery.isError && webhookSubscriptionStatus === "unknown" ? (
+              <Alert color="yellow" title="Webhook subscription could not be verified" icon={<IconAlertCircle size={18} />}>
+                <Stack gap="sm">
+                  <Text size="sm">
+                    OmniLodge could not verify Meta's webhook subscription right now. This does not mean the WhatsApp
+                    connection is disconnected. Retry the check before making connection changes.
+                  </Text>
+                  <Button
+                    variant="light"
+                    color="yellow"
+                    leftSection={<IconRefresh size={16} />}
+                    loading={statusQuery.isFetching}
+                    onClick={() => void statusQuery.refetch()}
+                  >
+                    Retry verification
+                  </Button>
+                </Stack>
+              </Alert>
+            ) : null}
 
             {status?.recoveryRequired ? (
               <Alert color="yellow" title="Manual recovery required" icon={<IconAlertCircle size={18} />}>

@@ -5,7 +5,12 @@ import {
   getWhatsAppWebhookVerificationConfig,
 } from '../config/whatsappConfig.js';
 import { kickWhatsAppWebhookQueue } from '../jobs/whatsappWebhookQueue.cron.js';
-import { parseMetaWebhook, verifyMetaWebhookSignature } from '../services/whatsappWebhookParser.js';
+import { captureBackendExceptionSafe } from '../services/errorMonitoringService.js';
+import {
+  parseMetaWebhook,
+  verifyMetaWebhookSignature,
+  WhatsAppWebhookValidationError,
+} from '../services/whatsappWebhookParser.js';
 import {
   enqueueWhatsAppWebhook,
   hashWhatsAppWebhookDelivery,
@@ -89,8 +94,21 @@ export const receiveWhatsAppWebhook = async (req: Request, res: Response): Promi
       wabaId: config.wabaId,
       phoneNumberId: config.phoneNumberId,
     });
-  } catch {
-    res.status(400).send('Invalid webhook payload.');
+  } catch (error) {
+    res.locals.errorMonitoringExceptionCaptured = true;
+    if (error instanceof WhatsAppWebhookValidationError) {
+      captureBackendExceptionSafe(error, req, {
+        statusCode: 400,
+        reference: `WHATSAPP_WEBHOOK_${error.safeCode}`,
+      });
+      res.status(400).send('Invalid webhook payload.');
+      return;
+    }
+    captureBackendExceptionSafe(error, req, {
+      statusCode: 500,
+      reference: 'WHATSAPP_WEBHOOK_PARSE_FAILURE',
+    });
+    res.status(500).send('Webhook parsing failed.');
     return;
   }
 

@@ -6,6 +6,7 @@ jest.mock('../../services/whatsappEmbeddedSignupService.js', () => ({
   getWhatsAppAdminStatus: jest.fn(),
   createWhatsAppEmbeddedSignupAttempt: jest.fn(),
   completeWhatsAppEmbeddedSignupAttempt: jest.fn(),
+  repairWhatsAppWebhookSubscription: jest.fn(),
 }));
 jest.mock('../../services/whatsappOutboundMessageService.js', () => ({
   listWhatsAppMessageTemplates: jest.fn(),
@@ -20,6 +21,7 @@ import {
   completeWhatsAppEmbeddedSignupAttempt,
   createWhatsAppEmbeddedSignupAttempt,
   getWhatsAppAdminStatus,
+  repairWhatsAppWebhookSubscription,
 } from '../../services/whatsappEmbeddedSignupService';
 import {
   listWhatsAppMessageTemplates,
@@ -31,6 +33,7 @@ import {
   createWhatsAppEmbeddedSignupAttemptController,
   getWhatsAppAdminStatusController,
   getWhatsAppMessageTemplatesController,
+  repairWhatsAppWebhookSubscriptionController,
   sendWhatsAppTemplateMessageController,
 } from '../whatsappAdminController';
 
@@ -46,6 +49,7 @@ userModel.findByPk = jest.fn();
 const mockCreate = createWhatsAppEmbeddedSignupAttempt as jest.Mock;
 const mockComplete = completeWhatsAppEmbeddedSignupAttempt as jest.Mock;
 const mockStatus = getWhatsAppAdminStatus as jest.Mock;
+const mockRepairSubscription = repairWhatsAppWebhookSubscription as jest.Mock;
 const mockListTemplates = listWhatsAppMessageTemplates as jest.Mock;
 const mockSendTemplate = sendWhatsAppTemplateMessage as jest.Mock;
 
@@ -135,8 +139,47 @@ describe('WhatsApp admin controller', () => {
 
     const statusRes = response();
     await getWhatsAppAdminStatusController({} as AuthenticatedRequest, statusRes as unknown as Response);
+    expect(mockStatus).toHaveBeenCalledWith({ checkWebhookSubscription: true });
     expect(statusRes.json).toHaveBeenCalledWith({ status: safeStatus });
     expect(statusRes.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
+  });
+
+  it('password-gates webhook subscription repair and returns its verified status', async () => {
+    const payload = {
+      repaired: true,
+      status: { connected: true, webhookSubscriptionStatus: 'verified' },
+    };
+    mockRepairSubscription.mockResolvedValue(payload);
+    const req = {
+      authContext: { id: 7, roleSlug: 'admin' },
+      body: { password: 'confirmed-password' },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await repairWhatsAppWebhookSubscriptionController(req, res as unknown as Response);
+
+    expect(userModel.findByPk).toHaveBeenCalledWith(7);
+    expect(mockCompare).toHaveBeenCalledWith('confirmed-password', 'password-hash');
+    expect(mockRepairSubscription).toHaveBeenCalledTimes(1);
+    expect(res.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
+    expect(res.json).toHaveBeenCalledWith(payload);
+  });
+
+  it('does not repair the webhook subscription when password confirmation fails', async () => {
+    mockCompare.mockResolvedValue(false);
+    const req = {
+      authContext: { id: 7, roleSlug: 'admin' },
+      body: { password: 'wrong' },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await repairWhatsAppWebhookSubscriptionController(req, res as unknown as Response);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith([{
+      message: 'Password confirmation is required to repair the WhatsApp webhook subscription.',
+    }]);
+    expect(mockRepairSubscription).not.toHaveBeenCalled();
   });
 
   it('does not echo unexpected provider or credential error messages', async () => {

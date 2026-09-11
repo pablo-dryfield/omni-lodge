@@ -35,6 +35,9 @@ jest.mock('../../controllers/whatsappAdminController.js', () => ({
       templates: [{ name: 'simple_notice', language: 'en_US', category: 'UTILITY' }],
     });
   }),
+  repairWhatsAppWebhookSubscriptionController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ repaired: true, status: { webhookSubscriptionStatus: 'verified' } });
+  }),
 }));
 
 import whatsappAdminRoutes from '../whatsappAdminRoutes';
@@ -97,6 +100,35 @@ describe('WhatsApp admin routes', () => {
     expect(response.body).toEqual({ status: { connected: true } });
     expect(response.headers['cache-control']).toBe('no-store');
   });
+
+  it('accepts a strictly validated password-confirmed subscription repair', async () => {
+    const app = buildApp();
+    const response = await request(app)
+      .post(`${basePath}/webhook-subscription/repair`)
+      .set('x-test-admin-id', '751')
+      .send({ password: 'confirmed-password' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      repaired: true,
+      status: { webhookSubscriptionStatus: 'verified' },
+    });
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  it.each([{}, { password: '' }, { password: 'x'.repeat(513) }])(
+    'rejects an invalid subscription repair password body %#',
+    async (bodyValue) => {
+      const app = buildApp();
+      const response = await request(app)
+        .post(`${basePath}/webhook-subscription/repair`)
+        .set('x-test-admin-id', '752')
+        .send(bodyValue);
+
+      expect(response.status).toBe(400);
+      expect(response.headers['cache-control']).toBe('no-store');
+    },
+  );
 
   it('accepts only a boolean offboarding confirmation flag', async () => {
     const app = buildApp();
