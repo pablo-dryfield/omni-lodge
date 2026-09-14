@@ -24,8 +24,43 @@ type SeedUser = {
   };
 };
 
-const DEFAULT_PASSWORD = 'schedule-demo';
+const DEMO_SEED_FLAG = 'SEED_SCHEDULING_DEMO';
+const DEMO_SEED_PASSWORD_ENV = 'SCHEDULING_DEMO_SEED_PASSWORD';
+const MINIMUM_DEMO_PASSWORD_LENGTH = 16;
+const DEMO_SEED_MARKER = 'scheduling-demo';
 const tz = process.env.SCHED_TZ || 'Europe/Warsaw';
+
+type DemoSeedConfig =
+  | { enabled: false }
+  | { enabled: true; password: string };
+
+const readDemoSeedConfig = (env: NodeJS.ProcessEnv = process.env): DemoSeedConfig => {
+  // This historical migration lives in the production migration chain, so
+  // demo data must be opt-in and impossible to enable in a runtime environment.
+  const requestedValue = String(env[DEMO_SEED_FLAG] ?? '').trim().toLowerCase();
+
+  if (!requestedValue || ['0', 'false', 'no', 'off'].includes(requestedValue)) {
+    return { enabled: false };
+  }
+
+  if (requestedValue !== 'true') {
+    throw new Error(`${DEMO_SEED_FLAG} must be exactly "true" to enable the scheduling demo seed`);
+  }
+
+  const nodeEnvironment = String(env.NODE_ENV ?? '').trim().toLowerCase();
+  if (!['development', 'test'].includes(nodeEnvironment)) {
+    throw new Error('The scheduling demo seed is allowed only when NODE_ENV=development or test');
+  }
+
+  const password = String(env[DEMO_SEED_PASSWORD_ENV] ?? '');
+  if (password.length < MINIMUM_DEMO_PASSWORD_LENGTH) {
+    throw new Error(
+      `${DEMO_SEED_PASSWORD_ENV} must contain at least ${MINIMUM_DEMO_PASSWORD_LENGTH} characters`,
+    );
+  }
+
+  return { enabled: true, password };
+};
 
 const seedUsers: SeedUser[] = [
   {
@@ -77,8 +112,12 @@ const seedUsers: SeedUser[] = [
   },
 ];
 
-async function upsertUsers(qi: QueryInterface, transaction: Transaction): Promise<number[]> {
-  const hashed = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+async function upsertUsers(
+  qi: QueryInterface,
+  transaction: Transaction,
+  password: string,
+): Promise<number[]> {
+  const hashed = await bcrypt.hash(password, 10);
   const insertedIds: number[] = [];
 
   for (const user of seedUsers) {
@@ -92,10 +131,11 @@ async function upsertUsers(qi: QueryInterface, transaction: Transaction): Promis
     );
 
     let userId = existing?.id;
+    let insertedBySeed = false;
 
     if (!userId) {
       const insertedRows = await qi.sequelize.query<{ id: number }>(
-        `INSERT INTO users (username, firstName, lastName, email, password, role, status, created_at, updated_at)
+        `INSERT INTO users (username, "firstName", "lastName", email, password, role, status, "createdAt", "updatedAt")
          VALUES (:username, :firstName, :lastName, :email, :password, :role, true, NOW(), NOW())
          RETURNING id`,
         {
@@ -114,6 +154,7 @@ async function upsertUsers(qi: QueryInterface, transaction: Transaction): Promis
 
       const insertedRow = insertedRows[0];
       userId = insertedRow?.id;
+      insertedBySeed = Boolean(userId);
     }
 
     if (!userId) {
@@ -122,15 +163,12 @@ async function upsertUsers(qi: QueryInterface, transaction: Transaction): Promis
 
     insertedIds.push(userId);
 
-    if (user.staffProfile) {
+    // Never modify a profile belonging to a user that pre-dated this seed.
+    if (user.staffProfile && insertedBySeed) {
       await qi.sequelize.query(
         `INSERT INTO staff_profiles (user_id, staff_type, lives_in_accom, active, created_at, updated_at)
          VALUES (:userId, :staffType, :lives, true, NOW(), NOW())
-         ON CONFLICT (user_id) DO UPDATE
-         SET staff_type = EXCLUDED.staff_type,
-             lives_in_accom = EXCLUDED.lives_in_accom,
-             active = EXCLUDED.active,
-             updated_at = NOW()`,
+         ON CONFLICT (user_id) DO NOTHING`,
         {
           transaction,
           replacements: {
@@ -206,11 +244,16 @@ async function resolveTemplate(qi: QueryInterface, name: string, transaction: Tr
 }
 
 export async function up({ context }: MigrationParams): Promise<void> {
+  const demoSeed = readDemoSeedConfig();
+  if (!demoSeed.enabled) {
+    return;
+  }
+
   const qi = context;
   const transaction = await qi.sequelize.transaction();
 
   try {
-    const userIds = await upsertUsers(qi, transaction);
+    const userIds = await upsertUsers(qi, transaction, demoSeed.password);
     const { id: weekId, weekStart } = await getOrCreateScheduleWeek(qi, transaction);
 
     const assistantId = userIds[2];
@@ -243,7 +286,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
             { role: 'Leader', required: 1 },
             { role: 'Guide', required: 2 },
           ]),
-          meta: JSON.stringify({}),
+          meta: JSON.stringify({ seed: DEMO_SEED_MARKER }),
         },
       },
     );
@@ -263,7 +306,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
           templateId: cleaningTemplate.templateId,
           date: tuesday,
           roles: JSON.stringify([{ role: 'Staff', required: 1 }]),
-          meta: JSON.stringify({ area: 'Kitchen' }),
+          meta: JSON.stringify({ area: 'Kitchen', seed: DEMO_SEED_MARKER }),
         },
       },
     );
@@ -272,7 +315,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
       `INSERT INTO shift_instances
         (schedule_week_id, shift_type_id, shift_template_id, date, time_start, time_end, capacity, required_roles, meta, created_at, updated_at)
        VALUES
-        (:weekId, :shiftTypeId, :templateId, :date, '14:00:00', '15:00:00', NULL, :roles::jsonb, '{}'::jsonb, NOW(), NOW())
+        (:weekId, :shiftTypeId, :templateId, :date, '14:00:00', '15:00:00', NULL, :roles::jsonb, :meta::jsonb, NOW(), NOW())
        RETURNING id`,
       {
         transaction,
@@ -283,6 +326,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
           templateId: promotionTemplate.templateId,
           date: wednesday,
           roles: JSON.stringify([{ role: 'Staff', required: 1 }]),
+          meta: JSON.stringify({ seed: DEMO_SEED_MARKER }),
         },
       },
     );
@@ -348,66 +392,40 @@ export async function up({ context }: MigrationParams): Promise<void> {
 }
 
 export async function down({ context }: MigrationParams): Promise<void> {
+  const demoSeed = readDemoSeedConfig();
+  if (!demoSeed.enabled) {
+    return;
+  }
+
   const qi = context;
   const transaction = await qi.sequelize.transaction();
 
   try {
-    const userEmails = seedUsers.map((user) => user.email);
-    const userRows = await qi.sequelize.query<{ id: number }>(
-      `SELECT id FROM users WHERE email = ANY(:emails)`,
+    await qi.sequelize.query(
+      `DELETE FROM shift_assignments
+       WHERE shift_instance_id IN (
+         SELECT id
+         FROM shift_instances
+         WHERE meta ->> 'seed' = :demoSeedMarker
+       )`,
       {
         transaction,
-        type: QueryTypes.SELECT,
-        replacements: { emails: userEmails },
+        replacements: { demoSeedMarker: DEMO_SEED_MARKER },
       },
     );
 
-    const userIds = userRows.map((row) => row.id);
-
-    if (userIds.length > 0) {
-      await qi.sequelize.query(
-        `DELETE FROM shift_assignments WHERE user_id = ANY(:userIds)`,
-        {
-          transaction,
-          replacements: { userIds },
-        },
-      );
-      await qi.sequelize.query(
-        `DELETE FROM staff_profiles WHERE user_id = ANY(:userIds)`,
-        {
-          transaction,
-          replacements: { userIds },
-        },
-      );
-      await qi.sequelize.query(
-        `DELETE FROM users WHERE id = ANY(:userIds)`,
-        {
-          transaction,
-          replacements: { userIds },
-        },
-      );
-    }
-
     await qi.sequelize.query(
       `DELETE FROM shift_instances
-       WHERE id IN (
-         SELECT si.id
-         FROM shift_instances si
-         JOIN schedule_weeks sw ON sw.id = si.schedule_week_id
-         WHERE sw.state = 'collecting'
-           AND sw.year = date_part('isoyear', NOW() + INTERVAL '1 week')
-           AND sw.iso_week = date_part('week', NOW() + INTERVAL '1 week')
-       )`,
-      { transaction },
+       WHERE meta ->> 'seed' = :demoSeedMarker`,
+      {
+        transaction,
+        replacements: { demoSeedMarker: DEMO_SEED_MARKER },
+      },
     );
 
-    await qi.sequelize.query(
-      `DELETE FROM schedule_weeks
-       WHERE state = 'collecting'
-         AND year = date_part('isoyear', NOW() + INTERVAL '1 week')
-         AND iso_week = date_part('week', NOW() + INTERVAL '1 week')`,
-      { transaction },
-    );
+    // The legacy schema has no durable marker proving which user/profile rows
+    // were created here. Retaining them is safer than deleting a pre-existing
+    // account that happens to use one of the demo identities.
 
     await transaction.commit();
   } catch (error) {
