@@ -32,6 +32,7 @@ import {
 import {
   loadAndValidateTlsCredentials,
   resolveExpectedUiRelease,
+  resolveUiServerListener,
   resolveUiServerRuntimePaths,
 } from './runtimeConfig.js';
 import { validateUiArtifact } from './uiArtifactValidation.js';
@@ -45,8 +46,8 @@ const runtimePaths = resolveUiServerRuntimePaths({
 });
 const uiBuildPath = runtimePaths.buildPath;
 const uiIndexFile = path.join(uiBuildPath, 'index.html');
-const uiServerPort = Number.parseInt(process.env.UI_SERVER_PORT ?? '3005', 10);
-const uiServerListenPort = process.env.NODE_ENV === 'production' ? 443 : uiServerPort;
+const uiServerListener = resolveUiServerListener(process.env);
+const uiServerListenPort = uiServerListener.port;
 const expectedUiRelease = resolveExpectedUiRelease(process.env);
 const uiArtifactValidation = validateUiArtifact({
   buildPath: uiBuildPath,
@@ -361,7 +362,7 @@ const reportUiServerRequestFailure = (error, req, status = 500, source = 'ui-ser
 const browserReportUrl = buildBrowserReportUrl({
   configuredOrigin: process.env.PUBLIC_APP_ORIGIN,
   environment: process.env.NODE_ENV || 'development',
-  developmentOrigin: `http://localhost:${uiServerPort}`,
+  developmentOrigin: `http://localhost:${uiServerListenPort}`,
 });
 
 restoreUiServerTelemetryQueue();
@@ -573,11 +574,11 @@ if(process.env.NODE_ENV === 'production'){
     certPath: runtimePaths.tlsCertPath,
   });
   const server = https.createServer(options, app);
-  server.listen(uiServerListenPort, '0.0.0.0', () => {
+  server.listen(uiServerListenPort, uiServerListener.host, () => {
     logger.info(`Server is running on port ${uiServerListenPort}`);
 });
 }else{
-  app.listen(uiServerListenPort, '0.0.0.0', () => {
+  app.listen(uiServerListenPort, uiServerListener.host, () => {
     logger.info(`Server is running on port ${uiServerListenPort}`);
   });
 }

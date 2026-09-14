@@ -180,6 +180,27 @@ test('rejects unsafe artifact references before reading outside the build', () =
   }
 });
 
+test('rejects unreferenced symbolic links anywhere in the publicly served tree', (t) => {
+  const fixture = createValidBuild();
+  const outsidePath = path.join(path.dirname(fixture.buildPath), 'outside.txt');
+  const linkPath = path.join(fixture.buildPath, 'unreferenced-link.txt');
+  try {
+    fs.writeFileSync(outsidePath, 'private');
+    try {
+      fs.symlinkSync(outsidePath, linkPath, 'file');
+    } catch (error) {
+      if (error && typeof error === 'object' && ['EPERM', 'EACCES'].includes(error.code)) {
+        t.skip('symbolic links are unavailable for this test account');
+        return;
+      }
+      throw error;
+    }
+    expectValidationFailure(fixture.buildPath, /unreferenced-link\.txt must not be a symbolic link/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('fails when service-worker or PWA essentials are invalid', () => {
   const fixture = createValidBuild();
   try {

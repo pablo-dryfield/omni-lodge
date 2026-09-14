@@ -125,6 +125,51 @@ const readRequiredJson = (input) => {
   }
 };
 
+const validateArtifactTree = ({ buildRoot, realBuildRoot, problems }) => {
+  const pending = [buildRoot];
+  while (pending.length > 0 && problems.length < MAX_VALIDATION_PROBLEMS) {
+    const directory = pending.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      problems.push(`${path.relative(buildRoot, directory) || '.'} is unreadable`);
+      continue;
+    }
+
+    for (const entry of entries) {
+      const candidate = path.join(directory, entry.name);
+      const relative = path.relative(buildRoot, candidate).replaceAll('\\', '/');
+      let stat;
+      try {
+        stat = fs.lstatSync(candidate);
+      } catch {
+        problems.push(`${relative} is unreadable`);
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        problems.push(`${relative} must not be a symbolic link`);
+        continue;
+      }
+      if (stat.isDirectory()) {
+        pending.push(candidate);
+        continue;
+      }
+      if (!stat.isFile()) {
+        problems.push(`${relative} must be a regular file`);
+        continue;
+      }
+      try {
+        if (!isContainedPath(realBuildRoot, fs.realpathSync(candidate))) {
+          problems.push(`${relative} resolves outside the UI build directory`);
+        }
+      } catch {
+        problems.push(`${relative} is unreadable`);
+      }
+    }
+  }
+};
+
 const extractHtmlReferences = (html) => [...html.matchAll(
   /\b(?:src|href)\s*=\s*["']([^"']+)["']/gi,
 )].map((match) => match[1]);
@@ -313,6 +358,8 @@ export const validateUiArtifact = ({
       `UI build path is missing or unreadable${code ? ` (${code})` : ''}`,
     ]);
   }
+
+  validateArtifactTree({ buildRoot, realBuildRoot, problems });
 
   const readText = (relativePath, label) => readRequiredText({
     buildRoot,

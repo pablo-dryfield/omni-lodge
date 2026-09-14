@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   loadAndValidateTlsCredentials,
   resolveExpectedUiRelease,
+  resolveUiServerListener,
   resolveUiServerRuntimePaths,
 } from './runtimeConfig.js';
 
@@ -45,6 +46,28 @@ test('selects the expected release using explicit precedence', () => {
   assert.equal(resolveExpectedUiRelease({ APP_VERSION: ' app ', REACT_APP_GIT_SHA: ' git ' }), 'git');
   assert.equal(resolveExpectedUiRelease({ APP_VERSION: ' app ' }), 'app');
   assert.equal(resolveExpectedUiRelease({}), null);
+});
+
+test('preserves listener defaults while allowing a private production preflight port', () => {
+  assert.deepEqual(resolveUiServerListener({}), { host: '0.0.0.0', port: 3005 });
+  assert.deepEqual(resolveUiServerListener({ NODE_ENV: 'production' }), {
+    host: '0.0.0.0',
+    port: 443,
+  });
+  assert.deepEqual(resolveUiServerListener({
+    NODE_ENV: 'production',
+    UI_SERVER_HOST: '127.0.0.1',
+    UI_SERVER_PORT: '3443',
+  }), { host: '127.0.0.1', port: 3443 });
+});
+
+test('rejects unsafe or invalid listener configuration', () => {
+  for (const port of ['0', '65536', '3.5', '443x', '-1']) {
+    assert.throws(() => resolveUiServerListener({ UI_SERVER_PORT: port }), /UI_SERVER_PORT/);
+  }
+  for (const host of ['public.example.com', 'https://127.0.0.1', '0.0.0.0 extra']) {
+    assert.throws(() => resolveUiServerListener({ UI_SERVER_HOST: host }), /UI_SERVER_HOST/);
+  }
 });
 
 test('fails before startup when TLS files are missing, empty, or invalid', () => {

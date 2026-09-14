@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import tls from 'node:tls';
 
@@ -52,6 +53,25 @@ export const resolveExpectedUiRelease = (env = process.env) => {
     env.COMMIT_SHA,
   );
   return value?.trim() ?? null;
+};
+
+export const resolveUiServerListener = (env = process.env) => {
+  const production = env.NODE_ENV === 'production';
+  const rawPort = firstNonEmpty(env.UI_SERVER_PORT) ?? (production ? '443' : '3005');
+  if (!/^\d+$/.test(rawPort)) {
+    throw new Error('UI_SERVER_PORT must be an integer between 1 and 65535');
+  }
+  const port = Number(rawPort);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('UI_SERVER_PORT must be an integer between 1 and 65535');
+  }
+
+  const host = (firstNonEmpty(env.UI_SERVER_HOST) ?? '0.0.0.0').trim();
+  if (host !== 'localhost' && net.isIP(host) === 0) {
+    throw new Error('UI_SERVER_HOST must be localhost or an IP address');
+  }
+
+  return Object.freeze({ host, port });
 };
 
 const readRequiredFile = (filePath, label) => {
