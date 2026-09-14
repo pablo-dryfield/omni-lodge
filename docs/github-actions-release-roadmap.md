@@ -1,6 +1,6 @@
 # OmniLodge GitHub Actions Release Roadmap
 
-Status: planning only; this pipeline is not active yet.
+Status: implementation started; the Phase 0 contract is recorded but root-only verification remains. The pipeline is not active yet.
 
 Baseline when this plan was written: `080fa5db5e568c7f005f60c7b8aa39eaf8272c1d`
 
@@ -48,17 +48,18 @@ The status labels in this document mean `[Current]`, `[Partial]`, `[Planned]`, `
 
 | Area | Repository today | Target | Status |
 | --- | --- | --- | --- |
-| GitHub Actions | No `.github/workflows` directory exists. | PR validation, trusted `master` release, deploy, and rollback workflows. | `[Planned]` |
-| Repository layout | `be`, `ui`, and `ui-server` are independent packages with separate lockfiles; the root lockfile is not a workspace entry point. | Install, cache, validate, and package each application independently. | `[Current]` |
-| Toolchain | `.nvmrc` selects Node 22; only the backend declares a Node engine; npm is not pinned project-wide. | One exact Node 22 and npm version recorded in all packages, CI, the manifest, and production. | `[Partial]` |
-| Source workflow | Work has historically landed directly on `master`, and legacy branches remain. | Isolated short-lived branches, required PR checks, human merge, and branch cleanup. | `[Planned]` |
-| Backend | Check, test, and build scripts exist, but production start, migration, access sync, and `postinstall` still compile TypeScript; no dedicated lint script exists. | Separate build-time and runtime-only commands with CI coverage. | `[Partial]` |
+| GitHub Actions | Bootstrap controls are configured: read-only default token, SHA pinning, protected `production` environment, and `PRODUCTION_DEPLOY_MODE=disabled`; no workflow exists yet. | PR validation, trusted `master` release, deploy, and rollback workflows. | `[Partial]` |
+| Repository layout | `be`, `ui`, and `ui-server` are independent packages with separate lockfiles; the unused empty root lockfile has been removed. | Install, cache, validate, and package each application independently. | `[Current]` |
+| Toolchain | Node 22.23.2 and npm 10.9.8 are selected and pinned in `.nvmrc` and all three package manifests. | Use that exact pair in local development, CI, release manifests, and production. | `[Current]` |
+| Source workflow | `master` requires pull requests and blocks force pushes/deletion, and short-lived task branches are in use; required CI checks do not exist yet, branch auto-delete is off, and legacy branches remain pending audit. | Isolated short-lived branches, required merge-result checks, human merge, and branch cleanup. | `[Partial]` |
+| Runtime contract | `docs/production-runtime-contract.md` records the non-secret package, runtime, repository, release, and smoke-test contract; root-only PM2/storage/migration/backup facts remain explicitly unverified. | Reviewed and fully verified production/runtime contract. | `[Partial]` |
+| Backend | Check, test, build, and runtime-only start/migrate/access-sync scripts exist and compile-on-install is removed; legacy production aliases still compile for fallback and no dedicated lint/CI coverage exists. | Runtime-only artifact activation with complete CI coverage. | `[Partial]` |
 | UI | Typecheck, lint, tests, and build scripts exist; about 750 generated `ui/build` files remain tracked for the legacy deployment. | Build once in Actions and ship only in the verified release artifact after cutover. | `[Partial]` |
 | UI server | Node tests exist; UI build and TLS paths are tied to the checkout, and there is no release-aware readiness contract. | Explicit runtime paths, strict preflight, syntax checks, and health reporting. | `[Partial]` |
-| Health checks | `/api/health` is a shallow process liveness response. | Separate liveness and DB/config/migration/release-aware readiness checks. | `[Partial]` |
+| Health checks | The legacy `/api/health` remains shallow; `/api/health/live` and `/api/health/ready` are implemented with database, required-config, and release checks. Migration-state readiness and deployment integration remain pending. | Separate liveness and DB/config/migration/release-aware readiness checks. | `[Partial]` |
 | Database validation | Production migrations exist, but there is no temporary-PostgreSQL migration gate in Actions. | Fresh migrate, verification, and second no-op migrate before any deploy can become eligible. | `[Planned]` |
 | TLS | The Cloudflare Origin CA key and certificate are read from tracked source paths. | Rotated, server-owned TLS material outside Git and artifacts. | `[Blocked]` prerequisite |
-| Deployment | Production uses the checkout/PM2 and legacy pull/build-oriented controls. | Verified release directories, atomic pointers, serialized activation, and rollback. | `[Planned]` |
+| Deployment | Production still uses the checkout/PM2 and legacy pull/build controls; a key-authenticated restricted deployment account and protected GitHub environment exist, but no deploy wrapper, release directories, secrets, or workflow are installed. | Verified release directories, atomic pointers, serialized activation, and rollback. | `[Partial]` |
 | Staging | No separate staging environment is established in this roadmap. | Optional promotion of the same `master` artifact to a separate environment. | `[Optional/Future]` |
 
 This matrix must be updated as roadmap phases land; adding a planned section below does not make that capability current.
@@ -476,6 +477,8 @@ A staging environment is optional later. If added, it must receive the same veri
 
 ### Phase 0: Baseline inventory and workflow contract
 
+Current status: **partial**. The checked-in [production runtime contract](production-runtime-contract.md) records the selected toolchain, package boundaries and commands, repository/release controls, observable host topology, persistent-path assumptions, maintenance controls, and public smoke routes. It deliberately leaves inaccessible facts unresolved rather than inferring them.
+
 - Inventory and record the exact local and production Node/npm versions, package scripts, build outputs, lockfiles, and expected CI commands. Select one exact Node 22/npm pair instead of relying on the current machine's incidental npm version.
 - Confirm that `be`, `ui`, and `ui-server` are independent npm projects and decide whether the unused root `package-lock.json` should be removed.
 - Inventory production read-only before changing it: current checkout path, PM2 process names/mode/cwd/start commands, service user, ports, Node/npm path, TLS ownership, persistent paths, upload/log/source-map locations, database migration state, server-owned backup command, and existing maintenance/deploy controls.
@@ -483,6 +486,14 @@ A staging environment is optional later. If added, it must receive the same veri
 - Inventory repository rules, collaborators with write access, and legacy branches. Define the required PR check names, merge-freshness policy, branch cleanup policy, release naming, artifact retention, production environment, `PRODUCTION_DEPLOY_MODE`, whether an administrator-only server allow flag is needed, and owners of approval, emergency freeze, and rollback.
 - Add a non-secret checked-in deployment contract or PM2 ecosystem description after the inventory. Do not copy production secrets into it.
 - Update the delivery status matrix with anything that changed since this review.
+
+Recorded on 2026-09-14:
+
+- Node 22.23.2/npm 10.9.8 selected; independent package-local lockfiles and CI command contract recorded.
+- Repository rules, protected production environment, disabled deployment mode, release naming/retention, ownership, and branch policy recorded.
+- Public homepage, proxied health, companion-domain, manifest, hashed-asset, PWA, and source-map-denial checks recorded; there is no application WebSocket route to test today.
+- Restricted read-only host access confirmed the executable paths, checkout/process arguments, service ownership, listeners, PostgreSQL major version, and legacy backup path existence.
+- Root-only PM2 metadata, effective mutable paths/permissions, applied migration state, and backup output/restore evidence remain required. Phase 0 does not meet its exit condition until those items are reviewed.
 
 Exit condition: the actual production/runtime contract and exact CI commands are reviewed and recorded, with no production mutation yet.
 
