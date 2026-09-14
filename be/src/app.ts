@@ -207,6 +207,14 @@ const apiLimiter = rateLimit({
   message: 'Too many requests from this IP, please try again after 15 minutes'
 });
 
+const healthLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { status: 'rate_limited', ready: false },
+});
+
 // Initialize Express
 const app = express();
 
@@ -282,7 +290,7 @@ app.use(
 );
 
 // Keep this public and independent so clients can verify backend availability.
-app.use('/api/health', healthRoutes);
+app.use('/api/health', healthLimiter, healthRoutes);
 
 app.use('/api/', apiLimiter);
 
