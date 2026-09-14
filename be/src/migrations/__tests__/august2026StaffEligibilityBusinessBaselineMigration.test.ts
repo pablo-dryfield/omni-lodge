@@ -1,6 +1,7 @@
 import {
   down,
   up,
+  verify,
 } from '../202608300006-august-2026-staff-eligibility-business-baseline.js';
 
 const createContext = () => {
@@ -187,6 +188,7 @@ describe('August 2026 staff eligibility business baseline migration', () => {
     expect(sql).toContain('IN SHARE ROW EXCLUSIVE MODE');
     expect(sql).toContain(`users."createdAt" AT TIME ZONE 'Europe/Warsaw'`);
     expect(sql).toContain(`profile."createdAt" AT TIME ZONE 'Europe/Warsaw'`);
+    expect(sql).not.toContain(`profile.created_at`);
     expect(sql).not.toContain('user_shift_role_membership_periods');
     expect(bulkInsert.mock.calls.some(([table]) => (
       table === 'user_shift_role_membership_periods'
@@ -215,6 +217,16 @@ describe('August 2026 staff eligibility business baseline migration', () => {
     expect(bulkDelete).toHaveBeenCalledTimes(2);
     expect(transaction.commit).toHaveBeenCalledTimes(1);
     expect(transaction.rollback).not.toHaveBeenCalled();
+  });
+
+  it('verifies staff-profile creation dates through their physical camel-case column', async () => {
+    const { context, query } = createContext();
+
+    await verify({ context });
+
+    const sql = query.mock.calls.map(([statement]) => String(statement)).join('\n');
+    expect(sql).toContain(`baseline_profile."createdAt" AT TIME ZONE 'Europe/Warsaw'`);
+    expect(sql).not.toContain(`baseline_profile.created_at`);
   });
 
   it('rolls back atomically if a baseline insert fails', async () => {

@@ -19,8 +19,18 @@ const quoteList = KNOWN_PLATFORMS.map((value) => `'${value}'`).join(', ');
 export async function up({ context }: MigrationParams): Promise<void> {
   await context.sequelize.query(`
     ALTER TABLE "bookings"
+    ALTER COLUMN "platform" DROP DEFAULT;
+  `);
+
+  await context.sequelize.query(`
+    ALTER TABLE "bookings"
     ALTER COLUMN "platform" TYPE VARCHAR(64)
     USING "platform"::text;
+  `);
+
+  await context.sequelize.query(`
+    ALTER TABLE "bookings"
+    ALTER COLUMN "platform" SET DEFAULT 'unknown';
   `);
 
   await context.sequelize.query(`
@@ -43,6 +53,11 @@ export async function down({ context }: MigrationParams): Promise<void> {
 
   await context.sequelize.query(`
     ALTER TABLE "bookings"
+    ALTER COLUMN "platform" DROP DEFAULT;
+  `);
+
+  await context.sequelize.query(`
+    ALTER TABLE "bookings"
     ALTER COLUMN "platform" TYPE "enum_bookings_platform"
     USING (
       CASE
@@ -50,6 +65,11 @@ export async function down({ context }: MigrationParams): Promise<void> {
         ELSE 'unknown'::"enum_bookings_platform"
       END
     );
+  `);
+
+  await context.sequelize.query(`
+    ALTER TABLE "bookings"
+    ALTER COLUMN "platform" SET DEFAULT 'unknown'::"enum_bookings_platform";
   `);
 
   await context.sequelize.query(`

@@ -1,7 +1,7 @@
 import { up } from '../202510020001-counter-registry.js';
 
 describe('counter registry migration', () => {
-  it('casts the nullable period enum before using a text fallback in the unique index', async () => {
+  it('uses an enum-typed fallback for the nullable period in the unique index', async () => {
     const transaction = {
       commit: jest.fn().mockResolvedValue(undefined),
       rollback: jest.fn().mockResolvedValue(undefined),
@@ -38,8 +38,11 @@ describe('counter registry migration', () => {
     const indexStatement = query.mock.calls
       .map(([statement]) => String(statement))
       .find((statement) => statement.includes('counter_channel_metrics_cell_unique'));
-    expect(indexStatement).toContain("COALESCE(period::text, '-')");
+    expect(indexStatement).toContain(
+      'COALESCE(period, \'before_cutoff\'::"enum_counter_channel_metrics_period")',
+    );
     expect(indexStatement).not.toContain("COALESCE(period, '-')");
+    expect(indexStatement).not.toContain('period::text');
     expect(transaction.commit).toHaveBeenCalledTimes(1);
     expect(transaction.rollback).not.toHaveBeenCalled();
   });

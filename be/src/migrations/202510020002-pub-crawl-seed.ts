@@ -126,7 +126,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
             }
         }
         const productMetaRows = (await qi.sequelize.query(
-            'SELECT product_type_id as "productTypeId", created_by as "createdBy" FROM products ORDER BY id ASC LIMIT 1',
+            'SELECT "productTypeId", "createdBy" FROM products ORDER BY id ASC LIMIT 1',
             { type: QueryTypes.SELECT, transaction },
         )) as Array<{ productTypeId?: number; createdBy?: number }>;
         const defaultProductTypeId = productMetaRows[0]?.productTypeId ?? 1;

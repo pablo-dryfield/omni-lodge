@@ -5,6 +5,8 @@ type MigrationParams = { context: QueryInterface };
 
 const TABLE_TEMPLATES = 'am_task_templates';
 const TABLE_ASSIGNMENTS = 'am_task_assignments';
+const TABLE_USERS = 'users';
+const TABLE_USER_TYPES = '"userTypes"';
 
 type TaskTemplateSeed = {
   name: string;
@@ -560,6 +562,29 @@ const ensureDirectUserAssignment = async (
   templateId: number,
   userId: number,
 ): Promise<void> => {
+  const user = await qi.sequelize.query<{ id: number }>(
+    `
+    SELECT user_record.id
+    FROM ${TABLE_USERS} user_record
+    JOIN ${TABLE_USER_TYPES} user_type ON user_type.id = user_record."userTypeId"
+    WHERE user_record.id = :userId
+      AND user_record.status IS TRUE
+      AND regexp_replace(lower(user_type.slug), '[^a-z0-9]+', '_', 'g') = 'assistant_manager'
+    LIMIT 1;
+    `,
+    {
+      transaction,
+      type: QueryTypes.SELECT,
+      replacements: { userId },
+    },
+  );
+
+  // This historical seed targeted one active Assistant Manager in production.
+  // An ID match alone is unsafe in a restored or independently seeded database.
+  if (user.length === 0) {
+    return;
+  }
+
   const existing = await qi.sequelize.query<AssignmentRow>(
     `
     SELECT id
@@ -644,7 +669,7 @@ export async function down({ context }: MigrationParams): Promise<void> {
       `
       SELECT id, name
       FROM ${TABLE_TEMPLATES}
-      WHERE name = ANY(:templateNames);
+      WHERE name IN (:templateNames);
       `,
       {
         transaction,
@@ -659,7 +684,7 @@ export async function down({ context }: MigrationParams): Promise<void> {
       await qi.sequelize.query(
         `
         DELETE FROM ${TABLE_ASSIGNMENTS}
-        WHERE template_id = ANY(:templateIds);
+        WHERE template_id IN (:templateIds);
         `,
         {
           transaction,
@@ -670,7 +695,7 @@ export async function down({ context }: MigrationParams): Promise<void> {
       await qi.sequelize.query(
         `
         DELETE FROM ${TABLE_TEMPLATES}
-        WHERE id = ANY(:templateIds);
+        WHERE id IN (:templateIds);
         `,
         {
           transaction,

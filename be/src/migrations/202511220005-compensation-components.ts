@@ -7,7 +7,7 @@ const TABLE_COMPENSATION_COMPONENTS = "compensation_components";
 const TABLE_COMPENSATION_ASSIGNMENTS = "compensation_component_assignments";
 const TABLE_USERS = "users";
 const TABLE_SHIFT_ROLES = "shift_roles";
-const TABLE_USER_TYPES = "user_types";
+const TABLE_USER_TYPES = "userTypes";
 
 export async function up({ context }: MigrationParams): Promise<void> {
   const qi = context;
@@ -211,6 +211,6 @@ export async function up({ context }: MigrationParams): Promise<void> {
 
 export async function down({ context }: MigrationParams): Promise<void> {
   const qi = context;
-  await qi.dropTable(TABLE_COMPENSATION_ASSIGNMENTS);
-  await qi.dropTable(TABLE_COMPENSATION_COMPONENTS);
+  await qi.dropTable(TABLE_COMPENSATION_ASSIGNMENTS, {});
+  await qi.dropTable(TABLE_COMPENSATION_COMPONENTS, {});
 }

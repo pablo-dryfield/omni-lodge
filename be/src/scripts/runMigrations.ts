@@ -478,15 +478,20 @@ function recordCreateTable(tracker: MigrationTracker, tableRef: TableRef, attrib
   const { schema, table } = normalizeTableRef(tableRef);
   const entry = ensureTableExpectation(tracker, schema, table, true);
   for (const [columnName, definition] of Object.entries(attributes ?? {})) {
-    entry.columns.add(columnName);
+    let physicalColumnName = columnName;
     if (definition && typeof definition === 'object') {
       const def = definition as {
+        field?: unknown;
         primaryKey?: boolean;
         references?: unknown;
         unique?: boolean | string;
       };
+      if (typeof def.field === 'string' && def.field.trim()) {
+        physicalColumnName = def.field;
+      }
+      entry.columns.add(physicalColumnName);
       if (def.primaryKey) {
-        entry.primaryKeyColumns.add(columnName);
+        entry.primaryKeyColumns.add(physicalColumnName);
       }
       const reference = resolveReference(def.references);
       if (reference) {
@@ -494,7 +499,7 @@ function recordCreateTable(tracker: MigrationTracker, tableRef: TableRef, attrib
           table,
           schema,
           type: 'FOREIGN KEY',
-          columns: [columnName],
+          columns: [physicalColumnName],
           references: {
             table: reference.table,
             schema: reference.schema,
@@ -507,10 +512,12 @@ function recordCreateTable(tracker: MigrationTracker, tableRef: TableRef, attrib
           table,
           schema,
           type: 'UNIQUE',
-          columns: [columnName],
+          columns: [physicalColumnName],
           name: typeof def.unique === 'string' ? def.unique : undefined,
         });
       }
+    } else {
+      entry.columns.add(physicalColumnName);
     }
   }
 }
@@ -744,26 +751,31 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
         };
       }
       if (prop === 'renameTable') {
-        return async (before: TableRef, after: TableRef) => {
+        return async (before: TableRef, after: TableRef, options?: unknown) => {
           recordRenameTable(tracker, after);
           const beforeRef = normalizeTableRef(before);
           const afterRef = normalizeTableRef(after);
-          if (!(await tableExists(beforeRef.schema, beforeRef.table)) && await tableExists(afterRef.schema, afterRef.table)) {
+          const transaction = getTransaction(options);
+          if (!(await tableExists(beforeRef.schema, beforeRef.table, transaction))
+            && await tableExists(afterRef.schema, afterRef.table, transaction)) {
             tracker.warnings.push(`renameTable skipped for existing ${afterRef.schema}.${afterRef.table}`);
             return undefined;
           }
-          return (target.renameTable as (...args: unknown[]) => unknown).call(target, before, after);
+          return (target.renameTable as (...args: unknown[]) => unknown).call(target, before, after, options);
         };
       }
       if (prop === 'renameColumn') {
-        return async (tableName: TableRef, oldName: string, newName: string) => {
+        return async (tableName: TableRef, oldName: string, newName: string, options?: unknown) => {
           recordRenameColumn(tracker, tableName, newName);
           const { schema, table } = normalizeTableRef(tableName);
-          if (!(await columnExists(schema, table, oldName)) && await columnExists(schema, table, newName)) {
+          const transaction = getTransaction(options);
+          if (!(await columnExists(schema, table, oldName, transaction))
+            && await columnExists(schema, table, newName, transaction)) {
             tracker.warnings.push(`renameColumn skipped for existing ${schema}.${table}.${newName}`);
             return undefined;
           }
-          return (target.renameColumn as (...args: unknown[]) => unknown).call(target, tableName, oldName, newName);
+          return (target.renameColumn as (...args: unknown[]) => unknown)
+            .call(target, tableName, oldName, newName, options);
         };
       }
       if (prop === 'bulkInsert') {
@@ -795,7 +807,7 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
                 `
                   SELECT ${quoteIdentifier(key)} AS value
                   FROM ${quoteQualifiedName(schema, table)}
-                  WHERE ${quoteIdentifier(key)} = ANY(:values);
+                  WHERE ${quoteIdentifier(key)} IN (:values);
                 `,
                 { values },
                 transaction,
@@ -836,8 +848,15 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
 
 async function tableExists(schema: string, table: string, transaction?: Transaction | null): Promise<boolean> {
   const rows = await selectQuery<{ name: string | null }>(
-    'SELECT to_regclass(:tableName) AS name',
-    { tableName: `${schema}.${table}` },
+    `
+      SELECT table_name AS name
+      FROM information_schema.tables
+      WHERE table_schema = :schema
+        AND table_name = :table
+        AND table_type = 'BASE TABLE'
+      LIMIT 1;
+    `,
+    { schema, table },
     transaction,
   );
   return Boolean(rows[0]?.name);
@@ -1161,7 +1180,7 @@ async function verifyTrackedObjects(tracker: MigrationTracker): Promise<VerifySu
         `
           SELECT ${quoteIdentifier(seed.identifierColumn)} AS value
           FROM ${quoteQualifiedName(seed.schema, seed.table)}
-          WHERE ${quoteIdentifier(seed.identifierColumn)} = ANY(:values);
+          WHERE ${quoteIdentifier(seed.identifierColumn)} IN (:values);
         `,
         { values: identifierValues },
       );

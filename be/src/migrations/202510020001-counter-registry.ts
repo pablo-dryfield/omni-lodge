@@ -336,7 +336,7 @@ export async function up({ context }: MigrationParams): Promise<void> {
             kind,
             COALESCE(addon_id, 0),
             tally_type,
-            COALESCE(period::text, '-')
+            COALESCE(period, 'before_cutoff'::"enum_counter_channel_metrics_period")
           )`, { transaction });
         }
         log('counter_channel_metrics checked');
