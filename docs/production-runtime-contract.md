@@ -1,6 +1,6 @@
 # OmniLodge Production Runtime Contract
 
-Status: Phase 0 inventory remains partially verified; the Phase 1 runtime changes and Phase 2 validation/release workflows are implemented on the current pull-request branch but have not been merged, observed as required checks, or used to deploy production. This file contains no credentials and does not authorize deployment.
+Status: Phase 0 inventory remains partially verified; the Phase 1 runtime changes and Phase 2 validation/release workflows are implemented on the current draft pull-request branch. Hosted pull-request and branch CI are green, and `CI / required` is now enforced on `master`; the changes remain unmerged and have not been used to deploy production. This file contains no credentials and does not authorize deployment.
 
 This contract is the handoff between the repository, GitHub Actions, and the production host. It records what is known now, what the release pipeline must preserve, and which root-only facts must still be verified before production can be mutated.
 
@@ -19,10 +19,10 @@ Evidence labels used below:
 | Permanent source branch | `master` |
 | Repository visibility | Public; confirm that this remains intentional before any later visibility change |
 | Write/admin access | One current collaborator, the owner, at the Phase 0 audit |
-| `master` protection | Pull request required; zero approvals while there is only one collaborator; force pushes and deletion blocked; rules apply to administrators |
-| Merge freshness | Pull-request CI checks out GitHub's prospective merge result. Requiring the branch to be current remains a branch-protection setting to verify after the workflow has run |
-| Required check | `.github/workflows/ci.yml` defines the stable pull-request aggregate `CI / required`, backed by `CI / backend`, `CI / ui`, `CI / ui-server`, and `CI / migrations`. It also exposes `Branch / required` for diagnostic `codex/**` pushes. Do not make `CI / required` mandatory until GitHub has observed a successful real run |
-| Branch cleanup | Repository auto-delete is currently off. Enable it before routine CI pull requests begin, then automatically delete ordinary merged topic branches; do not delete `origin/dev-1`, `origin/release-1`, or local `migration/omni-ha-prep` until their unique commits are audited |
+| `master` protection | Pull request required; the GitHub Actions app-bound `CI / required` check is strictly required; zero approvals while there is only one collaborator; force pushes and deletion blocked; rules apply to administrators |
+| Merge freshness | Pull-request CI checks out GitHub's prospective merge result, and strict required-check protection requires the branch to be current before merge |
+| Required check | `.github/workflows/ci.yml` defines the stable pull-request aggregate `CI / required`, backed by `CI / backend`, `CI / ui`, `CI / ui-server`, and `CI / migrations`. Hosted PR run `34901193737` passed and the app-bound aggregate is required on `master`. The workflow also exposes `Branch / required` for diagnostic `codex/**` pushes |
+| Branch cleanup | Repository auto-delete after merge is enabled for ordinary topic branches; do not delete `origin/dev-1`, `origin/release-1`, or local `migration/omni-ha-prep` until their unique commits are audited |
 | Production environment | `production`, restricted to exact branch `master`, required reviewer configured, administrator bypass disabled |
 | Deployment mode | Repository Actions variable `PRODUCTION_DEPLOY_MODE=disabled`; missing or unknown values also mean disabled |
 | Workflow permissions | Default token is read-only; Actions cannot approve pull requests; actions must be pinned to full commit SHAs |
@@ -55,7 +55,7 @@ There are exactly three independently installed npm projects:
 
 There is no root npm workspace and no root `package.json`. The former empty root `package-lock.json` is not an install input and is removed as part of the reproducibility change. CI must run `npm ci` separately in all three package directories and cache against the matching package-local lockfile.
 
-The current branch implements strict UI artifact validation, the disposable-PostgreSQL migration gate, compiled-model schema probing, pull-request CI, and the trusted `master` release workflow. Backend validation currently consists of TypeScript checking, Jest tests, compilation, and compiled-monitoring-model verification; it does not claim a separate lint gate. On 2026-09-14 the disposable database gate passed locally from empty state with all 189 migrations, a zero-change second run, 165 public tables, and 159/159 compiled models. Do not mark the reserved aggregate check as required until GitHub has observed it from a successful real workflow run.
+The current branch implements strict UI artifact validation, the disposable-PostgreSQL migration gate, compiled-model schema probing, pull-request CI, and the trusted `master` release workflow. Backend validation currently consists of TypeScript checking, Jest tests, compilation, and compiled-monitoring-model verification; it does not claim a separate lint gate. On 2026-09-14 the disposable database gate passed locally from empty state with all 189 migrations, a zero-change second run, 165 public tables, and 159/159 compiled models. Hosted PR run `34901193737` then succeeded on 2026-09-14 UTC (2026-09-15 Europe/Warsaw), with backend, UI, UI-server, migrations, and `CI / required` all green. Branch push run `34901192521` was also green, with migrations intentionally skipped by design.
 
 During the legacy transition, `ui/build` remains tracked and manual UI releases still follow `AGENTS.md`: build locally, commit the exact generated UI artifact, and fast-forward production to that commit. Backend `dist` is never committed. After the artifact deployment and rollback drill succeed, remove `ui/build` from Git in the dedicated cutover cleanup.
 
@@ -71,6 +71,8 @@ During the legacy transition, `ui/build` remains tracked and manual UI releases 
 - Backend and UI build trees pass the same recursive release preflight before their one-day handoff artifacts are uploaded and again after download. The packaging job removes checkout build output, downloads only outputs created by that same workflow run, validates them again, runs the packager tests, and emits one immutable `<release-id>.tar.gz` plus detached `.sha256` file. Packaging and verification reject links, special files, credential-like paths, unexpected runtime content, non-canonical manifests/archives, limit violations, and attempts to replace an existing release name.
 
 All referenced GitHub Actions are pinned to full commit SHAs and workflow token permissions are `contents: read`. Neither workflow deploys, reads `PRODUCTION_DEPLOY_MODE`, references the protected `production` environment, or connects to the VPS. `PRODUCTION_DEPLOY_MODE=disabled` therefore remains an additional fail-closed repository setting for the future deployment workflow, not a claim that deployment code already exists. The manifest's production-candidate flag is self-contained build metadata, not deployment authorization; a future unprivileged deploy preflight must independently verify the successful GitHub run and immutable artifact identity before production credentials are exposed.
+
+The first trusted `master` release run remains pending because the pull request is still draft and unmerged. No deployment workflow is active, no production action has occurred, and `PRODUCTION_DEPLOY_MODE` remains `disabled`.
 
 ### Release identity and runtime environment
 

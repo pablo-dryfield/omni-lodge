@@ -1,6 +1,6 @@
 # OmniLodge GitHub Actions Release Roadmap
 
-Status: Phase 1 and the Phase 2 CI/release implementation are present on the current pull-request branch. Phase 0 root-only verification remains incomplete, the workflows still require their first trusted GitHub runs, and no production deployment workflow is active.
+Status: Phase 1 and the Phase 2 CI/release implementation are present on the current draft pull-request branch. Hosted pull-request and branch CI are green, while Phase 0 root-only verification and the first trusted `master` release run remain pending. No production deployment workflow is active, and `PRODUCTION_DEPLOY_MODE=disabled` remains set.
 
 Baseline when this plan was written: `080fa5db5e568c7f005f60c7b8aa39eaf8272c1d`
 
@@ -48,16 +48,16 @@ The status labels in this document mean `[Current]`, `[Partial]`, `[Planned]`, `
 
 | Area | Repository today | Target | Status |
 | --- | --- | --- | --- |
-| GitHub Actions | Bootstrap controls plus SHA-pinned CI and trusted `master` release workflows are implemented. They use read-only token permissions, contain no deployment job, and still require their first real runs. `PRODUCTION_DEPLOY_MODE=disabled` remains set. | PR validation, trusted `master` release, deploy, and rollback workflows. | `[Partial]` |
+| GitHub Actions | Bootstrap controls plus SHA-pinned CI and trusted `master` release workflows are implemented. Hosted PR run `34901193737` passed; branch push run `34901192521` also passed with migrations intentionally skipped. The workflows use read-only token permissions and contain no deployment job. The first trusted `master` release run remains pending because the pull request is draft and unmerged, and `PRODUCTION_DEPLOY_MODE=disabled` remains set. | PR validation, trusted `master` release, deploy, and rollback workflows. | `[Partial]` |
 | Repository layout | `be`, `ui`, and `ui-server` are independent packages with separate lockfiles; the unused empty root lockfile has been removed. | Install, cache, validate, and package each application independently. | `[Current]` |
 | Toolchain | Node 22.23.2 and npm 10.9.8 are selected and pinned in `.nvmrc` and all three package manifests. | Use that exact pair in local development, CI, release manifests, and production. | `[Current]` |
-| Source workflow | `master` requires pull requests and blocks force pushes/deletion, and short-lived task branches are in use. The workflow defines `CI / required`, but it must run successfully once before branch protection can require it. Branch auto-delete is off, and legacy branches remain pending audit. | Isolated short-lived branches, required merge-result checks, human merge, and branch cleanup. | `[Partial]` |
+| Source workflow | `master` requires pull requests, strictly requires the GitHub Actions app-bound `CI / required` check, and blocks force pushes/deletion. Short-lived task branches are in use and repository auto-delete after merge is enabled; legacy branches remain pending audit. | Isolated short-lived branches, required merge-result checks, human merge, and branch cleanup. | `[Partial]` |
 | Runtime contract | `docs/production-runtime-contract.md` records the non-secret package, runtime, repository, release, and smoke-test contract; root-only PM2/storage/migration/backup facts remain explicitly unverified. | Reviewed and fully verified production/runtime contract. | `[Partial]` |
 | Backend | Check, test, build, and runtime-only start/migrate/access-sync scripts exist and compile-on-install is removed. CI and release jobs run check/tests/build; legacy production aliases still compile for fallback, and no separate backend lint command exists. | Runtime-only artifact activation with complete CI coverage. | `[Partial]` |
 | UI | Typecheck, lint, tests, and build scripts exist; generated `ui/build` files remain tracked for the legacy deployment. Actions now rebuild from a clean directory and validate release metadata/assets/source maps. | Build once in Actions and ship only in the verified release artifact after cutover. | `[Partial]` |
 | UI server | Build/TLS paths are configurable, startup performs strict release-aware artifact/TLS preflight, `/healthz` reports release/artifact status, and Actions run tests plus syntax checks. Legacy production still uses checkout-relative defaults. | Explicit release paths with server-owned TLS and deployment health gating. | `[Partial]` |
 | Health checks | The legacy `/api/health` remains shallow; `/api/health/live` and `/api/health/ready` are implemented with database, required-config, and release checks. Migration-state readiness and deployment integration remain pending. | Separate liveness and DB/config/migration/release-aware readiness checks. | `[Partial]` |
-| Database validation | An idempotent historical baseline and explicit legacy schema bridges now support pre-Umzug empty databases without modifying production-owned data. The complete gate passed locally against disposable PostgreSQL 16: 189 migrations on the first run, zero on the second, 165 public tables verified, and all 159 compiled Sequelize models queried. Its first Actions execution remains pending. | Keep this gate required before any deploy can become eligible. | `[Partial]` |
+| Database validation | An idempotent historical baseline and explicit legacy schema bridges now support pre-Umzug empty databases without modifying production-owned data. The complete gate passed locally against disposable PostgreSQL 16 and passed in hosted PR run `34901193737`; the hosted backend, UI, UI-server, migration, and aggregate `CI / required` jobs were all green. | Keep this gate required before any deploy can become eligible. | `[Partial]` |
 | TLS | The Cloudflare Origin CA key and certificate are read from tracked source paths. | Rotated, server-owned TLS material outside Git and artifacts. | `[Blocked]` prerequisite |
 | Deployment | Production still uses the checkout/PM2 and legacy pull/build controls; a key-authenticated restricted deployment account and protected GitHub environment exist, but no deploy wrapper, release directories, deployment secrets, deploy workflow, or rollback workflow is installed. The current Actions workflows cannot contact production. | Verified release directories, atomic pointers, serialized activation, and rollback. | `[Partial]` |
 | Staging | No separate staging environment is established in this roadmap. | Optional promotion of the same `master` artifact to a separate environment. | `[Optional/Future]` |
@@ -528,7 +528,7 @@ Exit condition: local tests pass and starting an already-built backend performs 
 
 ### Phase 2: CI without deployment
 
-Current status: **substantially implemented and independently reviewed on the current pull-request branch; pending its first successful GitHub CI and trusted `master` release runs**. No Phase 2 job contacts production.
+Current status: **substantially implemented and independently reviewed on the current draft pull-request branch; hosted PR and branch CI passed, while the first trusted `master` release run remains pending until merge**. No Phase 2 job contacts production.
 
 - Add parallel backend, UI, and UI-server jobs.
 - Add dependency caching keyed by each lockfile.
@@ -549,12 +549,14 @@ Implemented results:
 - The earliest migration reconstructs the historical pre-Umzug schema on an empty database, creates only missing tables on an existing database, and has an intentionally non-destructive no-op `down`.
 - Explicit, idempotent bridges now own profile fields, report preview ordering, and legacy physical timestamp names that production previously acquired through Sequelize sync; their rollback paths preserve pre-existing data.
 - The complete PostgreSQL gate passed locally from empty state (189 migrations, zero second-run changes, 165 public tables, and 159/159 compiled models) before the first GitHub run.
+- Hosted pull-request run `34901193737` succeeded on 2026-09-14 UTC (2026-09-15 Europe/Warsaw), with backend, UI, UI-server, migrations, and `CI / required` all green. Hosted branch push run `34901192521` was also green, with migrations intentionally skipped by the branch workflow.
+- `master` now strictly requires the GitHub Actions app-bound `CI / required` check, and repository branch auto-delete after merge is enabled.
 - Backend and UI producer trees pass the packager's recursive preflight before upload and again after download. The release packager uses an explicit runtime-file contract, rejects special/escaping or credential-like content, enforces file/count/archive limits, requires canonical manifest/archive bytes, publishes without overwriting an existing release, records file hashes and workflow provenance, emits a detached archive checksum, and distinguishes a canonical `master` release candidate from non-production inputs.
 - The release workflow has no `workflow_dispatch`, production environment, deployment secret, SSH connection, host mutation, or automatic-deployment step. Those remain Phase 3 work.
 
 The manifest's candidate flag is not deployment authorization. Phase 3 must independently obtain the successful GitHub run and immutable artifact identity, pass that external evidence to the strict verifier, and complete any security-review findings before credentials or host access are introduced.
 
-Exit condition: multiple real runs from the same source produce an equivalent release payload apart from declared metadata, branch artifacts cannot pass the production eligibility verifier, the fresh-database gate succeeds, and no production secret is requested by build jobs. This condition is not met until the workflows run successfully in GitHub.
+Exit condition: multiple real runs from the same source produce an equivalent release payload apart from declared metadata, branch artifacts cannot pass the production eligibility verifier, the fresh-database gate succeeds, and no production secret is requested by build jobs. Pull-request and branch CI have run successfully; the trusted `master` release run remains pending because the pull request is draft and unmerged.
 
 ### Phase 3: Production host preparation
 
