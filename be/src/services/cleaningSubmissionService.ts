@@ -15,6 +15,7 @@ import ShiftRole from '../models/ShiftRole.js';
 import ShiftType from '../models/ShiftType.js';
 import User from '../models/User.js';
 import UserType from '../models/UserType.js';
+import VolunteerShiftAttendance from '../models/VolunteerShiftAttendance.js';
 import logger from '../utils/logger.js';
 import { prepareTaskCompletionPayrollMutation } from './taskCompletionPayrollService.js';
 import { normalizeCleaningPhoto } from './cleaningPhotoValidationService.js';
@@ -37,7 +38,9 @@ const assertActor = (actor: CleaningActor) => { if (!positiveId(actor.actorId)) 
 const today = () => dayjs().tz(CLEANING_TIMEZONE).format('YYYY-MM-DD');
 const fullName = (user: Pick<User, 'id' | 'firstName' | 'lastName'> | null | undefined) =>
   `${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim() || `Staff #${user?.id ?? ''}`;
-const canonicalSlots = (slots: CleaningRequiredSlot[]) => JSON.stringify([...slots].sort((a, b) => a.key.localeCompare(b.key)));
+const canonicalSlots = (slots: CleaningRequiredSlot[]) => JSON.stringify([...slots]
+  .map((slot) => ({ key: String(slot?.key ?? ''), label: String(slot?.label ?? ''), ruleKey: String(slot?.ruleKey ?? '') }))
+  .sort((a, b) => a.key.localeCompare(b.key) || a.ruleKey.localeCompare(b.ruleKey) || a.label.localeCompare(b.label)));
 
 export const isCleaningTaskCompletionManaged = (scheduleConfig: unknown, meta: unknown): boolean =>
   cleaningPhotoWorkflowEnabled(scheduleConfig) || objectValue(objectValue(meta)[CLEANING_WORKFLOW_META_KEY]).managed === true;
@@ -75,6 +78,26 @@ const matchesSubmissionIdentity = (submission: CleaningSubmission, assignment: R
     && snapshot.date === taskDate && assignment.shiftInstance?.date === snapshot.date
     && assignment.shiftInstance?.shiftTypeId === snapshot.shiftTypeId;
 };
+/**
+ * Auto-assignment may replace a ShiftAssignment row without changing the work itself. Reusing evidence is safe only
+ * when every durable part of the saved assignment still identifies one exact published roster row. Assignment IDs
+ * alone are deliberately excluded here because they are the value being repaired.
+ */
+const matchesAssignmentIdChurnIdentity = (submission: CleaningSubmission, assignment: RosterAssignment,
+  taskDate: string, sources: CleaningPhotoSlotSource[]): boolean => {
+  const snapshot = objectValue(submission.scheduleSnapshot);
+  const shift = assignment.shiftInstance;
+  const snapshotAssignmentId = snapshot.assignmentId;
+  if (!positiveId(snapshotAssignmentId) || snapshotAssignmentId === assignment.id || !shift) return false;
+  if (submission.shiftAssignmentId != null && submission.shiftAssignmentId !== snapshotAssignmentId) return false;
+  return submission.userId === assignment.userId
+    && snapshot.shiftInstanceId === assignment.shiftInstanceId
+    && snapshot.date === taskDate && shift.date === taskDate
+    && snapshot.shiftTypeId === shift.shiftTypeId
+    && String(snapshot.timeStart ?? '') === String(shift.timeStart ?? '')
+    && String(snapshot.timeEnd ?? '') === String(shift.timeEnd ?? '')
+    && canonicalSlots(submission.requiredSlots) === canonicalSlots(slotsFor(assignment, sources));
+};
 const reviewerIds = (assignment: RosterAssignment, roster: RosterAssignment[]): number[] => [...new Set(roster.filter((candidate) =>
   candidate.userId !== assignment.userId && candidate.assignee?.status === true && candidate.assignee?.approved === true
   && ['manager', 'assistantmanager'].includes(normalizeRole(candidate.shiftRole?.slug ?? candidate.roleInShift))
@@ -110,6 +133,48 @@ export const ensureCleaningSubmissionsForTaskLog = async (taskLogId: number, tra
   managers = await loadRoster(log.taskDate, undefined, transaction);
   if (objectValue(objectValue(log.meta)[CLEANING_WORKFLOW_META_KEY]).managed !== true) {
     await log.update({ meta: { ...log.meta, [CLEANING_WORKFLOW_META_KEY]: { version: 1, managed: true, scheduleConfig: template.scheduleConfig } } }, { transaction });
+  }
+  const unmatchedSubmissions = existing.filter((submission) =>
+    !roster.some((assignment) => matchesSubmissionIdentity(submission, assignment, log.taskDate)));
+  const unmatchedAssignments = roster.filter((assignment) =>
+    !existing.some((submission) => matchesSubmissionIdentity(submission, assignment, log.taskDate)));
+  for (const assignment of unmatchedAssignments) {
+    const candidates = unmatchedSubmissions.filter((submission) =>
+      matchesAssignmentIdChurnIdentity(submission, assignment, log.taskDate, sources));
+    if (candidates.length !== 1) continue;
+    const candidate = candidates[0];
+    // Require a one-to-one match in both directions. Ambiguous historical rows are never merged or transferred.
+    if (unmatchedAssignments.filter((row) =>
+      matchesAssignmentIdChurnIdentity(candidate, row, log.taskDate, sources)).length !== 1) continue;
+    // A stale submission can still hold the replacement ID after an in-place owner change. Let the normal
+    // reassignment path detach it first instead of risking a unique-key conflict or transferring evidence.
+    if (existing.some((submission) => submission.id !== candidate.id
+      && submission.shiftAssignmentId === assignment.id)) continue;
+    const previousSnapshot = objectValue(candidate.scheduleSnapshot);
+    const previousAssignmentId = Number(previousSnapshot.assignmentId);
+    const priorHistory = Array.isArray(previousSnapshot.assignmentRebindHistory)
+      ? previousSnapshot.assignmentRebindHistory : [];
+    const reboundAt = new Date().toISOString();
+    const scheduleSnapshot = { ...previousSnapshot,
+      originalAssignmentId: positiveId(previousSnapshot.originalAssignmentId)
+        ? previousSnapshot.originalAssignmentId : previousAssignmentId,
+      assignmentId: assignment.id,
+      assignmentRebindHistory: [...priorHistory, {
+        fromAssignmentId: previousAssignmentId, toAssignmentId: assignment.id, reboundAt,
+        reason: 'published_roster_assignment_id_churn',
+      }],
+    };
+    const previousLiveAssignmentId = candidate.shiftAssignmentId;
+    await candidate.update({ shiftAssignmentId: assignment.id, scheduleSnapshot,
+      revision: candidate.revision + 1 }, { transaction });
+    await AuditLog.create({ actorId: null, action: 'cleaning.assignment_rebound', entity: 'am_task_log', entityId: String(log.id),
+      metaJson: { submissionId: candidate.id, userId: candidate.userId, revision: candidate.revision,
+        originalAssignmentId: scheduleSnapshot.originalAssignmentId, previousAssignmentId,
+        previousLiveAssignmentId, assignmentId: assignment.id, shiftInstanceId: assignment.shiftInstanceId,
+        shiftTypeId: assignment.shiftInstance!.shiftTypeId, taskDate: log.taskDate,
+        timeStart: assignment.shiftInstance!.timeStart, timeEnd: assignment.shiftInstance!.timeEnd,
+        requiredSlotKeys: candidate.requiredSlots.map((slot) => slot.key).sort(),
+        source: 'published_roster_reconciliation' } }, { transaction });
   }
   for (const prior of existing) {
     const stillAssigned = roster.some((row) => matchesSubmissionIdentity(prior, row, log.taskDate));
@@ -187,7 +252,8 @@ const loadContext = async (submissionId: number, actor: CleaningActor, transacti
   const roster = deduplicateCleaningRoster(await loadRoster(log.taskDate, [...new Set(sources.flatMap((source) => source.shiftTypeIds))], transaction));
   let assignment = roster.find((row) => matchesSubmissionIdentity(submission, row, log.taskDate)) ?? null;
   let reviewers = assignment ? reviewerIds(assignment, await loadRoster(log.taskDate, undefined, transaction)) : [];
-  if (actor.actorId !== submission.userId && !reviewers.includes(actor.actorId) && !isCleaningGlobalManager(actor)) {
+  const assignedTaskManager = normalizeRole(actor.roleSlug) === 'assistantmanager' && log.userId === actor.actorId;
+  if (actor.actorId !== submission.userId && !reviewers.includes(actor.actorId) && !isCleaningGlobalManager(actor) && !assignedTaskManager) {
     throw new HttpError(404, 'Cleaning submission was not found.');
   }
   if (requireLive) {
@@ -255,6 +321,32 @@ const serialize = async (context: Context, transaction?: Transaction) => {
 };
 
 export const getCleaningSubmission = async (submissionId: number, actor: CleaningActor) => ({ submission: await serialize(await loadContext(submissionId, actor)) });
+
+/** Read-only audit history for the manager-owned cleaning task, including superseded rejected photo versions. */
+export const getCleaningTaskHistory = async (taskLogId: number, actor: CleaningActor) => {
+  assertActor(actor);
+  if (!positiveId(taskLogId)) throw new HttpError(400, 'A valid cleaning task is required.');
+  const log = await AssistantManagerTaskLog.findByPk(taskLogId);
+  if (!log) throw new HttpError(404, 'Cleaning task was not found.');
+  const assignedTaskManager = normalizeRole(actor.roleSlug) === 'assistantmanager' && log.userId === actor.actorId;
+  if (!isCleaningGlobalManager(actor) && !assignedTaskManager) throw new HttpError(404, 'Cleaning task was not found.');
+  const template = await AssistantManagerTaskTemplate.findByPk(log.templateId);
+  if (!template || !isCleaningTaskCompletionManaged(template.scheduleConfig, log.meta)) {
+    throw new HttpError(404, 'Cleaning task was not found.');
+  }
+  const sources = getSources(log, template);
+  const roster = deduplicateCleaningRoster(await loadRoster(log.taskDate, [...new Set(sources.flatMap((source) => source.shiftTypeIds))]));
+  const managerRoster = await loadRoster(log.taskDate);
+  const submissions = await CleaningSubmission.findAll({ where: { taskLogId }, order: [['id', 'ASC']] });
+  const history: Awaited<ReturnType<typeof serialize>>[] = [];
+  for (const submission of submissions) {
+    const assignment = roster.find((row) => matchesSubmissionIdentity(submission, row, log.taskDate)) ?? null;
+    const photos = await CleaningPhotoVersion.findAll({ where: { submissionId: submission.id }, order: [['version', 'DESC'], ['id', 'DESC']] });
+    history.push(await serialize({ submission, log, template, assignment,
+      reviewers: assignment ? reviewerIds(assignment, managerRoster) : [], actor, photos }));
+  }
+  return { taskLogId, submissions: history };
+};
 
 export const listMyCleaningSubmissions = async (actor: CleaningActor) => {
   assertActor(actor);
@@ -363,14 +455,16 @@ const reconcileCleaningReviewRouting = async (context: Context, transaction: Tra
   const previousReviewers = normalizedIds(context.submission.reviewerUserIds);
   const reviewers = normalizedIds(context.reviewers);
   const active = actions.filter((action) => action.status);
+  const activeRevision = Number(objectValue(objectValue(active[0]?.payload).cleaningSubmission).revision);
   const routingChanged = JSON.stringify(previousReviewers) !== JSON.stringify(reviewers)
     || (targets.length === 0 ? active.length > 0 : active.length !== 1
       || JSON.stringify(normalizedIds(active[0]?.targetUserIds)) !== JSON.stringify(targets));
-  if (!routingChanged) return;
-  await context.submission.update({ reviewerUserIds: reviewers, revision: context.submission.revision + 1,
+  const actionRevisionChanged = active.length === 1 && activeRevision !== context.submission.revision;
+  if (!routingChanged && !actionRevisionChanged) return;
+  if (routingChanged) await context.submission.update({ reviewerUserIds: reviewers, revision: context.submission.revision + 1,
     status: reviewers.length ? 'awaiting_review' : 'escalated' }, { transaction });
   await syncReviewAction(context, transaction, { actions, targets, actorId: null });
-  await AuditLog.create({ actorId: null, action: 'cleaning.review_rerouted', entity: 'am_task_log', entityId: String(context.log.id),
+  if (routingChanged) await AuditLog.create({ actorId: null, action: 'cleaning.review_rerouted', entity: 'am_task_log', entityId: String(context.log.id),
     metaJson: { submissionId: context.submission.id, revision: context.submission.revision,
       previousReviewerUserIds: previousReviewers, reviewerUserIds: reviewers, targetUserIds: targets,
       source: 'published_roster_reconciliation' } }, { transaction });
@@ -586,4 +680,133 @@ export const assertCleaningTaskLogMutable = async (logId: number, transaction?: 
   if (await CleaningSubmission.findOne({ where: { taskLogId: logId }, attributes: ['id'], transaction })) {
     throw new HttpError(409, 'This task has cleaning submissions. Its date, assignee and history cannot be changed.');
   }
+};
+
+export type CleaningTaskDeletionPreparation = {
+  managed: boolean;
+  images: Array<{ storagePath: string | null; driveFileId: string | null }>;
+};
+
+/**
+ * Removes database records owned by an explicitly deleted cleaning task while the caller holds the task-log lock.
+ * Drive files are only returned here: the caller deletes them after the database transaction commits, matching the
+ * ordinary task-evidence deletion flow. Historical AuditLog rows intentionally remain addressable by task-log id.
+ */
+export const prepareCleaningTaskLogDeletion = async (params: {
+  log: AssistantManagerTaskLog;
+  actorId: number | null;
+  transaction: Transaction;
+}): Promise<CleaningTaskDeletionPreparation> => {
+  const { log, actorId, transaction } = params;
+  const template = await AssistantManagerTaskTemplate.findByPk(log.templateId, {
+    attributes: ['id', 'name', 'scheduleConfig'],
+    transaction,
+  });
+  const submissions = await CleaningSubmission.findAll({
+    where: { taskLogId: log.id },
+    order: [['id', 'ASC']],
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  const managed = isCleaningTaskCompletionManaged(template?.scheduleConfig, log.meta) || submissions.length > 0;
+  if (!managed) return { managed: false, images: [] };
+
+  const submissionIds = submissions.map((submission) => submission.id);
+  const photos = submissionIds.length
+    ? await CleaningPhotoVersion.findAll({
+        where: { submissionId: { [Op.in]: submissionIds } },
+        order: [['id', 'ASC']],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      })
+    : [];
+  const attendanceRows = await VolunteerShiftAttendance.findAll({
+    where: { evidenceTaskLogId: log.id },
+    attributes: ['id', 'evidenceFileId'],
+    order: [['id', 'ASC']],
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  const attendanceEvidenceIds = new Set(attendanceRows
+    .map((attendance) => attendance.evidenceFileId)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0));
+  const attendanceAudits = attendanceEvidenceIds.size
+    ? await AuditLog.findAll({
+        where: { action: 'volunteer_attendance.checked', entity: 'am_task_log', entityId: String(log.id) },
+        attributes: ['metaJson'],
+        transaction,
+      })
+    : [];
+  const attendanceImages = attendanceAudits.flatMap((audit) => {
+    const evidence = objectValue(objectValue(audit.metaJson).evidence);
+    if (!attendanceEvidenceIds.has(String(evidence.id ?? ''))) return [];
+    const storagePath = typeof evidence.storagePath === 'string' ? evidence.storagePath : null;
+    const driveFileId = typeof evidence.driveFileId === 'string' ? evidence.driveFileId : null;
+    return storagePath || driveFileId ? [{ storagePath, driveFileId }] : [];
+  });
+
+  let requiredActionCount = 0;
+  for (const submissionId of submissionIds) {
+    requiredActionCount += await RequiredAction.destroy({
+      where: actionWhere(submissionId),
+      transaction,
+    });
+  }
+
+  const removedAuditCount = await AuditLog.destroy({
+    where: { entity: 'am_task_log', entityId: String(log.id) },
+    transaction,
+  });
+
+  await AuditLog.create({
+    actorId,
+    action: 'cleaning.task_deleted',
+    entity: 'am_task_log',
+    entityId: String(log.id),
+    metaJson: {
+      taskLogId: log.id,
+      taskName: template?.name ?? null,
+      taskDate: log.taskDate,
+      status: log.status,
+      templateId: log.templateId,
+      userId: log.userId,
+      submissionCount: submissions.length,
+      photoCount: photos.length,
+      attendanceCount: attendanceRows.length,
+      requiredActionCount,
+      removedAuditCount,
+      completedTaskCreditMayChange: log.status === 'completed',
+      submissionIds,
+      photoIds: photos.map((photo) => photo.id),
+      attendanceIds: attendanceRows.map((attendance) => attendance.id),
+      source: 'authorized_task_log_deletion',
+    },
+  }, { transaction });
+
+  if (photos.length) {
+    await CleaningPhotoVersion.destroy({
+      where: { id: { [Op.in]: photos.map((photo) => photo.id) } },
+      transaction,
+    });
+  }
+  if (submissions.length) {
+    await CleaningSubmission.destroy({
+      where: { id: { [Op.in]: submissionIds } },
+      transaction,
+    });
+  }
+  if (attendanceRows.length) {
+    await VolunteerShiftAttendance.destroy({
+      where: { id: { [Op.in]: attendanceRows.map((attendance) => attendance.id) } },
+      transaction,
+    });
+  }
+
+  return {
+    managed: true,
+    images: [
+      ...photos.map((photo) => ({ storagePath: photo.storagePath, driveFileId: photo.driveFileId })),
+      ...attendanceImages,
+    ],
+  };
 };

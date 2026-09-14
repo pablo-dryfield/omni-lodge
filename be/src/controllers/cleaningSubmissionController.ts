@@ -2,7 +2,7 @@ import type { Response } from 'express';
 import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
-import { getCleaningPhotoStream, getCleaningSubmission, listMyCleaningSubmissions, reviewCleaningSubmissionPhoto,
+import { getCleaningPhotoStream, getCleaningSubmission, getCleaningTaskHistory, listMyCleaningSubmissions, reviewCleaningSubmissionPhoto,
   uploadCleaningSubmissionPhoto, waiveCanceledCleaningTask } from '../services/cleaningSubmissionService.js';
 
 const actor = (req: AuthenticatedRequest) => {
@@ -28,6 +28,10 @@ export const getMyCleaningSubmissions = async (req: AuthenticatedRequest, res: R
 };
 export const getCleaningSubmissionDetail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try { res.json(await getCleaningSubmission(id(req.params.submissionId), actor(req))); } catch (error) { errorResponse(res, error); }
+};
+export const getCleaningTaskPhotoHistory = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try { res.json(await getCleaningTaskHistory(id(req.params.taskLogId), actor(req))); } catch (error) { errorResponse(res, error); }
 };
 export const postCleaningPhoto = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {

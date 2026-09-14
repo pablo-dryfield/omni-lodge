@@ -5,6 +5,14 @@ export type TaskDateGenerationCandidate<TShiftInfo> = {
   shiftInfo: TShiftInfo | null;
 };
 
+type ShiftTemplateAssignmentGateInstance = {
+  date?: string | Date | null;
+  shiftTemplateId?: number | null;
+  assignments?: Array<{
+    assignee?: { status?: boolean | null } | null;
+  }> | null;
+};
+
 const SCHEDULED_WORKDAY_PLACEMENT_VALUES = new Set<AssistantManagerTaskScheduledWorkdayPlacement>([
   'start',
   'middle',
@@ -55,6 +63,28 @@ export const taskDateMatchesRequiredShiftTemplates = (
     return false;
   }
   return requiredShiftTemplateIds.some((templateId) => shiftTemplateIdsOnDate.has(templateId));
+};
+
+export const buildActiveAssignedShiftTemplateIdsByDate = (
+  shiftInstances: ShiftTemplateAssignmentGateInstance[],
+): Map<string, Set<number>> => {
+  const templateIdsByDate = new Map<string, Set<number>>();
+
+  shiftInstances.forEach((instance) => {
+    const hasActiveAssignment = instance.assignments?.some(
+      (assignment) => assignment.assignee?.status === true,
+    );
+    if (!instance.date || !instance.shiftTemplateId || !hasActiveAssignment) {
+      return;
+    }
+
+    const dateKey = String(instance.date).slice(0, 10);
+    const templateIds = templateIdsByDate.get(dateKey) ?? new Set<number>();
+    templateIds.add(instance.shiftTemplateId);
+    templateIdsByDate.set(dateKey, templateIds);
+  });
+
+  return templateIdsByDate;
 };
 
 export const buildTaskDateGenerationCandidates = <TShiftInfo>({

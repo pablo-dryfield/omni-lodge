@@ -1,4 +1,5 @@
 import {
+  buildActiveAssignedShiftTemplateIdsByDate,
   buildTaskDateGenerationCandidates,
   normalizeRequiredShiftTemplateIds,
   normalizeScheduledWorkdayPlacement,
@@ -19,6 +20,38 @@ describe('assistant-manager task shift-template rules', () => {
   it('uses ANY semantics for required shift templates', () => {
     expect(taskDateMatchesRequiredShiftTemplates([4, 7], new Set([7, 9]))).toBe(true);
     expect(taskDateMatchesRequiredShiftTemplates([4, 7], new Set([8, 9]))).toBe(false);
+  });
+
+  it('does not activate a date for an empty shift instance', () => {
+    const templateIdsByDate = buildActiveAssignedShiftTemplateIdsByDate([{
+      date: '2026-09-14',
+      shiftTemplateId: 3,
+      assignments: [],
+    }]);
+
+    expect(templateIdsByDate.has('2026-09-14')).toBe(false);
+    expect(taskDateMatchesRequiredShiftTemplates([3, 4, 5], templateIdsByDate.get('2026-09-14')))
+      .toBe(false);
+  });
+
+  it('activates a date when a selected shift has at least one active assignee', () => {
+    const templateIdsByDate = buildActiveAssignedShiftTemplateIdsByDate([
+      {
+        date: '2026-09-17',
+        shiftTemplateId: 3,
+        assignments: [{ assignee: { status: false } }],
+      },
+      {
+        date: '2026-09-18',
+        shiftTemplateId: 4,
+        assignments: [{ assignee: { status: true } }],
+      },
+    ]);
+
+    expect(taskDateMatchesRequiredShiftTemplates([3, 4, 5], templateIdsByDate.get('2026-09-17')))
+      .toBe(false);
+    expect(taskDateMatchesRequiredShiftTemplates([3, 4, 5], templateIdsByDate.get('2026-09-18')))
+      .toBe(true);
   });
 });
 

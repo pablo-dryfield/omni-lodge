@@ -1,5 +1,10 @@
 import type { AssistantManagerTaskEvidenceItem } from '../../types/assistantManagerTasks/AssistantManagerTask';
-import { canManuallyManageTask, getSubjectImageEvidenceItems, isCleaningManagedTask } from './cleaningTaskPlannerState';
+import {
+  canManuallyManageTask,
+  canRequestTaskDeletion,
+  getSubjectImageEvidenceItems,
+  isCleaningManagedTask,
+} from './cleaningTaskPlannerState';
 
 describe('Cleaning planner workflow state', () => {
   it('locks generic evidence and status changes as soon as the template opts in', () => {
@@ -16,12 +21,22 @@ describe('Cleaning planner workflow state', () => {
     expect(isCleaningManagedTask({ meta: { cleaningPhotoWorkflow: { managed: 'true' } } })).toBe(false);
     expect(isCleaningManagedTask({ meta: { cleaningPhotoWorkflow: [] } })).toBe(false);
   });
-  it('hides scheduled-task editing and deletion for managed logs even from managers, preserving ordinary access', () => {
+  it('keeps generic scheduled-task editing locked for managed logs, preserving ordinary access', () => {
     expect(canManuallyManageTask(true, { meta: { cleaningPhotoWorkflow: { managed: true } } }, { scheduleConfig: {} })).toBe(false);
     expect(canManuallyManageTask(true, { meta: {} }, { scheduleConfig: { cleaningPhotoApprovalEnabled: true } })).toBe(false);
     expect(canManuallyManageTask(true, { meta: {} }, { scheduleConfig: {} })).toBe(true);
     expect(canManuallyManageTask(false, { meta: {} }, { scheduleConfig: {} })).toBe(false);
     expect(canManuallyManageTask(true, null)).toBe(false);
+  });
+  it('allows authorized managers to request deletion in every task state', () => {
+    const managed = { cleaningPhotoWorkflow: { managed: true } };
+    expect(canRequestTaskDeletion(true, { meta: managed, status: 'pending' })).toBe(true);
+    expect(canRequestTaskDeletion(true, { meta: managed, status: 'missed' })).toBe(true);
+    expect(canRequestTaskDeletion(true, { meta: managed, status: 'completed' })).toBe(true);
+    expect(canRequestTaskDeletion(true, { meta: managed, status: 'waived' })).toBe(true);
+    expect(canRequestTaskDeletion(true, { meta: {}, status: 'completed' })).toBe(true);
+    expect(canRequestTaskDeletion(false, { meta: managed, status: 'missed' })).toBe(false);
+    expect(canRequestTaskDeletion(true, null)).toBe(false);
   });
   it('renders every approved photo for the expected subject and rule, without crossing subjects or rule types', () => {
     const items: AssistantManagerTaskEvidenceItem[] = [

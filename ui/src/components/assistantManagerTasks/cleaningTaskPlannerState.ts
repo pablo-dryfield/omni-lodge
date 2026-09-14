@@ -22,6 +22,12 @@ export const canManuallyManageTask = (
   template?: Pick<AssistantManagerTaskTemplate, 'scheduleConfig'> | null,
 ): boolean => hasManagementAccess && Boolean(log) && !isCleaningManagedTask(log, template);
 
+export const canRequestTaskDeletion = (
+  hasDeleteAccess: boolean,
+  log?: Pick<AssistantManagerTaskLog, 'meta' | 'status'> | null,
+  _template?: Pick<AssistantManagerTaskTemplate, 'scheduleConfig'> | null,
+): boolean => hasDeleteAccess && Boolean(log);
+
 // A subject can have several approved slots for the same rule. Keep every photo,
 // while retaining one empty placeholder when evidence has not arrived yet.
 export const getSubjectImageEvidenceItems = (

@@ -4,6 +4,7 @@ jest.mock('../../middleware/authMiddleware.js', () => ({ __esModule: true, defau
 jest.mock('../../controllers/cleaningSubmissionController.js', () => ({
   getMyCleaningSubmissions: (_req: any, res: any) => res.json({}),
   getCleaningSubmissionDetail: (_req: any, res: any) => res.json({}),
+  getCleaningTaskPhotoHistory: (_req: any, res: any) => res.json({ taskLogId: Number(_req.params.taskLogId), submissions: [] }),
   patchCleaningPhotoReview: (_req: any, res: any) => res.json({}),
   streamCleaningPhoto: (_req: any, res: any) => res.json({}),
   postWaiveCanceledCleaningTask: (_req: any, res: any) => res.json({ status: 'waived' }),
@@ -38,5 +39,9 @@ describe('real multer cleaning photo multipart parser', () => {
   it('routes the dedicated canceled-task waiver separately from photo submission endpoints', async () => {
     const result = await request(app).post('/api/cleaningSubmissions/tasks/12/waive').send({ reason: 'Canceled', expectedUpdatedAt: '2026-09-07T10:00:00Z' });
     expect(result.status).toBe(200); expect(result.body).toEqual({ status: 'waived' });
+  });
+  it('routes task photo history before the submission-id route', async () => {
+    const result = await request(app).get('/api/cleaningSubmissions/tasks/12');
+    expect(result.status).toBe(200); expect(result.body).toEqual({ taskLogId: 12, submissions: [] });
   });
 });

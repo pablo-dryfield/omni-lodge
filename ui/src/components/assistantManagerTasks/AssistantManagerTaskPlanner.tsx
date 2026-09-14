@@ -98,7 +98,13 @@ import {
 } from '../../actions/assistantManagerTaskActions';
 import { CerebroRichTextContent } from '../cerebro/CerebroRichTextContent';
 import TaskAttendanceCheck from './TaskAttendanceCheck';
-import { canManuallyManageTask, getSubjectImageEvidenceItems, isCleaningManagedTask } from './cleaningTaskPlannerState';
+import CleaningTaskPhotoHistory from '../volunteerCleaning/CleaningTaskPhotoHistory';
+import {
+  canManuallyManageTask,
+  canRequestTaskDeletion,
+  getSubjectImageEvidenceItems,
+  isCleaningManagedTask,
+} from './cleaningTaskPlannerState';
 import {
   normalizeTemplateTimeInput,
   TASK_TIME_INPUT_FORMATS,
@@ -106,6 +112,7 @@ import {
 import { useModuleAccess } from '../../hooks/useModuleAccess';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { compressImageFile } from '../../utils/imageCompression';
+import { parseAssistantManagerTaskDeepLink } from '../../utils/assistantManagerTaskDeepLink';
 import {
   getMissingExpectedShiftImageEvidenceItems,
   getShiftEvidenceRuleKeys,
@@ -2283,7 +2290,7 @@ const SetupTemplateCard = ({
               )}
               {defaults.requiredShiftTemplateIds.length > 0 && (
                 <Badge color="grape" variant="light">
-                  Needs selected shift
+                  Needs staffed operational shift
                 </Badge>
               )}
               {defaults.timesPerWeekPerAssignedUser != null &&
@@ -2520,7 +2527,7 @@ const PlannerTaskCard = ({
               <Badge size="xs" color={STATUS_COLORS[task.status]} variant="outline">
                 {task.status}
               </Badge>
-              {canDelete && !task.cleaningManaged && onDelete && (
+              {canDelete && onDelete && (
                 <Tooltip label="Delete task">
                   <ActionIcon
                     size="sm"
@@ -2663,7 +2670,7 @@ const MobilePlannerDayCard = ({
                       <Badge color={STATUS_COLORS[task.status]} variant="light">
                         {task.status}
                       </Badge>
-                      {canDeleteLogs && !task.cleaningManaged && onDeleteLog && (
+                      {canDeleteLogs && onDeleteLog && (
                         <ActionIcon
                           size="sm"
                           variant="light"
@@ -2830,7 +2837,7 @@ const DesktopOwnerGroupedDayColumn = ({
                                 >
                                   {task.status}
                                 </Badge>
-                                {canDeleteLogs && !task.cleaningManaged && onDeleteLog && (
+                                {canDeleteLogs && onDeleteLog && (
                                   <ActionIcon
                                     size="sm"
                                     variant="light"
@@ -3031,7 +3038,7 @@ const DayTaskBucketsBoard = ({
                           <Badge size="xs" color={STATUS_COLORS[log.status]} variant="light">
                             {log.status}
                           </Badge>
-                          {canManuallyManageTask(Boolean(canDeleteLogs), log, template) && onDeleteLog && (
+                          {canRequestTaskDeletion(Boolean(canDeleteLogs), log, template) && onDeleteLog && (
                             <ActionIcon
                               size="sm"
                               variant="light"
@@ -3577,11 +3584,10 @@ const AssistantManagerTaskPlanner = () => {
     requestedSectionParam === 'setup' || requestedSectionParam === 'dashboard'
       ? requestedSectionParam
       : null;
-  const requestedTaskIdParam = searchParams.get('task');
-  const requestedTaskId =
-    requestedTaskIdParam && Number.isInteger(Number(requestedTaskIdParam)) && Number(requestedTaskIdParam) > 0
-      ? Number(requestedTaskIdParam)
-      : null;
+  const {
+    taskId: requestedTaskId,
+    taskDate: requestedTaskDate,
+  } = parseAssistantManagerTaskDeepLink(searchParams);
 
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templateFormState, setTemplateFormState] =
@@ -3711,7 +3717,7 @@ const AssistantManagerTaskPlanner = () => {
     });
 
     summary.push({
-      label: 'Operational shift gate',
+      label: 'Staffed operational shift',
       value: templateFormState.requiredShiftTemplateIds.length > 0
         ? `${templateFormState.requiredShiftTemplateIds.length} selected`
         : 'None',
@@ -3857,12 +3863,17 @@ const AssistantManagerTaskPlanner = () => {
     return [effectiveDay.toDate(), effectiveDay.toDate()];
   }, [plannerStartDate]);
   const [logDateWindowMode, setLogDateWindowMode] =
-    useState<PlannerDateWindowMode>(canViewAllTasks ? 'week' : 'day');
+    useState<PlannerDateWindowMode>(requestedTaskDate ? 'day' : canViewAllTasks ? 'week' : 'day');
   const [logDateRange, setLogDateRange] = useState<[Date | null, Date | null]>(() => {
+    if (requestedTaskDate) {
+      const taskDay = dayjs(requestedTaskDate).startOf('day').toDate();
+      return [taskDay, taskDay];
+    }
     const [start, end] = canViewAllTasks ? getThisWeekRange() : getTodayRange();
     return [start, end];
   });
   const plannerRoleDefaultsInitializedRef = useRef(normalizedSessionRole != null);
+  const handledRequestedTaskWindowRef = useRef<string | null>(null);
   const [plannerRoleDefaultsReady, setPlannerRoleDefaultsReady] = useState(
     normalizedSessionRole != null,
   );
@@ -3899,6 +3910,7 @@ const AssistantManagerTaskPlanner = () => {
   const [selectedLog, setSelectedLog] = useState<AssistantManagerTaskLog | null>(null);
   const [logDetailModalOpen, setLogDetailModalOpen] = useState(false);
   const [logDeletePendingId, setLogDeletePendingId] = useState<number | null>(null);
+  const [logDeleteError, setLogDeleteError] = useState<string | null>(null);
   const [logDetailFormState, setLogDetailFormState] =
     useState<LogDetailFormState>(defaultLogDetailFormState);
   const [logDetailSubmitting, setLogDetailSubmitting] = useState(false);
@@ -4457,13 +4469,24 @@ const AssistantManagerTaskPlanner = () => {
     }
 
     plannerRoleDefaultsInitializedRef.current = true;
-    const nextMode: PlannerDateWindowMode = canViewAllTasks ? 'week' : 'day';
-    const [nextStart, nextEnd] = canViewAllTasks ? getThisWeekRange() : getTodayRange();
+    const nextMode: PlannerDateWindowMode = requestedTaskDate
+      ? 'day'
+      : canViewAllTasks
+        ? 'week'
+        : 'day';
+    const [nextStart, nextEnd] = requestedTaskDate
+      ? (() => {
+          const taskDay = dayjs(requestedTaskDate).startOf('day').toDate();
+          return [taskDay, taskDay] as [Date, Date];
+        })()
+      : canViewAllTasks
+        ? getThisWeekRange()
+        : getTodayRange();
     setLogDateWindowMode(nextMode);
     setLogDateRange([nextStart, nextEnd]);
     setLogScope(canViewAllTasks ? 'all' : 'self');
     setPlannerRoleDefaultsReady(true);
-  }, [canViewAllTasks, getThisWeekRange, getTodayRange, normalizedSessionRole]);
+  }, [canViewAllTasks, getThisWeekRange, getTodayRange, normalizedSessionRole, requestedTaskDate]);
 
   useEffect(() => {
     if (
@@ -4597,10 +4620,33 @@ const AssistantManagerTaskPlanner = () => {
       return;
     }
     if (logDateWindowMode === 'day') {
-      const [start, end] = getTodayRange();
+      const [start, end] = requestedTaskDate
+        ? (() => {
+            const taskDay = dayjs(requestedTaskDate).startOf('day').toDate();
+            return [taskDay, taskDay] as [Date, Date];
+          })()
+        : getTodayRange();
       setLogDateRange([start, end]);
     }
-  }, [getThisWeekRange, getTodayRange, logDateWindowMode]);
+  }, [getThisWeekRange, getTodayRange, logDateWindowMode, requestedTaskDate]);
+
+  useEffect(() => {
+    const requestKey = requestedTaskId != null && requestedTaskDate
+      ? `${requestedTaskId}:${requestedTaskDate}`
+      : null;
+    if (!requestKey) {
+      handledRequestedTaskWindowRef.current = null;
+      return;
+    }
+    if (handledRequestedTaskWindowRef.current === requestKey) {
+      return;
+    }
+
+    handledRequestedTaskWindowRef.current = requestKey;
+    const taskDay = dayjs(requestedTaskDate).startOf('day').toDate();
+    setLogDateWindowMode('day');
+    setLogDateRange([taskDay, taskDay]);
+  }, [requestedTaskDate, requestedTaskId]);
 
   useEffect(() => {
     if (!notificationsSupported) {
@@ -5094,6 +5140,7 @@ const AssistantManagerTaskPlanner = () => {
             const nextParams = new URLSearchParams(window.location.search);
             nextParams.set('section', 'dashboard');
             nextParams.set('task', String(log.id));
+            nextParams.set('taskDate', log.taskDate);
             setSearchParams(nextParams, { replace: false });
           };
           markTaskNotificationEventShown(eventKey);
@@ -6430,6 +6477,7 @@ const AssistantManagerTaskPlanner = () => {
   const handleLogSelect = useCallback((log: AssistantManagerTaskLog) => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set('task', String(log.id));
+    nextParams.set('taskDate', log.taskDate);
     setSearchParams(nextParams, { replace: false });
   }, [searchParams, setSearchParams]);
 
@@ -6650,6 +6698,7 @@ const AssistantManagerTaskPlanner = () => {
 
     const nextParams = new URLSearchParams(searchParams);
     nextParams.delete('task');
+    nextParams.delete('taskDate');
     setSearchParams(nextParams, { replace: false });
     setLogDetailModalOpen(false);
     setSelectedLog(null);
@@ -6682,7 +6731,8 @@ const AssistantManagerTaskPlanner = () => {
 
   const handleTaskLogDelete = useCallback(
     async (log: AssistantManagerTaskLog) => {
-      if (!canManuallyManageTask(canDeleteTaskLogs, log, templateMap.get(log.templateId))) {
+      const template = templateMap.get(log.templateId);
+      if (!canRequestTaskDeletion(canDeleteTaskLogs, log, template)) {
         return;
       }
 
@@ -6690,15 +6740,17 @@ const AssistantManagerTaskPlanner = () => {
       const taskDateLabel = dayjs(log.taskDate).isValid()
         ? dayjs(log.taskDate).format('MMM D, YYYY')
         : String(log.taskDate);
-      const confirmed = window.confirm(
-        `Delete "${taskName}" on ${taskDateLabel}? This also removes all saved evidence files/images from storage.`,
-      );
+      const cleaningManaged = isCleaningManagedTask(log, template);
+      const confirmed = window.confirm(cleaningManaged
+        ? `Permanently delete "${taskName}" on ${taskDateLabel}? This also deletes all cleaning photos, attendance, submissions, and saved evidence files, and may change progress or task-credit calculations. This cannot be undone.`
+        : `Delete "${taskName}" on ${taskDateLabel}? This also removes all saved evidence files/images from storage.`);
       if (!confirmed) {
         return;
       }
 
       setLogDeletePendingId(log.id);
       setLogDetailError(null);
+      setLogDeleteError(null);
 
       try {
         await dispatch(deleteAmTaskLog(log.id)).unwrap();
@@ -6707,7 +6759,11 @@ const AssistantManagerTaskPlanner = () => {
           closeLogDetailModal();
         }
       } catch (error) {
-        setLogDetailError(getErrorMessage(error, 'Failed to delete task'));
+        const message = getErrorMessage(error, 'Failed to delete task');
+        setLogDeleteError(message);
+        if (selectedLog?.id === log.id) {
+          setLogDetailError(message);
+        }
       } finally {
         setLogDeletePendingId((prev) => (prev === log.id ? null : prev));
       }
@@ -7275,6 +7331,7 @@ const AssistantManagerTaskPlanner = () => {
       await refreshLogs();
       const nextParams = new URLSearchParams(searchParams);
       nextParams.delete('task');
+      nextParams.delete('taskDate');
       setSearchParams(nextParams, { replace: false });
       setLogDetailModalOpen(false);
       setSelectedLog(null);
@@ -8188,6 +8245,11 @@ const AssistantManagerTaskPlanner = () => {
               {clearWeekError}
             </Alert>
           )}
+          {logDeleteError && (
+            <Alert color="red" title="Unable to remove task" withCloseButton onClose={() => setLogDeleteError(null)}>
+              {logDeleteError}
+            </Alert>
+          )}
           {generateWeeklyTasksSummary && (
             <Alert color="teal" title="Weekly Generation">
               Created {generateWeeklyTasksSummary.createdCount} tasks, updated{' '}
@@ -8863,8 +8925,8 @@ const AssistantManagerTaskPlanner = () => {
                     }
                   />
                   <MultiSelect
-                    label="Only create when these shift templates exist"
-                    description="Optional. At least one selected shift template must exist on that date. This activates the task for its assigned person; it does not assign the task to the staff working that shift. Applies to subsequent preview and generation."
+                    label="Only create when these operational shifts have assigned staff"
+                    description="Optional. At least one active person must be assigned to one selected operational shift on the task date. This condition only decides whether the task is created; it does not choose or change the task assignee. Applies to subsequent preview and generation."
                     placeholder={shiftTemplatesLoading ? 'Loading shift templates...' : 'No shift condition'}
                     data={shiftTemplateOptions}
                     value={templateFormState.requiredShiftTemplateIds}
@@ -10038,7 +10100,7 @@ const AssistantManagerTaskPlanner = () => {
               )}
 
               <Select
-                label="Operational Shift Condition"
+                label="Staffed Operational Shift Condition"
                 description={`Current selection: ${bulkTemplateOptionsCurrentSummary.requiredShiftGate}`}
                 data={[
                   { value: 'unchanged', label: 'Keep current values' },
@@ -10057,8 +10119,8 @@ const AssistantManagerTaskPlanner = () => {
 
               {bulkTemplateOptionsFormState.requiredShiftMode === 'replace' && (
                 <MultiSelect
-                  label="Required Shift Templates"
-                  description="At least one of these operational shifts must exist on the task date."
+                  label="Operational Shifts Requiring Staff"
+                  description="At least one active person must be assigned to one of these operational shifts on the task date. This does not choose or change the task assignee."
                   placeholder={shiftTemplatesLoading ? 'Loading shift templates...' : 'Select shifts'}
                   data={shiftTemplateOptions}
                   value={bulkTemplateOptionsFormState.requiredShiftTemplateIds}
@@ -10723,7 +10785,7 @@ const AssistantManagerTaskPlanner = () => {
                         )}
                       </Group>
                       <Group justify="flex-end" gap={6} wrap="nowrap">
-                        {canDeleteTaskLogs && !selectedLogCleaningManaged && (
+                        {canRequestTaskDeletion(canDeleteTaskLogs, selectedLog, selectedLogTemplate) && (
                           <Tooltip label="Delete task">
                             <ActionIcon
                               variant="subtle"
@@ -11223,11 +11285,14 @@ const AssistantManagerTaskPlanner = () => {
                     Staff upload their assigned photos from Cleaning on the homepage. Managers review
                     those photos there. This task completes automatically once everyone's required
                     photos are approved. Its assignee, date, time, evidence, and status are locked
-                    to the cleaning workflow and cannot be changed here. It cannot be deleted; use
-                    the audited cancellation option in homepage Cleaning when no cleaners remain.
-                    Comments are still available.
+                    to the cleaning workflow and cannot be changed here. An authorized manager can
+                    permanently delete the task, including every cleaning photo, attendance record,
+                    submission, and stored evidence file. Comments are still available.
                   </Text>
-                  <Group justify="center"><Button component={Link} to="/" variant="light" size="sm">Open homepage cleaning</Button></Group>
+                  <Group justify="center" wrap="wrap">
+                    {selectedLog ? <CleaningTaskPhotoHistory taskLogId={selectedLog.id} /> : null}
+                    <Button component={Link} to="/" variant="default" size="sm">Open homepage cleaning</Button>
+                  </Group>
                 </Stack>
               </Alert>
             )}

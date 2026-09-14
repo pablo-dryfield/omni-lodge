@@ -27,6 +27,7 @@ import {
 } from '../services/volunteerAttendanceCheckService.js';
 import {
   assertCleaningEvidencePreserved, assertCleaningTaskLogMutable, isCleaningTaskCompletionManaged,
+  prepareCleaningTaskLogDeletion,
 } from '../services/cleaningSubmissionService.js';
 import {
   CLEANING_WORKFLOW_META_KEY,
@@ -49,6 +50,7 @@ import {
   reconcileNightReportTaskWaiversForRange,
 } from '../services/assistantManagerTaskWaiverService.js';
 import {
+  buildActiveAssignedShiftTemplateIdsByDate,
   buildTaskDateGenerationCandidates,
   normalizeRequiredShiftTemplateIds,
   normalizeScheduledWorkdayPlacement,
@@ -1361,20 +1363,22 @@ const buildScheduledShiftTemplateIdsByDate = async (
       },
       shiftTemplateId: { [Op.ne]: null },
     },
+    include: [{
+      model: ShiftAssignment,
+      as: 'assignments',
+      attributes: ['id'],
+      required: true,
+      include: [{
+        model: User,
+        as: 'assignee',
+        attributes: ['id', 'status'],
+        required: true,
+        where: { status: true },
+      }],
+    }],
   });
-  const map = new Map<string, Set<number>>();
 
-  shiftInstances.forEach((instance) => {
-    if (!instance.date || !instance.shiftTemplateId) {
-      return;
-    }
-    const dateKey = String(instance.date).slice(0, 10);
-    const templateIds = map.get(dateKey) ?? new Set<number>();
-    templateIds.add(instance.shiftTemplateId);
-    map.set(dateKey, templateIds);
-  });
-
-  return map;
+  return buildActiveAssignedShiftTemplateIdsByDate(shiftInstances);
 };
 
 const buildExpectedEvidenceItemsForDate = (
@@ -4541,12 +4545,18 @@ export const deleteTaskLog = async (req: AuthenticatedRequest, res: Response): P
     const images = await sequelize.transaction(async (transaction) => {
       const log = await AssistantManagerTaskLog.findByPk(logId, { transaction, lock: transaction.LOCK.UPDATE });
       if (!log) throw new HttpError(404, 'Task log not found');
-      await assertAttendanceEvidencePreserved(log.id, log.meta, null, transaction);
-      await assertCleaningTaskLogMutable(log.id, transaction);
-      const stored = sanitizeEvidenceItems(log.meta?.evidenceItems)
-        .filter((item) => item.type === 'image' && Boolean(item.storagePath || item.driveFileId));
+      const cleaningDeletion = await prepareCleaningTaskLogDeletion({
+        log,
+        actorId: getActorId(req),
+        transaction,
+      });
+      if (!cleaningDeletion.managed) {
+        await assertAttendanceEvidencePreserved(log.id, log.meta, null, transaction);
+        await assertCleaningTaskLogMutable(log.id, transaction);
+      }
+      const stored = storedEvidenceImagesForDeletion(log.meta?.evidenceItems);
       await log.destroy({ transaction });
-      return stored;
+      return uniqueEvidenceImages([...stored, ...cleaningDeletion.images]);
     });
     // Never delete Drive evidence before the database has accepted the deletion.
     await deleteEvidenceImagesBestEffort(images, `deleted task ${logId}`);
@@ -4741,6 +4751,37 @@ const deleteEvidenceImagesBestEffort = async (
     if (result.status === 'rejected') {
       logger.warn(`Failed to clean up assistant manager task evidence image (${context})`, result.reason);
     }
+  });
+};
+
+const uniqueEvidenceImages = (
+  items: Array<{ storagePath?: string | null; driveFileId?: string | null }>,
+): Array<{ storagePath?: string | null; driveFileId?: string | null }> => {
+  const unique = new Map<string, { storagePath?: string | null; driveFileId?: string | null }>();
+  for (const item of items) {
+    const driveFileId = typeof item.driveFileId === 'string' ? item.driveFileId.trim() : '';
+    const storagePath = typeof item.storagePath === 'string' ? item.storagePath.trim() : '';
+    const storageDriveFileId = storagePath.startsWith('drive:') ? storagePath.slice('drive:'.length).trim() : '';
+    const key = driveFileId || storageDriveFileId
+      ? `drive:${driveFileId || storageDriveFileId}`
+      : storagePath ? `storage:${storagePath}` : '';
+    if (key && !unique.has(key)) unique.set(key, item);
+  }
+  return [...unique.values()];
+};
+
+const storedEvidenceImagesForDeletion = (
+  value: unknown,
+): Array<{ storagePath?: string | null; driveFileId?: string | null }> => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const item = entry as Record<string, unknown>;
+    const storagePath = typeof item.storagePath === 'string' ? item.storagePath.trim() : '';
+    const driveFileId = typeof item.driveFileId === 'string' ? item.driveFileId.trim() : '';
+    return storagePath || driveFileId
+      ? [{ storagePath: storagePath || null, driveFileId: driveFileId || null }]
+      : [];
   });
 };
 

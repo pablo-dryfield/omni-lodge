@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import { useState } from "react";
 import { type CleaningTaskIssue, getCleaningError, useCleaningCachedDataBlocked, useMyCleaningSubmissions, useWaiveCanceledCleaningTask } from "../../api/volunteerCleaning";
 import { useAppSelector } from "../../store/hooks";
+import { buildAssistantManagerTaskDeepLink } from "../../utils/assistantManagerTaskDeepLink";
 import CleaningReviewAction from "./CleaningReviewAction";
 import CleaningSubmissionForm from "./CleaningSubmissionForm";
 
@@ -61,7 +62,7 @@ const HomeCleaningTasks = () => {
           <Stack gap="sm">
             <Text size="sm">{issue.message}</Text>
             <Group gap="xs" justify="center" wrap="wrap">
-              <Button component="a" href={`/assistant-manager-tasks?section=dashboard&task=${issue.taskLogId}`} size="xs" variant="subtle">View task</Button>
+              <Button component="a" href={buildAssistantManagerTaskDeepLink(issue.taskLogId, issue.taskDate)} size="xs" variant="subtle">View task</Button>
               {issue.code === "no_active_cleaners" && issue.canWaive ? <Button size="xs" variant="light" color="orange" onClick={() => {
                 setWaiveIssue(issue); setWaiveReason(""); setWaiveError(null);
               }}>Waive canceled cleaning</Button> : null}

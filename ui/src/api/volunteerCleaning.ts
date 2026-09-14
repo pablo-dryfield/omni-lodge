@@ -57,20 +57,32 @@ export type MyCleaningSubmissions = {
   reviewSubmissions: CleaningSubmission[];
   taskIssues: CleaningTaskIssue[];
 };
-type CleaningError = AxiosError<{ message?: string; error?: string } | Array<{ message?: string }>>;
+export type CleaningTaskHistory = {
+  taskLogId: number;
+  submissions: CleaningSubmission[];
+};
+type CleaningError = AxiosError<unknown>;
 
 export const cleaningKeys = {
   all: ["volunteer-cleaning"] as const,
   mine: (userId: number) => ["volunteer-cleaning", "me", userId] as const,
   detail: (id: number, userId: number) => ["volunteer-cleaning", "detail", id, userId] as const,
+  taskHistory: (taskLogId: number, userId: number) => ["volunteer-cleaning", "task-history", taskLogId, userId] as const,
 };
 
 export const getCleaningError = (error: unknown, fallback = "Unable to load cleaning tasks."): string => {
   const candidate = error as CleaningError | undefined;
   const data = candidate?.response?.data;
   const body = Array.isArray(data) ? data[0] : data;
-  if (typeof body?.message === "string" && body.message) return body.message;
-  return body && "error" in body && typeof body.error === "string" && body.error ? body.error : fallback;
+  if (typeof body === "object" && body !== null) {
+    const payload = body as Record<string, unknown>;
+    if (typeof payload.message === "string" && payload.message.trim()) return payload.message;
+    if (typeof payload.error === "string" && payload.error.trim()) return payload.error;
+  }
+  if (typeof data === "string" && /Cannot\s+GET\s+\/api\/cleaningSubmissions\/tasks\//iu.test(data)) {
+    return "The running backend does not support cleaning photo history yet. Restart or update it, then try again.";
+  }
+  return fallback;
 };
 
 // Cached drafts may survive a temporary refresh failure, but not an
@@ -100,6 +112,10 @@ export const fetchCleaningSubmission = async (id: number): Promise<CleaningSubmi
   const response = await axiosInstance.get<CleaningResponse>(`/cleaningSubmissions/${id}`);
   return response.data.submission;
 };
+export const fetchCleaningTaskHistory = async (taskLogId: number): Promise<CleaningTaskHistory> => {
+  const response = await axiosInstance.get<CleaningTaskHistory>(`/cleaningSubmissions/tasks/${taskLogId}`);
+  return response.data;
+};
 export const fetchCleaningPhoto = async (submissionId: number, photoId: number, signal?: AbortSignal): Promise<Blob> => {
   const response = await axiosInstance.get<Blob>(`/cleaningSubmissions/${submissionId}/photos/${photoId}`, { responseType: "blob", signal });
   return response.data;
@@ -115,6 +131,13 @@ export const useCleaningSubmission = (id: number, userId: number, enabled = true
   queryKey: cleaningKeys.detail(id, userId),
   queryFn: () => fetchCleaningSubmission(id),
   enabled: enabled && Number.isInteger(id) && id > 0 && userId > 0,
+  retry: false,
+  staleTime: 15_000,
+});
+export const useCleaningTaskHistory = (taskLogId: number, userId: number, enabled = true) => useQuery({
+  queryKey: cleaningKeys.taskHistory(taskLogId, userId),
+  queryFn: () => fetchCleaningTaskHistory(taskLogId),
+  enabled: enabled && Number.isInteger(taskLogId) && taskLogId > 0 && userId > 0,
   retry: false,
   staleTime: 15_000,
 });

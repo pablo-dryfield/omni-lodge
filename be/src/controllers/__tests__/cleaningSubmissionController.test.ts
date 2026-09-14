@@ -1,10 +1,10 @@
 jest.mock('../../services/cleaningSubmissionService.js', () => ({ getCleaningPhotoStream: jest.fn(), getCleaningSubmission: jest.fn(),
-  listMyCleaningSubmissions: jest.fn(), reviewCleaningSubmissionPhoto: jest.fn(), uploadCleaningSubmissionPhoto: jest.fn(), waiveCanceledCleaningTask: jest.fn() }));
+  getCleaningTaskHistory: jest.fn(), listMyCleaningSubmissions: jest.fn(), reviewCleaningSubmissionPhoto: jest.fn(), uploadCleaningSubmissionPhoto: jest.fn(), waiveCanceledCleaningTask: jest.fn() }));
 jest.mock('../../utils/logger.js', () => ({ __esModule: true, default: { error: jest.fn() } }));
 import HttpError from '../../errors/HttpError.js';
-import { waiveCanceledCleaningTask } from '../../services/cleaningSubmissionService.js';
-import { postWaiveCanceledCleaningTask } from '../cleaningSubmissionController.js';
-const response = () => { const res: any = { status: jest.fn(), json: jest.fn() }; res.status.mockReturnValue(res); return res; };
+import { getCleaningTaskHistory, waiveCanceledCleaningTask } from '../../services/cleaningSubmissionService.js';
+import { getCleaningTaskPhotoHistory, postWaiveCanceledCleaningTask } from '../cleaningSubmissionController.js';
+const response = () => { const res: any = { status: jest.fn(), json: jest.fn(), setHeader: jest.fn() }; res.status.mockReturnValue(res); return res; };
 describe('canceled cleaning waiver controller', () => {
   beforeEach(() => jest.clearAllMocks());
   it('delegates only the authenticated actor and validated task ID with the reason/version body', async () => {
@@ -27,5 +27,17 @@ describe('canceled cleaning waiver controller', () => {
       await postWaiveCanceledCleaningTask({ params: { taskLogId: '12' }, authContext: { id: 9, roleSlug: 'manager' }, body: {} } as any, res);
       expect(res.status).toHaveBeenCalledWith(status); expect(res.json).toHaveBeenCalledWith({ message: 'Blocked' });
     }
+  });
+});
+
+describe('cleaning task photo history controller', () => {
+  beforeEach(() => jest.clearAllMocks());
+  it('delegates the authenticated actor and validated task ID', async () => {
+    const payload = { taskLogId: 12, submissions: [] }; const res = response();
+    (getCleaningTaskHistory as jest.Mock).mockResolvedValue(payload);
+    await getCleaningTaskPhotoHistory({ params: { taskLogId: '12' }, authContext: { id: 9, roleSlug: 'manager' } } as any, res);
+    expect(getCleaningTaskHistory).toHaveBeenCalledWith(12, { actorId: 9, roleSlug: 'manager' });
+    expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-store');
+    expect(res.json).toHaveBeenCalledWith(payload);
   });
 });

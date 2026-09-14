@@ -81,6 +81,11 @@ import { setNightReportList } from "../../reducers/nightReportReducer";
 import { setVenuesData } from "../../reducers/venueReducer";
 import axiosInstance from "../../utils/axiosInstance";
 import { compressImageFile } from "../../utils/imageCompression";
+import {
+  releaseAsyncOperationLock,
+  tryAcquireAsyncOperationLock,
+} from "../../utils/asyncOperationLock";
+import { executeNightReportSaveSequence } from "../../utils/nightReportSubmission";
 
 import type {
   NightReport,
@@ -570,6 +575,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const previousVenuesRef = useRef<EditableVenue[] | null>(null);
   const previousNotesRef = useRef<string | null>(null);
   const previousEditableVenueKeysRef = useRef<Set<string> | null>(null);
+  const reportSaveLockRef = useRef(false);
   const [activePhotoPreview, setActivePhotoPreview] = useState<NightReportPhotoPreview | null>(null);
   const [managerOptions, setManagerOptions] = useState<StaffOption[]>([]);
   const [bootstrapLoading, setBootstrapLoading] = useState(false);
@@ -1827,10 +1833,13 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       setValidationError(error);
       return;
     }
+    if (!tryAcquireAsyncOperationLock(reportSaveLockRef)) {
+      return;
+    }
     setValidationError(null);
-    const payload = createUpdatePayload();
+    setSaving(true);
     try {
-      setSaving(true);
+      const payload = createUpdatePayload();
       await dispatch(updateNightReport({ reportId: selectedReportId, payload })).unwrap();
       await dispatch(fetchNightReportById(selectedReportId));
       await dispatch(fetchNightReports());
@@ -1846,11 +1855,21 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
             : "Failed to save venues.";
       setValidationError(message);
     } finally {
+      releaseAsyncOperationLock(reportSaveLockRef);
       setSaving(false);
     }
   };
 
   const handleSubmit = async () => {
+    if (
+      reportSaveLockRef.current ||
+      nightReportUi.saving ||
+      nightReportUi.submitting ||
+      preparingPhoto ||
+      nightReportUi.uploadingPhoto
+    ) {
+      return;
+    }
     if (!selectedReportId) {
       setValidationError("Select a report to submit.");
       return;
@@ -1860,18 +1879,20 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
       setValidationError(error);
       return;
     }
+    if (!tryAcquireAsyncOperationLock(reportSaveLockRef)) {
+      return;
+    }
     setValidationError(null);
-
-    const payload = createUpdatePayload();
-
+    setSaving(true);
     const isAlreadySubmitted = currentStatus === "submitted";
-
     try {
-      await dispatch(updateNightReport({ reportId: selectedReportId, payload })).unwrap();
-      if (!isAlreadySubmitted) {
-        await dispatch(submitNightReport(selectedReportId)).unwrap();
-      }
-      await dispatch(fetchNightReports());
+      const payload = createUpdatePayload();
+      await executeNightReportSaveSequence({
+        alreadySubmitted: isAlreadySubmitted,
+        update: () => dispatch(updateNightReport({ reportId: selectedReportId, payload })).unwrap(),
+        submit: () => dispatch(submitNightReport(selectedReportId)).unwrap(),
+        refresh: () => dispatch(fetchNightReports()),
+      });
       setEditableVenueKeys(new Set());
       previousEditableVenueKeysRef.current = null;
       setActiveReportMode("view");
@@ -1885,6 +1906,9 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
             ? submissionError.message
             : fallbackMessage;
       setValidationError(message);
+    } finally {
+      releaseAsyncOperationLock(reportSaveLockRef);
+      setSaving(false);
     }
   };
 
@@ -1893,6 +1917,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const submitting = nightReportUi.submitting;
   const uploadingPhoto = nightReportUi.uploadingPhoto;
   const photoUploadBusy = uploadingPhoto || preparingPhoto;
+  const reportSaveBusy = saving || nightReportUi.saving;
+  const submitBusy = reportSaveBusy || submitting || photoUploadBusy;
   const currentStatus = nightReportDetail.data?.status ?? "draft";
   const isSubmittedReport = currentStatus === "submitted";
   const submitButtonLabel = isSubmittedReport ? "Save Changes" : "Submit Report";
@@ -4328,7 +4354,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                   !selectedReportId ||
                   readOnly ||
                   submitting ||
-                  saving ||
+                  reportSaveBusy ||
                   formHasFieldErrors ||
                   leaderHasError ||
                   !pendingChanges
@@ -4654,7 +4680,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
           color="success"
           startIcon={<Send />}
           onClick={handleSubmit}
-          disabled={!selectedReportId || submitting || readOnly || formHasFieldErrors || leaderHasError}
+          disabled={!selectedReportId || submitBusy || readOnly || formHasFieldErrors || leaderHasError}
           sx={{ alignSelf: "center" }}
         >
           {submitButtonLabel}

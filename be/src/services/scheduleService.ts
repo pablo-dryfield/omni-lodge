@@ -1948,6 +1948,57 @@ type AutoAssignSummary = {
   volunteerAssignments: VolunteerAssignmentSummary[];
 };
 
+type PlannedAutoAssignment = {
+  shiftInstanceId: number;
+  userId: number;
+  roleInShift: string;
+  shiftRoleId: number | null;
+};
+
+type ExistingAutoAssignment = PlannedAutoAssignment & {
+  id: number;
+};
+
+const createAutoAssignmentIdentity = (assignment: PlannedAutoAssignment): string => JSON.stringify([
+  assignment.shiftInstanceId,
+  assignment.userId,
+  assignment.shiftRoleId != null
+    ? `role-id:${assignment.shiftRoleId}`
+    : `role-name:${normalizeRoleName(assignment.roleInShift)}`,
+]);
+
+function reconcileAutoAssignments<T extends ExistingAutoAssignment>(
+  existingAssignments: T[],
+  plannedAssignments: PlannedAutoAssignment[],
+): { preserved: Array<{ existing: T; planned: PlannedAutoAssignment }>; obsolete: T[]; toCreate: PlannedAutoAssignment[] } {
+  const existingByIdentity = new Map<string, T[]>();
+  existingAssignments.forEach((assignment) => {
+    const identity = createAutoAssignmentIdentity(assignment);
+    const matching = existingByIdentity.get(identity) ?? [];
+    matching.push(assignment);
+    existingByIdentity.set(identity, matching);
+  });
+
+  const preserved: Array<{ existing: T; planned: PlannedAutoAssignment }> = [];
+  const toCreate: PlannedAutoAssignment[] = [];
+  plannedAssignments.forEach((assignment) => {
+    const identity = createAutoAssignmentIdentity(assignment);
+    const matching = existingByIdentity.get(identity);
+    const existing = matching?.shift();
+    if (existing) {
+      preserved.push({ existing, planned: assignment });
+    } else {
+      toCreate.push(assignment);
+    }
+  });
+
+  return {
+    preserved,
+    obsolete: Array.from(existingByIdentity.values()).flat(),
+    toCreate,
+  };
+}
+
 export async function autoAssignWeek(weekId: number, actorId: number | null): Promise<AutoAssignSummary> {
   const week = await ScheduleWeek.findByPk(weekId);
   if (!week) {
@@ -1982,10 +2033,10 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
       };
     }
 
-    const volunteerIds = volunteerProfiles.map((profile) => profile.userId);
-    const volunteerRoleAssignments = volunteerIds.length
+    const autoManagedVolunteerIds = volunteerProfiles.map((profile) => profile.userId);
+    const volunteerRoleAssignments = autoManagedVolunteerIds.length
       ? await UserShiftRole.findAll({
-          where: { userId: volunteerIds },
+          where: { userId: autoManagedVolunteerIds },
           transaction,
         })
       : [];
@@ -1995,11 +2046,12 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
       set.add(assignment.shiftRoleId);
       volunteerRoleMap.set(assignment.userId, set);
     });
-    const eligibleVolunteerIds = volunteerIds.filter((volunteerId) => {
+    const eligibleVolunteerIds = autoManagedVolunteerIds.filter((volunteerId) => {
       const roleSet = volunteerRoleMap.get(volunteerId);
       return Boolean(roleSet && roleSet.size > 0);
     });
     const volunteerSet = new Set(eligibleVolunteerIds);
+    const autoManagedVolunteerSet = new Set(autoManagedVolunteerIds);
     const volunteerProfileByUserId = new Map<number, StaffProfile>();
     volunteerProfiles.forEach((profile) => {
       if (volunteerSet.has(profile.userId)) {
@@ -2052,15 +2104,6 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
       };
     }
 
-    const shiftInstanceIds = shiftInstances.map((instance) => instance.id);
-    const removed = await ShiftAssignment.destroy({
-      where: {
-        shiftInstanceId: shiftInstanceIds,
-        userId: { [Op.in]: volunteerIds },
-      },
-      transaction,
-    });
-
     const assignmentCounts = new Map<number, number>();
     const assignmentSlotsByVolunteer = new Map<number, ShiftRange[]>();
     eligibleVolunteerIds.forEach((volunteerId) => {
@@ -2068,11 +2111,13 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
       assignmentSlotsByVolunteer.set(volunteerId, []);
     });
 
-    const plannedAssignments: Array<{ shiftInstanceId: number; userId: number; roleInShift: string; shiftRoleId: number | null }> = [];
+    const plannedAssignments: PlannedAutoAssignment[] = [];
     const unfilledSlots: Array<{ shiftInstanceId: number; role: string; date: string; timeStart: string; shiftRoleId: number | null }> = [];
 
     for (const instance of shiftInstances) {
-      const rawSlots = computeRolesToFill(instance, volunteerSet);
+      // Plan from an empty auto-managed volunteer slate. Existing volunteer rows are
+      // reconciled after planning, so they must not be mistaken for manual coverage.
+      const rawSlots = computeRolesToFill(instance, autoManagedVolunteerSet);
       if (rawSlots.length === 0) {
         continue;
       }
@@ -2191,8 +2236,30 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
       }
     }
 
+    const existingVolunteerAssignments = shiftInstances.flatMap((instance) =>
+      (instance.assignments ?? []).filter((assignment) => autoManagedVolunteerSet.has(assignment.userId)),
+    );
+    const reconciliation = reconcileAutoAssignments(existingVolunteerAssignments, plannedAssignments);
+
+    let removed = 0;
+    if (reconciliation.obsolete.length > 0) {
+      removed = await ShiftAssignment.destroy({
+        where: { id: { [Op.in]: reconciliation.obsolete.map((assignment) => assignment.id) } },
+        transaction,
+      });
+    }
+
+    for (const { existing, planned } of reconciliation.preserved) {
+      if (existing.roleInShift !== planned.roleInShift) {
+        await ShiftAssignment.update(
+          { roleInShift: planned.roleInShift },
+          { where: { id: existing.id }, transaction },
+        );
+      }
+    }
+
     let created = 0;
-    for (const assignment of plannedAssignments) {
+    for (const assignment of reconciliation.toCreate) {
       await ShiftAssignment.create(
         {
           shiftInstanceId: assignment.shiftInstanceId,
@@ -2224,6 +2291,7 @@ export async function autoAssignWeek(weekId: number, actorId: number | null): Pr
         weekId,
         created,
         removed,
+        preserved: reconciliation.preserved.length,
         unfilled: unfilledSlots.length,
       },
     });

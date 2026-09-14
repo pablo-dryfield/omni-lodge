@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest.js';
+import HttpError from '../../errors/HttpError.js';
 
 jest.mock('../../models/AssistantManagerTaskLog.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), sequelize: { transaction: jest.fn() } } }));
 jest.mock('../../models/AssistantManagerTaskTemplate.js', () => ({ __esModule: true, default: { findByPk: jest.fn() } }));
@@ -17,7 +18,7 @@ jest.mock('../../models/CerebroEntry.js', () => ({ __esModule: true, default: {}
 jest.mock('../../models/CerebroQuiz.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../__mocks__/sequelizeModelStub', () => ({ __esModule: true, default: { findByPk: jest.fn() } }));
 jest.mock('../../services/volunteerAttendanceCheckService.js', () => ({ assertAttendanceEvidencePreserved: jest.fn(), ensureTaskAttendanceCheckSatisfied: jest.fn(), validateAttendanceCheckConfig: jest.fn(), validateAttendanceCheckShiftTypes: jest.fn() }));
-jest.mock('../../services/cleaningSubmissionService.js', () => ({ assertCleaningEvidencePreserved: jest.fn(), assertCleaningTaskLogMutable: jest.fn(), isCleaningTaskCompletionManaged: jest.fn(() => true) }));
+jest.mock('../../services/cleaningSubmissionService.js', () => ({ assertCleaningEvidencePreserved: jest.fn(), assertCleaningTaskLogMutable: jest.fn(), isCleaningTaskCompletionManaged: jest.fn(() => true), prepareCleaningTaskLogDeletion: jest.fn() }));
 jest.mock('../../services/assistantManagerTaskEvidenceStorageService.js', () => ({ deleteAssistantManagerTaskEvidenceImage: jest.fn(), ensureAssistantManagerTaskEvidenceStorage: jest.fn(), openAssistantManagerTaskEvidenceImageStream: jest.fn(), storeAssistantManagerTaskEvidenceImage: jest.fn() }));
 jest.mock('../../services/configService.js', () => ({ getConfigValue: jest.fn(() => 'Europe/Warsaw') }));
 jest.mock('../../services/assistantManagerTaskWaiverService.js', () => ({ reconcileNightReportTaskWaiversForRange: jest.fn() }));
@@ -30,9 +31,14 @@ import AssistantManagerTaskLog from '../../models/AssistantManagerTaskLog.js';
 import AssistantManagerTaskTemplate from '../../models/AssistantManagerTaskTemplate.js';
 import ShiftAssignment from '../../models/ShiftAssignment.js';
 import User from '../../__mocks__/sequelizeModelStub';
-import { updateTaskLogMeta } from '../assistantManagerTaskController.js';
+import { assertAttendanceEvidencePreserved } from '../../services/volunteerAttendanceCheckService.js';
+import { assertCleaningTaskLogMutable, prepareCleaningTaskLogDeletion } from '../../services/cleaningSubmissionService.js';
+import { deleteAssistantManagerTaskEvidenceImage } from '../../services/assistantManagerTaskEvidenceStorageService.js';
+import { deleteTaskLog, updateTaskLogMeta } from '../assistantManagerTaskController.js';
 
 describe('Cleaning task metadata preserves approved multi-photo evidence', () => {
+  beforeEach(() => jest.clearAllMocks());
+
   it('accepts an ordinary comment after completion without normalizing or deleting either approved photo', async () => {
     const transaction = { LOCK: { UPDATE: 'UPDATE' }, commit: jest.fn().mockResolvedValue(undefined), rollback: jest.fn().mockResolvedValue(undefined) };
     const evidenceItems = [101, 102].map((id) => ({
@@ -67,5 +73,94 @@ describe('Cleaning task metadata preserves approved multi-photo evidence', () =>
     expect(transaction.commit).toHaveBeenCalledTimes(1);
     expect(transaction.rollback).not.toHaveBeenCalled();
     expect(AssistantManagerTaskLog.findByPk).toHaveBeenNthCalledWith(1, 91, { transaction, lock: 'UPDATE' });
+  });
+});
+
+describe('privileged cleaning task deletion', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const response = () => {
+    const res = {} as Response;
+    res.status = jest.fn().mockReturnValue(res);
+    res.json = jest.fn().mockReturnValue(res);
+    res.send = jest.fn().mockReturnValue(res);
+    return res;
+  };
+
+  it('rejects non-management users before opening a destructive transaction', async () => {
+    const req = {
+      params: { id: '91' },
+      authContext: { id: 9, roleSlug: 'assistant-manager' },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await deleteTaskLog(req, res);
+
+    expect(AssistantManagerTaskLog.sequelize!.transaction).not.toHaveBeenCalled();
+    expect(prepareCleaningTaskLogDeletion).not.toHaveBeenCalled();
+    expect(deleteAssistantManagerTaskEvidenceImage).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('deletes the task in the transaction and removes unique generic and cleaning files after commit', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    const log = { id: 91, templateId: 4, userId: 8, taskDate: '2026-09-07', status: 'completed',
+      meta: { evidenceItems: [{ id: 'generic-1', ruleKey: 'cleaning', type: 'image', storagePath: 'drive:generic-file', driveFileId: 'generic-file' }] },
+      destroy: jest.fn().mockResolvedValue(undefined) };
+    (AssistantManagerTaskLog.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(log);
+    (prepareCleaningTaskLogDeletion as jest.Mock).mockResolvedValue({ managed: true, images: [
+      { storagePath: 'drive:cleaning-file', driveFileId: 'cleaning-file' },
+      { storagePath: 'drive:generic-file', driveFileId: 'generic-file' },
+    ] });
+    (deleteAssistantManagerTaskEvidenceImage as jest.Mock).mockResolvedValue(undefined);
+    const req = { params: { id: '91' }, authContext: { id: 99, roleSlug: 'owner' } } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await deleteTaskLog(req, res);
+
+    expect(prepareCleaningTaskLogDeletion).toHaveBeenCalledWith({ log, actorId: 99, transaction });
+    expect(assertAttendanceEvidencePreserved).not.toHaveBeenCalled();
+    expect(assertCleaningTaskLogMutable).not.toHaveBeenCalled();
+    expect(log.destroy).toHaveBeenCalledWith({ transaction });
+    expect(deleteAssistantManagerTaskEvidenceImage).toHaveBeenCalledTimes(2);
+    expect(deleteAssistantManagerTaskEvidenceImage).toHaveBeenCalledWith({ storagePath: 'drive:generic-file', driveFileId: 'generic-file' });
+    expect(deleteAssistantManagerTaskEvidenceImage).toHaveBeenCalledWith({ storagePath: 'drive:cleaning-file', driveFileId: 'cleaning-file' });
+    expect(log.destroy.mock.invocationCallOrder[0])
+      .toBeLessThan((deleteAssistantManagerTaskEvidenceImage as jest.Mock).mock.invocationCallOrder[0]);
+    expect(res.status).toHaveBeenCalledWith(204);
+    expect(res.send).toHaveBeenCalled();
+  });
+
+  it('retains the ordinary attendance and cleaning guards for non-cleaning task deletion', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    const log = { id: 92, templateId: 5, userId: 8, taskDate: '2026-09-07', status: 'pending', meta: {},
+      destroy: jest.fn().mockResolvedValue(undefined) };
+    (AssistantManagerTaskLog.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(log);
+    (prepareCleaningTaskLogDeletion as jest.Mock).mockResolvedValue({ managed: false, images: [] });
+    (assertAttendanceEvidencePreserved as jest.Mock).mockRejectedValue(new HttpError(409, 'Attendance evidence is retained.'));
+    const req = { params: { id: '92' }, authContext: { id: 99, roleSlug: 'owner' } } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await deleteTaskLog(req, res);
+
+    expect(assertAttendanceEvidencePreserved).toHaveBeenCalledWith(92, {}, null, transaction);
+    expect(assertCleaningTaskLogMutable).not.toHaveBeenCalled();
+    expect(log.destroy).not.toHaveBeenCalled();
+    expect(deleteAssistantManagerTaskEvidenceImage).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(409);
+  });
+
+  it('rejects an assistant manager before opening the privileged deletion transaction', async () => {
+    const req = { params: { id: '91' }, authContext: { id: 8, roleSlug: 'assistant-manager' } } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await deleteTaskLog(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(AssistantManagerTaskLog.sequelize!.transaction).not.toHaveBeenCalled();
+    expect(prepareCleaningTaskLogDeletion).not.toHaveBeenCalled();
+    expect(deleteAssistantManagerTaskEvidenceImage).not.toHaveBeenCalled();
   });
 });

@@ -1832,7 +1832,7 @@ function mapReportVenuesToNormalized(venues: NightReportVenue[]): NormalizedVenu
     }));
 }
 
-async function getNightReportById(reportId: number): Promise<NightReport | null> {
+async function getNightReportById(reportId: number, transaction?: Transaction): Promise<NightReport | null> {
   return NightReport.findByPk(reportId, {
     include: [
       {
@@ -1850,6 +1850,7 @@ async function getNightReportById(reportId: number): Promise<NightReport | null>
       [{ model: NightReportVenue, as: 'venues' }, 'orderIndex', 'ASC'],
       [{ model: NightReportPhoto, as: 'photos' }, 'createdAt', 'ASC'],
     ],
+    ...(transaction ? { transaction } : {}),
   });
 }
 
@@ -2208,7 +2209,11 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
     }
 
     if (report.status === 'submitted') {
-      throw new HttpError(400, 'Report is already submitted');
+      await sequelize.transaction(async (transaction) => {
+        await reconcileNightReportTaskWaiversForReport(report, { mode: 'sync', transaction });
+      });
+      res.status(200).json([await serializeNightReport(report, req)]);
+      return;
     }
 
     const normalizedNotes = (report.notes ?? '').trim().toLowerCase();
@@ -2262,21 +2267,31 @@ export const submitNightReport = async (req: AuthenticatedRequest, res: Response
       }
     }
 
-    await NightReport.update(
-      {
-        status: 'submitted',
-        submittedAt: new Date(),
-        updatedBy: actorId,
-      },
-      { where: { id: reportId } },
-    );
+    const fresh = await sequelize.transaction(async (transaction) => {
+      const [submittedCount] = await NightReport.update(
+        {
+          status: 'submitted',
+          submittedAt: new Date(),
+          updatedBy: actorId,
+        },
+        { where: { id: reportId, status: 'draft' }, transaction },
+      );
 
-    const fresh = await getNightReportById(reportId);
-    if (!fresh) {
-      throw new HttpError(500, 'Failed to reload report');
-    }
+      const current = await getNightReportById(reportId, transaction);
+      if (!current) {
+        throw new HttpError(500, 'Failed to reload report');
+      }
 
-    await reconcileNightReportTaskWaiversForReport(fresh, { mode: 'sync' });
+      if (submittedCount === 0 && !canManageReport(current, actorId, req.authContext?.roleSlug)) {
+        throw new HttpError(403, 'You do not have permission to submit this report');
+      }
+      if (current.status !== 'submitted') {
+        throw new HttpError(409, 'Report submission state changed. Reload and try again');
+      }
+
+      await reconcileNightReportTaskWaiversForReport(current, { mode: 'sync', transaction });
+      return current;
+    });
 
     res.status(200).json([await serializeNightReport(fresh, req)]);
   } catch (error) {

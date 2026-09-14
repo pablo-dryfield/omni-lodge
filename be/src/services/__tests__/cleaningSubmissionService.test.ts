@@ -1,15 +1,16 @@
 jest.mock('../../config/database.js', () => ({ __esModule: true, default: { transaction: jest.fn() } }));
 jest.mock('../../models/AssistantManagerTaskLog.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn() } }));
 jest.mock('../../models/AssistantManagerTaskTemplate.js', () => ({ __esModule: true, default: { findByPk: jest.fn() } }));
-jest.mock('../../models/CleaningSubmission.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn(), findOne: jest.fn(), create: jest.fn() } }));
-jest.mock('../../models/CleaningPhotoVersion.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn(), findOne: jest.fn(), create: jest.fn() } }));
-jest.mock('../../models/RequiredAction.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn(), create: jest.fn(), update: jest.fn() } }));
-jest.mock('../../models/AuditLog.js', () => ({ __esModule: true, default: { create: jest.fn() } }));
+jest.mock('../../models/CleaningSubmission.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn(), findOne: jest.fn(), create: jest.fn(), destroy: jest.fn() } }));
+jest.mock('../../models/CleaningPhotoVersion.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn(), findOne: jest.fn(), create: jest.fn(), destroy: jest.fn() } }));
+jest.mock('../../models/RequiredAction.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn(), create: jest.fn(), update: jest.fn(), destroy: jest.fn() } }));
+jest.mock('../../models/AuditLog.js', () => ({ __esModule: true, default: { create: jest.fn(), destroy: jest.fn(), findAll: jest.fn() } }));
 jest.mock('../../models/ScheduleWeek.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn() } }));
 jest.mock('../../models/ShiftAssignment.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn() } }));
 jest.mock('../../models/ShiftInstance.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn() } }));
 jest.mock('../../models/ShiftRole.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ShiftType.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/VolunteerShiftAttendance.js', () => ({ __esModule: true, default: { findAll: jest.fn(), destroy: jest.fn() } }));
 jest.mock('../taskCompletionPayrollService.js', () => ({ prepareTaskCompletionPayrollMutation: jest.fn() }));
 jest.mock('../cleaningPhotoValidationService.js', () => ({ normalizeCleaningPhoto: jest.fn() }));
 jest.mock('../assistantManagerTaskEvidenceStorageService.js', () => ({ storeAssistantManagerTaskEvidenceImage: jest.fn(),
@@ -22,18 +23,21 @@ import sequelize from '../../config/database.js';
 import UserStub from '../../__mocks__/sequelizeModelStub.js';
 import AssistantManagerTaskLog from '../../models/AssistantManagerTaskLog.js';
 import AssistantManagerTaskTemplate from '../../models/AssistantManagerTaskTemplate.js';
+import AuditLog from '../../models/AuditLog.js';
 import CleaningSubmission from '../../models/CleaningSubmission.js';
 import CleaningPhotoVersion from '../../models/CleaningPhotoVersion.js';
 import RequiredAction from '../../models/RequiredAction.js';
 import ScheduleWeek from '../../models/ScheduleWeek.js';
 import ShiftAssignment from '../../models/ShiftAssignment.js';
 import ShiftInstance from '../../models/ShiftInstance.js';
+import VolunteerShiftAttendance from '../../models/VolunteerShiftAttendance.js';
 import { normalizeCleaningPhoto } from '../cleaningPhotoValidationService.js';
 import { prepareTaskCompletionPayrollMutation } from '../taskCompletionPayrollService.js';
 import { deleteAssistantManagerTaskEvidenceImage, openAssistantManagerTaskEvidenceImageStream, storeAssistantManagerTaskEvidenceImage } from '../assistantManagerTaskEvidenceStorageService.js';
 import { assertCleaningEvidencePreserved, assertCleaningTaskLogMutable, ensureCleaningSubmissionsForTaskLog,
-  getCleaningPhotoStream, getCleaningReviewActionPayload, getCleaningSubmission, isCleaningTaskCompletionManaged,
-  listMyCleaningSubmissions, reviewCleaningSubmissionPhoto, uploadCleaningSubmissionPhoto, waiveCanceledCleaningTask } from '../cleaningSubmissionService.js';
+  getCleaningPhotoStream, getCleaningReviewActionPayload, getCleaningSubmission, getCleaningTaskHistory, isCleaningTaskCompletionManaged,
+  listMyCleaningSubmissions, prepareCleaningTaskLogDeletion, reviewCleaningSubmissionPhoto, uploadCleaningSubmissionPhoto,
+  waiveCanceledCleaningTask } from '../cleaningSubmissionService.js';
 
 const tx = { LOCK: { UPDATE: 'UPDATE' } };
 const userModel = Object.assign(UserStub, { findAll: jest.fn(), findByPk: jest.fn() });
@@ -82,14 +86,19 @@ describe('assignment-scoped cleaning workflow', () => {
     (CleaningSubmission.findAll as jest.Mock).mockImplementation(async () => [...submissions]);
     (CleaningSubmission.findOne as jest.Mock).mockImplementation(async () => submissions[0] ?? null);
     (CleaningSubmission.create as jest.Mock).mockImplementation(async (values) => { const row = record({ id: submissions.length + 1, createdAt: new Date(), ...values }); submissions.push(row); return row; });
+    (CleaningSubmission.destroy as jest.Mock).mockResolvedValue(0);
     (CleaningPhotoVersion.findAll as jest.Mock).mockImplementation(async (options) => photos.filter((photo) => typeof options.where.submissionId === 'number'
       ? photo.submissionId === options.where.submissionId : options.where.submissionId[Op.in].includes(photo.submissionId)));
     (CleaningPhotoVersion.findOne as jest.Mock).mockImplementation(async (options) => photos.find((photo) => photo.driveFileId === options.where.driveFileId) ?? null);
     (CleaningPhotoVersion.create as jest.Mock).mockImplementation(async (values) => { const row = record({ id: nextPhotoId++, ...values }); photos.push(row); return row; });
+    (CleaningPhotoVersion.destroy as jest.Mock).mockResolvedValue(0);
     (RequiredAction.findAll as jest.Mock).mockImplementation(async (options) => actions.filter((action) => action.payload.cleaningSubmission.submissionId === options.where.payload.cleaningSubmission.submissionId));
     (RequiredAction.findByPk as jest.Mock).mockImplementation(async (id) => actions.find((action) => action.id === id));
     (RequiredAction.create as jest.Mock).mockImplementation(async (values) => { const row = record({ id: actions.length + 1, ...values }); actions.push(row); return row; });
     (RequiredAction.update as jest.Mock).mockResolvedValue([1]);
+    (RequiredAction.destroy as jest.Mock).mockResolvedValue(1);
+    (AuditLog.findAll as jest.Mock).mockResolvedValue([]);
+    (AuditLog.destroy as jest.Mock).mockResolvedValue(0);
     (ShiftAssignment.findAll as jest.Mock).mockImplementation(async (options) => {
       if (!options.include) return rows;
       const filter = options.include.find((item: any) => item.as === 'shiftInstance').where ?? {};
@@ -102,6 +111,8 @@ describe('assignment-scoped cleaning workflow', () => {
     (ShiftInstance.findAll as jest.Mock).mockResolvedValue([]);
     (ScheduleWeek.findAll as jest.Mock).mockResolvedValue([]);
     (ScheduleWeek.findByPk as jest.Mock).mockResolvedValue({ id: 10, state: 'published' });
+    (VolunteerShiftAttendance.findAll as jest.Mock).mockResolvedValue([]);
+    (VolunteerShiftAttendance.destroy as jest.Mock).mockResolvedValue(0);
     userModel.findAll.mockImplementation(async (options) => options?.include
       ? [{ id: 99, role: { slug: 'owner' } }] : [{ id: 9, firstName: 'Manager', lastName: 'Surname' }]);
     userModel.findByPk.mockImplementation(async (id) => ({ id, status: true, approved: true, role: { slug: id === 99 ? 'owner' : 'assistant-manager' } }));
@@ -140,12 +151,60 @@ describe('assignment-scoped cleaning workflow', () => {
     expect(submissions.find((row) => row.userId === 8)).toMatchObject({ shiftAssignmentId: 11, status: 'awaiting_upload' });
     expect(RequiredAction.update).toHaveBeenCalledWith({ status: false }, expect.anything());
   });
-  it('does not revive orphaned submissions after a new assignment replaces a deleted one', async () => {
-    const prior = await materialize(); prior.shiftAssignmentId = null; rows[0].id = 14;
+  it('safely rebinds an orphan after assignment-ID churn without losing its photos, state or audit identity', async () => {
+    const prior = await materialize(); await upload(prior);
+    const photo = photos[0]; const action = actions[0]; const previousRevision = prior.revision;
+    prior.shiftAssignmentId = null; rows[0] = assignment(14, 7, 7);
+    (AuditLog.create as jest.Mock).mockClear();
     await ensureCleaningSubmissionsForTaskLog(1);
-    expect(prior.shiftAssignmentId).toBeNull();
-    expect(submissions.some((row) => row.id !== prior.id && row.shiftAssignmentId === 14)).toBe(true);
-    await expect(upload(prior)).rejects.toMatchObject({ status: 409 });
+    expect(prior).toMatchObject({ shiftAssignmentId: 14, status: 'awaiting_review', revision: previousRevision + 1,
+      scheduleSnapshot: { assignmentId: 14, originalAssignmentId: 11,
+        assignmentRebindHistory: [expect.objectContaining({ fromAssignmentId: 11, toAssignmentId: 14,
+          reason: 'published_roster_assignment_id_churn' })] } });
+    expect(submissions).toHaveLength(1);
+    expect(photos).toEqual([photo]); expect(photo.submissionId).toBe(prior.id);
+    expect(action).toMatchObject({ status: true, targetUserIds: [9],
+      payload: { cleaningSubmission: { submissionId: prior.id, revision: prior.revision } } });
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ actorId: null,
+      action: 'cleaning.assignment_rebound', entity: 'am_task_log', entityId: '1',
+      metaJson: expect.objectContaining({ submissionId: prior.id, userId: 7, originalAssignmentId: 11,
+        previousAssignmentId: 11, previousLiveAssignmentId: null, assignmentId: 14, shiftInstanceId: 50,
+        shiftTypeId: 7, taskDate: '2026-09-07', requiredSlotKeys: ['house-1'] }) }), { transaction: tx });
+    expect(prior.scheduleSnapshot.subjectName).toBe('Person 7 Surname');
+  });
+  it('does not rebind when more than one orphan can claim the same replacement assignment', async () => {
+    const prior = await materialize(); prior.shiftAssignmentId = null;
+    const duplicate = record({ ...prior, id: 2, shiftAssignmentId: null,
+      scheduleSnapshot: structuredClone(prior.scheduleSnapshot), requiredSlots: structuredClone(prior.requiredSlots) });
+    submissions.push(duplicate); rows[0] = assignment(14, 7, 7);
+    (AuditLog.create as jest.Mock).mockClear();
+    await ensureCleaningSubmissionsForTaskLog(1);
+    expect(prior.shiftAssignmentId).toBeNull(); expect(duplicate.shiftAssignmentId).toBeNull();
+    expect(submissions.find((row) => row.id !== prior.id && row.id !== duplicate.id)).toMatchObject({
+      shiftAssignmentId: 14, userId: 7, status: 'awaiting_upload' });
+    expect(AuditLog.create).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'cleaning.assignment_rebound' }), expect.anything());
+  });
+  it.each([
+    ['physical shift', (row: any) => { row.shiftInstanceId = 51; row.shiftInstance.id = 51; }],
+    ['date', (row: any) => { row.shiftInstance.date = '2026-09-08'; }],
+    ['shift type', (row: any) => { row.shiftInstance.shiftTypeId = 8; }],
+    ['start time', (row: any) => { row.shiftInstance.timeStart = '18:30:00'; }],
+    ['end time', (row: any) => { row.shiftInstance.timeEnd = '22:30:00'; }],
+  ])('does not transfer historical evidence when the replacement changes the %s', async (_label, mutate) => {
+    const prior = await materialize(); await upload(prior); const photo = photos[0];
+    prior.shiftAssignmentId = null; rows[0] = assignment(14, 7, 7); mutate(rows[0]);
+    (AuditLog.create as jest.Mock).mockClear();
+    await ensureCleaningSubmissionsForTaskLog(1);
+    expect(prior.shiftAssignmentId).toBeNull(); expect(photo.submissionId).toBe(prior.id);
+    expect(AuditLog.create).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'cleaning.assignment_rebound' }), expect.anything());
+  });
+  it('does not transfer historical evidence when the required photo slot set changed', async () => {
+    const prior = await materialize(); await upload(prior); const photo = photos[0];
+    prior.shiftAssignmentId = null; prior.requiredSlots = [{ key: 'bedroom-1', label: 'Clean bedroom', ruleKey: 'bedroom' }];
+    rows[0] = assignment(14, 7, 7); (AuditLog.create as jest.Mock).mockClear();
+    await ensureCleaningSubmissionsForTaskLog(1);
+    expect(prior.shiftAssignmentId).toBeNull(); expect(photo.submissionId).toBe(prior.id);
+    expect(AuditLog.create).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'cleaning.assignment_rebound' }), expect.anything());
   });
   it('blocks unrelated reads and upload attempts before any Drive write', async () => {
     const sub = await materialize();
@@ -170,6 +229,25 @@ describe('assignment-scoped cleaning workflow', () => {
     expect(photos.map((photo) => [photo.version, photo.status])).toEqual([[1, 'rejected'], [2, 'pending']]);
     expect(actions[0].status).toBe(true); expect(actions[0].payload.cleaningSubmission.revision).toBe(sub.revision);
     expect(deleteAssistantManagerTaskEvidenceImage).not.toHaveBeenCalled();
+  });
+  it('returns the complete approved and rejected photo history to management', async () => {
+    const sub = await materialize(); await upload(sub);
+    await review(sub, 'rejected', manager, { reason: 'Please clean the sink.' });
+    await upload(sub);
+    const result = await getCleaningTaskHistory(log.id, owner);
+    expect(result.taskLogId).toBe(log.id);
+    expect(result.submissions[0].slots[0].history).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: photos[1].id, version: 2, status: 'pending' }),
+      expect.objectContaining({ id: photos[0].id, version: 1, status: 'rejected', rejectionReason: 'Please clean the sink.' }),
+    ]));
+  });
+  it('lets the assigned assistant manager view orphaned photo history but hides it from unrelated staff', async () => {
+    const sub = await materialize(); await upload(sub);
+    rows = [];
+    expect((await getCleaningTaskHistory(log.id, manager)).submissions).toHaveLength(1);
+    await getCleaningPhotoStream(sub.id, photos[0].id, manager);
+    await expect(getCleaningTaskHistory(log.id, { actorId: 500, roleSlug: 'assistant-manager' })).rejects.toMatchObject({ status: 404 });
+    await expect(getCleaningPhotoStream(sub.id, photos[0].id, { actorId: 500, roleSlug: 'assistant-manager' })).rejects.toMatchObject({ status: 404 });
   });
   it('requires rejection notes and forbids self-review even by a global manager', async () => {
     const sub = await materialize(); await upload(sub);
@@ -240,6 +318,66 @@ describe('assignment-scoped cleaning workflow', () => {
     await expect(assertCleaningEvidencePreserved(1, log.meta, next)).rejects.toMatchObject({ status: 409 });
     await expect(assertCleaningTaskLogMutable(1)).rejects.toMatchObject({ status: 409 });
     await expect(assertCleaningEvidencePreserved(1, log.meta, null)).rejects.toMatchObject({ status: 409 });
+  });
+  it('prepares a privileged hard deletion for a completed cleaning task and returns every stored photo', async () => {
+    const sub = await materialize(); await upload(sub); log.status = 'completed';
+    (VolunteerShiftAttendance.findAll as jest.Mock).mockResolvedValue([
+      { id: 71, evidenceFileId: 'attendance-photo' },
+    ]);
+    (AuditLog.findAll as jest.Mock).mockResolvedValue([
+      { metaJson: { evidence: { id: 'attendance-photo', storagePath: 'drive:attendance-file', driveFileId: 'attendance-file' } } },
+      { metaJson: { evidence: { id: 'different-photo', storagePath: 'drive:unrelated-file', driveFileId: 'unrelated-file' } } },
+    ]);
+    (AuditLog.destroy as jest.Mock).mockResolvedValue(4);
+
+    const result = await prepareCleaningTaskLogDeletion({ log, actorId: owner.actorId, transaction: tx as any });
+
+    expect(result).toEqual({ managed: true, images: expect.arrayContaining([
+      expect.objectContaining({ driveFileId: 'file-100' }),
+      { storagePath: 'drive:attendance-file', driveFileId: 'attendance-file' },
+    ]) });
+    expect(RequiredAction.destroy).toHaveBeenCalledWith({ where: expect.anything(), transaction: tx });
+    expect(CleaningPhotoVersion.destroy).toHaveBeenCalledWith({
+      where: { id: { [Op.in]: [100] } }, transaction: tx,
+    });
+    expect(CleaningSubmission.destroy).toHaveBeenCalledWith({
+      where: { id: { [Op.in]: [sub.id] } }, transaction: tx,
+    });
+    expect(VolunteerShiftAttendance.destroy).toHaveBeenCalledWith({
+      where: { id: { [Op.in]: [71] } }, transaction: tx,
+    });
+    expect(AuditLog.destroy).toHaveBeenCalledWith({
+      where: { entity: 'am_task_log', entityId: '1' }, transaction: tx,
+    });
+    expect((CleaningPhotoVersion.destroy as jest.Mock).mock.invocationCallOrder[0])
+      .toBeLessThan((CleaningSubmission.destroy as jest.Mock).mock.invocationCallOrder[0]);
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: owner.actorId, action: 'cleaning.task_deleted', entity: 'am_task_log', entityId: '1',
+      metaJson: expect.objectContaining({ taskLogId: 1, taskName: 'House cleaning', status: 'completed',
+        submissionCount: 1, photoCount: 1, attendanceCount: 1, requiredActionCount: 1,
+        removedAuditCount: 4,
+        completedTaskCreditMayChange: true, photoIds: [100], attendanceIds: [71] }),
+    }), { transaction: tx });
+  });
+  it.each(['pending', 'missed', 'completed', 'waived'] as const)(
+    'allows an empty cleaning-managed task in %s status to be prepared for deletion',
+    async (status) => {
+      log.status = status;
+      const result = await prepareCleaningTaskLogDeletion({ log, actorId: owner.actorId, transaction: tx as any });
+      expect(result).toEqual({ managed: true, images: [] });
+      expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'cleaning.task_deleted', metaJson: expect.objectContaining({ status }),
+      }), { transaction: tx });
+    },
+  );
+  it('leaves a non-cleaning task to the ordinary task deletion safeguards', async () => {
+    template.scheduleConfig = {}; log.meta = {};
+    const result = await prepareCleaningTaskLogDeletion({ log, actorId: owner.actorId, transaction: tx as any });
+    expect(result).toEqual({ managed: false, images: [] });
+    expect(AuditLog.create).not.toHaveBeenCalled();
+    expect(CleaningPhotoVersion.destroy).not.toHaveBeenCalled();
+    expect(CleaningSubmission.destroy).not.toHaveBeenCalled();
+    expect(VolunteerShiftAttendance.destroy).not.toHaveBeenCalled();
   });
   it('remains managed after the original template is edited or disabled', async () => {
     const sub = await materialize(); template.scheduleConfig = {};

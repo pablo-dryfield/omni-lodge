@@ -1,5 +1,5 @@
 import axiosInstance from "../utils/axiosInstance";
-import { cleaningKeys, fetchCleaningPhoto, fetchCleaningSubmission, fetchMyCleaningSubmissions, getCleaningError, isTransientCleaningQueryError, reviewCleaningPhoto, uploadCleaningPhoto, waiveCanceledCleaningTask } from "./volunteerCleaning";
+import { cleaningKeys, fetchCleaningPhoto, fetchCleaningSubmission, fetchCleaningTaskHistory, fetchMyCleaningSubmissions, getCleaningError, isTransientCleaningQueryError, reviewCleaningPhoto, uploadCleaningPhoto, waiveCanceledCleaningTask } from "./volunteerCleaning";
 
 jest.mock("../utils/axiosInstance", () => ({ __esModule: true, default: { get: jest.fn(), post: jest.fn(), patch: jest.fn() } }));
 const get = axiosInstance.get as jest.Mock;
@@ -24,6 +24,11 @@ describe("Cleaning API", () => {
     expect(await fetchCleaningPhoto(2, 9, signal)).toBe(blob);
     expect(get).toHaveBeenLastCalledWith("/cleaningSubmissions/2/photos/9", { responseType: "blob", signal });
   });
+  it("loads all saved cleaning photo versions for a task", async () => {
+    get.mockResolvedValueOnce({ data: { taskLogId: 8, submissions: [] } });
+    await fetchCleaningTaskHistory(8);
+    expect(get).toHaveBeenCalledWith("/cleaningSubmissions/tasks/8");
+  });
   it("sends revision and file as multipart without overriding the browser boundary", async () => {
     post.mockResolvedValue({ data: { submission: { id: 2 } } });
     const file = new File(["photo"], "clean.jpg", { type: "image/jpeg" });
@@ -43,6 +48,11 @@ describe("Cleaning API", () => {
     expect(getCleaningError({ response: { data: [{ message: "Reload the latest revision" }] } })).toBe("Reload the latest revision");
     expect(getCleaningError({ response: { data: { error: "Access denied" } } })).toBe("Access denied");
     expect(getCleaningError(new Error("network"), "Try again")).toBe("Try again");
+    expect(getCleaningError({ response: { status: 404, data: "<!DOCTYPE html><pre>Cannot GET /api/cleaningSubmissions/tasks/25</pre>" } })).toBe(
+      "The running backend does not support cleaning photo history yet. Restart or update it, then try again.",
+    );
+    expect(() => getCleaningError({ response: { data: "Unexpected plain-text response" } }, "Try again")).not.toThrow();
+    expect(getCleaningError({ response: { data: "Unexpected plain-text response" } }, "Try again")).toBe("Try again");
   });
   it("distinguishes recoverable refresh failures from authoritative resource and access errors", () => {
     expect(isTransientCleaningQueryError(null)).toBe(false);

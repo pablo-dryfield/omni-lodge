@@ -156,7 +156,7 @@ describe("Cleaning workflow", () => {
     expect(screen.getByRole("region", { name: "Cleaning tasks" })).toBeInTheDocument();
     expect(screen.getByText("Reconcile the closed settlement before continuing.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Waive canceled cleaning" })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "View task" })[0]).toHaveAttribute("href", "/assistant-manager-tasks?section=dashboard&task=21");
+    expect(screen.getAllByRole("link", { name: "View task" })[0]).toHaveAttribute("href", "/assistant-manager-tasks?section=dashboard&task=21&taskDate=2026-09-07");
   });
   it("requires a reason before a permitted canceled-cleaning waiver and retains conflict errors", async () => {
     const issue = { taskLogId: 21, taskDate: "2026-09-07", title: "House cleaning", code: "no_active_cleaners", message: "No assigned cleaners.", canWaive: true, updatedAt: "2026-09-07T12:00:00Z" };
