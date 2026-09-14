@@ -1,104 +1,132 @@
-const request = require('supertest');
-const app = require('../../src/app');  // Import your Express app
-const { Channel } = require('../../src/models'); // Import your Channel model
+jest.mock('../../src/models/Channel.js', () => ({
+  __esModule: true,
+  default: {
+    create: jest.fn(),
+    destroy: jest.fn(),
+    findAll: jest.fn(),
+    findByPk: jest.fn(),
+    getAttributes: jest.fn(),
+    update: jest.fn(),
+  },
+}));
+jest.mock('../../src/models/PaymentMethod.js', () => ({
+  __esModule: true,
+  default: {
+    findByPk: jest.fn(),
+    findOne: jest.fn(),
+  },
+}));
 
-jest.mock('../../src/models/Channel');  // Mock the Channel model
+const Channel = require('../../src/models/Channel.js').default;
+const PaymentMethod = require('../../src/models/PaymentMethod.js').default;
+const {
+  createChannel,
+  deleteChannel,
+  getAllChannels,
+} = require('../../src/controllers/channelController.js');
 
-describe('Channel Controller', () => {
-  afterEach(() => {
+const makeResponse = () => {
+  const res = {
+    status: jest.fn(),
+    json: jest.fn(),
+    send: jest.fn(),
+  };
+  res.status.mockReturnValue(res);
+  return res;
+};
+
+describe('channelController', () => {
+  beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  describe('GET /api/channels', () => {
-    it('should return all channels', async () => {
-      const mockData = [
-        { id: 1, name: 'Channel 1', description: 'Description 1' },
-        { id: 2, name: 'Channel 2', description: 'Description 2' },
-      ];
+  it('returns the compact channel contract and late-booking capability', async () => {
+    Channel.findAll.mockResolvedValue([
+      {
+        id: 1,
+        name: 'Ecwid',
+        description: 'Storefront',
+        paymentMethodId: 4,
+        paymentMethod: { name: 'Online/Card' },
+      },
+      {
+        id: 2,
+        name: 'Partner',
+        description: null,
+        paymentMethodId: 5,
+        paymentMethod: { name: 'Bank Transfer' },
+      },
+    ]);
+    const res = makeResponse();
 
-      Channel.findAll.mockResolvedValue(mockData);
+    await getAllChannels({ query: { format: 'compact' } }, res);
 
-      const res = await request(app).get('/api/channels');
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(mockData);
-    });
+    expect(Channel.findAll).toHaveBeenCalledWith(expect.objectContaining({
+      order: [['name', 'ASC']],
+    }));
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 1, lateBookingAllowed: true, paymentMethodName: 'Online/Card' }),
+      expect.objectContaining({ id: 2, lateBookingAllowed: false, paymentMethodName: 'Bank Transfer' }),
+    ]);
   });
 
-  describe('GET /api/channels/:id', () => {
-    it('should return a channel by ID', async () => {
-      const mockData = { id: 1, name: 'Channel 1', description: 'Description 1' };
+  it('requires an authenticated actor when creating a channel', async () => {
+    const res = makeResponse();
 
-      Channel.findByPk.mockResolvedValue(mockData);
+    await createChannel({ body: { name: 'Partner' } }, res);
 
-      const res = await request(app).get('/api/channels/1');
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(mockData);
-    });
-
-    it('should return 404 if channel not found', async () => {
-      Channel.findByPk.mockResolvedValue(null);
-
-      const res = await request(app).get('/api/channels/1');
-
-      expect(res.status).toBe(404);
-    });
+    expect(Channel.create).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith([{ message: 'Unauthorized' }]);
   });
 
-  describe('POST /api/channels', () => {
-    it('should create a new channel', async () => {
-      const newChannel = { name: 'Channel 3', description: 'Description 3' };
-      Channel.create.mockResolvedValue(newChannel);
+  it('records the actor and selected payment method when creating a channel', async () => {
+    PaymentMethod.findByPk.mockResolvedValue({ id: 12 });
+    const channel = {
+      reload: jest.fn().mockResolvedValue(undefined),
+      get: jest.fn().mockReturnValue({
+        id: 3,
+        name: 'Bank',
+        paymentMethodId: 12,
+        paymentMethod: { name: 'Bank Transfer' },
+      }),
+    };
+    Channel.create.mockResolvedValue(channel);
+    const res = makeResponse();
 
-      const res = await request(app)
-        .post('/api/channels')
-        .send(newChannel);
+    await createChannel({
+      authContext: { id: 42 },
+      body: {
+        name: 'Bank',
+        description: 'Manual orders',
+        apiKey: null,
+        apiSecret: null,
+        paymentMethodId: 12,
+      },
+    }, res);
 
-      expect(res.status).toBe(201);
-      expect(res.body).toEqual(newChannel);
-    });
+    expect(Channel.create).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Bank',
+      paymentMethodId: 12,
+      createdBy: 42,
+    }));
+    expect(channel.reload).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      id: 3,
+      paymentMethodName: 'Bank Transfer',
+    }));
   });
 
-  describe('PUT /api/channels/:id', () => {
-    it('should update a channel', async () => {
-      const updatedChannel = { id: 1, name: 'Updated Channel', description: 'Updated Description' };
-      Channel.update.mockResolvedValue([1]);
+  it('returns 404 when deleting a missing channel', async () => {
+    Channel.destroy.mockResolvedValue(0);
+    const res = makeResponse();
 
-      const res = await request(app)
-        .put('/api/channels/1')
-        .send(updatedChannel);
+    await deleteChannel({ params: { id: '99' } }, res);
 
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(updatedChannel);
-    });
-
-    it('should return 404 if channel not found', async () => {
-      Channel.update.mockResolvedValue([0]);
-
-      const res = await request(app)
-        .put('/api/channels/1')
-        .send({ name: 'New Name' });
-
-      expect(res.status).toBe(404);
-    });
-  });
-
-  describe('DELETE /api/channels/:id', () => {
-    it('should delete a channel', async () => {
-      Channel.destroy.mockResolvedValue(1);
-
-      const res = await request(app).delete('/api/channels/1');
-
-      expect(res.status).toBe(204);
-    });
-
-    it('should return 404 if channel not found', async () => {
-      Channel.destroy.mockResolvedValue(0);
-
-      const res = await request(app).delete('/api/channels/1');
-
-      expect(res.status).toBe(404);
-    });
+    expect(Channel.destroy).toHaveBeenCalledWith({ where: { id: '99' } });
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith([{ message: 'Channel not found' }]);
   });
 });

@@ -11,7 +11,10 @@ jest.mock('../../models/ConfigKey.js', () => ({
 jest.mock('../../models/ConfigValue.js', () => ({
   __esModule: true,
   default: {
-    sequelize: mockDatabase,
+    sequelize: {
+      transaction: (callback: (transaction: typeof mockTransaction) => unknown) =>
+        mockDatabase.transaction(callback),
+    },
     create: jest.fn(),
     findByPk: jest.fn(),
     findAll: jest.fn(),
