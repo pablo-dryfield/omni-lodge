@@ -1,6 +1,6 @@
 # OmniLodge Production Runtime Contract
 
-Status: Phase 0 baseline, partially verified on 2026-09-14. This file contains no credentials and does not authorize deployment.
+Status: Phase 0 inventory remains partially verified; the Phase 1 runtime changes and Phase 2 validation/release workflows are implemented on the current pull-request branch but have not been merged, observed as required checks, or used to deploy production. This file contains no credentials and does not authorize deployment.
 
 This contract is the handoff between the repository, GitHub Actions, and the production host. It records what is known now, what the release pipeline must preserve, and which root-only facts must still be verified before production can be mutated.
 
@@ -20,14 +20,14 @@ Evidence labels used below:
 | Repository visibility | Public; confirm that this remains intentional before any later visibility change |
 | Write/admin access | One current collaborator, the owner, at the Phase 0 audit |
 | `master` protection | Pull request required; zero approvals while there is only one collaborator; force pushes and deletion blocked; rules apply to administrators |
-| Merge freshness | Target: validate GitHub's prospective merge result and require the branch to be current before merge; no status check is required until the workflow exists |
-| Required check | Reserve the stable aggregate name `CI / required`; diagnostic jobs may use `CI / backend`, `CI / ui`, `CI / ui-server`, and `CI / migrations` |
+| Merge freshness | Pull-request CI checks out GitHub's prospective merge result. Requiring the branch to be current remains a branch-protection setting to verify after the workflow has run |
+| Required check | `.github/workflows/ci.yml` defines the stable pull-request aggregate `CI / required`, backed by `CI / backend`, `CI / ui`, `CI / ui-server`, and `CI / migrations`. It also exposes `Branch / required` for diagnostic `codex/**` pushes. Do not make `CI / required` mandatory until GitHub has observed a successful real run |
 | Branch cleanup | Repository auto-delete is currently off. Enable it before routine CI pull requests begin, then automatically delete ordinary merged topic branches; do not delete `origin/dev-1`, `origin/release-1`, or local `migration/omni-ha-prep` until their unique commits are audited |
 | Production environment | `production`, restricted to exact branch `master`, required reviewer configured, administrator bypass disabled |
 | Deployment mode | Repository Actions variable `PRODUCTION_DEPLOY_MODE=disabled`; missing or unknown values also mean disabled |
 | Workflow permissions | Default token is read-only; Actions cannot approve pull requests; actions must be pinned to full commit SHAs |
-| Artifact/log retention | Repository default observed as 90 days; release workflows must set explicit retention rather than rely on a mutable default |
-| Production credentials | Not configured in GitHub at this baseline |
+| Artifact/log retention | Repository default observed as 90 days; the release workflow explicitly uses one day for internal handoffs and 90 days for the combined release |
+| Production credentials | Not configured in GitHub at this baseline; the current CI and release workflows do not request a production environment, credentials, or host access |
 
 The initial release identifier is:
 
@@ -37,9 +37,9 @@ omnilodge-r<GITHUB_RUN_ID>-a<GITHUB_RUN_ATTEMPT>-<first 12 characters of GITHUB_
 
 The manifest always records the full 40-character SHA, run ID, run attempt, workflow identity, repository, event, and ref. The combined archive and detached checksum use the release identifier as their filename stem. A production release is eligible only when it was built by the reviewed release workflow from a successful canonical `push` to `refs/heads/master`.
 
-Validation artifacts may be retained for 14 days. Production release artifacts are retained for 90 days. The server must retain the active release and at least three previous verified releases, so rollback never depends on GitHub artifact retention.
+The release workflow retains its backend and UI handoff artifacts for one day and the final combined release artifact for 90 days. The CI workflow publishes no artifact. The server must eventually retain the active release and at least three previous verified releases, so rollback never depends on GitHub artifact retention.
 
-Approval, emergency freeze, and rollback are currently owned by the repository owner. A forward release needs the protected environment gate. An emergency freeze sets `PRODUCTION_DEPLOY_MODE` to `disabled`; rollback remains an explicit manual operation while forward deployment is disabled. A second server-owned automatic-deploy allow flag is not required for the first manual releases and must be reconsidered before removing the environment reviewer.
+Approval, emergency freeze, and rollback are currently owned by the repository owner. A future forward deployment must pass the protected environment gate. An emergency freeze sets `PRODUCTION_DEPLOY_MODE` to `disabled`; rollback remains an explicit manual operation while forward deployment is disabled. A second server-owned automatic-deploy allow flag is not required for the first manual releases and must be reconsidered before removing the environment reviewer.
 
 ## Toolchain and package contract
 
@@ -51,13 +51,46 @@ There are exactly three independently installed npm projects:
 | --- | --- | --- | --- |
 | Backend | `be/package-lock.json` | `be/dist/**` | `npm ci`; `npm run check`; `npm test -- --runInBand`; `npm run build:prod` |
 | Browser UI | `ui/package-lock.json` | `ui/build/**` | `npm ci`; `npm run check`; `CI=true npm test -- --watchAll=false`; `CI=true GENERATE_SOURCEMAP=true REACT_APP_RELEASE=<release-id> REACT_APP_GIT_SHA=<full-sha> npm run build` |
-| UI server | `ui-server/package-lock.json` | No compiled output | `npm ci`; `npm test`; `node --check server.js reportingSecurity.js sourceMapArchive.js telemetryPayload.js telemetrySecurity.js utils/logger.js` |
+| UI server | `ui-server/package-lock.json` | No compiled output | `npm ci`; `npm test`; syntax-check every checked-in `.js` file below `ui-server`, excluding `node_modules` |
 
 There is no root npm workspace and no root `package.json`. The former empty root `package-lock.json` is not an install input and is removed as part of the reproducibility change. CI must run `npm ci` separately in all three package directories and cache against the matching package-local lockfile.
 
-Backend linting, strict UI artifact validation, a disposable-PostgreSQL migration gate, and the GitHub workflow itself remain Phase 2 work. Do not mark the reserved aggregate check as required until GitHub has observed it from the real workflow.
+The current branch implements strict UI artifact validation, the disposable-PostgreSQL migration gate, compiled-model schema probing, pull-request CI, and the trusted `master` release workflow. Backend validation currently consists of TypeScript checking, Jest tests, compilation, and compiled-monitoring-model verification; it does not claim a separate lint gate. On 2026-09-14 the disposable database gate passed locally from empty state with all 189 migrations, a zero-change second run, 165 public tables, and 159/159 compiled models. Do not mark the reserved aggregate check as required until GitHub has observed it from a successful real workflow run.
 
 During the legacy transition, `ui/build` remains tracked and manual UI releases still follow `AGENTS.md`: build locally, commit the exact generated UI artifact, and fast-forward production to that commit. Backend `dist` is never committed. After the artifact deployment and rollback drill succeed, remove `ui/build` from Git in the dedicated cutover cleanup.
+
+## Implemented CI and release boundary
+
+`.github/workflows/ci.yml` and `.github/workflows/release.yml` are build-and-validation workflows only:
+
+- A `codex/**` push runs backend checks/tests, UI checks/tests, and UI-server tests/syntax checks. It intentionally skips the slower migration and application builds and reports the aggregate as `Branch / required`.
+- A pull request targeting `master` runs those gates plus backend compilation, a source-SHA-bound UI build, strict UI artifact/source-map validation, and a disposable PostgreSQL migration gate. Its aggregate is `CI / required`.
+- A push to `master` runs the separate release workflow. Backend, UI, UI-server, and PostgreSQL jobs run independently; packaging waits for all of them.
+- The PostgreSQL gate compiles migrations, migrates a fresh PostgreSQL 16.10 database, runs the migration command a second time, checks the applied migration set and required schema/index/foreign-key contract, then exercises every compiled Sequelize model against that schema.
+- The release UI job explicitly deletes tracked or stale `ui/build` output before building. Both full UI build paths stamp `release-metadata.json`, require usable source maps for emitted JavaScript/CSS and the service worker, and validate all referenced assets.
+- Backend and UI build trees pass the same recursive release preflight before their one-day handoff artifacts are uploaded and again after download. The packaging job removes checkout build output, downloads only outputs created by that same workflow run, validates them again, runs the packager tests, and emits one immutable `<release-id>.tar.gz` plus detached `.sha256` file. Packaging and verification reject links, special files, credential-like paths, unexpected runtime content, non-canonical manifests/archives, limit violations, and attempts to replace an existing release name.
+
+All referenced GitHub Actions are pinned to full commit SHAs and workflow token permissions are `contents: read`. Neither workflow deploys, reads `PRODUCTION_DEPLOY_MODE`, references the protected `production` environment, or connects to the VPS. `PRODUCTION_DEPLOY_MODE=disabled` therefore remains an additional fail-closed repository setting for the future deployment workflow, not a claim that deployment code already exists. The manifest's production-candidate flag is self-contained build metadata, not deployment authorization; a future unprivileged deploy preflight must independently verify the successful GitHub run and immutable artifact identity before production credentials are exposed.
+
+### Release identity and runtime environment
+
+The release job binds all components to one identity:
+
+```text
+omnilodge-r<GITHUB_RUN_ID>-a<GITHUB_RUN_ATTEMPT>-<first 12 characters of GITHUB_SHA>
+```
+
+The browser build receives `REACT_APP_RELEASE=<release-id>` and `REACT_APP_GIT_SHA=<full-sha>`. Its `release-metadata.json` must contain schema version `1`, that exact release ID, and the lowercase full 40-character SHA; the main JavaScript bundle and service worker must also embed the release ID.
+
+At artifact runtime, the backend must receive `APP_VERSION=<release-id>` and `GIT_COMMIT_SHA=<full-sha>`. In production, `/api/health/ready` also requires valid `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `JWT_SECRET`, and returns `503` when configuration or the database probe fails. Database probes are coalesced and briefly cached to prevent readiness polling from creating an unbounded query backlog.
+
+The UI server must be given explicit release paths at cutover:
+
+- `UI_BUILD_PATH` for the extracted browser bundle.
+- `UI_TLS_KEY_PATH` and `UI_TLS_CERT_PATH` for server-owned TLS material outside the release.
+- `UI_EXPECTED_RELEASE=<release-id>` so startup preflight rejects a missing or inconsistent browser artifact.
+
+`UI_SERVER_HOST` and `UI_SERVER_PORT` configure its listener when needed. After successful preflight, `GET /healthz` reports the UI-server release and sanitized artifact-validation status. These variables are runtime configuration; secrets and TLS contents never belong in a workflow artifact or manifest.
 
 ## Current production baseline
 
@@ -87,8 +120,8 @@ The current backend start script compiles before every production start. The cur
 | Concern | Current code/default | Production state |
 | --- | --- | --- |
 | Backend environment | `be/.env.prod`, resolved relative to the backend working directory when `NODE_ENV=production` | Existence, ownership, and effective PM2 environment require root verification; never print its contents |
-| UI build | `ui-server/../ui/build`, therefore checkout-relative today | Active path follows the checkout; replace with `UI_BUILD_PATH` before release-directory cutover |
-| TLS key/certificate | `be/src/ssl/cf-origin.key` and `be/src/ssl/cf-origin.pem`, read by the UI server from the checkout | Current files are tracked and unsafe; ownership requires root verification. Add configurable paths, install rotated server-owned material, verify it, then revoke/untrack the old material |
+| UI build | `UI_BUILD_PATH`; fallback `ui-server/../ui/build` for the legacy checkout | Active production still follows the checkout. Artifact cutover must set an explicit absolute extracted-release path and `UI_EXPECTED_RELEASE` |
+| TLS key/certificate | `UI_TLS_KEY_PATH` and `UI_TLS_CERT_PATH`; legacy fallbacks are `be/src/ssl/cf-origin.key` and `be/src/ssl/cf-origin.pem` | Current production files are tracked and unsafe; ownership requires root verification. Install rotated server-owned material outside releases, set the explicit paths, verify it, then revoke/untrack the old material |
 | Backend logs | Winston writes `error.log` and `combined.log` relative to the backend cwd, plus PM2 stdout/stderr | Exact active files, rotation, retention, and ownership require root verification |
 | UI-server logs | Winston writes `error.log` and `combined.log` relative to the UI-server cwd, plus PM2 stdout/stderr | Exact cwd/files, rotation, retention, and ownership require root verification |
 | Backend error spool | `ERROR_MONITORING_SPOOL_PATH`, otherwise `runtime/error-monitoring/failed-events.ndjson` below the backend cwd | Effective path and retained segments require root verification |
@@ -104,9 +137,14 @@ No runtime secret, `.env` file, TLS material, upload, log, telemetry spool, sour
 ## Database migrations and backups
 
 - The migration source is `be/src/migrations/*.ts`; production executes compiled `be/dist/migrations/*.js` through `dist/scripts/runMigrations.js`.
+- `202510010000-initial-schema.ts` is an idempotent baseline for databases that do not predate Umzug. It recreates the historical pre-migration table contract, creates only missing tables inside one transaction, and is a table-by-table no-op on an existing production-shaped database. Its `down` is intentionally a no-op because a later rollback cannot safely distinguish baseline-created tables from pre-existing tables.
+- Historical schema that production previously gained through Sequelize sync is now represented by explicit idempotent migrations for User profile fields, report preview ordering, and the physical timestamp names used by legacy models. Those migrations no-op on the production-shaped schema and use intentionally non-destructive rollback behavior for pre-existing columns.
 - Umzug records applied migrations in `sequelize_meta`; the application also records runs and steps in `migration_audit_runs` and `migration_audit_steps`.
+- Before Phase 3, replace the current empty-`sequelize_meta` legacy-adoption heuristic with an explicit schema fingerprint and fail-closed operator path. Its present any-table test can classify an unknown partial schema as fully migrated, bypassing the baseline's table-by-table repair behavior.
+- Before Phase 3, require same-named indexes and constraints to match their expected definitions; name equality alone is not sufficient drift verification.
 - The legacy `npm run migrate:prod` compiles and enables access-control seeding before executing the runner. Artifact deployment must instead call the already-compiled `npm run migrate:runtime` exactly once.
 - `MIGRATION_VERIFY_STRICT` is supported, but its effective production value and the exact applied/pending migration list require root/database verification.
+- Backend startup currently calls `sequelize.sync()` unless `SKIP_DB_SYNC=true`. Before the artifact deployment path is enabled, migrations must become authoritative and production must explicitly disable runtime schema sync; otherwise a missing migration could again be hidden by startup-time schema mutation.
 - The configured defaults are `/home/postgres/backup.sh` and `/home/postgres/backups`. Both currently exist and are root-owned; the script is executable.
 - Backup storage may be `local` or `drive`, controlled by application configuration. The effective mode, script contents, most recent successful backup, restore test, and generated-file naming require root/config verification.
 - The backend registers its backup schedule from `DB_BACKUP_CRON` and `DB_BACKUP_TZ` (defaults `0 6 * * *`, UTC). Effective production values require config verification.
@@ -136,7 +174,7 @@ The authenticated maintenance page currently exposes three server-side actions:
 
 Because the backend currently runs as root, these controls execute with root authority and the last two compile on production. Preserve them only as the legacy fallback through the dry run. At artifact cutover, disable the mutating actions and replace them with read-only release/health/rollback status. Do not add a second, UI-triggered deployment path in the first release.
 
-## Public smoke-test contract
+## Deployment smoke-test contract
 
 The 2026-09-14 baseline returned `200` for the main homepage, the proxied health route, both companion domains, and the main manifest. A JavaScript source-map request derived from the current asset manifest returned `404`. Never hard-code the current hashed asset filename; derive it from the candidate release's `asset-manifest.json`.
 
@@ -146,6 +184,7 @@ The 2026-09-14 baseline returned `200` for the main homepage, the proxied health
 | Legacy API health | `GET https://omni-lodge.com/api/health` returns `200` JSON with `status`, `ready`, and `uptimeSeconds`; this remains a compatibility liveness response and must not gate deployment |
 | API liveness | `GET https://omni-lodge.com/api/health/live` returns `200` with process uptime and sanitized release ID/Git SHA matching the candidate release |
 | API readiness | Poll `GET https://omni-lodge.com/api/health/ready`; require `200`, `ready: true`, successful required-configuration and database checks, and the expected release ID/full Git SHA. The endpoint is implemented in the repository but is not part of the 2026-09-14 production baseline until deployed |
+| UI-server health | Query the UI server's private `GET /healthz`; require `200`, the expected release ID, and `artifactValidation.status: "valid"`. Do not expose this endpoint as a substitute for public asset smoke tests |
 | Main PWA | `GET https://omni-lodge.com/manifest.json` and `/service-worker.js` return `200`; manifest/service-worker release metadata must match the release |
 | Transaction companion | `GET https://transaction.omni-lodge.com/` and `/finance/new-transaction/install.html` return `200`; `/finance/new-transaction/new-transaction.webmanifest` is valid |
 | Counter companion | `GET https://counter.omni-lodge.com/` and `/counters/new-counter/install.html` return `200`; `/counters/new-counter/new-counter.webmanifest` is valid |
