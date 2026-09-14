@@ -29,13 +29,29 @@ import {
   buildBrowserReportUrl,
   UI_CONTENT_SECURITY_POLICY,
 } from './reportingSecurity.js';
+import {
+  loadAndValidateTlsCredentials,
+  resolveExpectedUiRelease,
+  resolveUiServerRuntimePaths,
+} from './runtimeConfig.js';
+import { validateUiArtifact } from './uiArtifactValidation.js';
+import { createUiServerHealthHandler } from './health.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const uiBuildPath = path.join(__dirname, '..', 'ui', 'build');
+const runtimePaths = resolveUiServerRuntimePaths({
+  env: process.env,
+  moduleDirectory: __dirname,
+});
+const uiBuildPath = runtimePaths.buildPath;
 const uiIndexFile = path.join(uiBuildPath, 'index.html');
 const uiServerPort = Number.parseInt(process.env.UI_SERVER_PORT ?? '3005', 10);
 const uiServerListenPort = process.env.NODE_ENV === 'production' ? 443 : uiServerPort;
+const expectedUiRelease = resolveExpectedUiRelease(process.env);
+const uiArtifactValidation = validateUiArtifact({
+  buildPath: uiBuildPath,
+  expectedRelease: expectedUiRelease,
+});
 const uiServerTelemetryEndpoint =
   process.env.UI_SERVER_TELEMETRY_ENDPOINT
   ?? 'http://127.0.0.1:3001/api/client-errors/batch';
@@ -48,34 +64,8 @@ if (!uiServerTelemetrySecret) {
 } else if (!uiServerTelemetryEndpointIsSecure) {
   logger.warn('[ui] Trusted error telemetry is paused: its endpoint must use HTTPS or loopback HTTP and cannot contain credentials.');
 }
-const configuredUiServerRelease =
-  process.env.REACT_APP_BUILD_VERSION
-  ?? process.env.REACT_APP_RELEASE
-  ?? process.env.APP_VERSION
-  ?? process.env.GIT_COMMIT_SHA
-  ?? process.env.GIT_SHA
-  ?? process.env.COMMIT_SHA
-  ?? 'ui-server';
-const uiServerRelease = sanitizeUiServerRelease(configuredUiServerRelease) ?? 'ui-server';
-const resolveUiSourceMapRelease = () => {
-  const configured = process.env.REACT_APP_RELEASE
-    ?? process.env.REACT_APP_BUILD_VERSION
-    ?? process.env.REACT_APP_GIT_SHA
-    ?? process.env.REACT_APP_BUILD_ID;
-  if (configured) return configured;
-  try {
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(uiBuildPath, 'asset-manifest.json'), 'utf8'),
-    );
-    const mainAsset = String(manifest?.files?.['main.js'] || '');
-    const hash = mainAsset.match(/\/main\.([a-z0-9]+)\.js(?:$|\?)/i)?.[1];
-    if (hash) return `web-${hash}`;
-  } catch {
-    // Build validation below reports a missing/unreadable manifest separately.
-  }
-  return uiServerRelease;
-};
-const uiSourceMapRelease = resolveUiSourceMapRelease();
+const uiServerRelease = sanitizeUiServerRelease(uiArtifactValidation.release) ?? 'ui-server';
+const uiSourceMapRelease = uiServerRelease;
 const sourceMapArchiveRoot = process.env.ERROR_MONITORING_SOURCE_MAP_DIR
   ?? path.join(__dirname, '..', 'runtime', 'error-monitoring', 'source-maps');
 
@@ -383,44 +373,13 @@ const setNoCacheHeaders = (res) => {
   });
 };
 
-const validateUiBuildAssets = () => {
-  try {
-    const html = fs.readFileSync(uiIndexFile, 'utf8');
-    const references = [...new Set(
-      [...html.matchAll(/(?:src|href)="(\/[^"]+)"/g)]
-        .map((match) => match[1].split(/[?#]/, 1)[0])
-        .filter(Boolean),
-    )];
-    const missingAssets = references.filter((assetPath) => {
-      const normalizedPath = assetPath.replace(/^\/+/, '');
-      return !fs.existsSync(path.join(uiBuildPath, normalizedPath));
-    });
-
-    if (missingAssets.length > 0) {
-      logger.error(`[ui] Missing assets referenced in index.html: ${missingAssets.join(', ')}`);
-      enqueueUiServerError({
-        type: 'manual',
-        name: 'UiBuildAssetMissing',
-        message: 'The UI build references one or more missing static assets',
-        path: '/',
-        context: { missingAssetCount: missingAssets.length },
-      });
-    }
-  } catch (error) {
-    logger.error('[ui] Unable to validate build asset references', error);
-    enqueueUiServerError({
-      type: 'exception',
-      name: safeUiServerRead(error, 'name') || 'UiBuildValidationError',
-      message: safeUiServerRead(error, 'message') || 'Unable to validate UI build assets',
-      stack: safeUiServerRead(error, 'stack'),
-      path: '/',
-      context: { source: 'build-validation' },
-    });
-  }
-};
-
 const app = express();
 app.set('trust proxy', 1);
+
+app.get('/healthz', createUiServerHealthHandler({
+  release: uiServerRelease,
+  artifactValidation: uiArtifactValidation,
+}));
 
 app.use((req, res, next) => {
   // Keep the browser allowlist narrow while permitting Meta's official
@@ -582,7 +541,6 @@ process.on('beforeExit', () => {
   void flushUiServerTelemetry();
 });
 
-validateUiBuildAssets();
 try {
   const archivedMaps = archiveSourceMaps({
     buildRoot: uiBuildPath,
@@ -610,14 +568,10 @@ try {
 }
 
 if(process.env.NODE_ENV === 'production'){
-  // Define the directory path where the SSL certificate files are located
-  const sslDir = path.join(__dirname, '..', 'be', 'src','ssl');
-
-  // Read SSL certificate and private key files
-  const options = {
-    key: fs.readFileSync(path.join(sslDir, 'cf-origin.key')), // Read the private key file
-    cert: fs.readFileSync(path.join(sslDir, 'cf-origin.pem')), // Read the SSL certificate file
-  };
+  const options = loadAndValidateTlsCredentials({
+    keyPath: runtimePaths.tlsKeyPath,
+    certPath: runtimePaths.tlsCertPath,
+  });
   const server = https.createServer(options, app);
   server.listen(uiServerListenPort, '0.0.0.0', () => {
     logger.info(`Server is running on port ${uiServerListenPort}`);
