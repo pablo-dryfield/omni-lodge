@@ -45,7 +45,9 @@ describe('backend build and runtime package scripts', () => {
   it('runs compiled migrations without compiling', () => {
     expectRuntimeOnly('migrate:runtime', 'dist/scripts/runMigrations.js');
     expect(scripts['migrate:runtime']).toContain('NODE_ENV=production');
-    expect(scripts['migrate:runtime']).toContain('SEED_ACCESS_CONTROL=true');
+    expect(scripts['migrate:runtime']).toContain('SEED_ACCESS_CONTROL=false');
+    expect(scripts['migrate:runtime']).not.toContain('SEED_ACCESS_CONTROL=true');
+    expect(scripts['migrate:prod']).toContain('SEED_ACCESS_CONTROL=false');
   });
 
   it('reports migration status from compiled code without compiling or running migrations', () => {
