@@ -50,7 +50,7 @@ describe('backend runtime preflight', () => {
       checks: {
         productionConfiguration: true,
         databaseSyncPolicy: true,
-        startupMutationPolicy: true,
+        accessControlSeedPolicy: true,
         databaseReadOnlyProbe: true,
         sharpNativeOperation: true,
         puppeteerBrowserLaunch: true,
@@ -92,7 +92,7 @@ describe('backend runtime preflight', () => {
       const env = productionEnvironment();
       env.SEED_ACCESS_CONTROL = seedAccessControl;
       await expect(runRuntimePreflightChecks({ env, operations: operations() })).rejects.toMatchObject({
-        code: 'STARTUP_MUTATION_POLICY_UNSAFE',
+        code: 'ACCESS_CONTROL_SEED_POLICY_UNSAFE',
       });
     },
   );

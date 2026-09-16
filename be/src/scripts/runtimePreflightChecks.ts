@@ -18,7 +18,7 @@ export type RuntimePreflightResult = Readonly<{
   checks: Readonly<{
     productionConfiguration: true;
     databaseSyncPolicy: true;
-    startupMutationPolicy: true;
+    accessControlSeedPolicy: true;
     databaseReadOnlyProbe: true;
     sharpNativeOperation: true;
     puppeteerBrowserLaunch: true;
@@ -100,7 +100,7 @@ export async function runRuntimePreflightChecks({
 
   if (resolveDatabaseSyncBoolean(env.SEED_ACCESS_CONTROL, true)) {
     throw new RuntimePreflightError(
-      'STARTUP_MUTATION_POLICY_UNSAFE',
+      'ACCESS_CONTROL_SEED_POLICY_UNSAFE',
       'Production startup must not seed access control automatically.',
     );
   }
@@ -128,7 +128,7 @@ export async function runRuntimePreflightChecks({
     checks: {
       productionConfiguration: true,
       databaseSyncPolicy: true,
-      startupMutationPolicy: true,
+      accessControlSeedPolicy: true,
       databaseReadOnlyProbe: true,
       sharpNativeOperation: true,
       puppeteerBrowserLaunch: true,
