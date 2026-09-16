@@ -1,4 +1,25 @@
-import { assertDatabaseSyncPolicy } from '../databaseSyncPolicy.js';
+import {
+  assertDatabaseSyncPolicy,
+  resolveDatabaseSyncBoolean,
+} from '../databaseSyncPolicy.js';
+
+describe('resolveDatabaseSyncBoolean', () => {
+  it.each([
+    [true, true],
+    [1, true],
+    [' YES ', true],
+    [false, false],
+    [0, false],
+    [' n ', false],
+  ])('normalizes %p to %p', (value, expected) => {
+    expect(resolveDatabaseSyncBoolean(value, !expected)).toBe(expected);
+  });
+
+  it('uses the fail-safe caller fallback for missing or invalid values', () => {
+    expect(resolveDatabaseSyncBoolean(undefined, false)).toBe(false);
+    expect(resolveDatabaseSyncBoolean('maybe', true)).toBe(true);
+  });
+});
 
 describe('assertDatabaseSyncPolicy', () => {
   it('allows production startup only when runtime schema sync is disabled', () => {

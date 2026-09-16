@@ -73,7 +73,9 @@ const RUNTIME_TREES = [
 const RUNTIME_ENTRYPOINT_FILES = [
   'be/dist/app.js',
   'be/dist/scripts/baselineMigrations.js',
+  'be/dist/scripts/reportMigrationStatus.js',
   'be/dist/scripts/runMigrations.js',
+  'be/dist/scripts/runtimePreflight.js',
   'be/dist/scripts/syncAccessControl.js',
   'ui/build/index.html',
   'ui/build/asset-manifest.json',

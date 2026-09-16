@@ -48,6 +48,18 @@ describe('backend build and runtime package scripts', () => {
     expect(scripts['migrate:runtime']).toContain('SEED_ACCESS_CONTROL=true');
   });
 
+  it('reports migration status from compiled code without compiling or running migrations', () => {
+    expectRuntimeOnly('migrate:status:runtime', 'dist/scripts/reportMigrationStatus.js');
+    expect(scripts['migrate:status:runtime']).toContain('NODE_ENV=production');
+    expect(scripts['migrate:status:runtime']).not.toContain('runMigrations.js');
+  });
+
+  it('runs the dedicated compiled backend preflight without starting the application', () => {
+    expectRuntimeOnly('preflight:runtime', 'dist/scripts/runtimePreflight.js');
+    expect(scripts['preflight:runtime']).toContain('NODE_ENV=production');
+    expect(scripts['preflight:runtime']).not.toContain('dist/app.js');
+  });
+
   it('runs the compiled access-control sync without compiling', () => {
     expectRuntimeOnly('sync-access-control:runtime', 'dist/scripts/syncAccessControl.js');
     expect(scripts['sync-access-control:runtime']).toContain('NODE_ENV=production');

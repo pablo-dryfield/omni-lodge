@@ -1,16 +1,8 @@
 import { Request, Response, Router } from 'express';
+import { inspectRuntimeConfiguration } from '../config/runtimeConfiguration.js';
 
-const REQUIRED_DATABASE_ENV = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER'] as const;
-const REQUIRED_PRODUCTION_ENV = [
-  'DB_PASSWORD',
-  'JWT_SECRET',
-  'APP_VERSION',
-  'GIT_COMMIT_SHA',
-] as const;
 const DEFAULT_DATABASE_TIMEOUT_MS = 5_000;
 const DEFAULT_DATABASE_CACHE_MS = 2_000;
-const RELEASE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,119}$/;
-const GIT_SHA = /^[a-f0-9]{40}$/i;
 
 type HealthEnvironment = NodeJS.ProcessEnv;
 
@@ -119,26 +111,9 @@ export const createHealthRouter = (options: HealthRouterOptions = {}): Router =>
   router.get('/ready', async (_req: Request, res: Response) => {
     setHealthHeaders(res);
 
-    const requiredNames: readonly string[] = env.NODE_ENV === 'production'
-      ? [...REQUIRED_DATABASE_ENV, ...REQUIRED_PRODUCTION_ENV]
-      : REQUIRED_DATABASE_ENV;
-    const missing = requiredNames.filter((name) => !env[name]?.trim());
-    const invalid = missing.length === 0
-      ? [
-          !/^\d+$/.test(env.DB_PORT ?? '')
-            || Number(env.DB_PORT) < 1
-            || Number(env.DB_PORT) > 65_535
-            ? 'DB_PORT'
-            : null,
-          env.NODE_ENV === 'production' && !RELEASE_TOKEN.test(env.APP_VERSION ?? '')
-            ? 'APP_VERSION'
-            : null,
-          env.NODE_ENV === 'production' && !GIT_SHA.test(env.GIT_COMMIT_SHA ?? '')
-            ? 'GIT_COMMIT_SHA'
-            : null,
-        ].filter((name): name is string => Boolean(name))
-      : [];
-    const configurationOk = missing.length === 0 && invalid.length === 0;
+    const configuration = inspectRuntimeConfiguration(env);
+    const { missing, invalid } = configuration;
+    const configurationOk = configuration.ok;
     let databaseOk = false;
 
     if (configurationOk) {

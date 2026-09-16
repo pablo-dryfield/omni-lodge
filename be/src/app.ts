@@ -110,7 +110,10 @@ import { startErrorMonitoringSpoolReplayJob } from './jobs/errorMonitoringSpoolR
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
-import { assertDatabaseSyncPolicy } from './config/databaseSyncPolicy.js';
+import {
+  assertDatabaseSyncPolicy,
+  resolveDatabaseSyncBoolean,
+} from './config/databaseSyncPolicy.js';
 import logger from './utils/logger.js';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
@@ -176,25 +179,6 @@ const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
 externalRequestDiagnosticsService.install();
-
-const resolveBoolean = (value: unknown, fallback: boolean): boolean => {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-  if (typeof value === 'number') {
-    return value !== 0;
-  }
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (['true', '1', 'yes', 'y'].includes(normalized)) {
-      return true;
-    }
-    if (['false', '0', 'no', 'n'].includes(normalized)) {
-      return false;
-    }
-  }
-  return fallback;
-};
 
 // Temporarily disable scheduling cron automation without removing job code.
 const ENABLE_SCHEDULING_CRON_JOBS = false;
@@ -386,9 +370,9 @@ defineAssociations();
 
 async function bootstrap(): Promise<void> {
   try {
-    const shouldAlterSchema = resolveBoolean(getConfigValue('DB_SYNC_ALTER'), false);
-    const shouldSkipDbSync = resolveBoolean(getConfigValue('SKIP_DB_SYNC'), false);
-    const shouldSeedAccessControl = resolveBoolean(getConfigValue('SEED_ACCESS_CONTROL'), false);
+    const shouldAlterSchema = resolveDatabaseSyncBoolean(getConfigValue('DB_SYNC_ALTER'), false);
+    const shouldSkipDbSync = resolveDatabaseSyncBoolean(getConfigValue('SKIP_DB_SYNC'), false);
+    const shouldSeedAccessControl = resolveDatabaseSyncBoolean(getConfigValue('SEED_ACCESS_CONTROL'), false);
 
     assertDatabaseSyncPolicy({
       nodeEnv: process.env.NODE_ENV,

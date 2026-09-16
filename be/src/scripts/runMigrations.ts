@@ -5,21 +5,16 @@ import type { QueryInterface, Transaction } from 'sequelize';
 import { Umzug, SequelizeStorage } from 'umzug';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
-import { promises as fs } from 'fs';
 import sequelize from '../config/database.js';
 import {
-  assertMigrationMetadataLineage,
-  classifyMigrationDatabase,
-  MIGRATION_CONTROL_TABLES,
   normalizeConstraintAction,
   normalizeIndexMethod,
-  PRE_CI_PRODUCTION_METADATA_PROFILE,
   resolveConstraintDefinition,
   resolveIndexDefinition,
   type ConstraintDefinition,
   type IndexDefinition,
 } from './migrationSafety.js';
-import { LEGACY_ADOPTION_MIGRATIONS } from './legacyMigrationAdoptionProfile.js';
+import { inspectMigrationRuntimeStatus } from './migrationRuntimeStatus.js';
 
 const TABLE_MIGRATION_RUNS = 'migration_audit_runs';
 const TABLE_MIGRATION_STEPS = 'migration_audit_steps';
@@ -377,111 +372,11 @@ async function ensureSequelizeMetaTable(): Promise<void> {
   `);
 }
 
-async function inspectMigrationDatabase(): Promise<{
-  metadataTableExists: boolean;
-  appliedMigrationCount: number;
-  appliedMigrationNames: string[];
-  existingControlTables: string[];
-  applicationTables: string[];
-}> {
-  const controlTableRows = await selectQuery<{ table_name: string }>(
-    `
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_type = 'BASE TABLE'
-        AND table_name IN (:controlTables)
-      ORDER BY table_name;
-    `,
-    { controlTables: [...MIGRATION_CONTROL_TABLES] },
-  );
-  const existingControlTables = controlTableRows.map((row) => row.table_name);
-  const metadataTableExists = existingControlTables.includes('sequelize_meta');
-  let appliedMigrationNames: string[] = [];
-  if (metadataTableExists) {
-    const rows = await selectQuery<{ name: string }>(
-      'SELECT name FROM sequelize_meta ORDER BY name;',
-    );
-    appliedMigrationNames = rows.map((row) => row.name);
-  }
-
-  const tableRows = await selectQuery<{ table_name: string }>(
-    `
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_type = 'BASE TABLE'
-        AND table_name NOT IN (:controlTables)
-      ORDER BY table_name;
-    `,
-    { controlTables: [...MIGRATION_CONTROL_TABLES] },
-  );
-  return {
-    metadataTableExists,
-    appliedMigrationCount: appliedMigrationNames.length,
-    appliedMigrationNames,
-    existingControlTables,
-    applicationTables: tableRows.map((row) => row.table_name),
-  };
-}
-
-async function listCompiledMigrationNames(): Promise<string[]> {
-  const migrationsDirectory = join(__dirname, '../migrations');
-  const entries = await fs.readdir(migrationsDirectory, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
-    .map((entry) => entry.name)
-    .sort();
-}
-
 async function assertMigrationDatabaseSafe(): Promise<void> {
-  const [inventory, compiledMigrationNames] = await Promise.all([
-    inspectMigrationDatabase(),
-    listCompiledMigrationNames(),
-  ]);
-  const classification = classifyMigrationDatabase(inventory);
-  if (classification === 'fresh') {
-    assertMigrationMetadataLineage({
-      compiledMigrationNames,
-      appliedMigrationNames: inventory.appliedMigrationNames,
-      legacyAdoptionMigrationNames: LEGACY_ADOPTION_MIGRATIONS,
-      preCiProductionProfile: PRE_CI_PRODUCTION_METADATA_PROFILE,
-    });
-    return;
-  }
-
-  if (classification === 'managed') {
-    assertMigrationMetadataLineage({
-      compiledMigrationNames,
-      appliedMigrationNames: inventory.appliedMigrationNames,
-      legacyAdoptionMigrationNames: LEGACY_ADOPTION_MIGRATIONS,
-      preCiProductionProfile: PRE_CI_PRODUCTION_METADATA_PROFILE,
-    });
-    return;
-  }
-
-  if (classification === 'unmanaged_existing_schema') {
-    const sample = inventory.applicationTables.slice(0, 5).join(', ');
-    throw new Error(
-      'Migration authority is missing: application tables exist while sequelize_meta is missing or empty. '
-      + 'The normal migration runner will not adopt an existing schema automatically. '
-      + 'Use the reviewed operator-only legacy adoption command first. '
-      + `applicationTableCount=${inventory.applicationTables.length} sample=${sample}`,
-    );
-  }
-
-  if (classification === 'unexpected_control_state') {
-    throw new Error(
-      'Migration control state is inconsistent: migration audit tables exist while sequelize_meta is missing or empty. '
-      + 'Review and repair the control tables explicitly before running migrations. '
-      + `existingControlTables=${inventory.existingControlTables.join(',')}`,
-    );
-  }
-
-  throw new Error(
-    'Migration metadata is inconsistent: sequelize_meta contains applied migrations but no application tables exist. '
-    + `appliedMigrationCount=${inventory.appliedMigrationCount}`,
-  );
+  await inspectMigrationRuntimeStatus({
+    selectQuery,
+    migrationsDirectory: join(__dirname, '../migrations'),
+  });
 }
 
 function ensureTableExpectation(tracker: MigrationTracker, schema: string, table: string, created = false): TableExpectation {

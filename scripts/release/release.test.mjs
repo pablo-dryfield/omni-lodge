@@ -70,7 +70,9 @@ const makeFixture = () => {
   write(root, 'be/dist/app.js', 'console.log("backend");\n');
   write(root, 'be/dist/migrations/example.js', 'export default {};\n');
   write(root, 'be/dist/scripts/baselineMigrations.js', 'export const adopt = false;\n');
+  write(root, 'be/dist/scripts/reportMigrationStatus.js', 'export const status = true;\n');
   write(root, 'be/dist/scripts/runMigrations.js', 'export const run = true;\n');
+  write(root, 'be/dist/scripts/runtimePreflight.js', 'export const preflight = true;\n');
   write(root, 'be/dist/scripts/syncAccessControl.js', 'export const sync = true;\n');
   write(root, 'be/scripts/startMonitored.js', 'await import("../dist/app.js");\n');
   write(root, 'ui/build/index.html', '<script src="/static/js/main.abc12345.js"></script>\n');

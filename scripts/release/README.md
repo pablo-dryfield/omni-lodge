@@ -51,7 +51,10 @@ manifest, while both the hashed main bundle and `service-worker.js` must embed
 the exact release ID as a JavaScript string literal. Packaging also requires
 all backend runtime entrypoints and the UI shell, asset manifest, web manifest,
 manifest selector, service worker, and release metadata; a partially built
-artifact is rejected.
+artifact is rejected. The backend entrypoint contract includes the compiled,
+read-only migration-status reporter and the dedicated runtime-preflight command;
+deployment must not fall back to source files or compile either command on the
+production host.
 
 The release workflow should build the UI with that release ID and SHA, then run
 `scripts/ci/validate-ui-build.mjs --stamp` with the same values before invoking
