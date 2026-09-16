@@ -473,7 +473,7 @@ Store `PRODUCTION_DEPLOY_MODE` as a repository configuration variable, not an en
 
 Enable required reviewers, prevent self-review where practical, disallow administrator bypass, and restrict deployment branches when supported by the repository's GitHub plan. Environment protections are independent of the deployment-mode switch, and environment secrets must not become available until those protections pass. Confirm plan support before depending on required reviewers for a private repository.
 
-Rotate any deployment/root password or private credential that has previously been shared outside its intended secret store. After the dedicated deploy user/key and rollback path are proven, disable routine root/password SSH login in a separate hardening change rather than coupling it to the first cutover.
+GitHub Actions must use only the dedicated deployment key; it must never receive the root password. The owner has explicitly chosen to retain the existing root credential as a narrow accepted-risk exception. Do not describe that credential as secure or generalize the exception to future leaks. After the deploy user/key and rollback path are proven, disabling routine root/password SSH login remains recommended separate hardening rather than part of the first cutover.
 
 ## Explicit non-goals
 
