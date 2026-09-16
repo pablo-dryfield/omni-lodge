@@ -110,6 +110,7 @@ import { startErrorMonitoringSpoolReplayJob } from './jobs/errorMonitoringSpoolR
 
 // Sequelize instance and middlewares (make sure these are also migrated to .ts)
 import sequelize from './config/database.js';
+import { assertDatabaseSyncPolicy } from './config/databaseSyncPolicy.js';
 import logger from './utils/logger.js';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
@@ -388,6 +389,12 @@ async function bootstrap(): Promise<void> {
     const shouldAlterSchema = resolveBoolean(getConfigValue('DB_SYNC_ALTER'), false);
     const shouldSkipDbSync = resolveBoolean(getConfigValue('SKIP_DB_SYNC'), false);
     const shouldSeedAccessControl = resolveBoolean(getConfigValue('SEED_ACCESS_CONTROL'), false);
+
+    assertDatabaseSyncPolicy({
+      nodeEnv: process.env.NODE_ENV,
+      skipDbSync: shouldSkipDbSync,
+      alterSchema: shouldAlterSchema,
+    });
 
     if (shouldAlterSchema) {
       logger.warn('DB_SYNC_ALTER=true: sequelize.sync will attempt to alter existing tables. Prefer running migrations instead.');

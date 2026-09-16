@@ -11,7 +11,7 @@
     "packageManager": "npm@10.9.8",
     "scripts": {
         "build:clean:dev": "rimraf dist",
-        "build:clean:prod": "rm -rf dist",
+        "build:clean:prod": "rimraf dist",
         "check": "tsc --noEmit",
         "build:dev": "npm run build:clean:dev && tsc",
         "build:prod": "npm run build:clean:prod && tsc && npm run verify:compiled-monitoring-models",
@@ -30,6 +30,7 @@
         "migrate:dev": "cross-env NODE_OPTIONS=--max-old-space-size=4096 SEED_ACCESS_CONTROL=true npm run build:dev && cross-env NODE_OPTIONS=--max-old-space-size=4096 SEED_ACCESS_CONTROL=true node --enable-source-maps dist/scripts/runMigrations.js",
         "migrate:dev:undo": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build:dev && cross-env NODE_OPTIONS=--max-old-space-size=4096 node --enable-source-maps dist/scripts/runMigrations.js --undo",
         "migrate:runtime": "cross-env NODE_ENV=production NODE_OPTIONS=--max-old-space-size=4096 SEED_ACCESS_CONTROL=true node --enable-source-maps dist/scripts/runMigrations.js",
+        "migrate:adopt-legacy:runtime": "cross-env NODE_ENV=production NODE_OPTIONS=--max-old-space-size=4096 node --enable-source-maps dist/scripts/baselineMigrations.js",
         "migrate:prod": "cross-env NODE_OPTIONS=--max-old-space-size=4096 SEED_ACCESS_CONTROL=true npm run build:prod && npm run migrate:runtime",
         "migrate:prod:undo": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build:prod && cross-env NODE_ENV=production NODE_OPTIONS=--max-old-space-size=4096 node --enable-source-maps dist/scripts/runMigrations.js --undo",
         "bookings:backfill": "npm run build:prod && npm run bookings:backfill:run --",
