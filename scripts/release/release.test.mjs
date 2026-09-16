@@ -1327,10 +1327,12 @@ test('package and verify command-line entry points compose without package scrip
       '--workflow-path', '.github/workflows/release.yml',
       '--event', 'push',
       '--ref', 'refs/heads/master',
+      '--head-sha', SOURCE_SHA,
       '--run-id', '101',
       '--run-attempt', '2',
       '--run-number', '77',
       '--actor', 'release-bot',
+      '--artifact-name', RELEASE_ID,
     ], { encoding: 'utf8' });
     assert.equal(packageResult.status, 0, packageResult.stderr);
     const packaged = JSON.parse(packageResult.stdout);
