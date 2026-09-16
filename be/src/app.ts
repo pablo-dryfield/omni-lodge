@@ -114,6 +114,7 @@ import {
   assertDatabaseSyncPolicy,
   resolveDatabaseSyncBoolean,
 } from './config/databaseSyncPolicy.js';
+import { buildApplicationRuntimeModePolicy } from './config/applicationRuntimeMode.js';
 import logger from './utils/logger.js';
 import instrumentMiddleware from './middleware/instrumentMiddleware.js';
 import errorMiddleware from './middleware/errorMiddleware.js';
@@ -184,6 +185,26 @@ externalRequestDiagnosticsService.install();
 const ENABLE_SCHEDULING_CRON_JOBS = false;
 // Temporarily disable assistant manager task push cron automation.
 const ENABLE_AM_TASK_PUSH_CRON_JOBS = false;
+
+const startApplicationBackgroundJobs = (): void => {
+  startFinanceRecurringJob();
+  if (ENABLE_SCHEDULING_CRON_JOBS) {
+    startScheduleJobs();
+  }
+  startDbBackupJob();
+  startBookingEmailIngestionJob();
+  if (ENABLE_AM_TASK_PUSH_CRON_JOBS) {
+    startAmTaskPushNotificationsJob();
+  }
+  startDailyMidnightClosureJob();
+  startReviewFullSyncJob();
+  startStorefrontAbandonedCartJob();
+  startStorefrontBankTransferExpiryJob();
+  startWhatsAppRetentionJob();
+  startWhatsAppWebhookQueueJob();
+  startErrorMonitoringRetentionJob();
+  startErrorMonitoringSpoolReplayJob();
+};
 
 // API Requests limiter
 const apiLimiter = rateLimit({
@@ -373,6 +394,13 @@ async function bootstrap(): Promise<void> {
     const shouldAlterSchema = resolveDatabaseSyncBoolean(getConfigValue('DB_SYNC_ALTER'), false);
     const shouldSkipDbSync = resolveDatabaseSyncBoolean(getConfigValue('SKIP_DB_SYNC'), false);
     const shouldSeedAccessControl = resolveDatabaseSyncBoolean(getConfigValue('SEED_ACCESS_CONTROL'), false);
+    const runtimePolicy = buildApplicationRuntimeModePolicy({
+      value: process.env.APP_RUNTIME_MODE,
+      nodeEnv: process.env.NODE_ENV,
+      skipDbSync: shouldSkipDbSync,
+      alterSchema: shouldAlterSchema,
+      seedAccessControl: shouldSeedAccessControl,
+    });
 
     assertDatabaseSyncPolicy({
       nodeEnv: process.env.NODE_ENV,
@@ -394,88 +422,64 @@ async function bootstrap(): Promise<void> {
       await sequelize.sync(syncOptions);
     }
 
-    try {
-      await initializeConfigRegistry();
-    } catch (error) {
-      logger.warn('[config] Failed to initialize config registry', error);
-    }
-
-    try {
-      await ensureAffiliateAccessControl();
-    } catch (error) {
-      logger.warn('[access-control] Failed to ensure affiliate access control records', error);
-    }
-
-    try {
-      const seedResult = await runSeedOnce({
-        seedKey: 'booking-utm-catalog',
-        runType: 'auto',
-        run: () => seedBookingUtmCatalogFromExistingBookings(),
-      });
-      if (seedResult.skipped) {
-        logger.info('[affiliate-utm] Booking UTM catalog seed skipped (already run)');
-      } else {
-        logger.info('[affiliate-utm] Booking UTM catalog seed completed', {
-          seededCount: seedResult.seededCount,
-          details: seedResult.details ?? null,
-        });
-      }
-    } catch (error) {
-      logger.warn('[affiliate-utm] Failed to seed booking UTM catalog', error);
-    }
-
-    if (shouldSeedAccessControl) {
+    if (runtimePolicy.allowStartupMutations) {
       try {
-        await initializeAccessControl();
-      } catch (seedError) {
-        logger.error('Failed to initialize access control data', seedError);
+        await initializeConfigRegistry();
+      } catch (error) {
+        logger.warn('[config] Failed to initialize config registry', error);
+      }
+
+      try {
+        await ensureAffiliateAccessControl();
+      } catch (error) {
+        logger.warn('[access-control] Failed to ensure affiliate access control records', error);
+      }
+
+      try {
+        const seedResult = await runSeedOnce({
+          seedKey: 'booking-utm-catalog',
+          runType: 'auto',
+          run: () => seedBookingUtmCatalogFromExistingBookings(),
+        });
+        if (seedResult.skipped) {
+          logger.info('[affiliate-utm] Booking UTM catalog seed skipped (already run)');
+        } else {
+          logger.info('[affiliate-utm] Booking UTM catalog seed completed', {
+            seededCount: seedResult.seededCount,
+            details: seedResult.details ?? null,
+          });
+        }
+      } catch (error) {
+        logger.warn('[affiliate-utm] Failed to seed booking UTM catalog', error);
+      }
+
+      if (shouldSeedAccessControl) {
+        try {
+          await initializeAccessControl();
+        } catch (seedError) {
+          logger.error('Failed to initialize access control data', seedError);
+        }
+      } else {
+        logger.info('[access-control] Skipping initialization (set SEED_ACCESS_CONTROL=true to enable seeding).');
       }
     } else {
-      logger.info('[access-control] Skipping initialization (set SEED_ACCESS_CONTROL=true to enable seeding).');
+      logger.info('[runtime] Deployment candidate: startup mutations are disabled.');
     }
 
     if (process.env.NODE_ENV === 'production') {
       app.set('trust proxy', resolveProductionTrustProxyHops(process.env.TRUST_PROXY_HOPS));
       app.listen(PORT, '127.0.0.1', () => {
         logger.info(`backend listening on http://127.0.0.1:${PORT}`);
-        startFinanceRecurringJob();
-        if (ENABLE_SCHEDULING_CRON_JOBS) {
-          startScheduleJobs();
+        if (runtimePolicy.allowBackgroundJobs) {
+          startApplicationBackgroundJobs();
+        } else {
+          logger.info('[runtime] Deployment candidate: background jobs are disabled.');
         }
-        startDbBackupJob();
-        startBookingEmailIngestionJob();
-        if (ENABLE_AM_TASK_PUSH_CRON_JOBS) {
-          startAmTaskPushNotificationsJob();
-        }
-        startDailyMidnightClosureJob();
-        startReviewFullSyncJob();
-        startStorefrontAbandonedCartJob();
-        startStorefrontBankTransferExpiryJob();
-        startWhatsAppRetentionJob();
-        startWhatsAppWebhookQueueJob();
-        startErrorMonitoringRetentionJob();
-        startErrorMonitoringSpoolReplayJob();
       });
     } else {
       app.listen(PORT, '0.0.0.0', () => {
         logger.info(`Server is running on port ${PORT}`);
-        startFinanceRecurringJob();
-        if (ENABLE_SCHEDULING_CRON_JOBS) {
-          startScheduleJobs();
-        }
-        startDbBackupJob();
-        startBookingEmailIngestionJob();
-        if (ENABLE_AM_TASK_PUSH_CRON_JOBS) {
-          startAmTaskPushNotificationsJob();
-        }
-        startDailyMidnightClosureJob();
-        startReviewFullSyncJob();
-        startStorefrontAbandonedCartJob();
-        startStorefrontBankTransferExpiryJob();
-        startWhatsAppRetentionJob();
-        startWhatsAppWebhookQueueJob();
-        startErrorMonitoringRetentionJob();
-        startErrorMonitoringSpoolReplayJob();
+        startApplicationBackgroundJobs();
       });
     }
   } catch (err) {

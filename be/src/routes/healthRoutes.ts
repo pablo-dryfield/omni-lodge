@@ -81,6 +81,7 @@ export const createHealthRouter = (options: HealthRouterOptions = {}): Router =>
   const release = () => ({
     id: cleanPublicValue(env.APP_VERSION, 120),
     gitSha: cleanPublicValue(env.GIT_COMMIT_SHA, 64),
+    runtimeMode: cleanPublicValue(env.APP_RUNTIME_MODE, 40) ?? 'primary',
   });
 
   const setHealthHeaders = (res: Response) => {

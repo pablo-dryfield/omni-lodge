@@ -189,6 +189,7 @@ test('runtime launcher uses only fixed release/config/state roots', async () => 
     "SKIP_DB_SYNC: 'true'",
     "DB_SYNC_ALTER: 'false'",
     "SEED_ACCESS_CONTROL: 'false'",
+    "APP_RUNTIME_MODE: 'primary'",
     "PUPPETEER_CACHE_DIR: '/var/cache/omnilodge/puppeteer'",
     "identity.lockfiles['be/package-lock.json']",
     "identity.lockfiles['ui-server/package-lock.json']",

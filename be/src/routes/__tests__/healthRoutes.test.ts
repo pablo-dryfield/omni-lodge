@@ -39,6 +39,7 @@ describe('health routes', () => {
       env: {
         APP_VERSION: ' release-20260914-a1005a62 ',
         GIT_COMMIT_SHA: 'a1005a62<script>',
+        APP_RUNTIME_MODE: 'deployment-candidate',
       },
       uptime: () => 4.2,
       checkDatabase,
@@ -53,6 +54,7 @@ describe('health routes', () => {
       release: {
         id: 'release-20260914-a1005a62',
         gitSha: 'a1005a62script',
+        runtimeMode: 'deployment-candidate',
       },
     });
     expect(checkDatabase).not.toHaveBeenCalled();
@@ -74,6 +76,7 @@ describe('health routes', () => {
       release: {
         id: 'release-20260914-a1005a62',
         gitSha: 'a1005a62bb32a0807f78591bf49086bed05d79b2',
+        runtimeMode: 'primary',
       },
       checks: {
         configuration: { ok: true, missing: [], invalid: [] },

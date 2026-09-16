@@ -185,6 +185,7 @@ const buildBackend = () => {
     ],
     env: {
       NODE_ENV: 'production',
+      APP_RUNTIME_MODE: 'primary',
       NODE_OPTIONS: '--max-old-space-size=4096',
       APP_VERSION: identity.releaseId,
       GIT_COMMIT_SHA: identity.sourceSha,
