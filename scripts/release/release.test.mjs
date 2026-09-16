@@ -1,25 +1,35 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import {
   existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
 } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { extractGitHubArtifact } from '../deploy/extract-github-artifact.mjs';
+import {
+  createGitHubReleaseEvidence,
+  serializeGitHubReleaseEvidence,
+} from '../deploy/github-release-evidence.mjs';
 import {
   collectPayload,
   createReleaseManifest,
   createTarGzipBuffer,
+  extractVerifiedReleaseArchive,
   packageRelease,
   parseStrictCliArguments,
   preflightPayloadTree,
@@ -59,6 +69,7 @@ const makeFixture = () => {
   }
   write(root, 'be/dist/app.js', 'console.log("backend");\n');
   write(root, 'be/dist/migrations/example.js', 'export default {};\n');
+  write(root, 'be/dist/scripts/baselineMigrations.js', 'export const adopt = false;\n');
   write(root, 'be/dist/scripts/runMigrations.js', 'export const run = true;\n');
   write(root, 'be/dist/scripts/syncAccessControl.js', 'export const sync = true;\n');
   write(root, 'be/scripts/startMonitored.js', 'await import("../dist/app.js");\n');
@@ -125,6 +136,7 @@ const metadata = ({
 const productionEvidence = {
   workflowConclusion: 'success',
   artifactId: '987654321',
+  artifactDigest: `sha256:${'c'.repeat(64)}`,
   expectedReleaseId: RELEASE_ID,
   expectedSourceSha: SOURCE_SHA,
   expectedRepository: 'pablo-dryfield/omni-lodge',
@@ -134,6 +146,128 @@ const productionEvidence = {
   expectedRunId: '101',
   expectedRunAttempt: '2',
   expectedArtifactName: RELEASE_ID,
+};
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) !== 0 ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+const crc32 = (bytes) => {
+  let value = 0xffffffff;
+  for (const byte of bytes) value = CRC32_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
+};
+
+const buildStoredGitHubArtifactZip = (entries) => {
+  const localParts = [];
+  const centralParts = [];
+  let localOffset = 0;
+  for (const entry of entries) {
+    const nameBytes = Buffer.from(entry.name, 'utf8');
+    const data = Buffer.from(entry.data);
+    const checksum = crc32(data);
+    const flags = 0x0800;
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(flags, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBytes.length, 26);
+    localParts.push(local, nameBytes, data);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(0x0314, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(flags, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBytes.length, 28);
+    central.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+    central.writeUInt32LE(localOffset, 42);
+    centralParts.push(central, nameBytes);
+    localOffset += local.length + nameBytes.length + data.length;
+  }
+
+  const localData = Buffer.concat(localParts);
+  const centralData = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralData.length, 12);
+  end.writeUInt32LE(localData.length, 16);
+  return Buffer.concat([localData, centralData, end]);
+};
+
+const extractRawGitHubReleaseArtifact = async ({ fixture, release, stageName }) => {
+  const artifactZip = buildStoredGitHubArtifactZip([
+    { name: path.basename(release.archivePath), data: readFileSync(release.archivePath) },
+    { name: path.basename(release.checksumPath), data: readFileSync(release.checksumPath) },
+  ]);
+  const artifactDigest = `sha256:${sha256(artifactZip)}`;
+  const artifactId = '987654321';
+  const repositoryId = 9001;
+  const run = {
+    id: 101,
+    run_attempt: 2,
+    path: '.github/workflows/release.yml',
+    event: 'push',
+    head_branch: 'master',
+    head_sha: SOURCE_SHA,
+    status: 'completed',
+    conclusion: 'success',
+    repository: { id: repositoryId, full_name: 'pablo-dryfield/omni-lodge' },
+    head_repository: { id: repositoryId, full_name: 'pablo-dryfield/omni-lodge' },
+  };
+  const artifact = {
+    id: Number(artifactId),
+    name: RELEASE_ID,
+    expired: false,
+    digest: artifactDigest,
+    workflow_run: {
+      id: 101,
+      repository_id: repositoryId,
+      head_repository_id: repositoryId,
+      head_branch: 'master',
+      head_sha: SOURCE_SHA,
+    },
+  };
+  const evidence = createGitHubReleaseEvidence({
+    run,
+    artifactsResponse: { total_count: 1, artifacts: [artifact] },
+    expectedRunId: '101',
+    expectedRunAttempt: '2',
+    expectedSourceSha: SOURCE_SHA,
+    expectedArtifactId: artifactId,
+    configuredMode: 'disabled',
+    trigger: 'manual',
+    operation: 'dry-run',
+  });
+  const inputDirectory = path.join(fixture, `${stageName}-input`);
+  mkdirSync(inputDirectory);
+  const artifactZipPath = path.join(inputDirectory, 'artifact.zip');
+  const evidencePath = path.join(inputDirectory, 'evidence.json');
+  writeFileSync(artifactZipPath, artifactZip);
+  writeFileSync(evidencePath, serializeGitHubReleaseEvidence(evidence));
+  return extractGitHubArtifact({
+    artifactZipPath,
+    evidencePath,
+    stagingDirectory: path.join(fixture, stageName),
+  });
 };
 
 const packageCliArguments = (fixture, outputDir) => [
@@ -151,6 +285,21 @@ const packageCliArguments = (fixture, outputDir) => [
   '--run-attempt', '2',
   '--run-number', '77',
   '--actor', 'release-bot',
+];
+
+const productionEvidenceCliArguments = () => [
+  '--workflow-conclusion', 'success',
+  '--artifact-id', productionEvidence.artifactId,
+  '--artifact-digest', productionEvidence.artifactDigest,
+  '--expected-release-id', RELEASE_ID,
+  '--expected-source-sha', SOURCE_SHA,
+  '--expected-repository', productionEvidence.expectedRepository,
+  '--expected-workflow-path', productionEvidence.expectedWorkflowPath,
+  '--expected-event', productionEvidence.expectedEvent,
+  '--expected-ref', productionEvidence.expectedRef,
+  '--expected-run-id', productionEvidence.expectedRunId,
+  '--expected-run-attempt', productionEvidence.expectedRunAttempt,
+  '--expected-artifact-name', productionEvidence.expectedArtifactName,
 ];
 
 const spawnNode = (args, options = {}) => new Promise((resolve) => {
@@ -416,6 +565,446 @@ test('requires authenticated workflow and immutable artifact evidence for produc
   }
 });
 
+test('production extraction verifies and writes the exact release without overwriting', () => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({ repoRoot: fixture, outputDir: path.join(fixture, 'output'), metadata: metadata() });
+    const releasesDirectory = path.join(fixture, 'releases');
+    mkdirSync(releasesDirectory);
+    const extracted = extractVerifiedReleaseArchive({
+      archivePath: release.archivePath,
+      checksumPath: release.checksumPath,
+      expectedArchiveSha256: release.archiveSha256,
+      releasesDirectory,
+      requireProductionEligible: true,
+      productionEvidence,
+    });
+    const expectedDestination = path.join(releasesDirectory, RELEASE_ID);
+    assert.equal(extracted.destinationPath, expectedDestination);
+    assert.equal(
+      readFileSync(path.join(expectedDestination, 'be', 'dist', 'app.js'), 'utf8'),
+      readFileSync(path.join(fixture, 'be', 'dist', 'app.js'), 'utf8'),
+    );
+    assert.equal(existsSync(path.join(expectedDestination, 'release-manifest.json')), true);
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        archivePath: release.archivePath,
+        checksumPath: release.checksumPath,
+        expectedArchiveSha256: release.archiveSha256,
+        releasesDirectory,
+        requireProductionEligible: true,
+        productionEvidence,
+      }),
+      /Release directory already exists/,
+    );
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('raw GitHub artifact extraction binds the trusted inner hash into release extraction', async () => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({
+      repoRoot: fixture,
+      outputDir: path.join(fixture, 'output'),
+      metadata: metadata(),
+    });
+    const handoff = await extractRawGitHubReleaseArtifact({
+      fixture,
+      release,
+      stageName: 'github-stage-success',
+    });
+    assert.equal(handoff.archiveSha256, release.archiveSha256);
+    assert.notEqual(handoff.archiveSha256, handoff.artifactZipSha256);
+
+    const releasesDirectory = path.join(fixture, 'releases-from-github');
+    mkdirSync(releasesDirectory);
+    const extracted = extractVerifiedReleaseArchive({
+      archivePath: handoff.archivePath,
+      checksumPath: handoff.checksumPath,
+      expectedArchiveSha256: handoff.archiveSha256,
+      releasesDirectory,
+      productionEvidence: handoff.productionEvidence,
+    });
+    assert.equal(extracted.archiveSha256, handoff.archiveSha256);
+    assert.equal(extracted.destinationPath, path.join(releasesDirectory, RELEASE_ID));
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('release extraction rejects a self-consistent replacement after raw artifact verification', async () => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({
+      repoRoot: fixture,
+      outputDir: path.join(fixture, 'output'),
+      metadata: metadata(),
+    });
+    const handoff = await extractRawGitHubReleaseArtifact({
+      fixture,
+      release,
+      stageName: 'github-stage-replaced',
+    });
+    const originalTrustedArchiveSha256 = handoff.archiveSha256;
+
+    const altered = buildFixtureRelease(fixture);
+    replacePayloadFile(
+      altered.payload,
+      altered.manifest,
+      'be/dist/app.js',
+      'console.log("different but canonical backend");\n',
+    );
+    const replacement = writeCraftedArchive({
+      fixture,
+      payload: altered.payload,
+      manifest: altered.manifest,
+      name: 'self-consistent-replacement',
+    });
+    const replacementBytes = readFileSync(replacement.archivePath);
+    const replacementSha256 = sha256(replacementBytes);
+    assert.notEqual(replacementSha256, originalTrustedArchiveSha256);
+    writeFileSync(handoff.archivePath, replacementBytes);
+    writeFileSync(
+      handoff.checksumPath,
+      `${replacementSha256}  ${path.basename(handoff.archivePath)}\n`,
+    );
+
+    const selfConsistentReplacement = verifyReleaseArchive({
+      archivePath: handoff.archivePath,
+      checksumPath: handoff.checksumPath,
+      requireProductionEligible: true,
+      productionEvidence: handoff.productionEvidence,
+    });
+    assert.equal(selfConsistentReplacement.archiveSha256, replacementSha256);
+
+    const releasesDirectory = path.join(fixture, 'releases-reject-replacement');
+    mkdirSync(releasesDirectory);
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        archivePath: handoff.archivePath,
+        checksumPath: handoff.checksumPath,
+        expectedArchiveSha256: originalTrustedArchiveSha256,
+        releasesDirectory,
+        productionEvidence: handoff.productionEvidence,
+      }),
+      /does not match the trusted expected archive SHA-256/,
+    );
+    assert.deepEqual(readdirSync(releasesDirectory), []);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('production extraction leaves no partial directory when verification fails', () => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({ repoRoot: fixture, outputDir: path.join(fixture, 'output'), metadata: metadata() });
+    const archive = readFileSync(release.archivePath);
+    archive[archive.length - 1] ^= 0xff;
+    writeFileSync(release.archivePath, archive);
+    const releasesDirectory = path.join(fixture, 'releases');
+    mkdirSync(releasesDirectory);
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        archivePath: release.archivePath,
+        checksumPath: release.checksumPath,
+        expectedArchiveSha256: release.archiveSha256,
+        releasesDirectory,
+        requireProductionEligible: true,
+        productionEvidence,
+      }),
+      /does not match the trusted expected archive SHA-256/,
+    );
+    assert.deepEqual(readdirSync(releasesDirectory), []);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('production extraction cannot disable or omit production authorization', () => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({ repoRoot: fixture, outputDir: path.join(fixture, 'output'), metadata: metadata() });
+    const releasesDirectory = path.join(fixture, 'releases');
+    mkdirSync(releasesDirectory);
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        archivePath: release.archivePath,
+        checksumPath: release.checksumPath,
+        expectedArchiveSha256: release.archiveSha256,
+        releasesDirectory,
+        requireProductionEligible: false,
+        productionEvidence,
+      }),
+      /cannot disable production eligibility verification/,
+    );
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        archivePath: release.archivePath,
+        checksumPath: release.checksumPath,
+        expectedArchiveSha256: release.archiveSha256,
+        releasesDirectory,
+      }),
+      /Authenticated production provenance evidence is required/,
+    );
+    assert.deepEqual(readdirSync(releasesDirectory), []);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('production extraction requires and binds a trusted inner archive SHA-256', () => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({
+      repoRoot: fixture,
+      outputDir: path.join(fixture, 'output'),
+      metadata: metadata(),
+    });
+    const releasesDirectory = path.join(fixture, 'releases');
+    mkdirSync(releasesDirectory);
+    const base = {
+      archivePath: release.archivePath,
+      checksumPath: release.checksumPath,
+      releasesDirectory,
+      productionEvidence,
+    };
+    for (const expectedArchiveSha256 of [
+      undefined,
+      release.archiveSha256.toUpperCase(),
+      release.archiveSha256.slice(1),
+    ]) {
+      assert.throws(
+        () => extractVerifiedReleaseArchive({ ...base, expectedArchiveSha256 }),
+        /Trusted expected release archive SHA-256 is required/,
+      );
+    }
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        ...base,
+        expectedArchiveSha256: '0'.repeat(64),
+      }),
+      /does not match the trusted expected archive SHA-256/,
+    );
+    assert.deepEqual(readdirSync(releasesDirectory), []);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+for (const [targetName, targetPathFromRelease, fillByte, expectedFailure] of [
+  ['archive', (release) => release.archivePath, 0x5a, /Release archive metadata changed while being read/],
+  ['checksum', (release) => release.checksumPath, 0x30, /Detached checksum metadata changed while being read/],
+]) {
+  test(`release verification holds the opened ${targetName} descriptor across a path swap`, (context) => {
+    const fixture = makeFixture();
+    const originalReadSync = fs.readSync;
+    let builtinsPatched = false;
+    try {
+      const release = packageRelease({
+        repoRoot: fixture,
+        outputDir: path.join(fixture, 'output'),
+        metadata: metadata(),
+      });
+      const targetPath = targetPathFromRelease(release);
+      const originalTarget = readFileSync(targetPath);
+      const movedTargetPath = `${targetPath}.opened`;
+      let swapped = false;
+      let swapUnavailable = null;
+
+      fs.readSync = (...arguments_) => {
+        const descriptor = arguments_[0];
+        const descriptorSize = Number(fs.fstatSync(descriptor, { bigint: true }).size);
+        if (!swapped && descriptorSize === originalTarget.length) {
+          try {
+            renameSync(targetPath, movedTargetPath);
+            writeFileSync(targetPath, Buffer.alloc(originalTarget.length, fillByte));
+            swapped = true;
+          } catch (error) {
+            if (error && typeof error === 'object' && (error.code === 'EPERM' || error.code === 'EACCES')) {
+              swapUnavailable = error.code;
+            } else {
+              throw error;
+            }
+          }
+        }
+        return originalReadSync(...arguments_);
+      };
+      syncBuiltinESMExports();
+      builtinsPatched = true;
+
+      const releasesDirectory = path.join(fixture, `releases-${targetName}-descriptor-swap`);
+      mkdirSync(releasesDirectory);
+      let extracted = null;
+      let verificationError = null;
+      try {
+        extracted = extractVerifiedReleaseArchive({
+          archivePath: release.archivePath,
+          checksumPath: release.checksumPath,
+          expectedArchiveSha256: release.archiveSha256,
+          releasesDirectory,
+          productionEvidence,
+        });
+      } catch (error) {
+        verificationError = error;
+      }
+      if (swapUnavailable) {
+        context.skip(`Open-file path replacement is unavailable: ${swapUnavailable}`);
+        return;
+      }
+      assert.equal(swapped, true);
+      if (verificationError) {
+        assert.match(verificationError.message, expectedFailure);
+      } else {
+        assert.equal(extracted.archiveSha256, release.archiveSha256);
+      }
+    } finally {
+      if (builtinsPatched) {
+        fs.readSync = originalReadSync;
+        syncBuiltinESMExports();
+      }
+      cleanup(fixture);
+    }
+  });
+}
+
+test('failed release extraction preserves partial residue and its reservation', () => {
+  const fixture = makeFixture();
+  const originalWriteFileSync = fs.writeFileSync;
+  let builtinsPatched = false;
+  try {
+    const release = packageRelease({
+      repoRoot: fixture,
+      outputDir: path.join(fixture, 'output'),
+      metadata: metadata(),
+    });
+    const releasesDirectory = path.join(fixture, 'releases-preserved-residue');
+    mkdirSync(releasesDirectory);
+    let injected = false;
+    fs.writeFileSync = (target, ...arguments_) => {
+      if (!injected && typeof target === 'number') {
+        injected = true;
+        const error = new Error('injected extraction write failure');
+        error.code = 'EIO';
+        throw error;
+      }
+      return originalWriteFileSync(target, ...arguments_);
+    };
+    syncBuiltinESMExports();
+    builtinsPatched = true;
+
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        archivePath: release.archivePath,
+        checksumPath: release.checksumPath,
+        expectedArchiveSha256: release.archiveSha256,
+        releasesDirectory,
+        productionEvidence,
+      }),
+      /injected extraction write failure.*Partial extraction residue was preserved.*reservation was retained/,
+    );
+    assert.equal(injected, true);
+    const residue = readdirSync(releasesDirectory).sort();
+    assert.equal(residue.some((entry) => entry.startsWith(`.extract-${RELEASE_ID}-`)), true);
+    assert.equal(residue.includes(`.reserve-${RELEASE_ID}`), true);
+    assert.equal(residue.includes(RELEASE_ID), false);
+  } finally {
+    if (builtinsPatched) {
+      fs.writeFileSync = originalWriteFileSync;
+      syncBuiltinESMExports();
+    }
+    cleanup(fixture);
+  }
+});
+
+test('a competing extraction reservation is preserved and rejected', () => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({ repoRoot: fixture, outputDir: path.join(fixture, 'output'), metadata: metadata() });
+    const releasesDirectory = path.join(fixture, 'releases');
+    mkdirSync(releasesDirectory);
+    const reservationPath = path.join(releasesDirectory, `.reserve-${RELEASE_ID}`);
+    writeFileSync(reservationPath, 'owned by another deployment\n');
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        archivePath: release.archivePath,
+        checksumPath: release.checksumPath,
+        expectedArchiveSha256: release.archiveSha256,
+        releasesDirectory,
+        productionEvidence,
+      }),
+      /extraction reservation failed/,
+    );
+    assert.equal(readFileSync(reservationPath, 'utf8'), 'owned by another deployment\n');
+    assert.deepEqual(readdirSync(releasesDirectory), [`.reserve-${RELEASE_ID}`]);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('production extraction rejects a symbolic-link release root', (context) => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({ repoRoot: fixture, outputDir: path.join(fixture, 'output'), metadata: metadata() });
+    const realReleasesDirectory = path.join(fixture, 'releases-real');
+    const linkedReleasesDirectory = path.join(fixture, 'releases-linked');
+    mkdirSync(realReleasesDirectory);
+    try {
+      symlinkSync(
+        realReleasesDirectory,
+        linkedReleasesDirectory,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      if (error && typeof error === 'object' && (error.code === 'EPERM' || error.code === 'EACCES')) {
+        context.skip(`Symlink creation is unavailable: ${error.code}`);
+        return;
+      }
+      throw error;
+    }
+    assert.throws(
+      () => extractVerifiedReleaseArchive({
+        archivePath: release.archivePath,
+        checksumPath: release.checksumPath,
+        expectedArchiveSha256: release.archiveSha256,
+        releasesDirectory: linkedReleasesDirectory,
+        productionEvidence,
+      }),
+      /extraction root must be a real directory|resolves through a symbolic link or junction/,
+    );
+    assert.deepEqual(readdirSync(realReleasesDirectory), []);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('production extraction applies explicit release file and directory modes', (context) => {
+  if (process.platform === 'win32') {
+    context.skip('POSIX mode assertions do not apply on Windows');
+    return;
+  }
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({ repoRoot: fixture, outputDir: path.join(fixture, 'output'), metadata: metadata() });
+    const releasesDirectory = path.join(fixture, 'releases');
+    mkdirSync(releasesDirectory);
+    const extracted = extractVerifiedReleaseArchive({
+      archivePath: release.archivePath,
+      checksumPath: release.checksumPath,
+      expectedArchiveSha256: release.archiveSha256,
+      releasesDirectory,
+      productionEvidence,
+    });
+    assert.equal(statSync(extracted.destinationPath).mode & 0o777, 0o755);
+    assert.equal(statSync(path.join(extracted.destinationPath, 'be', 'dist')).mode & 0o777, 0o755);
+    assert.equal(statSync(path.join(extracted.destinationPath, 'be', 'dist', 'app.js')).mode & 0o777, 0o644);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
 for (const [field, value, message] of [
   ['expectedReleaseId', 'omnilodge-r102-a1-bbbbbbbbbbbb', /Expected release ID does not match/],
   ['expectedSourceSha', 'b'.repeat(40), /Expected source SHA does not match/],
@@ -449,6 +1038,8 @@ for (const [field, value, message] of [
 for (const [field, value, message] of [
   ['workflowConclusion', 'failure', /originating workflow must have concluded successfully/],
   ['artifactId', 'not-an-id', /immutable GitHub artifact ID is required/],
+  ['artifactDigest', `sha512:${'c'.repeat(64)}`, /authenticated lowercase SHA-256 GitHub artifact digest is required/],
+  ['artifactDigest', `sha256:${'C'.repeat(64)}`, /authenticated lowercase SHA-256 GitHub artifact digest is required/],
   ['expectedSourceSha', SOURCE_SHA.toUpperCase(), /Expected source SHA must be a full lowercase Git SHA/],
 ]) {
   test(`production verification rejects invalid authenticated ${field}`, () => {
@@ -761,6 +1352,7 @@ test('package and verify command-line entry points compose without package scrip
       '--require-production-eligible',
       '--workflow-conclusion', 'success',
       '--artifact-id', '987654321',
+      '--artifact-digest', productionEvidence.artifactDigest,
       '--expected-release-id', RELEASE_ID,
       '--expected-source-sha', SOURCE_SHA,
       '--expected-repository', 'pablo-dryfield/omni-lodge',
@@ -773,6 +1365,31 @@ test('package and verify command-line entry points compose without package scrip
     ], { encoding: 'utf8' });
     assert.equal(productionVerifyResult.status, 0, productionVerifyResult.stderr);
     assert.equal(JSON.parse(productionVerifyResult.stdout).productionEligibilityVerified, true);
+
+    const releasesDirectory = path.join(fixture, 'releases');
+    mkdirSync(releasesDirectory);
+    const missingExpectedHash = spawnSync(process.execPath, [
+      path.join(SCRIPT_DIRECTORY, 'extract.mjs'),
+      '--archive', packaged.archivePath,
+      '--releases-directory', releasesDirectory,
+      ...productionEvidenceCliArguments(),
+    ], { encoding: 'utf8' });
+    assert.notEqual(missingExpectedHash.status, 0);
+    assert.equal(missingExpectedHash.stdout, '');
+    assert.match(missingExpectedHash.stderr, /--expected-archive-sha256 is required/);
+
+    const extractionResult = spawnSync(process.execPath, [
+      path.join(SCRIPT_DIRECTORY, 'extract.mjs'),
+      '--archive', packaged.archivePath,
+      '--expected-archive-sha256', packaged.archiveSha256,
+      '--releases-directory', releasesDirectory,
+      ...productionEvidenceCliArguments(),
+    ], { encoding: 'utf8' });
+    assert.equal(extractionResult.status, 0, extractionResult.stderr);
+    const extraction = JSON.parse(extractionResult.stdout);
+    assert.equal(extraction.extracted, true);
+    assert.equal(extraction.releaseId, RELEASE_ID);
+    assert.deepEqual(extraction.warnings, []);
   } finally {
     cleanup(fixture);
   }
@@ -1104,6 +1721,39 @@ test('concurrent publishers cannot replace or corrupt the same immutable release
     const packaged = JSON.parse(succeeded[0].stdout);
     const verified = verifyReleaseArchive({ archivePath: packaged.archivePath, checksumPath: packaged.checksumPath });
     assert.equal(verified.manifest.releaseId, RELEASE_ID);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('concurrent extractors cannot replace or corrupt the same immutable release', async () => {
+  const fixture = makeFixture();
+  try {
+    const release = packageRelease({ repoRoot: fixture, outputDir: path.join(fixture, 'output'), metadata: metadata() });
+    const releasesDirectory = path.join(fixture, 'releases');
+    mkdirSync(releasesDirectory);
+    const args = [
+      path.join(SCRIPT_DIRECTORY, 'extract.mjs'),
+      '--archive', release.archivePath,
+      '--checksum', release.checksumPath,
+      '--expected-archive-sha256', release.archiveSha256,
+      '--releases-directory', releasesDirectory,
+      ...productionEvidenceCliArguments(),
+    ];
+    const results = await Promise.all([spawnNode(args), spawnNode(args)]);
+    const succeeded = results.filter((result) => result.status === 0);
+    const rejected = results.filter((result) => result.status === 1);
+    assert.equal(succeeded.length, 1, JSON.stringify(results));
+    assert.equal(rejected.length, 1, JSON.stringify(results));
+    assert.match(rejected[0].stderr, /Release directory already exists|extraction reservation failed/);
+    assert.equal(
+      readFileSync(path.join(releasesDirectory, RELEASE_ID, 'be', 'dist', 'app.js'), 'utf8'),
+      readFileSync(path.join(fixture, 'be', 'dist', 'app.js'), 'utf8'),
+    );
+    assert.deepEqual(
+      readdirSync(releasesDirectory).filter((entry) => entry.startsWith('.extract-') || entry.startsWith('.reserve-')),
+      [],
+    );
   } finally {
     cleanup(fixture);
   }

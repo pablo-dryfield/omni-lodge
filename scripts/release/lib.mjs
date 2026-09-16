@@ -1,18 +1,24 @@
 import {
+  chmodSync,
   closeSync,
   existsSync,
+  fchmodSync,
+  fstatSync,
   fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { constants as fsConstants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
@@ -23,6 +29,7 @@ export const CANONICAL_WORKFLOW_PATH = '.github/workflows/release.yml';
 export const CANONICAL_RELEASE_REF = 'refs/heads/master';
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const ARTIFACT_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/;
 const RELEASE_ID_PATTERN = /^omnilodge-r([1-9][0-9]*)-a([1-9][0-9]*)-([0-9a-f]{12})$/;
@@ -65,6 +72,7 @@ const RUNTIME_TREES = [
 
 const RUNTIME_ENTRYPOINT_FILES = [
   'be/dist/app.js',
+  'be/dist/scripts/baselineMigrations.js',
   'be/dist/scripts/runMigrations.js',
   'be/dist/scripts/syncAccessControl.js',
   'ui/build/index.html',
@@ -94,6 +102,7 @@ const PACKAGE_PATHS = [
 const REQUIRED_EXTERNAL_PRODUCTION_CHECKS = [
   'workflow_conclusion_success',
   'immutable_github_artifact_id',
+  'authenticated_github_artifact_digest',
   'expected_release_identity',
   'protected_environment_authorization',
 ];
@@ -254,17 +263,56 @@ const pathIsWithin = (parent, candidate) => {
     || normalizedCandidate.startsWith(parentPrefix);
 };
 
-const inspectCanonicalStandaloneFile = (filePath, label) => {
+const sameFileIdentity = (left, right) => left.ino === right.ino
+  && (process.platform === 'win32' || left.dev === right.dev);
+
+const readExactDescriptorBytes = (descriptor, size, label) => {
+  const data = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const bytesRead = readSync(descriptor, data, offset, size - offset, offset);
+    invariant(bytesRead > 0, `${label} changed size or became truncated while being read`);
+    offset += bytesRead;
+  }
+  return data;
+};
+
+const readCanonicalStandaloneFile = (filePath, label, maximumBytes) => {
   const resolvedPath = path.resolve(filePath);
   invariant(existsSync(resolvedPath), `${label} does not exist: ${resolvedPath}`);
-  const stat = lstatSync(resolvedPath);
-  invariant(!stat.isSymbolicLink() && stat.isFile(), `${label} must be a real regular file`);
+  const pathStat = lstatSync(resolvedPath, { bigint: true });
+  invariant(!pathStat.isSymbolicLink() && pathStat.isFile(), `${label} must be a real regular file`);
   const realPath = realpathSync.native(resolvedPath);
   invariant(
     pathsAreEqual(resolvedPath, realPath),
     `${label} or one of its ancestors resolves through a symbolic link or junction`,
   );
-  return { path: realPath, stat };
+  const noFollow = process.platform === 'win32' ? 0 : (fsConstants.O_NOFOLLOW ?? 0);
+  const descriptor = openSync(realPath, fsConstants.O_RDONLY | noFollow);
+  try {
+    const openedStat = fstatSync(descriptor, { bigint: true });
+    invariant(openedStat.isFile(), `${label} descriptor is not a regular file`);
+    invariant(sameFileIdentity(pathStat, openedStat), `${label} changed while it was opened`);
+    invariant(
+      openedStat.size >= 0n && openedStat.size <= BigInt(Number.MAX_SAFE_INTEGER),
+      `${label} size is outside the safe integer range`,
+    );
+    const size = Number(openedStat.size);
+    invariant(size > 0, `${label} is empty`);
+    invariant(size <= maximumBytes, `${label} exceeds the ${maximumBytes}-byte size limit`);
+    const data = readExactDescriptorBytes(descriptor, size, label);
+    const finalStat = fstatSync(descriptor, { bigint: true });
+    invariant(sameFileIdentity(openedStat, finalStat), `${label} identity changed while being read`);
+    invariant(
+      finalStat.size === openedStat.size
+        && finalStat.mtimeNs === openedStat.mtimeNs
+        && finalStat.ctimeNs === openedStat.ctimeNs,
+      `${label} metadata changed while being read`,
+    );
+    return { path: realPath, data, stat: openedStat };
+  } finally {
+    closeSync(descriptor);
+  }
 };
 
 const resolveCanonicalRepositoryRoot = (repoRoot) => {
@@ -1107,12 +1155,12 @@ const validateManifestShape = (manifest) => {
 };
 
 const readDetachedChecksum = (checksumPath, archivePath) => {
-  const { path: canonicalChecksumPath, stat: checksumStat } = inspectCanonicalStandaloneFile(
+  const { data: checksumData } = readCanonicalStandaloneFile(
     checksumPath,
     'Detached checksum',
+    1024,
   );
-  invariant(checksumStat.size <= 1024, 'Detached checksum file is too large');
-  const checksumText = readFileSync(canonicalChecksumPath, 'utf8');
+  const checksumText = checksumData.toString('utf8');
   const match = /^([0-9a-f]{64}) {2}([^\r\n]+)\r?\n?$/.exec(checksumText);
   invariant(match, 'Detached checksum file has an invalid format');
   invariant(match[2] === path.basename(archivePath), 'Detached checksum names a different archive');
@@ -1209,6 +1257,7 @@ const verifyProductionEligibility = (manifest, evidence) => {
   validateStringKeys(evidence, [
     'workflowConclusion',
     'artifactId',
+    'artifactDigest',
     'expectedReleaseId',
     'expectedSourceSha',
     'expectedRepository',
@@ -1221,6 +1270,10 @@ const verifyProductionEligibility = (manifest, evidence) => {
   ], 'authenticated production provenance evidence');
   invariant(evidence.workflowConclusion === 'success', 'The originating workflow must have concluded successfully');
   invariant(POSITIVE_INTEGER_PATTERN.test(String(evidence.artifactId || '')), 'An immutable GitHub artifact ID is required');
+  invariant(
+    ARTIFACT_DIGEST_PATTERN.test(String(evidence.artifactDigest || '')),
+    'An authenticated lowercase SHA-256 GitHub artifact digest is required',
+  );
   invariant(requireText(evidence.expectedReleaseId, 'expected release ID') === manifest.releaseId, 'Expected release ID does not match the manifest');
   const evidenceSourceSha = requireText(evidence.expectedSourceSha, 'expected source SHA');
   invariant(SOURCE_SHA_PATTERN.test(evidenceSourceSha), 'Expected source SHA must be a full lowercase Git SHA');
@@ -1237,20 +1290,36 @@ const verifyProductionEligibility = (manifest, evidence) => {
   invariant(requireText(evidence.expectedArtifactName, 'expected artifact name') === manifest.workflow.artifactName, 'Expected artifact name does not match the manifest');
 };
 
-export const verifyReleaseArchive = ({
+const verifyReleaseArchiveData = ({
   archivePath,
   checksumPath = `${archivePath}.sha256`,
   requireProductionEligible = false,
   productionEvidence = null,
+  expectedArchiveSha256 = null,
 }) => {
-  const { path: canonicalArchivePath, stat: archiveStat } = inspectCanonicalStandaloneFile(
+  const {
+    path: canonicalArchivePath,
+    data: archive,
+    stat: archiveStat,
+  } = readCanonicalStandaloneFile(
     archivePath,
     'Release archive',
+    RELEASE_LIMITS.maxCompressedArchiveBytes,
   );
-  validateReleaseEnvelopeResourceSummary({ compressedArchiveBytes: archiveStat.size });
-  const archive = readFileSync(canonicalArchivePath);
-  const expectedArchiveHash = readDetachedChecksum(checksumPath, canonicalArchivePath);
+  validateReleaseEnvelopeResourceSummary({ compressedArchiveBytes: Number(archiveStat.size) });
   const archiveSha256 = sha256(archive);
+  if (expectedArchiveSha256 !== null) {
+    invariant(
+      typeof expectedArchiveSha256 === 'string'
+        && SHA256_PATTERN.test(expectedArchiveSha256),
+      'Trusted expected release archive SHA-256 is required as 64 lowercase hexadecimal characters',
+    );
+    invariant(
+      archiveSha256 === expectedArchiveSha256,
+      'Release archive SHA-256 does not match the trusted expected archive SHA-256',
+    );
+  }
+  const expectedArchiveHash = readDetachedChecksum(checksumPath, canonicalArchivePath);
   invariant(archiveSha256 === expectedArchiveHash, 'Detached release archive checksum does not match');
   const entries = parseTar(archive);
 
@@ -1285,5 +1354,265 @@ export const verifyReleaseArchive = ({
     archiveSha256,
     payloadFileCount: archiveFiles.size - 1,
     productionCandidate: manifest.productionEligibility.candidate,
+    entries,
+  };
+};
+
+export const verifyReleaseArchive = (options) => {
+  const { entries: _entries, ...result } = verifyReleaseArchiveData(options);
+  return result;
+};
+
+const inspectCanonicalExtractionRoot = (releasesDirectory) => {
+  const resolvedRoot = path.resolve(releasesDirectory);
+  invariant(existsSync(resolvedRoot), `Release extraction root does not exist: ${resolvedRoot}`);
+  const rootStat = lstatSync(resolvedRoot);
+  invariant(!rootStat.isSymbolicLink() && rootStat.isDirectory(), 'Release extraction root must be a real directory');
+  const realRoot = realpathSync.native(resolvedRoot);
+  invariant(
+    pathsAreEqual(resolvedRoot, realRoot),
+    'Release extraction root or one of its ancestors resolves through a symbolic link or junction',
+  );
+  const parentPath = path.dirname(realRoot);
+  const parentStat = lstatSync(parentPath);
+  invariant(!parentStat.isSymbolicLink() && parentStat.isDirectory(), 'Release extraction parent must be a real directory');
+  if (typeof process.getuid === 'function') {
+    const uid = process.getuid();
+    invariant(rootStat.uid === uid, 'Release extraction root must be owned by the deployment process user');
+    invariant(parentStat.uid === uid, 'Release extraction parent must be owned by the deployment process user');
+    invariant((rootStat.mode & 0o022) === 0, 'Release extraction root cannot be group- or world-writable');
+    invariant((parentStat.mode & 0o022) === 0, 'Release extraction parent cannot be group- or world-writable');
+  }
+  return {
+    path: realRoot,
+    identity: { dev: rootStat.dev, ino: rootStat.ino },
+  };
+};
+
+const assertExtractionRootStable = (releaseRoot, identity) => {
+  const stat = lstatSync(releaseRoot);
+  invariant(!stat.isSymbolicLink() && stat.isDirectory(), 'Release extraction root changed during extraction');
+  invariant(
+    stat.dev === identity.dev && stat.ino === identity.ino && pathsAreEqual(realpathSync.native(releaseRoot), releaseRoot),
+    'Release extraction root identity changed during extraction',
+  );
+};
+
+const fsyncDirectory = (directoryPath) => {
+  if (process.platform === 'win32') return;
+  const descriptor = openSync(directoryPath, 'r');
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+};
+
+const writeExclusiveVerifiedFile = (filePath, data) => {
+  const noFollow = process.platform === 'win32' ? 0 : (fsConstants.O_NOFOLLOW ?? 0);
+  const descriptor = openSync(
+    filePath,
+    fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | noFollow,
+    0o644,
+  );
+  try {
+    writeFileSync(descriptor, data);
+    fchmodSync(descriptor, 0o644);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  const stat = lstatSync(filePath);
+  invariant(!stat.isSymbolicLink() && stat.isFile(), `Extracted release path is not a regular file: ${filePath}`);
+  invariant(readFileSync(filePath).equals(data), `Extracted release file verification failed: ${filePath}`);
+};
+
+export const extractVerifiedReleaseArchive = ({ releasesDirectory, ...verificationOptions }) => {
+  invariant(
+    typeof releasesDirectory === 'string' && releasesDirectory.length > 0,
+    'releasesDirectory is required',
+  );
+  const {
+    requireProductionEligible,
+    expectedArchiveSha256,
+    ...productionVerificationOptions
+  } = verificationOptions;
+  invariant(
+    requireProductionEligible === undefined || requireProductionEligible === true,
+    'Production release extraction cannot disable production eligibility verification',
+  );
+  invariant(
+    typeof expectedArchiveSha256 === 'string'
+      && SHA256_PATTERN.test(expectedArchiveSha256),
+    'Trusted expected release archive SHA-256 is required as 64 lowercase hexadecimal characters',
+  );
+  const verified = verifyReleaseArchiveData({
+    ...productionVerificationOptions,
+    requireProductionEligible: true,
+    expectedArchiveSha256,
+  });
+  const extractionRoot = inspectCanonicalExtractionRoot(releasesDirectory);
+  const releaseRoot = extractionRoot.path;
+  const finalPath = path.join(releaseRoot, verified.manifest.releaseId);
+  invariant(pathIsWithin(releaseRoot, finalPath), 'Final release path escapes the extraction root');
+  invariant(!existsSync(finalPath), `Release directory already exists: ${verified.manifest.releaseId}`);
+
+  const temporaryPath = path.join(
+    releaseRoot,
+    `.extract-${verified.manifest.releaseId}-${randomUUID()}`,
+  );
+  invariant(pathIsWithin(releaseRoot, temporaryPath), 'Temporary release path escapes the extraction root');
+  invariant(!existsSync(temporaryPath), 'Temporary release extraction path already exists');
+
+  const reservationPath = path.join(releaseRoot, `.reserve-${verified.manifest.releaseId}`);
+  invariant(pathIsWithin(releaseRoot, reservationPath), 'Release reservation path escapes the extraction root');
+  let reservationDescriptor;
+  let reservationCreated = false;
+  let reservationIdentity = null;
+  try {
+    reservationDescriptor = openSync(
+      reservationPath,
+      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+      0o600,
+    );
+    reservationCreated = true;
+    fchmodSync(reservationDescriptor, 0o600);
+    const descriptorStat = fstatSync(reservationDescriptor, { bigint: true });
+    const pathStat = lstatSync(reservationPath, { bigint: true });
+    invariant(
+      descriptorStat.isFile()
+        && pathStat.isFile()
+        && !pathStat.isSymbolicLink()
+        && descriptorStat.nlink === 1n
+        && sameFileIdentity(descriptorStat, pathStat),
+      'Release extraction reservation changed while it was created',
+    );
+    reservationIdentity = { dev: descriptorStat.dev, ino: descriptorStat.ino };
+    fsyncSync(reservationDescriptor);
+  } catch (error) {
+    if (reservationDescriptor !== undefined) closeSync(reservationDescriptor);
+    const residue = reservationCreated
+      ? ` Reservation residue was preserved at ${reservationPath} for operator inspection and trusted cleanup.`
+      : '';
+    throw new Error(`Release extraction reservation failed for ${verified.manifest.releaseId}: ${error.message}.${residue}`);
+  }
+
+  let temporaryCreated = false;
+  let finalCommitted = false;
+  let finalDurable = false;
+  let operationError = null;
+  let cleanupWarning = null;
+  const createdDirectories = new Set();
+  try {
+    assertExtractionRootStable(releaseRoot, extractionRoot.identity);
+    mkdirSync(temporaryPath, { mode: 0o700 });
+    temporaryCreated = true;
+    chmodSync(temporaryPath, 0o700);
+    createdDirectories.add(temporaryPath);
+    const rootPrefix = `${verified.manifest.releaseId}/`;
+    for (const entry of verified.entries) {
+      assertExtractionRootStable(releaseRoot, extractionRoot.identity);
+      if (entry.path === verified.manifest.releaseId) {
+        invariant(entry.type === 'directory', 'Release archive root must be a directory');
+        continue;
+      }
+      invariant(entry.path.startsWith(rootPrefix), 'Release archive entry is outside its release root');
+      const relativePath = entry.path.slice(rootPrefix.length);
+      assertSafeRelativePath(relativePath, 'release extraction path');
+      const destinationPath = path.resolve(temporaryPath, ...relativePath.split('/'));
+      invariant(pathIsWithin(temporaryPath, destinationPath), 'Release extraction path escapes its temporary root');
+
+      if (entry.type === 'directory') {
+        mkdirSync(destinationPath, { mode: 0o755 });
+        chmodSync(destinationPath, 0o755);
+        createdDirectories.add(destinationPath);
+        const directoryStat = lstatSync(destinationPath);
+        invariant(
+          !directoryStat.isSymbolicLink() && directoryStat.isDirectory(),
+          `Extracted release path is not a real directory: ${relativePath}`,
+        );
+      } else {
+        const parentPath = path.dirname(destinationPath);
+        const parentStat = lstatSync(parentPath);
+        invariant(
+          !parentStat.isSymbolicLink() && parentStat.isDirectory(),
+          `Extracted release parent is not a real directory: ${relativePath}`,
+        );
+        writeExclusiveVerifiedFile(destinationPath, entry.data);
+      }
+    }
+
+    chmodSync(temporaryPath, 0o755);
+    for (const directoryPath of [...createdDirectories].sort((left, right) => right.length - left.length)) {
+      fsyncDirectory(directoryPath);
+    }
+    assertExtractionRootStable(releaseRoot, extractionRoot.identity);
+    invariant(!existsSync(finalPath), `Release directory appeared during extraction: ${verified.manifest.releaseId}`);
+    renameSync(temporaryPath, finalPath);
+    temporaryCreated = false;
+    finalCommitted = true;
+    fsyncDirectory(releaseRoot);
+    finalDurable = true;
+  } catch (error) {
+    const residueMessage = temporaryCreated
+      ? ` Partial extraction residue was preserved at ${temporaryPath}; the release reservation was retained for operator inspection and trusted cleanup.`
+      : '';
+    operationError = finalCommitted && !finalDurable
+      ? new Error(
+          `Release ${verified.manifest.releaseId} was committed at ${finalPath}, but directory durability could not be confirmed: ${error.message}. Inspect the final path before retrying.`,
+          { cause: error },
+        )
+      : new Error(
+          `${error instanceof Error ? error.message : String(error)}${residueMessage}`,
+          { cause: error },
+        );
+  } finally {
+    if (reservationDescriptor !== undefined) {
+      try {
+        closeSync(reservationDescriptor);
+      } catch (error) {
+        cleanupWarning = `Could not close release reservation: ${error.message}`;
+      }
+    }
+    if (
+      reservationCreated
+        && ((!finalCommitted && !temporaryCreated) || finalDurable)
+        && existsSync(reservationPath)
+    ) {
+      try {
+        const currentReservation = lstatSync(reservationPath, { bigint: true });
+        invariant(
+          reservationIdentity
+            && currentReservation.isFile()
+            && !currentReservation.isSymbolicLink()
+            && currentReservation.nlink === 1n
+            && sameFileIdentity(currentReservation, reservationIdentity),
+          'Release reservation identity changed before cleanup',
+        );
+        unlinkSync(reservationPath);
+        fsyncDirectory(releaseRoot);
+      } catch (error) {
+        const message = `Could not durably remove release reservation ${reservationPath}: ${error.message}`;
+        if (operationError) {
+          cleanupWarning = cleanupWarning ? `${cleanupWarning}; ${message}` : message;
+        } else if (finalDurable) {
+          cleanupWarning = cleanupWarning ? `${cleanupWarning}; ${message}` : message;
+        } else {
+          operationError = new Error(message, { cause: error });
+        }
+      }
+    }
+  }
+
+  if (operationError) {
+    if (cleanupWarning) operationError.message = `${operationError.message} Cleanup warning: ${cleanupWarning}`;
+    throw operationError;
+  }
+
+  const { entries: _entries, ...result } = verified;
+  return {
+    ...result,
+    destinationPath: finalPath,
+    warnings: cleanupWarning ? [cleanupWarning] : [],
   };
 };

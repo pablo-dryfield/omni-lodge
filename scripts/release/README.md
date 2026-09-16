@@ -1,8 +1,11 @@
 # OmniLodge release packager
 
 These scripts create and verify the single application artifact described in
-`docs/github-actions-release-roadmap.md`. They use only Node.js built-ins and
-work on Linux, macOS, and Windows.
+`docs/github-actions-release-roadmap.md`. Packaging and diagnostic verification
+use only Node.js built-ins and work on Linux, macOS, and Windows. Production
+extraction and activation are Ubuntu-only security operations: their complete
+owner, mode, `O_NOFOLLOW`, fixed-root, and locking guarantees are POSIX host
+invariants, not Windows deployment claims.
 
 ## Build the archive
 
@@ -122,9 +125,18 @@ SHA describe a canonical `push` to `refs/heads/master`. Pull-request and branch
 artifacts can still be inspected, but cannot pass production verification.
 
 Integrity alone is not deployment authority. The trusted pre-deploy job must
-obtain the workflow conclusion and immutable artifact ID from GitHub, then pass
-that authenticated evidence to the verifier. Protected-environment approval
-remains a separate control.
+obtain the workflow conclusion, immutable artifact ID, and `sha256:...` artifact
+digest from GitHub's authenticated API. The digest authenticates the exact raw
+ZIP returned by GitHub's REST artifact-download endpoint; it is deliberately
+distinct from the detached SHA-256 of the inner `.tar.gz` release.
+
+`scripts/deploy/github-release-evidence.mjs` emits canonical schema-v2 evidence
+with an explicit `stage`, `dry-run`, or `deploy` operation. Manual staging and
+dry-run evidence may be generated while `PRODUCTION_DEPLOY_MODE=disabled`, but
+they never authorize activation. Automatic staging/dry-run is rejected, and a
+forward deploy remains fail-closed under the disabled/manual/automatic matrix.
+Protected-environment approval and the future root-owned host policy remain
+separate controls; the evidence object is not, by itself, server authority.
 
 ## Verify an archive
 
@@ -146,6 +158,7 @@ node scripts/release/verify.mjs \
   --require-production-eligible \
   --workflow-conclusion success \
   --artifact-id <immutable-github-artifact-id> \
+  --artifact-digest sha256:<authenticated-raw-artifact-zip-sha256> \
   --expected-release-id <release-id> \
   --expected-source-sha <full-40-character-sha> \
   --expected-repository pablo-dryfield/omni-lodge \
@@ -157,22 +170,69 @@ node scripts/release/verify.mjs \
   --expected-artifact-name <release-id>
 ```
 
-The artifact ID and artifact name must be read together from GitHub's
+The artifact ID, name, and digest must be read together from GitHub's
 authenticated artifact API response for the specified run. They are not
 operator-entered labels and must not be inferred from an archive filename.
 Event, ref, run ID, run attempt, repository, workflow path, source SHA, release
-ID, artifact name, and successful conclusion are independently matched before
-the artifact can pass this gate.
+ID, artifact name, digest, and successful conclusion are independently matched
+before the artifact can pass this gate.
 
-The verifier never extracts files. Deployment must verify first, then use a
-separate extraction step that retains the same traversal/link/allowlist checks.
+## Verified production extraction
+
+Production uses two bound extraction stages:
+
+1. `scripts/deploy/extract-github-artifact.mjs` hashes the raw REST ZIP and
+   matches the authenticated GitHub digest before accepting its exact two root
+   files: `<release-id>.tar.gz` and its detached checksum. It returns the
+   separately calculated inner archive SHA-256 in a canonical schema-v2
+   handoff.
+2. `scripts/release/extract.mjs` requires that trusted inner digest through
+   `--expected-archive-sha256`, reopens the archive and checksum with bounded
+   descriptor-based reads, checks the digest before decompression, performs the
+   full canonical manifest/payload verification, and publishes the immutable
+   release directory.
+
+The root-owned deployment wrapper must compose these stages from fixed,
+permission-restricted roots and pass the first stage's digest directly to the
+second. Never expose either CLI directly through unrestricted sudo or SSH, and
+never accept an expected digest or activation decision supplied by a caller.
+Failed extraction residue and its reservation are intentionally preserved for
+operator inspection and trusted cleanup instead of being recursively deleted
+through a potentially replaced path.
+
+The inner extraction command therefore includes:
+
+```bash
+node scripts/release/extract.mjs \
+  --archive <trusted-staging>/<release-id>.tar.gz \
+  --expected-archive-sha256 <trusted-inner-archive-sha256> \
+  --releases-directory <fixed-root-owned-release-directory> \
+  --workflow-conclusion success \
+  --artifact-id <immutable-github-artifact-id> \
+  --artifact-digest sha256:<authenticated-raw-artifact-zip-sha256> \
+  --expected-release-id <release-id> \
+  --expected-source-sha <full-40-character-sha> \
+  --expected-repository pablo-dryfield/omni-lodge \
+  --expected-workflow-path .github/workflows/release.yml \
+  --expected-event push \
+  --expected-ref refs/heads/master \
+  --expected-run-id <github-run-id> \
+  --expected-run-attempt <github-run-attempt> \
+  --expected-artifact-name <release-id>
+```
 
 ## Tests
 
 ```bash
-node --test scripts/release/release.test.mjs
+node --test \
+  scripts/release/release.test.mjs \
+  scripts/deploy/github-release-evidence.test.mjs \
+  scripts/deploy/extract-github-artifact.test.mjs
 ```
 
-The suite covers byte-for-byte determinism, canonical production evidence,
-branch-artifact rejection, detached and internal tampering, traversal defense,
-secret-file rejection, and immutable output naming.
+The suites cover byte-for-byte determinism, canonical production evidence,
+branch-artifact rejection, the raw-ZIP/inner-archive trust chain, detached and
+internal tampering, path-swap and traversal defense, secret-file rejection,
+immutable output naming, and fail-closed operation-mode selection. Required
+Linux CI runs all three suites so POSIX ownership and mode assertions are not
+hidden by Windows skips.

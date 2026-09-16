@@ -162,6 +162,38 @@ jobs:
           | sort -z
           | xargs -0 -n 1 node --check
 
+  release_tooling:
+    name: CI / release tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out merge candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify the pinned toolchain
+        run: |
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Test release and deployment trust tooling
+        run: >-
+          node --test
+          scripts/release/release.test.mjs
+          scripts/deploy/github-release-evidence.test.mjs
+          scripts/deploy/extract-github-artifact.test.mjs
+
   migrations:
     name: CI / migrations
     if: github.event_name == 'pull_request'
@@ -190,6 +222,7 @@ jobs:
       DB_NAME: omnilodge_ci
       DB_USER: omnilodge_ci
       DB_PASSWORD: omnilodge_ci_password
+      MIGRATION_AUTHORITY_TEST_DATABASE: omnilodge_ci
       GIT_COMMIT_SHA: ${{ github.sha }}
       # Automatic and migration-authored verify() checks remain active. The
       # legacy strict mode additionally rejects every raw SQL statement, while
@@ -229,6 +262,10 @@ jobs:
       - name: Build migrations
         run: npm run build:prod
 
+      - name: Prove unmanaged schemas fail closed without mutation
+        working-directory: ${{ github.workspace }}
+        run: node scripts/ci/verify-migration-authority.mjs
+
       - name: Migrate a fresh database
         run: npm run migrate:runtime
 
@@ -250,6 +287,7 @@ jobs:
       - backend
       - ui
       - ui_server
+      - release_tooling
       - migrations
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -260,25 +298,29 @@ jobs:
           BACKEND_RESULT: ${{ needs.backend.result }}
           UI_RESULT: ${{ needs.ui.result }}
           UI_SERVER_RESULT: ${{ needs.ui_server.result }}
+          RELEASE_TOOLING_RESULT: ${{ needs.release_tooling.result }}
           MIGRATIONS_RESULT: ${{ needs.migrations.result }}
         shell: bash
         run: |
-          printf 'backend=%s\nui=%s\nui-server=%s\nmigrations=%s\n' \
+          printf 'backend=%s\nui=%s\nui-server=%s\nrelease-tooling=%s\nmigrations=%s\n' \
             "$BACKEND_RESULT" \
             "$UI_RESULT" \
             "$UI_SERVER_RESULT" \
+            "$RELEASE_TOOLING_RESULT" \
             "$MIGRATIONS_RESULT"
           case "$EVENT_NAME" in
             pull_request)
               test "$BACKEND_RESULT" = success
               test "$UI_RESULT" = success
               test "$UI_SERVER_RESULT" = success
+              test "$RELEASE_TOOLING_RESULT" = success
               test "$MIGRATIONS_RESULT" = success
               ;;
             push)
               test "$BACKEND_RESULT" = success
               test "$UI_RESULT" = success
               test "$UI_SERVER_RESULT" = success
+              test "$RELEASE_TOOLING_RESULT" = success
               test "$MIGRATIONS_RESULT" = skipped
               ;;
             *)

@@ -9,6 +9,7 @@ const VALUE_OPTIONS = [
   'checksum',
   'workflow-conclusion',
   'artifact-id',
+  'artifact-digest',
   'expected-release-id',
   'expected-source-sha',
   'expected-repository',
@@ -40,6 +41,7 @@ const main = () => {
       ? {
           workflowConclusion: values['workflow-conclusion'],
           artifactId: values['artifact-id'],
+          artifactDigest: values['artifact-digest'],
           expectedReleaseId: values['expected-release-id'],
           expectedSourceSha: values['expected-source-sha'],
           expectedRepository: values['expected-repository'],

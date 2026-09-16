@@ -234,6 +234,7 @@ jobs:
       DB_NAME: omnilodge_release
       DB_USER: omnilodge_release
       DB_PASSWORD: omnilodge_release_password
+      MIGRATION_AUTHORITY_TEST_DATABASE: omnilodge_release
       GIT_COMMIT_SHA: ${{ github.sha }}
       MIGRATION_VERIFY_STRICT: "false"
       NODE_ENV: production
@@ -269,6 +270,10 @@ jobs:
 
       - name: Build migrations from release source
         run: npm run build:prod
+
+      - name: Prove unmanaged schemas fail closed without mutation
+        working-directory: ${{ github.workspace }}
+        run: node scripts/ci/verify-migration-authority.mjs
 
       - name: Migrate a fresh database
         run: npm run migrate:runtime
@@ -347,7 +352,10 @@ jobs:
           node scripts/ci/validate-ui-build.mjs
           node scripts/release/preflight.mjs --path be/dist
           node scripts/release/preflight.mjs --path ui/build
-          node --test scripts/release/release.test.mjs
+          node --test \
+            scripts/release/release.test.mjs \
+            scripts/deploy/github-release-evidence.test.mjs \
+            scripts/deploy/extract-github-artifact.test.mjs
 
       - name: Package and verify release
         id: package_release
