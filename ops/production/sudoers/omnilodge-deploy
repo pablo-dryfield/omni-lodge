@@ -1,0 +1,3 @@
+Defaults:omnilodge-deploy env_reset
+Defaults:omnilodge-deploy secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+omnilodge-deploy ALL=(root) NOPASSWD: /usr/local/sbin/omnilodge-deploy ""

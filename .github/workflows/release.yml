@@ -355,7 +355,11 @@ jobs:
           node --test \
             scripts/release/release.test.mjs \
             scripts/deploy/github-release-evidence.test.mjs \
-            scripts/deploy/extract-github-artifact.test.mjs
+            scripts/deploy/extract-github-artifact.test.mjs \
+            scripts/deploy/host/protocol.test.mjs \
+            scripts/deploy/host-protocol-client.test.mjs \
+            ops/production/bootstrap-assets.test.mjs
+          sudo sh ops/production/bootstrap-primitives.test.sh
 
       - name: Package and verify release
         id: package_release

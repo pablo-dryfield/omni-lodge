@@ -1,0 +1,50 @@
+#!/bin/sh
+set -eu
+
+readonly STATE_DIR='/var/lib/omnilodge/deploy/state'
+readonly DEPLOY_LOCK='/run/omnilodge/deploy.lock'
+umask 077
+
+if [ "$(id -u)" -ne 0 ] || [ "$#" -ne 0 ]; then
+  printf '%s\n' 'Deployment recovery check refused.' >&2
+  exit 64
+fi
+
+if [ ! -d "$STATE_DIR" ] || [ -L "$STATE_DIR" ]; then
+  printf '%s\n' 'Deployment state directory is missing or unsafe.' >&2
+  exit 78
+fi
+if [ "$(stat -c '%u:%g:%a' "$STATE_DIR")" != '0:0:700' ]; then
+  printf '%s\n' 'Deployment state directory metadata is unsafe.' >&2
+  exit 78
+fi
+if [ ! -d /run/omnilodge ] || [ -L /run/omnilodge ] \
+  || [ "$(stat -c '%u:%g:%a' /run/omnilodge)" != '0:0:700' ]; then
+  printf '%s\n' 'Deployment runtime directory is missing or unsafe.' >&2
+  exit 78
+fi
+
+exec 9>"$DEPLOY_LOCK"
+if ! flock -n 9; then
+  printf '%s\n' 'Deployment recovery cannot acquire the deployment lock.' >&2
+  exit 75
+fi
+
+# Bootstrap recovery is intentionally observation-only. The completed worker
+# will replace this with deterministic resume/rollback handling. Until then,
+# an unfinished marker stops recovery rather than guessing at production state.
+marker_list=$(mktemp)
+trap 'rm -f "$marker_list"' EXIT HUP INT TERM
+if ! find "$STATE_DIR" -mindepth 1 -maxdepth 1 -name '*.in-progress' -print -quit >"$marker_list"; then
+  printf '%s\n' 'Deployment state inspection failed.' >&2
+  exit 78
+fi
+if [ -s "$marker_list" ]; then
+  printf '%s\n' 'Unfinished deployment state requires operator review.' >&2
+  exit 78
+fi
+
+rm -f "$marker_list"
+trap - EXIT HUP INT TERM
+
+exit 0

@@ -1,0 +1,36 @@
+[Unit]
+Description=OmniLodge detached deployment worker %i
+Documentation=file:/usr/local/share/doc/omnilodge-production/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+RuntimeDirectory=omnilodge
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+WorkingDirectory=/var/lib/omnilodge/deploy
+Environment=NPM_CONFIG_CACHE=/var/cache/omnilodge/npm
+Environment=PUPPETEER_CACHE_DIR=/var/cache/omnilodge/puppeteer
+ExecStart=/usr/local/sbin/omnilodge-deploy-worker %i
+TimeoutStartSec=1h
+KillMode=mixed
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=append:/var/lib/omnilodge/logs/deploy/worker.log
+StandardError=append:/var/lib/omnilodge/logs/deploy/worker.log
+
+# This template is started for a validated request. It is never enabled.

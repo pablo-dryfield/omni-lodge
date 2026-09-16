@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+readonly PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+umask 077
+
+if [ "$(id -u)" -ne 0 ] || [ "$#" -ne 1 ]; then
+  printf '%s\n' 'Deployment worker refused.' >&2
+  exit 64
+fi
+
+case "$1" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *)
+    printf '%s\n' 'Deployment worker refused: invalid request identifier.' >&2
+    exit 64
+    ;;
+esac
+
+printf '%s\n' 'Production deployment worker is not activated on this host.' >&2
+exit 78
