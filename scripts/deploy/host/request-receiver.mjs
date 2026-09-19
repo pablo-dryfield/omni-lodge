@@ -15,6 +15,12 @@ import {
   inspectHostRequestMetadata,
   parseHostRequestHeader,
 } from './protocol.mjs';
+import {
+  HOST_V2_REQUEST_HEADER_BYTES,
+  finalizeHostV2RequestMetadata,
+  inspectHostV2RequestMetadata,
+  parseHostV2RequestHeader,
+} from './protocol-v2.mjs';
 
 const MAX_STREAM_COPY_BYTES = 1024 * 1024;
 const MAX_CONSECUTIVE_EMPTY_CHUNKS = 1024;
@@ -307,6 +313,119 @@ export const receiveHostRequestToFile = async ({ input, artifactDirectory }) => 
       throw new AggregateError(
         [error, ...cleanupErrors],
         'Host request failed and its partial artifact could not be fully cleaned up',
+      );
+    }
+    throw error;
+  }
+};
+
+// Explicit v2 entry point. It never auto-detects or reinterprets a v1 frame:
+// v1 and v2 have distinct magic values, parsers, and exported receivers.
+export const receiveHostV2RequestToFile = async ({ input, artifactDirectory }) => {
+  const reader = new ExactAsyncBufferReader(input);
+  let artifactHandle;
+  let artifactPath;
+
+  try {
+    const headerBytes = await reader.readExactly(
+      HOST_V2_REQUEST_HEADER_BYTES,
+      'Host v2 request header',
+    );
+    const header = parseHostV2RequestHeader(headerBytes);
+    const requestBytes = await reader.readExactly(
+      header.requestLength,
+      'Host v2 request',
+    );
+    const evidenceBytes = await reader.readExactly(
+      header.evidenceLength,
+      'Host v2 evidence',
+    );
+    const metadata = inspectHostV2RequestMetadata({
+      requestBytes,
+      evidenceBytes,
+      artifactZipLength: header.artifactZipLength,
+    });
+
+    if (metadata.request.kind !== 'forward_submit') {
+      await reader.requireEof();
+      const identity = finalizeHostV2RequestMetadata({ metadata, artifactZipSha256: null });
+      return Object.freeze({
+        header,
+        request: metadata.request,
+        evidence: null,
+        identity,
+        requestBytes: Buffer.from(requestBytes),
+        evidenceBytes: Buffer.alloc(0),
+        artifactZipPath: null,
+        artifactZipLength: 0,
+        cleanupArtifact: async () => {},
+      });
+    }
+
+    const directory = await validateArtifactDirectory(artifactDirectory);
+    const reserved = await openExclusiveArtifact(directory);
+    artifactHandle = reserved.handle;
+    artifactPath = reserved.filePath;
+    const artifactHash = createHash('sha256');
+    await reader.consumeExactly(
+      header.artifactZipLength,
+      'Host v2 artifact ZIP',
+      async (chunk) => {
+        artifactHash.update(chunk);
+        await writeAll(artifactHandle, chunk);
+      },
+    );
+    await reader.requireEof();
+    await artifactHandle.sync();
+    const artifactStat = await artifactHandle.stat({ bigint: true });
+    invariant(
+      artifactStat.isFile() && artifactStat.size === BigInt(header.artifactZipLength),
+      'Stored host v2 artifact ZIP length does not match its request header',
+    );
+    await artifactHandle.close();
+    artifactHandle = undefined;
+    const identity = finalizeHostV2RequestMetadata({
+      metadata,
+      artifactZipSha256: artifactHash.digest('hex'),
+    });
+    const cleanupArtifact = createArtifactCleanup({
+      filePath: artifactPath,
+      expectedStat: artifactStat,
+    });
+    return Object.freeze({
+      header,
+      request: metadata.request,
+      evidence: metadata.evidence,
+      identity,
+      requestBytes: Buffer.from(requestBytes),
+      evidenceBytes: Buffer.from(evidenceBytes),
+      artifactZipPath: artifactPath,
+      artifactZipLength: header.artifactZipLength,
+      cleanupArtifact,
+    });
+  } catch (error) {
+    const cleanupErrors = [];
+    try {
+      await reader.cancel();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (artifactHandle !== undefined) {
+      try {
+        await artifactHandle.close();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    try {
+      await unlinkIfPresent(artifactPath);
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        'Host v2 request failed and its partial artifact could not be fully cleaned up',
       );
     }
     throw error;

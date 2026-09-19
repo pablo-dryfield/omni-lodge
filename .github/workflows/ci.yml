@@ -195,8 +195,11 @@ jobs:
             scripts/deploy/github-release-evidence.test.mjs \
             scripts/deploy/extract-github-artifact.test.mjs \
             scripts/deploy/host/protocol.test.mjs \
+            scripts/deploy/host/protocol-v2.test.mjs \
             scripts/deploy/host-protocol-client.test.mjs \
-            ops/production/bootstrap-assets.test.mjs
+            ops/production/bootstrap-assets.test.mjs \
+            ops/production/host-state-primitives.test.mjs \
+            ops/production/release-preparation.test.mjs
           sudo sh ops/production/bootstrap-primitives.test.sh
 
   migrations:

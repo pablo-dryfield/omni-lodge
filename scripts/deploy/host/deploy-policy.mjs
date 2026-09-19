@@ -8,6 +8,7 @@ import {
   serializeCanonicalHostJson,
   validateHostRequestIdentity,
 } from './protocol.mjs';
+import { validateHostV2RequestIdentity } from './protocol-v2.mjs';
 
 export const MAX_HOST_POLICY_BYTES = 1024;
 
@@ -94,5 +95,50 @@ export const evaluateHostDeployPolicy = ({ policy, requestIdentity }) => {
     deploymentMode: validatedPolicy.deploymentMode,
     authorized: authorization.authorized,
     reason: authorization.reason,
+  });
+};
+
+export const evaluateHostV2DeployPolicy = ({ policy, requestIdentity }) => {
+  const validatedPolicy = validateHostDeployPolicy(policy);
+  const identity = validateHostV2RequestIdentity(requestIdentity);
+
+  let authorized;
+  let reason;
+  if (identity.kind === 'forward_submit') {
+    // Forward activation remains governed by the independent root-owned mode.
+    // Evidence authorization is an audit assertion and never replaces this
+    // decision. Stage/dry-run retain the v1 manual-only rules.
+    validateReleaseOperation({
+      configuredMode: validatedPolicy.deploymentMode,
+      trigger: identity.trigger,
+      operation: identity.operation,
+    });
+    if (identity.operation === 'deploy') {
+      const decision = selectDeploymentAuthorization({
+        configuredMode: validatedPolicy.deploymentMode,
+        trigger: identity.trigger,
+      });
+      authorized = decision.authorized;
+      reason = decision.reason;
+    } else {
+      authorized = true;
+      reason = 'non_activation_operation';
+    }
+  } else if (identity.kind === 'rollback_submit') {
+    // A production freeze must stop forward releases without disabling the
+    // operator's escape hatch. Rollback is manual-only in the request schema
+    // and is deliberately independent of the forward deployment mode.
+    authorized = true;
+    reason = 'manual_rollback_allowed_during_forward_freeze';
+  } else {
+    authorized = true;
+    reason = 'status_query';
+  }
+
+  return Object.freeze({
+    ...identity,
+    deploymentMode: validatedPolicy.deploymentMode,
+    authorized,
+    reason,
   });
 };

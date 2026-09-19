@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import {
+  mkdtemp,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
   createHostProtocolRequestChunks,
   createHostProtocolRequestFrame,
+  createHostV2ForwardRequestFileStream,
+  createHostV2ForwardRequestFrame,
+  createHostV2RollbackRequestFrame,
+  createHostV2StatusRequestFrame,
   validateHostProtocolResponse,
+  validateHostV2ProtocolResponse,
 } from './host-protocol-client.mjs';
 import {
   createHostResponse,
@@ -13,6 +27,11 @@ import {
   encodeHostResponseFrame,
   serializeCanonicalHostJson,
 } from './host/protocol.mjs';
+import {
+  createHostV2Response,
+  decodeHostV2RequestFrame,
+  encodeHostV2ResponseFrame,
+} from './host/protocol-v2.mjs';
 
 const REQUEST_ID = '123e4567-e89b-42d3-a456-426614174000';
 const SOURCE_SHA = 'b'.repeat(40);
@@ -165,5 +184,152 @@ test('caller rejects response framing with mandatory EOF', () => {
       requestIdentity: request.identity,
     }),
     /trailing bytes/,
+  );
+});
+
+const V2_ACTIVE = Object.freeze({
+  activationId: '223e4567-e89b-42d3-a456-426614174001',
+  snapshotSha256: 'a'.repeat(64),
+});
+const V2_TARGET = Object.freeze({
+  activationId: '323e4567-e89b-42d3-a456-426614174002',
+  snapshotSha256: 'b'.repeat(64),
+});
+
+const v2Base = (overrides = {}) => ({
+  requestId: REQUEST_ID,
+  requestedAtUtc: '2026-09-16T15:00:00.000Z',
+  actor: 'github-actions[bot]',
+  ...overrides,
+});
+
+test('v2 caller creates distinct forward, rollback, and status request variants', () => {
+  const forward = createHostV2ForwardRequestFrame(v2Base({
+    operation: 'deploy',
+    trigger: 'manual',
+    evidenceBytes: evidenceBytes(),
+    artifactZipBytes: ARTIFACT,
+  }));
+  assert.equal(decodeHostV2RequestFrame(forward.frame).identity.kind, 'forward_submit');
+
+  const rollback = createHostV2RollbackRequestFrame(v2Base({
+    expectedActiveSnapshot: V2_ACTIVE,
+    targetSnapshot: V2_TARGET,
+  }));
+  const decodedRollback = decodeHostV2RequestFrame(rollback.frame);
+  assert.equal(decodedRollback.identity.kind, 'rollback_submit');
+  assert.equal(decodedRollback.artifactZipBytes.length, 0);
+
+  const status = createHostV2StatusRequestFrame(v2Base({
+    subjectRequestId: V2_ACTIVE.activationId,
+  }));
+  assert.equal(decodeHostV2RequestFrame(status.frame).identity.kind, 'status_query');
+});
+
+test('v2 caller correlates status responses to request and subject identities', () => {
+  const request = createHostV2StatusRequestFrame(v2Base({
+    subjectRequestId: V2_ACTIVE.activationId,
+  }));
+  const response = createHostV2Response({
+    requestIdentity: request.identity,
+    code: 'STATUS_FOUND',
+    requestStatus: {
+      requestId: V2_ACTIVE.activationId,
+      kind: 'rollback_submit',
+      lifecycle: 'running',
+      phase: 'pointers_switched',
+      resultCode: null,
+      updatedAtUtc: '2026-09-16T15:00:01.000Z',
+    },
+  });
+  assert.equal(validateHostV2ProtocolResponse({
+    responseFrame: encodeHostV2ResponseFrame(response),
+    requestIdentity: request.identity,
+  }).requestStatus.phase, 'pointers_switched');
+  assert.throws(
+    () => validateHostV2ProtocolResponse({
+      responseFrame: encodeHostV2ResponseFrame(response),
+      requestIdentity: createHostV2StatusRequestFrame(v2Base({
+        requestId: '423e4567-e89b-42d3-a456-426614174003',
+        subjectRequestId: V2_ACTIVE.activationId,
+      })).identity,
+    }),
+    /request ID does not match/,
+  );
+});
+
+const collect = async (iterable) => {
+  const values = [];
+  for await (const value of iterable) values.push(value);
+  return Buffer.concat(values);
+};
+
+const createArtifactFile = async (context) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-v2-client-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const artifactPath = path.join(directory, 'release.zip');
+  await writeFile(artifactPath, ARTIFACT);
+  return { directory, artifactPath };
+};
+
+test('file-backed v2 caller streams the exact forward frame without accumulating the ZIP', async (context) => {
+  const { artifactPath } = await createArtifactFile(context);
+  const fileRequest = await createHostV2ForwardRequestFileStream(v2Base({
+    operation: 'deploy',
+    trigger: 'manual',
+    evidenceBytes: evidenceBytes(),
+    artifactZipPath: artifactPath,
+  }));
+  const streamed = await collect(fileRequest.chunks);
+  const buffered = createHostV2ForwardRequestFrame(v2Base({
+    operation: 'deploy',
+    trigger: 'manual',
+    evidenceBytes: evidenceBytes(),
+    artifactZipBytes: ARTIFACT,
+  }));
+  assert.deepEqual(streamed, buffered.frame);
+  assert.deepEqual(fileRequest.identity, buffered.identity);
+  assert.equal(fileRequest.totalLength, streamed.length);
+  await fileRequest.close();
+});
+
+test('file-backed v2 caller rejects in-place mutation between pre-hash and transmission', async (context) => {
+  const { artifactPath } = await createArtifactFile(context);
+  const request = await createHostV2ForwardRequestFileStream(v2Base({
+    operation: 'deploy',
+    trigger: 'manual',
+    evidenceBytes: evidenceBytes(),
+    artifactZipPath: artifactPath,
+  }));
+  const replacement = Buffer.from(ARTIFACT);
+  replacement[replacement.length - 1] ^= 0xff;
+  await writeFile(artifactPath, replacement);
+  await assert.rejects(collect(request.chunks), /changed|replaced/);
+  await request.close();
+});
+
+test('file-backed v2 caller rejects path swaps and symbolic links', { skip: process.platform === 'win32' }, async (context) => {
+  const { directory, artifactPath } = await createArtifactFile(context);
+  const request = await createHostV2ForwardRequestFileStream(v2Base({
+    operation: 'deploy',
+    trigger: 'manual',
+    evidenceBytes: evidenceBytes(),
+    artifactZipPath: artifactPath,
+  }));
+  await rename(artifactPath, path.join(directory, 'original.zip'));
+  await writeFile(artifactPath, ARTIFACT);
+  await assert.rejects(collect(request.chunks), /replaced/);
+  await request.close();
+
+  const linkPath = path.join(directory, 'linked.zip');
+  await symlink(path.join(directory, 'original.zip'), linkPath);
+  await assert.rejects(
+    createHostV2ForwardRequestFileStream(v2Base({
+      operation: 'deploy',
+      trigger: 'manual',
+      evidenceBytes: evidenceBytes(),
+      artifactZipPath: linkPath,
+    })),
+    /symbolic link or junction/,
   );
 });

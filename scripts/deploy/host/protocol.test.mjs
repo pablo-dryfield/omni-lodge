@@ -10,6 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import './protocol-v2.test.mjs';
+
 import {
   HOST_AUDIT_SCHEMA_VERSION,
   HOST_REQUEST_HEADER_BYTES,
