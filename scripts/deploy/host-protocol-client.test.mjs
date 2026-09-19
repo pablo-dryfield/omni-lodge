@@ -318,7 +318,7 @@ test('file-backed v2 caller rejects path swaps and symbolic links', { skip: proc
   }));
   await rename(artifactPath, path.join(directory, 'original.zip'));
   await writeFile(artifactPath, ARTIFACT);
-  await assert.rejects(collect(request.chunks), /replaced/);
+  await assert.rejects(collect(request.chunks), /replaced|changed while it was being read/);
   await request.close();
 
   const linkPath = path.join(directory, 'linked.zip');

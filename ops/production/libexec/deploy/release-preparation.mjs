@@ -228,7 +228,10 @@ const assertTrustedPathChain = (
   const resolvedTarget = path.resolve(targetPath);
   const resolvedTrustRoot = path.resolve(trustedRoot);
   if (!isWithin(resolvedTrustRoot, resolvedTarget)) fail(`${label} escapes its trusted ancestor root`);
-  const chain = pathChain(resolvedTarget);
+  const fullChain = pathChain(resolvedTarget);
+  const trustRootIndex = fullChain.findIndex((component) => pathsEqual(component, resolvedTrustRoot));
+  if (trustRootIndex === -1) fail(`${label} trusted ancestor root is not in the path chain`);
+  const chain = fullChain.slice(trustRootIndex);
   const first = [];
   const allowedOwners = new Set([0n]);
   if (owner !== null) allowedOwners.add(BigInt(owner));
