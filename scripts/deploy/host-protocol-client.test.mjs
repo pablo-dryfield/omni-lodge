@@ -330,6 +330,6 @@ test('file-backed v2 caller rejects path swaps and symbolic links', { skip: proc
       evidenceBytes: evidenceBytes(),
       artifactZipPath: linkPath,
     })),
-    /symbolic link or junction/,
+    /symbolic link or junction|must be a real file/,
   );
 });
