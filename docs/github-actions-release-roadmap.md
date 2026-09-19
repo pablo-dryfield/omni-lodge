@@ -1,10 +1,10 @@
 # OmniLodge GitHub Actions Release Roadmap
 
-Status: planning only; this pipeline is not active yet.
+Status: Phase 0 inventory, backup, restore, and production-shaped migration verification are complete. Phase 1 and the Phase 2 CI/release implementation are present on the current draft pull-request branch, and hosted pull-request and branch CI are green. Phase 3 now has repository-only foundations for compiled runtime preflight, a strict host protocol, and fail-closed host bootstrap/runtime scaffolding, but it is not operational and has not been installed on production. The first trusted `master` release remains pending. No deployment or rollback workflow is active, no GitHub production deployment secret is configured, the current Actions workflows cannot contact production, and `PRODUCTION_DEPLOY_MODE=disabled` remains set.
 
 Baseline when this plan was written: `080fa5db5e568c7f005f60c7b8aa39eaf8272c1d`
 
-Repository review refreshed on 2026-09-14 at `f27d2f32e54c2d806719f706feb10d26bbb91a47`.
+Initial repository review refreshed on 2026-09-14 at `f27d2f32e54c2d806719f706feb10d26bbb91a47`; implementation status in this document reflects the current Phase 0-2 implementation and partial Phase 3 repository foundations on the pull-request worktree.
 
 ## Objective
 
@@ -48,17 +48,18 @@ The status labels in this document mean `[Current]`, `[Partial]`, `[Planned]`, `
 
 | Area | Repository today | Target | Status |
 | --- | --- | --- | --- |
-| GitHub Actions | No `.github/workflows` directory exists. | PR validation, trusted `master` release, deploy, and rollback workflows. | `[Planned]` |
-| Repository layout | `be`, `ui`, and `ui-server` are independent packages with separate lockfiles; the root lockfile is not a workspace entry point. | Install, cache, validate, and package each application independently. | `[Current]` |
-| Toolchain | `.nvmrc` selects Node 22; only the backend declares a Node engine; npm is not pinned project-wide. | One exact Node 22 and npm version recorded in all packages, CI, the manifest, and production. | `[Partial]` |
-| Source workflow | Work has historically landed directly on `master`, and legacy branches remain. | Isolated short-lived branches, required PR checks, human merge, and branch cleanup. | `[Planned]` |
-| Backend | Check, test, and build scripts exist, but production start, migration, access sync, and `postinstall` still compile TypeScript; no dedicated lint script exists. | Separate build-time and runtime-only commands with CI coverage. | `[Partial]` |
-| UI | Typecheck, lint, tests, and build scripts exist; about 750 generated `ui/build` files remain tracked for the legacy deployment. | Build once in Actions and ship only in the verified release artifact after cutover. | `[Partial]` |
-| UI server | Node tests exist; UI build and TLS paths are tied to the checkout, and there is no release-aware readiness contract. | Explicit runtime paths, strict preflight, syntax checks, and health reporting. | `[Partial]` |
-| Health checks | `/api/health` is a shallow process liveness response. | Separate liveness and DB/config/migration/release-aware readiness checks. | `[Partial]` |
-| Database validation | Production migrations exist, but there is no temporary-PostgreSQL migration gate in Actions. | Fresh migrate, verification, and second no-op migrate before any deploy can become eligible. | `[Planned]` |
-| TLS | The Cloudflare Origin CA key and certificate are read from tracked source paths. | Rotated, server-owned TLS material outside Git and artifacts. | `[Blocked]` prerequisite |
-| Deployment | Production uses the checkout/PM2 and legacy pull/build-oriented controls. | Verified release directories, atomic pointers, serialized activation, and rollback. | `[Planned]` |
+| GitHub Actions | Bootstrap controls plus SHA-pinned CI and trusted `master` release workflows are implemented. Reviewed PR and branch runs are green. The workflows use read-only token permissions and contain no deployment or rollback job. The first trusted `master` release run remains pending because the pull request is draft and unmerged. No GitHub production deployment secret is configured, the workflows cannot contact production, and `PRODUCTION_DEPLOY_MODE=disabled` remains set. | PR validation, trusted `master` release, deploy, and rollback workflows. | `[Partial]` |
+| Repository layout | `be`, `ui`, and `ui-server` are independent packages with separate lockfiles; the unused empty root lockfile has been removed. | Install, cache, validate, and package each application independently. | `[Current]` |
+| Toolchain | Node 22.23.2 and npm 10.9.8 are selected and pinned in `.nvmrc` and all three package manifests. | Use that exact pair in local development, CI, release manifests, and production. | `[Current]` |
+| Source workflow | `master` requires pull requests, strictly requires the GitHub Actions app-bound `CI / required` check, and blocks force pushes/deletion. Short-lived task branches are in use and repository auto-delete after merge is enabled; legacy branches remain pending audit. | Isolated short-lived branches, required merge-result checks, human merge, and branch cleanup. | `[Partial]` |
+| Runtime contract | `docs/production-runtime-contract.md` records the non-secret package, runtime, repository, release, and smoke-test contract. Root PM2, storage, migration, backup, restore, and production-shaped upgrade facts were verified on 2026-09-16 and are recorded in `docs/production-phase0-evidence-2026-09-16.md`. | Reviewed and fully verified production/runtime contract. | `[Current]` |
+| Backend | Check, test, build, and runtime-only start/migrate/access-sync scripts exist and compile-on-install is removed. The compiled artifact now also contains a read-only migration-status command and a fail-closed runtime preflight covering release identity, migration lineage/state, runtime safety settings, read-only database access, Sharp, and the pinned Puppeteer cache/browser. CI and release jobs run check/tests/build; legacy production aliases still compile for fallback, and no separate backend lint command exists. These checks are not yet connected to production activation. | Runtime-only artifact activation with complete CI coverage. | `[Partial]` |
+| UI | Typecheck, lint, tests, and build scripts exist; generated `ui/build` files remain tracked for the legacy deployment. Actions now rebuild from a clean directory and validate release metadata/assets/source maps. | Build once in Actions and ship only in the verified release artifact after cutover. | `[Partial]` |
+| UI server | Build/TLS paths are configurable, startup performs strict release-aware artifact/TLS preflight, `/healthz` reports release/artifact status, and Actions run tests plus syntax checks. Legacy production still uses checkout-relative defaults. | Explicit release paths with server-owned TLS and deployment health gating. | `[Partial]` |
+| Health checks | The legacy `/api/health` remains shallow; `/api/health/live` and `/api/health/ready` are implemented with database, required-config, and release checks. Migration-state readiness and deployment integration remain pending. | Separate liveness and DB/config/migration/release-aware readiness checks. | `[Partial]` |
+| Database validation | An idempotent historical baseline and explicit legacy schema bridges support empty and production-shaped databases without modifying production-owned data. The PostgreSQL 16 fresh-database gate passed locally and in hosted CI. A one-time production backup was restored on PostgreSQL 17.5; four pending branch migrations applied successfully, a second run was a no-op, all 189 migration records matched, and 159 compiled models queried successfully. Shared fail-closed migration-lineage checks and a compiled read-only migration-status command are implemented, but deployment enforcement is not operational yet. | Keep the PostgreSQL 16 fresh gate required and require a reviewed production-shaped compatibility proof before first cutover. | `[Partial]` |
+| TLS | The matching Cloudflare Origin CA pair is still read from tracked source paths. The owner accepted the known exposure risk and directed that the pair be retained without rotation. | Reuse the retained pair from a permission-restricted server-owned path outside Git and artifacts; untrack it from the Git tip. Rotation remains recommended deferred hardening. This is an accepted-risk prerequisite. | `[Partial]` |
+| Deployment | Production still uses the checkout/PM2 and legacy pull/build controls. A restricted deployment account, its existing Ed25519 deploy key, and the protected GitHub environment are retained; key rotation is not part of this work. The repository now defines a strict versioned, bounded host protocol/client plus fail-closed bootstrap, policy, directory, PM2, systemd, and recovery scaffolds. Those assets are repository foundations only: nothing has been installed on the host, the root submitter/worker/recovery path is not operational, no deploy or rollback workflow exists, no GitHub production deployment secret is configured, and Actions cannot contact production. | Verified release directories, atomic pointers, serialized activation, and rollback. | `[Partial]` |
 | Staging | No separate staging environment is established in this roadmap. | Optional promotion of the same `master` artifact to a separate environment. | `[Optional/Future]` |
 
 This matrix must be updated as roadmap phases land; adding a planned section below does not make that capability current.
@@ -73,19 +74,19 @@ This matrix must be updated as roadmap phases land; adding a planned section bel
 - Never put production application secrets, database credentials, TLS private keys, uploads, logs, or runtime data in a GitHub Actions artifact.
 - Keep the existing deployment method available until the first artifact-based production deployment has passed all acceptance checks.
 
-## Important security prerequisite
+## Important TLS accepted-risk prerequisite
 
-`be/src/ssl/cf-origin.key` is currently tracked in Git, and the UI server reads the key and certificate from the source tree. The key must not be copied into release artifacts.
+`be/src/ssl/cf-origin.key` is currently tracked in public Git history, and the UI server reads the key and certificate from the source tree. The private key must therefore be treated as exposed and must never be copied into release artifacts.
 
-Before any Actions-driven production deployment is permitted:
+On 2026-09-16 the owner explicitly directed the project to retain the existing matching Cloudflare Origin CA pair without rotating or revoking it. This is an accepted-risk exception, not a claim that the key is secure. Before any Actions-driven production deployment is permitted:
 
-1. Add explicit runtime settings such as `UI_TLS_KEY_PATH` and `UI_TLS_CERT_PATH`.
-2. Store the certificate and key outside the repository, preferably under `/etc/omnilodge/tls`, readable only by the service account.
-3. Create and install a new Cloudflare Origin CA certificate and key.
-4. Restart and verify the origin with the new certificate while Cloudflare remains in strict TLS mode.
-5. Revoke the old Origin CA certificate only after the new certificate works. Revocation is irreversible.
-6. Remove the key and certificate from Git tracking and add their paths to `.gitignore`.
-7. Consider a later Git-history cleanup. Rotating the key is the urgent protection; history rewriting must be planned because it affects every clone.
+1. Keep using the implemented explicit `UI_TLS_KEY_PATH` and `UI_TLS_CERT_PATH` runtime settings.
+2. Copy the retained certificate and key to a server-owned path outside the repository and releases, preferably `/etc/omnilodge/tls`, readable only by the service account.
+3. Start the candidate UI server with those explicit paths and verify the origin while Cloudflare remains in strict TLS mode.
+4. Remove the key and certificate from the Git tip and add their source paths to `.gitignore`; never include either file in an artifact, manifest, cache, or workflow log.
+5. Keep rotation, revocation, and coordinated Git-history cleanup as recommended deferred hardening. Do not silently convert this exception into a claim that the historical key is protected.
+
+The verified host and certificate facts are recorded without private material in [Production Phase 0 Evidence — 2026-09-16](production-phase0-evidence-2026-09-16.md).
 
 ## Target release architecture
 
@@ -143,15 +144,21 @@ Protect `master` with stable required status-check names, no force pushes, and n
 
 ### Triggers
 
-- `push` to `codex/**`: run a fast branch-head validation set such as lint, typecheck, and unit tests; cancel an older run for the same branch and never deploy.
-- `pull_request` targeting `master`: run the canonical full validation against the prospective merge result; never deploy.
-- Open a draft pull request early so each later push also triggers `pull_request`/`synchronize`. Keep the branch-head suite fast and the merge-context suite authoritative instead of running two identical full suites for every commit.
-- `push` to `master`: rerun clean validation, build the exact resulting `master` SHA, and publish a new immutable release artifact every time.
-- `workflow_dispatch`: manually deploy an explicitly selected, previously successful trusted `master` release.
-- The successful `master` release workflow also contains the automatic-deployment path from the outset, gated by `PRODUCTION_DEPLOY_MODE` as described below.
-- CI concurrency may cancel obsolete runs for the same branch or pull request. Do not casually cancel a `master` release after artifact publication begins.
-- Use one `production-deploy` concurrency group with `cancel-in-progress: false`, backed by the server-side `flock`, so a migration or activation is never interrupted by a newer run. GitHub keeps at most one pending member of a concurrency group and replaces an older pending run when another arrives, so this is intentionally a latest-pending-release policy rather than an unlimited queue.
-- If GitHub merge queue is enabled later, add `merge_group` to the required validation workflow.
+The current Phase 2 implementation has these triggers:
+
+- `.github/workflows/ci.yml` runs on `push` to `codex/**` and on pull requests targeting `master`.
+- A branch push runs backend checks/tests, UI checks/tests, and UI-server tests/syntax checks. The migration gate and application builds are intentionally skipped, and the aggregate check is named `Branch / required`.
+- A pull request runs the canonical full validation against GitHub's prospective merge result. It adds backend/UI builds, strict source-SHA-bound UI artifact validation, and the disposable PostgreSQL gate; the aggregate check is named `CI / required`.
+- CI concurrency cancels obsolete runs for the same branch or pull request.
+- `.github/workflows/release.yml` runs only on `push` to `master`. It validates and builds the exact resulting SHA, then publishes one immutable combined release artifact. It has no deployment step and intentionally has no workflow concurrency rule that could replace a pending `master` release.
+
+Open a draft pull request early so each later push triggers the authoritative merge-context suite. After the first successful real `CI / required` run, configure that exact name as the branch-protection requirement. If GitHub merge queue is enabled later, add `merge_group` to the required validation workflow.
+
+Phase 3 will add the deployment-only triggers and serialization:
+
+- `workflow_dispatch` will manually deploy an explicitly selected, previously successful trusted `master` release.
+- The successful `master` release path will be able to request automatic deployment, gated by `PRODUCTION_DEPLOY_MODE` as described below. Artifact creation remains independent of that switch.
+- Use one `production-deploy` concurrency group with `cancel-in-progress: false`, backed by server-side `flock`, so a migration or activation is never interrupted by a newer run. GitHub keeps at most one pending member of a concurrency group and replaces an older pending run when another arrives, so this is intentionally a latest-pending-release policy rather than an unlimited queue.
 
 ### Deployment modes and automatic-deployment switch
 
@@ -181,7 +188,7 @@ The switch controls whether deployment is requested; it does not bypass the `pro
 
 The move from step 2 to step 3 is an explicit GitHub Environment settings change after repeated successful releases and a proven rollback drill; it is not something workflow code or the mode variable may bypass. If required reviewers are unavailable for this repository/plan, `manual` mode itself remains the initial human gate.
 
-Keep rollback separate from forward deployment. `rollback-production` is always an explicit manual workflow against a known retained release, uses the same environment and concurrency group, validates the retained manifest, switches only to an approved known-good version, and never runs migration `down`. For an operator-initiated rollback: set forward mode to `disabled`, cancel pending (not actively migrating/activating) forward runs, wait for any active deployment to settle or perform its immediate recovery, and then dispatch rollback. This prevents a pending automatic release from redeploying immediately afterward. Rollback remains available during the freeze. A failed automatic activation performs the deploy script's immediate code-pointer rollback once, fails the run, and does not enter an automatic retry loop; operators should return the mode to `manual` while investigating.
+Keep rollback separate from forward deployment. The future `rollback-production` workflow is always an explicit manual action against a known retained release, uses the same environment and concurrency group, validates the retained manifest, switches only to an approved known-good version, and never runs migration `down`. For an operator-initiated rollback: set forward mode to `disabled`, cancel pending (not actively migrating/activating) forward runs, wait for any active deployment to settle or perform its immediate recovery, and then dispatch rollback. This prevents a pending automatic release from redeploying immediately afterward. Rollback remains available during the freeze. A failed automatic activation performs the deploy script's immediate code-pointer rollback once, fails the run, and does not enter an automatic retry loop; operators should return the mode to `manual` while investigating.
 
 ### Permissions
 
@@ -194,31 +201,31 @@ Keep rollback separate from forward deployment. `rollback-production` is always 
 
 ### Parallel validation jobs
 
-There is no root npm workspace. Do not run one root-level `npm ci` and assume it covers the applications. Each job must use the package's own directory and lockfile. Decide in Phase 0 whether the 89-byte root `package-lock.json` should be removed or documented as intentionally unused.
+There is no root npm workspace. The unused root `package-lock.json` has been removed. Each workflow runs `npm ci` in the relevant package directory and caches against that package's own lockfile.
 
 Use stable, documented required-check names so branch protection does not silently stop enforcing validation after workflow refactors. Target feedback in a few minutes by parallelizing independent jobs and caching dependencies, but record actual command durations before deciding which suites can be split safely.
 
 #### Backend
 
-1. Use the exact Node 22 and npm version selected in Phase 0; `.nvmrc` currently specifies only Node major `22`, while the repository does not yet pin npm project-wide.
+1. Use the pinned Node 22.23.2 and npm 10.9.8 pair and fail if the runner does not expose that exact pair.
 2. Run `npm ci` from `be`.
 3. Run `npm run check`.
-4. Add and run a dedicated lint command rather than claiming the backend is linted today.
-5. Run `npm test -- --runInBand` initially for memory safety, then optimize only from measured CI timings.
-6. Run `npm run build:prod` once.
-7. Verify the compiled monitoring models.
-8. Upload the compiled output for the packaging job.
+4. Run `npm test -- --runInBand` initially for memory safety, then optimize only from measured CI timings.
+5. On pull requests and trusted releases, run `npm run build:prod`, including compiled-monitoring-model verification.
+6. In the release workflow, upload `be/dist` as a one-day handoff artifact for the packaging job. Do not commit it.
 
-Before any Actions-driven production deploy can become eligible, add a temporary PostgreSQL Actions service and make migration verification a required release gate: migrate an empty database, run schema/integration verification, then run migrations a second time and require a clean no-op result. Tests that require external integrations must use disposable test credentials or mocks and must never receive production secrets.
+The backend currently has no separate lint script, so Phase 2 does not claim a backend lint gate.
+
+The pull-request and release workflows now define a disposable PostgreSQL 16.10 service. They migrate a fresh database, invoke the migration runner a second time, verify the complete applied migration set and selected schema/index/foreign-key invariants, and query every registered compiled Sequelize model. On 2026-09-14 the same gate passed locally from an empty PostgreSQL 16 database: 189 migrations applied on the first run, the second run was a no-op, 165 public tables passed the schema checks, and all 159 compiled models queried successfully. Reviewed hosted pull-request run `34902107741` is the authoritative hosted-run proof for the current checkpoint. Tests that require external integrations must use disposable test credentials or mocks and must never receive production secrets.
 
 #### UI
 
 1. Run `npm ci` from `ui`.
 2. Run `npm run check`.
 3. Run `npm test -- --watchAll=false` (or the equivalent stable CI command) with watch mode disabled.
-4. Build with a stable `REACT_APP_RELEASE` and the required source-map setting.
-5. Validate `asset-manifest.json`, `index.html`, service worker assets, lazy chunks, and source-map coverage.
-6. Upload the UI output for packaging.
+4. Build with the run-specific `REACT_APP_RELEASE`, full `REACT_APP_GIT_SHA`, and source maps enabled. The trusted release job explicitly deletes tracked/stale output first.
+5. Stamp `release-metadata.json` and validate `asset-manifest.json`, `index.html`, service worker assets, PWA manifests, referenced/lazy assets, release consistency, and usable source-map coverage.
+6. In the release workflow, upload `ui/build` as a one-day handoff artifact for the packaging job.
 
 No value prefixed with `REACT_APP_` may contain a secret because those values are public in the browser bundle.
 
@@ -226,10 +233,10 @@ No value prefixed with `REACT_APP_` may contain a secret because those values ar
 
 1. Run `npm ci` from `ui-server`.
 2. Run all Node tests.
-3. Run `node --check` on the server and its helper modules.
+3. Run `node --check` on every checked-in JavaScript file below `ui-server`, excluding `node_modules`.
 4. Verify that a missing or inconsistent UI artifact causes preflight validation to fail.
 
-The build/release workflow should run these application jobs in parallel where dependencies permit, then package only after every required job and the PostgreSQL migration gate succeed.
+The release workflow runs these application jobs in parallel where dependencies permit, then packages only after every required job and the PostgreSQL migration gate succeed.
 
 ### UI build tracking transition
 
@@ -251,7 +258,7 @@ Do not rewrite Git history as part of this transition. Historical UI bundles may
 
 ### Backend scripts
 
-Separate compilation from execution:
+Implemented in Phase 1: compilation is separated from artifact execution:
 
 - `build:prod`: compile and verify only.
 - `start:runtime`: start `scripts/startMonitored.js dist/app.js` without compiling.
@@ -265,28 +272,27 @@ Move TypeScript, build tools, and type-only packages to development dependencies
 
 ### Backend readiness
 
-Add a local readiness endpoint that verifies:
+Implemented in Phase 1: `/api/health/live` remains process-only, while `/api/health/ready` verifies:
 
 - The HTTP process is accepting requests.
-- The database responds to a lightweight query.
+- The database responds through a bounded, coalesced, briefly cached lightweight query, so repeated readiness requests do not create an unbounded query backlog.
 - Required runtime configuration is loaded.
-- The running release ID and Git SHA match the expected release.
-- Startup migrations are not pending, if that check can be performed safely.
+- The running release ID and Git SHA are valid and exposed for the deployment verifier to compare with its expected release.
 
-Keep the existing lightweight liveness check separate from database readiness.
+Production readiness requires `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, a valid `APP_VERSION`, and a full 40-character `GIT_COMMIT_SHA`. Migration state is deliberately enforced by the release/deployment gate rather than the request-time endpoint today.
 
 ### UI server
 
-Add environment-configurable paths:
+Implemented in Phase 1: the UI server accepts environment-configurable paths:
 
 - `UI_BUILD_PATH`
 - `UI_TLS_KEY_PATH`
 - `UI_TLS_CERT_PATH`
 - Existing private source-map and telemetry paths must point to persistent storage.
 
-Add a local UI-server health endpoint that reports the release ID and artifact-validation status without exposing secrets.
+`UI_EXPECTED_RELEASE` binds startup to the expected browser release. A local `/healthz` endpoint reports the release ID and artifact-validation status without exposing secrets.
 
-UI preflight must fail before listening when the index, manifest, referenced hashed assets, service worker, or expected release metadata is missing or inconsistent.
+UI preflight fails before listening when TLS material, the index, manifest, referenced hashed assets, service worker, or expected release metadata is missing or inconsistent.
 
 ### Persistent files
 
@@ -332,6 +338,9 @@ ui-server/
   sourceMapArchive.js
   telemetryPayload.js
   telemetrySecurity.js
+  health.js
+  runtimeConfig.js
+  uiArtifactValidation.js
   utils/logger.js
   package.json
   package-lock.json
@@ -349,10 +358,11 @@ The manifest must contain:
 - Backend, UI, and UI-server lockfile hashes.
 - Main UI hashed asset path.
 - File count and SHA-256 for every shipped payload file except the manifest itself.
-- Workflow run ID and repository identity.
-- Workflow name/path, trigger event, canonical repository, and `refs/heads/master` eligibility.
+- Workflow run ID, run attempt, run number, actor, and immutable artifact name.
+- Workflow name/path, trigger event, ref, head SHA, and repository identity.
+- An explicit production-candidate decision that is true only for the canonical repository, reviewed workflow path, `push` event, and `refs/heads/master` provenance.
 
-Upload the tar archive and a detached SHA-256 checksum covering the complete archive, including its manifest, as an immutable GitHub Actions artifact. The internal manifest verifies the payload; the detached archive checksum protects the manifest and archive as a whole. Never overwrite an artifact identifier. Document Actions artifact retention and expiry; production must not depend on GitHub retention for rollback because it keeps verified releases locally. A durable GitHub Release is optional later if longer retention is required.
+The Phase 2 release job uploads the tar archive and a detached SHA-256 checksum covering the complete archive, including its manifest, as one GitHub Actions artifact named with the release ID. The internal manifest verifies every payload file; the detached archive checksum protects the manifest and archive as a whole. The release is created without production credentials or host access and is retained for 90 days. Never overwrite an artifact identifier. Production must not depend on GitHub retention for rollback because it will keep verified releases locally. A durable GitHub Release is optional later if longer retention is required.
 
 ### Branch artifacts versus deployable releases
 
@@ -414,25 +424,26 @@ The deployment workflow and root-owned server script together must:
 1. Acquire an exclusive `flock`; abort if another deployment is active.
 2. Have the unprivileged Actions verifier validate the canonical repository, reviewed workflow identity, `push` event, `refs/heads/master`, successful conclusion, and immutable artifact ID; then have the server compare the authenticated expected release ID/SHA with the manifest before doing any mutation.
 3. Accept uploads only in a fixed incoming directory.
-4. Verify the outer SHA-256 checksum before extraction.
-5. Reject absolute paths, `..` traversal, symlinks escaping the release, unexpected owners, and unexpected artifact contents.
-6. Extract to a new temporary release directory.
-7. Validate every manifest file and checksum.
-8. Confirm Node/npm compatibility and prepare lock-hash dependency directories.
-9. Attach server-owned environment, uploads, logs, runtime, TLS, and source-map locations.
-10. Run all preflight checks.
-11. Determine whether migrations are pending and, before any schema change, invoke the validated server-owned backup command configured during Phase 0. Require a newly created, non-empty backup and record its path/checksum; an exit code alone is insufficient.
-12. Run the compiled migration command once.
-13. Save the current backend pointer as the previous backend.
-14. Atomically switch the backend pointer and restart the single PM2 backend process in fork mode.
-15. Poll local readiness and require the expected release ID.
-16. If backend readiness fails, restore the previous backend pointer and restart it.
-17. Save and switch the UI pointer only after backend success.
-18. Restart the UI server with the matching release ID.
-19. Verify the main public homepage, `transaction.omni-lodge.com`, `counter.omni-lodge.com`, the web manifest, main hashed asset, API health, required proxy/WebSocket paths, and public source-map denial.
-20. If UI verification fails, restore the previous UI pointer without rolling back the healthy backend unless compatibility requires both to roll back.
-21. Persist the PM2 process list and write an auditable deployment record containing the release/run/artifact identity, trigger mode, actor, timings, checks, and rollback result.
-22. Keep the current and at least three previous releases; prune only releases not referenced by current/previous pointers.
+4. Fail closed unless free space covers the incoming archive, temporary extraction, candidate release, dependency layer, a newly verified database backup, and the retained-release floor with an explicit safety margin. Phase 0 observed approximately 6.3 GB free before a 967 MB backup and a 2.29 GB restored database, so this check cannot be inferred from current usage alone.
+5. Verify the outer SHA-256 checksum before extraction.
+6. Reject absolute paths, `..` traversal, symlinks escaping the release, unexpected owners, and unexpected artifact contents.
+7. Extract to a new temporary release directory.
+8. Validate every manifest file and checksum.
+9. Confirm Node/npm compatibility and prepare lock-hash dependency directories.
+10. Attach server-owned environment, uploads, logs, runtime, TLS, and source-map locations.
+11. Run all preflight checks.
+12. Determine whether migrations are pending and, before any schema change, invoke the validated server-owned backup command configured during Phase 0. Require a newly created, non-empty backup and record its path/checksum; an exit code alone is insufficient.
+13. Run the compiled migration command once.
+14. Save the current backend pointer as the previous backend.
+15. Atomically switch the backend pointer and restart the single PM2 backend process in fork mode.
+16. Poll local readiness and require the expected release ID.
+17. If backend readiness fails, restore the previous backend pointer and restart it.
+18. Save and switch the UI pointer only after backend success.
+19. Restart the UI server with the matching release ID.
+20. Verify the main public homepage, `transaction.omni-lodge.com`, `counter.omni-lodge.com`, the web manifest, main hashed asset, API health, required proxy/WebSocket paths, and public source-map denial.
+21. If UI verification fails, restore the previous UI pointer without rolling back the healthy backend unless compatibility requires both to roll back.
+22. Persist the PM2 process list and write an auditable deployment record containing the release/run/artifact identity, trigger mode, actor, timings, checks, and rollback result.
+23. Keep the current and at least three previous releases; prune only releases not referenced by current/previous pointers.
 
 One active production deployment is allowed to finish. GitHub may replace its one pending forward deployment with a newer pending release; whichever run remains must recheck the current `master` head immediately before staging/activation and skip itself when superseded. It is acceptable to skip intermediate application versions because the migration runner applies all pending migrations, but only while migrations obey the expand/contract rules below.
 
@@ -462,7 +473,7 @@ Store `PRODUCTION_DEPLOY_MODE` as a repository configuration variable, not an en
 
 Enable required reviewers, prevent self-review where practical, disallow administrator bypass, and restrict deployment branches when supported by the repository's GitHub plan. Environment protections are independent of the deployment-mode switch, and environment secrets must not become available until those protections pass. Confirm plan support before depending on required reviewers for a private repository.
 
-Rotate any deployment/root password or private credential that has previously been shared outside its intended secret store. After the dedicated deploy user/key and rollback path are proven, disable routine root/password SSH login in a separate hardening change rather than coupling it to the first cutover.
+GitHub Actions must use only the dedicated deployment key; it must never receive the root password. The owner has explicitly chosen to retain the existing root credential as a narrow accepted-risk exception. Do not describe that credential as secure or generalize the exception to future leaks. After the deploy user/key and rollback path are proven, disabling routine root/password SSH login remains recommended separate hardening rather than part of the first cutover.
 
 ## Explicit non-goals
 
@@ -476,6 +487,8 @@ A staging environment is optional later. If added, it must receive the same veri
 
 ### Phase 0: Baseline inventory and workflow contract
 
+Current status: **complete**. The checked-in [production runtime contract](production-runtime-contract.md) records the selected toolchain, package boundaries and commands, repository/release controls, verified host topology and mutable paths, maintenance controls, and public smoke routes. The sanitized root inventory, backup/restore proof, and production-shaped migration proof are recorded in [Production Phase 0 Evidence — 2026-09-16](production-phase0-evidence-2026-09-16.md).
+
 - Inventory and record the exact local and production Node/npm versions, package scripts, build outputs, lockfiles, and expected CI commands. Select one exact Node 22/npm pair instead of relying on the current machine's incidental npm version.
 - Confirm that `be`, `ui`, and `ui-server` are independent npm projects and decide whether the unused root `package-lock.json` should be removed.
 - Inventory production read-only before changing it: current checkout path, PM2 process names/mode/cwd/start commands, service user, ports, Node/npm path, TLS ownership, persistent paths, upload/log/source-map locations, database migration state, server-owned backup command, and existing maintenance/deploy controls.
@@ -484,9 +497,23 @@ A staging environment is optional later. If added, it must receive the same veri
 - Add a non-secret checked-in deployment contract or PM2 ecosystem description after the inventory. Do not copy production secrets into it.
 - Update the delivery status matrix with anything that changed since this review.
 
-Exit condition: the actual production/runtime contract and exact CI commands are reviewed and recorded, with no production mutation yet.
+Recorded on 2026-09-14 and completed on 2026-09-16:
+
+- Node 22.23.2/npm 10.9.8 selected; independent package-local lockfiles and CI command contract recorded.
+- Repository rules, protected production environment, disabled deployment mode, release naming/retention, ownership, and branch policy recorded.
+- Public homepage, proxied health, companion-domain, manifest, hashed-asset, PWA, and source-map-denial checks recorded; there is no application WebSocket route to test today.
+- Root verification confirmed the exact live and saved PM2 definitions, process paths, one-instance fork topology, restart/watch settings, systemd ownership, listeners, PostgreSQL 16.8, and rollback fallback.
+- Effective mutable paths and permissions were reviewed. Sensitive runtime files were permission-restricted without restarting the application, and one unexplained untracked file was moved recoverably into root-only quarantine without reading or deleting it.
+- Against the deployed production checkout, production had 185 applied migrations, zero pending or unknown migrations, a successful latest audit, and runtime schema sync disabled. The pull-request branch added four migrations. A fresh 966,676,562-byte backup passed archive validation and a full isolated restore with 165 public tables on PostgreSQL 17.5; the PostgreSQL 16.10 CI gate remains the runtime-version proof.
+- The exact branch then upgraded that production-shaped restore by four migrations; the second run was a no-op, the 189 compiled/applied names matched exactly, and all 159 compiled models queried successfully. The disposable restore was dropped afterward.
+- Both PM2 processes remained online and local health, proxied public health, and the public UI returned HTTP 200 after the inventory and permission hardening.
+- The owner accepted the known risk of retaining the historically public Origin CA key. Rotation is deferred; server-owned placement, explicit runtime paths, artifact exclusion, and removal from the Git tip remain mandatory before cutover.
+
+Exit condition: **met**. The actual production/runtime contract and exact CI commands are reviewed and recorded. Phase 0 made only permission hardening, fresh-backup creation, and recoverable quarantine changes; it did not deploy code, restart a process, alter the production schema, or activate different TLS material.
 
 ### Phase 1: Reproducible builds
+
+Current status: **implemented on the current pull-request branch; pending merge and release-path activation**.
 
 - Pin the exact selected Node 22 and npm versions.
 - Add engine/package-manager metadata to all three packages.
@@ -495,9 +522,18 @@ Exit condition: the actual production/runtime contract and exact CI commands are
 - Add configurable UI build/TLS paths and strict UI artifact validation.
 - Add release-aware liveness/readiness endpoints.
 
+Implemented results:
+
+- Node 22.23.2/npm 10.9.8 are pinned in `.nvmrc` and all three package manifests.
+- Backend artifact runtime commands start, migrate, and sync access control without compiling; legacy compile-on-start aliases remain only for the transition.
+- Production readiness validates the complete required configuration and full Git SHA, probes PostgreSQL with timeout/coalescing/caching, and is rate limited separately from application traffic.
+- The UI server accepts explicit build/TLS paths, validates TLS and the complete expected UI artifact before listening, and reports release/artifact status at `/healthz`.
+
 Exit condition: local tests pass and starting an already-built backend performs no compilation.
 
 ### Phase 2: CI without deployment
+
+Current status: **substantially implemented and independently reviewed on the current draft pull-request branch; hosted PR and branch CI passed, while the first trusted `master` release run remains pending until merge**. No Phase 2 job contacts production.
 
 - Add parallel backend, UI, and UI-server jobs.
 - Add dependency caching keyed by each lockfile.
@@ -508,20 +544,57 @@ Exit condition: local tests pass and starting an already-built backend performs 
 - On every `master` push, rebuild the merged SHA cleanly and publish a production-eligible artifact distinct from all branch artifacts.
 - Upload artifacts; do not contact production.
 
-Exit condition: multiple runs from the same source produce an equivalent release payload apart from declared metadata, branch artifacts cannot pass the production eligibility verifier, and no production secret is requested by build jobs.
+Implemented results:
+
+- `.github/workflows/ci.yml` has parallel backend, UI, UI-server, and pull-request-only migration jobs, with stable `CI / required` and `Branch / required` aggregates.
+- `.github/workflows/release.yml` rebuilds every pushed `master` SHA in clean jobs, uses one-day backend/UI handoff artifacts, and publishes one 90-day combined artifact named with the immutable release ID.
+- Both workflows pin the exact Node/npm pair, use package-local npm caches, use SHA-pinned official Actions, and run with `contents: read`.
+- The UI validator stamps and checks exact release metadata, all referenced assets, PWA files, hashed assets, and usable source maps.
+- The PostgreSQL job performs two migration runs and validates the applied migration inventory, selected schema/index/foreign-key invariants, and every compiled Sequelize model.
+- The earliest migration reconstructs the historical pre-Umzug schema on an empty database, creates only missing tables on an existing database, and has an intentionally non-destructive no-op `down`.
+- Explicit, idempotent bridges now own profile fields, report preview ordering, and legacy physical timestamp names that production previously acquired through Sequelize sync; their rollback paths preserve pre-existing data.
+- The complete PostgreSQL gate passed locally from empty state (189 migrations, zero second-run changes, 165 public tables, and 159/159 compiled models) before the first GitHub run.
+- Reviewed hosted pull-request run `34902107741` succeeded, with backend, UI, UI-server, migrations, and `CI / required` all green. Reviewed branch push run `34902103089` was also green, with migrations intentionally skipped by the branch workflow.
+- A fresh production backup was restored in isolation on 2026-09-16. Four branch migrations applied successfully to that production-shaped copy, a second run applied zero steps, all 189 compiled/applied migration names matched, and all 159 compiled models queried successfully. Production itself was not migrated.
+- `master` now strictly requires the GitHub Actions app-bound `CI / required` check, and repository branch auto-delete after merge is enabled.
+- Backend and UI producer trees pass the packager's recursive preflight before upload and again after download. The release packager uses an explicit runtime-file contract, rejects special/escaping or credential-like content, enforces file/count/archive limits, requires canonical manifest/archive bytes, publishes without overwriting an existing release, records file hashes and workflow provenance, emits a detached archive checksum, and distinguishes a canonical `master` release candidate from non-production inputs.
+- The release workflow has no `workflow_dispatch`, production environment, deployment secret, SSH connection, host mutation, or automatic-deployment step. Those remain Phase 3 work.
+
+The manifest's candidate flag is not deployment authorization. Phase 3 must independently obtain the successful GitHub run and immutable artifact identity, pass that external evidence to the strict verifier, and complete any security-review findings before credentials or host access are introduced.
+
+Exit condition: multiple real runs from the same source produce an equivalent release payload apart from declared metadata, branch artifacts cannot pass the production eligibility verifier, the fresh-database gate succeeds, and no production secret is requested by build jobs. Pull-request and branch CI have run successfully; the trusted `master` release run remains pending because the pull request is draft and unmerged.
 
 ### Phase 3: Production host preparation
 
-- Decouple and rotate TLS material.
+Current status: **partially implemented as repository-only, fail-closed foundations; not installed or operational**.
+
+Implemented repository foundations:
+
+- The compiled backend artifact exposes a read-only migration-status command and a runtime preflight. The preflight binds the canonical release identifier to the source SHA, applies the shared fail-closed migration-lineage and safety checks, requires schema sync and access-control seeding to be disabled for artifact runtime, proves read-only database access, and smoke-tests Sharp and Puppeteer using a fixed cache location.
+- A strict, versioned host protocol and client define bounded binary frames, exact end-of-input handling, canonical JSON, exact request schemas, release/evidence/archive binding, an independent server-side deployment-mode policy, and sanitized response codes.
+- Fail-closed production bootstrap/runtime assets define intended fixed release, dependency, configuration, persistent-data, cache, lock, PM2, systemd, SSH, log, and recovery locations. Their checked-in submitter, worker, and recovery entry points deliberately remain disabled scaffolds rather than deploy-capable implementations.
+- The existing restricted deploy account and existing Ed25519 deploy key are retained without rotation. The intended installation moves the retained public key authorization to a root-owned external `AuthorizedKeysFile`; no private key material is added to the repository, artifacts, or documentation.
+
+Not yet implemented or performed:
+
+- No operational protocol-aware root submitter, detached deployment worker, or recovery implementation exists.
+- None of the host bootstrap/runtime scaffolds has been installed, and no release directory, stable pointer, service definition, SSH rule, or policy file has been changed on production by this phase.
+- No manual deploy workflow, automatic deploy path, rollback workflow, or GitHub production deployment secret exists.
+- No current workflow can contact production, no production preflight/staging/activation/rollback has run, and `PRODUCTION_DEPLOY_MODE` remains `disabled`.
+
+- Decouple TLS from the checkout and artifacts by placing the retained Origin CA pair in a permission-restricted server-owned path and using explicit runtime paths. Under the documented owner-accepted exception, rotation is deferred hardening rather than a cutover prerequisite.
+- Replace the migration runner's broad empty-`sequelize_meta` adoption heuristic with an explicit, fingerprinted, fail-closed legacy adoption procedure. An unknown or partially constructed schema must never be marked as fully migrated merely because one application table exists.
+- Strengthen migration drift checks so a same-named index or constraint is accepted only when its columns, uniqueness/type, and foreign-key target also match the expected definition.
+- Make migrations authoritative for schema changes before artifact deployment. Production startup must set `SKIP_DB_SYNC=true`, and the application must fail clearly rather than silently repairing schema through `sequelize.sync()`.
 - Create the release, dependency, configuration, and persistent-data directories.
-- Create the restricted deploy user/key.
-- Install the root-owned validation/deploy script.
+- Retain the existing restricted deploy user/key and install its public authorization through the root-owned restricted SSH configuration; do not rotate it as part of this roadmap unless the owner changes direction.
+- Replace the disabled scaffolds with an independently reviewed, protocol-aware root submitter, detached worker, recovery path, and validation/deploy implementation before installing anything on production.
 - Configure PM2 to use stable current-release pointers.
 - Implement the unprivileged trusted-release verifier, shared deployment workflow, manual forward-deploy entry point, conditional automatic path, and always-manual rollback workflow.
 - Configure the repository variable `PRODUCTION_DEPLOY_MODE=disabled` and the protected `production` environment. Do not place production runtime secrets in the build workflow.
 - Preserve the current checkout and PM2 configuration as rollback fallback.
 
-Exit condition: a dummy artifact can be staged and rejected/accepted correctly without changing the live application.
+Exit condition: **not met**. A dummy artifact has not yet traversed an installed end-to-end submitter/worker path and been staged and rejected/accepted correctly on the host without changing the live application.
 
 ### Phase 4: Dry-run release
 
@@ -581,13 +654,16 @@ Keep each change independently reviewable:
 8. `build: add deterministic release packager and verifier`
 9. `ci: validate pull requests and trusted master releases`
 10. `ci: package the Actions-built UI without repository writes`
-11. `ops: add production host bootstrap and atomic deploy scripts`
-12. `ci: add trusted manual and switchable automatic production deployment`
-13. `security: rotate and untrack the origin certificate`
-14. `ops: replace live build maintenance actions with release status`
-15. `chore: stop tracking UI build after verified artifact cutover`
+11. `feat: add compiled migration status and artifact runtime preflight`
+12. `security: define the strict versioned host deployment protocol`
+13. `ops: add fail-closed production bootstrap and runtime scaffolds` (repository-only; do not install while the submitter, worker, and recovery entry points remain disabled)
+14. `ops: implement and verify the protocol-aware submitter, detached worker, recovery path, backup gate, atomic activation, smoke checks, and rollback` (retain the existing deploy account/key without rotation)
+15. `ci: add trusted manual and switchable automatic production deployment plus explicit rollback`
+16. `security: decouple and untrack origin TLS material` (rotation intentionally remains deferred under the owner-accepted exception)
+17. `ops: replace live build maintenance actions with release status`
+18. `chore: stop tracking UI build after verified artifact cutover`
 
-Do not combine the TLS rotation, PM2 cutover, dependency changes, and first automated deployment into one irreversible step.
+Do not combine TLS decoupling, PM2 cutover, dependency changes, and the first automated deployment into one irreversible step.
 
 ## First-release acceptance checklist
 
@@ -617,8 +693,8 @@ Do not combine the TLS rotation, PM2 cutover, dependency changes, and first auto
 - The automatic route is implemented but cannot run while mode is `manual`; its selection logic is tested without contacting production.
 - A simulated automatic run whose SHA is no longer the current `master` head is skipped, including when the newer head failed its release build.
 - The rollback drill freezes forward deployment, clears pending forward work, and proves rollback remains usable while mode is `disabled`.
-- The main domain, transaction shortcut, counter shortcut, API, required proxy/WebSocket routes, PWA behavior, and source-map denial all pass public smoke checks.
-- Deployment credentials are a restricted key for a dedicated user, and any previously exposed deployment credential has been rotated.
+- The main domain, transaction shortcut, counter shortcut, API, required proxy routes, any configured WebSocket route, PWA behavior, and source-map denial all pass public smoke checks.
+- GitHub Actions uses a restricted, unexposed key for the dedicated deployment user. The explicitly documented retained-Origin-CA exception is accepted risk and is never described as secure; it does not create a general exception for future leaked credentials.
 
 Before moving to unattended production, additionally prove several healthy manual releases, one approved `automatic`-mode release, emergency `disabled` behavior, explicit rollback while disabled, and a controlled release with the reviewer gate removed.
 
@@ -627,8 +703,8 @@ Before moving to unattended production, additionally prove several healthy manua
 1. Read the repository-root `AGENTS.md` and this roadmap completely.
 2. Check `git status`, current branch, latest commit, and whether any workflow files now exist.
 3. Confirm the work is on a current isolated task branch/worktree; do not merge the pull request autonomously.
-4. Do not assume the TLS security prerequisite was completed; verify it without displaying key material.
-5. Start with Phase 0, then the next incomplete phase only, unless the user authorizes a larger scope.
+4. Verify the accepted TLS exception and server-owned runtime paths without displaying key material. Do not re-open rotation unless the owner changes direction.
+5. Phase 0 is complete; continue with the next incomplete phase only unless the user authorizes a larger scope.
 6. Run and report tests after every phase.
 7. Do not configure GitHub secrets by placing secret values in commands, files, patches, logs, or chat.
 8. Inspect and report the current `PRODUCTION_DEPLOY_MODE`; never change it implicitly, deploy a branch artifact, or remove environment approval without explicit rollout authorization.

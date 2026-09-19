@@ -1,0 +1,15 @@
+/var/lib/omnilodge/logs/backend/*.log
+/var/lib/omnilodge/logs/ui-server/*.log
+/var/lib/omnilodge/logs/pm2/*.log
+/var/lib/omnilodge/logs/deploy/*.log {
+    su root root
+    daily
+    rotate 30
+    maxsize 50M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0600 root root
+}

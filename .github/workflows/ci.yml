@@ -1,0 +1,338 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "codex/**"
+  pull_request:
+    branches:
+      - master
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22.23.2"
+  NPM_VERSION: "10.9.8"
+
+jobs:
+  backend:
+    name: CI / backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: be
+    steps:
+      # actions/checkout v7.0.1. On pull_request, the default ref is GitHub's
+      # prospective merge result; do not override it with the branch head.
+      - name: Check out merge candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: be/package-lock.json
+
+      - name: Verify the pinned toolchain
+        run: |
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Type-check backend
+        run: npm run check
+
+      - name: Test backend
+        run: npm test -- --runInBand
+
+      - name: Build and verify backend
+        if: github.event_name == 'pull_request'
+        run: npm run build:prod
+
+  ui:
+    name: CI / ui
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+        working-directory: ui
+    env:
+      CI: "true"
+      GENERATE_SOURCEMAP: "true"
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      REACT_APP_RELEASE: omnilodge-ci-${{ github.sha }}
+      REACT_APP_GIT_SHA: ${{ github.sha }}
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out merge candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Verify the pinned toolchain
+        run: |
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Install UI dependencies
+        run: npm ci
+
+      - name: Type-check and lint UI
+        run: npm run check
+
+      - name: Test UI
+        run: npm test -- --watchAll=false
+
+      - name: Build UI from the checked-out SHA
+        if: github.event_name == 'pull_request'
+        run: npm run build
+
+      - name: Stamp and validate UI artifact
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_RELEASE_ID: omnilodge-ci-${{ github.sha }}
+          GIT_COMMIT_SHA: ${{ github.sha }}
+        run: node scripts/ci/validate-ui-build.mjs --stamp
+
+  ui_server:
+    name: CI / ui-server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: ui-server
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out merge candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui-server/package-lock.json
+
+      - name: Verify the pinned toolchain
+        run: |
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Install UI-server dependencies
+        run: npm ci
+
+      - name: Test UI server
+        run: npm test
+
+      - name: Check UI-server JavaScript syntax
+        run: >-
+          find . -path ./node_modules -prune -o -type f -name '*.js' -print0
+          | sort -z
+          | xargs -0 -n 1 node --check
+
+  release_tooling:
+    name: CI / release tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out merge candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify the pinned toolchain
+        run: |
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Test release and deployment trust tooling
+        run: |
+          set -euo pipefail
+          node --test \
+            scripts/release/release.test.mjs \
+            scripts/deploy/github-release-evidence.test.mjs \
+            scripts/deploy/extract-github-artifact.test.mjs \
+            scripts/deploy/host/protocol.test.mjs \
+            scripts/deploy/host/protocol-v2.test.mjs \
+            scripts/deploy/host-protocol-client.test.mjs \
+            ops/production/bootstrap-assets.test.mjs \
+            ops/production/host-state-primitives.test.mjs \
+            ops/production/release-preparation.test.mjs
+          sudo sh ops/production/bootstrap-primitives.test.sh
+
+  migrations:
+    name: CI / migrations
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        # Docker Official Image postgres:16.10-bookworm, pinned to its
+        # multi-platform manifest digest as resolved on 2026-09-14.
+        image: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+        env:
+          POSTGRES_DB: omnilodge_ci
+          POSTGRES_USER: omnilodge_ci
+          POSTGRES_PASSWORD: omnilodge_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --dbname=omnilodge_ci --username=omnilodge_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_VERSION: omnilodge-ci-${{ github.sha }}
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_NAME: omnilodge_ci
+      DB_USER: omnilodge_ci
+      DB_PASSWORD: omnilodge_ci_password
+      MIGRATION_AUTHORITY_TEST_DATABASE: omnilodge_ci
+      GIT_COMMIT_SHA: ${{ github.sha }}
+      # Automatic and migration-authored verify() checks remain active. The
+      # legacy strict mode additionally rejects every raw SQL statement, while
+      # 100+ existing migrations intentionally use SQL and must first be
+      # converted or explicitly classified.
+      MIGRATION_VERIFY_STRICT: "false"
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      TZ: UTC
+    defaults:
+      run:
+        shell: bash
+        working-directory: be
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out merge candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: be/package-lock.json
+
+      - name: Verify the pinned toolchain
+        run: |
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Build migrations
+        run: npm run build:prod
+
+      - name: Prove unmanaged schemas fail closed without mutation
+        working-directory: ${{ github.workspace }}
+        run: node scripts/ci/verify-migration-authority.mjs
+
+      - name: Migrate a fresh database
+        run: npm run migrate:runtime
+
+      - name: Run migrations again
+        run: npm run migrate:runtime
+
+      - name: Verify schema and second-run no-op
+        working-directory: ${{ github.workspace }}
+        run: node scripts/ci/verify-migrations.mjs
+
+      - name: Verify compiled models against the migrated schema
+        working-directory: ${{ github.workspace }}
+        run: node scripts/ci/verify-compiled-database.mjs
+
+  required:
+    name: ${{ github.event_name == 'pull_request' && 'CI / required' || 'Branch / required' }}
+    if: always()
+    needs:
+      - backend
+      - ui
+      - ui_server
+      - release_tooling
+      - migrations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every validation gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          UI_RESULT: ${{ needs.ui.result }}
+          UI_SERVER_RESULT: ${{ needs.ui_server.result }}
+          RELEASE_TOOLING_RESULT: ${{ needs.release_tooling.result }}
+          MIGRATIONS_RESULT: ${{ needs.migrations.result }}
+        shell: bash
+        run: |
+          printf 'backend=%s\nui=%s\nui-server=%s\nrelease-tooling=%s\nmigrations=%s\n' \
+            "$BACKEND_RESULT" \
+            "$UI_RESULT" \
+            "$UI_SERVER_RESULT" \
+            "$RELEASE_TOOLING_RESULT" \
+            "$MIGRATIONS_RESULT"
+          case "$EVENT_NAME" in
+            pull_request)
+              test "$BACKEND_RESULT" = success
+              test "$UI_RESULT" = success
+              test "$UI_SERVER_RESULT" = success
+              test "$RELEASE_TOOLING_RESULT" = success
+              test "$MIGRATIONS_RESULT" = success
+              ;;
+            push)
+              test "$BACKEND_RESULT" = success
+              test "$UI_RESULT" = success
+              test "$UI_SERVER_RESULT" = success
+              test "$RELEASE_TOOLING_RESULT" = success
+              test "$MIGRATIONS_RESULT" = skipped
+              ;;
+            *)
+              echo "Unsupported CI event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac

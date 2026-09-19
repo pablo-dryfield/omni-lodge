@@ -2,6 +2,13 @@ import { fetchFinanceTransactions } from '../actions/financeActions';
 import type { FinanceTransaction, FinanceTransactionListResponse } from '../types/finance';
 import financeReducer from './financeReducer';
 
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: {
+    isAxiosError: jest.fn(() => false),
+  },
+}));
+
 jest.mock('../utils/axiosInstance', () => ({
   __esModule: true,
   default: {

@@ -5,6 +5,8 @@ type MigrationParams = { context: QueryInterface };
 
 const TABLE_TEMPLATES = 'am_task_templates';
 const TABLE_ASSIGNMENTS = 'am_task_assignments';
+const TABLE_USERS = 'users';
+const TABLE_USER_TYPES = '"userTypes"';
 const TEMPLATE_NAME = 'Weekly - IG and TikTok posts';
 const ASSISTANT_USER_ID = 35;
 
@@ -48,6 +50,31 @@ const findTemplateId = async (qi: QueryInterface, transaction: Transaction) => {
   );
 
   return rows[0]?.id ?? null;
+};
+
+const intendedAssigneeExists = async (
+  qi: QueryInterface,
+  transaction: Transaction,
+  userId: number,
+): Promise<boolean> => {
+  const rows = await qi.sequelize.query<IdRow>(
+    `
+    SELECT user_record.id
+    FROM ${TABLE_USERS} user_record
+    JOIN ${TABLE_USER_TYPES} user_type ON user_type.id = user_record."userTypeId"
+    WHERE user_record.id = :userId
+      AND user_record.status IS TRUE
+      AND regexp_replace(lower(user_type.slug), '[^a-z0-9]+', '_', 'g') = 'assistant_manager'
+    LIMIT 1;
+    `,
+    {
+      transaction,
+      type: QueryTypes.SELECT,
+      replacements: { userId },
+    },
+  );
+
+  return Boolean(rows[0]?.id);
 };
 
 const ensureDirectUserAssignment = async (
@@ -135,6 +162,13 @@ export const up = async ({ context: qi }: MigrationParams): Promise<void> => {
         },
       },
     );
+
+    // User 35 was a real production assignee when this historical migration
+    // was authored. A fresh database must not delete other assignments or
+    // create a placeholder merely to reproduce that environment-specific ID.
+    if (!(await intendedAssigneeExists(qi, transaction, ASSISTANT_USER_ID))) {
+      return;
+    }
 
     await qi.sequelize.query(
       `

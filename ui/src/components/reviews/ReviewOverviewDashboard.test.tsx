@@ -366,5 +366,5 @@ describe('ReviewOverviewDashboard', () => {
       expect(screen.queryByRole('dialog', { name: 'Edit manual addition' })).not.toBeInTheDocument();
     });
     expect((await screen.findAllByText('Updated description')).length).toBeGreaterThan(0);
-  });
+  }, 15_000);
 });

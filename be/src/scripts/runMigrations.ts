@@ -5,17 +5,20 @@ import type { QueryInterface, Transaction } from 'sequelize';
 import { Umzug, SequelizeStorage } from 'umzug';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
-import { promises as fs } from 'fs';
 import sequelize from '../config/database.js';
+import {
+  normalizeConstraintAction,
+  normalizeIndexMethod,
+  resolveConstraintDefinition,
+  resolveIndexDefinition,
+  type ConstraintDefinition,
+  type IndexDefinition,
+} from './migrationSafety.js';
+import { inspectMigrationRuntimeStatus } from './migrationRuntimeStatus.js';
 
 const TABLE_MIGRATION_RUNS = 'migration_audit_runs';
 const TABLE_MIGRATION_STEPS = 'migration_audit_steps';
 const strictVerification = (process.env.MIGRATION_VERIFY_STRICT ?? 'false').trim().toLowerCase() === 'true';
-const BASELINE_EXCLUDES = new Set([
-  '202601150001-control-panel-config.js',
-  '202602010001-migration-audit.js',
-  '202602150001-config-seed-runs.js',
-]);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const migrationsGlob: [string, { cwd: string }] = ['../migrations/*.js', { cwd: __dirname }];
@@ -202,21 +205,36 @@ function interpretVerifyResult(result: VerifyResult): { status: string; details:
 
 type TableRef = string | { tableName: string; schema?: string };
 
-type IndexSpec = {
+type IndexSpec = IndexDefinition & {
   table: string;
   schema: string;
-  name?: string;
-  columns: string[];
-  unique?: boolean;
+  predicateWhere?: unknown;
 };
 
-type ConstraintSpec = {
+type ConstraintSpec = ConstraintDefinition & {
   table: string;
   schema: string;
+  checkWhere?: unknown;
+};
+
+type IndexOptions = {
   name?: string;
-  type: string;
-  columns: string[];
-  references?: { table: string; schema: string; column: string };
+  unique?: boolean;
+  using?: string;
+  type?: string;
+  where?: unknown;
+  transaction?: Transaction | null;
+};
+
+type ConstraintOptions = {
+  type?: string;
+  fields?: unknown[];
+  name?: string;
+  references?: unknown;
+  onUpdate?: string;
+  onDelete?: string;
+  where?: unknown;
+  transaction?: Transaction | null;
 };
 
 type SeedCheck = {
@@ -354,70 +372,11 @@ async function ensureSequelizeMetaTable(): Promise<void> {
   `);
 }
 
-async function listMigrationNames(): Promise<string[]> {
-  const distDir = join(__dirname, '../migrations');
-  const srcDir = join(__dirname, '../../src/migrations');
-
-  try {
-    const entries = await fs.readdir(distDir);
-    return entries.filter((entry) => entry.endsWith('.js')).sort();
-  } catch {
-    const entries = await fs.readdir(srcDir);
-    return entries
-      .filter((entry) => entry.endsWith('.ts'))
-      .map((entry) => entry.replace(/\.ts$/, '.js'))
-      .sort();
-  }
-}
-
-async function loadSequelizeMeta(): Promise<Set<string>> {
-  const rows = await selectQuery<{ name: string }>('SELECT name FROM sequelize_meta');
-  return new Set(rows.map((row) => row.name));
-}
-
-async function insertSequelizeMeta(names: string[]): Promise<void> {
-  if (names.length === 0) {
-    return;
-  }
-  const values = names.map((name) => `('${name.replace(/'/g, "''")}')`).join(', ');
-  await sequelize.query(
-    `INSERT INTO sequelize_meta (name) VALUES ${values} ON CONFLICT (name) DO NOTHING;`,
-  );
-}
-
-async function ensureBaselineState(): Promise<void> {
-  await ensureSequelizeMetaTable();
-  const rows = await selectQuery<{ count: string }>('SELECT COUNT(*)::bigint AS count FROM sequelize_meta');
-  const metaCount = Number(rows[0]?.count ?? 0);
-  if (metaCount > 0) {
-    return;
-  }
-
-  const excludedTables = [
-    'sequelize_meta',
-    'migration_audit_runs',
-    'migration_audit_steps',
-  ];
-  const excludedList = excludedTables.map((table) => `'${table}'`).join(', ');
-  const existing = await selectQuery<{ table_name: string }>(
-    `
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_type = 'BASE TABLE'
-        AND table_name NOT IN (${excludedList});
-    `,
-  );
-  if (existing.length === 0) {
-    return;
-  }
-
-  const names = await listMigrationNames();
-  const target = names.filter((name) => !BASELINE_EXCLUDES.has(name));
-  const existingMeta = await loadSequelizeMeta();
-  const missing = target.filter((name) => !existingMeta.has(name));
-  console.log(`baseline: inserting ${missing.length} migrations into sequelize_meta`);
-  await insertSequelizeMeta(missing);
+async function assertMigrationDatabaseSafe(): Promise<void> {
+  await inspectMigrationRuntimeStatus({
+    selectQuery,
+    migrationsDirectory: join(__dirname, '../migrations'),
+  });
 }
 
 function ensureTableExpectation(tracker: MigrationTracker, schema: string, table: string, created = false): TableExpectation {
@@ -438,12 +397,12 @@ function ensureTableExpectation(tracker: MigrationTracker, schema: string, table
   return entry;
 }
 
-function resolveReference(ref: unknown): { table: string; schema: string; column: string } | null {
+function resolveReference(ref: unknown): ConstraintDefinition['references'] | null {
   if (!ref) {
     return null;
   }
   if (typeof ref === 'string') {
-    return { table: ref, schema: 'public', column: 'id' };
+    return { table: ref, schema: 'public', columns: ['id'] };
   }
   if (typeof ref !== 'object') {
     return null;
@@ -451,8 +410,9 @@ function resolveReference(ref: unknown): { table: string; schema: string; column
   const refObj = ref as {
     table?: string | { tableName: string; schema?: string };
     model?: string | { tableName?: string; name?: string; schema?: string };
-    key?: string;
-    field?: string;
+    key?: string | string[];
+    field?: string | string[];
+    fields?: unknown[];
   };
   let table = '';
   let schema = 'public';
@@ -470,23 +430,31 @@ function resolveReference(ref: unknown): { table: string; schema: string; column
   if (!table) {
     return null;
   }
-  const column = refObj.key ?? refObj.field ?? 'id';
-  return { table, schema, column };
+  const rawColumns = refObj.fields ?? refObj.key ?? refObj.field ?? 'id';
+  const columns = (Array.isArray(rawColumns) ? rawColumns : [rawColumns]).map(normalizeField);
+  return { table, schema, columns };
 }
 
 function recordCreateTable(tracker: MigrationTracker, tableRef: TableRef, attributes: Record<string, unknown>): void {
   const { schema, table } = normalizeTableRef(tableRef);
   const entry = ensureTableExpectation(tracker, schema, table, true);
   for (const [columnName, definition] of Object.entries(attributes ?? {})) {
-    entry.columns.add(columnName);
+    let physicalColumnName = columnName;
     if (definition && typeof definition === 'object') {
       const def = definition as {
+        field?: unknown;
         primaryKey?: boolean;
         references?: unknown;
         unique?: boolean | string;
+        onUpdate?: string;
+        onDelete?: string;
       };
+      if (typeof def.field === 'string' && def.field.trim()) {
+        physicalColumnName = def.field;
+      }
+      entry.columns.add(physicalColumnName);
       if (def.primaryKey) {
-        entry.primaryKeyColumns.add(columnName);
+        entry.primaryKeyColumns.add(physicalColumnName);
       }
       const reference = resolveReference(def.references);
       if (reference) {
@@ -494,12 +462,14 @@ function recordCreateTable(tracker: MigrationTracker, tableRef: TableRef, attrib
           table,
           schema,
           type: 'FOREIGN KEY',
-          columns: [columnName],
+          columns: [physicalColumnName],
           references: {
             table: reference.table,
             schema: reference.schema,
-            column: reference.column,
+            columns: reference.columns,
           },
+          onUpdate: normalizeConstraintAction(def.onUpdate),
+          onDelete: normalizeConstraintAction(def.onDelete),
         });
       }
       if (def.unique) {
@@ -507,10 +477,12 @@ function recordCreateTable(tracker: MigrationTracker, tableRef: TableRef, attrib
           table,
           schema,
           type: 'UNIQUE',
-          columns: [columnName],
+          columns: [physicalColumnName],
           name: typeof def.unique === 'string' ? def.unique : undefined,
         });
       }
+    } else {
+      entry.columns.add(physicalColumnName);
     }
   }
 }
@@ -525,7 +497,13 @@ function recordAddColumn(
   const entry = ensureTableExpectation(tracker, schema, table);
   entry.columns.add(columnName);
   if (definition) {
-    const def = definition as { primaryKey?: boolean; references?: unknown; unique?: boolean | string };
+    const def = definition as {
+      primaryKey?: boolean;
+      references?: unknown;
+      unique?: boolean | string;
+      onUpdate?: string;
+      onDelete?: string;
+    };
     if (def.primaryKey) {
       entry.primaryKeyColumns.add(columnName);
     }
@@ -539,8 +517,10 @@ function recordAddColumn(
         references: {
           table: reference.table,
           schema: reference.schema,
-          column: reference.column,
+          columns: reference.columns,
         },
+        onUpdate: normalizeConstraintAction(def.onUpdate),
+        onDelete: normalizeConstraintAction(def.onDelete),
       });
     }
     if (def.unique) {
@@ -559,7 +539,7 @@ function recordAddIndex(
   tracker: MigrationTracker,
   tableRef: TableRef,
   fields: unknown[] = [],
-  options?: { name?: string; unique?: boolean },
+  options?: IndexOptions,
 ): void {
   const { schema, table } = normalizeTableRef(tableRef);
   const fieldList = Array.isArray(fields) ? fields : [fields];
@@ -567,7 +547,10 @@ function recordAddIndex(
     table,
     schema,
     name: options?.name,
-    unique: options?.unique,
+    unique: Boolean(options?.unique),
+    method: normalizeIndexMethod(options?.using ?? options?.type),
+    hasPredicate: options?.where != null,
+    predicateWhere: options?.where,
     columns: fieldList.map(normalizeField),
   });
 }
@@ -575,12 +558,7 @@ function recordAddIndex(
 function recordAddConstraint(
   tracker: MigrationTracker,
   tableRef: TableRef,
-  options: {
-    type?: string;
-    fields?: unknown[];
-    name?: string;
-    references?: unknown;
-  },
+  options: ConstraintOptions,
 ): void {
   const { schema, table } = normalizeTableRef(tableRef);
   const type = (options.type ?? '').toString().toUpperCase();
@@ -594,8 +572,11 @@ function recordAddConstraint(
     type: type || 'CONSTRAINT',
     columns,
     references: reference
-      ? { table: reference.table, schema: reference.schema, column: reference.column }
+      ? { table: reference.table, schema: reference.schema, columns: reference.columns }
       : undefined,
+    onUpdate: normalizeConstraintAction(options.onUpdate),
+    onDelete: normalizeConstraintAction(options.onDelete),
+    checkWhere: options.where,
   });
 }
 
@@ -699,7 +680,7 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
         };
       }
       if (prop === 'addIndex') {
-        return async (tableName: TableRef, fields: unknown[], options?: { name?: string; unique?: boolean }) => {
+        return async (tableName: TableRef, fields: unknown[], options?: IndexOptions) => {
           recordAddIndex(tracker, tableName, fields, options);
           const { schema, table } = normalizeTableRef(tableName);
           const transaction = getTransaction(options);
@@ -707,7 +688,10 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
             table,
             schema,
             name: options?.name,
-            unique: options?.unique,
+            unique: Boolean(options?.unique),
+            method: normalizeIndexMethod(options?.using ?? options?.type),
+            hasPredicate: options?.where != null,
+            predicateWhere: options?.where,
             columns: (Array.isArray(fields) ? fields : [fields]).map(normalizeField),
           };
           if (await indexExists(schema, table, expectedIndex, transaction)) {
@@ -718,12 +702,7 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
         };
       }
       if (prop === 'addConstraint') {
-        return async (tableName: TableRef, options: {
-          type?: string;
-          fields?: unknown[];
-          name?: string;
-          references?: unknown;
-        }) => {
+        return async (tableName: TableRef, options: ConstraintOptions) => {
           recordAddConstraint(tracker, tableName, options);
           const { schema, table } = normalizeTableRef(tableName);
           const transaction = getTransaction(options);
@@ -735,6 +714,9 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
             type: (options.type ?? '').toString().toUpperCase() || 'CONSTRAINT',
             columns: fieldList.map(normalizeField),
             references: resolveConstraintReference(options.references),
+            onUpdate: normalizeConstraintAction(options.onUpdate),
+            onDelete: normalizeConstraintAction(options.onDelete),
+            checkWhere: options.where,
           };
           if (await constraintExists(schema, table, expectedConstraint, transaction)) {
             tracker.warnings.push(`addConstraint skipped for existing ${schema}.${table}`);
@@ -744,26 +726,31 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
         };
       }
       if (prop === 'renameTable') {
-        return async (before: TableRef, after: TableRef) => {
+        return async (before: TableRef, after: TableRef, options?: unknown) => {
           recordRenameTable(tracker, after);
           const beforeRef = normalizeTableRef(before);
           const afterRef = normalizeTableRef(after);
-          if (!(await tableExists(beforeRef.schema, beforeRef.table)) && await tableExists(afterRef.schema, afterRef.table)) {
+          const transaction = getTransaction(options);
+          if (!(await tableExists(beforeRef.schema, beforeRef.table, transaction))
+            && await tableExists(afterRef.schema, afterRef.table, transaction)) {
             tracker.warnings.push(`renameTable skipped for existing ${afterRef.schema}.${afterRef.table}`);
             return undefined;
           }
-          return (target.renameTable as (...args: unknown[]) => unknown).call(target, before, after);
+          return (target.renameTable as (...args: unknown[]) => unknown).call(target, before, after, options);
         };
       }
       if (prop === 'renameColumn') {
-        return async (tableName: TableRef, oldName: string, newName: string) => {
+        return async (tableName: TableRef, oldName: string, newName: string, options?: unknown) => {
           recordRenameColumn(tracker, tableName, newName);
           const { schema, table } = normalizeTableRef(tableName);
-          if (!(await columnExists(schema, table, oldName)) && await columnExists(schema, table, newName)) {
+          const transaction = getTransaction(options);
+          if (!(await columnExists(schema, table, oldName, transaction))
+            && await columnExists(schema, table, newName, transaction)) {
             tracker.warnings.push(`renameColumn skipped for existing ${schema}.${table}.${newName}`);
             return undefined;
           }
-          return (target.renameColumn as (...args: unknown[]) => unknown).call(target, tableName, oldName, newName);
+          return (target.renameColumn as (...args: unknown[]) => unknown)
+            .call(target, tableName, oldName, newName, options);
         };
       }
       if (prop === 'bulkInsert') {
@@ -795,7 +782,7 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
                 `
                   SELECT ${quoteIdentifier(key)} AS value
                   FROM ${quoteQualifiedName(schema, table)}
-                  WHERE ${quoteIdentifier(key)} = ANY(:values);
+                  WHERE ${quoteIdentifier(key)} IN (:values);
                 `,
                 { values },
                 transaction,
@@ -836,8 +823,15 @@ function createTrackedQueryInterface(base: QueryInterface, tracker: MigrationTra
 
 async function tableExists(schema: string, table: string, transaction?: Transaction | null): Promise<boolean> {
   const rows = await selectQuery<{ name: string | null }>(
-    'SELECT to_regclass(:tableName) AS name',
-    { tableName: `${schema}.${table}` },
+    `
+      SELECT table_name AS name
+      FROM information_schema.tables
+      WHERE table_schema = :schema
+        AND table_name = :table
+        AND table_type = 'BASE TABLE'
+      LIMIT 1;
+    `,
+    { schema, table },
     transaction,
   );
   return Boolean(rows[0]?.name);
@@ -860,21 +854,45 @@ async function listTableIndexes(
   schema: string,
   table: string,
   transaction?: Transaction | null,
-): Promise<Array<{ name: string; columns: string[]; unique: boolean }>> {
-  const rows = await selectQuery<{ index_name: string; is_unique: boolean; columns: string[] }>(
+): Promise<IndexDefinition[]> {
+  const rows = await selectQuery<{
+    index_name: string;
+    is_unique: boolean;
+    columns: string[];
+    access_method: string;
+    has_predicate: boolean;
+    predicate: string | null;
+    is_valid: boolean;
+    is_ready: boolean;
+  }>(
     `
       SELECT
         i.relname AS index_name,
         ix.indisunique AS is_unique,
-        array_agg(a.attname ORDER BY x.ordinality) AS columns
+        ARRAY(
+          SELECT CASE
+            WHEN key_column.attnum > 0 THEN attribute.attname
+            ELSE pg_get_indexdef(ix.indexrelid, key_column.ordinal_position::integer, true)
+          END
+          FROM unnest(ix.indkey) WITH ORDINALITY key_column(attnum, ordinal_position)
+          LEFT JOIN pg_attribute attribute
+            ON attribute.attrelid = ix.indrelid
+           AND attribute.attnum = key_column.attnum
+          WHERE key_column.ordinal_position <= ix.indnkeyatts
+          ORDER BY key_column.ordinal_position
+        ) AS columns,
+        am.amname AS access_method,
+        ix.indpred IS NOT NULL AS has_predicate,
+        pg_get_expr(ix.indpred, ix.indrelid, true) AS predicate,
+        ix.indisvalid AS is_valid,
+        ix.indisready AS is_ready
       FROM pg_class t
       JOIN pg_namespace n ON n.oid = t.relnamespace
       JOIN pg_index ix ON ix.indrelid = t.oid
       JOIN pg_class i ON i.oid = ix.indexrelid
-      JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS x(attnum, ordinality) ON true
-      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = x.attnum
+      JOIN pg_am am ON am.oid = i.relam
       WHERE n.nspname = :schema AND t.relname = :table
-      GROUP BY i.relname, ix.indisunique;
+      ORDER BY i.relname;
     `,
     { schema, table },
     transaction,
@@ -882,75 +900,251 @@ async function listTableIndexes(
   return rows.map((row) => ({
     name: row.index_name,
     unique: row.is_unique,
+    method: normalizeIndexMethod(row.access_method),
+    hasPredicate: row.has_predicate,
+    predicate: row.has_predicate ? row.predicate ?? undefined : undefined,
+    valid: row.is_valid,
+    ready: row.is_ready,
     columns: Array.isArray(row.columns)
       ? row.columns
       : String(row.columns).replace(/[{}]/g, '').split(',').filter(Boolean),
   }));
 }
 
-async function listTableConstraints(schema: string, table: string, transaction?: Transaction | null): Promise<Array<{
-  name: string;
-  type: string;
-  columns: string[];
-  references?: { table: string | null; column: string | null };
-}>> {
+function postgresConstraintType(type: string): string {
+  const types: Record<string, string> = {
+    p: 'PRIMARY KEY',
+    u: 'UNIQUE',
+    f: 'FOREIGN KEY',
+    c: 'CHECK',
+    x: 'EXCLUDE',
+  };
+  return types[type] ?? type.toUpperCase();
+}
+
+function postgresConstraintAction(action: string): string {
+  const actions: Record<string, string> = {
+    a: 'NO ACTION',
+    r: 'RESTRICT',
+    c: 'CASCADE',
+    n: 'SET NULL',
+    d: 'SET DEFAULT',
+  };
+  return actions[action] ?? action.toUpperCase();
+}
+
+async function listTableConstraints(
+  schema: string,
+  table: string,
+  transaction?: Transaction | null,
+): Promise<ConstraintDefinition[]> {
   const rows = await selectQuery<{
     constraint_name: string;
     constraint_type: string;
-    column_name: string | null;
+    columns: string[];
+    foreign_schema: string | null;
     foreign_table: string | null;
-    foreign_column: string | null;
-    ordinal_position: number | null;
+    foreign_columns: string[];
+    update_action: string;
+    delete_action: string;
+    check_expression: string | null;
   }>(
     `
       SELECT
-        tc.constraint_name,
-        tc.constraint_type,
-        kcu.column_name,
-        kcu.ordinal_position,
-        ccu.table_name AS foreign_table,
-        ccu.column_name AS foreign_column
-      FROM information_schema.table_constraints tc
-      LEFT JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_catalog = kcu.constraint_catalog
-       AND tc.constraint_schema = kcu.constraint_schema
-       AND tc.constraint_name = kcu.constraint_name
-      LEFT JOIN information_schema.referential_constraints rc
-        ON tc.constraint_catalog = rc.constraint_catalog
-       AND tc.constraint_schema = rc.constraint_schema
-       AND tc.constraint_name = rc.constraint_name
-      LEFT JOIN information_schema.key_column_usage ccu
-        ON rc.unique_constraint_catalog = ccu.constraint_catalog
-       AND rc.unique_constraint_schema = ccu.constraint_schema
-       AND rc.unique_constraint_name = ccu.constraint_name
-       AND kcu.position_in_unique_constraint = ccu.ordinal_position
-      WHERE tc.table_schema = :schema AND tc.table_name = :table
-      ORDER BY tc.constraint_name, kcu.ordinal_position;
+        constraint_record.conname AS constraint_name,
+        constraint_record.contype::text AS constraint_type,
+        to_jsonb(COALESCE(ARRAY(
+          SELECT attribute.attname
+          FROM unnest(constraint_record.conkey) WITH ORDINALITY key_column(attnum, ordinal_position)
+          JOIN pg_attribute attribute
+            ON attribute.attrelid = constraint_record.conrelid
+           AND attribute.attnum = key_column.attnum
+          ORDER BY key_column.ordinal_position
+        ), ARRAY[]::text[])) AS columns,
+        target_namespace.nspname AS foreign_schema,
+        target_table.relname AS foreign_table,
+        to_jsonb(COALESCE(ARRAY(
+          SELECT attribute.attname
+          FROM unnest(constraint_record.confkey) WITH ORDINALITY key_column(attnum, ordinal_position)
+          JOIN pg_attribute attribute
+            ON attribute.attrelid = constraint_record.confrelid
+           AND attribute.attnum = key_column.attnum
+          ORDER BY key_column.ordinal_position
+        ), ARRAY[]::text[])) AS foreign_columns,
+        constraint_record.confupdtype::text AS update_action,
+        constraint_record.confdeltype::text AS delete_action,
+        CASE
+          WHEN constraint_record.contype = 'c'
+          THEN pg_get_expr(constraint_record.conbin, constraint_record.conrelid, true)
+          ELSE NULL
+        END AS check_expression
+      FROM pg_constraint constraint_record
+      JOIN pg_class source_table ON source_table.oid = constraint_record.conrelid
+      JOIN pg_namespace source_namespace ON source_namespace.oid = source_table.relnamespace
+      LEFT JOIN pg_class target_table ON target_table.oid = constraint_record.confrelid
+      LEFT JOIN pg_namespace target_namespace ON target_namespace.oid = target_table.relnamespace
+      WHERE source_namespace.nspname = :schema AND source_table.relname = :table
+      ORDER BY constraint_record.conname;
     `,
     { schema, table },
     transaction,
   );
-  const constraints = new Map<string, { name: string; type: string; columns: Array<{ name: string; position: number }>; references?: { table: string | null; column: string | null } }>();
-  for (const row of rows) {
-    const existing = constraints.get(row.constraint_name) ?? {
-      name: row.constraint_name,
-      type: row.constraint_type.toUpperCase(),
-      columns: [],
-      references: row.foreign_table || row.foreign_column ? { table: row.foreign_table, column: row.foreign_column } : undefined,
-    };
-    if (row.column_name && !existing.columns.some(
-      (column) => column.name === row.column_name && column.position === (row.ordinal_position ?? 0),
-    )) {
-      existing.columns.push({ name: row.column_name, position: row.ordinal_position ?? 0 });
-    }
-    constraints.set(row.constraint_name, existing);
-  }
-  return Array.from(constraints.values()).map((constraint) => ({
-    name: constraint.name,
-    type: constraint.type,
-    columns: constraint.columns.sort((a, b) => a.position - b.position).map((column) => column.name),
-    references: constraint.references,
+  return rows.map((row) => ({
+    name: row.constraint_name,
+    type: postgresConstraintType(row.constraint_type),
+    columns: row.columns,
+    references: row.foreign_schema && row.foreign_table
+      ? {
+        schema: row.foreign_schema,
+        table: row.foreign_table,
+        columns: row.foreign_columns,
+      }
+      : undefined,
+    onUpdate: postgresConstraintAction(row.update_action),
+    onDelete: postgresConstraintAction(row.delete_action),
+    checkExpression: row.check_expression ?? undefined,
   }));
+}
+
+type PredicateObjectKind = 'index' | 'check';
+
+function renderPredicateWhere(where: unknown): string {
+  const queryGenerator = sequelize.getQueryInterface().queryGenerator as unknown as {
+    whereItemsQuery: (value: unknown) => string;
+  };
+  const rendered = queryGenerator.whereItemsQuery(where).trim();
+  if (!rendered) {
+    throw new Error('Unable to render the expected predicate definition.');
+  }
+  return rendered;
+}
+
+async function canonicalizePredicateWithTransaction(
+  schema: string,
+  table: string,
+  where: unknown,
+  kind: PredicateObjectKind,
+  transaction: Transaction,
+): Promise<string> {
+  const suffix = randomUUID().replace(/-/gu, '');
+  const temporaryTable = `mp_${suffix}`;
+  const temporaryObject = `${kind === 'index' ? 'mi' : 'mc'}_${suffix}`;
+  let tableCreated = false;
+  try {
+    await sequelize.query(
+      `CREATE TEMP TABLE ${quoteIdentifier(temporaryTable)} `
+      + `(LIKE ${quoteQualifiedName(schema, table)}) ON COMMIT DROP;`,
+      { transaction },
+    );
+    tableCreated = true;
+    const predicateSql = renderPredicateWhere(where);
+    if (kind === 'index') {
+      await sequelize.query(
+        `CREATE INDEX ${quoteIdentifier(temporaryObject)} `
+        + `ON ${quoteIdentifier(temporaryTable)} ((1)) WHERE ${predicateSql};`,
+        { transaction },
+      );
+      const rows = await selectQuery<{ predicate: string | null }>(
+        `
+          SELECT pg_get_expr(index_metadata.indpred, index_metadata.indrelid, true) AS predicate
+          FROM pg_index index_metadata
+          JOIN pg_class index_record ON index_record.oid = index_metadata.indexrelid
+          WHERE index_record.relnamespace = pg_my_temp_schema()
+            AND index_record.relname = :objectName;
+        `,
+        { objectName: temporaryObject },
+        transaction,
+      );
+      if (!rows[0]?.predicate) throw new Error('PostgreSQL did not return the expected index predicate.');
+      return rows[0].predicate;
+    }
+
+    await sequelize.query(
+      `ALTER TABLE ${quoteIdentifier(temporaryTable)} `
+      + `ADD CONSTRAINT ${quoteIdentifier(temporaryObject)} CHECK (${predicateSql});`,
+      { transaction },
+    );
+    const rows = await selectQuery<{ predicate: string | null }>(
+      `
+        SELECT pg_get_expr(constraint_record.conbin, constraint_record.conrelid, true) AS predicate
+        FROM pg_constraint constraint_record
+        WHERE constraint_record.connamespace = pg_my_temp_schema()
+          AND constraint_record.conname = :objectName;
+      `,
+      { objectName: temporaryObject },
+      transaction,
+    );
+    if (!rows[0]?.predicate) throw new Error('PostgreSQL did not return the expected check expression.');
+    return rows[0].predicate;
+  } finally {
+    if (tableCreated) {
+      await sequelize.query(
+        `DROP TABLE IF EXISTS pg_temp.${quoteIdentifier(temporaryTable)};`,
+        { transaction },
+      ).catch(() => undefined);
+    }
+  }
+}
+
+async function canonicalizePredicate(
+  schema: string,
+  table: string,
+  where: unknown,
+  kind: PredicateObjectKind,
+  transaction?: Transaction | null,
+): Promise<string> {
+  if (transaction) {
+    return canonicalizePredicateWithTransaction(schema, table, where, kind, transaction);
+  }
+  return sequelize.transaction(
+    (localTransaction) => canonicalizePredicateWithTransaction(
+      schema,
+      table,
+      where,
+      kind,
+      localTransaction,
+    ),
+  );
+}
+
+async function expectedIndexDefinition(
+  expected: IndexSpec,
+  transaction?: Transaction | null,
+): Promise<IndexDefinition> {
+  if (!expected.hasPredicate) return expected;
+  if (expected.predicateWhere == null) {
+    throw new Error(`Expected partial index ${expected.name ?? '(unnamed)'} has no verifiable predicate.`);
+  }
+  return {
+    ...expected,
+    predicate: await canonicalizePredicate(
+      expected.schema,
+      expected.table,
+      expected.predicateWhere,
+      'index',
+      transaction,
+    ),
+  };
+}
+
+async function expectedConstraintDefinition(
+  expected: ConstraintSpec,
+  transaction?: Transaction | null,
+): Promise<ConstraintDefinition> {
+  if (expected.type.trim().toUpperCase() !== 'CHECK') return expected;
+  if (expected.checkWhere == null) {
+    throw new Error(`Expected check constraint ${expected.name ?? '(unnamed)'} has no verifiable expression.`);
+  }
+  return {
+    ...expected,
+    checkExpression: await canonicalizePredicate(
+      expected.schema,
+      expected.table,
+      expected.checkWhere,
+      'check',
+      transaction,
+    ),
+  };
 }
 
 async function indexExists(
@@ -960,19 +1154,15 @@ async function indexExists(
   transaction?: Transaction | null,
 ): Promise<boolean> {
   const actualIndexes = await listTableIndexes(schema, table, transaction);
-  const matchByName = expected.name
-    ? actualIndexes.find((index) => index.name === expected.name)
-    : undefined;
-  if (matchByName) {
-    return true;
+  const expectedDefinition = await expectedIndexDefinition(expected, transaction);
+  const resolution = resolveIndexDefinition(expectedDefinition, actualIndexes);
+  if (resolution.status === 'name_conflict') {
+    throw new Error(
+      `Index definition conflict for ${schema}.${table}.${expected.name}: `
+      + `${resolution.differences?.join(', ') ?? 'unknown difference'}`,
+    );
   }
-  return Boolean(
-    actualIndexes.find(
-      (index) =>
-        columnsMatchExact(expected.columns, index.columns) &&
-        (expected.unique === undefined || expected.unique === index.unique),
-    ),
-  );
+  return resolution.status !== 'missing';
 }
 
 async function constraintExists(
@@ -982,32 +1172,18 @@ async function constraintExists(
   transaction?: Transaction | null,
 ): Promise<boolean> {
   const actualConstraints = await listTableConstraints(schema, table, transaction);
-  const matchByName = expected.name
-    ? actualConstraints.find((constraint) => constraint.name === expected.name)
-    : undefined;
-  if (matchByName) {
-    return true;
+  const expectedDefinition = await expectedConstraintDefinition(expected, transaction);
+  const resolution = resolveConstraintDefinition(expectedDefinition, actualConstraints);
+  if (resolution.status === 'name_conflict') {
+    throw new Error(
+      `Constraint definition conflict for ${schema}.${table}.${expected.name}: `
+      + `${resolution.differences?.join(', ') ?? 'unknown difference'}`,
+    );
   }
-  return Boolean(
-    actualConstraints.find((constraint) => {
-      if (constraint.type !== expected.type) {
-        return false;
-      }
-      if (!columnsMatchExact(expected.columns, constraint.columns)) {
-        return false;
-      }
-      if (expected.references) {
-        return (
-          constraint.references?.table === expected.references.table &&
-          constraint.references?.column === expected.references.column
-        );
-      }
-      return true;
-    }),
-  );
+  return resolution.status !== 'missing';
 }
 
-function resolveConstraintReference(references?: unknown): { table: string; schema: string; column: string } | undefined {
+function resolveConstraintReference(references?: unknown): ConstraintDefinition['references'] {
   if (!references) {
     return undefined;
   }
@@ -1015,7 +1191,7 @@ function resolveConstraintReference(references?: unknown): { table: string; sche
   if (!resolved) {
     return undefined;
   }
-  return { table: resolved.table, schema: resolved.schema, column: resolved.column };
+  return resolved;
 }
 
 function columnsMatchExact(expected: string[], actual: string[]): boolean {
@@ -1029,7 +1205,15 @@ async function verifyTrackedObjects(tracker: MigrationTracker): Promise<VerifySu
   const missingTables: string[] = [];
   const missingColumns: Array<{ table: string; columns: string[] }> = [];
   const missingIndexes: Array<{ table: string; name?: string; columns: string[] }> = [];
-  const missingConstraints: Array<{ table: string; name?: string; type: string; columns: string[]; references?: { table: string; column: string } }> = [];
+  const mismatchedIndexes: Array<{ table: string; name?: string; differences: string[] }> = [];
+  const missingConstraints: Array<{
+    table: string;
+    name?: string;
+    type: string;
+    columns: string[];
+    references?: { table: string; columns: string[] };
+  }> = [];
+  const mismatchedConstraints: Array<{ table: string; name?: string; differences: string[] }> = [];
   const seedFailures: Array<{ table: string; reason: string; column?: string; missingValues?: Array<string | number | null> }> = [];
   const warnings: string[] = [...tracker.warnings];
 
@@ -1089,15 +1273,15 @@ async function verifyTrackedObjects(tracker: MigrationTracker): Promise<VerifySu
     const [schema, table] = tableKey.split('.');
     const actualIndexes = await listTableIndexes(schema, table);
     for (const expected of expectedIndexes) {
-      let match = actualIndexes.find((index) => expected.name && index.name === expected.name);
-      if (!match) {
-        match = actualIndexes.find(
-          (index) =>
-            columnsMatchExact(expected.columns, index.columns) &&
-            (expected.unique === undefined || expected.unique === index.unique),
-        );
-      }
-      if (!match) {
+      const expectedDefinition = await expectedIndexDefinition(expected);
+      const resolution = resolveIndexDefinition(expectedDefinition, actualIndexes);
+      if (resolution.status === 'name_conflict') {
+        mismatchedIndexes.push({
+          table: `${schema}.${table}`,
+          name: expected.name,
+          differences: resolution.differences ?? [],
+        });
+      } else if (resolution.status === 'missing') {
         missingIndexes.push({
           table: `${schema}.${table}`,
           name: expected.name,
@@ -1118,32 +1302,25 @@ async function verifyTrackedObjects(tracker: MigrationTracker): Promise<VerifySu
     const [schema, table] = tableKey.split('.');
     const actualConstraints = await listTableConstraints(schema, table);
     for (const expected of expectedConstraintList) {
-      let match = actualConstraints.find((constraint) => expected.name && constraint.name === expected.name);
-      if (!match) {
-        match = actualConstraints.find((constraint) => {
-          if (constraint.type !== expected.type) {
-            return false;
-          }
-          if (!columnsMatchExact(expected.columns, constraint.columns)) {
-            return false;
-          }
-          if (expected.references) {
-            return (
-              constraint.references?.table === expected.references.table &&
-              constraint.references?.column === expected.references.column
-            );
-          }
-          return true;
+      const expectedDefinition = await expectedConstraintDefinition(expected);
+      const resolution = resolveConstraintDefinition(expectedDefinition, actualConstraints);
+      if (resolution.status === 'name_conflict') {
+        mismatchedConstraints.push({
+          table: `${schema}.${table}`,
+          name: expected.name,
+          differences: resolution.differences ?? [],
         });
-      }
-      if (!match) {
+      } else if (resolution.status === 'missing') {
         missingConstraints.push({
           table: `${schema}.${table}`,
           name: expected.name,
           type: expected.type,
           columns: expected.columns,
           references: expected.references
-            ? { table: `${expected.references.schema}.${expected.references.table}`, column: expected.references.column }
+            ? {
+              table: `${expected.references.schema}.${expected.references.table}`,
+              columns: expected.references.columns,
+            }
             : undefined,
         });
       }
@@ -1161,7 +1338,7 @@ async function verifyTrackedObjects(tracker: MigrationTracker): Promise<VerifySu
         `
           SELECT ${quoteIdentifier(seed.identifierColumn)} AS value
           FROM ${quoteQualifiedName(seed.schema, seed.table)}
-          WHERE ${quoteIdentifier(seed.identifierColumn)} = ANY(:values);
+          WHERE ${quoteIdentifier(seed.identifierColumn)} IN (:values);
         `,
         { values: identifierValues },
       );
@@ -1203,7 +1380,9 @@ async function verifyTrackedObjects(tracker: MigrationTracker): Promise<VerifySu
   const hasFailures = missingTables.length > 0 ||
     missingColumns.length > 0 ||
     missingIndexes.length > 0 ||
+    mismatchedIndexes.length > 0 ||
     missingConstraints.length > 0 ||
+    mismatchedConstraints.length > 0 ||
     seedFailures.length > 0;
   const hasWarnings = warnings.length > 0;
   const trackedCount = tracker.tables.size + tracker.indexes.length + tracker.constraints.length + tracker.seeds.length;
@@ -1224,7 +1403,9 @@ async function verifyTrackedObjects(tracker: MigrationTracker): Promise<VerifySu
       missingTables,
       missingColumns,
       missingIndexes,
+      mismatchedIndexes,
       missingConstraints,
+      mismatchedConstraints,
       seedFailures,
       warnings,
       rawQueryCount: tracker.rawQueries.length,
@@ -1320,10 +1501,13 @@ async function run() {
     currentDirection = shouldUndo ? 'down' : 'up';
     currentRunId = randomUUID();
     let failure: unknown;
+    let auditRunStarted = false;
     try {
+        await assertMigrationDatabaseSafe();
+        await ensureSequelizeMetaTable();
         await ensureMigrationAuditTables();
-        await ensureBaselineState();
         await startMigrationRun(currentRunId, currentDirection);
+        auditRunStarted = true;
         if (shouldUndo) {
             await umzug.down({ step: 1 });
         }
@@ -1338,7 +1522,9 @@ async function run() {
     finally {
         const status = failure ? 'failed' : 'success';
         try {
-            await finishMigrationRun(currentRunId, currentDirection, status, failure);
+            if (auditRunStarted) {
+                await finishMigrationRun(currentRunId, currentDirection, status, failure);
+            }
         }
         finally {
             await sequelize.close();

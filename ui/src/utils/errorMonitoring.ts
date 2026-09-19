@@ -1191,7 +1191,13 @@ export const flushErrorMonitoring = (): Promise<boolean> => {
     // unbounded chain of follow-up callbacks during an outage.
     return activeFlushPromise;
   }
-  activeFlushPromise = executeFlush()
+  // Capture calls deliberately return synchronously while their durable queue
+  // writes are serialized in the background. Snapshot the current queue tail so
+  // an explicit flush always includes every capture started before this call.
+  // Captures made afterwards still schedule their own bounded follow-up flush.
+  const queuedBeforeFlush = queueOperation;
+  activeFlushPromise = queuedBeforeFlush
+    .then(() => executeFlush(), () => executeFlush())
     .catch(() => false)
     .finally(() => {
       activeFlushPromise = null;

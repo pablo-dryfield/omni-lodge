@@ -1,0 +1,407 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.23.2"
+  NPM_VERSION: "10.9.8"
+
+jobs:
+  metadata:
+    name: Release / metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      release_id: ${{ steps.identity.outputs.release_id }}
+    steps:
+      - name: Derive immutable release identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GITHUB_SHA is not a full lowercase Git SHA" >&2
+            exit 1
+          fi
+          release_id="omnilodge-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA:0:12}"
+          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
+
+  backend:
+    name: Release / backend
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+        working-directory: be
+    env:
+      APP_VERSION: ${{ needs.metadata.outputs.release_id }}
+      GIT_COMMIT_SHA: ${{ github.sha }}
+      NODE_OPTIONS: "--max-old-space-size=4096"
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: be/package-lock.json
+
+      - name: Verify the pinned toolchain
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Validate backend
+        run: |
+          npm run check
+          npm test -- --runInBand
+
+      - name: Build backend from release source
+        run: npm run build:prod
+
+      - name: Preflight backend build before upload
+        working-directory: ${{ github.workspace }}
+        run: node scripts/release/preflight.mjs --path be/dist
+
+      # actions/upload-artifact v7.0.1. This is an internal handoff artifact,
+      # not a deployable release.
+      - name: Upload backend build for packaging
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-backend-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: be/dist/
+          if-no-files-found: error
+          retention-days: 1
+          include-hidden-files: false
+
+  ui:
+    name: Release / ui
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: ui
+    env:
+      CI: "true"
+      GENERATE_SOURCEMAP: "true"
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      REACT_APP_GIT_SHA: ${{ github.sha }}
+      REACT_APP_RELEASE: ${{ needs.metadata.outputs.release_id }}
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Verify the pinned toolchain
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Install UI dependencies
+        run: npm ci
+
+      - name: Validate UI
+        run: |
+          npm run check
+          npm test -- --watchAll=false
+
+      - name: Remove tracked or stale UI output
+        run: rm -rf -- build
+
+      - name: Build UI from release source
+        run: npm run build
+
+      - name: Stamp and validate UI artifact
+        working-directory: ${{ github.workspace }}
+        env:
+          CI_RELEASE_ID: ${{ needs.metadata.outputs.release_id }}
+          GIT_COMMIT_SHA: ${{ github.sha }}
+        run: node scripts/ci/validate-ui-build.mjs --stamp
+
+      - name: Preflight UI build before upload
+        working-directory: ${{ github.workspace }}
+        run: node scripts/release/preflight.mjs --path ui/build
+
+      # actions/upload-artifact v7.0.1. This is an internal handoff artifact,
+      # not a deployable release.
+      - name: Upload UI build for packaging
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-ui-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: ui/build/
+          if-no-files-found: error
+          retention-days: 1
+          include-hidden-files: false
+
+  ui_server:
+    name: Release / ui-server
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: ui-server
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui-server/package-lock.json
+
+      - name: Verify the pinned toolchain
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Install UI-server dependencies
+        run: npm ci
+
+      - name: Test UI server
+        run: npm test
+
+      - name: Check UI-server JavaScript syntax
+        run: >-
+          find . -path ./node_modules -prune -o -type f -name '*.js' -print0
+          | sort -z
+          | xargs -0 -n 1 node --check
+
+  migrations:
+    name: Release / migrations
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        # Docker Official Image postgres:16.10-bookworm, pinned to its
+        # multi-platform manifest digest as resolved on 2026-09-14.
+        image: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+        env:
+          POSTGRES_DB: omnilodge_release
+          POSTGRES_USER: omnilodge_release
+          POSTGRES_PASSWORD: omnilodge_release_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --dbname=omnilodge_release --username=omnilodge_release"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_VERSION: ${{ needs.metadata.outputs.release_id }}
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_NAME: omnilodge_release
+      DB_USER: omnilodge_release
+      DB_PASSWORD: omnilodge_release_password
+      MIGRATION_AUTHORITY_TEST_DATABASE: omnilodge_release
+      GIT_COMMIT_SHA: ${{ github.sha }}
+      MIGRATION_VERIFY_STRICT: "false"
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      TZ: UTC
+    defaults:
+      run:
+        shell: bash
+        working-directory: be
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: be/package-lock.json
+
+      - name: Verify the pinned toolchain
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Build migrations from release source
+        run: npm run build:prod
+
+      - name: Prove unmanaged schemas fail closed without mutation
+        working-directory: ${{ github.workspace }}
+        run: node scripts/ci/verify-migration-authority.mjs
+
+      - name: Migrate a fresh database
+        run: npm run migrate:runtime
+
+      - name: Run migrations again
+        run: npm run migrate:runtime
+
+      - name: Verify schema and second-run no-op
+        working-directory: ${{ github.workspace }}
+        run: node scripts/ci/verify-migrations.mjs
+
+      - name: Verify compiled models against the migrated schema
+        working-directory: ${{ github.workspace }}
+        run: node scripts/ci/verify-compiled-database.mjs
+
+  package:
+    name: Release / package
+    needs:
+      - metadata
+      - backend
+      - ui
+      - ui_server
+      - migrations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify the pinned toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Remove tracked or stale build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$GITHUB_WORKSPACE/be/dist" "$GITHUB_WORKSPACE/ui/build"
+          mkdir -p -- "$GITHUB_WORKSPACE/be/dist" "$GITHUB_WORKSPACE/ui/build"
+
+      # actions/download-artifact v8.0.1.
+      - name: Download backend build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-backend-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: be/dist
+
+      # actions/download-artifact v8.0.1.
+      - name: Download UI build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-ui-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: ui/build
+
+      - name: Validate downloaded release inputs
+        shell: bash
+        env:
+          CI_RELEASE_ID: ${{ needs.metadata.outputs.release_id }}
+          GIT_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -f be/dist/app.js
+          node --check be/dist/app.js
+          node scripts/ci/validate-ui-build.mjs
+          node scripts/release/preflight.mjs --path be/dist
+          node scripts/release/preflight.mjs --path ui/build
+          node --test \
+            scripts/release/release.test.mjs \
+            scripts/deploy/github-release-evidence.test.mjs \
+            scripts/deploy/extract-github-artifact.test.mjs \
+            scripts/deploy/host/protocol.test.mjs \
+            scripts/deploy/host/protocol-v2.test.mjs \
+            scripts/deploy/host-protocol-client.test.mjs \
+            ops/production/bootstrap-assets.test.mjs \
+            ops/production/host-state-primitives.test.mjs \
+            ops/production/release-preparation.test.mjs
+          sudo sh ops/production/bootstrap-primitives.test.sh
+
+      - name: Package and verify release
+        id: package_release
+        shell: bash
+        env:
+          RELEASE_ARTIFACT_NAME: ${{ needs.metadata.outputs.release_id }}
+          RELEASE_ID: ${{ needs.metadata.outputs.release_id }}
+          RELEASE_WORKFLOW_PATH: .github/workflows/release.yml
+        run: |
+          set -euo pipefail
+          release_output="$RUNNER_TEMP/omnilodge-release"
+          mkdir -p -- "$release_output"
+          export RELEASE_BUILT_AT_UTC="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          node scripts/release/package.mjs \
+            --output-dir "$release_output" \
+            | tee "$RUNNER_TEMP/release-package-result.json"
+          node scripts/release/verify.mjs \
+            --archive "$release_output/${RELEASE_ID}.tar.gz"
+          node --input-type=module - "$RUNNER_TEMP/release-package-result.json" <<'NODE'
+          import fs from 'node:fs';
+          const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (result.releaseId !== process.env.RELEASE_ID) {
+            throw new Error('Packager returned the wrong release ID');
+          }
+          if (result.productionCandidate !== true) {
+            throw new Error(`Release is not a production candidate: ${result.productionIneligibilityReasons.join(', ')}`);
+          }
+          NODE
+
+      # actions/upload-artifact v7.0.1. This is the single deployable release
+      # artifact; its name is bound into the release manifest provenance.
+      - name: Upload immutable release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ needs.metadata.outputs.release_id }}
+          path: |
+            ${{ runner.temp }}/omnilodge-release/${{ needs.metadata.outputs.release_id }}.tar.gz
+            ${{ runner.temp }}/omnilodge-release/${{ needs.metadata.outputs.release_id }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          include-hidden-files: false

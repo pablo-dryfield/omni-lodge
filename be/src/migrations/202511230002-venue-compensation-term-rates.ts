@@ -115,9 +115,9 @@ export async function up({ context }: MigrationParams): Promise<void> {
       SELECT
         id AS term_id,
         NULL::INTEGER AS product_id,
-        'generic'::TEXT AS ticket_type,
+        'generic'::"enum_venue_compensation_term_rates_ticket_type" AS ticket_type,
         rate_amount,
-        rate_unit,
+        rate_unit::text::"enum_venue_compensation_term_rates_rate_unit" AS rate_unit,
         valid_from,
         valid_to,
         is_active,
@@ -151,4 +151,3 @@ export async function down({ context }: MigrationParams): Promise<void> {
     throw error;
   }
 }
-

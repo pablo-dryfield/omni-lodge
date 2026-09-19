@@ -1,10 +1,11 @@
-import { QueryInterface, Sequelize } from "sequelize";
+import { QueryInterface } from "sequelize";
 
 const TABLE = "venue_compensation_ledgers";
 const UNIQUE_INDEX = "venue_comp_ledgers_unique_range";
 const LEGACY_INDEX = "venue_comp_ledgers_range_idx";
+type MigrationParams = { context: QueryInterface };
 
-export async function up(qi: QueryInterface, _sequelize: typeof Sequelize): Promise<void> {
+export async function up({ context: qi }: MigrationParams): Promise<void> {
   await qi.sequelize.transaction(async (transaction) => {
     await qi.sequelize.query(
       `
@@ -37,7 +38,7 @@ export async function up(qi: QueryInterface, _sequelize: typeof Sequelize): Prom
   });
 }
 
-export async function down(qi: QueryInterface, _sequelize: typeof Sequelize): Promise<void> {
+export async function down({ context: qi }: MigrationParams): Promise<void> {
   await qi.sequelize.transaction(async (transaction) => {
     try {
       await qi.removeIndex(TABLE, UNIQUE_INDEX, { transaction });

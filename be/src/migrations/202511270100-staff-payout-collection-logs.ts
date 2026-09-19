@@ -1,6 +1,7 @@
 import { DataTypes, QueryInterface, Sequelize } from "sequelize";
 
 const TABLE = "staff_payout_collection_logs";
+type MigrationParams = { context: QueryInterface };
 
 const columnDefinitions = {
   id: {
@@ -76,14 +77,14 @@ const columnDefinitions = {
   },
 };
 
-export async function up(qi: QueryInterface, sequelize: typeof Sequelize): Promise<void> {
+export async function up({ context: qi }: MigrationParams): Promise<void> {
   await qi.createTable(TABLE, columnDefinitions);
   await qi.addIndex(TABLE, ["staff_profile_id"]);
   await qi.addIndex(TABLE, ["range_start", "range_end"]);
 }
 
-export async function down(qi: QueryInterface): Promise<void> {
-  await qi.dropTable(TABLE);
+export async function down({ context: qi }: MigrationParams): Promise<void> {
+  await qi.dropTable(TABLE, {});
   await qi.sequelize
     .query('DROP TYPE IF EXISTS "enum_staff_payout_collection_logs_direction"')
     .catch(() => {});

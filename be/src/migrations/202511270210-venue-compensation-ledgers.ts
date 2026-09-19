@@ -1,8 +1,9 @@
 import { DataTypes, QueryInterface, Sequelize } from 'sequelize';
 
 const TABLE = 'venue_compensation_ledgers';
+type MigrationParams = { context: QueryInterface };
 
-export async function up(qi: QueryInterface, sequelize: typeof Sequelize): Promise<void> {
+export async function up({ context: qi }: MigrationParams): Promise<void> {
   await qi.createTable(TABLE, {
     id: {
       type: DataTypes.INTEGER,
@@ -74,6 +75,6 @@ export async function up(qi: QueryInterface, sequelize: typeof Sequelize): Promi
   });
 }
 
-export async function down(qi: QueryInterface): Promise<void> {
-  await qi.dropTable(TABLE);
+export async function down({ context: qi }: MigrationParams): Promise<void> {
+  await qi.dropTable(TABLE, {});
 }

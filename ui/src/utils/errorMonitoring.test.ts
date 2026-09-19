@@ -101,6 +101,21 @@ describe("browser error monitoring", () => {
     expect(await store.getAll()).toEqual([]);
   });
 
+  it("flushes captures whose durable queue write is still pending", async () => {
+    configureWithoutHandlers();
+
+    captureClientError({ type: "manual", message: "flush immediately" });
+    await expect(flushErrorMonitoring()).resolves.toBe(true);
+
+    expect(readSentEvents(transport)).toEqual([
+      expect.objectContaining({
+        type: "manual",
+        message: "flush immediately",
+      }),
+    ]);
+    expect(await store.getAll()).toEqual([]);
+  });
+
   it("deduplicates a same-release burst before transport and records its local occurrence count", async () => {
     configureWithoutHandlers();
     captureClientError({ type: "manual", message: "same failure" });

@@ -55,7 +55,10 @@ const dropEnumTypes = async (qi: QueryInterface, enumNames: string[]): Promise<v
 export async function up({ context }: MigrationParams): Promise<void> {
   const qi = context;
 
-  await qi.dropTable(TABLE_BOOKINGS);
+  // Sequelize's PostgreSQL QueryInterface mutates this options object while
+  // removing model-owned enum types. Passing it explicitly keeps fresh-schema
+  // migrations compatible with registered ENUM-backed models.
+  await qi.dropTable(TABLE_BOOKINGS, {});
 
   await qi.createTable(TABLE_BOOKINGS, {
     id: {
@@ -512,10 +515,10 @@ export async function up({ context }: MigrationParams): Promise<void> {
 export async function down({ context }: MigrationParams): Promise<void> {
   const qi = context;
 
-  await qi.dropTable(TABLE_BOOKING_ADDONS);
-  await qi.dropTable(TABLE_BOOKING_EVENTS);
-  await qi.dropTable(TABLE_BOOKING_EMAILS);
-  await qi.dropTable(TABLE_BOOKINGS);
+  await qi.dropTable(TABLE_BOOKING_ADDONS, {});
+  await qi.dropTable(TABLE_BOOKING_EVENTS, {});
+  await qi.dropTable(TABLE_BOOKING_EMAILS, {});
+  await qi.dropTable(TABLE_BOOKINGS, {});
 
   await dropEnumTypes(qi, [
     'enum_booking_events_event_type',

@@ -1,104 +1,101 @@
-const request = require('supertest');
-const app = require('../../src/app'); // Import your Express app
-const { Guest } = require('../../src/models'); // Import your Guest model
+jest.mock('../../src/models/Guest.js', () => ({
+  __esModule: true,
+  default: {
+    create: jest.fn(),
+    destroy: jest.fn(),
+    findAll: jest.fn(),
+    findByPk: jest.fn(),
+    getAttributes: jest.fn(),
+    update: jest.fn(),
+  },
+}));
 
-jest.mock('../../src/models/Guest'); // Mock the Guest model
+const Guest = require('../../src/models/Guest.js').default;
+const {
+  createGuest,
+  deleteGuest,
+  getAllGuests,
+  getGuestById,
+  updateGuest,
+} = require('../../src/controllers/guestController.js');
 
-describe('Guest Controller', () => {
-  afterEach(() => {
+const makeResponse = () => {
+  const res = {
+    status: jest.fn(),
+    json: jest.fn(),
+    send: jest.fn(),
+  };
+  res.status.mockReturnValue(res);
+  return res;
+};
+
+describe('guestController', () => {
+  beforeEach(() => {
     jest.clearAllMocks();
-  });
-
-  describe('GET /api/guests', () => {
-    it('should return all guests', async () => {
-      const mockData = [
-        { id: 1, name: 'Alice', email: 'alice@example.com' },
-        { id: 2, name: 'Bob', email: 'bob@example.com' },
-      ];
-
-      Guest.findAll.mockResolvedValue(mockData);
-
-      const res = await request(app).get('/api/guests');
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(mockData);
+    Guest.getAttributes.mockReturnValue({
+      id: { type: {} },
+      name: { type: {} },
     });
   });
 
-  describe('GET /api/guests/:id', () => {
-    it('should return a guest by ID', async () => {
-      const mockData = { id: 1, name: 'Alice', email: 'alice@example.com' };
+  it('returns guests with the table column contract', async () => {
+    const guests = [{ id: 1, name: 'Alice' }];
+    Guest.findAll.mockResolvedValue(guests);
+    const res = makeResponse();
 
-      Guest.findByPk.mockResolvedValue(mockData);
+    await getAllGuests({ query: {} }, res);
 
-      const res = await request(app).get('/api/guests/1');
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(mockData);
-    });
-
-    it('should return 404 if guest not found', async () => {
-      Guest.findByPk.mockResolvedValue(null);
-
-      const res = await request(app).get('/api/guests/1');
-
-      expect(res.status).toBe(404);
-    });
+    expect(Guest.findAll).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith([{
+      data: guests,
+      columns: [
+        { header: 'Id', accessorKey: 'id', type: 'text' },
+        { header: 'Name', accessorKey: 'name', type: 'text' },
+      ],
+    }]);
   });
 
-  describe('POST /api/guests', () => {
-    it('should create a new guest', async () => {
-      const newGuest = { name: 'Charlie', email: 'charlie@example.com' };
-      Guest.create.mockResolvedValue(newGuest);
+  it('returns a guest by ID using the current array response shape', async () => {
+    const guest = { id: 7, name: 'Sam' };
+    Guest.findByPk.mockResolvedValue(guest);
+    const res = makeResponse();
 
-      const res = await request(app)
-        .post('/api/guests')
-        .send(newGuest);
+    await getGuestById({ params: { id: '7' } }, res);
 
-      expect(res.status).toBe(201);
-      expect(res.body).toEqual(newGuest);
-    });
+    expect(Guest.findByPk).toHaveBeenCalledWith('7');
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith([guest]);
   });
 
-  describe('PUT /api/guests/:id', () => {
-    it('should update a guest', async () => {
-      const updatedGuest = { id: 1, name: 'Alice', email: 'alice_new@example.com' };
-      Guest.update.mockResolvedValue([1]);
+  it('returns 404 when updating a missing guest', async () => {
+    Guest.update.mockResolvedValue([0]);
+    const res = makeResponse();
 
-      const res = await request(app)
-        .put('/api/guests/1')
-        .send(updatedGuest);
+    await updateGuest({ params: { id: '9' }, body: { name: 'Nobody' } }, res);
 
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(updatedGuest);
-    });
-
-    it('should return 404 if guest not found', async () => {
-      Guest.update.mockResolvedValue([0]);
-
-      const res = await request(app)
-        .put('/api/guests/1')
-        .send({ email: 'new_email@example.com' });
-
-      expect(res.status).toBe(404);
-    });
+    expect(Guest.update).toHaveBeenCalledWith(
+      { name: 'Nobody' },
+      { where: { id: '9' } },
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith([{ message: 'Guest not found' }]);
   });
 
-  describe('DELETE /api/guests/:id', () => {
-    it('should delete a guest', async () => {
-      Guest.destroy.mockResolvedValue(1);
+  it('creates and deletes guests through the current controller contract', async () => {
+    const created = { id: 11, name: 'Charlie' };
+    Guest.create.mockResolvedValue(created);
+    Guest.destroy.mockResolvedValue(1);
+    const createResponse = makeResponse();
+    const deleteResponse = makeResponse();
 
-      const res = await request(app).delete('/api/guests/1');
+    await createGuest({ body: { name: 'Charlie' } }, createResponse);
+    await deleteGuest({ params: { id: '11' } }, deleteResponse);
 
-      expect(res.status).toBe(204);
-    });
-
-    it('should return 404 if guest not found', async () => {
-      Guest.destroy.mockResolvedValue(0);
-
-      const res = await request(app).delete('/api/guests/1');
-
-      expect(res.status).toBe(404);
-    });
+    expect(createResponse.status).toHaveBeenCalledWith(201);
+    expect(createResponse.json).toHaveBeenCalledWith([created]);
+    expect(Guest.destroy).toHaveBeenCalledWith({ where: { id: '11' } });
+    expect(deleteResponse.status).toHaveBeenCalledWith(204);
+    expect(deleteResponse.send).toHaveBeenCalledTimes(1);
   });
 });

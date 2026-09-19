@@ -8,7 +8,10 @@ const mockDatabaseTransaction = jest.fn(async (
 
 jest.mock('../../config/database.js', () => ({
   __esModule: true,
-  default: { transaction: mockDatabaseTransaction },
+  default: {
+    transaction: (callback: (transaction: typeof mockTransactionObject) => unknown) =>
+      mockDatabaseTransaction(callback),
+  },
 }));
 jest.mock('../../config/whatsappConfig.js', () => ({
   WhatsAppConfigError: class WhatsAppConfigError extends Error {},
@@ -27,7 +30,10 @@ jest.mock('../../config/whatsappConfig.js', () => ({
 jest.mock('../../models/WhatsAppEmbeddedSignupAttempt.js', () => ({
   __esModule: true,
   default: {
-    sequelize: { transaction: mockDatabaseTransaction },
+    sequelize: {
+      transaction: (callback: (transaction: typeof mockTransactionObject) => unknown) =>
+        mockDatabaseTransaction(callback),
+    },
     update: jest.fn(),
     findOne: jest.fn(),
     create: jest.fn(),

@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+readonly PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+umask 077
+
+if [ "$(id -un)" != 'omnilodge-deploy' ]; then
+  printf '%s\n' 'Deployment gateway refused: unexpected account.' >&2
+  exit 77
+fi
+
+if [ "${SSH_ORIGINAL_COMMAND-}" != 'omnilodge-deploy-v1' ]; then
+  printf '%s\n' 'Deployment gateway refused: unsupported command.' >&2
+  exit 64
+fi
+
+if [ -n "${SSH_TTY-}" ]; then
+  printf '%s\n' 'Deployment gateway refused: a TTY is not allowed.' >&2
+  exit 77
+fi
+
+# The protocol frame is supplied on stdin. No caller-controlled value becomes
+# a sudo argument or environment variable.
+exec /usr/bin/env -i \
+  HOME=/home/omnilodge-deploy \
+  USER=omnilodge-deploy \
+  LOGNAME=omnilodge-deploy \
+  PATH="$PATH" \
+  /usr/bin/sudo -n -H -- /usr/local/sbin/omnilodge-deploy
