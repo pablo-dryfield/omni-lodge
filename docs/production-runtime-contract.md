@@ -1,6 +1,6 @@
 # OmniLodge Production Runtime Contract
 
-Status: Phase 0 inventory, backup, full restore, and production-shaped migration verification were completed on 2026-09-16. The Phase 1 runtime changes and Phase 2 validation/release workflows are implemented on the current draft pull-request branch. Hosted pull-request and branch CI are green, and `CI / required` is enforced on `master`; the changes remain unmerged and have not been used to deploy production. This file contains no credentials and does not authorize deployment.
+Status: Phase 0 inventory, backup, full restore, and production-shaped migration verification were completed on 2026-09-16. The Phase 1 runtime changes and Phase 2 validation/release workflows were merged to `master` in PR #16. Hosted pull-request and branch CI were green, `CI / required` is enforced on `master`, and the first trusted `master` release run `35459235360` succeeded for `0ff723bafc588970d2650dc435dbc8a2b4d469de`. Those changes have not been used to deploy production. This file contains no credentials and does not authorize deployment.
 
 This contract is the handoff between the repository, GitHub Actions, and the production host. It records the reviewed baseline, what the release pipeline must preserve, and which Phase 3 controls must still be implemented before artifact-based deployment.
 
@@ -70,9 +70,9 @@ During the legacy transition, `ui/build` remains tracked and manual UI releases 
 - The release UI job explicitly deletes tracked or stale `ui/build` output before building. Both full UI build paths stamp `release-metadata.json`, require usable source maps for emitted JavaScript/CSS and the service worker, and validate all referenced assets.
 - Backend and UI build trees pass the same recursive release preflight before their one-day handoff artifacts are uploaded and again after download. The packaging job removes checkout build output, downloads only outputs created by that same workflow run, validates them again, runs the packager tests, and emits one immutable `<release-id>.tar.gz` plus detached `.sha256` file. Packaging and verification reject links, special files, credential-like paths, unexpected runtime content, non-canonical manifests/archives, limit violations, and attempts to replace an existing release name.
 
-All referenced GitHub Actions are pinned to full commit SHAs and workflow token permissions are `contents: read`. Neither workflow deploys, reads `PRODUCTION_DEPLOY_MODE`, references the protected `production` environment, or connects to the VPS. `PRODUCTION_DEPLOY_MODE=disabled` therefore remains an additional fail-closed repository setting for the future deployment workflow, not a claim that deployment code already exists. The manifest's production-candidate flag is self-contained build metadata, not deployment authorization; a future unprivileged deploy preflight must independently verify the successful GitHub run and immutable artifact identity before production credentials are exposed.
+All referenced GitHub Actions are pinned to full commit SHAs and workflow token permissions are `contents: read` for CI/release work. The CI and release workflows do not deploy, read `PRODUCTION_DEPLOY_MODE`, reference the protected `production` environment, or connect to the VPS. The deploy-request preparation workflow on the current branch reads `PRODUCTION_DEPLOY_MODE`, verifies a trusted `master` release, and writes a host v2 request artifact, but it still does not reference the protected `production` environment, receive production secrets, or contact the VPS. `PRODUCTION_DEPLOY_MODE=disabled` remains a fail-closed repository setting for forward deployment. The manifest's production-candidate flag is self-contained build metadata, not deployment authorization; a future privileged submit job must independently verify the successful GitHub run and immutable artifact identity before production credentials are exposed.
 
-The first trusted `master` release run remains pending because the pull request is still draft and unmerged. No deployment workflow is active, no production action has occurred, and `PRODUCTION_DEPLOY_MODE` remains `disabled`.
+The first trusted `master` release run completed successfully after the PR #16 merge. No production action has occurred, no workflow can contact the VPS, and `PRODUCTION_DEPLOY_MODE` remains `disabled`.
 
 ### Release identity and runtime environment
 
@@ -111,7 +111,7 @@ The UI server must be given explicit release paths at cutover:
 | Public UI/TLS listener | `0.0.0.0:443` | Root host verification and repository |
 | Development UI-server listener | `0.0.0.0:3005` unless `UI_SERVER_PORT` overrides it | Repository; not a production listener |
 | PostgreSQL | PostgreSQL 16.8, loopback `127.0.0.1/[::1]:5432` | Root host verification; database name and role remain private |
-| Legacy health | Local `/api/health`, proxied public `/api/health`, and the public UI return HTTP 200; the unmerged `/api/health/live` and `/api/health/ready` routes return 404 on the legacy release as expected | Root host verification after permission hardening |
+| Legacy health | Local `/api/health`, proxied public `/api/health`, and the public UI return HTTP 200; `/api/health/live` and `/api/health/ready` return 404 on the current legacy production release as expected until the merged runtime changes are deployed | Root host verification after permission hardening |
 | Target release directories | `/opt/omnilodge`, `/etc/omnilodge`, and `/var/lib/omnilodge` do not exist at this baseline | Host; create only in Phase 3 |
 
 The current backend start script compiles before every production start. The current UI server runs directly from the checkout. These are baseline facts, not the target: artifact deployment must use runtime-only commands and immutable release directories.
@@ -209,4 +209,4 @@ All six Phase 0 evidence items were completed and reviewed on 2026-09-16:
 5. A fresh non-empty backup was checksummed, archive-validated, fully restored, upgraded with the branch migrations, rerun as a no-op, and model-probed.
 6. The current Git SHA/status, PM2 dump, and exact live UI build were recorded as recoverable cutover baselines.
 
-The sanitized record is [Production Phase 0 Evidence — 2026-09-16](production-phase0-evidence-2026-09-16.md). Phase 0 is **complete**. `PRODUCTION_DEPLOY_MODE` remains `disabled` because Phase 3 host preparation, the trusted `master` release, dry run, controlled cutover, and rollback drill are still pending.
+The sanitized record is [Production Phase 0 Evidence — 2026-09-16](production-phase0-evidence-2026-09-16.md). Phase 0 is **complete**. `PRODUCTION_DEPLOY_MODE` remains `disabled` because Phase 3 host preparation, dry run, controlled cutover, and rollback drill are still pending.

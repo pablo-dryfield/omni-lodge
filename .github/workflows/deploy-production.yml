@@ -1,0 +1,321 @@
+name: Production Deploy Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Successful Release workflow run ID to prepare
+        required: true
+        type: string
+      release_run_attempt:
+        description: Release workflow run attempt
+        required: true
+        default: "1"
+        type: string
+      source_sha:
+        description: Exact 40-character master SHA built by the release
+        required: true
+        type: string
+      artifact_id:
+        description: Immutable release artifact ID from that Release run
+        required: true
+        type: string
+      operation:
+        description: Forward operation to prepare
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - stage
+          - dry-run
+          - deploy
+  workflow_run:
+    workflows:
+      - Release
+    types:
+      - completed
+    branches:
+      - master
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22.23.2"
+  NPM_VERSION: "10.9.8"
+
+jobs:
+  prepare_request:
+    name: Production deploy / prepare request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out deployment workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify the pinned toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Select trusted release request
+        id: select
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_DEPLOY_MODE: ${{ vars.PRODUCTION_DEPLOY_MODE || 'disabled' }}
+          DISPATCH_RELEASE_RUN_ID: ${{ github.event.inputs.release_run_id || '' }}
+          DISPATCH_RELEASE_RUN_ATTEMPT: ${{ github.event.inputs.release_run_attempt || '' }}
+          DISPATCH_SOURCE_SHA: ${{ github.event.inputs.source_sha || '' }}
+          DISPATCH_ARTIFACT_ID: ${{ github.event.inputs.artifact_id || '' }}
+          DISPATCH_OPERATION: ${{ github.event.inputs.operation || '' }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { execFileSync } from 'node:child_process';
+          import fs from 'node:fs';
+
+          const CANONICAL_REPOSITORY = 'pablo-dryfield/omni-lodge';
+          const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/;
+          const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/;
+          const OPERATIONS = new Set(['stage', 'dry-run', 'deploy']);
+          const MODES = new Set(['disabled', 'manual', 'automatic']);
+
+          const output = (key, value) => {
+            if (String(value).includes('\n')) throw new Error(`Output ${key} cannot contain newlines`);
+            console.log(`${key}=${value}`);
+          };
+          const skip = (reason) => {
+            output('selected', 'false');
+            output('skip_reason', reason);
+            output('trigger', '');
+            output('operation', '');
+            output('run_id', '');
+            output('run_attempt', '');
+            output('source_sha', '');
+            output('artifact_id', '');
+          };
+          const fail = (message) => {
+            throw new Error(message);
+          };
+
+          const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const mode = process.env.PRODUCTION_DEPLOY_MODE || 'disabled';
+          if (!MODES.has(mode)) fail('PRODUCTION_DEPLOY_MODE is invalid; refusing to prepare a deployment request');
+          if (process.env.GITHUB_REPOSITORY !== CANONICAL_REPOSITORY) {
+            fail('Deployment requests may only run in the canonical repository');
+          }
+
+          if (process.env.GITHUB_EVENT_NAME === 'workflow_run') {
+            if (mode !== 'automatic') {
+              skip(`automatic deployment is not enabled; mode=${mode}`);
+              process.exit(0);
+            }
+            const run = event.workflow_run;
+            if (!run || typeof run !== 'object') fail('workflow_run payload is missing');
+            if (run.conclusion !== 'success') {
+              skip(`release workflow conclusion is ${run.conclusion || 'unknown'}`);
+              process.exit(0);
+            }
+            if (run.event !== 'push') {
+              skip(`release workflow event is ${run.event || 'unknown'}`);
+              process.exit(0);
+            }
+            if (run.head_branch !== 'master') {
+              skip(`release workflow branch is ${run.head_branch || 'unknown'}`);
+              process.exit(0);
+            }
+            if (run.repository?.full_name !== CANONICAL_REPOSITORY || run.head_repository?.full_name !== CANONICAL_REPOSITORY) {
+              fail('Release workflow repository identity is not canonical');
+            }
+            const sourceSha = run.head_sha;
+            if (!SOURCE_SHA_PATTERN.test(sourceSha)) fail('Release workflow source SHA is invalid');
+            const runId = String(run.id);
+            const runAttempt = String(run.run_attempt);
+            if (!POSITIVE_INTEGER_PATTERN.test(runId)) fail('Release workflow run ID is invalid');
+            if (!POSITIVE_INTEGER_PATTERN.test(runAttempt)) fail('Release workflow run attempt is invalid');
+            const currentMasterSha = execFileSync(
+              'gh',
+              ['api', `repos/${CANONICAL_REPOSITORY}/git/ref/heads/master`, '--jq', '.object.sha'],
+              { encoding: 'utf8' },
+            ).trim();
+            if (currentMasterSha !== sourceSha) {
+              skip('a newer master SHA exists; the older release will not be prepared automatically');
+              process.exit(0);
+            }
+            output('selected', 'true');
+            output('skip_reason', '');
+            output('trigger', 'automatic');
+            output('operation', 'deploy');
+            output('run_id', runId);
+            output('run_attempt', runAttempt);
+            output('source_sha', sourceSha);
+            output('artifact_id', '');
+            process.exit(0);
+          }
+
+          if (process.env.GITHUB_EVENT_NAME === 'workflow_dispatch') {
+            if (process.env.GITHUB_REF !== 'refs/heads/master') {
+              fail('Manual deployment request dispatch must run from refs/heads/master');
+            }
+            const runId = process.env.DISPATCH_RELEASE_RUN_ID || '';
+            const runAttempt = process.env.DISPATCH_RELEASE_RUN_ATTEMPT || '';
+            const sourceSha = process.env.DISPATCH_SOURCE_SHA || '';
+            const artifactId = process.env.DISPATCH_ARTIFACT_ID || '';
+            const operation = process.env.DISPATCH_OPERATION || '';
+            if (!POSITIVE_INTEGER_PATTERN.test(runId)) fail('release_run_id must be a positive integer');
+            if (!POSITIVE_INTEGER_PATTERN.test(runAttempt)) fail('release_run_attempt must be a positive integer');
+            if (!SOURCE_SHA_PATTERN.test(sourceSha)) fail('source_sha must be a full lowercase Git SHA');
+            if (!POSITIVE_INTEGER_PATTERN.test(artifactId)) fail('artifact_id must be a positive integer');
+            if (!OPERATIONS.has(operation)) fail('operation is invalid');
+            output('selected', 'true');
+            output('skip_reason', '');
+            output('trigger', 'manual');
+            output('operation', operation);
+            output('run_id', runId);
+            output('run_attempt', runAttempt);
+            output('source_sha', sourceSha);
+            output('artifact_id', artifactId);
+            process.exit(0);
+          }
+
+          fail(`Unsupported event: ${process.env.GITHUB_EVENT_NAME}`);
+          NODE
+
+      - name: Report skipped automatic request
+        if: steps.select.outputs.selected != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'No production request was prepared: %s\n' "${{ steps.select.outputs.skip_reason }}"
+
+      - name: Fetch trusted release metadata
+        if: steps.select.outputs.selected == 'true'
+        id: release_metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ steps.select.outputs.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ steps.select.outputs.run_attempt }}
+          SOURCE_SHA: ${{ steps.select.outputs.source_sha }}
+          SELECTED_ARTIFACT_ID: ${{ steps.select.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          work_dir="$RUNNER_TEMP/production-deploy-request"
+          mkdir -p -- "$work_dir"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID" > "$work_dir/run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100" > "$work_dir/artifacts.json"
+          artifact_id="$SELECTED_ARTIFACT_ID"
+          if [[ -z "$artifact_id" ]]; then
+            artifact_id="$(ARTIFACTS_JSON="$work_dir/artifacts.json" node --input-type=module -e '
+              import fs from "node:fs";
+              const { RELEASE_RUN_ID: runId, RELEASE_RUN_ATTEMPT: runAttempt, SOURCE_SHA: sourceSha, ARTIFACTS_JSON: artifactsPath } = process.env;
+              const releaseId = `omnilodge-r${runId}-a${runAttempt}-${sourceSha.slice(0, 12)}`;
+              const response = JSON.parse(fs.readFileSync(artifactsPath, "utf8"));
+              const matches = Array.isArray(response.artifacts)
+                ? response.artifacts.filter((artifact) => artifact.name === releaseId)
+                : [];
+              if (matches.length !== 1) {
+                throw new Error(`Expected exactly one release artifact named ${releaseId}`);
+              }
+              process.stdout.write(String(matches[0].id));
+            ')"
+          fi
+          release_id="omnilodge-r${RELEASE_RUN_ID}-a${RELEASE_RUN_ATTEMPT}-${SOURCE_SHA:0:12}"
+          {
+            printf 'work_dir=%s\n' "$work_dir"
+            printf 'run_json=%s\n' "$work_dir/run.json"
+            printf 'artifacts_json=%s\n' "$work_dir/artifacts.json"
+            printf 'artifact_id=%s\n' "$artifact_id"
+            printf 'release_id=%s\n' "$release_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate release evidence and create host request
+        if: steps.select.outputs.selected == 'true'
+        id: request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORK_DIR: ${{ steps.release_metadata.outputs.work_dir }}
+          RUN_JSON: ${{ steps.release_metadata.outputs.run_json }}
+          ARTIFACTS_JSON: ${{ steps.release_metadata.outputs.artifacts_json }}
+          RELEASE_RUN_ID: ${{ steps.select.outputs.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ steps.select.outputs.run_attempt }}
+          SOURCE_SHA: ${{ steps.select.outputs.source_sha }}
+          ARTIFACT_ID: ${{ steps.release_metadata.outputs.artifact_id }}
+          DEPLOY_MODE: ${{ vars.PRODUCTION_DEPLOY_MODE || 'disabled' }}
+          TRIGGER: ${{ steps.select.outputs.trigger }}
+          OPERATION: ${{ steps.select.outputs.operation }}
+        run: |
+          set -euo pipefail
+          evidence_path="$WORK_DIR/release-evidence.json"
+          artifact_zip_path="$WORK_DIR/github-artifact.zip"
+          request_path="$WORK_DIR/host-v2-request.bin"
+          identity_path="$WORK_DIR/host-v2-request-identity.json"
+          node scripts/deploy/github-release-evidence.mjs \
+            --run-json "$RUN_JSON" \
+            --artifacts-json "$ARTIFACTS_JSON" \
+            --expected-run-id "$RELEASE_RUN_ID" \
+            --expected-run-attempt "$RELEASE_RUN_ATTEMPT" \
+            --expected-source-sha "$SOURCE_SHA" \
+            --expected-artifact-id "$ARTIFACT_ID" \
+            --deploy-mode "$DEPLOY_MODE" \
+            --trigger "$TRIGGER" \
+            --operation "$OPERATION" \
+            > "$evidence_path"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$artifact_zip_path"
+          request_id="$(node --input-type=module -e "import { randomUUID } from 'node:crypto'; process.stdout.write(randomUUID());")"
+          requested_at_utc="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          actor="${GITHUB_ACTOR:-github-actions[bot]}"
+          node scripts/deploy/create-host-v2-request.mjs \
+            --artifact-zip "$artifact_zip_path" \
+            --evidence-json "$evidence_path" \
+            --request-id "$request_id" \
+            --requested-at-utc "$requested_at_utc" \
+            --actor "$actor" \
+            --operation "$OPERATION" \
+            --trigger "$TRIGGER" \
+            --output "$request_path" \
+            --identity-output "$identity_path" \
+            > "$WORK_DIR/host-v2-request-result.json"
+          {
+            printf 'evidence_path=%s\n' "$evidence_path"
+            printf 'artifact_zip_path=%s\n' "$artifact_zip_path"
+            printf 'request_path=%s\n' "$request_path"
+            printf 'identity_path=%s\n' "$identity_path"
+            printf 'request_result_path=%s\n' "$WORK_DIR/host-v2-request-result.json"
+            printf 'request_id=%s\n' "$request_id"
+            printf 'requested_at_utc=%s\n' "$requested_at_utc"
+          } >> "$GITHUB_OUTPUT"
+
+      # actions/upload-artifact v7.0.1.
+      - name: Upload prepared host request evidence
+        if: steps.select.outputs.selected == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: production-request-${{ steps.release_metadata.outputs.release_id }}-${{ steps.select.outputs.operation }}-${{ steps.select.outputs.trigger }}
+          path: |
+            ${{ steps.request.outputs.evidence_path }}
+            ${{ steps.request.outputs.identity_path }}
+            ${{ steps.request.outputs.request_result_path }}
+            ${{ steps.request.outputs.request_path }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          include-hidden-files: false
