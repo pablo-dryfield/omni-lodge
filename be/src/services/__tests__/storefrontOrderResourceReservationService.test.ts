@@ -187,6 +187,7 @@ describe('storefront order resource reservation service', () => {
   });
 
   it('refreshes held and consumed inventory horizons after a Manifest schedule amendment', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-10T12:00:00.000Z'));
     const held = {
       orderItemId: 91,
       inventoryItemId: 4,
@@ -213,12 +214,16 @@ describe('storefront order resource reservation service', () => {
       addons: [{ addonId: 10, quantity: 1, variants: [{ value: 'M', quantity: 1 }] }],
     }]);
 
-    await expect(refreshStorefrontOrderInventoryReservationExpiries({
-      id: 41,
-      paymentMethod: 'bank_transfer',
-      paymentStatus: 'pending',
-      paymentDueAt: new Date('2026-09-08T10:00:00.000Z'),
-    }, transaction)).resolves.toBe(2);
+    try {
+      await expect(refreshStorefrontOrderInventoryReservationExpiries({
+        id: 41,
+        paymentMethod: 'bank_transfer',
+        paymentStatus: 'pending',
+        paymentDueAt: new Date('2026-09-08T10:00:00.000Z'),
+      }, transaction)).resolves.toBe(2);
+    } finally {
+      jest.useRealTimers();
+    }
 
     const amendedExpiry = new Date('2026-09-19T20:00:00.000Z');
     expect(held.update).toHaveBeenCalledWith(
