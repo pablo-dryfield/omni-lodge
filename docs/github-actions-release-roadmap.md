@@ -589,6 +589,12 @@ Host install/dry-run starting checkpoint, 2026-09-21:
 - This slice must not activate a release, switch PM2 pointers, run migrations, install dependency layers, start a detached worker, enable automatic deployment, or implement rollback.
 - `PRODUCTION_DEPLOY_MODE` remains `disabled` unless explicitly changed later. A successful endpoint-only `dry-run` may prove the forced SSH/sudo/protocol boundary, but authorized submit requests are still expected to be rejected until the worker/staging path exists.
 
+Host install access checkpoint, 2026-09-21:
+
+- Non-interactive root SSH from the local operator workstation is not available; root login with existing keys is denied and the root password was not placed into a command, log, repository file, or automation.
+- The retained deploy key currently authenticates as `omnilodge-deploy`, but the host has not yet installed the forced-command SSH boundary: the account opens a normal deploy-user shell, has no passwordless sudo, and cannot access the root-owned `/root/omni-lodge` checkout.
+- The next safe action is a one-time root operator bootstrap from the trusted production checkout: copy the retained deploy public key into `/etc/ssh/authorized_keys/omnilodge-deploy`, run `sudo sh ops/production/bootstrap-primitives.test.sh`, `sudo sh ops/production/bootstrap-host.sh --check`, `--dry-run`, and `--install`, then verify metadata with the README commands. That still must not restart app services, switch PM2 pointers, run migrations, stage a release, or enable automatic deployment.
+
 Implemented repository foundations:
 
 - The compiled backend artifact exposes a read-only migration-status command and a runtime preflight. The preflight binds the canonical release identifier to the source SHA, applies the shared fail-closed migration-lineage and safety checks, requires schema sync and access-control seeding to be disabled for artifact runtime, proves read-only database access, and smoke-tests Sharp and Puppeteer using a fixed cache location.
