@@ -357,6 +357,7 @@ jobs:
             scripts/deploy/github-release-evidence.test.mjs \
             scripts/deploy/extract-github-artifact.test.mjs \
             scripts/deploy/create-host-v2-request.test.mjs \
+            scripts/deploy/submit-host-v2-request.test.mjs \
             scripts/deploy/host/protocol.test.mjs \
             scripts/deploy/host/protocol-v2.test.mjs \
             scripts/deploy/host-protocol-client.test.mjs \
