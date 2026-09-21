@@ -678,10 +678,18 @@ Dry-run completion checkpoint, 2026-09-22:
 - Manual dry-run request `db257a48-8ac4-4d8c-a10f-f6f336ea2a8c` completed with `REQUEST_SUCCEEDED`. It verified/transferred/extracted the release, reused the existing backend and UI-server dependency layers, prepared seven release-local managed links, prepared the Puppeteer browser cache, and passed both backend migration-status and runtime-preflight checks.
 - Host queues were clean afterward (`pending=0`, `running=0`, `incoming=0`), and host policy remained `manual`. No activation, live pointer switch, app restart, production migration, automatic deployment enablement, private-port smoke, or rollback action was performed.
 
+Private-port smoke implementation checkpoint, 2026-09-22:
+
+- The dry-run worker now starts the staged backend and UI-server release on ephemeral `127.0.0.1` ports after dependency/link/cache/preflight preparation, then shuts both candidate processes down without touching PM2 current-release pointers or public traffic.
+- Backend private smoke checks `/api/health/ready` and requires the staged release ID, source SHA, `APP_RUNTIME_MODE=dry-run`, valid configuration, and database readiness. UI-server private smoke checks `/healthz`, `/`, and public source-map denial for the staged release using the server-owned TLS path contract.
+- Dry-run evidence records only bounded command shape, ports, release identity, health/static/source-map results, and TLS path names; it does not record environment file contents or secrets.
+- Local validation currently covers this with `node --check ops/production/libexec/deploy/worker.mjs` and `node --test ops/production/release-preparation.test.mjs`. GitHub CI, production control-plane installation, and a host dry-run proof are still pending for this checkpoint.
+
 - Build a real release in Actions.
 - Transfer and verify it on production.
 - Install its dependency layers.
 - Run preflight and pending-migration checks.
+- Start the staged backend and UI-server on private loopback ports, verify readiness/static/source-map behavior, and shut them down.
 - Stop before pointer switching.
 - Exercise both manual and automatic trigger selection without allowing the automatic path to contact production; unknown/missing mode values must demonstrate fail-closed behavior.
 - After the dry run passes and immediately before Phase 5, change `PRODUCTION_DEPLOY_MODE` from `disabled` to `manual`.

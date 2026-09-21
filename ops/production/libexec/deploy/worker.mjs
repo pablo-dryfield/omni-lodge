@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 
-import { execFile as execFileCallback } from 'node:child_process';
+import {
+  execFile as execFileCallback,
+  spawn as spawnCallback,
+} from 'node:child_process';
 import {
   existsSync,
   lstatSync,
   statfsSync,
 } from 'node:fs';
 import * as nativeFs from 'node:fs/promises';
+import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -50,6 +56,14 @@ const DEPENDENCY_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 const BROWSER_CACHE_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 const DRY_RUN_COMMAND_TIMEOUT_MS = 90 * 1000;
 const BACKEND_ENV_FILE = '/etc/omnilodge/backend.env';
+const UI_SERVER_ENV_FILE = '/etc/omnilodge/ui-server.env';
+const UI_TLS_KEY_FILE = '/etc/omnilodge/tls/origin.key';
+const UI_TLS_CERT_FILE = '/etc/omnilodge/tls/origin.pem';
+const PRIVATE_SMOKE_HOST = '127.0.0.1';
+const PRIVATE_SMOKE_STARTUP_TIMEOUT_MS = 60 * 1000;
+const PRIVATE_SMOKE_REQUEST_TIMEOUT_MS = 10 * 1000;
+const PRIVATE_SMOKE_SHUTDOWN_TIMEOUT_MS = 5 * 1000;
+const PRIVATE_SMOKE_RESPONSE_LIMIT_BYTES = 256 * 1024;
 const execFile = promisify(execFileCallback);
 
 export const DEFAULT_DEPENDENCY_CAPACITY_BUDGET = Object.freeze({
@@ -132,6 +146,30 @@ const dryRunChecksResultPath = ({ paths, requestId }) =>
 
 const browserCacheResultPath = ({ paths, requestId }) =>
   path.join(paths.stateRoot, `${validateRequestId(requestId)}.browser-cache-result.json`);
+
+const delay = (milliseconds) => new Promise((resolve) => {
+  const timer = setTimeout(resolve, milliseconds);
+  timer.unref?.();
+});
+
+export const allocateLoopbackPort = async () => new Promise((resolve, reject) => {
+  const server = net.createServer();
+  server.once('error', reject);
+  server.listen(0, PRIVATE_SMOKE_HOST, () => {
+    const address = server.address();
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      if (!address || typeof address === 'string' || !Number.isInteger(address.port)) {
+        reject(new Error('Unable to allocate a private loopback smoke-test port'));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+});
 
 const publishOrVerifyBuffer = async ({
   fileOps,
@@ -222,6 +260,62 @@ export const runDryRunCommand = async (execution) => {
     stderr: result.stderr,
   });
 };
+
+export const requestPrivateSmokeEndpoint = async ({
+  protocol,
+  host = PRIVATE_SMOKE_HOST,
+  port,
+  requestPath,
+  timeoutMs = PRIVATE_SMOKE_REQUEST_TIMEOUT_MS,
+} = {}) => new Promise((resolve, reject) => {
+  const client = protocol === 'https:' ? https : http;
+  const request = client.request({
+    protocol,
+    hostname: host,
+    port,
+    path: requestPath,
+    method: 'GET',
+    timeout: timeoutMs,
+    rejectUnauthorized: false,
+    headers: {
+      Connection: 'close',
+    },
+  }, (response) => {
+    const chunks = [];
+    let totalBytes = 0;
+    response.on('data', (chunk) => {
+      totalBytes += chunk.length;
+      if (totalBytes > PRIVATE_SMOKE_RESPONSE_LIMIT_BYTES) {
+        request.destroy(new Error('Private smoke-test response exceeded the capture limit'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    response.on('end', () => {
+      resolve(Object.freeze({
+        statusCode: response.statusCode ?? 0,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }));
+    });
+  });
+  request.once('timeout', () => {
+    request.destroy(new Error(`Private smoke-test request timed out: ${requestPath}`));
+  });
+  request.once('error', reject);
+  request.end();
+});
+
+export const spawnPrivateSmokeProcess = (execution) => spawnCallback(
+  execution.executable,
+  execution.args,
+  {
+    cwd: execution.cwd,
+    env: execution.env,
+    stdio: ['ignore', 'ignore', 'ignore'],
+    windowsHide: true,
+  },
+);
 
 export const runBrowserCacheInstall = async (execution) => {
   await execFile(execution.executable, execution.args, {
@@ -344,6 +438,338 @@ const backendDryRunCommand = ({ plan, label, script }) => Object.freeze({
   env: backendDryRunEnvironment(plan),
 });
 
+const backendPrivateSmokeCommand = ({ plan, port }) => Object.freeze({
+  component: 'backend',
+  label: 'backend-private-smoke',
+  executable: '/usr/bin/node',
+  args: Object.freeze([
+    `--env-file=${BACKEND_ENV_FILE}`,
+    '--enable-source-maps',
+    'scripts/startMonitored.js',
+    'dist/app.js',
+  ]),
+  cwd: path.join(plan.releaseRoot, 'be'),
+  env: Object.freeze({
+    ...backendDryRunEnvironment(plan),
+    PORT: String(port),
+  }),
+});
+
+const uiServerPrivateSmokeEnvironment = ({ plan, port }) => Object.freeze({
+  HOME: '/root',
+  LOGNAME: 'root',
+  PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+  USER: 'root',
+  NODE_ENV: 'production',
+  NODE_OPTIONS: '--max-old-space-size=4096',
+  APP_VERSION: plan.releaseId,
+  GIT_COMMIT_SHA: plan.sourceSha,
+  UI_EXPECTED_RELEASE: plan.releaseId,
+  UI_BUILD_PATH: path.join(plan.releaseRoot, 'ui/build'),
+  UI_TLS_KEY_PATH: UI_TLS_KEY_FILE,
+  UI_TLS_CERT_PATH: UI_TLS_CERT_FILE,
+  UI_SERVER_HOST: PRIVATE_SMOKE_HOST,
+  UI_SERVER_PORT: String(port),
+  UI_SERVER_TELEMETRY_SPOOL_PATH: path.join(
+    plan.layout.persistentRoot,
+    'runtime/error-monitoring/ui-server-errors-private-smoke.json',
+  ),
+  ERROR_MONITORING_SOURCE_MAP_DIR: path.join(plan.layout.persistentRoot, 'source-maps'),
+});
+
+const uiServerPrivateSmokeCommand = ({ plan, port }) => Object.freeze({
+  component: 'ui-server',
+  label: 'ui-server-private-smoke',
+  executable: '/usr/bin/node',
+  args: Object.freeze([
+    `--env-file=${UI_SERVER_ENV_FILE}`,
+    'server.js',
+  ]),
+  cwd: path.join(plan.releaseRoot, 'ui-server'),
+  env: uiServerPrivateSmokeEnvironment({ plan, port }),
+});
+
+const publicCommandShape = (command) => Object.freeze({
+  component: command.component,
+  label: command.label,
+  executable: command.executable,
+  args: command.args,
+  cwd: command.cwd,
+});
+
+const observeProcess = (child) => {
+  const state = {
+    error: null,
+    exited: false,
+    code: null,
+    signal: null,
+  };
+  child.once('error', (error) => {
+    state.error = error;
+  });
+  child.once('exit', (code, signal) => {
+    state.exited = true;
+    state.code = code;
+    state.signal = signal;
+  });
+  return state;
+};
+
+const assertSmokeProcessAlive = ({ component, processState }) => {
+  if (processState.error) {
+    throw new Error(`${component} private smoke process failed to start`);
+  }
+  if (processState.exited) {
+    throw new Error(`${component} private smoke process exited before becoming healthy`);
+  }
+};
+
+const stopPrivateSmokeProcess = async (child) => {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  let exited = false;
+  const exitedPromise = new Promise((resolve) => {
+    child.once('exit', () => {
+      exited = true;
+      resolve('exit');
+    });
+  });
+  child.kill('SIGTERM');
+  const graceful = await Promise.race([
+    exitedPromise,
+    delay(PRIVATE_SMOKE_SHUTDOWN_TIMEOUT_MS).then(() => 'timeout'),
+  ]);
+  if (graceful !== 'timeout' || exited || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill('SIGKILL');
+  await Promise.race([
+    exitedPromise,
+    delay(PRIVATE_SMOKE_SHUTDOWN_TIMEOUT_MS),
+  ]);
+};
+
+const parsePrivateSmokeJson = ({ component, response }) => {
+  if (typeof response.body !== 'string' || response.body.length === 0) {
+    throw new Error(`${component} private smoke response body is empty`);
+  }
+  try {
+    return JSON.parse(response.body);
+  } catch (error) {
+    throw new Error(`${component} private smoke response is not JSON`, { cause: error });
+  }
+};
+
+const waitForPrivateSmokeEndpoint = async ({
+  component,
+  processState,
+  protocol,
+  port,
+  requestPath,
+  request,
+  validate,
+  sleep,
+}) => {
+  const deadline = Date.now() + PRIVATE_SMOKE_STARTUP_TIMEOUT_MS;
+  let lastError = null;
+  while (Date.now() <= deadline) {
+    assertSmokeProcessAlive({ component, processState });
+    try {
+      const response = await request({
+        protocol,
+        host: PRIVATE_SMOKE_HOST,
+        port,
+        requestPath,
+        timeoutMs: PRIVATE_SMOKE_REQUEST_TIMEOUT_MS,
+      });
+      const validation = validate(response);
+      return Object.freeze({
+        path: requestPath,
+        statusCode: response.statusCode,
+        ...validation,
+      });
+    } catch (error) {
+      lastError = error;
+      await sleep(500);
+    }
+  }
+  throw new Error(
+    `${component} private smoke endpoint did not become healthy`
+    + (lastError instanceof Error ? `: ${lastError.message}` : ''),
+  );
+};
+
+const validateBackendReadySmoke = ({ plan, response }) => {
+  if (response.statusCode !== 200) {
+    throw new Error(`backend readiness returned HTTP ${response.statusCode}`);
+  }
+  const body = parsePrivateSmokeJson({ component: 'backend', response });
+  if (
+    body?.status !== 'ok'
+    || body.ready !== true
+    || body.release?.id !== plan.releaseId
+    || body.release?.gitSha !== plan.sourceSha
+    || body.release?.runtimeMode !== 'dry-run'
+    || body.checks?.configuration?.ok !== true
+    || body.checks?.database?.ok !== true
+  ) {
+    throw new Error('backend readiness response did not match the staged release');
+  }
+  return Object.freeze({
+    ready: true,
+    release: Object.freeze({
+      id: body.release.id,
+      gitSha: body.release.gitSha,
+      runtimeMode: body.release.runtimeMode,
+    }),
+  });
+};
+
+const validateUiHealthSmoke = ({ plan, response }) => {
+  if (response.statusCode !== 200) {
+    throw new Error(`UI health returned HTTP ${response.statusCode}`);
+  }
+  const body = parsePrivateSmokeJson({ component: 'ui-server', response });
+  if (
+    body?.status !== 'ok'
+    || body.service !== 'ui-server'
+    || body.release !== plan.releaseId
+    || body.artifactValidation?.status !== 'valid'
+    || typeof body.artifactValidation?.mainAsset !== 'string'
+    || !body.artifactValidation.mainAsset.startsWith('/')
+  ) {
+    throw new Error('UI health response did not match the staged release');
+  }
+  return Object.freeze({
+    release: body.release,
+    artifactValidation: Object.freeze({
+      status: body.artifactValidation.status,
+      mainAsset: body.artifactValidation.mainAsset,
+      assetCount: body.artifactValidation.assetCount,
+      hashedAssetCount: body.artifactValidation.hashedAssetCount,
+      pwaManifestCount: body.artifactValidation.pwaManifestCount,
+    }),
+  });
+};
+
+const validateUiIndexSmoke = (response) => {
+  if (response.statusCode !== 200) {
+    throw new Error(`UI index returned HTTP ${response.statusCode}`);
+  }
+  const contentType = String(response.headers?.['content-type'] ?? '');
+  if (!contentType.toLowerCase().includes('text/html')) {
+    throw new Error('UI index did not return HTML');
+  }
+  if (!/<div\b[^>]*\bid=["']root["']/i.test(response.body)) {
+    throw new Error('UI index is not the OmniLodge application shell');
+  }
+  return Object.freeze({ servedApplicationShell: true });
+};
+
+const validateUiSourceMapDenialSmoke = (response) => {
+  if (response.statusCode !== 404) {
+    throw new Error(`public source-map probe returned HTTP ${response.statusCode}`);
+  }
+  return Object.freeze({ publicSourceMapsDenied: true });
+};
+
+export const runPrivateSmokeChecks = async ({
+  plan,
+  now = () => new Date(),
+  portAllocator = allocateLoopbackPort,
+  spawnProcess = spawnPrivateSmokeProcess,
+  request = requestPrivateSmokeEndpoint,
+  sleep = delay,
+} = {}) => {
+  const startedAtUtc = now().toISOString();
+  const backendPort = await portAllocator('backend');
+  const uiServerPort = await portAllocator('ui-server');
+  const backendCommand = backendPrivateSmokeCommand({ plan, port: backendPort });
+  const uiServerCommand = uiServerPrivateSmokeCommand({ plan, port: uiServerPort });
+  let backendProcess = null;
+  let uiServerProcess = null;
+  let backendProcessState = null;
+  let uiServerProcessState = null;
+
+  try {
+    backendProcess = spawnProcess(backendCommand);
+    backendProcessState = observeProcess(backendProcess);
+    const backendReady = await waitForPrivateSmokeEndpoint({
+      component: 'backend',
+      processState: backendProcessState,
+      protocol: 'http:',
+      port: backendPort,
+      requestPath: '/api/health/ready',
+      request,
+      sleep,
+      validate: (response) => validateBackendReadySmoke({ plan, response }),
+    });
+
+    uiServerProcess = spawnProcess(uiServerCommand);
+    uiServerProcessState = observeProcess(uiServerProcess);
+    const uiHealth = await waitForPrivateSmokeEndpoint({
+      component: 'ui-server',
+      processState: uiServerProcessState,
+      protocol: 'https:',
+      port: uiServerPort,
+      requestPath: '/healthz',
+      request,
+      sleep,
+      validate: (response) => validateUiHealthSmoke({ plan, response }),
+    });
+    const uiIndex = await waitForPrivateSmokeEndpoint({
+      component: 'ui-server',
+      processState: uiServerProcessState,
+      protocol: 'https:',
+      port: uiServerPort,
+      requestPath: '/',
+      request,
+      sleep,
+      validate: validateUiIndexSmoke,
+    });
+    const sourceMapProbePath = `${uiHealth.artifactValidation.mainAsset}.map`;
+    const uiSourceMapProbe = await waitForPrivateSmokeEndpoint({
+      component: 'ui-server',
+      processState: uiServerProcessState,
+      protocol: 'https:',
+      port: uiServerPort,
+      requestPath: sourceMapProbePath,
+      request,
+      sleep,
+      validate: validateUiSourceMapDenialSmoke,
+    });
+
+    return Object.freeze({
+      schemaVersion: 1,
+      releaseId: plan.releaseId,
+      sourceSha: plan.sourceSha,
+      preparationPlanSha256: plan.planSha256,
+      host: PRIVATE_SMOKE_HOST,
+      startedAtUtc,
+      completedAtUtc: now().toISOString(),
+      commands: Object.freeze([
+        publicCommandShape(backendCommand),
+        publicCommandShape(uiServerCommand),
+      ]),
+      backend: Object.freeze({
+        port: backendPort,
+        ...backendReady,
+      }),
+      uiServer: Object.freeze({
+        port: uiServerPort,
+        tls: Object.freeze({
+          keyPath: UI_TLS_KEY_FILE,
+          certPath: UI_TLS_CERT_FILE,
+          loopbackPeerVerification: 'disabled',
+        }),
+        health: uiHealth,
+        index: uiIndex,
+        sourceMapProbe: uiSourceMapProbe,
+      }),
+    });
+  } finally {
+    await stopPrivateSmokeProcess(uiServerProcess);
+    await stopPrivateSmokeProcess(backendProcess);
+  }
+};
+
 const backendBrowserCacheCommand = (plan) => Object.freeze({
   label: 'puppeteer-browser-cache',
   executable: '/usr/bin/node',
@@ -406,6 +832,7 @@ export const runDryRunRuntimeChecks = async ({
   plan,
   now = () => new Date(),
   executor = runDryRunCommand,
+  privateSmokeRunner = runPrivateSmokeChecks,
 } = {}) => {
   const migrationCommand = backendDryRunCommand({
     plan,
@@ -425,6 +852,10 @@ export const runDryRunRuntimeChecks = async ({
     label: runtimePreflightCommand.label,
     result: await executor(runtimePreflightCommand),
   }));
+  const privateSmoke = await privateSmokeRunner({
+    plan,
+    now,
+  });
   return Object.freeze({
     schemaVersion: 1,
     releaseId: plan.releaseId,
@@ -447,6 +878,7 @@ export const runDryRunRuntimeChecks = async ({
     ]),
     migrationStatus,
     runtimePreflight,
+    privateSmoke,
     capturedAtUtc: now().toISOString(),
   });
 };
