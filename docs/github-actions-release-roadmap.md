@@ -671,6 +671,13 @@ Interim host proof checkpoint, 2026-09-22:
 - The next official dry-run request `b6f14aba-485e-4ec3-b81e-e0401604ef38` on release `omnilodge-r35665519539-a1-35f1abaf7b6c` then exposed that the 30-second capacity proof freshness window is too short after dependency layers exist, because dependency tree sealing can consume most of the window before the proof is checked. The follow-up fix raises the deploy-control capacity proof window to the validator's existing five-minute upper bound while still recalculating capacity before each component.
 - No activation, live pointer switch, app restart, production migration, automatic deployment enablement, private-port smoke, or rollback action was performed.
 
+Dry-run completion checkpoint, 2026-09-22:
+
+- Release run `35667111052` for merge `53e71612c2cb952e19fc353a9dfb91e149531c05` succeeded and produced artifact `omnilodge-r35667111052-a1-53e71612c2cb` (`10669604146`). Automatic deploy-request run `35667568269` skipped as expected with repository `PRODUCTION_DEPLOY_MODE=disabled`.
+- Production control-plane assets from that merge were installed from an isolated, root-owned source archive and passed `bootstrap-primitives` plus `bootstrap-host --install`/`--check`; the installer reported that no service was enabled, started, restarted, reloaded, or switched.
+- Manual dry-run request `db257a48-8ac4-4d8c-a10f-f6f336ea2a8c` completed with `REQUEST_SUCCEEDED`. It verified/transferred/extracted the release, reused the existing backend and UI-server dependency layers, prepared seven release-local managed links, prepared the Puppeteer browser cache, and passed both backend migration-status and runtime-preflight checks.
+- Host queues were clean afterward (`pending=0`, `running=0`, `incoming=0`), and host policy remained `manual`. No activation, live pointer switch, app restart, production migration, automatic deployment enablement, private-port smoke, or rollback action was performed.
+
 - Build a real release in Actions.
 - Transfer and verify it on production.
 - Install its dependency layers.
