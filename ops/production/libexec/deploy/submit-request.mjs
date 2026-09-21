@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFile as execFileCallback } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
 import * as nativeFs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -38,6 +39,7 @@ const TRANSPORT_KEY_LABEL = 'github-actions-production';
 const FRAME_REJECTED_MESSAGE = 'Production deployment request rejected.\n';
 const INTERNAL_FAILURE_MESSAGE = 'Production deployment request failed.\n';
 const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SYSTEMCTL_CANDIDATES = Object.freeze(['/usr/bin/systemctl', '/bin/systemctl']);
 const execFile = promisify(execFileCallback);
 
 const sanitizeDiagnosticText = (value, maximumLength = 512) => {
@@ -118,14 +120,19 @@ export const incomingEvidencePath = ({ paths = HOST_DEPLOY_PATHS, requestId }) =
 
 export const startHostDeployWorker = async ({
   requestId,
-  systemctlPath = '/usr/bin/systemctl',
+  systemctlPath = null,
+  fs = nativeFs,
   runCommand = execFile,
 } = {}) => {
   const validatedRequestId = validateRequestId(requestId);
-  invariant(typeof systemctlPath === 'string' && systemctlPath.length > 0, 'systemctl path is required');
+  const resolvedSystemctlPath = systemctlPath ?? await resolveSystemctlPath({ fs });
+  invariant(
+    typeof resolvedSystemctlPath === 'string' && resolvedSystemctlPath.length > 0,
+    'systemctl path is required',
+  );
   invariant(typeof runCommand === 'function', 'worker start command is required');
   await runCommand(
-    systemctlPath,
+    resolvedSystemctlPath,
     ['--no-block', 'start', `omnilodge-deploy-worker@${validatedRequestId}.service`],
     {
       timeout: 15_000,
@@ -134,6 +141,24 @@ export const startHostDeployWorker = async ({
     },
   );
   return Object.freeze({ requestId: validatedRequestId, started: true });
+};
+
+export const resolveSystemctlPath = async ({
+  fs = nativeFs,
+  candidates = SYSTEMCTL_CANDIDATES,
+} = {}) => {
+  for (const candidate of candidates) {
+    invariant(typeof candidate === 'string' && candidate.startsWith('/'), 'systemctl candidate path is invalid');
+    try {
+      await fs.access(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'EACCES') throw error;
+    }
+  }
+  throw Object.assign(new Error('No executable systemctl path was found'), {
+    code: 'SYSTEMCTL_NOT_FOUND',
+  });
 };
 
 const unlinkIfPresent = async (fs, targetPath) => {
