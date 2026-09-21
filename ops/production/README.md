@@ -67,7 +67,7 @@ or GitHub Actions.
   tls/origin.pem
 
 /etc/ssh/authorized_keys/
-  omnilodge-deploy       # retained public key, root:root 0600
+  omnilodge-deploy       # retained public key, root:root 0644
 
 /var/lib/omnilodge/
   uploads/
@@ -125,10 +125,10 @@ does not rotate or display it. Keep the original home file as a recoverable but
 ignored copy until the forced-command login is tested from a second session.
 
 ```sh
-sudo install -d -o root -g root -m 0700 /etc/ssh/authorized_keys
+sudo install -d -o root -g root -m 0755 /etc/ssh/authorized_keys
 sudo test -f /home/omnilodge-deploy/.ssh/authorized_keys
 sudo test ! -L /home/omnilodge-deploy/.ssh/authorized_keys
-sudo install -o root -g root -m 0600 \
+sudo install -o root -g root -m 0644 \
   /home/omnilodge-deploy/.ssh/authorized_keys \
   /etc/ssh/authorized_keys/omnilodge-deploy
 sudo ssh-keygen -l -f /etc/ssh/authorized_keys/omnilodge-deploy >/dev/null
@@ -136,8 +136,8 @@ sudo ssh-keygen -l -f /etc/ssh/authorized_keys/omnilodge-deploy >/dev/null
 
 Have the operator compare the source and target fingerprints locally if there
 is any doubt, without copying them into logs or chat. Bootstrap refuses
-`--install` unless the external key file and directory have their exact
-root-owned modes and `ssh-keygen` can parse the file.
+`--install` unless the external public key file and directory have their exact
+root-owned, non-writable modes and `ssh-keygen` can parse the file.
 
 ```sh
 sudo sh ops/production/bootstrap-primitives.test.sh
