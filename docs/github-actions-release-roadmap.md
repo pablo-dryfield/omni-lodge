@@ -566,7 +566,7 @@ Exit condition: multiple real runs from the same source produce an equivalent re
 
 ### Phase 3: Production host preparation
 
-Current status: **partially implemented as repository-only, fail-closed foundations; not installed or operational**.
+Current status: **partially implemented with the endpoint/control-plane bootstrap assets installed fail-closed on production; detached staging, activation, automatic deployment, and rollback are still not operational**.
 
 Endpoint slice starting checkpoint, 2026-09-21:
 
@@ -595,6 +595,15 @@ Host install access checkpoint, 2026-09-21:
 - The retained deploy key currently authenticates as `omnilodge-deploy`, but the host has not yet installed the forced-command SSH boundary: the account opens a normal deploy-user shell, has no passwordless sudo, and cannot access the root-owned `/root/omni-lodge` checkout.
 - The next safe action is a one-time root operator bootstrap from the trusted production checkout: copy the retained deploy public key into `/etc/ssh/authorized_keys/omnilodge-deploy`, run `sudo sh ops/production/bootstrap-primitives.test.sh`, `sudo sh ops/production/bootstrap-host.sh --check`, `--dry-run`, and `--install`, then verify metadata with the README commands. That still must not restart app services, switch PM2 pointers, run migrations, stage a release, or enable automatic deployment.
 
+Host install completion checkpoint, 2026-09-21:
+
+- The production checkout was fast-forwarded to `cfe64ed1c05552278aebf36c99fcdfa64410d500`, and the reviewed bootstrap/control-plane assets were installed on the host in fail-closed mode. No release was activated, no PM2 pointer was switched, no migration ran, no dependency layer was installed, no detached worker was started, and no application service was restarted or reloaded.
+- Two host-observed bootstrap compatibility fixes were reviewed through PRs before final installation: PR #23 (`dc7ce4dfa682ea9c3f175bcd570765f7228c06ca`) accepts Ubuntu's escaped `sudo -l` rendering for the exact no-argument deploy command, and PR #24 (`cfe64ed1c05552278aebf36c99fcdfa64410d500`) keeps the retained deploy public key root-owned while making the external `AuthorizedKeysFile` readable/traversable by OpenSSH (`0755` directory, `0644` public key file). Both PRs passed required CI before merge.
+- Bootstrap verification passed on production after install. Verified metadata included `/etc/ssh/authorized_keys` as `root:root 755`, `/etc/ssh/authorized_keys/omnilodge-deploy` as `root:root 644`, `/etc/omnilodge` as `root:root 700`, root-owned `0600` policy/runtime env placeholders, `/usr/local/sbin/omnilodge-deploy` as `root:root 755`, and `/usr/local/libexec/omnilodge/ssh-gateway` as `root:root 755`. `visudo -cf /etc/sudoers.d/omnilodge-deploy` and `sshd -t` passed.
+- SSH was reloaded only to apply the restricted deploy-account Match block; the SSH service remained active. A normal deploy-user shell command was refused by the gateway with `unsupported command`, proving the deploy key no longer opens an interactive shell.
+- A dummy endpoint-only host-v2 `dry-run` request submitted through `omnilodge-deploy-v1` returned canonical response `REQUEST_REJECTED` with `responseStatus: rejected` for request `2ba75f7d-0124-4ab6-8358-39ef0b7d9111`, which is the expected endpoint-only result while the detached worker/staging path is intentionally inactive. `/opt/omnilodge/incoming` remained empty after cleanup; bounded request/audit state was recorded under `finished/`, `nonces/`, and `audit/segments/events.ndjson`.
+- The latest trusted `master` release after these bootstrap fixes is run `35643392241`, artifact `omnilodge-r35643392241-a1-cfe64ed1c055` (`10659740944`). The automatic deploy-request run `35644082008` completed with disabled-mode skip evidence and did not create or submit a host request. `PRODUCTION_DEPLOY_MODE` remains `disabled`.
+
 Implemented repository foundations:
 
 - The compiled backend artifact exposes a read-only migration-status command and a runtime preflight. The preflight binds the canonical release identifier to the source SHA, applies the shared fail-closed migration-lineage and safety checks, requires schema sync and access-control seeding to be disabled for artifact runtime, proves read-only database access, and smoke-tests Sharp and Puppeteer using a fixed cache location.
@@ -605,24 +614,23 @@ Implemented repository foundations:
 
 Not yet implemented or performed:
 
-- A protocol-aware root submitter exists in the repository and is covered by focused tests, but it has not been installed on the host. No detached deployment worker or recovery implementation exists.
-- None of the host bootstrap/runtime scaffolds has been installed, and no release directory, stable pointer, service definition, SSH rule, or policy file has been changed on production by this phase.
+- The protocol-aware root submitter is installed and covered by focused tests, but no detached deployment worker, recovery implementation, release staging implementation, or activation implementation exists yet.
+- Host bootstrap/runtime scaffolds, directories, disabled policy, service definitions, PM2 drop-in file, SSH rule, sudo rule, and endpoint/control-plane files are installed on production in fail-closed form. They have not staged or activated a release.
 - No detached worker, deployment activation path, production automatic deploy path, or rollback workflow exists yet.
-- The protected submit workflow is present on the current branch and its GitHub production environment inputs are configured, but it cannot complete until the protocol-aware endpoint is installed on the host. No production preflight/staging/activation/rollback has run, and `PRODUCTION_DEPLOY_MODE` remains `disabled`.
+- The protected submit workflow is present and its GitHub production environment inputs are configured. It can now reach the protocol-aware endpoint after environment approval, but authorized forward submissions are still expected to finish as `REQUEST_REJECTED` until the detached worker/staging path exists. No production preflight/staging/activation/rollback has run, and `PRODUCTION_DEPLOY_MODE` remains `disabled`.
 
 - Decouple TLS from the checkout and artifacts by placing the retained Origin CA pair in a permission-restricted server-owned path and using explicit runtime paths. Under the documented owner-accepted exception, rotation is deferred hardening rather than a cutover prerequisite.
 - Replace the migration runner's broad empty-`sequelize_meta` adoption heuristic with an explicit, fingerprinted, fail-closed legacy adoption procedure. An unknown or partially constructed schema must never be marked as fully migrated merely because one application table exists.
 - Strengthen migration drift checks so a same-named index or constraint is accepted only when its columns, uniqueness/type, and foreign-key target also match the expected definition.
 - Make migrations authoritative for schema changes before artifact deployment. Production startup must set `SKIP_DB_SYNC=true`, and the application must fail clearly rather than silently repairing schema through `sequelize.sync()`.
-- Create the release, dependency, configuration, and persistent-data directories.
-- Retain the existing restricted deploy user/key and install its public authorization through the root-owned restricted SSH configuration; do not rotate it as part of this roadmap unless the owner changes direction.
-- Replace the disabled scaffolds with an independently reviewed, protocol-aware root submitter, detached worker, recovery path, and validation/deploy implementation before installing anything on production.
-- Configure PM2 to use stable current-release pointers.
-- Install the protocol-aware root-owned host submitter, then complete the detached worker, shared deployment implementation, controlled manual forward-deploy entry point, conditional automatic path, and always-manual rollback workflow.
-- Configure the repository variable `PRODUCTION_DEPLOY_MODE=disabled` and the protected `production` environment. Do not place production runtime secrets in the build workflow.
+- The release, dependency, configuration, cache, and persistent-data directories now exist from bootstrap; keep them root-owned and do not repurpose them outside the deploy workflow.
+- The existing restricted deploy user/key is retained, and its public authorization is installed through the root-owned restricted SSH configuration. Do not rotate it as part of this roadmap unless the owner changes direction.
+- Replace the remaining disabled scaffolds with an independently reviewed detached worker, recovery path, validation/deploy implementation, controlled manual forward-deploy entry point, conditional automatic path, and always-manual rollback workflow.
+- Configure PM2 to use stable current-release pointers only after candidate staging, runtime env/TLS, backup, migration, readiness, smoke, and rollback gates exist.
+- Keep `PRODUCTION_DEPLOY_MODE=disabled` and the protected `production` environment in place until the Phase 4 dry run passes. Do not place production runtime secrets in the build workflow.
 - Preserve the current checkout and PM2 configuration as rollback fallback.
 
-Exit condition: **not met**. A dummy artifact has not yet traversed an installed end-to-end submitter/worker path and been staged and rejected/accepted correctly on the host without changing the live application.
+Exit condition: **not met**. A dummy artifact has traversed the installed forced SSH/sudo/protocol endpoint and was rejected correctly without changing the live application, but no artifact has traversed an installed end-to-end submitter/worker staging path yet.
 
 ### Phase 4: Dry-run release
 
