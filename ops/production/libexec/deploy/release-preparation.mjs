@@ -168,8 +168,11 @@ const pathsEqual = (left, right) => normalizePath(left) === normalizePath(right)
 const isWithin = (parent, candidate) => {
   const normalizedParent = normalizePath(parent);
   const normalizedCandidate = normalizePath(candidate);
-  return normalizedCandidate === normalizedParent
-    || normalizedCandidate.startsWith(`${normalizedParent}${path.sep}`);
+  if (normalizedCandidate === normalizedParent) return true;
+  const relative = path.relative(normalizedParent, normalizedCandidate);
+  return relative !== ''
+    && !relative.startsWith('..')
+    && !path.isAbsolute(relative);
 };
 
 const validateTrustedLayout = (layout) => {

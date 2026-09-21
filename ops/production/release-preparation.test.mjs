@@ -22,6 +22,7 @@ import {
   serializeReleaseManifest,
 } from '../../scripts/release/lib.mjs';
 import {
+  PRODUCTION_RELEASE_LAYOUT,
   assertReleaseSnapshotUnchanged,
   assertSufficientDependencyCapacity,
   calculateDependencyCapacity,
@@ -260,6 +261,17 @@ test('derives immutable release, dependency, cache, and managed-link plans from 
       'ui-server': 'install',
     });
   });
+});
+
+test('production layout treats the filesystem root as a trusted ancestor', () => {
+  assert.throws(
+    () => createReleasePreparationPlan({
+      expectedReleaseId: releaseId,
+      expectedSourceSha: sourceSha,
+      trustedLayout: PRODUCTION_RELEASE_LAYOUT,
+    }),
+    /Release root is missing/,
+  );
 });
 
 test('rejects traversal-shaped identity and source/release or candidate mismatches', async () => {
