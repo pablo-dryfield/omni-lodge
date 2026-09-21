@@ -4,16 +4,16 @@ These assets prepare the fixed, root-owned Phase 3 filesystem and privilege
 boundaries. They do **not** deploy a release, change the live pointers, reload
 SSH, reload systemd, restart PM2, run a migration, or enable a service.
 
-The checked-in deploy entry point and worker are deliberate fail-closed
-scaffolds. Do not give a workflow production credentials until the reviewed
-protocol submitter, detached worker, recovery implementation, backup gate,
-preflight, activation, smoke tests, and rollback path have replaced those
-scaffolds and passed a dummy-artifact exercise.
+The checked-in deploy entry point accepts authorized non-activation requests
+into durable state and starts a detached worker that can stage and verify a
+release candidate without switching live traffic. Do not enable production
+activation until recovery implementation, backup gate, preflight, activation,
+smoke tests, and rollback have passed a dummy-artifact exercise.
 
-The scaffold also does not implement request replay/idempotency records,
-request-size and concurrency admission, free-space/inode capacity gates, or
-artifact extraction quotas. Those are explicit activation blockers for the
-completed submitter/worker, not behavior supplied by this bootstrap.
+Activation remains deliberately unavailable in this slice. Request
+replay/idempotency records and artifact extraction quotas are implemented; full
+free-space/inode capacity gates for dependency publication remain an activation
+blocker.
 
 ## Security model
 
@@ -75,7 +75,7 @@ or GitHub Actions.
   logs/
   source-maps/
   deploy/requests/{pending,running,finished}/
-  deploy/{state,audit}/
+  deploy/{staging,state,audit}/
 
 /var/cache/omnilodge/
   npm/

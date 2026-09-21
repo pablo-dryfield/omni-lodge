@@ -6,3 +6,4 @@ export * from './deployment-flock.mjs';
 export * from './request-store.mjs';
 export * from './secure-filesystem.mjs';
 export * from './state-schema.mjs';
+export * from './worker.mjs';

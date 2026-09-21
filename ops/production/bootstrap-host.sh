@@ -323,6 +323,8 @@ validate_source_assets() {
     ops/production/libexec/deploy/secure-filesystem.mjs \
     ops/production/libexec/deploy/state-schema.mjs \
     ops/production/libexec/deploy/submit-request.mjs \
+    ops/production/libexec/deploy/worker.mjs \
+    scripts/deploy/extract-github-artifact.mjs \
     scripts/deploy/github-release-evidence.mjs \
     scripts/deploy/host/deploy-policy.mjs \
     scripts/deploy/host/protocol.mjs \
@@ -360,6 +362,7 @@ validate_source_assets() {
     "$node_path" --check "$(source_file bin/runtime-launcher.mjs)"
     "$node_path" --check "$(source_file pm2/ecosystem.production.cjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/submit-request.mjs)"
+    "$node_path" --check "$(repository_file ops/production/libexec/deploy/worker.mjs)"
   elif [ "$MODE" = 'install' ]; then
     die 'Node.js is required to install the host assets'
   else
@@ -532,7 +535,7 @@ validate_installed() {
     logs logs/backend logs/ui-server logs/pm2 logs/deploy \
     source-maps deploy deploy/requests deploy/requests/pending \
     deploy/requests/running deploy/requests/finished deploy/requests/nonces \
-    deploy/state deploy/audit deploy/audit/segments
+    deploy/staging deploy/state deploy/audit deploy/audit/segments
   do
     assert_exact_directory "$STATE_ROOT/$installed_directory" '700'
   done
@@ -574,6 +577,8 @@ validate_installed() {
     ops/production/libexec/deploy/secure-filesystem.mjs \
     ops/production/libexec/deploy/state-schema.mjs \
     ops/production/libexec/deploy/submit-request.mjs \
+    ops/production/libexec/deploy/worker.mjs \
+    scripts/deploy/extract-github-artifact.mjs \
     scripts/deploy/github-release-evidence.mjs \
     scripts/deploy/host/deploy-policy.mjs \
     scripts/deploy/host/protocol.mjs \
@@ -700,6 +705,8 @@ install_assets() {
     ops/production/libexec/deploy/secure-filesystem.mjs \
     ops/production/libexec/deploy/state-schema.mjs \
     ops/production/libexec/deploy/submit-request.mjs \
+    ops/production/libexec/deploy/worker.mjs \
+    scripts/deploy/extract-github-artifact.mjs \
     scripts/deploy/github-release-evidence.mjs \
     scripts/deploy/host/deploy-policy.mjs \
     scripts/deploy/host/protocol.mjs \
@@ -746,6 +753,7 @@ install_assets() {
   ensure_directory "$STATE_ROOT/deploy/requests/running" 700
   ensure_directory "$STATE_ROOT/deploy/requests/finished" 700
   ensure_directory "$STATE_ROOT/deploy/requests/nonces" 700
+  ensure_directory "$STATE_ROOT/deploy/staging" 700
   ensure_directory "$STATE_ROOT/deploy/state" 700
   ensure_directory "$STATE_ROOT/deploy/audit" 700
   ensure_directory "$STATE_ROOT/deploy/audit/segments" 700
@@ -791,6 +799,8 @@ install_assets() {
     ops/production/libexec/deploy/secure-filesystem.mjs \
     ops/production/libexec/deploy/state-schema.mjs \
     ops/production/libexec/deploy/submit-request.mjs \
+    ops/production/libexec/deploy/worker.mjs \
+    scripts/deploy/extract-github-artifact.mjs \
     scripts/deploy/github-release-evidence.mjs \
     scripts/deploy/host/deploy-policy.mjs \
     scripts/deploy/host/protocol.mjs \

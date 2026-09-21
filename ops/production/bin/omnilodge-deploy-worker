@@ -18,5 +18,5 @@ case "$1" in
     ;;
 esac
 
-printf '%s\n' 'Production deployment worker is not activated on this host.' >&2
-exit 78
+readonly CONTROL_PLANE_ENTRY='/usr/local/libexec/omnilodge/control-plane/ops/production/libexec/deploy/worker.mjs'
+exec /usr/bin/node "$CONTROL_PLANE_ENTRY" "$1"
