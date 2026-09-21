@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import {
   chmodSync,
   lstatSync,
@@ -36,6 +37,7 @@ import {
   prepareForwardReleaseArtifact,
   prepareDependencyLayers,
   prepareBackendBrowserCache,
+  runPrivateSmokeChecks,
   runDryRunRuntimeChecks,
 } from './libexec/deploy/worker.mjs';
 
@@ -75,6 +77,19 @@ const createMemoryStateFileOps = () => {
     },
   };
 };
+
+class FakeSmokeProcess extends EventEmitter {
+  exitCode = null;
+  signalCode = null;
+  killed = false;
+
+  kill(signal = 'SIGTERM') {
+    this.killed = true;
+    this.signalCode = signal;
+    this.emit('exit', null, signal);
+    return true;
+  }
+}
 
 const buildManifest = (payload) => {
   const files = [...payload.entries()]
@@ -719,6 +734,57 @@ test('dry-run runtime checks use fixed Ubuntu runtime commands and parse JSON ev
           stderr: '',
         };
       },
+      privateSmokeRunner: async ({ plan: smokePlan }) => ({
+        schemaVersion: 1,
+        releaseId: smokePlan.releaseId,
+        sourceSha: smokePlan.sourceSha,
+        preparationPlanSha256: smokePlan.planSha256,
+        host: '127.0.0.1',
+        startedAtUtc: '2026-09-16T12:00:00.000Z',
+        completedAtUtc: '2026-09-16T12:00:01.000Z',
+        commands: [],
+        backend: {
+          port: 49152,
+          path: '/api/health/ready',
+          statusCode: 200,
+          ready: true,
+          release: {
+            id: smokePlan.releaseId,
+            gitSha: smokePlan.sourceSha,
+            runtimeMode: 'dry-run',
+          },
+        },
+        uiServer: {
+          port: 49153,
+          tls: {
+            keyPath: '/etc/omnilodge/tls/origin.key',
+            certPath: '/etc/omnilodge/tls/origin.pem',
+            loopbackPeerVerification: 'disabled',
+          },
+          health: {
+            path: '/healthz',
+            statusCode: 200,
+            release: smokePlan.releaseId,
+            artifactValidation: {
+              status: 'valid',
+              mainAsset: '/static/js/main.12345678.js',
+              assetCount: 10,
+              hashedAssetCount: 3,
+              pwaManifestCount: 1,
+            },
+          },
+          index: {
+            path: '/',
+            statusCode: 200,
+            servedApplicationShell: true,
+          },
+          sourceMapProbe: {
+            path: '/static/js/main.12345678.js.map',
+            statusCode: 404,
+            publicSourceMapsDenied: true,
+          },
+        },
+      }),
     });
     assert.deepEqual(commands.map((command) => [
       command.label,
@@ -751,6 +817,123 @@ test('dry-run runtime checks use fixed Ubuntu runtime commands and parse JSON ev
     assert.equal(result.backendEnvironmentFile, '/etc/omnilodge/backend.env');
     assert.equal(result.migrationStatus.ok, true);
     assert.equal(result.runtimePreflight.ok, true);
+    assert.equal(result.privateSmoke.backend.ready, true);
+    assert.equal(result.privateSmoke.uiServer.sourceMapProbe.publicSourceMapsDenied, true);
+  });
+});
+
+test('private smoke starts candidate backend and UI server on loopback without current pointers', async () => {
+  await withFixture(async (fixture) => {
+    const plan = fixture.plan();
+    const commands = [];
+    const stopped = [];
+    const responses = new Map([
+      ['4001 /api/health/ready', {
+        statusCode: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({
+          status: 'ok',
+          ready: true,
+          release: {
+            id: plan.releaseId,
+            gitSha: plan.sourceSha,
+            runtimeMode: 'dry-run',
+          },
+          checks: {
+            configuration: { ok: true, missing: [], invalid: [] },
+            database: { ok: true },
+          },
+        }),
+      }],
+      ['4002 /healthz', {
+        statusCode: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({
+          status: 'ok',
+          service: 'ui-server',
+          release: plan.releaseId,
+          artifactValidation: {
+            status: 'valid',
+            mainAsset: '/static/js/main.12345678.js',
+            assetCount: 12,
+            hashedAssetCount: 5,
+            pwaManifestCount: 3,
+          },
+        }),
+      }],
+      ['4002 /', {
+        statusCode: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+        body: '<!doctype html><html><body><div id="root"></div></body></html>',
+      }],
+      ['4002 /static/js/main.12345678.js.map', {
+        statusCode: 404,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+        body: 'Not Found',
+      }],
+    ]);
+
+    const result = await runPrivateSmokeChecks({
+      plan,
+      now: () => new Date('2026-09-16T12:00:00.000Z'),
+      portAllocator: async (component) => (component === 'backend' ? 4001 : 4002),
+      spawnProcess: (command) => {
+        commands.push(command);
+        const child = new FakeSmokeProcess();
+        child.once('exit', () => stopped.push(command.component));
+        return child;
+      },
+      request: async ({ port, requestPath }) => {
+        const response = responses.get(`${port} ${requestPath}`);
+        if (!response) throw new Error(`unexpected smoke request: ${port} ${requestPath}`);
+        return response;
+      },
+      sleep: async () => {},
+    });
+
+    assert.deepEqual(commands.map((command) => [
+      command.component,
+      command.executable,
+      command.cwd,
+      command.args,
+      command.env.NODE_ENV,
+      command.env.APP_VERSION,
+      command.env.PORT ?? command.env.UI_SERVER_PORT,
+      command.env.UI_SERVER_HOST ?? null,
+      command.env.UI_BUILD_PATH ?? null,
+      command.env.UI_TLS_KEY_PATH ?? null,
+    ]), [
+      [
+        'backend',
+        '/usr/bin/node',
+        path.join(plan.releaseRoot, 'be'),
+        ['--env-file=/etc/omnilodge/backend.env', '--enable-source-maps', 'scripts/startMonitored.js', 'dist/app.js'],
+        'production',
+        plan.releaseId,
+        '4001',
+        null,
+        null,
+        null,
+      ],
+      [
+        'ui-server',
+        '/usr/bin/node',
+        path.join(plan.releaseRoot, 'ui-server'),
+        ['--env-file=/etc/omnilodge/ui-server.env', 'server.js'],
+        'production',
+        plan.releaseId,
+        '4002',
+        '127.0.0.1',
+        path.join(plan.releaseRoot, 'ui/build'),
+        '/etc/omnilodge/tls/origin.key',
+      ],
+    ]);
+    assert.equal(result.backend.port, 4001);
+    assert.equal(result.backend.release.runtimeMode, 'dry-run');
+    assert.equal(result.uiServer.port, 4002);
+    assert.equal(result.uiServer.health.artifactValidation.status, 'valid');
+    assert.equal(result.uiServer.sourceMapProbe.statusCode, 404);
+    assert.deepEqual(stopped.sort(), ['backend', 'ui-server']);
   });
 });
 
