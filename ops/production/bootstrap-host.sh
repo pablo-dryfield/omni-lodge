@@ -213,8 +213,8 @@ validate_external_authorized_keys() {
     note "warning: the root-owned deployment AuthorizedKeysFile is not staged: $AUTHORIZED_KEYS_TARGET"
     return 0
   fi
-  assert_exact_directory "$AUTHORIZED_KEYS_DIR" '700'
-  assert_exact_file "$AUTHORIZED_KEYS_TARGET" '600'
+  assert_exact_directory "$AUTHORIZED_KEYS_DIR" '755'
+  assert_exact_file "$AUTHORIZED_KEYS_TARGET" '644'
   omni_assert_root_controlled_ancestors "$AUTHORIZED_KEYS_TARGET"
   [ -s "$AUTHORIZED_KEYS_TARGET" ] || die 'the root-owned deployment AuthorizedKeysFile is empty'
   ssh_keygen_path=$(find_command ssh-keygen /usr/bin/ssh-keygen)
@@ -550,14 +550,14 @@ validate_installed() {
   assert_exact_directory "$CONTROL_PLANE_ROOT/scripts/deploy/host" '755'
   assert_exact_directory "$CONTROL_PLANE_ROOT/scripts/release" '755'
   assert_exact_directory "$DOC_ROOT" '755'
-  assert_exact_directory "$AUTHORIZED_KEYS_DIR" '700'
+  assert_exact_directory "$AUTHORIZED_KEYS_DIR" '755'
   assert_exact_directory /etc/systemd/system/pm2-root.service.d '755'
 
   assert_exact_file "$ETC_ROOT/deploy-policy.json" '600'
   validate_policy_file "$ETC_ROOT/deploy-policy.json"
   assert_exact_file "$ETC_ROOT/backend.env" '600'
   assert_exact_file "$ETC_ROOT/ui-server.env" '600'
-  assert_exact_file "$AUTHORIZED_KEYS_TARGET" '600'
+  assert_exact_file "$AUTHORIZED_KEYS_TARGET" '644'
   assert_exact_file "$SSHD_TARGET" '644'
   assert_exact_file "$SUDOERS_TARGET" '440'
   assert_exact_file "$LIBEXEC_ROOT/ssh-gateway" '755'
@@ -725,7 +725,7 @@ install_assets() {
 
   ensure_directory "$ETC_ROOT" 700
   ensure_directory "$ETC_ROOT/tls" 700
-  ensure_directory "$AUTHORIZED_KEYS_DIR" 700
+  ensure_directory "$AUTHORIZED_KEYS_DIR" 755
 
   ensure_directory "$STATE_ROOT" 700
   ensure_directory "$STATE_ROOT/uploads" 700

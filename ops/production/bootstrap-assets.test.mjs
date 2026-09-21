@@ -142,6 +142,9 @@ test('bootstrap has an explicit mutating mode and never activates services or ke
   assert.doesNotMatch(bootstrap, /\/home\/omnilodge-deploy\/\.ssh\/authorized_keys/);
   assert.match(bootstrap, /\/usr\/bin\/node 22\.23\.2 and \/usr\/bin\/npm 10\.9\.8/);
   assert.match(bootstrap, /AUTHORIZED_KEYS_TARGET='\/etc\/ssh\/authorized_keys\/omnilodge-deploy'/);
+  assert.match(bootstrap, /assert_exact_directory "\$AUTHORIZED_KEYS_DIR" '755'/);
+  assert.match(bootstrap, /assert_exact_file "\$AUTHORIZED_KEYS_TARGET" '644'/);
+  assert.match(bootstrap, /ensure_directory "\$AUTHORIZED_KEYS_DIR" 755/);
   assert.match(bootstrap, /CONTROL_PLANE_ROOT='\/usr\/local\/libexec\/omnilodge\/control-plane'/);
   assert.match(bootstrap, /deploy\/requests\/nonces/);
   assert.match(bootstrap, /deploy\/audit\/segments/);
