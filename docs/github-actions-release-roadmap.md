@@ -662,6 +662,14 @@ Current branch checkpoint, 2026-09-22:
 - Still do not switch live pointers, restart app services, run migrations, expose private test ports, change repository deploy mode, or implement rollback in this checkpoint.
 - Local production-control validation on Windows passed with `node --test ops/production/*.test.mjs` (57 tests, 50 passed, 7 Windows/POSIX skips, 0 failures); POSIX shell, POSIX ownership/mode, and symlink behavior must still be proven by Linux CI/host checks.
 
+Interim host proof checkpoint, 2026-09-22:
+
+- Trusted release run `35662622715` produced artifact `omnilodge-r35662622715-a1-3dbb99b22425` (`10667159465`) for merge `3dbb99b224250c00ad6b58d8511e6e12f1a01ee9`. Its automatic deploy-request run `35663042530` skipped as expected because repository `PRODUCTION_DEPLOY_MODE=disabled`.
+- Production control-plane assets were installed from an isolated, root-owned archive of that merge and passed `bootstrap-primitives` plus `bootstrap-host --check`; the legacy live checkout was not fast-forwarded for this install.
+- Manual dry-run request `43916851-9941-4b15-9195-4ddb84aa93d1` first exposed that `/etc/omnilodge/backend.env` was still the bootstrap placeholder, so migration-status/preflight could not read the production DB configuration. The server-owned backend env was populated from the currently running backend PM2 environment without printing values, with artifact safety flags forced to `SKIP_DB_SYNC=true`, `DB_SYNC_ALTER=false`, and `SEED_ACCESS_CONTROL=false`.
+- Direct continuation proved dependency publication/reuse, managed links, Puppeteer browser-cache preparation, migration-status, and runtime preflight can pass for the staged release. A fresh official dry-run request `9b8efe79-4708-4c3c-a9ed-5bbe07ca0df4` then exposed an idempotency gap: dependency publication-state inspection still required an unlinked release and failed once the managed links existed. This branch fixes that check to validate release snapshots with `linkState: auto`, preserving the managed-link allowlist while allowing safe dry-run replay.
+- No activation, live pointer switch, app restart, production migration, automatic deployment enablement, private-port smoke, or rollback action was performed.
+
 - Build a real release in Actions.
 - Transfer and verify it on production.
 - Install its dependency layers.
