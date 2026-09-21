@@ -583,6 +583,12 @@ Endpoint slice completion checkpoint, 2026-09-21:
 - Hosted verification passed in PR #20. The merge result is `5618c663ecac1a81aef27c7a593de19d9dffbb35`; trusted release run `35632794270` succeeded and produced artifact `omnilodge-r35632794270-a1-5618c663ecac` (`10655341770`). The automatic production deploy-request run `35633402178` completed with its prepare job reporting the disabled-mode skip and its submit job skipped, so no host connection or production mutation occurred.
 - This remains repository-only and not installed on production. No release was activated, no PM2 pointer was switched, no migration or dependency install ran, no detached worker was started, and no rollback path was implemented.
 
+Host install/dry-run starting checkpoint, 2026-09-21:
+
+- This slice is deliberately limited to installing the already-reviewed endpoint/control-plane bootstrap assets on the production host, validating the installed files and privilege boundary, and attempting endpoint-only `dry-run` evidence.
+- This slice must not activate a release, switch PM2 pointers, run migrations, install dependency layers, start a detached worker, enable automatic deployment, or implement rollback.
+- `PRODUCTION_DEPLOY_MODE` remains `disabled` unless explicitly changed later. A successful endpoint-only `dry-run` may prove the forced SSH/sudo/protocol boundary, but authorized submit requests are still expected to be rejected until the worker/staging path exists.
+
 Implemented repository foundations:
 
 - The compiled backend artifact exposes a read-only migration-status command and a runtime preflight. The preflight binds the canonical release identifier to the source SHA, applies the shared fail-closed migration-lineage and safety checks, requires schema sync and access-control seeding to be disabled for artifact runtime, proves read-only database access, and smoke-tests Sharp and Puppeteer using a fixed cache location.
