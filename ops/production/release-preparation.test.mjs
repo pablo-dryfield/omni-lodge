@@ -436,6 +436,30 @@ test('calculates plan-bound byte and inode budgets and fails closed on forgery o
     assert.equal(short.byteShortfall, 1n);
     assert.equal(short.inodeShortfall, 1n);
     assert.throws(() => assertSufficientDependencyCapacity(short), /Insufficient disk bytes or inodes/);
+
+    const observedAt = Date.parse('2026-09-21T12:00:00.000Z');
+    const laterNow = () => new Date(observedAt + (4 * 60 * 1000));
+    const stillFreshEvidence = capacityEvidenceFor(plan, state, { bytes: 2400, inodes: 240 });
+    stillFreshEvidence.measuredAtUtc = new Date(observedAt).toISOString();
+    assert.equal(calculateDependencyCapacity({
+      plan,
+      publicationState: state,
+      trustedBudget: dependencyBudget,
+      available: stillFreshEvidence,
+      now: laterNow,
+    }).sufficient, true);
+
+    const tooLateNow = () => new Date(observedAt + (5 * 60 * 1000) + 1);
+    assert.throws(
+      () => calculateDependencyCapacity({
+        plan,
+        publicationState: state,
+        trustedBudget: dependencyBudget,
+        available: stillFreshEvidence,
+        now: tooLateNow,
+      }),
+      /Dependency capacity evidence is stale or from the future/,
+    );
   });
 });
 
