@@ -997,6 +997,10 @@ test('validates the exact prepared-release symlink allowlist and rejects extras'
       }
       throw error;
     }
+    assert.deepEqual(inspectDependencyPublicationState(plan), {
+      backend: 'reuse',
+      'ui-server': 'reuse',
+    });
     assert.equal(validatePreparedReleaseLinks(plan), true);
     const extraTarget = path.join(fixture.fixtureRoot, 'extra-target');
     mkdir(extraTarget);

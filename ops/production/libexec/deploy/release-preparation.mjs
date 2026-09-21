@@ -1221,7 +1221,7 @@ const inspectDependencyPhase = (plan, component) => {
 
 export const inspectDependencyPublicationState = (plan) => {
   requirePlan(plan);
-  assertReleaseSnapshotUnchanged(plan);
+  assertReleaseSnapshotUnchanged(plan, { linkState: 'auto' });
   const result = {};
   for (const component of COMPONENT_NAMES) {
     const phase = inspectDependencyPhase(plan, component);
