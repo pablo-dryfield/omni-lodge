@@ -40,6 +40,45 @@ const INTERNAL_FAILURE_MESSAGE = 'Production deployment request failed.\n';
 const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const execFile = promisify(execFileCallback);
 
+const sanitizeDiagnosticText = (value, maximumLength = 512) => {
+  const source = String(value ?? '');
+  let output = '';
+  for (const character of source) {
+    const codePoint = character.codePointAt(0);
+    output += codePoint >= 32 && codePoint <= 126 ? character : '?';
+    if (output.length >= maximumLength) return output.slice(0, maximumLength);
+  }
+  return output;
+};
+
+const summarizeErrorForDiagnostic = (error) => Object.freeze({
+  name: sanitizeDiagnosticText(error?.name || 'Error', 96),
+  code: sanitizeDiagnosticText(error?.code || '', 96),
+  message: sanitizeDiagnosticText(error?.message || 'Unknown error'),
+});
+
+export const appendSubmitDiagnostic = async ({
+  fs = nativeFs,
+  paths = HOST_DEPLOY_PATHS,
+  clock = () => new Date(),
+  identity,
+  phase,
+  error,
+} = {}) => {
+  const line = `${JSON.stringify({
+    timestampUtc: clock().toISOString(),
+    component: 'host-v2-submit',
+    phase: sanitizeDiagnosticText(phase, 96),
+    requestId: sanitizeDiagnosticText(identity?.requestId, 96),
+    kind: sanitizeDiagnosticText(identity?.kind, 64),
+    operation: sanitizeDiagnosticText(identity?.operation, 64),
+    trigger: sanitizeDiagnosticText(identity?.trigger, 64),
+    releaseId: sanitizeDiagnosticText(identity?.releaseId, 128),
+    error: summarizeErrorForDiagnostic(error),
+  })}\n`;
+  await fs.appendFile(paths.deployLog, line, { mode: 0o600 });
+};
+
 const requestStateIdentity = (entry) => ({
   requestId: entry.requestState.request.requestId,
   requestSha256: entry.requestState.request.requestSha256,
@@ -247,6 +286,7 @@ export const handleHostV2SubmitRequest = async ({
   startWorker = startHostDeployWorker,
   persistForWorker = persistReceivedRequestForWorker,
   cleanupWorkerPayload = cleanupPersistedWorkerPayload,
+  recordSubmitDiagnostic = appendSubmitDiagnostic,
 } = {}) => {
   if (!input || typeof input[Symbol.asyncIterator] !== 'function') {
     throw new Error('Host submit input must be an async iterable');
@@ -377,6 +417,14 @@ export const handleHostV2SubmitRequest = async ({
       });
       await startWorker({ requestId: identity.requestId });
     } catch (error) {
+      await recordSubmitDiagnostic({
+        fs,
+        paths,
+        clock,
+        identity,
+        phase: staged === null ? 'persist_worker_payload' : 'start_worker',
+        error,
+      }).catch(() => {});
       await cleanupWorkerPayload({ staged, fs });
       await finishRejectedRequest({
         store: requestStore,

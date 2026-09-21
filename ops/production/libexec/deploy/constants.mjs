@@ -28,6 +28,7 @@ export const HOST_DEPLOY_PATHS = Object.freeze({
   stateRoot: '/var/lib/omnilodge/deploy/state',
   auditRoot: '/var/lib/omnilodge/deploy/audit',
   auditSegments: '/var/lib/omnilodge/deploy/audit/segments',
+  deployLog: '/var/lib/omnilodge/logs/deploy/worker.log',
   lockFile: '/run/omnilodge/deploy.lock',
 });
 
