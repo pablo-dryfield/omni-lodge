@@ -11,6 +11,7 @@ readonly ETC_ROOT='/etc/omnilodge'
 readonly STATE_ROOT='/var/lib/omnilodge'
 readonly CACHE_ROOT='/var/cache/omnilodge'
 readonly LIBEXEC_ROOT='/usr/local/libexec/omnilodge'
+readonly CONTROL_PLANE_ROOT='/usr/local/libexec/omnilodge/control-plane'
 readonly DOC_ROOT='/usr/local/share/doc/omnilodge-production'
 readonly SSHD_TARGET='/etc/ssh/sshd_config.d/90-omnilodge-deploy.conf'
 readonly SUDOERS_TARGET='/etc/sudoers.d/omnilodge-deploy'
@@ -62,6 +63,13 @@ source_file() {
   printf '%s/%s\n' "$SOURCE_ROOT" "$1"
 }
 
+repository_file() {
+  repository_candidate=$SOURCE_ROOT/../../$1
+  repository_resolved=$(readlink -f "$repository_candidate" 2>/dev/null || true)
+  [ -n "$repository_resolved" ] || die "repository asset path cannot be resolved: $1"
+  printf '%s\n' "$repository_resolved"
+}
+
 BOOTSTRAP_LIBRARY=$(source_file lib/bootstrap-functions.sh)
 [ -f "$BOOTSTRAP_LIBRARY" ] && [ ! -L "$BOOTSTRAP_LIBRARY" ] \
   || die 'bootstrap function library is missing or is a symbolic link'
@@ -106,6 +114,12 @@ require_source_file() {
   file_path=$(source_file "$1")
   [ -f "$file_path" ] || die "missing source asset: $1"
   [ ! -L "$file_path" ] || die "source asset is a symbolic link: $1"
+}
+
+require_repository_file() {
+  file_path=$(repository_file "$1")
+  [ -f "$file_path" ] || die "missing repository asset: $1"
+  [ ! -L "$file_path" ] || die "repository asset is a symbolic link: $1"
 }
 
 mode_of() { omni_mode_of "$@"; }
@@ -296,6 +310,32 @@ validate_source_assets() {
     fi
   done
 
+  for relative_path in \
+    ops/production/libexec/deploy/audit-log.mjs \
+    ops/production/libexec/deploy/canonical-json.mjs \
+    ops/production/libexec/deploy/capacity.mjs \
+    ops/production/libexec/deploy/constants.mjs \
+    ops/production/libexec/deploy/deployment-flock.mjs \
+    ops/production/libexec/deploy/index.mjs \
+    ops/production/libexec/deploy/release-preparation.mjs \
+    ops/production/libexec/deploy/request-store.mjs \
+    ops/production/libexec/deploy/secure-filesystem.mjs \
+    ops/production/libexec/deploy/state-schema.mjs \
+    ops/production/libexec/deploy/submit-request.mjs \
+    scripts/deploy/github-release-evidence.mjs \
+    scripts/deploy/host/deploy-policy.mjs \
+    scripts/deploy/host/protocol.mjs \
+    scripts/deploy/host/protocol-v2.mjs \
+    scripts/deploy/host/request-receiver.mjs \
+    scripts/deploy/host/state.mjs \
+    scripts/release/lib.mjs
+  do
+    require_repository_file "$relative_path"
+    if [ "$(id -u)" -eq 0 ]; then
+      omni_assert_root_controlled_ancestors "$(repository_file "$relative_path")"
+    fi
+  done
+
   validate_policy_file "$(source_file config/deploy-policy.json)"
 
   shell_path=$(find_command sh /bin/sh)
@@ -318,6 +358,7 @@ validate_source_assets() {
   if [ -n "$node_path" ]; then
     "$node_path" --check "$(source_file bin/runtime-launcher.mjs)"
     "$node_path" --check "$(source_file pm2/ecosystem.production.cjs)"
+    "$node_path" --check "$(repository_file ops/production/libexec/deploy/submit-request.mjs)"
   elif [ "$MODE" = 'install' ]; then
     die 'Node.js is required to install the host assets'
   else
@@ -489,7 +530,8 @@ validate_installed() {
     runtime runtime/backend runtime/error-monitoring \
     logs logs/backend logs/ui-server logs/pm2 logs/deploy \
     source-maps deploy deploy/requests deploy/requests/pending \
-    deploy/requests/running deploy/requests/finished deploy/state deploy/audit
+    deploy/requests/running deploy/requests/finished deploy/requests/nonces \
+    deploy/state deploy/audit deploy/audit/segments
   do
     assert_exact_directory "$STATE_ROOT/$installed_directory" '700'
   done
@@ -497,6 +539,15 @@ validate_installed() {
   assert_exact_directory "$CACHE_ROOT/npm" '700'
   assert_exact_directory "$CACHE_ROOT/puppeteer" '700'
   assert_exact_directory "$LIBEXEC_ROOT" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT/ops" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT/ops/production" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT/ops/production/libexec" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT/ops/production/libexec/deploy" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT/scripts" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT/scripts/deploy" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT/scripts/deploy/host" '755'
+  assert_exact_directory "$CONTROL_PLANE_ROOT/scripts/release" '755'
   assert_exact_directory "$DOC_ROOT" '755'
   assert_exact_directory "$AUTHORIZED_KEYS_DIR" '700'
   assert_exact_directory /etc/systemd/system/pm2-root.service.d '755'
@@ -510,6 +561,30 @@ validate_installed() {
   assert_exact_file "$SUDOERS_TARGET" '440'
   assert_exact_file "$LIBEXEC_ROOT/ssh-gateway" '755'
   assert_exact_file "$LIBEXEC_ROOT/runtime-launcher.mjs" '755'
+  for installed_control_plane_file in \
+    ops/production/libexec/deploy/audit-log.mjs \
+    ops/production/libexec/deploy/canonical-json.mjs \
+    ops/production/libexec/deploy/capacity.mjs \
+    ops/production/libexec/deploy/constants.mjs \
+    ops/production/libexec/deploy/deployment-flock.mjs \
+    ops/production/libexec/deploy/index.mjs \
+    ops/production/libexec/deploy/release-preparation.mjs \
+    ops/production/libexec/deploy/request-store.mjs \
+    ops/production/libexec/deploy/secure-filesystem.mjs \
+    ops/production/libexec/deploy/state-schema.mjs \
+    ops/production/libexec/deploy/submit-request.mjs \
+    scripts/deploy/github-release-evidence.mjs \
+    scripts/deploy/host/deploy-policy.mjs \
+    scripts/deploy/host/protocol.mjs \
+    scripts/deploy/host/protocol-v2.mjs \
+    scripts/deploy/host/request-receiver.mjs \
+    scripts/deploy/host/state.mjs \
+    scripts/release/lib.mjs
+  do
+    assert_exact_file "$CONTROL_PLANE_ROOT/$installed_control_plane_file" '644'
+    cmp -s "$(repository_file "$installed_control_plane_file")" "$CONTROL_PLANE_ROOT/$installed_control_plane_file" \
+      || die "installed control-plane file differs from the reviewed source: $installed_control_plane_file"
+  done
   assert_exact_file /usr/local/sbin/omnilodge-deploy '755'
   assert_exact_file /usr/local/sbin/omnilodge-deploy-worker '755'
   assert_exact_file /usr/local/sbin/omnilodge-deploy-recover '755'
@@ -612,6 +687,34 @@ install_assets() {
     [ $((source_permissions & 0022)) -eq 0 ] || die "install source is group/world writable: $source_asset"
   done
 
+  for source_asset in \
+    ops/production/libexec/deploy/audit-log.mjs \
+    ops/production/libexec/deploy/canonical-json.mjs \
+    ops/production/libexec/deploy/capacity.mjs \
+    ops/production/libexec/deploy/constants.mjs \
+    ops/production/libexec/deploy/deployment-flock.mjs \
+    ops/production/libexec/deploy/index.mjs \
+    ops/production/libexec/deploy/release-preparation.mjs \
+    ops/production/libexec/deploy/request-store.mjs \
+    ops/production/libexec/deploy/secure-filesystem.mjs \
+    ops/production/libexec/deploy/state-schema.mjs \
+    ops/production/libexec/deploy/submit-request.mjs \
+    scripts/deploy/github-release-evidence.mjs \
+    scripts/deploy/host/deploy-policy.mjs \
+    scripts/deploy/host/protocol.mjs \
+    scripts/deploy/host/protocol-v2.mjs \
+    scripts/deploy/host/request-receiver.mjs \
+    scripts/deploy/host/state.mjs \
+    scripts/release/lib.mjs
+  do
+    source_path=$(repository_file "$source_asset")
+    omni_assert_root_controlled_ancestors "$source_path"
+    [ "$(uid_of "$source_path")" = '0' ] || die "install source is not root-owned: $source_asset"
+    source_mode=$(mode_of "$source_path")
+    source_permissions=$((0$source_mode))
+    [ $((source_permissions & 0022)) -eq 0 ] || die "install source is group/world writable: $source_asset"
+  done
+
   ensure_directory "$OPT_ROOT" 755
   ensure_directory "$OPT_ROOT/incoming" 700
   ensure_directory "$OPT_ROOT/releases" 755
@@ -641,14 +744,25 @@ install_assets() {
   ensure_directory "$STATE_ROOT/deploy/requests/pending" 700
   ensure_directory "$STATE_ROOT/deploy/requests/running" 700
   ensure_directory "$STATE_ROOT/deploy/requests/finished" 700
+  ensure_directory "$STATE_ROOT/deploy/requests/nonces" 700
   ensure_directory "$STATE_ROOT/deploy/state" 700
   ensure_directory "$STATE_ROOT/deploy/audit" 700
+  ensure_directory "$STATE_ROOT/deploy/audit/segments" 700
 
   ensure_directory "$CACHE_ROOT" 700
   ensure_directory "$CACHE_ROOT/npm" 700
   ensure_directory "$CACHE_ROOT/puppeteer" 700
 
   ensure_directory "$LIBEXEC_ROOT" 755
+  ensure_directory "$CONTROL_PLANE_ROOT" 755
+  ensure_directory "$CONTROL_PLANE_ROOT/ops" 755
+  ensure_directory "$CONTROL_PLANE_ROOT/ops/production" 755
+  ensure_directory "$CONTROL_PLANE_ROOT/ops/production/libexec" 755
+  ensure_directory "$CONTROL_PLANE_ROOT/ops/production/libexec/deploy" 755
+  ensure_directory "$CONTROL_PLANE_ROOT/scripts" 755
+  ensure_directory "$CONTROL_PLANE_ROOT/scripts/deploy" 755
+  ensure_directory "$CONTROL_PLANE_ROOT/scripts/deploy/host" 755
+  ensure_directory "$CONTROL_PLANE_ROOT/scripts/release" 755
   ensure_directory "$DOC_ROOT" 755
 
   install_if_missing "$(source_file config/deploy-policy.json)" "$ETC_ROOT/deploy-policy.json" 600
@@ -664,6 +778,28 @@ install_assets() {
 
   atomic_install "$(source_file bin/ssh-gateway)" "$LIBEXEC_ROOT/ssh-gateway" 755
   atomic_install "$(source_file bin/runtime-launcher.mjs)" "$LIBEXEC_ROOT/runtime-launcher.mjs" 755
+  for control_plane_file in \
+    ops/production/libexec/deploy/audit-log.mjs \
+    ops/production/libexec/deploy/canonical-json.mjs \
+    ops/production/libexec/deploy/capacity.mjs \
+    ops/production/libexec/deploy/constants.mjs \
+    ops/production/libexec/deploy/deployment-flock.mjs \
+    ops/production/libexec/deploy/index.mjs \
+    ops/production/libexec/deploy/release-preparation.mjs \
+    ops/production/libexec/deploy/request-store.mjs \
+    ops/production/libexec/deploy/secure-filesystem.mjs \
+    ops/production/libexec/deploy/state-schema.mjs \
+    ops/production/libexec/deploy/submit-request.mjs \
+    scripts/deploy/github-release-evidence.mjs \
+    scripts/deploy/host/deploy-policy.mjs \
+    scripts/deploy/host/protocol.mjs \
+    scripts/deploy/host/protocol-v2.mjs \
+    scripts/deploy/host/request-receiver.mjs \
+    scripts/deploy/host/state.mjs \
+    scripts/release/lib.mjs
+  do
+    atomic_install "$(repository_file "$control_plane_file")" "$CONTROL_PLANE_ROOT/$control_plane_file" 644
+  done
   atomic_install "$(source_file bin/omnilodge-deploy)" /usr/local/sbin/omnilodge-deploy 755
   atomic_install "$(source_file bin/omnilodge-deploy-worker)" /usr/local/sbin/omnilodge-deploy-worker 755
   atomic_install "$(source_file bin/omnilodge-deploy-recover)" /usr/local/sbin/omnilodge-deploy-recover 755
