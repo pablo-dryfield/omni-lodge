@@ -4,15 +4,25 @@ set -eu
 readonly PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export PATH
 umask 077
+readonly CONTROL_PLANE_ENTRY='/usr/local/libexec/omnilodge/control-plane/ops/production/libexec/deploy/submit-request.mjs'
 
 if [ "$#" -ne 0 ] || [ "$(id -u)" -ne 0 ]; then
   printf '%s\n' 'Deployment entry point refused.' >&2
   exit 64
 fi
 
-# This deliberately fail-closed entry point is installed during host bootstrap.
-# It is replaced by the reviewed protocol-aware submitter before any deployment
-# workflow receives production credentials. Keeping a real executable at the
-# final sudo path lets visudo and the forced-command boundary be verified early.
-printf '%s\n' 'Production deployment is not activated on this host.' >&2
-exit 78
+if [ ! -f "$CONTROL_PLANE_ENTRY" ] || [ -L "$CONTROL_PLANE_ENTRY" ]; then
+  printf '%s\n' 'Deployment entry point refused.' >&2
+  exit 78
+fi
+
+# The protocol endpoint reads exactly one host-v2 frame from stdin and writes
+# exactly one canonical host-v2 response frame to stdout for valid requests.
+# It does not activate releases or run migrations in this endpoint-only phase.
+exec /usr/bin/env -i \
+  HOME=/root \
+  USER=root \
+  LOGNAME=root \
+  NODE_ENV=production \
+  PATH="$PATH" \
+  /usr/bin/node "$CONTROL_PLANE_ENTRY"

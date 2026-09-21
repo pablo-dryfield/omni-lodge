@@ -35,12 +35,39 @@ const expectedAssets = [
   'logrotate/omnilodge',
 ];
 
+const expectedControlPlaneAssets = [
+  'ops/production/libexec/deploy/audit-log.mjs',
+  'ops/production/libexec/deploy/canonical-json.mjs',
+  'ops/production/libexec/deploy/capacity.mjs',
+  'ops/production/libexec/deploy/constants.mjs',
+  'ops/production/libexec/deploy/deployment-flock.mjs',
+  'ops/production/libexec/deploy/index.mjs',
+  'ops/production/libexec/deploy/release-preparation.mjs',
+  'ops/production/libexec/deploy/request-store.mjs',
+  'ops/production/libexec/deploy/secure-filesystem.mjs',
+  'ops/production/libexec/deploy/state-schema.mjs',
+  'ops/production/libexec/deploy/submit-request.mjs',
+  'scripts/deploy/github-release-evidence.mjs',
+  'scripts/deploy/host/deploy-policy.mjs',
+  'scripts/deploy/host/protocol.mjs',
+  'scripts/deploy/host/protocol-v2.mjs',
+  'scripts/deploy/host/request-receiver.mjs',
+  'scripts/deploy/host/state.mjs',
+  'scripts/release/lib.mjs',
+];
+
 test('production bootstrap asset set is complete and contains no CRLF', async () => {
   for (const relative of expectedAssets) {
     await access(path.join(root, relative));
     const contents = await read(relative);
     assert.ok(contents.length > 0, `${relative} must not be empty`);
     assert.doesNotMatch(contents, /\r/, `${relative} must use LF line endings`);
+  }
+  for (const relative of expectedControlPlaneAssets) {
+    const source = path.resolve(root, '../..', relative);
+    await access(source);
+    const contents = await readFile(source, 'utf8');
+    assert.ok(contents.length > 0, `${relative} must not be empty`);
   }
 });
 
@@ -95,8 +122,10 @@ test('sudo boundary permits one root command with exactly zero arguments', async
 
   const rootEntry = await read('bin/omnilodge-deploy');
   assert.match(rootEntry, /\[ "\$#" -ne 0 \]/);
-  assert.match(rootEntry, /not activated/);
-  assert.match(rootEntry, /exit 78/);
+  assert.match(rootEntry, /CONTROL_PLANE_ENTRY='\/usr\/local\/libexec\/omnilodge\/control-plane\/ops\/production\/libexec\/deploy\/submit-request\.mjs'/);
+  assert.match(rootEntry, /\/usr\/bin\/node "\$CONTROL_PLANE_ENTRY"/);
+  assert.match(rootEntry, /It does not activate releases or run migrations/);
+  assert.doesNotMatch(rootEntry, /eval|\b(?:bash|sh)\s+-c\b/);
 });
 
 test('bootstrap has an explicit mutating mode and never activates services or keys', async () => {
@@ -110,6 +139,11 @@ test('bootstrap has an explicit mutating mode and never activates services or ke
   assert.doesNotMatch(bootstrap, /\/home\/omnilodge-deploy\/\.ssh\/authorized_keys/);
   assert.match(bootstrap, /\/usr\/bin\/node 22\.23\.2 and \/usr\/bin\/npm 10\.9\.8/);
   assert.match(bootstrap, /AUTHORIZED_KEYS_TARGET='\/etc\/ssh\/authorized_keys\/omnilodge-deploy'/);
+  assert.match(bootstrap, /CONTROL_PLANE_ROOT='\/usr\/local\/libexec\/omnilodge\/control-plane'/);
+  assert.match(bootstrap, /deploy\/requests\/nonces/);
+  assert.match(bootstrap, /deploy\/audit\/segments/);
+  assert.match(bootstrap, /ops\/production\/libexec\/deploy\/submit-request\.mjs/);
+  assert.match(bootstrap, /scripts\/deploy\/host\/protocol-v2\.mjs/);
   assert.ok(
     bootstrap.indexOf('bootstrap_assert_trusted_source_chain "$BOOTSTRAP_LIBRARY"')
       < bootstrap.indexOf('. "$BOOTSTRAP_LIBRARY"'),

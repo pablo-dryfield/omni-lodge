@@ -1,0 +1,377 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import { createHostAuditLog } from './libexec/deploy/audit-log.mjs';
+import { createRequestRecordStore } from './libexec/deploy/request-store.mjs';
+import { handleHostV2SubmitRequest } from './libexec/deploy/submit-request.mjs';
+import {
+  decodeHostV2ResponseFrame,
+  encodeHostV2RequestFrame,
+  serializeCanonicalHostV2Request,
+} from '../../scripts/deploy/host/protocol-v2.mjs';
+import { serializeCanonicalHostDeployPolicy } from '../../scripts/deploy/host/deploy-policy.mjs';
+import { serializeCanonicalHostJson } from '../../scripts/deploy/host/protocol.mjs';
+import { parseCanonicalHostRequestStateBytes } from '../../scripts/deploy/host/state.mjs';
+
+const SOURCE_SHA = 'c'.repeat(40);
+const RELEASE_ID = `omnilodge-r321-a4-${SOURCE_SHA.slice(0, 12)}`;
+const ARTIFACT = Buffer.from('PK\x03\x04host-endpoint-artifact', 'binary');
+const AUDIT_PATH = '/audit/events.ndjson';
+const TEST_PATHS = Object.freeze({
+  pendingRequests: '/state/pending',
+  runningRequests: '/state/running',
+  finishedRequests: '/state/finished',
+  requestNonces: '/state/nonces',
+});
+
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+
+const fakeStat = ({
+  inode,
+  type = 'file',
+  size = 0,
+}) => ({
+  dev: 1n,
+  ino: BigInt(inode),
+  uid: 0n,
+  gid: 0n,
+  mode: BigInt((type === 'directory' ? 0o040000 : 0o100000) | (type === 'directory' ? 0o700 : 0o600)),
+  size: BigInt(size),
+  isDirectory: () => type === 'directory',
+  isFile: () => type === 'file',
+  isSymbolicLink: () => false,
+});
+
+const createMemoryFileOps = () => {
+  const files = new Map();
+  let nextInode = 10n;
+  const missing = () => {
+    const error = new Error('missing');
+    error.code = 'ENOENT';
+    return error;
+  };
+  return {
+    files,
+    async publishExclusiveBuffer(targetPath, bytes) {
+      if (files.has(targetPath)) {
+        const error = new Error('exists');
+        error.code = 'EEXIST';
+        throw error;
+      }
+      const stat = fakeStat({ inode: nextInode, size: bytes.length });
+      nextInode += 1n;
+      files.set(targetPath, { bytes: Buffer.from(bytes), stat });
+      return { path: targetPath, stat };
+    },
+    async readSecureBuffer(targetPath) {
+      const file = files.get(targetPath);
+      if (!file) throw missing();
+      return { path: targetPath, bytes: Buffer.from(file.bytes), stat: file.stat };
+    },
+    async replaceBuffer(targetPath, bytes, expectedStat) {
+      const file = files.get(targetPath);
+      if (!file) throw missing();
+      assert.equal(file.stat.ino, expectedStat.ino);
+      const stat = fakeStat({ inode: nextInode, size: bytes.length });
+      nextInode += 1n;
+      files.set(targetPath, { bytes: Buffer.from(bytes), stat });
+      return { path: targetPath, stat };
+    },
+    async linkNoReplace(sourcePath, destinationPath) {
+      if (files.has(destinationPath)) {
+        const error = new Error('exists');
+        error.code = 'EEXIST';
+        throw error;
+      }
+      const source = files.get(sourcePath);
+      if (!source) throw missing();
+      files.set(destinationPath, source);
+      return { path: destinationPath, stat: source.stat };
+    },
+    async unlinkVerified(targetPath, expectedStat) {
+      const file = files.get(targetPath);
+      if (!file) throw missing();
+      assert.equal(file.stat.ino, expectedStat.ino);
+      files.delete(targetPath);
+    },
+    async appendDurableLine(targetPath, line) {
+      const existing = files.get(targetPath)?.bytes || Buffer.alloc(0);
+      files.set(targetPath, {
+        bytes: Buffer.concat([existing, line]),
+        stat: fakeStat({ inode: 900, size: existing.length + line.length }),
+      });
+      return { path: targetPath, bytesWritten: line.length };
+    },
+    async listSecureDirectory(targetPath, { maximumEntries = 1024 } = {}) {
+      const prefix = targetPath.endsWith('/') ? targetPath : `${targetPath}/`;
+      const names = [];
+      for (const filePath of files.keys()) {
+        if (!filePath.startsWith(prefix)) continue;
+        const rest = filePath.slice(prefix.length);
+        if (rest.length === 0 || rest.includes('/')) continue;
+        names.push(rest);
+      }
+      names.sort();
+      return names.slice(0, maximumEntries + 1);
+    },
+  };
+};
+
+const chunks = async function* (bytes) {
+  for (let offset = 0; offset < bytes.length; offset += 11) {
+    yield bytes.subarray(offset, Math.min(offset + 11, bytes.length));
+  }
+};
+
+const captureStream = () => {
+  const chunksWritten = [];
+  return {
+    chunks: chunksWritten,
+    async write(bytes) {
+      chunksWritten.push(Buffer.from(bytes));
+      return true;
+    },
+    bytes() {
+      return Buffer.concat(chunksWritten);
+    },
+    text() {
+      return this.bytes().toString('utf8');
+    },
+  };
+};
+
+const evidenceBytes = ({ artifact = ARTIFACT, operation = 'deploy', trigger = 'manual' } = {}) => {
+  const artifactDigest = `sha256:${sha256(artifact)}`;
+  return serializeCanonicalHostJson({
+    schemaVersion: 2,
+    operation: { name: operation, trigger },
+    activationAuthorization: operation === 'deploy'
+      ? { mode: 'manual', authorized: true, reason: 'authorized' }
+      : { mode: 'manual', authorized: false, reason: 'activation_not_requested' },
+    release: {
+      releaseId: RELEASE_ID,
+      sourceSha: SOURCE_SHA,
+      runId: '321',
+      runAttempt: '4',
+      artifactId: '789',
+      artifactName: RELEASE_ID,
+      artifactDigest,
+    },
+    productionEvidence: {
+      workflowConclusion: 'success',
+      artifactId: '789',
+      artifactDigest,
+      expectedReleaseId: RELEASE_ID,
+      expectedSourceSha: SOURCE_SHA,
+      expectedRepository: 'pablo-dryfield/omni-lodge',
+      expectedWorkflowPath: '.github/workflows/release.yml',
+      expectedEvent: 'push',
+      expectedRef: 'refs/heads/master',
+      expectedRunId: '321',
+      expectedRunAttempt: '4',
+      expectedArtifactName: RELEASE_ID,
+    },
+  });
+};
+
+const forwardFrame = ({
+  requestId = '123e4567-e89b-42d3-a456-426614174000',
+  requestedAtUtc = '2026-09-16T12:00:00.000Z',
+  operation = 'deploy',
+  trigger = 'manual',
+  artifact = ARTIFACT,
+} = {}) => {
+  const evidence = evidenceBytes({ artifact, operation, trigger });
+  const requestBytes = serializeCanonicalHostV2Request({
+    schemaVersion: 2,
+    requestId,
+    requestedAtUtc,
+    actor: 'github-actions[bot]',
+    kind: 'forward_submit',
+    payload: {
+      operation,
+      trigger,
+      evidenceSha256: sha256(evidence),
+      artifactZipSha256: sha256(artifact),
+    },
+  });
+  return encodeHostV2RequestFrame({
+    requestBytes,
+    evidenceBytes: evidence,
+    artifactZipBytes: artifact,
+  });
+};
+
+const statusFrame = ({
+  requestId = '223e4567-e89b-42d3-a456-426614174001',
+  subjectRequestId = '123e4567-e89b-42d3-a456-426614174000',
+  requestedAtUtc = '2026-09-16T12:00:00.000Z',
+} = {}) => encodeHostV2RequestFrame({
+  requestBytes: serializeCanonicalHostV2Request({
+    schemaVersion: 2,
+    requestId,
+    requestedAtUtc,
+    actor: 'github-actions[bot]',
+    kind: 'status_query',
+    payload: { subjectRequestId },
+  }),
+});
+
+const policyBytes = (deploymentMode) => serializeCanonicalHostDeployPolicy({
+  schemaVersion: 1,
+  deploymentMode,
+});
+
+const createHarness = ({
+  deploymentMode = 'disabled',
+  now = '2026-09-16T12:00:00.000Z',
+} = {}) => {
+  const fileOps = createMemoryFileOps();
+  const clock = () => new Date(now);
+  const store = createRequestRecordStore({
+    paths: TEST_PATHS,
+    fileOps,
+    clock,
+    pathApi: path.posix,
+  });
+  const audit = createHostAuditLog({
+    auditPath: AUDIT_PATH,
+    fileOps,
+    clock,
+  });
+  return {
+    fileOps,
+    store,
+    audit,
+    clock,
+    readPolicyBytes: async () => policyBytes(deploymentMode),
+  };
+};
+
+const submit = async ({ frame, artifactDirectory, harness }) => {
+  const output = captureStream();
+  const errorOutput = captureStream();
+  const result = await handleHostV2SubmitRequest({
+    input: chunks(frame),
+    output,
+    errorOutput,
+    clock: harness.clock,
+    readPolicyBytes: harness.readPolicyBytes,
+    requestStore: harness.store,
+    auditLog: harness.audit,
+    artifactDirectory,
+  });
+  return { result, output, errorOutput };
+};
+
+const readFinishedState = (fileOps, requestId) => parseCanonicalHostRequestStateBytes(
+  fileOps.files.get(`/state/finished/${requestId}.json`).bytes,
+);
+
+test('host submit endpoint policy-denies disabled forward deploys and cleans staged artifacts', async (context) => {
+  const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-'));
+  context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
+  const harness = createHarness({ deploymentMode: 'disabled' });
+  const { result, output, errorOutput } = await submit({
+    frame: forwardFrame(),
+    artifactDirectory,
+    harness,
+  });
+  const response = decodeHostV2ResponseFrame(output.bytes());
+  assert.equal(result.exitCode, 0);
+  assert.equal(response.code, 'POLICY_DENIED');
+  assert.equal(response.message, 'The host policy does not authorize this request.');
+  assert.equal(errorOutput.text(), '');
+  assert.deepEqual(await readdir(artifactDirectory), []);
+
+  const state = readFinishedState(harness.fileOps, '123e4567-e89b-42d3-a456-426614174000');
+  assert.equal(state.phase, 'rejected');
+  assert.equal(state.resultCode, 'POLICY_DENIED');
+  const auditLines = harness.fileOps.files.get(AUDIT_PATH).bytes.toString('utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(auditLines.map((event) => [event.eventType, event.outcomeCode]), [
+    ['request_admitted', null],
+    ['request_rejected', 'POLICY_DENIED'],
+  ]);
+});
+
+test('host submit endpoint rejects authorized requests while the worker path is intentionally inactive', async (context) => {
+  const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-stage-'));
+  context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
+  const harness = createHarness({ deploymentMode: 'disabled' });
+  const { output } = await submit({
+    frame: forwardFrame({
+      requestId: '323e4567-e89b-42d3-a456-426614174002',
+      operation: 'stage',
+    }),
+    artifactDirectory,
+    harness,
+  });
+  const response = decodeHostV2ResponseFrame(output.bytes());
+  assert.equal(response.code, 'REQUEST_REJECTED');
+  assert.deepEqual(await readdir(artifactDirectory), []);
+  const state = readFinishedState(harness.fileOps, '323e4567-e89b-42d3-a456-426614174002');
+  assert.equal(state.intent.operation, 'stage');
+  assert.equal(state.resultCode, 'REQUEST_REJECTED');
+});
+
+test('host submit endpoint rejects stale requests before creating durable request state', async (context) => {
+  const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-stale-'));
+  context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
+  const harness = createHarness({ deploymentMode: 'manual', now: '2026-09-16T12:06:00.001Z' });
+  const { output } = await submit({
+    frame: forwardFrame(),
+    artifactDirectory,
+    harness,
+  });
+  const response = decodeHostV2ResponseFrame(output.bytes());
+  assert.equal(response.code, 'REQUEST_TIMESTAMP_REJECTED');
+  assert.equal([...harness.fileOps.files.keys()].some((filePath) => filePath.startsWith('/state/finished/')), false);
+  assert.deepEqual(await readdir(artifactDirectory), []);
+});
+
+test('host submit endpoint returns exact status records for status queries', async (context) => {
+  const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-status-'));
+  context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
+  const harness = createHarness({ deploymentMode: 'disabled' });
+  await submit({
+    frame: forwardFrame({
+      requestId: '423e4567-e89b-42d3-a456-426614174003',
+      operation: 'stage',
+    }),
+    artifactDirectory,
+    harness,
+  });
+  const { output } = await submit({
+    frame: statusFrame({
+      requestId: '523e4567-e89b-42d3-a456-426614174004',
+      subjectRequestId: '423e4567-e89b-42d3-a456-426614174003',
+    }),
+    artifactDirectory,
+    harness,
+  });
+  const response = decodeHostV2ResponseFrame(output.bytes());
+  assert.equal(response.code, 'STATUS_FOUND');
+  assert.equal(response.requestStatus.requestId, '423e4567-e89b-42d3-a456-426614174003');
+  assert.equal(response.requestStatus.lifecycle, 'rejected');
+  assert.equal(response.requestStatus.resultCode, 'REQUEST_REJECTED');
+});
+
+test('host submit endpoint fails malformed frames without echoing request bytes', async (context) => {
+  const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-bad-'));
+  context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
+  const harness = createHarness();
+  const { result, output, errorOutput } = await submit({
+    frame: Buffer.from('<!DOCTYPE html><secret>do-not-echo</secret>'),
+    artifactDirectory,
+    harness,
+  });
+  assert.equal(result.exitCode, 65);
+  assert.equal(output.bytes().length, 0);
+  assert.equal(errorOutput.text(), 'Production deployment request rejected.\n');
+  assert.equal(errorOutput.text().includes('do-not-echo'), false);
+  assert.deepEqual(await readdir(artifactDirectory), []);
+});
