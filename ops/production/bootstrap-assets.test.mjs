@@ -126,6 +126,9 @@ test('sudo boundary permits one root command with exactly zero arguments', async
   assert.match(rootEntry, /\/usr\/bin\/node "\$CONTROL_PLANE_ENTRY"/);
   assert.match(rootEntry, /It does not activate releases or run migrations/);
   assert.doesNotMatch(rootEntry, /eval|\b(?:bash|sh)\s+-c\b/);
+
+  const bootstrap = await read('bootstrap-host.sh');
+  assert.ok(bootstrap.includes(String.raw`gsub(/\\"/, "\"", line)`));
 });
 
 test('bootstrap has an explicit mutating mode and never activates services or keys', async () => {

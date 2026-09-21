@@ -270,6 +270,7 @@ validate_deploy_account_scope() {
     commands {
       line = $0
       sub(/^[[:space:]]*/, "", line)
+      gsub(/\\"/, "\"", line)
       if (line != "(root) NOPASSWD: /usr/local/sbin/omnilodge-deploy \"\"") exit 1
       count += 1
     }
