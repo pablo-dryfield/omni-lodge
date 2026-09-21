@@ -131,6 +131,7 @@ test('fixed production state paths cannot be redirected by environment values', 
     stateRoot: '/var/lib/omnilodge/deploy/state',
     auditRoot: '/var/lib/omnilodge/deploy/audit',
     auditSegments: '/var/lib/omnilodge/deploy/audit/segments',
+    deployLog: '/var/lib/omnilodge/logs/deploy/worker.log',
     lockFile: '/run/omnilodge/deploy.lock',
   });
 });

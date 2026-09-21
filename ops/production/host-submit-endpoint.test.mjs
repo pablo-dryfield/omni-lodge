@@ -8,6 +8,7 @@ import test from 'node:test';
 import { createHostAuditLog } from './libexec/deploy/audit-log.mjs';
 import { createRequestRecordStore } from './libexec/deploy/request-store.mjs';
 import {
+  appendSubmitDiagnostic,
   handleHostV2SubmitRequest,
   startHostDeployWorker,
 } from './libexec/deploy/submit-request.mjs';
@@ -304,6 +305,39 @@ test('host submit endpoint starts detached workers through a fixed systemd unit 
   ]]);
 });
 
+test('host submit diagnostics are bounded JSON lines without control characters', async () => {
+  const appends = [];
+  await appendSubmitDiagnostic({
+    fs: {
+      appendFile: async (targetPath, line, options) => {
+        appends.push({ targetPath, line, options });
+      },
+    },
+    paths: { deployLog: '/deploy/worker.log' },
+    clock: () => new Date('2026-09-16T12:00:00.000Z'),
+    identity: {
+      requestId: '723e4567-e89b-42d3-a456-426614174006',
+      kind: 'forward_submit',
+      operation: 'stage',
+      trigger: 'manual',
+      releaseId: 'release-with\nnewline',
+    },
+    phase: 'start_worker',
+    error: Object.assign(new Error('systemctl failed\nsecret second line'), {
+      code: 'SYSTEMCTL_FAILED',
+    }),
+  });
+  assert.equal(appends.length, 1);
+  assert.equal(appends[0].targetPath, '/deploy/worker.log');
+  assert.deepEqual(appends[0].options, { mode: 0o600 });
+  assert.equal(appends[0].line.endsWith('\n'), true);
+  const parsed = JSON.parse(appends[0].line);
+  assert.equal(parsed.timestampUtc, '2026-09-16T12:00:00.000Z');
+  assert.equal(parsed.component, 'host-v2-submit');
+  assert.equal(parsed.releaseId, 'release-with?newline');
+  assert.equal(parsed.error.message, 'systemctl failed?secret second line');
+});
+
 test('host submit endpoint policy-denies disabled forward deploys and cleans staged artifacts', async (context) => {
   const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-'));
   context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
@@ -374,6 +408,56 @@ test('host submit endpoint accepts authorized requests and starts the detached w
   assert.equal(state.intent.operation, 'stage');
   assert.equal(state.phase, 'received');
   assert.equal(state.resultCode, null);
+});
+
+test('host submit endpoint records sanitized diagnostics when worker handoff fails', async (context) => {
+  const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-worker-fail-'));
+  context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
+  const harness = createHarness({ deploymentMode: 'manual' });
+  const diagnostics = [];
+  const stagedArtifacts = [];
+  const { output } = await submit({
+    frame: forwardFrame({
+      requestId: '623e4567-e89b-42d3-a456-426614174005',
+      operation: 'stage',
+    }),
+    artifactDirectory,
+    harness,
+    overrides: {
+      persistForWorker: async ({ received }) => {
+        stagedArtifacts.push(received.identity.requestId);
+        return {
+          requestId: received.identity.requestId,
+          artifactPath: path.join(artifactDirectory, `${received.identity.requestId}.zip`),
+          evidencePath: path.join(artifactDirectory, `${received.identity.requestId}.evidence.json`),
+        };
+      },
+      startWorker: async () => {
+        const error = new Error('systemctl failed with token secret-value\nsecond line');
+        error.code = 'SYSTEMCTL_FAILED';
+        throw error;
+      },
+      cleanupWorkerPayload: async ({ staged }) => {
+        stagedArtifacts.push(`cleanup:${staged.requestId}`);
+      },
+      recordSubmitDiagnostic: async (entry) => {
+        diagnostics.push(entry);
+      },
+    },
+  });
+  const response = decodeHostV2ResponseFrame(output.bytes());
+  assert.equal(response.code, 'REQUEST_REJECTED');
+  assert.deepEqual(stagedArtifacts, [
+    '623e4567-e89b-42d3-a456-426614174005',
+    'cleanup:623e4567-e89b-42d3-a456-426614174005',
+  ]);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].phase, 'start_worker');
+  assert.equal(diagnostics[0].identity.requestId, '623e4567-e89b-42d3-a456-426614174005');
+  assert.equal(diagnostics[0].error.code, 'SYSTEMCTL_FAILED');
+  const state = readFinishedState(harness.fileOps, '623e4567-e89b-42d3-a456-426614174005');
+  assert.equal(state.phase, 'rejected');
+  assert.equal(state.resultCode, 'REQUEST_REJECTED');
 });
 
 test('host submit endpoint rejects stale requests before creating durable request state', async (context) => {
