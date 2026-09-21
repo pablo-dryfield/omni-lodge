@@ -748,6 +748,7 @@ install_assets() {
   ensure_directory "$STATE_ROOT/logs/deploy" 700
   ensure_directory "$STATE_ROOT/source-maps" 700
   ensure_directory "$STATE_ROOT/deploy" 700
+  ensure_directory "$STATE_ROOT/deploy/installer-home" 700
   ensure_directory "$STATE_ROOT/deploy/requests" 700
   ensure_directory "$STATE_ROOT/deploy/requests/pending" 700
   ensure_directory "$STATE_ROOT/deploy/requests/running" 700

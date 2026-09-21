@@ -148,6 +148,7 @@ test('bootstrap has an explicit mutating mode and never activates services or ke
   assert.match(bootstrap, /assert_exact_file "\$AUTHORIZED_KEYS_TARGET" '644'/);
   assert.match(bootstrap, /ensure_directory "\$AUTHORIZED_KEYS_DIR" 755/);
   assert.match(bootstrap, /CONTROL_PLANE_ROOT='\/usr\/local\/libexec\/omnilodge\/control-plane'/);
+  assert.match(bootstrap, /ensure_directory "\$STATE_ROOT\/deploy\/installer-home" 700/);
   assert.match(bootstrap, /deploy\/requests\/nonces/);
   assert.match(bootstrap, /deploy\/audit\/segments/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/submit-request\.mjs/);
