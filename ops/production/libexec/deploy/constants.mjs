@@ -19,11 +19,13 @@ export const HOST_DEPLOY_RETENTION = Object.freeze({
 export const HOST_DEPLOY_PATHS = Object.freeze({
   incomingRoot: '/opt/omnilodge/incoming',
   deployRoot: '/var/lib/omnilodge/deploy',
+  stagingRoot: '/var/lib/omnilodge/deploy/staging',
   requestsRoot: '/var/lib/omnilodge/deploy/requests',
   pendingRequests: '/var/lib/omnilodge/deploy/requests/pending',
   runningRequests: '/var/lib/omnilodge/deploy/requests/running',
   finishedRequests: '/var/lib/omnilodge/deploy/requests/finished',
   requestNonces: '/var/lib/omnilodge/deploy/requests/nonces',
+  stateRoot: '/var/lib/omnilodge/deploy/state',
   auditRoot: '/var/lib/omnilodge/deploy/audit',
   auditSegments: '/var/lib/omnilodge/deploy/audit/segments',
   lockFile: '/run/omnilodge/deploy.lock',

@@ -47,6 +47,8 @@ const expectedControlPlaneAssets = [
   'ops/production/libexec/deploy/secure-filesystem.mjs',
   'ops/production/libexec/deploy/state-schema.mjs',
   'ops/production/libexec/deploy/submit-request.mjs',
+  'ops/production/libexec/deploy/worker.mjs',
+  'scripts/deploy/extract-github-artifact.mjs',
   'scripts/deploy/github-release-evidence.mjs',
   'scripts/deploy/host/deploy-policy.mjs',
   'scripts/deploy/host/protocol.mjs',
@@ -173,7 +175,7 @@ test('bootstrap has an explicit mutating mode and never activates services or ke
   assert.doesNotMatch(bootstrap, /(?:BEGIN [A-Z ]*PRIVATE KEY|ssh-ed25519\s+[A-Za-z0-9+/]{20,})/);
 });
 
-test('detached worker and recovery units are inactive scaffolds with fixed commands', async () => {
+test('detached worker and recovery units are inactive with fixed commands', async () => {
   const worker = await read('systemd/omnilodge-deploy-worker@.service');
   assert.match(worker, /^Type=oneshot$/m);
   assert.match(worker, /^User=root$/m);
@@ -201,6 +203,7 @@ test('detached worker and recovery units are inactive scaffolds with fixed comma
   const workerCommand = await read('bin/omnilodge-deploy-worker');
   assert.match(workerCommand, /-4\[0-9a-f\]\[0-9a-f\]\[0-9a-f\]-\[89ab\]/);
   assert.doesNotMatch(workerCommand, /-\[1-5\]\[0-9a-f\]/);
+  assert.match(workerCommand, /exec \/usr\/bin\/node "\$CONTROL_PLANE_ENTRY" "\$1"/);
 });
 
 test('stable PM2 definition keeps one fork-mode instance per component', async () => {

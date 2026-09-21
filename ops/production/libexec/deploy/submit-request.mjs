@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
+import { execFile as execFileCallback } from 'node:child_process';
 import * as nativeFs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -20,17 +22,23 @@ import {
 } from '../../../../scripts/deploy/host/deploy-policy.mjs';
 import { createHostAuditLog } from './audit-log.mjs';
 import { HOST_DEPLOY_PATHS } from './constants.mjs';
+import { invariant } from './canonical-json.mjs';
 import {
   RequestIdentityCollisionError,
   RequestRetentionCapacityError,
   createRequestRecordStore,
 } from './request-store.mjs';
-import { createSecurePathValidator } from './secure-filesystem.mjs';
+import {
+  createDurableFileOps,
+  createSecurePathValidator,
+} from './secure-filesystem.mjs';
 
 const HOST_POLICY_PATH = '/etc/omnilodge/deploy-policy.json';
 const TRANSPORT_KEY_LABEL = 'github-actions-production';
 const FRAME_REJECTED_MESSAGE = 'Production deployment request rejected.\n';
 const INTERNAL_FAILURE_MESSAGE = 'Production deployment request failed.\n';
+const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const execFile = promisify(execFileCallback);
 
 const requestStateIdentity = (entry) => ({
   requestId: entry.requestState.request.requestId,
@@ -53,6 +61,113 @@ const readPolicy = async ({
 const safeCleanupArtifact = async (received) => {
   if (!received || typeof received.cleanupArtifact !== 'function') return;
   await received.cleanupArtifact();
+};
+
+const validateRequestId = (requestId) => {
+  invariant(
+    typeof requestId === 'string' && REQUEST_ID_PATTERN.test(requestId),
+    'Worker request ID must be a canonical lowercase UUID v4',
+  );
+  return requestId;
+};
+
+export const incomingArtifactZipPath = ({ paths = HOST_DEPLOY_PATHS, requestId }) =>
+  path.join(paths.incomingRoot, `${validateRequestId(requestId)}.zip`);
+
+export const incomingEvidencePath = ({ paths = HOST_DEPLOY_PATHS, requestId }) =>
+  path.join(paths.incomingRoot, `${validateRequestId(requestId)}.evidence.json`);
+
+export const startHostDeployWorker = async ({
+  requestId,
+  systemctlPath = '/usr/bin/systemctl',
+  runCommand = execFile,
+} = {}) => {
+  const validatedRequestId = validateRequestId(requestId);
+  invariant(typeof systemctlPath === 'string' && systemctlPath.length > 0, 'systemctl path is required');
+  invariant(typeof runCommand === 'function', 'worker start command is required');
+  await runCommand(
+    systemctlPath,
+    ['--no-block', 'start', `omnilodge-deploy-worker@${validatedRequestId}.service`],
+    {
+      timeout: 15_000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true,
+    },
+  );
+  return Object.freeze({ requestId: validatedRequestId, started: true });
+};
+
+const unlinkIfPresent = async (fs, targetPath) => {
+  try {
+    await fs.unlink(targetPath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+};
+
+export const persistReceivedRequestForWorker = async ({
+  received,
+  fs = nativeFs,
+  paths = HOST_DEPLOY_PATHS,
+  fileOps = createDurableFileOps({ fs }),
+} = {}) => {
+  invariant(received?.identity?.kind === 'forward_submit', 'Only forward submit requests have worker payloads');
+  invariant(Buffer.isBuffer(received.evidenceBytes) && received.evidenceBytes.length > 0, 'Received evidence bytes are required');
+  invariant(typeof received.artifactZipPath === 'string' && received.artifactZipPath.length > 0, 'Received artifact ZIP path is required');
+
+  const requestId = validateRequestId(received.identity.requestId);
+  const artifactPath = incomingArtifactZipPath({ paths, requestId });
+  const evidencePath = incomingEvidencePath({ paths, requestId });
+  let evidenceWritten = false;
+  let evidenceStat = null;
+  let artifactLinked = false;
+
+  try {
+    const evidence = await fileOps.publishExclusiveBuffer(evidencePath, received.evidenceBytes);
+    evidenceWritten = true;
+    evidenceStat = evidence.stat;
+
+    const source = await fs.lstat(received.artifactZipPath, { bigint: true });
+    await fileOps.linkNoReplace(received.artifactZipPath, artifactPath);
+    artifactLinked = true;
+    await fileOps.unlinkVerified(received.artifactZipPath, source);
+    await fileOps.syncDirectory(paths.incomingRoot);
+    return Object.freeze({ requestId, artifactPath, evidencePath });
+  } catch (error) {
+    const cleanupErrors = [];
+    if (artifactLinked) {
+      try {
+        await unlinkIfPresent(fs, artifactPath);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (evidenceWritten) {
+      try {
+        await fileOps.unlinkVerified(evidencePath, evidenceStat);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        'Worker request persistence failed and cleanup was incomplete',
+      );
+    }
+    throw error;
+  }
+};
+
+export const cleanupPersistedWorkerPayload = async ({
+  staged,
+  fs = nativeFs,
+} = {}) => {
+  if (!staged) return;
+  await Promise.all([
+    unlinkIfPresent(fs, staged.artifactPath),
+    unlinkIfPresent(fs, staged.evidencePath),
+  ]);
 };
 
 const appendAudit = async ({
@@ -129,6 +244,9 @@ export const handleHostV2SubmitRequest = async ({
   requestStore = createRequestRecordStore({ paths, clock }),
   auditLog = createHostAuditLog({ clock }),
   receiveRequest = receiveHostV2RequestToFile,
+  startWorker = startHostDeployWorker,
+  persistForWorker = persistReceivedRequestForWorker,
+  cleanupWorkerPayload = cleanupPersistedWorkerPayload,
 } = {}) => {
   if (!input || typeof input[Symbol.asyncIterator] !== 'function') {
     throw new Error('Host submit input must be an async iterable');
@@ -250,22 +368,31 @@ export const handleHostV2SubmitRequest = async ({
       return await writeResponse({ identity, code: 'POLICY_DENIED' });
     }
 
-    // Endpoint-only slice: the host can authenticate, validate, record, audit,
-    // and answer protocol-v2 requests. It deliberately does not activate the
-    // detached staging/worker path yet, so authorized submit requests are
-    // durably rejected instead of being left in a pending state.
-    await finishRejectedRequest({
-      store: requestStore,
-      admission,
-      resultCode: 'REQUEST_REJECTED',
-    });
-    await appendAudit({
-      audit: auditLog,
-      identity,
-      eventType: 'request_rejected',
-      outcomeCode: 'REQUEST_REJECTED',
-    });
-    return await writeResponse({ identity, code: 'REQUEST_REJECTED' });
+    let staged = null;
+    try {
+      staged = await persistForWorker({
+        received,
+        fs,
+        paths,
+      });
+      await startWorker({ requestId: identity.requestId });
+    } catch (error) {
+      await cleanupWorkerPayload({ staged, fs });
+      await finishRejectedRequest({
+        store: requestStore,
+        admission,
+        resultCode: 'REQUEST_REJECTED',
+      });
+      await appendAudit({
+        audit: auditLog,
+        identity,
+        eventType: 'request_rejected',
+        outcomeCode: 'REQUEST_REJECTED',
+      });
+      return await writeResponse({ identity, code: 'REQUEST_REJECTED' });
+    }
+
+    return await writeResponse({ identity, code: 'REQUEST_ACCEPTED' });
   } catch (error) {
     if (received?.identity) {
       return await writeResponse({

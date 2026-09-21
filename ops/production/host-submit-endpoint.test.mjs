@@ -7,7 +7,10 @@ import test from 'node:test';
 
 import { createHostAuditLog } from './libexec/deploy/audit-log.mjs';
 import { createRequestRecordStore } from './libexec/deploy/request-store.mjs';
-import { handleHostV2SubmitRequest } from './libexec/deploy/submit-request.mjs';
+import {
+  handleHostV2SubmitRequest,
+  startHostDeployWorker,
+} from './libexec/deploy/submit-request.mjs';
 import {
   decodeHostV2ResponseFrame,
   encodeHostV2RequestFrame,
@@ -252,7 +255,7 @@ const createHarness = ({
   };
 };
 
-const submit = async ({ frame, artifactDirectory, harness }) => {
+const submit = async ({ frame, artifactDirectory, harness, overrides = {} }) => {
   const output = captureStream();
   const errorOutput = captureStream();
   const result = await handleHostV2SubmitRequest({
@@ -264,6 +267,7 @@ const submit = async ({ frame, artifactDirectory, harness }) => {
     requestStore: harness.store,
     auditLog: harness.audit,
     artifactDirectory,
+    ...overrides,
   });
   return { result, output, errorOutput };
 };
@@ -271,6 +275,34 @@ const submit = async ({ frame, artifactDirectory, harness }) => {
 const readFinishedState = (fileOps, requestId) => parseCanonicalHostRequestStateBytes(
   fileOps.files.get(`/state/finished/${requestId}.json`).bytes,
 );
+
+const readPendingState = (fileOps, requestId) => parseCanonicalHostRequestStateBytes(
+  fileOps.files.get(`/state/pending/${requestId}.json`).bytes,
+);
+
+test('host submit endpoint starts detached workers through a fixed systemd unit name', async () => {
+  const calls = [];
+  const result = await startHostDeployWorker({
+    requestId: '123e4567-e89b-42d3-a456-426614174000',
+    systemctlPath: '/bin/systemctl',
+    runCommand: async (...args) => {
+      calls.push(args);
+    },
+  });
+  assert.deepEqual(result, {
+    requestId: '123e4567-e89b-42d3-a456-426614174000',
+    started: true,
+  });
+  assert.deepEqual(calls, [[
+    '/bin/systemctl',
+    ['--no-block', 'start', 'omnilodge-deploy-worker@123e4567-e89b-42d3-a456-426614174000.service'],
+    {
+      timeout: 15_000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true,
+    },
+  ]]);
+});
 
 test('host submit endpoint policy-denies disabled forward deploys and cleans staged artifacts', async (context) => {
   const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-'));
@@ -298,10 +330,12 @@ test('host submit endpoint policy-denies disabled forward deploys and cleans sta
   ]);
 });
 
-test('host submit endpoint rejects authorized requests while the worker path is intentionally inactive', async (context) => {
+test('host submit endpoint accepts authorized requests and starts the detached worker', async (context) => {
   const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-stage-'));
   context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
   const harness = createHarness({ deploymentMode: 'disabled' });
+  const persisted = [];
+  const started = [];
   const { output } = await submit({
     frame: forwardFrame({
       requestId: '323e4567-e89b-42d3-a456-426614174002',
@@ -309,13 +343,37 @@ test('host submit endpoint rejects authorized requests while the worker path is 
     }),
     artifactDirectory,
     harness,
+    overrides: {
+      persistForWorker: async ({ received }) => {
+        persisted.push({
+          requestId: received.identity.requestId,
+          evidenceBytes: received.evidenceBytes.length,
+          artifactZipLength: received.artifactZipLength,
+        });
+        return {
+          requestId: received.identity.requestId,
+          artifactPath: path.join(artifactDirectory, `${received.identity.requestId}.zip`),
+          evidencePath: path.join(artifactDirectory, `${received.identity.requestId}.evidence.json`),
+        };
+      },
+      startWorker: async ({ requestId }) => {
+        started.push(requestId);
+      },
+    },
   });
   const response = decodeHostV2ResponseFrame(output.bytes());
-  assert.equal(response.code, 'REQUEST_REJECTED');
+  assert.equal(response.code, 'REQUEST_ACCEPTED');
   assert.deepEqual(await readdir(artifactDirectory), []);
-  const state = readFinishedState(harness.fileOps, '323e4567-e89b-42d3-a456-426614174002');
+  assert.deepEqual(started, ['323e4567-e89b-42d3-a456-426614174002']);
+  assert.deepEqual(persisted, [{
+    requestId: '323e4567-e89b-42d3-a456-426614174002',
+    evidenceBytes: evidenceBytes({ operation: 'stage' }).length,
+    artifactZipLength: ARTIFACT.length,
+  }]);
+  const state = readPendingState(harness.fileOps, '323e4567-e89b-42d3-a456-426614174002');
   assert.equal(state.intent.operation, 'stage');
-  assert.equal(state.resultCode, 'REQUEST_REJECTED');
+  assert.equal(state.phase, 'received');
+  assert.equal(state.resultCode, null);
 });
 
 test('host submit endpoint rejects stale requests before creating durable request state', async (context) => {
@@ -344,6 +402,14 @@ test('host submit endpoint returns exact status records for status queries', asy
     }),
     artifactDirectory,
     harness,
+    overrides: {
+      persistForWorker: async ({ received }) => ({
+        requestId: received.identity.requestId,
+        artifactPath: path.join(artifactDirectory, `${received.identity.requestId}.zip`),
+        evidencePath: path.join(artifactDirectory, `${received.identity.requestId}.evidence.json`),
+      }),
+      startWorker: async () => {},
+    },
   });
   const { output } = await submit({
     frame: statusFrame({
@@ -356,8 +422,9 @@ test('host submit endpoint returns exact status records for status queries', asy
   const response = decodeHostV2ResponseFrame(output.bytes());
   assert.equal(response.code, 'STATUS_FOUND');
   assert.equal(response.requestStatus.requestId, '423e4567-e89b-42d3-a456-426614174003');
-  assert.equal(response.requestStatus.lifecycle, 'rejected');
-  assert.equal(response.requestStatus.resultCode, 'REQUEST_REJECTED');
+  assert.equal(response.requestStatus.lifecycle, 'accepted');
+  assert.equal(response.requestStatus.phase, 'received');
+  assert.equal(response.requestStatus.resultCode, null);
 });
 
 test('host submit endpoint fails malformed frames without echoing request bytes', async (context) => {
