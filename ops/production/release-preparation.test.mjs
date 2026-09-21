@@ -28,9 +28,16 @@ import {
   calculateDependencyCapacity,
   createReleasePreparationPlan,
   inspectDependencyPublicationState,
+  prepareReleaseManagedLinks,
   publishDependencyLayer,
   validatePreparedReleaseLinks,
 } from './libexec/deploy/release-preparation.mjs';
+import {
+  prepareForwardReleaseArtifact,
+  prepareDependencyLayers,
+  prepareBackendBrowserCache,
+  runDryRunRuntimeChecks,
+} from './libexec/deploy/worker.mjs';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const sourceSha = 'a'.repeat(40);
@@ -42,6 +49,31 @@ const writeRelative = (root, relativePath, bytes) => {
   const destination = path.join(root, ...relativePath.split('/'));
   mkdir(path.dirname(destination));
   writeFileSync(destination, bytes, { mode: 0o644 });
+};
+
+const createMemoryStateFileOps = () => {
+  const files = new Map();
+  return {
+    files,
+    async publishExclusiveBuffer(targetPath, bytes) {
+      if (files.has(targetPath)) {
+        const error = new Error('exists');
+        error.code = 'EEXIST';
+        throw error;
+      }
+      files.set(targetPath, Buffer.from(bytes));
+      return { path: targetPath, stat: { size: BigInt(bytes.length) } };
+    },
+    async readSecureBuffer(targetPath) {
+      const bytes = files.get(targetPath);
+      if (!bytes) {
+        const error = new Error('missing');
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return { path: targetPath, bytes: Buffer.from(bytes), stat: { size: BigInt(bytes.length) } };
+    },
+  };
 };
 
 const buildManifest = (payload) => {
@@ -448,6 +480,291 @@ test('publishes a dependency layer atomically through an injected executor and r
   });
 });
 
+test('worker dependency preparation publishes both runtime layers with fresh capacity proofs', async () => {
+  await withFixture(async (fixture) => {
+    const plan = fixture.plan();
+    const prepared = await prepareDependencyLayers({
+      plan,
+      trustedBudget: dependencyBudget,
+      measureCapacity: ({ publicationState }) =>
+        capacityEvidenceFor(plan, publicationState, { bytes: 10_000, inodes: 10_000 }),
+      executor: fakeInstall,
+    });
+    assert.deepEqual(prepared.components.map((item) => [
+      item.component,
+      item.previousState,
+      item.status,
+      item.capacity.publicationStateKey,
+    ]), [
+      ['backend', 'install', 'published', 'backend:install|ui-server:install'],
+      ['ui-server', 'install', 'published', 'backend:reuse|ui-server:install'],
+    ]);
+    assert.equal(prepared.preparationState, 'partial');
+    assert.deepEqual(prepared.dependencies, {
+      backend: 'prepared',
+      'ui-server': 'prepared',
+    });
+    assert.deepEqual(inspectDependencyPublicationState(plan), {
+      backend: 'reuse',
+      'ui-server': 'reuse',
+    });
+  });
+});
+
+test('forward artifact preparation keeps stage lightweight and reserves dependency work for dry-run', async () => {
+  await withFixture(async (fixture) => {
+    const requestId = '923e4567-e89b-42d3-a456-426614174012';
+    const basePaths = {
+      incomingRoot: path.join(fixture.fixtureRoot, 'incoming'),
+      stagingRoot: path.join(fixture.fixtureRoot, 'staging'),
+      stateRoot: path.join(fixture.fixtureRoot, 'state-files'),
+    };
+    const extraction = {
+      releaseId,
+      artifactZipSha256: '3'.repeat(64),
+      operation: { name: 'stage', trigger: 'manual' },
+      archivePath: path.join(fixture.fixtureRoot, 'release.tar.gz'),
+      checksumPath: path.join(fixture.fixtureRoot, 'release.tar.gz.sha256'),
+      productionEvidence: { fixture: true },
+      archiveSha256: '4'.repeat(64),
+    };
+    const requestState = (operation) => ({
+      request: { kind: 'forward_submit', requestId },
+      intent: {
+        releaseId,
+        sourceSha,
+        artifactZipSha256: extraction.artifactZipSha256,
+        operation,
+        trigger: 'manual',
+      },
+    });
+
+    const stageFiles = createMemoryStateFileOps();
+    let dependencyCalls = 0;
+    let managedLinkCalls = 0;
+    let browserCacheCalls = 0;
+    let dryRunCheckCalls = 0;
+    const stageResult = await prepareForwardReleaseArtifact({
+      requestState: requestState('stage'),
+      paths: basePaths,
+      trustedLayout: fixture.layout,
+      fileOps: stageFiles,
+      extractArtifact: async () => extraction,
+      prepareDependencies: async () => {
+        dependencyCalls += 1;
+        throw new Error('stage must not prepare dependencies');
+      },
+      prepareManagedLinks: () => {
+        managedLinkCalls += 1;
+        throw new Error('stage must not prepare managed links');
+      },
+      prepareBrowserCache: async () => {
+        browserCacheCalls += 1;
+        throw new Error('stage must not prepare browser cache');
+      },
+      runDryRunChecks: async () => {
+        dryRunCheckCalls += 1;
+        throw new Error('stage must not run dry-run checks');
+      },
+    });
+    assert.equal(stageResult.preparationState, 'unlinked');
+    assert.equal(stageResult.dependencyPreparationState, null);
+    assert.equal(stageResult.managedLinkCount, 0);
+    assert.equal(dependencyCalls, 0);
+    assert.equal(managedLinkCalls, 0);
+    assert.equal(browserCacheCalls, 0);
+    assert.equal(dryRunCheckCalls, 0);
+    assert.equal([...stageFiles.files.keys()].some((filePath) => filePath.endsWith('.dependency-preparation-result.json')), false);
+    assert.equal([...stageFiles.files.keys()].some((filePath) => filePath.endsWith('.managed-links-result.json')), false);
+    assert.equal([...stageFiles.files.keys()].some((filePath) => filePath.endsWith('.browser-cache-result.json')), false);
+    assert.equal([...stageFiles.files.keys()].some((filePath) => filePath.endsWith('.dry-run-checks-result.json')), false);
+
+    const dryRunFiles = createMemoryStateFileOps();
+    const dryRunExtraction = {
+      ...extraction,
+      operation: { name: 'dry-run', trigger: 'manual' },
+    };
+    const dryRunResult = await prepareForwardReleaseArtifact({
+      requestState: requestState('dry-run'),
+      paths: basePaths,
+      trustedLayout: fixture.layout,
+      fileOps: dryRunFiles,
+      extractArtifact: async () => dryRunExtraction,
+      prepareDependencies: async ({ plan }) => ({
+        schemaVersion: 1,
+        releaseId: plan.releaseId,
+        sourceSha: plan.sourceSha,
+        preparationPlanSha256: plan.planSha256,
+        startedAtUtc: '2026-09-16T12:00:00.000Z',
+        completedAtUtc: '2026-09-16T12:00:00.000Z',
+        components: [],
+        preparationState: 'partial',
+        releaseLinks: 'unlinked',
+        dependencies: { backend: 'prepared', 'ui-server': 'prepared' },
+      }),
+      prepareManagedLinks: (plan) => ({
+        releaseId: plan.releaseId,
+        linkCount: plan.managedLinks.length,
+        created: plan.managedLinks.map((entry) => entry.relativePath),
+        reused: [],
+      }),
+      prepareBrowserCache: async ({ plan }) => ({
+        schemaVersion: 1,
+        releaseId: plan.releaseId,
+        sourceSha: plan.sourceSha,
+        preparationPlanSha256: plan.planSha256,
+        cacheRoot: plan.layout.puppeteerCacheRoot,
+        command: {
+          label: 'puppeteer-browser-cache',
+          executable: '/usr/bin/node',
+          args: ['node_modules/puppeteer/install.mjs'],
+          cwd: path.join(plan.releaseRoot, 'be'),
+        },
+        capturedAtUtc: '2026-09-16T12:00:00.000Z',
+      }),
+      runDryRunChecks: async ({ plan }) => ({
+        schemaVersion: 1,
+        releaseId: plan.releaseId,
+        sourceSha: plan.sourceSha,
+        preparationPlanSha256: plan.planSha256,
+        backendEnvironmentFile: '/etc/omnilodge/backend.env',
+        commands: [],
+        migrationStatus: {
+          schemaVersion: 1,
+          kind: 'omnilodge-migration-status',
+          ok: true,
+          pendingMigrationCount: 0,
+          pendingMigrationNames: [],
+        },
+        runtimePreflight: {
+          schemaVersion: 1,
+          kind: 'omnilodge-backend-runtime-preflight',
+          ok: true,
+          checks: {},
+        },
+        capturedAtUtc: '2026-09-16T12:00:00.000Z',
+      }),
+    });
+    assert.equal(dryRunResult.dependencyPreparationState, 'partial');
+    assert.equal(dryRunResult.managedLinkCount, 7);
+    assert.equal(dryRunResult.browserCachePrepared, true);
+    assert.equal(dryRunResult.dryRunChecksPassed, true);
+    assert.equal([...dryRunFiles.files.keys()].some((filePath) => filePath.endsWith('.dependency-preparation-result.json')), true);
+    assert.equal([...dryRunFiles.files.keys()].some((filePath) => filePath.endsWith('.managed-links-result.json')), true);
+    assert.equal([...dryRunFiles.files.keys()].some((filePath) => filePath.endsWith('.browser-cache-result.json')), true);
+    assert.equal([...dryRunFiles.files.keys()].some((filePath) => filePath.endsWith('.dry-run-checks-result.json')), true);
+  });
+});
+
+test('dry-run runtime checks use fixed Ubuntu runtime commands and parse JSON evidence', async () => {
+  await withFixture(async (fixture) => {
+    const plan = fixture.plan();
+    const commands = [];
+    const result = await runDryRunRuntimeChecks({
+      plan,
+      executor: async (execution) => {
+        commands.push(execution);
+        if (execution.label === 'migration-status') {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              schemaVersion: 1,
+              kind: 'omnilodge-migration-status',
+              ok: true,
+              pendingMigrationCount: 0,
+              pendingMigrationNames: [],
+            }),
+            stderr: '',
+          };
+        }
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            schemaVersion: 1,
+            kind: 'omnilodge-backend-runtime-preflight',
+            ok: true,
+            checks: {
+              productionConfiguration: true,
+              databaseSyncPolicy: true,
+              accessControlSeedPolicy: true,
+              databaseReadOnlyProbe: true,
+              sharpNativeOperation: true,
+              puppeteerBrowserLaunch: true,
+            },
+          }),
+          stderr: '',
+        };
+      },
+    });
+    assert.deepEqual(commands.map((command) => [
+      command.label,
+      command.executable,
+      command.cwd,
+      command.args,
+      command.env.NODE_ENV,
+      command.env.APP_VERSION,
+      command.env.PUPPETEER_CACHE_DIR,
+    ]), [
+      [
+        'migration-status',
+        '/usr/bin/node',
+        path.join(plan.releaseRoot, 'be'),
+        ['--env-file=/etc/omnilodge/backend.env', '--enable-source-maps', 'dist/scripts/reportMigrationStatus.js'],
+        'production',
+        plan.releaseId,
+        plan.layout.puppeteerCacheRoot,
+      ],
+      [
+        'runtime-preflight',
+        '/usr/bin/node',
+        path.join(plan.releaseRoot, 'be'),
+        ['--env-file=/etc/omnilodge/backend.env', '--enable-source-maps', 'dist/scripts/runtimePreflight.js'],
+        'production',
+        plan.releaseId,
+        plan.layout.puppeteerCacheRoot,
+      ],
+    ]);
+    assert.equal(result.backendEnvironmentFile, '/etc/omnilodge/backend.env');
+    assert.equal(result.migrationStatus.ok, true);
+    assert.equal(result.runtimePreflight.ok, true);
+  });
+});
+
+test('backend browser-cache preparation runs the reviewed Puppeteer install entrypoint', async () => {
+  await withFixture(async (fixture) => {
+    const plan = fixture.plan();
+    const commands = [];
+    const result = await prepareBackendBrowserCache({
+      plan,
+      executor: async (execution) => {
+        commands.push(execution);
+        return { exitCode: 0 };
+      },
+    });
+    assert.deepEqual(commands.map((command) => [
+      command.label,
+      command.executable,
+      command.cwd,
+      command.args,
+      command.env.NODE_ENV,
+      command.env.APP_VERSION,
+      command.env.PUPPETEER_CACHE_DIR,
+    ]), [
+      [
+        'puppeteer-browser-cache',
+        '/usr/bin/node',
+        path.join(plan.releaseRoot, 'be'),
+        ['node_modules/puppeteer/install.mjs'],
+        'production',
+        plan.releaseId,
+        plan.layout.puppeteerCacheRoot,
+      ],
+    ]);
+    assert.equal(result.cacheRoot, plan.layout.puppeteerCacheRoot);
+    assert.equal(result.command.executable, '/usr/bin/node');
+  });
+});
+
 test('requires a sufficient capacity proof bound to the exact plan and current publication state', async () => {
   await withFixture(async (fixture) => {
     const plan = fixture.plan();
@@ -667,13 +984,12 @@ test('validates the exact prepared-release symlink allowlist and rejects extras'
     const plan = fixture.plan();
     await publishBoth(plan);
     try {
-      for (const entry of plan.managedLinks) {
-        symlinkSync(
-          entry.targetPath,
-          entry.linkPath,
-          entry.targetType === 'directory' ? 'junction' : 'file',
-        );
-      }
+      const prepared = prepareReleaseManagedLinks(plan);
+      assert.equal(prepared.linkCount, plan.managedLinks.length);
+      assert.deepEqual(prepared.created, plan.managedLinks.map((entry) => entry.relativePath));
+      const reused = prepareReleaseManagedLinks(plan);
+      assert.deepEqual(reused.created, []);
+      assert.deepEqual(reused.reused, plan.managedLinks.map((entry) => entry.relativePath));
     } catch (error) {
       if (process.platform === 'win32' && ['EPERM', 'UNKNOWN'].includes(error.code)) {
         context.skip('Creating file symlinks is not permitted by this Windows environment');

@@ -38,7 +38,7 @@ Codex task
 - Each independent Codex task starts from current `origin/master` and uses its own short-lived `codex/<type>-<slug>` branch and isolated worktree or clone.
 - Collaborating subagents working on one pull request may share that task's worktree and branch; unrelated tasks must not share either.
 - Codex may create and push meaningful checkpoint commits, open a draft pull request, respond to CI failures, and prepare the merge summary. A human decides when to merge.
-- Delete short-lived task branches after merge. Audit `origin/dev-1`, `origin/release-1`, and local `migration/omni-ha-prep` before archiving or deleting them; do not remove them automatically.
+- Delete short-lived task branches after merge. Audit `origin/dev-1`, `origin/release-1`, local `migration/omni-ha-prep`, and any already-merged retained Codex branches such as `origin/codex/docs-cicd-roadmap` before archiving or deleting them; do not remove them automatically.
 - Codex does not need production credentials or direct production access for normal development work.
 - A feature-branch artifact is diagnostic only. Production eligibility begins with the clean release built from the resulting `master` SHA after merge.
 
@@ -513,7 +513,7 @@ Exit condition: **met**. The actual production/runtime contract and exact CI com
 
 ### Phase 1: Reproducible builds
 
-Current status: **implemented on the current pull-request branch; pending merge and release-path activation**.
+Current status: **complete for build reproducibility and merged to `master` in PR #16**. Release-path activation is intentionally separate Phase 3+ work.
 
 - Pin the exact selected Node 22 and npm versions.
 - Add engine/package-manager metadata to all three packages.
@@ -566,7 +566,7 @@ Exit condition: multiple real runs from the same source produce an equivalent re
 
 ### Phase 3: Production host preparation
 
-Current status: **non-activation staging is implemented and proven on production; activation, automatic deployment, dependency publication, migration gating, and rollback are still not operational**.
+Current status: **complete for Phase 3 non-activation staging and proven on production**. Activation, automatic deployment, migration gating, and rollback are deliberately Phase 4-6 work. The current follow-up branch begins Phase 4 by preparing dependency layers, release-local managed links, and dry-run runtime checks only for explicit `dry-run` requests, pending PR/CI and host proof.
 
 Endpoint slice starting checkpoint, 2026-09-21:
 
@@ -626,16 +626,16 @@ Implemented repository foundations:
 
 - The compiled backend artifact exposes a read-only migration-status command and a runtime preflight. The preflight binds the canonical release identifier to the source SHA, applies the shared fail-closed migration-lineage and safety checks, requires schema sync and access-control seeding to be disabled for artifact runtime, proves read-only database access, and smoke-tests Sharp and Puppeteer using a fixed cache location.
 - A strict, versioned host protocol and client define bounded binary frames, exact end-of-input handling, canonical JSON, exact request schemas, release/evidence/archive binding, an independent server-side deployment-mode policy, and sanitized response codes.
-- Production bootstrap/runtime assets define intended fixed release, dependency, configuration, persistent-data, cache, lock, PM2, systemd, SSH, log, and recovery locations. On the current branch, the submitter and non-activation worker can stage verified release candidates; recovery and activation still remain unavailable.
+- Production bootstrap/runtime assets define intended fixed release, dependency, configuration, persistent-data, cache, lock, PM2, systemd, SSH, log, and recovery locations. The deployed Phase 3 submitter and non-activation worker can stage verified release candidates. On the current follow-up branch, `stage` remains extraction-only while `dry-run` additionally prepares immutable runtime dependency layers and release-local managed links. Recovery and activation still remain unavailable.
 - The existing restricted deploy account and existing Ed25519 deploy key are retained without rotation. The intended installation moves the retained public key authorization to a root-owned external `AuthorizedKeysFile`; no private key material is added to the repository, artifacts, or documentation.
 - A deploy-request workflow validates a successful trusted `master` release through the GitHub API, honors `PRODUCTION_DEPLOY_MODE`, downloads the raw immutable artifact, and writes a host v2 forward request plus sanitized identity evidence as a short-retention Actions artifact. Manual `stage` and `dry-run` requests can be prepared while the mode is `disabled`; automatic requests are skipped unless the mode is exactly `automatic`. The current branch adds the protected production-environment submit job that downloads that prepared request, verifies the pinned host key fingerprint, streams the frame through SSH, validates the protocol response, and uploads sanitized response evidence.
 
-Not yet implemented or performed:
+Post-Phase-3 carry-forward, not Phase 3 blockers:
 
 - Deployment activation remains unavailable. `deploy` requests must not be used for production cutover until activation, migration, backup, readiness, smoke, and rollback gates are implemented and reviewed.
 - Automatic production deployment remains disabled at repository scope. Workflow-run deploy requests prove the disabled-mode skip and do not contact the host.
-- Dependency-layer publication, production migration gate, backup gate, smoke gate, recovery implementation, and rollback workflow are still pending.
-- No production preflight on private ports, PM2 pointer switch, application service restart, live traffic cutover, production migration, or rollback drill has run.
+- Production execution/proof of dry-run dependency-layer publication, release-local managed links, browser-cache preparation, dry-run migration-status/preflight checks, the production migration gate, backup gate, smoke gate, recovery implementation, and rollback workflow are still Phase 4-6 items.
+- No PM2 pointer switch, application service restart, live traffic cutover, production migration, or rollback drill has run.
 
 - Decouple TLS from the checkout and artifacts by placing the retained Origin CA pair in a permission-restricted server-owned path and using explicit runtime paths. Under the documented owner-accepted exception, rotation is deferred hardening rather than a cutover prerequisite.
 - Replace the migration runner's broad empty-`sequelize_meta` adoption heuristic with an explicit, fingerprinted, fail-closed legacy adoption procedure. An unknown or partially constructed schema must never be marked as fully migrated merely because one application table exists.
@@ -643,7 +643,7 @@ Not yet implemented or performed:
 - Make migrations authoritative for schema changes before artifact deployment. Production startup must set `SKIP_DB_SYNC=true`, and the application must fail clearly rather than silently repairing schema through `sequelize.sync()`.
 - The release, dependency, configuration, cache, and persistent-data directories now exist from bootstrap; keep them root-owned and do not repurpose them outside the deploy workflow.
 - The existing restricted deploy user/key is retained, and its public authorization is installed through the root-owned restricted SSH configuration. Do not rotate it as part of this roadmap unless the owner changes direction.
-- Implement recovery, dependency publication, validation/deploy activation, controlled manual forward-deploy entry point, conditional automatic path, and always-manual rollback workflow.
+- Implement recovery, validation/deploy activation, controlled manual forward-deploy entry point, conditional automatic path, and always-manual rollback workflow. Dependency publication is now wired on the current follow-up branch for explicit `dry-run` requests only, pending PR/CI and host proof.
 - Configure PM2 to use stable current-release pointers only after candidate staging, runtime env/TLS, backup, migration, readiness, smoke, and rollback gates exist.
 - Keep `PRODUCTION_DEPLOY_MODE=disabled` and the protected `production` environment in place until the Phase 4 dry run passes. Do not place production runtime secrets in the build workflow.
 - Preserve the current checkout and PM2 configuration as rollback fallback.
@@ -651,6 +651,16 @@ Not yet implemented or performed:
 Exit condition: **met for Phase 3 non-activation staging**. A real trusted `master` release artifact traversed the protected GitHub submit job, forced SSH/sudo/protocol endpoint, detached root worker, authenticated artifact extraction, release-preparation plan/state writing, transient cleanup, and terminal host request state without changing the live application. Activation, dependency publication, migrations, private-port smoke tests, traffic switching, automatic forward deployment, and rollback remain Phase 4-6 work.
 
 ### Phase 4: Dry-run release
+
+Current branch checkpoint, 2026-09-22:
+
+- Keep `stage` lightweight: it only verifies/transfers/extracts the trusted release and writes release-preparation evidence.
+- Extend explicit manual `dry-run` to publish or reuse immutable backend and UI-server dependency layers, recalculating disk/inode capacity before each component so a proof cannot be reused after host state changes.
+- After dependencies exist, prepare the staged release's local managed symlinks (`node_modules`, logs, runtime directories) and write bounded dependency/link evidence under `/var/lib/omnilodge/deploy/state`.
+- Prepare Puppeteer's browser cache through the reviewed backend package entrypoint after dependencies are linked, because global dependency installation intentionally keeps `npm ci --ignore-scripts`.
+- Run the backend migration-status reporter and runtime preflight from the staged release using `/usr/bin/node`, `/etc/omnilodge/backend.env`, and the release-local backend directory; record only bounded JSON results and command shape, not environment contents.
+- Still do not switch live pointers, restart app services, run migrations, expose private test ports, change repository deploy mode, or implement rollback in this checkpoint.
+- Local production-control validation on Windows passed with `node --test ops/production/*.test.mjs` (57 tests, 50 passed, 7 Windows/POSIX skips, 0 failures); POSIX shell, POSIX ownership/mode, and symlink behavior must still be proven by Linux CI/host checks.
 
 - Build a real release in Actions.
 - Transfer and verify it on production.
