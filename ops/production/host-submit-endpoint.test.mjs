@@ -10,6 +10,7 @@ import { createRequestRecordStore } from './libexec/deploy/request-store.mjs';
 import {
   appendSubmitDiagnostic,
   handleHostV2SubmitRequest,
+  resolveSystemctlPath,
   startHostDeployWorker,
 } from './libexec/deploy/submit-request.mjs';
 import {
@@ -303,6 +304,32 @@ test('host submit endpoint starts detached workers through a fixed systemd unit 
       windowsHide: true,
     },
   ]]);
+});
+
+test('host submit endpoint resolves systemctl from fixed absolute candidates', async () => {
+  const checked = [];
+  const fs = {
+    async access(candidate) {
+      checked.push(candidate);
+      if (candidate === '/usr/bin/systemctl') {
+        const error = new Error('missing');
+        error.code = 'ENOENT';
+        throw error;
+      }
+    },
+  };
+  assert.equal(await resolveSystemctlPath({ fs }), '/bin/systemctl');
+  assert.deepEqual(checked, ['/usr/bin/systemctl', '/bin/systemctl']);
+
+  const calls = [];
+  await startHostDeployWorker({
+    requestId: '823e4567-e89b-42d3-a456-426614174007',
+    fs,
+    runCommand: async (...args) => {
+      calls.push(args);
+    },
+  });
+  assert.equal(calls[0][0], '/bin/systemctl');
 });
 
 test('host submit diagnostics are bounded JSON lines without control characters', async () => {
