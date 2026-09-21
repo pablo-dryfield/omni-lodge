@@ -14,6 +14,7 @@ import {
   readlinkSync,
   realpathSync,
   renameSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -767,12 +768,13 @@ export const createReleasePreparationPlan = ({
   expectedReleaseId,
   expectedSourceSha,
   trustedLayout = PRODUCTION_RELEASE_LAYOUT,
+  linkState = 'unlinked',
 }) => {
   const verified = verifyRelease({
     expectedReleaseId,
     expectedSourceSha,
     trustedLayout,
-    linkState: 'unlinked',
+    linkState,
   });
   const base = {
     schemaVersion: PREPARATION_PLAN_SCHEMA_VERSION,
@@ -917,6 +919,47 @@ const assertExactLink = (entry) => {
       || targetBefore.ctimeNs !== targetAfter.ctimeNs) {
     fail(`Managed release link or target changed during validation: ${entry.relativePath}`);
   }
+};
+
+export const prepareReleaseManagedLinks = (plan) => {
+  requirePlan(plan);
+  for (const component of COMPONENT_NAMES) validateDependencyLayer(plan.dependencies[component]);
+
+  for (const entry of plan.managedLinks) {
+    assertTrustedParent(entry.linkPath, `Managed release link ${entry.relativePath}`, {
+      trustedRoot: plan.layout.trustedRoot,
+    });
+    assertTrustedPathChain(entry.targetPath, `Managed release link target ${entry.relativePath}`, {
+      expectedLeafType: entry.targetType,
+      owner: ownerUid(),
+      trustedRoot: plan.layout.trustedRoot,
+    });
+  }
+
+  const created = [];
+  const reused = [];
+  for (const entry of plan.managedLinks) {
+    if (pathEntryExists(entry.linkPath)) {
+      assertExactLink(entry);
+      reused.push(entry.relativePath);
+      continue;
+    }
+    symlinkSync(
+      entry.targetPath,
+      entry.linkPath,
+      entry.targetType === 'directory' ? 'junction' : 'file',
+    );
+    assertExactLink(entry);
+    fsyncDirectory(path.dirname(entry.linkPath));
+    created.push(entry.relativePath);
+  }
+  validatePreparedReleaseLinks(plan);
+  return deepFreeze({
+    releaseId: plan.releaseId,
+    linkCount: plan.managedLinks.length,
+    created: deepFreeze(created),
+    reused: deepFreeze(reused),
+  });
 };
 
 export const validatePreparedReleaseLinks = (plan) => {
