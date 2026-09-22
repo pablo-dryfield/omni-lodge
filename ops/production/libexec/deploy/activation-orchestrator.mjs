@@ -147,6 +147,7 @@ export const createActivationOrchestrator = ({
   requireFunction(checkedPointerSwitcher.switchArtifactPointers, 'Artifact pointer switch function');
   requireFunction(checkedPointerSwitcher.switchActivationSnapshotPointers, 'Activation snapshot pointer switch function');
   requireFunction(checkedPm2Controller.restartComponentsInOrder, 'PM2 ordered restart function');
+  requireFunction(checkedPm2Controller.restoreSavedProcessList, 'PM2 saved process-list restore function');
   requireFunction(checkedPm2Controller.saveProcessList, 'PM2 save function');
   requireFunction(now, 'Activation orchestrator clock');
 
@@ -528,6 +529,7 @@ export const createActivationOrchestrator = ({
       targetSnapshot: recoveryRecord.previousSnapshot,
     });
     let pm2Restart = null;
+    let pm2Restore = null;
     let pm2Save = null;
     if (usesManagedRuntime(recoveryRecord.previousSnapshot)) {
       pm2Restart = await checkedPm2Controller.restartComponentsInOrder({
@@ -535,6 +537,10 @@ export const createActivationOrchestrator = ({
         persist: false,
       });
       pm2Save = await checkedPm2Controller.saveProcessList();
+    } else if (recoveryRecord.previousSnapshot?.pm2State) {
+      pm2Restore = await checkedPm2Controller.restoreSavedProcessList({
+        pm2State: recoveryRecord.previousSnapshot.pm2State,
+      });
     }
 
     if (recoveryRecord.transaction.phase === 'restoring_previous') {
@@ -571,6 +577,7 @@ export const createActivationOrchestrator = ({
       recoveryPlan,
       pointerSwitch,
       pm2Restart,
+      pm2Restore,
       pm2Save,
       activationTransaction: failed.transaction,
       requestEntry: currentEntry,

@@ -62,6 +62,14 @@ const createFixture = ({
     snapshotKind: previousSnapshotKind,
     releaseId: 'legacy-checkout',
     sourceSha: 'b'.repeat(40),
+    ...(previousSnapshotKind === 'legacy_baseline' ? {
+      pm2State: Object.freeze({
+        dumpPath: '/root/.pm2/dump.pm2',
+        dumpSha256: 'd'.repeat(64),
+        backendProcessName: 'omni-lodge-be',
+        uiProcessName: 'omni-lodge-ui-server',
+      }),
+    } : {}),
   });
   const targetSnapshot = Object.freeze({
     snapshotKind: 'artifact',
@@ -164,6 +172,12 @@ const createFixture = ({
       calls.push('pm2:save');
       return Object.freeze({
         savedAtUtc: '2026-09-22T12:45:00.000Z',
+      });
+    },
+    restoreSavedProcessList: async () => {
+      calls.push('pm2:restore-saved');
+      return Object.freeze({
+        restoredAtUtc: '2026-09-22T12:45:00.000Z',
       });
     },
   });
@@ -329,6 +343,10 @@ test('activation orchestrator sequences artifact rollback through snapshot point
         calls.push('pm2:save');
         return Object.freeze({ savedAtUtc: '2026-09-22T12:45:00.000Z' });
       },
+      restoreSavedProcessList: async () => {
+        calls.push('pm2:restore-saved');
+        return Object.freeze({ restoredAtUtc: '2026-09-22T12:45:00.000Z' });
+      },
     }),
     publicSmokeRunner: async ({ releaseId, sourceSha }) => {
       calls.push(`smoke:${releaseId}:${sourceSha}`);
@@ -392,7 +410,7 @@ test('activation recovery converges pointers back to the previous snapshot and f
   assert.equal(result.requestPhase, 'failed');
 });
 
-test('activation recovery can finish an interrupted legacy-baseline restore without managed PM2 restart', async () => {
+test('activation recovery restores the saved PM2 process list when converging to a legacy baseline', async () => {
   const { calls, orchestrator } = createFixture({
     initialTransactionPhase: 'restoring_previous',
     recoveryAction: 'converge_previous_snapshot',
@@ -407,6 +425,7 @@ test('activation recovery can finish an interrupted legacy-baseline restore with
     'tx:read:restoring_previous@restoring_previous',
     'plan:converge_previous_snapshot@restoring_previous',
     'pointer:switch-snapshot',
+    'pm2:restore-saved',
     'tx:restoring_previous->previous_restored@restoring_previous',
     'request:restoring_previous->previous_restored',
     'tx:previous_restored->failed@previous_restored',
@@ -416,6 +435,7 @@ test('activation recovery can finish an interrupted legacy-baseline restore with
   assert.equal(result.transactionPhase, 'failed');
   assert.equal(result.requestPhase, 'failed');
   assert.equal(result.pm2Restart, null);
+  assert.equal(result.pm2Restore.restoredAtUtc, '2026-09-22T12:45:00.000Z');
   assert.equal(result.pm2Save, null);
 });
 
