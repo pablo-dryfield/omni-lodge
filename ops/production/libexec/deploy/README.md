@@ -29,6 +29,10 @@ Security properties:
   itself change PM2, release pointers, traffic, or database state. Activation
   transaction phase transitions are durably replaced with the same request and
   snapshot binding before any future pointer-switching code can rely on them;
+- activation pointer switching is isolated in a standalone module that can
+  atomically replace the reviewed `backend-current` and `ui-current` symlinks,
+  but the deployment worker does not call it until PM2 restart, readiness,
+  public smoke, and recovery gates are wired;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;
