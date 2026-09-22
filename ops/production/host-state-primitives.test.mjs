@@ -55,7 +55,7 @@ const identity = (overrides = {}) => ({
   ...overrides,
 });
 
-const rollbackIdentity = () => ({
+const rollbackIdentity = (overrides = {}) => ({
   requestId: REQUEST_ID,
   kind: 'rollback_submit',
   requestSha256: 'e'.repeat(64),
@@ -70,6 +70,7 @@ const rollbackIdentity = () => ({
     activationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     snapshotSha256: '2'.repeat(64),
   },
+  ...overrides,
 });
 
 const statusIdentity = () => ({
@@ -317,11 +318,12 @@ const advanceRequestState = (requestState, nextPhase, at = '2026-09-16T20:00:00.
     updatedAtUtc: at,
   });
 
-const activationPreparedDeployState = () => {
+const activationPreparedDeployState = (overrides = {}) => {
   let state = createInitialHostRequestState({
     requestIdentity: identity({
       operation: 'deploy',
       requestSha256: '9'.repeat(64),
+      ...overrides,
     }),
     receivedAtUtc: '2026-09-16T20:00:00.000Z',
   });
@@ -333,6 +335,20 @@ const activationPreparedDeployState = () => {
     'migrations_applied',
     'activation_prepared',
   ]) {
+    state = advanceRequestState(state, phase);
+  }
+  return state;
+};
+
+const activationPreparedRollbackState = (overrides = {}) => {
+  let state = createInitialHostRequestState({
+    requestIdentity: rollbackIdentity({
+      requestSha256: '0'.repeat(64),
+      ...overrides,
+    }),
+    receivedAtUtc: '2026-09-16T20:00:00.000Z',
+  });
+  for (const phase of ['authorized', 'activation_prepared']) {
     state = advanceRequestState(state, phase);
   }
   return state;
@@ -536,6 +552,50 @@ test('activation state store prepares deploy transactions and recovery plans wit
   assert.equal(recovery.databaseAction, 'none');
   assert.deepEqual(recovery.previousSnapshot, baseline);
   assert.deepEqual(recovery.targetSnapshot, prepared.targetSnapshot);
+});
+
+test('activation state store prepares rollback transactions from existing snapshots only', async () => {
+  const fileOps = createMemoryFileOps();
+  const store = createActivationStateStore({
+    paths: TEST_PATHS,
+    fileOps,
+    clock: () => new Date('2026-09-16T20:03:00.000Z'),
+  });
+  const baseline = legacyBaselineSnapshot();
+  await store.initializeActiveSnapshot(baseline);
+  const deployState = activationPreparedDeployState({
+    requestId: '22345678-1234-4abc-8def-1234567890ab',
+  });
+  const deployPrepared = await store.prepareForwardActivation({ requestState: deployState });
+  const requestState = activationPreparedRollbackState({
+    requestId: '32345678-1234-4abc-8def-1234567890ab',
+    expectedActiveSnapshot: createHostActivationSnapshotReference(baseline),
+    targetSnapshot: deployPrepared.transaction.targetSnapshot,
+  });
+
+  const prepared = await store.prepareRollbackActivation({ requestState });
+  assert.equal(prepared.transaction.phase, 'prepared');
+  assert.equal(prepared.transaction.requestKind, 'rollback_submit');
+  assert.deepEqual(
+    prepared.transaction.previousSnapshot,
+    createHostActivationSnapshotReference(baseline),
+  );
+  assert.deepEqual(
+    prepared.transaction.targetSnapshot,
+    deployPrepared.transaction.targetSnapshot,
+  );
+
+  const replay = await store.prepareRollbackActivation({ requestState });
+  assert.deepEqual(replay.transaction, prepared.transaction);
+
+  const recovery = await store.planRecovery({
+    requestId: requestState.request.requestId,
+    requestState,
+  });
+  assert.equal(recovery.action, 'abort_without_pointer_change');
+  assert.equal(recovery.databaseAction, 'none');
+  assert.deepEqual(recovery.previousSnapshot, baseline);
+  assert.deepEqual(recovery.targetSnapshot, deployPrepared.targetSnapshot);
 });
 
 test('activation state store advances transactions and commits the active snapshot after smoke verification', async () => {

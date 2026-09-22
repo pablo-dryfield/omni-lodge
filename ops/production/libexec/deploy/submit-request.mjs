@@ -434,12 +434,16 @@ export const handleHostV2SubmitRequest = async ({
     }
 
     let staged = null;
+    let handoffPhase = identity.kind === 'forward_submit' ? 'persist_worker_payload' : 'start_worker';
     try {
-      staged = await persistForWorker({
-        received,
-        fs,
-        paths,
-      });
+      if (identity.kind === 'forward_submit') {
+        staged = await persistForWorker({
+          received,
+          fs,
+          paths,
+        });
+        handoffPhase = 'start_worker';
+      }
       await startWorker({ requestId: identity.requestId });
     } catch (error) {
       await recordSubmitDiagnostic({
@@ -447,7 +451,7 @@ export const handleHostV2SubmitRequest = async ({
         paths,
         clock,
         identity,
-        phase: staged === null ? 'persist_worker_payload' : 'start_worker',
+        phase: handoffPhase,
         error,
       }).catch(() => {});
       await cleanupWorkerPayload({ staged, fs });

@@ -124,6 +124,19 @@ const auditIdentityFromRequestState = (requestState) => {
       artifactZipSha256: intent.artifactZipSha256,
     };
   }
+  if (request.kind === 'rollback_submit') {
+    const intent = requestState.intent;
+    return {
+      requestId: request.requestId,
+      kind: request.kind,
+      requestSha256: request.requestSha256,
+      requestedAtUtc: request.requestedAtUtc,
+      actor: request.actor,
+      trigger: intent.trigger,
+      expectedActiveSnapshot: intent.expectedActiveSnapshot,
+      targetSnapshot: intent.targetSnapshot,
+    };
+  }
   return { ...request };
 };
 
@@ -1299,6 +1312,31 @@ export const runDeploymentActivationPreparation = async ({
   });
 };
 
+export const runRollbackActivationPreparation = async ({
+  requestState,
+  activationStore,
+} = {}) => {
+  invariant(requestState?.request?.kind === 'rollback_submit', 'Rollback activation preparation only supports rollback requests');
+  invariant(requestState.intent?.trigger === 'manual', 'Rollback activation preparation only runs for manual rollback requests');
+  invariant(requestState.phase === 'activation_prepared', 'Rollback activation preparation requires the activation_prepared phase');
+  const prepared = await activationStore.prepareRollbackActivation({ requestState });
+  const recovery = await activationStore.planRecovery({
+    requestId: requestState.request.requestId,
+    requestState,
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    requestId: requestState.request.requestId,
+    trigger: requestState.intent.trigger,
+    transactionPhase: prepared.transaction.phase,
+    previousSnapshot: prepared.transaction.previousSnapshot,
+    targetSnapshot: prepared.transaction.targetSnapshot,
+    recoveryAction: recovery.action,
+    databaseAction: recovery.databaseAction,
+    preparedAtUtc: prepared.transaction.createdAtUtc,
+  });
+};
+
 const createDefaultActivationOrchestrator = ({
   activationStore,
   requestStore,
@@ -1320,12 +1358,28 @@ export const runDeploymentActivationCutover = async ({
   return activationOrchestrator.activateForwardDeployment({ entry });
 };
 
+export const runRollbackActivationCutover = async ({
+  entry,
+  activationOrchestrator,
+} = {}) => {
+  invariant(activationOrchestrator?.activateRollbackDeployment, 'Rollback activation orchestrator is required');
+  return activationOrchestrator.activateRollbackDeployment({ entry });
+};
+
 export const runDeploymentActivationRecovery = async ({
   entry,
   activationOrchestrator,
 } = {}) => {
   invariant(activationOrchestrator?.recoverForwardDeployment, 'Activation recovery orchestrator is required');
   return activationOrchestrator.recoverForwardDeployment({ entry });
+};
+
+export const runRollbackActivationRecovery = async ({
+  entry,
+  activationOrchestrator,
+} = {}) => {
+  invariant(activationOrchestrator?.recoverRollbackDeployment, 'Rollback activation recovery orchestrator is required');
+  return activationOrchestrator.recoverRollbackDeployment({ entry });
 };
 
 const finishIfTerminal = async ({
@@ -1354,9 +1408,12 @@ export const handleHostDeployWorkerRequest = async ({
   runMigrationGate = runDeploymentMigrationGate,
   activationStore = createActivationStateStore({ paths, clock, fileOps }),
   prepareActivationState = runDeploymentActivationPreparation,
+  prepareRollbackActivationState = runRollbackActivationPreparation,
   activationOrchestrator = createDefaultActivationOrchestrator({ activationStore, requestStore, clock }),
   activateDeployment = runDeploymentActivationCutover,
+  activateRollback = runRollbackActivationCutover,
   recoverDeployment = runDeploymentActivationRecovery,
+  recoverRollback = runRollbackActivationRecovery,
 } = {}) => {
   const validatedRequestId = validateRequestId(requestId);
   let entry = await requestStore.lookup(validatedRequestId);
@@ -1393,8 +1450,83 @@ export const handleHostDeployWorkerRequest = async ({
       nextPhase: 'authorized',
     });
 
+    if (entry.requestState.request.kind === 'rollback_submit') {
+      entry = await advanceIfAtPhase({
+        store: requestStore,
+        entry,
+        fromPhase: 'authorized',
+        nextPhase: 'activation_prepared',
+      });
+      if (entry.requestState.phase === 'activation_prepared') {
+        const activationPreparation = await prepareRollbackActivationState({
+          requestState: entry.requestState,
+          activationStore,
+          paths,
+          fileOps,
+          clock,
+        });
+        await publishOrVerifyBuffer({
+          fileOps,
+          targetPath: activationPreparationResultPath({ paths, requestId: validatedRequestId }),
+          bytes: serializeCanonicalJson(jsonSafe(activationPreparation)),
+        });
+      }
+      if (entry.requestState.phase === 'activation_prepared') {
+        try {
+          const activationCutover = await activateRollback({
+            entry,
+            activationOrchestrator,
+            paths,
+            fileOps,
+            clock,
+          });
+          await publishOrVerifyBuffer({
+            fileOps,
+            targetPath: activationCutoverResultPath({ paths, requestId: validatedRequestId }),
+            bytes: serializeCanonicalJson(jsonSafe(activationCutover)),
+          });
+          entry = activationCutover.requestEntry;
+        } catch (activationError) {
+          let recoveredSucceeded = false;
+          const recoveryEntry = await requestStore.lookup(validatedRequestId);
+          if (recoveryEntry !== null && recoveryEntry.state === 'running') {
+            const recovery = await recoverRollback({
+              entry: recoveryEntry,
+              activationOrchestrator,
+              paths,
+              fileOps,
+              clock,
+            });
+            await publishOrVerifyBuffer({
+              fileOps,
+              targetPath: activationRecoveryResultPath({ paths, requestId: validatedRequestId }),
+              bytes: serializeCanonicalJson(jsonSafe(recovery)),
+            });
+            if (recovery.requestEntry?.requestState?.phase === 'succeeded') {
+              entry = recovery.requestEntry;
+              recoveredSucceeded = true;
+            }
+          }
+          if (!recoveredSucceeded) {
+            throw activationError;
+          }
+        }
+      }
+    }
+
     if (entry.requestState.request.kind !== 'forward_submit') {
-      throw new Error('Rollback worker handling is not implemented in the staging slice');
+      entry = await finishIfTerminal({ store: requestStore, entry });
+      invariant(entry.state === 'finished', 'Rollback worker did not reach a terminal request state');
+      await appendAudit({
+        audit: auditLog,
+        entry,
+        eventType: 'request_finished',
+        outcomeCode: entry.requestState.resultCode,
+      });
+      return Object.freeze({
+        exitCode: 0,
+        status: createHostRequestStatus(entry.requestState),
+      });
     }
 
     if (entry.requestState.phase === 'authorized') {

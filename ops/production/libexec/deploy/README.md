@@ -5,7 +5,8 @@ receive network input by themselves. Production use still enters through the
 strict host protocol, request store, root-owned host policy, and detached
 worker service. Forward deploy activation is code-wired only after artifact
 verification, dry-run runtime checks, backup gating, migration gating, and
-activation-state preparation have succeeded.
+activation-state preparation have succeeded. Manual rollback activation is
+artifact-free and only uses previously recorded activation snapshots.
 
 The default paths are fixed in `constants.mjs`. Production callers must use
 those defaults. Constructor injection exists so the primitives can be tested
@@ -32,6 +33,9 @@ Security properties:
   itself change PM2, release pointers, traffic, or database state. Activation
   transaction phase transitions are durably replaced with the same request and
   snapshot binding before any future pointer-switching code can rely on them;
+- rollback preparation verifies the current active snapshot matches the
+  request's expected active snapshot, reads the requested target snapshot by
+  digest, and creates no artifact, evidence, backup, or migration payloads;
 - activation pointer switching is isolated in a standalone module that can
   atomically replace the reviewed `backend-current` and `ui-current` symlinks.
   The deployment worker reaches it only through the activation orchestrator
@@ -49,7 +53,10 @@ Security properties:
 - activation orchestration sequences the already-reviewed transaction, pointer,
   PM2, public smoke, active-snapshot commit, and recovery primitives. It has no
   CLI; the deployment worker injects production defaults only at the final
-  deploy phase after the earlier gates have succeeded;
+  deploy or rollback phase after the earlier gates have succeeded. Rollback
+  cutover is currently release-smoke-bound, so artifact snapshots can be
+  verified before commit while legacy-baseline rollback remains fail-closed
+  until a legacy-compatible smoke check is added;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;
