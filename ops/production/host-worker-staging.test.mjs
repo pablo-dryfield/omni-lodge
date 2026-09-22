@@ -193,6 +193,7 @@ test('detached worker stages a non-activation request and marks it succeeded', a
 test('detached worker fails deploy requests before activation is implemented', async () => {
   const harness = createHarness();
   await admit(harness, { requestId: '723e4567-e89b-42d3-a456-426614174011', operation: 'deploy' });
+  const prepared = [];
   await assert.rejects(
     handleHostDeployWorkerRequest({
       requestId: '723e4567-e89b-42d3-a456-426614174011',
@@ -201,11 +202,15 @@ test('detached worker fails deploy requests before activation is implemented', a
       auditLog: harness.audit,
       clock: harness.clock,
       fs: { unlink: async () => {} },
-      prepareRelease: async ({ requestState }) => ({ releaseId: requestState.intent.releaseId }),
+      prepareRelease: async ({ requestState }) => {
+        prepared.push(requestState.intent.operation);
+        return { releaseId: requestState.intent.releaseId };
+      },
     }),
-    /activation is not enabled/,
+    /Backup, migration, and activation switching gates are not enabled/,
   );
 
+  assert.deepEqual(prepared, ['deploy']);
   const entry = await finishedEntry(harness, '723e4567-e89b-42d3-a456-426614174011');
   assert.equal(entry.requestState.phase, 'failed');
   assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
