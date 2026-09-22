@@ -23,6 +23,7 @@ const expectedAssets = [
   'ssh/90-omnilodge-deploy.conf',
   'sudoers/omnilodge-deploy',
   'bin/ssh-gateway',
+  'bin/omnilodge-capture-legacy-baseline',
   'bin/omnilodge-deploy',
   'bin/omnilodge-deploy-worker',
   'bin/omnilodge-deploy-recover',
@@ -36,12 +37,15 @@ const expectedAssets = [
 ];
 
 const expectedControlPlaneAssets = [
+  'ops/production/libexec/deploy/activation-state-store.mjs',
   'ops/production/libexec/deploy/audit-log.mjs',
   'ops/production/libexec/deploy/canonical-json.mjs',
   'ops/production/libexec/deploy/capacity.mjs',
   'ops/production/libexec/deploy/constants.mjs',
+  'ops/production/libexec/deploy/capture-legacy-baseline-cli.mjs',
   'ops/production/libexec/deploy/deployment-flock.mjs',
   'ops/production/libexec/deploy/index.mjs',
+  'ops/production/libexec/deploy/legacy-baseline.mjs',
   'ops/production/libexec/deploy/release-preparation.mjs',
   'ops/production/libexec/deploy/request-store.mjs',
   'ops/production/libexec/deploy/secure-filesystem.mjs',
@@ -131,6 +135,26 @@ test('sudo boundary permits one root command with exactly zero arguments', async
 
   const bootstrap = await read('bootstrap-host.sh');
   assert.ok(bootstrap.includes(String.raw`gsub(/\\"/, "\"", line)`));
+});
+
+test('legacy baseline capture command is root-only and not exposed through deploy sudo', async () => {
+  const sudoers = await read('sudoers/omnilodge-deploy');
+  assert.doesNotMatch(sudoers, /omnilodge-capture-legacy-baseline/);
+
+  const rootEntry = await read('bin/omnilodge-capture-legacy-baseline');
+  assert.match(rootEntry, /\[ "\$#" -ne 0 \] \|\| \[ "\$\(id -u\)" -ne 0 \]/);
+  assert.match(
+    rootEntry,
+    /CONTROL_PLANE_ENTRY='\/usr\/local\/libexec\/omnilodge\/control-plane\/ops\/production\/libexec\/deploy\/capture-legacy-baseline-cli\.mjs'/,
+  );
+  assert.match(rootEntry, /\/usr\/bin\/node "\$CONTROL_PLANE_ENTRY"/);
+  assert.doesNotMatch(rootEntry, /eval|\b(?:bash|sh)\s+-c\b/);
+
+  const bootstrap = await read('bootstrap-host.sh');
+  assert.match(bootstrap, /bin\/omnilodge-capture-legacy-baseline/);
+  assert.match(bootstrap, /ops\/production\/libexec\/deploy\/capture-legacy-baseline-cli\.mjs/);
+  assert.match(bootstrap, /ops\/production\/libexec\/deploy\/activation-state-store\.mjs/);
+  assert.match(bootstrap, /ops\/production\/libexec\/deploy\/legacy-baseline\.mjs/);
 });
 
 test('bootstrap has an explicit mutating mode and never activates services or keys', async () => {
@@ -319,6 +343,7 @@ test('shell assets pass sh -n when a POSIX shell is available', async (context) 
   const scripts = [
     'bootstrap-host.sh',
     'bin/ssh-gateway',
+    'bin/omnilodge-capture-legacy-baseline',
     'bin/omnilodge-deploy',
     'bin/omnilodge-deploy-worker',
     'bin/omnilodge-deploy-recover',
