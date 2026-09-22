@@ -283,6 +283,9 @@ test('runtime launcher uses only fixed release/config/state roots', async () => 
   }
   assert.doesNotMatch(launcher, /child_process[^\n]*exec|\beval\s*\(/);
   assert.doesNotMatch(launcher, /env:\s*\{\s*\.\.\.process\.env/);
+  assert.doesNotMatch(launcher, /process\.exitCode\s*=/);
+  assert.match(launcher, /child\.once\('error'[\s\S]*process\.exit\(1\)/);
+  assert.match(launcher, /child\.once\('exit'[\s\S]*process\.exit\(exitCode\)/);
   assert.match(launcher, /env:\s*\{ \.\.\.BASE_ENV, \.\.\.launch\.env \}/);
   for (const fixedIdentity of ["HOME: '/root'", "USER: 'root'", "LOGNAME: 'root'"]) {
     assert.ok(launcher.includes(fixedIdentity), `missing minimal child identity: ${fixedIdentity}`);

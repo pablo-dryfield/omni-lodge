@@ -333,7 +333,7 @@ const run = () => {
   }
   child.once('error', (error) => {
     console.error(`Runtime process could not start: ${error.message}`);
-    process.exitCode = 1;
+    process.exit(1);
   });
   child.once('exit', (code, signal) => {
     if (signal) {
@@ -341,7 +341,11 @@ const run = () => {
       process.kill(process.pid, signal);
       return;
     }
-    process.exitCode = Number.isInteger(code) ? code : 1;
+    const exitCode = Number.isInteger(code) ? code : 1;
+    if (exitCode !== 0) {
+      console.error(`Runtime process exited before the launcher stopped: code=${exitCode}`);
+    }
+    process.exit(exitCode);
   });
 };
 
@@ -350,6 +354,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     run();
   } catch (error) {
     console.error(`Runtime launcher refused to start: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 78;
+    process.exit(78);
   }
 }
