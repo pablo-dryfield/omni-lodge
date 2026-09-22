@@ -28,6 +28,19 @@ const requestState = Object.freeze({
   phase: 'preflight_passed',
 });
 
+const migrationStatus = (pendingMigrationNames = ['20260922090000-add-example-column.js']) => Object.freeze({
+  schemaVersion: 1,
+  kind: 'omnilodge-migration-status',
+  ok: true,
+  classification: 'managed',
+  lineage: 'strict',
+  metadataTableExists: true,
+  appliedMigrationCount: 189,
+  compiledMigrationCount: 189 + pendingMigrationNames.length,
+  pendingMigrationCount: pendingMigrationNames.length,
+  pendingMigrationNames,
+});
+
 const nativePathApi = path;
 
 const makeTempFixture = async () => {
@@ -62,6 +75,7 @@ test('production backup gate records a fresh non-empty checksummed backup', asyn
     const backupPath = path.join(fixture.backupRoot, 'backup-20260917.tar.gz');
     const result = await runProductionBackupGate({
       requestState,
+      migrationStatus: migrationStatus(),
       backupCommandPath: fixture.commandPath,
       backupRoot: fixture.backupRoot,
       ...permissiveTestSecurity,
@@ -79,6 +93,10 @@ test('production backup gate records a fresh non-empty checksummed backup', asyn
 
     assert.equal(result.requestId, REQUEST_ID);
     assert.equal(result.releaseId, RELEASE_ID);
+    assert.equal(result.backupRequired, true);
+    assert.equal(result.backupReason, 'PENDING_MIGRATIONS');
+    assert.equal(result.pendingMigrationCount, 1);
+    assert.deepEqual(result.pendingMigrationNames, ['20260922090000-add-example-column.js']);
     assert.equal(result.command.path, fixture.commandPath);
     assert.equal(result.command.stdoutBytes, Buffer.byteLength('backup complete\n'));
     assert.equal(result.selectedBackup.path, backupPath);
@@ -93,12 +111,37 @@ test('production backup gate records a fresh non-empty checksummed backup', asyn
   }
 });
 
+test('production backup gate skips the backup when no migrations are pending', async () => {
+  const result = await runProductionBackupGate({
+    requestState,
+    migrationStatus: migrationStatus([]),
+    ...permissiveTestSecurity,
+    clock: () => new Date('2026-09-17T10:00:00.000Z'),
+    execFileImpl: async () => {
+      throw new Error('backup command should not run');
+    },
+  });
+
+  assert.equal(result.backupRequired, false);
+  assert.equal(result.backupReason, 'NO_PENDING_MIGRATIONS');
+  assert.equal(result.pendingMigrationCount, 0);
+  assert.deepEqual(result.pendingMigrationNames, []);
+  assert.equal(result.command, null);
+  assert.equal(result.backupRoot, null);
+  assert.equal(result.selectedBackup, null);
+  assert.equal(result.createdBackupCount, 0);
+
+  const serialized = serializeProductionBackupGateResult(result);
+  assert.deepEqual(parseProductionBackupGateResult(serialized), result);
+});
+
 test('production backup gate rejects commands that do not create a new backup', async () => {
   const fixture = await makeTempFixture();
   try {
     await assert.rejects(
       runProductionBackupGate({
         requestState,
+        migrationStatus: migrationStatus(),
         backupCommandPath: fixture.commandPath,
         backupRoot: fixture.backupRoot,
         ...permissiveTestSecurity,

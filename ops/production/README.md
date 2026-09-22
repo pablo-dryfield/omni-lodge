@@ -225,9 +225,12 @@ session:
    permit the files to enter an artifact or Git.
 3. Keep the reviewed backup script `/home/postgres/backup.sh` and staging
    directory `/home/postgres/backups` root-controlled and private. A `deploy`
-   request now runs this script after candidate preflight and must prove a
+   request now reads the candidate's migration-status evidence after preflight.
+   If there are pending migrations, it runs the backup script and must prove a
    newly created, non-empty, checksummed backup before the worker can advance
-   to the migration gate. Migration and activation still remain disabled.
+   to the migration gate. If there are zero pending migrations, it records
+   `backupRequired: false` and skips the backup. Missing or invalid migration
+   evidence fails closed. Migration and activation still remain disabled.
 4. Replace the three fail-closed deploy scaffolds with the reviewed submitter,
    worker, and recovery implementation. The root submitter must rederive
    authorization from `/etc/omnilodge/deploy-policy.json`; GitHub's claimed

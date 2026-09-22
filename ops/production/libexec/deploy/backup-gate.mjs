@@ -27,6 +27,11 @@ export const DEFAULT_PRODUCTION_BACKUP_GATE = Object.freeze({
   minimumAvailableBytes: 2 * 1024 * 1024 * 1024,
 });
 
+export const PRODUCTION_BACKUP_REASONS = Object.freeze({
+  pendingMigrations: 'PENDING_MIGRATIONS',
+  noPendingMigrations: 'NO_PENDING_MIGRATIONS',
+});
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const RELEASE_ID_PATTERN = /^omnilodge-r([1-9][0-9]*)-a([1-9][0-9]*)-([0-9a-f]{12})$/;
@@ -81,6 +86,11 @@ const requireOptionalNonNegativeSafeInteger = (value, label) => {
   return requireNonNegativeSafeInteger(value, label);
 };
 
+const requireOptionalAbsolutePath = (value, label) => {
+  if (value === null) return null;
+  return requireAbsolutePath(value, label);
+};
+
 const requireAbsolutePath = (value, label) => {
   invariant(typeof value === 'string' && value.length > 1 && value.length <= 4096, `${label} is invalid`);
   invariant(!/[\u0000-\u001f\u007f]/.test(value), `${label} contains a control character`);
@@ -91,6 +101,20 @@ const requireAbsolutePath = (value, label) => {
 const validateDate = (value, label) => {
   invariant(value instanceof Date && !Number.isNaN(value.getTime()), `${label} must be a valid Date`);
   return value;
+};
+
+const requireMigrationName = (value, label) => {
+  invariant(typeof value === 'string' && value.length > 0 && value.length <= 512, `${label} is invalid`);
+  invariant(!/[\u0000-\u001f\u007f/\\]/.test(value), `${label} contains unsafe characters`);
+  return value;
+};
+
+const validatePendingMigrationNames = (value, count, label) => {
+  invariant(Array.isArray(value), `${label} must be an array`);
+  invariant(value.length === count, `${label} length must match the pending migration count`);
+  const names = value.map((entry, index) => requireMigrationName(entry, `${label}[${index}]`));
+  invariant(new Set(names).size === names.length, `${label} must not contain duplicates`);
+  return Object.freeze(names);
 };
 
 const toIso = (value, label) => validateDate(value, label).toISOString();
@@ -362,6 +386,53 @@ const validateRequestStateForBackup = (requestState) => {
   return Object.freeze({ requestId, sourceSha, releaseId });
 };
 
+export const validateMigrationStatusForBackupGate = (rawStatus) => {
+  const status = requireExactKeys(
+    rawStatus,
+    [
+      'schemaVersion',
+      'kind',
+      'ok',
+      'classification',
+      'lineage',
+      'metadataTableExists',
+      'appliedMigrationCount',
+      'compiledMigrationCount',
+      'pendingMigrationCount',
+      'pendingMigrationNames',
+    ],
+    'production backup gate migration status',
+  );
+  invariant(status.schemaVersion === 1, 'Production backup gate migration status schema version is unsupported');
+  invariant(status.kind === 'omnilodge-migration-status', 'Production backup gate migration status kind is invalid');
+  invariant(status.ok === true, 'Production backup gate migration status is not successful');
+  invariant(status.classification === 'fresh' || status.classification === 'managed', 'Production backup gate migration classification is invalid');
+  invariant(typeof status.lineage === 'string' && status.lineage.length > 0, 'Production backup gate migration lineage is invalid');
+  invariant(typeof status.metadataTableExists === 'boolean', 'Production backup gate migration metadata flag is invalid');
+  const appliedMigrationCount = requireNonNegativeSafeInteger(status.appliedMigrationCount, 'Production backup gate applied migration count');
+  const compiledMigrationCount = requireNonNegativeSafeInteger(status.compiledMigrationCount, 'Production backup gate compiled migration count');
+  const pendingMigrationCount = requireNonNegativeSafeInteger(status.pendingMigrationCount, 'Production backup gate pending migration count');
+  invariant(appliedMigrationCount <= compiledMigrationCount, 'Production backup gate migration counts are inconsistent');
+  invariant(pendingMigrationCount <= compiledMigrationCount, 'Production backup gate pending migration count is inconsistent');
+  const pendingMigrationNames = validatePendingMigrationNames(
+    status.pendingMigrationNames,
+    pendingMigrationCount,
+    'Production backup gate pending migration names',
+  );
+  return Object.freeze({
+    schemaVersion: 1,
+    kind: 'omnilodge-migration-status',
+    ok: true,
+    classification: status.classification,
+    lineage: status.lineage,
+    metadataTableExists: status.metadataTableExists,
+    appliedMigrationCount,
+    compiledMigrationCount,
+    pendingMigrationCount,
+    pendingMigrationNames,
+  });
+};
+
 export const validateProductionBackupGateResult = (rawResult) => {
   const result = requireExactKeys(
     rawResult,
@@ -370,6 +441,10 @@ export const validateProductionBackupGateResult = (rawResult) => {
       'requestId',
       'releaseId',
       'sourceSha',
+      'backupRequired',
+      'backupReason',
+      'pendingMigrationCount',
+      'pendingMigrationNames',
       'command',
       'backupRoot',
       'availableBytesBefore',
@@ -385,37 +460,82 @@ export const validateProductionBackupGateResult = (rawResult) => {
   const requestId = requireUuid(result.requestId, 'Production backup gate request ID');
   const sourceSha = requireSourceSha(result.sourceSha, 'Production backup gate source SHA');
   const releaseId = requireReleaseId(result.releaseId, sourceSha, 'Production backup gate release ID');
-  const command = requireExactKeys(
-    result.command,
-    ['path', 'timeoutMs', 'stdoutBytes', 'stderrBytes'],
-    'production backup gate command result',
+  invariant(typeof result.backupRequired === 'boolean', 'Production backup gate backup-required flag is invalid');
+  invariant(
+    result.backupReason === PRODUCTION_BACKUP_REASONS.pendingMigrations
+      || result.backupReason === PRODUCTION_BACKUP_REASONS.noPendingMigrations,
+    'Production backup gate backup reason is invalid',
   );
-  const selectedBackup = requireExactKeys(
-    result.selectedBackup,
-    ['path', 'sizeBytes', 'sha256', 'mtimeUtc'],
-    'production backup gate selected backup',
+  const pendingMigrationCount = requireNonNegativeSafeInteger(result.pendingMigrationCount, 'Production backup gate pending migration count');
+  const pendingMigrationNames = validatePendingMigrationNames(
+    result.pendingMigrationNames,
+    pendingMigrationCount,
+    'Production backup gate pending migration names',
   );
+  let command = null;
+  if (result.command !== null) {
+    const rawCommand = requireExactKeys(
+      result.command,
+      ['path', 'timeoutMs', 'stdoutBytes', 'stderrBytes'],
+      'production backup gate command result',
+    );
+    command = Object.freeze({
+      path: requireAbsolutePath(rawCommand.path, 'Production backup gate command path'),
+      timeoutMs: requirePositiveSafeInteger(rawCommand.timeoutMs, 'Production backup gate command timeout'),
+      stdoutBytes: requireNonNegativeSafeInteger(rawCommand.stdoutBytes, 'Production backup gate stdout byte count'),
+      stderrBytes: requireNonNegativeSafeInteger(rawCommand.stderrBytes, 'Production backup gate stderr byte count'),
+    });
+  }
+  let selectedBackup = null;
+  if (result.selectedBackup !== null) {
+    const rawSelectedBackup = requireExactKeys(
+      result.selectedBackup,
+      ['path', 'sizeBytes', 'sha256', 'mtimeUtc'],
+      'production backup gate selected backup',
+    );
+    selectedBackup = Object.freeze({
+      path: requireAbsolutePath(rawSelectedBackup.path, 'Production backup gate selected backup path'),
+      sizeBytes: requirePositiveSafeInteger(rawSelectedBackup.sizeBytes, 'Production backup gate selected backup size'),
+      sha256: requireSha256(rawSelectedBackup.sha256, 'Production backup gate selected backup digest'),
+      mtimeUtc: requireUtc(rawSelectedBackup.mtimeUtc, 'Production backup gate selected backup mtime'),
+    });
+  }
+  const backupRoot = requireOptionalAbsolutePath(result.backupRoot, 'Production backup gate backup root');
+  const availableBytesBefore = requireOptionalNonNegativeSafeInteger(result.availableBytesBefore, 'Production backup gate available bytes before');
+  const availableBytesAfter = requireOptionalNonNegativeSafeInteger(result.availableBytesAfter, 'Production backup gate available bytes after');
+  const createdBackupCount = requireNonNegativeSafeInteger(result.createdBackupCount, 'Production backup gate created backup count');
+  if (result.backupRequired) {
+    invariant(result.backupReason === PRODUCTION_BACKUP_REASONS.pendingMigrations, 'Production backup gate required backups must be caused by pending migrations');
+    invariant(pendingMigrationCount > 0, 'Production backup gate cannot require backup without pending migrations');
+    invariant(command !== null, 'Production backup gate required backups must record the command');
+    invariant(backupRoot !== null, 'Production backup gate required backups must record the backup root');
+    invariant(selectedBackup !== null, 'Production backup gate required backups must record the selected backup');
+    invariant(createdBackupCount > 0, 'Production backup gate required backups must record at least one created backup');
+  } else {
+    invariant(result.backupReason === PRODUCTION_BACKUP_REASONS.noPendingMigrations, 'Production backup gate skipped backups must be caused by no pending migrations');
+    invariant(pendingMigrationCount === 0, 'Production backup gate skipped backup must have zero pending migrations');
+    invariant(command === null, 'Production backup gate skipped backup must not record a command');
+    invariant(backupRoot === null, 'Production backup gate skipped backup must not record a backup root');
+    invariant(availableBytesBefore === null, 'Production backup gate skipped backup must not record free space before');
+    invariant(availableBytesAfter === null, 'Production backup gate skipped backup must not record free space after');
+    invariant(selectedBackup === null, 'Production backup gate skipped backup must not record a selected backup');
+    invariant(createdBackupCount === 0, 'Production backup gate skipped backup must not record created backups');
+  }
   return Object.freeze({
     schemaVersion: PRODUCTION_BACKUP_GATE_RESULT_SCHEMA_VERSION,
     requestId,
     releaseId,
     sourceSha,
-    command: Object.freeze({
-      path: requireAbsolutePath(command.path, 'Production backup gate command path'),
-      timeoutMs: requirePositiveSafeInteger(command.timeoutMs, 'Production backup gate command timeout'),
-      stdoutBytes: requireNonNegativeSafeInteger(command.stdoutBytes, 'Production backup gate stdout byte count'),
-      stderrBytes: requireNonNegativeSafeInteger(command.stderrBytes, 'Production backup gate stderr byte count'),
-    }),
-    backupRoot: requireAbsolutePath(result.backupRoot, 'Production backup gate backup root'),
-    availableBytesBefore: requireOptionalNonNegativeSafeInteger(result.availableBytesBefore, 'Production backup gate available bytes before'),
-    availableBytesAfter: requireOptionalNonNegativeSafeInteger(result.availableBytesAfter, 'Production backup gate available bytes after'),
-    selectedBackup: Object.freeze({
-      path: requireAbsolutePath(selectedBackup.path, 'Production backup gate selected backup path'),
-      sizeBytes: requirePositiveSafeInteger(selectedBackup.sizeBytes, 'Production backup gate selected backup size'),
-      sha256: requireSha256(selectedBackup.sha256, 'Production backup gate selected backup digest'),
-      mtimeUtc: requireUtc(selectedBackup.mtimeUtc, 'Production backup gate selected backup mtime'),
-    }),
-    createdBackupCount: requirePositiveSafeInteger(result.createdBackupCount, 'Production backup gate created backup count'),
+    backupRequired: result.backupRequired,
+    backupReason: result.backupReason,
+    pendingMigrationCount,
+    pendingMigrationNames,
+    command,
+    backupRoot,
+    availableBytesBefore,
+    availableBytesAfter,
+    selectedBackup,
+    createdBackupCount,
     startedAtUtc: requireUtc(result.startedAtUtc, 'Production backup gate start time'),
     completedAtUtc: requireUtc(result.completedAtUtc, 'Production backup gate completion time'),
   });
@@ -433,6 +553,7 @@ export const parseProductionBackupGateResult = (bytes) => parseCanonicalJson(byt
 
 export const runProductionBackupGate = async ({
   requestState,
+  migrationStatus,
   fs = nativeFs,
   execFileImpl = execFile,
   clock = () => new Date(),
@@ -452,6 +573,31 @@ export const runProductionBackupGate = async ({
   enforceCommandExecutable = true,
 } = {}) => {
   const identity = validateRequestStateForBackup(requestState);
+  const migration = validateMigrationStatusForBackupGate(migrationStatus);
+  const startedAt = validateDate(clock(), 'Backup gate start time');
+
+  if (migration.pendingMigrationCount === 0) {
+    const completedAt = validateDate(clock(), 'Backup gate completion time');
+    return validateProductionBackupGateResult({
+      schemaVersion: PRODUCTION_BACKUP_GATE_RESULT_SCHEMA_VERSION,
+      requestId: identity.requestId,
+      releaseId: identity.releaseId,
+      sourceSha: identity.sourceSha,
+      backupRequired: false,
+      backupReason: PRODUCTION_BACKUP_REASONS.noPendingMigrations,
+      pendingMigrationCount: 0,
+      pendingMigrationNames: [],
+      command: null,
+      backupRoot: null,
+      availableBytesBefore: null,
+      availableBytesAfter: null,
+      selectedBackup: null,
+      createdBackupCount: 0,
+      startedAtUtc: toIso(startedAt, 'Backup gate start time'),
+      completedAtUtc: toIso(completedAt, 'Backup gate completion time'),
+    });
+  }
+
   const normalizedCommandPath = normalizePath(backupCommandPath, 'Production backup command path', pathApi);
   const normalizedBackupRoot = normalizePath(backupRoot, 'Production backup root', pathApi);
   const security = Object.freeze({
@@ -462,8 +608,6 @@ export const runProductionBackupGate = async ({
     enforcePrivateBackupFileMode,
     enforceCommandExecutable,
   });
-
-  validateDate(clock(), 'Backup gate clock');
   requirePositiveSafeInteger(commandTimeoutMs, 'Production backup command timeout');
   requirePositiveSafeInteger(outputLimitBytes, 'Production backup command output limit');
   requireNonNegativeSafeInteger(freshnessToleranceMs, 'Production backup freshness tolerance');
@@ -495,7 +639,6 @@ export const runProductionBackupGate = async ({
     fs,
     backupRoot: normalizedBackupRoot,
   });
-  const startedAt = validateDate(clock(), 'Backup gate start time');
   const command = await runBackupCommand({
     commandPath: normalizedCommandPath,
     commandTimeoutMs,
@@ -532,6 +675,10 @@ export const runProductionBackupGate = async ({
     requestId: identity.requestId,
     releaseId: identity.releaseId,
     sourceSha: identity.sourceSha,
+    backupRequired: true,
+    backupReason: PRODUCTION_BACKUP_REASONS.pendingMigrations,
+    pendingMigrationCount: migration.pendingMigrationCount,
+    pendingMigrationNames: migration.pendingMigrationNames,
     command: {
       path: normalizedCommandPath,
       timeoutMs: commandTimeoutMs,
