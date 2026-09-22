@@ -223,9 +223,11 @@ session:
    the directory `0700`, private key `0600`, and certificate non-writable by
    group/world. The owner chose to defer rotation; that exception does not
    permit the files to enter an artifact or Git.
-3. Configure the reviewed backup command/path in the completed deploy worker.
-   A deployment with pending migrations must prove a fresh, non-empty,
-   checksummed backup before migration.
+3. Keep the reviewed backup script `/home/postgres/backup.sh` and staging
+   directory `/home/postgres/backups` root-controlled and private. A `deploy`
+   request now runs this script after candidate preflight and must prove a
+   newly created, non-empty, checksummed backup before the worker can advance
+   to the migration gate. Migration and activation still remain disabled.
 4. Replace the three fail-closed deploy scaffolds with the reviewed submitter,
    worker, and recovery implementation. The root submitter must rederive
    authorization from `/etc/omnilodge/deploy-policy.json`; GitHub's claimed

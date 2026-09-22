@@ -27,6 +27,10 @@ import {
 } from '../../../../scripts/deploy/host/state.mjs';
 import { createHostAuditLog } from './audit-log.mjs';
 import { serializeCanonicalJson } from './canonical-json.mjs';
+import {
+  runProductionBackupGate,
+  serializeProductionBackupGateResult,
+} from './backup-gate.mjs';
 import { HOST_DEPLOY_PATHS } from './constants.mjs';
 import {
   PRODUCTION_RELEASE_LAYOUT,
@@ -146,6 +150,9 @@ const dryRunChecksResultPath = ({ paths, requestId }) =>
 
 const browserCacheResultPath = ({ paths, requestId }) =>
   path.join(paths.stateRoot, `${validateRequestId(requestId)}.browser-cache-result.json`);
+
+const backupGateResultPath = ({ paths, requestId }) =>
+  path.join(paths.stateRoot, `${validateRequestId(requestId)}.backup-gate-result.json`);
 
 const delay = (milliseconds) => new Promise((resolve) => {
   setTimeout(resolve, milliseconds);
@@ -1097,9 +1104,11 @@ export const handleHostDeployWorkerRequest = async ({
   paths = HOST_DEPLOY_PATHS,
   clock = () => new Date(),
   fs = nativeFs,
-  requestStore = createRequestRecordStore({ paths, clock }),
+  fileOps = createDurableFileOps(),
+  requestStore = createRequestRecordStore({ paths, clock, fileOps }),
   auditLog = createHostAuditLog({ clock }),
   prepareRelease = prepareForwardReleaseArtifact,
+  runBackupGate = runProductionBackupGate,
 } = {}) => {
   const validatedRequestId = validateRequestId(requestId);
   let entry = await requestStore.lookup(validatedRequestId);
@@ -1166,7 +1175,25 @@ export const handleHostDeployWorkerRequest = async ({
       nextPhase: 'preflight_passed',
     });
     if (entry.requestState.intent.operation === 'deploy') {
-      throw new Error('Backup, migration, and activation switching gates are not enabled in this slice');
+      if (entry.requestState.phase === 'preflight_passed') {
+        const backupGate = await runBackupGate({
+          requestState: entry.requestState,
+          paths,
+          fs,
+          clock,
+        });
+        await publishOrVerifyBuffer({
+          fileOps,
+          targetPath: backupGateResultPath({ paths, requestId: validatedRequestId }),
+          bytes: serializeProductionBackupGateResult(backupGate),
+        });
+        entry = await requestStore.advance({
+          ...identityFromEntry(entry),
+          fromPhase: 'preflight_passed',
+          nextPhase: 'backup_verified',
+        });
+      }
+      throw new Error('Production migration and activation switching gates are not enabled in this slice');
     }
     entry = await advanceIfAtPhase({
       store: requestStore,

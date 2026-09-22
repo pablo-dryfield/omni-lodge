@@ -315,6 +315,7 @@ validate_source_assets() {
   for relative_path in \
     ops/production/libexec/deploy/activation-state-store.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
+    ops/production/libexec/deploy/backup-gate.mjs \
     ops/production/libexec/deploy/canonical-json.mjs \
     ops/production/libexec/deploy/capacity.mjs \
     ops/production/libexec/deploy/constants.mjs \
@@ -367,6 +368,7 @@ validate_source_assets() {
     "$node_path" --check "$(source_file bin/runtime-launcher.mjs)"
     "$node_path" --check "$(source_file pm2/ecosystem.production.cjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-state-store.mjs)"
+    "$node_path" --check "$(repository_file ops/production/libexec/deploy/backup-gate.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/capture-legacy-baseline-cli.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/legacy-baseline.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/submit-request.mjs)"
@@ -578,6 +580,7 @@ validate_installed() {
   for installed_control_plane_file in \
     ops/production/libexec/deploy/activation-state-store.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
+    ops/production/libexec/deploy/backup-gate.mjs \
     ops/production/libexec/deploy/canonical-json.mjs \
     ops/production/libexec/deploy/capacity.mjs \
     ops/production/libexec/deploy/constants.mjs \
@@ -712,6 +715,7 @@ install_assets() {
 
   for source_asset in \
     ops/production/libexec/deploy/audit-log.mjs \
+    ops/production/libexec/deploy/backup-gate.mjs \
     ops/production/libexec/deploy/canonical-json.mjs \
     ops/production/libexec/deploy/capacity.mjs \
     ops/production/libexec/deploy/constants.mjs \
@@ -808,6 +812,7 @@ install_assets() {
   for control_plane_file in \
     ops/production/libexec/deploy/activation-state-store.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
+    ops/production/libexec/deploy/backup-gate.mjs \
     ops/production/libexec/deploy/canonical-json.mjs \
     ops/production/libexec/deploy/capacity.mjs \
     ops/production/libexec/deploy/constants.mjs \
