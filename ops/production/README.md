@@ -100,13 +100,14 @@ candidate before it will start:
 
 The launcher derives `APP_VERSION`, `GIT_COMMIT_SHA`, and the UI build path from
 the selected release manifest. It also requires each dependency link's
-64-character directory to equal the corresponding lockfile hash in that
-manifest and binds the release-ID suffix to the full source SHA. It forces
-production schema sync and access-control seeding off, pins Puppeteer's cache
-to `/var/cache/omnilodge/puppeteer`, and uses Node's `--env-file` support for
-the two root-only configuration files. The detached worker pins both npm and
-Puppeteer caches below `/var/cache/omnilodge`; real runtime values are never
-placed in the ecosystem file.
+64-character directory to equal the dependency-layer key derived from the
+manifest's package hash, lockfile hash, pinned toolchain, platform,
+architecture, and install flags, and binds the release-ID suffix to the full
+source SHA. It forces production schema sync and access-control seeding off,
+pins Puppeteer's cache to `/var/cache/omnilodge/puppeteer`, and uses Node's
+`--env-file` support for the two root-only configuration files. The detached
+worker pins both npm and Puppeteer caches below `/var/cache/omnilodge`; real
+runtime values are never placed in the ecosystem file.
 
 The launcher does not inherit the PM2 daemon or control-panel environment.
 It passes only a fixed root identity/PATH plus its enforced invariants to Node;

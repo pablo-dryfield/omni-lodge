@@ -34,10 +34,18 @@ const commandShape = (args) => Object.freeze({
   cwd: PRODUCTION_PM2.cwd,
 });
 
-export const pm2StartOrRestartCommand = (component) => {
+export const pm2DeleteCommand = (component) => {
   const validated = validateComponent(component);
   return commandShape([
-    'startOrRestart',
+    'delete',
+    PRODUCTION_PM2.processNames[validated],
+  ]);
+};
+
+export const pm2StartCommand = (component) => {
+  const validated = validateComponent(component);
+  return commandShape([
+    'start',
     PRODUCTION_PM2.ecosystemPath,
     '--only',
     PRODUCTION_PM2.processNames[validated],
@@ -45,7 +53,11 @@ export const pm2StartOrRestartCommand = (component) => {
   ]);
 };
 
+export const pm2DeleteAllCommand = () => commandShape(['delete', 'all']);
+
 export const pm2JlistCommand = () => commandShape(['jlist']);
+
+export const pm2ResurrectCommand = () => commandShape(['resurrect']);
 
 export const pm2SaveCommand = () => commandShape(['save', '--force']);
 
@@ -73,6 +85,19 @@ export const runPm2Command = async ({
     }),
   });
 };
+
+const isMissingPm2ProcessError = (error) => {
+  const output = `${error?.stdout ?? ''}\n${error?.stderr ?? ''}`;
+  return /Process or Namespace .* not found/i.test(output)
+    || /process .* not found/i.test(output)
+    || /No process found/i.test(output);
+};
+
+const commandByteSummary = ({ result, command }) => Object.freeze({
+  command: result?.command ?? command,
+  stdoutBytes: Buffer.byteLength(result?.stdout ?? '', 'utf8'),
+  stderrBytes: Buffer.byteLength(result?.stderr ?? '', 'utf8'),
+});
 
 const parseArgs = (value) => {
   if (Array.isArray(value)) return value.map(String);
@@ -204,19 +229,54 @@ export const createProductionPm2ServiceController = ({
     });
   };
 
-  const restartComponent = async (component) => {
+  const deleteComponent = async (component) => {
     const validated = validateComponent(component);
-    const command = pm2StartOrRestartCommand(validated);
+    const command = pm2DeleteCommand(validated);
+    try {
+      const result = await runner({
+        command,
+        timeoutMs: PM2_COMMAND_TIMEOUT_MS,
+      });
+      return Object.freeze({
+        component: validated,
+        deleted: true,
+        ...commandByteSummary({ result, command }),
+      });
+    } catch (error) {
+      if (!isMissingPm2ProcessError(error)) throw error;
+      return Object.freeze({
+        component: validated,
+        deleted: false,
+        command,
+        stdoutBytes: Buffer.byteLength(error?.stdout ?? '', 'utf8'),
+        stderrBytes: Buffer.byteLength(error?.stderr ?? '', 'utf8'),
+      });
+    }
+  };
+
+  const startComponent = async (component) => {
+    const validated = validateComponent(component);
+    const command = pm2StartCommand(validated);
     const result = await runner({
       command,
       timeoutMs: PM2_COMMAND_TIMEOUT_MS,
     });
     return Object.freeze({
       component: validated,
+      startedAtUtc: now().toISOString(),
+      ...commandByteSummary({ result, command }),
+    });
+  };
+
+  const restartComponent = async (component) => {
+    const deleteResult = await deleteComponent(component);
+    const startResult = await startComponent(component);
+    return Object.freeze({
+      component: validateComponent(component),
       restartedAtUtc: now().toISOString(),
-      command: result.command ?? command,
-      stdoutBytes: Buffer.byteLength(result.stdout ?? '', 'utf8'),
-      stderrBytes: Buffer.byteLength(result.stderr ?? '', 'utf8'),
+      strategy: 'delete-and-start',
+      delete: deleteResult,
+      start: startResult,
     });
   };
 
@@ -231,6 +291,43 @@ export const createProductionPm2ServiceController = ({
       command: result.command ?? command,
       stdoutBytes: Buffer.byteLength(result.stdout ?? '', 'utf8'),
       stderrBytes: Buffer.byteLength(result.stderr ?? '', 'utf8'),
+    });
+  };
+
+  const restoreSavedProcessList = async () => {
+    const deleteCommand = pm2DeleteAllCommand();
+    let deleteAll = null;
+    try {
+      const deleteResult = await runner({
+        command: deleteCommand,
+        timeoutMs: PM2_COMMAND_TIMEOUT_MS,
+      });
+      deleteAll = Object.freeze({
+        deleted: true,
+        ...commandByteSummary({ result: deleteResult, command: deleteCommand }),
+      });
+    } catch (error) {
+      if (!isMissingPm2ProcessError(error)) throw error;
+      deleteAll = Object.freeze({
+        deleted: false,
+        command: deleteCommand,
+        stdoutBytes: Buffer.byteLength(error?.stdout ?? '', 'utf8'),
+        stderrBytes: Buffer.byteLength(error?.stderr ?? '', 'utf8'),
+      });
+    }
+
+    const resurrectCommand = pm2ResurrectCommand();
+    const resurrectResult = await runner({
+      command: resurrectCommand,
+      timeoutMs: PM2_COMMAND_TIMEOUT_MS,
+    });
+    return Object.freeze({
+      restoredAtUtc: now().toISOString(),
+      deleteAll,
+      resurrect: commandByteSummary({
+        result: resurrectResult,
+        command: resurrectCommand,
+      }),
     });
   };
 
@@ -257,7 +354,10 @@ export const createProductionPm2ServiceController = ({
 
   return Object.freeze({
     inspect,
+    deleteComponent,
+    startComponent,
     restartComponent,
+    restoreSavedProcessList,
     saveProcessList,
     restartComponentsInOrder,
   });
