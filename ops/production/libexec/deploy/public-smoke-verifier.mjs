@@ -214,7 +214,11 @@ const validateAssetManifest = ({ response, releaseId }) => {
   }
   const mainAsset = body?.files?.['main.js'];
   invariant(typeof mainAsset === 'string' && HASHED_MAIN_ASSET_PATTERN.test(mainAsset), 'asset-manifest.json main asset is not content hashed');
-  invariant(Array.isArray(body.entrypoints) && body.entrypoints.includes(mainAsset), 'asset-manifest.json entrypoints do not include the main asset');
+  const normalizedMainAsset = mainAsset.startsWith('/') ? mainAsset.slice(1) : mainAsset;
+  invariant(
+    Array.isArray(body.entrypoints) && (body.entrypoints.includes(mainAsset) || body.entrypoints.includes(normalizedMainAsset)),
+    'asset-manifest.json entrypoints do not include the main asset',
+  );
   return Object.freeze({
     release,
     mainAsset,

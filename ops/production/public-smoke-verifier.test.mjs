@@ -78,7 +78,7 @@ const createFixtureResponses = ({
   })],
   [`${TARGETS.applicationOrigin}/asset-manifest.json${uiCacheBust(releaseId)}`, jsonResponse({
     files: { 'main.js': manifestMainAsset },
-    entrypoints: [manifestMainAsset],
+    entrypoints: [manifestMainAsset.startsWith('/') ? manifestMainAsset.slice(1) : manifestMainAsset],
   })],
   [`${TARGETS.applicationOrigin}/${uiCacheBust(releaseId)}`, htmlResponse(indexBody)],
   [`${TARGETS.applicationOrigin}/manifest.json${uiCacheBust(releaseId)}`, jsonResponse({
