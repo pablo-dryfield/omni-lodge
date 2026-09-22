@@ -56,6 +56,7 @@ const createFixture = ({
   initialTransactionPhase = 'prepared',
   recoveryAction = 'converge_previous_snapshot',
   previousSnapshotKind = 'artifact_release',
+  publicSmokeRunnerImpl = null,
 } = {}) => {
   const calls = [];
   const previousSnapshot = Object.freeze({
@@ -182,7 +183,7 @@ const createFixture = ({
     },
   });
 
-  const publicSmokeRunner = async ({ releaseId, sourceSha, targets }) => {
+  const publicSmokeRunner = publicSmokeRunnerImpl ?? (async ({ releaseId, sourceSha, targets }) => {
     calls.push(`smoke:${releaseId}:${sourceSha}`);
     assert.deepEqual(targets, { applicationOrigin: 'https://omni-lodge.example' });
     return Object.freeze({
@@ -190,7 +191,7 @@ const createFixture = ({
       releaseId,
       sourceSha,
     });
-  };
+  });
 
   return {
     calls,
@@ -234,6 +235,42 @@ test('activation orchestrator sequences request, pointer, PM2, smoke, save, and 
   assert.equal(result.transactionPhase, 'committed');
   assert.equal(result.requestPhase, 'succeeded');
   assert.equal(result.activeSnapshotReference.activationId, REQUEST_ID);
+});
+
+test('activation orchestrator attaches cutover progress to public smoke failures', async () => {
+  const { calls, orchestrator } = createFixture({
+    publicSmokeRunnerImpl: async ({ releaseId, sourceSha }) => {
+      calls.push(`smoke:${releaseId}:${sourceSha}`);
+      throw new Error('ui-index public smoke check did not pass after 90000ms');
+    },
+  });
+
+  await assert.rejects(
+    orchestrator.activateForwardDeployment({
+      entry: requestEntry('activation_prepared'),
+    }),
+    (error) => {
+      assert.equal(error.message, 'ui-index public smoke check did not pass after 90000ms');
+      assert.equal(error.activationProgress.operation, 'deploy');
+      assert.equal(error.activationProgress.releaseId, RELEASE_ID);
+      assert.equal(error.activationProgress.sourceSha, SOURCE_SHA);
+      assert.equal(error.activationProgress.requestPhase, 'pointers_switched');
+      assert.equal(error.activationProgress.transactionPhase, 'pointers_switched');
+      assert.equal(error.activationProgress.pointerSwitch.schemaVersion, 1);
+      assert.equal(error.activationProgress.pm2Restart.schemaVersion, 1);
+      return true;
+    },
+  );
+
+  assert.deepEqual(calls, [
+    'tx:prepared->pointer_switching@activation_prepared',
+    'request:activation_prepared->pointer_switching',
+    'pointer:switch',
+    'tx:pointer_switching->pointers_switched@pointer_switching',
+    'request:pointer_switching->pointers_switched',
+    'pm2:restart:backend,ui-server:persist=false',
+    `smoke:${RELEASE_ID}:${SOURCE_SHA}`,
+  ]);
 });
 
 test('activation orchestrator fails closed until all mutating dependencies are injected', () => {

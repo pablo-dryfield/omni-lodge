@@ -546,7 +546,22 @@ test('detached worker records recovery evidence when activation fails after poin
       prepareActivationState: async ({ requestState }) => activationPreparationResult(requestState),
       activateDeployment: async ({ entry }) => {
         await advanceHarnessRequest(harness, entry, ['pointer_switching']);
-        throw new Error('simulated pointer switch failure');
+        const error = new Error('simulated pointer switch failure');
+        error.activationProgress = {
+          operation: 'deploy',
+          requestPhase: 'pointer_switching',
+          pm2Restart: {
+            restartedAtUtc: '2026-09-17T10:00:00.000Z',
+            components: [
+              {
+                component: 'backend',
+                processName: 'omni-lodge-be',
+                inspection: { status: 'online', attempts: 2 },
+              },
+            ],
+          },
+        };
+        throw error;
       },
       recoverDeployment: async ({ entry }) => {
         recoveryPhases.push(entry.requestState.phase);
@@ -573,6 +588,17 @@ test('detached worker records recovery evidence when activation fails after poin
     .bytes.toString('utf8'));
   assert.equal(recoveryEvidence.action, 'converge_previous_snapshot');
   assert.equal(recoveryEvidence.requestPhase, 'failed');
+  const failureEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, `${requestId}.activation-failure-result.json`))
+    .bytes.toString('utf8'));
+  assert.equal(failureEvidence.requestKind, 'forward_submit');
+  assert.equal(failureEvidence.recoveredSucceeded, false);
+  assert.equal(failureEvidence.activationError.name, 'Error');
+  assert.equal(failureEvidence.activationError.message, 'simulated pointer switch failure');
+  assert.equal(failureEvidence.activationError.activationProgress.requestPhase, 'pointer_switching');
+  assert.equal(failureEvidence.activationError.activationProgress.pm2Restart.components[0].inspection.status, 'online');
+  assert.equal(failureEvidence.recovery.action, 'converge_previous_snapshot');
+  assert.equal(failureEvidence.recovery.requestPhase, 'failed');
   const entry = await finishedEntry(harness, requestId);
   assert.equal(entry.requestState.phase, 'failed');
   assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
