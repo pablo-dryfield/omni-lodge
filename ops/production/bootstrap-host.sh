@@ -155,6 +155,130 @@ validate_policy_file() {
   ' "$policy_path" || die "deployment policy is not canonical or has an unsupported mode: $policy_path"
 }
 
+validate_backend_environment_file() {
+  environment_path=$1
+  [ -f "$environment_path" ] || die "backend environment is missing: $environment_path"
+  node_path=$(find_command node /usr/bin/node)
+  [ -n "$node_path" ] || die 'Node.js is required to validate the backend environment'
+  "$node_path" - "$environment_path" <<'NODE'
+    const fs = require("node:fs");
+    const environmentPath = process.argv[2];
+
+    const requiredKeys = [
+      "NODE_ENV",
+      "DB_HOST",
+      "DB_PORT",
+      "DB_NAME",
+      "DB_USER",
+      "DB_PASSWORD",
+      "PGSSLMODE",
+      "JWT_SECRET",
+      "CONFIG_ENCRYPTION_KEY",
+      "SKIP_DB_SYNC",
+      "DB_SYNC_ALTER",
+      "SEED_ACCESS_CONTROL",
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "GOOGLE_REFRESH_TOKEN",
+      "GOOGLE_DRIVE_SCHEDULES_PARENT_ID",
+      "BOOKING_EMAIL_POLL_CRON",
+      "BOOKING_EMAIL_POLL_TZ",
+      "BOOKING_GMAIL_BATCH_SIZE",
+      "BOOKING_GMAIL_QUERY",
+      "DB_BACKUP_STORAGE",
+      "DB_BACKUP_DRIVE_FOLDER",
+      "SCHED_LOCK_DAY",
+      "SCHED_LOCK_HOUR",
+      "SCHED_REMINDER1_DAY",
+      "SCHED_REMINDER1_HOUR",
+      "SCHED_REMINDER2_DAY",
+      "SCHED_REMINDER2_HOUR",
+      "SCHED_TZ",
+      "SMTP_HOST",
+      "SMTP_PORT",
+      "SMTP_USER",
+      "SMTP_PASS",
+      "SMTP_FROM",
+      "ECWID_STORE_ID",
+      "ECWID_API_TOKEN",
+      "ERROR_MONITORING_HASH_SECRET",
+      "ERROR_MONITORING_INTERNAL_SECRET",
+    ];
+
+    const forbiddenKeys = new Set([
+      "APP_VERSION",
+      "DBUS_SESSION_BUS_ADDRESS",
+      "GIT_COMMIT_SHA",
+      "GIT_PAGER",
+      "LESSCLOSE",
+      "LESSOPEN",
+      "LS_COLORS",
+      "MOTD_SHOWN",
+      "PAGER",
+      "REACT_APP_RELEASE",
+    ]);
+    const forbiddenLowercaseKeys = new Set([
+      "args",
+      "automation",
+      "autorestart",
+      "axm_dynamic",
+      "created_at",
+      "cwd",
+      "env",
+      "exec_interpreter",
+      "exec_mode",
+      "exit_code",
+      "filter_env",
+      "instance_var",
+      "kill_retry_time",
+      "km_link",
+      "merge_logs",
+      "name",
+      "namespace",
+      "node_args",
+      "node_version",
+      "pmx",
+      "prev_restart_delay",
+      "restart_time",
+      "treekill",
+      "unstable_restarts",
+      "username",
+      "version",
+      "versioning",
+      "vizion",
+      "vizion_running",
+      "watch",
+      "windowsHide",
+    ]);
+
+    const lines = fs.readFileSync(environmentPath, "utf8").split(/\r?\n/);
+    const keys = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+      if (!match) {
+        console.error(`backend environment contains an invalid assignment line`);
+        process.exit(1);
+      }
+      keys.push(match[1]);
+    }
+
+    const uniqueKeys = new Set(keys);
+    const missing = requiredKeys.filter((key) => !uniqueKeys.has(key));
+    const lowercase = keys.filter((key) => !/^[A-Z][A-Z0-9_]*$/.test(key));
+    const forbidden = keys.filter((key) => forbiddenKeys.has(key) || forbiddenLowercaseKeys.has(key));
+    const duplicate = keys.filter((key, index) => keys.indexOf(key) !== index);
+    if (missing.length > 0 || lowercase.length > 0 || forbidden.length > 0 || duplicate.length > 0) {
+      if (missing.length > 0) console.error(`missing keys: ${missing.join(", ")}`);
+      if (lowercase.length > 0) console.error(`non-production lowercase keys: ${lowercase.join(", ")}`);
+      if (forbidden.length > 0) console.error(`forbidden runtime/PM2/system keys: ${forbidden.join(", ")}`);
+      if (duplicate.length > 0) console.error(`duplicate keys: ${[...new Set(duplicate)].join(", ")}`);
+      process.exit(1);
+    }
+NODE
+}
+
 validate_toolchain() {
   toolchain_requirement=${1:-optional}
   if [ ! -x /usr/bin/node ] || [ ! -x /usr/bin/npm ]; then
@@ -582,6 +706,7 @@ validate_installed() {
   assert_exact_file "$ETC_ROOT/deploy-policy.json" '600'
   validate_policy_file "$ETC_ROOT/deploy-policy.json"
   assert_exact_file "$ETC_ROOT/backend.env" '600'
+  validate_backend_environment_file "$ETC_ROOT/backend.env"
   assert_exact_file "$ETC_ROOT/ui-server.env" '600'
   assert_exact_file "$AUTHORIZED_KEYS_TARGET" '644'
   assert_exact_file "$SSHD_TARGET" '644'
