@@ -228,6 +228,25 @@ const migrationGateResult = (requestState, {
   completedAtUtc: '2026-09-17T10:02:00.000Z',
 });
 
+const activationPreparationResult = (requestState) => ({
+  schemaVersion: 1,
+  requestId: requestState.request.requestId,
+  releaseId: requestState.intent.releaseId,
+  sourceSha: requestState.intent.sourceSha,
+  transactionPhase: 'prepared',
+  previousSnapshot: {
+    activationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    snapshotSha256: '6'.repeat(64),
+  },
+  targetSnapshot: {
+    activationId: requestState.request.requestId,
+    snapshotSha256: '7'.repeat(64),
+  },
+  recoveryAction: 'abort_without_pointer_change',
+  databaseAction: 'none',
+  preparedAtUtc: '2026-09-17T10:02:00.000Z',
+});
+
 const dryRunChecksResult = (requestState, {
   pendingMigrationNames = [],
 } = {}) => ({
@@ -314,12 +333,13 @@ test('detached worker stages a non-activation request and marks it succeeded', a
   ]);
 });
 
-test('detached worker fails deploy requests before activation is implemented', async () => {
+test('detached worker prepares activation state and fails before pointer switching', async () => {
   const harness = createHarness();
   await admit(harness, { requestId: '723e4567-e89b-42d3-a456-426614174011', operation: 'deploy' });
   const prepared = [];
   const backupGatePhases = [];
   const migrationGatePhases = [];
+  const activationPhases = [];
   await assert.rejects(
     handleHostDeployWorkerRequest({
       requestId: '723e4567-e89b-42d3-a456-426614174011',
@@ -346,13 +366,18 @@ test('detached worker fails deploy requests before activation is implemented', a
         assert.equal(backupResult.backupRequired, true);
         return migrationGateResult(requestState);
       },
+      prepareActivationState: async ({ requestState }) => {
+        activationPhases.push(requestState.phase);
+        return activationPreparationResult(requestState);
+      },
     }),
-    /Production activation switching gates are not enabled/,
+    /Production pointer switching gates are not enabled/,
   );
 
   assert.deepEqual(prepared, ['deploy']);
   assert.deepEqual(backupGatePhases, ['preflight_passed']);
   assert.deepEqual(migrationGatePhases, ['backup_verified']);
+  assert.deepEqual(activationPhases, ['activation_prepared']);
   assert.ok(harness.fileOps.files.has(path.join(
     TEST_PATHS.stateRoot,
     '723e4567-e89b-42d3-a456-426614174011.backup-gate-result.json',
@@ -361,6 +386,11 @@ test('detached worker fails deploy requests before activation is implemented', a
     TEST_PATHS.stateRoot,
     '723e4567-e89b-42d3-a456-426614174011.migration-gate-result.json',
   )));
+  const activationEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, '723e4567-e89b-42d3-a456-426614174011.activation-preparation-result.json'))
+    .bytes.toString('utf8'));
+  assert.equal(activationEvidence.transactionPhase, 'prepared');
+  assert.equal(activationEvidence.recoveryAction, 'abort_without_pointer_change');
   const entry = await finishedEntry(harness, '723e4567-e89b-42d3-a456-426614174011');
   assert.equal(entry.requestState.phase, 'failed');
   assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
@@ -372,6 +402,7 @@ test('detached worker skips production backup when migration status has no pendi
   await admit(harness, { requestId, operation: 'deploy' });
   const prepared = [];
   const migrationGatePhases = [];
+  const activationPhases = [];
 
   await assert.rejects(
     handleHostDeployWorkerRequest({
@@ -393,8 +424,12 @@ test('detached worker skips production backup when migration status has no pendi
         assert.equal(backupResult.backupRequired, false);
         return migrationGateResult(requestState, { pendingMigrationNames: [] });
       },
+      prepareActivationState: async ({ requestState }) => {
+        activationPhases.push(requestState.phase);
+        return activationPreparationResult(requestState);
+      },
     }),
-    /Production activation switching gates are not enabled/,
+    /Production pointer switching gates are not enabled/,
   );
 
   assert.deepEqual(prepared, ['deploy']);
@@ -412,7 +447,44 @@ test('detached worker skips production backup when migration status has no pendi
     .bytes.toString('utf8'));
   assert.equal(migrationEvidence.migrationRequired, false);
   assert.equal(migrationEvidence.command, null);
+  assert.deepEqual(activationPhases, ['activation_prepared']);
+  const activationEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, `${requestId}.activation-preparation-result.json`))
+    .bytes.toString('utf8'));
+  assert.equal(activationEvidence.transactionPhase, 'prepared');
 
+  const entry = await finishedEntry(harness, requestId);
+  assert.equal(entry.requestState.phase, 'failed');
+  assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
+});
+
+test('detached worker fails closed when activation baseline is missing', async () => {
+  const harness = createHarness();
+  const requestId = '923e4567-e89b-42d3-a456-426614174013';
+  await admit(harness, { requestId, operation: 'deploy' });
+
+  await assert.rejects(
+    handleHostDeployWorkerRequest({
+      requestId,
+      paths: TEST_PATHS,
+      requestStore: harness.store,
+      auditLog: harness.audit,
+      clock: harness.clock,
+      fileOps: harness.fileOps,
+      fs: { unlink: async () => {} },
+      prepareRelease: async ({ requestState }) => {
+        await publishDryRunChecks(harness, requestState);
+        return { releaseId: requestState.intent.releaseId };
+      },
+      runMigrationGate: async ({ requestState }) => migrationGateResult(requestState, { pendingMigrationNames: [] }),
+    }),
+    /Active activation snapshot is missing/,
+  );
+
+  assert.equal(harness.fileOps.files.has(path.join(
+    TEST_PATHS.stateRoot,
+    `${requestId}.activation-preparation-result.json`,
+  )), false);
   const entry = await finishedEntry(harness, requestId);
   assert.equal(entry.requestState.phase, 'failed');
   assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
