@@ -13,6 +13,13 @@ const safeCandidatePolicy = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const safeDryRunPolicy = (overrides: Record<string, unknown> = {}) => ({
+  ...safeCandidatePolicy({
+    value: APPLICATION_RUNTIME_MODES.dryRun,
+  }),
+  ...overrides,
+});
+
 describe('application runtime mode', () => {
   it('preserves primary behavior when the transition setting is absent', () => {
     expect(resolveApplicationRuntimeMode(undefined)).toBe('primary');
@@ -37,6 +44,15 @@ describe('application runtime mode', () => {
     });
   });
 
+  it('disables startup mutation and background jobs for a safe dry-run candidate', () => {
+    expect(resolveApplicationRuntimeMode('dry-run')).toBe('dry-run');
+    expect(buildApplicationRuntimeModePolicy(safeDryRunPolicy())).toEqual({
+      mode: 'dry-run',
+      allowStartupMutations: false,
+      allowBackgroundJobs: false,
+    });
+  });
+
   it.each([
     ['non-production environment', { nodeEnv: 'development' }, 'NODE_ENV'],
     ['runtime schema sync', { skipDbSync: false }, 'SKIP_DB_SYNC'],
@@ -44,6 +60,16 @@ describe('application runtime mode', () => {
     ['access-control seeding', { seedAccessControl: true }, 'SEED_ACCESS_CONTROL'],
   ])('rejects candidate mode with %s', (_label, overrides, expected) => {
     expect(() => buildApplicationRuntimeModePolicy(safeCandidatePolicy(overrides)))
+      .toThrow(expected);
+  });
+
+  it.each([
+    ['non-production environment', { nodeEnv: 'development' }, 'NODE_ENV'],
+    ['runtime schema sync', { skipDbSync: false }, 'SKIP_DB_SYNC'],
+    ['schema alteration', { alterSchema: true }, 'DB_SYNC_ALTER'],
+    ['access-control seeding', { seedAccessControl: true }, 'SEED_ACCESS_CONTROL'],
+  ])('rejects dry-run mode with %s', (_label, overrides, expected) => {
+    expect(() => buildApplicationRuntimeModePolicy(safeDryRunPolicy(overrides)))
       .toThrow(expected);
   });
 

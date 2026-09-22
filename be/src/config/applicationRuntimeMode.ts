@@ -1,6 +1,7 @@
 export const APPLICATION_RUNTIME_MODES = Object.freeze({
   primary: 'primary',
   deploymentCandidate: 'deployment-candidate',
+  dryRun: 'dry-run',
 } as const);
 
 export type ApplicationRuntimeMode =
@@ -25,8 +26,14 @@ export function resolveApplicationRuntimeMode(value: unknown): ApplicationRuntim
   if (normalized === APPLICATION_RUNTIME_MODES.deploymentCandidate) {
     return APPLICATION_RUNTIME_MODES.deploymentCandidate;
   }
+  if (normalized === APPLICATION_RUNTIME_MODES.dryRun) {
+    return APPLICATION_RUNTIME_MODES.dryRun;
+  }
   throw new Error('[runtime] APP_RUNTIME_MODE is invalid.');
 }
+
+const isNonPrimaryRuntimeMode = (mode: ApplicationRuntimeMode): boolean =>
+  mode !== APPLICATION_RUNTIME_MODES.primary;
 
 export function buildApplicationRuntimeModePolicy({
   value,
@@ -42,7 +49,7 @@ export function buildApplicationRuntimeModePolicy({
   seedAccessControl: boolean;
 }): ApplicationRuntimeModePolicy {
   const mode = resolveApplicationRuntimeMode(value);
-  if (mode === APPLICATION_RUNTIME_MODES.deploymentCandidate) {
+  if (isNonPrimaryRuntimeMode(mode)) {
     const violations: string[] = [];
     if ((nodeEnv ?? '').trim().toLowerCase() !== 'production') {
       violations.push('NODE_ENV must be production');
@@ -52,7 +59,7 @@ export function buildApplicationRuntimeModePolicy({
     if (seedAccessControl) violations.push('SEED_ACCESS_CONTROL must be false');
     if (violations.length > 0) {
       throw new Error(
-        '[runtime] Refusing unsafe deployment-candidate startup: '
+        `[runtime] Refusing unsafe ${mode} startup: `
         + `${violations.join('; ')}.`,
       );
     }
