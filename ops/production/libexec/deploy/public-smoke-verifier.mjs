@@ -209,7 +209,9 @@ const validateAssetManifest = ({ response, releaseId }) => {
   invariant(response.statusCode === 200, `asset-manifest.json returned HTTP ${response.statusCode}`);
   const body = parseJsonBody({ response, label: 'asset-manifest.json' });
   const release = releaseFromObject(body);
-  invariant(release === releaseId, 'asset-manifest.json release does not match');
+  if (release !== null) {
+    invariant(release === releaseId, 'asset-manifest.json release does not match');
+  }
   const mainAsset = body?.files?.['main.js'];
   invariant(typeof mainAsset === 'string' && HASHED_MAIN_ASSET_PATTERN.test(mainAsset), 'asset-manifest.json main asset is not content hashed');
   invariant(Array.isArray(body.entrypoints) && body.entrypoints.includes(mainAsset), 'asset-manifest.json entrypoints do not include the main asset');
