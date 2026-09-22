@@ -26,7 +26,9 @@ Security properties:
 - activation state is split into immutable snapshot files, one replaceable
   active-snapshot pointer file, and request-bound transaction files. Preparing
   an activation is idempotent and recovery-plannable, but it does not by
-  itself change PM2, release pointers, traffic, or database state;
+  itself change PM2, release pointers, traffic, or database state. Activation
+  transaction phase transitions are durably replaced with the same request and
+  snapshot binding before any future pointer-switching code can rely on them;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;
