@@ -33,6 +33,11 @@ Security properties:
   atomically replace the reviewed `backend-current` and `ui-current` symlinks,
   but the deployment worker does not call it until PM2 restart, readiness,
   public smoke, and recovery gates are wired;
+- public smoke verification is isolated in a standalone module that checks the
+  public API health, UI artifact identity, public source-map denial, and
+  companion PWA entry points for a target release, but the deployment worker
+  does not call it until pointer switching, PM2 restart, and recovery behavior
+  are wired;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;
