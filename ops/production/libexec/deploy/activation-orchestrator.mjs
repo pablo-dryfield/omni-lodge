@@ -1,4 +1,8 @@
 const DEFAULT_RESTART_COMPONENTS = Object.freeze(['backend', 'ui-server']);
+const RESTORE_REQUIRED_REQUEST_PHASES = new Set(['pointer_switching', 'pointers_switched', 'smoke_verified']);
+const RESTORE_IN_PROGRESS_REQUEST_PHASES = new Set(['restore_required', 'restoring_previous', 'previous_restored']);
+const RESTORE_REQUIRED_TRANSACTION_PHASES = new Set(['pointer_switching', 'pointers_switched', 'smoke_verified']);
+const RESTORE_IN_PROGRESS_TRANSACTION_PHASES = new Set(['restore_required', 'restoring_previous', 'previous_restored']);
 
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -29,6 +33,14 @@ const requireActivationPreparedDeploy = (entry) => {
   return checked;
 };
 
+const requireForwardDeploy = (entry) => {
+  const checked = requireEntry(entry);
+  const { requestState } = checked;
+  invariant(requestState.request?.kind === 'forward_submit', 'Only forward deployment requests can be recovered');
+  invariant(requestState.intent?.operation === 'deploy', 'Only deploy requests can be recovered');
+  return checked;
+};
+
 const advanceRequest = async ({
   requestStore,
   entry,
@@ -47,6 +59,22 @@ const advanceRequest = async ({
   return advanced;
 };
 
+const advanceRequestTo = async ({
+  requestStore,
+  entry,
+  nextPhase,
+  resultCode = null,
+}) => {
+  const checked = requireEntry(entry);
+  if (checked.requestState.phase === nextPhase) return checked;
+  return advanceRequest({
+    requestStore,
+    entry: checked,
+    nextPhase,
+    resultCode,
+  });
+};
+
 const transitionActivation = async ({
   activationStore,
   requestState,
@@ -58,6 +86,18 @@ const transitionActivation = async ({
   });
   invariant(transitioned?.transaction?.phase === nextPhase, `Activation transaction did not advance to ${nextPhase}`);
   return transitioned;
+};
+
+const readActivationTransaction = async ({
+  activationStore,
+  requestState,
+}) => {
+  const record = await activationStore.readTransaction({
+    requestId: requestState.request.requestId,
+    requestState,
+  });
+  invariant(record?.transaction?.phase, 'Activation transaction record is missing a phase');
+  return record;
 };
 
 const releaseIdentity = (targetSnapshot) => {
@@ -84,9 +124,12 @@ export const createActivationOrchestrator = ({
   const checkedPm2Controller = requireObject(pm2Controller, 'PM2 service controller');
   const runSmoke = requireFunction(publicSmokeRunner, 'Public smoke runner');
   requireFunction(checkedActivationStore.transitionTransaction, 'Activation transaction transition function');
+  requireFunction(checkedActivationStore.readTransaction, 'Activation transaction read function');
+  requireFunction(checkedActivationStore.planRecovery, 'Activation recovery-plan function');
   requireFunction(checkedActivationStore.commitActiveSnapshot, 'Activation active-snapshot commit function');
   requireFunction(checkedRequestStore.advance, 'Request phase advance function');
   requireFunction(checkedPointerSwitcher.switchArtifactPointers, 'Artifact pointer switch function');
+  requireFunction(checkedPointerSwitcher.switchActivationSnapshotPointers, 'Activation snapshot pointer switch function');
   requireFunction(checkedPm2Controller.restartComponentsInOrder, 'PM2 ordered restart function');
   requireFunction(checkedPm2Controller.saveProcessList, 'PM2 save function');
   requireFunction(now, 'Activation orchestrator clock');
@@ -190,7 +233,194 @@ export const createActivationOrchestrator = ({
     });
   };
 
+  const recoverForwardDeployment = async ({
+    entry,
+    restartComponents = DEFAULT_RESTART_COMPONENTS,
+  } = {}) => {
+    let currentEntry = requireForwardDeploy(entry);
+    const startedAtUtc = now().toISOString();
+    const initial = await readActivationTransaction({
+      activationStore: checkedActivationStore,
+      requestState: currentEntry.requestState,
+    });
+    const recoveryPlan = await checkedActivationStore.planRecovery({
+      requestId: currentEntry.requestState.request.requestId,
+      requestState: currentEntry.requestState,
+    });
+
+    if (recoveryPlan.action === 'none') {
+      return Object.freeze({
+        schemaVersion: 1,
+        startedAtUtc,
+        completedAtUtc: now().toISOString(),
+        action: 'none',
+        transactionPhase: initial.transaction.phase,
+        requestPhase: currentEntry.requestState.phase,
+        recoveryPlan,
+      });
+    }
+
+    if (recoveryPlan.action === 'abort_without_pointer_change') {
+      const failed = await transitionActivation({
+        activationStore: checkedActivationStore,
+        requestState: currentEntry.requestState,
+        nextPhase: 'failed',
+      });
+      currentEntry = await advanceRequestTo({
+        requestStore: checkedRequestStore,
+        entry: currentEntry,
+        nextPhase: 'failed',
+      });
+      return Object.freeze({
+        schemaVersion: 1,
+        startedAtUtc,
+        completedAtUtc: now().toISOString(),
+        action: recoveryPlan.action,
+        transactionPhase: failed.transaction.phase,
+        requestPhase: currentEntry.requestState.phase,
+        recoveryPlan,
+        activationTransaction: failed.transaction,
+        requestEntry: currentEntry,
+      });
+    }
+
+    if (recoveryPlan.action === 'commit_target_snapshot') {
+      if (currentEntry.requestState.phase === 'pointers_switched') {
+        currentEntry = await advanceRequestTo({
+          requestStore: checkedRequestStore,
+          entry: currentEntry,
+          nextPhase: 'smoke_verified',
+        });
+      }
+      invariant(
+        currentEntry.requestState.phase === 'smoke_verified',
+        'Target commit recovery requires a smoke-verified durable request state',
+      );
+      const pm2Save = await checkedPm2Controller.saveProcessList();
+      const committed = await transitionActivation({
+        activationStore: checkedActivationStore,
+        requestState: currentEntry.requestState,
+        nextPhase: 'committed',
+      });
+      const activeSnapshot = await checkedActivationStore.commitActiveSnapshot({
+        transaction: committed.transaction,
+        requestState: currentEntry.requestState,
+        previousSnapshot: committed.previousSnapshot,
+        targetSnapshot: committed.targetSnapshot,
+      });
+      currentEntry = await advanceRequestTo({
+        requestStore: checkedRequestStore,
+        entry: currentEntry,
+        nextPhase: 'succeeded',
+      });
+      return Object.freeze({
+        schemaVersion: 1,
+        startedAtUtc,
+        completedAtUtc: now().toISOString(),
+        action: recoveryPlan.action,
+        transactionPhase: committed.transaction.phase,
+        requestPhase: currentEntry.requestState.phase,
+        recoveryPlan,
+        pm2Save,
+        activeSnapshotReference: activeSnapshot.reference ?? null,
+        activationTransaction: committed.transaction,
+        requestEntry: currentEntry,
+      });
+    }
+
+    invariant(recoveryPlan.action === 'converge_previous_snapshot', `Unsupported activation recovery action: ${recoveryPlan.action}`);
+
+    let recoveryRecord = initial;
+    if (RESTORE_REQUIRED_TRANSACTION_PHASES.has(recoveryRecord.transaction.phase)) {
+      recoveryRecord = await transitionActivation({
+        activationStore: checkedActivationStore,
+        requestState: currentEntry.requestState,
+        nextPhase: 'restore_required',
+      });
+    } else {
+      invariant(
+        RESTORE_IN_PROGRESS_TRANSACTION_PHASES.has(recoveryRecord.transaction.phase),
+        `Cannot restore previous snapshot from activation transaction phase ${recoveryRecord.transaction.phase}`,
+      );
+    }
+
+    if (RESTORE_REQUIRED_REQUEST_PHASES.has(currentEntry.requestState.phase)) {
+      currentEntry = await advanceRequestTo({
+        requestStore: checkedRequestStore,
+        entry: currentEntry,
+        nextPhase: 'restore_required',
+      });
+    } else {
+      invariant(
+        RESTORE_IN_PROGRESS_REQUEST_PHASES.has(currentEntry.requestState.phase),
+        `Cannot restore previous snapshot from request phase ${currentEntry.requestState.phase}`,
+      );
+    }
+
+    if (recoveryRecord.transaction.phase === 'restore_required') {
+      recoveryRecord = await transitionActivation({
+        activationStore: checkedActivationStore,
+        requestState: currentEntry.requestState,
+        nextPhase: 'restoring_previous',
+      });
+    }
+    currentEntry = await advanceRequestTo({
+      requestStore: checkedRequestStore,
+      entry: currentEntry,
+      nextPhase: 'restoring_previous',
+    });
+
+    const pointerSwitch = await checkedPointerSwitcher.switchActivationSnapshotPointers({
+      targetSnapshot: recoveryRecord.previousSnapshot,
+    });
+    const pm2Restart = await checkedPm2Controller.restartComponentsInOrder({
+      components: Object.freeze([...restartComponents]),
+      persist: false,
+    });
+    const pm2Save = await checkedPm2Controller.saveProcessList();
+
+    if (recoveryRecord.transaction.phase === 'restoring_previous') {
+      recoveryRecord = await transitionActivation({
+        activationStore: checkedActivationStore,
+        requestState: currentEntry.requestState,
+        nextPhase: 'previous_restored',
+      });
+    }
+    currentEntry = await advanceRequestTo({
+      requestStore: checkedRequestStore,
+      entry: currentEntry,
+      nextPhase: 'previous_restored',
+    });
+
+    const failed = await transitionActivation({
+      activationStore: checkedActivationStore,
+      requestState: currentEntry.requestState,
+      nextPhase: 'failed',
+    });
+    currentEntry = await advanceRequestTo({
+      requestStore: checkedRequestStore,
+      entry: currentEntry,
+      nextPhase: 'failed',
+    });
+
+    return Object.freeze({
+      schemaVersion: 1,
+      startedAtUtc,
+      completedAtUtc: now().toISOString(),
+      action: recoveryPlan.action,
+      transactionPhase: failed.transaction.phase,
+      requestPhase: currentEntry.requestState.phase,
+      recoveryPlan,
+      pointerSwitch,
+      pm2Restart,
+      pm2Save,
+      activationTransaction: failed.transaction,
+      requestEntry: currentEntry,
+    });
+  };
+
   return Object.freeze({
     activateForwardDeployment,
+    recoverForwardDeployment,
   });
 };

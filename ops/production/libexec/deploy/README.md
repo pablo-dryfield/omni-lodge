@@ -46,8 +46,9 @@ Security properties:
   are wired;
 - activation orchestration is isolated in a standalone dependency-injected
   module that sequences the already-reviewed transaction, pointer, PM2, public
-  smoke, and active-snapshot primitives. It has no CLI, no production defaults,
-  and is not imported by the deployment worker in this checkpoint;
+  smoke, active-snapshot commit, and recovery primitives. It has no CLI, no
+  production defaults, and is not imported by the deployment worker in this
+  checkpoint;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;

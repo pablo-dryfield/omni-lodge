@@ -28,7 +28,10 @@ const requestEntry = (phase) => Object.freeze({
   }),
 });
 
-const createFixture = () => {
+const createFixture = ({
+  initialTransactionPhase = 'prepared',
+  recoveryAction = 'converge_previous_snapshot',
+} = {}) => {
   const calls = [];
   const previousSnapshot = Object.freeze({
     snapshotKind: 'legacy',
@@ -42,7 +45,7 @@ const createFixture = () => {
     backendRestoreTarget: '/opt/omnilodge/releases/target/be',
     uiRestoreTarget: '/opt/omnilodge/releases/target',
   });
-  let transactionPhase = 'prepared';
+  let transactionPhase = initialTransactionPhase;
 
   const transaction = (phase) => Object.freeze({
     requestId: REQUEST_ID,
@@ -52,6 +55,24 @@ const createFixture = () => {
   });
 
   const activationStore = Object.freeze({
+    readTransaction: async ({ requestState }) => {
+      calls.push(`tx:read:${transactionPhase}@${requestState.phase}`);
+      return Object.freeze({
+        transaction: transaction(transactionPhase),
+        previousSnapshot,
+        targetSnapshot,
+      });
+    },
+    planRecovery: async ({ requestState }) => {
+      calls.push(`plan:${recoveryAction}@${requestState.phase}`);
+      return Object.freeze({
+        action: recoveryAction,
+        databaseAction: 'none',
+        requestId: requestState.request.requestId,
+        previousSnapshot,
+        targetSnapshot,
+      });
+    },
     transitionTransaction: async ({ requestState, nextPhase }) => {
       calls.push(`tx:${transactionPhase}->${nextPhase}@${requestState.phase}`);
       if (nextPhase === 'committed') {
@@ -89,6 +110,15 @@ const createFixture = () => {
     switchArtifactPointers: async ({ targetSnapshot: rawTargetSnapshot }) => {
       calls.push('pointer:switch');
       assert.equal(rawTargetSnapshot.releaseId, RELEASE_ID);
+      return Object.freeze({
+        schemaVersion: 1,
+        backend: Object.freeze({ changed: true }),
+        ui: Object.freeze({ changed: true }),
+      });
+    },
+    switchActivationSnapshotPointers: async ({ targetSnapshot: rawTargetSnapshot }) => {
+      calls.push('pointer:switch-snapshot');
+      assert.equal(rawTargetSnapshot, previousSnapshot);
       return Object.freeze({
         schemaVersion: 1,
         backend: Object.freeze({ changed: true }),
@@ -184,4 +214,59 @@ test('activation orchestrator only accepts activation-prepared deploy requests',
     }),
     /activation-prepared request/,
   );
+});
+
+test('activation recovery converges pointers back to the previous snapshot and fails the request', async () => {
+  const { calls, orchestrator } = createFixture({
+    initialTransactionPhase: 'pointers_switched',
+    recoveryAction: 'converge_previous_snapshot',
+  });
+
+  const result = await orchestrator.recoverForwardDeployment({
+    entry: requestEntry('pointers_switched'),
+  });
+
+  assert.deepEqual(calls, [
+    'tx:read:pointers_switched@pointers_switched',
+    'plan:converge_previous_snapshot@pointers_switched',
+    'tx:pointers_switched->restore_required@pointers_switched',
+    'request:pointers_switched->restore_required',
+    'tx:restore_required->restoring_previous@restore_required',
+    'request:restore_required->restoring_previous',
+    'pointer:switch-snapshot',
+    'pm2:restart:backend,ui-server:persist=false',
+    'pm2:save',
+    'tx:restoring_previous->previous_restored@restoring_previous',
+    'request:restoring_previous->previous_restored',
+    'tx:previous_restored->failed@previous_restored',
+    'request:previous_restored->failed',
+  ]);
+  assert.equal(result.action, 'converge_previous_snapshot');
+  assert.equal(result.transactionPhase, 'failed');
+  assert.equal(result.requestPhase, 'failed');
+});
+
+test('activation recovery commits the target when smoke already verified the new release', async () => {
+  const { calls, orchestrator } = createFixture({
+    initialTransactionPhase: 'smoke_verified',
+    recoveryAction: 'commit_target_snapshot',
+  });
+
+  const result = await orchestrator.recoverForwardDeployment({
+    entry: requestEntry('pointers_switched'),
+  });
+
+  assert.deepEqual(calls, [
+    'tx:read:smoke_verified@pointers_switched',
+    'plan:commit_target_snapshot@pointers_switched',
+    'request:pointers_switched->smoke_verified',
+    'pm2:save',
+    'tx:smoke_verified->committed@smoke_verified',
+    'active:commit',
+    'request:smoke_verified->succeeded',
+  ]);
+  assert.equal(result.action, 'commit_target_snapshot');
+  assert.equal(result.transactionPhase, 'committed');
+  assert.equal(result.requestPhase, 'succeeded');
+  assert.equal(result.activeSnapshotReference.activationId, REQUEST_ID);
 });

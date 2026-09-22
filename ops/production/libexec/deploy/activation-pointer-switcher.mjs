@@ -75,18 +75,33 @@ export const pointerSetFromArtifactSnapshot = ({
   pathApi = path,
 } = {}) => {
   const snapshot = validateHostActivationSnapshot(targetSnapshot);
-  invariant(snapshot.snapshotKind === 'artifact', 'Only artifact activation snapshots can become current pointers');
+  invariant(snapshot.snapshotKind === 'artifact_release', 'Only artifact activation snapshots can become current pointers');
+  return pointerSetFromActivationSnapshot({ targetSnapshot: snapshot, layout, pathApi });
+};
+
+export const pointerSetFromActivationSnapshot = ({
+  targetSnapshot,
+  layout = PRODUCTION_RELEASE_LAYOUT,
+  pathApi = path,
+} = {}) => {
+  const snapshot = validateHostActivationSnapshot(targetSnapshot);
   const pointers = defaultActivationPointerPaths({ layout, pathApi });
+  const backendTargetPath = typeof snapshot.backendRestoreTarget === 'string'
+    ? snapshot.backendRestoreTarget
+    : snapshot.backendRestoreTarget.path;
+  const uiTargetPath = typeof snapshot.uiRestoreTarget === 'string'
+    ? snapshot.uiRestoreTarget
+    : snapshot.uiRestoreTarget.path;
   return Object.freeze({
     backend: Object.freeze({
       component: 'backend',
       linkPath: pointers.backend,
-      targetPath: snapshot.backendRestoreTarget,
+      targetPath: backendTargetPath,
     }),
     ui: Object.freeze({
       component: 'ui',
       linkPath: pointers.ui,
-      targetPath: snapshot.uiRestoreTarget,
+      targetPath: uiTargetPath,
     }),
   });
 };
@@ -226,10 +241,18 @@ export const createActivationPointerSwitcher = ({
     pointers: pointerSetFromArtifactSnapshot({ targetSnapshot, layout, pathApi }),
   });
 
+  const switchActivationSnapshotPointers = async ({
+    targetSnapshot,
+    layout = PRODUCTION_RELEASE_LAYOUT,
+  }) => switchPointerSet({
+    pointers: pointerSetFromActivationSnapshot({ targetSnapshot, layout, pathApi }),
+  });
+
   return Object.freeze({
     readPointer,
     replacePointer,
     switchPointerSet,
+    switchActivationSnapshotPointers,
     switchArtifactPointers,
   });
 };

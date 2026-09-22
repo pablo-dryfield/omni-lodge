@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import {
   createActivationPointerSwitcher,
+  pointerSetFromActivationSnapshot,
+  pointerSetFromArtifactSnapshot,
 } from './libexec/deploy/activation-pointer-switcher.mjs';
 
 const skipOnWindows = process.platform === 'win32'
@@ -43,6 +45,92 @@ const createFixture = async () => {
 const createSwitcher = () => createActivationPointerSwitcher({
   trustedUid: process.getuid(),
   trustedGid: process.getgid(),
+});
+
+const SOURCE_SHA = 'abcdefabcdefabcdefabcdefabcdefabcdefabcd';
+const REQUEST_SHA = 'b'.repeat(64);
+const ARTIFACT_RELEASE_ID = `omnilodge-r35724809287-a1-${SOURCE_SHA.slice(0, 12)}`;
+const ACTIVATION_ID = '12345678-1234-4234-9234-123456789abc';
+const PREVIOUS_ACTIVATION_ID = '22345678-1234-4234-9234-123456789abc';
+const SNAPSHOT_SHA = 'c'.repeat(64);
+
+test('activation pointer plans support artifact and legacy-baseline snapshots', () => {
+  const layout = {
+    releasesRoot: '/opt/omnilodge/releases',
+  };
+  const artifactSnapshot = {
+    schemaVersion: 1,
+    snapshotKind: 'artifact_release',
+    activationId: ACTIVATION_ID,
+    releaseId: ARTIFACT_RELEASE_ID,
+    sourceSha: SOURCE_SHA,
+    evidenceSha256: 'd'.repeat(64),
+    artifactZipSha256: 'e'.repeat(64),
+    activatedByRequestId: ACTIVATION_ID,
+    activatedByRequestSha256: REQUEST_SHA,
+    activatedAtUtc: '2026-09-22T12:00:00.000Z',
+    backendRestoreTarget: `/opt/omnilodge/releases/${ARTIFACT_RELEASE_ID}/be`,
+    uiRestoreTarget: `/opt/omnilodge/releases/${ARTIFACT_RELEASE_ID}`,
+    predecessorSnapshot: {
+      activationId: PREVIOUS_ACTIVATION_ID,
+      snapshotSha256: SNAPSHOT_SHA,
+    },
+  };
+  const legacySnapshot = {
+    schemaVersion: 1,
+    snapshotKind: 'legacy_baseline',
+    activationId: PREVIOUS_ACTIVATION_ID,
+    backendRestoreTarget: {
+      path: '/root/omni-lodge/be',
+      sourceSha: SOURCE_SHA,
+    },
+    uiRestoreTarget: {
+      path: '/root/omni-lodge/ui/build',
+      buildTreeSha256: 'f'.repeat(64),
+    },
+    pm2State: {
+      dumpPath: '/root/.pm2/dump.pm2',
+      dumpSha256: 'a'.repeat(64),
+      backendProcessName: 'omni-lodge-be',
+      uiProcessName: 'omni-lodge-ui-server',
+    },
+    capturedAtUtc: '2026-09-22T11:00:00.000Z',
+    capturedBy: 'root',
+  };
+
+  assert.deepEqual(pointerSetFromArtifactSnapshot({
+    targetSnapshot: artifactSnapshot,
+    layout,
+    pathApi: path.posix,
+  }), {
+    backend: {
+      component: 'backend',
+      linkPath: '/opt/omnilodge/backend-current',
+      targetPath: `/opt/omnilodge/releases/${ARTIFACT_RELEASE_ID}/be`,
+    },
+    ui: {
+      component: 'ui',
+      linkPath: '/opt/omnilodge/ui-current',
+      targetPath: `/opt/omnilodge/releases/${ARTIFACT_RELEASE_ID}`,
+    },
+  });
+
+  assert.deepEqual(pointerSetFromActivationSnapshot({
+    targetSnapshot: legacySnapshot,
+    layout,
+    pathApi: path.posix,
+  }), {
+    backend: {
+      component: 'backend',
+      linkPath: '/opt/omnilodge/backend-current',
+      targetPath: '/root/omni-lodge/be',
+    },
+    ui: {
+      component: 'ui',
+      linkPath: '/opt/omnilodge/ui-current',
+      targetPath: '/root/omni-lodge/ui/build',
+    },
+  });
 });
 
 test('activation pointer switcher creates and atomically replaces current links', {
