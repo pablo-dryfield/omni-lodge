@@ -145,6 +145,10 @@ const validateProcessRecord = ({ record, component }) => {
   invariant(env.exec_mode === 'fork_mode', `${component} PM2 process is not in fork mode`);
   invariant(env.pm_exec_path === PRODUCTION_PM2.runtimeLauncher, `${component} PM2 script is not the runtime launcher`);
   invariant(env.pm_cwd === PRODUCTION_PM2.cwd, `${component} PM2 cwd is invalid`);
+  invariant(
+    env.OMNILODGE_RUNTIME_COMPONENT === component,
+    `${component} PM2 runtime component environment is invalid`,
+  );
   const args = parseArgs(env.args);
   invariant(args.length === 1 && args[0] === component, `${component} PM2 runtime launcher args are invalid`);
   if (env.watch !== undefined) {
@@ -166,6 +170,7 @@ const validateProcessRecord = ({ record, component }) => {
     script: env.pm_exec_path,
     cwd: env.pm_cwd,
     args: Object.freeze(args),
+    runtimeComponent: env.OMNILODGE_RUNTIME_COMPONENT,
   });
 };
 

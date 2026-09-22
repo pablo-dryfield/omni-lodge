@@ -314,10 +314,27 @@ export const buildLaunch = (component) => {
   fail('Expected exactly one component: backend or ui-server');
 };
 
+const isRuntimeComponent = (value) => value === 'backend' || value === 'ui-server';
+
+export const resolveRuntimeComponent = ({ argv = process.argv, env = process.env } = {}) => {
+  if (isRuntimeComponent(env.OMNILODGE_RUNTIME_COMPONENT)) return env.OMNILODGE_RUNTIME_COMPONENT;
+  if (argv.length === 3 && isRuntimeComponent(argv[2])) return argv[2];
+  fail('Runtime launcher accepts exactly one component: backend or ui-server');
+};
+
+export const shouldRunRuntimeLauncher = ({
+  argv = process.argv,
+  env = process.env,
+  modulePath = fileURLToPath(import.meta.url),
+} = {}) => {
+  if (isRuntimeComponent(env.OMNILODGE_RUNTIME_COMPONENT)) return true;
+  if (!argv[1]) return false;
+  return path.resolve(modulePath) === path.resolve(argv[1]);
+};
+
 const run = () => {
   if (process.getuid?.() !== 0) fail('Runtime launcher must run as root');
-  if (process.argv.length !== 3) fail('Runtime launcher accepts exactly one component');
-  const launch = buildLaunch(process.argv[2]);
+  const launch = buildLaunch(resolveRuntimeComponent());
   const child = spawn(NODE, launch.args, {
     cwd: launch.cwd,
     // Node gives an existing process variable precedence over --env-file.
@@ -349,7 +366,7 @@ const run = () => {
   });
 };
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (shouldRunRuntimeLauncher()) {
   try {
     run();
   } catch (error) {

@@ -260,6 +260,8 @@ test('stable PM2 definition keeps one fork-mode instance per component', async (
     assert.equal(app.watch, false);
     assert.equal(app.script, '/usr/local/libexec/omnilodge/runtime-launcher.mjs');
   }
+  assert.equal(ecosystem.apps[0].env.OMNILODGE_RUNTIME_COMPONENT, 'backend');
+  assert.equal(ecosystem.apps[1].env.OMNILODGE_RUNTIME_COMPONENT, 'ui-server');
 });
 
 test('runtime launcher uses only fixed release/config/state roots', async () => {
@@ -286,12 +288,41 @@ test('runtime launcher uses only fixed release/config/state roots', async () => 
   assert.doesNotMatch(launcher, /process\.exitCode\s*=/);
   assert.match(launcher, /child\.once\('error'[\s\S]*process\.exit\(1\)/);
   assert.match(launcher, /child\.once\('exit'[\s\S]*process\.exit\(exitCode\)/);
+  assert.match(launcher, /OMNILODGE_RUNTIME_COMPONENT/);
+  assert.match(launcher, /shouldRunRuntimeLauncher/);
   assert.match(launcher, /env:\s*\{ \.\.\.BASE_ENV, \.\.\.launch\.env \}/);
   for (const fixedIdentity of ["HOME: '/root'", "USER: 'root'", "LOGNAME: 'root'"]) {
     assert.ok(launcher.includes(fixedIdentity), `missing minimal child identity: ${fixedIdentity}`);
   }
   assert.match(launcher, /requireReleaseFile/);
   assert.match(launcher, /escapes its release component/);
+});
+
+test('runtime launcher starts under PM2 even when PM2 hides the script as argv[1]', async () => {
+  const launcherPath = path.join(root, 'bin/runtime-launcher.mjs');
+  const {
+    resolveRuntimeComponent,
+    shouldRunRuntimeLauncher,
+  } = await import(`${pathToFileURL(launcherPath).href}?pm2-entrypoint-test=${Date.now()}`);
+
+  assert.equal(resolveRuntimeComponent({
+    argv: ['/usr/bin/node', '/usr/local/lib/node_modules/pm2/lib/ProcessContainerFork.js'],
+    env: { OMNILODGE_RUNTIME_COMPONENT: 'backend' },
+  }), 'backend');
+  assert.equal(shouldRunRuntimeLauncher({
+    argv: ['/usr/bin/node', '/usr/local/lib/node_modules/pm2/lib/ProcessContainerFork.js'],
+    env: { OMNILODGE_RUNTIME_COMPONENT: 'backend' },
+    modulePath: '/usr/local/libexec/omnilodge/runtime-launcher.mjs',
+  }), true);
+  assert.equal(shouldRunRuntimeLauncher({
+    argv: ['/usr/bin/node', '/usr/local/lib/node_modules/pm2/lib/ProcessContainerFork.js'],
+    env: {},
+    modulePath: '/usr/local/libexec/omnilodge/runtime-launcher.mjs',
+  }), false);
+  assert.throws(() => resolveRuntimeComponent({
+    argv: ['/usr/bin/node', '/tmp/container.js'],
+    env: { OMNILODGE_RUNTIME_COMPONENT: 'worker' },
+  }), /backend or ui-server/);
 });
 
 test('runtime launcher accepts candidate and rejects non-candidate release manifests', async () => {

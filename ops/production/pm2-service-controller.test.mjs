@@ -22,6 +22,7 @@ const pm2Record = ({
   args = [component],
   execMode = 'fork_mode',
   pmId = component === 'backend' ? 1 : 0,
+  runtimeComponent = component,
 }) => ({
   name: PRODUCTION_PM2.processNames[component],
   pm_id: pmId,
@@ -33,6 +34,7 @@ const pm2Record = ({
     pm_exec_path: script,
     pm_cwd: cwd,
     args,
+    OMNILODGE_RUNTIME_COMPONENT: runtimeComponent,
     instances: 1,
     autorestart: true,
     watch: false,
@@ -110,10 +112,16 @@ test('PM2 process-list validation accepts the reviewed fork-mode runtime launche
   assert.equal(validation.ok, true);
   assert.equal(validation.processCount, 2);
   assert.deepEqual(
-    validation.processes.map((process) => [process.component, process.name, process.script, process.args]),
+    validation.processes.map((process) => [
+      process.component,
+      process.name,
+      process.script,
+      process.args,
+      process.runtimeComponent,
+    ]),
     [
-      ['backend', 'omni-lodge-be', '/usr/local/libexec/omnilodge/runtime-launcher.mjs', ['backend']],
-      ['ui-server', 'omni-lodge-ui-server', '/usr/local/libexec/omnilodge/runtime-launcher.mjs', ['ui-server']],
+      ['backend', 'omni-lodge-be', '/usr/local/libexec/omnilodge/runtime-launcher.mjs', ['backend'], 'backend'],
+      ['ui-server', 'omni-lodge-ui-server', '/usr/local/libexec/omnilodge/runtime-launcher.mjs', ['ui-server'], 'ui-server'],
     ],
   );
 });
@@ -147,6 +155,16 @@ test('PM2 process-list validation fails closed on wrong script, mode, status, du
       ],
     }),
     /backend PM2 process is not online/,
+  );
+
+  assert.throws(
+    () => validatePm2ProcessList({
+      processes: [
+        pm2Record({ component: 'backend', runtimeComponent: null }),
+        pm2Record({ component: 'ui-server' }),
+      ],
+    }),
+    /backend PM2 runtime component environment is invalid/,
   );
 
   assert.throws(
