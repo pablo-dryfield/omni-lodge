@@ -333,7 +333,7 @@ jobs:
       - prepare_request
     if: needs.prepare_request.outputs.selected == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 45
     environment: production
     steps:
       # actions/checkout v7.0.1.
@@ -435,14 +435,54 @@ jobs:
             --ssh-command omnilodge-deploy-v1 \
             --timeout-ms 120000 \
             > "$result_path"
-          printf 'result_path=%s\n' "$result_path" >> "$GITHUB_OUTPUT"
+          request_id="$(RESULT_PATH="$result_path" node --input-type=module -e '
+            import fs from "node:fs";
+            const result = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, "utf8"));
+            process.stdout.write(result.requestId);
+          ')"
+          {
+            printf 'result_path=%s\n' "$result_path"
+            printf 'request_id=%s\n' "$request_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Poll host request status
+        id: poll
+        shell: bash
+        env:
+          REQUEST_DIR: ${{ runner.temp }}/production-deploy-request
+          SUBJECT_REQUEST_ID: ${{ steps.submit.outputs.request_id }}
+          DEPLOY_HOST: ${{ steps.ssh.outputs.host }}
+          DEPLOY_PORT: ${{ steps.ssh.outputs.port }}
+          DEPLOY_USER: ${{ steps.ssh.outputs.user }}
+          DEPLOY_KEY_PATH: ${{ steps.ssh.outputs.key_path }}
+          DEPLOY_KNOWN_HOSTS_PATH: ${{ steps.ssh.outputs.known_hosts_path }}
+        run: |
+          set -euo pipefail
+          status_path="$REQUEST_DIR/host-v2-status-result.json"
+          printf 'status_path=%s\n' "$status_path" >> "$GITHUB_OUTPUT"
+          node scripts/deploy/poll-host-v2-request-status.mjs \
+            --subject-request-id "$SUBJECT_REQUEST_ID" \
+            --actor "${GITHUB_ACTOR:-github-actions[bot]}" \
+            --host "$DEPLOY_HOST" \
+            --port "$DEPLOY_PORT" \
+            --user "$DEPLOY_USER" \
+            --key "$DEPLOY_KEY_PATH" \
+            --known-hosts "$DEPLOY_KNOWN_HOSTS_PATH" \
+            --ssh-command omnilodge-deploy-v1 \
+            --timeout-ms 120000 \
+            --poll-interval-ms 10000 \
+            --deadline-ms 1800000 \
+            > "$status_path"
 
       # actions/upload-artifact v7.0.1.
       - name: Upload host response evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: production-response-${{ needs.prepare_request.outputs.release_id }}-${{ needs.prepare_request.outputs.operation }}-${{ needs.prepare_request.outputs.trigger }}
-          path: ${{ steps.submit.outputs.result_path }}
+          path: |
+            ${{ runner.temp }}/production-deploy-request/host-v2-submit-result.json
+            ${{ runner.temp }}/production-deploy-request/host-v2-status-result.json
           if-no-files-found: error
           retention-days: 7
           compression-level: 0

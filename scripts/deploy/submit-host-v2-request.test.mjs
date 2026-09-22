@@ -7,7 +7,10 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
-import { createHostV2ForwardRequestFile } from './create-host-v2-request.mjs';
+import {
+  createHostV2ForwardRequestFile,
+  createHostV2StatusRequestFile,
+} from './create-host-v2-request.mjs';
 import {
   buildSshArguments,
   serializeHostV2SubmitResult,
@@ -26,6 +29,7 @@ const RUN_ATTEMPT = '1';
 const ARTIFACT_ID = '10651797247';
 const RELEASE_ID = `omnilodge-r${RUN_ID}-a${RUN_ATTEMPT}-${SOURCE_SHA.slice(0, 12)}`;
 const REQUEST_ID = '123e4567-e89b-42d3-a456-426614174000';
+const SUBJECT_REQUEST_ID = '223e4567-e89b-42d3-a456-426614174001';
 const REQUESTED_AT_UTC = '2026-09-21T16:36:28.000Z';
 const ARTIFACT = Buffer.from('PK\x03\x04submit-host-v2-request-test-artifact', 'binary');
 
@@ -102,8 +106,35 @@ const makeFixture = async (context) => {
   };
 };
 
+const makeStatusFixture = async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omnilodge-submit-host-v2-status-'));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const requestPath = path.join(root, 'host-status-request.bin');
+  const identityPath = path.join(root, 'host-status-request-identity.json');
+  const keyPath = path.join(root, 'deploy-key');
+  const knownHostsPath = path.join(root, 'known_hosts');
+  fs.writeFileSync(keyPath, 'not-a-real-private-key-for-unit-tests\n');
+  fs.writeFileSync(knownHostsPath, '203.0.113.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n');
+  await createHostV2StatusRequestFile({
+    requestId: REQUEST_ID,
+    requestedAtUtc: REQUESTED_AT_UTC,
+    actor: 'github-actions[bot]',
+    subjectRequestId: SUBJECT_REQUEST_ID,
+    outputPath: requestPath,
+    identityOutputPath: identityPath,
+  });
+  return {
+    root,
+    requestPath,
+    identityPath,
+    keyPath,
+    knownHostsPath,
+  };
+};
+
 const createMockSpawn = ({
   responseCode = 'REQUEST_ACCEPTED',
+  requestStatus = null,
   exitCode = 0,
   mutateResponse = (response) => response,
   onSpawn = () => {},
@@ -133,6 +164,7 @@ const createMockSpawn = ({
       const response = mutateResponse(createHostV2Response({
         requestIdentity: decoded.identity,
         code: responseCode,
+        requestStatus,
       }));
       child.stdout.end(encodeHostV2ResponseFrame(response));
       child.stderr.end();
@@ -207,7 +239,43 @@ test('streams a prepared host v2 request over SSH and validates the response', a
   assert.equal(result.releaseId, RELEASE_ID);
   assert.equal(result.operation, 'dry-run');
   assert.equal(result.trigger, 'manual');
+  assert.equal(result.subjectRequestId, null);
+  assert.equal(result.requestStatus, null);
   assert.equal(serializeHostV2SubmitResult(result), `${JSON.stringify(result, null, 2)}\n`);
+});
+
+test('returns status details for a host v2 status query', async (context) => {
+  const fixture = await makeStatusFixture(context);
+  const requestStatus = {
+    requestId: SUBJECT_REQUEST_ID,
+    kind: 'forward_submit',
+    lifecycle: 'succeeded',
+    phase: 'succeeded',
+    resultCode: 'REQUEST_SUCCEEDED',
+    updatedAtUtc: '2026-09-21T16:37:28.000Z',
+  };
+  const result = await submitHostV2Request({
+    requestPath: fixture.requestPath,
+    identityPath: fixture.identityPath,
+    host: '23.95.192.213',
+    port: '22',
+    user: 'omnilodge-deploy',
+    keyPath: fixture.keyPath,
+    knownHostsPath: fixture.knownHostsPath,
+    spawnCommand: createMockSpawn({
+      responseCode: 'STATUS_FOUND',
+      requestStatus,
+    }),
+  });
+
+  assert.equal(result.requestId, REQUEST_ID);
+  assert.equal(result.requestKind, 'status_query');
+  assert.equal(result.responseCode, 'STATUS_FOUND');
+  assert.equal(result.subjectRequestId, SUBJECT_REQUEST_ID);
+  assert.deepEqual(result.requestStatus, requestStatus);
+  assert.equal(result.releaseId, null);
+  assert.equal(result.operation, null);
+  assert.equal(result.trigger, null);
 });
 
 test('rejects a protocol response that does not match the saved request identity', async (context) => {

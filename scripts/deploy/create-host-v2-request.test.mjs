@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createHostV2ForwardRequestFile,
   createHostV2RollbackRequestFile,
+  createHostV2StatusRequestFile,
   serializeHostV2RequestCreationResult,
 } from './create-host-v2-request.mjs';
 import { serializeCanonicalHostJson } from './host/protocol.mjs';
@@ -157,6 +158,35 @@ test('creates an artifact-free host v2 rollback request and identity document', 
   assert.equal(decoded.artifactZipBytes.length, 0);
 });
 
+test('creates an artifact-free host v2 status request and identity document', async (context) => {
+  const fixture = makeFixture(context);
+  const result = await createHostV2StatusRequestFile({
+    requestId: REQUEST_ID,
+    requestedAtUtc: REQUESTED_AT_UTC,
+    actor: 'github-actions[bot]',
+    subjectRequestId: TARGET_SNAPSHOT.activationId,
+    outputPath: fixture.outputPath,
+    identityOutputPath: fixture.identityOutputPath,
+  });
+  const requestBytes = fs.readFileSync(fixture.outputPath);
+  const identityText = fs.readFileSync(fixture.identityOutputPath, 'utf8');
+  const identity = JSON.parse(identityText);
+  const decoded = decodeHostV2RequestFrame(requestBytes);
+
+  assert.deepEqual(identity, result);
+  assert.equal(identityText, serializeHostV2RequestCreationResult(result));
+  assert.equal(result.hostProtocolVersion, 2);
+  assert.equal(result.requestIdentity.kind, 'status_query');
+  assert.equal(result.requestIdentity.subjectRequestId, TARGET_SNAPSHOT.activationId);
+  assert.equal(result.requestFrameBytes, requestBytes.length);
+  assert.equal(result.requestFrameSha256, sha256(requestBytes));
+  assert.equal(result.artifactZipLength, 0);
+  assert.equal(result.artifactZipSha256, null);
+  assert.deepEqual(decoded.identity, result.requestIdentity);
+  assert.equal(decoded.evidenceBytes.length, 0);
+  assert.equal(decoded.artifactZipBytes.length, 0);
+});
+
 test('cleans up a streamed request when the identity output cannot be created', async (context) => {
   const fixture = makeFixture(context);
   fs.writeFileSync(fixture.identityOutputPath, 'existing identity');
@@ -200,6 +230,41 @@ test('CLI writes a canonical rollback identity document', (context) => {
   assert.equal(result.stdout, fs.readFileSync(fixture.identityOutputPath, 'utf8'));
   const identity = JSON.parse(result.stdout);
   assert.equal(identity.requestIdentity.kind, 'rollback_submit');
+  assert.equal(identity.artifactZipLength, 0);
+  assert.equal(identity.requestFrameSha256, sha256(fs.readFileSync(fixture.outputPath)));
+});
+
+test('CLI writes a canonical status identity document', (context) => {
+  const fixture = makeFixture(context);
+  const scriptPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    'create-host-v2-request.mjs',
+  );
+  const result = spawnSync(process.execPath, [
+    scriptPath,
+    '--kind',
+    'status',
+    '--request-id',
+    REQUEST_ID,
+    '--requested-at-utc',
+    REQUESTED_AT_UTC,
+    '--actor',
+    'github-actions[bot]',
+    '--subject-request-id',
+    TARGET_SNAPSHOT.activationId,
+    '--output',
+    fixture.outputPath,
+    '--identity-output',
+    fixture.identityOutputPath,
+  ], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout, fs.readFileSync(fixture.identityOutputPath, 'utf8'));
+  const identity = JSON.parse(result.stdout);
+  assert.equal(identity.requestIdentity.kind, 'status_query');
+  assert.equal(identity.requestIdentity.subjectRequestId, TARGET_SNAPSHOT.activationId);
   assert.equal(identity.artifactZipLength, 0);
   assert.equal(identity.requestFrameSha256, sha256(fs.readFileSync(fixture.outputPath)));
 });
