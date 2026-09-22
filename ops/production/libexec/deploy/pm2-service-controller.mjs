@@ -18,6 +18,8 @@ const COMPONENTS = Object.freeze(['backend', 'ui-server']);
 const PM2_COMMAND_TIMEOUT_MS = 60 * 1000;
 const PM2_SAVE_TIMEOUT_MS = 30 * 1000;
 const PM2_JLIST_LIMIT_BYTES = 1024 * 1024;
+const PM2_INSPECTION_RETRY_TIMEOUT_MS = 60 * 1000;
+const PM2_INSPECTION_RETRY_INTERVAL_MS = 2 * 1000;
 
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -98,6 +100,12 @@ const commandByteSummary = ({ result, command }) => Object.freeze({
   stdoutBytes: Buffer.byteLength(result?.stdout ?? '', 'utf8'),
   stderrBytes: Buffer.byteLength(result?.stderr ?? '', 'utf8'),
 });
+
+const delay = (milliseconds) => new Promise((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
+
+const errorMessage = (error) => (error instanceof Error ? error.message : String(error));
 
 const parseArgs = (value) => {
   if (Array.isArray(value)) return value.map(String);
@@ -209,6 +217,7 @@ export const validatePm2ProcessList = ({
 export const createProductionPm2ServiceController = ({
   runner = runPm2Command,
   now = () => new Date(),
+  wait = delay,
 } = {}) => {
   const inspect = async ({ allowUnmanagedProcesses = false } = {}) => {
     const command = pm2JlistCommand();
@@ -227,6 +236,49 @@ export const createProductionPm2ServiceController = ({
       command: result.command ?? command,
       validation,
     });
+  };
+
+  const inspectWithRetry = async ({
+    allowUnmanagedProcesses = false,
+    timeoutMs = PM2_INSPECTION_RETRY_TIMEOUT_MS,
+    intervalMs = PM2_INSPECTION_RETRY_INTERVAL_MS,
+  } = {}) => {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    const attempts = [];
+    let attempt = 0;
+    let lastError = null;
+
+    for (;;) {
+      attempt += 1;
+      try {
+        const inspection = await inspect({ allowUnmanagedProcesses });
+        return Object.freeze({
+          ...inspection,
+          attempts: Object.freeze(attempts.concat(Object.freeze({
+            attempt,
+            attemptedAtUtc: now().toISOString(),
+            ok: true,
+          }))),
+        });
+      } catch (error) {
+        lastError = error;
+        attempts.push(Object.freeze({
+          attempt,
+          attemptedAtUtc: now().toISOString(),
+          ok: false,
+          message: errorMessage(error),
+        }));
+
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          throw new Error(
+            `PM2 process validation did not become ready after ${attempt} attempt(s): ${errorMessage(lastError)}`,
+            { cause: lastError },
+          );
+        }
+        await wait(Math.min(intervalMs, remainingMs));
+      }
+    }
   };
 
   const deleteComponent = async (component) => {
@@ -334,12 +386,17 @@ export const createProductionPm2ServiceController = ({
   const restartComponentsInOrder = async ({
     components = COMPONENTS,
     persist = false,
+    inspectionTimeoutMs = PM2_INSPECTION_RETRY_TIMEOUT_MS,
+    inspectionIntervalMs = PM2_INSPECTION_RETRY_INTERVAL_MS,
   } = {}) => {
     const restarted = [];
     for (const component of components.map(validateComponent)) {
       restarted.push(await restartComponent(component));
     }
-    const inspection = await inspect();
+    const inspection = await inspectWithRetry({
+      timeoutMs: inspectionTimeoutMs,
+      intervalMs: inspectionIntervalMs,
+    });
     let save = null;
     if (persist) {
       save = await saveProcessList();
@@ -354,6 +411,7 @@ export const createProductionPm2ServiceController = ({
 
   return Object.freeze({
     inspect,
+    inspectWithRetry,
     deleteComponent,
     startComponent,
     restartComponent,
