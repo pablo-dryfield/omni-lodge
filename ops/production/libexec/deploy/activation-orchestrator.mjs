@@ -126,6 +126,24 @@ const releaseIdentity = (targetSnapshot) => {
 
 const usesManagedRuntime = (snapshot) => MANAGED_RUNTIME_SNAPSHOT_KINDS.has(snapshot?.snapshotKind);
 
+const throwWithActivationProgress = (error, progress) => {
+  if (error && typeof error === 'object') {
+    Object.defineProperty(error, 'activationProgress', {
+      value: Object.freeze(progress),
+      enumerable: true,
+      configurable: true,
+    });
+    throw error;
+  }
+  const wrapped = new Error(String(error));
+  Object.defineProperty(wrapped, 'activationProgress', {
+    value: Object.freeze(progress),
+    enumerable: true,
+    configurable: true,
+  });
+  throw wrapped;
+};
+
 export const createActivationOrchestrator = ({
   activationStore,
   requestStore,
@@ -191,14 +209,27 @@ export const createActivationOrchestrator = ({
     });
 
     const identity = releaseIdentity(pointersSwitched.targetSnapshot);
-    const publicSmoke = await runSmoke({
-      releaseId: identity.releaseId,
-      sourceSha: identity.sourceSha,
-      targets: smokeTargets,
-      requestState: currentEntry.requestState,
-      targetSnapshot: pointersSwitched.targetSnapshot,
-      now,
-    });
+    let publicSmoke;
+    try {
+      publicSmoke = await runSmoke({
+        releaseId: identity.releaseId,
+        sourceSha: identity.sourceSha,
+        targets: smokeTargets,
+        requestState: currentEntry.requestState,
+        targetSnapshot: pointersSwitched.targetSnapshot,
+        now,
+      });
+    } catch (error) {
+      throwWithActivationProgress(error, {
+        operation: 'deploy',
+        releaseId: identity.releaseId,
+        sourceSha: identity.sourceSha,
+        requestPhase: currentEntry.requestState.phase,
+        transactionPhase: pointersSwitched.transaction.phase,
+        pointerSwitch,
+        pm2Restart,
+      });
+    }
 
     const smokeVerified = await transitionActivation({
       activationStore: checkedActivationStore,
@@ -294,14 +325,27 @@ export const createActivationOrchestrator = ({
       persist: false,
     });
 
-    const publicSmoke = await runSmoke({
-      releaseId: identity.releaseId,
-      sourceSha: identity.sourceSha,
-      targets: smokeTargets,
-      requestState: currentEntry.requestState,
-      targetSnapshot: pointersSwitched.targetSnapshot,
-      now,
-    });
+    let publicSmoke;
+    try {
+      publicSmoke = await runSmoke({
+        releaseId: identity.releaseId,
+        sourceSha: identity.sourceSha,
+        targets: smokeTargets,
+        requestState: currentEntry.requestState,
+        targetSnapshot: pointersSwitched.targetSnapshot,
+        now,
+      });
+    } catch (error) {
+      throwWithActivationProgress(error, {
+        operation: 'rollback',
+        releaseId: identity.releaseId,
+        sourceSha: identity.sourceSha,
+        requestPhase: currentEntry.requestState.phase,
+        transactionPhase: pointersSwitched.transaction.phase,
+        pointerSwitch,
+        pm2Restart,
+      });
+    }
 
     const smokeVerified = await transitionActivation({
       activationStore: checkedActivationStore,

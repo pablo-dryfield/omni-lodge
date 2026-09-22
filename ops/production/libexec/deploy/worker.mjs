@@ -191,6 +191,9 @@ const activationCutoverResultPath = ({ paths, requestId }) =>
 const activationRecoveryResultPath = ({ paths, requestId }) =>
   path.join(paths.stateRoot, `${validateRequestId(requestId)}.activation-recovery-result.json`);
 
+const activationFailureResultPath = ({ paths, requestId }) =>
+  path.join(paths.stateRoot, `${validateRequestId(requestId)}.activation-failure-result.json`);
+
 const delay = (milliseconds) => new Promise((resolve) => {
   setTimeout(resolve, milliseconds);
 });
@@ -393,6 +396,97 @@ const jsonSafe = (value) => {
     return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, jsonSafe(child)]));
   }
   return value;
+};
+
+const serializeDeploymentError = (error, depth = 0) => {
+  if (depth > 4) return Object.freeze({ truncated: true });
+  if (error instanceof Error) {
+    const result = {
+      name: error.name || 'Error',
+      message: error.message,
+    };
+    if (typeof error.code === 'string' && error.code.length > 0) result.code = error.code;
+    if (typeof error.errno === 'number') result.errno = error.errno;
+    if (typeof error.syscall === 'string' && error.syscall.length > 0) result.syscall = error.syscall;
+    if (typeof error.address === 'string' && error.address.length > 0) result.address = error.address;
+    if (typeof error.port === 'number') result.port = error.port;
+    if (error.activationProgress) result.activationProgress = jsonSafe(error.activationProgress);
+    if (error.cause) result.cause = serializeDeploymentError(error.cause, depth + 1);
+    return Object.freeze(result);
+  }
+  if (error && typeof error === 'object') {
+    return Object.freeze({
+      name: error.constructor?.name || 'NonErrorObject',
+      details: jsonSafe(error),
+    });
+  }
+  return Object.freeze({
+    name: typeof error,
+    message: String(error),
+  });
+};
+
+const recoverySummary = (recovery) => {
+  if (!recovery || typeof recovery !== 'object') return null;
+  return Object.freeze({
+    action: recovery.action ?? null,
+    transactionPhase: recovery.transactionPhase ?? null,
+    requestPhase: recovery.requestPhase ?? null,
+    recoveryPlanAction: recovery.recoveryPlan?.action ?? null,
+    pm2Restart: recovery.pm2Restart
+      ? {
+        restartedAtUtc: recovery.pm2Restart.restartedAtUtc ?? null,
+        components: Array.isArray(recovery.pm2Restart.components)
+          ? recovery.pm2Restart.components.map((component) => ({
+            component: component.component ?? null,
+            processName: component.processName ?? null,
+            status: component.inspection?.status ?? null,
+            attempts: component.inspection?.attempts ?? null,
+          }))
+          : [],
+      }
+      : null,
+    pm2Restore: recovery.pm2Restore
+      ? {
+        restoredAtUtc: recovery.pm2Restore.restoredAtUtc ?? null,
+        deleteAll: recovery.pm2Restore.deleteAll
+          ? { deleted: recovery.pm2Restore.deleteAll.deleted ?? null }
+          : null,
+        resurrect: recovery.pm2Restore.resurrect
+          ? { stdoutBytes: recovery.pm2Restore.resurrect.stdoutBytes ?? null }
+          : null,
+      }
+      : null,
+  });
+};
+
+const publishActivationFailureEvidence = async ({
+  fileOps,
+  paths,
+  requestId,
+  requestKind,
+  activationError,
+  recovery,
+  recoveredSucceeded,
+  clock,
+}) => {
+  const evidence = {
+    schemaVersion: 1,
+    requestId,
+    requestKind,
+    recordedAtUtc: clock().toISOString(),
+    recoveredSucceeded,
+    activationError: serializeDeploymentError(activationError),
+    recovery: recoverySummary(recovery),
+  };
+  try {
+    await fileOps.publishExclusiveBuffer(
+      activationFailureResultPath({ paths, requestId }),
+      serializeCanonicalJson(jsonSafe(evidence)),
+    );
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
 };
 
 const summarizeCapacity = (calculation) => Object.freeze({
@@ -1488,9 +1582,10 @@ export const handleHostDeployWorkerRequest = async ({
           entry = activationCutover.requestEntry;
         } catch (activationError) {
           let recoveredSucceeded = false;
+          let recovery = null;
           const recoveryEntry = await requestStore.lookup(validatedRequestId);
           if (recoveryEntry !== null && recoveryEntry.state === 'running') {
-            const recovery = await recoverRollback({
+            recovery = await recoverRollback({
               entry: recoveryEntry,
               activationOrchestrator,
               paths,
@@ -1507,6 +1602,16 @@ export const handleHostDeployWorkerRequest = async ({
               recoveredSucceeded = true;
             }
           }
+          await publishActivationFailureEvidence({
+            fileOps,
+            paths,
+            requestId: validatedRequestId,
+            requestKind: entry.requestState.request.kind,
+            activationError,
+            recovery,
+            recoveredSucceeded,
+            clock,
+          });
           if (!recoveredSucceeded) {
             throw activationError;
           }
@@ -1647,9 +1752,10 @@ export const handleHostDeployWorkerRequest = async ({
           entry = activationCutover.requestEntry;
         } catch (activationError) {
           let recoveredSucceeded = false;
+          let recovery = null;
           const recoveryEntry = await requestStore.lookup(validatedRequestId);
           if (recoveryEntry !== null && recoveryEntry.state === 'running') {
-            const recovery = await recoverDeployment({
+            recovery = await recoverDeployment({
               entry: recoveryEntry,
               activationOrchestrator,
               paths,
@@ -1666,6 +1772,16 @@ export const handleHostDeployWorkerRequest = async ({
               recoveredSucceeded = true;
             }
           }
+          await publishActivationFailureEvidence({
+            fileOps,
+            paths,
+            requestId: validatedRequestId,
+            requestKind: entry.requestState.request.kind,
+            activationError,
+            recovery,
+            recoveredSucceeded,
+            clock,
+          });
           if (!recoveredSucceeded) {
             throw activationError;
           }
