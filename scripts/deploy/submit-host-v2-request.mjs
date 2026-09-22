@@ -248,6 +248,8 @@ export const submitHostV2Request = async ({
       releaseId: requestIdentity.releaseId ?? null,
       operation: requestIdentity.operation ?? null,
       trigger: requestIdentity.trigger ?? null,
+      subjectRequestId: requestIdentity.subjectRequestId ?? null,
+      requestStatus: response.requestStatus ?? null,
       responseReceived: true,
     });
   } finally {

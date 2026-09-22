@@ -11,12 +11,20 @@ import { parseStrictCliArguments } from '../release/lib.mjs';
 import {
   createHostV2ForwardRequestFileStream,
   createHostV2RollbackRequestChunks,
+  createHostV2StatusRequestChunks,
 } from './host-protocol-client.mjs';
 import { MAX_HOST_V2_EVIDENCE_BYTES } from './host/protocol-v2.mjs';
 
 const OPERATIONS = new Set(['stage', 'dry-run', 'deploy']);
 const TRIGGERS = new Set(['manual', 'automatic']);
-const REQUEST_KINDS = new Set(['forward', 'forward_submit', 'rollback', 'rollback_submit']);
+const REQUEST_KINDS = new Set([
+  'forward',
+  'forward_submit',
+  'rollback',
+  'rollback_submit',
+  'status',
+  'status_query',
+]);
 const SNAPSHOT_REFERENCE_PATTERN = /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):([0-9a-f]{64})$/;
 
 const VALUE_OPTIONS = [
@@ -30,6 +38,7 @@ const VALUE_OPTIONS = [
   'trigger',
   'expected-active-snapshot',
   'target-snapshot',
+  'subject-request-id',
   'output',
   'identity-output',
 ];
@@ -52,8 +61,10 @@ const requiredCliValue = (values, name) => {
 };
 
 const parseRequestKind = (value = 'forward') => {
-  invariant(REQUEST_KINDS.has(value), '--kind must be forward or rollback');
-  return value === 'rollback' || value === 'rollback_submit' ? 'rollback_submit' : 'forward_submit';
+  invariant(REQUEST_KINDS.has(value), '--kind must be forward, rollback, or status');
+  if (value === 'rollback' || value === 'rollback_submit') return 'rollback_submit';
+  if (value === 'status' || value === 'status_query') return 'status_query';
+  return 'forward_submit';
 };
 
 const parseSnapshotReference = (value, label) => {
@@ -245,9 +256,70 @@ export const createHostV2RollbackRequestFile = async ({
   }
 };
 
+export const createHostV2StatusRequestFile = async ({
+  requestId,
+  requestedAtUtc,
+  actor,
+  subjectRequestId,
+  outputPath,
+  identityOutputPath,
+}) => {
+  const resolvedOutputPath = path.resolve(outputPath);
+  const resolvedIdentityOutputPath = path.resolve(identityOutputPath);
+  invariant(
+    !samePath(resolvedOutputPath, resolvedIdentityOutputPath),
+    'Host v2 request output and identity output must be different files',
+  );
+
+  const createdPaths = new Set();
+  try {
+    const request = createHostV2StatusRequestChunks({
+      requestId,
+      requestedAtUtc,
+      actor,
+      subjectRequestId,
+    });
+    const frame = await writeChunksExclusive({
+      filePath: resolvedOutputPath,
+      chunks: request.chunks,
+      createdPaths,
+    });
+    invariant(frame.bytes === request.totalLength, 'Host v2 request output length does not match the request identity');
+    const result = Object.freeze({
+      schemaVersion: 1,
+      hostProtocolVersion: 2,
+      requestIdentity: request.identity,
+      requestFrameBytes: frame.bytes,
+      requestFrameSha256: frame.sha256,
+      artifactZipLength: 0,
+      artifactZipSha256: null,
+    });
+    await writeTextExclusive({
+      filePath: resolvedIdentityOutputPath,
+      text: serializeHostV2RequestCreationResult(result),
+      createdPaths,
+    });
+    return result;
+  } catch (error) {
+    await Promise.all([...createdPaths].reverse().map(removeCreatedPath));
+    throw error;
+  }
+};
+
 export const runCli = async (argv = process.argv.slice(2)) => {
   const { values } = parseStrictCliArguments(argv, { valueOptions: VALUE_OPTIONS });
   const kind = parseRequestKind(values.kind);
+  if (kind === 'status_query') {
+    const result = await createHostV2StatusRequestFile({
+      requestId: requiredCliValue(values, 'request-id'),
+      requestedAtUtc: requiredCliValue(values, 'requested-at-utc'),
+      actor: requiredCliValue(values, 'actor'),
+      subjectRequestId: requiredCliValue(values, 'subject-request-id'),
+      outputPath: requiredCliValue(values, 'output'),
+      identityOutputPath: requiredCliValue(values, 'identity-output'),
+    });
+    return serializeHostV2RequestCreationResult(result);
+  }
   if (kind === 'rollback_submit') {
     const result = await createHostV2RollbackRequestFile({
       requestId: requiredCliValue(values, 'request-id'),
