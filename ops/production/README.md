@@ -10,6 +10,12 @@ release candidate without switching live traffic. Do not enable production
 activation until recovery implementation, backup gate, preflight, activation,
 smoke tests, and rollback have passed a dummy-artifact exercise.
 
+The checked-in legacy-baseline command is a separate protected-root command. It
+captures the current checkout/UI-build/PM2 fallback into the activation-state
+store once, before any artifact cutover can replace live pointers. It is not
+available through the deploy SSH account and does not restart services, run
+migrations, or change production traffic.
+
 Activation remains deliberately unavailable in this slice. Request
 replay/idempotency records and artifact extraction quotas are implemented; full
 free-space/inode capacity gates for dependency publication remain an activation
@@ -183,6 +189,7 @@ sudo stat -c '%U:%G %a %n' \
   /etc/omnilodge/deploy-policy.json \
   /etc/omnilodge/backend.env \
   /etc/omnilodge/ui-server.env \
+  /usr/local/sbin/omnilodge-capture-legacy-baseline \
   /usr/local/sbin/omnilodge-deploy \
   /usr/local/libexec/omnilodge/ssh-gateway
 sudo visudo -cf /etc/sudoers.d/omnilodge-deploy
@@ -191,6 +198,18 @@ sudo sshd -t
 
 Do not print `/etc/omnilodge/*.env`, TLS key material, deployment requests, or
 GitHub environment secrets into a log or support conversation.
+
+After the host assets are installed and before any first artifact cutover, a
+protected root session may initialize the activation baseline:
+
+```sh
+sudo /usr/local/sbin/omnilodge-capture-legacy-baseline
+```
+
+The command is idempotent once an active activation snapshot exists. It writes
+only bounded restore metadata and digests to stdout; it must not be used as a
+rollback substitute or run after an artifact release is already the active
+snapshot.
 
 ## Separate operator-only configuration
 
@@ -225,19 +244,22 @@ Activation is intentionally outside the bootstrap script:
    so a failed recovery start blocks PM2 when the new unit graph becomes live.
    The detached worker template and recovery service are not separately
    enabled.
-4. Run `systemctl daemon-reload`, inspect the effective PM2 dependencies, and
+4. Capture the legacy activation baseline with
+   `/usr/local/sbin/omnilodge-capture-legacy-baseline` while production still
+   runs from the legacy checkout.
+5. Run `systemctl daemon-reload`, inspect the effective PM2 dependencies, and
    confirm a clean recovery run. Do not restart PM2 yet.
-5. Reload (not blindly restart) SSH, test a second connection using the deploy
+6. Reload (not blindly restart) SSH, test a second connection using the deploy
    key and exact forced command, and confirm shell/scp/sftp/forwarding attempts
    are refused. The bootstrap stub must still return a disabled response.
-6. Exercise accepted and rejected dummy request frames while production still
+7. Exercise accepted and rejected dummy request frames while production still
    runs from the legacy checkout. Confirm detached worker state and audit logs
    contain no request payload or secret.
-7. Perform the real dry run with no pointer switch or service restart.
-8. Preserve the legacy checkout and saved PM2 dump. Change the repository mode
+8. Perform the real dry run with no pointer switch or service restart.
+9. Preserve the legacy checkout and saved PM2 dump. Change the repository mode
    to `manual` only immediately before the approved first cutover; change the
    root-owned policy separately through a protected operator procedure.
-9. At cutover, load `/etc/omnilodge/ecosystem.production.cjs` only after the
+10. At cutover, load `/etc/omnilodge/ecosystem.production.cjs` only after the
    backend and UI candidates, dependency links, persistent links, environment,
    TLS, backup, migration, private readiness, public smoke, and rollback gates
    have passed.

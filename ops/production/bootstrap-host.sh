@@ -293,6 +293,7 @@ validate_source_assets() {
     ssh/90-omnilodge-deploy.conf \
     sudoers/omnilodge-deploy \
     bin/ssh-gateway \
+    bin/omnilodge-capture-legacy-baseline \
     bin/omnilodge-deploy \
     bin/omnilodge-deploy-worker \
     bin/omnilodge-deploy-recover \
@@ -312,12 +313,15 @@ validate_source_assets() {
   done
 
   for relative_path in \
+    ops/production/libexec/deploy/activation-state-store.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
     ops/production/libexec/deploy/canonical-json.mjs \
     ops/production/libexec/deploy/capacity.mjs \
     ops/production/libexec/deploy/constants.mjs \
+    ops/production/libexec/deploy/capture-legacy-baseline-cli.mjs \
     ops/production/libexec/deploy/deployment-flock.mjs \
     ops/production/libexec/deploy/index.mjs \
+    ops/production/libexec/deploy/legacy-baseline.mjs \
     ops/production/libexec/deploy/release-preparation.mjs \
     ops/production/libexec/deploy/request-store.mjs \
     ops/production/libexec/deploy/secure-filesystem.mjs \
@@ -346,6 +350,7 @@ validate_source_assets() {
     "$shell_path" -n \
       "$(source_file bootstrap-host.sh)" \
       "$(source_file bin/ssh-gateway)" \
+      "$(source_file bin/omnilodge-capture-legacy-baseline)" \
       "$(source_file bin/omnilodge-deploy)" \
       "$(source_file bin/omnilodge-deploy-worker)" \
       "$(source_file bin/omnilodge-deploy-recover)" \
@@ -361,6 +366,9 @@ validate_source_assets() {
   if [ -n "$node_path" ]; then
     "$node_path" --check "$(source_file bin/runtime-launcher.mjs)"
     "$node_path" --check "$(source_file pm2/ecosystem.production.cjs)"
+    "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-state-store.mjs)"
+    "$node_path" --check "$(repository_file ops/production/libexec/deploy/capture-legacy-baseline-cli.mjs)"
+    "$node_path" --check "$(repository_file ops/production/libexec/deploy/legacy-baseline.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/submit-request.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/worker.mjs)"
   elif [ "$MODE" = 'install' ]; then
@@ -497,6 +505,7 @@ show_plan() {
   note "  - create persistent state below $STATE_ROOT"
   note '  - install a forced-command SSH rule and an exact no-argument sudo rule'
   note '  - install disabled deploy/worker/recovery executables and inactive systemd units'
+  note '  - install the root-only legacy baseline capture command'
   note '  - install, but not start, the stable PM2 ecosystem and runtime launcher'
   note '  - leave the existing deployment key, live checkout, PM2 processes, and services unchanged'
 }
@@ -508,6 +517,7 @@ validate_installed() {
     && [ ! -e "$LIBEXEC_ROOT" ] && [ ! -L "$LIBEXEC_ROOT" ] \
     && [ ! -e "$SSHD_TARGET" ] && [ ! -L "$SSHD_TARGET" ] \
     && [ ! -e "$SUDOERS_TARGET" ] && [ ! -L "$SUDOERS_TARGET" ] \
+    && [ ! -e /usr/local/sbin/omnilodge-capture-legacy-baseline ] && [ ! -L /usr/local/sbin/omnilodge-capture-legacy-baseline ] \
     && [ ! -e /usr/local/sbin/omnilodge-deploy ] && [ ! -L /usr/local/sbin/omnilodge-deploy ] \
     && [ ! -e /etc/systemd/system/omnilodge-deploy-worker@.service ] \
     && [ ! -L /etc/systemd/system/omnilodge-deploy-worker@.service ] \
@@ -566,12 +576,15 @@ validate_installed() {
   assert_exact_file "$LIBEXEC_ROOT/ssh-gateway" '755'
   assert_exact_file "$LIBEXEC_ROOT/runtime-launcher.mjs" '755'
   for installed_control_plane_file in \
+    ops/production/libexec/deploy/activation-state-store.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
     ops/production/libexec/deploy/canonical-json.mjs \
     ops/production/libexec/deploy/capacity.mjs \
     ops/production/libexec/deploy/constants.mjs \
+    ops/production/libexec/deploy/capture-legacy-baseline-cli.mjs \
     ops/production/libexec/deploy/deployment-flock.mjs \
     ops/production/libexec/deploy/index.mjs \
+    ops/production/libexec/deploy/legacy-baseline.mjs \
     ops/production/libexec/deploy/release-preparation.mjs \
     ops/production/libexec/deploy/request-store.mjs \
     ops/production/libexec/deploy/secure-filesystem.mjs \
@@ -591,6 +604,7 @@ validate_installed() {
     cmp -s "$(repository_file "$installed_control_plane_file")" "$CONTROL_PLANE_ROOT/$installed_control_plane_file" \
       || die "installed control-plane file differs from the reviewed source: $installed_control_plane_file"
   done
+  assert_exact_file /usr/local/sbin/omnilodge-capture-legacy-baseline '755'
   assert_exact_file /usr/local/sbin/omnilodge-deploy '755'
   assert_exact_file /usr/local/sbin/omnilodge-deploy-worker '755'
   assert_exact_file /usr/local/sbin/omnilodge-deploy-recover '755'
@@ -610,6 +624,8 @@ validate_installed() {
     || die 'installed SSH gateway differs from the reviewed source'
   cmp -s "$(source_file bin/runtime-launcher.mjs)" "$LIBEXEC_ROOT/runtime-launcher.mjs" \
     || die 'installed runtime launcher differs from the reviewed source'
+  cmp -s "$(source_file bin/omnilodge-capture-legacy-baseline)" /usr/local/sbin/omnilodge-capture-legacy-baseline \
+    || die 'installed legacy baseline capture command differs from the reviewed source'
   cmp -s "$(source_file bin/omnilodge-deploy)" /usr/local/sbin/omnilodge-deploy \
     || die 'installed deploy entry point differs from the reviewed source'
   cmp -s "$(source_file bin/omnilodge-deploy-worker)" /usr/local/sbin/omnilodge-deploy-worker \
@@ -673,6 +689,7 @@ install_assets() {
     ssh/90-omnilodge-deploy.conf \
     sudoers/omnilodge-deploy \
     bin/ssh-gateway \
+    bin/omnilodge-capture-legacy-baseline \
     bin/omnilodge-deploy \
     bin/omnilodge-deploy-worker \
     bin/omnilodge-deploy-recover \
@@ -789,12 +806,15 @@ install_assets() {
   atomic_install "$(source_file bin/ssh-gateway)" "$LIBEXEC_ROOT/ssh-gateway" 755
   atomic_install "$(source_file bin/runtime-launcher.mjs)" "$LIBEXEC_ROOT/runtime-launcher.mjs" 755
   for control_plane_file in \
+    ops/production/libexec/deploy/activation-state-store.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
     ops/production/libexec/deploy/canonical-json.mjs \
     ops/production/libexec/deploy/capacity.mjs \
     ops/production/libexec/deploy/constants.mjs \
+    ops/production/libexec/deploy/capture-legacy-baseline-cli.mjs \
     ops/production/libexec/deploy/deployment-flock.mjs \
     ops/production/libexec/deploy/index.mjs \
+    ops/production/libexec/deploy/legacy-baseline.mjs \
     ops/production/libexec/deploy/release-preparation.mjs \
     ops/production/libexec/deploy/request-store.mjs \
     ops/production/libexec/deploy/secure-filesystem.mjs \
@@ -812,6 +832,7 @@ install_assets() {
   do
     atomic_install "$(repository_file "$control_plane_file")" "$CONTROL_PLANE_ROOT/$control_plane_file" 644
   done
+  atomic_install "$(source_file bin/omnilodge-capture-legacy-baseline)" /usr/local/sbin/omnilodge-capture-legacy-baseline 755
   atomic_install "$(source_file bin/omnilodge-deploy)" /usr/local/sbin/omnilodge-deploy 755
   atomic_install "$(source_file bin/omnilodge-deploy-worker)" /usr/local/sbin/omnilodge-deploy-worker 755
   atomic_install "$(source_file bin/omnilodge-deploy-recover)" /usr/local/sbin/omnilodge-deploy-recover 755

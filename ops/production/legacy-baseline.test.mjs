@@ -11,10 +11,15 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  captureLegacyBaselineOnce,
+  runCaptureLegacyBaselineCli,
+} from './libexec/deploy/capture-legacy-baseline-cli.mjs';
+import {
   captureAndInitializeLegacyBaseline,
   createLegacyBaselineSnapshot,
   hashLegacyUiBuildTree,
 } from './libexec/deploy/legacy-baseline.mjs';
+import { createHostActivationSnapshotReference } from '../../scripts/deploy/host/state.mjs';
 
 const SOURCE_SHA = 'c'.repeat(40);
 
@@ -25,6 +30,16 @@ const mkdir = (directory) => mkdirSync(directory, { recursive: true, mode: 0o755
 const writeFile = (filePath, contents) => {
   mkdir(path.dirname(filePath));
   writeFileSync(filePath, contents, { mode: 0o600 });
+};
+
+const createStringSink = () => {
+  const chunks = [];
+  return {
+    write: (chunk) => {
+      chunks.push(String(chunk));
+    },
+    value: () => chunks.join(''),
+  };
 };
 
 const createFixture = () => {
@@ -115,6 +130,137 @@ test('legacy baseline capture initializes the provided activation store', async 
     assert.deepEqual(result.snapshot, calls[0]);
     assert.equal(result.reference.activationId, '22222222-2222-4222-8222-222222222222');
     assert.equal(result.activePath, '/var/lib/omnilodge/deploy/state/active-activation-snapshot.json');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('legacy baseline command refuses non-root callers and command arguments', async () => {
+  const stdout = createStringSink();
+  const stderr = createStringSink();
+  assert.equal(
+    await runCaptureLegacyBaselineCli({
+      uid: 1000,
+      argv: [],
+      stdout,
+      stderr,
+    }),
+    64,
+  );
+  assert.equal(stdout.value(), '');
+  assert.match(stderr.value(), /Legacy baseline capture refused/);
+
+  const rootStdout = createStringSink();
+  const rootStderr = createStringSink();
+  assert.equal(
+    await runCaptureLegacyBaselineCli({
+      uid: 0,
+      argv: ['--force'],
+      stdout: rootStdout,
+      stderr: rootStderr,
+    }),
+    64,
+  );
+  assert.equal(rootStdout.value(), '');
+  assert.match(rootStderr.value(), /Legacy baseline capture refused/);
+});
+
+test('legacy baseline command is idempotent when an active snapshot already exists', async () => {
+  const fixture = createFixture();
+  try {
+    const snapshot = await createLegacyBaselineSnapshot({
+      activationId: '33333333-3333-4333-8333-333333333333',
+      capturedAtUtc: '2026-09-22T01:42:00.000Z',
+      capturedBy: 'root',
+      repositoryPath: fixture.repositoryPath,
+      backendRestorePath: '/root/omni-lodge/be',
+      uiBuildPath: fixture.uiBuildPath,
+      uiRestorePath: '/root/omni-lodge/ui/build',
+      pm2DumpPath: fixture.pm2DumpPath,
+      pm2DumpRestorePath: '/root/.pm2/dump.pm2',
+      execFileImpl: await fakeGit(fixture.repositoryPath),
+    });
+    const reference = createHostActivationSnapshotReference(snapshot);
+    let captureCalled = false;
+    const summary = await captureLegacyBaselineOnce({
+      store: {
+        readActiveSnapshot: async () => ({
+          snapshot,
+          reference,
+          path: '/var/lib/omnilodge/deploy/state/active-activation-snapshot.json',
+        }),
+        activePath: () => '/unused-active-path.json',
+      },
+      capture: async () => {
+        captureCalled = true;
+        throw new Error('capture must not run');
+      },
+    });
+
+    assert.equal(captureCalled, false);
+    assert.equal(summary.disposition, 'already-initialized');
+    assert.equal(summary.snapshotKind, 'legacy_baseline');
+    assert.equal(summary.activationId, snapshot.activationId);
+    assert.equal(summary.snapshotSha256, reference.snapshotSha256);
+    assert.equal(summary.activePath, '/var/lib/omnilodge/deploy/state/active-activation-snapshot.json');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('legacy baseline command creates one baseline and emits a bounded JSON summary', async () => {
+  const fixture = createFixture();
+  try {
+    const snapshot = await createLegacyBaselineSnapshot({
+      activationId: '44444444-4444-4444-8444-444444444444',
+      capturedAtUtc: '2026-09-22T01:43:00.000Z',
+      capturedBy: 'root',
+      repositoryPath: fixture.repositoryPath,
+      backendRestorePath: '/root/omni-lodge/be',
+      uiBuildPath: fixture.uiBuildPath,
+      uiRestorePath: '/root/omni-lodge/ui/build',
+      pm2DumpPath: fixture.pm2DumpPath,
+      pm2DumpRestorePath: '/root/.pm2/dump.pm2',
+      execFileImpl: await fakeGit(fixture.repositoryPath),
+    });
+    const reference = createHostActivationSnapshotReference(snapshot);
+    const stdout = createStringSink();
+    const stderr = createStringSink();
+
+    const exitCode = await runCaptureLegacyBaselineCli({
+      uid: 0,
+      argv: [],
+      stdout,
+      stderr,
+      store: {
+        readActiveSnapshot: async () => null,
+      },
+      capture: async ({ capturedBy }) => {
+        assert.equal(capturedBy, 'root');
+        return {
+          snapshot,
+          reference,
+          activePath: '/var/lib/omnilodge/deploy/state/active-activation-snapshot.json',
+        };
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.value(), '');
+    const parsed = JSON.parse(stdout.value());
+    assert.deepEqual(parsed, {
+      schemaVersion: 1,
+      disposition: 'created',
+      activePath: '/var/lib/omnilodge/deploy/state/active-activation-snapshot.json',
+      activationId: snapshot.activationId,
+      snapshotSha256: reference.snapshotSha256,
+      snapshotKind: 'legacy_baseline',
+      capturedAtUtc: snapshot.capturedAtUtc,
+      capturedBy: 'root',
+      backendRestoreTarget: snapshot.backendRestoreTarget,
+      uiRestoreTarget: snapshot.uiRestoreTarget,
+      pm2State: snapshot.pm2State,
+    });
   } finally {
     fixture.cleanup();
   }
