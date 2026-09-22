@@ -55,10 +55,11 @@ const rollbackEntry = (phase) => Object.freeze({
 const createFixture = ({
   initialTransactionPhase = 'prepared',
   recoveryAction = 'converge_previous_snapshot',
+  previousSnapshotKind = 'artifact_release',
 } = {}) => {
   const calls = [];
   const previousSnapshot = Object.freeze({
-    snapshotKind: 'legacy',
+    snapshotKind: previousSnapshotKind,
     releaseId: 'legacy-checkout',
     sourceSha: 'b'.repeat(40),
   });
@@ -387,6 +388,54 @@ test('activation recovery converges pointers back to the previous snapshot and f
     'request:previous_restored->failed',
   ]);
   assert.equal(result.action, 'converge_previous_snapshot');
+  assert.equal(result.transactionPhase, 'failed');
+  assert.equal(result.requestPhase, 'failed');
+});
+
+test('activation recovery can finish an interrupted legacy-baseline restore without managed PM2 restart', async () => {
+  const { calls, orchestrator } = createFixture({
+    initialTransactionPhase: 'restoring_previous',
+    recoveryAction: 'converge_previous_snapshot',
+    previousSnapshotKind: 'legacy_baseline',
+  });
+
+  const result = await orchestrator.recoverForwardDeployment({
+    entry: requestEntry('restoring_previous'),
+  });
+
+  assert.deepEqual(calls, [
+    'tx:read:restoring_previous@restoring_previous',
+    'plan:converge_previous_snapshot@restoring_previous',
+    'pointer:switch-snapshot',
+    'tx:restoring_previous->previous_restored@restoring_previous',
+    'request:restoring_previous->previous_restored',
+    'tx:previous_restored->failed@previous_restored',
+    'request:previous_restored->failed',
+  ]);
+  assert.equal(result.action, 'converge_previous_snapshot');
+  assert.equal(result.transactionPhase, 'failed');
+  assert.equal(result.requestPhase, 'failed');
+  assert.equal(result.pm2Restart, null);
+  assert.equal(result.pm2Save, null);
+});
+
+test('activation recovery marks previous-restored requests failed after an interrupted retry', async () => {
+  const { calls, orchestrator } = createFixture({
+    initialTransactionPhase: 'previous_restored',
+    recoveryAction: 'mark_request_failed',
+  });
+
+  const result = await orchestrator.recoverForwardDeployment({
+    entry: requestEntry('previous_restored'),
+  });
+
+  assert.deepEqual(calls, [
+    'tx:read:previous_restored@previous_restored',
+    'plan:mark_request_failed@previous_restored',
+    'tx:previous_restored->failed@previous_restored',
+    'request:previous_restored->failed',
+  ]);
+  assert.equal(result.action, 'mark_request_failed');
   assert.equal(result.transactionPhase, 'failed');
   assert.equal(result.requestPhase, 'failed');
 });
