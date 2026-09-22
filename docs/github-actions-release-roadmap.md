@@ -684,6 +684,7 @@ Private-port smoke implementation checkpoint, 2026-09-22:
 - Backend private smoke checks `/api/health/ready` and requires the staged release ID, source SHA, `APP_RUNTIME_MODE=dry-run`, valid configuration, and database readiness. UI-server private smoke checks `/healthz`, `/`, and public source-map denial for the staged release using the server-owned TLS path contract.
 - The private-smoke wait loop must keep the worker process alive while waiting for candidate readiness; readiness polling timers are intentionally referenced so a not-yet-ready candidate cannot leave the request stuck in `running`.
 - Dry-run evidence records only bounded command shape, ports, release identity, health/static/source-map results, and TLS path names; it does not record environment file contents or secrets.
+- Production proof for release `omnilodge-r35672017886-a1-9b87e417ebf7` exposed a backend runtime-contract gap: request `5971664f-165a-4efb-8e97-6b92865c126f` reached private smoke but the staged backend exited because `APP_RUNTIME_MODE=dry-run` was not accepted by backend startup validation. This branch makes `dry-run` an explicit safe backend runtime mode with the same no-mutation/no-background-job policy as `deployment-candidate`.
 - Local validation currently covers this with `node --check ops/production/libexec/deploy/worker.mjs` and `node --test ops/production/release-preparation.test.mjs`. GitHub CI, production control-plane installation, and a host dry-run proof are still pending for this checkpoint.
 
 - Build a real release in Actions.
