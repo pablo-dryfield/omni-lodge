@@ -17,6 +17,7 @@
       "merge_logs": true,
       "time": true,
       "env": {
+        "OMNILODGE_RUNTIME_COMPONENT": "backend",
         "NODE_ENV": "production"
       },
       "out_file": "/var/lib/omnilodge/logs/pm2/backend-out.log",
@@ -39,6 +40,7 @@
       "merge_logs": true,
       "time": true,
       "env": {
+        "OMNILODGE_RUNTIME_COMPONENT": "ui-server",
         "NODE_ENV": "production"
       },
       "out_file": "/var/lib/omnilodge/logs/pm2/ui-server-out.log",
