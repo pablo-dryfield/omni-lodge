@@ -14,6 +14,8 @@ const TARGETS = Object.freeze({
   counterOrigin: 'https://counter.example.omnilodge.test',
 });
 
+const uiCacheBust = (releaseId = RELEASE_ID) => `?omnilodge-release=${encodeURIComponent(releaseId)}`;
+
 const jsonResponse = (body, statusCode = 200) => Object.freeze({
   statusCode,
   headers: Object.freeze({ 'content-type': 'application/json; charset=utf-8' }),
@@ -73,19 +75,19 @@ const createFixtureResponses = ({
       pwaManifestCount: 3,
     },
   })],
-  [`${TARGETS.applicationOrigin}/asset-manifest.json`, jsonResponse({
+  [`${TARGETS.applicationOrigin}/asset-manifest.json${uiCacheBust(releaseId)}`, jsonResponse({
     release: releaseId,
     files: { 'main.js': mainAsset },
     entrypoints: [mainAsset],
   })],
-  [`${TARGETS.applicationOrigin}/`, htmlResponse(indexBody)],
-  [`${TARGETS.applicationOrigin}/manifest.json`, jsonResponse({
+  [`${TARGETS.applicationOrigin}/${uiCacheBust(releaseId)}`, htmlResponse(indexBody)],
+  [`${TARGETS.applicationOrigin}/manifest.json${uiCacheBust(releaseId)}`, jsonResponse({
     name: 'OmniLodge',
     start_url: '/',
     display: 'standalone',
     icons: [{ src: '/logo.png', sizes: '192x192' }],
   })],
-  [`${TARGETS.applicationOrigin}/service-worker.js`, jsResponse(`self.addEventListener('install', () => {}); const release = '${releaseId}';`)],
+  [`${TARGETS.applicationOrigin}/service-worker.js${uiCacheBust(releaseId)}`, jsResponse(`self.addEventListener('install', () => {}); const release = '${releaseId}';`)],
   [`${TARGETS.applicationOrigin}${mainAsset}.map`, Object.freeze({
     statusCode: sourceMapStatus,
     headers: Object.freeze({ 'content-type': 'text/plain' }),

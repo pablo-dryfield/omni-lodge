@@ -39,13 +39,22 @@ const normalizeOrigin = (origin, label) => {
   return parsed.origin;
 };
 
-const createSmokeUrl = ({ origin, pathname }) => {
+const createSmokeUrl = ({ origin, pathname, query = {} }) => {
   invariant(typeof pathname === 'string' && pathname.startsWith('/'), 'Public smoke path must be absolute');
   const url = new URL(pathname, origin);
+  for (const [key, value] of Object.entries(query)) {
+    invariant(/^[A-Za-z0-9_.-]+$/.test(key), 'Public smoke query key is invalid');
+    invariant(typeof value === 'string' && value.length > 0, 'Public smoke query value is invalid');
+    url.searchParams.set(key, value);
+  }
   invariant(url.username === '' && url.password === '', 'Public smoke URL must not contain credentials');
   invariant(url.hash === '', 'Public smoke URL must not contain a fragment');
   return url.toString();
 };
+
+const cacheBustingQuery = ({ releaseId }) => Object.freeze({
+  'omnilodge-release': releaseId,
+});
 
 export const requestPublicSmokeUrl = async ({
   url,
@@ -68,7 +77,9 @@ export const requestPublicSmokeUrl = async ({
     timeout: timeoutMs,
     headers: {
       Accept: '*/*',
+      'Cache-Control': 'no-cache',
       Connection: 'close',
+      Pragma: 'no-cache',
       'User-Agent': 'OmniLodgeDeploymentPublicSmoke/1',
     },
   }, (response) => {
@@ -324,6 +335,7 @@ export const runPublicSmokeChecks = async ({
   const transactionOrigin = normalizeOrigin(targets.transactionOrigin, 'transaction companion');
   const counterOrigin = normalizeOrigin(targets.counterOrigin, 'counter companion');
   const startedAtUtc = now().toISOString();
+  const uiCacheBust = cacheBustingQuery({ releaseId });
   const warmupCheck = (options) => checkWithWarmupRetry({
     ...options,
     retryWindowMs,
@@ -351,7 +363,7 @@ export const runPublicSmokeChecks = async ({
   });
   const assetManifest = await warmupCheck({
     name: 'ui-asset-manifest',
-    url: createSmokeUrl({ origin: applicationOrigin, pathname: '/asset-manifest.json' }),
+    url: createSmokeUrl({ origin: applicationOrigin, pathname: '/asset-manifest.json', query: uiCacheBust }),
     request,
     validate: (response) => validateAssetManifest({ response, releaseId }),
   });
@@ -359,19 +371,19 @@ export const runPublicSmokeChecks = async ({
   invariant(uiHealth.artifactValidation.mainAsset === mainAsset, 'UI health and asset manifest disagree on the main asset');
   const uiIndex = await warmupCheck({
     name: 'ui-index',
-    url: createSmokeUrl({ origin: applicationOrigin, pathname: '/' }),
+    url: createSmokeUrl({ origin: applicationOrigin, pathname: '/', query: uiCacheBust }),
     request,
     validate: (response) => validateUiIndex({ response, mainAsset }),
   });
   const uiManifest = await warmupCheck({
     name: 'ui-manifest',
-    url: createSmokeUrl({ origin: applicationOrigin, pathname: '/manifest.json' }),
+    url: createSmokeUrl({ origin: applicationOrigin, pathname: '/manifest.json', query: uiCacheBust }),
     request,
     validate: (response) => validateWebManifest({ response, label: 'manifest.json' }),
   });
   const serviceWorker = await warmupCheck({
     name: 'ui-service-worker',
-    url: createSmokeUrl({ origin: applicationOrigin, pathname: '/service-worker.js' }),
+    url: createSmokeUrl({ origin: applicationOrigin, pathname: '/service-worker.js', query: uiCacheBust }),
     request,
     validate: (response) => validateServiceWorker({ response, releaseId }),
   });
