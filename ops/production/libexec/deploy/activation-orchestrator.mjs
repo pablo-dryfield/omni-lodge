@@ -3,6 +3,7 @@ const RESTORE_REQUIRED_REQUEST_PHASES = new Set(['pointer_switching', 'pointers_
 const RESTORE_IN_PROGRESS_REQUEST_PHASES = new Set(['restore_required', 'restoring_previous', 'previous_restored']);
 const RESTORE_REQUIRED_TRANSACTION_PHASES = new Set(['pointer_switching', 'pointers_switched', 'smoke_verified']);
 const RESTORE_IN_PROGRESS_TRANSACTION_PHASES = new Set(['restore_required', 'restoring_previous', 'previous_restored']);
+const MANAGED_RUNTIME_SNAPSHOT_KINDS = new Set(['artifact_release']);
 
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -122,6 +123,8 @@ const releaseIdentity = (targetSnapshot) => {
     sourceSha: targetSnapshot.sourceSha,
   });
 };
+
+const usesManagedRuntime = (snapshot) => MANAGED_RUNTIME_SNAPSHOT_KINDS.has(snapshot?.snapshotKind);
 
 export const createActivationOrchestrator = ({
   activationStore,
@@ -444,6 +447,41 @@ export const createActivationOrchestrator = ({
       });
     }
 
+    if (recoveryPlan.action === 'mark_request_failed') {
+      if (currentEntry.requestState.phase === 'restoring_previous') {
+        currentEntry = await advanceRequestTo({
+          requestStore: checkedRequestStore,
+          entry: currentEntry,
+          nextPhase: 'previous_restored',
+        });
+      }
+      invariant(
+        currentEntry.requestState.phase === 'previous_restored',
+        'Failure marking recovery requires a previous-restored durable request state',
+      );
+      const failed = await transitionActivation({
+        activationStore: checkedActivationStore,
+        requestState: currentEntry.requestState,
+        nextPhase: 'failed',
+      });
+      currentEntry = await advanceRequestTo({
+        requestStore: checkedRequestStore,
+        entry: currentEntry,
+        nextPhase: 'failed',
+      });
+      return Object.freeze({
+        schemaVersion: 1,
+        startedAtUtc,
+        completedAtUtc: now().toISOString(),
+        action: recoveryPlan.action,
+        transactionPhase: failed.transaction.phase,
+        requestPhase: currentEntry.requestState.phase,
+        recoveryPlan,
+        activationTransaction: failed.transaction,
+        requestEntry: currentEntry,
+      });
+    }
+
     invariant(recoveryPlan.action === 'converge_previous_snapshot', `Unsupported activation recovery action: ${recoveryPlan.action}`);
 
     let recoveryRecord = initial;
@@ -489,11 +527,15 @@ export const createActivationOrchestrator = ({
     const pointerSwitch = await checkedPointerSwitcher.switchActivationSnapshotPointers({
       targetSnapshot: recoveryRecord.previousSnapshot,
     });
-    const pm2Restart = await checkedPm2Controller.restartComponentsInOrder({
-      components: Object.freeze([...restartComponents]),
-      persist: false,
-    });
-    const pm2Save = await checkedPm2Controller.saveProcessList();
+    let pm2Restart = null;
+    let pm2Save = null;
+    if (usesManagedRuntime(recoveryRecord.previousSnapshot)) {
+      pm2Restart = await checkedPm2Controller.restartComponentsInOrder({
+        components: Object.freeze([...restartComponents]),
+        persist: false,
+      });
+      pm2Save = await checkedPm2Controller.saveProcessList();
+    }
 
     if (recoveryRecord.transaction.phase === 'restoring_previous') {
       recoveryRecord = await transitionActivation({
