@@ -1,8 +1,9 @@
 # Production host state primitives
 
 These modules are an inert foundation for the root-owned deployment worker.
-They do not receive network input, invoke application commands, call PM2 or
-systemd, run migrations, or change release pointers.
+They do not receive network input by themselves, and the deployment worker does
+not yet invoke application commands, call PM2 or systemd, run migrations, or
+change release pointers.
 
 The default paths are fixed in `constants.mjs`. Production callers must use
 those defaults. Constructor injection exists so the primitives can be tested
@@ -43,6 +44,10 @@ Security properties:
   validates the reviewed fork-mode runtime-launcher process shape. It is not
   called by the deployment worker until activation and recovery orchestration
   are wired;
+- activation orchestration is isolated in a standalone dependency-injected
+  module that sequences the already-reviewed transaction, pointer, PM2, public
+  smoke, and active-snapshot primitives. It has no CLI, no production defaults,
+  and is not imported by the deployment worker in this checkpoint;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;

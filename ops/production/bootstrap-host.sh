@@ -314,6 +314,7 @@ validate_source_assets() {
 
   for relative_path in \
     ops/production/libexec/deploy/activation-state-store.mjs \
+    ops/production/libexec/deploy/activation-orchestrator.mjs \
     ops/production/libexec/deploy/activation-pointer-switcher.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
     ops/production/libexec/deploy/backup-gate.mjs \
@@ -371,6 +372,7 @@ validate_source_assets() {
     "$node_path" --check "$(source_file bin/runtime-launcher.mjs)"
     "$node_path" --check "$(source_file pm2/ecosystem.production.cjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-state-store.mjs)"
+    "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-orchestrator.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-pointer-switcher.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/backup-gate.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/capture-legacy-baseline-cli.mjs)"
@@ -585,6 +587,7 @@ validate_installed() {
   assert_exact_file "$LIBEXEC_ROOT/runtime-launcher.mjs" '755'
   for installed_control_plane_file in \
     ops/production/libexec/deploy/activation-state-store.mjs \
+    ops/production/libexec/deploy/activation-orchestrator.mjs \
     ops/production/libexec/deploy/activation-pointer-switcher.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
     ops/production/libexec/deploy/backup-gate.mjs \
@@ -822,6 +825,7 @@ install_assets() {
   atomic_install "$(source_file bin/runtime-launcher.mjs)" "$LIBEXEC_ROOT/runtime-launcher.mjs" 755
   for control_plane_file in \
     ops/production/libexec/deploy/activation-state-store.mjs \
+    ops/production/libexec/deploy/activation-orchestrator.mjs \
     ops/production/libexec/deploy/activation-pointer-switcher.mjs \
     ops/production/libexec/deploy/audit-log.mjs \
     ops/production/libexec/deploy/backup-gate.mjs \

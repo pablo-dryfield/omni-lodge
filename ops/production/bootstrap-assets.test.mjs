@@ -38,6 +38,7 @@ const expectedAssets = [
 
 const expectedControlPlaneAssets = [
   'ops/production/libexec/deploy/activation-state-store.mjs',
+  'ops/production/libexec/deploy/activation-orchestrator.mjs',
   'ops/production/libexec/deploy/activation-pointer-switcher.mjs',
   'ops/production/libexec/deploy/audit-log.mjs',
   'ops/production/libexec/deploy/backup-gate.mjs',
@@ -158,6 +159,7 @@ test('legacy baseline capture command is root-only and not exposed through deplo
   assert.match(bootstrap, /bin\/omnilodge-capture-legacy-baseline/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/capture-legacy-baseline-cli\.mjs/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/activation-state-store\.mjs/);
+  assert.match(bootstrap, /ops\/production\/libexec\/deploy\/activation-orchestrator\.mjs/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/activation-pointer-switcher\.mjs/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/backup-gate\.mjs/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/legacy-baseline\.mjs/);

@@ -220,6 +220,20 @@ export const createProductionPm2ServiceController = ({
     });
   };
 
+  const saveProcessList = async () => {
+    const command = pm2SaveCommand();
+    const result = await runner({
+      command,
+      timeoutMs: PM2_SAVE_TIMEOUT_MS,
+    });
+    return Object.freeze({
+      savedAtUtc: now().toISOString(),
+      command: result.command ?? command,
+      stdoutBytes: Buffer.byteLength(result.stdout ?? '', 'utf8'),
+      stderrBytes: Buffer.byteLength(result.stderr ?? '', 'utf8'),
+    });
+  };
+
   const restartComponentsInOrder = async ({
     components = COMPONENTS,
     persist = false,
@@ -231,17 +245,7 @@ export const createProductionPm2ServiceController = ({
     const inspection = await inspect();
     let save = null;
     if (persist) {
-      const command = pm2SaveCommand();
-      const result = await runner({
-        command,
-        timeoutMs: PM2_SAVE_TIMEOUT_MS,
-      });
-      save = Object.freeze({
-        savedAtUtc: now().toISOString(),
-        command: result.command ?? command,
-        stdoutBytes: Buffer.byteLength(result.stdout ?? '', 'utf8'),
-        stderrBytes: Buffer.byteLength(result.stderr ?? '', 'utf8'),
-      });
+      save = await saveProcessList();
     }
     return Object.freeze({
       schemaVersion: 1,
@@ -254,6 +258,7 @@ export const createProductionPm2ServiceController = ({
   return Object.freeze({
     inspect,
     restartComponent,
+    saveProcessList,
     restartComponentsInOrder,
   });
 };
