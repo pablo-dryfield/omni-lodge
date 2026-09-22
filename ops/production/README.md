@@ -233,7 +233,10 @@ session:
    evidence fails closed. After `backup_verified`, the worker runs the
    release-local compiled migration runner only when pending migrations exist,
    then re-runs migration-status and requires zero pending migrations before
-   advancing to `migrations_applied`. Activation still remains disabled.
+   advancing to `migrations_applied`. After that, it advances to
+   `activation_prepared`, creates or verifies the durable activation
+   transaction against the active snapshot, records recovery-planning evidence,
+   and still stops before pointer switching, PM2 restarts, or public traffic.
 4. Replace the three fail-closed deploy scaffolds with the reviewed submitter,
    worker, and recovery implementation. The root submitter must rederive
    authorization from `/etc/omnilodge/deploy-policy.json`; GitHub's claimed

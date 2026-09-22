@@ -25,6 +25,7 @@ import {
 import {
   createHostRequestStatus,
 } from '../../../../scripts/deploy/host/state.mjs';
+import { createActivationStateStore } from './activation-state-store.mjs';
 import { createHostAuditLog } from './audit-log.mjs';
 import {
   invariant,
@@ -163,6 +164,9 @@ const backupGateResultPath = ({ paths, requestId }) =>
 
 const migrationGateResultPath = ({ paths, requestId }) =>
   path.join(paths.stateRoot, `${validateRequestId(requestId)}.migration-gate-result.json`);
+
+const activationPreparationResultPath = ({ paths, requestId }) =>
+  path.join(paths.stateRoot, `${validateRequestId(requestId)}.activation-preparation-result.json`);
 
 const delay = (milliseconds) => new Promise((resolve) => {
   setTimeout(resolve, milliseconds);
@@ -1259,6 +1263,32 @@ export const runDeploymentMigrationGate = async ({
   });
 };
 
+export const runDeploymentActivationPreparation = async ({
+  requestState,
+  activationStore,
+} = {}) => {
+  invariant(requestState?.request?.kind === 'forward_submit', 'Activation preparation only supports forward deploy requests');
+  invariant(requestState.intent?.operation === 'deploy', 'Activation preparation only runs for deploy requests');
+  invariant(requestState.phase === 'activation_prepared', 'Activation preparation requires the activation_prepared phase');
+  const prepared = await activationStore.prepareForwardActivation({ requestState });
+  const recovery = await activationStore.planRecovery({
+    requestId: requestState.request.requestId,
+    requestState,
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    requestId: requestState.request.requestId,
+    releaseId: requestState.intent.releaseId,
+    sourceSha: requestState.intent.sourceSha,
+    transactionPhase: prepared.transaction.phase,
+    previousSnapshot: prepared.transaction.previousSnapshot,
+    targetSnapshot: prepared.transaction.targetSnapshot,
+    recoveryAction: recovery.action,
+    databaseAction: recovery.databaseAction,
+    preparedAtUtc: prepared.transaction.createdAtUtc,
+  });
+};
+
 const finishIfTerminal = async ({
   store,
   entry,
@@ -1283,6 +1313,8 @@ export const handleHostDeployWorkerRequest = async ({
   prepareRelease = prepareForwardReleaseArtifact,
   runBackupGate = runProductionBackupGate,
   runMigrationGate = runDeploymentMigrationGate,
+  activationStore = createActivationStateStore({ paths, clock, fileOps }),
+  prepareActivationState = runDeploymentActivationPreparation,
 } = {}) => {
   const validatedRequestId = validateRequestId(requestId);
   let entry = await requestStore.lookup(validatedRequestId);
@@ -1404,7 +1436,27 @@ export const handleHostDeployWorkerRequest = async ({
           nextPhase: 'migrations_applied',
         });
       }
-      throw new Error('Production activation switching gates are not enabled in this slice');
+      entry = await advanceIfAtPhase({
+        store: requestStore,
+        entry,
+        fromPhase: 'migrations_applied',
+        nextPhase: 'activation_prepared',
+      });
+      if (entry.requestState.phase === 'activation_prepared') {
+        const activationPreparation = await prepareActivationState({
+          requestState: entry.requestState,
+          activationStore,
+          paths,
+          fileOps,
+          clock,
+        });
+        await publishOrVerifyBuffer({
+          fileOps,
+          targetPath: activationPreparationResultPath({ paths, requestId: validatedRequestId }),
+          bytes: serializeCanonicalJson(jsonSafe(activationPreparation)),
+        });
+      }
+      throw new Error('Production pointer switching gates are not enabled in this slice');
     }
     entry = await advanceIfAtPhase({
       store: requestStore,
