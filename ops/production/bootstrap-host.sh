@@ -324,6 +324,7 @@ validate_source_assets() {
     ops/production/libexec/deploy/deployment-flock.mjs \
     ops/production/libexec/deploy/index.mjs \
     ops/production/libexec/deploy/legacy-baseline.mjs \
+    ops/production/libexec/deploy/pm2-service-controller.mjs \
     ops/production/libexec/deploy/public-smoke-verifier.mjs \
     ops/production/libexec/deploy/release-preparation.mjs \
     ops/production/libexec/deploy/request-store.mjs \
@@ -374,6 +375,7 @@ validate_source_assets() {
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/backup-gate.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/capture-legacy-baseline-cli.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/legacy-baseline.mjs)"
+    "$node_path" --check "$(repository_file ops/production/libexec/deploy/pm2-service-controller.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/public-smoke-verifier.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/submit-request.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/worker.mjs)"
@@ -593,6 +595,7 @@ validate_installed() {
     ops/production/libexec/deploy/deployment-flock.mjs \
     ops/production/libexec/deploy/index.mjs \
     ops/production/libexec/deploy/legacy-baseline.mjs \
+    ops/production/libexec/deploy/pm2-service-controller.mjs \
     ops/production/libexec/deploy/public-smoke-verifier.mjs \
     ops/production/libexec/deploy/release-preparation.mjs \
     ops/production/libexec/deploy/request-store.mjs \
@@ -727,6 +730,7 @@ install_assets() {
     ops/production/libexec/deploy/constants.mjs \
     ops/production/libexec/deploy/deployment-flock.mjs \
     ops/production/libexec/deploy/index.mjs \
+    ops/production/libexec/deploy/pm2-service-controller.mjs \
     ops/production/libexec/deploy/public-smoke-verifier.mjs \
     ops/production/libexec/deploy/release-preparation.mjs \
     ops/production/libexec/deploy/request-store.mjs \
@@ -828,6 +832,7 @@ install_assets() {
     ops/production/libexec/deploy/deployment-flock.mjs \
     ops/production/libexec/deploy/index.mjs \
     ops/production/libexec/deploy/legacy-baseline.mjs \
+    ops/production/libexec/deploy/pm2-service-controller.mjs \
     ops/production/libexec/deploy/public-smoke-verifier.mjs \
     ops/production/libexec/deploy/release-preparation.mjs \
     ops/production/libexec/deploy/request-store.mjs \

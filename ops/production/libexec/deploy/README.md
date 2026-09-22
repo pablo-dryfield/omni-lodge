@@ -38,6 +38,11 @@ Security properties:
   companion PWA entry points for a target release, but the deployment worker
   does not call it until pointer switching, PM2 restart, and recovery behavior
   are wired;
+- PM2 service control is isolated in a standalone module that builds fixed
+  `pm2 startOrRestart`, `pm2 jlist`, and `pm2 save --force` command shapes and
+  validates the reviewed fork-mode runtime-launcher process shape. It is not
+  called by the deployment worker until activation and recovery orchestration
+  are wired;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;
