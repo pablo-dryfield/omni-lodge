@@ -333,51 +333,79 @@ test('detached worker stages a non-activation request and marks it succeeded', a
   ]);
 });
 
-test('detached worker prepares activation state and fails before pointer switching', async () => {
+const advanceHarnessRequest = async (harness, entry, phases) => {
+  let current = entry;
+  for (const nextPhase of phases) {
+    current = await harness.store.advance({
+      requestId: current.requestState.request.requestId,
+      requestSha256: current.requestState.request.requestSha256,
+      fromPhase: current.requestState.phase,
+      nextPhase,
+    });
+  }
+  return current;
+};
+
+test('detached worker activates a deploy request after backup and migration gates', async () => {
   const harness = createHarness();
   await admit(harness, { requestId: '723e4567-e89b-42d3-a456-426614174011', operation: 'deploy' });
   const prepared = [];
   const backupGatePhases = [];
   const migrationGatePhases = [];
   const activationPhases = [];
-  await assert.rejects(
-    handleHostDeployWorkerRequest({
-      requestId: '723e4567-e89b-42d3-a456-426614174011',
-      paths: TEST_PATHS,
-      requestStore: harness.store,
-      auditLog: harness.audit,
-      clock: harness.clock,
-      fileOps: harness.fileOps,
-      fs: { unlink: async () => {} },
-      prepareRelease: async ({ requestState }) => {
-        prepared.push(requestState.intent.operation);
-        await publishDryRunChecks(harness, requestState, {
-          pendingMigrationNames: ['20260922090000-example-change.js'],
-        });
-        return { releaseId: requestState.intent.releaseId };
-      },
-      runBackupGate: async ({ requestState }) => {
-        backupGatePhases.push(requestState.phase);
-        return backupGateResult(requestState);
-      },
-      runMigrationGate: async ({ requestState, migrationStatus, backupGateResult: backupResult }) => {
-        migrationGatePhases.push(requestState.phase);
-        assert.equal(migrationStatus.pendingMigrationCount, 1);
-        assert.equal(backupResult.backupRequired, true);
-        return migrationGateResult(requestState);
-      },
-      prepareActivationState: async ({ requestState }) => {
-        activationPhases.push(requestState.phase);
-        return activationPreparationResult(requestState);
-      },
-    }),
-    /Production pointer switching gates are not enabled/,
-  );
+  const cutoverPhases = [];
+  const result = await handleHostDeployWorkerRequest({
+    requestId: '723e4567-e89b-42d3-a456-426614174011',
+    paths: TEST_PATHS,
+    requestStore: harness.store,
+    auditLog: harness.audit,
+    clock: harness.clock,
+    fileOps: harness.fileOps,
+    fs: { unlink: async () => {} },
+    prepareRelease: async ({ requestState }) => {
+      prepared.push(requestState.intent.operation);
+      await publishDryRunChecks(harness, requestState, {
+        pendingMigrationNames: ['20260922090000-example-change.js'],
+      });
+      return { releaseId: requestState.intent.releaseId };
+    },
+    runBackupGate: async ({ requestState }) => {
+      backupGatePhases.push(requestState.phase);
+      return backupGateResult(requestState);
+    },
+    runMigrationGate: async ({ requestState, migrationStatus, backupGateResult: backupResult }) => {
+      migrationGatePhases.push(requestState.phase);
+      assert.equal(migrationStatus.pendingMigrationCount, 1);
+      assert.equal(backupResult.backupRequired, true);
+      return migrationGateResult(requestState);
+    },
+    prepareActivationState: async ({ requestState }) => {
+      activationPhases.push(requestState.phase);
+      return activationPreparationResult(requestState);
+    },
+    activateDeployment: async ({ entry }) => {
+      cutoverPhases.push(entry.requestState.phase);
+      const requestEntry = await advanceHarnessRequest(harness, entry, [
+        'pointer_switching',
+        'pointers_switched',
+        'smoke_verified',
+        'succeeded',
+      ]);
+      return {
+        schemaVersion: 1,
+        requestPhase: requestEntry.requestState.phase,
+        requestEntry,
+      };
+    },
+  });
 
   assert.deepEqual(prepared, ['deploy']);
   assert.deepEqual(backupGatePhases, ['preflight_passed']);
   assert.deepEqual(migrationGatePhases, ['backup_verified']);
   assert.deepEqual(activationPhases, ['activation_prepared']);
+  assert.deepEqual(cutoverPhases, ['activation_prepared']);
+  assert.equal(result.status.lifecycle, 'succeeded');
+  assert.equal(result.status.resultCode, 'REQUEST_SUCCEEDED');
   assert.ok(harness.fileOps.files.has(path.join(
     TEST_PATHS.stateRoot,
     '723e4567-e89b-42d3-a456-426614174011.backup-gate-result.json',
@@ -391,9 +419,13 @@ test('detached worker prepares activation state and fails before pointer switchi
     .bytes.toString('utf8'));
   assert.equal(activationEvidence.transactionPhase, 'prepared');
   assert.equal(activationEvidence.recoveryAction, 'abort_without_pointer_change');
+  const cutoverEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, '723e4567-e89b-42d3-a456-426614174011.activation-cutover-result.json'))
+    .bytes.toString('utf8'));
+  assert.equal(cutoverEvidence.requestPhase, 'succeeded');
   const entry = await finishedEntry(harness, '723e4567-e89b-42d3-a456-426614174011');
-  assert.equal(entry.requestState.phase, 'failed');
-  assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
+  assert.equal(entry.requestState.phase, 'succeeded');
+  assert.equal(entry.requestState.resultCode, 'REQUEST_SUCCEEDED');
 });
 
 test('detached worker skips production backup when migration status has no pending migrations', async () => {
@@ -403,34 +435,46 @@ test('detached worker skips production backup when migration status has no pendi
   const prepared = [];
   const migrationGatePhases = [];
   const activationPhases = [];
+  const cutoverPhases = [];
 
-  await assert.rejects(
-    handleHostDeployWorkerRequest({
-      requestId,
-      paths: TEST_PATHS,
-      requestStore: harness.store,
-      auditLog: harness.audit,
-      clock: harness.clock,
-      fileOps: harness.fileOps,
-      fs: { unlink: async () => {} },
-      prepareRelease: async ({ requestState }) => {
-        prepared.push(requestState.intent.operation);
-        await publishDryRunChecks(harness, requestState);
-        return { releaseId: requestState.intent.releaseId };
-      },
-      runMigrationGate: async ({ requestState, migrationStatus, backupGateResult: backupResult }) => {
-        migrationGatePhases.push(requestState.phase);
-        assert.equal(migrationStatus.pendingMigrationCount, 0);
-        assert.equal(backupResult.backupRequired, false);
-        return migrationGateResult(requestState, { pendingMigrationNames: [] });
-      },
-      prepareActivationState: async ({ requestState }) => {
-        activationPhases.push(requestState.phase);
-        return activationPreparationResult(requestState);
-      },
-    }),
-    /Production pointer switching gates are not enabled/,
-  );
+  await handleHostDeployWorkerRequest({
+    requestId,
+    paths: TEST_PATHS,
+    requestStore: harness.store,
+    auditLog: harness.audit,
+    clock: harness.clock,
+    fileOps: harness.fileOps,
+    fs: { unlink: async () => {} },
+    prepareRelease: async ({ requestState }) => {
+      prepared.push(requestState.intent.operation);
+      await publishDryRunChecks(harness, requestState);
+      return { releaseId: requestState.intent.releaseId };
+    },
+    runMigrationGate: async ({ requestState, migrationStatus, backupGateResult: backupResult }) => {
+      migrationGatePhases.push(requestState.phase);
+      assert.equal(migrationStatus.pendingMigrationCount, 0);
+      assert.equal(backupResult.backupRequired, false);
+      return migrationGateResult(requestState, { pendingMigrationNames: [] });
+    },
+    prepareActivationState: async ({ requestState }) => {
+      activationPhases.push(requestState.phase);
+      return activationPreparationResult(requestState);
+    },
+    activateDeployment: async ({ entry }) => {
+      cutoverPhases.push(entry.requestState.phase);
+      const requestEntry = await advanceHarnessRequest(harness, entry, [
+        'pointer_switching',
+        'pointers_switched',
+        'smoke_verified',
+        'succeeded',
+      ]);
+      return {
+        schemaVersion: 1,
+        requestPhase: requestEntry.requestState.phase,
+        requestEntry,
+      };
+    },
+  });
 
   assert.deepEqual(prepared, ['deploy']);
   const backupEvidence = JSON.parse(harness.fileOps.files
@@ -452,7 +496,63 @@ test('detached worker skips production backup when migration status has no pendi
     .get(path.join(TEST_PATHS.stateRoot, `${requestId}.activation-preparation-result.json`))
     .bytes.toString('utf8'));
   assert.equal(activationEvidence.transactionPhase, 'prepared');
+  assert.deepEqual(cutoverPhases, ['activation_prepared']);
 
+  const entry = await finishedEntry(harness, requestId);
+  assert.equal(entry.requestState.phase, 'succeeded');
+  assert.equal(entry.requestState.resultCode, 'REQUEST_SUCCEEDED');
+});
+
+test('detached worker records recovery evidence when activation fails after pointer switching starts', async () => {
+  const harness = createHarness();
+  const requestId = 'a23e4567-e89b-42d3-a456-426614174014';
+  await admit(harness, { requestId, operation: 'deploy' });
+  const recoveryPhases = [];
+
+  await assert.rejects(
+    handleHostDeployWorkerRequest({
+      requestId,
+      paths: TEST_PATHS,
+      requestStore: harness.store,
+      auditLog: harness.audit,
+      clock: harness.clock,
+      fileOps: harness.fileOps,
+      fs: { unlink: async () => {} },
+      prepareRelease: async ({ requestState }) => {
+        await publishDryRunChecks(harness, requestState);
+        return { releaseId: requestState.intent.releaseId };
+      },
+      runMigrationGate: async ({ requestState }) => migrationGateResult(requestState, { pendingMigrationNames: [] }),
+      prepareActivationState: async ({ requestState }) => activationPreparationResult(requestState),
+      activateDeployment: async ({ entry }) => {
+        await advanceHarnessRequest(harness, entry, ['pointer_switching']);
+        throw new Error('simulated pointer switch failure');
+      },
+      recoverDeployment: async ({ entry }) => {
+        recoveryPhases.push(entry.requestState.phase);
+        const requestEntry = await advanceHarnessRequest(harness, entry, [
+          'restore_required',
+          'restoring_previous',
+          'previous_restored',
+          'failed',
+        ]);
+        return {
+          schemaVersion: 1,
+          action: 'converge_previous_snapshot',
+          requestPhase: requestEntry.requestState.phase,
+          requestEntry,
+        };
+      },
+    }),
+    /simulated pointer switch failure/,
+  );
+
+  assert.deepEqual(recoveryPhases, ['pointer_switching']);
+  const recoveryEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, `${requestId}.activation-recovery-result.json`))
+    .bytes.toString('utf8'));
+  assert.equal(recoveryEvidence.action, 'converge_previous_snapshot');
+  assert.equal(recoveryEvidence.requestPhase, 'failed');
   const entry = await finishedEntry(harness, requestId);
   assert.equal(entry.requestState.phase, 'failed');
   assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');

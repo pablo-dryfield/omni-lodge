@@ -1,9 +1,11 @@
 # Production host state primitives
 
-These modules are an inert foundation for the root-owned deployment worker.
-They do not receive network input by themselves, and the deployment worker does
-not yet invoke application commands, call PM2 or systemd, run migrations, or
-change release pointers.
+These modules form the root-owned deployment worker control plane. They do not
+receive network input by themselves. Production use still enters through the
+strict host protocol, request store, root-owned host policy, and detached
+worker service. Forward deploy activation is code-wired only after artifact
+verification, dry-run runtime checks, backup gating, migration gating, and
+activation-state preparation have succeeded.
 
 The default paths are fixed in `constants.mjs`. Production callers must use
 those defaults. Constructor injection exists so the primitives can be tested
@@ -31,24 +33,23 @@ Security properties:
   transaction phase transitions are durably replaced with the same request and
   snapshot binding before any future pointer-switching code can rely on them;
 - activation pointer switching is isolated in a standalone module that can
-  atomically replace the reviewed `backend-current` and `ui-current` symlinks,
-  but the deployment worker does not call it until PM2 restart, readiness,
-  public smoke, and recovery gates are wired;
-- public smoke verification is isolated in a standalone module that checks the
-  public API health, UI artifact identity, public source-map denial, and
-  companion PWA entry points for a target release, but the deployment worker
-  does not call it until pointer switching, PM2 restart, and recovery behavior
-  are wired;
-- PM2 service control is isolated in a standalone module that builds fixed
-  `pm2 startOrRestart`, `pm2 jlist`, and `pm2 save --force` command shapes and
-  validates the reviewed fork-mode runtime-launcher process shape. It is not
-  called by the deployment worker until activation and recovery orchestration
-  are wired;
-- activation orchestration is isolated in a standalone dependency-injected
-  module that sequences the already-reviewed transaction, pointer, PM2, public
-  smoke, active-snapshot commit, and recovery primitives. It has no CLI, no
-  production defaults, and is not imported by the deployment worker in this
-  checkpoint;
+  atomically replace the reviewed `backend-current` and `ui-current` symlinks.
+  The deployment worker reaches it only through the activation orchestrator
+  after backup, migration, activation-state, PM2, public-smoke, and recovery
+  dependencies are wired;
+- public smoke verification checks the public API health, UI artifact
+  identity, public source-map denial, and companion PWA entry points for a
+  target release. The deployment worker calls it through the activation
+  orchestrator only after release pointers and PM2 have moved to the target
+  release;
+- PM2 service control builds fixed `pm2 startOrRestart`, `pm2 jlist`, and
+  `pm2 save --force` command shapes and validates the reviewed fork-mode
+  runtime-launcher process shape. The deployment worker reaches it only through
+  activation orchestration;
+- activation orchestration sequences the already-reviewed transaction, pointer,
+  PM2, public smoke, active-snapshot commit, and recovery primitives. It has no
+  CLI; the deployment worker injects production defaults only at the final
+  deploy phase after the earlier gates have succeeded;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;
