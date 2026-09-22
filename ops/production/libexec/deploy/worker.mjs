@@ -52,6 +52,7 @@ import {
   serializeReleasePreparationPlan,
   serializeReleasePreparationState,
 } from './release-preparation.mjs';
+import { runManagedOriginReadinessChecks } from './managed-origin-readiness-verifier.mjs';
 import { createProductionPm2ServiceController } from './pm2-service-controller.mjs';
 import { runPublicSmokeChecks } from './public-smoke-verifier.mjs';
 import { createRequestRecordStore } from './request-store.mjs';
@@ -1440,6 +1441,7 @@ const createDefaultActivationOrchestrator = ({
   requestStore,
   pointerSwitcher: createActivationPointerSwitcher(),
   pm2Controller: createProductionPm2ServiceController({ now: clock }),
+  originReadinessRunner: runManagedOriginReadinessChecks,
   publicSmokeRunner: runPublicSmokeChecks,
   now: clock,
 });
