@@ -68,7 +68,7 @@ or GitHub Actions.
   deploy-policy.json     # initially disabled, root:root 0600
   backend.env            # server values only, root:root 0600
   ui-server.env          # server values only, root:root 0600
-  ecosystem.production.cjs
+  ecosystem.production.json
   tls/origin.key         # copied separately, never by this repository
   tls/origin.pem
 
@@ -270,7 +270,7 @@ Activation is intentionally outside the bootstrap script:
 9. Preserve the legacy checkout and saved PM2 dump. Change the repository mode
    to `manual` only immediately before the approved first cutover; change the
    root-owned policy separately through a protected operator procedure.
-10. At cutover, load `/etc/omnilodge/ecosystem.production.cjs` only after the
+10. At cutover, load `/etc/omnilodge/ecosystem.production.json` only after the
    backend and UI candidates, dependency links, persistent links, environment,
    TLS, backup, migration, private readiness, public smoke, and rollback gates
    have passed.

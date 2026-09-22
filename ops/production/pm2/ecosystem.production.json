@@ -1,0 +1,48 @@
+{
+  "apps": [
+    {
+      "name": "omni-lodge-be",
+      "cwd": "/",
+      "interpreter": "/usr/bin/node",
+      "script": "/usr/local/libexec/omnilodge/runtime-launcher.mjs",
+      "args": ["backend"],
+      "exec_mode": "fork",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_restarts": 10,
+      "min_uptime": "10s",
+      "kill_timeout": 15000,
+      "listen_timeout": 15000,
+      "merge_logs": true,
+      "time": true,
+      "env": {
+        "NODE_ENV": "production"
+      },
+      "out_file": "/var/lib/omnilodge/logs/pm2/backend-out.log",
+      "error_file": "/var/lib/omnilodge/logs/pm2/backend-error.log"
+    },
+    {
+      "name": "omni-lodge-ui-server",
+      "cwd": "/",
+      "interpreter": "/usr/bin/node",
+      "script": "/usr/local/libexec/omnilodge/runtime-launcher.mjs",
+      "args": ["ui-server"],
+      "exec_mode": "fork",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_restarts": 10,
+      "min_uptime": "10s",
+      "kill_timeout": 15000,
+      "listen_timeout": 15000,
+      "merge_logs": true,
+      "time": true,
+      "env": {
+        "NODE_ENV": "production"
+      },
+      "out_file": "/var/lib/omnilodge/logs/pm2/ui-server-out.log",
+      "error_file": "/var/lib/omnilodge/logs/pm2/ui-server-error.log"
+    }
+  ]
+}
