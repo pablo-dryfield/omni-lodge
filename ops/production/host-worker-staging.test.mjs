@@ -182,6 +182,52 @@ const backupGateResult = (requestState) => ({
   completedAtUtc: '2026-09-17T10:01:00.000Z',
 });
 
+const migrationGateResult = (requestState, {
+  pendingMigrationNames = ['20260922090000-example-change.js'],
+} = {}) => ({
+  schemaVersion: 1,
+  requestId: requestState.request.requestId,
+  releaseId: requestState.intent.releaseId,
+  sourceSha: requestState.intent.sourceSha,
+  migrationRequired: pendingMigrationNames.length > 0,
+  migrationReason: pendingMigrationNames.length > 0 ? 'PENDING_MIGRATIONS' : 'NO_PENDING_MIGRATIONS',
+  pendingMigrationCountBefore: pendingMigrationNames.length,
+  pendingMigrationNamesBefore: pendingMigrationNames,
+  backupRequired: pendingMigrationNames.length > 0,
+  selectedBackup: pendingMigrationNames.length > 0
+    ? {
+        path: `/home/postgres/backups/${requestState.request.requestId}.tar.gz`,
+        sizeBytes: 1024,
+        sha256: '4'.repeat(64),
+        mtimeUtc: '2026-09-17T10:00:00.000Z',
+      }
+    : null,
+  command: pendingMigrationNames.length > 0
+    ? {
+        label: 'run-migrations',
+        executable: '/usr/bin/node',
+        args: ['--env-file=/etc/omnilodge/backend.env', '--enable-source-maps', 'dist/scripts/runMigrations.js'],
+        cwd: '/opt/omnilodge/releases/test/be',
+        stdoutBytes: 128,
+        stderrBytes: 0,
+      }
+    : null,
+  postMigrationStatus: {
+    schemaVersion: 1,
+    kind: 'omnilodge-migration-status',
+    ok: true,
+    classification: 'managed',
+    lineage: 'strict',
+    metadataTableExists: true,
+    appliedMigrationCount: 189 + pendingMigrationNames.length,
+    compiledMigrationCount: 189 + pendingMigrationNames.length,
+    pendingMigrationCount: 0,
+    pendingMigrationNames: [],
+  },
+  startedAtUtc: '2026-09-17T10:01:00.000Z',
+  completedAtUtc: '2026-09-17T10:02:00.000Z',
+});
+
 const dryRunChecksResult = (requestState, {
   pendingMigrationNames = [],
 } = {}) => ({
@@ -273,6 +319,7 @@ test('detached worker fails deploy requests before activation is implemented', a
   await admit(harness, { requestId: '723e4567-e89b-42d3-a456-426614174011', operation: 'deploy' });
   const prepared = [];
   const backupGatePhases = [];
+  const migrationGatePhases = [];
   await assert.rejects(
     handleHostDeployWorkerRequest({
       requestId: '723e4567-e89b-42d3-a456-426614174011',
@@ -293,15 +340,26 @@ test('detached worker fails deploy requests before activation is implemented', a
         backupGatePhases.push(requestState.phase);
         return backupGateResult(requestState);
       },
+      runMigrationGate: async ({ requestState, migrationStatus, backupGateResult: backupResult }) => {
+        migrationGatePhases.push(requestState.phase);
+        assert.equal(migrationStatus.pendingMigrationCount, 1);
+        assert.equal(backupResult.backupRequired, true);
+        return migrationGateResult(requestState);
+      },
     }),
-    /Production migration and activation switching gates are not enabled/,
+    /Production activation switching gates are not enabled/,
   );
 
   assert.deepEqual(prepared, ['deploy']);
   assert.deepEqual(backupGatePhases, ['preflight_passed']);
+  assert.deepEqual(migrationGatePhases, ['backup_verified']);
   assert.ok(harness.fileOps.files.has(path.join(
     TEST_PATHS.stateRoot,
     '723e4567-e89b-42d3-a456-426614174011.backup-gate-result.json',
+  )));
+  assert.ok(harness.fileOps.files.has(path.join(
+    TEST_PATHS.stateRoot,
+    '723e4567-e89b-42d3-a456-426614174011.migration-gate-result.json',
   )));
   const entry = await finishedEntry(harness, '723e4567-e89b-42d3-a456-426614174011');
   assert.equal(entry.requestState.phase, 'failed');
@@ -313,6 +371,7 @@ test('detached worker skips production backup when migration status has no pendi
   const requestId = '823e4567-e89b-42d3-a456-426614174012';
   await admit(harness, { requestId, operation: 'deploy' });
   const prepared = [];
+  const migrationGatePhases = [];
 
   await assert.rejects(
     handleHostDeployWorkerRequest({
@@ -328,8 +387,14 @@ test('detached worker skips production backup when migration status has no pendi
         await publishDryRunChecks(harness, requestState);
         return { releaseId: requestState.intent.releaseId };
       },
+      runMigrationGate: async ({ requestState, migrationStatus, backupGateResult: backupResult }) => {
+        migrationGatePhases.push(requestState.phase);
+        assert.equal(migrationStatus.pendingMigrationCount, 0);
+        assert.equal(backupResult.backupRequired, false);
+        return migrationGateResult(requestState, { pendingMigrationNames: [] });
+      },
     }),
-    /Production migration and activation switching gates are not enabled/,
+    /Production activation switching gates are not enabled/,
   );
 
   assert.deepEqual(prepared, ['deploy']);
@@ -341,6 +406,12 @@ test('detached worker skips production backup when migration status has no pendi
   assert.equal(backupEvidence.pendingMigrationCount, 0);
   assert.equal(backupEvidence.command, null);
   assert.equal(backupEvidence.selectedBackup, null);
+  assert.deepEqual(migrationGatePhases, ['backup_verified']);
+  const migrationEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, `${requestId}.migration-gate-result.json`))
+    .bytes.toString('utf8'));
+  assert.equal(migrationEvidence.migrationRequired, false);
+  assert.equal(migrationEvidence.command, null);
 
   const entry = await finishedEntry(harness, requestId);
   assert.equal(entry.requestState.phase, 'failed');
