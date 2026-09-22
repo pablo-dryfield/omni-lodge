@@ -1,0 +1,231 @@
+name: Production Rollback Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_active_snapshot:
+        description: Current active snapshot as activationId:snapshotSha256
+        required: true
+        type: string
+      target_snapshot:
+        description: Rollback target snapshot as activationId:snapshotSha256
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22.23.2"
+  NPM_VERSION: "10.9.8"
+
+jobs:
+  prepare_request:
+    name: Production rollback / prepare request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      request_id: ${{ steps.request.outputs.request_id }}
+      request_artifact_name: production-rollback-request-${{ steps.request.outputs.request_id }}
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out deployment workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify the pinned toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      - name: Validate rollback dispatch and create host request
+        id: request
+        shell: bash
+        env:
+          EXPECTED_ACTIVE_SNAPSHOT: ${{ github.event.inputs.expected_active_snapshot }}
+          TARGET_SNAPSHOT: ${{ github.event.inputs.target_snapshot }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REPOSITORY" != "pablo-dryfield/omni-lodge" ]; then
+            printf '%s\n' 'Rollback requests may only run in the canonical repository.' >&2
+            exit 64
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/master" ]; then
+            printf '%s\n' 'Rollback request dispatch must run from refs/heads/master.' >&2
+            exit 64
+          fi
+
+          work_dir="$RUNNER_TEMP/production-rollback-request"
+          mkdir -p -- "$work_dir"
+          request_path="$work_dir/host-v2-request.bin"
+          identity_path="$work_dir/host-v2-request-identity.json"
+          request_id="$(node --input-type=module -e "import { randomUUID } from 'node:crypto'; process.stdout.write(randomUUID());")"
+          requested_at_utc="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          actor="${GITHUB_ACTOR:-github-actions[bot]}"
+
+          node scripts/deploy/create-host-v2-request.mjs \
+            --kind rollback \
+            --request-id "$request_id" \
+            --requested-at-utc "$requested_at_utc" \
+            --actor "$actor" \
+            --expected-active-snapshot "$EXPECTED_ACTIVE_SNAPSHOT" \
+            --target-snapshot "$TARGET_SNAPSHOT" \
+            --output "$request_path" \
+            --identity-output "$identity_path" \
+            > "$work_dir/host-v2-request-result.json"
+
+          {
+            printf 'work_dir=%s\n' "$work_dir"
+            printf 'request_path=%s\n' "$request_path"
+            printf 'identity_path=%s\n' "$identity_path"
+            printf 'request_result_path=%s\n' "$work_dir/host-v2-request-result.json"
+            printf 'request_id=%s\n' "$request_id"
+            printf 'requested_at_utc=%s\n' "$requested_at_utc"
+          } >> "$GITHUB_OUTPUT"
+
+      # actions/upload-artifact v7.0.1.
+      - name: Upload prepared rollback request evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: production-rollback-request-${{ steps.request.outputs.request_id }}
+          path: |
+            ${{ steps.request.outputs.identity_path }}
+            ${{ steps.request.outputs.request_result_path }}
+            ${{ steps.request.outputs.request_path }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          include-hidden-files: false
+
+  submit_request:
+    name: Production rollback / submit request
+    needs:
+      - prepare_request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out deployment workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-node v7.0.0.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify the pinned toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(npm --version)" = "${NPM_VERSION}"
+
+      # actions/download-artifact v8.0.1.
+      - name: Download prepared rollback request
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ needs.prepare_request.outputs.request_artifact_name }}
+          path: ${{ runner.temp }}/production-rollback-request
+
+      - name: Prepare pinned SSH transport
+        id: ssh
+        shell: bash
+        env:
+          PRODUCTION_DEPLOY_SSH_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_KEY }}
+          PRODUCTION_DEPLOY_HOST: ${{ vars.PRODUCTION_DEPLOY_HOST }}
+          PRODUCTION_DEPLOY_PORT: ${{ vars.PRODUCTION_DEPLOY_PORT || '22' }}
+          PRODUCTION_DEPLOY_USER: ${{ vars.PRODUCTION_DEPLOY_USER || 'omnilodge-deploy' }}
+          PRODUCTION_DEPLOY_HOST_ED25519_SHA256: ${{ vars.PRODUCTION_DEPLOY_HOST_ED25519_SHA256 }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DEPLOY_SSH_KEY"
+          test -n "$PRODUCTION_DEPLOY_HOST"
+          test -n "$PRODUCTION_DEPLOY_PORT"
+          test -n "$PRODUCTION_DEPLOY_USER"
+          test -n "$PRODUCTION_DEPLOY_HOST_ED25519_SHA256"
+          case "$PRODUCTION_DEPLOY_PORT" in
+            ''|*[!0-9]*) exit 64 ;;
+          esac
+          if [ "$PRODUCTION_DEPLOY_PORT" -lt 1 ] || [ "$PRODUCTION_DEPLOY_PORT" -gt 65535 ]; then
+            exit 64
+          fi
+
+          ssh_dir="$RUNNER_TEMP/production-ssh"
+          install -d -m 700 -- "$ssh_dir"
+          key_path="$ssh_dir/deploy_key"
+          known_hosts_path="$ssh_dir/known_hosts"
+          candidate_known_hosts="$ssh_dir/known_hosts.candidate"
+          printf '%s\n' "$PRODUCTION_DEPLOY_SSH_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+
+          ssh-keyscan -p "$PRODUCTION_DEPLOY_PORT" -t ed25519 "$PRODUCTION_DEPLOY_HOST" > "$candidate_known_hosts" 2>/dev/null
+          test -s "$candidate_known_hosts"
+          observed_fingerprint="$(ssh-keygen -lf "$candidate_known_hosts" | awk 'NR == 1 { print $2 }')"
+          if [ "$observed_fingerprint" != "$PRODUCTION_DEPLOY_HOST_ED25519_SHA256" ]; then
+            printf '%s\n' 'Production host key fingerprint mismatch.' >&2
+            exit 77
+          fi
+          mv -- "$candidate_known_hosts" "$known_hosts_path"
+          chmod 600 "$known_hosts_path"
+          {
+            printf 'key_path=%s\n' "$key_path"
+            printf 'known_hosts_path=%s\n' "$known_hosts_path"
+            printf 'host=%s\n' "$PRODUCTION_DEPLOY_HOST"
+            printf 'port=%s\n' "$PRODUCTION_DEPLOY_PORT"
+            printf 'user=%s\n' "$PRODUCTION_DEPLOY_USER"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Submit rollback host request
+        id: submit
+        shell: bash
+        env:
+          REQUEST_DIR: ${{ runner.temp }}/production-rollback-request
+          DEPLOY_HOST: ${{ steps.ssh.outputs.host }}
+          DEPLOY_PORT: ${{ steps.ssh.outputs.port }}
+          DEPLOY_USER: ${{ steps.ssh.outputs.user }}
+          DEPLOY_KEY_PATH: ${{ steps.ssh.outputs.key_path }}
+          DEPLOY_KNOWN_HOSTS_PATH: ${{ steps.ssh.outputs.known_hosts_path }}
+        run: |
+          set -euo pipefail
+          result_path="$REQUEST_DIR/host-v2-submit-result.json"
+          node scripts/deploy/submit-host-v2-request.mjs \
+            --request "$REQUEST_DIR/host-v2-request.bin" \
+            --identity "$REQUEST_DIR/host-v2-request-identity.json" \
+            --host "$DEPLOY_HOST" \
+            --port "$DEPLOY_PORT" \
+            --user "$DEPLOY_USER" \
+            --key "$DEPLOY_KEY_PATH" \
+            --known-hosts "$DEPLOY_KNOWN_HOSTS_PATH" \
+            --ssh-command omnilodge-deploy-v1 \
+            --timeout-ms 120000 \
+            > "$result_path"
+          printf 'result_path=%s\n' "$result_path" >> "$GITHUB_OUTPUT"
+
+      # actions/upload-artifact v7.0.1.
+      - name: Upload rollback host response evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: production-rollback-response-${{ needs.prepare_request.outputs.request_id }}
+          path: ${{ steps.submit.outputs.result_path }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          include-hidden-files: false
