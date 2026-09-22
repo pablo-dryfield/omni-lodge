@@ -38,7 +38,8 @@ const createFixtureResponses = ({
   releaseId = RELEASE_ID,
   sourceSha = SOURCE_SHA,
   mainAsset = MAIN_ASSET,
-  indexBody = `<!doctype html><html><head><script defer src="${MAIN_ASSET}"></script></head><body><div id="root"></div></body></html>`,
+  manifestMainAsset = mainAsset,
+  indexBody = `<!doctype html><html><head><script defer src="${mainAsset}"></script></head><body><div id="root"></div></body></html>`,
   sourceMapStatus = 404,
 } = {}) => new Map([
   [`${TARGETS.applicationOrigin}/api/health/live`, jsonResponse({
@@ -76,9 +77,8 @@ const createFixtureResponses = ({
     },
   })],
   [`${TARGETS.applicationOrigin}/asset-manifest.json${uiCacheBust(releaseId)}`, jsonResponse({
-    release: releaseId,
-    files: { 'main.js': mainAsset },
-    entrypoints: [mainAsset],
+    files: { 'main.js': manifestMainAsset },
+    entrypoints: [manifestMainAsset],
   })],
   [`${TARGETS.applicationOrigin}/${uiCacheBust(releaseId)}`, htmlResponse(indexBody)],
   [`${TARGETS.applicationOrigin}/manifest.json${uiCacheBust(releaseId)}`, jsonResponse({
@@ -172,6 +172,23 @@ test('public smoke verifier fails closed when the public UI does not serve the m
       retryWindowMs: 0,
     }),
     /UI index does not reference the target main asset/,
+  );
+});
+
+test('public smoke verifier fails closed when asset-manifest is stale behind UI health', async () => {
+  const responses = createFixtureResponses({
+    manifestMainAsset: '/static/js/main.12345678.js',
+  });
+
+  await assert.rejects(
+    runPublicSmokeChecks({
+      releaseId: RELEASE_ID,
+      sourceSha: SOURCE_SHA,
+      targets: TARGETS,
+      request: createRequester(responses),
+      retryWindowMs: 0,
+    }),
+    /UI health and asset manifest disagree on the main asset/,
   );
 });
 
