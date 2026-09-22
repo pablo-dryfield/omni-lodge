@@ -937,6 +937,85 @@ test('private smoke starts candidate backend and UI server on loopback without c
   });
 });
 
+test('private smoke keeps the worker alive while waiting for candidate readiness', async () => {
+  await withFixture(async (fixture) => {
+    const plan = fixture.plan();
+    const attempts = new Map();
+    const responseFor = (port, requestPath) => {
+      if (port === 4101 && requestPath === '/api/health/ready') {
+        return {
+          statusCode: 200,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({
+            status: 'ok',
+            ready: true,
+            release: {
+              id: plan.releaseId,
+              gitSha: plan.sourceSha,
+              runtimeMode: 'dry-run',
+            },
+            checks: {
+              configuration: { ok: true, missing: [], invalid: [] },
+              database: { ok: true },
+            },
+          }),
+        };
+      }
+      if (port === 4102 && requestPath === '/healthz') {
+        return {
+          statusCode: 200,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({
+            status: 'ok',
+            service: 'ui-server',
+            release: plan.releaseId,
+            artifactValidation: {
+              status: 'valid',
+              mainAsset: '/static/js/main.12345678.js',
+              assetCount: 12,
+              hashedAssetCount: 5,
+              pwaManifestCount: 3,
+            },
+          }),
+        };
+      }
+      if (port === 4102 && requestPath === '/') {
+        return {
+          statusCode: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+          body: '<!doctype html><html><body><div id="root"></div></body></html>',
+        };
+      }
+      if (port === 4102 && requestPath === '/static/js/main.12345678.js.map') {
+        return {
+          statusCode: 404,
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+          body: 'Not Found',
+        };
+      }
+      throw new Error(`unexpected smoke request: ${port} ${requestPath}`);
+    };
+
+    const result = await runPrivateSmokeChecks({
+      plan,
+      portAllocator: async (component) => (component === 'backend' ? 4101 : 4102),
+      spawnProcess: () => new FakeSmokeProcess(),
+      request: async ({ port, requestPath }) => {
+        const key = `${port} ${requestPath}`;
+        const attempt = (attempts.get(key) ?? 0) + 1;
+        attempts.set(key, attempt);
+        if (key === '4101 /api/health/ready' && attempt === 1) {
+          throw new Error('candidate is still starting');
+        }
+        return responseFor(port, requestPath);
+      },
+    });
+
+    assert.equal(result.backend.ready, true);
+    assert.equal(attempts.get('4101 /api/health/ready'), 2);
+  });
+});
+
 test('backend browser-cache preparation runs the reviewed Puppeteer install entrypoint', async () => {
   await withFixture(async (fixture) => {
     const plan = fixture.plan();
