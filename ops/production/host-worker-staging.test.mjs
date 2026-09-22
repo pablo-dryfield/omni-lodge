@@ -152,6 +152,31 @@ const identity = ({
   artifactZipSha256: '3'.repeat(64),
 });
 
+const backupGateResult = (requestState) => ({
+  schemaVersion: 1,
+  requestId: requestState.request.requestId,
+  releaseId: requestState.intent.releaseId,
+  sourceSha: requestState.intent.sourceSha,
+  command: {
+    path: '/home/postgres/backup.sh',
+    timeoutMs: 60 * 60 * 1000,
+    stdoutBytes: 12,
+    stderrBytes: 0,
+  },
+  backupRoot: '/home/postgres/backups',
+  availableBytesBefore: 6 * 1024 * 1024 * 1024,
+  availableBytesAfter: 5 * 1024 * 1024 * 1024,
+  selectedBackup: {
+    path: `/home/postgres/backups/${requestState.request.requestId}.tar.gz`,
+    sizeBytes: 1024,
+    sha256: '4'.repeat(64),
+    mtimeUtc: '2026-09-17T10:00:00.000Z',
+  },
+  createdBackupCount: 1,
+  startedAtUtc: '2026-09-17T10:00:00.000Z',
+  completedAtUtc: '2026-09-17T10:01:00.000Z',
+});
+
 const admit = async (harness, options) => harness.store.admit({ identity: identity(options) });
 
 const finishedEntry = async (harness, requestId) => {
@@ -170,6 +195,7 @@ test('detached worker stages a non-activation request and marks it succeeded', a
     requestStore: harness.store,
     auditLog: harness.audit,
     clock: harness.clock,
+    fileOps: harness.fileOps,
     fs: { unlink: async () => {} },
     prepareRelease: async ({ requestState }) => {
       prepared.push(requestState.intent.operation);
@@ -194,6 +220,7 @@ test('detached worker fails deploy requests before activation is implemented', a
   const harness = createHarness();
   await admit(harness, { requestId: '723e4567-e89b-42d3-a456-426614174011', operation: 'deploy' });
   const prepared = [];
+  const backupGatePhases = [];
   await assert.rejects(
     handleHostDeployWorkerRequest({
       requestId: '723e4567-e89b-42d3-a456-426614174011',
@@ -201,16 +228,26 @@ test('detached worker fails deploy requests before activation is implemented', a
       requestStore: harness.store,
       auditLog: harness.audit,
       clock: harness.clock,
+      fileOps: harness.fileOps,
       fs: { unlink: async () => {} },
       prepareRelease: async ({ requestState }) => {
         prepared.push(requestState.intent.operation);
         return { releaseId: requestState.intent.releaseId };
       },
+      runBackupGate: async ({ requestState }) => {
+        backupGatePhases.push(requestState.phase);
+        return backupGateResult(requestState);
+      },
     }),
-    /Backup, migration, and activation switching gates are not enabled/,
+    /Production migration and activation switching gates are not enabled/,
   );
 
   assert.deepEqual(prepared, ['deploy']);
+  assert.deepEqual(backupGatePhases, ['preflight_passed']);
+  assert.ok(harness.fileOps.files.has(path.join(
+    TEST_PATHS.stateRoot,
+    '723e4567-e89b-42d3-a456-426614174011.backup-gate-result.json',
+  )));
   const entry = await finishedEntry(harness, '723e4567-e89b-42d3-a456-426614174011');
   assert.equal(entry.requestState.phase, 'failed');
   assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
