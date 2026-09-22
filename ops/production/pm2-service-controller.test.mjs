@@ -219,6 +219,44 @@ test('PM2 controller restarts components in order, validates jlist, and can pers
   assert.equal(result.save.savedAtUtc, '2026-09-22T12:30:00.000Z');
 });
 
+test('PM2 controller retries process-list validation while managed processes warm up', async () => {
+  const calls = [];
+  const controller = createProductionPm2ServiceController({
+    now: () => new Date('2026-09-22T12:30:00.000Z'),
+    wait: async () => {},
+    runner: async ({ command, timeoutMs }) => {
+      calls.push({ command, timeoutMs });
+      if (command.args[0] === 'jlist') {
+        const processList = calls.filter((call) => call.command.args[0] === 'jlist').length === 1
+          ? [
+            pm2Record({ component: 'ui-server' }),
+            pm2Record({ component: 'backend', status: 'launching' }),
+          ]
+          : validProcessList();
+        return {
+          command,
+          stdout: JSON.stringify(processList),
+          stderr: '',
+        };
+      }
+      return {
+        command,
+        stdout: 'ok',
+        stderr: '',
+      };
+    },
+  });
+
+  const result = await controller.restartComponentsInOrder({
+    inspectionTimeoutMs: 1_000,
+    inspectionIntervalMs: 0,
+  });
+  assert.equal(result.inspection.validation.ok, true);
+  assert.equal(result.inspection.attempts.length, 2);
+  assert.equal(result.inspection.attempts[0].ok, false);
+  assert.equal(result.inspection.attempts[1].ok, true);
+});
+
 test('PM2 controller restores the saved process list by clearing PM2 and resurrecting the dump', async () => {
   const calls = [];
   const controller = createProductionPm2ServiceController({

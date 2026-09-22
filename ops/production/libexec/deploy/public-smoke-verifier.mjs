@@ -6,6 +6,8 @@ const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const HASHED_MAIN_ASSET_PATTERN = /^\/static\/js\/main\.[A-Za-z0-9_-]{8,}\.js$/;
 const DEFAULT_TIMEOUT_MS = 10 * 1000;
 const DEFAULT_RESPONSE_LIMIT_BYTES = 512 * 1024;
+const DEFAULT_WARMUP_RETRY_WINDOW_MS = 90 * 1000;
+const DEFAULT_WARMUP_RETRY_INTERVAL_MS = 3 * 1000;
 
 export const DEFAULT_PUBLIC_SMOKE_TARGETS = Object.freeze({
   applicationOrigin: 'https://omni-lodge.com',
@@ -16,6 +18,12 @@ export const DEFAULT_PUBLIC_SMOKE_TARGETS = Object.freeze({
 const invariant = (condition, message) => {
   if (!condition) throw new Error(message);
 };
+
+const delay = (milliseconds) => new Promise((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
+
+const errorMessage = (error) => (error instanceof Error ? error.message : String(error));
 
 const validateExpectedRelease = ({ releaseId, sourceSha }) => {
   invariant(typeof releaseId === 'string' && RELEASE_ID_PATTERN.test(releaseId), 'Public smoke expected release ID is invalid');
@@ -261,38 +269,87 @@ const check = async ({
   });
 };
 
+const checkWithWarmupRetry = async ({
+  name,
+  url,
+  request,
+  validate,
+  retryWindowMs,
+  retryIntervalMs,
+  wait,
+}) => {
+  const deadline = Date.now() + Math.max(0, retryWindowMs);
+  let attempt = 0;
+  let lastError = null;
+
+  for (;;) {
+    attempt += 1;
+    try {
+      const result = await check({
+        name,
+        url,
+        request,
+        validate,
+      });
+      return Object.freeze({
+        ...result,
+        attempts: attempt,
+      });
+    } catch (error) {
+      lastError = error;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          `${name} public smoke check did not pass after ${attempt} attempt(s): ${errorMessage(lastError)}`,
+          { cause: lastError },
+        );
+      }
+      await wait(Math.min(retryIntervalMs, remainingMs));
+    }
+  }
+};
+
 export const runPublicSmokeChecks = async ({
   releaseId,
   sourceSha,
   targets = DEFAULT_PUBLIC_SMOKE_TARGETS,
   now = () => new Date(),
   request = requestPublicSmokeUrl,
+  retryWindowMs = DEFAULT_WARMUP_RETRY_WINDOW_MS,
+  retryIntervalMs = DEFAULT_WARMUP_RETRY_INTERVAL_MS,
+  wait = delay,
 } = {}) => {
   validateExpectedRelease({ releaseId, sourceSha });
   const applicationOrigin = normalizeOrigin(targets.applicationOrigin, 'application');
   const transactionOrigin = normalizeOrigin(targets.transactionOrigin, 'transaction companion');
   const counterOrigin = normalizeOrigin(targets.counterOrigin, 'counter companion');
   const startedAtUtc = now().toISOString();
+  const warmupCheck = (options) => checkWithWarmupRetry({
+    ...options,
+    retryWindowMs,
+    retryIntervalMs,
+    wait,
+  });
 
-  const apiLive = await check({
+  const apiLive = await warmupCheck({
     name: 'api-live',
     url: createSmokeUrl({ origin: applicationOrigin, pathname: '/api/health/live' }),
     request,
     validate: (response) => validateBackendLive({ response, releaseId, sourceSha }),
   });
-  const apiReady = await check({
+  const apiReady = await warmupCheck({
     name: 'api-ready',
     url: createSmokeUrl({ origin: applicationOrigin, pathname: '/api/health/ready' }),
     request,
     validate: (response) => validateBackendReady({ response, releaseId, sourceSha }),
   });
-  const uiHealth = await check({
+  const uiHealth = await warmupCheck({
     name: 'ui-health',
     url: createSmokeUrl({ origin: applicationOrigin, pathname: '/healthz' }),
     request,
     validate: (response) => validateUiHealth({ response, releaseId }),
   });
-  const assetManifest = await check({
+  const assetManifest = await warmupCheck({
     name: 'ui-asset-manifest',
     url: createSmokeUrl({ origin: applicationOrigin, pathname: '/asset-manifest.json' }),
     request,
@@ -300,19 +357,19 @@ export const runPublicSmokeChecks = async ({
   });
   const mainAsset = assetManifest.mainAsset;
   invariant(uiHealth.artifactValidation.mainAsset === mainAsset, 'UI health and asset manifest disagree on the main asset');
-  const uiIndex = await check({
+  const uiIndex = await warmupCheck({
     name: 'ui-index',
     url: createSmokeUrl({ origin: applicationOrigin, pathname: '/' }),
     request,
     validate: (response) => validateUiIndex({ response, mainAsset }),
   });
-  const uiManifest = await check({
+  const uiManifest = await warmupCheck({
     name: 'ui-manifest',
     url: createSmokeUrl({ origin: applicationOrigin, pathname: '/manifest.json' }),
     request,
     validate: (response) => validateWebManifest({ response, label: 'manifest.json' }),
   });
-  const serviceWorker = await check({
+  const serviceWorker = await warmupCheck({
     name: 'ui-service-worker',
     url: createSmokeUrl({ origin: applicationOrigin, pathname: '/service-worker.js' }),
     request,

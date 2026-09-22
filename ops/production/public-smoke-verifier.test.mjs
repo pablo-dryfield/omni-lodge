@@ -150,6 +150,7 @@ test('public smoke verifier fails closed when API release identity does not matc
       sourceSha: SOURCE_SHA,
       targets: TARGETS,
       request: createRequester(responses),
+      retryWindowMs: 0,
     }),
     /API liveness release ID does not match/,
   );
@@ -166,6 +167,7 @@ test('public smoke verifier fails closed when the public UI does not serve the m
       sourceSha: SOURCE_SHA,
       targets: TARGETS,
       request: createRequester(responses),
+      retryWindowMs: 0,
     }),
     /UI index does not reference the target main asset/,
   );
@@ -180,7 +182,43 @@ test('public smoke verifier fails closed when source maps are publicly exposed',
       sourceSha: SOURCE_SHA,
       targets: TARGETS,
       request: createRequester(responses),
+      retryWindowMs: 0,
     }),
     /source-map probe returned HTTP 200/,
   );
+});
+
+test('public smoke verifier retries warm-up checks until the target release is visible', async () => {
+  const responses = createFixtureResponses();
+  const calls = new Map();
+  const request = async ({ url }) => {
+    calls.set(url, (calls.get(url) ?? 0) + 1);
+    if (url === `${TARGETS.applicationOrigin}/api/health/live` && calls.get(url) === 1) {
+      return jsonResponse({
+        status: 'ok',
+        live: true,
+        release: {
+          id: `omnilodge-r357-a1-${'123456789abc'}`,
+          gitSha: SOURCE_SHA,
+          runtimeMode: 'primary',
+        },
+      });
+    }
+    const response = responses.get(url);
+    if (!response) throw new Error(`Unexpected smoke URL: ${url}`);
+    return response;
+  };
+
+  const result = await runPublicSmokeChecks({
+    releaseId: RELEASE_ID,
+    sourceSha: SOURCE_SHA,
+    targets: TARGETS,
+    request,
+    retryWindowMs: 1_000,
+    retryIntervalMs: 0,
+    wait: async () => {},
+  });
+
+  assert.equal(result.api.live.attempts, 2);
+  assert.equal(result.api.live.release.id, RELEASE_ID);
 });
