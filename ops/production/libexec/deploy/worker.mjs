@@ -148,8 +148,7 @@ const browserCacheResultPath = ({ paths, requestId }) =>
   path.join(paths.stateRoot, `${validateRequestId(requestId)}.browser-cache-result.json`);
 
 const delay = (milliseconds) => new Promise((resolve) => {
-  const timer = setTimeout(resolve, milliseconds);
-  timer.unref?.();
+  setTimeout(resolve, milliseconds);
 });
 
 export const allocateLoopbackPort = async () => new Promise((resolve, reject) => {

@@ -682,6 +682,7 @@ Private-port smoke implementation checkpoint, 2026-09-22:
 
 - The dry-run worker now starts the staged backend and UI-server release on ephemeral `127.0.0.1` ports after dependency/link/cache/preflight preparation, then shuts both candidate processes down without touching PM2 current-release pointers or public traffic.
 - Backend private smoke checks `/api/health/ready` and requires the staged release ID, source SHA, `APP_RUNTIME_MODE=dry-run`, valid configuration, and database readiness. UI-server private smoke checks `/healthz`, `/`, and public source-map denial for the staged release using the server-owned TLS path contract.
+- The private-smoke wait loop must keep the worker process alive while waiting for candidate readiness; readiness polling timers are intentionally referenced so a not-yet-ready candidate cannot leave the request stuck in `running`.
 - Dry-run evidence records only bounded command shape, ports, release identity, health/static/source-map results, and TLS path names; it does not record environment file contents or secrets.
 - Local validation currently covers this with `node --check ops/production/libexec/deploy/worker.mjs` and `node --test ops/production/release-preparation.test.mjs`. GitHub CI, production control-plane installation, and a host dry-run proof are still pending for this checkpoint.
 
