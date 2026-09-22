@@ -149,6 +149,7 @@ export const createActivationOrchestrator = ({
   requestStore,
   pointerSwitcher,
   pm2Controller,
+  originReadinessRunner,
   publicSmokeRunner,
   now = () => new Date(),
 } = {}) => {
@@ -156,6 +157,7 @@ export const createActivationOrchestrator = ({
   const checkedRequestStore = requireObject(requestStore, 'Request record store');
   const checkedPointerSwitcher = requireObject(pointerSwitcher, 'Activation pointer switcher');
   const checkedPm2Controller = requireObject(pm2Controller, 'PM2 service controller');
+  const runOriginReadiness = requireFunction(originReadinessRunner, 'Managed origin readiness runner');
   const runSmoke = requireFunction(publicSmokeRunner, 'Public smoke runner');
   requireFunction(checkedActivationStore.transitionTransaction, 'Activation transaction transition function');
   requireFunction(checkedActivationStore.readTransaction, 'Activation transaction read function');
@@ -209,6 +211,28 @@ export const createActivationOrchestrator = ({
     });
 
     const identity = releaseIdentity(pointersSwitched.targetSnapshot);
+    let managedOriginReadiness;
+    try {
+      managedOriginReadiness = await runOriginReadiness({
+        releaseId: identity.releaseId,
+        sourceSha: identity.sourceSha,
+        requestState: currentEntry.requestState,
+        targetSnapshot: pointersSwitched.targetSnapshot,
+        now,
+      });
+    } catch (error) {
+      throwWithActivationProgress(error, {
+        operation: 'deploy',
+        releaseId: identity.releaseId,
+        sourceSha: identity.sourceSha,
+        requestPhase: currentEntry.requestState.phase,
+        transactionPhase: pointersSwitched.transaction.phase,
+        pointerSwitch,
+        pm2Restart,
+        managedOriginReadiness: error?.managedOriginReadiness ?? null,
+      });
+    }
+
     let publicSmoke;
     try {
       publicSmoke = await runSmoke({
@@ -228,6 +252,7 @@ export const createActivationOrchestrator = ({
         transactionPhase: pointersSwitched.transaction.phase,
         pointerSwitch,
         pm2Restart,
+        managedOriginReadiness,
       });
     }
 
@@ -272,6 +297,7 @@ export const createActivationOrchestrator = ({
       requestPhase: currentEntry.requestState.phase,
       pointerSwitch,
       pm2Restart,
+      managedOriginReadiness,
       publicSmoke,
       pm2Save,
       activeSnapshotReference: activeSnapshot.reference ?? null,
@@ -325,6 +351,28 @@ export const createActivationOrchestrator = ({
       persist: false,
     });
 
+    let managedOriginReadiness;
+    try {
+      managedOriginReadiness = await runOriginReadiness({
+        releaseId: identity.releaseId,
+        sourceSha: identity.sourceSha,
+        requestState: currentEntry.requestState,
+        targetSnapshot: pointersSwitched.targetSnapshot,
+        now,
+      });
+    } catch (error) {
+      throwWithActivationProgress(error, {
+        operation: 'rollback',
+        releaseId: identity.releaseId,
+        sourceSha: identity.sourceSha,
+        requestPhase: currentEntry.requestState.phase,
+        transactionPhase: pointersSwitched.transaction.phase,
+        pointerSwitch,
+        pm2Restart,
+        managedOriginReadiness: error?.managedOriginReadiness ?? null,
+      });
+    }
+
     let publicSmoke;
     try {
       publicSmoke = await runSmoke({
@@ -344,6 +392,7 @@ export const createActivationOrchestrator = ({
         transactionPhase: pointersSwitched.transaction.phase,
         pointerSwitch,
         pm2Restart,
+        managedOriginReadiness,
       });
     }
 
@@ -388,6 +437,7 @@ export const createActivationOrchestrator = ({
       requestPhase: currentEntry.requestState.phase,
       pointerSwitch,
       pm2Restart,
+      managedOriginReadiness,
       publicSmoke,
       pm2Save,
       activeSnapshotReference: activeSnapshot.reference ?? null,

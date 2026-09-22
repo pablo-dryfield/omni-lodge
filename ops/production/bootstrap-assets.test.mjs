@@ -49,6 +49,7 @@ const expectedControlPlaneAssets = [
   'ops/production/libexec/deploy/deployment-flock.mjs',
   'ops/production/libexec/deploy/index.mjs',
   'ops/production/libexec/deploy/legacy-baseline.mjs',
+  'ops/production/libexec/deploy/managed-origin-readiness-verifier.mjs',
   'ops/production/libexec/deploy/pm2-service-controller.mjs',
   'ops/production/libexec/deploy/public-smoke-verifier.mjs',
   'ops/production/libexec/deploy/release-preparation.mjs',
@@ -163,6 +164,7 @@ test('legacy baseline capture command is root-only and not exposed through deplo
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/activation-pointer-switcher\.mjs/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/backup-gate\.mjs/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/legacy-baseline\.mjs/);
+  assert.match(bootstrap, /ops\/production\/libexec\/deploy\/managed-origin-readiness-verifier\.mjs/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/pm2-service-controller\.mjs/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/public-smoke-verifier\.mjs/);
 });

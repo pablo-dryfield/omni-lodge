@@ -56,6 +56,7 @@ const createFixture = ({
   initialTransactionPhase = 'prepared',
   recoveryAction = 'converge_previous_snapshot',
   previousSnapshotKind = 'artifact_release',
+  originReadinessRunnerImpl = null,
   publicSmokeRunnerImpl = null,
 } = {}) => {
   const calls = [];
@@ -192,6 +193,14 @@ const createFixture = ({
       sourceSha,
     });
   });
+  const originReadinessRunner = originReadinessRunnerImpl ?? (async ({ releaseId, sourceSha }) => {
+    calls.push(`origin:${releaseId}:${sourceSha}`);
+    return Object.freeze({
+      schemaVersion: 1,
+      releaseId,
+      sourceSha,
+    });
+  });
 
   return {
     calls,
@@ -200,6 +209,7 @@ const createFixture = ({
       requestStore,
       pointerSwitcher,
       pm2Controller,
+      originReadinessRunner,
       publicSmokeRunner,
       now: () => new Date('2026-09-22T12:45:00.000Z'),
     }),
@@ -221,6 +231,7 @@ test('activation orchestrator sequences request, pointer, PM2, smoke, save, and 
     'tx:pointer_switching->pointers_switched@pointer_switching',
     'request:pointer_switching->pointers_switched',
     'pm2:restart:backend,ui-server:persist=false',
+    `origin:${RELEASE_ID}:${SOURCE_SHA}`,
     `smoke:${RELEASE_ID}:${SOURCE_SHA}`,
     'tx:pointers_switched->smoke_verified@pointers_switched',
     'request:pointers_switched->smoke_verified',
@@ -234,7 +245,63 @@ test('activation orchestrator sequences request, pointer, PM2, smoke, save, and 
   assert.equal(result.sourceSha, SOURCE_SHA);
   assert.equal(result.transactionPhase, 'committed');
   assert.equal(result.requestPhase, 'succeeded');
+  assert.equal(result.managedOriginReadiness.releaseId, RELEASE_ID);
   assert.equal(result.activeSnapshotReference.activationId, REQUEST_ID);
+});
+
+test('activation orchestrator attaches cutover progress to managed origin readiness failures', async () => {
+  const { calls, orchestrator } = createFixture({
+    originReadinessRunnerImpl: async ({ releaseId, sourceSha }) => {
+      calls.push(`origin:${releaseId}:${sourceSha}`);
+      const error = new Error('ui-origin-health managed origin readiness check did not pass after 60 attempt(s): connect ECONNREFUSED 127.0.0.1:443');
+      Object.defineProperty(error, 'managedOriginReadiness', {
+        value: Object.freeze({
+          name: 'ui-origin-health',
+          url: 'https://127.0.0.1/healthz',
+          attempts: Object.freeze([
+            Object.freeze({
+              attempt: 1,
+              attemptedAtUtc: '2026-09-22T12:45:00.000Z',
+              ok: false,
+              message: 'connect ECONNREFUSED 127.0.0.1:443',
+            }),
+          ]),
+          lastMessage: 'connect ECONNREFUSED 127.0.0.1:443',
+        }),
+        enumerable: true,
+        configurable: true,
+      });
+      throw error;
+    },
+  });
+
+  await assert.rejects(
+    orchestrator.activateForwardDeployment({
+      entry: requestEntry('activation_prepared'),
+    }),
+    (error) => {
+      assert.match(error.message, /ui-origin-health managed origin readiness/);
+      assert.equal(error.activationProgress.operation, 'deploy');
+      assert.equal(error.activationProgress.releaseId, RELEASE_ID);
+      assert.equal(error.activationProgress.sourceSha, SOURCE_SHA);
+      assert.equal(error.activationProgress.requestPhase, 'pointers_switched');
+      assert.equal(error.activationProgress.transactionPhase, 'pointers_switched');
+      assert.equal(error.activationProgress.pointerSwitch.schemaVersion, 1);
+      assert.equal(error.activationProgress.pm2Restart.schemaVersion, 1);
+      assert.equal(error.activationProgress.managedOriginReadiness.name, 'ui-origin-health');
+      return true;
+    },
+  );
+
+  assert.deepEqual(calls, [
+    'tx:prepared->pointer_switching@activation_prepared',
+    'request:activation_prepared->pointer_switching',
+    'pointer:switch',
+    'tx:pointer_switching->pointers_switched@pointer_switching',
+    'request:pointer_switching->pointers_switched',
+    'pm2:restart:backend,ui-server:persist=false',
+    `origin:${RELEASE_ID}:${SOURCE_SHA}`,
+  ]);
 });
 
 test('activation orchestrator attaches cutover progress to public smoke failures', async () => {
@@ -258,6 +325,7 @@ test('activation orchestrator attaches cutover progress to public smoke failures
       assert.equal(error.activationProgress.transactionPhase, 'pointers_switched');
       assert.equal(error.activationProgress.pointerSwitch.schemaVersion, 1);
       assert.equal(error.activationProgress.pm2Restart.schemaVersion, 1);
+      assert.equal(error.activationProgress.managedOriginReadiness.releaseId, RELEASE_ID);
       return true;
     },
   );
@@ -269,6 +337,7 @@ test('activation orchestrator attaches cutover progress to public smoke failures
     'tx:pointer_switching->pointers_switched@pointer_switching',
     'request:pointer_switching->pointers_switched',
     'pm2:restart:backend,ui-server:persist=false',
+    `origin:${RELEASE_ID}:${SOURCE_SHA}`,
     `smoke:${RELEASE_ID}:${SOURCE_SHA}`,
   ]);
 });
@@ -385,6 +454,10 @@ test('activation orchestrator sequences artifact rollback through snapshot point
         return Object.freeze({ restoredAtUtc: '2026-09-22T12:45:00.000Z' });
       },
     }),
+    originReadinessRunner: async ({ releaseId, sourceSha }) => {
+      calls.push(`origin:${releaseId}:${sourceSha}`);
+      return Object.freeze({ schemaVersion: 1, releaseId, sourceSha });
+    },
     publicSmokeRunner: async ({ releaseId, sourceSha }) => {
       calls.push(`smoke:${releaseId}:${sourceSha}`);
       return Object.freeze({ schemaVersion: 1, releaseId, sourceSha });
@@ -404,6 +477,7 @@ test('activation orchestrator sequences artifact rollback through snapshot point
     'tx:pointer_switching->pointers_switched@pointer_switching',
     'request:pointer_switching->pointers_switched',
     'pm2:restart:backend,ui-server:persist=false',
+    `origin:${RELEASE_ID}:${SOURCE_SHA}`,
     `smoke:${RELEASE_ID}:${SOURCE_SHA}`,
     'tx:pointers_switched->smoke_verified@pointers_switched',
     'request:pointers_switched->smoke_verified',
