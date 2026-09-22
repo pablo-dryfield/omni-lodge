@@ -153,6 +153,25 @@ const identity = ({
   artifactZipSha256: '3'.repeat(64),
 });
 
+const rollbackIdentity = ({
+  requestId = 'b23e4567-e89b-42d3-a456-426614174015',
+} = {}) => ({
+  requestId,
+  kind: 'rollback_submit',
+  requestSha256: '5'.repeat(64),
+  requestedAtUtc: '2026-09-17T09:59:30.000Z',
+  actor: 'github-actions[bot]',
+  trigger: 'manual',
+  expectedActiveSnapshot: {
+    activationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    snapshotSha256: '6'.repeat(64),
+  },
+  targetSnapshot: {
+    activationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    snapshotSha256: '7'.repeat(64),
+  },
+});
+
 const backupGateResult = (requestState) => ({
   schemaVersion: 1,
   requestId: requestState.request.requestId,
@@ -295,6 +314,7 @@ const publishDryRunChecks = async (harness, requestState, options) => {
 };
 
 const admit = async (harness, options) => harness.store.admit({ identity: identity(options) });
+const admitRollback = async (harness, options) => harness.store.admit({ identity: rollbackIdentity(options) });
 
 const finishedEntry = async (harness, requestId) => {
   const entry = await harness.store.lookup(requestId);
@@ -556,6 +576,72 @@ test('detached worker records recovery evidence when activation fails after poin
   const entry = await finishedEntry(harness, requestId);
   assert.equal(entry.requestState.phase, 'failed');
   assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
+});
+
+test('detached worker prepares and activates manual rollback requests without artifact staging', async () => {
+  const harness = createHarness();
+  const requestId = 'b23e4567-e89b-42d3-a456-426614174015';
+  await admitRollback(harness, { requestId });
+  const rollbackPreparationPhases = [];
+  const rollbackCutoverPhases = [];
+
+  const result = await handleHostDeployWorkerRequest({
+    requestId,
+    paths: TEST_PATHS,
+    requestStore: harness.store,
+    auditLog: harness.audit,
+    clock: harness.clock,
+    fileOps: harness.fileOps,
+    fs: { unlink: async () => {} },
+    prepareRelease: async () => {
+      throw new Error('rollback must not stage artifacts');
+    },
+    prepareRollbackActivationState: async ({ requestState }) => {
+      rollbackPreparationPhases.push(requestState.phase);
+      return {
+        schemaVersion: 1,
+        requestId,
+        trigger: 'manual',
+        transactionPhase: 'prepared',
+        previousSnapshot: requestState.intent.expectedActiveSnapshot,
+        targetSnapshot: requestState.intent.targetSnapshot,
+        recoveryAction: 'abort_without_pointer_change',
+        databaseAction: 'none',
+        preparedAtUtc: '2026-09-17T10:00:00.000Z',
+      };
+    },
+    activateRollback: async ({ entry }) => {
+      rollbackCutoverPhases.push(entry.requestState.phase);
+      const requestEntry = await advanceHarnessRequest(harness, entry, [
+        'pointer_switching',
+        'pointers_switched',
+        'smoke_verified',
+        'succeeded',
+      ]);
+      return {
+        schemaVersion: 1,
+        requestPhase: requestEntry.requestState.phase,
+        requestEntry,
+      };
+    },
+  });
+
+  assert.deepEqual(rollbackPreparationPhases, ['activation_prepared']);
+  assert.deepEqual(rollbackCutoverPhases, ['activation_prepared']);
+  assert.equal(result.status.lifecycle, 'succeeded');
+  assert.equal(result.status.resultCode, 'REQUEST_SUCCEEDED');
+  const activationEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, `${requestId}.activation-preparation-result.json`))
+    .bytes.toString('utf8'));
+  assert.equal(activationEvidence.trigger, 'manual');
+  assert.equal(activationEvidence.transactionPhase, 'prepared');
+  const cutoverEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, `${requestId}.activation-cutover-result.json`))
+    .bytes.toString('utf8'));
+  assert.equal(cutoverEvidence.requestPhase, 'succeeded');
+  const entry = await finishedEntry(harness, requestId);
+  assert.equal(entry.requestState.phase, 'succeeded');
+  assert.equal(entry.requestState.resultCode, 'REQUEST_SUCCEEDED');
 });
 
 test('detached worker fails closed when activation baseline is missing', async () => {

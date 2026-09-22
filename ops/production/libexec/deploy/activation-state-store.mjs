@@ -42,6 +42,19 @@ const requireDeployPreparedRequest = (requestState) => {
   return requestState;
 };
 
+const requireRollbackPreparedRequest = (requestState) => {
+  if (requestState?.request?.kind !== 'rollback_submit') {
+    throw new Error('Only rollback requests can prepare rollback activation state');
+  }
+  if (requestState.intent?.trigger !== 'manual') {
+    throw new Error('Only manually triggered rollback requests can prepare rollback activation state');
+  }
+  if (requestState.phase !== 'activation_prepared') {
+    throw new Error('Rollback activation state requires an activation-prepared request');
+  }
+  return requestState;
+};
+
 const referenceKey = (reference) => `${reference.activationId}:${reference.snapshotSha256}`;
 
 const snapshotRecordFromBytes = ({ bytes, path: filePath, stat }) => {
@@ -249,6 +262,41 @@ export const createActivationStateStore = ({
     });
   };
 
+  const prepareRollbackActivation = async ({ requestState: rawRequestState }) => {
+    const requestState = requireRollbackPreparedRequest(rawRequestState);
+    try {
+      return await readTransaction({
+        requestId: requestState.request.requestId,
+        requestState,
+      });
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+
+    const previous = await readActiveSnapshot();
+    if (previous === null) {
+      throw new Error('Active activation snapshot is missing; rollback cannot verify the expected active snapshot');
+    }
+    compareReference(
+      previous.reference,
+      requestState.intent.expectedActiveSnapshot,
+      'Active rollback source snapshot',
+    );
+    const target = await readSnapshotByReference(requestState.intent.targetSnapshot);
+    const transaction = createHostActivationTransaction({
+      requestState,
+      previousSnapshot: previous.snapshot,
+      targetSnapshot: target.snapshot,
+      createdAtUtc: clock().toISOString(),
+    });
+    return publishOrVerifyTransaction({
+      transaction,
+      requestState,
+      previousSnapshot: previous.snapshot,
+      targetSnapshot: target.snapshot,
+    });
+  };
+
   const planRecovery = async ({ requestId, requestState }) => {
     const record = await readTransaction({ requestId, requestState });
     return planHostActivationRecovery({
@@ -331,6 +379,7 @@ export const createActivationStateStore = ({
     readTransaction,
     initializeActiveSnapshot,
     prepareForwardActivation,
+    prepareRollbackActivation,
     transitionTransaction,
     planRecovery,
     commitActiveSnapshot,

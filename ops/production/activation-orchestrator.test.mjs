@@ -28,6 +28,30 @@ const requestEntry = (phase) => Object.freeze({
   }),
 });
 
+const rollbackEntry = (phase) => Object.freeze({
+  state: 'running',
+  requestState: Object.freeze({
+    schemaVersion: 1,
+    phase,
+    request: Object.freeze({
+      kind: 'rollback_submit',
+      requestId: REQUEST_ID,
+      requestSha256: REQUEST_SHA,
+    }),
+    intent: Object.freeze({
+      trigger: 'manual',
+      expectedActiveSnapshot: Object.freeze({
+        activationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        snapshotSha256: '1'.repeat(64),
+      }),
+      targetSnapshot: Object.freeze({
+        activationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        snapshotSha256: '2'.repeat(64),
+      }),
+    }),
+  }),
+});
+
 const createFixture = ({
   initialTransactionPhase = 'prepared',
   recoveryAction = 'converge_previous_snapshot',
@@ -214,6 +238,127 @@ test('activation orchestrator only accepts activation-prepared deploy requests',
     }),
     /activation-prepared request/,
   );
+});
+
+test('activation orchestrator sequences artifact rollback through snapshot pointers', async () => {
+  const calls = [];
+  const previousSnapshot = Object.freeze({
+    snapshotKind: 'artifact',
+    releaseId: 'omnilodge-r111-a1-bbbbbbbbbbbb',
+    sourceSha: 'b'.repeat(40),
+  });
+  const targetSnapshot = Object.freeze({
+    snapshotKind: 'artifact',
+    releaseId: RELEASE_ID,
+    sourceSha: SOURCE_SHA,
+    backendRestoreTarget: '/opt/omnilodge/releases/target/be',
+    uiRestoreTarget: '/opt/omnilodge/releases/target',
+  });
+  let transactionPhase = 'prepared';
+  const transaction = (phase) => Object.freeze({
+    requestId: REQUEST_ID,
+    requestSha256: REQUEST_SHA,
+    requestKind: 'rollback_submit',
+    phase,
+  });
+  const orchestrator = createActivationOrchestrator({
+    activationStore: Object.freeze({
+      readTransaction: async ({ requestState }) => {
+        calls.push(`tx:read:${transactionPhase}@${requestState.phase}`);
+        return Object.freeze({
+          transaction: transaction(transactionPhase),
+          previousSnapshot,
+          targetSnapshot,
+        });
+      },
+      planRecovery: async () => {
+        throw new Error('not used');
+      },
+      transitionTransaction: async ({ requestState, nextPhase }) => {
+        calls.push(`tx:${transactionPhase}->${nextPhase}@${requestState.phase}`);
+        transactionPhase = nextPhase;
+        return Object.freeze({
+          transaction: transaction(transactionPhase),
+          previousSnapshot,
+          targetSnapshot,
+        });
+      },
+      commitActiveSnapshot: async ({ transaction: rawTransaction, targetSnapshot: rawTargetSnapshot }) => {
+        calls.push('active:commit');
+        assert.equal(rawTransaction.phase, 'committed');
+        assert.equal(rawTargetSnapshot.releaseId, RELEASE_ID);
+        return Object.freeze({
+          reference: Object.freeze({
+            activationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            snapshotSha256: '2'.repeat(64),
+          }),
+        });
+      },
+    }),
+    requestStore: Object.freeze({
+      advance: async ({ fromPhase, nextPhase, resultCode }) => {
+        calls.push(`request:${fromPhase}->${nextPhase}`);
+        assert.equal(resultCode, null);
+        return rollbackEntry(nextPhase);
+      },
+    }),
+    pointerSwitcher: Object.freeze({
+      switchArtifactPointers: async () => {
+        throw new Error('rollback must not use artifact-only pointer switching');
+      },
+      switchActivationSnapshotPointers: async ({ targetSnapshot: rawTargetSnapshot }) => {
+        calls.push('pointer:switch-snapshot');
+        assert.equal(rawTargetSnapshot, targetSnapshot);
+        return Object.freeze({
+          schemaVersion: 1,
+          backend: Object.freeze({ changed: true }),
+          ui: Object.freeze({ changed: true }),
+        });
+      },
+    }),
+    pm2Controller: Object.freeze({
+      restartComponentsInOrder: async ({ components, persist }) => {
+        calls.push(`pm2:restart:${components.join(',')}:persist=${persist}`);
+        return Object.freeze({
+          schemaVersion: 1,
+          restarted: Object.freeze(components.map((component) => Object.freeze({ component }))),
+        });
+      },
+      saveProcessList: async () => {
+        calls.push('pm2:save');
+        return Object.freeze({ savedAtUtc: '2026-09-22T12:45:00.000Z' });
+      },
+    }),
+    publicSmokeRunner: async ({ releaseId, sourceSha }) => {
+      calls.push(`smoke:${releaseId}:${sourceSha}`);
+      return Object.freeze({ schemaVersion: 1, releaseId, sourceSha });
+    },
+    now: () => new Date('2026-09-22T12:45:00.000Z'),
+  });
+
+  const result = await orchestrator.activateRollbackDeployment({
+    entry: rollbackEntry('activation_prepared'),
+  });
+
+  assert.deepEqual(calls, [
+    'tx:read:prepared@activation_prepared',
+    'tx:prepared->pointer_switching@activation_prepared',
+    'request:activation_prepared->pointer_switching',
+    'pointer:switch-snapshot',
+    'tx:pointer_switching->pointers_switched@pointer_switching',
+    'request:pointer_switching->pointers_switched',
+    'pm2:restart:backend,ui-server:persist=false',
+    `smoke:${RELEASE_ID}:${SOURCE_SHA}`,
+    'tx:pointers_switched->smoke_verified@pointers_switched',
+    'request:pointers_switched->smoke_verified',
+    'pm2:save',
+    'tx:smoke_verified->committed@smoke_verified',
+    'active:commit',
+    'request:smoke_verified->succeeded',
+  ]);
+  assert.equal(result.releaseId, RELEASE_ID);
+  assert.equal(result.transactionPhase, 'committed');
+  assert.equal(result.requestPhase, 'succeeded');
 });
 
 test('activation recovery converges pointers back to the previous snapshot and fails the request', async () => {

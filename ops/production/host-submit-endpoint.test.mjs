@@ -226,6 +226,30 @@ const statusFrame = ({
   }),
 });
 
+const rollbackFrame = ({
+  requestId = '723e4567-e89b-42d3-a456-426614174006',
+  requestedAtUtc = '2026-09-16T12:00:00.000Z',
+} = {}) => encodeHostV2RequestFrame({
+  requestBytes: serializeCanonicalHostV2Request({
+    schemaVersion: 2,
+    requestId,
+    requestedAtUtc,
+    actor: 'github-actions[bot]',
+    kind: 'rollback_submit',
+    payload: {
+      trigger: 'manual',
+      expectedActiveSnapshot: {
+        activationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        snapshotSha256: '1'.repeat(64),
+      },
+      targetSnapshot: {
+        activationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        snapshotSha256: '2'.repeat(64),
+      },
+    },
+  }),
+});
+
 const policyBytes = (deploymentMode) => serializeCanonicalHostDeployPolicy({
   schemaVersion: 1,
   deploymentMode,
@@ -433,6 +457,37 @@ test('host submit endpoint accepts authorized requests and starts the detached w
   }]);
   const state = readPendingState(harness.fileOps, '323e4567-e89b-42d3-a456-426614174002');
   assert.equal(state.intent.operation, 'stage');
+  assert.equal(state.phase, 'received');
+  assert.equal(state.resultCode, null);
+});
+
+test('host submit endpoint accepts manual rollback without staging worker payloads', async (context) => {
+  const artifactDirectory = await mkdtemp(path.join(os.tmpdir(), 'omnilodge-submit-rollback-'));
+  context.after(() => rm(artifactDirectory, { recursive: true, force: true }));
+  const harness = createHarness({ deploymentMode: 'disabled' });
+  const persisted = [];
+  const started = [];
+  const { output } = await submit({
+    frame: rollbackFrame(),
+    artifactDirectory,
+    harness,
+    overrides: {
+      persistForWorker: async () => {
+        persisted.push('unexpected');
+      },
+      startWorker: async ({ requestId }) => {
+        started.push(requestId);
+      },
+    },
+  });
+  const response = decodeHostV2ResponseFrame(output.bytes());
+  assert.equal(response.code, 'REQUEST_ACCEPTED');
+  assert.deepEqual(await readdir(artifactDirectory), []);
+  assert.deepEqual(persisted, []);
+  assert.deepEqual(started, ['723e4567-e89b-42d3-a456-426614174006']);
+  const state = readPendingState(harness.fileOps, '723e4567-e89b-42d3-a456-426614174006');
+  assert.equal(state.request.kind, 'rollback_submit');
+  assert.equal(state.intent.trigger, 'manual');
   assert.equal(state.phase, 'received');
   assert.equal(state.resultCode, null);
 });

@@ -33,11 +33,24 @@ const requireActivationPreparedDeploy = (entry) => {
   return checked;
 };
 
-const requireForwardDeploy = (entry) => {
+const requireActivationPreparedRollback = (entry) => {
   const checked = requireEntry(entry);
   const { requestState } = checked;
-  invariant(requestState.request?.kind === 'forward_submit', 'Only forward deployment requests can be recovered');
-  invariant(requestState.intent?.operation === 'deploy', 'Only deploy requests can be recovered');
+  invariant(requestState.request?.kind === 'rollback_submit', 'Only rollback requests can use rollback activation');
+  invariant(requestState.intent?.trigger === 'manual', 'Only manually triggered rollback requests can be activated');
+  invariant(requestState.phase === 'activation_prepared', 'Rollback cutover requires an activation-prepared request');
+  return checked;
+};
+
+const requireRecoverableActivationRequest = (entry) => {
+  const checked = requireEntry(entry);
+  const { requestState } = checked;
+  if (requestState.request?.kind === 'forward_submit') {
+    invariant(requestState.intent?.operation === 'deploy', 'Only deploy requests can be recovered');
+  } else {
+    invariant(requestState.request?.kind === 'rollback_submit', 'Only rollback requests can be recovered');
+    invariant(requestState.intent?.trigger === 'manual', 'Only manually triggered rollback requests can be recovered');
+  }
   return checked;
 };
 
@@ -233,11 +246,114 @@ export const createActivationOrchestrator = ({
     });
   };
 
+  const activateRollbackDeployment = async ({
+    entry,
+    smokeTargets = undefined,
+    restartComponents = DEFAULT_RESTART_COMPONENTS,
+  } = {}) => {
+    let currentEntry = requireActivationPreparedRollback(entry);
+    const startedAtUtc = now().toISOString();
+    const prepared = await readActivationTransaction({
+      activationStore: checkedActivationStore,
+      requestState: currentEntry.requestState,
+    });
+    const identity = releaseIdentity(prepared.targetSnapshot);
+
+    const pointerSwitching = await transitionActivation({
+      activationStore: checkedActivationStore,
+      requestState: currentEntry.requestState,
+      nextPhase: 'pointer_switching',
+    });
+    currentEntry = await advanceRequest({
+      requestStore: checkedRequestStore,
+      entry: currentEntry,
+      nextPhase: 'pointer_switching',
+    });
+
+    const pointerSwitch = await checkedPointerSwitcher.switchActivationSnapshotPointers({
+      targetSnapshot: pointerSwitching.targetSnapshot,
+    });
+
+    const pointersSwitched = await transitionActivation({
+      activationStore: checkedActivationStore,
+      requestState: currentEntry.requestState,
+      nextPhase: 'pointers_switched',
+    });
+    currentEntry = await advanceRequest({
+      requestStore: checkedRequestStore,
+      entry: currentEntry,
+      nextPhase: 'pointers_switched',
+    });
+
+    const pm2Restart = await checkedPm2Controller.restartComponentsInOrder({
+      components: Object.freeze([...restartComponents]),
+      persist: false,
+    });
+
+    const publicSmoke = await runSmoke({
+      releaseId: identity.releaseId,
+      sourceSha: identity.sourceSha,
+      targets: smokeTargets,
+      requestState: currentEntry.requestState,
+      targetSnapshot: pointersSwitched.targetSnapshot,
+      now,
+    });
+
+    const smokeVerified = await transitionActivation({
+      activationStore: checkedActivationStore,
+      requestState: currentEntry.requestState,
+      nextPhase: 'smoke_verified',
+    });
+    currentEntry = await advanceRequest({
+      requestStore: checkedRequestStore,
+      entry: currentEntry,
+      nextPhase: 'smoke_verified',
+    });
+
+    const pm2Save = await checkedPm2Controller.saveProcessList();
+
+    const committed = await transitionActivation({
+      activationStore: checkedActivationStore,
+      requestState: currentEntry.requestState,
+      nextPhase: 'committed',
+    });
+    const activeSnapshot = await checkedActivationStore.commitActiveSnapshot({
+      transaction: committed.transaction,
+      requestState: currentEntry.requestState,
+      previousSnapshot: committed.previousSnapshot,
+      targetSnapshot: committed.targetSnapshot,
+    });
+
+    currentEntry = await advanceRequest({
+      requestStore: checkedRequestStore,
+      entry: currentEntry,
+      nextPhase: 'succeeded',
+    });
+
+    return Object.freeze({
+      schemaVersion: 1,
+      startedAtUtc,
+      completedAtUtc: now().toISOString(),
+      releaseId: identity.releaseId,
+      sourceSha: identity.sourceSha,
+      transactionPhase: committed.transaction.phase,
+      requestPhase: currentEntry.requestState.phase,
+      pointerSwitch,
+      pm2Restart,
+      publicSmoke,
+      pm2Save,
+      activeSnapshotReference: activeSnapshot.reference ?? null,
+      activationTransaction: committed.transaction,
+      requestEntry: currentEntry,
+      smokeVerifiedTransaction: smokeVerified.transaction,
+    });
+  };
+
   const recoverForwardDeployment = async ({
     entry,
     restartComponents = DEFAULT_RESTART_COMPONENTS,
   } = {}) => {
-    let currentEntry = requireForwardDeploy(entry);
+    let currentEntry = requireRecoverableActivationRequest(entry);
     const startedAtUtc = now().toISOString();
     const initial = await readActivationTransaction({
       activationStore: checkedActivationStore,
@@ -421,6 +537,8 @@ export const createActivationOrchestrator = ({
 
   return Object.freeze({
     activateForwardDeployment,
+    activateRollbackDeployment,
     recoverForwardDeployment,
+    recoverRollbackDeployment: recoverForwardDeployment,
   });
 };
