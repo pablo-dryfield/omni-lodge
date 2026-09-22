@@ -230,7 +230,10 @@ session:
    newly created, non-empty, checksummed backup before the worker can advance
    to the migration gate. If there are zero pending migrations, it records
    `backupRequired: false` and skips the backup. Missing or invalid migration
-   evidence fails closed. Migration and activation still remain disabled.
+   evidence fails closed. After `backup_verified`, the worker runs the
+   release-local compiled migration runner only when pending migrations exist,
+   then re-runs migration-status and requires zero pending migrations before
+   advancing to `migrations_applied`. Activation still remains disabled.
 4. Replace the three fail-closed deploy scaffolds with the reviewed submitter,
    worker, and recovery implementation. The root submitter must rederive
    authorization from `/etc/omnilodge/deploy-policy.json`; GitHub's claimed

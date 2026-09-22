@@ -32,6 +32,7 @@ import {
   serializeCanonicalJson,
 } from './canonical-json.mjs';
 import {
+  parseProductionBackupGateResult,
   runProductionBackupGate,
   serializeProductionBackupGateResult,
   validateMigrationStatusForBackupGate,
@@ -64,6 +65,7 @@ const DEPENDENCY_COMPONENTS = Object.freeze(['backend', 'ui-server']);
 const DEPENDENCY_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 const BROWSER_CACHE_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 const DRY_RUN_COMMAND_TIMEOUT_MS = 90 * 1000;
+const MIGRATION_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const BACKEND_ENV_FILE = '/etc/omnilodge/backend.env';
 const UI_SERVER_ENV_FILE = '/etc/omnilodge/ui-server.env';
 const UI_TLS_KEY_FILE = '/etc/omnilodge/tls/origin.key';
@@ -158,6 +160,9 @@ const browserCacheResultPath = ({ paths, requestId }) =>
 
 const backupGateResultPath = ({ paths, requestId }) =>
   path.join(paths.stateRoot, `${validateRequestId(requestId)}.backup-gate-result.json`);
+
+const migrationGateResultPath = ({ paths, requestId }) =>
+  path.join(paths.stateRoot, `${validateRequestId(requestId)}.migration-gate-result.json`);
 
 const delay = (milliseconds) => new Promise((resolve) => {
   setTimeout(resolve, milliseconds);
@@ -263,6 +268,21 @@ export const runDryRunCommand = async (execution) => {
     env: execution.env,
     timeout: DRY_RUN_COMMAND_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  });
+  return Object.freeze({
+    exitCode: 0,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
+};
+
+export const runMigrationCommand = async (execution) => {
+  const result = await execFile(execution.executable, execution.args, {
+    cwd: execution.cwd,
+    env: execution.env,
+    timeout: MIGRATION_COMMAND_TIMEOUT_MS,
+    maxBuffer: 8 * 1024 * 1024,
     windowsHide: true,
   });
   return Object.freeze({
@@ -447,6 +467,24 @@ const backendDryRunCommand = ({ plan, label, script }) => Object.freeze({
   ]),
   cwd: path.join(plan.releaseRoot, 'be'),
   env: backendDryRunEnvironment(plan),
+});
+
+const backendMigrationEnvironment = (plan) => Object.freeze({
+  ...backendDryRunEnvironment(plan),
+  APP_RUNTIME_MODE: 'deployment-candidate',
+  MIGRATION_VERIFY_STRICT: 'false',
+});
+
+const backendMigrationCommand = ({ plan }) => Object.freeze({
+  label: 'run-migrations',
+  executable: '/usr/bin/node',
+  args: Object.freeze([
+    `--env-file=${BACKEND_ENV_FILE}`,
+    '--enable-source-maps',
+    'dist/scripts/runMigrations.js',
+  ]),
+  cwd: path.join(plan.releaseRoot, 'be'),
+  env: backendMigrationEnvironment(plan),
 });
 
 const backendPrivateSmokeCommand = ({ plan, port }) => Object.freeze({
@@ -1110,6 +1148,117 @@ const readMigrationStatusForBackupGate = async ({
   return validateMigrationStatusForBackupGate(result.migrationStatus);
 };
 
+const readBackupGateResult = async ({
+  fileOps,
+  paths,
+  requestId,
+  requestState,
+}) => {
+  const loaded = await fileOps.readSecureBuffer(backupGateResultPath({ paths, requestId }), {
+    maximumBytes: 16 * 1024,
+  });
+  const result = parseProductionBackupGateResult(loaded.bytes);
+  invariant(result.releaseId === requestState.intent.releaseId, 'Backup gate result release ID does not match the request');
+  invariant(result.sourceSha === requestState.intent.sourceSha, 'Backup gate result source SHA does not match the request');
+  return result;
+};
+
+const createPlanForRequestState = (requestState) => createReleasePreparationPlan({
+  expectedReleaseId: requestState.intent.releaseId,
+  expectedSourceSha: requestState.intent.sourceSha,
+  trustedLayout: PRODUCTION_RELEASE_LAYOUT,
+  linkState: 'auto',
+});
+
+const samePendingMigrations = (left, right) => (
+  left.pendingMigrationCount === right.pendingMigrationCount
+  && left.pendingMigrationNames.length === right.pendingMigrationNames.length
+  && left.pendingMigrationNames.every((name, index) => name === right.pendingMigrationNames[index])
+);
+
+export const runDeploymentMigrationGate = async ({
+  requestState,
+  migrationStatus,
+  backupGateResult,
+  now = () => new Date(),
+  createPlan = createPlanForRequestState,
+  migrationExecutor = runMigrationCommand,
+  statusExecutor = runDryRunCommand,
+} = {}) => {
+  invariant(requestState?.request?.kind === 'forward_submit', 'Migration gate only supports forward deploy requests');
+  invariant(requestState.intent?.operation === 'deploy', 'Migration gate only runs for deploy requests');
+  invariant(requestState.phase === 'backup_verified', 'Migration gate requires the backup_verified phase');
+  const beforeStatus = validateMigrationStatusForBackupGate(migrationStatus);
+  const backupResult = parseProductionBackupGateResult(serializeProductionBackupGateResult(backupGateResult));
+  invariant(backupResult.requestId === requestState.request.requestId, 'Migration gate backup result request ID does not match');
+  invariant(backupResult.releaseId === requestState.intent.releaseId, 'Migration gate backup result release ID does not match');
+  invariant(backupResult.sourceSha === requestState.intent.sourceSha, 'Migration gate backup result source SHA does not match');
+  invariant(samePendingMigrations(backupResult, beforeStatus), 'Migration gate backup result does not match migration-status evidence');
+
+  const startedAtUtc = now().toISOString();
+  if (beforeStatus.pendingMigrationCount === 0) {
+    invariant(backupResult.backupRequired === false, 'Migration gate expected backup to be skipped for current migrations');
+    return Object.freeze({
+      schemaVersion: 1,
+      requestId: requestState.request.requestId,
+      releaseId: requestState.intent.releaseId,
+      sourceSha: requestState.intent.sourceSha,
+      migrationRequired: false,
+      migrationReason: 'NO_PENDING_MIGRATIONS',
+      pendingMigrationCountBefore: 0,
+      pendingMigrationNamesBefore: Object.freeze([]),
+      backupRequired: false,
+      selectedBackup: null,
+      command: null,
+      postMigrationStatus: beforeStatus,
+      startedAtUtc,
+      completedAtUtc: now().toISOString(),
+    });
+  }
+
+  invariant(backupResult.backupRequired === true, 'Migration gate requires verified backup evidence before running pending migrations');
+  invariant(backupResult.selectedBackup !== null, 'Migration gate requires selected backup evidence before running pending migrations');
+  const plan = createPlan(requestState);
+  const migrationCommand = backendMigrationCommand({ plan });
+  const migrationResult = await migrationExecutor(migrationCommand);
+  invariant(migrationResult?.exitCode === 0, 'Migration command failed');
+
+  const statusCommand = backendDryRunCommand({
+    plan,
+    label: 'post-migration-status',
+    script: 'dist/scripts/reportMigrationStatus.js',
+  });
+  const postMigrationStatus = validateMigrationStatusForBackupGate(assertMigrationStatusResult(parseJsonCommandOutput({
+    label: statusCommand.label,
+    result: await statusExecutor(statusCommand),
+  })));
+  invariant(postMigrationStatus.pendingMigrationCount === 0, 'Migration gate post-migration status still has pending migrations');
+
+  return Object.freeze({
+    schemaVersion: 1,
+    requestId: requestState.request.requestId,
+    releaseId: requestState.intent.releaseId,
+    sourceSha: requestState.intent.sourceSha,
+    migrationRequired: true,
+    migrationReason: 'PENDING_MIGRATIONS',
+    pendingMigrationCountBefore: beforeStatus.pendingMigrationCount,
+    pendingMigrationNamesBefore: beforeStatus.pendingMigrationNames,
+    backupRequired: true,
+    selectedBackup: backupResult.selectedBackup,
+    command: Object.freeze({
+      label: migrationCommand.label,
+      executable: migrationCommand.executable,
+      args: migrationCommand.args,
+      cwd: migrationCommand.cwd,
+      stdoutBytes: Buffer.byteLength(migrationResult.stdout ?? ''),
+      stderrBytes: Buffer.byteLength(migrationResult.stderr ?? ''),
+    }),
+    postMigrationStatus,
+    startedAtUtc,
+    completedAtUtc: now().toISOString(),
+  });
+};
+
 const finishIfTerminal = async ({
   store,
   entry,
@@ -1133,6 +1282,7 @@ export const handleHostDeployWorkerRequest = async ({
   auditLog = createHostAuditLog({ clock }),
   prepareRelease = prepareForwardReleaseArtifact,
   runBackupGate = runProductionBackupGate,
+  runMigrationGate = runDeploymentMigrationGate,
 } = {}) => {
   const validatedRequestId = validateRequestId(requestId);
   let entry = await requestStore.lookup(validatedRequestId);
@@ -1223,7 +1373,38 @@ export const handleHostDeployWorkerRequest = async ({
           nextPhase: 'backup_verified',
         });
       }
-      throw new Error('Production migration and activation switching gates are not enabled in this slice');
+      if (entry.requestState.phase === 'backup_verified') {
+        const migrationStatus = await readMigrationStatusForBackupGate({
+          fileOps,
+          paths,
+          requestId: validatedRequestId,
+          requestState: entry.requestState,
+        });
+        const migrationGate = await runMigrationGate({
+          requestState: entry.requestState,
+          migrationStatus,
+          backupGateResult: await readBackupGateResult({
+            fileOps,
+            paths,
+            requestId: validatedRequestId,
+            requestState: entry.requestState,
+          }),
+          paths,
+          fs,
+          clock,
+        });
+        await publishOrVerifyBuffer({
+          fileOps,
+          targetPath: migrationGateResultPath({ paths, requestId: validatedRequestId }),
+          bytes: serializeCanonicalJson(jsonSafe(migrationGate)),
+        });
+        entry = await requestStore.advance({
+          ...identityFromEntry(entry),
+          fromPhase: 'backup_verified',
+          nextPhase: 'migrations_applied',
+        });
+      }
+      throw new Error('Production activation switching gates are not enabled in this slice');
     }
     entry = await advanceIfAtPhase({
       store: requestStore,
