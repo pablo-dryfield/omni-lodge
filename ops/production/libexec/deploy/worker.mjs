@@ -25,6 +25,8 @@ import {
 import {
   createHostRequestStatus,
 } from '../../../../scripts/deploy/host/state.mjs';
+import { createActivationOrchestrator } from './activation-orchestrator.mjs';
+import { createActivationPointerSwitcher } from './activation-pointer-switcher.mjs';
 import { createActivationStateStore } from './activation-state-store.mjs';
 import { createHostAuditLog } from './audit-log.mjs';
 import {
@@ -50,6 +52,8 @@ import {
   serializeReleasePreparationPlan,
   serializeReleasePreparationState,
 } from './release-preparation.mjs';
+import { createProductionPm2ServiceController } from './pm2-service-controller.mjs';
+import { runPublicSmokeChecks } from './public-smoke-verifier.mjs';
 import { createRequestRecordStore } from './request-store.mjs';
 import {
   createDurableFileOps,
@@ -167,6 +171,12 @@ const migrationGateResultPath = ({ paths, requestId }) =>
 
 const activationPreparationResultPath = ({ paths, requestId }) =>
   path.join(paths.stateRoot, `${validateRequestId(requestId)}.activation-preparation-result.json`);
+
+const activationCutoverResultPath = ({ paths, requestId }) =>
+  path.join(paths.stateRoot, `${validateRequestId(requestId)}.activation-cutover-result.json`);
+
+const activationRecoveryResultPath = ({ paths, requestId }) =>
+  path.join(paths.stateRoot, `${validateRequestId(requestId)}.activation-recovery-result.json`);
 
 const delay = (milliseconds) => new Promise((resolve) => {
   setTimeout(resolve, milliseconds);
@@ -1289,6 +1299,35 @@ export const runDeploymentActivationPreparation = async ({
   });
 };
 
+const createDefaultActivationOrchestrator = ({
+  activationStore,
+  requestStore,
+  clock,
+} = {}) => createActivationOrchestrator({
+  activationStore,
+  requestStore,
+  pointerSwitcher: createActivationPointerSwitcher(),
+  pm2Controller: createProductionPm2ServiceController({ now: clock }),
+  publicSmokeRunner: runPublicSmokeChecks,
+  now: clock,
+});
+
+export const runDeploymentActivationCutover = async ({
+  entry,
+  activationOrchestrator,
+} = {}) => {
+  invariant(activationOrchestrator?.activateForwardDeployment, 'Activation orchestrator is required');
+  return activationOrchestrator.activateForwardDeployment({ entry });
+};
+
+export const runDeploymentActivationRecovery = async ({
+  entry,
+  activationOrchestrator,
+} = {}) => {
+  invariant(activationOrchestrator?.recoverForwardDeployment, 'Activation recovery orchestrator is required');
+  return activationOrchestrator.recoverForwardDeployment({ entry });
+};
+
 const finishIfTerminal = async ({
   store,
   entry,
@@ -1315,6 +1354,9 @@ export const handleHostDeployWorkerRequest = async ({
   runMigrationGate = runDeploymentMigrationGate,
   activationStore = createActivationStateStore({ paths, clock, fileOps }),
   prepareActivationState = runDeploymentActivationPreparation,
+  activationOrchestrator = createDefaultActivationOrchestrator({ activationStore, requestStore, clock }),
+  activateDeployment = runDeploymentActivationCutover,
+  recoverDeployment = runDeploymentActivationRecovery,
 } = {}) => {
   const validatedRequestId = validateRequestId(requestId);
   let entry = await requestStore.lookup(validatedRequestId);
@@ -1456,7 +1498,47 @@ export const handleHostDeployWorkerRequest = async ({
           bytes: serializeCanonicalJson(jsonSafe(activationPreparation)),
         });
       }
-      throw new Error('Production pointer switching gates are not enabled in this slice');
+      if (entry.requestState.phase === 'activation_prepared') {
+        try {
+          const activationCutover = await activateDeployment({
+            entry,
+            activationOrchestrator,
+            paths,
+            fileOps,
+            clock,
+          });
+          await publishOrVerifyBuffer({
+            fileOps,
+            targetPath: activationCutoverResultPath({ paths, requestId: validatedRequestId }),
+            bytes: serializeCanonicalJson(jsonSafe(activationCutover)),
+          });
+          entry = activationCutover.requestEntry;
+        } catch (activationError) {
+          let recoveredSucceeded = false;
+          const recoveryEntry = await requestStore.lookup(validatedRequestId);
+          if (recoveryEntry !== null && recoveryEntry.state === 'running') {
+            const recovery = await recoverDeployment({
+              entry: recoveryEntry,
+              activationOrchestrator,
+              paths,
+              fileOps,
+              clock,
+            });
+            await publishOrVerifyBuffer({
+              fileOps,
+              targetPath: activationRecoveryResultPath({ paths, requestId: validatedRequestId }),
+              bytes: serializeCanonicalJson(jsonSafe(recovery)),
+            });
+            if (recovery.requestEntry?.requestState?.phase === 'succeeded') {
+              entry = recovery.requestEntry;
+              recoveredSucceeded = true;
+            }
+          }
+          if (!recoveredSucceeded) {
+            throw activationError;
+          }
+        }
+      }
     }
     entry = await advanceIfAtPhase({
       store: requestStore,
@@ -1477,13 +1559,15 @@ export const handleHostDeployWorkerRequest = async ({
     });
   } catch (error) {
     entry = await requestStore.lookup(validatedRequestId);
-    if (entry !== null && entry.state === 'running' && !['succeeded', 'failed', 'rejected'].includes(entry.requestState.phase)) {
+    if (entry !== null && entry.state === 'running') {
       await cleanupIncomingWorkerPayload({
         requestId: validatedRequestId,
         paths,
         fs,
       });
-      entry = await failRunningRequest({ store: requestStore, entry });
+      if (!['succeeded', 'failed', 'rejected'].includes(entry.requestState.phase)) {
+        entry = await failRunningRequest({ store: requestStore, entry });
+      }
       entry = await finishIfTerminal({ store: requestStore, entry });
       await appendAudit({
         audit: auditLog,
