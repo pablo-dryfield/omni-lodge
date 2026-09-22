@@ -46,7 +46,7 @@ test('PM2 controller uses fixed Ubuntu PM2 commands and process names', () => {
     executable: '/usr/bin/pm2',
     args: [
       'startOrRestart',
-      '/etc/omnilodge/ecosystem.production.cjs',
+      '/etc/omnilodge/ecosystem.production.json',
       '--only',
       'omni-lodge-be',
       '--update-env',
@@ -57,7 +57,7 @@ test('PM2 controller uses fixed Ubuntu PM2 commands and process names', () => {
     executable: '/usr/bin/pm2',
     args: [
       'startOrRestart',
-      '/etc/omnilodge/ecosystem.production.cjs',
+      '/etc/omnilodge/ecosystem.production.json',
       '--only',
       'omni-lodge-ui-server',
       '--update-env',
@@ -177,8 +177,8 @@ test('PM2 controller restarts components in order, validates jlist, and can pers
 
   const result = await controller.restartComponentsInOrder({ persist: true });
   assert.deepEqual(calls.map((call) => call.command.args), [
-    ['startOrRestart', '/etc/omnilodge/ecosystem.production.cjs', '--only', 'omni-lodge-be', '--update-env'],
-    ['startOrRestart', '/etc/omnilodge/ecosystem.production.cjs', '--only', 'omni-lodge-ui-server', '--update-env'],
+    ['startOrRestart', '/etc/omnilodge/ecosystem.production.json', '--only', 'omni-lodge-be', '--update-env'],
+    ['startOrRestart', '/etc/omnilodge/ecosystem.production.json', '--only', 'omni-lodge-ui-server', '--update-env'],
     ['jlist'],
     ['save', '--force'],
   ]);

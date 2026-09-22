@@ -5,7 +5,7 @@ const execFile = promisify(execFileCallback);
 
 export const PRODUCTION_PM2 = Object.freeze({
   executable: '/usr/bin/pm2',
-  ecosystemPath: '/etc/omnilodge/ecosystem.production.cjs',
+  ecosystemPath: '/etc/omnilodge/ecosystem.production.json',
   runtimeLauncher: '/usr/local/libexec/omnilodge/runtime-launcher.mjs',
   processNames: Object.freeze({
     backend: 'omni-lodge-be',

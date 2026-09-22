@@ -302,7 +302,7 @@ validate_source_assets() {
     systemd/omnilodge-deploy-worker@.service \
     systemd/omnilodge-deploy-recovery.service \
     systemd/pm2-root-omnilodge-deploy.conf \
-    pm2/ecosystem.production.cjs \
+    pm2/ecosystem.production.json \
     logrotate/omnilodge \
     README.md
   do
@@ -370,7 +370,8 @@ validate_source_assets() {
   node_path=$(find_command node /usr/bin/node)
   if [ -n "$node_path" ]; then
     "$node_path" --check "$(source_file bin/runtime-launcher.mjs)"
-    "$node_path" --check "$(source_file pm2/ecosystem.production.cjs)"
+    "$node_path" -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" \
+      "$(source_file pm2/ecosystem.production.json)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-state-store.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-orchestrator.mjs)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-pointer-switcher.mjs)"
@@ -623,7 +624,7 @@ validate_installed() {
   assert_exact_file /usr/local/sbin/omnilodge-deploy '755'
   assert_exact_file /usr/local/sbin/omnilodge-deploy-worker '755'
   assert_exact_file /usr/local/sbin/omnilodge-deploy-recover '755'
-  assert_exact_file "$ETC_ROOT/ecosystem.production.cjs" '644'
+  assert_exact_file "$ETC_ROOT/ecosystem.production.json" '644'
   assert_exact_file /etc/systemd/system/omnilodge-deploy-worker@.service '644'
   assert_exact_file /etc/systemd/system/omnilodge-deploy-recovery.service '644'
   assert_exact_file /etc/systemd/system/pm2-root.service.d/20-omnilodge-deploy-recovery.conf '644'
@@ -651,7 +652,7 @@ validate_installed() {
     || die 'installed SSH Match configuration differs from the reviewed source'
   cmp -s "$(source_file sudoers/omnilodge-deploy)" "$SUDOERS_TARGET" \
     || die 'installed sudo rule differs from the reviewed source'
-  cmp -s "$(source_file pm2/ecosystem.production.cjs)" "$ETC_ROOT/ecosystem.production.cjs" \
+  cmp -s "$(source_file pm2/ecosystem.production.json)" "$ETC_ROOT/ecosystem.production.json" \
     || die 'installed PM2 ecosystem differs from the reviewed source'
   cmp -s "$(source_file systemd/omnilodge-deploy-worker@.service)" /etc/systemd/system/omnilodge-deploy-worker@.service \
     || die 'installed deployment worker unit differs from the reviewed source'
@@ -713,7 +714,7 @@ install_assets() {
     systemd/omnilodge-deploy-worker@.service \
     systemd/omnilodge-deploy-recovery.service \
     systemd/pm2-root-omnilodge-deploy.conf \
-    pm2/ecosystem.production.cjs \
+    pm2/ecosystem.production.json \
     logrotate/omnilodge \
     README.md
   do
@@ -859,7 +860,7 @@ install_assets() {
   atomic_install "$(source_file bin/omnilodge-deploy)" /usr/local/sbin/omnilodge-deploy 755
   atomic_install "$(source_file bin/omnilodge-deploy-worker)" /usr/local/sbin/omnilodge-deploy-worker 755
   atomic_install "$(source_file bin/omnilodge-deploy-recover)" /usr/local/sbin/omnilodge-deploy-recover 755
-  atomic_install "$(source_file pm2/ecosystem.production.cjs)" "$ETC_ROOT/ecosystem.production.cjs" 644
+  atomic_install "$(source_file pm2/ecosystem.production.json)" "$ETC_ROOT/ecosystem.production.json" 644
   atomic_install "$(source_file systemd/omnilodge-deploy-worker@.service)" /etc/systemd/system/omnilodge-deploy-worker@.service 644
   atomic_install "$(source_file systemd/omnilodge-deploy-recovery.service)" /etc/systemd/system/omnilodge-deploy-recovery.service 644
   ensure_directory /etc/systemd/system/pm2-root.service.d 755

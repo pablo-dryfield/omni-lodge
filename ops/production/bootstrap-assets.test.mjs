@@ -32,7 +32,7 @@ const expectedAssets = [
   'systemd/omnilodge-deploy-worker@.service',
   'systemd/omnilodge-deploy-recovery.service',
   'systemd/pm2-root-omnilodge-deploy.conf',
-  'pm2/ecosystem.production.cjs',
+  'pm2/ecosystem.production.json',
   'logrotate/omnilodge',
 ];
 
@@ -242,8 +242,7 @@ test('detached worker and recovery units are inactive with fixed commands', asyn
 });
 
 test('stable PM2 definition keeps one fork-mode instance per component', async () => {
-  const ecosystemPath = path.join(root, 'pm2/ecosystem.production.cjs');
-  const ecosystem = (await import(`${pathToFileURL(ecosystemPath).href}?test=${Date.now()}`)).default;
+  const ecosystem = JSON.parse(await read('pm2/ecosystem.production.json'));
   assert.equal(ecosystem.apps.length, 2);
   assert.deepEqual(ecosystem.apps.map((app) => app.name), ['omni-lodge-be', 'omni-lodge-ui-server']);
   for (const app of ecosystem.apps) {
