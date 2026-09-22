@@ -965,7 +965,7 @@ export const prepareForwardReleaseArtifact = async ({
   let managedLinks = null;
   let browserCache = null;
   let dryRunChecks = null;
-  if (requestState.intent.operation === 'dry-run') {
+  if (requestState.intent.operation === 'dry-run' || requestState.intent.operation === 'deploy') {
     dependencyPreparation = await prepareDependencies({
       plan,
       now,
@@ -1159,16 +1159,15 @@ export const handleHostDeployWorkerRequest = async ({
       });
     }
 
-    if (entry.requestState.intent.operation === 'deploy') {
-      throw new Error('Release activation is not enabled in the detached staging slice');
-    }
-
     entry = await advanceIfAtPhase({
       store: requestStore,
       entry,
       fromPhase: 'artifact_staged',
       nextPhase: 'preflight_passed',
     });
+    if (entry.requestState.intent.operation === 'deploy') {
+      throw new Error('Backup, migration, and activation switching gates are not enabled in this slice');
+    }
     entry = await advanceIfAtPhase({
       store: requestStore,
       entry,

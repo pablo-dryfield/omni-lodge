@@ -550,7 +550,7 @@ test('worker dependency preparation publishes both runtime layers with fresh cap
   });
 });
 
-test('forward artifact preparation keeps stage lightweight and reserves dependency work for dry-run', async () => {
+test('forward artifact preparation keeps stage lightweight and prepares candidates for dry-run and deploy', async () => {
   await withFixture(async (fixture) => {
     const requestId = '923e4567-e89b-42d3-a456-426614174012';
     const basePaths = {
@@ -692,6 +692,81 @@ test('forward artifact preparation keeps stage lightweight and reserves dependen
     assert.equal([...dryRunFiles.files.keys()].some((filePath) => filePath.endsWith('.managed-links-result.json')), true);
     assert.equal([...dryRunFiles.files.keys()].some((filePath) => filePath.endsWith('.browser-cache-result.json')), true);
     assert.equal([...dryRunFiles.files.keys()].some((filePath) => filePath.endsWith('.dry-run-checks-result.json')), true);
+
+    const deployFiles = createMemoryStateFileOps();
+    const deployExtraction = {
+      ...extraction,
+      operation: { name: 'deploy', trigger: 'manual' },
+    };
+    const deployResult = await prepareForwardReleaseArtifact({
+      requestState: requestState('deploy'),
+      paths: basePaths,
+      trustedLayout: fixture.layout,
+      fileOps: deployFiles,
+      extractArtifact: async () => deployExtraction,
+      prepareDependencies: async ({ plan }) => ({
+        schemaVersion: 1,
+        releaseId: plan.releaseId,
+        sourceSha: plan.sourceSha,
+        preparationPlanSha256: plan.planSha256,
+        startedAtUtc: '2026-09-16T12:00:00.000Z',
+        completedAtUtc: '2026-09-16T12:00:00.000Z',
+        components: [],
+        preparationState: 'partial',
+        releaseLinks: 'unlinked',
+        dependencies: { backend: 'prepared', 'ui-server': 'prepared' },
+      }),
+      prepareManagedLinks: (plan) => ({
+        releaseId: plan.releaseId,
+        linkCount: plan.managedLinks.length,
+        created: plan.managedLinks.map((entry) => entry.relativePath),
+        reused: [],
+      }),
+      prepareBrowserCache: async ({ plan }) => ({
+        schemaVersion: 1,
+        releaseId: plan.releaseId,
+        sourceSha: plan.sourceSha,
+        preparationPlanSha256: plan.planSha256,
+        cacheRoot: plan.layout.puppeteerCacheRoot,
+        command: {
+          label: 'puppeteer-browser-cache',
+          executable: '/usr/bin/node',
+          args: ['node_modules/puppeteer/install.mjs'],
+          cwd: path.join(plan.releaseRoot, 'be'),
+        },
+        capturedAtUtc: '2026-09-16T12:00:00.000Z',
+      }),
+      runDryRunChecks: async ({ plan }) => ({
+        schemaVersion: 1,
+        releaseId: plan.releaseId,
+        sourceSha: plan.sourceSha,
+        preparationPlanSha256: plan.planSha256,
+        backendEnvironmentFile: '/etc/omnilodge/backend.env',
+        commands: [],
+        migrationStatus: {
+          schemaVersion: 1,
+          kind: 'omnilodge-migration-status',
+          ok: true,
+          pendingMigrationCount: 0,
+          pendingMigrationNames: [],
+        },
+        runtimePreflight: {
+          schemaVersion: 1,
+          kind: 'omnilodge-backend-runtime-preflight',
+          ok: true,
+          checks: {},
+        },
+        capturedAtUtc: '2026-09-16T12:00:00.000Z',
+      }),
+    });
+    assert.equal(deployResult.dependencyPreparationState, 'partial');
+    assert.equal(deployResult.managedLinkCount, 7);
+    assert.equal(deployResult.browserCachePrepared, true);
+    assert.equal(deployResult.dryRunChecksPassed, true);
+    assert.equal([...deployFiles.files.keys()].some((filePath) => filePath.endsWith('.dependency-preparation-result.json')), true);
+    assert.equal([...deployFiles.files.keys()].some((filePath) => filePath.endsWith('.managed-links-result.json')), true);
+    assert.equal([...deployFiles.files.keys()].some((filePath) => filePath.endsWith('.browser-cache-result.json')), true);
+    assert.equal([...deployFiles.files.keys()].some((filePath) => filePath.endsWith('.dry-run-checks-result.json')), true);
   });
 });
 
