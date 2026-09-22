@@ -12,6 +12,7 @@ import {
   planHostActivationRecovery,
   serializeCanonicalHostActivationSnapshot,
   serializeCanonicalHostActivationTransaction,
+  transitionHostActivationTransaction,
   validateHostActivationSnapshot,
   validateHostActivationTransactionBinding,
 } from '../../../../scripts/deploy/host/state.mjs';
@@ -258,6 +259,37 @@ export const createActivationStateStore = ({
     });
   };
 
+  const transitionTransaction = async ({
+    requestState,
+    nextPhase,
+  }) => {
+    const record = await readTransaction({
+      requestId: requestState.request.requestId,
+      requestState,
+    });
+    if (record.transaction.phase === nextPhase) {
+      return Object.freeze({ disposition: 'already-transitioned', ...record });
+    }
+    const transaction = transitionHostActivationTransaction({
+      transaction: record.transaction,
+      requestState,
+      previousSnapshot: record.previousSnapshot,
+      targetSnapshot: record.targetSnapshot,
+      nextPhase,
+      updatedAtUtc: clock().toISOString(),
+    });
+    const bytes = serializeCanonicalHostActivationTransaction(transaction);
+    await fileOps.replaceBuffer(record.path, bytes, record.stat);
+    const reread = await readTransaction({
+      requestId: requestState.request.requestId,
+      requestState,
+    });
+    if (reread.transaction.phase !== nextPhase) {
+      throw new Error('Activation transaction did not advance to the requested phase');
+    }
+    return Object.freeze({ disposition: 'transitioned', ...reread });
+  };
+
   const commitActiveSnapshot = async ({
     transaction,
     requestState,
@@ -299,6 +331,7 @@ export const createActivationStateStore = ({
     readTransaction,
     initializeActiveSnapshot,
     prepareForwardActivation,
+    transitionTransaction,
     planRecovery,
     commitActiveSnapshot,
   });

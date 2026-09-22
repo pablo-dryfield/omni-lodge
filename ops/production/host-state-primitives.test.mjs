@@ -538,6 +538,80 @@ test('activation state store prepares deploy transactions and recovery plans wit
   assert.deepEqual(recovery.targetSnapshot, prepared.targetSnapshot);
 });
 
+test('activation state store advances transactions and commits the active snapshot after smoke verification', async () => {
+  const fileOps = createMemoryFileOps();
+  const store = createActivationStateStore({
+    paths: TEST_PATHS,
+    fileOps,
+    clock: () => new Date('2026-09-16T20:02:00.000Z'),
+  });
+  await store.initializeActiveSnapshot(legacyBaselineSnapshot());
+  const activationPrepared = activationPreparedDeployState();
+  await store.prepareForwardActivation({ requestState: activationPrepared });
+
+  const pointerSwitching = await store.transitionTransaction({
+    requestState: activationPrepared,
+    nextPhase: 'pointer_switching',
+  });
+  assert.equal(pointerSwitching.disposition, 'transitioned');
+  assert.equal(pointerSwitching.transaction.phase, 'pointer_switching');
+
+  const replay = await store.transitionTransaction({
+    requestState: activationPrepared,
+    nextPhase: 'pointer_switching',
+  });
+  assert.equal(replay.disposition, 'already-transitioned');
+
+  const pointersSwitched = await store.transitionTransaction({
+    requestState: activationPrepared,
+    nextPhase: 'pointers_switched',
+  });
+  assert.equal(pointersSwitched.transaction.phase, 'pointers_switched');
+
+  const requestSmokeVerified = advanceRequestState(
+    advanceRequestState(activationPrepared, 'pointer_switching'),
+    'pointers_switched',
+  );
+  const smokeVerified = advanceRequestState(requestSmokeVerified, 'smoke_verified');
+  const transactionSmokeVerified = await store.transitionTransaction({
+    requestState: smokeVerified,
+    nextPhase: 'smoke_verified',
+  });
+  assert.equal(transactionSmokeVerified.transaction.phase, 'smoke_verified');
+
+  const committed = await store.transitionTransaction({
+    requestState: smokeVerified,
+    nextPhase: 'committed',
+  });
+  assert.equal(committed.transaction.phase, 'committed');
+
+  const active = await store.commitActiveSnapshot({
+    ...committed,
+    requestState: smokeVerified,
+  });
+  assert.deepEqual(active.reference, committed.transaction.targetSnapshot);
+  assert.deepEqual((await store.readActiveSnapshot()).reference, committed.transaction.targetSnapshot);
+});
+
+test('activation state store rejects illegal transaction transitions', async () => {
+  const store = createActivationStateStore({
+    paths: TEST_PATHS,
+    fileOps: createMemoryFileOps(),
+    clock: () => new Date('2026-09-16T20:02:00.000Z'),
+  });
+  await store.initializeActiveSnapshot(legacyBaselineSnapshot());
+  const requestState = activationPreparedDeployState();
+  await store.prepareForwardActivation({ requestState });
+
+  await assert.rejects(
+    store.transitionTransaction({
+      requestState,
+      nextPhase: 'committed',
+    }),
+    /Illegal host activation transition from prepared to committed/,
+  );
+});
+
 test('activation preparation fails closed until a trusted active baseline exists', async () => {
   const store = createActivationStateStore({
     paths: TEST_PATHS,
