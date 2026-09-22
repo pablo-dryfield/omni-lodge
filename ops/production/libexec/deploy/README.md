@@ -27,6 +27,9 @@ Security properties:
   active-snapshot pointer file, and request-bound transaction files. Preparing
   an activation is idempotent and recovery-plannable, but it does not by
   itself change PM2, release pointers, traffic, or database state;
+- legacy-baseline capture hashes the current Git source SHA, UI build tree,
+  and PM2 dump into the first active snapshot. It records only bounded
+  digests and restore paths, not application secrets or file contents;
 - state transitions use no-replace hard links between directories on the same
   filesystem, followed by durable removal of the old link. An interrupted
   transition leaves two links to the same inode and is recognized as a
