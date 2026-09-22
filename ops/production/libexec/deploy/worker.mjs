@@ -26,10 +26,15 @@ import {
   createHostRequestStatus,
 } from '../../../../scripts/deploy/host/state.mjs';
 import { createHostAuditLog } from './audit-log.mjs';
-import { serializeCanonicalJson } from './canonical-json.mjs';
+import {
+  invariant,
+  parseCanonicalJson,
+  serializeCanonicalJson,
+} from './canonical-json.mjs';
 import {
   runProductionBackupGate,
   serializeProductionBackupGateResult,
+  validateMigrationStatusForBackupGate,
 } from './backup-gate.mjs';
 import { HOST_DEPLOY_PATHS } from './constants.mjs';
 import {
@@ -1086,6 +1091,25 @@ const failRunningRequest = async ({
   });
 };
 
+const readMigrationStatusForBackupGate = async ({
+  fileOps,
+  paths,
+  requestId,
+  requestState,
+}) => {
+  const loaded = await fileOps.readSecureBuffer(dryRunChecksResultPath({ paths, requestId }), {
+    maximumBytes: 1024 * 1024,
+  });
+  const result = parseCanonicalJson(loaded.bytes, {
+    label: 'Dry-run checks result',
+    maximumBytes: 1024 * 1024,
+  });
+  invariant(result?.schemaVersion === 1, 'Dry-run checks result schema version is invalid');
+  invariant(result.releaseId === requestState.intent.releaseId, 'Dry-run checks result release ID does not match the request');
+  invariant(result.sourceSha === requestState.intent.sourceSha, 'Dry-run checks result source SHA does not match the request');
+  return validateMigrationStatusForBackupGate(result.migrationStatus);
+};
+
 const finishIfTerminal = async ({
   store,
   entry,
@@ -1178,6 +1202,12 @@ export const handleHostDeployWorkerRequest = async ({
       if (entry.requestState.phase === 'preflight_passed') {
         const backupGate = await runBackupGate({
           requestState: entry.requestState,
+          migrationStatus: await readMigrationStatusForBackupGate({
+            fileOps,
+            paths,
+            requestId: validatedRequestId,
+            requestState: entry.requestState,
+          }),
           paths,
           fs,
           clock,

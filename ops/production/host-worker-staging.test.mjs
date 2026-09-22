@@ -3,6 +3,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { createHostAuditLog } from './libexec/deploy/audit-log.mjs';
+import { serializeCanonicalJson } from './libexec/deploy/canonical-json.mjs';
 import { createRequestRecordStore } from './libexec/deploy/request-store.mjs';
 import { handleHostDeployWorkerRequest } from './libexec/deploy/worker.mjs';
 import { createHostRequestStatus } from '../../scripts/deploy/host/state.mjs';
@@ -157,6 +158,10 @@ const backupGateResult = (requestState) => ({
   requestId: requestState.request.requestId,
   releaseId: requestState.intent.releaseId,
   sourceSha: requestState.intent.sourceSha,
+  backupRequired: true,
+  backupReason: 'PENDING_MIGRATIONS',
+  pendingMigrationCount: 1,
+  pendingMigrationNames: ['20260922090000-example-change.js'],
   command: {
     path: '/home/postgres/backup.sh',
     timeoutMs: 60 * 60 * 1000,
@@ -176,6 +181,53 @@ const backupGateResult = (requestState) => ({
   startedAtUtc: '2026-09-17T10:00:00.000Z',
   completedAtUtc: '2026-09-17T10:01:00.000Z',
 });
+
+const dryRunChecksResult = (requestState, {
+  pendingMigrationNames = [],
+} = {}) => ({
+  schemaVersion: 1,
+  releaseId: requestState.intent.releaseId,
+  sourceSha: requestState.intent.sourceSha,
+  preparationPlanSha256: '5'.repeat(64),
+  backendEnvironmentFile: '/etc/omnilodge/backend.env',
+  commands: [],
+  migrationStatus: {
+    schemaVersion: 1,
+    kind: 'omnilodge-migration-status',
+    ok: true,
+    classification: 'managed',
+    lineage: 'strict',
+    metadataTableExists: true,
+    appliedMigrationCount: 189,
+    compiledMigrationCount: 189 + pendingMigrationNames.length,
+    pendingMigrationCount: pendingMigrationNames.length,
+    pendingMigrationNames,
+  },
+  runtimePreflight: {
+    schemaVersion: 1,
+    kind: 'omnilodge-backend-runtime-preflight',
+    ok: true,
+    checks: {},
+  },
+  privateSmoke: {
+    schemaVersion: 1,
+    ok: true,
+    checks: [],
+  },
+  capturedAtUtc: '2026-09-17T10:00:00.000Z',
+});
+
+const dryRunChecksPath = (requestId) => path.join(
+  TEST_PATHS.stateRoot,
+  `${requestId}.dry-run-checks-result.json`,
+);
+
+const publishDryRunChecks = async (harness, requestState, options) => {
+  await harness.fileOps.publishExclusiveBuffer(
+    dryRunChecksPath(requestState.request.requestId),
+    serializeCanonicalJson(dryRunChecksResult(requestState, options)),
+  );
+};
 
 const admit = async (harness, options) => harness.store.admit({ identity: identity(options) });
 
@@ -232,6 +284,9 @@ test('detached worker fails deploy requests before activation is implemented', a
       fs: { unlink: async () => {} },
       prepareRelease: async ({ requestState }) => {
         prepared.push(requestState.intent.operation);
+        await publishDryRunChecks(harness, requestState, {
+          pendingMigrationNames: ['20260922090000-example-change.js'],
+        });
         return { releaseId: requestState.intent.releaseId };
       },
       runBackupGate: async ({ requestState }) => {
@@ -249,6 +304,45 @@ test('detached worker fails deploy requests before activation is implemented', a
     '723e4567-e89b-42d3-a456-426614174011.backup-gate-result.json',
   )));
   const entry = await finishedEntry(harness, '723e4567-e89b-42d3-a456-426614174011');
+  assert.equal(entry.requestState.phase, 'failed');
+  assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
+});
+
+test('detached worker skips production backup when migration status has no pending migrations', async () => {
+  const harness = createHarness();
+  const requestId = '823e4567-e89b-42d3-a456-426614174012';
+  await admit(harness, { requestId, operation: 'deploy' });
+  const prepared = [];
+
+  await assert.rejects(
+    handleHostDeployWorkerRequest({
+      requestId,
+      paths: TEST_PATHS,
+      requestStore: harness.store,
+      auditLog: harness.audit,
+      clock: harness.clock,
+      fileOps: harness.fileOps,
+      fs: { unlink: async () => {} },
+      prepareRelease: async ({ requestState }) => {
+        prepared.push(requestState.intent.operation);
+        await publishDryRunChecks(harness, requestState);
+        return { releaseId: requestState.intent.releaseId };
+      },
+    }),
+    /Production migration and activation switching gates are not enabled/,
+  );
+
+  assert.deepEqual(prepared, ['deploy']);
+  const backupEvidence = JSON.parse(harness.fileOps.files
+    .get(path.join(TEST_PATHS.stateRoot, `${requestId}.backup-gate-result.json`))
+    .bytes.toString('utf8'));
+  assert.equal(backupEvidence.backupRequired, false);
+  assert.equal(backupEvidence.backupReason, 'NO_PENDING_MIGRATIONS');
+  assert.equal(backupEvidence.pendingMigrationCount, 0);
+  assert.equal(backupEvidence.command, null);
+  assert.equal(backupEvidence.selectedBackup, null);
+
+  const entry = await finishedEntry(harness, requestId);
   assert.equal(entry.requestState.phase, 'failed');
   assert.equal(entry.requestState.resultCode, 'REQUEST_FAILED');
 });
