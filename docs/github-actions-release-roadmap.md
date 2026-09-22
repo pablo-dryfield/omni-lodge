@@ -702,6 +702,14 @@ Exit condition: the staged release is complete, checksummed, starts on private t
 
 ### Phase 5: First controlled cutover
 
+Current branch checkpoint, 2026-09-22:
+
+- Add durable activation-state primitives before enabling any pointer switch: the host must have a trusted active snapshot, a request-bound target snapshot, and a recovery-plannable activation transaction before PM2 or release pointers can be changed.
+- Implemented in this branch: `activation-state-store.mjs` writes immutable activation snapshots, an active-snapshot file, and request-bound activation transactions using the existing durable file primitives. Tests prove idempotent legacy-baseline initialization, deploy-transaction preparation, missing-baseline fail-closed behavior, and recovery planning without pointer changes.
+- Local validation for this checkpoint: `node --check ops/production/libexec/deploy/activation-state-store.mjs`, `node --test ops/production/host-state-primitives.test.mjs`, and `node --test ops/production/*.test.mjs`.
+- Keep first-cutover code fail-closed until backup, migration, private readiness, public smoke, transaction recovery, and manual rollback are all wired and tested.
+- Do not change `PRODUCTION_DEPLOY_MODE`, the root-owned host policy, current-release pointers, PM2 processes, public traffic, production migrations, or rollback behavior in this branch.
+
 - Keep `PRODUCTION_DEPLOY_MODE=manual`; automatic deployment code is present but must not activate production yet.
 - Schedule a low-traffic window.
 - Record current commit, PM2 state, database backup, and current UI assets.
