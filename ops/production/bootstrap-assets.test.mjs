@@ -187,6 +187,11 @@ test('bootstrap has an explicit mutating mode and never activates services or ke
   assert.match(bootstrap, /ensure_directory "\$STATE_ROOT\/deploy\/installer-home" 700/);
   assert.match(bootstrap, /deploy\/requests\/nonces/);
   assert.match(bootstrap, /deploy\/audit\/segments/);
+  assert.match(bootstrap, /validate_backend_environment_file\(\)/);
+  assert.match(bootstrap, /CONFIG_ENCRYPTION_KEY/);
+  assert.match(bootstrap, /ERROR_MONITORING_INTERNAL_SECRET/);
+  assert.match(bootstrap, /forbidden runtime\/PM2\/system keys/);
+  assert.match(bootstrap, /validate_backend_environment_file "\$ETC_ROOT\/backend\.env"/);
   assert.match(bootstrap, /ops\/production\/libexec\/deploy\/submit-request\.mjs/);
   assert.match(bootstrap, /scripts\/deploy\/host\/protocol-v2\.mjs/);
   assert.ok(
