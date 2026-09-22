@@ -12,10 +12,16 @@ import {
   readFilesystemAvailability,
 } from './libexec/deploy/capacity.mjs';
 import {
+  createHostActivationSnapshotReference,
+  createHostLegacyBaselineActivationSnapshot,
   createInitialHostRequestState,
   parseCanonicalHostRequestStateBytes,
   serializeCanonicalHostRequestState,
+  transitionHostRequestState,
 } from '../../scripts/deploy/host/state.mjs';
+import {
+  createActivationStateStore,
+} from './libexec/deploy/activation-state-store.mjs';
 import { HOST_DEPLOY_PATHS } from './libexec/deploy/constants.mjs';
 import {
   DeploymentBusyError,
@@ -301,6 +307,55 @@ const TEST_PATHS = Object.freeze({
   runningRequests: '/state/running',
   finishedRequests: '/state/finished',
   requestNonces: '/state/nonces',
+  stateRoot: '/state/deploy',
+});
+
+const advanceRequestState = (requestState, nextPhase, at = '2026-09-16T20:00:00.000Z') =>
+  transitionHostRequestState({
+    state: requestState,
+    nextPhase,
+    updatedAtUtc: at,
+  });
+
+const activationPreparedDeployState = () => {
+  let state = createInitialHostRequestState({
+    requestIdentity: identity({
+      operation: 'deploy',
+      requestSha256: '9'.repeat(64),
+    }),
+    receivedAtUtc: '2026-09-16T20:00:00.000Z',
+  });
+  for (const phase of [
+    'authorized',
+    'artifact_staged',
+    'preflight_passed',
+    'backup_verified',
+    'migrations_applied',
+    'activation_prepared',
+  ]) {
+    state = advanceRequestState(state, phase);
+  }
+  return state;
+};
+
+const legacyBaselineSnapshot = () => createHostLegacyBaselineActivationSnapshot({
+  activationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  backendRestoreTarget: {
+    path: '/root/omni-lodge/be',
+    sourceSha: SOURCE_SHA,
+  },
+  uiRestoreTarget: {
+    path: '/root/omni-lodge/ui/build',
+    buildTreeSha256: '7'.repeat(64),
+  },
+  pm2State: {
+    dumpPath: '/root/.pm2/dump.pm2',
+    dumpSha256: '8'.repeat(64),
+    backendProcessName: 'omni-lodge-be',
+    uiProcessName: 'omni-lodge-ui-server',
+  },
+  capturedAtUtc: '2026-09-16T20:00:00.000Z',
+  capturedBy: 'pablo-dryfield',
 });
 
 test('request store treats an exact replay idempotently and detects digest collisions', async () => {
@@ -428,6 +483,72 @@ test('request store durably transitions pending to running to finished', async (
   });
   assert.equal(finished.state, 'finished');
   assert.equal(fileOps.files.size, 2);
+});
+
+test('activation state store initializes an active legacy baseline idempotently', async () => {
+  const fileOps = createMemoryFileOps();
+  const store = createActivationStateStore({
+    paths: TEST_PATHS,
+    fileOps,
+  });
+  const baseline = legacyBaselineSnapshot();
+  const first = await store.initializeActiveSnapshot(baseline);
+  const replay = await store.initializeActiveSnapshot(baseline);
+
+  assert.deepEqual(first.reference, createHostActivationSnapshotReference(baseline));
+  assert.deepEqual(replay.reference, first.reference);
+  assert.deepEqual((await store.readActiveSnapshot()).reference, first.reference);
+  assert.equal(
+    fileOps.files.has(store.activePath()),
+    true,
+  );
+  assert.equal(fileOps.files.size, 2);
+});
+
+test('activation state store prepares deploy transactions and recovery plans without pointer changes', async () => {
+  const fileOps = createMemoryFileOps();
+  const store = createActivationStateStore({
+    paths: TEST_PATHS,
+    fileOps,
+    clock: () => new Date('2026-09-16T20:01:00.000Z'),
+  });
+  const baseline = legacyBaselineSnapshot();
+  await store.initializeActiveSnapshot(baseline);
+  const requestState = activationPreparedDeployState();
+
+  const prepared = await store.prepareForwardActivation({ requestState });
+  assert.equal(prepared.transaction.phase, 'prepared');
+  assert.equal(prepared.transaction.requestId, REQUEST_ID);
+  assert.equal(prepared.targetSnapshot.activationId, REQUEST_ID);
+  assert.deepEqual(
+    prepared.targetSnapshot.predecessorSnapshot,
+    createHostActivationSnapshotReference(baseline),
+  );
+
+  const replay = await store.prepareForwardActivation({ requestState });
+  assert.deepEqual(replay.transaction, prepared.transaction);
+
+  const recovery = await store.planRecovery({
+    requestId: REQUEST_ID,
+    requestState,
+  });
+  assert.equal(recovery.action, 'abort_without_pointer_change');
+  assert.equal(recovery.databaseAction, 'none');
+  assert.deepEqual(recovery.previousSnapshot, baseline);
+  assert.deepEqual(recovery.targetSnapshot, prepared.targetSnapshot);
+});
+
+test('activation preparation fails closed until a trusted active baseline exists', async () => {
+  const store = createActivationStateStore({
+    paths: TEST_PATHS,
+    fileOps: createMemoryFileOps(),
+  });
+  await assert.rejects(
+    store.prepareForwardActivation({
+      requestState: activationPreparedDeployState(),
+    }),
+    /capture the legacy baseline/,
+  );
 });
 
 test('request lookup recognizes and repairs an interrupted hard-link transition', async () => {

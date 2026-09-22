@@ -23,6 +23,10 @@ Security properties:
 - forward and rollback admissions persist the exact canonical state produced
   by `scripts/deploy/host/state.mjs`; status queries intentionally create no
   deployment state;
+- activation state is split into immutable snapshot files, one replaceable
+  active-snapshot pointer file, and request-bound transaction files. Preparing
+  an activation is idempotent and recovery-plannable, but it does not by
+  itself change PM2, release pointers, traffic, or database state;
 - state transitions use no-replace hard links between directories on the same
   filesystem, followed by durable removal of the old link. An interrupted
   transition leaves two links to the same inode and is recognized as a
