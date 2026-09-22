@@ -9,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,25 @@ const LOCKFILE_PATHS = Object.freeze([
   'ui/package-lock.json',
   'ui-server/package-lock.json',
 ]);
+const PINNED_NODE_VERSION = '22.23.2';
+const PINNED_NPM_VERSION = '10.9.8';
+const TARGET_PLATFORM = 'linux';
+const TARGET_ARCH = 'x64';
+const DEPENDENCY_INSTALL_FLAGS = Object.freeze([
+  'ci',
+  '--omit=dev',
+  '--no-audit',
+  '--no-fund',
+  '--ignore-scripts',
+]);
+const LOCKFILE_BY_COMPONENT = Object.freeze({
+  backend: 'be/package-lock.json',
+  'ui-server': 'ui-server/package-lock.json',
+});
+const PACKAGE_FILE_BY_COMPONENT = Object.freeze({
+  backend: 'be/package.json',
+  'ui-server': 'ui-server/package.json',
+});
 const ROOT = '/opt/omnilodge';
 const RELEASES = `${ROOT}/releases`;
 const NODE = '/usr/bin/node';
@@ -33,6 +53,52 @@ const BASE_ENV = Object.freeze({
 
 const fail = (message) => {
   throw new Error(message);
+};
+
+const canonicalDigest = (value) => createHash('sha256')
+  .update(Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'))
+  .digest('hex');
+
+const manifestFileHash = (manifest, filePath) => {
+  const match = manifest.files?.find((file) => file?.path === filePath);
+  if (typeof match?.sha256 !== 'string' || !LOCK_HASH.test(match.sha256)) {
+    fail(`Release manifest is missing ${filePath}`);
+  }
+  return match.sha256;
+};
+
+const dependencyLayerKey = ({ lockSha256, packageSha256, toolchain }) => canonicalDigest({
+  lockSha256,
+  packageSha256,
+  node: toolchain.node,
+  npm: toolchain.npm,
+  platform: TARGET_PLATFORM,
+  arch: TARGET_ARCH,
+  installFlags: DEPENDENCY_INSTALL_FLAGS,
+});
+
+const dependencyLayerKeysFromManifest = ({ manifest, lockfiles }) => {
+  const toolchain = manifest.toolchain;
+  if (
+    toolchain === null
+    || typeof toolchain !== 'object'
+    || Array.isArray(toolchain)
+    || toolchain.node !== PINNED_NODE_VERSION
+    || toolchain.npm !== PINNED_NPM_VERSION
+  ) fail('Release manifest toolchain is invalid');
+
+  return Object.freeze({
+    backend: dependencyLayerKey({
+      lockSha256: lockfiles[LOCKFILE_BY_COMPONENT.backend],
+      packageSha256: manifestFileHash(manifest, PACKAGE_FILE_BY_COMPONENT.backend),
+      toolchain,
+    }),
+    'ui-server': dependencyLayerKey({
+      lockSha256: lockfiles[LOCKFILE_BY_COMPONENT['ui-server']],
+      packageSha256: manifestFileHash(manifest, PACKAGE_FILE_BY_COMPONENT['ui-server']),
+      toolchain,
+    }),
+  });
 };
 
 const assertRootFile = (filePath, { allowedModes = [0o600], nonEmpty = false } = {}) => {
@@ -111,7 +177,13 @@ export const validateReleaseManifestIdentity = (manifest, releaseId) => {
     || !Array.isArray(manifest.productionEligibility.reasons)
     || manifest.productionEligibility.reasons.length !== 0
   ) fail('Release is not production eligible');
-  return Object.freeze({ releaseId, sourceSha: manifest.sourceSha, lockfiles: Object.freeze({ ...lockfiles }) });
+  const frozenLockfiles = Object.freeze({ ...lockfiles });
+  return Object.freeze({
+    releaseId,
+    sourceSha: manifest.sourceSha,
+    lockfiles: frozenLockfiles,
+    dependencyLayerKeys: dependencyLayerKeysFromManifest({ manifest, lockfiles: frozenLockfiles }),
+  });
 };
 
 const readManifest = (releaseRoot) => {
@@ -134,16 +206,16 @@ const requireReleaseFile = (filePath, componentRoot) => {
   assertRootFile(filePath, { allowedModes: [0o644], nonEmpty: true });
 };
 
-const requireDependencyLink = (componentRoot, component, expectedLockHash) => {
+const requireDependencyLink = (componentRoot, component, expectedLayerKey) => {
   const nodeModulesPath = path.join(componentRoot, 'node_modules');
   const target = requireManagedSymlink(
     nodeModulesPath,
     `${ROOT}/dependencies/${component}`,
     '/node_modules',
   );
-  const lockDirectory = path.basename(path.dirname(target));
-  if (!LOCK_HASH.test(lockDirectory) || lockDirectory !== expectedLockHash) {
-    fail(`${nodeModulesPath} is not keyed by the release lockfile hash`);
+  const layerDirectory = path.basename(path.dirname(target));
+  if (!LOCK_HASH.test(layerDirectory) || layerDirectory !== expectedLayerKey) {
+    fail(`${nodeModulesPath} is not keyed by the release dependency layer`);
   }
 };
 
@@ -169,7 +241,7 @@ const buildBackend = () => {
   const identity = readManifest(releaseRoot);
   const envFile = '/etc/omnilodge/backend.env';
   assertRootFile(envFile);
-  requireDependencyLink(componentRoot, 'backend', identity.lockfiles['be/package-lock.json']);
+  requireDependencyLink(componentRoot, 'backend', identity.dependencyLayerKeys.backend);
   requirePersistentFileLink(componentRoot, 'error.log', '/var/lib/omnilodge/logs/backend/error.log');
   requirePersistentFileLink(componentRoot, 'combined.log', '/var/lib/omnilodge/logs/backend/combined.log');
   requirePersistentDirectoryLink(componentRoot, 'runtime', '/var/lib/omnilodge/runtime/backend');
@@ -208,7 +280,7 @@ const buildUiServer = () => {
   const envFile = '/etc/omnilodge/ui-server.env';
   assertRootFile(envFile);
   assertRootDirectory(componentRoot);
-  requireDependencyLink(componentRoot, 'ui-server', identity.lockfiles['ui-server/package-lock.json']);
+  requireDependencyLink(componentRoot, 'ui-server', identity.dependencyLayerKeys['ui-server']);
   requirePersistentFileLink(componentRoot, 'error.log', '/var/lib/omnilodge/logs/ui-server/error.log');
   requirePersistentFileLink(componentRoot, 'combined.log', '/var/lib/omnilodge/logs/ui-server/combined.log');
   requireReleaseFile(path.join(componentRoot, 'server.js'), componentRoot);

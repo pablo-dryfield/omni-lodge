@@ -269,8 +269,9 @@ test('runtime launcher uses only fixed release/config/state roots', async () => 
     "SEED_ACCESS_CONTROL: 'false'",
     "APP_RUNTIME_MODE: 'primary'",
     "PUPPETEER_CACHE_DIR: '/var/cache/omnilodge/puppeteer'",
-    "identity.lockfiles['be/package-lock.json']",
-    "identity.lockfiles['ui-server/package-lock.json']",
+    'dependencyLayerKeysFromManifest',
+    'identity.dependencyLayerKeys.backend',
+    "identity.dependencyLayerKeys['ui-server']",
   ]) {
     assert.ok(launcher.includes(required), `missing launcher invariant: ${required}`);
   }
@@ -295,17 +296,26 @@ test('runtime launcher accepts candidate and rejects non-candidate release manif
     schemaVersion: 1,
     releaseId,
     sourceSha,
+    toolchain: { node: '22.23.2', npm: '10.9.8' },
     lockfiles: {
       'be/package-lock.json': 'b'.repeat(64),
       'ui/package-lock.json': 'c'.repeat(64),
       'ui-server/package-lock.json': 'd'.repeat(64),
     },
+    files: [
+      { path: 'be/package.json', size: 1, sha256: 'e'.repeat(64) },
+      { path: 'ui-server/package.json', size: 1, sha256: 'f'.repeat(64) },
+    ],
     productionEligibility: { candidate: true, reasons: [] },
   };
   assert.deepEqual(validateReleaseManifestIdentity(manifest, releaseId), {
     releaseId,
     sourceSha,
     lockfiles: manifest.lockfiles,
+    dependencyLayerKeys: {
+      backend: '8af84dc64fcb5301c14530c2d578de67ac594b52b6612fbe45292e06dea6a897',
+      'ui-server': 'b9b7c2b25f35c7ec0cf4ac4ac311016dd46b3ca65f366f18d713059345559da2',
+    },
   });
   assert.throws(
     () => validateReleaseManifestIdentity({
