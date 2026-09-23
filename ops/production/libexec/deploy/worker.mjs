@@ -49,6 +49,7 @@ import {
   inspectReleasePreparationState,
   publishDependencyLayer,
   prepareReleaseManagedLinks,
+  runManagedReleaseGarbageCollection,
   serializeReleasePreparationPlan,
   serializeReleasePreparationState,
 } from './release-preparation.mjs';
@@ -194,6 +195,9 @@ const activationRecoveryResultPath = ({ paths, requestId }) =>
 
 const activationFailureResultPath = ({ paths, requestId }) =>
   path.join(paths.stateRoot, `${validateRequestId(requestId)}.activation-failure-result.json`);
+
+const garbageCollectionResultPath = ({ paths, requestId }) =>
+  path.join(paths.stateRoot, `${validateRequestId(requestId)}.garbage-collection-result.json`);
 
 const delay = (milliseconds) => new Promise((resolve) => {
   setTimeout(resolve, milliseconds);
@@ -425,6 +429,57 @@ const serializeDeploymentError = (error, depth = 0) => {
     name: typeof error,
     message: String(error),
   });
+};
+
+const publishPostRequestGarbageCollection = async ({
+  entry,
+  fileOps,
+  paths,
+  clock,
+  garbageCollector,
+}) => {
+  if (entry.requestState.phase !== 'succeeded') return null;
+  const requestId = entry.requestState.request.requestId;
+  let evidence;
+  try {
+    const result = await garbageCollector({
+      paths,
+      now: clock,
+      dryRun: false,
+    });
+    evidence = Object.freeze({
+      schemaVersion: 1,
+      requestId,
+      status: 'completed',
+      capturedAtUtc: clock().toISOString(),
+      result,
+    });
+  } catch (error) {
+    evidence = Object.freeze({
+      schemaVersion: 1,
+      requestId,
+      status: 'failed',
+      capturedAtUtc: clock().toISOString(),
+      error: serializeDeploymentError(error),
+    });
+  }
+  try {
+    await publishOrVerifyBuffer({
+      fileOps,
+      targetPath: garbageCollectionResultPath({ paths, requestId }),
+      bytes: serializeCanonicalJson(jsonSafe(evidence)),
+    });
+    return evidence;
+  } catch (error) {
+    return Object.freeze({
+      schemaVersion: 1,
+      requestId,
+      status: 'evidence_publish_failed',
+      capturedAtUtc: clock().toISOString(),
+      cleanup: evidence,
+      error: serializeDeploymentError(error),
+    });
+  }
 };
 
 const recoverySummary = (recovery) => {
@@ -1510,6 +1565,7 @@ export const handleHostDeployWorkerRequest = async ({
   activateRollback = runRollbackActivationCutover,
   recoverDeployment = runDeploymentActivationRecovery,
   recoverRollback = runRollbackActivationRecovery,
+  garbageCollector = runManagedReleaseGarbageCollection,
 } = {}) => {
   const validatedRequestId = validateRequestId(requestId);
   let entry = await requestStore.lookup(validatedRequestId);
@@ -1629,6 +1685,13 @@ export const handleHostDeployWorkerRequest = async ({
         entry,
         eventType: 'request_finished',
         outcomeCode: entry.requestState.resultCode,
+      });
+      await publishPostRequestGarbageCollection({
+        entry,
+        fileOps,
+        paths,
+        clock,
+        garbageCollector,
       });
       return Object.freeze({
         exitCode: 0,
@@ -1802,6 +1865,13 @@ export const handleHostDeployWorkerRequest = async ({
       entry,
       eventType: 'request_finished',
       outcomeCode: entry.requestState.resultCode,
+    });
+    await publishPostRequestGarbageCollection({
+      entry,
+      fileOps,
+      paths,
+      clock,
+      garbageCollector,
     });
     return Object.freeze({
       exitCode: 0,

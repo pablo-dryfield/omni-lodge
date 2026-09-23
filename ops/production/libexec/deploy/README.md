@@ -66,6 +66,13 @@ Security properties:
   recoverable advanced state, never as two unrelated requests;
 - audit events are bounded one-write NDJSON entries with host-generated time
   and the authenticated transport key label; and
+- release garbage collection is planned before it mutates anything. It protects
+  explicit releases, current release pointers, and valid activation snapshots;
+  keeps recent undeployed releases for diagnostics; removes only old
+  unprotected release directories; and prunes dependency layers only when no
+  retained release still references them. A cleanup failure after a successful
+  deploy is recorded as best-effort evidence and must not make the already
+  activated request fail; and
 - capacity admission uses exact bigint arithmetic and requires explicit byte
   and inode estimates for every retained or temporary allocation class.
 
