@@ -27,6 +27,19 @@ export type MigrationAuditRun = {
   runningSteps: number;
 };
 
+export type RuntimeReleaseInfo = {
+  id: string | null;
+  gitSha: string | null;
+  runtimeMode: string | null;
+};
+
+export type RuntimeReleaseStatus = {
+  status: string;
+  live: boolean;
+  uptimeSeconds: number;
+  release: RuntimeReleaseInfo;
+};
+
 export const useConfigSeedRuns = (limit = 5) =>
   useQuery<ConfigSeedRun[], unknown>({
     queryKey: ["config-seed-runs", limit],
@@ -34,6 +47,16 @@ export const useConfigSeedRuns = (limit = 5) =>
       const response = await axiosInstance.get(`/config/seed/runs?limit=${limit}`);
       return (response.data?.runs ?? []) as ConfigSeedRun[];
     },
+  });
+
+export const useRuntimeReleaseStatus = () =>
+  useQuery<RuntimeReleaseStatus, unknown>({
+    queryKey: ["runtime-release-status"],
+    queryFn: async () => {
+      const response = await axiosInstance.get<RuntimeReleaseStatus>("/health/live");
+      return response.data;
+    },
+    refetchInterval: 60_000,
   });
 
 export const useMigrationAuditRuns = (limit = 5) =>
