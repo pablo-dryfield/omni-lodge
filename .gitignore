@@ -15,6 +15,7 @@ pids
 *.pid
 *.seed
 *.pid.lock
+/.tmp/
 /runtime/error-monitoring/
 /be/runtime/error-monitoring/
 
