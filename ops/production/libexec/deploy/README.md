@@ -54,9 +54,9 @@ Security properties:
   PM2, public smoke, active-snapshot commit, and recovery primitives. It has no
   CLI; the deployment worker injects production defaults only at the final
   deploy or rollback phase after the earlier gates have succeeded. Rollback
-  cutover is currently release-smoke-bound, so artifact snapshots can be
-  verified before commit while legacy-baseline rollback remains fail-closed
-  until a legacy-compatible smoke check is added;
+  cutover is release-smoke-bound for managed release snapshots so the target
+  can be verified before commit. Legacy-baseline rollback is retained only as
+  historical emergency fallback behavior, not the normal rollback target;
 - legacy-baseline capture hashes the current Git source SHA, UI build tree,
   and PM2 dump into the first active snapshot. It records only bounded
   digests and restore paths, not application secrets or file contents;

@@ -290,6 +290,8 @@ pointer and marker, and either resume a documented safe step or restore the
 last verified pointers. It must never guess, run a migration `down`, or overlap
 two backend instances.
 
-Rollback remains manual in every deployment mode. Retain current plus at least
-three previous verified releases and every dependency directory referenced by
-current/previous pointers.
+Rollback remains manual in every deployment mode. Normal rollback targets a
+retained managed-release activation snapshot, not the old legacy checkout.
+Retain current plus at least three previous verified releases and every
+dependency directory referenced by current/previous pointers. The operator
+runbook is [Production Managed-Release Rollback Runbook](../../docs/production-managed-release-rollback.md).
