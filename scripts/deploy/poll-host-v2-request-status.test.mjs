@@ -75,6 +75,57 @@ test('polls until a host v2 request reaches terminal success', async () => {
   assert.equal(serializeHostV2StatusPollResult(result), `${JSON.stringify(result, null, 2)}\n`);
 });
 
+test('retries a failed status query without treating the subject request as failed', async () => {
+  const created = [];
+  const responses = [
+    {
+      responseCode: 'REQUEST_FAILED',
+      responseStatus: 'failed',
+      requestStatus: null,
+    },
+    {
+      responseCode: 'STATUS_FOUND',
+      responseStatus: 'succeeded',
+      requestStatus: {
+        requestId: SUBJECT_REQUEST_ID,
+        kind: 'forward_submit',
+        lifecycle: 'running',
+        phase: 'pointers_switched',
+        resultCode: null,
+        updatedAtUtc: REQUESTED_AT_UTC,
+      },
+    },
+    {
+      responseCode: 'STATUS_FOUND',
+      responseStatus: 'succeeded',
+      requestStatus: {
+        requestId: SUBJECT_REQUEST_ID,
+        kind: 'forward_submit',
+        lifecycle: 'succeeded',
+        phase: 'succeeded',
+        resultCode: 'REQUEST_SUCCEEDED',
+        updatedAtUtc: REQUESTED_AT_UTC,
+      },
+    },
+  ];
+
+  const result = await pollHostV2RequestStatus(baseOptions({
+    uuid: () => `423e4567-e89b-42d3-a456-42661417400${created.length}`,
+    createStatusRequestFile: async (request) => {
+      created.push(request);
+    },
+    submit: async () => responses.shift(),
+  }));
+
+  assert.equal(result.succeeded, true);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.attempts.length, 3);
+  assert.equal(result.attempts[0].responseCode, 'REQUEST_FAILED');
+  assert.equal(result.attempts[0].observedStatus, null);
+  assert.equal(result.finalStatus.lifecycle, 'succeeded');
+  assert.equal(result.terminalResponseCode, 'STATUS_FOUND');
+});
+
 test('returns non-success when the terminal host v2 status is failed', async () => {
   const result = await pollHostV2RequestStatus(baseOptions({
     uuid: () => STATUS_REQUEST_IDS[0],
