@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -29,8 +30,10 @@ import {
   calculateDependencyCapacity,
   createReleasePreparationPlan,
   inspectDependencyPublicationState,
+  planManagedReleaseGarbageCollection,
   prepareReleaseManagedLinks,
   publishDependencyLayer,
+  runManagedReleaseGarbageCollection,
   validatePreparedReleaseLinks,
 } from './libexec/deploy/release-preparation.mjs';
 import {
@@ -91,15 +94,24 @@ class FakeSmokeProcess extends EventEmitter {
   }
 }
 
-const buildManifest = (payload) => {
+const buildManifest = (
+  payload,
+  {
+    id = releaseId,
+    sha = sourceSha,
+    builtAtUtc = '2026-09-16T12:00:00.000Z',
+  } = {},
+) => {
+  const releaseMatch = /^omnilodge-r([1-9][0-9]*)-a([1-9][0-9]*)-[0-9a-f]{12}$/.exec(id);
+  assert.ok(releaseMatch, `fixture release ID must be valid: ${id}`);
   const files = [...payload.entries()]
     .map(([filePath, data]) => ({ path: filePath, size: data.length, sha256: sha256(data) }))
     .sort((left, right) => left.path.localeCompare(right.path));
   return {
     schemaVersion: 1,
-    releaseId,
-    sourceSha,
-    builtAtUtc: '2026-09-16T12:00:00.000Z',
+    releaseId: id,
+    sourceSha: sha,
+    builtAtUtc,
     toolchain: { node: '22.23.2', npm: '10.9.8' },
     lockfiles: {
       'be/package-lock.json': sha256(payload.get('be/package-lock.json')),
@@ -117,12 +129,12 @@ const buildManifest = (payload) => {
       canonicalWorkflowPath: CANONICAL_WORKFLOW_PATH,
       event: 'push',
       ref: CANONICAL_RELEASE_REF,
-      headSha: sourceSha,
-      runId: '12345',
-      runAttempt: 2,
+      headSha: sha,
+      runId: releaseMatch[1],
+      runAttempt: Number(releaseMatch[2]),
       runNumber: '77',
       actor: 'release-operator',
-      artifactName: releaseId,
+      artifactName: id,
     },
     productionEligibility: {
       canonicalRepository: CANONICAL_REPOSITORY,
@@ -142,7 +154,12 @@ const buildManifest = (payload) => {
   };
 };
 
-const createFixture = () => {
+const createFixture = ({
+  id = releaseId,
+  sha = sourceSha,
+  builtAtUtc = '2026-09-16T12:00:00.000Z',
+  dependencyVariant = 'default',
+} = {}) => {
   const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), 'omnilodge-release-preparation-'));
   const layout = {
     trustedRoot: fixtureRoot,
@@ -171,25 +188,25 @@ const createFixture = () => {
     'logs/ui-server/combined.log',
   ]) writeRelative(layout.persistentRoot, logPath, Buffer.from(''));
 
-  const releaseRoot = path.join(layout.releasesRoot, releaseId);
+  const releaseRoot = path.join(layout.releasesRoot, id);
   mkdir(releaseRoot);
   const payload = new Map();
   for (const filePath of REQUIRED_PAYLOAD_FILES) {
     payload.set(filePath, Buffer.from(`fixture:${filePath}\n`, 'utf8'));
   }
-  payload.set('be/package.json', Buffer.from('{"name":"be"}\n'));
-  payload.set('be/package-lock.json', Buffer.from('{"name":"be","lockfileVersion":3}\n'));
-  payload.set('ui-server/package.json', Buffer.from('{"name":"ui-server"}\n'));
-  payload.set('ui-server/package-lock.json', Buffer.from('{"name":"ui-server","lockfileVersion":3}\n'));
+  payload.set('be/package.json', Buffer.from(`{"name":"be","variant":"${dependencyVariant}"}\n`));
+  payload.set('be/package-lock.json', Buffer.from(`{"name":"be","lockfileVersion":3,"variant":"${dependencyVariant}"}\n`));
+  payload.set('ui-server/package.json', Buffer.from(`{"name":"ui-server","variant":"${dependencyVariant}"}\n`));
+  payload.set('ui-server/package-lock.json', Buffer.from(`{"name":"ui-server","lockfileVersion":3,"variant":"${dependencyVariant}"}\n`));
   payload.set('ui/build/static/js/main.fixture.js', Buffer.from('globalThis.fixture=true;\n'));
   for (const [filePath, data] of payload) writeRelative(releaseRoot, filePath, data);
-  const manifest = buildManifest(payload);
+  const manifest = buildManifest(payload, { id, sha, builtAtUtc });
   writeRelative(releaseRoot, 'release-manifest.json', serializeReleaseManifest(manifest));
 
   const cleanup = () => rmSync(fixtureRoot, { recursive: true, force: true });
   const plan = () => createReleasePreparationPlan({
-    expectedReleaseId: releaseId,
-    expectedSourceSha: sourceSha,
+    expectedReleaseId: id,
+    expectedSourceSha: sha,
     trustedLayout: layout,
   });
   return { fixtureRoot, layout, releaseRoot, payload, manifest, cleanup, plan };
@@ -202,6 +219,37 @@ const withFixture = async (callback) => {
   } finally {
     fixture.cleanup();
   }
+};
+
+const addReleaseToFixture = (fixture, {
+  id,
+  sha,
+  builtAtUtc,
+  dependencyVariant,
+}) => {
+  const releaseRoot = path.join(fixture.layout.releasesRoot, id);
+  mkdir(releaseRoot);
+  const payload = new Map();
+  for (const filePath of REQUIRED_PAYLOAD_FILES) {
+    payload.set(filePath, Buffer.from(`fixture:${filePath}:${dependencyVariant}\n`, 'utf8'));
+  }
+  payload.set('be/package.json', Buffer.from(`{"name":"be","variant":"${dependencyVariant}"}\n`));
+  payload.set('be/package-lock.json', Buffer.from(`{"name":"be","lockfileVersion":3,"variant":"${dependencyVariant}"}\n`));
+  payload.set('ui-server/package.json', Buffer.from(`{"name":"ui-server","variant":"${dependencyVariant}"}\n`));
+  payload.set('ui-server/package-lock.json', Buffer.from(`{"name":"ui-server","lockfileVersion":3,"variant":"${dependencyVariant}"}\n`));
+  payload.set('ui/build/static/js/main.fixture.js', Buffer.from(`globalThis.fixture="${dependencyVariant}";\n`));
+  for (const [filePath, data] of payload) writeRelative(releaseRoot, filePath, data);
+  const manifest = buildManifest(payload, { id, sha, builtAtUtc });
+  writeRelative(releaseRoot, 'release-manifest.json', serializeReleaseManifest(manifest));
+  return {
+    releaseRoot,
+    manifest,
+    plan: () => createReleasePreparationPlan({
+      expectedReleaseId: id,
+      expectedSourceSha: sha,
+      trustedLayout: fixture.layout,
+    }),
+  };
 };
 
 const fakeInstall = async (execution) => {
@@ -547,6 +595,81 @@ test('worker dependency preparation publishes both runtime layers with fresh cap
       backend: 'reuse',
       'ui-server': 'reuse',
     });
+  });
+});
+
+test('managed release garbage collection preserves protected releases and removes old unprotected releases', async () => {
+  await withFixture(async (fixture) => {
+    const activePlan = fixture.plan();
+    await publishBoth(activePlan);
+
+    const oldSha = 'c'.repeat(40);
+    const oldReleaseId = `omnilodge-r11111-a1-${oldSha.slice(0, 12)}`;
+    const oldRelease = addReleaseToFixture(fixture, {
+      id: oldReleaseId,
+      sha: oldSha,
+      builtAtUtc: '2026-07-01T12:00:00.000Z',
+      dependencyVariant: 'old-release',
+    });
+    const oldPlan = oldRelease.plan();
+    await publishBoth(oldPlan);
+
+    const recentSha = 'd'.repeat(40);
+    const recentReleaseId = `omnilodge-r22222-a1-${recentSha.slice(0, 12)}`;
+    addReleaseToFixture(fixture, {
+      id: recentReleaseId,
+      sha: recentSha,
+      builtAtUtc: '2026-09-23T10:00:00.000Z',
+      dependencyVariant: 'recent-release',
+    });
+
+    const stateRoot = path.join(fixture.fixtureRoot, 'deploy-state');
+    mkdir(stateRoot);
+    const paths = { stateRoot };
+    const policy = {
+      minimumRetainedUnprotectedReleases: 0,
+      unprotectedReleaseRetentionMs: 24 * 60 * 60 * 1000,
+      unreferencedDependencyLayerRetentionMs: 0,
+      stalePartialDependencyRetentionMs: 24 * 60 * 60 * 1000,
+    };
+    const now = () => new Date('2026-09-23T12:00:00.000Z');
+
+    const plan = planManagedReleaseGarbageCollection({
+      trustedLayout: fixture.layout,
+      paths,
+      policy,
+      currentLinkPaths: [],
+      protectedReleaseIds: [releaseId],
+      now,
+    });
+    assert.deepEqual(plan.releases.removable.map((item) => item.releaseId), [oldReleaseId]);
+    assert.equal(plan.releases.kept.some((item) => item.releaseId === releaseId), true);
+    assert.equal(plan.releases.kept.some((item) => item.releaseId === recentReleaseId), true);
+    assert.equal(
+      plan.dependencies.backend.removable.some((item) => item.name === oldPlan.dependencies.backend.layerKey),
+      true,
+    );
+    assert.equal(
+      plan.dependencies.backend.removable.some((item) => item.name === activePlan.dependencies.backend.layerKey),
+      false,
+    );
+
+    const result = runManagedReleaseGarbageCollection({
+      trustedLayout: fixture.layout,
+      paths,
+      policy,
+      currentLinkPaths: [],
+      protectedReleaseIds: [releaseId],
+      now,
+    });
+    assert.equal(result.removed.releases.length, 1);
+    assert.equal(existsSync(oldRelease.releaseRoot), false);
+    assert.equal(existsSync(fixture.releaseRoot), true);
+    assert.equal(existsSync(path.join(fixture.layout.releasesRoot, recentReleaseId)), true);
+    assert.equal(existsSync(oldPlan.dependencies.backend.finalPath), false);
+    assert.equal(existsSync(activePlan.dependencies.backend.finalPath), true);
+    assert.equal(existsSync(oldPlan.dependencies['ui-server'].finalPath), false);
+    assert.equal(existsSync(activePlan.dependencies['ui-server'].finalPath), true);
   });
 });
 
