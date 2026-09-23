@@ -318,7 +318,8 @@ export const createActivationOrchestrator = ({
       activationStore: checkedActivationStore,
       requestState: currentEntry.requestState,
     });
-    const identity = releaseIdentity(prepared.targetSnapshot);
+    const targetUsesManagedRuntime = usesManagedRuntime(prepared.targetSnapshot);
+    const identity = targetUsesManagedRuntime ? releaseIdentity(prepared.targetSnapshot) : null;
 
     const pointerSwitching = await transitionActivation({
       activationStore: checkedActivationStore,
@@ -346,54 +347,76 @@ export const createActivationOrchestrator = ({
       nextPhase: 'pointers_switched',
     });
 
-    const pm2Restart = await checkedPm2Controller.restartComponentsInOrder({
-      components: Object.freeze([...restartComponents]),
-      persist: false,
-    });
+    let pm2Restart = null;
+    let pm2Restore = null;
+    let pm2Save = null;
+    let managedOriginReadiness = null;
+    let publicSmoke = null;
 
-    let managedOriginReadiness;
-    try {
-      managedOriginReadiness = await runOriginReadiness({
-        releaseId: identity.releaseId,
-        sourceSha: identity.sourceSha,
-        requestState: currentEntry.requestState,
-        targetSnapshot: pointersSwitched.targetSnapshot,
-        now,
+    if (targetUsesManagedRuntime) {
+      pm2Restart = await checkedPm2Controller.restartComponentsInOrder({
+        components: Object.freeze([...restartComponents]),
+        persist: false,
       });
-    } catch (error) {
-      throwWithActivationProgress(error, {
-        operation: 'rollback',
-        releaseId: identity.releaseId,
-        sourceSha: identity.sourceSha,
-        requestPhase: currentEntry.requestState.phase,
-        transactionPhase: pointersSwitched.transaction.phase,
-        pointerSwitch,
-        pm2Restart,
-        managedOriginReadiness: error?.managedOriginReadiness ?? null,
-      });
-    }
 
-    let publicSmoke;
-    try {
-      publicSmoke = await runSmoke({
-        releaseId: identity.releaseId,
-        sourceSha: identity.sourceSha,
-        targets: smokeTargets,
-        requestState: currentEntry.requestState,
-        targetSnapshot: pointersSwitched.targetSnapshot,
-        now,
-      });
-    } catch (error) {
-      throwWithActivationProgress(error, {
-        operation: 'rollback',
-        releaseId: identity.releaseId,
-        sourceSha: identity.sourceSha,
-        requestPhase: currentEntry.requestState.phase,
-        transactionPhase: pointersSwitched.transaction.phase,
-        pointerSwitch,
-        pm2Restart,
-        managedOriginReadiness,
-      });
+      try {
+        managedOriginReadiness = await runOriginReadiness({
+          releaseId: identity.releaseId,
+          sourceSha: identity.sourceSha,
+          requestState: currentEntry.requestState,
+          targetSnapshot: pointersSwitched.targetSnapshot,
+          now,
+        });
+      } catch (error) {
+        throwWithActivationProgress(error, {
+          operation: 'rollback',
+          releaseId: identity.releaseId,
+          sourceSha: identity.sourceSha,
+          requestPhase: currentEntry.requestState.phase,
+          transactionPhase: pointersSwitched.transaction.phase,
+          pointerSwitch,
+          pm2Restart,
+          managedOriginReadiness: error?.managedOriginReadiness ?? null,
+        });
+      }
+
+      try {
+        publicSmoke = await runSmoke({
+          releaseId: identity.releaseId,
+          sourceSha: identity.sourceSha,
+          targets: smokeTargets,
+          requestState: currentEntry.requestState,
+          targetSnapshot: pointersSwitched.targetSnapshot,
+          now,
+        });
+      } catch (error) {
+        throwWithActivationProgress(error, {
+          operation: 'rollback',
+          releaseId: identity.releaseId,
+          sourceSha: identity.sourceSha,
+          requestPhase: currentEntry.requestState.phase,
+          transactionPhase: pointersSwitched.transaction.phase,
+          pointerSwitch,
+          pm2Restart,
+          managedOriginReadiness,
+        });
+      }
+    } else if (pointersSwitched.targetSnapshot?.pm2State) {
+      try {
+        pm2Restore = await checkedPm2Controller.restoreSavedProcessList({
+          pm2State: pointersSwitched.targetSnapshot.pm2State,
+        });
+      } catch (error) {
+        throwWithActivationProgress(error, {
+          operation: 'rollback',
+          releaseId: null,
+          sourceSha: null,
+          requestPhase: currentEntry.requestState.phase,
+          transactionPhase: pointersSwitched.transaction.phase,
+          pointerSwitch,
+          pm2Restore: error?.pm2Restore ?? null,
+        });
+      }
     }
 
     const smokeVerified = await transitionActivation({
@@ -407,7 +430,9 @@ export const createActivationOrchestrator = ({
       nextPhase: 'smoke_verified',
     });
 
-    const pm2Save = await checkedPm2Controller.saveProcessList();
+    if (targetUsesManagedRuntime) {
+      pm2Save = await checkedPm2Controller.saveProcessList();
+    }
 
     const committed = await transitionActivation({
       activationStore: checkedActivationStore,
@@ -431,12 +456,13 @@ export const createActivationOrchestrator = ({
       schemaVersion: 1,
       startedAtUtc,
       completedAtUtc: now().toISOString(),
-      releaseId: identity.releaseId,
-      sourceSha: identity.sourceSha,
+      releaseId: identity?.releaseId ?? null,
+      sourceSha: identity?.sourceSha ?? null,
       transactionPhase: committed.transaction.phase,
       requestPhase: currentEntry.requestState.phase,
       pointerSwitch,
       pm2Restart,
+      pm2Restore,
       managedOriginReadiness,
       publicSmoke,
       pm2Save,
