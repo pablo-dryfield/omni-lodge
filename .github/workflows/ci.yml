@@ -25,8 +25,74 @@ env:
   NPM_VERSION: "10.9.8"
 
 jobs:
+  changes:
+    name: CI / changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run_full_ci: ${{ steps.scope.outputs.run_full_ci }}
+      changed_count: ${{ steps.scope.outputs.changed_count }}
+    steps:
+      # actions/checkout v7.0.1.
+      - name: Check out merge candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Decide validation scope
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
+          PUSH_AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          case "$EVENT_NAME" in
+            pull_request)
+              git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" > changed-files.txt
+              ;;
+            push)
+              if [[ "$PUSH_BEFORE_SHA" =~ ^0+$ ]]; then
+                git diff-tree --no-commit-id --name-only -r "$PUSH_AFTER_SHA" > changed-files.txt
+              else
+                git diff --name-only "$PUSH_BEFORE_SHA" "$PUSH_AFTER_SHA" > changed-files.txt
+              fi
+              ;;
+            *)
+              echo "Unsupported CI event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          changed_count="$(grep -cve '^[[:space:]]*$' changed-files.txt || true)"
+          run_full_ci=false
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            case "$file" in
+              docs/*|*.md)
+                ;;
+              *)
+                run_full_ci=true
+                ;;
+            esac
+          done < changed-files.txt
+
+          printf 'Changed files (%s):\n' "$changed_count"
+          sed 's/^/- /' changed-files.txt
+          printf 'run_full_ci=%s\n' "$run_full_ci"
+
+          echo "changed_count=$changed_count" >> "$GITHUB_OUTPUT"
+          echo "run_full_ci=$run_full_ci" >> "$GITHUB_OUTPUT"
+
   backend:
     name: CI / backend
+    needs: changes
+    if: needs.changes.outputs.run_full_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -69,6 +135,8 @@ jobs:
 
   ui:
     name: CI / ui
+    needs: changes
+    if: needs.changes.outputs.run_full_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     defaults:
@@ -124,6 +192,8 @@ jobs:
 
   ui_server:
     name: CI / ui-server
+    needs: changes
+    if: needs.changes.outputs.run_full_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -164,6 +234,8 @@ jobs:
 
   release_tooling:
     name: CI / release tooling
+    needs: changes
+    if: needs.changes.outputs.run_full_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -209,7 +281,8 @@ jobs:
 
   migrations:
     name: CI / migrations
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.run_full_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
@@ -297,6 +370,7 @@ jobs:
     name: ${{ github.event_name == 'pull_request' && 'CI / required' || 'Branch / required' }}
     if: always()
     needs:
+      - changes
       - backend
       - ui
       - ui_server
@@ -308,6 +382,8 @@ jobs:
       - name: Require every validation gate
         env:
           EVENT_NAME: ${{ github.event_name }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUN_FULL_CI: ${{ needs.changes.outputs.run_full_ci }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           UI_RESULT: ${{ needs.ui.result }}
           UI_SERVER_RESULT: ${{ needs.ui_server.result }}
@@ -321,6 +397,15 @@ jobs:
             "$UI_SERVER_RESULT" \
             "$RELEASE_TOOLING_RESULT" \
             "$MIGRATIONS_RESULT"
+          test "$CHANGES_RESULT" = success
+          if [[ "$RUN_FULL_CI" != true ]]; then
+            test "$BACKEND_RESULT" = skipped
+            test "$UI_RESULT" = skipped
+            test "$UI_SERVER_RESULT" = skipped
+            test "$RELEASE_TOOLING_RESULT" = skipped
+            test "$MIGRATIONS_RESULT" = skipped
+            exit 0
+          fi
           case "$EVENT_NAME" in
             pull_request)
               test "$BACKEND_RESULT" = success
