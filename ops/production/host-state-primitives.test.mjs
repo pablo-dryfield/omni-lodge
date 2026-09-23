@@ -90,6 +90,7 @@ const fakeStat = ({
   gid = 0,
   symlink = false,
   size = 0,
+  mtimeMs = Date.parse('2026-09-16T00:00:00.000Z'),
 }) => ({
   dev: 1n,
   ino: BigInt(inode),
@@ -97,6 +98,7 @@ const fakeStat = ({
   gid: BigInt(gid),
   mode: BigInt((type === 'directory' ? 0o040000 : 0o100000) | mode),
   size: BigInt(size),
+  mtimeMs,
   isDirectory: () => type === 'directory',
   isFile: () => type === 'file',
   isSymbolicLink: () => symlink,
@@ -280,8 +282,16 @@ const createMemoryFileOps = () => {
       assert.equal(file.stat.ino, expectedStat.ino);
       files.delete(targetPath);
     },
-    async appendDurableLine(targetPath, line) {
+    async appendDurableLine(targetPath, line, {
+      maximumBytes = 16 * 1024,
+      maximumFileBytes = 256 * 1024,
+    } = {}) {
+      assert.equal(line.at(-1), 0x0a);
+      assert.ok(line.length <= maximumBytes);
       const existing = files.get(targetPath)?.bytes || Buffer.alloc(0);
+      if (existing.length + line.length > maximumFileBytes) {
+        throw new Error(`Audit file exceeds its byte limit: ${targetPath}`);
+      }
       files.set(targetPath, {
         bytes: Buffer.concat([existing, line]),
         stat: fakeStat({ inode: 900, type: 'file', size: existing.length + line.length }),
@@ -735,6 +745,71 @@ test('audit append stamps server time and authenticated transport key label', as
   assert.equal(event.transportKeyLabel, 'github-actions-production');
   assert.equal(event.requestSha256, 'b'.repeat(64));
   assert.equal(event.requestKind, 'forward_submit');
+});
+
+test('audit append rotates the active segment before it exceeds the byte limit', async () => {
+  const fileOps = createMemoryFileOps();
+  const auditPath = '/audit/events.ndjson';
+  const audit = createHostAuditLog({
+    auditPath,
+    fileOps,
+    clock: () => new Date('2026-09-23T07:20:30.123Z'),
+    maximumLineBytes: 1024,
+    maximumSegmentBytes: 1024,
+  });
+  await audit.append({
+    identity: identity({ requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }),
+    transportKeyLabel: 'github-actions-production',
+    eventType: 'request_admitted',
+  });
+  const firstActive = fileOps.files.get(auditPath).bytes.toString('utf8');
+  assert.ok(firstActive.length > 0 && firstActive.length < 1024);
+
+  await audit.append({
+    identity: identity({ requestId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }),
+    transportKeyLabel: 'github-actions-production',
+    eventType: 'request_running',
+  });
+
+  const archivedNames = [...fileOps.files.keys()]
+    .filter((filePath) => filePath.startsWith('/audit/events-'))
+    .map((filePath) => path.posix.basename(filePath));
+  assert.deepEqual(archivedNames, ['events-20260923T072030123Z-000.ndjson']);
+  assert.equal(
+    JSON.parse(fileOps.files.get('/audit/events-20260923T072030123Z-000.ndjson').bytes.toString('utf8')).requestId,
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  );
+  assert.equal(
+    JSON.parse(fileOps.files.get(auditPath).bytes.toString('utf8')).requestId,
+    'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  );
+});
+
+test('audit append prunes expired segments and keeps the newest bounded set', async () => {
+  const fileOps = createMemoryFileOps();
+  await fileOps.publishExclusiveBuffer('/audit/events-20260920T000000000Z-000.ndjson', Buffer.from('old\n'));
+  await fileOps.publishExclusiveBuffer('/audit/events-20260922T000000000Z-000.ndjson', Buffer.from('extra\n'));
+  await fileOps.publishExclusiveBuffer('/audit/events-20260922T010000000Z-000.ndjson', Buffer.from('newest\n'));
+
+  const audit = createHostAuditLog({
+    auditPath: '/audit/events.ndjson',
+    fileOps,
+    clock: () => new Date('2026-09-23T00:00:00.000Z'),
+    auditRetentionMs: 36 * 60 * 60 * 1000,
+    maximumAuditSegments: 1,
+  });
+  await audit.append({
+    identity: identity(),
+    transportKeyLabel: 'github-actions-production',
+    eventType: 'request_admitted',
+  });
+
+  const remainingSegments = [...fileOps.files.keys()]
+    .filter((filePath) => filePath.startsWith('/audit/events-'))
+    .map((filePath) => path.posix.basename(filePath))
+    .sort();
+  assert.deepEqual(remainingSegments, ['events-20260922T010000000Z-000.ndjson']);
+  assert.equal(fileOps.files.has('/audit/events.ndjson'), true);
 });
 
 const permissiveNativeSecurity = {
