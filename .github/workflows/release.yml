@@ -303,6 +303,11 @@ jobs:
       - migrations
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
     steps:
       # actions/checkout v7.0.1.
       - name: Check out release source
@@ -358,6 +363,7 @@ jobs:
           node scripts/release/preflight.mjs --path ui/build
           node --test \
             scripts/release/release.test.mjs \
+            scripts/release/release-workflow-hardening.test.mjs \
             scripts/deploy/github-release-evidence.test.mjs \
             scripts/deploy/extract-github-artifact.test.mjs \
             scripts/deploy/create-host-v2-request.test.mjs \
@@ -400,6 +406,14 @@ jobs:
             throw new Error(`Release is not a production candidate: ${result.productionIneligibilityReasons.join(', ')}`);
           }
           NODE
+
+      # actions/attest-build-provenance v4.2.2.
+      - name: Attest immutable release artifact provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            ${{ runner.temp }}/omnilodge-release/${{ needs.metadata.outputs.release_id }}.tar.gz
+            ${{ runner.temp }}/omnilodge-release/${{ needs.metadata.outputs.release_id }}.tar.gz.sha256
 
       # actions/upload-artifact v7.0.1. This is the single deployable release
       # artifact; its name is bound into the release manifest provenance.

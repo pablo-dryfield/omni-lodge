@@ -1,6 +1,6 @@
 # OmniLodge GitHub Actions Release Roadmap
 
-Status: Phases 0-6 are complete. The repository now validates PRs, builds trusted immutable `master` releases for backend/UI/UI-server in GitHub Actions, deploys those artifacts without compiling on production, blocks generated UI/backend build artifacts from Git, and runs production from managed release pointers. Automatic production deployment is configured and proven with the host policy and repository `PRODUCTION_DEPLOY_MODE` both restored to `automatic`.
+Status: Phases 0-6 are complete, and Phase 7 optional hardening has started with artifact provenance attestations. The repository now validates PRs, builds trusted immutable `master` releases for backend/UI/UI-server in GitHub Actions, deploys those artifacts without compiling on production, blocks generated UI/backend build artifacts from Git, and runs production from managed release pointers. Automatic production deployment is configured and proven with the host policy and repository `PRODUCTION_DEPLOY_MODE` both restored to `automatic`.
 
 Latest evidence: production is healthy on `omnilodge-r35864299959-a1-ba96006a4682` from source SHA `ba96006a468273640446843b35ae162d3f0dfceb`. The emergency freeze drill completed on 2026-09-23: Release rerun `35864299959` attempt 2 succeeded while `PRODUCTION_DEPLOY_MODE=disabled`, automatic Production Deploy Request run `35866959846` skipped host submission, rollback run `35867068044` restored retained predecessor `omnilodge-r35862318917-a1-d977f64749b3`, rollback run `35867270236` returned production to `omnilodge-r35864299959-a1-ba96006a4682`, public `/healthz` and `/api/health/ready` returned HTTP 200, and `PRODUCTION_DEPLOY_MODE` was restored to `automatic`.
 
@@ -19,7 +19,7 @@ Initial repository review refreshed on 2026-09-14 at `f27d2f32e54c2d806719f706fe
 | Phase 4: Dry-run release | **Completed** | Trusted releases were transferred, extracted, dependency layers were published/reused, managed links and Puppeteer cache were prepared, backend migration-status/runtime preflight passed, and private backend/UI smoke checks succeeded without public activation. | Nothing required for this phase. |
 | Phase 5: First controlled cutover | **Completed** | Manual deploys reached public cutover, rollback drill run `35812156678` succeeded, post-rollback forward deploy run `35812350402` succeeded, and the no-committed-UI cleanup release deploy run `35828883438` succeeded on 2026-09-23. | Nothing required for this phase. Legacy-baseline rollback was proven but is no longer the documented normal rollback target. |
 | Phase 6: Operationalize | **Completed** | `ui/build` was removed from the Git tip, `/ui/build/` is ignored, `AGENTS.md` forbids committed generated UI build files and production builds, production is running release `omnilodge-r35864299959-a1-ba96006a4682` built from source in Actions, deployment audit-log rotation/retention is installed and accepted production audit events, rollback is documented as a retained managed-release operation, Dependabot is configured for npm plus GitHub Actions, maintenance shows release/deploy links, docs-only master pushes skip release packaging, docs-only PRs have a lightweight required-check path, old-release/dependency garbage collection is production-verified by dry-run `35846364912`, synthetic audit-threshold rotation/retention is production-proven, recent CI/release duration was reviewed, branch cleanup removed retired `dev-1`/`release-1`, unattended automatic deployment is configured and production-proven with a `master`-only production branch policy, `codex/*` task PRs are configured for squash auto-merge after green checks, merged same-repository PR branches are explicitly cleaned up after merge, and the emergency `disabled` freeze plus retained-release rollback drill completed successfully on 2026-09-23. | Nothing required for this phase. |
-| Phase 7: Optional cleanup and hardening | **Optional / future** | Not started. | Optional staging, TLS termination move to nginx/Caddy, unprivileged Node service user, backend worker split, provenance attestations, and coordinated historical TLS/UI-bundle cleanup. |
+| Phase 7: Optional cleanup and hardening | **In progress** | Artifact provenance attestation wiring is being added to the trusted Release package job with a pinned GitHub action and a CI guard. | Remaining optional tracks should stay separate: staging environment, nginx/Caddy TLS termination plus unprivileged Node runtime, backend API/worker split, and coordinated historical TLS/UI-bundle cleanup. |
 
 ## Objective
 
@@ -846,11 +846,18 @@ Remaining:
 
 ### Phase 7: Optional cleanup and hardening
 
-- Add a separate staging environment only if it solves a demonstrated need; promote the exact same `master` artifact.
-- Move TLS termination to nginx/Caddy and run Node processes as an unprivileged service user.
-- Split backend API and background workers to permit genuine rolling deployments.
-- Add artifact provenance/attestations if supported by the GitHub plan.
-- Plan a coordinated Git-history cleanup for the historical TLS key and accumulated UI bundles.
+Current status: **in progress**. Phase 7 contains five materially different tracks; do not bundle the host/runtime/security-history tracks into one production deployment. Keep each track independently reviewable and reversible.
+
+Completed / active:
+
+- Add artifact provenance/attestations if supported by the GitHub plan. Active implementation adds `actions/attest-build-provenance` pinned to commit `4d101475d8b20a2381f78447822ac1eab6504dd8` in the trusted Release package job, attests the final release tarball plus detached checksum, grants attestation/OIDC permissions only to the package job, and adds a CI guard so the provenance step is not accidentally removed. Final proof is the next trusted `master` Release run succeeding and producing an attested artifact.
+
+Remaining:
+
+- Add a separate staging environment only if it solves a demonstrated need; promote the exact same `master` artifact. This requires explicit decisions for domain/DNS, environment variables/secrets, database/data policy, and whether staging deploys automatically or by manual dispatch.
+- Move TLS termination to nginx/Caddy and run Node processes as an unprivileged service user. Treat this as a production maintenance project with rollback: prepare config and service user first, test private origin locally, switch traffic only after health checks pass, and preserve the current PM2/root launcher as a rollback path until proven stable.
+- Split backend API and background workers to permit genuine rolling deployments. This needs application-level analysis of scheduled jobs, queues, singleton workers, and PM2 process boundaries before code changes; do not combine it with TLS/runtime user migration.
+- Plan a coordinated Git-history cleanup for the historical TLS key and accumulated UI bundles. This is a repository rewrite/security-coordination project, not an ordinary code change; it requires maintainer approval, backup, force-push coordination, fork/cache cleanup expectations, and credential/certificate rotation decisions before any rewrite.
 
 ## Proposed commit sequence
 
