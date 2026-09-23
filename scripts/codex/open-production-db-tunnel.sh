@@ -14,27 +14,49 @@ db_user="${PROD_DB_READER_USER:-codex_cloud_reader}"
 
 runtime_user_suffix="${UID:-$(id -u 2>/dev/null || printf user)}"
 runtime_root="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/omnilodge-codex-cloud-${runtime_user_suffix}"
+persisted_secret_root="${OMNILODGE_CODEX_SECRET_DIR:-${HOME:-/tmp}/.omnilodge-codex-cloud}"
 key_file="${runtime_root}/prod-db-tunnel-key"
 known_hosts_file="${runtime_root}/known_hosts"
 control_socket="${runtime_root}/prod-db-tunnel.sock"
 
-require_env() {
+read_required_value() {
   local name="$1"
-  if [ -z "${!name:-}" ]; then
-    echo "Missing required environment value: ${name}" >&2
-    exit 2
+  local file_name="$2"
+  local base64_name="${name}_B64"
+  local candidate
+
+  if [ -n "${!name:-}" ]; then
+    printf '%s' "${!name}"
+    return 0
   fi
+
+  if [ -n "${!base64_name:-}" ]; then
+    printf '%s' "${!base64_name}" | base64 -d
+    return 0
+  fi
+
+  for candidate in \
+    "${persisted_secret_root}/${file_name}" \
+    "${runtime_root}/${file_name}"; do
+    if [ -f "$candidate" ]; then
+      cat "$candidate"
+      return 0
+    fi
+  done
+
+  echo "Missing required environment value or secret file: ${name}" >&2
+  echo "Expected ${name}, ${base64_name}, or ${persisted_secret_root}/${file_name}" >&2
+  exit 2
 }
 
 prepare_ssh_files() {
-  require_env PROD_DB_TUNNEL_SSH_PRIVATE_KEY
-  require_env PROD_SSH_KNOWN_HOSTS
-
   mkdir -p "$runtime_root"
   chmod 700 "$runtime_root" 2>/dev/null || true
-  printf '%s\n' "$PROD_DB_TUNNEL_SSH_PRIVATE_KEY" > "$key_file"
+  read_required_value PROD_DB_TUNNEL_SSH_PRIVATE_KEY prod-db-tunnel-key > "$key_file"
+  printf '\n' >> "$key_file"
   chmod 600 "$key_file" 2>/dev/null || true
-  printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > "$known_hosts_file"
+  read_required_value PROD_SSH_KNOWN_HOSTS known_hosts > "$known_hosts_file"
+  printf '\n' >> "$known_hosts_file"
   chmod 600 "$known_hosts_file" 2>/dev/null || true
 }
 
@@ -75,7 +97,8 @@ start_tunnel() {
 }
 
 check_tunnel() {
-  require_env PROD_DB_READER_PASSWORD
+  local db_password
+  db_password="$(read_required_value PROD_DB_READER_PASSWORD prod-db-reader-password)"
   start_tunnel
 
   if ! command -v psql >/dev/null 2>&1; then
@@ -85,7 +108,7 @@ check_tunnel() {
 
   local result
   result="$(
-    PGPASSWORD="$PROD_DB_READER_PASSWORD" psql \
+    PGPASSWORD="$db_password" psql \
       -h "$local_db_host" \
       -p "$local_db_port" \
       -U "$db_user" \
