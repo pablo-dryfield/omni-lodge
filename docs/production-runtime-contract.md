@@ -19,13 +19,13 @@ Evidence labels used below:
 | Permanent source branch | `master` |
 | Repository visibility | Public; confirm that this remains intentional before any later visibility change |
 | Write/admin access | One current collaborator, the owner, at the Phase 0 audit |
-| `master` protection | Pull request required; the GitHub Actions app-bound `CI / required` check is strictly required; zero approvals while there is only one collaborator; force pushes and deletion blocked; rules apply to administrators |
+| `master` protection | Pull request required; the GitHub Actions app-bound `CI / required` check is strictly required; same-repository non-draft PRs are squash auto-merged only after required checks pass; zero approvals while there is only one collaborator; force pushes and deletion blocked; rules apply to administrators |
 | Merge freshness | Pull-request CI checks out GitHub's prospective merge result, and strict required-check protection requires the branch to be current before merge |
 | Required check | `.github/workflows/ci.yml` defines the stable pull-request aggregate `CI / required`, backed by `CI / backend`, `CI / ui`, `CI / ui-server`, and `CI / migrations`. Reviewed hosted PR run `34902107741` passed and the app-bound aggregate is required on `master`. The workflow also exposes `Branch / required` for diagnostic `codex/**` pushes |
 | Branch cleanup | Repository auto-delete after merge is enabled for ordinary topic branches; do not delete `origin/dev-1`, `origin/release-1`, or local `migration/omni-ha-prep` until their unique commits are audited |
 | Production environment | `production`, restricted to exact branch `master`, required reviewer configured, administrator bypass disabled |
 | Deployment mode | Repository Actions variable `PRODUCTION_DEPLOY_MODE=disabled`; missing or unknown values also mean disabled |
-| Workflow permissions | Default token is read-only; Actions cannot approve pull requests; actions must be pinned to full commit SHAs |
+| Workflow permissions | Default token is read-only for CI/release workflows; the dedicated auto-merge workflow has only `contents: write` and `pull-requests: write`, does not check out pull-request code, and excludes fork PRs; actions must be pinned to full commit SHAs |
 | Artifact/log retention | Repository default observed as 90 days; the release workflow explicitly uses one day for internal handoffs and 90 days for the combined release |
 | Production credentials | Not configured in GitHub at this baseline; the current CI and release workflows do not request a production environment, credentials, or host access |
 
@@ -65,6 +65,7 @@ The artifact cutover and rollback drill succeeded on 2026-09-23. `ui/build` is n
 
 - A `codex/**` push runs backend checks/tests, UI checks/tests, and UI-server tests/syntax checks. It intentionally skips the slower migration and application builds and reports the aggregate as `Branch / required`.
 - A pull request targeting `master` runs those gates plus backend compilation, a source-SHA-bound UI build, strict UI artifact/source-map validation, and a disposable PostgreSQL migration gate. Its aggregate is `CI / required`.
+- The auto-merge workflow runs on `pull_request_target`, does not execute repository code from the pull request, excludes forks, and requests squash auto-merge for same-repository non-draft PRs targeting `master`; branch protection still gates the actual merge.
 - A push to `master` runs the separate release workflow. Backend, UI, UI-server, and PostgreSQL jobs run independently; packaging waits for all of them.
 - The PostgreSQL gate compiles migrations, migrates a fresh PostgreSQL 16.10 database, runs the migration command a second time, checks the applied migration set and required schema/index/foreign-key contract, then exercises every compiled Sequelize model against that schema.
 - The release UI job explicitly deletes stale `ui/build` output before building. Both full UI build paths stamp `release-metadata.json`, require usable source maps for emitted JavaScript/CSS and the service worker, and validate all referenced assets.
