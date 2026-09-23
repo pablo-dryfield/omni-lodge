@@ -1,4 +1,5 @@
 /ops/production/** text eol=lf
 /scripts/deploy/** text eol=lf
+/scripts/codex/** text eol=lf
 /.github/workflows/*.yml text eol=lf
 /.github/workflows/*.yaml text eol=lf
