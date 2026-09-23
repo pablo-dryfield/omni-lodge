@@ -264,6 +264,7 @@ jobs:
           set -euo pipefail
           node --test \
             scripts/release/release.test.mjs \
+            scripts/release/release-workflow-hardening.test.mjs \
             scripts/deploy/github-release-evidence.test.mjs \
             scripts/deploy/extract-github-artifact.test.mjs \
             scripts/deploy/create-host-v2-request.test.mjs \
