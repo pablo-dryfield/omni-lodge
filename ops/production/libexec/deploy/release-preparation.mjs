@@ -9,11 +9,13 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
   readSync,
   readdirSync,
   readlinkSync,
   realpathSync,
   renameSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -30,10 +32,15 @@ import {
   assertSafeRelativePath,
   serializeReleaseManifest,
 } from '../../../../scripts/release/lib.mjs';
+import {
+  parseCanonicalHostActivationSnapshotBytes,
+} from '../../../../scripts/deploy/host/state.mjs';
+import { HOST_DEPLOY_PATHS } from './constants.mjs';
 
 const RELEASE_ID_PATTERN = /^omnilodge-r([1-9][0-9]*)-a([1-9][0-9]*)-([0-9a-f]{12})$/;
 const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const PARTIAL_DEPENDENCY_LAYER_PATTERN = /^\.[0-9a-f]{64}\.partial$/;
 const COMPONENT_NAMES = Object.freeze(['backend', 'ui-server']);
 const LOCKFILE_BY_COMPONENT = Object.freeze({
   backend: 'be/package-lock.json',
@@ -111,6 +118,7 @@ const CAPACITY_PROOF_MAX_AGE_MS = 5 * 60 * 1000;
 const PREPARATION_PLAN_SCHEMA_VERSION = 2;
 const PREPARATION_STATE_SCHEMA_VERSION = 1;
 const INSTALL_IDENTITY_NAME = 'omnilodge-install';
+const DAY_MS = 24 * 60 * 60 * 1000;
 const DEPENDENCY_TREE_LIMITS = Object.freeze({
   maxEntries: 250_000,
   maxFileBytes: 1024 * 1024 * 1024,
@@ -142,6 +150,18 @@ export const PRODUCTION_RELEASE_LAYOUT = deepFreeze({
   persistentRoot: '/var/lib/omnilodge',
   installerHomeRoot: '/var/lib/omnilodge/deploy/installer-home',
 });
+
+export const DEFAULT_RELEASE_GARBAGE_COLLECTION_POLICY = deepFreeze({
+  minimumRetainedUnprotectedReleases: 8,
+  unprotectedReleaseRetentionMs: 30 * DAY_MS,
+  unreferencedDependencyLayerRetentionMs: 14 * DAY_MS,
+  stalePartialDependencyRetentionMs: 7 * DAY_MS,
+});
+
+export const PRODUCTION_CURRENT_RELEASE_LINKS = deepFreeze([
+  '/opt/omnilodge/backend-current',
+  '/opt/omnilodge/ui-current',
+]);
 
 const canonicalBytes = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
 const canonicalDigest = (value) => createHash('sha256').update(canonicalBytes(value)).digest('hex');
@@ -646,6 +666,467 @@ const dependencyPlan = ({ component, releaseRoot, lockHash, packageHash, toolcha
     puppeteerCacheRoot: layout.puppeteerCacheRoot,
     installerHomeRoot: layout.installerHomeRoot,
     trustedRoot: layout.trustedRoot,
+  });
+};
+
+const normalizeGarbageCollectionPolicy = (policy) => {
+  sameKeys(policy, [
+    'minimumRetainedUnprotectedReleases',
+    'unprotectedReleaseRetentionMs',
+    'unreferencedDependencyLayerRetentionMs',
+    'stalePartialDependencyRetentionMs',
+  ], 'release garbage collection policy');
+  for (const [key, value] of Object.entries(policy)) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      fail(`Release garbage collection policy ${key} must be a non-negative safe integer`);
+    }
+  }
+  return deepFreeze({ ...policy });
+};
+
+const addProtectionReason = (protectedReleaseReasons, releaseId, reason) => {
+  if (!RELEASE_ID_PATTERN.test(releaseId)) return;
+  if (!protectedReleaseReasons.has(releaseId)) protectedReleaseReasons.set(releaseId, new Set());
+  protectedReleaseReasons.get(releaseId).add(reason);
+};
+
+const releaseIdFromPathWithinReleaseRoot = ({ targetPath, releasesRoot }) => {
+  const releaseRoot = path.resolve(releasesRoot);
+  const resolvedTarget = path.resolve(targetPath);
+  if (!isWithin(releaseRoot, resolvedTarget)) return null;
+  const relative = path.relative(releaseRoot, resolvedTarget);
+  const [candidate, ...rest] = relative.split(path.sep);
+  if (!RELEASE_ID_PATTERN.test(candidate)) return null;
+  if (rest.length === 0 || (rest.length === 1 && rest[0] === 'be')) return candidate;
+  return null;
+};
+
+const readCurrentReleaseLinkProtections = ({ layout, currentLinkPaths }) => {
+  const warnings = [];
+  const releaseIds = new Map();
+  for (const linkPath of currentLinkPaths) {
+    try {
+      const target = readlinkSync(linkPath);
+      const absoluteTarget = path.resolve(path.dirname(linkPath), target);
+      const releaseId = releaseIdFromPathWithinReleaseRoot({
+        targetPath: absoluteTarget,
+        releasesRoot: layout.releasesRoot,
+      });
+      if (releaseId !== null) {
+        addProtectionReason(releaseIds, releaseId, `current_link:${path.basename(linkPath)}`);
+      } else {
+        warnings.push(`Current release link does not target a managed release: ${linkPath}`);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        warnings.push(`Unable to inspect current release link ${linkPath}: ${error.message}`);
+      }
+    }
+  }
+  return { releaseIds, warnings };
+};
+
+const readActivationSnapshotProtections = ({ layout, paths }) => {
+  const warnings = [];
+  const releaseIds = new Map();
+  let reliable = true;
+  let entries = [];
+  try {
+    entries = readdirSync(paths.stateRoot).sort();
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      warnings.push(`Activation state root is missing: ${paths.stateRoot}`);
+      return { releaseIds, warnings, reliable: false };
+    }
+    throw error;
+  }
+  for (const name of entries) {
+    if (name !== 'active-activation-snapshot.json' && !name.endsWith('.activation-snapshot.json')) continue;
+    const snapshotPath = path.join(paths.stateRoot, name);
+    try {
+      const snapshot = parseCanonicalHostActivationSnapshotBytes(readFileSync(snapshotPath));
+      if (snapshot.snapshotKind !== 'artifact_release') continue;
+      if (!isWithin(layout.releasesRoot, snapshot.uiRestoreTarget)
+          || !pathsEqual(snapshot.uiRestoreTarget, path.join(layout.releasesRoot, snapshot.releaseId))
+          || !pathsEqual(snapshot.backendRestoreTarget, path.join(layout.releasesRoot, snapshot.releaseId, 'be'))) {
+        reliable = false;
+        warnings.push(`Activation snapshot does not point at the configured release root: ${snapshotPath}`);
+        continue;
+      }
+      addProtectionReason(releaseIds, snapshot.releaseId, `activation_snapshot:${snapshot.activationId}`);
+    } catch (error) {
+      reliable = false;
+      warnings.push(`Unable to inspect activation snapshot ${snapshotPath}: ${error.message}`);
+    }
+  }
+  return { releaseIds, warnings, reliable };
+};
+
+const readCanonicalReleaseManifest = (releaseRoot, expectedReleaseId) => {
+  const manifestPath = path.join(releaseRoot, 'release-manifest.json');
+  const manifestBytes = readStableRegularFile(manifestPath, 'Release garbage collection manifest', {
+    maximumBytes: RELEASE_LIMITS.maxManifestBytes,
+    captureBytes: true,
+  }).data;
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestBytes.toString('utf8'));
+  } catch (error) {
+    throw new Error(`Release manifest is invalid JSON: ${error.message}`, { cause: error });
+  }
+  if (!manifestBytes.equals(serializeReleaseManifest(manifest))) {
+    fail('Release manifest is not canonical JSON');
+  }
+  validateManifestIdentity({
+    manifest,
+    expectedReleaseId,
+    expectedSourceSha: manifest.sourceSha,
+  });
+  return manifest;
+};
+
+const releaseTimestampMs = ({ manifest, stat }) => {
+  const builtAt = Date.parse(manifest.builtAtUtc);
+  if (!Number.isNaN(builtAt)) return builtAt;
+  return Number(stat.mtimeMs);
+};
+
+const inspectReleaseDirectories = ({ layout }) => {
+  assertRealDirectory(layout.releasesRoot, 'Release root', {
+    ownerUid: ownerUid(),
+    trustedRoot: layout.trustedRoot,
+  });
+  const releases = [];
+  const invalid = [];
+  for (const name of readdirSync(layout.releasesRoot).sort()) {
+    if (!RELEASE_ID_PATTERN.test(name)) continue;
+    const releaseRoot = path.join(layout.releasesRoot, name);
+    if (!isWithin(layout.releasesRoot, releaseRoot)) fail('Release garbage collection candidate escapes release root');
+    try {
+      const stat = lstatSync(releaseRoot, { bigint: true });
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        invalid.push(deepFreeze({ releaseId: name, path: releaseRoot, reason: 'not_a_real_directory' }));
+        continue;
+      }
+      if (!pathsEqual(realpathSync.native(releaseRoot), releaseRoot)) {
+        invalid.push(deepFreeze({ releaseId: name, path: releaseRoot, reason: 'resolves_through_link' }));
+        continue;
+      }
+      const manifest = readCanonicalReleaseManifest(releaseRoot, name);
+      releases.push(deepFreeze({
+        releaseId: name,
+        sourceSha: manifest.sourceSha,
+        path: releaseRoot,
+        builtAtUtc: manifest.builtAtUtc,
+        timestampMs: releaseTimestampMs({ manifest, stat }),
+        manifest,
+      }));
+    } catch (error) {
+      invalid.push(deepFreeze({
+        releaseId: name,
+        path: releaseRoot,
+        reason: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+  return { releases, invalid };
+};
+
+const dependencyLayerKeysForRelease = ({ release, layout }) => {
+  const result = {};
+  for (const component of COMPONENT_NAMES) {
+    const packageEntry = release.manifest.files.find((file) => file.path === PACKAGE_FILE_BY_COMPONENT[component]);
+    const dependency = dependencyPlan({
+      component,
+      releaseRoot: release.path,
+      lockHash: release.manifest.lockfiles[LOCKFILE_BY_COMPONENT[component]],
+      packageHash: packageEntry.sha256,
+      toolchain: release.manifest.toolchain,
+      layout,
+    });
+    result[component] = dependency.layerKey;
+  }
+  return deepFreeze(result);
+};
+
+const entryAgeMs = ({ stat, nowMs }) => Math.max(0, nowMs - Number(stat.mtimeMs));
+
+const inspectDependencyGarbage = ({
+  layout,
+  keptReleases,
+  policy,
+  nowMs,
+  dependencyProtectionComplete,
+}) => {
+  const protectedLayers = Object.fromEntries(COMPONENT_NAMES.map((component) => [component, new Set()]));
+  if (dependencyProtectionComplete) {
+    for (const release of keptReleases) {
+      const keys = dependencyLayerKeysForRelease({ release, layout });
+      for (const component of COMPONENT_NAMES) protectedLayers[component].add(keys[component]);
+    }
+  }
+
+  const byComponent = {};
+  for (const component of COMPONENT_NAMES) {
+    const componentRoot = path.join(layout.dependenciesRoot, component);
+    assertRealDirectory(componentRoot, `${component} dependency root`, {
+      ownerUid: ownerUid(),
+      trustedRoot: layout.trustedRoot,
+    });
+    const kept = [];
+    const removable = [];
+    const invalid = [];
+    const stalePartials = [];
+    for (const name of readdirSync(componentRoot).sort()) {
+      const layerPath = path.join(componentRoot, name);
+      let stat;
+      try {
+        stat = lstatSync(layerPath, { bigint: true });
+      } catch (error) {
+        if (error?.code === 'ENOENT') continue;
+        throw error;
+      }
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        invalid.push(deepFreeze({ name, path: layerPath, reason: 'not_a_real_directory' }));
+        continue;
+      }
+      if (PARTIAL_DEPENDENCY_LAYER_PATTERN.test(name)) {
+        const ageMs = entryAgeMs({ stat, nowMs });
+        const record = deepFreeze({
+          name,
+          path: layerPath,
+          ageMs,
+          reason: ageMs >= policy.stalePartialDependencyRetentionMs ? 'stale_partial_dependency' : 'recent_partial_dependency',
+        });
+        if (ageMs >= policy.stalePartialDependencyRetentionMs) stalePartials.push(record);
+        else kept.push(record);
+        continue;
+      }
+      if (!SHA256_PATTERN.test(name)) {
+        invalid.push(deepFreeze({ name, path: layerPath, reason: 'unrecognized_dependency_layer_name' }));
+        continue;
+      }
+      const ageMs = entryAgeMs({ stat, nowMs });
+      const protectedByRelease = protectedLayers[component].has(name);
+      const canRemove = dependencyProtectionComplete
+        && !protectedByRelease
+        && ageMs >= policy.unreferencedDependencyLayerRetentionMs;
+      const record = deepFreeze({
+        name,
+        path: layerPath,
+        ageMs,
+        protected: protectedByRelease,
+        reason: protectedByRelease
+          ? 'referenced_by_retained_release'
+          : (dependencyProtectionComplete ? 'unreferenced_dependency_layer' : 'dependency_protection_incomplete'),
+      });
+      if (canRemove) removable.push(record);
+      else kept.push(record);
+    }
+    byComponent[component] = deepFreeze({
+      protectedLayerKeys: deepFreeze([...protectedLayers[component]].sort()),
+      kept: deepFreeze(kept),
+      removable: deepFreeze(removable),
+      stalePartials: deepFreeze(stalePartials),
+      invalid: deepFreeze(invalid),
+    });
+  }
+  return deepFreeze(byComponent);
+};
+
+export const planManagedReleaseGarbageCollection = ({
+  trustedLayout = PRODUCTION_RELEASE_LAYOUT,
+  paths = HOST_DEPLOY_PATHS,
+  policy: rawPolicy = DEFAULT_RELEASE_GARBAGE_COLLECTION_POLICY,
+  currentLinkPaths = PRODUCTION_CURRENT_RELEASE_LINKS,
+  protectedReleaseIds = [],
+  now = () => new Date(),
+} = {}) => {
+  const layout = validateTrustedLayout(trustedLayout);
+  const policy = normalizeGarbageCollectionPolicy(rawPolicy);
+  const capturedAt = now();
+  const capturedAtUtc = capturedAt.toISOString();
+  const nowMs = capturedAt.getTime();
+  const warnings = [];
+  const protectedReleaseReasons = new Map();
+
+  if (!Array.isArray(protectedReleaseIds)) fail('Protected release IDs must be an array');
+  for (const releaseId of protectedReleaseIds) {
+    if (!RELEASE_ID_PATTERN.test(releaseId)) fail(`Protected release ID is invalid: ${releaseId}`);
+    addProtectionReason(protectedReleaseReasons, releaseId, 'explicit_protected_release');
+  }
+
+  const linkProtections = readCurrentReleaseLinkProtections({ layout, currentLinkPaths });
+  warnings.push(...linkProtections.warnings);
+  for (const [releaseId, reasons] of linkProtections.releaseIds) {
+    for (const reason of reasons) addProtectionReason(protectedReleaseReasons, releaseId, reason);
+  }
+
+  const snapshotProtections = readActivationSnapshotProtections({ layout, paths });
+  warnings.push(...snapshotProtections.warnings);
+  for (const [releaseId, reasons] of snapshotProtections.releaseIds) {
+    for (const reason of reasons) addProtectionReason(protectedReleaseReasons, releaseId, reason);
+  }
+
+  const inventory = inspectReleaseDirectories({ layout });
+  if (!snapshotProtections.reliable) {
+    for (const release of inventory.releases) {
+      addProtectionReason(protectedReleaseReasons, release.releaseId, 'activation_state_unreliable');
+    }
+  }
+
+  const candidates = inventory.releases
+    .filter((release) => !protectedReleaseReasons.has(release.releaseId))
+    .sort((left, right) => right.timestampMs - left.timestampMs || right.releaseId.localeCompare(left.releaseId));
+  candidates.forEach((release, index) => {
+    const ageMs = Math.max(0, nowMs - release.timestampMs);
+    if (index < policy.minimumRetainedUnprotectedReleases) {
+      addProtectionReason(protectedReleaseReasons, release.releaseId, 'minimum_retained_unprotected_release');
+    } else if (ageMs < policy.unprotectedReleaseRetentionMs) {
+      addProtectionReason(protectedReleaseReasons, release.releaseId, 'recent_unprotected_release');
+    }
+  });
+
+  const keptReleases = [];
+  const removableReleases = [];
+  for (const release of inventory.releases) {
+    const reasons = protectedReleaseReasons.get(release.releaseId);
+    const record = deepFreeze({
+      releaseId: release.releaseId,
+      sourceSha: release.sourceSha,
+      path: release.path,
+      builtAtUtc: release.builtAtUtc,
+      protected: Boolean(reasons),
+      reasons: deepFreeze(reasons ? [...reasons].sort() : ['old_unprotected_release']),
+    });
+    if (reasons) keptReleases.push(release);
+    else removableReleases.push(record);
+  }
+
+  const dependencyProtectionComplete = snapshotProtections.reliable && inventory.invalid.length === 0;
+  const dependencies = inspectDependencyGarbage({
+    layout,
+    keptReleases,
+    policy,
+    nowMs,
+    dependencyProtectionComplete,
+  });
+
+  return deepFreeze({
+    schemaVersion: 1,
+    capturedAtUtc,
+    layout,
+    policy,
+    activationStateReliable: snapshotProtections.reliable,
+    dependencyProtectionComplete,
+    warnings: deepFreeze(warnings),
+    releases: deepFreeze({
+      kept: deepFreeze(inventory.releases
+        .filter((release) => protectedReleaseReasons.has(release.releaseId))
+        .map((release) => deepFreeze({
+          releaseId: release.releaseId,
+          sourceSha: release.sourceSha,
+          path: release.path,
+          builtAtUtc: release.builtAtUtc,
+          reasons: deepFreeze([...protectedReleaseReasons.get(release.releaseId)].sort()),
+        }))),
+      removable: deepFreeze(removableReleases),
+      invalid: deepFreeze(inventory.invalid),
+    }),
+    dependencies,
+  });
+};
+
+const fsyncDirectory = (directoryPath) => {
+  if (process.platform === 'win32') return;
+  const descriptor = openSync(directoryPath, fsConstants.O_RDONLY);
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+};
+
+const removeSafeDirectoryTree = ({ targetPath, trustedParent, label }) => {
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedParent = path.resolve(trustedParent);
+  if (!isWithin(resolvedParent, resolvedTarget) || pathsEqual(resolvedParent, resolvedTarget)) {
+    fail(`${label} deletion target escapes or equals its trusted parent`);
+  }
+  const stat = lstatSync(resolvedTarget, { bigint: true });
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} deletion target is not a real directory`);
+  if (!pathsEqual(realpathSync.native(resolvedTarget), resolvedTarget)) {
+    fail(`${label} deletion target resolves through a link`);
+  }
+  rmSync(resolvedTarget, { recursive: true, force: false });
+  fsyncDirectory(resolvedParent);
+  return deepFreeze({ path: resolvedTarget, removed: true });
+};
+
+export const runManagedReleaseGarbageCollection = ({
+  trustedLayout = PRODUCTION_RELEASE_LAYOUT,
+  paths = HOST_DEPLOY_PATHS,
+  policy = DEFAULT_RELEASE_GARBAGE_COLLECTION_POLICY,
+  currentLinkPaths = PRODUCTION_CURRENT_RELEASE_LINKS,
+  protectedReleaseIds = [],
+  now = () => new Date(),
+  dryRun = false,
+} = {}) => {
+  const plan = planManagedReleaseGarbageCollection({
+    trustedLayout,
+    paths,
+    policy,
+    currentLinkPaths,
+    protectedReleaseIds,
+    now,
+  });
+  const removed = {
+    releases: [],
+    dependencies: Object.fromEntries(COMPONENT_NAMES.map((component) => [component, []])),
+    partialDependencies: Object.fromEntries(COMPONENT_NAMES.map((component) => [component, []])),
+  };
+  if (!dryRun) {
+    for (const release of plan.releases.removable) {
+      removed.releases.push(removeSafeDirectoryTree({
+        targetPath: release.path,
+        trustedParent: plan.layout.releasesRoot,
+        label: `Release ${release.releaseId}`,
+      }));
+    }
+    for (const component of COMPONENT_NAMES) {
+      const componentRoot = path.join(plan.layout.dependenciesRoot, component);
+      for (const layer of plan.dependencies[component].removable) {
+        removed.dependencies[component].push(removeSafeDirectoryTree({
+          targetPath: layer.path,
+          trustedParent: componentRoot,
+          label: `${component} dependency layer ${layer.name}`,
+        }));
+      }
+      for (const layer of plan.dependencies[component].stalePartials) {
+        removed.partialDependencies[component].push(removeSafeDirectoryTree({
+          targetPath: layer.path,
+          trustedParent: componentRoot,
+          label: `${component} partial dependency layer ${layer.name}`,
+        }));
+      }
+    }
+  }
+  return deepFreeze({
+    schemaVersion: 1,
+    dryRun,
+    plannedAtUtc: plan.capturedAtUtc,
+    plan,
+    removed: deepFreeze({
+      releases: deepFreeze(removed.releases),
+      dependencies: deepFreeze(Object.fromEntries(COMPONENT_NAMES.map((component) => [
+        component,
+        deepFreeze(removed.dependencies[component]),
+      ]))),
+      partialDependencies: deepFreeze(Object.fromEntries(COMPONENT_NAMES.map((component) => [
+        component,
+        deepFreeze(removed.partialDependencies[component]),
+      ]))),
+    }),
   });
 };
 
@@ -1543,16 +2024,6 @@ const writeExclusive = (destination, bytes, mode) => {
   try {
     writeFileSync(descriptor, bytes);
     chmodSync(destination, mode);
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-};
-
-const fsyncDirectory = (directoryPath) => {
-  if (process.platform === 'win32') return;
-  const descriptor = openSync(directoryPath, fsConstants.O_RDONLY);
-  try {
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);

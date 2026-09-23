@@ -1,0 +1,76 @@
+name: Auto-merge
+
+on:
+  pull_request_target:
+    branches:
+      - master
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - closed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable:
+    name: Auto-merge / enable
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: >-
+      github.event.action != 'closed'
+      && github.event.pull_request.draft == false
+      && github.event.pull_request.base.repo.full_name == github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.base.ref == 'master'
+      && startsWith(github.event.pull_request.head.ref, 'codex/')
+    steps:
+      - name: Enable squash auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.OMNILODGE_AUTOMERGE_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "OMNILODGE_AUTOMERGE_TOKEN is required so auto-merged master pushes trigger release/deploy workflows." >&2
+            exit 1
+          fi
+
+          gh pr merge "$PR_URL" --squash --auto --delete-branch
+
+  cleanup_branch:
+    name: Auto-merge / cleanup branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: >-
+      github.event.action == 'closed'
+      && github.event.pull_request.merged == true
+      && github.event.pull_request.base.repo.full_name == github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.base.ref == 'master'
+      && github.event.pull_request.head.ref != github.event.pull_request.base.ref
+    steps:
+      - name: Delete merged same-repository branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          if gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/${HEAD_REF}" --silent; then
+            echo "Deleted merged branch ${HEAD_REF}."
+            exit 0
+          fi
+
+          echo "Initial delete failed; checking whether ${HEAD_REF} still exists."
+          if gh api "repos/${REPOSITORY}/git/ref/heads/${HEAD_REF}" --silent > /dev/null 2>&1; then
+            echo "Branch ${HEAD_REF} still exists after delete attempt." >&2
+            exit 1
+          fi
+
+          echo "Branch ${HEAD_REF} was already removed."
