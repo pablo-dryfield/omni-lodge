@@ -6,10 +6,32 @@ This repo is ready to use from Codex Cloud without relying on Pablo's local mach
 
 Create a Codex Cloud environment for the OmniLodge GitHub repo and add these values.
 
-If the environment supports setup commands, make sure the base tools for DB inspection are present:
+Use this setup script. Codex Cloud secrets are available during setup, then removed before the agent phase, so this script stores the DB tunnel credentials in private files that the repo helper can use later.
 
 ```bash
-apt-get update && apt-get install -y openssh-client postgresql-client
+set -e
+apt-get update
+apt-get install -y openssh-client postgresql-client
+npm ci --prefix be
+npm ci --prefix ui
+npm ci --prefix ui-server
+
+install -d -m 700 "$HOME/.omnilodge-codex-cloud"
+printf '%s\n' "$PROD_DB_TUNNEL_SSH_PRIVATE_KEY" > "$HOME/.omnilodge-codex-cloud/prod-db-tunnel-key"
+printf '%s\n' "$PROD_DB_READER_PASSWORD" > "$HOME/.omnilodge-codex-cloud/prod-db-reader-password"
+printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > "$HOME/.omnilodge-codex-cloud/known_hosts"
+chmod 600 "$HOME/.omnilodge-codex-cloud/prod-db-tunnel-key" "$HOME/.omnilodge-codex-cloud/prod-db-reader-password" "$HOME/.omnilodge-codex-cloud/known_hosts"
+```
+
+Use the same dependency commands in the maintenance script, but do not rely on secrets being present there:
+
+```bash
+set -e
+apt-get update
+apt-get install -y openssh-client postgresql-client
+npm ci --prefix be
+npm ci --prefix ui
+npm ci --prefix ui-server
 ```
 
 ### Secrets
@@ -22,6 +44,8 @@ Add these as secrets, not regular variables:
 | `PROD_DB_READER_PASSWORD` | Copy the contents of `.tmp/codex-cloud/prod_db_reader_password.txt` from the local setup machine. |
 
 Do not paste these values into commits, issue comments, PR descriptions, logs, or chat messages.
+
+Codex Cloud currently removes secrets before the agent phase. The setup script above intentionally copies these two secrets into private files inside the container so Codex can open the read-only DB tunnel during later commands. Treat this environment as production-read-capable even though the database role and SSH key are restricted.
 
 ### Variables
 
