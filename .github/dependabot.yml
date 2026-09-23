@@ -1,0 +1,81 @@
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Europe/Warsaw"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/be"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "07:00"
+      timezone: "Europe/Warsaw"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "backend"
+    commit-message:
+      prefix: "build"
+      include: "scope"
+    versioning-strategy: "increase-if-necessary"
+    groups:
+      backend-npm:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/ui"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "07:00"
+      timezone: "Europe/Warsaw"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ui"
+    commit-message:
+      prefix: "build"
+      include: "scope"
+    versioning-strategy: "increase-if-necessary"
+    groups:
+      ui-npm:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/ui-server"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "07:00"
+      timezone: "Europe/Warsaw"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ui-server"
+    commit-message:
+      prefix: "build"
+      include: "scope"
+    versioning-strategy: "increase-if-necessary"
+    groups:
+      ui-server-npm:
+        patterns:
+          - "*"
