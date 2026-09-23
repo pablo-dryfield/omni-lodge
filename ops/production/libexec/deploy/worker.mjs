@@ -482,6 +482,31 @@ const publishPostRequestGarbageCollection = async ({
   }
 };
 
+const runPreRequestGarbageCollection = async ({
+  entry,
+  paths,
+  clock,
+  garbageCollector,
+}) => {
+  if (entry.requestState.phase !== 'authorized') return null;
+  if (entry.requestState.request.kind !== 'forward_submit') return null;
+  if (!['dry-run', 'deploy'].includes(entry.requestState.intent.operation)) return null;
+  try {
+    return await garbageCollector({
+      paths,
+      now: clock,
+      dryRun: false,
+    });
+  } catch (error) {
+    return Object.freeze({
+      schemaVersion: 1,
+      status: 'failed',
+      capturedAtUtc: clock().toISOString(),
+      error: serializeDeploymentError(error),
+    });
+  }
+};
+
 const recoverySummary = (recovery) => {
   if (!recovery || typeof recovery !== 'object') return null;
   return Object.freeze({
@@ -1700,6 +1725,12 @@ export const handleHostDeployWorkerRequest = async ({
     }
 
     if (entry.requestState.phase === 'authorized') {
+      await runPreRequestGarbageCollection({
+        entry,
+        paths,
+        clock,
+        garbageCollector,
+      });
       await prepareRelease({
         requestState: entry.requestState,
         paths,

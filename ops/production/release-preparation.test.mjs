@@ -624,13 +624,31 @@ test('managed release garbage collection preserves protected releases and remove
     });
 
     const stateRoot = path.join(fixture.fixtureRoot, 'deploy-state');
+    const stagingRoot = path.join(fixture.fixtureRoot, 'deploy-staging');
+    const runningRequests = path.join(fixture.fixtureRoot, 'deploy-running');
+    const sourceMapsRoot = path.join(fixture.layout.persistentRoot, 'source-maps');
     mkdir(stateRoot);
-    const paths = { stateRoot };
+    mkdir(stagingRoot);
+    mkdir(runningRequests);
+    mkdir(sourceMapsRoot);
+    const oldStagingRequestId = '123e4567-e89b-42d3-a456-426614174000';
+    const runningStagingRequestId = '223e4567-e89b-42d3-a456-426614174000';
+    mkdir(path.join(stagingRoot, oldStagingRequestId));
+    mkdir(path.join(stagingRoot, runningStagingRequestId));
+    writeFileSync(path.join(runningRequests, `${runningStagingRequestId}.json`), '{}\n');
+    mkdir(path.join(sourceMapsRoot, oldReleaseId));
+    mkdir(path.join(sourceMapsRoot, recentReleaseId));
+    const paths = { stateRoot, stagingRoot, runningRequests };
     const policy = {
       minimumRetainedUnprotectedReleases: 0,
       unprotectedReleaseRetentionMs: 24 * 60 * 60 * 1000,
       unreferencedDependencyLayerRetentionMs: 0,
       stalePartialDependencyRetentionMs: 24 * 60 * 60 * 1000,
+      minimumRetainedActivationSnapshots: 0,
+      activationSnapshotRetentionMs: 0,
+      minimumRetainedSourceMapReleases: 0,
+      sourceMapRetentionMs: 0,
+      stagingRetentionMs: 0,
     };
     const now = () => new Date('2026-09-23T12:00:00.000Z');
 
@@ -653,6 +671,10 @@ test('managed release garbage collection preserves protected releases and remove
       plan.dependencies.backend.removable.some((item) => item.name === activePlan.dependencies.backend.layerKey),
       false,
     );
+    assert.deepEqual(plan.staging.removable.map((item) => item.name), [oldStagingRequestId]);
+    assert.equal(plan.staging.kept.some((item) => item.name === runningStagingRequestId), true);
+    assert.deepEqual(plan.sourceMaps.removable.map((item) => item.releaseId), [oldReleaseId]);
+    assert.equal(plan.sourceMaps.kept.some((item) => item.releaseId === recentReleaseId), true);
 
     const result = runManagedReleaseGarbageCollection({
       trustedLayout: fixture.layout,
@@ -663,9 +685,15 @@ test('managed release garbage collection preserves protected releases and remove
       now,
     });
     assert.equal(result.removed.releases.length, 1);
+    assert.equal(result.removed.staging.length, 1);
+    assert.equal(result.removed.sourceMaps.length, 1);
     assert.equal(existsSync(oldRelease.releaseRoot), false);
     assert.equal(existsSync(fixture.releaseRoot), true);
     assert.equal(existsSync(path.join(fixture.layout.releasesRoot, recentReleaseId)), true);
+    assert.equal(existsSync(path.join(stagingRoot, oldStagingRequestId)), false);
+    assert.equal(existsSync(path.join(stagingRoot, runningStagingRequestId)), true);
+    assert.equal(existsSync(path.join(sourceMapsRoot, oldReleaseId)), false);
+    assert.equal(existsSync(path.join(sourceMapsRoot, recentReleaseId)), true);
     assert.equal(existsSync(oldPlan.dependencies.backend.finalPath), false);
     assert.equal(existsSync(activePlan.dependencies.backend.finalPath), true);
     assert.equal(existsSync(oldPlan.dependencies['ui-server'].finalPath), false);

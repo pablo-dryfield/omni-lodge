@@ -105,6 +105,8 @@ const PINNED_NODE_VERSION = '22.23.2';
 const PINNED_NPM_VERSION = '10.9.8';
 const TARGET_PLATFORM = 'linux';
 const TARGET_ARCH = 'x64';
+const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ACTIVE_ACTIVATION_SNAPSHOT_FILE = 'active-activation-snapshot.json';
 const DEPENDENCY_INSTALL_FLAGS = Object.freeze([
   'ci',
   '--omit=dev',
@@ -152,10 +154,15 @@ export const PRODUCTION_RELEASE_LAYOUT = deepFreeze({
 });
 
 export const DEFAULT_RELEASE_GARBAGE_COLLECTION_POLICY = deepFreeze({
-  minimumRetainedUnprotectedReleases: 8,
-  unprotectedReleaseRetentionMs: 30 * DAY_MS,
-  unreferencedDependencyLayerRetentionMs: 14 * DAY_MS,
-  stalePartialDependencyRetentionMs: 7 * DAY_MS,
+  minimumRetainedUnprotectedReleases: 0,
+  unprotectedReleaseRetentionMs: 0,
+  unreferencedDependencyLayerRetentionMs: 0,
+  stalePartialDependencyRetentionMs: DAY_MS,
+  minimumRetainedActivationSnapshots: 4,
+  activationSnapshotRetentionMs: 0,
+  minimumRetainedSourceMapReleases: 0,
+  sourceMapRetentionMs: 0,
+  stagingRetentionMs: 0,
 });
 
 export const PRODUCTION_CURRENT_RELEASE_LINKS = deepFreeze([
@@ -675,6 +682,11 @@ const normalizeGarbageCollectionPolicy = (policy) => {
     'unprotectedReleaseRetentionMs',
     'unreferencedDependencyLayerRetentionMs',
     'stalePartialDependencyRetentionMs',
+    'minimumRetainedActivationSnapshots',
+    'activationSnapshotRetentionMs',
+    'minimumRetainedSourceMapReleases',
+    'sourceMapRetentionMs',
+    'stagingRetentionMs',
   ], 'release garbage collection policy');
   for (const [key, value] of Object.entries(policy)) {
     if (!Number.isSafeInteger(value) || value < 0) {
@@ -726,24 +738,71 @@ const readCurrentReleaseLinkProtections = ({ layout, currentLinkPaths }) => {
   return { releaseIds, warnings };
 };
 
-const readActivationSnapshotProtections = ({ layout, paths }) => {
+const activationSnapshotTimestampMs = ({ snapshot, stat }) => {
+  const activatedAt = Date.parse(snapshot.activatedAtUtc);
+  if (!Number.isNaN(activatedAt)) return activatedAt;
+  return Number(stat.mtimeMs);
+};
+
+const activationSnapshotRecord = ({
+  name,
+  snapshotPath,
+  snapshot,
+  stat,
+  nowMs,
+  reason,
+}) => deepFreeze({
+  name,
+  path: snapshotPath,
+  activationId: snapshot.activationId,
+  releaseId: snapshot.releaseId,
+  activatedAtUtc: snapshot.activatedAtUtc,
+  ageMs: Math.max(0, nowMs - activationSnapshotTimestampMs({ snapshot, stat })),
+  active: name === ACTIVE_ACTIVATION_SNAPSHOT_FILE,
+  reason,
+});
+
+const readActivationSnapshotProtections = ({
+  layout,
+  paths,
+  policy,
+  nowMs,
+}) => {
   const warnings = [];
   const releaseIds = new Map();
   let reliable = true;
   let entries = [];
+  const validSnapshots = [];
+  const invalid = [];
   try {
     entries = readdirSync(paths.stateRoot).sort();
   } catch (error) {
     if (error?.code === 'ENOENT') {
       warnings.push(`Activation state root is missing: ${paths.stateRoot}`);
-      return { releaseIds, warnings, reliable: false };
+      return {
+        releaseIds,
+        warnings,
+        reliable: false,
+        activationSnapshots: deepFreeze({
+          kept: [],
+          removable: [],
+          invalid: [],
+        }),
+      };
     }
     throw error;
   }
   for (const name of entries) {
-    if (name !== 'active-activation-snapshot.json' && !name.endsWith('.activation-snapshot.json')) continue;
+    if (name !== ACTIVE_ACTIVATION_SNAPSHOT_FILE && !name.endsWith('.activation-snapshot.json')) continue;
     const snapshotPath = path.join(paths.stateRoot, name);
     try {
+      const stat = lstatSync(snapshotPath, { bigint: true });
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        reliable = false;
+        invalid.push(deepFreeze({ name, path: snapshotPath, reason: 'not_a_real_file' }));
+        warnings.push(`Activation snapshot is not a real file: ${snapshotPath}`);
+        continue;
+      }
       const snapshot = parseCanonicalHostActivationSnapshotBytes(readFileSync(snapshotPath));
       if (snapshot.snapshotKind !== 'artifact_release') continue;
       if (!isWithin(layout.releasesRoot, snapshot.uiRestoreTarget)
@@ -751,15 +810,110 @@ const readActivationSnapshotProtections = ({ layout, paths }) => {
           || !pathsEqual(snapshot.backendRestoreTarget, path.join(layout.releasesRoot, snapshot.releaseId, 'be'))) {
         reliable = false;
         warnings.push(`Activation snapshot does not point at the configured release root: ${snapshotPath}`);
+        invalid.push(deepFreeze({ name, path: snapshotPath, reason: 'restore_target_outside_release_root' }));
         continue;
       }
-      addProtectionReason(releaseIds, snapshot.releaseId, `activation_snapshot:${snapshot.activationId}`);
+      validSnapshots.push(deepFreeze({
+        name,
+        path: snapshotPath,
+        snapshot,
+        timestampMs: activationSnapshotTimestampMs({ snapshot, stat }),
+        stat,
+      }));
     } catch (error) {
       reliable = false;
+      invalid.push(deepFreeze({
+        name,
+        path: snapshotPath,
+        reason: error instanceof Error ? error.message : String(error),
+      }));
       warnings.push(`Unable to inspect activation snapshot ${snapshotPath}: ${error.message}`);
     }
   }
-  return { releaseIds, warnings, reliable };
+
+  if (!reliable) {
+    for (const snapshot of validSnapshots) {
+      addProtectionReason(releaseIds, snapshot.snapshot.releaseId, `activation_snapshot_unreliable:${snapshot.snapshot.activationId}`);
+    }
+    return {
+      releaseIds,
+      warnings,
+      reliable,
+      activationSnapshots: deepFreeze({
+        kept: deepFreeze(validSnapshots.map((snapshot) => activationSnapshotRecord({
+          name: snapshot.name,
+          snapshotPath: snapshot.path,
+          snapshot: snapshot.snapshot,
+          stat: snapshot.stat,
+          nowMs,
+          reason: 'activation_state_unreliable',
+        }))),
+        removable: [],
+        invalid: deepFreeze(invalid),
+      }),
+    };
+  }
+
+  const retainedNamedSnapshots = new Set();
+  const namedSnapshots = validSnapshots
+    .filter((snapshot) => snapshot.name !== ACTIVE_ACTIVATION_SNAPSHOT_FILE)
+    .sort((left, right) => right.timestampMs - left.timestampMs || right.name.localeCompare(left.name));
+  namedSnapshots.forEach((snapshot, index) => {
+    const ageMs = Math.max(0, nowMs - snapshot.timestampMs);
+    if (index < policy.minimumRetainedActivationSnapshots) {
+      retainedNamedSnapshots.add(snapshot.name);
+    } else if (ageMs < policy.activationSnapshotRetentionMs) {
+      retainedNamedSnapshots.add(snapshot.name);
+    }
+  });
+
+  const kept = [];
+  const removable = [];
+  for (const snapshot of validSnapshots) {
+    if (snapshot.name === ACTIVE_ACTIVATION_SNAPSHOT_FILE) {
+      addProtectionReason(releaseIds, snapshot.snapshot.releaseId, `active_activation_snapshot:${snapshot.snapshot.activationId}`);
+      kept.push(activationSnapshotRecord({
+        name: snapshot.name,
+        snapshotPath: snapshot.path,
+        snapshot: snapshot.snapshot,
+        stat: snapshot.stat,
+        nowMs,
+        reason: 'active_activation_snapshot',
+      }));
+      continue;
+    }
+    if (retainedNamedSnapshots.has(snapshot.name)) {
+      addProtectionReason(releaseIds, snapshot.snapshot.releaseId, `retained_activation_snapshot:${snapshot.snapshot.activationId}`);
+      kept.push(activationSnapshotRecord({
+        name: snapshot.name,
+        snapshotPath: snapshot.path,
+        snapshot: snapshot.snapshot,
+        stat: snapshot.stat,
+        nowMs,
+        reason: 'retained_activation_snapshot',
+      }));
+    } else {
+      removable.push(activationSnapshotRecord({
+        name: snapshot.name,
+        snapshotPath: snapshot.path,
+        snapshot: snapshot.snapshot,
+        stat: snapshot.stat,
+        nowMs,
+        reason: 'old_activation_snapshot',
+      }));
+    }
+  }
+
+  return {
+    releaseIds,
+    warnings,
+    reliable,
+    activationSnapshots: deepFreeze({
+      kept: deepFreeze(kept),
+      removable: deepFreeze(removable),
+      invalid: deepFreeze(invalid),
+    }),
+  };
 };
 
 const readCanonicalReleaseManifest = (releaseRoot, expectedReleaseId) => {
@@ -934,6 +1088,224 @@ const inspectDependencyGarbage = ({
   return deepFreeze(byComponent);
 };
 
+const optionalRealDirectoryState = ({ directoryPath }) => {
+  try {
+    const stat = lstatSync(directoryPath, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      return { ok: false, missing: false, stat, reason: 'not_a_real_directory' };
+    }
+    if (!pathsEqual(realpathSync.native(directoryPath), directoryPath)) {
+      return { ok: false, missing: false, stat, reason: 'resolves_through_link' };
+    }
+    return { ok: true, missing: false, stat, reason: null };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { ok: false, missing: true, stat: null, reason: 'missing' };
+    throw error;
+  }
+};
+
+const inspectRunningRequestIds = ({ paths, warnings }) => {
+  if (typeof paths.runningRequests !== 'string' || !path.isAbsolute(paths.runningRequests)) {
+    warnings.push('Running request root is unavailable; staging cleanup was skipped');
+    return null;
+  }
+  const runningState = optionalRealDirectoryState({ directoryPath: paths.runningRequests });
+  if (!runningState.ok) {
+    warnings.push(`Running request root is ${runningState.reason}; staging cleanup was skipped: ${paths.runningRequests}`);
+    return null;
+  }
+  const runningRequestIds = new Set();
+  for (const name of readdirSync(paths.runningRequests).sort()) {
+    if (!name.endsWith('.json')) continue;
+    const requestId = name.slice(0, -'.json'.length);
+    if (REQUEST_ID_PATTERN.test(requestId)) runningRequestIds.add(requestId);
+  }
+  return runningRequestIds;
+};
+
+const inspectStagingGarbage = ({
+  paths,
+  policy,
+  nowMs,
+  warnings,
+}) => {
+  if (typeof paths.stagingRoot !== 'string' || !path.isAbsolute(paths.stagingRoot)) {
+    return deepFreeze({
+      root: paths.stagingRoot ?? null,
+      kept: [],
+      removable: [],
+      invalid: [],
+      skipped: true,
+      reason: 'staging_root_unavailable',
+    });
+  }
+  const stagingState = optionalRealDirectoryState({ directoryPath: paths.stagingRoot });
+  if (stagingState.missing) {
+    return deepFreeze({
+      root: paths.stagingRoot,
+      kept: [],
+      removable: [],
+      invalid: [],
+      skipped: true,
+      reason: 'staging_root_missing',
+    });
+  }
+  if (!stagingState.ok) {
+    warnings.push(`Staging root is unsafe; staging cleanup was skipped: ${paths.stagingRoot}`);
+    return deepFreeze({
+      root: paths.stagingRoot,
+      kept: [],
+      removable: [],
+      invalid: [],
+      skipped: true,
+      reason: stagingState.reason,
+    });
+  }
+
+  const runningRequestIds = inspectRunningRequestIds({ paths, warnings });
+  const kept = [];
+  const removable = [];
+  const invalid = [];
+  for (const name of readdirSync(paths.stagingRoot).sort()) {
+    const stagingPath = path.join(paths.stagingRoot, name);
+    let stat;
+    try {
+      stat = lstatSync(stagingPath, { bigint: true });
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!REQUEST_ID_PATTERN.test(name)) {
+      invalid.push(deepFreeze({ name, path: stagingPath, reason: 'unrecognized_staging_directory_name' }));
+      continue;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      invalid.push(deepFreeze({ name, path: stagingPath, reason: 'not_a_real_directory' }));
+      continue;
+    }
+    const ageMs = entryAgeMs({ stat, nowMs });
+    const running = runningRequestIds?.has(name) ?? false;
+    const record = deepFreeze({
+      name,
+      path: stagingPath,
+      ageMs,
+      running,
+      reason: running
+        ? 'running_request_staging'
+        : (runningRequestIds === null ? 'running_state_unavailable' : 'finished_or_abandoned_staging'),
+    });
+    if (runningRequestIds !== null && !running && ageMs >= policy.stagingRetentionMs) {
+      removable.push(record);
+    } else {
+      kept.push(record);
+    }
+  }
+  return deepFreeze({
+    root: paths.stagingRoot,
+    kept: deepFreeze(kept),
+    removable: deepFreeze(removable),
+    invalid: deepFreeze(invalid),
+    skipped: false,
+    reason: null,
+  });
+};
+
+const inspectSourceMapGarbage = ({
+  layout,
+  keptReleaseIds,
+  policy,
+  nowMs,
+  warnings,
+}) => {
+  const sourceMapsRoot = path.join(layout.persistentRoot, 'source-maps');
+  const sourceMapState = optionalRealDirectoryState({ directoryPath: sourceMapsRoot });
+  if (sourceMapState.missing) {
+    return deepFreeze({
+      root: sourceMapsRoot,
+      kept: [],
+      removable: [],
+      invalid: [],
+      skipped: true,
+      reason: 'source_maps_root_missing',
+    });
+  }
+  if (!sourceMapState.ok) {
+    warnings.push(`Source-map root is unsafe; source-map cleanup was skipped: ${sourceMapsRoot}`);
+    return deepFreeze({
+      root: sourceMapsRoot,
+      kept: [],
+      removable: [],
+      invalid: [],
+      skipped: true,
+      reason: sourceMapState.reason,
+    });
+  }
+
+  const candidates = [];
+  const invalid = [];
+  for (const name of readdirSync(sourceMapsRoot).sort()) {
+    const sourceMapPath = path.join(sourceMapsRoot, name);
+    let stat;
+    try {
+      stat = lstatSync(sourceMapPath, { bigint: true });
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!RELEASE_ID_PATTERN.test(name)) {
+      invalid.push(deepFreeze({ releaseId: name, path: sourceMapPath, reason: 'unrecognized_source_map_directory_name' }));
+      continue;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      invalid.push(deepFreeze({ releaseId: name, path: sourceMapPath, reason: 'not_a_real_directory' }));
+      continue;
+    }
+    candidates.push(deepFreeze({
+      releaseId: name,
+      path: sourceMapPath,
+      timestampMs: Number(stat.mtimeMs),
+      ageMs: entryAgeMs({ stat, nowMs }),
+    }));
+  }
+
+  const newestUnprotected = new Set();
+  candidates
+    .filter((candidate) => !keptReleaseIds.has(candidate.releaseId))
+    .sort((left, right) => right.timestampMs - left.timestampMs || right.releaseId.localeCompare(left.releaseId))
+    .slice(0, policy.minimumRetainedSourceMapReleases)
+    .forEach((candidate) => newestUnprotected.add(candidate.releaseId));
+
+  const kept = [];
+  const removable = [];
+  for (const candidate of candidates) {
+    const protectedByRelease = keptReleaseIds.has(candidate.releaseId);
+    const retainedAsRecent = candidate.ageMs < policy.sourceMapRetentionMs;
+    const retainedAsMinimum = newestUnprotected.has(candidate.releaseId);
+    const record = deepFreeze({
+      releaseId: candidate.releaseId,
+      path: candidate.path,
+      ageMs: candidate.ageMs,
+      protected: protectedByRelease,
+      reason: protectedByRelease
+        ? 'retained_release_source_maps'
+        : (retainedAsMinimum
+          ? 'minimum_retained_source_map_release'
+          : (retainedAsRecent ? 'recent_source_map_release' : 'old_source_map_release')),
+    });
+    if (protectedByRelease || retainedAsMinimum || retainedAsRecent) kept.push(record);
+    else removable.push(record);
+  }
+
+  return deepFreeze({
+    root: sourceMapsRoot,
+    kept: deepFreeze(kept),
+    removable: deepFreeze(removable),
+    invalid: deepFreeze(invalid),
+    skipped: false,
+    reason: null,
+  });
+};
+
 export const planManagedReleaseGarbageCollection = ({
   trustedLayout = PRODUCTION_RELEASE_LAYOUT,
   paths = HOST_DEPLOY_PATHS,
@@ -962,7 +1334,12 @@ export const planManagedReleaseGarbageCollection = ({
     for (const reason of reasons) addProtectionReason(protectedReleaseReasons, releaseId, reason);
   }
 
-  const snapshotProtections = readActivationSnapshotProtections({ layout, paths });
+  const snapshotProtections = readActivationSnapshotProtections({
+    layout,
+    paths,
+    policy,
+    nowMs,
+  });
   warnings.push(...snapshotProtections.warnings);
   for (const [releaseId, reasons] of snapshotProtections.releaseIds) {
     for (const reason of reasons) addProtectionReason(protectedReleaseReasons, releaseId, reason);
@@ -1011,6 +1388,20 @@ export const planManagedReleaseGarbageCollection = ({
     nowMs,
     dependencyProtectionComplete,
   });
+  const keptReleaseIds = new Set(keptReleases.map((release) => release.releaseId));
+  const staging = inspectStagingGarbage({
+    paths,
+    policy,
+    nowMs,
+    warnings,
+  });
+  const sourceMaps = inspectSourceMapGarbage({
+    layout,
+    keptReleaseIds,
+    policy,
+    nowMs,
+    warnings,
+  });
 
   return deepFreeze({
     schemaVersion: 1,
@@ -1034,6 +1425,9 @@ export const planManagedReleaseGarbageCollection = ({
       invalid: deepFreeze(inventory.invalid),
     }),
     dependencies,
+    activationSnapshots: snapshotProtections.activationSnapshots,
+    staging,
+    sourceMaps,
   });
 };
 
@@ -1063,6 +1457,22 @@ const removeSafeDirectoryTree = ({ targetPath, trustedParent, label }) => {
   return deepFreeze({ path: resolvedTarget, removed: true });
 };
 
+const removeSafeRegularFile = ({ targetPath, trustedParent, label }) => {
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedParent = path.resolve(trustedParent);
+  if (!isWithin(resolvedParent, resolvedTarget) || pathsEqual(resolvedParent, resolvedTarget)) {
+    fail(`${label} deletion target escapes or equals its trusted parent`);
+  }
+  const stat = lstatSync(resolvedTarget, { bigint: true });
+  if (!stat.isFile() || stat.isSymbolicLink()) fail(`${label} deletion target is not a real file`);
+  if (!pathsEqual(realpathSync.native(resolvedTarget), resolvedTarget)) {
+    fail(`${label} deletion target resolves through a link`);
+  }
+  unlinkSync(resolvedTarget);
+  fsyncDirectory(resolvedParent);
+  return deepFreeze({ path: resolvedTarget, removed: true });
+};
+
 export const runManagedReleaseGarbageCollection = ({
   trustedLayout = PRODUCTION_RELEASE_LAYOUT,
   paths = HOST_DEPLOY_PATHS,
@@ -1084,8 +1494,18 @@ export const runManagedReleaseGarbageCollection = ({
     releases: [],
     dependencies: Object.fromEntries(COMPONENT_NAMES.map((component) => [component, []])),
     partialDependencies: Object.fromEntries(COMPONENT_NAMES.map((component) => [component, []])),
+    activationSnapshots: [],
+    staging: [],
+    sourceMaps: [],
   };
   if (!dryRun) {
+    for (const snapshot of plan.activationSnapshots.removable) {
+      removed.activationSnapshots.push(removeSafeRegularFile({
+        targetPath: snapshot.path,
+        trustedParent: paths.stateRoot,
+        label: `Activation snapshot ${snapshot.name}`,
+      }));
+    }
     for (const release of plan.releases.removable) {
       removed.releases.push(removeSafeDirectoryTree({
         targetPath: release.path,
@@ -1110,6 +1530,20 @@ export const runManagedReleaseGarbageCollection = ({
         }));
       }
     }
+    for (const stagingDirectory of plan.staging.removable) {
+      removed.staging.push(removeSafeDirectoryTree({
+        targetPath: stagingDirectory.path,
+        trustedParent: plan.staging.root,
+        label: `Staging directory ${stagingDirectory.name}`,
+      }));
+    }
+    for (const sourceMapDirectory of plan.sourceMaps.removable) {
+      removed.sourceMaps.push(removeSafeDirectoryTree({
+        targetPath: sourceMapDirectory.path,
+        trustedParent: plan.sourceMaps.root,
+        label: `Source-map directory ${sourceMapDirectory.releaseId}`,
+      }));
+    }
   }
   return deepFreeze({
     schemaVersion: 1,
@@ -1126,6 +1560,9 @@ export const runManagedReleaseGarbageCollection = ({
         component,
         deepFreeze(removed.partialDependencies[component]),
       ]))),
+      activationSnapshots: deepFreeze(removed.activationSnapshots),
+      staging: deepFreeze(removed.staging),
+      sourceMaps: deepFreeze(removed.sourceMaps),
     }),
   });
 };
