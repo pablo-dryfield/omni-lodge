@@ -26,7 +26,7 @@ const VALUE_OPTIONS = [
 ];
 
 const TERMINAL_LIFECYCLES = new Set(['succeeded', 'failed', 'rejected']);
-const RETRYABLE_RESPONSE_CODES = new Set(['STATUS_NOT_FOUND', 'HOST_BUSY']);
+const RETRYABLE_RESPONSE_CODES = new Set(['STATUS_NOT_FOUND', 'HOST_BUSY', 'REQUEST_FAILED']);
 const DEFAULT_SSH_COMMAND = 'omnilodge-deploy-v1';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
