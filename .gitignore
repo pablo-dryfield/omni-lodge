@@ -109,6 +109,10 @@ dist
 .temp
 .cache
 
+# Generated OmniLodge browser UI build. Production uses GitHub Actions release
+# artifacts, not Git-tracked bundles.
+/ui/build/
+
 # Docusaurus cache and generated files
 .docusaurus
 
