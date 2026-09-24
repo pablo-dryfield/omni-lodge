@@ -12,9 +12,20 @@
 
 ## Codex Cloud operating rules
 
-- Codex Cloud work should use normal GitHub branches and pull requests. Do not depend on files that only exist on Pablo's local machine unless the task explicitly supplies them.
-- Codex Cloud production access is intentionally read-only by default. Use the dedicated `codex_cloud_reader` database role through the restricted `omnilodge-codex-db-tunnel` SSH tunnel when production data inspection is needed.
-- The production DB tunnel must be configured through Codex Cloud environment secrets/variables; never commit SSH keys, database passwords, generated `.env` files, or copied production data.
-- Use `scripts/codex/open-production-db-tunnel.sh check` to open and verify the read-only production DB tunnel from a cloud environment when direct SSH is reachable.
-- If Codex Cloud reports `ssh: connect to host 23.95.192.213 port 22: Network is unreachable`, treat it as a network-route limitation rather than a secret or database-password issue. Do not expose PostgreSQL directly; use a local/trusted environment or implement a separate HTTPS/443 protected production-read connector.
+- Codex Cloud implementation, fix, refactor, and documentation-change tasks must use a same-repository branch named `codex/<short-kebab-description>` based on the latest `origin/master`, then open a pull request into `master`. Do not commit directly to `master`.
+- The GitHub automation is intentionally scoped to this structure: CI runs on pushes to `codex/**`, and same-repository `codex/*` pull requests into `master` are eligible for squash auto-merge after required checks pass.
+- Before opening the PR, run relevant local checks for the touched areas and include the exact commands/results in the PR description or final task summary. Use `.github/workflows/ci.yml` as the source of truth for the full CI matrix:
+  - backend changes: `npm --prefix be run check` and `npm --prefix be test -- --runInBand`;
+  - UI changes: `npm --prefix ui run check` and `CI=true npm --prefix ui test -- --watchAll=false`;
+  - UI server changes: `npm --prefix ui-server test`;
+  - release/deploy/ops changes: run the relevant `node --test ...` suite from the `CI / release tooling` job;
+  - docs-only changes: at minimum run `git diff --check`.
+- If a check cannot run in Codex Cloud, do not hide it. Report the exact command, failure/blocker, and why the PR is still safe for GitHub Actions to validate.
+- PRs should be ready for review/merge, not draft, unless the task is intentionally incomplete or blocked. Keep PRs focused and do not commit generated outputs such as `ui/build` or `be/dist`.
+- Read-only investigation/report tasks do not need a branch or PR unless they produce repository file changes.
+- Codex Cloud production access is intentionally read-only by default. Use the Cloudflare Access-protected HTTPS production read connector with `scripts/codex/query-production-read-api.sh` when production database context is needed.
+- The production read connector is configured through Codex Cloud environment secrets/variables; never commit connector bearer tokens, Cloudflare Access service-token credentials, SSH keys, database passwords, generated `.env` files, or copied production data.
+- Use `scripts/codex/query-production-read-api.sh health` to verify production read access from Codex Cloud. The helper uses `PROD_READ_API_URL`, `PROD_READ_API_TOKEN`, `CLOUDFLARE_ACCESS_CLIENT_ID`, and `CLOUDFLARE_ACCESS_CLIENT_SECRET`.
+- The legacy `scripts/codex/open-production-db-tunnel.sh check` SSH tunnel helper is only a local/trusted-environment fallback when direct SSH is reachable. Raw SSH to production is not the expected Codex Cloud path.
+- If Codex Cloud reports `ssh: connect to host 23.95.192.213 port 22: Network is unreachable`, treat it as a known raw-SSH network-route limitation. Do not expose PostgreSQL directly; use the HTTPS/443 production read connector instead.
 - Production deployments should still happen through the GitHub Actions release/deploy workflow. Do not SSH into production from Codex Cloud for deploys unless a future task explicitly provisions and authorizes that maintenance path.
