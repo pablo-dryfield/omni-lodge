@@ -582,6 +582,7 @@ const PaymentLinksPage = () => {
   const [items, setItems] = useState<CartItemDraft[]>([emptyItem()]);
   const [bankTransferCustomerConfirmation, setBankTransferCustomerConfirmation] = useState(true);
   const [bankTransferInternalConfirmation, setBankTransferInternalConfirmation] = useState(true);
+  const [bankTransferAllowPastDates, setBankTransferAllowPastDates] = useState(false);
   const [receivingOrder, setReceivingOrder] = useState<BankTransferOrder | null>(null);
   const [paymentReference, setPaymentReference] = useState("");
   const [paymentNote, setPaymentNote] = useState("");
@@ -729,6 +730,7 @@ const PaymentLinksPage = () => {
   const creatorProducts = creatorMode === "bank-transfer"
     ? bankTransferProducts
     : paymentLinkProducts;
+  const todayDate = dayjs().format("YYYY-MM-DD");
   const productById = useMemo(
     () => new Map(creatorProducts.map((product) => [product.id, product])),
     [creatorProducts],
@@ -742,6 +744,7 @@ const PaymentLinksPage = () => {
     setItems([emptyItem()]);
     setBankTransferCustomerConfirmation(true);
     setBankTransferInternalConfirmation(true);
+    setBankTransferAllowPastDates(false);
     setQuote(null);
     setFormError("");
     setClientRequestId(createClientRequestId());
@@ -785,6 +788,17 @@ const PaymentLinksPage = () => {
 
   const updateItem = (key: string, patch: Partial<CartItemDraft>) => {
     setItems((current) => current.map((item) => item.key === key ? { ...item, ...patch } : item));
+    setQuote(null);
+  };
+
+  const updateBankTransferAllowPastDates = (enabled: boolean) => {
+    setBankTransferAllowPastDates(enabled);
+    if (enabled) return;
+    setItems((current) => current.map((item) => (
+      item.experienceDate && item.experienceDate < todayDate
+        ? { ...item, experienceDate: "" }
+        : item
+    )));
     setQuote(null);
   };
 
@@ -2013,6 +2027,17 @@ const PaymentLinksPage = () => {
                   />
                 </Stack>
               </Paper>
+              <Paper withBorder radius="md" p="md">
+                <Stack gap="xs">
+                  <Text fw={700}>Date options</Text>
+                  <Switch
+                    label="Allow past experience dates"
+                    description="Use this when creating a booking later for an experience that already happened."
+                    checked={bankTransferAllowPastDates}
+                    onChange={(event) => updateBankTransferAllowPastDates(event.currentTarget.checked)}
+                  />
+                </Stack>
+              </Paper>
               {bankTransferCatalogLoading && (
                 <Group justify="center" gap="sm">
                   <Loader size="sm" />
@@ -2058,7 +2083,14 @@ const PaymentLinksPage = () => {
                   {product && (
                     <>
                       <SimpleGrid cols={{ base: 1, sm: 3 }}>
-                        <TextInput label="Date" type="date" min={dayjs().format("YYYY-MM-DD")} value={item.experienceDate} onChange={(event) => updateItem(item.key, { experienceDate: event.currentTarget.value })} required={product.config.dateRequired} />
+                        <TextInput
+                          label="Date"
+                          type="date"
+                          min={creatorMode === "bank-transfer" && bankTransferAllowPastDates ? undefined : todayDate}
+                          value={item.experienceDate}
+                          onChange={(event) => updateItem(item.key, { experienceDate: event.currentTarget.value })}
+                          required={product.config.dateRequired}
+                        />
                         {product.config.timeMode === "select" ? (
                           <Select label="Start time" data={(product.config.startTimes || []).map((time) => ({ value: time, label: time }))} value={item.experienceTime || null} onChange={(value) => updateItem(item.key, { experienceTime: value || "" })} />
                         ) : (
