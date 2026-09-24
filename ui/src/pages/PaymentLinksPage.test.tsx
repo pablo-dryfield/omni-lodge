@@ -78,6 +78,10 @@ const awaitingOrder = {
   customerEmailSentAt: null,
   internalEmailSentAt: null,
   confirmationEmailComplete: false,
+  notificationPreferences: {
+    customerConfirmation: true,
+    internalConfirmation: true,
+  },
   bankTransferInstructionsEmailSentAt: "2026-09-07T10:01:00.000Z",
   bankTransferCancellationEmailSentAt: null,
   cancellationReason: null,
@@ -152,9 +156,12 @@ describe("PaymentLinksPage bank transfer bookings", () => {
   it("opens the bank transfer creator from its URL action and consumes the action", async () => {
     renderPage("/bookings/payment-links?tab=bank-transfers&action=create-bank-transfer");
 
-    expect(await screen.findByRole("dialog", { name: "Create bank transfer booking" })).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Create bank transfer booking" });
+    expect(dialog).toBeInTheDocument();
     expect(screen.getByLabelText(/Full name/)).toBeRequired();
     expect(screen.getByLabelText(/Email/)).toBeRequired();
+    expect(within(dialog).getByRole("switch", { name: /Send customer booking confirmation/ })).toBeChecked();
+    expect(within(dialog).getByRole("switch", { name: /Send internal OmniLodge notification/ })).toBeChecked();
     await waitFor(() => {
       const query = new URLSearchParams(screen.getByTestId("location-search").textContent || "");
       expect(query.has("action")).toBe(false);
@@ -178,7 +185,7 @@ describe("PaymentLinksPage bank transfer bookings", () => {
     renderPage("/bookings/payment-links?tab=bank-transfers&action=create-bank-transfer");
 
     const dialog = await screen.findByRole("dialog", { name: "Create bank transfer booking" });
-    expect(within(dialog).getByRole("button", { name: "Create booking & send email" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "Create booking" })).toBeEnabled();
     expect((await screen.findAllByText("Ada Guest")).length).toBeGreaterThan(0);
   });
 
@@ -231,10 +238,12 @@ describe("PaymentLinksPage bank transfer bookings", () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Mark received" }));
-    expect(await screen.findByRole("dialog", { name: "Confirm payment received" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/Payment reference/), { target: { value: "BANK-8841" } });
-    fireEvent.change(screen.getByLabelText(/Internal note/), { target: { value: "Visible in PLN account" } });
-    fireEvent.click(screen.getByRole("button", { name: "Confirm payment received" }));
+    const dialog = await screen.findByRole("dialog", { name: "Confirm payment received" });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("switch", { name: "Customer booking confirmation" }));
+    fireEvent.change(within(dialog).getByLabelText(/Payment reference/), { target: { value: "BANK-8841" } });
+    fireEvent.change(within(dialog).getByLabelText(/Internal note/), { target: { value: "Visible in PLN account" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm payment received" }));
 
     await waitFor(() => {
       expect(mockPatch).toHaveBeenCalledWith(
@@ -243,6 +252,10 @@ describe("PaymentLinksPage bank transfer bookings", () => {
           paymentReference: "BANK-8841",
           note: "Visible in PLN account",
           clientRequestId: expect.any(String),
+          notifications: {
+            customerConfirmation: false,
+            internalConfirmation: true,
+          },
         }),
       );
     });

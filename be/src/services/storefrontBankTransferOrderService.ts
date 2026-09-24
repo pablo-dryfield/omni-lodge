@@ -13,7 +13,6 @@ import User from '../models/User.js';
 import { fulfillPaidOrder } from '../controllers/storefrontCommerceController.js';
 import {
   quoteStorefrontCart,
-  STOREFRONT_CURRENCY,
   type StorefrontCartInput,
   type StorefrontQuote,
 } from './storefrontCommerceService.js';
@@ -35,7 +34,9 @@ import {
   deliverStorefrontBankTransferCancellationEmail,
   deliverStorefrontBankTransferInstructionsEmail,
   deliverStorefrontOrderEmails,
+  getStorefrontOrderConfirmationNotificationPreferences,
   isStorefrontOrderConfirmationEmailComplete,
+  type StorefrontConfirmationNotificationPreferences,
 } from './storefrontOrderEmailService.js';
 import logger from '../utils/logger.js';
 
@@ -57,6 +58,7 @@ export type CreateBankTransferOrderInput = {
   clientRequestId: unknown;
   customer: unknown;
   cart: unknown;
+  notifications?: unknown;
 };
 
 export type ReceiveBankTransferOrderInput = {
@@ -66,6 +68,7 @@ export type ReceiveBankTransferOrderInput = {
   paymentReference?: unknown;
   note?: unknown;
   clientRequestId?: unknown;
+  notifications?: unknown;
 };
 
 export type CancelBankTransferOrderInput = {
@@ -83,6 +86,59 @@ const asRecord = (value: unknown): Record<string, unknown> | null => (
     ? value as Record<string, unknown>
     : null
 );
+
+const booleanPreference = (
+  source: Record<string, unknown> | null,
+  keys: string[],
+  fallback: boolean,
+): boolean => {
+  if (!source) return fallback;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = source[key];
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+    }
+    return Boolean(value);
+  }
+  return fallback;
+};
+
+const parseNotificationPreferences = (
+  value: unknown,
+): StorefrontConfirmationNotificationPreferences => {
+  const source = asRecord(value);
+  return {
+    customerConfirmation: booleanPreference(
+      source,
+      ['customerConfirmation', 'customerConfirmationEnabled', 'sendCustomerConfirmation', 'customer'],
+      true,
+    ),
+    internalConfirmation: booleanPreference(
+      source,
+      ['internalConfirmation', 'internalConfirmationEnabled', 'sendInternalConfirmation', 'internal'],
+      true,
+    ),
+  };
+};
+
+const maybeParseNotificationPreferences = (
+  value: unknown,
+): StorefrontConfirmationNotificationPreferences | null => {
+  if (value === undefined) return null;
+  return parseNotificationPreferences(value);
+};
+
+const metadataWithNotificationPreferences = (
+  metadata: Record<string, unknown> | null | undefined,
+  preferences: StorefrontConfirmationNotificationPreferences,
+): Record<string, unknown> => ({
+  ...(metadata || {}),
+  confirmationNotifications: preferences,
+});
 
 const parseUuid = (value: unknown, label: string): string => {
   const normalized = (typeof value === 'string' ? value : '').trim().toLowerCase();
@@ -138,9 +194,13 @@ const stableValue = (value: unknown): unknown => {
   }, {});
 };
 
-const requestHash = (customer: BankTransferCustomer, cart: unknown): string =>
+const requestHash = (
+  customer: BankTransferCustomer,
+  cart: unknown,
+  notifications: StorefrontConfirmationNotificationPreferences,
+): string =>
   createHash('sha256')
-    .update(JSON.stringify(stableValue({ customer, cart })))
+    .update(JSON.stringify(stableValue({ customer, cart, notifications })))
     .digest('hex');
 
 const paymentReference = (orderId: number): string => `KTK-BT-${String(orderId).padStart(6, '0')}`;
@@ -231,6 +291,7 @@ const createOrderTransaction = async (
   customer: BankTransferCustomer,
   cart: StorefrontCartInput,
   allowedProductTypeIds: number[] | null,
+  notificationPreferences: StorefrontConfirmationNotificationPreferences,
 ): Promise<{ order: StorefrontOrder; created: boolean }> => sequelize.transaction(async (transaction) => {
   const existing = await findIdempotentOrder(clientRequestId, hash, transaction);
   if (existing) return { order: existing, created: false };
@@ -286,6 +347,7 @@ const createOrderTransaction = async (
       discountCodes: quote.discountCodes,
       discounts: quote.discounts,
       cart: normalizedCart,
+      confirmationNotifications: notificationPreferences,
     },
     createdByUserId: actorId,
     paymentDueAt: dueAt,
@@ -364,66 +426,70 @@ const serializeOrders = async (orders: StorefrontOrder[]) => {
     return { id: Number(id), fullName: user ? `${user.firstName} ${user.lastName}`.trim() : `User #${id}` };
   };
 
-  return orders.map((order) => ({
-    publicId: order.publicId,
-    status: order.status === 'cancelled'
-      ? 'cancelled'
-      : order.paymentStatus === 'paid'
-        ? 'payment_received'
-        : 'awaiting_transfer',
-    paymentStatus: order.paymentStatus,
-    paymentMethod: order.paymentMethod,
-    paymentReference: order.paymentReference,
-    paymentDueAt: order.paymentDueAt,
-    subtotal: Number(order.subtotal),
-    addonTotal: Number(order.addonTotal),
-    discountTotal: Number(order.discountTotal),
-    total: Number(order.total),
-    currency: order.currency,
-    customer: {
-      fullName: `${order.customerFirstName} ${order.customerLastName}`.trim(),
-      firstName: order.customerFirstName,
-      lastName: order.customerLastName,
-      email: order.customerEmail,
-      phone: order.customerPhone,
-      phoneCountry: order.customerCountryCode,
-      countryCode: order.customerCountryCode,
-    },
-    items: (order.items || []).map((item) => ({
-      bookingId: bookingIds.get(`${order.publicId}-${item.id}`) ?? null,
-      productId: item.productId,
-      productName: item.productName,
-      productSlug: item.productSlug,
-      quantity: item.quantity,
-      experienceDate: item.experienceDate,
-      experienceTime: item.experienceTime,
-      unitPrice: Number(item.unitPrice),
-      baseTotal: Number(item.baseTotal),
-      addonTotal: Number(item.addonTotal),
-      total: Number(item.total),
-      addons: item.addons,
-      options: item.options,
-    })),
-    createdBy: actor(order.createdByUserId),
-    receivedBy: actor(order.paymentReceivedByUserId),
-    createdAt: order.createdAt,
-    paidAt: order.paidAt,
-    customerEmailSentAt: order.customerEmailSentAt,
-    internalEmailSentAt: order.internalEmailSentAt,
-    confirmationEmailComplete: isStorefrontOrderConfirmationEmailComplete(order),
-    bankTransferInstructionsEmailSentAt: order.bankTransferEmailSentAt,
-    bankTransferCancellationEmailSentAt: order.bankTransferCancellationEmailSentAt,
-    cancellationReason: typeof order.metadata?.bankTransferCancellationReason === 'string'
-      ? order.metadata.bankTransferCancellationReason
-      : null,
-    cancelledAt: typeof order.metadata?.bankTransferCancelledAt === 'string'
-      ? order.metadata.bankTransferCancelledAt
-      : null,
-    receivedPaymentReference: typeof order.metadata?.receivedPaymentReference === 'string'
-      ? order.metadata.receivedPaymentReference
-      : null,
-    paymentNote: order.paymentNote,
-  }));
+  return orders.map((order) => {
+    const notificationPreferences = getStorefrontOrderConfirmationNotificationPreferences(order);
+    return {
+      publicId: order.publicId,
+      status: order.status === 'cancelled'
+        ? 'cancelled'
+        : order.paymentStatus === 'paid'
+          ? 'payment_received'
+          : 'awaiting_transfer',
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      paymentReference: order.paymentReference,
+      paymentDueAt: order.paymentDueAt,
+      subtotal: Number(order.subtotal),
+      addonTotal: Number(order.addonTotal),
+      discountTotal: Number(order.discountTotal),
+      total: Number(order.total),
+      currency: order.currency,
+      customer: {
+        fullName: `${order.customerFirstName} ${order.customerLastName}`.trim(),
+        firstName: order.customerFirstName,
+        lastName: order.customerLastName,
+        email: order.customerEmail,
+        phone: order.customerPhone,
+        phoneCountry: order.customerCountryCode,
+        countryCode: order.customerCountryCode,
+      },
+      items: (order.items || []).map((item) => ({
+        bookingId: bookingIds.get(`${order.publicId}-${item.id}`) ?? null,
+        productId: item.productId,
+        productName: item.productName,
+        productSlug: item.productSlug,
+        quantity: item.quantity,
+        experienceDate: item.experienceDate,
+        experienceTime: item.experienceTime,
+        unitPrice: Number(item.unitPrice),
+        baseTotal: Number(item.baseTotal),
+        addonTotal: Number(item.addonTotal),
+        total: Number(item.total),
+        addons: item.addons,
+        options: item.options,
+      })),
+      createdBy: actor(order.createdByUserId),
+      receivedBy: actor(order.paymentReceivedByUserId),
+      createdAt: order.createdAt,
+      paidAt: order.paidAt,
+      customerEmailSentAt: order.customerEmailSentAt,
+      internalEmailSentAt: order.internalEmailSentAt,
+      confirmationEmailComplete: isStorefrontOrderConfirmationEmailComplete(order),
+      notificationPreferences,
+      bankTransferInstructionsEmailSentAt: order.bankTransferEmailSentAt,
+      bankTransferCancellationEmailSentAt: order.bankTransferCancellationEmailSentAt,
+      cancellationReason: typeof order.metadata?.bankTransferCancellationReason === 'string'
+        ? order.metadata.bankTransferCancellationReason
+        : null,
+      cancelledAt: typeof order.metadata?.bankTransferCancelledAt === 'string'
+        ? order.metadata.bankTransferCancelledAt
+        : null,
+      receivedPaymentReference: typeof order.metadata?.receivedPaymentReference === 'string'
+        ? order.metadata.receivedPaymentReference
+        : null,
+      paymentNote: order.paymentNote,
+    };
+  });
 };
 
 export const serializeBankTransferOrder = async (order: StorefrontOrder) =>
@@ -531,6 +597,7 @@ export const listBankTransferOrders = async (
 export const createBankTransferOrder = async (input: CreateBankTransferOrderInput) => {
   const clientRequestId = parseUuid(input.clientRequestId, 'Client request ID');
   const customer = parseCustomer(input.customer);
+  const notificationPreferences = parseNotificationPreferences(input.notifications);
   const cartInput = input.cart as StorefrontCartInput;
   if (!cartInput || !Array.isArray(cartInput.items)) {
     throw new HttpError(400, 'The cart must contain at least one item.');
@@ -539,32 +606,13 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
     throw new HttpError(400, 'One or more cart items are invalid.');
   }
   const cart = addCustomerToSavedCart(cartInput, customer);
-  const hash = requestHash(customer, cart);
+  const hash = requestHash(customer, cart, notificationPreferences);
   const existing = await findIdempotentOrder(clientRequestId, hash);
   if (existing) {
     const order = await loadOrder(existing.publicId);
     await assertProductScope((order.items || []).map((item) => item.productId), input.allowedProductTypeIds);
-    let emailError: string | null = null;
-    if (!order.bankTransferEmailSentAt) {
-      try {
-        await deliverStorefrontBankTransferInstructionsEmail(
-          order.publicId,
-          getStorefrontBankTransferAccount(order.currency),
-        );
-      } catch (error) {
-        emailError = 'The booking already exists, but the bank transfer email could not be sent.';
-        logger.error(
-          `[storefront-email] Idempotent bank-transfer delivery failed for ${order.publicId}: ${(error as Error).message}`,
-        );
-      }
-    }
-    return { order: await loadOrder(order.publicId), created: false, emailError };
+    return { order: await loadOrder(order.publicId), created: false, emailError: null };
   }
-
-  // The storefront currency is canonical today. Resolve configuration before
-  // committing an order so a missing bank account cannot leave an unsendable
-  // reservation in the operations queue.
-  const account = getStorefrontBankTransferAccount(STOREFRONT_CURRENCY);
 
   let result: { order: StorefrontOrder; created: boolean };
   try {
@@ -575,6 +623,7 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
       customer,
       cart,
       input.allowedProductTypeIds,
+      notificationPreferences,
     );
   } catch (error) {
     if (!(error instanceof UniqueConstraintError)) throw error;
@@ -583,19 +632,8 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
     result = { order: concurrent, created: false };
   }
 
-  let emailError: string | null = null;
   const createdOrder = await loadOrder(result.order.publicId);
-  if (!createdOrder.bankTransferEmailSentAt) {
-    try {
-      await deliverStorefrontBankTransferInstructionsEmail(createdOrder.publicId, account);
-    } catch (error) {
-      emailError = 'The booking was created, but the bank transfer email could not be sent.';
-      logger.error(
-        `[storefront-email] Bank-transfer instructions failed for ${createdOrder.publicId}: ${(error as Error).message}`,
-      );
-    }
-  }
-  return { order: await loadOrder(createdOrder.publicId), created: result.created, emailError };
+  return { order: createdOrder, created: result.created, emailError: null };
 };
 
 export const receiveBankTransferOrder = async (input: ReceiveBankTransferOrderInput) => {
@@ -610,6 +648,12 @@ export const receiveBankTransferOrder = async (input: ReceiveBankTransferOrderIn
   }
   if (order.status !== 'pending_payment' || order.paymentStatus !== 'unpaid') {
     throw new HttpError(409, 'This bank transfer order can no longer be marked as paid.');
+  }
+  const notificationPreferences = maybeParseNotificationPreferences(input.notifications);
+  if (notificationPreferences) {
+    await order.update({
+      metadata: metadataWithNotificationPreferences(order.metadata, notificationPreferences),
+    });
   }
   const receivedReference = clean(input.paymentReference, 160) || null;
   const note = clean(input.note, 2000) || null;

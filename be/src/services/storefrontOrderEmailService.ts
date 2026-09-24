@@ -66,6 +66,63 @@ export type StorefrontEmailProductDetails = {
 
 type ProductDetailsByProductId = ReadonlyMap<number, StorefrontEmailProductDetails>;
 
+export type StorefrontConfirmationNotificationPreferences = {
+  customerConfirmation: boolean;
+  internalConfirmation: boolean;
+};
+
+const DEFAULT_CONFIRMATION_NOTIFICATION_PREFERENCES: StorefrontConfirmationNotificationPreferences = {
+  customerConfirmation: true,
+  internalConfirmation: true,
+};
+
+const recordValue = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+
+const booleanPreference = (
+  source: Record<string, unknown> | null,
+  keys: string[],
+  fallback: boolean,
+): boolean => {
+  if (!source) return fallback;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = source[key];
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+    }
+    return Boolean(value);
+  }
+  return fallback;
+};
+
+export const getStorefrontOrderConfirmationNotificationPreferences = (
+  order: Pick<StorefrontOrder, 'metadata'>,
+): StorefrontConfirmationNotificationPreferences => {
+  const metadata = recordValue(order.metadata);
+  const source =
+    recordValue(metadata?.confirmationNotifications)
+    ?? recordValue(metadata?.notificationPreferences)
+    ?? null;
+  return {
+    customerConfirmation: booleanPreference(
+      source,
+      ['customerConfirmation', 'customerConfirmationEnabled', 'sendCustomerConfirmation', 'customer'],
+      DEFAULT_CONFIRMATION_NOTIFICATION_PREFERENCES.customerConfirmation,
+    ),
+    internalConfirmation: booleanPreference(
+      source,
+      ['internalConfirmation', 'internalConfirmationEnabled', 'sendInternalConfirmation', 'internal'],
+      DEFAULT_CONFIRMATION_NOTIFICATION_PREFERENCES.internalConfirmation,
+    ),
+  };
+};
+
 const normalizeTextList = (value: unknown): string[] => (
   Array.isArray(value)
     ? value.map((item) => String(item ?? '').trim()).filter(Boolean)
@@ -642,6 +699,7 @@ export const deliverStorefrontOrderEmails = async (publicId: string): Promise<vo
   await sequelize.transaction(async (transaction) => {
     const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
     if (!order || order.paymentStatus !== 'paid') return;
+    const notificationPreferences = getStorefrontOrderConfirmationNotificationPreferences(order);
 
     const bookings = await Booking.findAll({
       where: { platform: 'omnilodge', platformOrderId: order.publicId },
@@ -672,14 +730,14 @@ export const deliverStorefrontOrderEmails = async (publicId: string): Promise<vo
     );
 
     const from = fromAddress();
-    if (!order.customerEmailSentAt) {
+    if (notificationPreferences.customerConfirmation && !order.customerEmailSentAt) {
       const email = buildCustomerStorefrontEmail(order, bookingIdsByItemId, productDetailsByProductId);
       await sendMessage({ to: order.customerEmail, from, ...email });
       await order.update({ customerEmailSentAt: new Date() }, { transaction });
     }
 
     const internalTo = header(getConfigValue('STOREFRONT_NOTIFICATION_EMAIL'));
-    if (internalTo && !order.internalEmailSentAt) {
+    if (notificationPreferences.internalConfirmation && internalTo && !order.internalEmailSentAt) {
       const email = buildInternalStorefrontEmail(order, bookingIdsByItemId, productDetailsByProductId);
       await sendMessage({ to: internalTo, from, ...email });
       await order.update({ internalEmailSentAt: new Date() }, { transaction });
@@ -691,7 +749,11 @@ export const deliverStorefrontOrderEmails = async (publicId: string): Promise<vo
 
 export const isStorefrontOrderConfirmationEmailComplete = (order: StorefrontOrder): boolean => {
   const internalTo = header(getConfigValue('STOREFRONT_NOTIFICATION_EMAIL'));
-  return Boolean(order.customerEmailSentAt && (!internalTo || order.internalEmailSentAt));
+  const notificationPreferences = getStorefrontOrderConfirmationNotificationPreferences(order);
+  return Boolean(
+    (!notificationPreferences.customerConfirmation || order.customerEmailSentAt)
+    && (!notificationPreferences.internalConfirmation || !internalTo || order.internalEmailSentAt),
+  );
 };
 
 export const deliverStorefrontBankTransferInstructionsEmail = async (

@@ -205,6 +205,10 @@ type BankTransferOrder = {
   customerEmailSentAt: string | null;
   internalEmailSentAt: string | null;
   confirmationEmailComplete: boolean;
+  notificationPreferences?: {
+    customerConfirmation: boolean;
+    internalConfirmation: boolean;
+  };
   bankTransferInstructionsEmailSentAt: string | null;
   bankTransferCancellationEmailSentAt: string | null;
   cancellationReason: string | null;
@@ -471,6 +475,11 @@ const bankTransferDueState = (order: BankTransferOrder): { color: string; label:
   return { color: "dimmed", label: `Due ${dueAt.format("D MMM YYYY, HH:mm")}` };
 };
 
+const bankTransferNotificationPreferences = (order: Pick<BankTransferOrder, "notificationPreferences">) => ({
+  customerConfirmation: order.notificationPreferences?.customerConfirmation !== false,
+  internalConfirmation: order.notificationPreferences?.internalConfirmation !== false,
+});
+
 const bankTransferEmailState = (order: BankTransferOrder): { color: string; label: string } => {
   if (order.status === "cancelled") {
     return order.bankTransferCancellationEmailSentAt
@@ -478,6 +487,10 @@ const bankTransferEmailState = (order: BankTransferOrder): { color: string; labe
       : { color: "orange", label: "Cancellation pending" };
   }
   if (order.status === "payment_received") {
+    const preferences = bankTransferNotificationPreferences(order);
+    if (!preferences.customerConfirmation && !preferences.internalConfirmation) {
+      return { color: "gray", label: "Confirmations off" };
+    }
     return order.confirmationEmailComplete
       ? { color: "green", label: "Confirmation sent" }
       : { color: "orange", label: "Confirmation pending" };
@@ -485,6 +498,13 @@ const bankTransferEmailState = (order: BankTransferOrder): { color: string; labe
   return order.bankTransferInstructionsEmailSentAt
     ? { color: "green", label: "Instructions sent" }
     : { color: "orange", label: "Instructions pending" };
+};
+
+const enabledConfirmationSummary = (customerConfirmation: boolean, internalConfirmation: boolean): string => {
+  if (customerConfirmation && internalConfirmation) return "Customer and internal confirmations were queued automatically.";
+  if (customerConfirmation) return "Customer confirmation was queued automatically.";
+  if (internalConfirmation) return "Internal notification was queued automatically.";
+  return "No confirmations were sent because both notification options were turned off.";
 };
 
 const shortOrderReference = (publicId: string): string => {
@@ -560,9 +580,13 @@ const PaymentLinksPage = () => {
   const [discountCodes, setDiscountCodes] = useState("");
   const [customer, setCustomer] = useState({ fullName: "", email: "", phoneCountry: "", phone: "" });
   const [items, setItems] = useState<CartItemDraft[]>([emptyItem()]);
+  const [bankTransferCustomerConfirmation, setBankTransferCustomerConfirmation] = useState(true);
+  const [bankTransferInternalConfirmation, setBankTransferInternalConfirmation] = useState(true);
   const [receivingOrder, setReceivingOrder] = useState<BankTransferOrder | null>(null);
   const [paymentReference, setPaymentReference] = useState("");
   const [paymentNote, setPaymentNote] = useState("");
+  const [paymentReceivedCustomerConfirmation, setPaymentReceivedCustomerConfirmation] = useState(true);
+  const [paymentReceivedInternalConfirmation, setPaymentReceivedInternalConfirmation] = useState(true);
   const [paymentReceivedRequestId, setPaymentReceivedRequestId] = useState(createClientRequestId);
   const [paymentReceivedSaving, setPaymentReceivedSaving] = useState(false);
   const [paymentReceivedError, setPaymentReceivedError] = useState("");
@@ -716,6 +740,8 @@ const PaymentLinksPage = () => {
     setDiscountCodes("");
     setCustomer({ fullName: "", email: "", phoneCountry: "", phone: "" });
     setItems([emptyItem()]);
+    setBankTransferCustomerConfirmation(true);
+    setBankTransferInternalConfirmation(true);
     setQuote(null);
     setFormError("");
     setClientRequestId(createClientRequestId());
@@ -870,6 +896,10 @@ const PaymentLinksPage = () => {
             },
             cart: cartPayload(),
             clientRequestId,
+            notifications: {
+              customerConfirmation: bankTransferCustomerConfirmation,
+              internalConfirmation: bankTransferInternalConfirmation,
+            },
           },
         );
         setBankTransferOrders((current) => [
@@ -883,7 +913,7 @@ const PaymentLinksPage = () => {
         } : {
           color: "green",
           title: "Booking created",
-          message: `Bank transfer instructions were sent to ${response.data.data.customer.email}.`,
+          message: "The booking was created as Not paid. Mark it Paid to send the enabled confirmations.",
         });
         setModalOpen(false);
         return;
@@ -909,10 +939,13 @@ const PaymentLinksPage = () => {
   };
 
   const openPaymentReceived = (order: BankTransferOrder) => {
+    const preferences = bankTransferNotificationPreferences(order);
     setBankTransferNotice(null);
     setReceivingOrder(order);
     setPaymentReference("");
     setPaymentNote("");
+    setPaymentReceivedCustomerConfirmation(preferences.customerConfirmation);
+    setPaymentReceivedInternalConfirmation(preferences.internalConfirmation);
     setPaymentReceivedRequestId(createClientRequestId());
     setPaymentReceivedError("");
   };
@@ -934,6 +967,10 @@ const PaymentLinksPage = () => {
           ...(paymentReference.trim() ? { paymentReference: paymentReference.trim() } : {}),
           ...(paymentNote.trim() ? { note: paymentNote.trim() } : {}),
           clientRequestId: paymentReceivedRequestId,
+          notifications: {
+            customerConfirmation: paymentReceivedCustomerConfirmation,
+            internalConfirmation: paymentReceivedInternalConfirmation,
+          },
         },
       );
       setBankTransferOrders((current) => current.map((order) => (
@@ -942,7 +979,10 @@ const PaymentLinksPage = () => {
       setBankTransferNotice({
         color: "green",
         title: "Payment recorded",
-        message: `${response.data.data.customer.fullName}'s booking is now paid.`,
+        message: `${response.data.data.customer.fullName}'s booking is now paid. ${enabledConfirmationSummary(
+          paymentReceivedCustomerConfirmation,
+          paymentReceivedInternalConfirmation,
+        )}`,
       });
       setReceivingOrder(null);
     } catch (requestError) {
@@ -1954,8 +1994,25 @@ const PaymentLinksPage = () => {
           {creatorMode === "bank-transfer" ? (
             <>
               <Alert color="blue" icon={<IconBuildingBank size={18} />}>
-                The booking is reserved immediately. The customer receives the booking summary and bank transfer instructions by email.
+                The booking is reserved immediately as Not paid. Final confirmations are sent only after you mark payment received.
               </Alert>
+              <Paper withBorder radius="md" p="md">
+                <Stack gap="xs">
+                  <Text fw={700}>Final confirmation after payment</Text>
+                  <Switch
+                    label="Send customer booking confirmation"
+                    description="Only sent when this booking is marked Paid."
+                    checked={bankTransferCustomerConfirmation}
+                    onChange={(event) => setBankTransferCustomerConfirmation(event.currentTarget.checked)}
+                  />
+                  <Switch
+                    label="Send internal OmniLodge notification"
+                    description="Only sent when this booking is marked Paid."
+                    checked={bankTransferInternalConfirmation}
+                    onChange={(event) => setBankTransferInternalConfirmation(event.currentTarget.checked)}
+                  />
+                </Stack>
+              </Paper>
               {bankTransferCatalogLoading && (
                 <Group justify="center" gap="sm">
                   <Loader size="sm" />
@@ -2146,7 +2203,7 @@ const PaymentLinksPage = () => {
                 : paymentLinkCatalogLoading || Boolean(paymentLinkCatalogError)}
               onClick={() => void create()}
             >
-              {creatorMode === "bank-transfer" ? "Create booking & send email" : "Create and copy link"}
+              {creatorMode === "bank-transfer" ? "Create booking" : "Create and copy link"}
             </Button>
           </Group>
         </Stack>
@@ -2179,8 +2236,24 @@ const PaymentLinksPage = () => {
             </Paper>
 
             <Alert color="blue" icon={<IconCircleCheck size={18} />}>
-              Confirm only after the transfer is visible in the bank account. The booking will be marked paid and the customer confirmation will be sent.
+              Confirm only after the transfer is visible in the bank account. The booking will be marked Paid and only the enabled confirmations below will be sent.
             </Alert>
+
+            <Paper withBorder radius="md" p="md">
+              <Stack gap="xs">
+                <Text fw={700}>Send final confirmations</Text>
+                <Switch
+                  label="Customer booking confirmation"
+                  checked={paymentReceivedCustomerConfirmation}
+                  onChange={(event) => setPaymentReceivedCustomerConfirmation(event.currentTarget.checked)}
+                />
+                <Switch
+                  label="Internal OmniLodge notification"
+                  checked={paymentReceivedInternalConfirmation}
+                  onChange={(event) => setPaymentReceivedInternalConfirmation(event.currentTarget.checked)}
+                />
+              </Stack>
+            </Paper>
 
             <TextInput
               label="Payment reference"
