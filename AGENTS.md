@@ -22,6 +22,7 @@
   - docs-only changes: at minimum run `git diff --check`.
 - If a check cannot run in Codex Cloud, do not hide it. Report the exact command, failure/blocker, and why the PR is still safe for GitHub Actions to validate.
 - PRs should be ready for review/merge, not draft, unless the task is intentionally incomplete or blocked. Keep PRs focused and do not commit generated outputs such as `ui/build` or `be/dist`.
+- A pull request is not complete until the branch has been pushed to the repository remote and the remote provider confirms a real, open PR URL. The `make_pr` helper may only prepare PR metadata; do not treat its response alone as proof that a GitHub PR exists. If `origin` is missing, restore it from the authenticated repository context, push the `codex/*` branch, create the PR, and verify its URL/state with `gh pr view` (or the equivalent provider API) before reporting completion.
 - Read-only investigation/report tasks do not need a branch or PR unless they produce repository file changes.
 - Codex Cloud production access is intentionally read-only by default. Use the Cloudflare Access-protected HTTPS production read connector with `scripts/codex/query-production-read-api.sh` when production database context is needed.
 - The production read connector is configured through Codex Cloud environment secrets/variables; never commit connector bearer tokens, Cloudflare Access service-token credentials, SSH keys, database passwords, generated `.env` files, or copied production data.
