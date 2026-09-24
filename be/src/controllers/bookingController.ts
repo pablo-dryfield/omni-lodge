@@ -561,7 +561,7 @@ const EMAIL_TEMPLATE_TYPES: EmailTemplateType[] = ['plain_text', 'react_email'];
 const UNRESOLVED_EMAIL_PLACEHOLDER_REGEX = /\{\{\s*([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)\s*\}\}/g;
 const ALL_INCOMING_GMAIL_QUERY = 'in:anywhere -in:sent -in:drafts';
 const FALLBACK_BOOKING_QUERY =
-  'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR civitatis.com OR airbnb.com OR airbnbmail.com))';
+  'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR pubcrawlkrakow.pl OR civitatis.com OR airbnb.com OR airbnbmail.com))';
 
 const resolveBookingQuery = (): string =>
   getConfigValue('BOOKING_GMAIL_PROCESS_ALL_MESSAGES') !== false

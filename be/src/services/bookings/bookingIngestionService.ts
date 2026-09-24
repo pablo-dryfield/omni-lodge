@@ -47,7 +47,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const FALLBACK_QUERY =
-  'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR civitatis.com OR airbnb.com OR airbnbmail.com))';
+  'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR pubcrawlkrakow.pl OR civitatis.com OR airbnb.com OR airbnbmail.com))';
 const ALL_INCOMING_GMAIL_QUERY = 'in:anywhere -in:sent -in:drafts';
 
 const DEFAULT_BOOKING_TIMEZONE =
