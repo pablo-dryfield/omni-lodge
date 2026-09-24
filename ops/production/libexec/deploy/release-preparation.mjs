@@ -101,6 +101,10 @@ const EXTERNAL_CHECKS = Object.freeze([
 ]);
 const DEPENDENCY_MARKER_FILE = '.omnilodge-dependency.json';
 const DEPENDENCY_PARTIAL_MARKER_FILE = '.omnilodge-partial.json';
+// Bump this when the dependency layer publication/validation format changes in
+// a way that should force production to build fresh immutable node_modules
+// layers instead of reusing previously published layer directories.
+const DEPENDENCY_LAYER_FORMAT_VERSION = 2;
 const PINNED_NODE_VERSION = '22.23.2';
 const PINNED_NPM_VERSION = '10.9.8';
 const TARGET_PLATFORM = 'linux';
@@ -630,6 +634,7 @@ export const dependencyLayerMaterial = ({
   arch = TARGET_ARCH,
   installFlags = DEPENDENCY_INSTALL_FLAGS,
 }) => deepFreeze({
+  layerFormatVersion: DEPENDENCY_LAYER_FORMAT_VERSION,
   lockSha256,
   packageSha256,
   node,
