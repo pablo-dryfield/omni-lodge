@@ -152,7 +152,8 @@ CODEX_READ_CONNECTOR_STATEMENT_TIMEOUT_MS=5000
 CODEX_READ_CONNECTOR_LOCK_TIMEOUT_MS=1000
 CODEX_READ_CONNECTOR_RATE_LIMIT_PER_MINUTE=60
 # Optional. Empty means /tables/read is disabled.
-CODEX_READ_CONNECTOR_ALLOWED_TABLES=public.error_monitoring_issues
+# Use exact schema.table names, or schema.* for all current and future tables/views in that schema.
+CODEX_READ_CONNECTOR_ALLOWED_TABLES=public.*
 ```
 
 Example runtime command:
@@ -225,6 +226,18 @@ Cloud and should be used instead:
 ```bash
 scripts/codex/query-production-read-api.sh health
 ```
+
+If a production-read task needs unrestricted app-table inspection, configure the
+connector with:
+
+```bash
+CODEX_READ_CONNECTOR_ALLOWED_TABLES=public.*
+```
+
+This grants row reads for all current and future tables/views in the `public`
+schema only. It does not remove the connector's read-only transaction mode,
+Cloudflare Access service-token check, bearer-token check, row limit,
+statement timeout, response-size limit, or rate limit.
 
 To stop the tunnel:
 

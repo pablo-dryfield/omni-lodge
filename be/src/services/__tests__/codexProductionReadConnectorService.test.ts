@@ -2,6 +2,7 @@ import request from 'supertest';
 
 import {
   createProductionReadConnectorApp,
+  loadProductionReadConnectorConfig,
   type ProductionReadConnectorConfig,
   type ProductionReadQuery,
   type ProductionReadQueryExecutor,
@@ -124,6 +125,70 @@ describe('Codex production read connector', () => {
       .expect(403);
 
     expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('allows schema wildcard entries to read any table in that schema', async () => {
+    const executor = jest.fn(async () => ({
+      rows: [{ id: '123', platform: 'civitatis' }],
+      rowCount: 1,
+    }));
+    const app = createProductionReadConnectorApp(
+      config({ allowedTableKeys: new Set(['public.*']) }),
+      executor,
+    );
+
+    await request(app)
+      .post('/tables/read')
+      .set(authHeader)
+      .send({
+        schema: 'public',
+        table: 'bookings',
+        columns: ['id', 'platform'],
+        filters: { platform: 'civitatis' },
+        limit: 5,
+      })
+      .expect(200);
+
+    const query = executor.mock.calls[0]?.[0];
+    expect(query?.text).toContain('FROM "public"."bookings"');
+    expect(query?.values).toEqual(['civitatis', 5]);
+  });
+
+  it('keeps schema wildcard entries scoped to their schema', async () => {
+    const executor = jest.fn() as jest.MockedFunction<ProductionReadQueryExecutor>;
+    const app = createProductionReadConnectorApp(
+      config({ allowedTableKeys: new Set(['public.*']) }),
+      executor,
+    );
+
+    await request(app)
+      .post('/tables/read')
+      .set(authHeader)
+      .send({ schema: 'private', table: 'bookings' })
+      .expect(403);
+
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('loads exact and schema wildcard allowlist entries from the environment', () => {
+    const loadedConfig = loadProductionReadConnectorConfig({
+      CODEX_READ_CONNECTOR_TOKEN: 'test-connector-token',
+      CODEX_READ_DB_NAME: 'omni_lodge_db',
+      CODEX_READ_DB_PASSWORD: 'not-used-in-tests',
+      CODEX_READ_CONNECTOR_ALLOWED_TABLES: 'public.*,custom.audit_log',
+    });
+
+    expect(loadedConfig.allowedTableKeys.has('public.*')).toBe(true);
+    expect(loadedConfig.allowedTableKeys.has('custom.audit_log')).toBe(true);
+  });
+
+  it('rejects invalid table wildcard allowlist entries from the environment', () => {
+    expect(() => loadProductionReadConnectorConfig({
+      CODEX_READ_CONNECTOR_TOKEN: 'test-connector-token',
+      CODEX_READ_DB_NAME: 'omni_lodge_db',
+      CODEX_READ_DB_PASSWORD: 'not-used-in-tests',
+      CODEX_READ_CONNECTOR_ALLOWED_TABLES: '*.bookings',
+    })).toThrow('Invalid CODEX_READ_CONNECTOR_ALLOWED_TABLES entry: *.bookings');
   });
 
   it('builds allowlisted row reads with identifiers quoted and filter values parameterized', async () => {
