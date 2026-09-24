@@ -33,6 +33,7 @@ const DEPENDENCY_INSTALL_FLAGS = Object.freeze([
   '--no-fund',
   '--ignore-scripts',
 ]);
+const DEPENDENCY_LAYER_FORMAT_VERSION = 2;
 const LOCKFILE_BY_COMPONENT = Object.freeze({
   backend: 'be/package-lock.json',
   'ui-server': 'ui-server/package-lock.json',
@@ -68,6 +69,7 @@ const manifestFileHash = (manifest, filePath) => {
 };
 
 const dependencyLayerKey = ({ lockSha256, packageSha256, toolchain }) => canonicalDigest({
+  layerFormatVersion: DEPENDENCY_LAYER_FORMAT_VERSION,
   lockSha256,
   packageSha256,
   node: toolchain.node,

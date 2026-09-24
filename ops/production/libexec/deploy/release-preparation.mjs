@@ -1008,6 +1008,49 @@ const dependencyLayerKeysForRelease = ({ release, layout }) => {
   return deepFreeze(result);
 };
 
+const releaseNodeModulesLinkPath = ({ release, component }) => {
+  const relativePath = component === 'backend'
+    ? 'be/node_modules'
+    : 'ui-server/node_modules';
+  return path.join(release.path, ...relativePath.split('/'));
+};
+
+const linkedDependencyLayerKeyForRelease = ({
+  release,
+  component,
+  layout,
+  warnings,
+}) => {
+  const linkPath = releaseNodeModulesLinkPath({ release, component });
+  let linkStat;
+  try {
+    linkStat = lstatSync(linkPath, { bigint: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!linkStat.isSymbolicLink()) {
+    warnings.push(`Retained release has a non-symlink dependency path; linked-layer protection skipped: ${linkPath}`);
+    return null;
+  }
+
+  const componentRoot = path.join(layout.dependenciesRoot, component);
+  const rawTarget = readlinkSync(linkPath);
+  const target = path.resolve(path.dirname(linkPath), rawTarget);
+  const relativeTarget = path.relative(componentRoot, target);
+  if (!relativeTarget || relativeTarget.startsWith('..') || path.isAbsolute(relativeTarget)) {
+    warnings.push(`Retained release dependency link escapes the managed dependency root; linked-layer protection skipped: ${linkPath}`);
+    return null;
+  }
+
+  const segments = relativeTarget.split(path.sep);
+  if (segments.length !== 2 || segments[1] !== 'node_modules' || !SHA256_PATTERN.test(segments[0])) {
+    warnings.push(`Retained release dependency link does not target a managed dependency layer; linked-layer protection skipped: ${linkPath}`);
+    return null;
+  }
+  return segments[0];
+};
+
 const entryAgeMs = ({ stat, nowMs }) => Math.max(0, nowMs - Number(stat.mtimeMs));
 
 const inspectDependencyGarbage = ({
@@ -1016,12 +1059,22 @@ const inspectDependencyGarbage = ({
   policy,
   nowMs,
   dependencyProtectionComplete,
+  warnings,
 }) => {
   const protectedLayers = Object.fromEntries(COMPONENT_NAMES.map((component) => [component, new Set()]));
   if (dependencyProtectionComplete) {
     for (const release of keptReleases) {
       const keys = dependencyLayerKeysForRelease({ release, layout });
-      for (const component of COMPONENT_NAMES) protectedLayers[component].add(keys[component]);
+      for (const component of COMPONENT_NAMES) {
+        protectedLayers[component].add(keys[component]);
+        const linkedLayerKey = linkedDependencyLayerKeyForRelease({
+          release,
+          component,
+          layout,
+          warnings,
+        });
+        if (linkedLayerKey !== null) protectedLayers[component].add(linkedLayerKey);
+      }
     }
   }
 
@@ -1392,6 +1445,7 @@ export const planManagedReleaseGarbageCollection = ({
     policy,
     nowMs,
     dependencyProtectionComplete,
+    warnings,
   });
   const keptReleaseIds = new Set(keptReleases.map((release) => release.releaseId));
   const staging = inspectStagingGarbage({

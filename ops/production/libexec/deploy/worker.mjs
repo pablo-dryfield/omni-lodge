@@ -538,6 +538,12 @@ const recoverySummary = (recovery) => {
           : null,
       }
       : null,
+    managedOriginReadiness: recovery.managedOriginReadiness
+      ? {
+        releaseId: recovery.managedOriginReadiness.releaseId ?? null,
+        sourceSha: recovery.managedOriginReadiness.sourceSha ?? null,
+      }
+      : null,
   });
 };
 

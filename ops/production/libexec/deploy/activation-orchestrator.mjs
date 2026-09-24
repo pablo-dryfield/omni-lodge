@@ -651,11 +651,33 @@ export const createActivationOrchestrator = ({
     let pm2Restart = null;
     let pm2Restore = null;
     let pm2Save = null;
+    let managedOriginReadiness = null;
     if (usesManagedRuntime(recoveryRecord.previousSnapshot)) {
       pm2Restart = await checkedPm2Controller.restartComponentsInOrder({
         components: Object.freeze([...restartComponents]),
         persist: false,
       });
+      const identity = releaseIdentity(recoveryRecord.previousSnapshot);
+      try {
+        managedOriginReadiness = await runOriginReadiness({
+          releaseId: identity.releaseId,
+          sourceSha: identity.sourceSha,
+          requestState: currentEntry.requestState,
+          targetSnapshot: recoveryRecord.previousSnapshot,
+          now,
+        });
+      } catch (error) {
+        throwWithActivationProgress(error, {
+          operation: 'recovery',
+          releaseId: identity.releaseId,
+          sourceSha: identity.sourceSha,
+          requestPhase: currentEntry.requestState.phase,
+          transactionPhase: recoveryRecord.transaction.phase,
+          pointerSwitch,
+          pm2Restart,
+          managedOriginReadiness: error?.managedOriginReadiness ?? null,
+        });
+      }
       pm2Save = await checkedPm2Controller.saveProcessList();
     } else if (recoveryRecord.previousSnapshot?.pm2State) {
       pm2Restore = await checkedPm2Controller.restoreSavedProcessList({
@@ -699,6 +721,7 @@ export const createActivationOrchestrator = ({
       pm2Restart,
       pm2Restore,
       pm2Save,
+      managedOriginReadiness,
       activationTransaction: failed.transaction,
       requestEntry: currentEntry,
     });
