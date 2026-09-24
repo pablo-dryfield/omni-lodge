@@ -22,6 +22,7 @@ import UserShiftRole from '../models/UserShiftRole.js';
 import logger from '../utils/logger.js';
 import { getConfigValue } from './configService.js';
 import { sendSchedulingNotification } from './notificationService.js';
+import { exchangeShiftAssignmentOwners } from './shiftAssignmentMutationService.js';
 import { buildAssignmentInclude, buildRequestInclude } from './shiftRequestIncludes.js';
 import {
   canCancelShiftRequest,
@@ -957,27 +958,7 @@ const applyApprovedRequest = async (
     if (!toAssignment) {
       throw new HttpError(409, 'Swap assignments are incomplete');
     }
-    await sequelize.query(
-      `
-        UPDATE "shift_assignments"
-        SET "user_id" = CASE
-          WHEN "id" = :fromAssignmentId THEN :toUserId
-          WHEN "id" = :toAssignmentId THEN :fromUserId
-          ELSE "user_id"
-        END,
-        "updated_at" = NOW()
-        WHERE "id" IN (:fromAssignmentId, :toAssignmentId)
-      `,
-      {
-        replacements: {
-          fromAssignmentId: fromAssignment.id,
-          toAssignmentId: toAssignment.id,
-          fromUserId: fromAssignment.userId,
-          toUserId: toAssignment.userId,
-        },
-        transaction,
-      },
-    );
+    await exchangeShiftAssignmentOwners(fromAssignment, toAssignment, transaction);
   } else if (requestType === 'takeover') {
     await fromAssignment.update({ userId: request.requesterId }, { transaction });
   } else {
