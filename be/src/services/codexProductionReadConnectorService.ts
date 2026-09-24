@@ -61,6 +61,7 @@ const { Pool } = pg;
 
 const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/;
 const TABLE_KEY_PATTERN = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
+const TABLE_SCHEMA_WILDCARD_PATTERN = /^[a-z_][a-z0-9_]*\.\*$/;
 const DEFAULT_MAX_ROWS = 100;
 const HARD_MAX_ROWS = 500;
 const DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024;
@@ -144,7 +145,7 @@ const parseAllowedTableKeys = (value: string | undefined): ReadonlySet<string> =
     .filter(Boolean);
 
   for (const key of keys) {
-    if (!TABLE_KEY_PATTERN.test(key)) {
+    if (!TABLE_KEY_PATTERN.test(key) && !TABLE_SCHEMA_WILDCARD_PATTERN.test(key)) {
       throw new Error(`Invalid CODEX_READ_CONNECTOR_ALLOWED_TABLES entry: ${key}`);
     }
   }
@@ -361,12 +362,17 @@ const normalizeOrderBy = (
 
 const tableKey = (schema: string, table: string): string => `${schema}.${table}`;
 
+const tableSchemaWildcardKey = (schema: string): string => `${schema}.*`;
+
 const ensureTableReadAllowed = (
   config: ProductionReadConnectorConfig,
   schema: string,
   table: string,
 ): void => {
-  if (!config.allowedTableKeys.has(tableKey(schema, table))) {
+  if (
+    !config.allowedTableKeys.has(tableKey(schema, table))
+    && !config.allowedTableKeys.has(tableSchemaWildcardKey(schema))
+  ) {
     throw new HttpError(403, 'table_not_allowlisted', 'This table is not allowlisted for row reads');
   }
 };
