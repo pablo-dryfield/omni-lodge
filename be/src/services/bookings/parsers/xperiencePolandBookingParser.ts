@@ -206,6 +206,8 @@ const parseMoney = (value?: string | null): { amount: number | null; currency: s
   };
 };
 
+const roundMoney = (value: number): number => Math.round(value * 100) / 100;
+
 const parsePartySize = (value?: string | null): number | null => {
   if (!value) {
     return null;
@@ -650,17 +652,29 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
 
     if (kind === 'resale_booking') {
       const resale = extractResaleBookingDetails(context, body, subject);
+      const cashToCollectAmount =
+        resale.cashAmount ??
+        (resale.fullValueAmount !== null && resale.depositAmount !== null
+          ? roundMoney(Math.max(resale.fullValueAmount - resale.depositAmount, 0))
+          : null);
+      const partnerCommissionAmount =
+        resale.depositAmount ??
+        (resale.fullValueAmount !== null && cashToCollectAmount !== null
+          ? roundMoney(Math.max(resale.fullValueAmount - cashToCollectAmount, 0))
+          : null);
       const bookingFields: BookingFieldPatch = {
         productName: 'Pub Crawl Krakow',
         guestEmail: resale.guestEmail,
         guestPhone: resale.guestPhone,
         currency: resale.currency,
-        paymentMethod: 'Deposit + cash on arrival',
+        paymentMethod: 'Cash on arrival',
         notes: appendNote([
           'XperiencePoland resale booking via Pub Crawl Krakow.',
-          resale.depositAmount !== null ? `Deposit paid online: ${resale.depositAmount.toFixed(2)} ${resale.currency}` : null,
-          resale.cashAmount !== null ? `Cash to collect on arrival: ${resale.cashAmount.toFixed(2)} ${resale.currency}` : null,
-          resale.fullValueAmount !== null ? `Full value: ${resale.fullValueAmount.toFixed(2)} ${resale.currency}` : null,
+          cashToCollectAmount !== null ? `Cash to collect on arrival: ${cashToCollectAmount.toFixed(2)} ${resale.currency}` : null,
+          partnerCommissionAmount !== null
+            ? `XperiencePoland commission/deposit retained: ${partnerCommissionAmount.toFixed(2)} ${resale.currency}`
+            : null,
+          resale.fullValueAmount !== null ? `External full value: ${resale.fullValueAmount.toFixed(2)} ${resale.currency}` : null,
         ]),
       };
       if (resale.firstName) {
@@ -673,10 +687,13 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
         bookingFields.partySizeTotal = resale.partySize;
         bookingFields.partySizeAdults = resale.partySize;
       }
-      if (resale.fullValueAmount !== null) {
-        bookingFields.priceGross = resale.fullValueAmount;
-        bookingFields.priceNet = resale.fullValueAmount;
-        bookingFields.baseAmount = resale.fullValueAmount;
+      if (cashToCollectAmount !== null) {
+        bookingFields.priceGross = cashToCollectAmount;
+        bookingFields.priceNet = cashToCollectAmount;
+        bookingFields.baseAmount = cashToCollectAmount;
+      }
+      if (partnerCommissionAmount !== null) {
+        bookingFields.commissionAmount = partnerCommissionAmount;
       }
       if (resale.parsedDate?.isValid()) {
         bookingFields.experienceDate = resale.parsedDate.format('YYYY-MM-DD');
@@ -690,7 +707,7 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
         platformBookingId: reservation,
         platformOrderId: reservation,
         status: 'confirmed',
-        paymentStatus: resale.depositAmount !== null ? 'deposit' : 'unknown',
+        paymentStatus: cashToCollectAmount !== null && cashToCollectAmount > 0 ? 'unpaid' : 'unknown',
         eventType: 'created',
         bookingFields,
         occurredAt,
@@ -701,6 +718,9 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
           depositAmount: resale.depositAmount,
           cashAmount: resale.cashAmount,
           fullValueAmount: resale.fullValueAmount,
+          partnerCommissionAmount,
+          cashToCollectAmount,
+          externalFullValueAmount: resale.fullValueAmount,
         },
       };
     }

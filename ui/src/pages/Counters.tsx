@@ -16,6 +16,7 @@ import {
   CircularProgress,
   Collapse,
   Dialog,
+  DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
@@ -132,6 +133,7 @@ type BucketDescriptor = {
   label: string;
 };
 type CashCurrency = 'PLN' | 'EUR';
+type CounterBookingPaymentStatus = 'unknown' | 'unpaid' | 'deposit' | 'partial' | 'paid' | 'refunded';
 const parseCounterIdParam = (value: string | null): number | null => {
   if (!value) {
     return null;
@@ -161,6 +163,7 @@ type BookingAttendancePatchPayload = {
   addonRefundReason?: string | null;
   attendedTshirtSizes?: Record<string, number>;
   markNoShowWhenAbsent?: boolean;
+  paymentStatus?: CounterBookingPaymentStatus;
 };
 
 type AddonRefundDisposition = 'pending_external' | 'customer_declined' | 'already_refunded_external';
@@ -173,6 +176,7 @@ type StagedBookingAttendance = {
   addonRefundReason?: string | null;
   attendedTshirtSizes: Record<string, number>;
   markNoShowWhenAbsent?: boolean;
+  paymentStatus?: CounterBookingPaymentStatus;
 };
 
 type CounterAttendanceUpdateRow = {
@@ -184,6 +188,25 @@ type CounterAttendanceUpdateRow = {
   addonRefundReason?: string | null;
   markNoShowWhenAbsent: boolean;
   attendedTshirtSizes: Record<string, number>;
+  paymentStatus?: CounterBookingPaymentStatus;
+};
+
+type PendingBookingCashCollection = {
+  bookingId: number;
+  channelId: number;
+  currency: CashCurrency;
+  amount: number;
+  perPersonAmount: number;
+  attendedTotal: number;
+  customerName: string;
+  platformBookingId: string;
+};
+
+type BookingCashConfirmationState = {
+  order: UnifiedOrder;
+  payload: BookingAttendancePatchPayload;
+  cash: PendingBookingCashCollection;
+  closePartialAfterPaid?: boolean;
 };
 
 const TSHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL'] as const;
@@ -732,8 +755,13 @@ const applyAttendanceToOrder = (
     attendedTotal: nextAttended,
     attendedExtras: nextAttendedExtras,
     attendedTshirtSizes,
+    ...(payload.paymentStatus ? { paymentStatus: payload.paymentStatus } : {}),
     remainingTotal,
-    rawData: { ...(rawData ?? {}), attendedTshirtSizes },
+    rawData: {
+      ...(rawData ?? {}),
+      attendedTshirtSizes,
+      ...(payload.paymentStatus ? { paymentStatus: payload.paymentStatus } : {}),
+    },
   };
 };
 
@@ -755,6 +783,20 @@ const normalizePlatformLookupKey = (value?: string | null): string => {
   }
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 };
+
+const XPERIENCEPOLAND_PLATFORM_KEY = 'xperiencepoland';
+const XPERIENCEPOLAND_RESALE_CASH_TICKET_PREFIX = 'booking-cash:xperiencepoland:';
+
+const isXperiencePolandCashArrivalOrder = (order: UnifiedOrder): boolean => {
+  if (normalizePlatformLookupKey(order.platform) !== XPERIENCEPOLAND_PLATFORM_KEY) {
+    return false;
+  }
+  const paymentText = `${order.paymentMethod ?? ''} ${order.rawData?.paymentMethod ?? ''}`.toLowerCase();
+  return paymentText.includes('cash on arrival');
+};
+
+const buildBookingCashTicketKey = (bookingId: number): string =>
+  `${XPERIENCEPOLAND_RESALE_CASH_TICKET_PREFIX}${bookingId}`;
 
 type PlatformChipStyle = {
   backgroundColor: string;
@@ -1019,6 +1061,7 @@ type CounterReservationDraft = {
   cashOverridesByChannel: Record<number, string>;
   cashCurrencyByChannel: Record<number, CashCurrency>;
   pendingBookingAttendanceById: Record<number, StagedBookingAttendance>;
+  pendingBookingCashCollectionById: Record<number, PendingBookingCashCollection>;
   editingCustomTicket: {
     channelId: number;
     ticketLabel: string;
@@ -1158,6 +1201,49 @@ const parseCashInput = (value: string): number | null => {
     return null;
   }
   return Math.max(0, Math.round(numeric * 100) / 100);
+};
+
+const parseMoneyLikeNumber = (value: unknown): number | null => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? Math.max(0, Math.round(value * 100) / 100) : null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const parsed = parseCashInput(value);
+  return parsed != null && Number.isFinite(parsed) ? parsed : null;
+};
+
+const roundCashAmount = (value: number): number =>
+  Number.isFinite(value) ? Math.max(0, Math.round(value * 100) / 100) : 0;
+
+const getSnapshotTicketKey = (ticket: WalkInSnapshotTicket): string | null =>
+  typeof ticket.key === 'string' && ticket.key.trim().length > 0 ? ticket.key.trim() : null;
+
+const cashSnapshotHasPositiveAmount = (entry: CashSnapshotEntry | undefined): boolean => {
+  if (!entry) {
+    return false;
+  }
+  const totals = aggregateCashTotals(entry);
+  for (const amount of totals.values()) {
+    if (Number.isFinite(amount) && amount > 0) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const totalCashFromSnapshotTickets = (tickets: WalkInSnapshotTicket[]): { amount: number; people: number } => {
+  return tickets.reduce(
+    (total, ticket) => {
+      ticket.currencies.forEach((currency) => {
+        total.amount += roundCashAmount(Number(currency.cash) || 0);
+        total.people += Math.max(0, Math.round(Number(currency.people) || 0));
+      });
+      return total;
+    },
+    { amount: 0, people: 0 },
+  );
 };
 
 const valuesAreClose = (a: number | null, b: number | null, epsilon = 0.01): boolean => {
@@ -2352,6 +2438,11 @@ const Counters = (props: GenericPageProps) => {
   const [pendingBookingAttendanceById, setPendingBookingAttendanceById] = useState<
     Record<number, StagedBookingAttendance>
   >({});
+  const [pendingBookingCashCollectionById, setPendingBookingCashCollectionById] = useState<
+    Record<number, PendingBookingCashCollection>
+  >({});
+  const [bookingCashConfirmation, setBookingCashConfirmation] =
+    useState<BookingCashConfirmationState | null>(null);
   const hydratedReservationDraftKeyRef = useRef<string | null>(null);
   const skipReservationDraftPersistRef = useRef(false);
   const pendingBookingAttendanceRef = useRef<Record<number, StagedBookingAttendance>>({});
@@ -2390,6 +2481,7 @@ const Counters = (props: GenericPageProps) => {
         attendedExtras: getOrderAttendedExtras(nextOrder),
         attendedTshirtSizes: payload.attendedTshirtSizes ?? getOrderAttendedTshirtSizes(nextOrder),
         markNoShowWhenAbsent: Boolean(payload.markNoShowWhenAbsent),
+        ...(payload.paymentStatus ? { paymentStatus: payload.paymentStatus } : {}),
         ...(payload.addonRefundRequests ? { addonRefundRequests: payload.addonRefundRequests } : {}),
         ...(payload.addonRefundDisposition ? { addonRefundDisposition: payload.addonRefundDisposition } : {}),
         ...(payload.addonRefundReason !== undefined ? { addonRefundReason: payload.addonRefundReason } : {}),
@@ -3431,6 +3523,8 @@ const loadCounterById = useCallback(
       setWalkInNoteDirty(false);
       setFreePeopleByChannel({});
       setFreeAddonsByChannel({});
+      setPendingBookingCashCollectionById({});
+      setBookingCashConfirmation(null);
       lastWalkInInitRef.current = null;
       return;
     }
@@ -5590,6 +5684,95 @@ useEffect(() => {
     return map;
   }, [registry.channels]);
 
+  const resolveBookingCashCollection = useCallback(
+    (
+      order: UnifiedOrder,
+      attendedTotalRaw: number,
+    ): PendingBookingCashCollection | null | undefined => {
+      if (!isXperiencePolandCashArrivalOrder(order)) {
+        return null;
+      }
+
+      const bookingId = getOrderBookingId(order);
+      if (!bookingId) {
+        setOnlineReservationsError('Booking ID is missing for this XperiencePoland cash-on-arrival reservation.');
+        return undefined;
+      }
+
+      const platformKey = normalizePlatformLookupKey(order.platform);
+      const channelId = onlineChannelIdByPlatform.get(platformKey);
+      if (!channelId) {
+        setOnlineReservationsError('XperiencePoland channel is missing from the counter channel setup.');
+        return undefined;
+      }
+
+      const attendedTotal = Math.max(0, Math.round(Number(attendedTotalRaw) || 0));
+      if (attendedTotal <= 0) {
+        return null;
+      }
+
+      const quantity = Math.max(0, Math.round(Number(order.quantity) || 0));
+      const totalCashDue =
+        parseMoneyLikeNumber(order.rawData?.baseAmount) ??
+        parseMoneyLikeNumber(order.rawData?.priceGross) ??
+        null;
+      if (totalCashDue == null || totalCashDue <= 0 || quantity <= 0) {
+        setOnlineReservationsError('Cash-to-collect amount is missing for this XperiencePoland reservation.');
+        return undefined;
+      }
+
+      const currencyRaw = String(order.rawData?.currency ?? '').trim().toUpperCase();
+      const currency: CashCurrency = isCashCurrency(currencyRaw) ? currencyRaw : 'PLN';
+      const perPersonAmount = roundCashAmount(totalCashDue / quantity);
+      const amount = roundCashAmount(perPersonAmount * attendedTotal);
+      if (amount <= 0) {
+        return null;
+      }
+
+      return {
+        bookingId,
+        channelId,
+        currency,
+        amount,
+        perPersonAmount,
+        attendedTotal,
+        customerName: String(order.customerName ?? '').trim() || 'Guest',
+        platformBookingId: String(order.platformBookingId ?? order.id ?? bookingId).trim(),
+      };
+    },
+    [onlineChannelIdByPlatform],
+  );
+
+  const stageBookingCashCollection = useCallback(
+    (bookingId: number, cash: PendingBookingCashCollection | null) => {
+      setPendingBookingCashCollectionById((prev) => {
+        if (!cash) {
+          if (!(bookingId in prev)) {
+            return prev;
+          }
+          const { [bookingId]: _removed, ...rest } = prev;
+          return rest;
+        }
+        const current = prev[bookingId];
+        if (
+          current &&
+          current.channelId === cash.channelId &&
+          current.currency === cash.currency &&
+          current.amount === cash.amount &&
+          current.perPersonAmount === cash.perPersonAmount &&
+          current.attendedTotal === cash.attendedTotal &&
+          current.customerName === cash.customerName &&
+          current.platformBookingId === cash.platformBookingId
+        ) {
+          return prev;
+        }
+        return { ...prev, [bookingId]: cash };
+      });
+      setWalkInNoteDirty(true);
+    },
+    [],
+  );
+
   const onlineManagedChannelIdSet = useMemo(
     () => new Set<number>(Array.from(onlineChannelIdByPlatform.values())),
     [onlineChannelIdByPlatform],
@@ -5805,6 +5988,11 @@ useEffect(() => {
           ? (draft.pendingBookingAttendanceById as Record<number, StagedBookingAttendance>)
           : {},
       );
+      setPendingBookingCashCollectionById(
+        isRecord(draft.pendingBookingCashCollectionById)
+          ? (draft.pendingBookingCashCollectionById as Record<number, PendingBookingCashCollection>)
+          : {},
+      );
       setEditingCustomTicket(
         isRecord(draft.editingCustomTicket) &&
           typeof draft.editingCustomTicket.channelId === 'number' &&
@@ -5839,6 +6027,7 @@ useEffect(() => {
     registry.dirtyMetricKeys.length > 0 ||
     walkInNoteDirty ||
     Object.keys(pendingBookingAttendanceById).length > 0 ||
+    Object.keys(pendingBookingCashCollectionById).length > 0 ||
     editingCustomTicket != null ||
     cashEditingChannelId != null;
 
@@ -5885,6 +6074,7 @@ useEffect(() => {
       cashOverridesByChannel,
       cashCurrencyByChannel,
       pendingBookingAttendanceById,
+      pendingBookingCashCollectionById,
       editingCustomTicket,
       cashEditingChannelId,
       cashEditingValue,
@@ -5907,6 +6097,7 @@ useEffect(() => {
     hasRecoverableReservationChanges,
     loggedUserId,
     pendingBookingAttendanceById,
+    pendingBookingCashCollectionById,
     registry.dirtyMetricKeys,
     registry.metricsByKey,
     reservationDraftHydrationKey,
@@ -5985,6 +6176,7 @@ useEffect(() => {
               ? { addonRefundReason: staged.addonRefundReason }
               : {}),
             markNoShowWhenAbsent: Boolean(staged.markNoShowWhenAbsent),
+            ...(staged.paymentStatus ? { paymentStatus: staged.paymentStatus } : {}),
           });
         });
         setOnlineReservationOrders(mergedOrders);
@@ -6119,12 +6311,31 @@ useEffect(() => {
       if (target === current && extrasAlreadyFull) {
         return;
       }
-      applyBookingAttendanceLocally(order, {
+      const payload: BookingAttendancePatchPayload = {
         attendedTotal: target,
         attendedExtras: purchasedExtras,
-      });
+      };
+      const cash = resolveBookingCashCollection(order, target);
+      if (cash === undefined) {
+        return;
+      }
+      if (cash) {
+        setBookingCashConfirmation({
+          order,
+          payload,
+          cash,
+        });
+        return;
+      }
+      const applied = applyBookingAttendanceLocally(order, payload);
+      if (applied) {
+        const bookingId = getOrderBookingId(order);
+        if (bookingId) {
+          stageBookingCashCollection(bookingId, null);
+        }
+      }
     },
-    [applyBookingAttendanceLocally],
+    [applyBookingAttendanceLocally, resolveBookingCashCollection, stageBookingCashCollection],
   );
 
   const closePartialCheckInEditor = useCallback(() => {
@@ -6289,12 +6500,97 @@ useEffect(() => {
     addonRefundDisposition?: AddonRefundDisposition;
     addonRefundReason?: string | null;
   } = {}): boolean => {
+    if (partialCheckInEditorOrder && partialCheckInEditorDraft) {
+      const bookingId = getOrderBookingId(partialCheckInEditorOrder);
+      const sourceOrder =
+        bookingId != null
+          ? onlineReservationOrders.find((entry) => getOrderBookingId(entry) === bookingId) ?? partialCheckInEditorOrder
+          : partialCheckInEditorOrder;
+      const shouldMarkNoShowWhenAbsent =
+        isXperiencePolandCashArrivalOrder(sourceOrder) &&
+        Math.max(0, Math.round(Number(partialCheckInEditorDraft.attendedTotal) || 0)) <= 0;
+      const payload: BookingAttendancePatchPayload = {
+        attendedTotal: partialCheckInEditorDraft.attendedTotal,
+        attendedExtras: partialCheckInEditorDraft.attendedExtras,
+        attendedTshirtSizes: partialCheckInEditorDraft.attendedTshirtSizes,
+        markNoShowWhenAbsent: Boolean(partialCheckInEditorDraft.markNoShowWhenAbsent || shouldMarkNoShowWhenAbsent),
+        ...(options.addonRefundRequests ? { addonRefundRequests: options.addonRefundRequests } : {}),
+        ...(options.addonRefundDisposition ? { addonRefundDisposition: options.addonRefundDisposition } : {}),
+        ...(options.addonRefundReason !== undefined ? { addonRefundReason: options.addonRefundReason } : {}),
+      };
+      const cash = resolveBookingCashCollection(sourceOrder, payload.attendedTotal ?? 0);
+      if (cash === undefined) {
+        return false;
+      }
+      if (cash) {
+        setBookingCashConfirmation({
+          order: sourceOrder,
+          payload,
+          cash,
+          closePartialAfterPaid: true,
+        });
+        return false;
+      }
+      const appliedDirectly = applyBookingAttendanceLocally(sourceOrder, payload);
+      if (appliedDirectly) {
+        if (bookingId) {
+          stageBookingCashCollection(bookingId, null);
+        }
+        closePartialCheckInEditor();
+      }
+      return Boolean(appliedDirectly);
+    }
     const applied = applyPartialEditorDraftLocally(options);
     if (applied) {
       closePartialCheckInEditor();
     }
     return applied;
-  }, [applyPartialEditorDraftLocally, closePartialCheckInEditor]);
+  }, [
+    applyBookingAttendanceLocally,
+    applyPartialEditorDraftLocally,
+    closePartialCheckInEditor,
+    onlineReservationOrders,
+    partialCheckInEditorDraft,
+    partialCheckInEditorOrder,
+    resolveBookingCashCollection,
+    stageBookingCashCollection,
+  ]);
+
+  const handleBookingCashConfirmationCancel = useCallback(() => {
+    setBookingCashConfirmation(null);
+  }, []);
+
+  const handleBookingCashConfirmationPaid = useCallback(() => {
+    if (!bookingCashConfirmation) {
+      return;
+    }
+    const bookingId = getOrderBookingId(bookingCashConfirmation.order);
+    if (!bookingId) {
+      setOnlineReservationsError('Booking ID is missing for this cash payment confirmation.');
+      setBookingCashConfirmation(null);
+      return;
+    }
+    const applied = applyBookingAttendanceLocally(bookingCashConfirmation.order, {
+      ...bookingCashConfirmation.payload,
+      paymentStatus: 'paid',
+    });
+    if (!applied) {
+      return;
+    }
+    stageBookingCashCollection(bookingId, bookingCashConfirmation.cash);
+    setBookingCashConfirmation(null);
+    if (bookingCashConfirmation.closePartialAfterPaid) {
+      closePartialCheckInEditor();
+    }
+    setOnlineReservationsNotice(
+      `Recorded ${bookingCashConfirmation.cash.currency} ${formatCashAmount(bookingCashConfirmation.cash.amount)} cash paid for ${bookingCashConfirmation.cash.customerName}.`,
+    );
+  }, [
+    applyBookingAttendanceLocally,
+    bookingCashConfirmation,
+    closePartialCheckInEditor,
+    stageBookingCashCollection,
+  ]);
 
   const handlePartialEditorApply = useCallback(() => {
     if (!partialCheckInEditorDraft) {
@@ -7032,9 +7328,28 @@ useEffect(() => {
     const activeCashChannelIds = new Set<number>();
     summaryChannelIds.forEach((channelId) => activeCashChannelIds.add(channelId));
     walkInChannelIds.forEach((channelId) => activeCashChannelIds.add(channelId));
+    cashSnapshotEntries.forEach((entry, channelId) => {
+      if (cashSnapshotHasPositiveAmount(entry)) {
+        activeCashChannelIds.add(channelId);
+      }
+    });
+    Object.values(pendingBookingCashCollectionById).forEach((cash) => {
+      if (cash && cash.amount > 0) {
+        activeCashChannelIds.add(cash.channelId);
+      }
+    });
 
     registry.channels.forEach((channel) => {
-      if (!isCashPaymentChannel(channel) || !activeCashChannelIds.has(channel.id)) {
+      const existingSnapshotEntry = cashSnapshotEntries.get(channel.id);
+      const pendingCashCollections = Object.values(pendingBookingCashCollectionById).filter(
+        (cash) => cash.channelId === channel.id && cash.amount > 0,
+      );
+      const hasBookingCashSnapshot =
+        pendingCashCollections.length > 0 || cashSnapshotHasPositiveAmount(existingSnapshotEntry);
+      if (
+        !activeCashChannelIds.has(channel.id) ||
+        (!isCashPaymentChannel(channel) && !hasBookingCashSnapshot)
+      ) {
         return;
       }
       const normalizedName = channel.name?.toLowerCase() ?? '';
@@ -7118,12 +7433,43 @@ useEffect(() => {
       const currency = resolveCashCurrencyForChannel(channel.id);
       const details = cashDetailsByChannel.get(channel.id);
       const rawAmount = details?.displayAmount ?? null;
-      const normalizedAmount =
+      let normalizedAmount =
         rawAmount != null && Number.isFinite(rawAmount) ? Math.max(0, Math.round(rawAmount * 100) / 100) : 0;
-      if (normalizedAmount <= 0 && normalizedQty <= 0 && currency === 'PLN') {
+      let snapshotQty = normalizedQty;
+      const pendingTicketKeys = new Set(
+        pendingCashCollections.map((cash) => buildBookingCashTicketKey(cash.bookingId)),
+      );
+      const existingTickets = existingSnapshotEntry?.tickets?.filter((ticket) => {
+        const key = getSnapshotTicketKey(ticket);
+        return !key || !pendingTicketKeys.has(key);
+      }) ?? [];
+      const pendingTickets: WalkInSnapshotTicket[] = pendingCashCollections.map((cash) => ({
+        key: buildBookingCashTicketKey(cash.bookingId),
+        name: `${cash.platformBookingId || `Booking ${cash.bookingId}`} - ${cash.customerName}`,
+        currencies: [
+          {
+            currency: cash.currency,
+            people: cash.attendedTotal,
+            cash: cash.amount,
+            addons: {},
+          },
+        ],
+      }));
+      const bookingCashTickets = [...existingTickets, ...pendingTickets];
+      if (bookingCashTickets.length > 0) {
+        const ticketTotals = totalCashFromSnapshotTickets(bookingCashTickets);
+        normalizedAmount = ticketTotals.amount;
+        snapshotQty = ticketTotals.people > 0 ? ticketTotals.people : snapshotQty;
+      }
+      if (normalizedAmount <= 0 && snapshotQty <= 0 && currency === 'PLN') {
         return;
       }
-      snapshotChannels[channel.id.toString()] = { currency, amount: normalizedAmount, qty: normalizedQty };
+      snapshotChannels[channel.id.toString()] = {
+        currency,
+        amount: normalizedAmount,
+        qty: snapshotQty,
+        ...(bookingCashTickets.length > 0 ? { tickets: bookingCashTickets } : {}),
+      };
     });
 
     const freeChannels: Record<string, FreeSnapshotChannelEntry> = {};
@@ -7191,7 +7537,9 @@ useEffect(() => {
     return sections.join('\n');
   }, [
     cashDetailsByChannel,
+    cashSnapshotEntries,
     counterNotes,
+    pendingBookingCashCollectionById,
     registry.channels,
     resolveCashCurrencyForChannel,
     summaryChannelIds,
@@ -7355,6 +7703,7 @@ useEffect(() => {
           addonRefundReason?: string | null;
           markNoShowWhenAbsent?: boolean;
           attendedTshirtSizes: Record<string, number>;
+          paymentStatus?: CounterBookingPaymentStatus;
         }>;
       } = {},
     ): Promise<boolean> => {
@@ -7450,6 +7799,7 @@ useEffect(() => {
                 ...(row.addonRefundDisposition ? { addonRefundDisposition: row.addonRefundDisposition } : {}),
                 ...(row.addonRefundReason !== undefined ? { addonRefundReason: row.addonRefundReason } : {}),
                 markNoShowWhenAbsent: Boolean(row.markNoShowWhenAbsent),
+                ...(row.paymentStatus ? { paymentStatus: row.paymentStatus } : {}),
               })),
               metrics: metricsPayload,
               status: statusToCommit,
@@ -7457,6 +7807,7 @@ useEffect(() => {
             }),
           ).unwrap();
           setPendingBookingAttendanceById({});
+          setPendingBookingCashCollectionById({});
           setOnlineReservationsNotice(
             `Synced ${attendanceUpdates.length} reservation update${attendanceUpdates.length === 1 ? '' : 's'}.`,
           );
@@ -8034,6 +8385,7 @@ useEffect(() => {
             ...(staged.addonRefundDisposition ? { addonRefundDisposition: staged.addonRefundDisposition } : {}),
             ...(staged.addonRefundReason !== undefined ? { addonRefundReason: staged.addonRefundReason } : {}),
             markNoShowWhenAbsent: Boolean(staged.markNoShowWhenAbsent),
+            ...(staged.paymentStatus ? { paymentStatus: staged.paymentStatus } : {}),
           };
         })
         .filter((row): row is CounterAttendanceUpdateRow => Boolean(row));
@@ -10252,6 +10604,19 @@ type SummaryRowOptions = {
       });
     });
 
+    Object.values(pendingBookingCashCollectionById).forEach((cash) => {
+      if (!cash || cash.amount <= 0 || cash.attendedTotal <= 0) {
+        return;
+      }
+      rows.push({
+        channelId: cash.channelId,
+        channelName: channelNameById.get(cash.channelId) ?? `Channel ${cash.channelId}`,
+        ticketLabel: cash.platformBookingId || `Booking ${cash.bookingId}`,
+        currency: cash.currency,
+        qty: cash.attendedTotal,
+      });
+    });
+
     const aggregate = new Map<string, CashTicketSummaryRow>();
     rows.forEach((row) => {
       const key = `${row.channelId}|${row.ticketLabel}|${row.currency}`;
@@ -10271,6 +10636,7 @@ type SummaryRowOptions = {
     );
   }, [
     getMetric,
+    pendingBookingCashCollectionById,
     registry.channels,
     resolveCashCurrencyForChannel,
     walkInChannelIds,
@@ -11399,6 +11765,99 @@ type SummaryRowOptions = {
         >
           {renderCounterEditor()}
         </DialogContent>
+      </Dialog>
+      <Dialog
+        open={Boolean(bookingCashConfirmation)}
+        fullScreen
+        aria-labelledby="booking-cash-confirmation-title"
+      >
+        <DialogTitle
+          id="booking-cash-confirmation-title"
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Typography variant="h5" component="span" fontWeight={800}>
+            Charge cash on arrival
+          </Typography>
+        </DialogTitle>
+        <DialogContent
+          dividers
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: '#f7f8fb',
+            p: { xs: 2, sm: 4 },
+          }}
+        >
+          {bookingCashConfirmation && (
+            <Card
+              variant="outlined"
+              sx={{
+                width: '100%',
+                maxWidth: 680,
+                borderRadius: 4,
+                boxShadow: '0 24px 70px rgba(15, 23, 42, 0.12)',
+              }}
+            >
+              <CardContent>
+                <Stack spacing={3} alignItems="center" textAlign="center">
+                  <Alert severity="warning" sx={{ width: '100%', textAlign: 'left' }}>
+                    Collect this cash before marking the reservation as paid and checked in.
+                  </Alert>
+                  <Stack spacing={0.5} alignItems="center">
+                    <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 1.2 }}>
+                      Cash to collect
+                    </Typography>
+                    <Typography variant="h2" component="div" fontWeight={900}>
+                      {bookingCashConfirmation.cash.currency} {formatCashAmount(bookingCashConfirmation.cash.amount)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {bookingCashConfirmation.cash.attendedTotal} × {bookingCashConfirmation.cash.currency}{' '}
+                      {formatCashAmount(bookingCashConfirmation.cash.perPersonAmount)}
+                    </Typography>
+                  </Stack>
+                  <Divider flexItem />
+                  <Stack spacing={1} sx={{ width: '100%' }}>
+                    <Typography variant="h6" fontWeight={800}>
+                      {bookingCashConfirmation.cash.customerName}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      XperiencePoland resale · Reference {bookingCashConfirmation.cash.platformBookingId || '—'}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      This will mark the booking payment as paid and add the amount to Channel Numbers for later collection.
+                    </Typography>
+                  </Stack>
+                </Stack>
+              </CardContent>
+            </Card>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: { xs: 2, sm: 3 }, gap: 1, justifyContent: 'center' }}>
+          <Button
+            size="large"
+            variant="outlined"
+            onClick={handleBookingCashConfirmationCancel}
+            sx={{ minWidth: 160 }}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="large"
+            variant="contained"
+            color="success"
+            onClick={handleBookingCashConfirmationPaid}
+            sx={{ minWidth: 160 }}
+          >
+            Paid
+          </Button>
+        </DialogActions>
       </Dialog>
       <Dialog
         open={Boolean(partialCheckInEditorOrder && partialCheckInEditorDraft)}

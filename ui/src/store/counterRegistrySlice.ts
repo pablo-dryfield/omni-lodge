@@ -97,6 +97,7 @@ type AttendanceUpdateInput = {
   addonRefundDisposition?: 'pending_external' | 'customer_declined' | 'already_refunded_external';
   addonRefundReason?: string | null;
   markNoShowWhenAbsent?: boolean;
+  paymentStatus?: 'unknown' | 'unpaid' | 'deposit' | 'partial' | 'paid' | 'refunded';
 };
 
 type FinalizeCounterReservationsArgs = {
