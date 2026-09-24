@@ -6,12 +6,12 @@ This repo is ready to use from Codex Cloud without relying on Pablo's local mach
 
 Create a Codex Cloud environment for the OmniLodge GitHub repo and add these values.
 
-Use this setup script. Codex Cloud secrets are available during setup, then removed before the agent phase, so this script stores the DB tunnel credentials in private files that the repo helper can use later.
+Use this setup script. Codex Cloud secrets are available during setup, then removed before the agent phase, so this script stores production-read credentials in private files that the repo helpers can use later.
 
 ```bash
 set -e
 apt-get update
-apt-get install -y openssh-client postgresql-client
+apt-get install -y curl openssh-client postgresql-client
 npm ci --prefix be
 npm ci --prefix ui
 npm ci --prefix ui-server
@@ -20,6 +20,21 @@ install -d -m 700 "$HOME/.omnilodge-codex-cloud"
 printf '%s\n' "$PROD_DB_TUNNEL_SSH_PRIVATE_KEY" > "$HOME/.omnilodge-codex-cloud/prod-db-tunnel-key"
 printf '%s\n' "$PROD_DB_READER_PASSWORD" > "$HOME/.omnilodge-codex-cloud/prod-db-reader-password"
 printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > "$HOME/.omnilodge-codex-cloud/known_hosts"
+
+persist_optional_secret() {
+  secret_name="$1"
+  target_name="$2"
+  if [ -n "${!secret_name:-}" ]; then
+    printf '%s\n' "${!secret_name}" > "$HOME/.omnilodge-codex-cloud/$target_name"
+    chmod 600 "$HOME/.omnilodge-codex-cloud/$target_name"
+  fi
+}
+
+persist_optional_secret PROD_READ_API_URL prod-read-api-url
+persist_optional_secret PROD_READ_API_TOKEN prod-read-api-token
+persist_optional_secret CLOUDFLARE_ACCESS_CLIENT_ID cloudflare-access-client-id
+persist_optional_secret CLOUDFLARE_ACCESS_CLIENT_SECRET cloudflare-access-client-secret
+
 chmod 600 "$HOME/.omnilodge-codex-cloud/prod-db-tunnel-key" "$HOME/.omnilodge-codex-cloud/prod-db-reader-password" "$HOME/.omnilodge-codex-cloud/known_hosts"
 ```
 
@@ -28,7 +43,7 @@ Use the same dependency commands in the maintenance script, but do not rely on s
 ```bash
 set -e
 apt-get update
-apt-get install -y openssh-client postgresql-client
+apt-get install -y curl openssh-client postgresql-client
 npm ci --prefix be
 npm ci --prefix ui
 npm ci --prefix ui-server
@@ -42,10 +57,13 @@ Add these as secrets, not regular variables:
 | --- | --- |
 | `PROD_DB_TUNNEL_SSH_PRIVATE_KEY` | Copy the full contents of `.tmp/codex-cloud/omnilodge_codex_db_tunnel_ed25519` from the local setup machine. |
 | `PROD_DB_READER_PASSWORD` | Copy the contents of `.tmp/codex-cloud/prod_db_reader_password.txt` from the local setup machine. |
+| `PROD_READ_API_TOKEN` | The random bearer token configured on the production read connector as `CODEX_READ_CONNECTOR_TOKEN`. |
+| `CLOUDFLARE_ACCESS_CLIENT_ID` | Cloudflare Access service token client ID for the production read connector app. |
+| `CLOUDFLARE_ACCESS_CLIENT_SECRET` | Cloudflare Access service token client secret for the production read connector app. |
 
 Do not paste these values into commits, issue comments, PR descriptions, logs, or chat messages.
 
-Codex Cloud currently removes secrets before the agent phase. The setup script above intentionally copies these two secrets into private files inside the container so Codex can open the read-only DB tunnel during later commands. Treat this environment as production-read-capable even though the database role and SSH key are restricted.
+Codex Cloud currently removes secrets before the agent phase. The setup script above intentionally copies production-read secrets into private files inside the container so Codex can use the HTTPS read connector, or open the legacy read-only DB tunnel from environments where SSH is reachable. Treat this environment as production-read-capable even though the database role, SSH key, Access token, and connector token are restricted.
 
 ### Variables
 
@@ -62,10 +80,99 @@ Add these as environment variables:
 | `PROD_DB_LOCAL_PORT` | `15432` |
 | `PROD_DB_NAME` | `omni_lodge_db` |
 | `PROD_DB_READER_USER` | `codex_cloud_reader` |
+| `PROD_READ_API_URL` | The Cloudflare Access-protected HTTPS URL for the production read connector, for example `https://codex-read.omni-lodge.com`. |
+
+## Preferred production DB read access from Codex Cloud
+
+Codex Cloud should use the HTTPS/443 read connector when production DB context is needed. This avoids exposing PostgreSQL and avoids raw SSH, which is not reliably routable from Codex Cloud.
+
+The helper is:
+
+```bash
+scripts/codex/query-production-read-api.sh health
+scripts/codex/query-production-read-api.sh tables
+scripts/codex/query-production-read-api.sh describe public error_monitoring_issues
+scripts/codex/query-production-read-api.sh report open-error-issues '{"statuses":["open","investigating"],"limit":25}'
+```
+
+The helper sends:
+
+- the Cloudflare Access service token headers;
+- the connector's own `Authorization: Bearer ...` token.
+
+The connector itself:
+
+- listens only on `127.0.0.1`;
+- connects as `codex_cloud_reader`;
+- wraps every DB operation in a read-only transaction;
+- applies statement, lock, row, response-size, and rate limits;
+- exposes only health/schema endpoints, predefined reports, and optional allowlisted row reads;
+- logs operation metadata only, not DB passwords, bearer tokens, or result values.
+
+### Production connector process
+
+The backend release artifact contains the connector at:
+
+```bash
+/opt/omnilodge/backend-current/dist/scripts/productionReadConnector.js
+```
+
+Run it as a separate process from the main backend, with a private env file such as `/etc/omnilodge/codex-read-connector.env`:
+
+```bash
+CODEX_READ_CONNECTOR_HOST=127.0.0.1
+CODEX_READ_CONNECTOR_PORT=3019
+CODEX_READ_CONNECTOR_TOKEN=<random-long-secret>
+CODEX_READ_DB_HOST=127.0.0.1
+CODEX_READ_DB_PORT=5432
+CODEX_READ_DB_NAME=omni_lodge_db
+CODEX_READ_DB_USER=codex_cloud_reader
+CODEX_READ_DB_PASSWORD=<codex_cloud_reader_password>
+CODEX_READ_CONNECTOR_MAX_ROWS=100
+CODEX_READ_CONNECTOR_MAX_RESPONSE_BYTES=262144
+CODEX_READ_CONNECTOR_STATEMENT_TIMEOUT_MS=5000
+CODEX_READ_CONNECTOR_LOCK_TIMEOUT_MS=1000
+CODEX_READ_CONNECTOR_RATE_LIMIT_PER_MINUTE=60
+# Optional. Empty means /tables/read is disabled.
+CODEX_READ_CONNECTOR_ALLOWED_TABLES=public.error_monitoring_issues
+```
+
+Example runtime command:
+
+```bash
+cd /opt/omnilodge/backend-current
+node --env-file=/etc/omnilodge/codex-read-connector.env --enable-source-maps dist/scripts/productionReadConnector.js
+```
+
+### Cloudflare Tunnel + Access
+
+Create a Cloudflare Tunnel on the production host and publish only the connector's loopback origin:
+
+```text
+Public hostname: codex-read.omni-lodge.com
+Service URL: http://127.0.0.1:3019
+```
+
+Then create a Cloudflare Access self-hosted application for that hostname and allow only the Codex Cloud service token. Store the Access client ID/secret in Codex Cloud as secrets.
+
+Keep PostgreSQL bound to localhost/private networking. Do not expose port 5432 publicly.
 
 ## Verifying production DB read-only access
 
 From a Codex Cloud shell:
+
+```bash
+scripts/codex/query-production-read-api.sh health
+scripts/codex/query-production-read-api.sh report open-error-issues '{"limit":10}'
+```
+
+Expected health output includes:
+
+```json
+{"ok":true,"service":"codex-production-read-connector"}
+```
+
+The legacy SSH tunnel helper remains useful from a local or trusted environment that can reach production SSH:
 
 ```bash
 scripts/codex/open-production-db-tunnel.sh check
