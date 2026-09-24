@@ -24,6 +24,12 @@ const XPERIENCEPOLAND_TIMEZONE =
 const NEW_FLOW_START = dayjs.tz('2026-05-05 00:00', 'YYYY-MM-DD HH:mm', XPERIENCEPOLAND_TIMEZONE);
 
 const DATE_TIME_FORMATS = [
+  'dddd, MMMM D, YYYY HH:mm',
+  'dddd, MMMM D, YYYY H:mm',
+  'dddd, MMMM D, YYYY',
+  'ddd, MMMM D, YYYY HH:mm',
+  'ddd, MMMM D, YYYY H:mm',
+  'ddd, MMMM D, YYYY',
   'MMMM D, YYYY HH:mm',
   'MMMM D, YYYY H:mm',
   'MMMM D YYYY HH:mm',
@@ -51,10 +57,14 @@ const DATE_TIME_FORMATS = [
 ];
 
 const BOOKING_SENDER_PATTERN = /(?:^|[<\s])friends@xperiencepoland\.com(?:[>\s]|$)/i;
+const RESALE_BOOKING_SENDER_PATTERN = /(?:^|[<\s])noreply@pubcrawlkrakow\.pl(?:[>\s]|$)/i;
+const RESALE_BOOKING_SUBJECT_PATTERN = /^\s*New\s+Booking:\s+.+?\s+-\s+\d+\s+pax\s+-\s+.+$/i;
 const LEGACY_BOOKING_SUBJECT_PATTERN = /\brezerwacja\s+na\b/i;
 const AVAILABILITY_SUBJECT_PATTERN = /\bpotwierdzenie\s+dost/i;
 const REPLY_SUBJECT_PATTERN = /^\s*(?:re|fw|fwd|odp)\s*:/i;
 const LEGACY_BODY_MARKER_PATTERN = /\bnowa rezerwacja czeka na twoje potwierdzenie\b/i;
+const RESALE_BODY_MARKER_PATTERN = /\bNew\s+Resale\s+Booking\b/i;
+const RESALE_BRAND_MARKER_PATTERN = /\bNew\s+booking\s+made\s+through\s+Pub\s+Crawl\s+Krakow\b/i;
 
 const RESERVATION_LABELS = ['Reservation number:', 'Numer rezerwacji:'];
 const CLIENT_LABELS = ['Client:', 'Klient:'];
@@ -82,6 +92,7 @@ const ALLOWED_XPERIENCE_PRODUCTS = ['Private Pub Crawl', 'Regular Pub Crawl with
 
 type XperienceEmailKind =
   | 'legacy_booking'
+  | 'resale_booking'
   | 'availability_request'
   | 'availability_confirmed'
   | 'availability_rejected'
@@ -142,7 +153,10 @@ const sanitizeDateText = (value?: string | null): string | null => {
   if (!value) {
     return null;
   }
-  return value.replace(/\(.*?\)/g, '').trim();
+  return value
+    .replace(/\(.*?\)/g, '')
+    .replace(/^(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\s*,?\s+/i, '')
+    .trim();
 };
 
 const normalizeName = (value?: string | null): { firstName: string | null; lastName: string | null } => {
@@ -205,6 +219,66 @@ const parsePartySize = (value?: string | null): number | null => {
 };
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const asFlexibleLabelPattern = (label: string): string =>
+  label
+    .trim()
+    .split(/\s+/)
+    .map(escapeRegExp)
+    .join('\\s*');
+
+const normalizeInlineWhitespace = (value: string): string =>
+  value
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r/g, '\n');
+
+const extractSection = (
+  text: string,
+  start: RegExp,
+  end: RegExp,
+): string | null => {
+  const normalized = normalizeInlineWhitespace(text);
+  const startMatch = start.exec(normalized);
+  if (!startMatch || startMatch.index < 0) {
+    return null;
+  }
+
+  const afterStart = normalized.slice(startMatch.index + startMatch[0].length);
+  const endMatch = end.exec(afterStart);
+  return (endMatch ? afterStart.slice(0, endMatch.index) : afterStart).trim() || null;
+};
+
+const extractInlineField = (
+  text: string,
+  label: string,
+  nextLabels: string[],
+): string | null => {
+  const normalized = normalizeInlineWhitespace(text);
+  const labelPattern = asFlexibleLabelPattern(label);
+  const nextPattern = nextLabels.map(asFlexibleLabelPattern).join('|');
+  const terminator = nextPattern ? `(?=(?:${nextPattern})|\\n\\s*\\n|$)` : '(?=\\n\\s*\\n|$)';
+  const regex = new RegExp(`${labelPattern}\\s*([\\s\\S]*?)${terminator}`, 'i');
+  const match = regex.exec(normalized);
+  return match?.[1]?.replace(/\s+/g, ' ').trim() || null;
+};
+
+const extractHeaderValue = (
+  headers: Record<string, string>,
+  name: string,
+): string | null => {
+  const direct = headers[name] ?? headers[name.toLowerCase()] ?? headers[name.toUpperCase()];
+  if (direct) {
+    return direct;
+  }
+  const normalizedName = name.toLowerCase();
+  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === normalizedName);
+  return entry?.[1] ?? null;
+};
+
+const extractEmailAddress = (value?: string | null): string | null => {
+  const match = value?.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0] ?? null;
+};
 
 const findBlockBoundary = (text: string, labels: string[]): number => {
   const lower = text.toLowerCase();
@@ -288,8 +362,10 @@ const parseExperienceDate = (dateText?: string | null, timeText?: string | null,
 
 const extractReservationCandidate = (context: BookingParserContext, body: string): string | null => {
   const byLabel = extractField(body, RESERVATION_LABELS, [CLIENT_LABELS, PHONE_LABELS, DATE_LABELS]);
+  const byReference = body.match(/\bReference\s+([A-Z0-9]{4,})\b/i)?.[1] ?? null;
+  const byFooterReference = body.match(/\bRef\s+([A-Z0-9]{4,})\b/i)?.[1] ?? null;
   const bySubject = context.subject?.match(/\|\s*([A-Z0-9]{4,})\s*$/i)?.[1] ?? null;
-  const raw = byLabel ?? bySubject;
+  const raw = byLabel ?? byReference ?? byFooterReference ?? bySubject;
   if (!raw) {
     return null;
   }
@@ -316,6 +392,15 @@ const classifyEmailKind = (
 ): XperienceEmailKind => {
   const normalizedSubject = foldText(subject);
   const normalizedBody = foldText(body);
+
+  if (
+    RESALE_BOOKING_SUBJECT_PATTERN.test(subject) &&
+    RESALE_BODY_MARKER_PATTERN.test(body) &&
+    RESALE_BRAND_MARKER_PATTERN.test(body) &&
+    /\bReference\s+[A-Z0-9]{4,}\b/i.test(body)
+  ) {
+    return 'resale_booking';
+  }
 
   if (newFlowEligible) {
     if (
@@ -401,6 +486,69 @@ const extractTotalAmountText = (text: string): string | null => {
   return regexMatch?.[1]?.trim() ?? null;
 };
 
+const extractResaleBookingDetails = (
+  context: BookingParserContext,
+  body: string,
+  subject: string,
+) => {
+  const customerSection = extractSection(body, /Customer\s+Details/i, /Booking\s+Details/i) ?? body;
+  const bookingSection = extractSection(body, /Booking\s+Details/i, /Reply\s+to\s+this\s+email/i) ?? body;
+
+  const guestName =
+    extractInlineField(customerSection, 'Name', ['Email', 'Phone']) ??
+    subject.match(/^\s*New\s+Booking:\s+(.+?)\s+-\s+\d+\s+pax\s+-/i)?.[1] ??
+    null;
+  const guestEmail =
+    extractInlineField(customerSection, 'Email', ['Phone']) ??
+    extractEmailAddress(extractHeaderValue(context.headers, 'reply-to'));
+  const guestPhone = extractInlineField(customerSection, 'Phone', []);
+  const partySizeText =
+    extractInlineField(bookingSection, 'Group Size', ['Payment', 'Collect on arrival']) ??
+    subject.match(/\b(\d+)\s+pax\b/i)?.[1] ??
+    null;
+  const dateText =
+    extractInlineField(bookingSection, 'Date', ['Time', 'Group Size', 'Payment']) ??
+    subject.match(/\d+\s+pax\s+-\s+(.+)$/i)?.[1] ??
+    null;
+  const timeText = extractInlineField(bookingSection, 'Time', ['Group Size', 'Payment']);
+  const paymentText = extractInlineField(bookingSection, 'Payment', ['Collect on arrival']);
+  const cashText =
+    extractInlineField(bookingSection, 'Collect on arrival', []) ??
+    body.match(/Cash\s+to\s+collect\s+on\s+the\s+night\s+([^\n\r]+)/i)?.[1] ??
+    null;
+  const depositText =
+    paymentText?.match(/Deposit\s+(.+?)\s+paid/i)?.[1] ??
+    body.match(/Deposit\s+(.+?)\s+paid/i)?.[1] ??
+    null;
+  const fullValueText =
+    paymentText?.match(/full\s+value\s+([^\n\r]+)/i)?.[1] ??
+    body.match(/full\s+value\s+([^\n\r]+)/i)?.[1] ??
+    null;
+
+  const { firstName, lastName } = normalizeName(guestName ?? undefined);
+  const partySize = parsePartySize(partySizeText);
+  const deposit = parseMoney(depositText);
+  const cash = parseMoney(cashText);
+  const fullValue = parseMoney(fullValueText);
+  const parsedDate = parseExperienceDate(dateText, timeText, null);
+
+  return {
+    guestName,
+    firstName,
+    lastName,
+    guestEmail: extractEmailAddress(guestEmail),
+    guestPhone,
+    partySize,
+    dateText,
+    timeText,
+    parsedDate,
+    depositAmount: deposit.amount,
+    cashAmount: cash.amount,
+    fullValueAmount: fullValue.amount,
+    currency: fullValue.currency ?? deposit.currency ?? cash.currency ?? 'PLN',
+  };
+};
+
 const appendNote = (parts: Array<string | null | undefined>): string | null => {
   const normalized = parts
     .map((part) => part?.trim())
@@ -419,14 +567,18 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
     const body = context.textBody || context.rawTextBody || context.snippet || '';
     const sender = context.from ?? context.headers.from ?? '';
 
-    const senderMatch = BOOKING_SENDER_PATTERN.test(sender);
+    const kind = classifyEmailKind(subject, body, isNewFlowEligible(context));
+    const senderMatch =
+      BOOKING_SENDER_PATTERN.test(sender) ||
+      (kind === 'resale_booking' && RESALE_BOOKING_SENDER_PATTERN.test(sender));
     const replySubjectMatch = REPLY_SUBJECT_PATTERN.test(subject);
     const newFlowEligible = isNewFlowEligible(context);
-    const kind = classifyEmailKind(subject, body, newFlowEligible);
     const reservation = extractReservationCandidate(context, body);
 
     const subjectMatch = Boolean(
-      kind === 'legacy_booking'
+      kind === 'resale_booking'
+        ? RESALE_BOOKING_SUBJECT_PATTERN.test(subject)
+        : kind === 'legacy_booking'
         ? LEGACY_BOOKING_SUBJECT_PATTERN.test(subject) && !replySubjectMatch
         : kind
           ? AVAILABILITY_SUBJECT_PATTERN.test(subject) || REPLY_SUBJECT_PATTERN.test(subject) || LEGACY_BOOKING_SUBJECT_PATTERN.test(subject)
@@ -434,7 +586,7 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
     );
 
     const canParseChecks: BookingParserCheck[] = [
-      { label: 'sender matches friends@xperiencepoland.com', passed: senderMatch, value: sender || null },
+      { label: 'sender matches XperiencePoland or Pub Crawl Krakow resale sender', passed: senderMatch, value: sender || null },
       { label: 'new flow date active', passed: newFlowEligible || kind === 'legacy_booking', value: newFlowEligible ? 'new-flow-enabled' : 'legacy-only' },
       { label: 'email kind detected', passed: Boolean(kind), value: kind },
       { label: 'subject pattern matches', passed: subjectMatch, value: subject || null },
@@ -456,7 +608,7 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
       Boolean(kind) &&
       subjectMatch &&
       Boolean(reservation) &&
-      (!replySubjectMatch || kind !== 'legacy_booking');
+      (!replySubjectMatch || (kind !== 'legacy_booking' && kind !== 'resale_booking'));
 
     return {
       name: this.name,
@@ -494,6 +646,63 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
     const reservation = extractReservationCandidate(context, body);
     if (!reservation) {
       return null;
+    }
+
+    if (kind === 'resale_booking') {
+      const resale = extractResaleBookingDetails(context, body, subject);
+      const bookingFields: BookingFieldPatch = {
+        productName: 'Pub Crawl Krakow',
+        guestEmail: resale.guestEmail,
+        guestPhone: resale.guestPhone,
+        currency: resale.currency,
+        paymentMethod: 'Deposit + cash on arrival',
+        notes: appendNote([
+          'XperiencePoland resale booking via Pub Crawl Krakow.',
+          resale.depositAmount !== null ? `Deposit paid online: ${resale.depositAmount.toFixed(2)} ${resale.currency}` : null,
+          resale.cashAmount !== null ? `Cash to collect on arrival: ${resale.cashAmount.toFixed(2)} ${resale.currency}` : null,
+          resale.fullValueAmount !== null ? `Full value: ${resale.fullValueAmount.toFixed(2)} ${resale.currency}` : null,
+        ]),
+      };
+      if (resale.firstName) {
+        bookingFields.guestFirstName = resale.firstName;
+      }
+      if (resale.lastName) {
+        bookingFields.guestLastName = resale.lastName;
+      }
+      if (resale.partySize !== null) {
+        bookingFields.partySizeTotal = resale.partySize;
+        bookingFields.partySizeAdults = resale.partySize;
+      }
+      if (resale.fullValueAmount !== null) {
+        bookingFields.priceGross = resale.fullValueAmount;
+        bookingFields.priceNet = resale.fullValueAmount;
+        bookingFields.baseAmount = resale.fullValueAmount;
+      }
+      if (resale.parsedDate?.isValid()) {
+        bookingFields.experienceDate = resale.parsedDate.format('YYYY-MM-DD');
+        bookingFields.experienceStartAt = resale.parsedDate.toDate();
+      }
+
+      const occurredAt = context.receivedAt ?? context.internalDate ?? null;
+      const sourceReceivedAt = context.receivedAt ?? context.internalDate ?? null;
+      return {
+        platform: 'xperiencepoland',
+        platformBookingId: reservation,
+        platformOrderId: reservation,
+        status: 'confirmed',
+        paymentStatus: resale.depositAmount !== null ? 'deposit' : 'unknown',
+        eventType: 'created',
+        bookingFields,
+        occurredAt,
+        sourceReceivedAt,
+        rawPayload: {
+          xperienceEmailKind: kind,
+          resaleSource: 'pubcrawlkrakow.pl',
+          depositAmount: resale.depositAmount,
+          cashAmount: resale.cashAmount,
+          fullValueAmount: resale.fullValueAmount,
+        },
+      };
     }
 
     const clientName = extractField(body, CLIENT_LABELS, [PHONE_LABELS, DATE_LABELS, TIME_LABELS]);
@@ -646,6 +855,4 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
     };
   }
 }
-
-
 
