@@ -162,6 +162,7 @@ describe("PaymentLinksPage bank transfer bookings", () => {
     expect(screen.getByLabelText(/Email/)).toBeRequired();
     expect(within(dialog).getByRole("switch", { name: /Send customer booking confirmation/ })).toBeChecked();
     expect(within(dialog).getByRole("switch", { name: /Send internal OmniLodge notification/ })).toBeChecked();
+    expect(within(dialog).getByRole("switch", { name: /Allow past experience dates/ })).not.toBeChecked();
     await waitFor(() => {
       const query = new URLSearchParams(screen.getByTestId("location-search").textContent || "");
       expect(query.has("action")).toBe(false);
