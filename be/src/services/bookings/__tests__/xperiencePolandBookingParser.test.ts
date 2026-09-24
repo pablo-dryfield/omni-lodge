@@ -65,7 +65,7 @@ describe('XperiencePoland Pub Crawl Krakow resale bookings', () => {
         platformBookingId: '0AOYSXQU',
         platformOrderId: '0AOYSXQU',
         status: 'confirmed',
-        paymentStatus: 'deposit',
+        paymentStatus: 'unpaid',
         eventType: 'created',
         occurredAt: new Date('2026-09-12T18:37:12.000Z'),
         sourceReceivedAt: new Date('2026-09-12T18:37:12.000Z'),
@@ -75,6 +75,9 @@ describe('XperiencePoland Pub Crawl Krakow resale bookings', () => {
           depositAmount: 30,
           cashAmount: 90,
           fullValueAmount: 120,
+          partnerCommissionAmount: 30,
+          cashToCollectAmount: 90,
+          externalFullValueAmount: 120,
         }),
       }),
     );
@@ -88,17 +91,18 @@ describe('XperiencePoland Pub Crawl Krakow resale bookings', () => {
         partySizeTotal: 1,
         partySizeAdults: 1,
         currency: 'PLN',
-        paymentMethod: 'Deposit + cash on arrival',
-        priceGross: 120,
-        priceNet: 120,
-        baseAmount: 120,
+        paymentMethod: 'Cash on arrival',
+        priceGross: 90,
+        priceNet: 90,
+        baseAmount: 90,
+        commissionAmount: 30,
         experienceDate: '2026-09-12',
         experienceStartAt: new Date('2026-09-12T19:00:00.000Z'),
       }),
     );
-    expect(parsed?.bookingFields?.notes).toContain('Deposit paid online: 30.00 PLN');
     expect(parsed?.bookingFields?.notes).toContain('Cash to collect on arrival: 90.00 PLN');
-    expect(parsed?.bookingFields?.notes).toContain('Full value: 120.00 PLN');
+    expect(parsed?.bookingFields?.notes).toContain('XperiencePoland commission/deposit retained: 30.00 PLN');
+    expect(parsed?.bookingFields?.notes).toContain('External full value: 120.00 PLN');
   });
 
   it('does not parse reply threads as new resale bookings', () => {

@@ -21,7 +21,12 @@ import NightReportPhoto from '../models/NightReportPhoto.js';
 import NightReportVenue from '../models/NightReportVenue.js';
 import { deleteNightReportPhoto as removeNightReportFile } from '../services/nightReportStorageService.js';
 import { createEcwidBatchRequest, type EcwidBatchRequestItem } from '../services/ecwidService.js';
-import { type BookingAttendanceStatus, type BookingStatus } from '../constants/bookings.js';
+import {
+  BOOKING_PAYMENT_STATUSES,
+  type BookingAttendanceStatus,
+  type BookingPaymentStatus,
+  type BookingStatus,
+} from '../constants/bookings.js';
 import { reconcileCounterInventory } from '../services/inventoryService.js';
 import { normalizeBookingExtrasSnapshot as normalizeBookingExtras } from '../utils/bookingExtras.js';
 
@@ -46,6 +51,7 @@ type AttendanceUpdateInput = {
   addonRefundReason?: string | null;
   markNoShowWhenAbsent?: boolean;
   attendedTshirtSizes?: Record<string, number>;
+  paymentStatus?: BookingPaymentStatus;
 };
 
 type BookingAddonRefundAction = {
@@ -269,6 +275,7 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
       addonRefundReason?: unknown;
       markNoShowWhenAbsent?: unknown;
       attendedTshirtSizes?: unknown;
+      paymentStatus?: unknown;
     };
     const bookingId = Number(typed.bookingId);
     if (!Number.isInteger(bookingId) || bookingId <= 0) {
@@ -363,6 +370,14 @@ function parseAttendanceUpdates(payload: unknown): AttendanceUpdateInput[] {
         sizes[size] = Math.round(quantity);
       }
       update.attendedTshirtSizes = sizes;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(typed, 'paymentStatus')) {
+      const paymentStatus = String(typed.paymentStatus ?? '').trim().toLowerCase();
+      if (!BOOKING_PAYMENT_STATUSES.includes(paymentStatus as BookingPaymentStatus)) {
+        throw new HttpError(400, 'attendanceUpdates[].paymentStatus is invalid');
+      }
+      update.paymentStatus = paymentStatus as BookingPaymentStatus;
     }
 
     return update;
@@ -575,6 +590,9 @@ async function applyBookingAttendanceUpdate(
   const hasAttendance = nextAttendanceStatus === 'checked_in_full' || nextAttendanceStatus === 'checked_in_partial';
   booking.checkedInAt = hasAttendance ? new Date() : null;
   booking.checkedInBy = hasAttendance ? (actorId ?? booking.checkedInBy ?? null) : null;
+  if (update.paymentStatus) {
+    booking.paymentStatus = update.paymentStatus;
+  }
   booking.updatedBy = actorId;
   applyExternalAddonRefundRequests(booking, update, actorId, counterId);
 

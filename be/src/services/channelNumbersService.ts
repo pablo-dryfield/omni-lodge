@@ -540,6 +540,19 @@ const aggregateCashTotals = (entry: CashSnapshotEntry): Map<string, number> => {
   return totals;
 };
 
+const hasPositiveCashSnapshot = (entry: CashSnapshotEntry | undefined): boolean => {
+  if (!entry) {
+    return false;
+  }
+  const totals = aggregateCashTotals(entry);
+  for (const amount of totals.values()) {
+    if (Number.isFinite(amount) && amount > 0) {
+      return true;
+    }
+  }
+  return false;
+};
+
 const buildTicketSummary = (entry: CashSnapshotEntry, channelName: string): string | null => {
   if (!entry.tickets || entry.tickets.length === 0) {
     return null;
@@ -615,7 +628,7 @@ async function buildChannelCashSummary(params: {
     const noteText = stripSnapshotFromNote(counter.notes);
 
     snapshotMap.forEach((snapshotEntry, channelId) => {
-      if (!cashEligibleChannels.has(channelId)) {
+      if (!cashEligibleChannels.has(channelId) && !hasPositiveCashSnapshot(snapshotEntry)) {
         return;
       }
       const channel = channelLookup.get(channelId);
@@ -2196,24 +2209,6 @@ export async function recordChannelCashCollection(params: {
     throw new HttpError(400, 'channelId must be a positive integer');
   }
 
-  const channelRecord = await Channel.findByPk(channelId, {
-    include: [{ model: PaymentMethod, as: 'paymentMethod' }],
-  });
-  if (!channelRecord) {
-    throw new HttpError(404, 'Channel not found');
-  }
-  const paymentName = channelRecord.paymentMethod?.name?.toLowerCase() ?? '';
-  if (paymentName !== 'cash') {
-    throw new HttpError(400, 'This channel is not configured for cash payments');
-  }
-
-  const normalizedCurrency = sanitizeCurrency(currency);
-  const normalizedAmount = Number(amount);
-  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
-    throw new HttpError(400, 'Amount must be greater than zero');
-  }
-  const amountMinor = Math.round(normalizedAmount * 100);
-
   const start = dayjs(rangeStart, 'YYYY-MM-DD', true);
   const end = dayjs(rangeEnd, 'YYYY-MM-DD', true);
   if (!start.isValid() || !end.isValid() || end.isBefore(start)) {
@@ -2227,6 +2222,34 @@ export async function recordChannelCashCollection(params: {
   if (!rangeIsCanonical) {
     throw new HttpError(400, 'Collections can only be recorded for full calendar months');
   }
+
+  const channelRecord = await Channel.findByPk(channelId, {
+    include: [{ model: PaymentMethod, as: 'paymentMethod' }],
+  });
+  if (!channelRecord) {
+    throw new HttpError(404, 'Channel not found');
+  }
+  const paymentName = channelRecord.paymentMethod?.name?.toLowerCase() ?? '';
+  if (paymentName !== 'cash') {
+    const counters = await Counter.findAll({
+      where: { date: { [Op.between]: [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')] } },
+      attributes: ['id', 'notes'],
+    });
+    const hasSnapshotCashDue = counters.some((counter) => {
+      const snapshot = extractCashSnapshotMap(counter.notes).get(channelId);
+      return hasPositiveCashSnapshot(snapshot);
+    });
+    if (!hasSnapshotCashDue) {
+      throw new HttpError(400, 'This channel is not configured for cash payments and has no cash snapshot due in the selected range');
+    }
+  }
+
+  const normalizedCurrency = sanitizeCurrency(currency);
+  const normalizedAmount = Number(amount);
+  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+    throw new HttpError(400, 'Amount must be greater than zero');
+  }
+  const amountMinor = Math.round(normalizedAmount * 100);
 
   let financeTransactionIdValue: number | null = null;
   if (financeTransactionId != null) {
