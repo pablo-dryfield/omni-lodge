@@ -58,6 +58,15 @@ jest.mock('../storefrontOrderEmailService.js', () => ({
   deliverStorefrontBankTransferCancellationEmail: jest.fn(),
   deliverStorefrontBankTransferInstructionsEmail: jest.fn(),
   deliverStorefrontOrderEmails: jest.fn(),
+  getStorefrontOrderConfirmationNotificationPreferences: jest.fn((order: { metadata?: Record<string, unknown> | null }) => {
+    const source = order.metadata?.confirmationNotifications as
+      | { customerConfirmation?: boolean; internalConfirmation?: boolean }
+      | undefined;
+    return {
+      customerConfirmation: source?.customerConfirmation !== false,
+      internalConfirmation: source?.internalConfirmation !== false,
+    };
+  }),
   isStorefrontOrderConfirmationEmailComplete: jest.fn(() => false),
 }));
 jest.mock('../../utils/logger.js', () => ({
@@ -144,5 +153,19 @@ describe('bank-transfer order listing and serialization', () => {
     }));
 
     expect(serialized.receivedPaymentReference).toBe('BANK-STATEMENT-42');
+  });
+
+  it('serializes saved confirmation notification preferences', async () => {
+    const serialized = await serializeBankTransferOrder(buildOrder(8, 10, {
+      confirmationNotifications: {
+        customerConfirmation: false,
+        internalConfirmation: true,
+      },
+    }));
+
+    expect(serialized.notificationPreferences).toEqual({
+      customerConfirmation: false,
+      internalConfirmation: true,
+    });
   });
 });

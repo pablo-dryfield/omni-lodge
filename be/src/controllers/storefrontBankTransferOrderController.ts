@@ -65,6 +65,7 @@ export const createStorefrontBankTransferOrder = async (
       clientRequestId: request.body?.clientRequestId,
       customer: request.body?.customer,
       cart: request.body?.cart,
+      notifications: request.body?.notifications,
     });
     response.status(result.created ? 201 : 200).json({
       data: await serializeBankTransferOrder(result.order),
@@ -88,6 +89,7 @@ export const markStorefrontBankTransferPaymentReceived = async (
       paymentReference: request.body?.paymentReference,
       note: request.body?.note,
       clientRequestId: request.body?.clientRequestId,
+      notifications: request.body?.notifications,
     });
     response.json({ data: await serializeBankTransferOrder(order) });
   } catch (error) {

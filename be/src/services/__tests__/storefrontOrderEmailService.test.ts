@@ -267,4 +267,47 @@ describe('storefront paid-order emails', () => {
       internalEmailSentAt: null,
     } as StorefrontOrder)).toBe(true);
   });
+
+  it('treats intentionally disabled confirmation recipients as complete', () => {
+    mockedGetConfigValue.mockReturnValueOnce('bookings@example.com');
+    expect(isStorefrontOrderConfirmationEmailComplete({
+      ...order,
+      metadata: {
+        confirmationNotifications: {
+          customerConfirmation: false,
+          internalConfirmation: false,
+        },
+      },
+      customerEmailSentAt: null,
+      internalEmailSentAt: null,
+    } as StorefrontOrder)).toBe(true);
+  });
+
+  it('still waits for enabled recipients when only one confirmation channel is disabled', () => {
+    mockedGetConfigValue.mockReturnValueOnce('bookings@example.com');
+    expect(isStorefrontOrderConfirmationEmailComplete({
+      ...order,
+      metadata: {
+        confirmationNotifications: {
+          customerConfirmation: false,
+          internalConfirmation: true,
+        },
+      },
+      customerEmailSentAt: null,
+      internalEmailSentAt: null,
+    } as StorefrontOrder)).toBe(false);
+
+    mockedGetConfigValue.mockReturnValueOnce('bookings@example.com');
+    expect(isStorefrontOrderConfirmationEmailComplete({
+      ...order,
+      metadata: {
+        confirmationNotifications: {
+          customerConfirmation: false,
+          internalConfirmation: true,
+        },
+      },
+      customerEmailSentAt: null,
+      internalEmailSentAt: new Date(),
+    } as StorefrontOrder)).toBe(true);
+  });
 });
