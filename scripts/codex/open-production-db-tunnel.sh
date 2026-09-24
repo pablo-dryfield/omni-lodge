@@ -19,6 +19,18 @@ key_file="${runtime_root}/prod-db-tunnel-key"
 known_hosts_file="${runtime_root}/known_hosts"
 control_socket="${runtime_root}/prod-db-tunnel.sock"
 
+print_ssh_network_failure_help() {
+  cat >&2 <<EOF
+Unable to reach the production SSH tunnel endpoint (${ssh_host}:22).
+
+The secret files were loaded, but the environment cannot route to raw SSH on
+port 22. In Codex Cloud this usually means direct SSH is unavailable from the
+agent network, even when agent internet access is enabled. Use this helper from
+a local/trusted environment, or add a separate HTTPS/443 production-read
+connector before expecting Codex Cloud database checks to pass.
+EOF
+}
+
 read_required_value() {
   local name="$1"
   local file_name="$2"
@@ -77,10 +89,14 @@ start_tunnel() {
     return 0
   fi
 
-  ssh \
+  local ssh_error_file
+  ssh_error_file="$(mktemp "${runtime_root}/prod-db-tunnel-ssh-error.XXXXXX")"
+
+  if ssh \
     -i "$key_file" \
     -o BatchMode=yes \
     -o IdentitiesOnly=yes \
+    -o ConnectTimeout="${PROD_SSH_CONNECT_TIMEOUT_SECONDS:-10}" \
     -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
@@ -91,7 +107,20 @@ start_tunnel() {
     -f \
     -N \
     -L "${local_db_host}:${local_db_port}:${remote_db_host}:${remote_db_port}" \
-    "$(tunnel_target)"
+    "$(tunnel_target)" \
+    2>"$ssh_error_file"; then
+    rm -f "$ssh_error_file"
+  else
+    local ssh_status=$?
+    if grep -Eqi 'Network is unreachable|No route to host|Connection timed out|Connection refused' "$ssh_error_file"; then
+      print_ssh_network_failure_help
+      cat "$ssh_error_file" >&2
+    else
+      cat "$ssh_error_file" >&2
+    fi
+    rm -f "$ssh_error_file"
+    return "$ssh_status"
+  fi
 
   echo "Production DB tunnel open on ${local_db_host}:${local_db_port}."
 }

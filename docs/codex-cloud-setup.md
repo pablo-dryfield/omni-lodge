@@ -80,6 +80,26 @@ codex_cloud_reader
 omni_lodge_db
 ```
 
+### If Codex Cloud cannot reach SSH
+
+If the check fails with:
+
+```text
+ssh: connect to host 23.95.192.213 port 22: Network is unreachable
+```
+
+then the secrets were accepted and the failure is the transport route, not the
+database credentials. Direct SSH to the production host is not currently a
+reliable Codex Cloud access path, even after enabling agent internet access and
+testing with an unrestricted domain allowlist.
+
+Do not expose PostgreSQL directly to the internet to work around this. Until a
+separate HTTPS/443 production-read connector exists, use this tunnel helper from
+a local/trusted environment for production database inspection. The preferred
+future cloud path is a narrowly scoped HTTPS/443 connector, such as a Cloudflare
+Tunnel/Access protected read-only diagnostics endpoint, with audit logging and
+the same `codex_cloud_reader` database role.
+
 To stop the tunnel:
 
 ```bash
