@@ -652,6 +652,7 @@ test('activation recovery converges pointers back to the previous snapshot and f
     'request:restore_required->restoring_previous',
     'pointer:switch-snapshot',
     'pm2:restart:backend,ui-server:persist=false',
+    `origin:legacy-checkout:${'b'.repeat(40)}`,
     'pm2:save',
     'tx:restoring_previous->previous_restored@restoring_previous',
     'request:restoring_previous->previous_restored',
@@ -661,6 +662,39 @@ test('activation recovery converges pointers back to the previous snapshot and f
   assert.equal(result.action, 'converge_previous_snapshot');
   assert.equal(result.transactionPhase, 'failed');
   assert.equal(result.requestPhase, 'failed');
+  assert.equal(result.managedOriginReadiness.releaseId, 'legacy-checkout');
+});
+
+test('activation recovery refuses to mark a managed previous release restored before origin readiness passes', async () => {
+  const originCalls = [];
+  const { calls, orchestrator } = createFixture({
+    initialTransactionPhase: 'pointers_switched',
+    recoveryAction: 'converge_previous_snapshot',
+    originReadinessRunnerImpl: async ({ releaseId, sourceSha }) => {
+      originCalls.push(`${releaseId}:${sourceSha}`);
+      const error = new Error('previous origin down');
+      error.managedOriginReadiness = Object.freeze({ failed: true });
+      throw error;
+    },
+  });
+
+  await assert.rejects(
+    () => orchestrator.recoverForwardDeployment({
+      entry: requestEntry('pointers_switched'),
+    }),
+    (error) => {
+      assert.match(error.message, /previous origin down/);
+      assert.equal(error.activationProgress.operation, 'recovery');
+      assert.equal(error.activationProgress.releaseId, 'legacy-checkout');
+      assert.equal(error.activationProgress.requestPhase, 'restoring_previous');
+      assert.deepEqual(error.activationProgress.managedOriginReadiness, { failed: true });
+      return true;
+    },
+  );
+
+  assert.deepEqual(originCalls, [`legacy-checkout:${'b'.repeat(40)}`]);
+  assert.equal(calls.includes('pm2:save'), false);
+  assert.equal(calls.includes('tx:restoring_previous->previous_restored@restoring_previous'), false);
 });
 
 test('activation recovery restores the saved PM2 process list when converging to a legacy baseline', async () => {

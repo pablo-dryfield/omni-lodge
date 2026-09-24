@@ -277,6 +277,7 @@ test('runtime launcher uses only fixed release/config/state roots', async () => 
     "SEED_ACCESS_CONTROL: 'false'",
     "APP_RUNTIME_MODE: 'primary'",
     "PUPPETEER_CACHE_DIR: '/var/cache/omnilodge/puppeteer'",
+    'DEPENDENCY_LAYER_FORMAT_VERSION = 2',
     'dependencyLayerKeysFromManifest',
     'identity.dependencyLayerKeys.backend',
     "identity.dependencyLayerKeys['ui-server']",
@@ -353,8 +354,8 @@ test('runtime launcher accepts candidate and rejects non-candidate release manif
     sourceSha,
     lockfiles: manifest.lockfiles,
     dependencyLayerKeys: {
-      backend: '8af84dc64fcb5301c14530c2d578de67ac594b52b6612fbe45292e06dea6a897',
-      'ui-server': 'b9b7c2b25f35c7ec0cf4ac4ac311016dd46b3ca65f366f18d713059345559da2',
+      backend: 'd076f352c76e86552a63dbb235d5aba6ea79e5a0bea4855d563c75aa245789d2',
+      'ui-server': 'f084657983dc00e8055d15f287cc8d8f597276d9c8c7b37aa1e36dc5489b34d3',
     },
   });
   assert.throws(

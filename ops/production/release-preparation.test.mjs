@@ -43,12 +43,21 @@ import {
   runPrivateSmokeChecks,
   runDryRunRuntimeChecks,
 } from './libexec/deploy/worker.mjs';
+import {
+  validateReleaseManifestIdentity as validateRuntimeReleaseManifestIdentity,
+} from './bin/runtime-launcher.mjs';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const sourceSha = 'a'.repeat(40);
 const releaseId = `omnilodge-r12345-a2-${sourceSha.slice(0, 12)}`;
 
 const mkdir = (directory) => mkdirSync(directory, { recursive: true, mode: 0o755 });
+
+const symlinkDirectory = (target, linkPath) => symlinkSync(
+  target,
+  linkPath,
+  process.platform === 'win32' ? 'junction' : 'dir',
+);
 
 const writeRelative = (root, relativePath, bytes) => {
   const destination = path.join(root, ...relativePath.split('/'));
@@ -357,6 +366,16 @@ test('derives immutable release, dependency, cache, and managed-link plans from 
       backend: 'install',
       'ui-server': 'install',
     });
+  });
+});
+
+test('runtime launcher derives the same dependency layer keys as release preparation', async () => {
+  await withFixture(async (fixture) => {
+    const plan = fixture.plan();
+    const runtimeIdentity = validateRuntimeReleaseManifestIdentity(fixture.manifest, releaseId);
+
+    assert.equal(runtimeIdentity.dependencyLayerKeys.backend, plan.dependencies.backend.layerKey);
+    assert.equal(runtimeIdentity.dependencyLayerKeys['ui-server'], plan.dependencies['ui-server'].layerKey);
   });
 });
 
@@ -701,6 +720,86 @@ test('managed release garbage collection preserves protected releases and remove
     assert.equal(existsSync(activePlan.dependencies.backend.finalPath), true);
     assert.equal(existsSync(oldPlan.dependencies['ui-server'].finalPath), false);
     assert.equal(existsSync(activePlan.dependencies['ui-server'].finalPath), true);
+  });
+});
+
+test('managed release garbage collection preserves layers linked by retained releases', async () => {
+  await withFixture(async (fixture) => {
+    const activePlan = fixture.plan();
+    await publishBoth(activePlan);
+
+    const linkedBackendLayer = 'e'.repeat(64);
+    const linkedUiServerLayer = 'f'.repeat(64);
+    const unreferencedBackendLayer = '1'.repeat(64);
+    const unreferencedUiServerLayer = '2'.repeat(64);
+    const createLayer = (component, key) => {
+      const root = path.join(fixture.layout.dependenciesRoot, component, key);
+      mkdir(path.join(root, 'node_modules'));
+      return root;
+    };
+    const linkedBackendRoot = createLayer('backend', linkedBackendLayer);
+    const linkedUiServerRoot = createLayer('ui-server', linkedUiServerLayer);
+    const unreferencedBackendRoot = createLayer('backend', unreferencedBackendLayer);
+    const unreferencedUiServerRoot = createLayer('ui-server', unreferencedUiServerLayer);
+
+    const backendLink = path.join(fixture.releaseRoot, 'be/node_modules');
+    const uiServerLink = path.join(fixture.releaseRoot, 'ui-server/node_modules');
+    symlinkDirectory(path.join(linkedBackendRoot, 'node_modules'), backendLink);
+    symlinkDirectory(path.join(linkedUiServerRoot, 'node_modules'), uiServerLink);
+
+    const paths = {
+      stateRoot: path.join(fixture.fixtureRoot, 'deploy-state'),
+      stagingRoot: path.join(fixture.fixtureRoot, 'deploy-staging'),
+      runningRequests: path.join(fixture.fixtureRoot, 'deploy-running'),
+    };
+    mkdir(paths.stateRoot);
+    mkdir(paths.stagingRoot);
+    mkdir(paths.runningRequests);
+    const policy = {
+      minimumRetainedUnprotectedReleases: 0,
+      unprotectedReleaseRetentionMs: 0,
+      unreferencedDependencyLayerRetentionMs: 0,
+      stalePartialDependencyRetentionMs: 24 * 60 * 60 * 1000,
+      minimumRetainedActivationSnapshots: 0,
+      activationSnapshotRetentionMs: 0,
+      minimumRetainedSourceMapReleases: 0,
+      sourceMapRetentionMs: 0,
+      stagingRetentionMs: 0,
+    };
+
+    const plan = planManagedReleaseGarbageCollection({
+      trustedLayout: fixture.layout,
+      paths,
+      policy,
+      currentLinkPaths: [],
+      protectedReleaseIds: [releaseId],
+      now: () => new Date('2026-09-23T12:00:00.000Z'),
+    });
+
+    assert.equal(plan.dependencies.backend.protectedLayerKeys.includes(activePlan.dependencies.backend.layerKey), true);
+    assert.equal(plan.dependencies.backend.protectedLayerKeys.includes(linkedBackendLayer), true);
+    assert.equal(plan.dependencies['ui-server'].protectedLayerKeys.includes(activePlan.dependencies['ui-server'].layerKey), true);
+    assert.equal(plan.dependencies['ui-server'].protectedLayerKeys.includes(linkedUiServerLayer), true);
+    assert.equal(plan.dependencies.backend.removable.some((item) => item.name === linkedBackendLayer), false);
+    assert.equal(plan.dependencies['ui-server'].removable.some((item) => item.name === linkedUiServerLayer), false);
+    assert.equal(plan.dependencies.backend.removable.some((item) => item.name === unreferencedBackendLayer), true);
+    assert.equal(plan.dependencies['ui-server'].removable.some((item) => item.name === unreferencedUiServerLayer), true);
+
+    const result = runManagedReleaseGarbageCollection({
+      trustedLayout: fixture.layout,
+      paths,
+      policy,
+      currentLinkPaths: [],
+      protectedReleaseIds: [releaseId],
+      now: () => new Date('2026-09-23T12:00:00.000Z'),
+    });
+
+    assert.equal(result.removed.dependencies.backend.some((item) => item.path === unreferencedBackendRoot), true);
+    assert.equal(result.removed.dependencies['ui-server'].some((item) => item.path === unreferencedUiServerRoot), true);
+    assert.equal(existsSync(linkedBackendRoot), true);
+    assert.equal(existsSync(linkedUiServerRoot), true);
+    assert.equal(existsSync(unreferencedBackendRoot), false);
+    assert.equal(existsSync(unreferencedUiServerRoot), false);
   });
 });
 
