@@ -335,7 +335,9 @@ test('derives immutable release, dependency, cache, and managed-link plans from 
     assert.equal(plan.sourceSha, sourceSha);
     assert.equal(plan.payloadFileCount, fixture.manifest.fileCount);
     assert.equal(plan.dependencies.backend.lockHash, fixture.manifest.lockfiles['be/package-lock.json']);
+    assert.equal(plan.dependencies.backend.material.layerFormatVersion, 2);
     assert.equal(plan.dependencies['ui-server'].lockHash, fixture.manifest.lockfiles['ui-server/package-lock.json']);
+    assert.equal(plan.dependencies['ui-server'].material.layerFormatVersion, 2);
     assert.equal(
       plan.dependencies.backend.finalPath,
       path.join(fixture.layout.dependenciesRoot, 'backend', plan.dependencies.backend.layerKey),
@@ -548,6 +550,7 @@ test('publishes a dependency layer atomically through an injected executor and r
       path.join(plan.dependencies.backend.finalPath, '.omnilodge-dependency.json'),
       'utf8',
     ));
+    assert.equal(marker.material.layerFormatVersion, 2);
     assert.equal(marker.tree.algorithm, 'sha256');
     assert.match(marker.tree.digest, /^[0-9a-f]{64}$/);
     assert.equal(Number.isSafeInteger(marker.tree.entryCount) && marker.tree.entryCount > 0, true);
