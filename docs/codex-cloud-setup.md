@@ -6,7 +6,7 @@ This repo is ready to use from Codex Cloud without relying on Pablo's local mach
 
 Create a Codex Cloud environment for the OmniLodge GitHub repo and add these values.
 
-Use this setup script. Codex Cloud secrets are available during setup, then removed before the agent phase, so this script stores production-read credentials in private files that the repo helpers can use later.
+Use this setup script. Codex Cloud secrets are available during setup, then removed before the agent phase, so this script stores production-read credentials in private files that the repo helpers can use later. The HTTPS read connector is the primary production-inspection path; the raw SSH tunnel credentials are optional legacy fallback values only.
 
 ```bash
 set -e
@@ -17,25 +17,38 @@ npm ci --prefix ui
 npm ci --prefix ui-server
 
 install -d -m 700 "$HOME/.omnilodge-codex-cloud"
-printf '%s\n' "$PROD_DB_TUNNEL_SSH_PRIVATE_KEY" > "$HOME/.omnilodge-codex-cloud/prod-db-tunnel-key"
-printf '%s\n' "$PROD_DB_READER_PASSWORD" > "$HOME/.omnilodge-codex-cloud/prod-db-reader-password"
-printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > "$HOME/.omnilodge-codex-cloud/known_hosts"
 
-persist_optional_secret() {
+persist_required_value() {
   secret_name="$1"
   target_name="$2"
-  if [ -n "${!secret_name:-}" ]; then
-    printf '%s\n' "${!secret_name}" > "$HOME/.omnilodge-codex-cloud/$target_name"
-    chmod 600 "$HOME/.omnilodge-codex-cloud/$target_name"
+  if [ -z "${!secret_name:-}" ]; then
+    echo "Missing required Codex Cloud value: $secret_name" >&2
+    exit 2
   fi
+  printf '%s\n' "${!secret_name}" > "$HOME/.omnilodge-codex-cloud/$target_name"
+  chmod 600 "$HOME/.omnilodge-codex-cloud/$target_name"
 }
 
-persist_optional_secret PROD_READ_API_URL prod-read-api-url
-persist_optional_secret PROD_READ_API_TOKEN prod-read-api-token
-persist_optional_secret CLOUDFLARE_ACCESS_CLIENT_ID cloudflare-access-client-id
-persist_optional_secret CLOUDFLARE_ACCESS_CLIENT_SECRET cloudflare-access-client-secret
+persist_optional_value() {
+  secret_name="$1"
+  target_name="$2"
+  if [ -z "${!secret_name:-}" ]; then
+    return 0
+  fi
+  printf '%s\n' "${!secret_name}" > "$HOME/.omnilodge-codex-cloud/$target_name"
+  chmod 600 "$HOME/.omnilodge-codex-cloud/$target_name"
+}
 
-chmod 600 "$HOME/.omnilodge-codex-cloud/prod-db-tunnel-key" "$HOME/.omnilodge-codex-cloud/prod-db-reader-password" "$HOME/.omnilodge-codex-cloud/known_hosts"
+persist_optional_value PROD_READ_API_URL prod-read-api-url
+persist_required_value PROD_READ_API_TOKEN prod-read-api-token
+persist_required_value CLOUDFLARE_ACCESS_CLIENT_ID cloudflare-access-client-id
+persist_required_value CLOUDFLARE_ACCESS_CLIENT_SECRET cloudflare-access-client-secret
+
+# Optional legacy SSH tunnel fallback. These are not required for the preferred
+# Cloudflare Access HTTPS read connector.
+persist_optional_value PROD_DB_TUNNEL_SSH_PRIVATE_KEY prod-db-tunnel-key
+persist_optional_value PROD_DB_READER_PASSWORD prod-db-reader-password
+persist_optional_value PROD_SSH_KNOWN_HOSTS known_hosts
 ```
 
 Use the same dependency commands in the maintenance script, but do not rely on secrets being present there:
@@ -51,23 +64,29 @@ npm ci --prefix ui-server
 
 ### Secrets
 
-Add these as secrets, not regular variables:
+Add these as secrets, not regular variables. The first three are required for the preferred Codex Cloud production-read path:
 
 | Secret | Source |
 | --- | --- |
-| `PROD_DB_TUNNEL_SSH_PRIVATE_KEY` | Copy the full contents of `.tmp/codex-cloud/omnilodge_codex_db_tunnel_ed25519` from the local setup machine. |
-| `PROD_DB_READER_PASSWORD` | Copy the contents of `.tmp/codex-cloud/prod_db_reader_password.txt` from the local setup machine. |
 | `PROD_READ_API_TOKEN` | The random bearer token configured on the production read connector as `CODEX_READ_CONNECTOR_TOKEN`. |
 | `CLOUDFLARE_ACCESS_CLIENT_ID` | Cloudflare Access service token client ID for the production read connector app. |
 | `CLOUDFLARE_ACCESS_CLIENT_SECRET` | Cloudflare Access service token client secret for the production read connector app. |
+| `PROD_DB_READER_PASSWORD` | Optional legacy SSH-tunnel fallback. Copy the contents of `.tmp/codex-cloud/prod_db_reader_password.txt` from the local setup machine only if the fallback tunnel is needed. |
+| `PROD_DB_TUNNEL_SSH_PRIVATE_KEY` | Optional legacy SSH-tunnel fallback. Copy the full contents of `.tmp/codex-cloud/omnilodge_codex_db_tunnel_ed25519` from the local setup machine only if the fallback tunnel is needed. |
 
 Do not paste these values into commits, issue comments, PR descriptions, logs, or chat messages.
 
-Codex Cloud currently removes secrets before the agent phase. The setup script above intentionally copies production-read secrets into private files inside the container so Codex can use the HTTPS read connector, or open the legacy read-only DB tunnel from environments where SSH is reachable. Treat this environment as production-read-capable even though the database role, SSH key, Access token, and connector token are restricted.
+Codex Cloud currently removes secrets before the agent phase. The setup script above intentionally copies production-read secrets into private files inside the container so Codex can use the HTTPS read connector after setup. Treat this environment as production-read-capable even though the connector, Cloudflare Access service token, and database role are restricted.
 
 ### Variables
 
 Add these as environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `PROD_READ_API_URL` | `https://codex-read.omni-lodge.com` |
+
+The following values are optional legacy SSH-tunnel fallback values. Keep them only if you still want local/trusted environments to use `scripts/codex/open-production-db-tunnel.sh`:
 
 | Variable | Value |
 | --- | --- |
@@ -80,7 +99,6 @@ Add these as environment variables:
 | `PROD_DB_LOCAL_PORT` | `15432` |
 | `PROD_DB_NAME` | `omni_lodge_db` |
 | `PROD_DB_READER_USER` | `codex_cloud_reader` |
-| `PROD_READ_API_URL` | The Cloudflare Access-protected HTTPS URL for the production read connector, for example `https://codex-read.omni-lodge.com`. |
 
 ## Preferred production DB read access from Codex Cloud
 
@@ -200,12 +218,13 @@ database credentials. Direct SSH to the production host is not currently a
 reliable Codex Cloud access path, even after enabling agent internet access and
 testing with an unrestricted domain allowlist.
 
-Do not expose PostgreSQL directly to the internet to work around this. Until a
-separate HTTPS/443 production-read connector exists, use this tunnel helper from
-a local/trusted environment for production database inspection. The preferred
-future cloud path is a narrowly scoped HTTPS/443 connector, such as a Cloudflare
-Tunnel/Access protected read-only diagnostics endpoint, with audit logging and
-the same `codex_cloud_reader` database role.
+Do not expose PostgreSQL directly to the internet to work around this. The
+Cloudflare Tunnel/Access protected HTTPS read connector already exists for Codex
+Cloud and should be used instead:
+
+```bash
+scripts/codex/query-production-read-api.sh health
+```
 
 To stop the tunnel:
 
@@ -216,10 +235,22 @@ scripts/codex/open-production-db-tunnel.sh stop
 ## How cloud work should flow
 
 1. Start a Codex Cloud task against this repository.
-2. Create a branch and make the requested changes.
-3. Run the relevant local checks in the cloud environment.
-4. Open a pull request.
-5. Let GitHub Actions validate, auto-merge when green, and deploy from `master`.
+2. For implementation, fix, refactor, or documentation-change tasks, create a same-repository branch from latest `origin/master` named `codex/<short-kebab-description>`.
+3. Make the requested changes on that branch. Do not commit generated outputs such as `ui/build` or `be/dist`.
+4. Run the relevant local checks in the cloud environment and record the commands/results:
+   - backend changes: `npm --prefix be run check` and `npm --prefix be test -- --runInBand`;
+   - UI changes: `npm --prefix ui run check` and `CI=true npm --prefix ui test -- --watchAll=false`;
+   - UI-server changes: `npm --prefix ui-server test`;
+   - release/deploy/ops changes: run the relevant `node --test ...` suite from `.github/workflows/ci.yml`;
+   - docs-only changes: at minimum run `git diff --check`.
+5. Commit, push the `codex/*` branch, and open a pull request into `master`. The PR should be ready for review/merge, not draft, unless the task is intentionally incomplete or blocked.
+6. Include the implementation summary and check results in the PR description or final Codex Cloud task summary.
+7. Let GitHub Actions validate. Same-repository `codex/*` PRs into `master` are eligible for squash auto-merge when green, and production deployment is handled from `master`.
+
+The CI and auto-merge workflows depend on this naming convention:
+
+- `.github/workflows/ci.yml` runs on pushes to `codex/**` and pull requests into `master`.
+- `.github/workflows/auto-merge.yml` enables auto-merge only for same-repository pull requests whose head branch starts with `codex/`.
 
 The cloud environment should not deploy by copying files to production. Production deploys are handled by the immutable release artifact built by GitHub Actions.
 
@@ -227,6 +258,12 @@ The cloud environment should not deploy by copying files to production. Producti
 
 The production host now has:
 
+- HTTPS production read connector
+  - served through Cloudflare Tunnel public hostname `codex-read.omni-lodge.com`;
+  - protected by a Cloudflare Access self-hosted application and service token;
+  - backed by the connector's own `Authorization: Bearer ...` token;
+  - loopback origin only: `http://127.0.0.1:3019`;
+  - preferred for all Codex Cloud production data inspection.
 - PostgreSQL role `codex_cloud_reader`
   - login enabled;
   - default transaction read-only;
