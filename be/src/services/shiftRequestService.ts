@@ -32,6 +32,7 @@ import {
   getInitialShiftRequestStatus,
   getShiftRequestStatusAfterManagerDecision,
   getShiftRequestStatusAfterPartnerResponse,
+  isSameShiftInstanceAssignment,
   normalizeShiftRequestNote,
 } from './shiftRequestRulesService.js';
 
@@ -319,6 +320,9 @@ const assertStaffCanReceiveAssignment = async (
   const targetRange = getShiftRange(targetAssignment);
   const overlap = existingAssignments.some((assignment) => {
     if (!assignment.shiftInstance) {
+      return false;
+    }
+    if (isSameShiftInstanceAssignment(targetAssignment, assignment)) {
       return false;
     }
     return rangesOverlap(targetRange, getShiftRange(assignment));

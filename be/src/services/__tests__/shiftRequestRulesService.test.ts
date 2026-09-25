@@ -8,6 +8,7 @@ import {
   getInitialShiftRequestStatus,
   getShiftRequestStatusAfterManagerDecision,
   getShiftRequestStatusAfterPartnerResponse,
+  isSameShiftInstanceAssignment,
   isActiveShiftRequestStatus,
   normalizeShiftRequestNote,
   parseStrictBoolean,
@@ -210,3 +211,26 @@ describe('affected assignment and active-request conflicts', () => {
   });
 });
 
+describe('same shift instance assignment stacking', () => {
+  it('allows multiple assignments on the same shift instance', () => {
+    expect(isSameShiftInstanceAssignment(
+      { shiftInstanceId: 2890 },
+      { shiftInstanceId: 2890 },
+    )).toBe(true);
+  });
+
+  it('keeps different shift instances subject to normal overlap validation', () => {
+    expect(isSameShiftInstanceAssignment(
+      { shiftInstanceId: 2890 },
+      { shiftInstanceId: 2895 },
+    )).toBe(false);
+  });
+
+  it.each([
+    [{ shiftInstanceId: null }, { shiftInstanceId: 2890 }],
+    [{ shiftInstanceId: undefined }, { shiftInstanceId: 2890 }],
+    [{ shiftInstanceId: 0 }, { shiftInstanceId: 0 }],
+  ])('does not treat missing or invalid shift instance IDs as stackable %#', (target, existing) => {
+    expect(isSameShiftInstanceAssignment(target, existing)).toBe(false);
+  });
+});

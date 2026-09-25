@@ -18,6 +18,10 @@ export type ShiftRequestAssignmentConflict = {
   requestId: number | null;
 };
 
+export type ShiftAssignmentInstanceReference = {
+  shiftInstanceId?: number | null;
+};
+
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
 
@@ -138,3 +142,16 @@ export const findActiveShiftRequestAssignmentConflict = (
   return null;
 };
 
+/**
+ * A person can hold multiple roles on the same scheduled shift instance, such
+ * as Manager + Leader on the same Pub Crawl. Those assignments share one
+ * operational time window, so they must not block each other during sequential
+ * multi-role swaps. Different shift instances still use normal time-overlap
+ * validation.
+ */
+export const isSameShiftInstanceAssignment = (
+  target: ShiftAssignmentInstanceReference,
+  existing: ShiftAssignmentInstanceReference,
+): boolean =>
+  isPositiveInteger(target.shiftInstanceId)
+  && target.shiftInstanceId === existing.shiftInstanceId;
