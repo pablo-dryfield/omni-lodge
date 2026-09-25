@@ -875,9 +875,17 @@ const PaymentLinksPage = () => {
     setPreviewing(true);
     setFormError("");
     try {
-      const response = await axiosInstance.post<{ quote: Quote }>("/storefront-saved-carts/preview", {
-        cart: cartPayload(),
-      });
+      const response = await axiosInstance.post<{ quote: Quote }>(
+        creatorMode === "bank-transfer"
+          ? "/storefront-bank-transfer-orders/preview"
+          : "/storefront-saved-carts/preview",
+        {
+          cart: cartPayload(),
+          ...(creatorMode === "bank-transfer"
+            ? { allowPastExperienceDates: bankTransferAllowPastDates }
+            : {}),
+        },
+      );
       setQuote(response.data.quote);
       return response.data.quote;
     } catch (requestError) {
@@ -914,6 +922,7 @@ const PaymentLinksPage = () => {
               customerConfirmation: bankTransferCustomerConfirmation,
               internalConfirmation: bankTransferInternalConfirmation,
             },
+            allowPastExperienceDates: bankTransferAllowPastDates,
           },
         );
         setBankTransferOrders((current) => [

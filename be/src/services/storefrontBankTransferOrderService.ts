@@ -59,6 +59,13 @@ export type CreateBankTransferOrderInput = {
   customer: unknown;
   cart: unknown;
   notifications?: unknown;
+  allowPastExperienceDates?: unknown;
+};
+
+export type PreviewBankTransferOrderInput = {
+  allowedProductTypeIds: number[] | null;
+  cart: unknown;
+  allowPastExperienceDates?: unknown;
 };
 
 export type ReceiveBankTransferOrderInput = {
@@ -132,6 +139,12 @@ const maybeParseNotificationPreferences = (
   return parseNotificationPreferences(value);
 };
 
+const parseAllowPastExperienceDates = (value: unknown): boolean => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value.trim().toLowerCase() === 'true';
+  return false;
+};
+
 const metadataWithNotificationPreferences = (
   metadata: Record<string, unknown> | null | undefined,
   preferences: StorefrontConfirmationNotificationPreferences,
@@ -198,9 +211,10 @@ const requestHash = (
   customer: BankTransferCustomer,
   cart: unknown,
   notifications: StorefrontConfirmationNotificationPreferences,
+  allowPastExperienceDates: boolean,
 ): string =>
   createHash('sha256')
-    .update(JSON.stringify(stableValue({ customer, cart, notifications })))
+    .update(JSON.stringify(stableValue({ allowPastExperienceDates, customer, cart, notifications })))
     .digest('hex');
 
 const paymentReference = (orderId: number): string => `KTK-BT-${String(orderId).padStart(6, '0')}`;
@@ -292,6 +306,7 @@ const createOrderTransaction = async (
   cart: StorefrontCartInput,
   allowedProductTypeIds: number[] | null,
   notificationPreferences: StorefrontConfirmationNotificationPreferences,
+  allowPastExperienceDates: boolean,
 ): Promise<{ order: StorefrontOrder; created: boolean }> => sequelize.transaction(async (transaction) => {
   const existing = await findIdempotentOrder(clientRequestId, hash, transaction);
   if (existing) return { order: existing, created: false };
@@ -302,7 +317,7 @@ const createOrderTransaction = async (
   // the final unit.
   const concurrent = await findIdempotentOrder(clientRequestId, hash, transaction);
   if (concurrent) return { order: concurrent, created: false };
-  const quote = await quoteStorefrontCart(cart, transaction);
+  const quote = await quoteStorefrontCart(cart, transaction, { allowPastExperienceDates });
   if (quote.total <= 0) throw new HttpError(400, 'A bank transfer order must have an amount greater than zero.');
   await assertProductScope(quote.items.map((item) => item.productId), allowedProductTypeIds, transaction);
   const now = new Date();
@@ -594,10 +609,27 @@ export const listBankTransferOrders = async (
   return serializeOrders(orders);
 };
 
+export const previewBankTransferOrder = async (input: PreviewBankTransferOrderInput) => {
+  const cart = input.cart as StorefrontCartInput;
+  if (!cart || !Array.isArray(cart.items)) {
+    throw new HttpError(400, 'The cart must contain at least one item.');
+  }
+  const quote = await quoteStorefrontCart(cart, undefined, {
+    allowMissingCustomerDetails: true,
+    allowPastExperienceDates: parseAllowPastExperienceDates(input.allowPastExperienceDates),
+  });
+  await assertProductScope(quote.items.map((item) => item.productId), input.allowedProductTypeIds);
+  return {
+    quote,
+    cart: normalizeSavedCartFromQuote(quote),
+  };
+};
+
 export const createBankTransferOrder = async (input: CreateBankTransferOrderInput) => {
   const clientRequestId = parseUuid(input.clientRequestId, 'Client request ID');
   const customer = parseCustomer(input.customer);
   const notificationPreferences = parseNotificationPreferences(input.notifications);
+  const allowPastExperienceDates = parseAllowPastExperienceDates(input.allowPastExperienceDates);
   const cartInput = input.cart as StorefrontCartInput;
   if (!cartInput || !Array.isArray(cartInput.items)) {
     throw new HttpError(400, 'The cart must contain at least one item.');
@@ -606,7 +638,7 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
     throw new HttpError(400, 'One or more cart items are invalid.');
   }
   const cart = addCustomerToSavedCart(cartInput, customer);
-  const hash = requestHash(customer, cart, notificationPreferences);
+  const hash = requestHash(customer, cart, notificationPreferences, allowPastExperienceDates);
   const existing = await findIdempotentOrder(clientRequestId, hash);
   if (existing) {
     const order = await loadOrder(existing.publicId);
@@ -624,6 +656,7 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
       cart,
       input.allowedProductTypeIds,
       notificationPreferences,
+      allowPastExperienceDates,
     );
   } catch (error) {
     if (!(error instanceof UniqueConstraintError)) throw error;

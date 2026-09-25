@@ -75,6 +75,39 @@ describe('quoteStorefrontCart validation', () => {
     ).rejects.toThrow('Experience date cannot be in the past.');
   });
 
+  it('allows past experience dates when explicitly requested', async () => {
+    const experienceDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+    productFindAll.mockResolvedValue([{
+      id: 1,
+      name: 'Pub Crawl',
+      slug: 'pub-crawl',
+      price: 100,
+      storefrontConfig: { dateRequired: true },
+      productAddons: [],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+
+    await expect(
+      quoteStorefrontCart({
+        items: [
+          {
+            productId: 1,
+            quantity: 1,
+            experienceDate,
+          },
+        ],
+      }, undefined, { allowPastExperienceDates: true }),
+    ).resolves.toEqual(expect.objectContaining({
+      total: 100,
+      items: [
+        expect.objectContaining({
+          productId: 1,
+          experienceDate,
+        }),
+      ],
+    }));
+  });
+
   it('rejects carts with more than 20 lines', async () => {
     await expect(
       quoteStorefrontCart({
