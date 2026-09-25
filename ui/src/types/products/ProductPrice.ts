@@ -2,6 +2,7 @@ export type ProductPrice = {
   id: number;
   productId: number;
   price: number;
+  currencyCode: string;
   validFrom: string;
   validTo: string | null;
   createdBy: number | null;

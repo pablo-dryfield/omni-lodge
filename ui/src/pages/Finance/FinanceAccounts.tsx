@@ -14,6 +14,7 @@ import {
   Switch,
   Table,
   Text,
+  Textarea,
   TextInput,
   ThemeIcon,
   Tooltip,
@@ -60,22 +61,37 @@ import {
   getFinanceErrorMessage,
   humanizeFinanceValue,
 } from "../../components/finance/financeFormatters";
+import axiosInstance from "../../utils/axiosInstance";
 
 type DraftAccount = {
   name: string;
   type: FinanceAccount["type"];
   currency: string;
+  accountHolderName: string;
+  accountNumber: string;
+  swiftCode: string;
+  bankName: string;
+  bankTransferInstructions: string;
   openingBalanceMinor: number;
   isActive: boolean;
 };
 
 type AccountStatusFilter = "all" | "active" | "archived";
 type AccountTypeFilter = "all" | FinanceAccount["type"];
+type CurrencyOptionResponse = {
+  code: string;
+  name?: string | null;
+};
 
 const DEFAULT_DRAFT: DraftAccount = {
   name: "",
   type: "cash",
   currency: "PLN",
+  accountHolderName: "",
+  accountNumber: "",
+  swiftCode: "",
+  bankName: "",
+  bankTransferInstructions: "",
   openingBalanceMinor: 0,
   isActive: true,
 };
@@ -101,6 +117,9 @@ const FinanceAccounts = () => {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [currencyOptions, setCurrencyOptions] = useState([
+    { value: "PLN", label: "PLN — Polish złoty" },
+  ]);
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
 
@@ -109,11 +128,50 @@ const FinanceAccounts = () => {
   }, [dispatch]);
 
   useEffect(() => {
+    let active = true;
+    const loadCurrencyOptions = async () => {
+      try {
+        const response = await axiosInstance.get<{ data?: CurrencyOptionResponse[] }>("/currencies/options");
+        if (!active) {
+          return;
+        }
+        const options = (response.data.data ?? [])
+          .map((currency) => {
+            const code = String(currency.code ?? "").trim().toUpperCase();
+            if (!code) {
+              return null;
+            }
+            return {
+              value: code,
+              label: currency.name ? `${code} — ${currency.name}` : code,
+            };
+          })
+          .filter((option): option is { value: string; label: string } => option !== null);
+        if (!options.some((option) => option.value === "PLN")) {
+          options.unshift({ value: "PLN", label: "PLN — Polish złoty" });
+        }
+        setCurrencyOptions(options);
+      } catch (error) {
+        console.warn("Unable to load currency options", error);
+      }
+    };
+    void loadCurrencyOptions();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (editingAccount) {
       setDraft({
         name: editingAccount.name,
         type: editingAccount.type,
         currency: editingAccount.currency,
+        accountHolderName: editingAccount.accountHolderName ?? "",
+        accountNumber: editingAccount.accountNumber ?? "",
+        swiftCode: editingAccount.swiftCode ?? "",
+        bankName: editingAccount.bankName ?? "",
+        bankTransferInstructions: editingAccount.bankTransferInstructions ?? "",
         openingBalanceMinor: editingAccount.openingBalanceMinor,
         isActive: editingAccount.isActive,
       });
@@ -134,7 +192,11 @@ const FinanceAccounts = () => {
         !query ||
         account.name.toLocaleLowerCase().includes(query) ||
         account.currency.toLocaleLowerCase().includes(query) ||
-        account.type.toLocaleLowerCase().includes(query);
+        account.type.toLocaleLowerCase().includes(query) ||
+        (account.accountHolderName ?? "").toLocaleLowerCase().includes(query) ||
+        (account.accountNumber ?? "").toLocaleLowerCase().includes(query) ||
+        (account.swiftCode ?? "").toLocaleLowerCase().includes(query) ||
+        (account.bankName ?? "").toLocaleLowerCase().includes(query);
       const matchesStatus =
         statusFilter === "all" ||
         (statusFilter === "active" ? account.isActive : !account.isActive);
@@ -144,6 +206,15 @@ const FinanceAccounts = () => {
   }, [search, sortedAccounts, statusFilter, typeFilter]);
 
   const hasFilters = Boolean(search.trim()) || statusFilter !== "all" || typeFilter !== "all";
+
+  const currencySelectOptions = useMemo(() => {
+    const options = [...currencyOptions];
+    const code = draft.currency.trim().toUpperCase();
+    if (code && !options.some((option) => option.value === code)) {
+      options.unshift({ value: code, label: code });
+    }
+    return options;
+  }, [currencyOptions, draft.currency]);
 
   const openNewAccount = () => {
     setEditingAccount(null);
@@ -200,6 +271,11 @@ const FinanceAccounts = () => {
               ...draft,
               name: draft.name.trim(),
               currency: draft.currency.trim().toUpperCase(),
+              accountHolderName: draft.accountHolderName.trim() || null,
+              accountNumber: draft.accountNumber.trim() || null,
+              swiftCode: draft.swiftCode.trim().toUpperCase() || null,
+              bankName: draft.bankName.trim() || null,
+              bankTransferInstructions: draft.bankTransferInstructions.trim() || null,
             },
           }),
         ).unwrap();
@@ -209,6 +285,11 @@ const FinanceAccounts = () => {
             ...draft,
             name: draft.name.trim(),
             currency: draft.currency.trim().toUpperCase(),
+            accountHolderName: draft.accountHolderName.trim() || null,
+            accountNumber: draft.accountNumber.trim() || null,
+            swiftCode: draft.swiftCode.trim().toUpperCase() || null,
+            bankName: draft.bankName.trim() || null,
+            bankTransferInstructions: draft.bankTransferInstructions.trim() || null,
           }),
         ).unwrap();
       }
@@ -369,6 +450,10 @@ const FinanceAccounts = () => {
                   fields={[
                     { label: "Currency", value: account.currency },
                     {
+                      label: "Transfer holder",
+                      value: account.accountHolderName || "Not configured",
+                    },
+                    {
                       label: "Opening balance",
                       value: formatFinanceMoneyMinor(account.openingBalanceMinor, account.currency),
                     },
@@ -407,6 +492,11 @@ const FinanceAccounts = () => {
                       <Table.Tr key={account.id}>
                         <Table.Td>
                           <Text fw={750}>{account.name}</Text>
+                          {account.accountHolderName || account.accountNumber ? (
+                            <Text size="xs" c="dimmed">
+                              {[account.accountHolderName, account.accountNumber].filter(Boolean).join(" · ")}
+                            </Text>
+                          ) : null}
                         </Table.Td>
                         <Table.Td>{humanizeFinanceValue(account.type)}</Table.Td>
                         <Table.Td>{account.currency}</Table.Td>
@@ -491,22 +581,74 @@ const FinanceAccounts = () => {
                       }))
                     }
                   />
-                  <TextInput
+                  <Select
                     label="Currency"
                     description={
                       editingAccount
                         ? "Locked after creation to preserve the currency of historical balances. Create a new account to use another currency."
-                        : "Three-letter ISO code"
+                        : "Choose the currency held by this account."
                     }
                     value={draft.currency}
-                    onChange={(event) =>
-                      setDraft((state) => ({ ...state, currency: event.currentTarget.value.toUpperCase() }))
+                    data={currencySelectOptions}
+                    onChange={(value) =>
+                      setDraft((state) => ({ ...state, currency: (value ?? "PLN").toUpperCase() }))
                     }
-                    maxLength={3}
-                    readOnly={Boolean(editingAccount)}
+                    searchable
+                    disabled={Boolean(editingAccount)}
                     withAsterisk
                   />
                 </SimpleGrid>
+              </FinanceFormSection>
+
+              <FinanceFormSection
+                title="Bank-transfer details"
+                description="Optional details shown on manual bank-transfer bookings. The account name above stays as your internal label."
+                icon={<IconBuildingBank size={18} />}
+              >
+                <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                  <TextInput
+                    label="Account holder name"
+                    placeholder="Legal beneficiary name"
+                    value={draft.accountHolderName}
+                    onChange={(event) =>
+                      setDraft((state) => ({ ...state, accountHolderName: event.currentTarget.value }))
+                    }
+                  />
+                  <TextInput
+                    label="Account number / IBAN"
+                    placeholder="PL..."
+                    value={draft.accountNumber}
+                    onChange={(event) =>
+                      setDraft((state) => ({ ...state, accountNumber: event.currentTarget.value }))
+                    }
+                  />
+                  <TextInput
+                    label="SWIFT / BIC"
+                    placeholder="INGBPLPW"
+                    value={draft.swiftCode}
+                    onChange={(event) =>
+                      setDraft((state) => ({ ...state, swiftCode: event.currentTarget.value.toUpperCase() }))
+                    }
+                  />
+                  <TextInput
+                    label="Bank name"
+                    placeholder="Bank name shown to the customer"
+                    value={draft.bankName}
+                    onChange={(event) =>
+                      setDraft((state) => ({ ...state, bankName: event.currentTarget.value }))
+                    }
+                  />
+                </SimpleGrid>
+                <Textarea
+                  label="Extra payment instructions"
+                  placeholder="Optional text included with transfer instructions"
+                  minRows={2}
+                  autosize
+                  value={draft.bankTransferInstructions}
+                  onChange={(event) =>
+                    setDraft((state) => ({ ...state, bankTransferInstructions: event.currentTarget.value }))
+                  }
+                />
               </FinanceFormSection>
 
               <FinanceFormSection

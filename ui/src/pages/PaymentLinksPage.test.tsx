@@ -103,6 +103,18 @@ const paymentReceivedOrder = {
 
 let listedBankTransferOrders: unknown[] = [awaitingOrder];
 
+const bankTransferAccount = {
+  id: 4,
+  name: "ING PLN",
+  type: "bank",
+  currency: "PLN",
+  accountHolderName: "David Powe-Bowman",
+  accountNumber: "PL19105014451000009773406781",
+  swiftCode: "INGBPLPW",
+  bankName: "ING Bank Śląski S.A.",
+  instructions: null,
+};
+
 const LocationProbe = () => {
   const location = useLocation();
   return <output data-testid="location-search">{location.search}</output>;
@@ -128,7 +140,7 @@ describe("PaymentLinksPage bank transfer bookings", () => {
     mockGet.mockImplementation((url: string) => {
       if (url === "/storefront/products") return Promise.resolve({ data: { products: [] } });
       if (url === "/storefront-bank-transfer-orders/catalog") {
-        return Promise.resolve({ data: { products: [] } });
+        return Promise.resolve({ data: { products: [], bankTransferAccounts: [bankTransferAccount] } });
       }
       if (url === "/storefront-saved-carts") return Promise.resolve({ data: { data: [] } });
       if (url === "/storefront-ongoing-carts") return Promise.resolve({ data: { data: [] } });
@@ -174,7 +186,7 @@ describe("PaymentLinksPage bank transfer bookings", () => {
   it("keeps bank-transfer creation available when unrelated Direct Sales requests fail", async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === "/storefront-bank-transfer-orders/catalog") {
-        return Promise.resolve({ data: { products: [] } });
+        return Promise.resolve({ data: { products: [], bankTransferAccounts: [bankTransferAccount] } });
       }
       if (url === "/storefront-bank-transfer-orders") {
         return Promise.resolve({ data: { data: [awaitingOrder] } });
@@ -186,7 +198,7 @@ describe("PaymentLinksPage bank transfer bookings", () => {
     renderPage("/bookings/payment-links?tab=bank-transfers&action=create-bank-transfer");
 
     const dialog = await screen.findByRole("dialog", { name: "Create bank transfer booking" });
-    expect(within(dialog).getByRole("button", { name: "Create booking" })).toBeEnabled();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Create booking" })).toBeEnabled());
     expect((await screen.findAllByText("Ada Guest")).length).toBeGreaterThan(0);
   });
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MRT_ColumnDef } from "mantine-react-table";
 import dayjs from "dayjs";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -16,11 +16,17 @@ import { fetchProducts } from "../../actions/productActions";
 import { EditSelectOption } from "../../utils/CustomEditSelect";
 import { removeEmptyKeys } from "../../utils/removeEmptyKeys";
 import { getChangedValues } from "../../utils/getChangedValues";
+import axiosInstance from "../../utils/axiosInstance";
 
 const MODULE_SLUG = "product-price-management";
 
 type ProductPriceListProps = {
   pageTitle?: string;
+};
+
+type CurrencyOptionResponse = {
+  code: string;
+  name?: string | null;
 };
 
 const normalizeProductPricePayload = (payload: Partial<ProductPrice>) => {
@@ -34,6 +40,10 @@ const normalizeProductPricePayload = (payload: Partial<ProductPrice>) => {
 
   if (hasValue(payload.price)) {
     next.price = Number(payload.price);
+  }
+
+  if (hasValue(payload.currencyCode)) {
+    next.currencyCode = String(payload.currencyCode).trim().toUpperCase().slice(0, 3);
   }
 
   if (hasValue(payload.validFrom)) {
@@ -56,6 +66,9 @@ const ProductPriceList = ({ pageTitle }: ProductPriceListProps) => {
   const productsState = useAppSelector((state) => state.products)[0];
   const { currentPage } = useAppSelector((state) => state.navigation);
   const { loggedUserId } = useAppSelector((state) => state.session);
+  const [currencyOptions, setCurrencyOptions] = useState<EditSelectOption[]>([
+    { value: "PLN", label: "PLN — Polish złoty" },
+  ]);
 
   useEffect(() => {
     dispatch(fetchProductPrices(undefined));
@@ -66,6 +79,40 @@ const ProductPriceList = ({ pageTitle }: ProductPriceListProps) => {
       dispatch(fetchProducts());
     }
   }, [dispatch, productsState.data]);
+
+  useEffect(() => {
+    let active = true;
+    const loadCurrencyOptions = async () => {
+      try {
+        const response = await axiosInstance.get<{ data?: CurrencyOptionResponse[] }>("/currencies/options");
+        if (!active) {
+          return;
+        }
+        const options = (response.data.data ?? [])
+          .map((currency) => {
+            const code = String(currency.code ?? "").trim().toUpperCase();
+            if (!code) {
+              return null;
+            }
+            return {
+              value: code,
+              label: currency.name ? `${code} — ${currency.name}` : code,
+            };
+          })
+          .filter((option): option is EditSelectOption => option !== null);
+        if (!options.some((option) => option.value === "PLN")) {
+          options.unshift({ value: "PLN", label: "PLN — Polish złoty" });
+        }
+        setCurrencyOptions(options);
+      } catch (error) {
+        console.warn("Unable to load currency options", error);
+      }
+    };
+    void loadCurrencyOptions();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const productOptions = useMemo<EditSelectOption[]>(() => {
     const records = productsState.data[0]?.data || [];
@@ -98,7 +145,10 @@ const ProductPriceList = ({ pageTitle }: ProductPriceListProps) => {
 
   const handleCreate = async (payload: Partial<ProductPrice>) => {
     const sanitized = removeEmptyKeys(normalizeProductPricePayload(payload), Number(loggedUserId ?? 0));
-    if (sanitized.productId && sanitized.price != null && sanitized.validFrom) {
+    if (!sanitized.currencyCode) {
+      sanitized.currencyCode = "PLN";
+    }
+    if (sanitized.productId && sanitized.price != null && sanitized.currencyCode && sanitized.validFrom) {
       await dispatch(createProductPrice(sanitized));
       await dispatch(fetchProductPrices(undefined));
     }
@@ -140,9 +190,10 @@ const ProductPriceList = ({ pageTitle }: ProductPriceListProps) => {
         productPricesState.data[0]?.columns || [],
         productPriceColumnDef({
           productOptions,
+          currencyOptions,
         }),
       ),
-    [productPricesState.data, productOptions],
+    [productPricesState.data, productOptions, currencyOptions],
   );
 
   const headingTitle = pageTitle ?? currentPage;

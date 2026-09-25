@@ -22,6 +22,7 @@ import UserShiftRole from '../models/UserShiftRole.js';
 import logger from '../utils/logger.js';
 import { getConfigValue } from './configService.js';
 import { sendSchedulingNotification } from './notificationService.js';
+import { reassignAssistantManagerTasksForManagerShiftOwnerChange } from './assistantManagerTaskShiftReassignmentService.js';
 import { exchangeShiftAssignmentOwners } from './shiftAssignmentMutationService.js';
 import { buildAssignmentInclude, buildRequestInclude } from './shiftRequestIncludes.js';
 import {
@@ -943,6 +944,7 @@ const assertRequestAssignmentsStillValid = async (
 const applyApprovedRequest = async (
   request: SwapRequest,
   transaction: Transaction,
+  managerId: number,
 ): Promise<void> => {
   const requestType = resolveRequestType(request);
   const { fromAssignment, toAssignment } = await assertRequestAssignmentsStillValid(request, transaction);
@@ -958,9 +960,36 @@ const applyApprovedRequest = async (
     if (!toAssignment) {
       throw new HttpError(409, 'Swap assignments are incomplete');
     }
+    if (!isPositiveInteger(request.partnerId)) {
+      throw new HttpError(409, 'Swap partner is missing');
+    }
     await exchangeShiftAssignmentOwners(fromAssignment, toAssignment, transaction);
+    await reassignAssistantManagerTasksForManagerShiftOwnerChange({
+      assignment: fromAssignment,
+      fromUserId: request.requesterId,
+      toUserId: request.partnerId,
+      actorId: managerId,
+      requestId: request.id,
+    }, transaction);
+    await reassignAssistantManagerTasksForManagerShiftOwnerChange({
+      assignment: toAssignment,
+      fromUserId: request.partnerId,
+      toUserId: request.requesterId,
+      actorId: managerId,
+      requestId: request.id,
+    }, transaction);
   } else if (requestType === 'takeover') {
+    if (!isPositiveInteger(request.partnerId)) {
+      throw new HttpError(409, 'Original shift owner is missing');
+    }
     await fromAssignment.update({ userId: request.requesterId }, { transaction });
+    await reassignAssistantManagerTasksForManagerShiftOwnerChange({
+      assignment: fromAssignment,
+      fromUserId: request.partnerId,
+      toUserId: request.requesterId,
+      actorId: managerId,
+      requestId: request.id,
+    }, transaction);
   } else {
     await fromAssignment.destroy({ transaction });
   }
@@ -997,7 +1026,7 @@ export async function decideShiftChangeRequest(
       throw new HttpError(400, (error as Error).message);
     }
     if (approve) {
-      await applyApprovedRequest(request, transaction);
+      await applyApprovedRequest(request, transaction, managerId);
     }
     request.status = nextStatus;
     request.managerId = managerId;

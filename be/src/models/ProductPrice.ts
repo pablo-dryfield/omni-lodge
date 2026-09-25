@@ -10,6 +10,7 @@ import {
   Table,
 } from 'sequelize-typescript';
 import Product from './Product.js';
+import Currency from './Currency.js';
 import User from './User.js';
 
 @Table({
@@ -34,6 +35,14 @@ export default class ProductPrice extends Model {
   @AllowNull(false)
   @Column(DataType.DECIMAL(10, 2))
   declare price: number;
+
+  @ForeignKey(() => Currency)
+  @AllowNull(false)
+  @Column({ field: 'currency_code', type: DataType.STRING(3), defaultValue: 'PLN' })
+  declare currencyCode: string;
+
+  @BelongsTo(() => Currency, { foreignKey: 'currency_code', as: 'currency' })
+  declare currency?: Currency;
 
   @AllowNull(false)
   @Column({ field: 'valid_from', type: DataType.DATEONLY })

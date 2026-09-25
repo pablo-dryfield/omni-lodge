@@ -29,6 +29,10 @@ const normalizePayload = (payload: Partial<ProductPrice>) => {
   if (payload.price != null) {
     next.price = Number(payload.price);
   }
+  if (payload.currencyCode != null) {
+    const currencyCode = String(payload.currencyCode).trim().toUpperCase();
+    if (currencyCode) next.currencyCode = currencyCode.slice(0, 3);
+  }
   if (payload.validFrom != null && payload.validFrom !== '') {
     next.validFrom = payload.validFrom;
   }
@@ -56,6 +60,7 @@ export const listProductPrices = async (req: Request, res: Response): Promise<vo
       ],
       order: [
         ['productId', 'ASC'],
+        ['currencyCode', 'ASC'],
         ['validFrom', 'DESC'],
         ['id', 'DESC'],
       ],

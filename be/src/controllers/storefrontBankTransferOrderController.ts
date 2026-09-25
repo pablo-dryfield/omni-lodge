@@ -6,6 +6,7 @@ import { loadStorefrontProducts } from './storefrontController.js';
 import {
   cancelBankTransferOrder,
   createBankTransferOrder,
+  listBankTransferAccounts,
   listBankTransferOrders,
   previewBankTransferOrder,
   receiveBankTransferOrder,
@@ -28,9 +29,14 @@ export const listStorefrontBankTransferCatalog = async (
 ): Promise<void> => {
   try {
     response.set('Cache-Control', 'private, no-store');
+    const [products, bankTransferAccounts] = await Promise.all([
+      loadStorefrontProducts(await getAllowedProductTypeIds(request)),
+      listBankTransferAccounts(),
+    ]);
     response.json({
-      version: 3,
-      products: await loadStorefrontProducts(await getAllowedProductTypeIds(request)),
+      version: 4,
+      products,
+      bankTransferAccounts,
     });
   } catch (error) {
     next(error);
@@ -66,6 +72,8 @@ export const createStorefrontBankTransferOrder = async (
       clientRequestId: request.body?.clientRequestId,
       customer: request.body?.customer,
       cart: request.body?.cart,
+      currencyCode: request.body?.currencyCode,
+      bankTransferAccountId: request.body?.bankTransferAccountId,
       notifications: request.body?.notifications,
       allowPastExperienceDates: request.body?.allowPastExperienceDates,
     });
@@ -88,6 +96,8 @@ export const previewStorefrontBankTransferOrder = async (
     response.json(await previewBankTransferOrder({
       allowedProductTypeIds: await getAllowedProductTypeIds(request),
       cart: request.body?.cart,
+      currencyCode: request.body?.currencyCode,
+      bankTransferAccountId: request.body?.bankTransferAccountId,
       allowPastExperienceDates: request.body?.allowPastExperienceDates,
     }));
   } catch (error) {

@@ -137,6 +137,12 @@ const settingsNav: SettingsNavSection[] = [
         icon: <IconCurrencyDollar size={20} />,
       },
       {
+        label: "Currencies",
+        to: "/settings/currencies",
+        slug: PAGE_SLUGS.settingsProductPrices,
+        icon: <IconCurrencyEuro size={20} />,
+      },
+      {
         label: "Venues",
         to: "/settings/venues",
         slug: PAGE_SLUGS.settingsVenues,
