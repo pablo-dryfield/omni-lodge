@@ -202,6 +202,7 @@ export type TaskLogStatusUpdatePayload = {
   notes?: string | null;
   evidenceItems?: AssistantManagerTaskEvidenceItem[];
   socialMediaContentId?: number | null;
+  force?: boolean;
 };
 
 export type ManagedAssistantManagerTaskLogPayload = {
