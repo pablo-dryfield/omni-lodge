@@ -4,6 +4,7 @@ import HttpError from '../errors/HttpError.js';
 import Addon from '../models/Addon.js';
 import Channel from '../models/Channel.js';
 import ChannelProductPrice from '../models/ChannelProductPrice.js';
+import Currency from '../models/Currency.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
 import ProductPrice from '../models/ProductPrice.js';
@@ -20,6 +21,7 @@ import {
 export const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const CURRENCY_CODE_PATTERN = /^[A-Z]{3}$/;
 
 export type StorefrontCartAddonInput = {
   addonId: number;
@@ -73,7 +75,8 @@ export type StorefrontQuoteItem = {
 };
 
 export type StorefrontQuote = {
-  currency: typeof STOREFRONT_CURRENCY;
+  currency: string;
+  currencyExchangeRateToPln: number;
   subtotal: number;
   addonTotal: number;
   discountTotal: number;
@@ -94,9 +97,45 @@ export type StorefrontQuote = {
 export type StorefrontQuoteOptions = {
   allowMissingCustomerDetails?: boolean;
   allowPastExperienceDates?: boolean;
+  currencyCode?: unknown;
 };
 
 const roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const convertPlnAmountToCurrency = (
+  amountPln: number,
+  currencyCode: string,
+  exchangeRateToPln: number,
+): number => (
+  currencyCode === STOREFRONT_CURRENCY
+    ? amountPln
+    : amountPln / exchangeRateToPln
+);
+
+export const normalizeStorefrontCurrencyCode = (value: unknown): string => {
+  const normalized = String(value ?? STOREFRONT_CURRENCY).trim().toUpperCase();
+  if (!normalized) return STOREFRONT_CURRENCY;
+  if (!CURRENCY_CODE_PATTERN.test(normalized)) {
+    throw new HttpError(400, 'Currency must use a three-letter ISO code.');
+  }
+  return normalized;
+};
+
+const resolveCurrencyExchangeRate = async (
+  currencyCode: string,
+  transaction?: Transaction,
+): Promise<number> => {
+  if (currencyCode === STOREFRONT_CURRENCY) return 1;
+  const currency = await Currency.findByPk(currencyCode, { transaction });
+  if (!currency || !currency.isActive) {
+    throw new HttpError(400, `${currencyCode} is not configured as an active booking currency.`);
+  }
+  const rate = Number(currency.exchangeRateToPln);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new HttpError(409, `${currencyCode} does not have a valid exchange rate to PLN.`);
+  }
+  return rate;
+};
 
 const slugify = (value: string): string =>
   value
@@ -316,6 +355,8 @@ const productIncludes: Includeable[] = [
 
 const resolveProductPrices = async (
   products: Product[],
+  currencyCode: string,
+  exchangeRateToPln: number,
   transaction?: Transaction,
 ): Promise<Map<number, number>> => {
   const ids = products.map((product) => product.id);
@@ -326,6 +367,7 @@ const resolveProductPrices = async (
   const scheduled = await ProductPrice.findAll({
     where: {
       productId: { [Op.in]: ids },
+      currencyCode,
       validFrom: { [Op.lte]: today },
       [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: today } }],
     },
@@ -337,9 +379,12 @@ const resolveProductPrices = async (
   });
 
   products.forEach((product) => {
-    const basePrice = Number(product.price);
-    if (!prices.has(product.id) && Number.isFinite(basePrice) && basePrice > 0) {
-      prices.set(product.id, basePrice);
+    const basePricePln = Number(product.price);
+    if (!prices.has(product.id) && Number.isFinite(basePricePln) && basePricePln > 0) {
+      const converted = currencyCode === STOREFRONT_CURRENCY
+        ? basePricePln
+        : basePricePln / exchangeRateToPln;
+      prices.set(product.id, roundMoney(converted));
     }
   });
 
@@ -349,7 +394,7 @@ const resolveProductPrices = async (
       where: {
         productId: { [Op.in]: unresolved },
         ticketType: 'normal',
-        currencyCode: STOREFRONT_CURRENCY,
+        currencyCode,
         validFrom: { [Op.lte]: today },
         [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: today } }],
       },
@@ -381,6 +426,7 @@ const resolvePromotions = async (
   codes: string[],
   merchandiseSubtotal: number,
   quoteItems: StorefrontQuoteItem[],
+  currencyCode: string,
   transaction?: Transaction,
 ): Promise<StorefrontQuote['discounts']> => {
   if (codes.length === 0) return [];
@@ -423,7 +469,7 @@ const resolvePromotions = async (
   codes.forEach((code) => {
     const promotion = byCode.get(code);
     if (!promotion) return;
-    if (promotion.currency && promotion.currency !== STOREFRONT_CURRENCY) {
+    if (promotion.currency && promotion.currency !== currencyCode) {
       throw new HttpError(400, `Discount code ${code} is not available for this currency.`);
     }
     if (
@@ -496,6 +542,8 @@ export const quoteStorefrontCart = async (
     throw new HttpError(400, 'The cart must contain at least one item.');
   }
   if (input.items.length > 20) throw new HttpError(400, 'The cart cannot contain more than 20 items.');
+  const currencyCode = normalizeStorefrontCurrencyCode(options.currencyCode);
+  const currencyExchangeRateToPln = await resolveCurrencyExchangeRate(currencyCode, transaction);
 
   const normalizedItems = input.items.map((item, index) => ({
     productId: asPositiveInteger(item.productId, `items[${index}].productId`, Number.MAX_SAFE_INTEGER),
@@ -530,7 +578,7 @@ export const quoteStorefrontCart = async (
     ),
   );
   const [prices, inventoryByAddon] = await Promise.all([
-    resolveProductPrices(products, transaction),
+    resolveProductPrices(products, currencyCode, currencyExchangeRateToPln, transaction),
     getAddonInventoryAvailability(availableAddonIds, transaction),
   ]);
 
@@ -589,11 +637,16 @@ export const quoteStorefrontCart = async (
       if (!Number.isFinite(baseUnitPrice) || baseUnitPrice < 0) {
         throw new HttpError(409, `${addon.name} does not have a valid price.`);
       }
+      const baseUnitPriceInQuoteCurrency = convertPlnAmountToCurrency(
+        baseUnitPrice,
+        currencyCode,
+        currencyExchangeRateToPln,
+      );
 
       let addonQuantity = 1;
       let value = normalizeText(addonInput.value, 128) || null;
-      let addonUnitPrice = baseUnitPrice;
-      let addonLineTotal = baseUnitPrice;
+      let addonUnitPrice = baseUnitPriceInQuoteCurrency;
+      let addonLineTotal = baseUnitPriceInQuoteCurrency;
       if (selectionMode === 'boolean') {
         const selected =
           addonInput.quantity === undefined
@@ -604,7 +657,12 @@ export const quoteStorefrontCart = async (
       } else if (selectionMode === 'options') {
         const selectedOption = (addonConfig.options ?? []).find((option) => option.value === value);
         if (!selectedOption) throw new HttpError(400, `Please select a valid option for ${addon.name}.`);
-        addonUnitPrice = Number(selectedOption.price ?? baseUnitPrice);
+        const selectedOptionPricePln = Number(selectedOption.price ?? baseUnitPrice);
+        addonUnitPrice = convertPlnAmountToCurrency(
+          selectedOptionPricePln,
+          currencyCode,
+          currencyExchangeRateToPln,
+        );
         addonLineTotal = addonUnitPrice;
       } else {
         addonQuantity = asPositiveInteger(addonInput.quantity, `${addon.name} quantity`, maxQuantity);
@@ -627,10 +685,14 @@ export const quoteStorefrontCart = async (
         }
         const configuredTotal = addonConfig.quantityPrices?.[String(addonQuantity)];
         if (configuredTotal !== undefined) {
-          addonLineTotal = Number(configuredTotal);
+          addonLineTotal = convertPlnAmountToCurrency(
+            Number(configuredTotal),
+            currencyCode,
+            currencyExchangeRateToPln,
+          );
           addonUnitPrice = addonLineTotal / addonQuantity;
         } else {
-          addonLineTotal = baseUnitPrice * addonQuantity;
+          addonLineTotal = baseUnitPriceInQuoteCurrency * addonQuantity;
         }
       }
       if (![addonUnitPrice, addonLineTotal].every((price) => Number.isFinite(price) && price >= 0)) {
@@ -675,11 +737,12 @@ export const quoteStorefrontCart = async (
   const addonTotal = roundMoney(quoteItems.reduce((sum, item) => sum + item.addonTotal, 0));
   const merchandiseSubtotal = roundMoney(subtotal + addonTotal);
   const requestedCodes = normalizeDiscountCodes(input);
-  const discounts = await resolvePromotions(requestedCodes, merchandiseSubtotal, quoteItems, transaction);
+  const discounts = await resolvePromotions(requestedCodes, merchandiseSubtotal, quoteItems, currencyCode, transaction);
   const discountTotal = roundMoney(discounts.reduce((sum, discount) => sum + discount.amount, 0));
 
   return {
-    currency: STOREFRONT_CURRENCY,
+    currency: currencyCode,
+    currencyExchangeRateToPln,
     subtotal,
     addonTotal,
     discountTotal,

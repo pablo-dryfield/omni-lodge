@@ -7,8 +7,10 @@ import {
   AutoIncrement,
   AllowNull,
   Default,
+  ForeignKey,
   Index,
 } from 'sequelize-typescript';
+import Currency from '../../models/Currency.js';
 import type FinanceTransaction from './FinanceTransaction.js';
 
 export type FinanceAccountType = 'cash' | 'bank' | 'stripe' | 'revolut' | 'other';
@@ -35,9 +37,30 @@ export default class FinanceAccount extends Model {
   )
   declare type: FinanceAccountType;
 
+  @ForeignKey(() => Currency)
   @AllowNull(false)
   @Column(DataType.STRING(3))
   declare currency: string;
+
+  @AllowNull(true)
+  @Column({ field: 'account_holder_name', type: DataType.STRING(160) })
+  declare accountHolderName: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'account_number', type: DataType.STRING(80) })
+  declare accountNumber: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'swift_code', type: DataType.STRING(32) })
+  declare swiftCode: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'bank_name', type: DataType.STRING(160) })
+  declare bankName: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'bank_transfer_instructions', type: DataType.TEXT })
+  declare bankTransferInstructions: string | null;
 
   @AllowNull(false)
   @Default(0)

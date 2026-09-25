@@ -34,6 +34,8 @@ import StorefrontOngoingCart from "../models/StorefrontOngoingCart.js";
 import StorefrontJourneyVisit from "../models/StorefrontJourneyVisit.js";
 import StorefrontJourneyEvent from "../models/StorefrontJourneyEvent.js";
 import CounterChannelMetric from "../models/CounterChannelMetric.js";
+import Currency from "../models/Currency.js";
+import CurrencyExchangeRate from "../models/CurrencyExchangeRate.js";
 import PaymentMethod from "../models/PaymentMethod.js";
 import ProductPrice from "../models/ProductPrice.js";
 import ChannelCommission from "../models/ChannelCommission.js";
@@ -201,6 +203,8 @@ const sequelize = new Sequelize({
   },
   models: [
     User,
+    Currency,
+    CurrencyExchangeRate,
     PaymentMethod,
     ProductPrice,
     Booking,

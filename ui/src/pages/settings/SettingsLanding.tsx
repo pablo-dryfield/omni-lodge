@@ -32,6 +32,7 @@ import {
   IconBrandGoogle,
   IconMail,
   IconBrandWhatsapp,
+  IconCurrencyEuro,
 } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import axiosInstance from "../../utils/axiosInstance";
@@ -114,6 +115,13 @@ const sections: SettingsSection[] = [
     icon: IconTag,
     to: "/settings/product-aliases",
     pageSlug: PAGE_SLUGS.settingsProductAliases,
+  },
+  {
+    label: "Currencies",
+    description: "Manage exchange rates used for manual transfer bookings and product prices.",
+    icon: IconCurrencyEuro,
+    to: "/settings/currencies",
+    pageSlug: PAGE_SLUGS.settingsProductPrices,
   },
   {
     label: "User Shift Roles",

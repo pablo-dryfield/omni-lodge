@@ -1,4 +1,5 @@
 import Booking from '../../models/Booking.js';
+import FinanceAccount from '../../finance/models/FinanceAccount.js';
 import Product from '../../models/Product.js';
 import StorefrontOrder from '../../models/StorefrontOrder.js';
 import User from '../../models/User.js';
@@ -17,6 +18,14 @@ jest.mock('../../config/database.js', () => ({
 jest.mock('../../models/AuditLog.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/Booking.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../../models/BookingEvent.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../finance/models/FinanceAccount.js', () => ({
+  __esModule: true,
+  default: { findAll: jest.fn(), findByPk: jest.fn() },
+}));
+jest.mock('../../models/Currency.js', () => ({
+  __esModule: true,
+  default: { findAll: jest.fn() },
+}));
 jest.mock('../../models/Product.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../../models/StorefrontOrder.js', () => ({
   __esModule: true,
@@ -30,6 +39,8 @@ jest.mock('../../models/User.js', () => ({ __esModule: true, default: { findAll:
 jest.mock('../../controllers/storefrontCommerceController.js', () => ({ fulfillPaidOrder: jest.fn() }));
 jest.mock('../storefrontCommerceService.js', () => ({
   STOREFRONT_CURRENCY: 'PLN',
+  normalizeStorefrontCurrencyCode: jest.fn((value: unknown) =>
+    String(value ?? 'PLN').trim().toUpperCase() || 'PLN'),
   quoteStorefrontCart: jest.fn(),
 }));
 jest.mock('../storefrontSavedCartService.js', () => ({
@@ -78,6 +89,7 @@ jest.mock('../../utils/logger.js', () => ({
 }));
 
 const orderModel = StorefrontOrder as unknown as { findAll: jest.Mock };
+const financeAccountModel = FinanceAccount as unknown as { findByPk: jest.Mock };
 const productModel = Product as unknown as { findAll: jest.Mock };
 const bookingModel = Booking as unknown as { findAll: jest.Mock };
 const userModel = User as unknown as { findAll: jest.Mock };
@@ -192,20 +204,45 @@ describe('bank-transfer order listing and serialization', () => {
     };
     quoteStorefrontCartMock.mockResolvedValue(quote);
     normalizeSavedCartFromQuoteMock.mockReturnValue({ items: quote.items });
+    financeAccountModel.findByPk.mockResolvedValue({
+      id: 4,
+      name: 'ING EUR',
+      type: 'bank',
+      currency: 'PLN',
+      accountHolderName: 'David Powe-Bowman',
+      accountNumber: 'PL19105014451000009773406781',
+      swiftCode: 'INGBPLPW',
+      bankName: 'ING Bank Śląski S.A.',
+      bankTransferInstructions: null,
+      isActive: true,
+    });
 
     const result = await previewBankTransferOrder({
       allowedProductTypeIds: null,
       cart,
+      bankTransferAccountId: 4,
       allowPastExperienceDates: true,
     });
 
     expect(quoteStorefrontCartMock).toHaveBeenCalledWith(cart, undefined, {
       allowMissingCustomerDetails: true,
       allowPastExperienceDates: true,
+      currencyCode: 'PLN',
     });
     expect(result).toEqual({
       quote,
       cart: { items: quote.items },
+      bankTransferAccount: {
+        financeAccountId: 4,
+        accountName: 'ING EUR',
+        accountType: 'bank',
+        currency: 'PLN',
+        accountHolderName: 'David Powe-Bowman',
+        accountNumber: 'PL19105014451000009773406781',
+        swiftCode: 'INGBPLPW',
+        bankName: 'ING Bank Śląski S.A.',
+        instructions: null,
+      },
     });
   });
 });

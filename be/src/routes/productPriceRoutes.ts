@@ -16,6 +16,7 @@ const validateId = [param('id').isInt({ gt: 0 }).withMessage('ID must be a posit
 const validateBody = [
   check('productId').isInt({ gt: 0 }).withMessage('productId must be a positive integer'),
   check('price').isFloat({ gt: 0 }).withMessage('price must be a positive number'),
+  check('currencyCode').optional().isLength({ min: 3, max: 3 }).withMessage('currencyCode must be a three-letter ISO code'),
   check('validFrom').isISO8601().withMessage('validFrom must be a valid date'),
   check('validTo').optional({ nullable: true }).isISO8601().withMessage('validTo must be a valid date'),
 ];

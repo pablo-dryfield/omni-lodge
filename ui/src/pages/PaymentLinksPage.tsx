@@ -114,6 +114,7 @@ type CartAddonInput = {
 
 type Quote = {
   currency: string;
+  currencyExchangeRateToPln?: number;
   subtotal: number;
   addonTotal: number;
   discountTotal: number;
@@ -181,6 +182,30 @@ type BankTransferOrderActor = {
   fullName: string;
 };
 
+type BankTransferAccount = {
+  id: number;
+  name: string;
+  type: string;
+  currency: string;
+  accountHolderName: string;
+  accountNumber: string;
+  swiftCode: string | null;
+  bankName: string | null;
+  instructions: string | null;
+};
+
+type BankTransferAccountSnapshot = {
+  financeAccountId: number;
+  accountName: string;
+  accountType: string;
+  currency: string;
+  accountHolderName: string;
+  accountNumber: string;
+  swiftCode: string | null;
+  bankName: string | null;
+  instructions: string | null;
+};
+
 type BankTransferOrder = {
   publicId: string;
   status: "awaiting_transfer" | "payment_received" | "cancelled";
@@ -191,6 +216,9 @@ type BankTransferOrder = {
   paymentNote: string | null;
   total: number;
   currency: string;
+  currencyExchangeRateToPln: number | null;
+  bankTransferAccountId: number | null;
+  bankTransferAccount: BankTransferAccountSnapshot | null;
   customer: {
     fullName: string;
     email: string;
@@ -428,6 +456,36 @@ const BankTransferStatusDetails = ({
   );
 };
 
+const BankTransferDestinationDetails = ({
+  account,
+  fallbackCurrency,
+}: {
+  account: BankTransferAccountSnapshot | BankTransferAccount | null | undefined;
+  fallbackCurrency?: string;
+}) => {
+  if (!account) {
+    return (
+      <Text size="xs" c="dimmed">
+        Transfer account not recorded
+      </Text>
+    );
+  }
+  const name = "accountName" in account ? account.accountName : account.name;
+  const currency = account.currency || fallbackCurrency || "PLN";
+  return (
+    <Stack gap={2} miw={190}>
+      <Text size="sm" fw={700}>{name}</Text>
+      <Text size="xs" c="dimmed">{account.accountHolderName}</Text>
+      <Text size="xs" c="dimmed">{account.accountNumber}</Text>
+      <Group gap="xs">
+        <Badge size="xs" variant="light">{currency}</Badge>
+        {account.bankName && <Text size="xs" c="dimmed">{account.bankName}</Text>}
+      </Group>
+      {account.swiftCode && <Text size="xs" c="dimmed">SWIFT {account.swiftCode}</Text>}
+    </Stack>
+  );
+};
+
 const copyText = async (value: string): Promise<void> => {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -533,6 +591,7 @@ const PaymentLinksPage = () => {
   const isMobile = useMediaQuery("(max-width: 48em)");
   const [paymentLinkProducts, setPaymentLinkProducts] = useState<StorefrontProduct[]>([]);
   const [bankTransferProducts, setBankTransferProducts] = useState<StorefrontProduct[]>([]);
+  const [bankTransferAccounts, setBankTransferAccounts] = useState<BankTransferAccount[]>([]);
   const [paymentLinkCatalogLoading, setPaymentLinkCatalogLoading] = useState(true);
   const [paymentLinkCatalogError, setPaymentLinkCatalogError] = useState("");
   const [bankTransferCatalogLoading, setBankTransferCatalogLoading] = useState(true);
@@ -583,6 +642,8 @@ const PaymentLinksPage = () => {
   const [bankTransferCustomerConfirmation, setBankTransferCustomerConfirmation] = useState(true);
   const [bankTransferInternalConfirmation, setBankTransferInternalConfirmation] = useState(true);
   const [bankTransferAllowPastDates, setBankTransferAllowPastDates] = useState(false);
+  const [bankTransferCurrency, setBankTransferCurrency] = useState("PLN");
+  const [bankTransferAccountId, setBankTransferAccountId] = useState<string | null>(null);
   const [receivingOrder, setReceivingOrder] = useState<BankTransferOrder | null>(null);
   const [paymentReference, setPaymentReference] = useState("");
   const [paymentNote, setPaymentNote] = useState("");
@@ -632,10 +693,14 @@ const PaymentLinksPage = () => {
     setBankTransferCatalogLoading(true);
     setBankTransferCatalogError("");
     try {
-      const response = await axiosInstance.get<{ products: StorefrontProduct[] }>(
+      const response = await axiosInstance.get<{
+        products: StorefrontProduct[];
+        bankTransferAccounts?: BankTransferAccount[];
+      }>(
         "/storefront-bank-transfer-orders/catalog",
       );
       setBankTransferProducts(response.data.products || []);
+      setBankTransferAccounts(response.data.bankTransferAccounts || []);
     } catch (requestError) {
       setBankTransferCatalogError(errorMessage(requestError));
     } finally {
@@ -735,6 +800,45 @@ const PaymentLinksPage = () => {
     () => new Map(creatorProducts.map((product) => [product.id, product])),
     [creatorProducts],
   );
+  const bankTransferCurrencyOptions = useMemo(() => {
+    const currencies = [...new Set(["PLN", ...bankTransferAccounts.map((account) => account.currency)])];
+    return currencies
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right))
+      .map((currency) => ({ value: currency, label: currency }));
+  }, [bankTransferAccounts]);
+  const bankTransferAccountsForCurrency = useMemo(
+    () => bankTransferAccounts.filter((account) => account.currency === bankTransferCurrency),
+    [bankTransferAccounts, bankTransferCurrency],
+  );
+  const selectedBankTransferAccount = useMemo(
+    () => bankTransferAccountsForCurrency.find((account) => String(account.id) === bankTransferAccountId) ?? null,
+    [bankTransferAccountId, bankTransferAccountsForCurrency],
+  );
+  const bankTransferAccountOptions = useMemo(
+    () => bankTransferAccountsForCurrency.map((account) => ({
+      value: String(account.id),
+      label: `${account.name} — ${account.accountHolderName}`,
+    })),
+    [bankTransferAccountsForCurrency],
+  );
+  const bankTransferAccountRequired = creatorMode === "bank-transfer" && !selectedBankTransferAccount;
+
+  useEffect(() => {
+    if (creatorMode !== "bank-transfer" || !modalOpen) return;
+    if (bankTransferAccountsForCurrency.length === 0) {
+      if (bankTransferAccountId !== null) setBankTransferAccountId(null);
+      return;
+    }
+    if (!bankTransferAccountId || !bankTransferAccountsForCurrency.some((account) => String(account.id) === bankTransferAccountId)) {
+      setBankTransferAccountId(String(bankTransferAccountsForCurrency[0].id));
+    }
+  }, [
+    bankTransferAccountId,
+    bankTransferAccountsForCurrency,
+    creatorMode,
+    modalOpen,
+  ]);
 
   const resetForm = useCallback(() => {
     setName("");
@@ -745,6 +849,8 @@ const PaymentLinksPage = () => {
     setBankTransferCustomerConfirmation(true);
     setBankTransferInternalConfirmation(true);
     setBankTransferAllowPastDates(false);
+    setBankTransferCurrency("PLN");
+    setBankTransferAccountId(null);
     setQuote(null);
     setFormError("");
     setClientRequestId(createClientRequestId());
@@ -875,6 +981,9 @@ const PaymentLinksPage = () => {
     setPreviewing(true);
     setFormError("");
     try {
+      if (creatorMode === "bank-transfer" && !bankTransferAccountId) {
+        throw new Error("Select the bank account where the customer will transfer the money.");
+      }
       const response = await axiosInstance.post<{ quote: Quote }>(
         creatorMode === "bank-transfer"
           ? "/storefront-bank-transfer-orders/preview"
@@ -882,7 +991,11 @@ const PaymentLinksPage = () => {
         {
           cart: cartPayload(),
           ...(creatorMode === "bank-transfer"
-            ? { allowPastExperienceDates: bankTransferAllowPastDates }
+            ? {
+                allowPastExperienceDates: bankTransferAllowPastDates,
+                currencyCode: bankTransferCurrency,
+                bankTransferAccountId: bankTransferAccountId ? Number(bankTransferAccountId) : null,
+              }
             : {}),
         },
       );
@@ -907,6 +1020,9 @@ const PaymentLinksPage = () => {
         if (!customer.email.trim()) {
           throw new Error("Enter the customer's email address so confirmation can be delivered.");
         }
+        if (!bankTransferAccountId) {
+          throw new Error("Select the bank account where the customer will transfer the money.");
+        }
         const response = await axiosInstance.post<{ data: BankTransferOrder; warning?: string }>(
           "/storefront-bank-transfer-orders",
           {
@@ -917,6 +1033,8 @@ const PaymentLinksPage = () => {
               phone: customer.phone.trim(),
             },
             cart: cartPayload(),
+            currencyCode: bankTransferCurrency,
+            bankTransferAccountId: Number(bankTransferAccountId),
             clientRequestId,
             notifications: {
               customerConfirmation: bankTransferCustomerConfirmation,
@@ -1477,6 +1595,7 @@ const PaymentLinksPage = () => {
                     <Table.Th>Experiences</Table.Th>
                     <Table.Th>Status</Table.Th>
                     <Table.Th>Total</Table.Th>
+                    <Table.Th>Transfer to</Table.Th>
                     <Table.Th>Email</Table.Th>
                     <Table.Th>Created</Table.Th>
                     <Table.Th>Received</Table.Th>
@@ -1507,7 +1626,18 @@ const PaymentLinksPage = () => {
                       <Table.Td>
                         <BankTransferStatusDetails order={order} />
                       </Table.Td>
-                      <Table.Td fw={700}>{money(order.total, order.currency)}</Table.Td>
+                      <Table.Td>
+                        <Text fw={700}>{money(order.total, order.currency)}</Text>
+                        {order.currency !== "PLN" && order.currencyExchangeRateToPln ? (
+                          <Text size="xs" c="dimmed">1 {order.currency} = {order.currencyExchangeRateToPln.toFixed(4)} PLN</Text>
+                        ) : null}
+                      </Table.Td>
+                      <Table.Td>
+                        <BankTransferDestinationDetails
+                          account={order.bankTransferAccount}
+                          fallbackCurrency={order.currency}
+                        />
+                      </Table.Td>
                       <Table.Td>
                         <Badge
                           size="sm"
@@ -1626,6 +1756,18 @@ const PaymentLinksPage = () => {
                       <Text size="sm" c="dimmed">Total</Text>
                       <Text size="xl" fw={800}>{money(order.total, order.currency)}</Text>
                     </Group>
+                    {order.currency !== "PLN" && order.currencyExchangeRateToPln ? (
+                      <Text size="xs" c="dimmed">
+                        Rate used: 1 {order.currency} = {order.currencyExchangeRateToPln.toFixed(4)} PLN
+                      </Text>
+                    ) : null}
+                    <Paper withBorder radius="md" p="sm">
+                      <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={4}>Transfer to</Text>
+                      <BankTransferDestinationDetails
+                        account={order.bankTransferAccount}
+                        fallbackCurrency={order.currency}
+                      />
+                    </Paper>
                     <Group justify="space-between" align="flex-start" wrap="nowrap">
                       <Text size="xs" c="dimmed">
                         Created {dayjs(order.createdAt).format("D MMM, HH:mm")}
@@ -2047,6 +2189,51 @@ const PaymentLinksPage = () => {
                   />
                 </Stack>
               </Paper>
+              <Paper withBorder radius="md" p="md">
+                <Stack gap="sm">
+                  <Text fw={700}>Payment destination</Text>
+                  <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <Select
+                      label="Customer pays in"
+                      data={bankTransferCurrencyOptions}
+                      value={bankTransferCurrency}
+                      onChange={(value) => {
+                        setBankTransferCurrency(value || "PLN");
+                        setBankTransferAccountId(null);
+                        setQuote(null);
+                      }}
+                      searchable
+                    />
+                    <Select
+                      label="Transfer goes to account"
+                      data={bankTransferAccountOptions}
+                      value={bankTransferAccountId}
+                      onChange={(value) => {
+                        setBankTransferAccountId(value);
+                        setQuote(null);
+                      }}
+                      searchable
+                      required
+                      disabled={bankTransferAccountsForCurrency.length === 0}
+                      placeholder={
+                        bankTransferAccountsForCurrency.length === 0
+                          ? `No ${bankTransferCurrency} transfer account configured`
+                          : "Select account"
+                      }
+                    />
+                  </SimpleGrid>
+                  {selectedBankTransferAccount ? (
+                    <BankTransferDestinationDetails
+                      account={selectedBankTransferAccount}
+                      fallbackCurrency={bankTransferCurrency}
+                    />
+                  ) : (
+                    <Alert color="yellow" title="Transfer account required">
+                      Add an active {bankTransferCurrency} bank or Revolut account with account holder and account number in Finance Accounts.
+                    </Alert>
+                  )}
+                </Stack>
+              </Paper>
               {bankTransferCatalogLoading && (
                 <Group justify="center" gap="sm">
                   <Loader size="sm" />
@@ -2209,6 +2396,11 @@ const PaymentLinksPage = () => {
               <Group justify="space-between"><Text>Add-ons</Text><Text fw={600}>{money(quote.addonTotal, quote.currency)}</Text></Group>
               {quote.discountTotal > 0 && <Group justify="space-between"><Text>Discount</Text><Text fw={600}>-{money(quote.discountTotal, quote.currency)}</Text></Group>}
               <Group justify="space-between" mt="sm"><Text size="lg" fw={700}>Customer pays</Text><Text size="xl" fw={700}>{money(quote.total, quote.currency)}</Text></Group>
+              {quote.currency !== "PLN" && quote.currencyExchangeRateToPln ? (
+                <Text size="xs" c="dimmed" ta="right">
+                  Rate used: 1 {quote.currency} = {quote.currencyExchangeRateToPln.toFixed(4)} PLN
+                </Text>
+              ) : null}
             </Box>
           )}
           {formError && <Alert color="red">{formError}</Alert>}
@@ -2228,7 +2420,7 @@ const PaymentLinksPage = () => {
               variant="light"
               loading={previewing}
               disabled={saving || (creatorMode === "bank-transfer"
-                ? bankTransferCatalogLoading || Boolean(bankTransferCatalogError)
+                ? bankTransferCatalogLoading || Boolean(bankTransferCatalogError) || bankTransferAccountRequired
                 : paymentLinkCatalogLoading || Boolean(paymentLinkCatalogError))}
               onClick={() => void preview()}
             >
@@ -2240,7 +2432,7 @@ const PaymentLinksPage = () => {
                 : <IconLink size={17} />}
               loading={saving}
               disabled={creatorMode === "bank-transfer"
-                ? bankTransferCatalogLoading || Boolean(bankTransferCatalogError)
+                ? bankTransferCatalogLoading || Boolean(bankTransferCatalogError) || bankTransferAccountRequired
                 : paymentLinkCatalogLoading || Boolean(paymentLinkCatalogError)}
               onClick={() => void create()}
             >

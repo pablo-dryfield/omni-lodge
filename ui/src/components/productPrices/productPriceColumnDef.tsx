@@ -5,10 +5,12 @@ import CustomEditSelect, { EditSelectOption } from "../../utils/CustomEditSelect
 
 export type ProductPriceColumnParams = {
   productOptions: EditSelectOption[];
+  currencyOptions: EditSelectOption[];
 };
 
 export const productPriceColumnDef = ({
   productOptions,
+  currencyOptions,
 }: ProductPriceColumnParams): ResponseModifications<Partial<ProductPrice>>[] => [
   {
     accessorKey: "id",
@@ -62,6 +64,24 @@ export const productPriceColumnDef = ({
         step: 0.01,
         required: true,
       },
+    },
+  },
+  {
+    accessorKey: "currencyCode",
+    modifications: {
+      id: "currencyCode",
+      header: "Currency",
+      Header: ({ column }) => <div>{column.columnDef.header}</div>,
+      Cell: ({ cell }) => String(cell.getValue<string>() || "PLN").toUpperCase(),
+      Edit: ({ cell, row, table }) => (
+        <CustomEditSelect
+          cell={cell}
+          row={row}
+          table={table}
+          options={currencyOptions}
+          placeholder="Select currency"
+        />
+      ),
     },
   },
   {

@@ -53,6 +53,7 @@ const SettingsPermissions = lazy(() => import("../../pages/settings/SettingsPerm
 const SettingsProducts = lazy(() => import("../../pages/settings/SettingsProducts"));
 const SettingsProductTypes = lazy(() => import("../../pages/settings/SettingsProductTypes"));
 const SettingsProductPrices = lazy(() => import("../../pages/settings/SettingsProductPrices"));
+const SettingsCurrencies = lazy(() => import("../../pages/settings/SettingsCurrencies"));
 const SettingsProductAliases = lazy(() => import("../../pages/settings/SettingsProductAliases"));
 const SettingsAddons = lazy(() => import("../../pages/settings/SettingsAddons"));
 const SettingsVenues = lazy(() => import("../../pages/settings/SettingsVenues"));
@@ -191,6 +192,7 @@ const Routes = () => {
           <Route path="products" element={<SettingsProducts />} />
           <Route path="product-aliases" element={<SettingsProductAliases />} />
           <Route path="product-prices" element={<SettingsProductPrices />} />
+          <Route path="currencies" element={<SettingsCurrencies />} />
           <Route path="product-types" element={<SettingsProductTypes />} />
           <Route path="addons" element={<SettingsAddons />} />
           <Route path="venues" element={<SettingsVenues />} />

@@ -16,6 +16,7 @@ import {
 } from 'sequelize-typescript';
 import type { NonAttribute } from 'sequelize';
 
+import FinanceAccount from '../finance/models/FinanceAccount.js';
 import StorefrontOrderItem from './StorefrontOrderItem.js';
 import User from './User.js';
 
@@ -158,6 +159,14 @@ export default class StorefrontOrder extends Model {
   @AllowNull(true)
   @Column({ field: 'bank_transfer_cancellation_email_sent_at', type: DataType.DATE })
   declare bankTransferCancellationEmailSentAt: Date | null;
+
+  @ForeignKey(() => FinanceAccount)
+  @AllowNull(true)
+  @Column({ field: 'bank_transfer_account_id', type: DataType.INTEGER })
+  declare bankTransferAccountId: number | null;
+
+  @BelongsTo(() => FinanceAccount, { foreignKey: 'bank_transfer_account_id', as: 'bankTransferAccount' })
+  declare bankTransferAccount?: NonAttribute<FinanceAccount | null>;
 
   @AllowNull(true)
   @Unique

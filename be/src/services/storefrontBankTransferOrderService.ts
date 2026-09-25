@@ -6,12 +6,15 @@ import HttpError from '../errors/HttpError.js';
 import AuditLog from '../models/AuditLog.js';
 import Booking from '../models/Booking.js';
 import BookingEvent from '../models/BookingEvent.js';
+import FinanceAccount from '../finance/models/FinanceAccount.js';
+import Currency from '../models/Currency.js';
 import Product from '../models/Product.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
 import User from '../models/User.js';
 import { fulfillPaidOrder } from '../controllers/storefrontCommerceController.js';
 import {
+  normalizeStorefrontCurrencyCode,
   quoteStorefrontCart,
   type StorefrontCartInput,
   type StorefrontQuote,
@@ -29,6 +32,7 @@ import { getStorefrontExperienceStartAt } from './storefrontBookingProjectionSer
 import {
   getStorefrontBankTransferAccount,
   getStorefrontBankTransferDueHours,
+  type StorefrontBankTransferAccount,
 } from './storefrontBankTransferConfigService.js';
 import {
   deliverStorefrontBankTransferCancellationEmail,
@@ -58,6 +62,8 @@ export type CreateBankTransferOrderInput = {
   clientRequestId: unknown;
   customer: unknown;
   cart: unknown;
+  currencyCode?: unknown;
+  bankTransferAccountId?: unknown;
   notifications?: unknown;
   allowPastExperienceDates?: unknown;
 };
@@ -65,6 +71,8 @@ export type CreateBankTransferOrderInput = {
 export type PreviewBankTransferOrderInput = {
   allowedProductTypeIds: number[] | null;
   cart: unknown;
+  currencyCode?: unknown;
+  bankTransferAccountId?: unknown;
   allowPastExperienceDates?: unknown;
 };
 
@@ -145,6 +153,169 @@ const parseAllowPastExperienceDates = (value: unknown): boolean => {
   return false;
 };
 
+const TRANSFER_ACCOUNT_TYPES = ['bank', 'revolut', 'other'] as const;
+const CURRENCY_PATTERN = /^[A-Z]{3}$/;
+
+type BankTransferAccountCatalogItem = {
+  id: number;
+  name: string;
+  type: string;
+  currency: string;
+  accountHolderName: string;
+  accountNumber: string;
+  swiftCode: string | null;
+  bankName: string | null;
+  instructions: string | null;
+};
+
+type BankTransferAccountSnapshot = {
+  financeAccountId: number;
+  accountName: string;
+  accountType: string;
+  currency: string;
+  accountHolderName: string;
+  accountNumber: string;
+  swiftCode: string | null;
+  bankName: string | null;
+  instructions: string | null;
+};
+
+const serializeTransferFinanceAccount = (account: FinanceAccount): BankTransferAccountCatalogItem | null => {
+  const currency = String(account.currency ?? '').trim().toUpperCase();
+  const accountHolderName = clean(account.accountHolderName, 160);
+  const accountNumber = clean(account.accountNumber, 80);
+  if (
+    !account.isActive
+    || !TRANSFER_ACCOUNT_TYPES.includes(account.type as typeof TRANSFER_ACCOUNT_TYPES[number])
+    || !CURRENCY_PATTERN.test(currency)
+    || !accountHolderName
+    || !accountNumber
+  ) {
+    return null;
+  }
+  return {
+    id: Number(account.id),
+    name: clean(account.name, 120),
+    type: account.type,
+    currency,
+    accountHolderName,
+    accountNumber,
+    swiftCode: clean(account.swiftCode, 32) || null,
+    bankName: clean(account.bankName, 160) || null,
+    instructions: clean(account.bankTransferInstructions, 1000) || null,
+  };
+};
+
+export const listBankTransferAccounts = async (): Promise<BankTransferAccountCatalogItem[]> => {
+  const [accounts, activeCurrencies] = await Promise.all([
+    FinanceAccount.findAll({
+      where: {
+        isActive: true,
+        type: { [Op.in]: TRANSFER_ACCOUNT_TYPES },
+      },
+      order: [['currency', 'ASC'], ['name', 'ASC'], ['id', 'ASC']],
+    }),
+    Currency.findAll({
+      where: { isActive: true },
+      attributes: ['code'],
+    }),
+  ]);
+  const activeCurrencyCodes = new Set(activeCurrencies.map((currency) => currency.code));
+  return accounts
+    .map(serializeTransferFinanceAccount)
+    .filter((account): account is BankTransferAccountCatalogItem =>
+      account !== null && activeCurrencyCodes.has(account.currency));
+};
+
+const parseBankTransferAccountId = (value: unknown): number => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new HttpError(400, 'Select the bank account that will receive this transfer.');
+  }
+  return parsed;
+};
+
+const financeAccountToSnapshot = (account: FinanceAccount): BankTransferAccountSnapshot => {
+  const serialized = serializeTransferFinanceAccount(account);
+  if (!serialized) {
+    throw new HttpError(400, 'The selected bank account is not available for bank-transfer bookings.');
+  }
+  return {
+    financeAccountId: serialized.id,
+    accountName: serialized.name,
+    accountType: serialized.type,
+    currency: serialized.currency,
+    accountHolderName: serialized.accountHolderName,
+    accountNumber: serialized.accountNumber,
+    swiftCode: serialized.swiftCode,
+    bankName: serialized.bankName,
+    instructions: serialized.instructions,
+  };
+};
+
+const resolveBankTransferFinanceAccount = async (
+  accountIdInput: unknown,
+  currencyCode: string,
+  transaction?: Transaction,
+): Promise<BankTransferAccountSnapshot> => {
+  const accountId = parseBankTransferAccountId(accountIdInput);
+  const account = await FinanceAccount.findByPk(accountId, { transaction });
+  if (!account) {
+    throw new HttpError(400, 'The selected bank account no longer exists.');
+  }
+  const snapshot = financeAccountToSnapshot(account);
+  if (snapshot.currency !== currencyCode) {
+    throw new HttpError(400, `The selected bank account receives ${snapshot.currency}, not ${currencyCode}.`);
+  }
+  return snapshot;
+};
+
+const snapshotToEmailAccount = (snapshot: BankTransferAccountSnapshot): StorefrontBankTransferAccount => ({
+  beneficiary: snapshot.accountHolderName,
+  iban: snapshot.accountNumber,
+  bic: snapshot.swiftCode,
+  bankName: snapshot.bankName,
+  instructions: snapshot.instructions,
+});
+
+const bankTransferAccountSnapshotFromMetadata = (
+  metadata: Record<string, unknown> | null | undefined,
+): BankTransferAccountSnapshot | null => {
+  const source = asRecord(asRecord(metadata)?.bankTransferAccount);
+  if (!source) return null;
+  const financeAccountId = Number(source.financeAccountId ?? source.id);
+  const currency = String(source.currency ?? '').trim().toUpperCase();
+  const accountHolderName = clean(source.accountHolderName ?? source.beneficiary, 160);
+  const accountNumber = clean(source.accountNumber ?? source.iban, 80);
+  const accountName = clean(source.accountName ?? source.name, 120);
+  if (!Number.isInteger(financeAccountId) || financeAccountId <= 0 || !currency || !accountHolderName || !accountNumber) {
+    return null;
+  }
+  return {
+    financeAccountId,
+    accountName: accountName || `Account #${financeAccountId}`,
+    accountType: clean(source.accountType ?? source.type, 32) || 'bank',
+    currency,
+    accountHolderName,
+    accountNumber,
+    swiftCode: clean(source.swiftCode ?? source.bic, 32) || null,
+    bankName: clean(source.bankName, 160) || null,
+    instructions: clean(source.instructions, 1000) || null,
+  };
+};
+
+const resolveOrderBankTransferEmailAccount = async (
+  order: StorefrontOrder,
+): Promise<StorefrontBankTransferAccount> => {
+  const snapshot = bankTransferAccountSnapshotFromMetadata(order.metadata);
+  if (snapshot) return snapshotToEmailAccount(snapshot);
+  if (order.bankTransferAccountId != null) {
+    const account = await FinanceAccount.findByPk(order.bankTransferAccountId);
+    if (account) return snapshotToEmailAccount(financeAccountToSnapshot(account));
+  }
+  return getStorefrontBankTransferAccount(order.currency);
+};
+
 const metadataWithNotificationPreferences = (
   metadata: Record<string, unknown> | null | undefined,
   preferences: StorefrontConfirmationNotificationPreferences,
@@ -212,9 +383,18 @@ const requestHash = (
   cart: unknown,
   notifications: StorefrontConfirmationNotificationPreferences,
   allowPastExperienceDates: boolean,
+  currencyCode: string,
+  bankTransferAccountId: number,
 ): string =>
   createHash('sha256')
-    .update(JSON.stringify(stableValue({ allowPastExperienceDates, customer, cart, notifications })))
+    .update(JSON.stringify(stableValue({
+      allowPastExperienceDates,
+      bankTransferAccountId,
+      currencyCode,
+      customer,
+      cart,
+      notifications,
+    })))
     .digest('hex');
 
 const paymentReference = (orderId: number): string => `KTK-BT-${String(orderId).padStart(6, '0')}`;
@@ -307,6 +487,8 @@ const createOrderTransaction = async (
   allowedProductTypeIds: number[] | null,
   notificationPreferences: StorefrontConfirmationNotificationPreferences,
   allowPastExperienceDates: boolean,
+  currencyCode: string,
+  bankTransferAccount: BankTransferAccountSnapshot,
 ): Promise<{ order: StorefrontOrder; created: boolean }> => sequelize.transaction(async (transaction) => {
   const existing = await findIdempotentOrder(clientRequestId, hash, transaction);
   if (existing) return { order: existing, created: false };
@@ -317,7 +499,7 @@ const createOrderTransaction = async (
   // the final unit.
   const concurrent = await findIdempotentOrder(clientRequestId, hash, transaction);
   if (concurrent) return { order: concurrent, created: false };
-  const quote = await quoteStorefrontCart(cart, transaction, { allowPastExperienceDates });
+  const quote = await quoteStorefrontCart(cart, transaction, { allowPastExperienceDates, currencyCode });
   if (quote.total <= 0) throw new HttpError(400, 'A bank transfer order must have an amount greater than zero.');
   await assertProductScope(quote.items.map((item) => item.productId), allowedProductTypeIds, transaction);
   const now = new Date();
@@ -362,9 +544,16 @@ const createOrderTransaction = async (
       discountCodes: quote.discountCodes,
       discounts: quote.discounts,
       cart: normalizedCart,
+      currency: {
+        code: quote.currency,
+        exchangeRateToPln: quote.currencyExchangeRateToPln,
+        capturedAt: now.toISOString(),
+      },
+      bankTransferAccount,
       confirmationNotifications: notificationPreferences,
     },
     createdByUserId: actorId,
+    bankTransferAccountId: bankTransferAccount.financeAccountId,
     paymentDueAt: dueAt,
     idempotencyKey: clientRequestId,
     idempotencyRequestHash: hash,
@@ -396,6 +585,8 @@ const createOrderTransaction = async (
       paymentReference: order.paymentReference,
       total: Number(order.total),
       currency: order.currency,
+      bankTransferAccountId: bankTransferAccount.financeAccountId,
+      bankTransferAccountName: bankTransferAccount.accountName,
       bookingIds: projection.bookings.map((booking) => Number(booking.id)),
     },
   }, { transaction });
@@ -443,6 +634,9 @@ const serializeOrders = async (orders: StorefrontOrder[]) => {
 
   return orders.map((order) => {
     const notificationPreferences = getStorefrontOrderConfirmationNotificationPreferences(order);
+    const bankTransferAccount = bankTransferAccountSnapshotFromMetadata(order.metadata);
+    const currencyMetadata = asRecord(asRecord(order.metadata)?.currency);
+    const currencyExchangeRateToPln = Number(currencyMetadata?.exchangeRateToPln);
     return {
       publicId: order.publicId,
       status: order.status === 'cancelled'
@@ -459,6 +653,11 @@ const serializeOrders = async (orders: StorefrontOrder[]) => {
       discountTotal: Number(order.discountTotal),
       total: Number(order.total),
       currency: order.currency,
+      currencyExchangeRateToPln: Number.isFinite(currencyExchangeRateToPln) && currencyExchangeRateToPln > 0
+        ? currencyExchangeRateToPln
+        : null,
+      bankTransferAccountId: order.bankTransferAccountId,
+      bankTransferAccount,
       customer: {
         fullName: `${order.customerFirstName} ${order.customerLastName}`.trim(),
         firstName: order.customerFirstName,
@@ -614,14 +813,21 @@ export const previewBankTransferOrder = async (input: PreviewBankTransferOrderIn
   if (!cart || !Array.isArray(cart.items)) {
     throw new HttpError(400, 'The cart must contain at least one item.');
   }
+  const currencyCode = normalizeStorefrontCurrencyCode(input.currencyCode);
+  const bankTransferAccount = await resolveBankTransferFinanceAccount(
+    input.bankTransferAccountId,
+    currencyCode,
+  );
   const quote = await quoteStorefrontCart(cart, undefined, {
     allowMissingCustomerDetails: true,
     allowPastExperienceDates: parseAllowPastExperienceDates(input.allowPastExperienceDates),
+    currencyCode,
   });
   await assertProductScope(quote.items.map((item) => item.productId), input.allowedProductTypeIds);
   return {
     quote,
     cart: normalizeSavedCartFromQuote(quote),
+    bankTransferAccount,
   };
 };
 
@@ -630,6 +836,11 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
   const customer = parseCustomer(input.customer);
   const notificationPreferences = parseNotificationPreferences(input.notifications);
   const allowPastExperienceDates = parseAllowPastExperienceDates(input.allowPastExperienceDates);
+  const currencyCode = normalizeStorefrontCurrencyCode(input.currencyCode);
+  const bankTransferAccount = await resolveBankTransferFinanceAccount(
+    input.bankTransferAccountId,
+    currencyCode,
+  );
   const cartInput = input.cart as StorefrontCartInput;
   if (!cartInput || !Array.isArray(cartInput.items)) {
     throw new HttpError(400, 'The cart must contain at least one item.');
@@ -638,7 +849,14 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
     throw new HttpError(400, 'One or more cart items are invalid.');
   }
   const cart = addCustomerToSavedCart(cartInput, customer);
-  const hash = requestHash(customer, cart, notificationPreferences, allowPastExperienceDates);
+  const hash = requestHash(
+    customer,
+    cart,
+    notificationPreferences,
+    allowPastExperienceDates,
+    currencyCode,
+    bankTransferAccount.financeAccountId,
+  );
   const existing = await findIdempotentOrder(clientRequestId, hash);
   if (existing) {
     const order = await loadOrder(existing.publicId);
@@ -657,6 +875,8 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
       input.allowedProductTypeIds,
       notificationPreferences,
       allowPastExperienceDates,
+      currencyCode,
+      bankTransferAccount,
     );
   } catch (error) {
     if (!(error instanceof UniqueConstraintError)) throw error;
@@ -723,7 +943,7 @@ export const resendBankTransferInstructions = async (
   if (order.status !== 'pending_payment' || order.paymentStatus !== 'unpaid') {
     throw new HttpError(409, 'Bank transfer instructions cannot be sent for this order state.');
   }
-  const account = getStorefrontBankTransferAccount(order.currency);
+  const account = await resolveOrderBankTransferEmailAccount(order);
   const sent = await deliverStorefrontBankTransferInstructionsEmail(publicId, account, { force: true });
   if (!sent) {
     throw new HttpError(409, 'This bank transfer order is no longer awaiting payment.');
