@@ -277,4 +277,117 @@ describe('privileged task status override', () => {
     expect(AssistantManagerTaskLog.sequelize!.transaction).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
   });
+
+  it('allows a manager to reopen a missed task for late completion', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    const log = {
+      id: 95,
+      templateId: 6,
+      userId: 8,
+      taskDate: '2026-09-12',
+      status: 'missed',
+      meta: {},
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    (AssistantManagerTaskLog.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValueOnce(log).mockResolvedValueOnce(null);
+    (AssistantManagerTaskTemplate.findByPk as jest.Mock).mockResolvedValue({
+      id: 6,
+      name: 'Daily - Arrive at 20:45 and check late staff',
+      description: null,
+      scheduleConfig: { time: '20:45', durationHours: 0.1, completionWindowMode: 'strict' },
+    });
+    const req = {
+      params: { id: '95' },
+      body: { status: 'pending', force: true },
+      authContext: { id: 99, roleSlug: 'manager' },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await updateTaskLogStatus(req, res);
+
+    expect(log.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'pending',
+        completedAt: null,
+        updatedBy: 99,
+        meta: expect.objectContaining({
+          lateTaskReopen: expect.objectContaining({
+            enabled: true,
+            previousStatus: 'missed',
+            reopenedBy: 99,
+            reopenedAt: expect.any(String),
+          }),
+        }),
+      }),
+      { transaction },
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('rejects late reopen from an assistant manager before opening a transaction', async () => {
+    const req = {
+      params: { id: '95' },
+      body: { status: 'pending', force: true },
+      authContext: { id: 8, roleSlug: 'assistant-manager' },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await updateTaskLogStatus(req, res);
+
+    expect(AssistantManagerTaskLog.sequelize!.transaction).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  it('allows the assigned user to complete a late-reopened task after the original deadline', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    const log = {
+      id: 96,
+      templateId: 6,
+      userId: 8,
+      taskDate: '2026-09-12',
+      status: 'pending',
+      meta: { lateTaskReopen: { enabled: true, reopenedAt: '2026-09-25T12:00:00.000Z', reopenedBy: 99, previousStatus: 'missed' } },
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    (AssistantManagerTaskLog.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValueOnce(log).mockResolvedValueOnce(null);
+    (AssistantManagerTaskTemplate.findByPk as jest.Mock).mockResolvedValue({
+      id: 6,
+      name: 'Daily - Arrive at 20:45 and check late staff',
+      description: null,
+      scheduleConfig: {
+        time: '20:45',
+        durationHours: 0.1,
+        completionWindowMode: 'strict',
+        evidenceRules: [],
+      },
+    });
+    (ShiftAssignment.findAll as jest.Mock).mockResolvedValue([]);
+    const req = {
+      params: { id: '96' },
+      body: { status: 'completed' },
+      authContext: { id: 8, roleSlug: 'assistant-manager' },
+    } as unknown as AuthenticatedRequest;
+    const res = response();
+
+    await updateTaskLogStatus(req, res);
+
+    expect(ensureTaskAttendanceCheckSatisfied).toHaveBeenCalledWith(
+      log,
+      expect.objectContaining({
+        lateTaskReopen: expect.objectContaining({ enabled: true }),
+      }),
+      transaction,
+    );
+    expect(log.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'completed',
+        completedAt: expect.any(Date),
+        updatedBy: 8,
+      }),
+      { transaction },
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
 });

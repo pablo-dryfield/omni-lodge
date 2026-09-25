@@ -1283,6 +1283,9 @@ const normalizeRoleSlug = (value?: string | null): string | null => {
   return withHyphens;
 };
 
+const isLateTaskReopenActive = (meta?: AssistantManagerTaskLogMeta | null): boolean =>
+  meta?.lateTaskReopen?.enabled === true;
+
 const PLANNER_START_HOUR = 6;
 const PLANNER_END_HOUR = 22;
 const PLANNER_SLOT_HEIGHT = 56;
@@ -4238,11 +4241,12 @@ const AssistantManagerTaskPlanner = () => {
     }
     return isTaskCompletionWindowExpired(selectedLog, templateMap);
   }, [selectedLog, templateMap]);
+  const selectedLogLateReopenActive = isLateTaskReopenActive(selectedLog?.meta);
   const selectedLogEvidenceReadOnly = Boolean(
     !selectedLog ||
       selectedLogCleaningManaged ||
       selectedLog.status === 'completed' ||
-      !selectedLogIsCurrentDay ||
+      (!selectedLogIsCurrentDay && !selectedLogLateReopenActive) ||
       dashboardTaskEditOpen,
   );
   const selectedLogCompletesOnSocialMediaPublish = !selectedLogCleaningManaged && doesTaskCompleteOnSocialMediaPublish(
@@ -4253,8 +4257,8 @@ const AssistantManagerTaskPlanner = () => {
     selectedLog &&
       !selectedLogCleaningManaged &&
       selectedLog.status !== 'completed' &&
-      selectedLogIsCurrentDay &&
-      !selectedLogStrictCompletionExpired &&
+      (selectedLogIsCurrentDay || selectedLogLateReopenActive) &&
+      (!selectedLogStrictCompletionExpired || selectedLogLateReopenActive) &&
       !selectedLogCompletesOnSocialMediaPublish,
   );
   const selectedLogCanReopen = Boolean(
@@ -4269,6 +4273,15 @@ const AssistantManagerTaskPlanner = () => {
       !selectedLogCleaningManaged &&
       selectedLog.status !== 'completed' &&
       (selectedLogIsPastDay || selectedLogStrictCompletionExpired),
+  );
+  const selectedLogCanLateReopen = Boolean(
+    selectedLog &&
+      canForceCompleteTaskLogs &&
+      !selectedLogCleaningManaged &&
+      selectedLog.status !== 'completed' &&
+      selectedLogCompletionLocked &&
+      !selectedLogLateReopenActive &&
+      !selectedLogCompletesOnSocialMediaPublish,
   );
   const selectedLogCanForceComplete = Boolean(
     selectedLog &&
@@ -7417,6 +7430,49 @@ const AssistantManagerTaskPlanner = () => {
       setLogDetailSubmitting(false);
     }
   }, [dispatch, refreshLogs, selectedLog, selectedLogCanReopen]);
+
+  const handleLogDetailLateReopen = useCallback(async () => {
+    if (!selectedLog || !selectedLogCanLateReopen) {
+      return;
+    }
+
+    const taskName = selectedLog.templateName ?? `Template #${selectedLog.templateId}`;
+    const taskDateLabel = dayjs(selectedLog.taskDate).isValid()
+      ? dayjs(selectedLog.taskDate).format('MMM D, YYYY')
+      : String(selectedLog.taskDate);
+    const confirmed = window.confirm(
+      `Reopen "${taskName}" on ${taskDateLabel} for late completion? The assigned person will be able to upload missing evidence and complete it after the original deadline.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setLogDetailSubmitting(true);
+    setLogDetailReopening(true);
+    setLogDetailError(null);
+
+    try {
+      const statusResponse = (await dispatch(
+        updateAmTaskLogStatus({
+          logId: selectedLog.id,
+          payload: { status: 'pending', force: true },
+        }),
+      ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
+      const reopenedLog = (statusResponse?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
+
+      if (reopenedLog) {
+        setSelectedLog(reopenedLog);
+        setLogDetailFormState(buildLogDetailFormStateFromLog(reopenedLog));
+      }
+
+      await refreshLogs();
+    } catch (error) {
+      setLogDetailError(getErrorMessage(error, 'Failed to reopen task'));
+    } finally {
+      setLogDetailReopening(false);
+      setLogDetailSubmitting(false);
+    }
+  }, [dispatch, refreshLogs, selectedLog, selectedLogCanLateReopen]);
 
   const handleLogDetailForceComplete = useCallback(async () => {
     if (!selectedLog || !selectedLogCanForceComplete) {
@@ -10872,6 +10928,11 @@ const AssistantManagerTaskPlanner = () => {
                             Manual
                           </Badge>
                         )}
+                        {selectedLogLateReopenActive && (
+                          <Badge color="orange" variant="light">
+                            Reopened
+                          </Badge>
+                        )}
                         {selectedLog.meta.onShift === false && (
                           <Badge color="yellow" variant="light">
                             Off shift
@@ -12147,6 +12208,16 @@ const AssistantManagerTaskPlanner = () => {
                       {selectedLogStrictCompletionExpired ? 'Time Window Expired' : 'Task Not Completed'}
                     </Text>
                   </Paper>
+                  {selectedLogCanLateReopen && (
+                    <Button
+                      variant="default"
+                      onClick={handleLogDetailLateReopen}
+                      loading={logDetailReopening}
+                      disabled={logDetailReopening || socialMediaPlanSaving}
+                    >
+                      Reopen for completion
+                    </Button>
+                  )}
                   {selectedLogCanForceComplete && (
                     <Button
                       color="red"

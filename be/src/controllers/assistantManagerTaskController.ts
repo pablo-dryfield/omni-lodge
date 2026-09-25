@@ -135,6 +135,7 @@ const TEMPLATE_CONFIG_MANAGED_META_KEYS = [
   'requireSocialMediaPlan',
   'completeOnSocialMediaPublish',
 ] as const;
+const LATE_TASK_REOPEN_META_KEY = 'lateTaskReopen';
 
 const startOfPlannerWeek = (value?: string | dayjs.Dayjs | Date | null) => {
   const date = value ? dayjs(value) : dayjs();
@@ -190,6 +191,8 @@ const canViewAllTaskLogs = (req: AuthenticatedRequest): boolean => {
   const normalizedRole = normalizeRoleSlug(req.authContext?.roleSlug ?? null);
   return normalizedRole != null && GLOBAL_TASK_VIEWER_ROLES.has(normalizedRole);
 };
+const objectMetaValue = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const parseBooleanFlag = (value: unknown): boolean => {
   if (Array.isArray(value)) {
     return value.some((item) => parseBooleanFlag(item));
@@ -199,6 +202,27 @@ const parseBooleanFlag = (value: unknown): boolean => {
     return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
   }
   return value === true || value === 1;
+};
+const isLateTaskReopenActive = (meta: unknown): boolean => {
+  const marker = objectMetaValue(meta)[LATE_TASK_REOPEN_META_KEY];
+  const value = objectMetaValue(marker);
+  return value.enabled === true;
+};
+const buildLateTaskReopenMarker = (
+  previousMarker: unknown,
+  actorId: number | null,
+  previousStatus: AssistantManagerTaskStatus,
+): Record<string, unknown> => {
+  const existing = objectMetaValue(previousMarker);
+  const originalStatus = typeof existing.previousStatus === 'string'
+    ? existing.previousStatus
+    : previousStatus;
+  return {
+    enabled: true,
+    previousStatus: originalStatus,
+    reopenedAt: new Date().toISOString(),
+    reopenedBy: actorId,
+  };
 };
 const PRIORITY_VALUES = new Set(['high', 'medium', 'low']);
 const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
@@ -1857,8 +1881,10 @@ const isTaskLogOnCurrentDay = (
 };
 
 const canEditTaskLogEvidence = (
-  log: Pick<AssistantManagerTaskLog, 'taskDate' | 'status'>,
-): boolean => log.status !== 'completed' && isTaskLogOnCurrentDay(log);
+  log: Pick<AssistantManagerTaskLog, 'taskDate' | 'status' | 'meta'>,
+): boolean => log.status !== 'completed' && (
+  isTaskLogOnCurrentDay(log) || isLateTaskReopenActive(log.meta)
+);
 
 const syncTemplateGroupOrderValues = async (
   template: AssistantManagerTaskTemplate,
@@ -4428,10 +4454,27 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
       }
 
       const forceComplete = force && status === 'completed';
+      const forceLateReopen = force && status === 'pending';
+      const cleaningCompletionManaged = isCleaningTaskCompletionManaged(template.scheduleConfig, nextMeta);
+
+      if (forceLateReopen) {
+        if (cleaningCompletionManaged) {
+          throw new HttpError(409, 'This task is completed automatically after all cleaning photos are approved. Use the cleaning review workflow.');
+        }
+        if (log.status === 'completed') {
+          throw new HttpError(400, 'Completed tasks can be reopened only during their normal completion window.');
+        }
+        nextMeta[LATE_TASK_REOPEN_META_KEY] = buildLateTaskReopenMarker(
+          nextMeta[LATE_TASK_REOPEN_META_KEY],
+          actorId,
+          log.status,
+        );
+        shouldUpdateMeta = true;
+      }
 
       // A retry on an already completed managed task is a no-op, not a second completion.
-      if (status && (!isCleaningTaskCompletionManaged(template.scheduleConfig, nextMeta) || status !== log.status)) {
-        if (status !== log.status && isCleaningTaskCompletionManaged(template.scheduleConfig, nextMeta)) {
+      if (status && (!cleaningCompletionManaged || status !== log.status)) {
+        if (status !== log.status && cleaningCompletionManaged) {
           throw new HttpError(409, 'This task is completed automatically after all cleaning photos are approved. Use the cleaning review workflow.');
         }
         if (status === 'completed') {
@@ -4441,14 +4484,15 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
               nextMeta,
               template.scheduleConfig,
             );
-            if (!isTaskLogOnCurrentDay(log, timezoneName)) {
+            const lateCompletionAllowed = isLateTaskReopenActive(nextMeta);
+            if (!lateCompletionAllowed && !isTaskLogOnCurrentDay(log, timezoneName)) {
               throw new HttpError(400, 'Task can only be completed on its scheduled day');
             }
             const strictDeadline = getTaskLogStrictCompletionDeadline(
               { taskDate: log.taskDate, meta: nextMeta, template },
               timezoneName,
             );
-            if (strictDeadline && dayjs().tz(timezoneName).isAfter(strictDeadline)) {
+            if (!lateCompletionAllowed && strictDeadline && dayjs().tz(timezoneName).isAfter(strictDeadline)) {
               throw new HttpError(400, 'Task can no longer be completed after its scheduled end time');
             }
             const taskDay = dayjs(log.taskDate);

@@ -124,6 +124,12 @@ export type AssistantManagerTaskLogMeta = {
   completeOnSocialMediaPublish?: boolean;
   socialMediaContentId?: number | null;
   socialMediaContentSnapshot?: AssistantManagerTaskSocialMediaContentSummary | null;
+  lateTaskReopen?: {
+    enabled?: boolean;
+    previousStatus?: AssistantManagerTaskLog['status'];
+    reopenedAt?: string;
+    reopenedBy?: number | null;
+  };
   [key: string]: unknown;
 };
 
