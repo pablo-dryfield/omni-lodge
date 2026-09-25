@@ -1,5 +1,6 @@
 import {
   filterExpectedEvidenceItemsForCurrentShiftSources,
+  reconcileExpectedEvidenceItemsForCurrentRoster,
   retainEvidenceSubjectForConfiguredShiftRule,
 } from '../assistantManagerTaskEvidenceSubjectService';
 
@@ -100,5 +101,73 @@ describe('stored assistant-manager task expected evidence', () => {
         },
       ]),
     ).toEqual([expectedEvidenceItems[0]]);
+  });
+
+  it('reconciles stored expected slots against the live roster', () => {
+    const storedSlots = [
+      {
+        id: 'stored-henry',
+        sourceKey: 'promotion_shift',
+        sourceLabel: 'Promotion',
+        ruleKey: 'promotion_screenshot',
+        type: 'image' as const,
+        subjectUserId: 101,
+        subjectName: 'Henry Brown',
+        shiftTypeIds: [7],
+      },
+      {
+        id: 'stored-removed',
+        sourceKey: 'promotion_shift',
+        sourceLabel: 'Promotion',
+        ruleKey: 'promotion_screenshot',
+        type: 'image' as const,
+        subjectUserId: 102,
+        subjectName: 'Removed Person',
+        shiftTypeIds: [7],
+      },
+    ];
+    const liveSlots = [
+      {
+        id: 'live-henry',
+        sourceKey: 'promotion_shift',
+        sourceLabel: 'Promotion',
+        ruleKey: 'promotion_screenshot',
+        type: 'image' as const,
+        subjectUserId: 101,
+        subjectName: 'Henry Brown',
+        shiftTypeIds: [7],
+      },
+      {
+        id: 'live-yanna',
+        sourceKey: 'promotion_shift',
+        sourceLabel: 'Promotion',
+        ruleKey: 'promotion_screenshot',
+        type: 'image' as const,
+        subjectUserId: 103,
+        subjectName: 'Yanna Yolova',
+        shiftTypeIds: [7],
+      },
+    ];
+
+    expect(reconcileExpectedEvidenceItemsForCurrentRoster(storedSlots, liveSlots)).toEqual([
+      {
+        ...liveSlots[0],
+        id: 'stored-henry',
+      },
+      liveSlots[1],
+    ]);
+  });
+
+  it('clears expected slots when the current roster no longer matches the shift evidence source', () => {
+    expect(
+      reconcileExpectedEvidenceItemsForCurrentRoster([
+        {
+          id: 'stored-henry',
+          sourceKey: 'promotion_shift',
+          ruleKey: 'promotion_screenshot',
+          subjectUserId: 101,
+        },
+      ], []),
+    ).toEqual([]);
   });
 });

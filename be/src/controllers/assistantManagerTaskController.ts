@@ -73,6 +73,7 @@ import {
 } from '../services/assistantManagerTaskLogManagementService.js';
 import {
   filterExpectedEvidenceItemsForCurrentShiftSources,
+  reconcileExpectedEvidenceItemsForCurrentRoster,
   retainEvidenceSubjectForConfiguredShiftRule,
 } from '../services/assistantManagerTaskEvidenceSubjectService.js';
 import {
@@ -1786,16 +1787,20 @@ const resolveLogExpectedEvidenceItems = (
     getNormalizedExpectedEvidenceItems((log.meta ?? {})['expectedEvidenceItems']),
     shiftEvidenceSources,
   );
-  if (storedExpected.length > 0) {
+  if (!scheduledShiftCandidatesByDate) {
     return storedExpected;
   }
   if (!log.template || shiftEvidenceSources.length === 0) {
     return [];
   }
 
-  const map = scheduledShiftCandidatesByDate ?? new Map<string, ScheduledShiftCandidate[]>();
   const taskDateKey = dayjs(log.taskDate).tz(resolveTaskPlannerTimezone()).format('YYYY-MM-DD');
-  return buildExpectedEvidenceItemsForDate(log.template, taskDateKey, map);
+  const liveExpected = buildExpectedEvidenceItemsForDate(
+    log.template,
+    taskDateKey,
+    scheduledShiftCandidatesByDate,
+  );
+  return reconcileExpectedEvidenceItemsForCurrentRoster(storedExpected, liveExpected);
 };
 
 const formatLogWithLiveExpectedEvidenceItems = (
