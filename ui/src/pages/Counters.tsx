@@ -643,13 +643,26 @@ const normalizeAddonRefundActions = (value: unknown): BookingAddonRefundAction[]
     .filter((entry): entry is BookingAddonRefundAction => entry !== null);
 };
 
-const getOrderPendingAddonRefundActions = (order: UnifiedOrder): BookingAddonRefundAction[] =>
+const getOrderVisibleAddonRefundActions = (order: UnifiedOrder): BookingAddonRefundAction[] =>
   normalizeAddonRefundActions(order.rawData?.addonRefundActions).filter(
     (entry) => {
       const status = String(entry.status ?? '').toLowerCase();
       return status === 'pending' || status === 'declined';
     },
   );
+
+const getAddonRefundActionSectionTitle = (
+  entries: Array<{ action: BookingAddonRefundAction }>,
+): string => {
+  const statuses = new Set(entries.map(({ action }) => String(action.status ?? '').toLowerCase()));
+  if (statuses.has('pending') && statuses.has('declined')) {
+    return 'External Add-on Refund Status';
+  }
+  if (statuses.has('declined')) {
+    return 'Customer-Declined Refunds';
+  }
+  return 'Pending External Refunds';
+};
 
 const getOrderRemainingExtrasTotal = (order: UnifiedOrder): number =>
   ORDER_EXTRA_KEYS.reduce((total, key) => {
@@ -9823,7 +9836,7 @@ useEffect(() => {
                         const hasAddonCounters = (Object.keys(purchasedExtras) as Array<keyof OrderExtras>).some(
                           (key) => Math.max(0, Number(purchasedExtras[key]) || 0) > 0,
                         );
-                        const pendingAddonRefundActions = getOrderPendingAddonRefundActions(order);
+                        const pendingAddonRefundActions = getOrderVisibleAddonRefundActions(order);
                         return (
                           <Stack
                             key={`${order.id}-${order.platformBookingId}`}
@@ -10879,10 +10892,10 @@ type SummaryRowOptions = {
     summaryChannelOrder,
   ]);
 
-  const pendingAddonRefundActionEntries = useMemo(
+  const visibleAddonRefundActionEntries = useMemo(
     () =>
       onlineReservationsScoped.flatMap((order) =>
-        getOrderPendingAddonRefundActions(order).map((action) => ({
+        getOrderVisibleAddonRefundActions(order).map((action) => ({
           order,
           action,
         })),
@@ -10978,7 +10991,7 @@ type SummaryRowOptions = {
                 </CardContent>
               </Card>
             </Grid>
-            {pendingAddonRefundActionEntries.length > 0 && (
+            {visibleAddonRefundActionEntries.length > 0 && (
               <Grid size={{ xs: 12 }}>
                 <Card
                   variant="outlined"
@@ -10989,10 +11002,10 @@ type SummaryRowOptions = {
                 >
                   <CardContent>
                     <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-                      Pending External Refunds
+                      {getAddonRefundActionSectionTitle(visibleAddonRefundActionEntries)}
                     </Typography>
                     <Stack spacing={1}>
-                      {pendingAddonRefundActionEntries.map(({ order, action }) => {
+                      {visibleAddonRefundActionEntries.map(({ order, action }) => {
                         const bookingId = getOrderBookingId(order);
                         const status = String(action.status ?? 'pending').toLowerCase();
                         const actionPersisted = !String(action.id ?? '').startsWith('pending-local-');
