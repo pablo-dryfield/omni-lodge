@@ -79,6 +79,8 @@ export type StorefrontQuote = {
   currencyExchangeRateToPln: number;
   subtotal: number;
   addonTotal: number;
+  calculatedAmountBeforeDiscount?: number;
+  amountBeforeDiscountOverride?: number | null;
   discountTotal: number;
   total: number;
   discountCode: string | null;
@@ -98,9 +100,28 @@ export type StorefrontQuoteOptions = {
   allowMissingCustomerDetails?: boolean;
   allowPastExperienceDates?: boolean;
   currencyCode?: unknown;
+  amountBeforeDiscountOverride?: number | null;
 };
 
 const roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const splitMoneyByWeights = (total: number, weights: number[]): number[] => {
+  const normalizedTotal = roundMoney(Math.max(Number(total) || 0, 0));
+  if (weights.length === 0) return [];
+  const normalizedWeights = weights.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
+  const weightTotal = normalizedWeights.reduce((sum, value) => sum + value, 0);
+  if (weightTotal <= 0) {
+    return splitMoneyByWeights(normalizedTotal, weights.map(() => 1));
+  }
+  let remaining = normalizedTotal;
+  return normalizedWeights.map((weight, index) => {
+    const share = index === normalizedWeights.length - 1
+      ? remaining
+      : roundMoney(normalizedTotal * (weight / weightTotal));
+    remaining = roundMoney(remaining - share);
+    return share;
+  });
+};
 
 const convertPlnAmountToCurrency = (
   amountPln: number,
@@ -172,6 +193,62 @@ const normalizeDate = (
 
 const normalizeText = (value: unknown, maxLength = 255): string =>
   value === null || value === undefined ? '' : String(value).trim().slice(0, maxLength);
+
+const normalizeAmountBeforeDiscountOverride = (value: number | null | undefined): number | null => {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new HttpError(400, 'Manual amount before discounts must be greater than zero.');
+  }
+  return roundMoney(parsed);
+};
+
+const applyAmountBeforeDiscountOverride = (
+  quoteItems: StorefrontQuoteItem[],
+  amountBeforeDiscountOverride: number,
+): StorefrontQuoteItem[] => {
+  const itemTotals = quoteItems.map((item) => Math.max(Number(item.total) || 0, 0));
+  const itemShares = splitMoneyByWeights(
+    amountBeforeDiscountOverride,
+    itemTotals.some((total) => total > 0)
+      ? itemTotals
+      : quoteItems.map((item) => Math.max(Number(item.quantity) || 0, 1)),
+  );
+
+  return quoteItems.map((item, itemIndex) => {
+    const adjustedItemTotal = itemShares[itemIndex] ?? 0;
+    const componentWeights = item.addonTotal > 0 && item.addons.length > 0
+      ? [
+          Math.max(Number(item.baseTotal) || 0, 0),
+          Math.max(Number(item.addonTotal) || 0, 0),
+        ]
+      : [1, 0];
+    const [adjustedBaseTotal, adjustedAddonTotal] = splitMoneyByWeights(
+      adjustedItemTotal,
+      componentWeights,
+    );
+    const addonShares = splitMoneyByWeights(
+      adjustedAddonTotal,
+      item.addons.map((addon) => Math.max(Number(addon.total) || 0, 0)),
+    );
+    const adjustedAddons = item.addons.map((addon, addonIndex) => {
+      const adjustedAddonTotal = addonShares[addonIndex] ?? 0;
+      return {
+        ...addon,
+        unitPrice: addon.quantity > 0 ? roundMoney(adjustedAddonTotal / addon.quantity) : adjustedAddonTotal,
+        total: adjustedAddonTotal,
+      };
+    });
+    return {
+      ...item,
+      unitPrice: item.quantity > 0 ? roundMoney(adjustedBaseTotal / item.quantity) : adjustedBaseTotal,
+      baseTotal: adjustedBaseTotal,
+      addonTotal: adjustedAddonTotal,
+      total: roundMoney(adjustedBaseTotal + adjustedAddonTotal),
+      addons: adjustedAddons,
+    };
+  });
+};
 
 export const normalizeStorefrontAddonVariants = (
   input: unknown,
@@ -735,22 +812,31 @@ export const quoteStorefrontCart = async (
 
   const subtotal = roundMoney(quoteItems.reduce((sum, item) => sum + item.baseTotal, 0));
   const addonTotal = roundMoney(quoteItems.reduce((sum, item) => sum + item.addonTotal, 0));
-  const merchandiseSubtotal = roundMoney(subtotal + addonTotal);
+  const calculatedAmountBeforeDiscount = roundMoney(subtotal + addonTotal);
+  const amountBeforeDiscountOverride = normalizeAmountBeforeDiscountOverride(options.amountBeforeDiscountOverride);
+  const pricedQuoteItems = amountBeforeDiscountOverride === null
+    ? quoteItems
+    : applyAmountBeforeDiscountOverride(quoteItems, amountBeforeDiscountOverride);
+  const pricedSubtotal = roundMoney(pricedQuoteItems.reduce((sum, item) => sum + item.baseTotal, 0));
+  const pricedAddonTotal = roundMoney(pricedQuoteItems.reduce((sum, item) => sum + item.addonTotal, 0));
+  const merchandiseSubtotal = roundMoney(pricedSubtotal + pricedAddonTotal);
   const requestedCodes = normalizeDiscountCodes(input);
-  const discounts = await resolvePromotions(requestedCodes, merchandiseSubtotal, quoteItems, currencyCode, transaction);
+  const discounts = await resolvePromotions(requestedCodes, merchandiseSubtotal, pricedQuoteItems, currencyCode, transaction);
   const discountTotal = roundMoney(discounts.reduce((sum, discount) => sum + discount.amount, 0));
 
   return {
     currency: currencyCode,
     currencyExchangeRateToPln,
-    subtotal,
-    addonTotal,
+    subtotal: pricedSubtotal,
+    addonTotal: pricedAddonTotal,
+    calculatedAmountBeforeDiscount,
+    amountBeforeDiscountOverride,
     discountTotal,
     total: roundMoney(merchandiseSubtotal - discountTotal),
     discountCode: discounts[0]?.code ?? null,
     discountCodes: discounts.map((discount) => discount.code),
     promotionId: discounts[0]?.promotionId ?? null,
     discounts,
-    items: quoteItems,
+    items: pricedQuoteItems,
   };
 };

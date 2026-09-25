@@ -16,13 +16,21 @@ jest.mock('../../models/ProductPrice.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn() },
 }));
-jest.mock('../../models/StorefrontPromotion.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/StorefrontPromotion.js', () => ({
+  __esModule: true,
+  default: { findAll: jest.fn() },
+}));
+jest.mock('../storefrontResourceReservationAvailabilityService.js', () => ({
+  getActivePromotionReservationCounts: jest.fn(async () => new Map()),
+}));
 
 import Product from '../../models/Product.js';
 import ProductPrice from '../../models/ProductPrice.js';
+import StorefrontPromotion from '../../models/StorefrontPromotion.js';
 
 const productFindAll = Product.findAll as jest.Mock;
 const productPriceFindAll = ProductPrice.findAll as jest.Mock;
+const promotionFindAll = StorefrontPromotion.findAll as jest.Mock;
 
 describe('quoteStorefrontCart validation', () => {
   beforeEach(() => {
@@ -103,6 +111,56 @@ describe('quoteStorefrontCart validation', () => {
         expect.objectContaining({
           productId: 1,
           experienceDate,
+        }),
+      ],
+    }));
+  });
+
+  it('applies a manual amount before discount calculation', async () => {
+    productFindAll.mockResolvedValue([{
+      id: 1,
+      name: 'Pub Crawl',
+      slug: 'pub-crawl',
+      price: 31.57,
+      storefrontConfig: {},
+      productAddons: [],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+    promotionFindAll.mockResolvedValue([{
+      id: 7,
+      code: 'ROUND10',
+      name: 'Rounded transfer discount',
+      type: 'percentage',
+      value: 10,
+      currency: null,
+      maxRedemptions: null,
+      redemptionCount: 0,
+      minSubtotal: null,
+      metadata: null,
+    }]);
+
+    await expect(
+      quoteStorefrontCart(
+        {
+          items: [{ productId: 1, quantity: 1 }],
+          discountCode: 'ROUND10',
+        },
+        undefined,
+        { amountBeforeDiscountOverride: 28 },
+      ),
+    ).resolves.toEqual(expect.objectContaining({
+      subtotal: 28,
+      addonTotal: 0,
+      calculatedAmountBeforeDiscount: 31.57,
+      amountBeforeDiscountOverride: 28,
+      discountTotal: 2.8,
+      total: 25.2,
+      items: [
+        expect.objectContaining({
+          productId: 1,
+          unitPrice: 28,
+          baseTotal: 28,
+          total: 28,
         }),
       ],
     }));

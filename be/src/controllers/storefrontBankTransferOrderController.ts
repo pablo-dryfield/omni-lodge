@@ -73,6 +73,7 @@ export const createStorefrontBankTransferOrder = async (
       customer: request.body?.customer,
       cart: request.body?.cart,
       currencyCode: request.body?.currencyCode,
+      amountBeforeDiscountOverride: request.body?.amountBeforeDiscountOverride,
       bankTransferAccountId: request.body?.bankTransferAccountId,
       notifications: request.body?.notifications,
       allowPastExperienceDates: request.body?.allowPastExperienceDates,
@@ -97,6 +98,7 @@ export const previewStorefrontBankTransferOrder = async (
       allowedProductTypeIds: await getAllowedProductTypeIds(request),
       cart: request.body?.cart,
       currencyCode: request.body?.currencyCode,
+      amountBeforeDiscountOverride: request.body?.amountBeforeDiscountOverride,
       bankTransferAccountId: request.body?.bankTransferAccountId,
       allowPastExperienceDates: request.body?.allowPastExperienceDates,
     }));

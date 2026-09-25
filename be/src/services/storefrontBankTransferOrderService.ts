@@ -63,6 +63,7 @@ export type CreateBankTransferOrderInput = {
   customer: unknown;
   cart: unknown;
   currencyCode?: unknown;
+  amountBeforeDiscountOverride?: unknown;
   bankTransferAccountId?: unknown;
   notifications?: unknown;
   allowPastExperienceDates?: unknown;
@@ -72,6 +73,7 @@ export type PreviewBankTransferOrderInput = {
   allowedProductTypeIds: number[] | null;
   cart: unknown;
   currencyCode?: unknown;
+  amountBeforeDiscountOverride?: unknown;
   bankTransferAccountId?: unknown;
   allowPastExperienceDates?: unknown;
 };
@@ -151,6 +153,18 @@ const parseAllowPastExperienceDates = (value: unknown): boolean => {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') return value.trim().toLowerCase() === 'true';
   return false;
+};
+
+const parseAmountBeforeDiscountOverride = (value: unknown): number | null => {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new HttpError(400, 'Manual amount before discounts must be greater than zero.');
+  }
+  if (parsed > 1_000_000) {
+    throw new HttpError(400, 'Manual amount before discounts is too high.');
+  }
+  return Math.round((parsed + Number.EPSILON) * 100) / 100;
 };
 
 const TRANSFER_ACCOUNT_TYPES = ['bank', 'revolut', 'other'] as const;
@@ -384,11 +398,13 @@ const requestHash = (
   notifications: StorefrontConfirmationNotificationPreferences,
   allowPastExperienceDates: boolean,
   currencyCode: string,
+  amountBeforeDiscountOverride: number | null,
   bankTransferAccountId: number,
 ): string =>
   createHash('sha256')
     .update(JSON.stringify(stableValue({
       allowPastExperienceDates,
+      ...(amountBeforeDiscountOverride !== null ? { amountBeforeDiscountOverride } : {}),
       bankTransferAccountId,
       currencyCode,
       customer,
@@ -488,6 +504,7 @@ const createOrderTransaction = async (
   notificationPreferences: StorefrontConfirmationNotificationPreferences,
   allowPastExperienceDates: boolean,
   currencyCode: string,
+  amountBeforeDiscountOverride: number | null,
   bankTransferAccount: BankTransferAccountSnapshot,
 ): Promise<{ order: StorefrontOrder; created: boolean }> => sequelize.transaction(async (transaction) => {
   const existing = await findIdempotentOrder(clientRequestId, hash, transaction);
@@ -499,7 +516,11 @@ const createOrderTransaction = async (
   // the final unit.
   const concurrent = await findIdempotentOrder(clientRequestId, hash, transaction);
   if (concurrent) return { order: concurrent, created: false };
-  const quote = await quoteStorefrontCart(cart, transaction, { allowPastExperienceDates, currencyCode });
+  const quote = await quoteStorefrontCart(cart, transaction, {
+    allowPastExperienceDates,
+    currencyCode,
+    ...(amountBeforeDiscountOverride !== null ? { amountBeforeDiscountOverride } : {}),
+  });
   if (quote.total <= 0) throw new HttpError(400, 'A bank transfer order must have an amount greater than zero.');
   await assertProductScope(quote.items.map((item) => item.productId), allowedProductTypeIds, transaction);
   const now = new Date();
@@ -549,6 +570,15 @@ const createOrderTransaction = async (
         exchangeRateToPln: quote.currencyExchangeRateToPln,
         capturedAt: now.toISOString(),
       },
+      ...(amountBeforeDiscountOverride !== null
+        ? {
+            manualAmountBeforeDiscount: {
+              amount: amountBeforeDiscountOverride,
+              calculatedAmountBeforeDiscount: quote.calculatedAmountBeforeDiscount,
+              currency: quote.currency,
+            },
+          }
+        : {}),
       bankTransferAccount,
       confirmationNotifications: notificationPreferences,
     },
@@ -585,6 +615,15 @@ const createOrderTransaction = async (
       paymentReference: order.paymentReference,
       total: Number(order.total),
       currency: order.currency,
+      ...(amountBeforeDiscountOverride !== null
+        ? {
+            manualAmountBeforeDiscount: {
+              amount: amountBeforeDiscountOverride,
+              calculatedAmountBeforeDiscount: quote.calculatedAmountBeforeDiscount,
+              currency: quote.currency,
+            },
+          }
+        : {}),
       bankTransferAccountId: bankTransferAccount.financeAccountId,
       bankTransferAccountName: bankTransferAccount.accountName,
       bookingIds: projection.bookings.map((booking) => Number(booking.id)),
@@ -818,10 +857,12 @@ export const previewBankTransferOrder = async (input: PreviewBankTransferOrderIn
     input.bankTransferAccountId,
     currencyCode,
   );
+  const amountBeforeDiscountOverride = parseAmountBeforeDiscountOverride(input.amountBeforeDiscountOverride);
   const quote = await quoteStorefrontCart(cart, undefined, {
     allowMissingCustomerDetails: true,
     allowPastExperienceDates: parseAllowPastExperienceDates(input.allowPastExperienceDates),
     currencyCode,
+    ...(amountBeforeDiscountOverride !== null ? { amountBeforeDiscountOverride } : {}),
   });
   await assertProductScope(quote.items.map((item) => item.productId), input.allowedProductTypeIds);
   return {
@@ -837,6 +878,7 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
   const notificationPreferences = parseNotificationPreferences(input.notifications);
   const allowPastExperienceDates = parseAllowPastExperienceDates(input.allowPastExperienceDates);
   const currencyCode = normalizeStorefrontCurrencyCode(input.currencyCode);
+  const amountBeforeDiscountOverride = parseAmountBeforeDiscountOverride(input.amountBeforeDiscountOverride);
   const bankTransferAccount = await resolveBankTransferFinanceAccount(
     input.bankTransferAccountId,
     currencyCode,
@@ -855,6 +897,7 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
     notificationPreferences,
     allowPastExperienceDates,
     currencyCode,
+    amountBeforeDiscountOverride,
     bankTransferAccount.financeAccountId,
   );
   const existing = await findIdempotentOrder(clientRequestId, hash);
@@ -876,6 +919,7 @@ export const createBankTransferOrder = async (input: CreateBankTransferOrderInpu
       notificationPreferences,
       allowPastExperienceDates,
       currencyCode,
+      amountBeforeDiscountOverride,
       bankTransferAccount,
     );
   } catch (error) {
