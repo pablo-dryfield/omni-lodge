@@ -172,6 +172,133 @@ describe('CounterRegistryService.upsertMetrics', () => {
       ]),
     );
   });
+
+  it('keeps declined external add-ons as booked no-shows while preserving the people split', async () => {
+    const counter = {
+      id: 921,
+      date: '2026-09-12',
+      productId: 28,
+    };
+    jest.spyOn(CounterRegistryService, 'loadCounterById').mockResolvedValue(counter as never);
+    jest.spyOn(CounterRegistryService, 'buildContext').mockResolvedValue({
+      counter,
+      channels: [
+        {
+          id: 15,
+          name: 'OmniLodge',
+          sortOrder: 0,
+          paymentMethodId: null,
+          paymentMethodName: 'Card',
+          cashPrice: null,
+          cashPaymentEligible: false,
+          walkInTicketPrices: [],
+        },
+      ],
+      addons: [
+        {
+          addonId: 1,
+          name: 'Cocktails',
+          key: 'cocktails',
+          maxPerAttendee: null,
+          sortOrder: 0,
+        },
+      ],
+      product: null,
+    } as never);
+    mockChannelFindAll.mockResolvedValue([
+      {
+        id: 15,
+        name: 'OmniLodge',
+        paymentMethodId: null,
+        paymentMethod: { name: 'Card' },
+      },
+    ]);
+    mockAddonFindAll.mockResolvedValue([{ id: 1, name: 'Cocktails' }]);
+    mockBookingFindAll.mockResolvedValue([
+      {
+        id: 9920,
+        platform: 'omnilodge',
+        status: 'confirmed',
+        guestEmail: 'andre@example.com',
+        guestFirstName: 'André',
+        guestLastName: 'Schlüß',
+        sourceReceivedAt: new Date('2026-09-12T17:00:00.000Z'),
+        partySizeTotal: 17,
+        partySizeAdults: 17,
+        partySizeChildren: 0,
+        addonsSnapshot: {
+          addons: [{ addonId: 1, name: 'Cocktails', quantity: 17 }],
+          partyBreakdown: { men: 17, women: 0 },
+        },
+        attendedTotal: 12,
+        attendedAddonsSnapshot: { cocktails: 0, tshirts: 0, photos: 0 },
+        addonRefundActions: [
+          {
+            id: 'declined-cocktails',
+            status: 'declined',
+            addonKey: 'cocktails',
+            quantity: 17,
+          },
+        ],
+        attendanceStatus: 'checked_in_partial',
+      },
+    ]);
+
+    let persistedRows: Array<Record<string, unknown>> = [];
+    mockMetricFindAll
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(async () => persistedRows);
+    mockMetricBulkCreate.mockImplementationOnce(async (rows) => {
+      persistedRows = rows as Array<Record<string, unknown>>;
+      return rows;
+    });
+
+    const result = await CounterRegistryService.upsertMetrics(921, [], 191);
+
+    expect(mockMetricBulkCreate.mock.calls[0][0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          counterId: 921,
+          channelId: 15,
+          kind: 'people',
+          addonId: null,
+          tallyType: 'booked',
+          period: 'before_cutoff',
+          qty: 17,
+        }),
+        expect.objectContaining({
+          counterId: 921,
+          channelId: 15,
+          kind: 'people',
+          addonId: null,
+          tallyType: 'attended',
+          period: null,
+          qty: 12,
+        }),
+        expect.objectContaining({
+          counterId: 921,
+          channelId: 15,
+          kind: 'addon',
+          addonId: 1,
+          tallyType: 'booked',
+          period: 'before_cutoff',
+          qty: 17,
+        }),
+      ]),
+    );
+    expect(result.derivedSummary.totals.people).toEqual({
+      bookedBefore: 17,
+      bookedAfter: 0,
+      attended: 12,
+      nonShow: 5,
+    });
+    expect(result.derivedSummary.totals.addons.cocktails).toEqual(expect.objectContaining({
+      bookedBefore: 17,
+      bookedAfter: 0,
+      attended: 0,
+      nonShow: 17,
+    }));
+  });
 });
 
 describe('CounterRegistryService.updateCounterMetadata', () => {
