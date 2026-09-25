@@ -91,6 +91,11 @@ export type StorefrontQuote = {
   items: StorefrontQuoteItem[];
 };
 
+export type StorefrontQuoteOptions = {
+  allowMissingCustomerDetails?: boolean;
+  allowPastExperienceDates?: boolean;
+};
+
 const roundMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
 const slugify = (value: string): string =>
@@ -110,14 +115,17 @@ const asPositiveInteger = (value: unknown, label: string, max = 50): number => {
   return parsed;
 };
 
-const normalizeDate = (value: unknown): string | null => {
+const normalizeDate = (
+  value: unknown,
+  options: Pick<StorefrontQuoteOptions, 'allowPastExperienceDates'> = {},
+): string | null => {
   if (value === null || value === undefined || value === '') return null;
   const normalized = String(value).trim();
   const parsed = dayjs(normalized);
   if (!DATE_PATTERN.test(normalized) || !parsed.isValid() || parsed.format('YYYY-MM-DD') !== normalized) {
     throw new HttpError(400, 'Experience date must use YYYY-MM-DD.');
   }
-  if (dayjs(normalized).isBefore(dayjs().startOf('day'))) {
+  if (!options.allowPastExperienceDates && dayjs(normalized).isBefore(dayjs().startOf('day'))) {
     throw new HttpError(400, 'Experience date cannot be in the past.');
   }
   return normalized;
@@ -482,7 +490,7 @@ const resolvePromotions = async (
 export const quoteStorefrontCart = async (
   input: StorefrontCartInput,
   transaction?: Transaction,
-  options: { allowMissingCustomerDetails?: boolean } = {},
+  options: StorefrontQuoteOptions = {},
 ): Promise<StorefrontQuote> => {
   if (!input || !Array.isArray(input.items) || input.items.length === 0) {
     throw new HttpError(400, 'The cart must contain at least one item.');
@@ -492,7 +500,9 @@ export const quoteStorefrontCart = async (
   const normalizedItems = input.items.map((item, index) => ({
     productId: asPositiveInteger(item.productId, `items[${index}].productId`, Number.MAX_SAFE_INTEGER),
     quantity: item.quantity,
-    experienceDate: normalizeDate(item.experienceDate),
+    experienceDate: normalizeDate(item.experienceDate, {
+      allowPastExperienceDates: options.allowPastExperienceDates === true,
+    }),
     experienceTime: item.experienceTime,
     addons: Array.isArray(item.addons) ? item.addons : [],
     options:

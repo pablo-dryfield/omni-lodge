@@ -37,6 +37,7 @@ jest.mock('../../controllers/storefrontBankTransferOrderController.js', () => {
     listStorefrontBankTransferCatalog: jest.fn(respond),
     listStorefrontBankTransferOrders: jest.fn(respond),
     markStorefrontBankTransferPaymentReceived: jest.fn(respond),
+    previewStorefrontBankTransferOrder: jest.fn(respond),
     resendStorefrontBankTransferCancellation: jest.fn(respond),
     resendStorefrontBankTransferInstructions: jest.fn(respond),
     retryStorefrontBankTransferConfirmation: jest.fn(respond),
@@ -49,6 +50,7 @@ import {
   listStorefrontBankTransferCatalog,
   listStorefrontBankTransferOrders,
   markStorefrontBankTransferPaymentReceived,
+  previewStorefrontBankTransferOrder,
   resendStorefrontBankTransferCancellation,
   resendStorefrontBankTransferInstructions,
   retryStorefrontBankTransferConfirmation,
@@ -82,6 +84,7 @@ describe('bank-transfer booking route authorization', () => {
   it.each([
     ['get', '/api/storefront-bank-transfer-orders', 'view', listStorefrontBankTransferOrders],
     ['get', '/api/storefront-bank-transfer-orders/catalog', 'view', listStorefrontBankTransferCatalog],
+    ['post', '/api/storefront-bank-transfer-orders/preview', 'create', previewStorefrontBankTransferOrder],
     ['post', '/api/storefront-bank-transfer-orders', 'create', createStorefrontBankTransferOrder],
     ['patch', '/api/storefront-bank-transfer-orders/abc/payment-received', 'update', markStorefrontBankTransferPaymentReceived],
     ['patch', '/api/storefront-bank-transfer-orders/abc/cancel', 'update', cancelStorefrontBankTransferOrder],

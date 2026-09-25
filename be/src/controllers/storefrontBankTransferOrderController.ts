@@ -7,6 +7,7 @@ import {
   cancelBankTransferOrder,
   createBankTransferOrder,
   listBankTransferOrders,
+  previewBankTransferOrder,
   receiveBankTransferOrder,
   resendBankTransferCancellation,
   resendBankTransferInstructions,
@@ -66,11 +67,29 @@ export const createStorefrontBankTransferOrder = async (
       customer: request.body?.customer,
       cart: request.body?.cart,
       notifications: request.body?.notifications,
+      allowPastExperienceDates: request.body?.allowPastExperienceDates,
     });
     response.status(result.created ? 201 : 200).json({
       data: await serializeBankTransferOrder(result.order),
       ...(result.emailError ? { warning: result.emailError } : {}),
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const previewStorefrontBankTransferOrder = async (
+  request: AuthenticatedRequest,
+  response: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    response.set('Cache-Control', 'private, no-store');
+    response.json(await previewBankTransferOrder({
+      allowedProductTypeIds: await getAllowedProductTypeIds(request),
+      cart: request.body?.cart,
+      allowPastExperienceDates: request.body?.allowPastExperienceDates,
+    }));
   } catch (error) {
     next(error);
   }

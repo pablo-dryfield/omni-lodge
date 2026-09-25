@@ -7,6 +7,7 @@ import {
   listStorefrontBankTransferCatalog,
   listStorefrontBankTransferOrders,
   markStorefrontBankTransferPaymentReceived,
+  previewStorefrontBankTransferOrder,
   resendStorefrontBankTransferInstructions,
   resendStorefrontBankTransferCancellation,
   retryStorefrontBankTransferConfirmation,
@@ -27,6 +28,12 @@ router.get(
   authMiddleware,
   authorizeModuleAction(moduleSlug, 'view'),
   listStorefrontBankTransferOrders,
+);
+router.post(
+  '/preview',
+  authMiddleware,
+  authorizeModuleAction(moduleSlug, 'create'),
+  previewStorefrontBankTransferOrder,
 );
 router.post(
   '/',

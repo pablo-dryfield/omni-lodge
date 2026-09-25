@@ -4,8 +4,11 @@ import StorefrontOrder from '../../models/StorefrontOrder.js';
 import User from '../../models/User.js';
 import {
   listBankTransferOrders,
+  previewBankTransferOrder,
   serializeBankTransferOrder,
 } from '../storefrontBankTransferOrderService.js';
+import { quoteStorefrontCart } from '../storefrontCommerceService.js';
+import { normalizeSavedCartFromQuote } from '../storefrontSavedCartService.js';
 
 jest.mock('../../config/database.js', () => ({
   __esModule: true,
@@ -78,6 +81,8 @@ const orderModel = StorefrontOrder as unknown as { findAll: jest.Mock };
 const productModel = Product as unknown as { findAll: jest.Mock };
 const bookingModel = Booking as unknown as { findAll: jest.Mock };
 const userModel = User as unknown as { findAll: jest.Mock };
+const quoteStorefrontCartMock = quoteStorefrontCart as jest.Mock;
+const normalizeSavedCartFromQuoteMock = normalizeSavedCartFromQuote as jest.Mock;
 
 const buildOrder = (id: number, productId: number, metadata: Record<string, unknown> = {}) => ({
   id,
@@ -166,6 +171,41 @@ describe('bank-transfer order listing and serialization', () => {
     expect(serialized.notificationPreferences).toEqual({
       customerConfirmation: false,
       internalConfirmation: true,
+    });
+  });
+
+  it('previews manual bank-transfer carts with the explicit past-date override', async () => {
+    const cart = {
+      items: [{ productId: 10, quantity: 1, experienceDate: '2026-09-12' }],
+    };
+    const quote = {
+      currency: 'PLN',
+      subtotal: 100,
+      addonTotal: 0,
+      discountTotal: 0,
+      total: 100,
+      discountCode: null,
+      discountCodes: [],
+      promotionId: null,
+      discounts: [],
+      items: [{ productId: 10 }],
+    };
+    quoteStorefrontCartMock.mockResolvedValue(quote);
+    normalizeSavedCartFromQuoteMock.mockReturnValue({ items: quote.items });
+
+    const result = await previewBankTransferOrder({
+      allowedProductTypeIds: null,
+      cart,
+      allowPastExperienceDates: true,
+    });
+
+    expect(quoteStorefrontCartMock).toHaveBeenCalledWith(cart, undefined, {
+      allowMissingCustomerDetails: true,
+      allowPastExperienceDates: true,
+    });
+    expect(result).toEqual({
+      quote,
+      cart: { items: quote.items },
     });
   });
 });
