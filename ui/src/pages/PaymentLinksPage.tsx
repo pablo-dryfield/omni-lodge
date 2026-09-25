@@ -117,6 +117,8 @@ type Quote = {
   currencyExchangeRateToPln?: number;
   subtotal: number;
   addonTotal: number;
+  calculatedAmountBeforeDiscount?: number;
+  amountBeforeDiscountOverride?: number | null;
   discountTotal: number;
   total: number;
   items: Array<{ productName: string; total: number }>;
@@ -643,6 +645,7 @@ const PaymentLinksPage = () => {
   const [bankTransferInternalConfirmation, setBankTransferInternalConfirmation] = useState(true);
   const [bankTransferAllowPastDates, setBankTransferAllowPastDates] = useState(false);
   const [bankTransferCurrency, setBankTransferCurrency] = useState("PLN");
+  const [bankTransferAmountBeforeDiscountOverride, setBankTransferAmountBeforeDiscountOverride] = useState<number | string>("");
   const [bankTransferAccountId, setBankTransferAccountId] = useState<string | null>(null);
   const [receivingOrder, setReceivingOrder] = useState<BankTransferOrder | null>(null);
   const [paymentReference, setPaymentReference] = useState("");
@@ -850,6 +853,7 @@ const PaymentLinksPage = () => {
     setBankTransferInternalConfirmation(true);
     setBankTransferAllowPastDates(false);
     setBankTransferCurrency("PLN");
+    setBankTransferAmountBeforeDiscountOverride("");
     setBankTransferAccountId(null);
     setQuote(null);
     setFormError("");
@@ -977,6 +981,17 @@ const PaymentLinksPage = () => {
     return { items: cartItems, discountCodes: codes, discountCode: codes[0] || null };
   };
 
+  const bankTransferAmountBeforeDiscountOverridePayload = (): number | undefined => {
+    if (bankTransferAmountBeforeDiscountOverride === "" || bankTransferAmountBeforeDiscountOverride === null) {
+      return undefined;
+    }
+    const parsed = Number(bankTransferAmountBeforeDiscountOverride);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error("Manual amount before discounts must be greater than zero.");
+    }
+    return Math.round((parsed + Number.EPSILON) * 100) / 100;
+  };
+
   const preview = async (): Promise<Quote | null> => {
     setPreviewing(true);
     setFormError("");
@@ -984,6 +999,9 @@ const PaymentLinksPage = () => {
       if (creatorMode === "bank-transfer" && !bankTransferAccountId) {
         throw new Error("Select the bank account where the customer will transfer the money.");
       }
+      const amountBeforeDiscountOverride = creatorMode === "bank-transfer"
+        ? bankTransferAmountBeforeDiscountOverridePayload()
+        : undefined;
       const response = await axiosInstance.post<{ quote: Quote }>(
         creatorMode === "bank-transfer"
           ? "/storefront-bank-transfer-orders/preview"
@@ -994,6 +1012,7 @@ const PaymentLinksPage = () => {
             ? {
                 allowPastExperienceDates: bankTransferAllowPastDates,
                 currencyCode: bankTransferCurrency,
+                ...(amountBeforeDiscountOverride !== undefined ? { amountBeforeDiscountOverride } : {}),
                 bankTransferAccountId: bankTransferAccountId ? Number(bankTransferAccountId) : null,
               }
             : {}),
@@ -1023,6 +1042,7 @@ const PaymentLinksPage = () => {
         if (!bankTransferAccountId) {
           throw new Error("Select the bank account where the customer will transfer the money.");
         }
+        const amountBeforeDiscountOverride = bankTransferAmountBeforeDiscountOverridePayload();
         const response = await axiosInstance.post<{ data: BankTransferOrder; warning?: string }>(
           "/storefront-bank-transfer-orders",
           {
@@ -1034,6 +1054,7 @@ const PaymentLinksPage = () => {
             },
             cart: cartPayload(),
             currencyCode: bankTransferCurrency,
+            ...(amountBeforeDiscountOverride !== undefined ? { amountBeforeDiscountOverride } : {}),
             bankTransferAccountId: Number(bankTransferAccountId),
             clientRequestId,
             notifications: {
@@ -2199,6 +2220,7 @@ const PaymentLinksPage = () => {
                       value={bankTransferCurrency}
                       onChange={(value) => {
                         setBankTransferCurrency(value || "PLN");
+                        setBankTransferAmountBeforeDiscountOverride("");
                         setBankTransferAccountId(null);
                         setQuote(null);
                       }}
@@ -2388,10 +2410,33 @@ const PaymentLinksPage = () => {
               onChange={(event) => setCustomer((current) => ({ ...current, phone: event.currentTarget.value }))}
             />
           </SimpleGrid>
+          {creatorMode === "bank-transfer" && (
+            <NumberInput
+              label={`Manual amount before discounts (${bankTransferCurrency})`}
+              description="Optional. Replaces the calculated product/add-on amount first; discount codes are applied after this amount."
+              placeholder="Leave empty to use calculated pricing"
+              min={0}
+              decimalScale={2}
+              value={bankTransferAmountBeforeDiscountOverride}
+              onChange={(value) => {
+                setBankTransferAmountBeforeDiscountOverride(value ?? "");
+                setQuote(null);
+              }}
+            />
+          )}
           <TextInput label="Discount codes" description="Separate multiple codes with commas" value={discountCodes} onChange={(event) => { setDiscountCodes(event.currentTarget.value); setQuote(null); }} />
 
           {quote && (
             <Box py="sm" style={{ borderTop: "1px solid var(--mantine-color-gray-3)", borderBottom: "1px solid var(--mantine-color-gray-3)" }}>
+              {quote.amountBeforeDiscountOverride ? (
+                <Text size="xs" c="dimmed" ta="right" mb={4}>
+                  Manual pre-discount amount applied
+                  {quote.calculatedAmountBeforeDiscount !== undefined
+                    ? `; calculated pricing was ${money(quote.calculatedAmountBeforeDiscount, quote.currency)}`
+                    : ""}
+                  .
+                </Text>
+              ) : null}
               <Group justify="space-between"><Text>Experiences</Text><Text fw={600}>{money(quote.subtotal, quote.currency)}</Text></Group>
               <Group justify="space-between"><Text>Add-ons</Text><Text fw={600}>{money(quote.addonTotal, quote.currency)}</Text></Group>
               {quote.discountTotal > 0 && <Group justify="space-between"><Text>Discount</Text><Text fw={600}>-{money(quote.discountTotal, quote.currency)}</Text></Group>}

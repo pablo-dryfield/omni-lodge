@@ -245,4 +245,53 @@ describe('bank-transfer order listing and serialization', () => {
       },
     });
   });
+
+  it('passes a manual pre-discount amount into bank-transfer previews', async () => {
+    const cart = {
+      items: [{ productId: 10, quantity: 1, experienceDate: '2026-09-12' }],
+    };
+    const quote = {
+      currency: 'EUR',
+      subtotal: 28,
+      addonTotal: 0,
+      calculatedAmountBeforeDiscount: 27.83,
+      amountBeforeDiscountOverride: 28,
+      discountTotal: 0,
+      total: 28,
+      discountCode: null,
+      discountCodes: [],
+      promotionId: null,
+      discounts: [],
+      items: [{ productId: 10 }],
+    };
+    quoteStorefrontCartMock.mockResolvedValue(quote);
+    normalizeSavedCartFromQuoteMock.mockReturnValue({ items: quote.items });
+    financeAccountModel.findByPk.mockResolvedValue({
+      id: 5,
+      name: 'ING EUR',
+      type: 'bank',
+      currency: 'EUR',
+      accountHolderName: 'David Powe-Bowman',
+      accountNumber: 'PL19105014451000009773406781',
+      swiftCode: 'INGBPLPW',
+      bankName: 'ING Bank Śląski S.A.',
+      bankTransferInstructions: null,
+      isActive: true,
+    });
+
+    await previewBankTransferOrder({
+      allowedProductTypeIds: null,
+      cart,
+      currencyCode: 'EUR',
+      bankTransferAccountId: 5,
+      amountBeforeDiscountOverride: '28',
+    });
+
+    expect(quoteStorefrontCartMock).toHaveBeenCalledWith(cart, undefined, {
+      allowMissingCustomerDetails: true,
+      allowPastExperienceDates: false,
+      currencyCode: 'EUR',
+      amountBeforeDiscountOverride: 28,
+    });
+  });
 });
