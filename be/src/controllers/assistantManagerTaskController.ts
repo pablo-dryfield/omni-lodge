@@ -190,6 +190,16 @@ const canViewAllTaskLogs = (req: AuthenticatedRequest): boolean => {
   const normalizedRole = normalizeRoleSlug(req.authContext?.roleSlug ?? null);
   return normalizedRole != null && GLOBAL_TASK_VIEWER_ROLES.has(normalizedRole);
 };
+const parseBooleanFlag = (value: unknown): boolean => {
+  if (Array.isArray(value)) {
+    return value.some((item) => parseBooleanFlag(item));
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+  }
+  return value === true || value === 1;
+};
 const PRIORITY_VALUES = new Set(['high', 'medium', 'low']);
 const TIME_INPUT_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'h:mm A', 'h A'];
 const TASK_COMPLETION_WINDOW_MODE_VALUES = new Set(['day', 'strict']);
@@ -4329,8 +4339,13 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
     }
     const status = typeof req.body.status === 'string' ? (req.body.status.trim() as AssistantManagerTaskStatus) : undefined;
     const notes = typeof req.body.notes === 'string' ? req.body.notes.trim() : undefined;
+    const force = parseBooleanFlag(req.body?.force);
     if (status && !STATUS_VALUES.has(status)) {
       res.status(400).json([{ message: 'Invalid status provided' }]);
+      return;
+    }
+    if (force && !canViewAllTaskLogs(req)) {
+      res.status(403).json([{ message: 'Forbidden' }]);
       return;
     }
     const hasEvidenceItems = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'evidenceItems');
@@ -4412,58 +4427,62 @@ export const updateTaskLogStatus = async (req: AuthenticatedRequest, res: Respon
         shouldUpdateMeta = true;
       }
 
+      const forceComplete = force && status === 'completed';
+
       // A retry on an already completed managed task is a no-op, not a second completion.
       if (status && (!isCleaningTaskCompletionManaged(template.scheduleConfig, nextMeta) || status !== log.status)) {
         if (status !== log.status && isCleaningTaskCompletionManaged(template.scheduleConfig, nextMeta)) {
           throw new HttpError(409, 'This task is completed automatically after all cleaning photos are approved. Use the cleaning review workflow.');
         }
         if (status === 'completed') {
-          await ensureTaskAttendanceCheckSatisfied(log, nextMeta, transaction);
-          assertManualSocialMediaPublishTaskCompletionAllowed(
-            nextMeta,
-            template.scheduleConfig,
-          );
-          if (!isTaskLogOnCurrentDay(log, timezoneName)) {
-            throw new HttpError(400, 'Task can only be completed on its scheduled day');
-          }
-          const strictDeadline = getTaskLogStrictCompletionDeadline(
-            { taskDate: log.taskDate, meta: nextMeta, template },
-            timezoneName,
-          );
-          if (strictDeadline && dayjs().tz(timezoneName).isAfter(strictDeadline)) {
-            throw new HttpError(400, 'Task can no longer be completed after its scheduled end time');
-          }
-          const taskDay = dayjs(log.taskDate);
-          const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
-            taskDay.startOf('day'),
-            taskDay.endOf('day'),
-          );
-          const expectedEvidenceItems = resolveLogExpectedEvidenceItems(
-            {
-              taskDate: log.taskDate,
-              meta: nextMeta,
+          if (!forceComplete) {
+            await ensureTaskAttendanceCheckSatisfied(log, nextMeta, transaction);
+            assertManualSocialMediaPublishTaskCompletionAllowed(
+              nextMeta,
+              template.scheduleConfig,
+            );
+            if (!isTaskLogOnCurrentDay(log, timezoneName)) {
+              throw new HttpError(400, 'Task can only be completed on its scheduled day');
+            }
+            const strictDeadline = getTaskLogStrictCompletionDeadline(
+              { taskDate: log.taskDate, meta: nextMeta, template },
+              timezoneName,
+            );
+            if (strictDeadline && dayjs().tz(timezoneName).isAfter(strictDeadline)) {
+              throw new HttpError(400, 'Task can no longer be completed after its scheduled end time');
+            }
+            const taskDay = dayjs(log.taskDate);
+            const scheduledShiftCandidatesByDate = await buildScheduledShiftCandidateMap(
+              taskDay.startOf('day'),
+              taskDay.endOf('day'),
+            );
+            const expectedEvidenceItems = resolveLogExpectedEvidenceItems(
+              {
+                taskDate: log.taskDate,
+                meta: nextMeta,
+                template,
+              } as AssistantManagerTaskLog & {
+                template?: AssistantManagerTaskTemplate | null;
+              },
+              scheduledShiftCandidatesByDate,
+            );
+            const { normalizedItems } = ensureEvidenceRequirementsSatisfied(
               template,
-            } as AssistantManagerTaskLog & {
-              template?: AssistantManagerTaskTemplate | null;
-            },
-            scheduledShiftCandidatesByDate,
-          );
-          const { normalizedItems } = ensureEvidenceRequirementsSatisfied(
-            template,
-            nextMeta,
-            expectedEvidenceItems,
-          );
-          nextMeta.evidenceItems = normalizedItems;
+              nextMeta,
+              expectedEvidenceItems,
+            );
+            nextMeta.evidenceItems = normalizedItems;
 
-          const socialMediaSnapshot = await requireTaskReadySocialMediaContent({
-            required: resolveRequireSocialMediaPlan(nextMeta, template.scheduleConfig),
-            linkedContentId: getStoredSocialMediaContentId(nextMeta),
-            loadContent: (contentId) => loadSocialMediaTaskRecord(contentId, transaction),
-          });
-          if (socialMediaSnapshot) {
-            nextMeta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY] = socialMediaSnapshot;
+            const socialMediaSnapshot = await requireTaskReadySocialMediaContent({
+              required: resolveRequireSocialMediaPlan(nextMeta, template.scheduleConfig),
+              linkedContentId: getStoredSocialMediaContentId(nextMeta),
+              loadContent: (contentId) => loadSocialMediaTaskRecord(contentId, transaction),
+            });
+            if (socialMediaSnapshot) {
+              nextMeta[SOCIAL_MEDIA_CONTENT_SNAPSHOT_META_KEY] = socialMediaSnapshot;
+            }
+            shouldUpdateMeta = true;
           }
-          shouldUpdateMeta = true;
         }
         payload.status = status;
         payload.completedAt = status === 'completed' ? new Date() : null;
@@ -4537,6 +4556,7 @@ export const deleteTaskLog = async (req: AuthenticatedRequest, res: Response): P
       res.status(400).json([{ message: 'Invalid task log id' }]);
       return;
     }
+    const force = parseBooleanFlag(req.query?.force);
 
     // Delete permission is intentionally stricter than the route guard:
     // assistant-managers can access the planner, but only admin/owner/manager can delete tasks.
@@ -4556,8 +4576,10 @@ export const deleteTaskLog = async (req: AuthenticatedRequest, res: Response): P
         transaction,
       });
       if (!cleaningDeletion.managed) {
-        await assertAttendanceEvidencePreserved(log.id, log.meta, null, transaction);
-        await assertCleaningTaskLogMutable(log.id, transaction);
+        if (!force) {
+          await assertAttendanceEvidencePreserved(log.id, log.meta, null, transaction);
+          await assertCleaningTaskLogMutable(log.id, transaction);
+        }
       }
       const stored = storedEvidenceImagesForDeletion(log.meta?.evidenceItems);
       await log.destroy({ transaction });

@@ -3578,6 +3578,7 @@ const AssistantManagerTaskPlanner = () => {
   const canBulkUpdateTemplates = canViewAllTasks && access.canUpdate;
   const canEditTaskLogs = canViewAllTasks && access.canUpdate;
   const canDeleteTaskLogs = canViewAllTasks && access.canDelete;
+  const canForceCompleteTaskLogs = canViewAllTasks && access.canUpdate;
   const canCreateManualTasks = canViewAllTasks && access.canCreate;
   const requestedSectionParam = searchParams.get('section');
   const requestedSection =
@@ -3915,6 +3916,7 @@ const AssistantManagerTaskPlanner = () => {
     useState<LogDetailFormState>(defaultLogDetailFormState);
   const [logDetailSubmitting, setLogDetailSubmitting] = useState(false);
   const [logDetailCompleting, setLogDetailCompleting] = useState(false);
+  const [logDetailForceCompleting, setLogDetailForceCompleting] = useState(false);
   const [logDetailReopening, setLogDetailReopening] = useState(false);
   const [logDetailError, setLogDetailError] = useState<string | null>(null);
   const [socialMediaPlanOptions, setSocialMediaPlanOptions] = useState<
@@ -4267,6 +4269,13 @@ const AssistantManagerTaskPlanner = () => {
       !selectedLogCleaningManaged &&
       selectedLog.status !== 'completed' &&
       (selectedLogIsPastDay || selectedLogStrictCompletionExpired),
+  );
+  const selectedLogCanForceComplete = Boolean(
+    selectedLog &&
+      canForceCompleteTaskLogs &&
+      !selectedLogCleaningManaged &&
+      selectedLog.status !== 'completed' &&
+      !selectedLogCompletesOnSocialMediaPublish,
   );
   const selectedLogMissingRequiredEvidenceLabels = useMemo(() => {
     if (!selectedLog || selectedLogEvidenceRules.length === 0) {
@@ -6760,6 +6769,37 @@ const AssistantManagerTaskPlanner = () => {
         }
       } catch (error) {
         const message = getErrorMessage(error, 'Failed to delete task');
+        const shouldOfferForceDelete =
+          canDeleteTaskLogs &&
+          /attendance|cleaning|evidence|photo|protected|retained|submission/i.test(message);
+
+        if (shouldOfferForceDelete) {
+          const forceConfirmed = window.confirm(
+            `Normal deletion was blocked:\n\n${message}\n\nForce delete "${taskName}" on ${taskDateLabel} anyway? This permanently removes the task plus saved evidence/images and cannot be undone.`,
+          );
+          if (forceConfirmed) {
+            try {
+              setLogDeleteError(null);
+              if (selectedLog?.id === log.id) {
+                setLogDetailError(null);
+              }
+              await dispatch(deleteAmTaskLog({ logId: log.id, force: true })).unwrap();
+              await refreshLogs();
+              if (selectedLog?.id === log.id) {
+                closeLogDetailModal();
+              }
+              return;
+            } catch (forceError) {
+              const forceMessage = getErrorMessage(forceError, 'Failed to force delete task');
+              setLogDeleteError(forceMessage);
+              if (selectedLog?.id === log.id) {
+                setLogDetailError(forceMessage);
+              }
+              return;
+            }
+          }
+        }
+
         setLogDeleteError(message);
         if (selectedLog?.id === log.id) {
           setLogDetailError(message);
@@ -7377,6 +7417,60 @@ const AssistantManagerTaskPlanner = () => {
       setLogDetailSubmitting(false);
     }
   }, [dispatch, refreshLogs, selectedLog, selectedLogCanReopen]);
+
+  const handleLogDetailForceComplete = useCallback(async () => {
+    if (!selectedLog || !selectedLogCanForceComplete) {
+      return;
+    }
+
+    const taskName = selectedLog.templateName ?? `Template #${selectedLog.templateId}`;
+    const taskDateLabel = dayjs(selectedLog.taskDate).isValid()
+      ? dayjs(selectedLog.taskDate).format('MMM D, YYYY')
+      : String(selectedLog.taskDate);
+    const confirmed = window.confirm(
+      `Force complete "${taskName}" on ${taskDateLabel}? This bypasses the normal same-day, deadline, and evidence checks for this admin correction.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setLogDetailSubmitting(true);
+    setLogDetailForceCompleting(true);
+    setLogDetailError(null);
+
+    try {
+      const statusResponse = (await dispatch(
+        updateAmTaskLogStatus({
+          logId: selectedLog.id,
+          payload: { status: 'completed', force: true },
+        }),
+      ).unwrap()) as ServerResponse<AssistantManagerTaskLog>;
+      const completedLog = (statusResponse?.[0]?.data as AssistantManagerTaskLog[] | undefined)?.[0];
+
+      if (completedLog) {
+        setSelectedLog(completedLog);
+        setLogDetailFormState(buildLogDetailFormStateFromLog(completedLog));
+      }
+      await refreshLogs();
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('task');
+      nextParams.delete('taskDate');
+      setSearchParams(nextParams, { replace: false });
+      setLogDetailModalOpen(false);
+      setSelectedLog(null);
+      setLogDetailFormState(defaultLogDetailFormState);
+      setLogDetailError(null);
+      setEvidenceUploadingRuleKey(null);
+      setLinkInputCounts({});
+      setEvidenceRuleEditModes({});
+      setCommentDraft('');
+    } catch (error) {
+      setLogDetailError(getErrorMessage(error, 'Failed to force complete task'));
+    } finally {
+      setLogDetailForceCompleting(false);
+      setLogDetailSubmitting(false);
+    }
+  }, [dispatch, refreshLogs, searchParams, selectedLog, selectedLogCanForceComplete, setSearchParams]);
 
   const handleLogEvidenceSaveRule = useCallback(async (rule: AssistantManagerTaskEvidenceRule) => {
     if (!selectedLog || selectedLogEvidenceReadOnly) {
@@ -12047,11 +12141,24 @@ const AssistantManagerTaskPlanner = () => {
                   Open Task
                 </Button>
               ) : !dashboardTaskEditOpen && selectedLogCompletionLocked ? (
-                <Paper withBorder radius="lg" px="md" py="xs" bg="red.0">
-                  <Text fw={700} c="red.7">
-                    {selectedLogStrictCompletionExpired ? 'Time Window Expired' : 'Task Not Completed'}
-                  </Text>
-                </Paper>
+                <>
+                  <Paper withBorder radius="lg" px="md" py="xs" bg="red.0">
+                    <Text fw={700} c="red.7">
+                      {selectedLogStrictCompletionExpired ? 'Time Window Expired' : 'Task Not Completed'}
+                    </Text>
+                  </Paper>
+                  {selectedLogCanForceComplete && (
+                    <Button
+                      color="red"
+                      variant="light"
+                      onClick={handleLogDetailForceComplete}
+                      loading={logDetailForceCompleting}
+                      disabled={logDetailForceCompleting || socialMediaPlanSaving}
+                    >
+                      Force complete task
+                    </Button>
+                  )}
+                </>
               ) : null}
             </Group>
             {!dashboardTaskEditOpen &&

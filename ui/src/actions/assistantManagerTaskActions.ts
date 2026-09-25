@@ -743,10 +743,13 @@ export const updateAmTaskLogStatus = createAsyncThunk(
 
 export const deleteAmTaskLog = createAsyncThunk(
   'assistantManagerTasks/deleteLog',
-  async (logId: number, { rejectWithValue }) => {
+  async (arg: number | { logId: number; force?: boolean }, { rejectWithValue }) => {
+    const logId = typeof arg === 'number' ? arg : arg.logId;
+    const force = typeof arg === 'number' ? false : arg.force === true;
     try {
       await axiosInstance.delete(`/assistantManagerTasks/logs/${logId}`, {
         withCredentials: true,
+        params: force ? { force: 'true' } : undefined,
       });
       return logId;
     } catch (error) {
