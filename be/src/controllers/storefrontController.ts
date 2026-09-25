@@ -107,6 +107,7 @@ const loadEffectiveProductPrices = async (productIds: number[]): Promise<Map<num
   const prices = await ProductPrice.findAll({
     where: {
       productId: { [Op.in]: productIds },
+      currencyCode: STOREFRONT_CURRENCY,
       validFrom: { [Op.lte]: today },
       [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: today } }],
     },
