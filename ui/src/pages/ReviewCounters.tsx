@@ -21,11 +21,14 @@ const isReviewTab = (value: string | null): value is ReviewTab =>
   value != null && REVIEW_TABS.includes(value as ReviewTab);
 const isReviewMonth = (value: string | null): value is string =>
   value != null && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+const REVIEW_MANAGER_ROLES = new Set(["owner", "manager", "assistant-manager", "admin", "administrator"]);
+const normalizeRoleSlug = (value: string | null | undefined) =>
+  String(value ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
 
 const ReviewCounters = () => {
   const roleSlug = useAppSelector((state) => state.session.roleSlug);
   const currentUserId = useAppSelector((state) => state.session.loggedUserId);
-  const canManage = ["owner", "manager", "admin", "administrator"].includes(String(roleSlug ?? "").trim().toLowerCase());
+  const canManage = REVIEW_MANAGER_ROLES.has(normalizeRoleSlug(roleSlug));
   const reviewModuleAccess = useModuleAccess("review-counter-management");
   const [searchParams, setSearchParams] = useSearchParams();
   const [historySection, setHistorySection] = useState<string | null>(null);

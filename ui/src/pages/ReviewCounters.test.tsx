@@ -143,7 +143,7 @@ describe('ReviewCounters month query', () => {
     expect(screen.queryByText('Previous review-counter history')).not.toBeInTheDocument();
   });
 
-  it.each(['owner', 'manager', 'admin', 'administrator'])(
+  it.each(['owner', 'manager', 'assistant-manager', 'assistant_manager', 'admin', 'administrator'])(
     'shows manager-only review tools to the %s role',
     (roleSlug) => {
       mockRoleSlug = roleSlug;
