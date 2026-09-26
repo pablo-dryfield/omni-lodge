@@ -360,7 +360,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
     'finance-reports': ['view', 'create', 'update', 'delete'],
     'cerebro-library': ['view', 'create'],
     'cerebro-admin': ['view', 'create'],
-    'review-counter-management': ['view'],
+    'review-counter-management': ['view', 'create', 'update'],
     'am-task-management': ['view', 'create', 'update', 'delete'],
   },
   affiliate: {

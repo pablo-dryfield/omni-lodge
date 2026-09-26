@@ -9,7 +9,7 @@ const archiveView=authorizeModuleAction('review-counter-management','view');
 const archiveCreate=authorizeModuleAction('review-counter-management','create');
 const archiveUpdate=authorizeModuleAction('review-counter-management','update');
 const archiveDelete=authorizeModuleAction('review-counter-management','delete');
-const reviewManager=requireRoles(['owner','manager','admin','administrator']);
+const reviewManager=requireRoles(['owner','manager','assistant-manager','admin','administrator']);
 
 // Get all reviews
 // router.get('/', reviewController.getAllReviews);
