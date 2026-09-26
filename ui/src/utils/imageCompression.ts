@@ -53,6 +53,8 @@ const HEIC_MIME_TYPES = new Set([
   "image/heif-sequence",
 ]);
 
+const HEIC_FILE_EXTENSION = /\.(?:heic|heif)$/i;
+
 const convertHeicToJpeg = async (file: File): Promise<File> => {
   try {
     const { default: heic2any } = await import("heic2any");
@@ -136,7 +138,7 @@ export const compressImageFile = async (
 ): Promise<File> => {
   let workingFile = file;
   const normalizedMime = file.type?.toLowerCase() ?? "";
-  if (HEIC_MIME_TYPES.has(normalizedMime)) {
+  if (HEIC_MIME_TYPES.has(normalizedMime) || HEIC_FILE_EXTENSION.test(file.name)) {
     workingFile = await convertHeicToJpeg(file);
   }
 

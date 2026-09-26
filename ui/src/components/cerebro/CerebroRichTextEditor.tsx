@@ -48,6 +48,7 @@ import {
 } from '@tabler/icons-react';
 import { uploadCerebroAsset } from '../../api/cerebro';
 import { normalizeCerebroRichText } from '../../utils/cerebroRichText';
+import { prepareCerebroImageUpload } from '../../utils/cerebroImageUpload';
 import { CerebroTableCell, CerebroTableHeader, FontSize } from './cerebroRichTextExtensions';
 import './CerebroRichText.css';
 
@@ -204,8 +205,9 @@ export const CerebroRichTextEditor = ({
 
     try {
       setIsUploadingAsset(true);
+      const preparedFile = await prepareCerebroImageUpload(file);
       const result = await uploadCerebroAsset({
-        file,
+        file: preparedFile,
         sectionId: assetUploadContext.sectionId,
         entryTitle: assetUploadContext.entryTitle.trim(),
         kind: assetUploadContext.kind,
@@ -368,7 +370,7 @@ export const CerebroRichTextEditor = ({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
+          accept="image/*,.heic,.heif"
           style={{ display: 'none' }}
           onChange={handleAssetUpload}
         />
