@@ -213,12 +213,16 @@ describe('assignment-scoped cleaning workflow', () => {
     await expect(upload({ ...sub, revision: 500 })).rejects.toMatchObject({ status: 409 });
     expect(storeAssistantManagerTaskEvidenceImage).not.toHaveBeenCalled();
   });
-  it('sends a nonblocking review request to the real on-shift manager only after upload', async () => {
+  it('sends a nonblocking review request only to the task planner assignee after upload', async () => {
+    rows.push(assignment(20, 10, 1, 'manager'));
     const sub = await materialize(); const result = await upload(sub);
     expect(result.submission.slots[0]).toMatchObject({ status: 'pending', currentVersion: { version: 1, mimeType: 'image/jpeg' } });
     expect(actions[0]).toMatchObject({ type: 'cleaning_review', targetUserIds: [9], requiresCompletion: false, requiresSignature: false });
     expect(log.status).toBe('pending');
     expect(result.submission.canReview).toBe(false);
+    expect((await listMyCleaningSubmissions({ actorId: 10, roleSlug: 'manager' })).reviewSubmissions).toEqual([]);
+    expect((await listMyCleaningSubmissions(owner)).reviewSubmissions).toEqual([]);
+    await expect(review(sub, 'approved', { actorId: 10, roleSlug: 'manager' })).rejects.toMatchObject({ status: 403 });
   });
   it('rejects pending or approved replacements and preserves rejected versions on retake', async () => {
     const sub = await materialize(); await upload(sub);
@@ -255,13 +259,13 @@ describe('assignment-scoped cleaning workflow', () => {
     await expect(review(sub, 'approved', { actorId: 7, roleSlug: 'owner' })).rejects.toMatchObject({ status: 403 });
     expect(photos[0].status).toBe('pending');
   });
-  it('uses an explicit audited manager escalation only when no reviewer is available', async () => {
-    rows = rows.filter((row) => row.userId !== 9);
+  it('does not broadcast a review when the task planner assignee is also the cleaner', async () => {
+    log.userId = 7;
     const sub = await materialize(); await upload(sub);
-    expect(actions[0].targetUserIds).toEqual([99]);
-    await expect(review(sub, 'approved', owner)).rejects.toMatchObject({ status: 400 });
-    const result = await review(sub, 'approved', owner, { escalationReason: 'No manager cleaning shift was scheduled.' });
-    expect(result.taskCompleted).toBe(true); expect(log.status).toBe('completed');
+    expect(actions).toEqual([]);
+    await expect(review(sub, 'approved', owner, { escalationReason: 'Management override' })).rejects.toMatchObject({ status: 403 });
+    await expect(review(sub, 'approved', { actorId: 7, roleSlug: 'owner' })).rejects.toMatchObject({ status: 403 });
+    expect(log.status).toBe('pending');
   });
   it('does not let a global manager bypass a live scheduled reviewer', async () => {
     const sub = await materialize(); await upload(sub);
@@ -274,7 +278,7 @@ describe('assignment-scoped cleaning workflow', () => {
     expect(photos[0].status).toBe('pending');
     (ScheduleWeek.findByPk as jest.Mock).mockResolvedValue({ state: 'published' });
     await review(sub);
-    expect(ShiftAssignment.findAll).toHaveBeenCalledWith(expect.objectContaining({ lock: 'UPDATE', where: { id: { [Op.in]: [11, 12] } } }));
+    expect(ShiftAssignment.findAll).toHaveBeenCalledWith(expect.objectContaining({ lock: 'UPDATE', where: { id: { [Op.in]: [11] } } }));
   });
   it('requires every person before completing the task and preserves all approved photos', async () => {
     rows.push(assignment(14, 8, 7)); await materialize();
@@ -303,10 +307,10 @@ describe('assignment-scoped cleaning workflow', () => {
     await getCleaningPhotoStream(sub.id, photos[0].id, manager);
     expect(openAssistantManagerTaskEvidenceImageStream).toHaveBeenCalledTimes(1);
   });
-  it('invalidates stale review popups when the manager is reassigned', async () => {
+  it('invalidates stale review popups when the task planner assignment changes', async () => {
     const sub = await materialize(); await upload(sub);
     expect(await getCleaningReviewActionPayload(actions[0].id, sub.id, 9)).toMatchObject({ submissionId: sub.id, pendingPhotos: 1 });
-    rows = rows.filter((row) => row.userId !== 9);
+    log.userId = 10;
     expect(await getCleaningReviewActionPayload(actions[0].id, sub.id, 9)).toBeNull();
   });
   it('preserves managed evidence fields while allowing UI sanitization of private metadata', async () => {
@@ -497,10 +501,10 @@ describe('assignment-scoped cleaning workflow', () => {
     await expect(upload(original)).rejects.toMatchObject({ status: 409 });
     expect(storeAssistantManagerTaskEvidenceImage).not.toHaveBeenCalled();
   });
-  it('retargets a pending popup after an on-shift manager replacement and bumps its revision only once', async () => {
+  it('retargets a pending popup after a task planner reassignment and bumps its revision only once', async () => {
     const sub = await materialize(); await upload(sub);
     const oldRevision = sub.revision; const actionId = actions[0].id;
-    rows = rows.filter((row) => row.userId !== 9); rows.push(assignment(20, 10, 1, 'manager'));
+    log.userId = 10;
     await ensureCleaningSubmissionsForTaskLog(1);
     expect(sub.reviewerUserIds).toEqual([10]); expect(sub.revision).toBe(oldRevision + 1);
     expect(actions[0]).toMatchObject({ id: actionId, status: true, targetUserIds: [10], updatedBy: null,
@@ -511,28 +515,24 @@ describe('assignment-scoped cleaning workflow', () => {
     await ensureCleaningSubmissionsForTaskLog(1);
     expect(sub.revision).toBe(oldRevision + 1); expect(sub.update).not.toHaveBeenCalled(); expect(actions[0].update).not.toHaveBeenCalled();
   });
-  it('moves a pending popup to management escalation when the reviewer disappears, then to a newly scheduled manager', async () => {
+  it('disables a pending popup when task ownership moves to the cleaner, then targets a new task assignee', async () => {
     const sub = await materialize(); await upload(sub); const revision = sub.revision;
-    rows = rows.filter((row) => row.userId !== 9);
+    log.userId = 7;
     await ensureCleaningSubmissionsForTaskLog(1);
     expect(sub).toMatchObject({ status: 'escalated', reviewerUserIds: [], revision: revision + 1 });
-    expect(actions[0].targetUserIds).toEqual([99]);
-    rows.push(assignment(20, 10, 1, 'manager'));
+    expect(actions[0].status).toBe(false);
+    log.userId = 10;
     await ensureCleaningSubmissionsForTaskLog(1);
     expect(sub).toMatchObject({ status: 'awaiting_review', reviewerUserIds: [10], revision: revision + 2 });
     expect(actions[0].targetUserIds).toEqual([10]);
   });
-  it('retargets changed escalation membership and disables stale popups if no authorized reviewer remains', async () => {
-    rows = rows.filter((row) => row.userId !== 9); const sub = await materialize(); await upload(sub);
+  it('never routes an unassigned review to global management', async () => {
+    log.userId = 7; const sub = await materialize(); await upload(sub);
     const revision = sub.revision;
     userModel.findAll.mockImplementation(async (options) => options?.include ? [{ id: 101, role: { slug: 'admin' } }] : []);
     await ensureCleaningSubmissionsForTaskLog(1);
-    expect(actions[0].targetUserIds).toEqual([101]); expect(sub.revision).toBe(revision + 1);
-    userModel.findAll.mockResolvedValue([]);
-    await ensureCleaningSubmissionsForTaskLog(1);
-    expect(actions[0].status).toBe(false); expect(sub.revision).toBe(revision + 2);
-    await ensureCleaningSubmissionsForTaskLog(1);
-    expect(sub.revision).toBe(revision + 2);
+    expect(actions).toEqual([]); expect(sub.revision).toBe(revision);
+    expect((await listMyCleaningSubmissions({ actorId: 101, roleSlug: 'admin' })).reviewSubmissions).toEqual([]);
   });
   it('does not churn pending popup revisions or reappearances during unchanged homepage refreshes', async () => {
     const sub = await materialize(); await upload(sub); const revision = sub.revision;
