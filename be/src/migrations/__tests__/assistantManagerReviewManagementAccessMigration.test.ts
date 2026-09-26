@@ -46,7 +46,7 @@ describe('assistant manager review management access migration', () => {
   it('verifies that both permissions are active', async () => {
     const { context } = buildContext();
     (context.sequelize.query as jest.Mock).mockResolvedValueOnce([[
-      { role_count: 1, granted_action_count: 2 },
+      { module_count: 1, role_count: 1, granted_action_count: 2 },
     ], undefined]);
 
     await expect(migration.verify({ context })).resolves.toMatchObject({ ok: true });
@@ -59,14 +59,23 @@ describe('assistant manager review management access migration', () => {
     });
   });
 
-  it('fails verification when the role or either permission is missing', async () => {
+  it('fails verification when an existing role and module lack either permission', async () => {
     const { context } = buildContext();
-    (context.sequelize.query as jest.Mock)
-      .mockResolvedValueOnce([[{ role_count: 1, granted_action_count: 1 }], undefined])
-      .mockResolvedValueOnce([[{ role_count: 0, granted_action_count: 0 }], undefined]);
+    (context.sequelize.query as jest.Mock).mockResolvedValueOnce([[
+      { module_count: 1, role_count: 1, granted_action_count: 1 },
+    ], undefined]);
 
     await expect(migration.verify({ context })).resolves.toMatchObject({ ok: false });
-    await expect(migration.verify({ context })).resolves.toMatchObject({ ok: false });
+  });
+
+  it.each([
+    { module_count: 0, role_count: 1, granted_action_count: 0 },
+    { module_count: 1, role_count: 0, granted_action_count: 0 },
+  ])('allows the access-control seed to create optional missing catalog data', async (access) => {
+    const { context } = buildContext();
+    (context.sequelize.query as jest.Mock).mockResolvedValueOnce([[access], undefined]);
+
+    await expect(migration.verify({ context })).resolves.toMatchObject({ ok: true });
   });
 
   it('uses a safe no-op rollback', async () => {

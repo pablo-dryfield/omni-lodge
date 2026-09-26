@@ -47,6 +47,9 @@ export async function verify({ context }: MigrationParams): Promise<{ ok: boolea
   const [rows] = await context.sequelize.query(
     `SELECT
        (SELECT COUNT(*)::integer
+          FROM modules
+         WHERE slug = :moduleSlug) AS module_count,
+       (SELECT COUNT(*)::integer
           FROM "userTypes"
          WHERE slug = :roleSlug) AS role_count,
        (SELECT COUNT(DISTINCT a.key)::integer
@@ -63,11 +66,19 @@ export async function verify({ context }: MigrationParams): Promise<{ ok: boolea
       replacements: { actionKeys: ACTION_KEYS, moduleSlug: MODULE_SLUG, roleSlug: ROLE_SLUG },
     },
   );
-  const access = (rows as Array<{ role_count: number; granted_action_count: number }>)[0];
+  const access = (rows as Array<{
+    module_count: number;
+    role_count: number;
+    granted_action_count: number;
+  }>)[0];
 
   return {
-    ok: Number(access?.role_count) > 0
-      && Number(access?.granted_action_count) === ACTION_KEYS.length,
+    // Fresh databases create this legacy module through the access-control
+    // seed after migrations. If it is already present (as in production),
+    // require the complete grant before accepting the migration.
+    ok: Number(access?.module_count) === 0
+      || Number(access?.role_count) === 0
+      || Number(access?.granted_action_count) === ACTION_KEYS.length,
     details: { access },
   };
 }
