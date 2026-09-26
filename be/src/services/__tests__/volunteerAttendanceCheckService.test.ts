@@ -24,7 +24,7 @@ const config = { evidenceRules: [{ key: 'meeting', type: 'image', required: true
   checkKind: 'meeting_point', shiftTypeIds: [1], evidenceRuleKey: 'meeting', expectedTime: '20:45',
 } };
 const evidence = { id: 'photo-1', type: 'image', ruleKey: 'meeting', storagePath: 'drive:file', driveFileId: 'file',
-  valid: true, uploadedAt: '2026-09-06T18:45:00Z', uploadedBy: 9 };
+  valid: true, uploadedAt: '2026-09-06T11:00:00Z', uploadedBy: 9 };
 const log = { id: 10, templateId: 11, taskDate: '2026-09-06', userId: 9, status: 'pending', meta: { evidenceItems: [evidence] } };
 const assignment = { id: 20, userId: 7, shiftInstanceId: 30, roleInShift: 'Guide', assignee: { firstName: 'A', lastName: 'Guide' },
   shiftInstance: { id: 30, date: log.taskDate, shiftTypeId: 1 } };
@@ -45,7 +45,7 @@ describe('photo-linked attendance', () => {
     (AssistantManagerTaskTemplate.findByPk as jest.Mock).mockResolvedValue({ scheduleConfig: config });
     (ShiftAssignment.findByPk as jest.Mock).mockResolvedValue(assignment);
     (ShiftAssignment.findAll as jest.Mock).mockResolvedValue([assignment]);
-    (ShiftInstance.findByPk as jest.Mock).mockResolvedValue({ id: 30, date: log.taskDate, shiftTypeId: 1, scheduleWeekId: 1 });
+    (ShiftInstance.findByPk as jest.Mock).mockResolvedValue({ id: 30, date: log.taskDate, timeStart: '20:45', shiftTypeId: 1, scheduleWeekId: 1 });
     (ScheduleWeek.findByPk as jest.Mock).mockResolvedValue({ state: 'published' });
     (VolunteerShiftAttendance.findOne as jest.Mock).mockResolvedValue(null);
     (VolunteerShiftAttendance.findAll as jest.Mock).mockResolvedValue([]);
@@ -100,6 +100,23 @@ describe('photo-linked attendance', () => {
     await expect(save()).rejects.toMatchObject({ status: 409 });
     jest.setSystemTime(new Date('2026-09-06T18:44:00Z'));
     await expect(save()).rejects.toMatchObject({ status: 409 });
+  });
+  it('allows promotion attendance from each assignment shift start instead of the final configured check time', async () => {
+    const promotionConfig = { ...config, volunteerAttendance: { ...config.volunteerAttendance,
+      checkKind: 'promotion_chat', expectedTime: '18:00' } };
+    (AssistantManagerTaskTemplate.findByPk as jest.Mock).mockResolvedValue({ scheduleConfig: promotionConfig });
+    (ShiftInstance.findByPk as jest.Mock).mockResolvedValue({ id: 30, date: log.taskDate, timeStart: '14:00', shiftTypeId: 1, scheduleWeekId: 1 });
+    jest.setSystemTime(new Date('2026-09-06T12:00:00Z'));
+    await expect(save()).resolves.toMatchObject({ checkKind: 'promotion_chat' });
+    expect(VolunteerShiftAttendance.create).toHaveBeenCalledWith(expect.objectContaining({ expectedTime: '18:00' }), { transaction });
+  });
+  it('rejects promotion attendance before that assignment shift starts', async () => {
+    const promotionConfig = { ...config, volunteerAttendance: { ...config.volunteerAttendance,
+      checkKind: 'promotion_chat', expectedTime: '18:00' } };
+    (AssistantManagerTaskTemplate.findByPk as jest.Mock).mockResolvedValue({ scheduleConfig: promotionConfig });
+    (ShiftInstance.findByPk as jest.Mock).mockResolvedValue({ id: 30, date: log.taskDate, timeStart: '16:00', shiftTypeId: 1, scheduleWeekId: 1 });
+    jest.setSystemTime(new Date('2026-09-06T13:59:00Z'));
+    await expect(save()).rejects.toMatchObject({ status: 409, message: expect.stringContaining('16:00 Warsaw time') });
   });
   it('requires all current assignments before completion and counts duplicate roles once', async () => {
     await expect(ensureTaskAttendanceCheckSatisfied(log as never, log.meta)).rejects.toMatchObject({ status: 409 });

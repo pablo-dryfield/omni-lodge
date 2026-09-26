@@ -22,7 +22,7 @@ function AttendanceRow({ assignment, check, canUpdate }: { assignment: Attendanc
   return <Paper withBorder p="sm" radius="md">
     <Stack gap="xs">
       <Group justify="space-between" wrap="wrap">
-        <div><Text fw={600}>{assignment.name}</Text><Text size="xs" c="dimmed">{assignment.shiftName} · {assignment.role}</Text></div>
+        <div><Text fw={600}>{assignment.name}</Text><Text size="xs" c="dimmed">{assignment.shiftName} · {assignment.role} · attendance from {assignment.availableTime}</Text></div>
         {linked && <Badge color={assignment.status === 'on_time' ? 'green' : assignment.status === 'late' ? 'orange' : 'gray'}>Saved</Badge>}
       </Group>
       {assignment.self && <Text size="sm" c="dimmed">Another manager must confirm your attendance.</Text>}
@@ -55,7 +55,9 @@ export default function TaskAttendanceCheck({ taskLogId, evidenceVersion }: { ta
       {query.isLoading && access.canView && <Loader size="sm" />}
       {query.error && <Alert color="red">{attendanceCheckError(query.error)}</Alert>}
       {check && <>
-        <Text size="sm" c="dimmed">{check.checkKind === 'meeting_point' ? 'Meeting point' : 'Promotion chat'} · {check.expectedTime} Warsaw time. Confirm each person against the task photo above.</Text>
+        <Text size="sm" c="dimmed">{check.checkKind === 'meeting_point'
+          ? `Meeting point · ${check.expectedTime} Warsaw time.`
+          : 'Promotion attendance can be saved from each person\'s scheduled shift start.'} Confirm each person against the task photo above.</Text>
         {!check.evidence.length && <Alert color="blue">Upload the required task photo above before recording attendance.</Alert>}
         {!check.assignments.length && <Text size="sm" c="dimmed">No other staff are assigned to these shift types in the published schedule for this day.</Text>}
         {check.assignments.map((assignment) => <AttendanceRow key={`${assignment.assignmentId}:${assignment.revision}:${check.evidence.map((item) => item.id).join(',')}`} assignment={assignment} check={check} canUpdate={access.canUpdate} />)}

@@ -7,7 +7,7 @@ import { useModuleAccess } from '../../hooks/useModuleAccess';
 jest.mock('../../api/volunteerAttendanceChecks', () => ({ useAttendanceCheck: jest.fn(), useSaveAttendanceCheck: jest.fn(), attendanceCheckError: () => 'Attendance changed. Refresh.' }));
 jest.mock('../../hooks/useModuleAccess', () => ({ useModuleAccess: jest.fn() }));
 const assignment = { assignmentId: 20, userId: 7, name: 'Vera Volunteer', role: 'Guide', shiftName: 'Pub Crawl',
-  startTime: '20:45', endTime: '00:00', status: 'on_time' as const, revision: 2, evidenceTaskLogId: null,
+  startTime: '20:45', endTime: '00:00', availableTime: '20:45', status: 'on_time' as const, revision: 2, evidenceTaskLogId: null,
   evidenceFileId: null, lateMinutes: null, notes: null, recordedAt: null, self: false };
 const check = { taskLogId: 10, taskDate: '2026-09-06', checkKind: 'meeting_point' as const, expectedTime: '20:45', evidenceRuleKey: 'meeting', shiftTypeIds: [1], serverTime: '2026-09-06T19:00:00Z',
   evidence: [{ id: 'photo-1', fileName: 'Meeting photo.jpg', subjectUserId: null, uploadedAt: '2026-09-06T18:50:00Z' }], assignments: [assignment] };
@@ -27,6 +27,13 @@ describe('Task attendance photo check', () => {
     expect(screen.getByText('Vera Volunteer')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save attendance' }));
     expect(mutate).toHaveBeenCalledWith({ assignmentId: 20, input: { status: 'on_time', evidenceFileId: 'photo-1', expectedRevision: 2, notes: null, lateMinutes: null } });
+  });
+  it('explains that promotion attendance is available from each scheduled shift start', () => {
+    (api.useAttendanceCheck as jest.Mock).mockReturnValue({ data: { ...check, checkKind: 'promotion_chat',
+      assignments: [{ ...assignment, startTime: '14:00', availableTime: '14:00' }] }, refetch: jest.fn() });
+    view();
+    expect(screen.getByText(/Promotion attendance can be saved from each person's scheduled shift start/)).toBeInTheDocument();
+    expect(screen.getByText(/attendance from 14:00/)).toBeInTheDocument();
   });
   it('prevents self-confirmation', () => {
     (api.useAttendanceCheck as jest.Mock).mockReturnValue({ data: { ...check, assignments: [{ ...assignment, self: true }] }, refetch: jest.fn() });
