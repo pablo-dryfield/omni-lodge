@@ -46,10 +46,27 @@ describe('assistant manager review management access migration', () => {
   it('verifies that both permissions are active', async () => {
     const { context } = buildContext();
     (context.sequelize.query as jest.Mock).mockResolvedValueOnce([[
-      { assistant_manager_has_review_management: true },
+      { role_count: 1, granted_action_count: 2 },
     ], undefined]);
 
     await expect(migration.verify({ context })).resolves.toMatchObject({ ok: true });
+
+    const [sql, options] = (context.sequelize.query as jest.Mock).mock.calls[0];
+    expect(sql).toContain('COUNT(DISTINCT a.key)');
+    expect(options.replacements).toMatchObject({
+      actionKeys: ['create', 'update'],
+      roleSlug: 'assistant-manager',
+    });
+  });
+
+  it('fails verification when the role or either permission is missing', async () => {
+    const { context } = buildContext();
+    (context.sequelize.query as jest.Mock)
+      .mockResolvedValueOnce([[{ role_count: 1, granted_action_count: 1 }], undefined])
+      .mockResolvedValueOnce([[{ role_count: 0, granted_action_count: 0 }], undefined]);
+
+    await expect(migration.verify({ context })).resolves.toMatchObject({ ok: false });
+    await expect(migration.verify({ context })).resolves.toMatchObject({ ok: false });
   });
 
   it('uses a safe no-op rollback', async () => {

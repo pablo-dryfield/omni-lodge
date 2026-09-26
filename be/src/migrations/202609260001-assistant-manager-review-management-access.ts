@@ -45,30 +45,29 @@ export async function down({ context }: MigrationParams): Promise<void> {
 
 export async function verify({ context }: MigrationParams): Promise<{ ok: boolean; details: unknown }> {
   const [rows] = await context.sequelize.query(
-    `SELECT NOT EXISTS (
-       SELECT 1
-         FROM unnest(ARRAY[:actionKeys]::text[]) required_action(key)
-        WHERE NOT EXISTS (
-          SELECT 1
-            FROM "userTypes" ut
-            JOIN "roleModulePermissions" rmp ON rmp."userTypeId" = ut.id
-            JOIN modules m ON m.id = rmp."moduleId"
-            JOIN actions a ON a.id = rmp."actionId"
-           WHERE ut.slug = :roleSlug
-             AND m.slug = :moduleSlug
-             AND a.key = required_action.key
-             AND rmp.allowed = true
-             AND rmp.status = true
-        )
-     ) AS assistant_manager_has_review_management;`,
+    `SELECT
+       (SELECT COUNT(*)::integer
+          FROM "userTypes"
+         WHERE slug = :roleSlug) AS role_count,
+       (SELECT COUNT(DISTINCT a.key)::integer
+          FROM "roleModulePermissions" rmp
+          JOIN "userTypes" ut ON ut.id = rmp."userTypeId"
+          JOIN modules m ON m.id = rmp."moduleId"
+          JOIN actions a ON a.id = rmp."actionId"
+         WHERE ut.slug = :roleSlug
+           AND m.slug = :moduleSlug
+           AND a.key IN (:actionKeys)
+           AND rmp.allowed = true
+           AND rmp.status = true) AS granted_action_count;`,
     {
       replacements: { actionKeys: ACTION_KEYS, moduleSlug: MODULE_SLUG, roleSlug: ROLE_SLUG },
     },
   );
-  const access = (rows as Array<{ assistant_manager_has_review_management: boolean }>)[0];
+  const access = (rows as Array<{ role_count: number; granted_action_count: number }>)[0];
 
   return {
-    ok: Boolean(access?.assistant_manager_has_review_management),
+    ok: Number(access?.role_count) > 0
+      && Number(access?.granted_action_count) === ACTION_KEYS.length,
     details: { access },
   };
 }
