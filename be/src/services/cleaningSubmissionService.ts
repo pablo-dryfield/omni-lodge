@@ -98,11 +98,9 @@ const matchesAssignmentIdChurnIdentity = (submission: CleaningSubmission, assign
     && String(snapshot.timeEnd ?? '') === String(shift.timeEnd ?? '')
     && canonicalSlots(submission.requiredSlots) === canonicalSlots(slotsFor(assignment, sources));
 };
-const reviewerIds = (assignment: RosterAssignment, roster: RosterAssignment[]): number[] => [...new Set(roster.filter((candidate) =>
-  candidate.userId !== assignment.userId && candidate.assignee?.status === true && candidate.assignee?.approved === true
-  && ['manager', 'assistantmanager'].includes(normalizeRole(candidate.shiftRole?.slug ?? candidate.roleInShift))
-  && assignment.shiftInstance && candidate.shiftInstance && shiftsOverlap(assignment.shiftInstance, candidate.shiftInstance))
-  .map((candidate) => candidate.userId))];
+/** The task planner assignee is the sole reviewer; task ownership is the review assignment. */
+const reviewerIds = (log: Pick<AssistantManagerTaskLog, 'userId'>, assignment: RosterAssignment): number[] =>
+  positiveId(log.userId) && log.userId !== assignment.userId ? [log.userId] : [];
 const latestPhotos = (photos: CleaningPhotoVersion[]) => {
   const map = new Map<string, CleaningPhotoVersion>();
   for (const photo of photos) if (!map.has(photo.slotKey) || map.get(photo.slotKey)!.version < photo.version) map.set(photo.slotKey, photo);
@@ -121,8 +119,7 @@ export const ensureCleaningSubmissionsForTaskLog = async (taskLogId: number, tra
   // Do not silently manufacture past work or attach work to an already closed task.
   if (!['pending', 'missed'].includes(log.status) || (log.taskDate !== today() && existing.length === 0)) return existing;
   let roster = deduplicateCleaningRoster(await loadRoster(log.taskDate, [...new Set(sources.flatMap((source) => source.shiftTypeIds))], transaction));
-  let managers = await loadRoster(log.taskDate, undefined, transaction);
-  const relatedRows = [...roster, ...managers];
+  const relatedRows = roster;
   const assignmentIds = [...new Set(relatedRows.map((row) => row.id))].sort((a, b) => a - b);
   const shiftIds = [...new Set(relatedRows.map((row) => row.shiftInstanceId))].sort((a, b) => a - b);
   const weekIds = [...new Set(relatedRows.map((row) => row.shiftInstance?.scheduleWeekId).filter(positiveId))].sort((a, b) => a - b);
@@ -130,7 +127,6 @@ export const ensureCleaningSubmissionsForTaskLog = async (taskLogId: number, tra
   if (shiftIds.length) await ShiftInstance.findAll({ where: { id: { [Op.in]: shiftIds } }, order: [['id', 'ASC']], transaction, lock: transaction.LOCK.UPDATE });
   if (assignmentIds.length) await ShiftAssignment.findAll({ where: { id: { [Op.in]: assignmentIds } }, order: [['id', 'ASC']], transaction, lock: transaction.LOCK.UPDATE });
   roster = deduplicateCleaningRoster(await loadRoster(log.taskDate, [...new Set(sources.flatMap((source) => source.shiftTypeIds))], transaction));
-  managers = await loadRoster(log.taskDate, undefined, transaction);
   if (objectValue(objectValue(log.meta)[CLEANING_WORKFLOW_META_KEY]).managed !== true) {
     await log.update({ meta: { ...log.meta, [CLEANING_WORKFLOW_META_KEY]: { version: 1, managed: true, scheduleConfig: template.scheduleConfig } } }, { transaction });
   }
@@ -195,7 +191,7 @@ export const ensureCleaningSubmissionsForTaskLog = async (taskLogId: number, tra
     if (log.taskDate !== today()) continue;
     const requiredSlots = slotsFor(assignment, sources);
     if (!requiredSlots.length) continue;
-    const reviewers = reviewerIds(assignment, managers);
+    const reviewers = reviewerIds(log, assignment);
     const row = await CleaningSubmission.create({ taskLogId, shiftAssignmentId: assignment.id, userId: assignment.userId,
       requiredSlots, reviewerUserIds: reviewers, revision: 1, status: reviewers.length ? 'awaiting_upload' : 'escalated',
       scheduleSnapshot: { assignmentId: assignment.id, shiftInstanceId: assignment.shiftInstanceId,
@@ -210,7 +206,7 @@ export const ensureCleaningSubmissionsForTaskLog = async (taskLogId: number, tra
     const photos = await CleaningPhotoVersion.findAll({ where: { submissionId: submission.id }, order: [['version', 'DESC'], ['id', 'DESC']], transaction });
     if (![...latestPhotos(photos).values()].some((photo) => photo.status === 'pending')) continue;
     await reconcileCleaningReviewRouting({ submission, log, template, assignment, photos,
-      reviewers: reviewerIds(assignment, managers), actor: { actorId: log.userId, roleSlug: null } }, transaction);
+      reviewers: reviewerIds(log, assignment), actor: { actorId: log.userId, roleSlug: null } }, transaction);
   }
   let rosterIssue: { code: string; message: string } | null = null;
   if (roster.length === 0) {
@@ -251,7 +247,7 @@ const loadContext = async (submissionId: number, actor: CleaningActor, transacti
   const sources = getSources(log, template);
   const roster = deduplicateCleaningRoster(await loadRoster(log.taskDate, [...new Set(sources.flatMap((source) => source.shiftTypeIds))], transaction));
   let assignment = roster.find((row) => matchesSubmissionIdentity(submission, row, log.taskDate)) ?? null;
-  let reviewers = assignment ? reviewerIds(assignment, await loadRoster(log.taskDate, undefined, transaction)) : [];
+  let reviewers = assignment ? reviewerIds(log, assignment) : [];
   const assignedTaskManager = normalizeRole(actor.roleSlug) === 'assistantmanager' && log.userId === actor.actorId;
   if (actor.actorId !== submission.userId && !reviewers.includes(actor.actorId) && !isCleaningGlobalManager(actor) && !assignedTaskManager) {
     throw new HttpError(404, 'Cleaning submission was not found.');
@@ -272,8 +268,7 @@ const loadContext = async (submissionId: number, actor: CleaningActor, transacti
       || !lockedShift || lockedShift.date !== log.taskDate || lockedShift.shiftTypeId !== assignment.shiftInstance!.shiftTypeId
       || lockedWeek?.state !== 'published') throw new HttpError(409, 'The schedule changed. Refresh before continuing.');
     if (transaction) {
-      const managerRoster = await loadRoster(log.taskDate, undefined, transaction);
-      const allRows = [...roster, ...managerRoster];
+      const allRows = roster;
       const assignmentIds = [...new Set(allRows.map((row) => row.id))].sort((a, b) => a - b);
       const shiftIds = [...new Set(allRows.map((row) => row.shiftInstanceId))].sort((a, b) => a - b);
       const weekIds = [...new Set(allRows.map((row) => row.shiftInstance?.scheduleWeekId).filter(positiveId))].sort((a, b) => a - b);
@@ -285,9 +280,9 @@ const loadContext = async (submissionId: number, actor: CleaningActor, transacti
       if (!refreshedAssignment) {
         throw new HttpError(409, 'The cleaning assignment changed. Refresh before continuing.');
       }
-      // Shift times may also have changed while waiting for a row lock. Use the refreshed interval for review authority.
+      // Keep the refreshed assignment for independent-review and upload authorization checks.
       assignment = refreshedAssignment;
-      reviewers = reviewerIds(assignment, await loadRoster(log.taskDate, undefined, transaction));
+      reviewers = reviewerIds(log, assignment);
     }
   }
   const photos = await CleaningPhotoVersion.findAll({ where: { submissionId }, order: [['version', 'DESC'], ['id', 'DESC']], transaction });
@@ -296,7 +291,7 @@ const loadContext = async (submissionId: number, actor: CleaningActor, transacti
 
 const canReviewContext = (context: Context) => context.actor.actorId !== context.submission.userId && Boolean(context.assignment)
   && ['pending', 'missed'].includes(context.log.status)
-  && (context.reviewers.includes(context.actor.actorId) || (context.reviewers.length === 0 && isCleaningGlobalManager(context.actor)));
+  && context.reviewers.includes(context.actor.actorId);
 
 const serialize = async (context: Context, transaction?: Transaction) => {
   const { submission, log, template, assignment, reviewers, actor, photos } = context;
@@ -314,7 +309,7 @@ const serialize = async (context: Context, transaction?: Transaction) => {
     title: template.name, shiftName: String(objectValue(submission.scheduleSnapshot).shiftName ?? 'Cleaning'), status: submission.status,
     revision: submission.revision, reviewerMissing: reviewers.length === 0, canReview: canReviewContext(context),
     canUpload: actor.actorId === submission.userId && Boolean(assignment) && ['pending', 'missed'].includes(log.status) && log.taskDate <= today(),
-    escalationReason: !assignment ? 'The assignment is no longer on the published schedule.' : reviewers.length === 0 ? 'No other manager is on the overlapping published shift.' : null,
+    escalationReason: !assignment ? 'The assignment is no longer on the published schedule.' : reviewers.length === 0 ? 'The task planner assignee cannot independently review this submission.' : null,
     slots: submission.requiredSlots.map((slot) => ({ ...slot, status: latest.get(slot.key)?.status ?? 'missing',
       currentVersion: latest.has(slot.key) ? versionDto(latest.get(slot.key)!) : null,
       history: photos.filter((photo) => photo.slotKey === slot.key).map(versionDto) })) };
@@ -336,14 +331,13 @@ export const getCleaningTaskHistory = async (taskLogId: number, actor: CleaningA
   }
   const sources = getSources(log, template);
   const roster = deduplicateCleaningRoster(await loadRoster(log.taskDate, [...new Set(sources.flatMap((source) => source.shiftTypeIds))]));
-  const managerRoster = await loadRoster(log.taskDate);
   const submissions = await CleaningSubmission.findAll({ where: { taskLogId }, order: [['id', 'ASC']] });
   const history: Awaited<ReturnType<typeof serialize>>[] = [];
   for (const submission of submissions) {
     const assignment = roster.find((row) => matchesSubmissionIdentity(submission, row, log.taskDate)) ?? null;
     const photos = await CleaningPhotoVersion.findAll({ where: { submissionId: submission.id }, order: [['version', 'DESC'], ['id', 'DESC']] });
     history.push(await serialize({ submission, log, template, assignment,
-      reviewers: assignment ? reviewerIds(assignment, managerRoster) : [], actor, photos }));
+      reviewers: assignment ? reviewerIds(log, assignment) : [], actor, photos }));
   }
   return { taskLogId, submissions: history };
 };
@@ -416,13 +410,7 @@ export const listMyCleaningSubmissions = async (actor: CleaningActor) => {
 
 const actionWhere = (submissionId: number) => ({ type: 'cleaning_review', payload: { cleaningSubmission: { submissionId } } });
 const normalizedIds = (values: number[] | null | undefined): number[] => [...new Set((values ?? []).filter(positiveId))].sort((a, b) => a - b);
-const resolveReviewTargets = async (context: Pick<Context, 'reviewers' | 'submission'>, transaction: Transaction): Promise<number[]> => {
-  if (context.reviewers.length) return normalizedIds(context.reviewers);
-  const managers = await User.findAll({ where: { status: true, approved: true }, attributes: ['id'],
-    include: [{ model: UserType, as: 'role', required: true, attributes: ['slug'] }], transaction });
-  return normalizedIds(managers.filter((user) => user.id !== context.submission.userId
-    && isCleaningGlobalManager({ actorId: user.id, roleSlug: (user as unknown as { role?: UserType }).role?.slug ?? null })).map((user) => user.id));
-};
+const resolveReviewTargets = (context: Pick<Context, 'reviewers'>): number[] => normalizedIds(context.reviewers);
 const syncReviewAction = async (context: Context, transaction: Transaction,
   options: { actions?: RequiredAction[]; targets?: number[]; actorId?: number | null } = {}) => {
   const latest = latestPhotos(context.photos);
@@ -433,8 +421,7 @@ const syncReviewAction = async (context: Context, transaction: Transaction,
     for (const action of actions) if (action.status) await action.update({ status: false, updatedBy: actorId }, { transaction });
     return;
   }
-  // Escalation stays in the manager homepage queue; no broad broadcast to ordinary users.
-  const targets = options.targets ?? await resolveReviewTargets(context, transaction);
+  const targets = options.targets ?? resolveReviewTargets(context);
   if (!targets.length) {
     for (const action of actions) if (action.status) await action.update({ status: false, updatedBy: actorId }, { transaction });
     return;
@@ -448,10 +435,10 @@ const syncReviewAction = async (context: Context, transaction: Transaction,
   for (const action of actions.slice(1)) await action.update({ status: false }, { transaction });
 };
 
-/** A shift-manager change must move pending popups as well as live review authorization. */
+/** A task planner reassignment must move pending popups as well as live review authorization. */
 const reconcileCleaningReviewRouting = async (context: Context, transaction: Transaction) => {
   const actions = await RequiredAction.findAll({ where: actionWhere(context.submission.id), order: [['id', 'ASC']], transaction, lock: transaction.LOCK.UPDATE });
-  const targets = await resolveReviewTargets(context, transaction);
+  const targets = resolveReviewTargets(context);
   const previousReviewers = normalizedIds(context.submission.reviewerUserIds);
   const reviewers = normalizedIds(context.reviewers);
   const active = actions.filter((action) => action.status);
@@ -566,14 +553,13 @@ export const reviewCleaningSubmissionPhoto = async (params: CleaningActor & { su
   if (body.decision === 'rejected' && !reason) throw new HttpError(400, 'Explain what needs to be cleaned again.');
   const taskCompleted = await sequelize.transaction(async (transaction) => {
     const context = await loadContext(params.submissionId, params, transaction, true);
-    if (!canReviewContext(context)) throw new HttpError(403, 'Only another on-shift manager can review this cleaning submission.');
-    if (!context.reviewers.length && !escalationReason) throw new HttpError(400, 'Explain why you are handling this missing-manager review.');
+    if (!canReviewContext(context)) throw new HttpError(403, 'Only the person assigned this task in the task planner can review this cleaning submission.');
     assertCleaningRevision(body.expectedRevision, context.submission.revision);
     const photo = context.photos.find((item) => item.id === params.photoId);
     if (!photo || latestPhotos(context.photos).get(photo.slotKey)?.id !== photo.id || photo.status !== 'pending') throw new HttpError(409, 'Only the latest pending photo can be reviewed.');
-    // Re-read reviewer roster after acquiring all assignment locks: a reassignment removes reviewer authority immediately.
-    const liveReviewers = context.assignment ? reviewerIds(context.assignment, await loadRoster(context.log.taskDate, undefined, transaction)) : [];
-    if (!liveReviewers.includes(params.actorId) && !(liveReviewers.length === 0 && isCleaningGlobalManager(params) && escalationReason)) throw new HttpError(403, 'Your on-shift review assignment changed. Refresh before continuing.');
+    // Re-read task ownership after acquiring assignment locks: a planner reassignment removes authority immediately.
+    const liveReviewers = context.assignment ? reviewerIds(context.log, context.assignment) : [];
+    if (!liveReviewers.includes(params.actorId)) throw new HttpError(403, 'Your task planner review assignment changed. Refresh before continuing.');
     context.reviewers = liveReviewers;
     await photo.update({ status: body.decision, reviewedBy: params.actorId, reviewedAt: new Date(), rejectionReason: body.decision === 'rejected' ? reason : null }, { transaction });
     await updateSubmissionStatus(context, transaction);
