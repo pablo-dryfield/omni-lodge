@@ -5,7 +5,7 @@ import axiosInstance from '../utils/axiosInstance';
 export type AttendanceCheckStatus = 'on_time' | 'late' | 'absent' | 'excused';
 export type AttendanceCheckAssignment = {
   assignmentId: number; userId: number; name: string; role: string; shiftName: string;
-  startTime: string; endTime: string; status: AttendanceCheckStatus | null;
+  startTime: string; endTime: string; availableTime: string; status: AttendanceCheckStatus | null;
   revision: number; evidenceTaskLogId: number | null; evidenceFileId: string | null;
   lateMinutes: number | null; notes: string | null; recordedAt: string | null; self: boolean;
 };

@@ -47,6 +47,10 @@ type Assignment = ShiftAssignment & {
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown> : {};
 const positiveId = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+const attendanceAvailableTime = (config: VolunteerAttendanceCheckConfig, instance?: Pick<ShiftInstance, 'timeStart'>): string =>
+  config.checkKind === 'promotion_chat' && typeof instance?.timeStart === 'string'
+    ? instance.timeStart.slice(0, 5)
+    : config.expectedTime;
 const role = (value: string | null): string => {
   const normalized = (value ?? '').trim().toLowerCase().replace(/[\s_-]/gu, '');
   return normalized === 'administrator' ? 'admin' : normalized;
@@ -166,6 +170,7 @@ export const getVolunteerAttendanceCheck = async (logId: number, actor: Attendan
       name: `${assignment.assignee?.firstName ?? ''} ${assignment.assignee?.lastName ?? ''}`.trim() || `Staff #${assignment.userId}`,
       role: assignment.roleInShift, shiftName: assignment.shiftInstance?.shiftType?.name ?? 'Shift',
       startTime: assignment.shiftInstance?.timeStart, endTime: assignment.shiftInstance?.timeEnd,
+      availableTime: attendanceAvailableTime(config, assignment.shiftInstance),
       status: attendance?.status === 'attended' ? 'on_time' : attendance?.status ?? null,
       revision: assignment.volunteerAttendance?.revision ?? 0,
       evidenceTaskLogId: attendance?.evidenceTaskLogId ?? null,
@@ -199,8 +204,6 @@ export const saveVolunteerAttendanceCheck = async (params: AttendanceCheckActor 
     const { log, config } = await loadTask(params.taskLogId, params, transaction);
     if (log.status === 'waived') throw new HttpError(409, 'A waived task cannot confirm attendance.');
     const now = new Date();
-    const checkAt = dayjs.tz(`${log.taskDate}T${config.expectedTime}:00`, TIMEZONE);
-    if (!checkAt.isValid() || checkAt.valueOf() > now.valueOf()) throw new HttpError(409, 'Attendance can be checked only at or after the configured time.');
     const image = images(log, config).find((item) => item.id === body.evidenceFileId);
     if (!image || new Date(image.uploadedAt!).valueOf() > now.valueOf()) throw new HttpError(409, 'The selected uploaded photo is no longer available. Refresh the task.');
     const assignment = await ShiftAssignment.findByPk(params.assignmentId, { attributes: ['id', 'userId', 'shiftInstanceId'],
@@ -213,6 +216,11 @@ export const saveVolunteerAttendanceCheck = async (params: AttendanceCheckActor 
     const instance = await ShiftInstance.findByPk(assignment.shiftInstanceId, { transaction, lock: transaction.LOCK.UPDATE });
     if (!instance || instance.date !== log.taskDate || !config.shiftTypeIds.includes(instance.shiftTypeId)) {
       throw new HttpError(409, 'This person is not scheduled for the configured check.');
+    }
+    const availableTime = attendanceAvailableTime(config, instance);
+    const checkAt = dayjs.tz(`${log.taskDate}T${availableTime}:00`, TIMEZONE);
+    if (!checkAt.isValid() || checkAt.valueOf() > now.valueOf()) {
+      throw new HttpError(409, `Attendance for this shift can be checked only at or after ${availableTime} Warsaw time.`);
     }
     const week = await ScheduleWeek.findByPk(instance.scheduleWeekId, { attributes: ['id', 'state'], transaction, lock: transaction.LOCK.UPDATE });
     if (week?.state !== 'published') throw new HttpError(409, 'The schedule is no longer published.');
