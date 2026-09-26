@@ -47,3 +47,45 @@ describe('Airbnb earnings totals', () => {
     expect(parsed?.bookingFields?.baseAmount).toBeUndefined();
   });
 });
+
+describe('Airbnb reservation amendments', () => {
+  it('parses an identifier-free guest addition instead of treating footer text as a reminder', async () => {
+    const parsed = await new AirbnbBookingParser().parse({
+      messageId: 'airbnb-guest-addition',
+      subject: 'Mathias added a guest to Krawl Through Krakow Pub Crawl',
+      from: 'Airbnb <automated@airbnb.com>',
+      headers: { from: 'Airbnb <automated@airbnb.com>' },
+      receivedAt: new Date('2026-09-26T17:01:31.000Z'),
+      textBody: [
+        'Mathias updated their reservation',
+        'Mathias has added 1 guest to the reservation.',
+        'Updated reservation',
+        'https://www.airbnb.com/hosting/experience/134745428 Krawl Through Krakow Pub Crawl Hosted by David',
+        'Friday, November 20 9:00 PM · 5 guests',
+        'Manage email reminders',
+      ].join('\n'),
+    });
+
+    expect(parsed).toEqual(expect.objectContaining({
+      platform: 'airbnb',
+      platformBookingId: 'airbnb-amend-airbnb-guest-addition',
+      eventType: 'amended',
+      status: 'amended',
+      bookingFields: expect.objectContaining({
+        guestFirstName: 'Mathias',
+        partySizeTotal: 5,
+        partySizeAdults: 5,
+        experienceDate: '2026-11-20',
+      }),
+    }));
+  });
+
+  it('still ignores reminder emails based on their subject', async () => {
+    const parsed = await new AirbnbBookingParser().parse({
+      ...buildContext('TOTAL (PLN) Zł 100.00'),
+      subject: 'Reminder: Ada booked your experience',
+    });
+
+    expect(parsed).toBeNull();
+  });
+});

@@ -1721,6 +1721,11 @@ const normalizeNameForMatch = (value: unknown): string | null => {
 const isAirbnbCancellationPlaceholderId = (platform: BookingPlatform, platformBookingId: string): boolean =>
   platform === 'airbnb' && platformBookingId.startsWith(AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX);
 
+const AIRBNB_AMENDMENT_PLACEHOLDER_PREFIX = 'airbnb-amend-';
+
+const isAirbnbAmendmentPlaceholderId = (platform: BookingPlatform, platformBookingId: string): boolean =>
+  platform === 'airbnb' && platformBookingId.startsWith(AIRBNB_AMENDMENT_PLACEHOLDER_PREFIX);
+
 const findAirbnbCancellationMatch = async (
   event: ParsedBookingEvent,
   transaction: Transaction,
@@ -1833,6 +1838,84 @@ const findAirbnbCancellationMatch = async (
   return scored[0].candidate;
 };
 
+const findAirbnbAmendmentMatch = async (
+  event: ParsedBookingEvent,
+  transaction: Transaction,
+): Promise<Booking | null> => {
+  if (
+    event.platform !== 'airbnb'
+    || event.status !== 'amended'
+    || !isAirbnbAmendmentPlaceholderId(event.platform, event.platformBookingId)
+  ) {
+    return null;
+  }
+
+  const fields = event.bookingFields ?? {};
+  const targetFirst = normalizeNameForMatch(fields.guestFirstName ?? null);
+  const targetLast = normalizeNameForMatch(fields.guestLastName ?? null);
+  const targetExperienceDate = typeof fields.experienceDate === 'string' && fields.experienceDate.trim()
+    ? fields.experienceDate.trim()
+    : null;
+  const targetStartAt = isValidDateValue(fields.experienceStartAt) ? fields.experienceStartAt : null;
+
+  // A guest name plus an event date/time is required. Never create a new
+  // booking from an identifier-free alteration if it cannot be matched
+  // uniquely to an existing reservation.
+  if ((!targetFirst && !targetLast) || (!targetExperienceDate && !targetStartAt)) {
+    return null;
+  }
+
+  const where: Record<string, unknown> = {
+    platform: 'airbnb',
+    status: { [Op.ne]: 'cancelled' },
+  };
+  if (targetExperienceDate) {
+    where.experienceDate = targetExperienceDate;
+  }
+  if (targetStartAt) {
+    const rangeMs = 3 * 60 * 60 * 1000;
+    where.experienceStartAt = {
+      [Op.between]: [new Date(targetStartAt.getTime() - rangeMs), new Date(targetStartAt.getTime() + rangeMs)],
+    };
+  }
+
+  const candidates = await Booking.findAll({
+    where,
+    order: [['createdAt', 'DESC']],
+    limit: 30,
+    transaction,
+  });
+
+  const scored = candidates
+    .map((candidate) => {
+      const candidateFirst = normalizeNameForMatch(candidate.guestFirstName ?? null);
+      const candidateLast = normalizeNameForMatch(candidate.guestLastName ?? null);
+      let score = 0;
+      if (targetFirst) {
+        if (candidateFirst !== targetFirst) return { candidate, score: -1 };
+        score += 4;
+      }
+      if (targetLast) {
+        if (candidateLast !== targetLast) return { candidate, score: -1 };
+        score += 4;
+      }
+      if (targetExperienceDate && candidate.experienceDate === targetExperienceDate) score += 2;
+      if (targetStartAt && isValidDateValue(candidate.experienceStartAt)) {
+        const minutesDiff = Math.abs(candidate.experienceStartAt.getTime() - targetStartAt.getTime()) / 60000;
+        if (minutesDiff <= 30) score += 3;
+        else if (minutesDiff <= 180) score += 1;
+      }
+      return { candidate, score };
+    })
+    .filter((entry) => entry.score >= 6)
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0 || (scored.length > 1 && scored[0].score === scored[1].score)) {
+    return null;
+  }
+  return scored[0].candidate;
+};
+
 const applyParsedEvent = async (
   email: BookingEmail,
   event: ParsedBookingEvent,
@@ -1892,12 +1975,20 @@ const applyParsedEvent = async (
       booking = await findAirbnbCancellationMatch(event, transaction);
     }
 
+    if (!booking) {
+      booking = await findAirbnbAmendmentMatch(event, transaction);
+    }
+
     if (!booking && priorEvent?.bookingId) {
       booking = await Booking.findByPk(priorEvent.bookingId, { transaction });
     }
 
     if (!booking && isAirbnbCancellationPlaceholderId(event.platform, event.platformBookingId)) {
       throw new Error('Unable to match Airbnb cancellation email to an existing booking');
+    }
+
+    if (!booking && isAirbnbAmendmentPlaceholderId(event.platform, event.platformBookingId)) {
+      throw new Error('Unable to match Airbnb amendment email to an existing booking');
     }
 
     if (!booking && isScopedReprocess) {

@@ -25,6 +25,7 @@ const AIRBNB_TIMEZONE =
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
 const AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX = 'airbnb-cancel-';
+const AIRBNB_AMENDMENT_PLACEHOLDER_PREFIX = 'airbnb-amend-';
 const UNICODE_NAME_FRAGMENT = `[\\p{L}\\p{M}' -]+`;
 
 const BOOKING_ID_STOP_WORDS = new Set([
@@ -41,15 +42,10 @@ const BOOKING_ID_STOP_WORDS = new Set([
 ]);
 
 const isReminderEmail = (context: BookingParserContext): boolean => {
-  const haystack = [
-    context.subject ?? '',
-    context.snippet ?? '',
-    context.textBody ?? '',
-    context.rawTextBody ?? '',
-  ]
-    .join(' ')
-    .toLowerCase();
-  return haystack.includes('reminder');
+  // Airbnb's full HTML footer can contain unrelated references to reminders.
+  // Only the subject identifies the non-transactional reminder messages that
+  // must be ignored; reservation changes remain actionable.
+  return /\breminder\b/i.test(context.subject ?? '');
 };
 
 const EXPERIENCE_INTENT_PATTERNS: RegExp[] = [
@@ -246,6 +242,12 @@ const extractGuestNameFromSubject = (subject?: string | null): string | null => 
   const bookedMatch = subject.match(new RegExp(`^(${UNICODE_NAME_FRAGMENT}?)\\s+booked your experience\\b`, 'iu'));
   if (bookedMatch?.[1]) {
     return bookedMatch[1].trim();
+  }
+  const amendmentMatch = subject.match(
+    new RegExp(`^(${UNICODE_NAME_FRAGMENT}?)\\s+(?:added|removed|updated|changed)\\b`, 'iu'),
+  );
+  if (amendmentMatch?.[1]) {
+    return amendmentMatch[1].trim();
   }
   return null;
 };
@@ -585,7 +587,13 @@ const deriveStatusFromContext = (context: BookingParserContext, text: string): B
   if (subject.includes('cancelled') || subject.includes('canceled')) {
     return 'cancelled';
   }
-  if (subject.includes('alteration') || subject.includes('change') || subject.includes('updated') || subject.includes('modified')) {
+  if (
+    subject.includes('alteration')
+    || subject.includes('change')
+    || subject.includes('updated')
+    || subject.includes('modified')
+    || /\b(?:added|removed)\s+(?:a|\d+)\s+guests?\b/i.test(subject)
+  ) {
     return 'amended';
   }
   if (subject.includes('request') || subject.includes('inquiry')) {
@@ -598,6 +606,9 @@ const deriveStatusFromContext = (context: BookingParserContext, text: string): B
     return 'cancelled';
   }
   if (/(?:reservation|booking)\s+(?:was|has been)?\s*(?:changed|updated|modified|altered)\b/i.test(body)) {
+    return 'amended';
+  }
+  if (/\b(?:updated|changed)\s+their\s+(?:reservation|booking)\b/i.test(body)) {
     return 'amended';
   }
   return 'confirmed';
@@ -679,10 +690,13 @@ export class AirbnbBookingParser implements BookingEmailParser {
     const status = deriveStatusFromContext(context, text);
     const eventType = statusToEventType(status);
     const bookingId = extractBookingId(text, context.subject);
-    if (!bookingId && status !== 'cancelled') {
+    if (!bookingId && status !== 'cancelled' && status !== 'amended') {
       return null;
     }
-    const platformBookingId = bookingId ?? `${AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX}${context.messageId}`;
+    const placeholderPrefix = status === 'cancelled'
+      ? AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX
+      : AIRBNB_AMENDMENT_PLACEHOLDER_PREFIX;
+    const platformBookingId = bookingId ?? `${placeholderPrefix}${context.messageId}`;
 
     const bookingFields: BookingFieldPatch = {};
     const listingName = extractListingName(text);
@@ -742,10 +756,14 @@ export class AirbnbBookingParser implements BookingEmailParser {
     const stopLabels = ['Check-in', 'Check out', 'Check-out', 'Checkout', 'Reservation', 'Confirmation', 'Total', 'Listing'];
     const guestsRaw = extractField(text, 'Guests:', stopLabels) ?? extractField(text, 'Guest count:', stopLabels);
     const adultsInlineMatch = text.match(/\bGuests?\s+(\d{1,3})\s+adults?\b/i);
+    const guestCountMatches = Array.from(text.matchAll(/\b(\d{1,3})\s+guests?\b/gi));
+    // Alteration emails first say "added 1 guest" and later show the updated
+    // reservation total. The final guest-count occurrence is authoritative.
+    const reservationGuestCount = guestCountMatches[guestCountMatches.length - 1]?.[1] ?? null;
     const totalGuests =
       parseCount(guestsRaw) ??
       parseCount(adultsInlineMatch?.[1] ?? null) ??
-      parseCount(text.match(/\b(\d{1,3})\s+guests?\b/i)?.[1] ?? null);
+      parseCount(reservationGuestCount);
 
     const adultsRaw = extractField(text, 'Adults:', stopLabels);
     const childrenRaw = extractField(text, 'Children:', stopLabels);
