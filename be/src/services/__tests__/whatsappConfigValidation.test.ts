@@ -29,6 +29,7 @@ import ConfigValue from '../../models/ConfigValue';
 import ConfigHistory from '../../models/ConfigHistory';
 import {
   getWhatsAppConfigValue,
+  getWhatsAppTestConfig,
   getWhatsAppWebhookQueueConfig,
   resolveWhatsAppOnboardingGeneration,
 } from '../../config/whatsappConfig';
@@ -79,6 +80,26 @@ describe('WhatsApp control-panel validation', () => {
     expect(getWhatsAppConfigValue('WHATSAPP_RETENTION_DAYS')).toBe('5');
     expect(getWhatsAppConfigValue('WHATSAPP_SOURCE_STALE_HOURS')).toBe('48');
     expect(resolveWhatsAppOnboardingGeneration()).toBe('generation-cache');
+  });
+
+  it('validates the fixed-recipient delivery test contract', () => {
+    expect(getWhatsAppTestConfig({
+      WHATSAPP_TEST_API_TOKEN: 't'.repeat(32),
+      WHATSAPP_TEST_RECIPIENT: '+48502484066',
+      WHATSAPP_TEST_TEMPLATE_NAME: 'existing_template',
+      WHATSAPP_TEST_TEMPLATE_LANGUAGE: 'en_US',
+    })).toEqual({
+      apiToken: 't'.repeat(32),
+      recipient: '+48502484066',
+      templateName: 'existing_template',
+      languageCode: 'en_US',
+    });
+    expect(() => getWhatsAppTestConfig({
+      WHATSAPP_TEST_API_TOKEN: 't'.repeat(32),
+      WHATSAPP_TEST_RECIPIENT: '+1999999999999999',
+      WHATSAPP_TEST_TEMPLATE_NAME: 'existing_template',
+      WHATSAPP_TEST_TEMPLATE_LANGUAGE: 'en_US',
+    })).toThrow('WHATSAPP_TEST_RECIPIENT');
   });
 
   it('loads the atomic composite keyring from the dynamic config cache', async () => {
@@ -141,6 +162,10 @@ describe('WhatsApp control-panel validation', () => {
     ['WHATSAPP_WABA_ID', 'waba-1', 'numeric Meta identifier'],
     ['WHATSAPP_PHONE_NUMBER_ID', 'phone-1', 'numeric Meta identifier'],
     ['WHATSAPP_BRIEF_API_TOKEN', 'x'.repeat(31), 'at least 32 characters'],
+    ['WHATSAPP_TEST_API_TOKEN', 'x'.repeat(31), 'at least 32 characters'],
+    ['WHATSAPP_TEST_RECIPIENT', '48502484066', 'E.164'],
+    ['WHATSAPP_TEST_TEMPLATE_NAME', 'Invalid Template', 'required format'],
+    ['WHATSAPP_TEST_TEMPLATE_LANGUAGE', 'english', 'required format'],
     ['WHATSAPP_CONTACT_HASH_KEY', 'x'.repeat(31), 'at least 32 characters'],
     ['WHATSAPP_RETENTION_DAYS', 1.5, 'must be an integer'],
     ['WHATSAPP_SOURCE_STALE_HOURS', 169, 'must be <= 168'],

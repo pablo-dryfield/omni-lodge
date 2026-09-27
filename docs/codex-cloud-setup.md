@@ -291,3 +291,30 @@ The production host now has:
   - only allowed to forward to `127.0.0.1:5432`.
 
 If Codex Cloud needs additional production access later, add it deliberately as a new secret/variable and document the access boundary here.
+
+## Fixed-recipient WhatsApp delivery test
+
+The backend exposes a separate machine-authenticated delivery-test operation at
+`POST /api/integrations/whatsapp/test/messages`. It does not accept a recipient,
+template, language, or message body from the caller. Configure all four values
+in the production control panel before enabling it:
+
+- `WHATSAPP_TEST_API_TOKEN`: an independent random token of at least 32 characters;
+- `WHATSAPP_TEST_RECIPIENT`: the single permitted E.164 destination;
+- `WHATSAPP_TEST_TEMPLATE_NAME`: the exact approved, parameter-free Meta template;
+- `WHATSAPP_TEST_TEMPLATE_LANGUAGE`: that template's exact language code.
+
+Store the same API token in Codex Cloud as `WHATSAPP_TEST_API_TOKEN` or in the
+private `~/.omnilodge-codex-cloud/whatsapp-test-api-token` file. Never reuse an
+administrator password, the Meta access token, or the read-connector token.
+Then request one message and poll its provider status with:
+
+```bash
+scripts/codex/send-production-whatsapp-test.sh send
+scripts/codex/send-production-whatsapp-test.sh status '<message-id>'
+```
+
+The send route is limited to one request per 15 minutes per client and never
+retries an ambiguous Meta write. A response of `accepted` proves only that Meta
+returned a message ID; `delivered` is populated later from the signed webhook.
+The feature fails closed with HTTP 503 whenever any fixed setting is missing.

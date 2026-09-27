@@ -38,6 +38,13 @@ export interface WhatsAppBriefConfig {
   retentionDays: number;
 }
 
+export interface WhatsAppTestConfig {
+  apiToken: string;
+  recipient: string;
+  templateName: string;
+  languageCode: string;
+}
+
 export interface WhatsAppQueueEncryptionKey {
   id: string;
   material: Buffer;
@@ -67,6 +74,10 @@ export type WhatsAppConfigKey =
   | 'WHATSAPP_WABA_ID'
   | 'WHATSAPP_PHONE_NUMBER_ID'
   | 'WHATSAPP_BRIEF_API_TOKEN'
+  | 'WHATSAPP_TEST_API_TOKEN'
+  | 'WHATSAPP_TEST_RECIPIENT'
+  | 'WHATSAPP_TEST_TEMPLATE_NAME'
+  | 'WHATSAPP_TEST_TEMPLATE_LANGUAGE'
   | 'WHATSAPP_ONBOARDING_GENERATION'
   | 'WHATSAPP_WEBHOOK_QUEUE_KEYRING'
   | 'WHATSAPP_WEBHOOK_QUEUE_ACTIVE_KEY_ID'
@@ -259,6 +270,28 @@ export const getWhatsAppWebhookQueueConfig = (
     activeKey: { id: activeKeyId, material: activeKey },
     decryptionKeys,
   };
+};
+
+export const getWhatsAppTestConfig = (
+  environment?: WhatsAppEnvironment,
+): WhatsAppTestConfig => {
+  const apiToken = requireConfigValue('WHATSAPP_TEST_API_TOKEN', environment);
+  const recipient = requireConfigValue('WHATSAPP_TEST_RECIPIENT', environment);
+  const templateName = requireConfigValue('WHATSAPP_TEST_TEMPLATE_NAME', environment);
+  const languageCode = requireConfigValue('WHATSAPP_TEST_TEMPLATE_LANGUAGE', environment);
+  if (apiToken.length < 32 || apiToken.length > 512) {
+    throw new WhatsAppConfigError('WHATSAPP_TEST_API_TOKEN must contain 32-512 characters');
+  }
+  if (!/^\+[1-9]\d{7,14}$/.test(recipient)) {
+    throw new WhatsAppConfigError('WHATSAPP_TEST_RECIPIENT must be a valid E.164 number');
+  }
+  if (!/^[a-z0-9_]{1,512}$/.test(templateName)) {
+    throw new WhatsAppConfigError('WHATSAPP_TEST_TEMPLATE_NAME is invalid');
+  }
+  if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(languageCode)) {
+    throw new WhatsAppConfigError('WHATSAPP_TEST_TEMPLATE_LANGUAGE is invalid');
+  }
+  return { apiToken, recipient, templateName, languageCode };
 };
 
 export const loadWhatsAppConfig = (
