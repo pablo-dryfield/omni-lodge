@@ -316,5 +316,10 @@ scripts/codex/send-production-whatsapp-test.sh status '<message-id>'
 
 The send route is limited to one request per 15 minutes per client and never
 retries an ambiguous Meta write. A response of `accepted` proves only that Meta
-returned a message ID; `delivered` is populated later from the signed webhook.
-The feature fails closed with HTTP 503 whenever any fixed setting is missing.
+returned a message ID. The status endpoint reports `awaiting_webhook` until a
+signed status webhook is persisted, then reports Meta's status. A `failed`
+status includes the sanitized provider error code, title, and available details
+so the configured recipient or account can be repaired without inspecting raw
+webhook payloads. The feature fails closed with HTTP 503 whenever any fixed
+setting is missing. The helper preserves JSON error bodies on non-success HTTP
+responses so the safe diagnostic code remains visible.

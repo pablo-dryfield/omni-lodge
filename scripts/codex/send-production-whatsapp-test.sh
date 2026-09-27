@@ -33,7 +33,7 @@ case "${1:-send}" in
 esac
 
 curl_args=(
-  --fail --silent --show-error
+  --fail-with-body --silent --show-error
   --request "$method"
   --header "Authorization: Bearer $token"
   --header 'Content-Type: application/json'

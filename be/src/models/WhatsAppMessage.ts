@@ -76,6 +76,22 @@ export default class WhatsAppMessage extends Model {
   declare deliveryStatus: string | null;
 
   @AllowNull(true)
+  @Column({ field: 'delivery_error_code', type: DataType.STRING(32) })
+  declare deliveryErrorCode: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'delivery_error_title', type: DataType.STRING(256) })
+  declare deliveryErrorTitle: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'delivery_error_details', type: DataType.STRING(512) })
+  declare deliveryErrorDetails: string | null;
+
+  @AllowNull(true)
+  @Column({ field: 'delivery_error_updated_at', type: DataType.DATE })
+  declare deliveryErrorUpdatedAt: Date | null;
+
+  @AllowNull(true)
   @Column({ field: 'status_updated_at', type: DataType.DATE })
   declare statusUpdatedAt: Date | null;
 
