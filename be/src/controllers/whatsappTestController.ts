@@ -42,10 +42,19 @@ export const getWhatsAppDeliveryTestStatus = async (req: Request, res: Response)
   }
   try {
     const message = await WhatsAppMessage.findOne({ where: { providerMessageId: messageId } });
+    const status = message?.deliveryStatus ?? 'awaiting_webhook';
+    const failure = status === 'failed'
+      ? {
+        code: message?.deliveryErrorCode ?? null,
+        title: message?.deliveryErrorTitle ?? null,
+        details: message?.deliveryErrorDetails ?? null,
+      }
+      : null;
     res.json({
       messageId,
-      status: message?.deliveryStatus ?? 'accepted',
+      status,
       statusUpdatedAt: message?.statusUpdatedAt?.toISOString() ?? null,
+      failure,
     });
   } catch (error) {
     safeError(res, error);

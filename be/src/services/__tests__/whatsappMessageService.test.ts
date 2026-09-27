@@ -2,6 +2,7 @@ import { Op } from 'sequelize';
 import WhatsAppMessage from '../../models/WhatsAppMessage';
 import WhatsAppSourceState from '../../models/WhatsAppSourceState';
 import WhatsAppWebhookInbox from '../../models/WhatsAppWebhookInbox';
+import type { NormalizedWhatsAppStatusEvent } from '../../types/whatsapp';
 
 jest.mock('../../services/configService.js', () => ({
   getConfigValueRaw: jest.fn((key: string) => process.env[key] ?? null),
@@ -57,6 +58,48 @@ const inboxModel = WhatsAppWebhookInbox as unknown as {
   count: jest.Mock;
   findOne: jest.Mock;
 };
+
+const statusEvent = (
+  overrides: Partial<NormalizedWhatsAppStatusEvent> = {},
+): NormalizedWhatsAppStatusEvent => ({
+  kind: 'status',
+  source: 'messages',
+  wabaId: 'waba-1',
+  phoneNumberId: 'phone-1',
+  timestamp: new Date('2026-08-27T07:00:00.000Z'),
+  messageId: 'wamid.status-1',
+  recipientWaId: '48502484066',
+  status: 'sent',
+  conversationId: null,
+  deliveryErrorCode: null,
+  deliveryErrorTitle: null,
+  deliveryErrorDetails: null,
+  ...overrides,
+});
+
+const storedMessage = (overrides: Record<string, unknown> = {}) => ({
+  phoneNumberId: 'phone-1',
+  providerMessageId: 'wamid.status-1',
+  direction: 'outbound',
+  source: 'messages',
+  messageType: 'unknown',
+  contactKey: null,
+  contactPhoneSuffix: '4066',
+  contactDisplayName: null,
+  textContent: null,
+  contextProviderMessageId: null,
+  occurredAt: new Date('2026-08-27T07:00:00.000Z'),
+  contentUpdatedAt: null,
+  deliveryStatus: 'sent',
+  statusUpdatedAt: new Date('2026-08-27T07:00:00.000Z'),
+  deliveryErrorCode: null,
+  deliveryErrorTitle: null,
+  deliveryErrorDetails: null,
+  deliveryErrorUpdatedAt: null,
+  editedAt: null,
+  revokedAt: null,
+  ...overrides,
+});
 
 describe('whatsappMessageService', () => {
   const now = new Date('2026-08-27T07:30:00.000Z');
@@ -139,6 +182,258 @@ describe('whatsappMessageService', () => {
     });
     expect(rows[0].contactKey).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(rows[0])).not.toContain('481234567');
+  });
+
+  it('folds same-message statuses monotonically while retaining failure diagnostics', async () => {
+    const result = await ingestWhatsAppWebhook({
+      events: [
+        statusEvent(),
+        statusEvent({
+          status: 'delivered',
+          timestamp: new Date('2026-08-27T07:01:00.000Z'),
+        }),
+        statusEvent({
+          status: 'failed',
+          timestamp: new Date('2026-08-27T07:02:00.000Z'),
+          deliveryErrorCode: '131026',
+          deliveryErrorTitle: 'Message undeliverable',
+          deliveryErrorDetails: 'Recipient could not receive the message.',
+        }),
+        statusEvent({
+          status: 'read',
+          timestamp: new Date('2026-08-27T07:03:00.000Z'),
+        }),
+        statusEvent({
+          status: 'played',
+          timestamp: new Date('2026-08-27T07:04:00.000Z'),
+        }),
+      ],
+    }, { receivedAt: now, contactHashKey: 'test-contact-key' });
+
+    expect(result).toEqual({ inserted: 0, deduplicated: 4, statusesUpdated: 1 });
+    const [rows, options] = messageModel.bulkCreate.mock.calls[0];
+    expect(rows).toEqual([expect.objectContaining({
+      providerMessageId: 'wamid.status-1',
+      deliveryStatus: 'played',
+      statusUpdatedAt: new Date('2026-08-27T07:04:00.000Z'),
+      deliveryErrorCode: '131026',
+      deliveryErrorTitle: 'Message undeliverable',
+      deliveryErrorDetails: 'Recipient could not receive the message.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:02:00.000Z'),
+    })]);
+    expect(options.updateOnDuplicate).toEqual(expect.arrayContaining([
+      'deliveryStatus',
+      'statusUpdatedAt',
+      'deliveryErrorCode',
+      'deliveryErrorTitle',
+      'deliveryErrorDetails',
+      'deliveryErrorUpdatedAt',
+    ]));
+  });
+
+  it('does not let a later failure downgrade an already delivered message', async () => {
+    messageModel.findAll.mockResolvedValue([storedMessage({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+    })]);
+
+    await ingestWhatsAppWebhook({
+      events: [statusEvent({
+        status: 'failed',
+        timestamp: new Date('2026-08-27T07:05:00.000Z'),
+        deliveryErrorCode: '131026',
+        deliveryErrorTitle: 'Message undeliverable',
+        deliveryErrorDetails: 'A later provider callback reported failure.',
+      })],
+    }, { receivedAt: now, contactHashKey: 'test-contact-key' });
+
+    const [rows] = messageModel.bulkCreate.mock.calls[0];
+    expect(rows[0]).toMatchObject({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+      deliveryErrorCode: '131026',
+      deliveryErrorTitle: 'Message undeliverable',
+      deliveryErrorDetails: 'A later provider callback reported failure.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+    });
+  });
+
+  it('lets a later delivery success win without erasing prior failure diagnostics', async () => {
+    messageModel.findAll.mockResolvedValue([storedMessage({
+      deliveryStatus: 'failed',
+      statusUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+      deliveryErrorCode: '131026',
+      deliveryErrorTitle: 'Message undeliverable',
+      deliveryErrorDetails: 'Earlier failure detail.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+    })]);
+
+    await ingestWhatsAppWebhook({
+      events: [statusEvent({
+        status: 'delivered',
+        timestamp: new Date('2026-08-27T07:05:00.000Z'),
+      })],
+    }, { receivedAt: now, contactHashKey: 'test-contact-key' });
+
+    const [rows] = messageModel.bulkCreate.mock.calls[0];
+    expect(rows[0]).toMatchObject({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+      deliveryErrorCode: '131026',
+      deliveryErrorTitle: 'Message undeliverable',
+      deliveryErrorDetails: 'Earlier failure detail.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+    });
+  });
+
+  it('does not replace newer persisted failure diagnostics with an older failed event', async () => {
+    messageModel.findAll.mockResolvedValue([storedMessage({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+      deliveryErrorCode: '131049',
+      deliveryErrorTitle: 'Newer failure',
+      deliveryErrorDetails: 'Keep this diagnostic.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+    })]);
+
+    await ingestWhatsAppWebhook({
+      events: [statusEvent({
+        status: 'failed',
+        timestamp: new Date('2026-08-27T07:02:00.000Z'),
+        deliveryErrorCode: '131026',
+        deliveryErrorTitle: 'Older failure',
+        deliveryErrorDetails: 'Do not restore this diagnostic.',
+      })],
+    }, { receivedAt: now, contactHashKey: 'test-contact-key' });
+
+    const [rows] = messageModel.bulkCreate.mock.calls[0];
+    expect(rows[0]).toMatchObject({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+      deliveryErrorCode: '131049',
+      deliveryErrorTitle: 'Newer failure',
+      deliveryErrorDetails: 'Keep this diagnostic.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+    });
+  });
+
+  it('starts a new diagnostic snapshot when a newer callback changes the code', async () => {
+    messageModel.findAll.mockResolvedValue([storedMessage({
+      deliveryStatus: 'failed',
+      statusUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+      deliveryErrorCode: '131026',
+      deliveryErrorTitle: 'Original title',
+      deliveryErrorDetails: 'Original detail.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+    })]);
+
+    await ingestWhatsAppWebhook({
+      events: [statusEvent({
+        status: 'failed',
+        timestamp: new Date('2026-08-27T07:02:00.000Z'),
+        deliveryErrorCode: '131047',
+      })],
+    }, { receivedAt: now, contactHashKey: 'test-contact-key' });
+
+    const [rows] = messageModel.bulkCreate.mock.calls[0];
+    expect(rows[0]).toMatchObject({
+      deliveryStatus: 'failed',
+      statusUpdatedAt: new Date('2026-08-27T07:02:00.000Z'),
+      deliveryErrorCode: '131047',
+      deliveryErrorTitle: null,
+      deliveryErrorDetails: null,
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:02:00.000Z'),
+    });
+  });
+
+  it('enriches a matching diagnostic code without clearing absent fields', async () => {
+    messageModel.findAll.mockResolvedValue([storedMessage({
+      deliveryStatus: 'failed',
+      statusUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+      deliveryErrorCode: '131047',
+      deliveryErrorTitle: 'Original title',
+      deliveryErrorDetails: 'Original detail.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:01:00.000Z'),
+    })]);
+
+    await ingestWhatsAppWebhook({
+      events: [statusEvent({
+        status: 'failed',
+        timestamp: new Date('2026-08-27T07:03:00.000Z'),
+        deliveryErrorCode: '131047',
+        deliveryErrorDetails: 'Newer detail only.',
+      })],
+    }, { receivedAt: now, contactHashKey: 'test-contact-key' });
+
+    const [rows] = messageModel.bulkCreate.mock.calls[0];
+    expect(rows[0]).toMatchObject({
+      deliveryStatus: 'failed',
+      statusUpdatedAt: new Date('2026-08-27T07:03:00.000Z'),
+      deliveryErrorCode: '131047',
+      deliveryErrorTitle: 'Original title',
+      deliveryErrorDetails: 'Newer detail only.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:03:00.000Z'),
+    });
+  });
+
+  it('fills a missing error field from an older callback without rewinding diagnostic freshness', async () => {
+    messageModel.findAll.mockResolvedValue([storedMessage({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:06:00.000Z'),
+      deliveryErrorCode: '131049',
+      deliveryErrorTitle: 'Newer failure',
+      deliveryErrorDetails: null,
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+    })]);
+
+    await ingestWhatsAppWebhook({
+      events: [statusEvent({
+        status: 'failed',
+        timestamp: new Date('2026-08-27T07:02:00.000Z'),
+        deliveryErrorDetails: 'Older detail fills the missing field.',
+      })],
+    }, { receivedAt: now, contactHashKey: 'test-contact-key' });
+
+    const [rows] = messageModel.bulkCreate.mock.calls[0];
+    expect(rows[0]).toMatchObject({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:06:00.000Z'),
+      deliveryErrorCode: '131049',
+      deliveryErrorTitle: 'Newer failure',
+      deliveryErrorDetails: 'Older detail fills the missing field.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+    });
+  });
+
+  it('does not attach an older error code to a newer uncoded diagnostic snapshot', async () => {
+    messageModel.findAll.mockResolvedValue([storedMessage({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:06:00.000Z'),
+      deliveryErrorCode: null,
+      deliveryErrorTitle: 'Newer uncoded failure',
+      deliveryErrorDetails: 'Keep this newer diagnostic.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+    })]);
+
+    await ingestWhatsAppWebhook({
+      events: [statusEvent({
+        status: 'failed',
+        timestamp: new Date('2026-08-27T07:02:00.000Z'),
+        deliveryErrorCode: '131026',
+        deliveryErrorTitle: 'Older coded failure',
+        deliveryErrorDetails: 'Do not attach this diagnostic.',
+      })],
+    }, { receivedAt: now, contactHashKey: 'test-contact-key' });
+
+    const [rows] = messageModel.bulkCreate.mock.calls[0];
+    expect(rows[0]).toMatchObject({
+      deliveryStatus: 'delivered',
+      statusUpdatedAt: new Date('2026-08-27T07:06:00.000Z'),
+      deliveryErrorCode: null,
+      deliveryErrorTitle: 'Newer uncoded failure',
+      deliveryErrorDetails: 'Keep this newer diagnostic.',
+      deliveryErrorUpdatedAt: new Date('2026-08-27T07:05:00.000Z'),
+    });
   });
 
   it('applies revocation to the target WAMID and clears message content', async () => {

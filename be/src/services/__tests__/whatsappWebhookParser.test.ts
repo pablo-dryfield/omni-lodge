@@ -254,6 +254,9 @@ describe('parseWhatsAppWebhookPayload', () => {
         status: 'delivered',
         recipientWaId: 'customer-2',
         conversationId: 'conversation-1',
+        deliveryErrorCode: null,
+        deliveryErrorTitle: null,
+        deliveryErrorDetails: null,
       }),
     );
     expect(result[2]).toEqual(
@@ -267,6 +270,196 @@ describe('parseWhatsAppWebhookPayload', () => {
     );
     expect(result[2]).not.toHaveProperty('mediaId');
     expect(JSON.stringify(result)).not.toContain('discard-this-media-id');
+  });
+
+  it('chooses one bounded and redacted diagnostic from a failed message status', () => {
+    const payload = {
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: options.expectedWabaId,
+        changes: [{
+          field: 'messages',
+          value: {
+            metadata,
+            statuses: [{
+              id: 'failed-message-1',
+              recipient_id: 'customer-2',
+              status: 'failed',
+              timestamp: 1787808601,
+              errors: [
+                { code: -1, title: null, error_data: { details: null } },
+                { code: 131026 },
+                {
+                  code: 131047,
+                  title: `  Message\u202e   ${'x'.repeat(300)}  `,
+                  message: 'This fallback must not be used.',
+                  error_data: {
+                    details:
+                      'Contact +48 502 484 066 or guest@example.com; '
+                      + 'Authorization: Bearer auth-secret '
+                      + 'client_secret=client-secret app_secret=app-secret '
+                      + 'appsecret_proof=proof-secret refresh_token=refresh-secret '
+                      + 'client_token=client-token see https://example.com/private',
+                    ignored: 'do-not-retain',
+                  },
+                  href: 'https://developers.facebook.com/private',
+                },
+              ],
+            }],
+          },
+        }],
+      }],
+    };
+
+    const result = parseWhatsAppWebhookPayload(payload, options);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({
+      kind: 'status',
+      messageId: 'failed-message-1',
+      status: 'failed',
+      deliveryErrorCode: '131047',
+      deliveryErrorTitle: expect.stringMatching(/^Message x+$/),
+      deliveryErrorDetails:
+        'Contact [number redacted] or [email redacted]; Authorization: [redacted] '
+        + 'client_secret=[redacted] app_secret=[redacted] appsecret_proof=[redacted] '
+        + 'refresh_token=[redacted] client_token=[redacted] see [link redacted]',
+    }));
+    const status = result[0] as { deliveryErrorTitle: string };
+    expect(status.deliveryErrorTitle).toHaveLength(256);
+    for (const secret of [
+      'auth-secret',
+      'client-secret',
+      'app-secret',
+      'proof-secret',
+      'refresh-secret',
+      'client-token',
+    ]) {
+      expect(JSON.stringify(result)).not.toContain(secret);
+    }
+    expect(JSON.stringify(result)).not.toContain('do-not-retain');
+    expect(JSON.stringify(result)).not.toContain('developers.facebook.com/private');
+  });
+
+  it('ignores provider error objects on a non-failed status', () => {
+    const [status] = parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: options.expectedWabaId,
+        changes: [{
+          field: 'messages',
+          value: {
+            metadata,
+            statuses: [{
+              id: 'delivered-message-1',
+              recipient_id: 'customer-2',
+              status: 'delivered',
+              timestamp: 1787808601,
+              errors: [{
+                code: 131026,
+                title: 'Stale failure',
+                error_data: { details: 'Must not survive.' },
+              }],
+            }],
+          },
+        }],
+      }],
+    }, options);
+
+    expect(status).toEqual(expect.objectContaining({
+      deliveryErrorCode: null,
+      deliveryErrorTitle: null,
+      deliveryErrorDetails: null,
+    }));
+  });
+
+  it('redacts secrets from quoted JSON-style diagnostic fields', () => {
+    const [status] = parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: options.expectedWabaId,
+        changes: [{
+          field: 'messages',
+          value: {
+            metadata,
+            statuses: [{
+              id: 'failed-message-json-secret',
+              recipient_id: 'customer-2',
+              status: 'failed',
+              timestamp: 1787808601,
+              errors: [{
+                code: 131047,
+                error_data: {
+                  details:
+                    'Credentials {"client_secret":"quoted-client-secret",'
+                    + '"Authorization":"Bearer quoted-auth-secret","safe":"keep"}',
+                },
+              }],
+            }],
+          },
+        }],
+      }],
+    }, options);
+
+    expect(status).toEqual(expect.objectContaining({
+      deliveryErrorDetails:
+        'Credentials {"client_secret":[redacted],'
+        + '"Authorization":[redacted],"safe":"keep"}',
+    }));
+    expect(JSON.stringify(status)).not.toContain('quoted-client-secret');
+    expect(JSON.stringify(status)).not.toContain('quoted-auth-secret');
+  });
+
+  it('falls through blank nested diagnostics to message and legacy detail fields', () => {
+    const statuses = parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: options.expectedWabaId,
+        changes: [{
+          field: 'messages',
+          value: {
+            metadata,
+            statuses: [
+              {
+                id: 'failed-message-2',
+                recipient_id: 'customer-2',
+                status: 'failed',
+                timestamp: 1787808601,
+                errors: [{
+                  code: '131047',
+                  error_data: { details: ' \n ' },
+                  message: 'Message fallback detail.',
+                  details: 'Legacy detail must be lower priority.',
+                }],
+              },
+              {
+                id: 'failed-message-3',
+                recipient_id: 'customer-2',
+                status: 'failed',
+                timestamp: 1787808602,
+                errors: [{
+                  code: '131048',
+                  error_data: { details: '   ' },
+                  message: '\t',
+                  details: 'Legacy provider detail.',
+                }],
+              },
+            ],
+          },
+        }],
+      }],
+    }, options);
+
+    expect(statuses[0]).toEqual(expect.objectContaining({
+      deliveryErrorCode: '131047',
+      deliveryErrorTitle: null,
+      deliveryErrorDetails: 'Message fallback detail.',
+    }));
+    expect(statuses[1]).toEqual(expect.objectContaining({
+      deliveryErrorCode: '131048',
+      deliveryErrorTitle: null,
+      deliveryErrorDetails: 'Legacy provider detail.',
+    }));
   });
 
   it('parses all history threads and infers inbound and outbound direction', () => {

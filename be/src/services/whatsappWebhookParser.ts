@@ -15,6 +15,16 @@ import type {
 
 type UnknownRecord = Record<string, unknown>;
 const MAX_NORMALIZED_TEXT_LENGTH = 4_000;
+const MAX_DELIVERY_ERROR_CODE_LENGTH = 32;
+const MAX_DELIVERY_ERROR_TITLE_LENGTH = 256;
+const MAX_DELIVERY_ERROR_DETAILS_LENGTH = 512;
+const DELIVERY_ERROR_UNSAFE_CONTROLS =
+  /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const DELIVERY_ERROR_SECRET_ASSIGNMENT =
+  /(\b(?:authorization|appsecret[_ -]?proof|client[_ -]?(?:secret|token)|app[_ -]?secret|access[_ -]?token|refresh[_ -]?token|api[_ -]?key|secret|password)\b["']?\s*[:=]\s*)(?:(["'])(?:bearer\s+)?[^"']*\2|["']?(?:bearer\s+)?[^\s,;}\]"']+["']?)/gi;
+const DELIVERY_ERROR_EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
+const DELIVERY_ERROR_PHONE = /(?<!\d)\+?\d(?:[\s()./-]*\d){7,14}(?!\d)/g;
+const DELIVERY_ERROR_URL = /https?:\/\/\S+/gi;
 
 export class WhatsAppWebhookSignatureError extends Error {
   constructor() {
@@ -60,6 +70,99 @@ const contentString = (value: unknown): string | null =>
 const nestedRecord = (record: UnknownRecord, key: string): UnknownRecord | null => {
   const value = record[key];
   return isRecord(value) ? value : null;
+};
+
+const normalizeDeliveryErrorCode = (value: unknown): string | null => {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0
+      ? String(value).slice(0, MAX_DELIVERY_ERROR_CODE_LENGTH)
+      : null;
+  }
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return /^\d{1,32}$/.test(normalized) ? normalized : null;
+};
+
+const sanitizeDeliveryErrorText = (value: unknown, maxLength: number): string | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value
+    .replace(DELIVERY_ERROR_UNSAFE_CONTROLS, ' ')
+    .replace(DELIVERY_ERROR_SECRET_ASSIGNMENT, '$1[redacted]')
+    .replace(DELIVERY_ERROR_EMAIL, '[email redacted]')
+    .replace(DELIVERY_ERROR_PHONE, '[number redacted]')
+    .replace(DELIVERY_ERROR_URL, '[link redacted]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+};
+
+type NormalizedDeliveryError = {
+  deliveryErrorCode: string | null;
+  deliveryErrorTitle: string | null;
+  deliveryErrorDetails: string | null;
+};
+
+const normalizeSingleDeliveryError = (error: UnknownRecord): NormalizedDeliveryError => {
+  const deliveryErrorCode = normalizeDeliveryErrorCode(error.code);
+  const deliveryErrorTitle = sanitizeDeliveryErrorText(
+    error.title,
+    MAX_DELIVERY_ERROR_TITLE_LENGTH,
+  );
+  const errorData = nestedRecord(error, 'error_data');
+  const normalizedDetails =
+    sanitizeDeliveryErrorText(errorData?.details, MAX_DELIVERY_ERROR_DETAILS_LENGTH)
+    ?? sanitizeDeliveryErrorText(error.message, MAX_DELIVERY_ERROR_DETAILS_LENGTH)
+    ?? sanitizeDeliveryErrorText(error.details, MAX_DELIVERY_ERROR_DETAILS_LENGTH);
+
+  return {
+    deliveryErrorCode,
+    deliveryErrorTitle,
+    deliveryErrorDetails: normalizedDetails === deliveryErrorTitle ? null : normalizedDetails,
+  };
+};
+
+const deliveryErrorUsefulness = (error: NormalizedDeliveryError): number => {
+  const hasCode = Boolean(error.deliveryErrorCode);
+  const hasTitle = Boolean(error.deliveryErrorTitle);
+  const hasDetails = Boolean(error.deliveryErrorDetails);
+  const hasText = hasTitle || hasDetails;
+
+  // Prefer an actionable code paired with provider context, followed by a
+  // code-only entry, then text-only context. Detail text wins otherwise-equal
+  // candidates, and the first provider entry wins an exact tie.
+  const category = hasCode && hasText ? 3 : hasCode ? 2 : hasText ? 1 : 0;
+  return (category * 10) + (hasDetails ? 2 : 0) + (hasTitle ? 1 : 0);
+};
+
+const normalizeDeliveryError = (status: UnknownRecord, statusName: string): {
+  deliveryErrorCode: string | null;
+  deliveryErrorTitle: string | null;
+  deliveryErrorDetails: string | null;
+} => {
+  if (statusName.toLowerCase() !== 'failed') {
+    return {
+      deliveryErrorCode: null,
+      deliveryErrorTitle: null,
+      deliveryErrorDetails: null,
+    };
+  }
+
+  let bestError: NormalizedDeliveryError | null = null;
+  let bestUsefulness = -1;
+  for (const error of records(status.errors)) {
+    const normalized = normalizeSingleDeliveryError(error);
+    const usefulness = deliveryErrorUsefulness(normalized);
+    if (usefulness > bestUsefulness) {
+      bestError = normalized;
+      bestUsefulness = usefulness;
+    }
+  }
+
+  return bestError ?? {
+    deliveryErrorCode: null,
+    deliveryErrorTitle: null,
+    deliveryErrorDetails: null,
+  };
 };
 
 const parseTimestamp = (value: unknown): Date | null => {
@@ -232,6 +335,8 @@ const normalizeStatus = (
   const timestamp = parseTimestamp(status.timestamp);
   if (!messageId || !statusName || !timestamp) return null;
 
+  const deliveryError = normalizeDeliveryError(status, statusName);
+
   return {
     kind: 'status',
     source: 'messages',
@@ -242,6 +347,7 @@ const normalizeStatus = (
     status: statusName,
     conversationId: nonEmptyString(nestedRecord(status, 'conversation')?.id),
     timestamp,
+    ...deliveryError,
   };
 };
 

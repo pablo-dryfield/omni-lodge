@@ -30,6 +30,9 @@ export interface NormalizedWhatsAppStatusEvent extends WhatsAppWebhookScope {
   recipientWaId: string | null;
   status: string;
   conversationId: string | null;
+  deliveryErrorCode: string | null;
+  deliveryErrorTitle: string | null;
+  deliveryErrorDetails: string | null;
 }
 
 export interface NormalizedWhatsAppHistorySyncEvent {

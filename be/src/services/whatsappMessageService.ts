@@ -46,6 +46,10 @@ type StoredMessageValues = {
   contentUpdatedAt: Date | null;
   deliveryStatus: string | null;
   statusUpdatedAt: Date | null;
+  deliveryErrorCode: string | null;
+  deliveryErrorTitle: string | null;
+  deliveryErrorDetails: string | null;
+  deliveryErrorUpdatedAt: Date | null;
   editedAt: Date | null;
   revokedAt: Date | null;
 };
@@ -128,9 +132,21 @@ const MESSAGE_UPDATE_FIELDS: Array<keyof StoredMessageValues> = [
   'contentUpdatedAt',
   'deliveryStatus',
   'statusUpdatedAt',
+  'deliveryErrorCode',
+  'deliveryErrorTitle',
+  'deliveryErrorDetails',
+  'deliveryErrorUpdatedAt',
   'editedAt',
   'revokedAt',
 ];
+
+const DELIVERY_STATUS_RANK: Readonly<Record<string, number>> = Object.freeze({
+  sent: 1,
+  failed: 2,
+  delivered: 3,
+  read: 4,
+  played: 4,
+});
 
 function validDate(value: Date): boolean {
   return value instanceof Date && Number.isFinite(value.getTime());
@@ -240,6 +256,10 @@ function storedValues(row: WhatsAppMessage): StoredMessageValues {
     contentUpdatedAt: row.contentUpdatedAt,
     deliveryStatus: row.deliveryStatus,
     statusUpdatedAt: row.statusUpdatedAt,
+    deliveryErrorCode: row.deliveryErrorCode,
+    deliveryErrorTitle: row.deliveryErrorTitle,
+    deliveryErrorDetails: row.deliveryErrorDetails,
+    deliveryErrorUpdatedAt: row.deliveryErrorUpdatedAt,
     editedAt: row.editedAt,
     revokedAt: row.revokedAt,
   };
@@ -314,10 +334,118 @@ function mergeMessageEvent(
     contentUpdatedAt: event.timestamp,
     deliveryStatus: existing?.deliveryStatus ?? null,
     statusUpdatedAt: existing?.statusUpdatedAt ?? null,
+    deliveryErrorCode: existing?.deliveryErrorCode ?? null,
+    deliveryErrorTitle: existing?.deliveryErrorTitle ?? null,
+    deliveryErrorDetails: existing?.deliveryErrorDetails ?? null,
+    deliveryErrorUpdatedAt: existing?.deliveryErrorUpdatedAt ?? null,
     editedAt: event.action === 'edit' ? event.timestamp : existing?.editedAt ?? null,
     revokedAt: event.action === 'revoke' ? event.timestamp : existing?.revokedAt ?? null,
   };
 }
+
+const deliveryStatusRank = (status: string | null | undefined): number | null => {
+  if (!status) return null;
+  return DELIVERY_STATUS_RANK[status.trim().toLowerCase()] ?? null;
+};
+
+const shouldApplyDeliveryStatus = (
+  incomingStatus: string,
+  incomingAt: Date,
+  existingStatus: string | null | undefined,
+  existingAt: Date | string | null | undefined,
+): boolean => {
+  if (!existingStatus) return true;
+  const incomingRank = deliveryStatusRank(incomingStatus);
+  const existingRank = deliveryStatusRank(existingStatus);
+  if (incomingRank !== null && existingRank !== null && incomingRank !== existingRank) {
+    return incomingRank > existingRank;
+  }
+  if (incomingRank !== null && existingRank === null) return true;
+  if (incomingRank === null && existingRank !== null) return false;
+  const priorStatusAt = asDate(existingAt);
+  return !priorStatusAt || incomingAt.getTime() >= priorStatusAt.getTime();
+};
+
+const mergeDeliveryErrorField = (
+  incoming: string | null,
+  existing: string | null | undefined,
+  incomingIsFresh: boolean,
+): string | null => {
+  if (!incoming) return existing ?? null;
+  return !existing || incomingIsFresh ? incoming : existing;
+};
+
+const mergeDeliveryErrorSnapshot = (
+  existing: StoredMessageValues | undefined,
+  incoming: {
+    code: string | null;
+    title: string | null;
+    details: string | null;
+  },
+  incomingAt: Date,
+  isFailureEvent: boolean,
+): Pick<StoredMessageValues,
+  | 'deliveryErrorCode'
+  | 'deliveryErrorTitle'
+  | 'deliveryErrorDetails'
+  | 'deliveryErrorUpdatedAt'
+> => {
+  const existingSnapshot = {
+    deliveryErrorCode: existing?.deliveryErrorCode ?? null,
+    deliveryErrorTitle: existing?.deliveryErrorTitle ?? null,
+    deliveryErrorDetails: existing?.deliveryErrorDetails ?? null,
+    deliveryErrorUpdatedAt: existing?.deliveryErrorUpdatedAt ?? null,
+  };
+  const hasIncomingDiagnostic = Boolean(incoming.code || incoming.title || incoming.details);
+  if (!isFailureEvent || !hasIncomingDiagnostic) return existingSnapshot;
+
+  const knownFailureDetailsAt = asDate(existing?.deliveryErrorUpdatedAt);
+  const incomingIsFresh = !knownFailureDetailsAt
+    || incomingAt.getTime() >= knownFailureDetailsAt.getTime();
+  const changesCode = Boolean(
+    incoming.code
+    && existingSnapshot.deliveryErrorCode
+    && incoming.code !== existingSnapshot.deliveryErrorCode,
+  );
+  const introducesCode = Boolean(incoming.code && !existingSnapshot.deliveryErrorCode);
+
+  if (changesCode) {
+    if (!incomingIsFresh) return existingSnapshot;
+    return {
+      deliveryErrorCode: incoming.code,
+      deliveryErrorTitle: incoming.title,
+      deliveryErrorDetails: incoming.details,
+      deliveryErrorUpdatedAt: incomingAt,
+    };
+  }
+  if (introducesCode && !incomingIsFresh) return existingSnapshot;
+
+  const hasUsefulNewEvidence =
+    Boolean(incoming.code && incoming.code !== existingSnapshot.deliveryErrorCode)
+    || Boolean(incoming.title && incoming.title !== existingSnapshot.deliveryErrorTitle)
+    || Boolean(incoming.details && incoming.details !== existingSnapshot.deliveryErrorDetails);
+
+  return {
+    deliveryErrorCode: mergeDeliveryErrorField(
+      incoming.code,
+      existingSnapshot.deliveryErrorCode,
+      incomingIsFresh,
+    ),
+    deliveryErrorTitle: mergeDeliveryErrorField(
+      incoming.title,
+      existingSnapshot.deliveryErrorTitle,
+      incomingIsFresh,
+    ),
+    deliveryErrorDetails: mergeDeliveryErrorField(
+      incoming.details,
+      existingSnapshot.deliveryErrorDetails,
+      incomingIsFresh,
+    ),
+    deliveryErrorUpdatedAt: incomingIsFresh && hasUsefulNewEvidence
+      ? incomingAt
+      : existingSnapshot.deliveryErrorUpdatedAt,
+  };
+};
 
 function mergeStatusEvent(
   event: NormalizedStatusEvent,
@@ -328,8 +456,28 @@ function mergeStatusEvent(
   const providerMessageId = cleanRequired(event.messageId, 256);
   if (!phoneNumberId || !providerMessageId || !validDate(event.timestamp)) return null;
 
-  const priorStatusAt = asDate(existing?.statusUpdatedAt);
-  if (priorStatusAt && priorStatusAt.getTime() > event.timestamp.getTime()) return null;
+  const incomingStatus = cleanRequired(event.status, 32);
+  if (!incomingStatus) return null;
+  const applyStatus = shouldApplyDeliveryStatus(
+    incomingStatus,
+    event.timestamp,
+    existing?.deliveryStatus,
+    existing?.statusUpdatedAt,
+  );
+  const incomingDeliveryErrorCode = cleanOptional(event.deliveryErrorCode, 32);
+  const incomingDeliveryErrorTitle = cleanOptional(event.deliveryErrorTitle, 256);
+  const incomingDeliveryErrorDetails = cleanOptional(event.deliveryErrorDetails, 512);
+  const isFailureEvent = incomingStatus.toLowerCase() === 'failed';
+  const deliveryError = mergeDeliveryErrorSnapshot(
+    existing,
+    {
+      code: incomingDeliveryErrorCode,
+      title: incomingDeliveryErrorTitle,
+      details: incomingDeliveryErrorDetails,
+    },
+    event.timestamp,
+    isFailureEvent,
+  );
 
   const contact = contactMetadata(event.recipientWaId, contactHashKey);
   return {
@@ -345,8 +493,9 @@ function mergeStatusEvent(
     contextProviderMessageId: existing?.contextProviderMessageId ?? null,
     occurredAt: existing?.occurredAt ?? event.timestamp,
     contentUpdatedAt: existing?.contentUpdatedAt ?? null,
-    deliveryStatus: cleanRequired(event.status, 32),
-    statusUpdatedAt: event.timestamp,
+    deliveryStatus: applyStatus ? incomingStatus : existing?.deliveryStatus ?? incomingStatus,
+    statusUpdatedAt: applyStatus ? event.timestamp : existing?.statusUpdatedAt ?? event.timestamp,
+    ...deliveryError,
     editedAt: existing?.editedAt ?? null,
     revokedAt: existing?.revokedAt ?? null,
   };
@@ -556,7 +705,8 @@ export async function ingestWhatsAppWebhook(
   const validStatusEvents = statusEvents.filter(
     (event) =>
       Boolean(cleanRequired(event.phoneNumberId, 64)) &&
-      Boolean(cleanRequired(event.messageId, 256)),
+      Boolean(cleanRequired(event.messageId, 256)) &&
+      Boolean(cleanRequired(event.status, 32)),
   );
 
   const dedupedMessages = latestByKey(
@@ -564,11 +714,14 @@ export async function ingestWhatsAppWebhook(
     (event) => messageKey(event.phoneNumberId.trim(), effectiveMessageId(event) as string),
     (event) => event.timestamp,
   );
-  const dedupedStatuses = latestByKey(
-    validStatusEvents,
-    (event) => messageKey(event.phoneNumberId.trim(), event.messageId.trim()),
-    (event) => event.timestamp,
-  );
+  const groupedStatuses = new Map<string, NormalizedStatusEvent[]>();
+  validStatusEvents.forEach((event) => {
+    const key = messageKey(event.phoneNumberId.trim(), event.messageId.trim());
+    const group = groupedStatuses.get(key) ?? [];
+    group.push(event);
+    groupedStatuses.set(key, group);
+  });
+  const deduplicatedStatuses = validStatusEvents.length - groupedStatuses.size;
 
   try {
     // History synchronization can contain up to 180 days. Discard expired content
@@ -592,21 +745,28 @@ export async function ingestWhatsAppWebhook(
       .filter((row): row is StoredMessageValues => Boolean(row));
     const messagesUpserted = await bulkUpsert(messageRows);
 
-    const statusKeys = dedupedStatuses.values.map((event) => ({
-      phoneNumberId: event.phoneNumberId.trim(),
-      providerMessageId: event.messageId.trim(),
+    const statusKeys = [...groupedStatuses.values()].map((events) => ({
+      phoneNumberId: events[0].phoneNumberId.trim(),
+      providerMessageId: events[0].messageId.trim(),
     }));
     const existingStatusMessages = await loadExistingMessages(statusKeys);
-    const statusRows = dedupedStatuses.values
-      .map((event) =>
-        mergeStatusEvent(
-          event,
-          existingStatusMessages.get(
-            messageKey(event.phoneNumberId.trim(), event.messageId.trim()),
-          ),
-          options.contactHashKey,
-        ),
-      )
+    const statusRows = [...groupedStatuses.entries()]
+      .map(([key, events]) => {
+        let merged = existingStatusMessages.get(key);
+        events
+          .sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime())
+          .forEach((event) => {
+            const next = mergeStatusEvent(
+              event,
+              merged,
+              options.contactHashKey,
+            );
+            if (next) {
+              merged = next;
+            }
+          });
+        return merged;
+      })
       .filter((row): row is StoredMessageValues => Boolean(row));
     const statusesApplied = await bulkUpsert(statusRows);
 
@@ -716,7 +876,7 @@ export async function ingestWhatsAppWebhook(
 
     return {
       inserted: messagesUpserted,
-      deduplicated: dedupedMessages.deduplicated + dedupedStatuses.deduplicated,
+      deduplicated: dedupedMessages.deduplicated + deduplicatedStatuses,
       statusesUpdated: statusesApplied,
     };
   } catch (error) {

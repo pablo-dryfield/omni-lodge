@@ -26,6 +26,7 @@ const messageModel = WhatsAppMessage as unknown as { findOne: jest.Mock };
 describe('WhatsApp delivery test controller', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    messageModel.findOne.mockReset();
     (getWhatsAppTestConfig as jest.Mock).mockReturnValue({
       recipient: '+48502484066',
       templateName: 'existing_template',
@@ -60,6 +61,47 @@ describe('WhatsApp delivery test controller', () => {
       messageId: 'wamid.1',
       status: 'delivered',
       statusUpdatedAt: '2026-09-27T14:00:00.000Z',
+      failure: null,
+    });
+  });
+
+  it('reports bounded provider failure diagnostics from the signed webhook', async () => {
+    messageModel.findOne.mockResolvedValue({
+      deliveryStatus: 'failed',
+      statusUpdatedAt: new Date('2026-09-27T14:00:00.000Z'),
+      deliveryErrorCode: '131026',
+      deliveryErrorTitle: 'Message undeliverable',
+      deliveryErrorDetails: 'The recipient could not receive this message.',
+    });
+    const res = response();
+    await getWhatsAppDeliveryTestStatus(
+      { params: { messageId: 'wamid.failed' } } as unknown as Request,
+      res as unknown as Response,
+    );
+    expect(res.json).toHaveBeenCalledWith({
+      messageId: 'wamid.failed',
+      status: 'failed',
+      statusUpdatedAt: '2026-09-27T14:00:00.000Z',
+      failure: {
+        code: '131026',
+        title: 'Message undeliverable',
+        details: 'The recipient could not receive this message.',
+      },
+    });
+  });
+
+  it('distinguishes a missing webhook status from Meta acceptance', async () => {
+    messageModel.findOne.mockResolvedValue(null);
+    const res = response();
+    await getWhatsAppDeliveryTestStatus(
+      { params: { messageId: 'wamid.pending' } } as unknown as Request,
+      res as unknown as Response,
+    );
+    expect(res.json).toHaveBeenCalledWith({
+      messageId: 'wamid.pending',
+      status: 'awaiting_webhook',
+      statusUpdatedAt: null,
+      failure: null,
     });
   });
 });
