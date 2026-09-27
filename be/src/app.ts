@@ -69,6 +69,7 @@ import storefrontBankTransferOrderRoutes from './routes/storefrontBankTransferOr
 import { storefrontStripeWebhook } from './controllers/storefrontWebhookController.js';
 import whatsappBriefRoutes from './routes/whatsappBriefRoutes.js';
 import whatsappAdminRoutes from './routes/whatsappAdminRoutes.js';
+import whatsappTestRoutes from './routes/whatsappTestRoutes.js';
 import {
   receiveWhatsAppWebhook,
   verifyWhatsAppWebhook,
@@ -367,6 +368,7 @@ app.use('/api/google-api', googleApiRoutes);
 app.use('/api/integrations', integrationRoutes);
 app.use('/api/integrations/whatsapp/brief', whatsappBriefRoutes);
 app.use('/api/integrations/whatsapp/admin', whatsappAdminRoutes);
+app.use('/api/integrations/whatsapp/test', whatsappTestRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/performance', performanceRoutes);
@@ -515,6 +517,5 @@ process.on('exit', (code) => {
 });
 
 void bootstrap();
-
 
 
