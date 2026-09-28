@@ -2,14 +2,14 @@ jest.mock('../../config/database.js', () => ({
   __esModule: true,
   default: { transaction: jest.fn() },
 }));
-jest.mock('../../models/ReviewArchive.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/ReviewArchive.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../../models/ReviewAssignment.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ReviewSyncRun.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ReviewManualCredit.js', () => ({
   __esModule: true,
-  default: { findByPk: jest.fn() },
+  default: { create: jest.fn(), findByPk: jest.fn() },
 }));
-jest.mock('../../models/ReviewDailySnapshot.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/ReviewDailySnapshot.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../../models/ReviewMonthLock.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../__mocks__/sequelizeModelStub', () => ({
   __esModule: true,
@@ -17,10 +17,15 @@ jest.mock('../../__mocks__/sequelizeModelStub', () => ({
 }));
 
 import ReviewManualCredit from '../../models/ReviewManualCredit';
-import { deleteManualReviewCredit, updateManualReviewCredit } from '../reviewArchiveController';
+import ReviewArchive from '../../models/ReviewArchive';
+import ReviewDailySnapshot from '../../models/ReviewDailySnapshot';
+import { createManualReviewCredit, deleteManualReviewCredit, getReviewTrends, updateManualReviewCredit } from '../reviewArchiveController';
 
 const findManualCredit = ReviewManualCredit.findByPk as jest.Mock;
+const createManualCredit = ReviewManualCredit.create as jest.Mock;
 const countUsers = jest.requireMock('../../__mocks__/sequelizeModelStub').default.count as jest.Mock;
+const findArchivedReviews = ReviewArchive.findAll as jest.Mock;
+const findDailySnapshots = ReviewDailySnapshot.findAll as jest.Mock;
 
 const createResponse = () => {
   const response = {
@@ -31,6 +36,77 @@ const createResponse = () => {
   response.status.mockReturnValue(response);
   return response;
 };
+
+describe('createManualReviewCredit', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('creates a no-name GetYourGuide entry without a user ID', async () => {
+    const credit = { id: 81 };
+    createManualCredit.mockResolvedValue(credit);
+    const response = createResponse();
+
+    await createManualReviewCredit(
+      {
+        body: {
+          category: 'no_name',
+          platform: 'GetYourGuide',
+          date: '2026-09-01',
+          credit: 1,
+          notes: 'Reviewer did not name a team member',
+        },
+        authContext: { id: 9 },
+      } as never,
+      response as never,
+    );
+
+    expect(countUsers).not.toHaveBeenCalled();
+    expect(createManualCredit).toHaveBeenCalledWith({
+      userId: null,
+      category: 'no_name',
+      platform: 'getyourguide',
+      date: '2026-09-01',
+      credit: 1,
+      notes: 'Reviewer did not name a team member',
+      createdBy: 9,
+    });
+    expect(response.status).toHaveBeenCalledWith(201);
+    expect(response.json).toHaveBeenCalledWith({ credit });
+  });
+});
+
+describe('getReviewTrends', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('shows an archive total when a platform has not completed a snapshot yet', async () => {
+    findDailySnapshots.mockResolvedValue([]);
+    findArchivedReviews.mockResolvedValue([
+      { platform: 'getyourguide' },
+      { platform: 'getyourguide' },
+    ]);
+    const response = createResponse();
+
+    await getReviewTrends(
+      { query: { platform: 'getyourguide', days: '90' } } as never,
+      response as never,
+    );
+
+    expect(findArchivedReviews).toHaveBeenCalledWith({
+      attributes: ['platform'],
+      where: { isDeleted: false, platform: 'getyourguide' },
+    });
+    expect(response.json).toHaveBeenCalledWith({
+      snapshots: [expect.objectContaining({
+        platform: 'getyourguide',
+        sourceTotalCount: null,
+        activeCount: 2,
+      })],
+    });
+  });
+});
 
 describe('deleteManualReviewCredit', () => {
   beforeEach(() => {
