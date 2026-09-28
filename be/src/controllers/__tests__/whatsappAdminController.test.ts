@@ -12,6 +12,24 @@ jest.mock('../../services/whatsappOutboundMessageService.js', () => ({
   listWhatsAppMessageTemplates: jest.fn(),
   sendWhatsAppTemplateMessage: jest.fn(),
 }));
+jest.mock('../../services/whatsappTemplateManagementService.js', () => ({
+  archiveManagedWhatsAppTemplates: jest.fn(),
+  createManagedWhatsAppTemplate: jest.fn(),
+  deleteManagedWhatsAppTemplate: jest.fn(),
+  getManagedWhatsAppTemplateEvents: jest.fn(),
+  listManagedWhatsAppTemplates: jest.fn(),
+  previewManagedWhatsAppTemplate: jest.fn(),
+  sendManagedWhatsAppTemplate: jest.fn(),
+  syncManagedWhatsAppTemplates: jest.fn(),
+  unarchiveManagedWhatsAppTemplates: jest.fn(),
+  unpauseManagedWhatsAppTemplate: jest.fn(),
+  updateManagedWhatsAppTemplate: jest.fn(),
+}));
+jest.mock('../../services/whatsappTemplateVariableService.js', () => ({
+  listWhatsAppTemplateVariables: jest.fn(() => []),
+  searchWhatsAppTemplateBookings: jest.fn(),
+  WhatsAppTemplateVariableError: class WhatsAppTemplateVariableError extends Error {},
+}));
 
 import bcrypt from 'bcryptjs';
 import type { Response } from 'express';
@@ -27,14 +45,20 @@ import {
   listWhatsAppMessageTemplates,
   sendWhatsAppTemplateMessage,
 } from '../../services/whatsappOutboundMessageService';
+import {
+  createManagedWhatsAppTemplate,
+  syncManagedWhatsAppTemplates,
+} from '../../services/whatsappTemplateManagementService';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
 import {
   completeWhatsAppEmbeddedSignupAttemptController,
+  createManagedWhatsAppTemplateController,
   createWhatsAppEmbeddedSignupAttemptController,
   getWhatsAppAdminStatusController,
   getWhatsAppMessageTemplatesController,
   repairWhatsAppWebhookSubscriptionController,
   sendWhatsAppTemplateMessageController,
+  syncManagedWhatsAppTemplatesController,
 } from '../whatsappAdminController';
 
 const response = () => ({
@@ -52,6 +76,8 @@ const mockStatus = getWhatsAppAdminStatus as jest.Mock;
 const mockRepairSubscription = repairWhatsAppWebhookSubscription as jest.Mock;
 const mockListTemplates = listWhatsAppMessageTemplates as jest.Mock;
 const mockSendTemplate = sendWhatsAppTemplateMessage as jest.Mock;
+const mockCreateManagedTemplate = createManagedWhatsAppTemplate as jest.Mock;
+const mockSyncManagedTemplates = syncManagedWhatsAppTemplates as jest.Mock;
 
 describe('WhatsApp admin controller', () => {
   beforeEach(() => {
@@ -328,5 +354,36 @@ describe('WhatsApp admin controller', () => {
       details: { code: 'META_TIMEOUT', ambiguous: true },
     }]);
     expect(JSON.stringify(res.json.mock.calls)).not.toContain('secret response material');
+  });
+
+  it('password-gates template synchronization and creation without forwarding the password', async () => {
+    const definition = {
+      name: 'booking_confirmation',
+      language: 'en_US',
+      category: 'UTILITY',
+      parameterFormat: 'NAMED',
+      components: [{ type: 'BODY', text: 'Hi {{guest_first_name}}' }],
+    };
+    const template = { metaTemplateId: '123456789', ...definition };
+    mockSyncManagedTemplates.mockResolvedValue([template]);
+    mockCreateManagedTemplate.mockResolvedValue(template);
+
+    const syncRes = response();
+    await syncManagedWhatsAppTemplatesController({
+      authContext: { id: 7, roleSlug: 'admin' },
+      body: { password: 'confirmed-password' },
+    } as unknown as AuthenticatedRequest, syncRes as unknown as Response);
+    expect(mockSyncManagedTemplates).toHaveBeenCalledWith(7);
+    expect(syncRes.json).toHaveBeenCalledWith({ templates: [template] });
+
+    const createRes = response();
+    await createManagedWhatsAppTemplateController({
+      authContext: { id: 7, roleSlug: 'admin' },
+      body: { password: 'confirmed-password', ...definition },
+    } as unknown as AuthenticatedRequest, createRes as unknown as Response);
+    expect(mockCreateManagedTemplate).toHaveBeenCalledWith(definition, 7);
+    expect(createRes.status).toHaveBeenCalledWith(201);
+    expect(createRes.json).toHaveBeenCalledWith({ template });
+    expect(JSON.stringify(mockCreateManagedTemplate.mock.calls)).not.toContain('confirmed-password');
   });
 });

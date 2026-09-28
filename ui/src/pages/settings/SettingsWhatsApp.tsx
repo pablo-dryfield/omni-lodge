@@ -25,6 +25,7 @@ import {
   IconRefresh,
   IconSend,
   IconShieldLock,
+  IconTemplate,
 } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
@@ -596,14 +597,25 @@ const SettingsWhatsApp = () => {
               explicitly authorize it below.
             </Text>
           </Stack>
-          <Button
-            variant="default"
-            leftSection={<IconRefresh size={16} />}
-            loading={statusQuery.isFetching}
-            onClick={() => void statusQuery.refetch()}
-          >
-            Refresh status
-          </Button>
+          <Group gap="sm">
+            <Button
+              component="a"
+              href="/settings/whatsapp/templates"
+              color="teal"
+              variant="light"
+              leftSection={<IconTemplate size={16} />}
+            >
+              Manage templates
+            </Button>
+            <Button
+              variant="default"
+              leftSection={<IconRefresh size={16} />}
+              loading={statusQuery.isFetching}
+              onClick={() => void statusQuery.refetch()}
+            >
+              Refresh status
+            </Button>
+          </Group>
         </Group>
 
         {statusQuery.isError ? (

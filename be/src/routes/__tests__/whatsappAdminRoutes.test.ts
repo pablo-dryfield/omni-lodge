@@ -18,8 +18,51 @@ jest.mock('../../middleware/authMiddleware.js', () => ({
   },
 }));
 jest.mock('../../controllers/whatsappAdminController.js', () => ({
+  archiveManagedWhatsAppTemplatesController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ templates: [] });
+  }),
+  createManagedWhatsAppTemplateController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.status(201).json({ template: { metaTemplateId: '123' } });
+  }),
+  deleteManagedWhatsAppTemplateController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ deleted: true });
+  }),
+  getManagedWhatsAppTemplateEventsController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ events: [] });
+  }),
   getWhatsAppAdminStatusController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
     res.json({ status: { connected: false } });
+  }),
+  getWhatsAppTemplateVariablesController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ variables: [] });
+  }),
+  listManagedWhatsAppTemplatesController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ templates: [] });
+  }),
+  previewManagedWhatsAppTemplateController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ preview: { body: 'Preview' } });
+  }),
+  searchWhatsAppTemplateBookingsController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ bookings: [] });
+  }),
+  sendManagedWhatsAppTemplateController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.status(202).json({ messageId: 'wamid.managed-message-id' });
+  }),
+  syncManagedWhatsAppTemplatesController: jest.fn((req: AuthenticatedRequest, res: Response) => {
+    if (req.body?.password === 'wrong-password') {
+      res.status(403).json([{ message: 'Password confirmation is required.' }]);
+      return;
+    }
+    res.json({ templates: [] });
+  }),
+  unarchiveManagedWhatsAppTemplatesController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ templates: [] });
+  }),
+  unpauseManagedWhatsAppTemplateController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ template: { metaTemplateId: '123' } });
+  }),
+  updateManagedWhatsAppTemplateController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
+    res.json({ template: { metaTemplateId: '123' } });
   }),
   createWhatsAppEmbeddedSignupAttemptController: jest.fn((_req: AuthenticatedRequest, res: Response) => {
     res.status(201).json({ attempt: { id: 'attempt-id' } });
@@ -186,6 +229,72 @@ describe('WhatsApp admin routes', () => {
       templates: [{ name: 'simple_notice', language: 'en_US', category: 'UTILITY' }],
     });
     expect(response.headers['cache-control']).toBe('no-store');
+  });
+
+  it('exposes the managed-template library, variables, booking search, and preview routes', async () => {
+    const app = buildApp();
+    const headers = { 'x-test-admin-id': '904' };
+
+    const [templates, variables, bookings, preview] = await Promise.all([
+      request(app).get(`${basePath}/templates`).set(headers),
+      request(app).get(`${basePath}/templates/variables`).set(headers),
+      request(app).post(`${basePath}/templates/bookings/search`).set(headers).send({ q: 'alex' }),
+      request(app).post(`${basePath}/templates/preview`).set(headers).send({
+        metaTemplateId: '123456789',
+        bookingId: 42,
+      }),
+    ]);
+
+    expect(templates.status).toBe(200);
+    expect(templates.body).toEqual({ templates: [] });
+    expect(variables.body).toEqual({ variables: [] });
+    expect(bookings.body).toEqual({ bookings: [] });
+    expect(preview.body).toEqual({ preview: { body: 'Preview' } });
+  });
+
+  it('strictly validates password-gated managed-template writes', async () => {
+    const app = buildApp();
+    const path = `${basePath}/templates/sync`;
+
+    const missingPassword = await request(app)
+      .post(path)
+      .set('x-test-admin-id', '905')
+      .send({});
+    const accepted = await request(app)
+      .post(path)
+      .set('x-test-admin-id', '905')
+      .send({ password: 'confirmed-password' });
+
+    expect(missingPassword.status).toBe(400);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ templates: [] });
+  });
+
+  it('strictly rate-limits password confirmation failures by administrator account', async () => {
+    const app = buildApp();
+    const sync = (adminId: number, password: string) => request(app)
+      .post(`${basePath}/templates/sync`)
+      .set('x-test-admin-id', String(adminId))
+      .send({ password });
+
+    const legitimateResponses = [];
+    for (let index = 0; index < 6; index += 1) {
+      legitimateResponses.push(await sync(906, 'confirmed-password'));
+    }
+    expect(legitimateResponses.every((response) => response.status === 200)).toBe(true);
+
+    const failures = [];
+    for (let index = 0; index < 6; index += 1) {
+      failures.push(await sync(907, 'wrong-password'));
+    }
+    const differentAdmin = await sync(908, 'wrong-password');
+
+    expect(failures.slice(0, 5).every((response) => response.status === 403)).toBe(true);
+    expect(failures[5]?.status).toBe(429);
+    expect(failures[5]?.body).toEqual([{
+      message: 'Too many password confirmation failures. Try again later.',
+    }]);
+    expect(differentAdmin.status).toBe(403);
   });
 
   it.each([

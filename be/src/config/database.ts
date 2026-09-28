@@ -74,6 +74,9 @@ import WhatsAppMessage from "../models/WhatsAppMessage.js";
 import WhatsAppSourceState from "../models/WhatsAppSourceState.js";
 import WhatsAppWebhookInbox from "../models/WhatsAppWebhookInbox.js";
 import WhatsAppEmbeddedSignupAttempt from "../models/WhatsAppEmbeddedSignupAttempt.js";
+import WhatsAppTemplate from "../models/WhatsAppTemplate.js";
+import WhatsAppTemplateEvent from "../models/WhatsAppTemplateEvent.js";
+import WhatsAppTemplateSend from "../models/WhatsAppTemplateSend.js";
 import ConfigKey from "../models/ConfigKey.js";
 import ConfigValue from "../models/ConfigValue.js";
 import ConfigHistory from "../models/ConfigHistory.js";
@@ -193,7 +196,7 @@ const sequelize = new Sequelize({
     // Sequelize may inline bind values in diagnostic SQL. WhatsApp rows contain
     // short-lived customer content, so never retain those statements in the
     // longer-lived query diagnostics buffer.
-    if (/\bwhatsapp_(?:messages|source_state|webhook_inbox)\b/i.test(sql)) {
+    if (/\bwhatsapp_(?:messages|source_state|webhook_inbox|templates|template_events|template_sends)\b/i.test(sql)) {
       return;
     }
     queryDiagnosticsService.recordQuery(sql, timing);
@@ -326,6 +329,9 @@ const sequelize = new Sequelize({
     WhatsAppSourceState,
     WhatsAppWebhookInbox,
     WhatsAppEmbeddedSignupAttempt,
+    WhatsAppTemplate,
+    WhatsAppTemplateEvent,
+    WhatsAppTemplateSend,
     ConfigKey,
     ConfigValue,
     ConfigHistory,

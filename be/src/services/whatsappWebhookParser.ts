@@ -6,8 +6,10 @@ import type {
   NormalizedWhatsAppHistorySyncEvent,
   NormalizedWhatsAppMessageEvent,
   NormalizedWhatsAppStatusEvent,
+  NormalizedWhatsAppTemplateEvent,
   NormalizedWhatsAppWebhookEvent,
   WhatsAppMessageDirection,
+  WhatsAppTemplateWebhookSource,
   WhatsAppWebhookBatch,
   WhatsAppWebhookParserOptions,
   WhatsAppWebhookSource,
@@ -62,6 +64,14 @@ const nonEmptyString = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : null;
+};
+
+const providerId = (value: unknown): string | null => {
+  const stringValue = nonEmptyString(value);
+  if (stringValue && /^\d{1,64}$/.test(stringValue)) return stringValue;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? String(value)
+    : null;
 };
 
 const contentString = (value: unknown): string | null =>
@@ -520,7 +530,11 @@ const parseMessageEchoesChange = (
   return events;
 };
 
-type SupportedWebhookField = WhatsAppWebhookSource | 'account_update' | 'smb_app_state_sync';
+type SupportedWebhookField =
+  | WhatsAppWebhookSource
+  | WhatsAppTemplateWebhookSource
+  | 'account_update'
+  | 'smb_app_state_sync';
 
 const supportedField = (
   value: string | null,
@@ -529,7 +543,112 @@ const supportedField = (
   || value === 'history'
   || value === 'smb_message_echoes'
   || value === 'smb_app_state_sync'
-  || value === 'account_update';
+  || value === 'account_update'
+  || value === 'message_template_status_update'
+  || value === 'message_template_quality_update'
+  || value === 'message_template_components_update'
+  || value === 'template_category_update';
+
+const TEMPLATE_WEBHOOK_FIELDS = new Set<WhatsAppTemplateWebhookSource>([
+  'message_template_status_update',
+  'message_template_quality_update',
+  'message_template_components_update',
+  'template_category_update',
+]);
+
+const isTemplateWebhookField = (value: SupportedWebhookField): value is WhatsAppTemplateWebhookSource =>
+  TEMPLATE_WEBHOOK_FIELDS.has(value as WhatsAppTemplateWebhookSource);
+
+const safeWebhookDetails = (value: UnknownRecord): Record<string, unknown> => {
+  const allowedKeys = [
+    'event',
+    'reason',
+    'reason_info',
+    'recommendation_info',
+    'title',
+    'description',
+    'disable_date',
+    'correct_category',
+    'current_category',
+    'new_category',
+    'previous_category',
+    'category_update_timestamp',
+    'new_quality_score',
+    'previous_quality_score',
+  ] as const;
+  const details: Record<string, unknown> = {};
+  for (const key of allowedKeys) {
+    const candidate = value[key];
+    if (typeof candidate === 'string') {
+      details[key] = contentString(candidate);
+    } else if (
+      (typeof candidate === 'number' && Number.isFinite(candidate))
+      || typeof candidate === 'boolean'
+      || candidate === null
+    ) details[key] = candidate;
+  }
+  const rejectionInfo = nestedRecord(value, 'rejection_info');
+  if (rejectionInfo) {
+    const nestedReason = contentString(rejectionInfo.reason);
+    const nestedRecommendation = contentString(rejectionInfo.recommendation);
+    if (details.reason_info === undefined && nestedReason !== null) {
+      details.reason_info = nestedReason;
+    }
+    if (details.recommendation_info === undefined && nestedRecommendation !== null) {
+      details.recommendation_info = nestedRecommendation;
+    }
+  }
+  return details;
+};
+
+const parseTemplateChange = (
+  field: WhatsAppTemplateWebhookSource,
+  value: UnknownRecord,
+  wabaId: string,
+  entryTimestamp: unknown,
+): NormalizedWhatsAppTemplateEvent[] => {
+  const templateId = providerId(value.message_template_id)
+    ?? providerId(value.template_id)
+    ?? providerId(value.id);
+  if (!templateId) return [];
+  const rawTimestamp = value.timestamp
+    ?? value.webhook_trigger_timestamp
+    ?? value.category_update_timestamp
+    ?? entryTimestamp;
+  const occurredAt = parseTimestamp(rawTimestamp) ?? new Date();
+  const event = nonEmptyString(value.event);
+  const qualityValue = nonEmptyString(value.new_quality_score);
+  const categoryValue = nonEmptyString(value.new_category)
+    ?? nonEmptyString(value.correct_category)
+    ?? nonEmptyString(value.category);
+  return [{
+    kind: 'template',
+    source: field,
+    wabaId,
+    templateId,
+    templateName: nonEmptyString(value.message_template_name)
+      ?? nonEmptyString(value.template_name)
+      ?? nonEmptyString(value.name),
+    language: nonEmptyString(value.message_template_language)
+      ?? nonEmptyString(value.message_template_language_and_locale_code)
+      ?? nonEmptyString(value.template_language)
+      ?? nonEmptyString(value.language),
+    event,
+    value: field === 'message_template_quality_update'
+      ? qualityValue
+      : field === 'template_category_update'
+        ? categoryValue
+        : event,
+    previousValue: field === 'message_template_quality_update'
+      ? nonEmptyString(value.previous_quality_score)
+      : field === 'template_category_update'
+        ? nonEmptyString(value.previous_category) ?? nonEmptyString(value.current_category)
+        : null,
+    category: nonEmptyString(value.message_template_category) ?? categoryValue,
+    occurredAt,
+    details: safeWebhookDetails(value),
+  }];
+};
 
 const parseAccountUpdateChange = (
   value: UnknownRecord,
@@ -659,6 +778,10 @@ export const parseWhatsAppWebhookPayload = (
         continue;
       }
       validateEntryWabaScope(wabaId, options);
+      if (isTemplateWebhookField(field)) {
+        events.push(...parseTemplateChange(field, value, wabaId, entry.time));
+        continue;
+      }
       const phoneNumberId = validateChangeScope(value, options);
 
       if (field === 'smb_app_state_sync') {

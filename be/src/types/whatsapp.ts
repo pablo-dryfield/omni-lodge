@@ -56,11 +56,33 @@ export interface NormalizedWhatsAppAccountStateEvent {
   unavailable: boolean;
 }
 
+export type WhatsAppTemplateWebhookSource =
+  | 'message_template_status_update'
+  | 'message_template_quality_update'
+  | 'message_template_components_update'
+  | 'template_category_update';
+
+export interface NormalizedWhatsAppTemplateEvent {
+  kind: 'template';
+  source: WhatsAppTemplateWebhookSource;
+  wabaId: string;
+  templateId: string;
+  templateName: string | null;
+  language: string | null;
+  event: string | null;
+  value: string | null;
+  previousValue: string | null;
+  category: string | null;
+  occurredAt: Date;
+  details: Record<string, unknown>;
+}
+
 export type NormalizedWhatsAppWebhookEvent =
   | NormalizedWhatsAppMessageEvent
   | NormalizedWhatsAppStatusEvent
   | NormalizedWhatsAppHistorySyncEvent
-  | NormalizedWhatsAppAccountStateEvent;
+  | NormalizedWhatsAppAccountStateEvent
+  | NormalizedWhatsAppTemplateEvent;
 
 export interface WhatsAppWebhookBatch {
   events: NormalizedWhatsAppWebhookEvent[];

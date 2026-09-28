@@ -73,6 +73,7 @@ const SettingsDbBackups = lazy(() => import("../../pages/settings/SettingsDbBack
 const SettingsHomeExperience = lazy(() => import("../../pages/settings/SettingsHomeExperience"));
 const SettingsControlPanel = lazy(() => import("../../pages/settings/SettingsControlPanel"));
 const SettingsWhatsApp = lazy(() => import("../../pages/settings/SettingsWhatsApp"));
+const SettingsWhatsAppTemplates = lazy(() => import("../../pages/settings/SettingsWhatsAppTemplates"));
 const SettingsEmailPreviews = lazy(() => import("../../pages/settings/SettingsEmailPreviews"));
 const SettingsGoogleApi = lazy(() => import("../../pages/settings/SettingsGoogleApi"));
 const SettingsMaintenance = lazy(() => import("../../pages/settings/SettingsMaintenance"));
@@ -214,6 +215,7 @@ const Routes = () => {
           <Route path="home-experience" element={<SettingsHomeExperience />} />
           <Route path="control-panel" element={<SettingsControlPanel />} />
           <Route path="whatsapp" element={<SettingsWhatsApp />} />
+          <Route path="whatsapp/templates" element={<SettingsWhatsAppTemplates />} />
           <Route path="email-previews" element={<SettingsEmailPreviews />} />
           <Route path="google-api" element={<SettingsGoogleApi />} />
           <Route path="maintenance" element={<SettingsMaintenance />} />

@@ -12,11 +12,16 @@ import type {
   NormalizedWhatsAppWebhookEvent,
   WhatsAppWebhookBatch,
 } from '../types/whatsapp.js';
+import {
+  ingestWhatsAppTemplateEvents,
+  updateWhatsAppTemplateSendStatuses,
+} from './whatsappTemplateManagementService.js';
 
 type NormalizedMessageEvent = Extract<NormalizedWhatsAppWebhookEvent, { kind: 'message' }>;
 type NormalizedStatusEvent = Extract<NormalizedWhatsAppWebhookEvent, { kind: 'status' }>;
 type NormalizedHistorySyncEvent = Extract<NormalizedWhatsAppWebhookEvent, { kind: 'history_sync' }>;
 type NormalizedAccountStateEvent = Extract<NormalizedWhatsAppWebhookEvent, { kind: 'account_state' }>;
+type NormalizedTemplateEvent = Extract<NormalizedWhatsAppWebhookEvent, { kind: 'template' }>;
 
 export const WHATSAPP_SOURCE_STATE_ID = 1;
 export const WHATSAPP_MAX_RETENTION_DAYS = 7;
@@ -685,6 +690,10 @@ export async function ingestWhatsAppWebhook(
   const accountStateEvents = batch.events.filter(
     (event): event is NormalizedAccountStateEvent => event.kind === 'account_state',
   );
+  const templateEvents = batch.events.filter(
+    (event): event is NormalizedTemplateEvent =>
+      event.kind === 'template' && validDate(event.occurredAt),
+  );
   const validEvents = batch.events.filter(
     (event): event is NormalizedMessageEvent | NormalizedStatusEvent =>
       (event.kind === 'message' || event.kind === 'status')
@@ -769,6 +778,12 @@ export async function ingestWhatsAppWebhook(
       })
       .filter((row): row is StoredMessageValues => Boolean(row));
     const statusesApplied = await bulkUpsert(statusRows);
+    if (templateEvents.length > 0) {
+      await ingestWhatsAppTemplateEvents(templateEvents);
+    }
+    if (validStatusEvents.length > 0) {
+      await updateWhatsAppTemplateSendStatuses(validStatusEvents);
+    }
 
     const latestMessageAt = validEvents.reduce<Date | null>(
       (latest, event) =>

@@ -2,12 +2,25 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import rateLimit from 'express-rate-limit';
 import { body, param, validationResult } from 'express-validator';
 import {
+  archiveManagedWhatsAppTemplatesController,
   completeWhatsAppEmbeddedSignupAttemptController,
+  createManagedWhatsAppTemplateController,
   createWhatsAppEmbeddedSignupAttemptController,
+  deleteManagedWhatsAppTemplateController,
+  getManagedWhatsAppTemplateEventsController,
   getWhatsAppAdminStatusController,
   getWhatsAppMessageTemplatesController,
+  getWhatsAppTemplateVariablesController,
+  listManagedWhatsAppTemplatesController,
+  previewManagedWhatsAppTemplateController,
   repairWhatsAppWebhookSubscriptionController,
+  searchWhatsAppTemplateBookingsController,
+  sendManagedWhatsAppTemplateController,
   sendWhatsAppTemplateMessageController,
+  syncManagedWhatsAppTemplatesController,
+  unarchiveManagedWhatsAppTemplatesController,
+  unpauseManagedWhatsAppTemplateController,
+  updateManagedWhatsAppTemplateController,
 } from '../controllers/whatsappAdminController.js';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { requireRoles } from '../middleware/authorizationMiddleware.js';
@@ -18,6 +31,11 @@ const router = Router();
 const adminRateLimitKey = (req: Request): string => {
   const adminId = (req as AuthenticatedRequest).authContext?.id;
   return adminId ? `admin:${adminId}:ip:${req.ip}` : `ip:${req.ip}`;
+};
+
+const adminReauthenticationRateLimitKey = (req: Request): string => {
+  const adminId = (req as AuthenticatedRequest).authContext?.id;
+  return adminId ? `admin:${adminId}` : `ip:${req.ip}`;
 };
 
 const attemptLimiter = rateLimit({
@@ -39,12 +57,35 @@ const completionLimiter = rateLimit({
 });
 
 const outboundMessageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: adminRateLimitKey,
+  message: [{ message: 'Too many WhatsApp message attempts. Try again in a minute.' }],
+});
+
+const templateMutationLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: adminRateLimitKey,
+  message: [{ message: 'Too many WhatsApp template changes. Try again in a minute.' }],
+});
+
+const reauthenticationFailureLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: adminRateLimitKey,
-  message: [{ message: 'Too many WhatsApp message attempts. Try again later.' }],
+  keyGenerator: adminReauthenticationRateLimitKey,
+  // Only retain password-confirmation failures in the counter. Validation,
+  // provider, and successful responses must not consume the administrator's
+  // small re-authentication budget or reduce legitimate send throughput.
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req, res) => res.statusCode !== 403,
+  message: [{ message: 'Too many password confirmation failures. Try again later.' }],
 });
 
 const subscriptionRepairLimiter = rateLimit({
@@ -76,8 +117,124 @@ router.use((_req, res, next) => {
 
 router.get('/status', getWhatsAppAdminStatusController);
 router.get('/messages/templates', getWhatsAppMessageTemplatesController);
+router.get('/templates', listManagedWhatsAppTemplatesController);
+router.get('/templates/variables', getWhatsAppTemplateVariablesController);
+router.post(
+  '/templates/bookings/search',
+  body('q').optional().isString().isLength({ max: 128 }),
+  validate,
+  searchWhatsAppTemplateBookingsController,
+);
+router.post(
+  '/templates/sync',
+  reauthenticationFailureLimiter,
+  templateMutationLimiter,
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  validate,
+  syncManagedWhatsAppTemplatesController,
+);
+router.post(
+  '/templates/preview',
+  body('metaTemplateId').optional().isString().matches(/^\d{1,64}$/),
+  body('definition').optional().isObject({ strict: true }),
+  body('bookingId').optional({ nullable: true }).isInt({ min: 1 }),
+  body().custom((value) => {
+    if (!value?.metaTemplateId && !value?.definition) {
+      throw new Error('A template ID or definition is required.');
+    }
+    return true;
+  }),
+  validate,
+  previewManagedWhatsAppTemplateController,
+);
+router.post(
+  '/templates/archive',
+  reauthenticationFailureLimiter,
+  templateMutationLimiter,
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  body('templateIds').isArray({ min: 1, max: 100 }),
+  body('templateIds.*').isString().matches(/^\d{1,64}$/),
+  validate,
+  archiveManagedWhatsAppTemplatesController,
+);
+router.post(
+  '/templates/unarchive',
+  reauthenticationFailureLimiter,
+  templateMutationLimiter,
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  body('templateIds').isArray({ min: 1, max: 100 }),
+  body('templateIds.*').isString().matches(/^\d{1,64}$/),
+  validate,
+  unarchiveManagedWhatsAppTemplatesController,
+);
+router.post(
+  '/templates',
+  reauthenticationFailureLimiter,
+  templateMutationLimiter,
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  body('name').isString().matches(/^[a-z0-9_]{1,512}$/),
+  body('language').isString().matches(/^[a-z]{2,3}(?:_[A-Z]{2})?$/),
+  body('category').isIn(['UTILITY', 'MARKETING', 'AUTHENTICATION']),
+  body('parameterFormat').optional().isIn(['NAMED', 'POSITIONAL']),
+  body('messageSendTtlSeconds').optional({ nullable: true }).isInt({ min: -1, max: 2_592_000 }),
+  body('components').isArray({ min: 1, max: 50 }),
+  body('bookingBindings').optional().isObject({ strict: true }),
+  validate,
+  createManagedWhatsAppTemplateController,
+);
+router.put(
+  '/templates/:id',
+  reauthenticationFailureLimiter,
+  templateMutationLimiter,
+  param('id').isString().matches(/^\d{1,64}$/),
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  body('category').isIn(['UTILITY', 'MARKETING', 'AUTHENTICATION']),
+  body('parameterFormat').optional().isIn(['NAMED', 'POSITIONAL']),
+  body('messageSendTtlSeconds').optional({ nullable: true }).isInt({ min: -1, max: 2_592_000 }),
+  body('components').isArray({ min: 1, max: 50 }),
+  body('bookingBindings').optional().isObject({ strict: true }),
+  validate,
+  updateManagedWhatsAppTemplateController,
+);
+router.delete(
+  '/templates/:id',
+  reauthenticationFailureLimiter,
+  templateMutationLimiter,
+  param('id').isString().matches(/^\d{1,64}$/),
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  body('name').isString().matches(/^[a-z0-9_]{1,512}$/),
+  validate,
+  deleteManagedWhatsAppTemplateController,
+);
+router.post(
+  '/templates/:id/unpause',
+  reauthenticationFailureLimiter,
+  templateMutationLimiter,
+  param('id').isString().matches(/^\d{1,64}$/),
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  validate,
+  unpauseManagedWhatsAppTemplateController,
+);
+router.get(
+  '/templates/:id/events',
+  param('id').isString().matches(/^\d{1,64}$/),
+  validate,
+  getManagedWhatsAppTemplateEventsController,
+);
+router.post(
+  '/templates/:id/send',
+  reauthenticationFailureLimiter,
+  outboundMessageLimiter,
+  param('id').isString().matches(/^\d{1,64}$/),
+  body('password').isString().isLength({ min: 1, max: 512 }),
+  body('bookingId').isInt({ min: 1 }),
+  body('recipient').optional().isString().matches(/^\+[1-9]\d{7,14}$/),
+  validate,
+  sendManagedWhatsAppTemplateController,
+);
 router.post(
   '/webhook-subscription/repair',
+  reauthenticationFailureLimiter,
   subscriptionRepairLimiter,
   body('password').isString().isLength({ min: 1, max: 512 }),
   validate,
@@ -85,6 +242,7 @@ router.post(
 );
 router.post(
   '/messages/template',
+  reauthenticationFailureLimiter,
   outboundMessageLimiter,
   body('password').isString().isLength({ min: 1, max: 512 }),
   body('recipient').isString().matches(/^\+[1-9]\d{7,14}$/),
@@ -95,6 +253,7 @@ router.post(
 );
 router.post(
   '/embedded-signup/attempts',
+  reauthenticationFailureLimiter,
   attemptLimiter,
   body('password').isString().isLength({ min: 1, max: 512 }),
   body('reconnectAfterOffboarding').optional().isBoolean({ strict: true }),

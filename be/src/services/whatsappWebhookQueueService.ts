@@ -93,6 +93,13 @@ const restoreBatchDates = (value: unknown): WhatsAppWebhookBatch => {
     if (record.kind === 'history_sync' || record.kind === 'account_state') {
       return record as unknown as NormalizedWhatsAppWebhookEvent;
     }
+    if (record.kind === 'template') {
+      const occurredAt = new Date(String(record.occurredAt ?? ''));
+      if (!Number.isFinite(occurredAt.getTime())) {
+        throw new Error('Invalid encrypted WhatsApp template webhook timestamp');
+      }
+      return { ...record, occurredAt } as unknown as NormalizedWhatsAppWebhookEvent;
+    }
     if (record.kind !== 'message' && record.kind !== 'status') {
       throw new Error('Invalid encrypted WhatsApp webhook event kind');
     }

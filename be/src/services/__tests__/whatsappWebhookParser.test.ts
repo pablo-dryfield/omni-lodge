@@ -790,6 +790,133 @@ describe('parseWhatsAppWebhookPayload', () => {
     ).toEqual({ events: [] });
   });
 
+  it('normalizes account-scoped template status, quality, and category updates', () => {
+    const result = parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: options.expectedWabaId,
+        changes: [
+          {
+            field: 'message_template_status_update',
+            value: {
+              message_template_id: '123456789',
+              message_template_name: 'booking_reminder',
+              message_template_language: 'en_US',
+              event: 'REJECTED',
+              reason: 'INCORRECT_CATEGORY',
+              reason_info: 'Use utility for an existing booking.',
+              recommendation_info: 'Change the category and resubmit.',
+              timestamp: 1_787_808_600,
+              access_token: 'must-not-be-retained',
+            },
+          },
+          {
+            field: 'message_template_quality_update',
+            value: {
+              message_template_id: '123456789',
+              new_quality_score: 'YELLOW',
+              previous_quality_score: 'GREEN',
+              timestamp: '1787808601',
+            },
+          },
+          {
+            field: 'template_category_update',
+            value: {
+              message_template_id: '123456789',
+              current_category: 'MARKETING',
+              new_category: 'UTILITY',
+              category_update_timestamp: 1_787_808_602,
+            },
+          },
+        ],
+      }],
+    }, options);
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        kind: 'template',
+        source: 'message_template_status_update',
+        wabaId: options.expectedWabaId,
+        templateId: '123456789',
+        templateName: 'booking_reminder',
+        language: 'en_US',
+        value: 'REJECTED',
+        occurredAt: new Date('2026-08-27T05:30:00.000Z'),
+        details: expect.objectContaining({ reason: 'INCORRECT_CATEGORY' }),
+      }),
+      expect.objectContaining({
+        source: 'message_template_quality_update',
+        value: 'YELLOW',
+        previousValue: 'GREEN',
+      }),
+      expect.objectContaining({
+        source: 'template_category_update',
+        value: 'UTILITY',
+        previousValue: 'MARKETING',
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain('must-not-be-retained');
+  });
+
+  it('accepts numeric template ids, uses the entry timestamp, and normalizes nested rejection guidance', () => {
+    const entryTimestamp = 1_787_808_603;
+    const result = parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: options.expectedWabaId,
+        time: entryTimestamp,
+        changes: [{
+          field: 'message_template_status_update',
+          value: {
+            message_template_id: 1_689_556_908_129_835,
+            event: 'REJECTED',
+            reason: 'POLICY_VIOLATION',
+            rejection_info: {
+              reason: 'The wording does not match the selected category.',
+              recommendation: 'Use transactional wording and resubmit.',
+              access_token: 'must-not-be-retained',
+            },
+          },
+        }],
+      }],
+    }, options);
+
+    expect(result).toEqual([expect.objectContaining({
+      templateId: '1689556908129835',
+      occurredAt: new Date(entryTimestamp * 1_000),
+      details: expect.objectContaining({
+        reason: 'POLICY_VIOLATION',
+        reason_info: 'The wording does not match the selected category.',
+        recommendation_info: 'Use transactional wording and resubmit.',
+      }),
+    })]);
+    expect(JSON.stringify(result)).not.toContain('must-not-be-retained');
+  });
+
+  it('does not require phone metadata for template updates and still rejects another WABA', () => {
+    const change = {
+      field: 'message_template_components_update',
+      value: {
+        message_template_id: '123456789',
+        event: 'EDITED',
+      },
+    };
+    expect(parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{ id: options.expectedWabaId, changes: [change] }],
+    }, options)).toEqual([
+      expect.objectContaining({
+        kind: 'template',
+        source: 'message_template_components_update',
+        templateId: '123456789',
+      }),
+    ]);
+    expect(() => parseWhatsAppWebhookPayload({
+      object: 'whatsapp_business_account',
+      entry: [{ id: 'another-waba', changes: [change] }],
+    }, options)).toThrow('unexpected WABA id');
+  });
+
   it('rejects the wrong webhook object, WABA, or phone number id', () => {
     expect(() => parseWhatsAppWebhookPayload({ object: 'page' }, options)).toThrow(
       WhatsAppWebhookValidationError,
