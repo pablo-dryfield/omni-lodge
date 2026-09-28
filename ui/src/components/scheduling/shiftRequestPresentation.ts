@@ -20,6 +20,9 @@ export const getRoleBundleSummary = (request: ShiftRequest): string | null => {
   if (bundle.salaryPolicy === "takeover_split") {
     return `${roles}: task plans stay with their original owners and both affected Assistant Manager salary days split 50/50.`;
   }
+  if (bundle.salaryPolicy === "operational_split") {
+    return `${roles}: Manager and task assignments stay unchanged; the Manager/task owner and Leader/Guide partner split both affected Assistant Manager salary days 50/50.`;
+  }
   if (bundle.taskPolicy === "reassign_to_new_manager") {
     return `${roles}: full handover; task plans move to the new Managers and salary is not split.`;
   }
