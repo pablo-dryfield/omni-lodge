@@ -33,7 +33,8 @@ describe('Natalie and Jamie historical Manager swap reconciliation', () => {
     expect(String(sql)).toContain("'salaryPolicy', 'takeover_split'");
     expect(String(sql)).toContain("'taskPolicy', 'retain_original_owner'");
     expect(String(sql)).toContain('SET user_id = request_row.partner_id');
-    expect(options.replacements.reconciliationKey).toBe('natalie-jamie-2026-09-24-27-manager-only');
+    expect(String(sql)).toContain("'reconciliationKey', 'natalie-jamie-2026-09-24-27-manager-only'");
+    expect(options.replacements).toBeUndefined();
     expect(transaction.commit).toHaveBeenCalledTimes(1);
     expect(transaction.rollback).not.toHaveBeenCalled();
   });

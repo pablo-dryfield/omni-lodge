@@ -29,10 +29,13 @@ const run = async (context: QueryInterface, direction: 'up' | 'down'): Promise<v
              LIMIT 1
              FOR UPDATE;
 
+             -- Fresh databases do not contain this production-only historical
+             -- request. Keep the migration portable while still validating the
+             -- assignment state when the target request does exist.
              IF request_row.id IS NULL THEN
-               RAISE EXCEPTION 'Approved Natalie/Jamie manager swap for 2026-09-24 and 2026-09-27 was not found';
+               RETURN;
              END IF;
-             IF request_row.assignment_snapshot->'roleBundle'->>'reconciliationKey' = :reconciliationKey THEN
+             IF request_row.assignment_snapshot->'roleBundle'->>'reconciliationKey' = '${RECONCILIATION_KEY}' THEN
                RETURN;
              END IF;
 
@@ -84,7 +87,7 @@ const run = async (context: QueryInterface, direction: 'up' | 'down'): Promise<v
                      'roles', jsonb_build_array('manager'),
                      'taskPolicy', 'retain_original_owner',
                      'salaryPolicy', 'takeover_split',
-                     'reconciliationKey', :reconciliationKey,
+                     'reconciliationKey', '${RECONCILIATION_KEY}',
                      'transfers', jsonb_build_array(jsonb_build_object(
                        'role', 'manager',
                        'fromAssignment', original_from,
@@ -103,7 +106,7 @@ const run = async (context: QueryInterface, direction: 'up' | 'down'): Promise<v
            BEGIN
              SELECT * INTO request_row
              FROM swap_requests
-             WHERE assignment_snapshot->'roleBundle'->>'reconciliationKey' = :reconciliationKey
+             WHERE assignment_snapshot->'roleBundle'->>'reconciliationKey' = '${RECONCILIATION_KEY}'
              LIMIT 1
              FOR UPDATE;
              IF request_row.id IS NULL THEN
@@ -126,7 +129,7 @@ const run = async (context: QueryInterface, direction: 'up' | 'down'): Promise<v
              WHERE id = request_row.id;
            END
            $reconcile$;`,
-      { replacements: { reconciliationKey: RECONCILIATION_KEY }, transaction },
+      { transaction },
     );
     await transaction.commit();
   } catch (error) {
