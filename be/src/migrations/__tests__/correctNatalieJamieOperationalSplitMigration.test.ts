@@ -22,6 +22,8 @@ describe('Natalie and Jamie operational salary split correction', () => {
     expect(snapshotSql).toContain('operational_split');
     expect(snapshotSql).toContain('2026-09-24');
     expect(snapshotSql).toContain('2026-09-27');
+    expect(snapshotSql).toContain("concat_ws(' '");
+    expect(snapshotSql).not.toContain(">>'firstName'\n                   ||");
     expect(test.query).toHaveBeenNthCalledWith(1, expect.any(String), {
       transaction: test.transaction,
     });

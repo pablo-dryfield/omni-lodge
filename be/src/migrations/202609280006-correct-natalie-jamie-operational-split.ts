@@ -45,15 +45,19 @@ const run = async (context: QueryInterface, direction: 'up' | 'down'): Promise<v
                  'date', '2026-09-24',
                  'salaryRecipientUserId', requester_id,
                  'shareRecipientUserId', partner_id,
-                 'shareRecipientName', assignment_snapshot->'toAssignment'->'assignee'->>'firstName'
-                   || ' ' || assignment_snapshot->'toAssignment'->'assignee'->>'lastName'
+                 'shareRecipientName', concat_ws(' ',
+                   assignment_snapshot->'toAssignment'->'assignee'->>'firstName',
+                   assignment_snapshot->'toAssignment'->'assignee'->>'lastName'
+                 )
                ),
                jsonb_build_object(
                  'date', '2026-09-27',
                  'salaryRecipientUserId', partner_id,
                  'shareRecipientUserId', requester_id,
-                 'shareRecipientName', assignment_snapshot->'assignee'->>'firstName'
-                   || ' ' || assignment_snapshot->'assignee'->>'lastName'
+                 'shareRecipientName', concat_ws(' ',
+                   assignment_snapshot->'assignee'->>'firstName',
+                   assignment_snapshot->'assignee'->>'lastName'
+                 )
                )
              ), TRUE
            ), "updatedAt" = NOW()
