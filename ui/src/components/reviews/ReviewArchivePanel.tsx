@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  FileButton,
   Group,
   MultiSelect,
   Pagination,
@@ -25,6 +26,7 @@ import {
   IconSearch,
   IconStarFilled,
   IconTrash,
+  IconUpload,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import axiosInstance from '../../utils/axiosInstance';
@@ -33,6 +35,7 @@ import {
   REVIEW_CREDIT_TIMEZONE,
   reviewMonthInWarsaw,
 } from '../../utils/reviewCreditMonth';
+import { parseGetYourGuideReviewHtml } from '../../utils/getYourGuideReviewHtml';
 
 type Platform = 'google' | 'tripadvisor' | 'airbnb' | 'getyourguide';
 type User = { id: number; firstName: string; lastName: string; username: string };
@@ -101,6 +104,8 @@ export default function ReviewArchivePanel({
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [sourceStats, setSourceStats] = useState<{ totalCount?: number; averageRating?: number }>({});
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState('');
   const fastSyncedPlatform = useRef<string | null>(null);
 
   const load = useCallback(async () => {
@@ -241,6 +246,37 @@ export default function ReviewArchivePanel({
     }
   };
 
+  const importSavedHtml = async (file: File | null) => {
+    if (!file) return;
+    setImporting(true);
+    setError('');
+    setImportMessage('');
+    try {
+      const importedReviews = parseGetYourGuideReviewHtml(await file.text());
+      if (!importedReviews.length) {
+        throw new Error('No GetYourGuide review cards were found in this HTML file.');
+      }
+      const started = await axiosInstance.post('/reviews/archive/sync/fast/start', { platform });
+      const runId = started.data.run.id;
+      for (let index = 0; index < importedReviews.length; index += 25) {
+        await axiosInstance.post(`/reviews/archive/sync/fast/${runId}/page`, {
+          reviews: importedReviews.slice(index, index + 25),
+        });
+      }
+      await axiosInstance.post(`/reviews/archive/sync/fast/${runId}/complete`, {
+        sourceTotalCount: importedReviews.length,
+      });
+      setSourceStats((current) => ({ ...current, totalCount: importedReviews.length }));
+      setPage(1);
+      await load();
+      setImportMessage(`Imported ${importedReviews.length} GetYourGuide reviews. Existing review IDs were updated, not duplicated.`);
+    } catch (caught: any) {
+      setError(caught.response?.data?.[0]?.message ?? caught.message ?? 'Unable to import the saved HTML file.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const options = users.map((user) => ({
     value: String(user.id),
     label: `${user.firstName} ${user.lastName}`.trim() || user.username,
@@ -260,15 +296,33 @@ export default function ReviewArchivePanel({
             </Text>
           </Stack>
           {canManage && (
-            <Button
-              leftSection={<IconRefresh size={17} />}
-              loading={loading}
-              onClick={() => void sync(true)}
-              fullWidth={isMobile}
-              maw={220}
-            >
-              Full sync
-            </Button>
+            <Group justify="center" w="100%">
+              <Button
+                leftSection={<IconRefresh size={17} />}
+                loading={loading}
+                onClick={() => void sync(true)}
+                fullWidth={isMobile}
+                maw={220}
+              >
+                Full sync
+              </Button>
+              {platform === 'getyourguide' && (
+                <FileButton onChange={(file) => void importSavedHtml(file)} accept="text/html,.html,.htm">
+                  {(props) => (
+                    <Button
+                      {...props}
+                      variant="light"
+                      leftSection={<IconUpload size={17} />}
+                      loading={importing}
+                      fullWidth={isMobile}
+                      maw={220}
+                    >
+                      Import saved HTML
+                    </Button>
+                  )}
+                </FileButton>
+              )}
+            </Group>
           )}
         </Stack>
 
@@ -362,6 +416,11 @@ export default function ReviewArchivePanel({
               {error}
             </Text>
           )
+        )}
+        {importMessage && (
+          <Alert color="green" mt="sm" title="GetYourGuide import complete" ta="center">
+            {importMessage}
+          </Alert>
         )}
       </Paper>
 
