@@ -9,6 +9,11 @@ jest.mock('../../services/configService.js', () => ({
   hasConfigValueOverride: jest.fn(() => false),
 }));
 
+jest.mock('../whatsappTemplateManagementService.js', () => ({
+  ingestWhatsAppTemplateEvents: jest.fn().mockResolvedValue(0),
+  updateWhatsAppTemplateSendStatuses: jest.fn().mockResolvedValue(0),
+}));
+
 jest.mock('../../models/WhatsAppMessage.js', () => ({
   __esModule: true,
   default: {
