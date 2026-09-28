@@ -49,6 +49,8 @@ export type AssistantManagerSalaryDailyTaskProgress = {
   attributionMethod?: AssistantManagerSalaryTaskAttributionMethod;
   shiftInstanceIds?: number[];
   attributionWarning?: string;
+  salarySplitRecipientUserId?: number;
+  salarySplitRecipientName?: string;
 };
 
 export type AssistantManagerSalaryTaskAttributionMethod =
@@ -68,6 +70,8 @@ export type AssistantManagerSalaryTakeoverSplitPolicy = {
   shiftTakerName: string;
   taskOwnerUserId: number;
   taskOwnerName: string;
+  shareRecipientUserId?: number;
+  shareRecipientName?: string;
   shiftTakerPercent: number;
   taskOwnerPercent: number;
 };
@@ -189,6 +193,9 @@ export const calculateAssistantManagerSalaryTaskCompletion = (params: {
       const taskOwnerUserId = progress?.taskOwnerUserId;
       const normalizedSalaryRecipientUserId = Number(salaryRecipientUserId);
       const normalizedTaskOwnerUserId = Number(taskOwnerUserId);
+      const normalizedShareRecipientUserId = Number(
+        progress?.salarySplitRecipientUserId ?? taskOwnerUserId,
+      );
       const shiftTakerPercent = Number(splitSettings?.shiftTakerPercent);
       const isTrustedTakeoverAttribution =
         progress?.attributionMethod === "shift_assignment"
@@ -198,10 +205,10 @@ export const calculateAssistantManagerSalaryTaskCompletion = (params: {
         && day.date >= splitSettings.effectiveStart
         && Number.isInteger(normalizedSalaryRecipientUserId)
         && normalizedSalaryRecipientUserId > 0
-        && Number.isInteger(normalizedTaskOwnerUserId)
-        && normalizedTaskOwnerUserId > 0
-        && normalizedSalaryRecipientUserId !== normalizedTaskOwnerUserId
-        && isTrustedTakeoverAttribution
+        && Number.isInteger(normalizedShareRecipientUserId)
+        && normalizedShareRecipientUserId > 0
+        && normalizedSalaryRecipientUserId !== normalizedShareRecipientUserId
+        && (isTrustedTakeoverAttribution || progress?.salarySplitRecipientUserId !== undefined)
         && !progress?.attributionWarning
         && Number.isFinite(shiftTakerPercent)
         && shiftTakerPercent > 0
@@ -213,6 +220,11 @@ export const calculateAssistantManagerSalaryTaskCompletion = (params: {
             taskOwnerUserId: normalizedTaskOwnerUserId,
             taskOwnerName:
               progress?.taskOwnerName?.trim() || `Staff #${normalizedTaskOwnerUserId}`,
+            ...(progress?.salarySplitRecipientUserId !== undefined ? {
+              shareRecipientUserId: normalizedShareRecipientUserId,
+              shareRecipientName: progress.salarySplitRecipientName?.trim()
+                || `Staff #${normalizedShareRecipientUserId}`,
+            } : {}),
             shiftTakerPercent,
             taskOwnerPercent: 100 - shiftTakerPercent,
           }

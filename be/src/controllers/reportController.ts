@@ -6975,12 +6975,17 @@ type ApprovedTakeoversByUserAndDate = Map<
   number,
   Map<string, AssistantManagerSalaryApprovedTakeover[]>
 >;
+type SalarySplitRecipientsByUserAndDate = Map<
+  number,
+  Map<string, { userId: number; name: string }>
+>;
 
 type TaskScoreContext = {
   byUser: TaskScoreLookup;
   shiftTaskSetsByDate: Map<string, ShiftTaskDaySummary[]>;
   managerShiftsByUserAndDate: ManagerShiftsByUserAndDate;
   approvedTakeoversByUserAndDate: ApprovedTakeoversByUserAndDate;
+  salarySplitRecipientsByUserAndDate: SalarySplitRecipientsByUserAndDate;
 };
 
 const createEmptyTaskScoreContext = (): TaskScoreContext => ({
@@ -6988,6 +6993,7 @@ const createEmptyTaskScoreContext = (): TaskScoreContext => ({
   shiftTaskSetsByDate: new Map(),
   managerShiftsByUserAndDate: new Map(),
   approvedTakeoversByUserAndDate: new Map(),
+  salarySplitRecipientsByUserAndDate: new Map(),
 });
 
 const assignmentAppliesToUser = (
@@ -7542,7 +7548,8 @@ const applyAssistantManagerSalaryTakeoverSplits = async (
         credits.push({
           sourceSummary,
           sourceComponent,
-          taskOwnerUserId: row.takeoverSplitPolicy.taskOwnerUserId,
+          taskOwnerUserId: row.takeoverSplitPolicy.shareRecipientUserId
+            ?? row.takeoverSplitPolicy.taskOwnerUserId,
           amount: allocated.taskOwnerPayableAmount,
           taskOwnerRow: allocated.taskOwnerRow,
         });
@@ -7848,7 +7855,13 @@ const buildAssistantManagerSalaryTaskProgressForRecipient = (
         context.approvedTakeoversByUserAndDate.get(salaryRecipient.userId)?.get(date) ?? [],
     });
     if (attributedProgress) {
-      progressByDate.set(date, attributedProgress);
+      const splitRecipient = context.salarySplitRecipientsByUserAndDate
+        .get(salaryRecipient.userId)?.get(date);
+      progressByDate.set(date, splitRecipient ? {
+        ...attributedProgress,
+        salarySplitRecipientUserId: splitRecipient.userId,
+        salarySplitRecipientName: splitRecipient.name,
+      } : attributedProgress);
     }
   });
   return progressByDate;
@@ -8855,6 +8868,7 @@ const buildTaskScoreContext = async (
   });
 
   const approvedTakeoversByUserAndDate: ApprovedTakeoversByUserAndDate = new Map();
+  const salarySplitRecipientsByUserAndDate: SalarySplitRecipientsByUserAndDate = new Map();
   approvedTakeoverRequests.forEach((request) => {
     const shiftTakerUserId = normalizeUserId(request.getDataValue("requesterId"));
     const partnerUserId = normalizeUserId(request.getDataValue("partnerId"));
@@ -8874,6 +8888,27 @@ const buildTaskScoreContext = async (
     const roleBundle = roleBundleValue && typeof roleBundleValue === "object" && !Array.isArray(roleBundleValue)
       ? roleBundleValue as Record<string, unknown>
       : null;
+    if (roleBundle?.salaryPolicy === "operational_split" && Array.isArray(roleBundle.salarySplitRecipients)) {
+      roleBundle.salarySplitRecipients.forEach((value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return;
+        const entry = value as Record<string, unknown>;
+        const salaryUserId = normalizeUserId(entry.salaryRecipientUserId);
+        const shareUserId = normalizeUserId(entry.shareRecipientUserId);
+        const date = typeof entry.date === "string" ? entry.date : "";
+        if (!salaryUserId || !shareUserId || !/^\d{4}-\d{2}-\d{2}$/u.test(date)) return;
+        let byDate = salarySplitRecipientsByUserAndDate.get(salaryUserId);
+        if (!byDate) {
+          byDate = new Map();
+          salarySplitRecipientsByUserAndDate.set(salaryUserId, byDate);
+        }
+        byDate.set(date, {
+          userId: shareUserId,
+          name: typeof entry.shareRecipientName === "string"
+            ? entry.shareRecipientName : `Staff #${shareUserId}`,
+        });
+      });
+      return;
+    }
     if (
       request.getDataValue("requestType") === "swap"
       && roleBundle?.version === 1
@@ -8990,6 +9025,7 @@ const buildTaskScoreContext = async (
     shiftTaskSetsByDate,
     managerShiftsByUserAndDate,
     approvedTakeoversByUserAndDate,
+    salarySplitRecipientsByUserAndDate,
   };
 };
 

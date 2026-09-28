@@ -51,6 +51,26 @@ describe("combined Assistant Manager role request presentation", () => {
     });
     expect(getRoleBundleSummary(request)).toContain("split 50/50");
   });
+
+  it("describes a historical operational split without implying that tasks moved", () => {
+    const request = makeRequest({
+      requestType: "swap",
+      assignmentSnapshot: {
+        ...makeRequest().assignmentSnapshot!,
+        roleBundle: {
+          version: 1,
+          roles: ["manager"],
+          taskPolicy: "retain_original_owner",
+          salaryPolicy: "operational_split",
+          salarySplitRecipients: [],
+          transfers: [],
+        },
+      },
+    });
+
+    expect(getRoleBundleSummary(request)).toContain("Manager and task assignments stay unchanged");
+    expect(getRoleBundleSummary(request)).toContain("split both affected Assistant Manager salary days 50/50");
+  });
 });
 
 describe("shift request presentation", () => {

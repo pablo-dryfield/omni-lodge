@@ -257,6 +257,36 @@ describe('Assistant Manager Salary daily task completion', () => {
     });
   });
 
+  it('splits with an operational partner while keeping the Manager as task owner', () => {
+    const [row] = calculateAssistantManagerSalaryTaskCompletion({
+      dailyBase: [{ date: '2026-09-24', baseAmount: 80 }],
+      progressByDate: new Map([['2026-09-24', {
+        totalTasks: 10, completedTasks: 10, waivedTasks: 0, pendingTasks: 0, missedTasks: 0,
+        totalPoints: 20, completedPoints: 20, waivedPoints: 0, pendingPoints: 0, missedPoints: 0,
+        taskOwnerUserId: 188,
+        taskOwnerName: 'Natalie Looper',
+        attributionMethod: 'salary_recipient',
+        salarySplitRecipientUserId: 191,
+        salarySplitRecipientName: 'Jamie Felton',
+      }]]),
+      salaryRecipientUserId: 188,
+      salaryRecipientName: 'Natalie Looper',
+      takeoverSplit: { enabled: true, effectiveStart: '2026-08-01', shiftTakerPercent: 50 },
+    });
+
+    expect(row).toMatchObject({
+      taskOwnerUserId: 188,
+      taskOwnerName: 'Natalie Looper',
+      takeoverSplitPolicy: {
+        shiftTakerUserId: 188,
+        taskOwnerUserId: 188,
+        shareRecipientUserId: 191,
+        shareRecipientName: 'Jamie Felton',
+        shiftTakerPercent: 50,
+      },
+    });
+  });
+
   it('merges assignment rows by date without presenting ambiguous task counts', () => {
     expect(mergeAssistantManagerSalaryDailyBreakdowns([
       {

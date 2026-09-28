@@ -21,6 +21,8 @@ export type PayAssistantManagerSalaryTakeoverSplit = {
   shiftTakerName: string;
   taskOwnerUserId: number;
   taskOwnerName: string;
+  shareRecipientUserId?: number;
+  shareRecipientName?: string;
   shiftTakerPercent: number;
   taskOwnerPercent: number;
   fullDayBaseAmount: number;

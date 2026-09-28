@@ -147,7 +147,13 @@ export interface ShiftAssignmentSnapshot extends ShiftAssignmentSnapshotBase {
     version: 1;
     roles: Array<'manager' | 'leader' | 'guide'>;
     taskPolicy: 'retain_original_owner' | 'reassign_to_new_manager';
-    salaryPolicy: 'takeover_split' | 'no_split';
+    salaryPolicy: 'takeover_split' | 'operational_split' | 'no_split';
+    salarySplitRecipients?: Array<{
+      date: string;
+      salaryRecipientUserId: number;
+      shareRecipientUserId: number;
+      shareRecipientName: string;
+    }>;
     transfers: Array<{
       role: 'manager' | 'leader' | 'guide';
       fromAssignment: ShiftAssignmentSnapshotBase;

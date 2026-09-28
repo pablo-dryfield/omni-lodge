@@ -100,10 +100,10 @@ const takeoverAllocationDetails = (
   }
 
   const counterpartName = (
-    isShiftTaker ? split.taskOwnerName : split.shiftTakerName
+    isShiftTaker ? (split.shareRecipientName ?? split.taskOwnerName) : split.shiftTakerName
   )?.trim();
   const counterpartUserId = isShiftTaker
-    ? Number(split.taskOwnerUserId)
+    ? Number(split.shareRecipientUserId ?? split.taskOwnerUserId)
     : Number(split.shiftTakerUserId);
   const counterpartLabel = counterpartName
     || (Number.isInteger(counterpartUserId) && counterpartUserId > 0
@@ -117,7 +117,9 @@ const takeoverAllocationDetails = (
       : 'the task-plan owner');
 
   return {
-    label: `${formatPercent(percent)} ${isShiftTaker ? 'shift-takeover' : 'task-plan'} share \u00b7 shared with ${counterpartLabel}`,
+    label: `${formatPercent(percent)} ${split.shareRecipientUserId
+      ? (isShiftTaker ? 'manager/task' : 'leader/guide')
+      : (isShiftTaker ? 'shift-takeover' : 'task-plan')} share \u00b7 shared with ${counterpartLabel}`,
     color: isShiftTaker ? 'blue.8' : 'violet.8',
     taskOwnerLabel,
     fullDayBaseAmount,

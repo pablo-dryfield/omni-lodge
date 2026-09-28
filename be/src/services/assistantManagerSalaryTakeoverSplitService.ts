@@ -33,11 +33,12 @@ export const allocateAssistantManagerSalaryTakeoverDay = (
   row: AssistantManagerSalaryDailyBreakdown,
 ): AssistantManagerSalaryTakeoverAllocatedRows | null => {
   const policy = row.takeoverSplitPolicy;
+  const shareRecipientUserId = policy?.shareRecipientUserId ?? policy?.taskOwnerUserId;
   const baseMinor = toMinor(row.baseAmount);
   const payableMinor = toMinor(row.payableAmount);
   if (
     !policy
-    || policy.shiftTakerUserId === policy.taskOwnerUserId
+    || policy.shiftTakerUserId === shareRecipientUserId
     || !Number.isFinite(policy.shiftTakerPercent)
     || policy.shiftTakerPercent <= 0
     || policy.shiftTakerPercent >= 100
