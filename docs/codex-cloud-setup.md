@@ -314,7 +314,9 @@ scripts/codex/send-production-whatsapp-test.sh send
 scripts/codex/send-production-whatsapp-test.sh status '<message-id>'
 ```
 
-The send route is limited to one request per 15 minutes per client and never
+The send route has no endpoint-specific cooldown, so each authenticated request
+can send another test message. The global API and Meta platform limits still
+apply, and each request can incur Meta messaging charges. The route never
 retries an ambiguous Meta write. A response of `accepted` proves only that Meta
 returned a message ID. The status endpoint reports `awaiting_webhook` until a
 signed status webhook is persisted, then reports Meta's status. A `failed`
