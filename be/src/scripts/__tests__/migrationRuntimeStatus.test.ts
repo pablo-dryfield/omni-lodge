@@ -8,7 +8,10 @@ import {
   listCompiledMigrationNames,
   MigrationDatabaseSafetyError,
 } from '../migrationRuntimeStatus.js';
-import type { MigrationDatabaseInventory } from '../migrationSafety.js';
+import {
+  PRE_CI_PRODUCTION_METADATA_PROFILE,
+  type MigrationDatabaseInventory,
+} from '../migrationSafety.js';
 
 const compiledMigrationNames = (): string[] => readdirSync(resolve('src/migrations'))
   .filter((name) => name.endsWith('.ts'))
@@ -28,6 +31,22 @@ const inventory = (
 });
 
 describe('migration runtime status', () => {
+  it('keeps post-boundary migration sequence identifiers unique', () => {
+    const compiled = compiledMigrationNames();
+    const boundaryIndex = compiled.indexOf(PRE_CI_PRODUCTION_METADATA_PROFILE.compiledBoundary);
+    expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+
+    const migrationsBySequence = new Map<string, string[]>();
+    for (const name of compiled.slice(boundaryIndex + 1)) {
+      const sequence = /^([0-9]{12})-/u.exec(name)?.[1];
+      expect(sequence).toBeDefined();
+      migrationsBySequence.set(sequence!, [...(migrationsBySequence.get(sequence!) ?? []), name]);
+    }
+
+    const collisions = [...migrationsBySequence.values()].filter((names) => names.length > 1);
+    expect(collisions).toEqual([]);
+  });
+
   it('reports a valid managed database and exact pending names', () => {
     const compiled = compiledMigrationNames();
     const applied = compiled.slice(0, -2);
