@@ -155,3 +155,43 @@ export const isSameShiftInstanceAssignment = (
 ): boolean =>
   isPositiveInteger(target.shiftInstanceId)
   && target.shiftInstanceId === existing.shiftInstanceId;
+
+export type ManagerRoleBundleRole = 'manager' | 'leader' | 'guide';
+
+const MANAGER_ROLE_BUNDLE_ORDER: ManagerRoleBundleRole[] = ['manager', 'leader', 'guide'];
+
+/**
+ * Validates the role packages offered by the Assistant Manager swap modal.
+ * Manager + Guide is deliberately impossible, and Leader always travels with
+ * Guide. A full three-role handover moves the task plan; every other package
+ * leaves Assistant Manager task ownership unchanged.
+ */
+export const normalizeManagerRoleBundle = (value: unknown): {
+  roles: ManagerRoleBundleRole[];
+  taskPolicy: 'retain_original_owner' | 'reassign_to_new_manager';
+  salaryPolicy: 'takeover_split' | 'no_split';
+} | null => {
+  if (value == null) return null;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError('roles must be a non-empty array');
+  }
+  const roles = Array.from(new Set(value.map((role) => {
+    if (role !== 'manager' && role !== 'leader' && role !== 'guide') {
+      throw new TypeError('roles may only contain manager, leader, and guide');
+    }
+    return role;
+  }))).sort((left, right) =>
+    MANAGER_ROLE_BUNDLE_ORDER.indexOf(left) - MANAGER_ROLE_BUNDLE_ORDER.indexOf(right));
+  if (roles.includes('leader') && !roles.includes('guide')) {
+    throw new TypeError('Leader can only be swapped together with Guide');
+  }
+  if (roles.includes('manager') && roles.includes('guide') && !roles.includes('leader')) {
+    throw new TypeError('Manager and Guide cannot be swapped without Leader');
+  }
+  const fullHandover = MANAGER_ROLE_BUNDLE_ORDER.every((role) => roles.includes(role));
+  return {
+    roles,
+    taskPolicy: fullHandover ? 'reassign_to_new_manager' : 'retain_original_owner',
+    salaryPolicy: roles.includes('manager') && !fullHandover ? 'takeover_split' : 'no_split',
+  };
+};

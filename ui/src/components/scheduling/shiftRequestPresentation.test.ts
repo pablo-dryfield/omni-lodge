@@ -1,6 +1,7 @@
 import type { ShiftRequest } from "../../types/scheduling";
 import {
   canRequestTakeoverAssignment,
+  getRoleBundleSummary,
   getShiftRequestType,
   getShiftRequestTypeLabel,
   resolveShiftRequestAssignment,
@@ -31,6 +32,25 @@ const makeRequest = (overrides: Partial<ShiftRequest> = {}): ShiftRequest => ({
     },
   },
   ...overrides,
+});
+
+describe("combined Assistant Manager role request presentation", () => {
+  it("describes the Manager-only salary split", () => {
+    const request = makeRequest({
+      requestType: "swap",
+      assignmentSnapshot: {
+        ...makeRequest().assignmentSnapshot!,
+        roleBundle: {
+          version: 1,
+          roles: ["manager"],
+          taskPolicy: "retain_original_owner",
+          salaryPolicy: "takeover_split",
+          transfers: [],
+        },
+      },
+    });
+    expect(getRoleBundleSummary(request)).toContain("split 50/50");
+  });
 });
 
 describe("shift request presentation", () => {

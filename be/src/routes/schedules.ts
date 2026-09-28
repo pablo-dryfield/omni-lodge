@@ -453,6 +453,7 @@ router.post('/shift-change-requests', authMiddleware, async (req, res) => {
       assignmentId: req.body?.assignmentId,
       fromAssignmentId: req.body?.fromAssignmentId,
       toAssignmentId: req.body?.toAssignmentId,
+      roles: req.body?.roles,
       requestNote: req.body?.requestNote ?? req.body?.note,
     });
     res.status(201).json(shiftRequest);

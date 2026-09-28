@@ -54,6 +54,7 @@ import { useCerebroBootstrap } from "../api/cerebro";
 import axiosInstance from "../utils/axiosInstance";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import {
+  getRoleBundleSummary,
   getShiftRequestType,
   getShiftRequestTypeLabel,
   resolveShiftRequestAssignment,
@@ -587,6 +588,7 @@ const ScheduleRequestCard = ({
   const toAssignment = resolveShiftRequestAssignment(request, "to");
   const requesterName = formatUserName(request.requester);
   const partnerName = formatUserName(request.partner);
+  const roleBundleSummary = getRoleBundleSummary(request);
   return (
     <Card withBorder radius="md" p="lg">
       <Stack gap="md">
@@ -626,6 +628,7 @@ const ScheduleRequestCard = ({
         </SimpleGrid>
 
         {request.requestNote ? <Alert color="blue"><b>Request note:</b> {request.requestNote}</Alert> : null}
+        {roleBundleSummary ? <Alert color="violet"><b>Combined role request:</b> {roleBundleSummary}</Alert> : null}
         {request.partnerResponseNote ? <Alert color="teal"><b>Teammate note:</b> {request.partnerResponseNote}</Alert> : null}
         {requiresIndependentManager ? (
           <Alert color="yellow">

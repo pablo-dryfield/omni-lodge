@@ -8690,14 +8690,15 @@ const buildTaskScoreContext = async (
     }),
     SwapRequest.findAll({
       attributes: [
+        "requestType",
         "requesterId",
         "partnerId",
         "fromAssignmentId",
         "assignmentSnapshot",
       ],
       where: {
-        requestType: "takeover",
         status: "approved",
+        requestType: { [Op.in]: ["takeover", "swap"] },
       },
     }),
   ]);
@@ -8869,6 +8870,63 @@ const buildTaskScoreContext = async (
     }
 
     const snapshot = snapshotValue as Record<string, unknown>;
+    const roleBundleValue = snapshot.roleBundle;
+    const roleBundle = roleBundleValue && typeof roleBundleValue === "object" && !Array.isArray(roleBundleValue)
+      ? roleBundleValue as Record<string, unknown>
+      : null;
+    if (
+      request.getDataValue("requestType") === "swap"
+      && roleBundle?.version === 1
+      && roleBundle.salaryPolicy === "takeover_split"
+      && Array.isArray(roleBundle.transfers)
+    ) {
+      const managerTransferValue = roleBundle.transfers.find((value) =>
+        value && typeof value === "object" && !Array.isArray(value)
+        && (value as Record<string, unknown>).role === "manager");
+      const managerTransfer = managerTransferValue && typeof managerTransferValue === "object"
+        ? managerTransferValue as Record<string, unknown>
+        : null;
+      const sides = managerTransfer
+        ? [
+            { shiftTakerUserId: partnerUserId, original: managerTransfer.fromAssignment },
+            { shiftTakerUserId, original: managerTransfer.toAssignment },
+          ]
+        : [];
+      sides.forEach(({ shiftTakerUserId: takerId, original }) => {
+        if (!takerId || !original || typeof original !== "object" || Array.isArray(original)) return;
+        const originalRecord = original as Record<string, unknown>;
+        const shiftValue = originalRecord.shiftInstance;
+        const shift = shiftValue && typeof shiftValue === "object" && !Array.isArray(shiftValue)
+          ? shiftValue as Record<string, unknown>
+          : null;
+        const date = typeof shift?.date === "string" ? shift.date.trim() : "";
+        const shiftInstanceId = normalizeUserId(originalRecord.shiftInstanceId ?? shift?.id);
+        const originalOwnerUserId = normalizeUserId(originalRecord.userId);
+        if (!shiftInstanceId || !originalOwnerUserId || !/^\d{4}-\d{2}-\d{2}$/u.test(date)) return;
+        const assigneeValue = originalRecord.assignee;
+        const assignee = assigneeValue && typeof assigneeValue === "object" && !Array.isArray(assigneeValue)
+          ? assigneeValue as Record<string, unknown>
+          : null;
+        const originalOwnerName = [assignee?.firstName, assignee?.lastName]
+          .map((name) => typeof name === "string" ? name.trim() : "").filter(Boolean).join(" ")
+          || `Staff #${originalOwnerUserId}`;
+        let byDate = approvedTakeoversByUserAndDate.get(takerId);
+        if (!byDate) {
+          byDate = new Map();
+          approvedTakeoversByUserAndDate.set(takerId, byDate);
+        }
+        const dateRows = byDate.get(date) ?? [];
+        dateRows.push({
+          originalOwnerUserId,
+          originalOwnerName,
+          shiftInstanceId,
+          shiftAssignmentId: normalizeUserId(originalRecord.id),
+          originalRoleInShift: typeof originalRecord.roleInShift === "string" ? originalRecord.roleInShift : "Manager",
+        });
+        byDate.set(date, dateRows);
+      });
+      return;
+    }
     const shiftInstanceValue = snapshot.shiftInstance;
     const shiftInstance = shiftInstanceValue
       && typeof shiftInstanceValue === "object"
@@ -11097,4 +11155,3 @@ function quoteIdentifier(value: string): string {
   const quoter = getDialectQuoter();
   return quoter.quoteIdentifier(value);
 }
-
