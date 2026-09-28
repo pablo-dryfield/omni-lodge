@@ -33,6 +33,8 @@ import {
   getShiftRequestStatusAfterManagerDecision,
   getShiftRequestStatusAfterPartnerResponse,
   isSameShiftInstanceAssignment,
+  normalizeManagerRoleBundle,
+  type ManagerRoleBundleRole,
   normalizeShiftRequestNote,
 } from './shiftRequestRulesService.js';
 
@@ -59,6 +61,7 @@ type CreateShiftChangeRequestPayload = {
   toAssignmentId?: number | null;
   assignmentId?: number | null;
   requestNote?: unknown;
+  roles?: unknown;
 };
 
 type AssignmentDetails = ShiftAssignment & {
@@ -214,6 +217,40 @@ const normalizeRoleName = (value: string | null | undefined): string =>
 
 const roleNamesMatch = (left: string, right: string): boolean =>
   left === right || left.includes(right) || right.includes(left);
+
+const getManagerBundleRole = (assignment: Pick<ShiftAssignment, 'roleInShift'> & {
+  shiftRole?: Pick<ShiftRole, 'name' | 'slug'> | null;
+}): ManagerRoleBundleRole | null => {
+  const candidates = [assignment.roleInShift, assignment.shiftRole?.slug, assignment.shiftRole?.name]
+    .map(normalizeRoleName);
+  if (candidates.some((role) => role === 'manager' || role === 'assistant manager')) return 'manager';
+  if (candidates.some((role) => role === 'leader')) return 'leader';
+  if (candidates.some((role) => role === 'guide')) return 'guide';
+  return null;
+};
+
+const loadRoleBundleAssignments = async (
+  userId: number,
+  shiftInstanceId: number,
+  roles: ManagerRoleBundleRole[],
+  transaction: Transaction,
+): Promise<Map<ManagerRoleBundleRole, AssignmentDetails>> => {
+  const assignments = await ShiftAssignment.findAll({
+    where: { userId, shiftInstanceId },
+    include: buildAssignmentInclude(),
+    transaction,
+  }) as AssignmentDetails[];
+  const byRole = new Map<ManagerRoleBundleRole, AssignmentDetails>();
+  assignments.forEach((assignment) => {
+    const role = getManagerBundleRole(assignment);
+    if (role && roles.includes(role) && !byRole.has(role)) byRole.set(role, assignment);
+  });
+  const missing = roles.find((role) => !byRole.has(role));
+  if (missing) {
+    throw new HttpError(400, `Both Assistant Managers must hold the ${missing} role on their selected shifts`);
+  }
+  return byRole;
+};
 
 const assertStaffCanReceiveAssignment = async (
   requesterId: number,
@@ -671,6 +708,12 @@ export async function createShiftChangeRequest(
     throw new HttpError(401, 'Unauthorized');
   }
   const requestType = assertRequestType(payload.requestType);
+  let roleBundle: ReturnType<typeof normalizeManagerRoleBundle>;
+  try {
+    roleBundle = requestType === 'swap' ? normalizeManagerRoleBundle(payload.roles) : null;
+  } catch (error) {
+    throw new HttpError(400, (error as Error).message);
+  }
   const requestNote = normalizeNote(payload.requestNote, 'requestNote');
   const fromAssignmentId = requestType === 'swap'
     ? payload.fromAssignmentId
@@ -703,6 +746,7 @@ export async function createShiftChangeRequest(
     }
 
     let partnerId: number | null = null;
+    let bundleTransfers: NonNullable<ShiftAssignmentSnapshot['roleBundle']>['transfers'] | null = null;
     if (requestType === 'swap') {
       if (fromAssignment.userId !== payload.requesterId) {
         throw new HttpError(403, 'You can only swap your own assignment');
@@ -737,6 +781,30 @@ export async function createShiftChangeRequest(
         swapAssignmentIds,
       );
       partnerId = toAssignment.userId;
+      if (roleBundle) {
+        if (getManagerBundleRole(fromAssignment) !== 'manager' || getManagerBundleRole(toAssignment) !== 'manager') {
+          throw new HttpError(400, 'Bundled Assistant Manager swaps must start from Manager assignments');
+        }
+        const fromRoles = await loadRoleBundleAssignments(
+          payload.requesterId,
+          fromAssignment.shiftInstanceId,
+          roleBundle.roles,
+          transaction,
+        );
+        const toRoles = await loadRoleBundleAssignments(
+          toAssignment.userId,
+          toAssignment.shiftInstanceId,
+          roleBundle.roles,
+          transaction,
+        );
+        const bundleIds = roleBundle.roles.flatMap((role) => [fromRoles.get(role)!.id, toRoles.get(role)!.id]);
+        await lockAssignmentRows(Array.from(new Set(bundleIds)).sort((a, b) => a - b), transaction);
+        bundleTransfers = roleBundle.roles.map((role) => ({
+          role,
+          fromAssignment: createAssignmentSnapshot(fromRoles.get(role)!),
+          toAssignment: createAssignmentSnapshot(toRoles.get(role)!),
+        }));
+      }
     } else if (requestType === 'takeover') {
       if (fromAssignment.userId === payload.requesterId) {
         throw new HttpError(400, 'You already own this shift assignment');
@@ -767,6 +835,13 @@ export async function createShiftChangeRequest(
         ? {
             ...createAssignmentSnapshot(fromAssignment),
             toAssignment: createAssignmentSnapshot(toAssignment),
+            ...(roleBundle ? {
+              roleBundle: {
+                version: 1 as const,
+                ...roleBundle,
+                transfers: bundleTransfers!,
+              },
+            } : {}),
           }
         : createAssignmentSnapshot(fromAssignment),
     }, { transaction });
@@ -967,21 +1042,56 @@ const applyApprovedRequest = async (
     if (!isPositiveInteger(request.partnerId)) {
       throw new HttpError(409, 'Swap partner is missing');
     }
-    await exchangeShiftAssignmentOwners(fromAssignment, toAssignment, transaction);
-    await reassignAssistantManagerTasksForManagerShiftOwnerChange({
-      assignment: fromAssignment,
-      fromUserId: request.requesterId,
-      toUserId: request.partnerId,
-      actorId: managerId,
-      requestId: request.id,
-    }, transaction);
-    await reassignAssistantManagerTasksForManagerShiftOwnerChange({
-      assignment: toAssignment,
-      fromUserId: request.partnerId,
-      toUserId: request.requesterId,
-      actorId: managerId,
-      requestId: request.id,
-    }, transaction);
+    const roleBundle = request.assignmentSnapshot?.roleBundle;
+    if (roleBundle?.version === 1) {
+      for (const transfer of roleBundle.transfers) {
+        const bundleFrom = await getDetailedAssignment(transfer.fromAssignment.id, transaction);
+        const bundleTo = await getDetailedAssignment(transfer.toAssignment.id, transaction);
+        if (
+          bundleFrom.userId !== transfer.fromAssignment.userId
+          || bundleTo.userId !== transfer.toAssignment.userId
+          || bundleFrom.shiftInstanceId !== transfer.fromAssignment.shiftInstanceId
+          || bundleTo.shiftInstanceId !== transfer.toAssignment.shiftInstanceId
+          || getManagerBundleRole(bundleFrom) !== transfer.role
+          || getManagerBundleRole(bundleTo) !== transfer.role
+        ) {
+          throw new HttpError(409, `The ${transfer.role} assignments changed after this request was created`);
+        }
+        await exchangeShiftAssignmentOwners(bundleFrom, bundleTo, transaction);
+        if (transfer.role === 'manager' && roleBundle.taskPolicy === 'reassign_to_new_manager') {
+          await reassignAssistantManagerTasksForManagerShiftOwnerChange({
+            assignment: bundleFrom,
+            fromUserId: request.requesterId,
+            toUserId: request.partnerId,
+            actorId: managerId,
+            requestId: request.id,
+          }, transaction);
+          await reassignAssistantManagerTasksForManagerShiftOwnerChange({
+            assignment: bundleTo,
+            fromUserId: request.partnerId,
+            toUserId: request.requesterId,
+            actorId: managerId,
+            requestId: request.id,
+          }, transaction);
+        }
+      }
+    } else {
+      await exchangeShiftAssignmentOwners(fromAssignment, toAssignment, transaction);
+      await reassignAssistantManagerTasksForManagerShiftOwnerChange({
+        assignment: fromAssignment,
+        fromUserId: request.requesterId,
+        toUserId: request.partnerId,
+        actorId: managerId,
+        requestId: request.id,
+      }, transaction);
+      await reassignAssistantManagerTasksForManagerShiftOwnerChange({
+        assignment: toAssignment,
+        fromUserId: request.partnerId,
+        toUserId: request.requesterId,
+        actorId: managerId,
+        requestId: request.id,
+      }, transaction);
+    }
   } else if (requestType === 'takeover') {
     if (!isPositiveInteger(request.partnerId)) {
       throw new HttpError(409, 'Original shift owner is missing');

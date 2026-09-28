@@ -13,6 +13,19 @@ export const getShiftRequestType = (request: ShiftRequest): ShiftRequestType => 
 export const getShiftRequestTypeLabel = (requestType: ShiftRequestType): string =>
   requestType === "takeover" ? "Takeover" : requestType === "drop" ? "Drop" : "Swap";
 
+export const getRoleBundleSummary = (request: ShiftRequest): string | null => {
+  const bundle = request.assignmentSnapshot?.roleBundle;
+  if (!bundle) return null;
+  const roles = bundle.roles.map((role) => role[0].toUpperCase() + role.slice(1)).join(" + ");
+  if (bundle.salaryPolicy === "takeover_split") {
+    return `${roles}: task plans stay with their original owners and both affected Assistant Manager salary days split 50/50.`;
+  }
+  if (bundle.taskPolicy === "reassign_to_new_manager") {
+    return `${roles}: full handover; task plans move to the new Managers and salary is not split.`;
+  }
+  return `${roles}: Manager assignments, task plans, and Assistant Manager salary remain unchanged.`;
+};
+
 export const resolveShiftRequestAssignment = (
   request: ShiftRequest,
   side: "from" | "to" = "from",

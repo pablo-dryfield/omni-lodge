@@ -9,6 +9,7 @@ import {
   Group,
   Modal,
   Paper,
+  Radio,
   Select,
   SimpleGrid,
   Stack,
@@ -24,7 +25,12 @@ import { buildUserProfilePhotoUrl } from "../../utils/profilePhoto";
 export interface SwapRequestModalProps {
   opened: boolean;
   onClose: () => void;
-  onSubmit: (payload: { fromAssignmentId: number; toAssignmentId: number; partnerId: number }) => Promise<void>;
+  onSubmit: (payload: {
+    fromAssignmentId: number;
+    toAssignmentId: number;
+    partnerId: number;
+    roles?: Array<"manager" | "leader" | "guide">;
+  }) => Promise<void>;
   fromAssignment: ShiftAssignment | null;
   fromShift: ShiftInstance | null;
   potentialAssignments: Array<ShiftAssignment & { shiftInstance?: ShiftInstance }>;
@@ -71,6 +77,10 @@ const SwapRequestModal = ({
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [targetAssignmentId, setTargetAssignmentId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [rolePackage, setRolePackage] = useState<"manager" | "guide" | "leader_guide" | "all">("manager");
+
+  const isManagerRole = (assignment?: ShiftAssignment | null) =>
+    assignment?.roleInShift?.trim().toLowerCase().replace(/[\s-]+/g, "_") === "manager";
 
   const dateOptions = useMemo(() => {
     const uniqueDates = new Map<string, string>();
@@ -119,11 +129,24 @@ const SwapRequestModal = ({
     [assignmentsForDate, targetAssignmentId],
   );
 
+  const bothManagersHoldRole = (role: "leader" | "guide") => {
+    const normalize = (value?: string | null) => value?.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const sourceHasRole = (fromShift?.assignments ?? []).some(
+      (assignment) => assignment.userId === fromAssignment?.userId && normalize(assignment.roleInShift) === role,
+    );
+    const targetHasRole = (selectedAssignment?.shiftInstance?.assignments ?? []).some(
+      (assignment) => assignment.userId === selectedAssignment?.userId && normalize(assignment.roleInShift) === role,
+    );
+    return sourceHasRole && targetHasRole;
+  };
+  const canSwapLeaderAndGuide = bothManagersHoldRole("leader") && bothManagersHoldRole("guide");
+
   useEffect(() => {
     if (!opened) {
       setSelectedDate(null);
       setTargetAssignmentId(null);
       setSubmitting(false);
+      setRolePackage("manager");
       return;
     }
     const preferredDate = fromShift?.date ?? null;
@@ -148,6 +171,17 @@ const SwapRequestModal = ({
         fromAssignmentId: fromAssignment.id,
         toAssignmentId: selectedAssignment.id,
         partnerId: selectedAssignment.userId,
+        ...(isManagerRole(fromAssignment) && isManagerRole(selectedAssignment)
+          ? {
+              roles: rolePackage === "all"
+                ? ["manager", "leader", "guide"]
+                : rolePackage === "leader_guide"
+                  ? ["leader", "guide"]
+                  : rolePackage === "guide"
+                    ? ["guide"]
+                  : ["manager"],
+            }
+          : {}),
       });
       onClose();
     } finally {
@@ -331,6 +365,43 @@ const SwapRequestModal = ({
             }}
           />
         </Stack>
+
+        {isManagerRole(fromAssignment) && isManagerRole(selectedAssignment) ? (
+          <Paper withBorder radius="md" p="md" w="100%">
+            <Stack gap="xs">
+              <Text fw={900} ta="center">Choose the role package</Text>
+              <Radio.Group value={rolePackage} onChange={(value) => setRolePackage(value as typeof rolePackage)}>
+                <Stack gap="xs">
+                  <Radio value="manager" label="Manager only — keep tasks with their current owners and split both affected salary days 50/50" />
+                  <Radio
+                    value="guide"
+                    disabled={!bothManagersHoldRole("guide")}
+                    label="Guide only — no Assistant Manager task or salary change"
+                  />
+                  <Radio
+                    value="leader_guide"
+                    disabled={!canSwapLeaderAndGuide}
+                    label="Leader + Guide — no Assistant Manager task or salary change"
+                  />
+                  <Radio
+                    value="all"
+                    disabled={!canSwapLeaderAndGuide}
+                    label="Manager + Leader + Guide — reassign tasks and do not split salary"
+                  />
+                </Stack>
+              </Radio.Group>
+              <Alert color={rolePackage === "manager" ? "yellow" : "blue"} variant="light">
+                {rolePackage === "manager"
+                  ? "Partial Manager swap: each original manager keeps their task plan; the two affected AM salary days are split 50/50."
+                  : rolePackage === "all"
+                    ? "Full handover: all roles and Assistant Manager tasks move together; there is no salary split."
+                    : rolePackage === "leader_guide"
+                      ? "Leader always moves with Guide. Manager assignments and Assistant Manager salary stay unchanged."
+                      : "Guide assignments move by themselves. Manager assignments, tasks, and salary stay unchanged."}
+              </Alert>
+            </Stack>
+          </Paper>
+        ) : null}
 
         {selectedDate && partnerOptions.length === 0 ? (
           <Alert color="blue" radius="md" variant="light" w="100%">

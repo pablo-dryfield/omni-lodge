@@ -7,6 +7,7 @@ import type { ShiftRequest, ShiftRequestType } from "../../types/scheduling";
 import {
   getShiftRequestType,
   getShiftRequestTypeLabel,
+  getRoleBundleSummary,
   resolveShiftRequestAssignment,
   type ShiftRequestAssignmentLike,
 } from "../../components/scheduling/shiftRequestPresentation";
@@ -105,6 +106,7 @@ const SwapsPage = () => {
             const toAssignment = resolveShiftRequestAssignment(request, "to");
             const requesterName = formatUserName(request.requester, request.requesterId);
             const partnerName = formatUserName(request.partner, request.partnerId);
+            const roleBundleSummary = getRoleBundleSummary(request);
             const requiresIndependentManager = loggedUserId != null
               && (request.requesterId === loggedUserId || request.partnerId === loggedUserId);
             return (
@@ -141,6 +143,7 @@ const SwapsPage = () => {
                   )}
 
                   {request.requestNote ? <Alert color="blue"><b>Request note:</b> {request.requestNote}</Alert> : null}
+                  {roleBundleSummary ? <Alert color="violet"><b>Combined role request:</b> {roleBundleSummary}</Alert> : null}
                   {request.partnerResponseNote ? <Alert color="teal"><b>Teammate note:</b> {request.partnerResponseNote}</Alert> : null}
                   {request.decisionReason ? (
                     <Alert color="gray">

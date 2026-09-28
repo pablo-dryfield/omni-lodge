@@ -11,6 +11,7 @@ import {
   isSameShiftInstanceAssignment,
   isActiveShiftRequestStatus,
   normalizeShiftRequestNote,
+  normalizeManagerRoleBundle,
   parseStrictBoolean,
 } from '../shiftRequestRulesService';
 
@@ -28,6 +29,38 @@ describe('strict shift-request boolean parsing', () => {
       expect(parseStrictBoolean(input)).toBeNull();
     },
   );
+});
+
+describe('Assistant Manager role bundles', () => {
+  it('keeps Manager-only swaps as split-payment partial handovers', () => {
+    expect(normalizeManagerRoleBundle(['manager'])).toEqual({
+      roles: ['manager'],
+      taskPolicy: 'retain_original_owner',
+      salaryPolicy: 'takeover_split',
+    });
+  });
+
+  it('moves tasks without a split only for the full role package', () => {
+    expect(normalizeManagerRoleBundle(['guide', 'manager', 'leader'])).toEqual({
+      roles: ['manager', 'leader', 'guide'],
+      taskPolicy: 'reassign_to_new_manager',
+      salaryPolicy: 'no_split',
+    });
+  });
+
+  it('allows Leader only when Guide moves with it', () => {
+    expect(normalizeManagerRoleBundle(['leader', 'guide'])).toEqual({
+      roles: ['leader', 'guide'],
+      taskPolicy: 'retain_original_owner',
+      salaryPolicy: 'no_split',
+    });
+    expect(() => normalizeManagerRoleBundle(['leader'])).toThrow('Leader can only be swapped together with Guide');
+  });
+
+  it('rejects the impossible Manager and Guide combination', () => {
+    expect(() => normalizeManagerRoleBundle(['manager', 'guide']))
+      .toThrow('Manager and Guide cannot be swapped without Leader');
+  });
 });
 
 describe('shift-request note normalization', () => {

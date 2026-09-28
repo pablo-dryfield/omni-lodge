@@ -49,6 +49,7 @@ import SwapRequestModal from "../../components/scheduling/SwapRequestModal";
 import ShiftChangeRequestModal from "../../components/scheduling/ShiftChangeRequestModal";
 import {
   getShiftRequestType,
+  getRoleBundleSummary,
   resolveShiftRequestAssignment,
   type ShiftRequestAssignmentLike,
 } from "../../components/scheduling/shiftRequestPresentation";
@@ -291,14 +292,27 @@ const MyShiftsPage = () => {
     if (hasShiftStartPassed(entry.shift)) {
       return;
     }
-    setSwapModal({ opened: true, assignment: entry.assignment, shift: entry.shift });
+    const managerAssignment = (entry.shift.assignments ?? []).find(
+      (assignment) => assignment.userId === loggedUserId && normalizeRole(assignment.roleInShift) === "manager",
+    );
+    setSwapModal({
+      opened: true,
+      assignment: managerAssignment ?? entry.assignment,
+      shift: entry.shift,
+    });
   };
 
-  const handleSubmitSwap = async (payload: { fromAssignmentId: number; toAssignmentId: number; partnerId: number }) => {
+  const handleSubmitSwap = async (payload: {
+    fromAssignmentId: number;
+    toAssignmentId: number;
+    partnerId: number;
+    roles?: Array<"manager" | "leader" | "guide">;
+  }) => {
     await createShiftRequest.mutateAsync({
       type: "swap",
       fromAssignmentId: payload.fromAssignmentId,
       toAssignmentId: payload.toAssignmentId,
+      ...(payload.roles ? { roles: payload.roles } : {}),
     });
   };
 
@@ -609,6 +623,7 @@ const MyShiftsPage = () => {
     const requesterName =
       [request.requester?.firstName, request.requester?.lastName].filter(Boolean).join(" ") || "Teammate";
     const requestTitle = requestType === "takeover" ? "Takeover request" : requestType === "drop" ? "Drop request" : "Swap request";
+    const roleBundleSummary = getRoleBundleSummary(request);
 
     return (
       <Card key={request.id} withBorder shadow="sm" radius={22} padding="md">
@@ -644,6 +659,7 @@ const MyShiftsPage = () => {
               <Text size="sm" fw={700}>{request.requestNote}</Text>
             </Alert>
           ) : null}
+          {roleBundleSummary ? <Alert color="violet" radius="lg"><b>Combined role request:</b> {roleBundleSummary}</Alert> : null}
 
           {request.partnerResponseNote ? (
             <Alert color="teal" radius="lg" variant="light">

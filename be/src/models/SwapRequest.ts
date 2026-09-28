@@ -44,6 +44,18 @@ export type ShiftAssignmentSnapshotBase = {
 export type ShiftAssignmentSnapshot = ShiftAssignmentSnapshotBase & {
   /** Present for swaps so both original assignment owners remain available after approval. */
   toAssignment?: ShiftAssignmentSnapshotBase | null;
+  /** Present for Assistant Manager swaps that exchange several roles as one approval. */
+  roleBundle?: {
+    version: 1;
+    roles: Array<'manager' | 'leader' | 'guide'>;
+    taskPolicy: 'retain_original_owner' | 'reassign_to_new_manager';
+    salaryPolicy: 'takeover_split' | 'no_split';
+    transfers: Array<{
+      role: 'manager' | 'leader' | 'guide';
+      fromAssignment: ShiftAssignmentSnapshotBase;
+      toAssignment: ShiftAssignmentSnapshotBase;
+    }>;
+  } | null;
 };
 
 @Table({

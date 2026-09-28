@@ -645,6 +645,7 @@ export type CreateShiftRequestPayload =
       type: "swap";
       fromAssignmentId: number;
       toAssignmentId: number;
+      roles?: Array<"manager" | "leader" | "guide">;
       note?: string;
     }
   | {
