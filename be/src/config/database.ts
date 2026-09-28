@@ -178,6 +178,7 @@ import {
   VolunteerFund,
   VolunteerFundEntry,
 } from "../finance/models/index.js";
+import { isPromotionTrackingServerEnabled } from "./promotionTrackingFeature.js";
 import { queryDiagnosticsService } from "../services/queryDiagnosticsService.js";
 
 const environment = (process.env.NODE_ENV || "development").trim();
@@ -191,6 +192,22 @@ if (configResult.error) {
 }
 
 const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
+const promotionTrackingModels = isPromotionTrackingServerEnabled()
+  ? [
+      PromotionRoutePlan,
+      PromotionRouteVersion,
+      PromotionRouteCheckpoint,
+      PromotionTeamAssignment,
+      PromotionSession,
+      PromotionSessionParticipant,
+      PromotionLocationSample,
+      PromotionCheckpointVisit,
+      PromotionCoPresenceChallenge,
+      PromotionCoPresenceResponse,
+      PromotionIncident,
+      PromotionManagerOverride,
+    ]
+  : [];
 
 if (!DB_HOST || !DB_PORT || !DB_NAME || !DB_USER) {
   console.warn("Database configuration is incomplete. Check DB_HOST, DB_PORT, DB_NAME, DB_USER environment variables.");
@@ -318,18 +335,7 @@ const sequelize = new Sequelize({
     ShiftInstance,
     Availability,
     ShiftAssignment,
-    PromotionRoutePlan,
-    PromotionRouteVersion,
-    PromotionRouteCheckpoint,
-    PromotionTeamAssignment,
-    PromotionSession,
-    PromotionSessionParticipant,
-    PromotionLocationSample,
-    PromotionCheckpointVisit,
-    PromotionCoPresenceChallenge,
-    PromotionCoPresenceResponse,
-    PromotionIncident,
-    PromotionManagerOverride,
+    ...promotionTrackingModels,
     SwapRequest,
     ReportTemplate,
     ReportSchedule,
