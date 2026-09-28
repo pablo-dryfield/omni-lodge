@@ -191,7 +191,27 @@ export async function getReviewTrends(req: AuthenticatedRequest, res: Response) 
     const where: any = { snapshotDate: { [Op.gte]: since.toISOString().slice(0, 10) } };
     if (platform) where.platform = platform;
     const snapshots = await ReviewDailySnapshot.findAll({ where, order: [['snapshotDate', 'ASC'], ['platform', 'ASC']] });
-    res.json({ snapshots });
+    const representedPlatforms = new Set(snapshots.map(snapshot => snapshot.platform));
+    const archiveWhere: Record<string, unknown> = { isDeleted: false };
+    if (platform) archiveWhere.platform = platform;
+    const archivedReviews = await ReviewArchive.findAll({
+      attributes: ['platform'],
+      where: archiveWhere,
+    });
+    const activeCounts = new Map<string, number>();
+    for (const review of archivedReviews) {
+      activeCounts.set(review.platform, (activeCounts.get(review.platform) ?? 0) + 1);
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const archiveFallbacks = Array.from(activeCounts.entries())
+      .filter(([archivePlatform]) => !representedPlatforms.has(archivePlatform))
+      .map(([archivePlatform, activeCount]) => ({
+        snapshotDate: today,
+        platform: archivePlatform,
+        sourceTotalCount: null,
+        activeCount,
+      }));
+    res.json({ snapshots: [...snapshots, ...archiveFallbacks] });
   } catch (error) { fail(res, error); }
 }
 
@@ -247,7 +267,15 @@ export async function createManualReviewCredit(req: AuthenticatedRequest, res: R
     const category = ['staff', 'no_name', 'bad'].includes(String(req.body.category)) ? String(req.body.category) : 'staff';
     const userId = category === 'staff' ? Number(req.body.userId) : null;
     if (category === 'staff' && (!Number.isInteger(userId) || !await User.count({ where: { id: userId } }))) throw new Error('A valid user is required for staff credit');
-    const row = await ReviewManualCredit.create({ userId, category, platform: String(req.body.platform ?? 'manual'), date: String(req.body.date), credit: Number(req.body.credit ?? 1), notes: req.body.notes ?? null, createdBy: actor(req) });
+    const platform = String(req.body.platform ?? 'manual').trim().toLowerCase();
+    const date = String(req.body.date ?? '').trim();
+    const credit = Number(req.body.credit ?? 1);
+    if (!platform || platform.length > 64) throw new Error('A valid platform is required');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('A valid date is required');
+    if (!Number.isFinite(credit) || credit <= 0 || credit > 999999.9999) {
+      throw new Error('Credit amount must be greater than zero and no more than 999999.9999');
+    }
+    const row = await ReviewManualCredit.create({ userId, category, platform, date, credit, notes: req.body.notes ?? null, createdBy: actor(req) });
     res.status(201).json({ credit: row });
   } catch (error) { fail(res, error); }
 }
