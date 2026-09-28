@@ -52,6 +52,7 @@ import venueRoutes from './routes/venueRoutes.js';
 import venueCompensationTermRoutes from './routes/venueCompensationTermRoutes.js';
 import venueCompensationTermRateRoutes from './routes/venueCompensationTermRateRoutes.js';
 import schedulesRoutes from './routes/schedules.js';
+import promotionTrackingRoutes from './routes/promotionTrackingRoutes.js';
 import staffProfileRoutes from './routes/staffProfileRoutes.js';
 import shiftRoleRoutes from './routes/shiftRoles.js';
 import sqlHelperRoutes from './routes/sqlHelperRoutes.js';
@@ -241,7 +242,7 @@ const corsOptions: cors.CorsOptions = {
   origin: allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Authorization', 'Content-Type', 'X-OmniLodge-Telemetry'],
+  allowedHeaders: ['Authorization', 'Content-Type', 'X-OmniLodge-Telemetry', 'Idempotency-Key', 'X-Expected-Session-Version'],
   exposedHeaders: ['X-Request-Id'],
 };
 
@@ -352,6 +353,7 @@ app.use('/api/storefront-ongoing-carts', storefrontOngoingCartRoutes);
 app.use('/api/storefront-promotions', storefrontPromotionRoutes);
 app.use('/api/storefront-bank-transfer-orders', storefrontBankTransferOrderRoutes);
 app.use('/api/schedules', schedulesRoutes);
+app.use('/api/promotion-tracking', promotionTrackingRoutes);
 app.use('/api/sql-helper', sqlHelperRoutes);
 app.use('/api/db-backups', dbBackupRoutes);
 app.use('/api/pm2', pm2Routes);

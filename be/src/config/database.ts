@@ -62,6 +62,18 @@ import ScheduleWeek from "../models/ScheduleWeek.js";
 import ShiftInstance from "../models/ShiftInstance.js";
 import Availability from "../models/Availability.js";
 import ShiftAssignment from "../models/ShiftAssignment.js";
+import PromotionRoutePlan from "../models/PromotionRoutePlan.js";
+import PromotionRouteVersion from "../models/PromotionRouteVersion.js";
+import PromotionRouteCheckpoint from "../models/PromotionRouteCheckpoint.js";
+import PromotionTeamAssignment from "../models/PromotionTeamAssignment.js";
+import PromotionSession from "../models/PromotionSession.js";
+import PromotionSessionParticipant from "../models/PromotionSessionParticipant.js";
+import PromotionLocationSample from "../models/PromotionLocationSample.js";
+import PromotionCheckpointVisit from "../models/PromotionCheckpointVisit.js";
+import PromotionCoPresenceChallenge from "../models/PromotionCoPresenceChallenge.js";
+import PromotionCoPresenceResponse from "../models/PromotionCoPresenceResponse.js";
+import PromotionIncident from "../models/PromotionIncident.js";
+import PromotionManagerOverride from "../models/PromotionManagerOverride.js";
 import SwapRequest from "../models/SwapRequest.js";
 import Export from "../models/Export.js";
 import Notification from "../models/Notification.js";
@@ -306,6 +318,18 @@ const sequelize = new Sequelize({
     ShiftInstance,
     Availability,
     ShiftAssignment,
+    PromotionRoutePlan,
+    PromotionRouteVersion,
+    PromotionRouteCheckpoint,
+    PromotionTeamAssignment,
+    PromotionSession,
+    PromotionSessionParticipant,
+    PromotionLocationSample,
+    PromotionCheckpointVisit,
+    PromotionCoPresenceChallenge,
+    PromotionCoPresenceResponse,
+    PromotionIncident,
+    PromotionManagerOverride,
     SwapRequest,
     ReportTemplate,
     ReportSchedule,
