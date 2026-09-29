@@ -98,9 +98,9 @@ const matchesAssignmentIdChurnIdentity = (submission: CleaningSubmission, assign
     && String(snapshot.timeEnd ?? '') === String(shift.timeEnd ?? '')
     && canonicalSlots(submission.requiredSlots) === canonicalSlots(slotsFor(assignment, sources));
 };
-/** The task planner assignee is the sole reviewer; task ownership is the review assignment. */
-const reviewerIds = (log: Pick<AssistantManagerTaskLog, 'userId'>, assignment: RosterAssignment): number[] =>
-  positiveId(log.userId) && log.userId !== assignment.userId ? [log.userId] : [];
+/** The task planner assignee is the sole reviewer; they may also be on the cleaning roster that day. */
+const reviewerIds = (log: Pick<AssistantManagerTaskLog, 'userId'>, _assignment: RosterAssignment): number[] =>
+  positiveId(log.userId) ? [log.userId] : [];
 const latestPhotos = (photos: CleaningPhotoVersion[]) => {
   const map = new Map<string, CleaningPhotoVersion>();
   for (const photo of photos) if (!map.has(photo.slotKey) || map.get(photo.slotKey)!.version < photo.version) map.set(photo.slotKey, photo);
@@ -289,7 +289,7 @@ const loadContext = async (submissionId: number, actor: CleaningActor, transacti
   return { submission, log, template, assignment, reviewers, actor, photos };
 };
 
-const canReviewContext = (context: Context) => context.actor.actorId !== context.submission.userId && Boolean(context.assignment)
+const canReviewContext = (context: Context) => Boolean(context.assignment)
   && ['pending', 'missed'].includes(context.log.status)
   && context.reviewers.includes(context.actor.actorId);
 
@@ -390,7 +390,7 @@ export const listMyCleaningSubmissions = async (actor: CleaningActor) => {
       if (!context.assignment || context.log.status === 'waived') continue;
       const dto = await serialize(context);
       if (row.userId === actor.actorId) submissions.push(dto);
-      else if (canReviewContext(context) && context.photos.some((photo) => latestPhotos(context.photos).get(photo.slotKey)?.id === photo.id && photo.status === 'pending')) reviewSubmissions.push(dto);
+      if (canReviewContext(context) && context.photos.some((photo) => latestPhotos(context.photos).get(photo.slotKey)?.id === photo.id && photo.status === 'pending')) reviewSubmissions.push(dto);
     } catch (error) { if (!(error instanceof HttpError && error.status === 404)) throw error; }
   }
   const taskIssues: { taskLogId: number; taskDate: string; title: string; code: string; message: string; canWaive: boolean; updatedAt: string }[] = [];
@@ -522,7 +522,7 @@ const completeTaskIfApproved = async (context: Pick<Context, 'log' | 'template' 
     const latest = latestPhotos(photos.filter((photo) => photo.submissionId === submission.id));
     for (const slot of submission.requiredSlots) {
       const photo = latest.get(slot.key);
-      if (!photo || photo.status !== 'approved' || !photo.reviewedBy || photo.reviewedBy === submission.userId) return false;
+      if (!photo || photo.status !== 'approved' || !photo.reviewedBy) return false;
       accepted.push({ photo, submission, slot });
     }
   }

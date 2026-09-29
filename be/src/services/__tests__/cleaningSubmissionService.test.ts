@@ -259,13 +259,18 @@ describe('assignment-scoped cleaning workflow', () => {
     await expect(review(sub, 'approved', { actorId: 7, roleSlug: 'owner' })).rejects.toMatchObject({ status: 403 });
     expect(photos[0].status).toBe('pending');
   });
-  it('does not broadcast a review when the task planner assignee is also the cleaner', async () => {
+  it('lets the task planner assignee review their own cleaning photo when they are also scheduled to clean', async () => {
     log.userId = 7;
     const sub = await materialize(); await upload(sub);
-    expect(actions).toEqual([]);
+    expect(actions[0]).toMatchObject({ type: 'cleaning_review', targetUserIds: [7] });
+    const queue = await listMyCleaningSubmissions({ actorId: 7, roleSlug: 'assistant-manager' });
+    expect(queue.submissions.map((item) => item.id)).toContain(sub.id);
+    expect(queue.reviewSubmissions.map((item) => item.id)).toContain(sub.id);
     await expect(review(sub, 'approved', owner, { escalationReason: 'Management override' })).rejects.toMatchObject({ status: 403 });
-    await expect(review(sub, 'approved', { actorId: 7, roleSlug: 'owner' })).rejects.toMatchObject({ status: 403 });
-    expect(log.status).toBe('pending');
+    const result = await review(sub, 'approved', { actorId: 7, roleSlug: 'assistant-manager' });
+    expect(result.taskCompleted).toBe(true);
+    expect(photos[0]).toMatchObject({ status: 'approved', reviewedBy: 7 });
+    expect(log.status).toBe('completed');
   });
   it('does not let a global manager bypass a live scheduled reviewer', async () => {
     const sub = await materialize(); await upload(sub);
@@ -515,23 +520,23 @@ describe('assignment-scoped cleaning workflow', () => {
     await ensureCleaningSubmissionsForTaskLog(1);
     expect(sub.revision).toBe(oldRevision + 1); expect(sub.update).not.toHaveBeenCalled(); expect(actions[0].update).not.toHaveBeenCalled();
   });
-  it('disables a pending popup when task ownership moves to the cleaner, then targets a new task assignee', async () => {
+  it('retargets a pending popup when task ownership moves to the cleaner, then to a new task assignee', async () => {
     const sub = await materialize(); await upload(sub); const revision = sub.revision;
     log.userId = 7;
     await ensureCleaningSubmissionsForTaskLog(1);
-    expect(sub).toMatchObject({ status: 'escalated', reviewerUserIds: [], revision: revision + 1 });
-    expect(actions[0].status).toBe(false);
+    expect(sub).toMatchObject({ status: 'awaiting_review', reviewerUserIds: [7], revision: revision + 1 });
+    expect(actions[0]).toMatchObject({ status: true, targetUserIds: [7] });
     log.userId = 10;
     await ensureCleaningSubmissionsForTaskLog(1);
     expect(sub).toMatchObject({ status: 'awaiting_review', reviewerUserIds: [10], revision: revision + 2 });
     expect(actions[0].targetUserIds).toEqual([10]);
   });
-  it('never routes an unassigned review to global management', async () => {
+  it('routes a self-review only to the task assignee and never to global management', async () => {
     log.userId = 7; const sub = await materialize(); await upload(sub);
     const revision = sub.revision;
     userModel.findAll.mockImplementation(async (options) => options?.include ? [{ id: 101, role: { slug: 'admin' } }] : []);
     await ensureCleaningSubmissionsForTaskLog(1);
-    expect(actions).toEqual([]); expect(sub.revision).toBe(revision);
+    expect(actions[0]).toMatchObject({ status: true, targetUserIds: [7] }); expect(sub.revision).toBe(revision);
     expect((await listMyCleaningSubmissions({ actorId: 101, roleSlug: 'admin' })).reviewSubmissions).toEqual([]);
   });
   it('does not churn pending popup revisions or reappearances during unchanged homepage refreshes', async () => {
