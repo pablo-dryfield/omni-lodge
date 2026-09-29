@@ -41,6 +41,11 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+      # source-map 0.8 changes SourceMapConsumer construction to an async API.
+      # Keep 0.6.x until browserStackSymbolicationService is migrated manually.
+      - dependency-name: "source-map"
+        update-types:
+          - "version-update:semver-minor"
     groups:
       backend-npm:
         patterns:
@@ -70,6 +75,12 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+      # Mantine 7.17 typings require newer TypeScript syntax than the UI's
+      # pinned TypeScript 4.9 compiler supports. Keep 7.9.x until a planned
+      # TypeScript/Mantine upgrade is done together.
+      - dependency-name: "@mantine/*"
+        update-types:
+          - "version-update:semver-minor"
     groups:
       ui-npm:
         patterns:
