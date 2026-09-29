@@ -35,10 +35,19 @@ updates:
       prefix: "build"
       include: "scope"
     versioning-strategy: "increase-if-necessary"
+    ignore:
+      # Major npm upgrades are handled as planned manual work so they do not
+      # get mixed into auto-mergeable grouped dependency PRs.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       backend-npm:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "npm"
     directory: "/ui"
@@ -55,10 +64,19 @@ updates:
       prefix: "build"
       include: "scope"
     versioning-strategy: "increase-if-necessary"
+    ignore:
+      # Major npm upgrades are handled as planned manual work so they do not
+      # get mixed into auto-mergeable grouped dependency PRs.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       ui-npm:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "npm"
     directory: "/ui-server"
@@ -75,7 +93,16 @@ updates:
       prefix: "build"
       include: "scope"
     versioning-strategy: "increase-if-necessary"
+    ignore:
+      # Major npm upgrades are handled as planned manual work so they do not
+      # get mixed into auto-mergeable grouped dependency PRs.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       ui-server-npm:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
