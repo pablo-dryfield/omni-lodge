@@ -57,11 +57,16 @@ const quoteEmailDisplayName = (value: string): string =>
 const isStorefrontBooking = (booking: Booking): boolean =>
   String(booking.platform ?? '').trim().toLowerCase() === 'omnilodge';
 
+const usesOmniLodgeEmailIdentity = (booking: Booking): boolean => {
+  const platform = String(booking.platform ?? '').trim().toLowerCase();
+  return platform === 'omnilodge' || platform === 'airbnb';
+};
+
 const resolveDirectBookingEmailFrom = (booking: Booking): string | null => {
-  const addressKey = isStorefrontBooking(booking)
+  const addressKey = usesOmniLodgeEmailIdentity(booking)
     ? 'STOREFRONT_EMAIL_FROM_ADDRESS'
     : 'DIRECT_BOOKINGS_EMAIL_FROM_ADDRESS';
-  const nameKey = isStorefrontBooking(booking)
+  const nameKey = usesOmniLodgeEmailIdentity(booking)
     ? 'STOREFRONT_EMAIL_FROM_NAME'
     : 'DIRECT_BOOKINGS_EMAIL_FROM_NAME';
   const address = sanitizeEmailHeaderPart(String(getConfigValue(addressKey) ?? ''));
@@ -74,7 +79,7 @@ const resolveDirectBookingEmailFrom = (booking: Booking): string | null => {
 };
 
 const resolveDirectBookingNotificationEmail = (booking: Booking): string | null => {
-  const key = isStorefrontBooking(booking)
+  const key = usesOmniLodgeEmailIdentity(booking)
     ? 'STOREFRONT_NOTIFICATION_EMAIL'
     : 'DIRECT_BOOKINGS_NOTIFICATION_EMAIL';
   const email = sanitizeEmailHeaderPart(String(getConfigValue(key) ?? ''));
