@@ -2286,19 +2286,6 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         productBucket.counterIds.add(counter.id);
         productBucket.totalCustomers += customers;
         productBucket.totalCommission += commissionPerStaff;
-        if (
-          pubCrawlGuidingCommissionComponent
-          && pubCrawlGuidingProductKeys.has(guideCommissionProductKey(meta.productId))
-        ) {
-          allocateComponentToProduct(
-            productBucketsByUser,
-            userId,
-            meta.productId,
-            meta.productName,
-            pubCrawlGuidingCommissionComponent.id,
-            commissionPerStaff,
-          );
-        }
 
         const guideBreakdown = aggregate.guides.get(userId) ?? {
           userId,
