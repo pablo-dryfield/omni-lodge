@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import HttpError from '../../errors/HttpError.js';
 import {
   COMPENSATION_SETTLEMENT_INTENT_MAX_AGE_SECONDS,
+  COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET,
   CompensationSettlementIntentConfigurationError,
   getCompensationSettlementIntentDirection,
   isSegmentedCompensationSettlementIntent,
@@ -30,6 +31,11 @@ const baseIntent = (overrides: Partial<CompensationSettlementIntentInput> = {}):
   ...overrides,
 });
 
+const verifiedBaseIntent = (overrides: Partial<CompensationSettlementIntentInput> = {}) => ({
+  ...baseIntent(overrides),
+  routingOverrideReason: overrides.routingOverrideReason ?? null,
+});
+
 const signRawPayload = (payload: Record<string, unknown>, secret: string): string => {
   const payloadSegment = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const signature = crypto.createHmac('sha256', secret).update(payloadSegment, 'utf8').digest('base64url');
@@ -53,7 +59,7 @@ describe('compensation settlement intent service', () => {
     const token = signCompensationSettlementIntent(baseIntent(), { now: FIXED_NOW });
 
     expect(verifyCompensationSettlementIntent(token, { now: FIXED_NOW })).toEqual({
-      ...baseIntent(),
+      ...verifiedBaseIntent(),
       issuedAt: FIXED_NOW_SECONDS,
       version: 1,
     });
@@ -71,6 +77,26 @@ describe('compensation settlement intent service', () => {
       category: 'commission',
       currency: 'PLN',
     });
+  });
+
+  it('round-trips the review-target routing override reason', () => {
+    const token = signCompensationSettlementIntent(
+      baseIntent({
+        routingOverrideReason: COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET,
+      }),
+      { now: FIXED_NOW },
+    );
+
+    expect(verifyCompensationSettlementIntent(token, { now: FIXED_NOW })).toMatchObject({
+      routingOverrideReason: COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET,
+    });
+  });
+
+  it('rejects unknown routing override reasons', () => {
+    expect(() => signCompensationSettlementIntent(
+      baseIntent({ routingOverrideReason: 'manual_budget_move' as never }),
+      { now: FIXED_NOW },
+    )).toThrow('routingOverrideReason is invalid.');
   });
 
   it('rejects payload or signature tampering', () => {
@@ -111,7 +137,7 @@ describe('compensation settlement intent service', () => {
       now: afterExpiry,
       allowExpired: true,
     })).toMatchObject({
-      ...baseIntent(),
+      ...verifiedBaseIntent(),
       issuedAt: FIXED_NOW_SECONDS,
       version: 1,
     });
@@ -134,7 +160,7 @@ describe('compensation settlement intent service', () => {
     expect(isSegmentedCompensationSettlementIntent(verified)).toBe(true);
     expect(getCompensationSettlementIntentDirection(verified)).toBe('payable');
     expect(verified).toEqual({
-      ...baseIntent(),
+      ...verifiedBaseIntent(),
       issuedAt: FIXED_NOW_SECONDS,
       version: 2,
       direction: 'payable',
@@ -155,7 +181,7 @@ describe('compensation settlement intent service', () => {
     }, process.env.JWT_SECRET as string);
 
     expect(verifyCompensationSettlementIntent(token, { now: FIXED_NOW })).toEqual({
-      ...baseIntent(),
+      ...verifiedBaseIntent(),
       issuedAt: FIXED_NOW_SECONDS,
       version: 1,
     });

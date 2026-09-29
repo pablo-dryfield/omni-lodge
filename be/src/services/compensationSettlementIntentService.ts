@@ -10,7 +10,11 @@ export const COMPENSATION_SETTLEMENT_INTENT_MAX_AGE_SECONDS = 10 * 60;
 export const COMPENSATION_SETTLEMENT_INTENT_CLOCK_SKEW_SECONDS = 60;
 export const COMPENSATION_SETTLEMENT_INTENT_LEGACY_VERSION = 1 as const;
 export const COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION = 2 as const;
+export const COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET =
+  'pub_crawl_guiding_review_target' as const;
 export type CompensationSettlementDirection = 'payable' | 'receivable';
+export type CompensationSettlementRoutingOverrideReason =
+  typeof COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET;
 
 export type CompensationSettlementIntentPayloadBase = {
   userId: number;
@@ -25,6 +29,7 @@ export type CompensationSettlementIntentPayloadBase = {
   outstandingAmountMinor: number;
   ruleId: number;
   currency: string;
+  routingOverrideReason: CompensationSettlementRoutingOverrideReason | null;
   /** Unix time in whole seconds. */
   issuedAt: number;
 };
@@ -50,13 +55,18 @@ export type CompensationSettlementIntentPayload =
   | CompensationSettlementIntentPayloadV1
   | CompensationSettlementIntentPayloadV2;
 
+type CompensationSettlementIntentInputBase =
+  Omit<CompensationSettlementIntentPayloadBase, 'issuedAt' | 'routingOverrideReason'> & {
+    routingOverrideReason?: CompensationSettlementRoutingOverrideReason | null;
+  };
+
 export type CompensationSettlementIntentInputV1 =
-  Omit<CompensationSettlementIntentPayloadBase, 'issuedAt'> & {
+  CompensationSettlementIntentInputBase & {
     version?: typeof COMPENSATION_SETTLEMENT_INTENT_LEGACY_VERSION;
   };
 
 export type CompensationSettlementIntentInputV2 =
-  Omit<CompensationSettlementIntentPayloadBase, 'issuedAt'>
+  CompensationSettlementIntentInputBase
   & CompensationSettlementIntentSegmentFields
   & {
     version?: typeof COMPENSATION_SETTLEMENT_INTENT_SEGMENTED_VERSION;
@@ -200,6 +210,19 @@ const parseDirection = (value: unknown): 'payable' => {
   return value;
 };
 
+const parseRoutingOverrideReason = (
+  value: unknown,
+): CompensationSettlementRoutingOverrideReason | null => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  const normalized = parseIdentifier(value, 'routingOverrideReason');
+  if (normalized !== COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET) {
+    throw invalidIntent('routingOverrideReason is invalid.');
+  }
+  return normalized;
+};
+
 const parseIssuedAt = (value: unknown): number => {
   const issuedAt = Number(value);
   if (!Number.isSafeInteger(issuedAt) || issuedAt <= 0) {
@@ -260,6 +283,7 @@ const normalizePayload = (raw: Record<string, unknown>): CompensationSettlementI
     outstandingAmountMinor,
     ruleId: parsePositiveInteger(raw.ruleId, 'ruleId'),
     currency: parseCurrency(raw.currency),
+    routingOverrideReason: parseRoutingOverrideReason(raw.routingOverrideReason),
     issuedAt: parseIssuedAt(raw.issuedAt),
   };
 

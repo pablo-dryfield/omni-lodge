@@ -44,6 +44,7 @@ import {
 } from '../services/staffPayoutBatchValidation.js';
 import { loadCompensationSettlementRouter } from '../services/compensationSettlementRoutingService.js';
 import {
+  COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET,
   isSegmentedCompensationSettlementIntent,
   verifyCompensationSettlementIntent,
   type CompensationSettlementIntentPayload,
@@ -273,6 +274,13 @@ const getSettlementIntentSegmentKey = (
   intent && isSegmentedCompensationSettlementIntent(intent)
     ? intent.segmentKey
     : null
+);
+
+const hasPubCrawlGuidingReviewTargetRoutingOverride = (
+  intent: CompensationSettlementIntentPayload,
+): boolean => (
+  intent.routingOverrideReason
+  === COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET
 );
 
 const buildCalculatedSettlementIdentity = (params: {
@@ -934,10 +942,20 @@ const validateBatchSettlementRouting = async (params: {
     ) {
       throw new HttpError(409, `${line.label} settlement intent no longer matches this payout. Refresh Pays and try again.`);
     }
+    const hasSignedReviewTargetFundOverride =
+      hasPubCrawlGuidingReviewTargetRoutingOverride(intent)
+      && intent.destination === 'volunteer_fund'
+      && intent.sourceKey === 'compensation_component'
+      && intent.componentId !== null
+      && route.destination === 'staff_vendor'
+      && route.ruleId === intent.ruleId;
     if (
-      route.destination !== 'volunteer_fund'
-      || route.fundId !== line.fundId
-      || route.ruleId !== intent.ruleId
+      !hasSignedReviewTargetFundOverride
+      && (
+        route.destination !== 'volunteer_fund'
+        || route.fundId !== line.fundId
+        || route.ruleId !== intent.ruleId
+      )
     ) {
       throw new HttpError(
         409,
