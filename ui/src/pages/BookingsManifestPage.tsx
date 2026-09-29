@@ -1174,6 +1174,10 @@ const isXperiencePolandOrder = (order: UnifiedOrder): boolean => {
   return (order.platform ?? '').toLowerCase() === 'xperiencepoland';
 };
 
+const isAirbnbOrder = (order: UnifiedOrder): boolean => {
+  return (order.platform ?? '').toLowerCase() === 'airbnb';
+};
+
 const isDirectFoodTourOrder = (order: UnifiedOrder): boolean => {
   return (
     (order.platform ?? '').toLowerCase() === 'direct' &&
@@ -1346,7 +1350,7 @@ type AmendModalState = {
   opened: boolean;
   order: UnifiedOrder | null;
   bookingId: number | null;
-  mode: "ecwid" | "xperience" | "storefront" | "direct" | null;
+  mode: "ecwid" | "xperience" | "storefront" | "direct" | "airbnb" | null;
   formDate: Date | null;
   formTime: string;
   submitting: boolean;
@@ -2173,6 +2177,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const xperienceOrder = isXperiencePolandOrder(order);
     const storefrontOrder = isStorefrontOrder(order);
     const directActionOrder = isDirectManifestActionOrder(order);
+    const airbnbOrder = isAirbnbOrder(order);
     baseState.opened = true;
     baseState.order = order;
     baseState.bookingId = getBookingIdFromOrder(order);
@@ -2184,7 +2189,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           ? "storefront"
           : directActionOrder
             ? "direct"
-            : null;
+            : airbnbOrder
+              ? "airbnb"
+              : null;
     baseState.formDate = order.date && dayjs(order.date, DATE_FORMAT, true).isValid()
       ? dayjs(order.date, DATE_FORMAT).toDate()
       : null;
@@ -2781,7 +2788,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     await axiosInstance.post(endpoint, {
       pickupDate,
       pickupTime: normalizedTime,
-      ...(amendState.mode === "storefront" ? { sendCustomerEmail: false } : {}),
+      ...(["storefront", "airbnb"].includes(amendState.mode) ? { sendCustomerEmail: false } : {}),
     });
     return { pickupDate, pickupTime: normalizedTime };
   };
@@ -3356,7 +3363,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const handleConfirmDirectAmend = async () => {
-    if (amendState.submitting || amendState.mode !== "direct") {
+    if (amendState.submitting || !["direct", "airbnb"].includes(amendState.mode ?? "")) {
       return;
     }
 
@@ -4998,7 +5005,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     amendHasPendingScheduleChange &&
     amendHasCustomerEmail;
   const directAmendCanSubmit =
-    Boolean(amendState.opened && amendState.mode === "direct" && amendState.bookingId) &&
+    Boolean(amendState.opened && ["direct", "airbnb"].includes(amendState.mode ?? "") && amendState.bookingId) &&
     !amendState.submitting &&
     amendHasRequiredScheduleFields &&
     amendHasPendingScheduleChange;
@@ -5032,7 +5039,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   );
   const mobileActionsCanAmend = Boolean(
     mobileActionsOrder &&
-      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder)) &&
+      (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder) || isAirbnbOrder(mobileActionsOrder)) &&
       mobileActionsBookingId,
   );
   const mobileActionsCanCancel = Boolean(
@@ -6348,6 +6355,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                   ? "Updating the booking will show the same date-change email preview used for Ecwid before anything is saved."
                 : amendState.mode === "direct"
                   ? "Updating the pickup details will update this Food Tour booking and email the customer."
+                : amendState.mode === "airbnb"
+                  ? "Updating the pickup details will update this Airbnb booking in OmniLodge. The change is not sent to Airbnb."
                 : "Updating the pickup details will update this booking in OmniLodge."}
           </Text>
           {amendState.mode === "ecwid" && amendPreview.status === "loading" && (
@@ -6525,14 +6534,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             required
             placeholder="HH:mm"
           />
-          {amendState.mode && !amendHasCustomerEmail && (
+          {amendState.mode && amendState.mode !== "airbnb" && !amendHasCustomerEmail && (
             <Alert color="yellow" title="Missing customer email">
               Date change email preview is unavailable because this booking has no customer email.
             </Alert>
           )}
           {amendHasRequiredScheduleFields && !amendHasPendingScheduleChange && (
             <Alert color="blue" title="No changes detected">
-              Update pickup date or time to enable email preview.
+              Update pickup date or time to enable saving.
             </Alert>
           )}
           {amendState.error && (
@@ -6541,7 +6550,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             </Alert>
           )}
           <Group justify="flex-end">
-            {amendState.mode === "direct" ? (
+            {amendState.mode === "direct" || amendState.mode === "airbnb" ? (
               <Button
                 onClick={() => {
                   void handleConfirmDirectAmend();
@@ -6549,7 +6558,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 loading={amendState.submitting}
                 disabled={!directAmendCanSubmit}
               >
-                Save Changes & Send Email
+                {amendState.mode === "airbnb" ? "Save Changes" : "Save Changes & Send Email"}
               </Button>
             ) : (
               <Button
