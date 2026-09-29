@@ -3125,31 +3125,37 @@ const Reports = (props: GenericPageProps) => {
   const exportTemplateMutation = useExportReportTemplate();
   const upsertTemplateInCache = useCallback(
     (record: ReportTemplateDto) => {
-      queryClient.setQueryData<ReportTemplateListResponse>(["reports", "templates"], (current) => {
-        if (!current) {
-          return { templates: [record] };
-        }
-        const exists = current.templates.some((template) => template.id === record.id);
-        return {
-          templates: exists
-            ? current.templates.map((template) => (template.id === record.id ? record : template))
-            : [...current.templates, record],
-        };
-      });
+      queryClient.setQueryData<ReportTemplateListResponse>(
+        ["reports", "templates"],
+        (current: ReportTemplateListResponse | undefined): ReportTemplateListResponse => {
+          if (!current) {
+            return { templates: [record] };
+          }
+          const exists = current.templates.some((template) => template.id === record.id);
+          return {
+            templates: exists
+              ? current.templates.map((template) => (template.id === record.id ? record : template))
+              : [...current.templates, record],
+          };
+        },
+      );
     },
     [queryClient],
   );
 
   const removeTemplateFromCache = useCallback(
     (templateId: string) => {
-      queryClient.setQueryData<ReportTemplateListResponse>(["reports", "templates"], (current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          templates: current.templates.filter((template) => template.id !== templateId),
-        };
-      });
+      queryClient.setQueryData<ReportTemplateListResponse>(
+        ["reports", "templates"],
+        (current: ReportTemplateListResponse | undefined): ReportTemplateListResponse | undefined => {
+          if (!current) {
+            return current;
+          }
+          return {
+            templates: current.templates.filter((template) => template.id !== templateId),
+          };
+        },
+      );
     },
     [queryClient],
   );
