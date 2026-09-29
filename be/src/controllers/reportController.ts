@@ -19,6 +19,7 @@ import CounterChannelMetric from "../models/CounterChannelMetric.js";
 import CounterProduct from "../models/CounterProduct.js";
 import CounterUser from "../models/CounterUser.js";
 import User from "../models/User.js";
+import UserType from "../models/UserType.js";
 import StaffProfile from "../models/StaffProfile.js";
 import AffiliatePayoutLog from "../models/AffiliatePayoutLog.js";
 import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
@@ -133,7 +134,15 @@ import {
   loadCompensationSettlementRouter,
   type CompensationSettlementDestination,
 } from "../services/compensationSettlementRoutingService.js";
-import { signCompensationSettlementIntent } from "../services/compensationSettlementIntentService.js";
+import {
+  COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET,
+  signCompensationSettlementIntent,
+  type CompensationSettlementRoutingOverrideReason,
+} from "../services/compensationSettlementIntentService.js";
+import {
+  isPubCrawlGuidingComponentName,
+  shouldRoutePubCrawlGuidingToVolunteerBudget,
+} from "../services/pubCrawlGuidingReviewTargetRoutingService.js";
 import {
   getShiftRoleMembersForRange,
   getStaffProfileTypePeriodsForRange,
@@ -385,6 +394,7 @@ type SettlementSourceSummary = {
   currency: string;
   allocatedFundIds: number[];
   routeChanged: boolean;
+  routingOverrideReason: CompensationSettlementRoutingOverrideReason | null;
   settlementIntent: string | null;
 };
 
@@ -467,6 +477,9 @@ type CommissionSummary = {
   excludedSettlementTotal: number;
   settlementSources: SettlementSourceSummary[];
   staffType: string | null;
+  livesInAccom: boolean;
+  userTypeSlug: string | null;
+  userTypeName: string | null;
   productTotals: ProductPayoutSummary[];
   counterIncentiveMarkers: Record<string, string[]>;
   counterIncentiveTotals: Record<string, number>;
@@ -533,6 +546,13 @@ type ProductBucketLookup = Map<number, Map<string, ProductBucket>>;
 type GuideCommissionRateLookup = {
   defaultRate: number;
   ratesByProduct: Map<string, number>;
+};
+
+type GuideCommissionSplit = {
+  pubCrawlEntries: CommissionBreakdownEntry[];
+  otherEntries: CommissionBreakdownEntry[];
+  pubCrawlAmount: number;
+  otherAmount: number;
 };
 
 type StaffCollectionAggregate = {
@@ -2171,6 +2191,14 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       isActive: component.isActive,
     }));
     const guideCommissionRates = buildGuideCommissionRateLookup(typedComponents);
+    const pubCrawlGuidingCommissionComponent =
+      findPubCrawlGuidingCommissionComponent(typedComponents);
+    const pubCrawlGuidingProductKeys = pubCrawlGuidingCommissionComponent
+      ? collectGuideCommissionProductKeys(pubCrawlGuidingCommissionComponent)
+      : new Set<string>();
+    const pubCrawlGuidingReviewTargetMinReviews = pubCrawlGuidingCommissionComponent
+      ? resolvePubCrawlGuidingReviewTargetMinReviews(pubCrawlGuidingCommissionComponent)
+      : REVIEW_MINIMUM_THRESHOLD;
 
     const platformGuestTotals = await computePlatformGuestTotals(counterIds);
     commissionDataByUser.forEach((summary) => {
@@ -2258,6 +2286,19 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         productBucket.counterIds.add(counter.id);
         productBucket.totalCustomers += customers;
         productBucket.totalCommission += commissionPerStaff;
+        if (
+          pubCrawlGuidingCommissionComponent
+          && pubCrawlGuidingProductKeys.has(guideCommissionProductKey(meta.productId))
+        ) {
+          allocateComponentToProduct(
+            productBucketsByUser,
+            userId,
+            meta.productId,
+            meta.productName,
+            pubCrawlGuidingCommissionComponent.id,
+            commissionPerStaff,
+          );
+        }
 
         const guideBreakdown = aggregate.guides.get(userId) ?? {
           userId,
@@ -2481,8 +2522,10 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         financeVendorId: number | null;
         financeClientId: number | null;
         staffType: string | null;
+        livesInAccom: boolean;
       }
     >();
+    const userTypeByUserId = new Map<number, { slug: string | null; name: string | null }>();
     const collectionMap = new Map<
       number,
       { currency: string; receivable: number; payable: number }
@@ -2491,7 +2534,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     let staffProfileIds: number[] = [];
     if (hydratedSummaryUserIds.length > 0) {
       const staffProfiles = (await StaffProfile.findAll({
-        attributes: ["userId", "financeVendorId", "financeClientId", "staffType"],
+        attributes: ["userId", "financeVendorId", "financeClientId", "staffType", "livesInAccom"],
         where: {
           userId: {
             [Op.in]: hydratedSummaryUserIds,
@@ -2503,7 +2546,33 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         financeVendorId: number | null;
         financeClientId: number | null;
         staffType: string | null;
+        livesInAccom: boolean;
       }>;
+
+      const usersWithRoles = (await User.findAll({
+        attributes: ["id"],
+        include: [
+          {
+            model: UserType,
+            as: "role",
+            attributes: ["slug", "name"],
+            required: false,
+          },
+        ],
+        where: {
+          id: {
+            [Op.in]: hydratedSummaryUserIds,
+          },
+        },
+      })) as Array<User & { role?: UserType | null }>;
+
+      usersWithRoles.forEach((user) => {
+        const role = user.role ?? null;
+        userTypeByUserId.set(user.id, {
+          slug: role?.slug ?? null,
+          name: role?.name ?? null,
+        });
+      });
 
       staffProfileIds = staffProfiles.map((profile) => profile.userId);
 
@@ -2513,6 +2582,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           financeVendorId: profile.financeVendorId,
           financeClientId: profile.financeClientId,
           staffType: profile.staffType,
+          livesInAccom: profile.livesInAccom === true,
         });
       });
 
@@ -2738,6 +2808,9 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       summary.financeVendorId = profile?.financeVendorId ?? null;
       summary.financeClientId = profile?.financeClientId ?? null;
       summary.staffType = profile?.staffType ?? null;
+      summary.livesInAccom = profile?.livesInAccom === true;
+      summary.userTypeSlug = userTypeByUserId.get(userId)?.slug ?? null;
+      summary.userTypeName = userTypeByUserId.get(userId)?.name ?? null;
       summary.paidEntries = staffProfileKey
         ? (paidEntriesByStaffProfileId.get(staffProfileKey) ?? [])
         : [];
@@ -2914,6 +2987,17 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
     const settlementFundNameById = new Map(
       settlementFundRows.map((fund) => [fund.id, fund.name] as const),
     );
+    const defaultVolunteerBudgetFund =
+      [...settlementFundRows]
+        .filter((fund) => (
+          fund.isActive
+          && fund.currency.trim().toUpperCase() === resolvePayoutCurrency()
+        ))
+        .sort((left, right) => (
+          Number(right.name.trim().toLowerCase() === "volunteer fund")
+          - Number(left.name.trim().toLowerCase() === "volunteer fund")
+          || left.id - right.id
+        ))[0] ?? null;
     // Read the whole period, not only users still present in the live report.
     // Otherwise an allocation can disappear from reconciliation when its
     // staff/source calculation is removed entirely.
@@ -3066,6 +3150,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         amount: number;
         earnings: DatedMinorAmount[];
         references?: Array<{ id: number; date: string }>;
+        routingOverrideReason?: CompensationSettlementRoutingOverrideReason | null;
       }): Promise<void> => {
         const sourceAmount = roundCurrencyValue(input.amount);
         const componentId = input.componentId ?? null;
@@ -3267,6 +3352,32 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             ? { componentId, componentCategory: input.category }
             : { systemSource: input.sourceKey }),
         });
+        const shouldApplyPubCrawlGuidingBudgetOverride =
+          input.routingOverrideReason === COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET
+          && route.destination === "staff_vendor"
+          && input.sourceKey === "compensation_component"
+          && componentId !== null
+          && (settlementSegment.staffType ?? summary.staffType) === "long_term";
+        const routeForSettlement = shouldApplyPubCrawlGuidingBudgetOverride
+          ? {
+              ...route,
+              destination: "volunteer_fund" as CompensationSettlementDestination,
+              fundId: defaultVolunteerBudgetFund?.id ?? null,
+            }
+          : route;
+        if (
+          shouldApplyPubCrawlGuidingBudgetOverride
+          && !defaultVolunteerBudgetFund
+        ) {
+          throw new HttpError(
+            409,
+            `${input.label} for ${summary.fullName} needs an active ${resolvePayoutCurrency()} Volunteer Fund because the review target was missed.`,
+          );
+        }
+        const appliedRoutingOverrideReason =
+          shouldApplyPubCrawlGuidingBudgetOverride
+            ? input.routingOverrideReason ?? null
+            : null;
         const activeAllocationsByFund = nonzeroAllocationsByFund;
         if (activeAllocationsByFund.length > 1) {
           throw new HttpError(
@@ -3351,16 +3462,16 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             ? "staff_vendor"
             : null;
         const routeChanged = historicalDestination === "volunteer_fund"
-          ? route.destination !== "volunteer_fund" || route.fundId !== historicalFundId
+          ? routeForSettlement.destination !== "volunteer_fund" || routeForSettlement.fundId !== historicalFundId
           : historicalDestination === "staff_vendor"
-            ? route.destination !== "staff_vendor"
+            ? routeForSettlement.destination !== "staff_vendor"
             : false;
         // A live ledger settlement is authoritative for its whole source and
         // period. This prevents either destination from being exposed again
         // after a rule or staff-label change.
-        const destination = historicalDestination ?? route.destination;
+        const destination = historicalDestination ?? routeForSettlement.destination;
         const fundId = historicalFundId
-          ?? (destination === "volunteer_fund" ? route.fundId : null);
+          ?? (destination === "volunteer_fund" ? routeForSettlement.fundId : null);
         const allocatedFundIds = activeAllocationsByFund
           .map(([allocatedFundId]) => allocatedFundId)
           .sort((left, right) => left - right);
@@ -3413,7 +3524,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           destination,
           fundId,
           fundName: fund?.name ?? null,
-          ruleId: route.ruleId,
+          ruleId: routeForSettlement.ruleId,
           settledAmount: destination === "volunteer_fund" ? allocatedAmount : personallySettledAmount,
           allocatedAmount,
           outstandingAmount,
@@ -3421,6 +3532,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
           currency: resolvePayoutCurrency(),
           allocatedFundIds,
           routeChanged,
+          routingOverrideReason: appliedRoutingOverrideReason,
           settlementIntent: null,
         });
 
@@ -3433,16 +3545,61 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         }
       };
 
-      await addSettlementSource({
-        sourceKey: "guide_commission",
-        label: "Guide commission",
-        category: "commission",
-        amount: summary.totalCommission,
-        earnings: buildExactDatedMinorEarnings(
-          summary.totalCommission,
-          summary.breakdown.map((entry) => ({ date: entry.date, amount: entry.commission })),
-        ),
-      });
+      if (pubCrawlGuidingCommissionComponent && pubCrawlGuidingProductKeys.size > 0) {
+        const commissionSplit = splitGuideCommissionForPubCrawlGuiding(
+          summary,
+          pubCrawlGuidingProductKeys,
+        );
+        await addSettlementSource({
+          sourceKey: "guide_commission",
+          label: "Guide commission",
+          category: "commission",
+          amount: commissionSplit.otherAmount,
+          earnings: buildExactDatedMinorEarnings(
+            commissionSplit.otherAmount,
+            commissionSplit.otherEntries.map((entry) => ({
+              date: entry.date,
+              amount: entry.commission,
+            })),
+          ),
+        });
+        await addSettlementSource({
+          sourceKey: "compensation_component",
+          label: pubCrawlGuidingCommissionComponent.name,
+          componentId: pubCrawlGuidingCommissionComponent.id,
+          category: pubCrawlGuidingCommissionComponent.category,
+          amount: commissionSplit.pubCrawlAmount,
+          earnings: buildExactDatedMinorEarnings(
+            commissionSplit.pubCrawlAmount,
+            commissionSplit.pubCrawlEntries.map((entry) => ({
+              date: entry.date,
+              amount: entry.commission,
+            })),
+          ),
+          routingOverrideReason: shouldRoutePubCrawlGuidingToVolunteerBudget({
+            staffType: summary.staffType,
+            livesInAccom: summary.livesInAccom,
+            userTypeSlug: summary.userTypeSlug,
+            userTypeName: summary.userTypeName,
+            reviewPaymentOverride: summary.reviewPaymentOverride,
+            totalEligibleReviews: summary.reviewTotals.totalEligibleReviews,
+            minReviews: pubCrawlGuidingReviewTargetMinReviews,
+          })
+            ? COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET
+            : null,
+        });
+      } else {
+        await addSettlementSource({
+          sourceKey: "guide_commission",
+          label: "Guide commission",
+          category: "commission",
+          amount: summary.totalCommission,
+          earnings: buildExactDatedMinorEarnings(
+            summary.totalCommission,
+            summary.breakdown.map((entry) => ({ date: entry.date, amount: entry.commission })),
+          ),
+        });
+      }
       for (const component of summary.componentTotals) {
         await addSettlementSource({
           sourceKey: "compensation_component",
@@ -3528,6 +3685,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
               outstandingAmountMinor: Math.round(source.outstandingAmount * 100),
               ruleId: source.ruleId,
               currency: source.currency,
+              routingOverrideReason: source.routingOverrideReason,
               ...(source.segmentKey ? {
                 direction: "payable",
                 segmentKey: source.segmentKey,
@@ -3592,6 +3750,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             outstandingAmountMinor: Math.round(source.outstandingAmount * 100),
             ruleId: source.ruleId,
             currency: source.currency,
+            routingOverrideReason: source.routingOverrideReason,
             ...(source.segmentKey ? {
               direction: "payable",
               segmentKey: source.segmentKey,
@@ -6367,6 +6526,9 @@ const createEmptySummary = (
   excludedSettlementTotal: 0,
   settlementSources: [],
   staffType: null,
+  livesInAccom: false,
+  userTypeSlug: null,
+  userTypeName: null,
   productTotals: [],
   counterIncentiveMarkers: {},
   counterIncentiveTotals: {},
@@ -7944,6 +8106,74 @@ type GuideCommissionConfig = {
   entries: GuideCommissionProductEntry[];
 };
 
+const guideCommissionProductKey = (productId: number | null): string =>
+  productId === null ? "__null__" : `${productId}`;
+
+const findPubCrawlGuidingCommissionComponent = (
+  components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
+): (CompensationComponent & { assignments?: CompensationComponentAssignment[] }) | null =>
+  components.find((component) => (
+    component.isActive && isPubCrawlGuidingComponentName(component.name)
+  )) ?? null;
+
+const collectGuideCommissionProductKeys = (
+  component: CompensationComponent & { assignments?: CompensationComponentAssignment[] },
+): Set<string> => {
+  const productKeys = new Set<string>();
+  const addConfig = (config: unknown) => {
+    const normalized = normalizeGuideCommissionConfig(config);
+    normalized?.entries.forEach((entry) => {
+      productKeys.add(guideCommissionProductKey(entry.productId));
+    });
+  };
+
+  addConfig(component.config ?? {});
+  component.assignments?.forEach((assignment) => {
+    if (assignment.isActive) {
+      addConfig(assignment.config ?? {});
+    }
+  });
+  return productKeys;
+};
+
+const resolvePubCrawlGuidingReviewTargetMinReviews = (
+  component: CompensationComponent & { assignments?: CompensationComponentAssignment[] },
+): number => {
+  let minReviews = normalizeReviewRequirementConfig(component.config ?? {}).minReviews ?? null;
+  component.assignments?.forEach((assignment) => {
+    if (!assignment.isActive) {
+      return;
+    }
+    minReviews = normalizeReviewRequirementConfig(assignment.config ?? {}).minReviews ?? minReviews;
+  });
+  return minReviews && minReviews > 0 ? minReviews : REVIEW_MINIMUM_THRESHOLD;
+};
+
+const splitGuideCommissionForPubCrawlGuiding = (
+  summary: CommissionSummary,
+  productKeys: Set<string>,
+): GuideCommissionSplit => {
+  const pubCrawlEntries: CommissionBreakdownEntry[] = [];
+  const otherEntries: CommissionBreakdownEntry[] = [];
+  summary.breakdown.forEach((entry) => {
+    if (productKeys.has(guideCommissionProductKey(entry.productId))) {
+      pubCrawlEntries.push(entry);
+    } else {
+      otherEntries.push(entry);
+    }
+  });
+  const pubCrawlAmount = roundCurrencyValue(
+    pubCrawlEntries.reduce((sum, entry) => sum + entry.commission, 0),
+  );
+  const otherAmount = roundCurrencyValue(summary.totalCommission - pubCrawlAmount);
+  return {
+    pubCrawlEntries,
+    otherEntries,
+    pubCrawlAmount,
+    otherAmount,
+  };
+};
+
 function buildGuideCommissionRateLookup(
   components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
 ): GuideCommissionRateLookup {
@@ -7961,8 +8191,7 @@ function buildGuideCommissionRateLookup(
       if (!Number.isFinite(entry.rate)) {
         return;
       }
-      const key = entry.productId === null ? "__null__" : `${entry.productId}`;
-      ratesByProduct.set(key, entry.rate);
+      ratesByProduct.set(guideCommissionProductKey(entry.productId), entry.rate);
     });
   };
 
@@ -7983,7 +8212,7 @@ function buildGuideCommissionRateLookup(
 }
 
 function resolveGuideCommissionRate(lookup: GuideCommissionRateLookup, productId: number | null): number {
-  const key = productId === null ? "__null__" : `${productId}`;
+  const key = guideCommissionProductKey(productId);
   return lookup.ratesByProduct.get(key) ?? lookup.defaultRate;
 }
 

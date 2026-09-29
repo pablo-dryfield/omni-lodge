@@ -96,6 +96,7 @@ export type PaySettlementSource = {
   currency: string;
   allocatedFundIds: number[];
   routeChanged: boolean;
+  routingOverrideReason?: string | null;
   settlementIntent: string | null;
 };
 
