@@ -5220,6 +5220,9 @@ const isStorefrontBooking = (booking: Booking): boolean =>
   String(booking.platform ?? '').trim().toLowerCase() === 'omnilodge' &&
   Boolean(String(booking.platformOrderId ?? '').trim());
 
+const isAirbnbBooking = (booking: Booking): boolean =>
+  String(booking.platform ?? '').trim().toLowerCase() === 'airbnb';
+
 const isDirectManifestActionBooking = (booking: Booking): boolean =>
   isDirectFoodTourBooking(booking) || isStorefrontBooking(booking);
 
@@ -5231,6 +5234,19 @@ const requireDirectManifestActionBooking = async (bookingId: number): Promise<Bo
     throw new HttpError(404, 'Booking not found');
   }
   if (!isDirectManifestActionBooking(booking)) {
+    throw new HttpError(400, 'This booking platform does not support this manifest action.');
+  }
+  return booking;
+};
+
+const requireAmendableManifestBooking = async (bookingId: number): Promise<Booking> => {
+  const booking = await Booking.findByPk(bookingId, {
+    include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+  });
+  if (!booking) {
+    throw new HttpError(404, 'Booking not found');
+  }
+  if (!isDirectManifestActionBooking(booking) && !isAirbnbBooking(booking)) {
     throw new HttpError(400, 'This booking platform does not support this manifest action.');
   }
   return booking;
@@ -6254,7 +6270,7 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
     }
     const normalizedTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
 
-    const booking = await requireDirectManifestActionBooking(bookingIdParam);
+    const booking = await requireAmendableManifestBooking(bookingIdParam);
     if (booking.status === 'cancelled') {
       res.status(400).json({ message: 'Cancelled bookings cannot be amended' });
       return;
@@ -6296,7 +6312,11 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
       );
       await booking.save({ transaction });
       await saveDirectBookingEvent(booking, 'amended', req.authContext?.id ?? null, {
-        action: isStorefrontBooking(booking) ? 'amend-storefront-booking' : 'amend-direct-food-tour',
+        action: isStorefrontBooking(booking)
+          ? 'amend-storefront-booking'
+          : isAirbnbBooking(booking)
+            ? 'amend-airbnb-booking'
+            : 'amend-direct-food-tour',
         previousExperienceStartAt: previousExperienceStartAt ? previousExperienceStartAt.toISOString() : null,
         nextExperienceStartAt: booking.experienceStartAt ? booking.experienceStartAt.toISOString() : null,
       }, transaction);

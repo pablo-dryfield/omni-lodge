@@ -1174,6 +1174,10 @@ const isXperiencePolandOrder = (order: UnifiedOrder): boolean => {
   return (order.platform ?? '').toLowerCase() === 'xperiencepoland';
 };
 
+const isAirbnbOrder = (order: UnifiedOrder): boolean => {
+  return (order.platform ?? '').toLowerCase() === 'airbnb';
+};
+
 const isDirectFoodTourOrder = (order: UnifiedOrder): boolean => {
   return (
     (order.platform ?? '').toLowerCase() === 'direct' &&
@@ -1185,7 +1189,7 @@ const isStorefrontOrder = (order: UnifiedOrder): boolean =>
   (order.platform ?? '').toLowerCase() === 'omnilodge';
 
 const isDirectManifestActionOrder = (order: UnifiedOrder): boolean =>
-  isDirectFoodTourOrder(order) || isStorefrontOrder(order);
+  isDirectFoodTourOrder(order) || isStorefrontOrder(order) || isAirbnbOrder(order);
 
 const isOrderExperienceDateOnOrBeforeToday = (order: UnifiedOrder): boolean => {
   const rawDate = String(order.date ?? "").trim();
@@ -6347,7 +6351,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                 : amendState.mode === "storefront"
                   ? "Updating the booking will show the same date-change email preview used for Ecwid before anything is saved."
                 : amendState.mode === "direct"
-                  ? "Updating the pickup details will update this Food Tour booking and email the customer."
+                  ? `Updating the pickup details will update this ${amendState.order && isAirbnbOrder(amendState.order) ? "Airbnb" : "Food Tour"} booking and email the customer.`
                 : "Updating the pickup details will update this booking in OmniLodge."}
           </Text>
           {amendState.mode === "ecwid" && amendPreview.status === "loading" && (
@@ -6525,7 +6529,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             required
             placeholder="HH:mm"
           />
-          {amendState.mode && !amendHasCustomerEmail && (
+          {amendState.mode && amendState.mode !== "direct" && !amendHasCustomerEmail && (
             <Alert color="yellow" title="Missing customer email">
               Date change email preview is unavailable because this booking has no customer email.
             </Alert>
