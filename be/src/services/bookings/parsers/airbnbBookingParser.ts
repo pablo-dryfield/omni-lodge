@@ -21,6 +21,9 @@ const DEFAULT_BOOKING_TIMEZONE =
   (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
 const AIRBNB_TIMEZONE =
   (getConfigValue('AIRBNB_TIMEZONE') as string | null) ?? DEFAULT_BOOKING_TIMEZONE;
+const AIRBNB_SENT_MONEY_TOTAL_PER_GUEST_PLN = Number(
+  getConfigValue('AIRBNB_SENT_MONEY_TOTAL_PER_GUEST_PLN') ?? 125,
+);
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
@@ -131,10 +134,50 @@ const cleanListingTitle = (value: string): string => {
 const MONEY_SYMBOLS: Record<string, string> = {
   zl: 'PLN',
   'z\u0142': 'PLN',
+  'z\u0141': 'PLN',
   pln: 'PLN',
   $: 'USD',
   '\u20ac': 'EUR',
   '\u00a3': 'GBP',
+};
+
+const MONTH_NUMBER_BY_LABEL: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+const MONTH_PATTERN =
+  '(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+
+type AirbnbSentMoneyDetails = {
+  amount: number;
+  currency: string | null;
+  guestName: string | null;
+  experienceDate: string | null;
+  productName: string | null;
+  inferredPartySize: number | null;
 };
 
 const TIMEZONE_ALIASES: Record<string, string> = {
@@ -191,6 +234,128 @@ const parseMoney = (value: string | null): { amount: number | null; currency: st
     MONEY_SYMBOLS[symbol] ??
     (rawSymbol && rawSymbol.length === 3 ? rawSymbol.toUpperCase() : null);
   return { amount, currency };
+};
+
+const parseSentMoneyAmount = (value: string | null): { amount: number | null; currency: string | null } => {
+  if (!value) {
+    return { amount: null, currency: null };
+  }
+  const match = value.match(/([A-Za-z\u0141\u0142$€£]{1,5})?\s*([\d.,]+)\s*([A-Za-z\u0141\u0142$€£]{1,5})?/i);
+  if (!match) {
+    return { amount: null, currency: null };
+  }
+  const amount = Number.parseFloat(match[2].replace(/,/g, ''));
+  if (Number.isNaN(amount)) {
+    return { amount: null, currency: null };
+  }
+  const rawSymbol = (match[1]?.trim() || match[3]?.trim() || '').replace(/^ZL$/i, 'zl');
+  const symbol = rawSymbol.toLowerCase();
+  const currency =
+    MONEY_SYMBOLS[rawSymbol] ??
+    MONEY_SYMBOLS[symbol] ??
+    (rawSymbol && rawSymbol.length === 3 ? rawSymbol.toUpperCase() : null);
+  return { amount, currency };
+};
+
+const inferAirbnbSentMoneyPartySize = (
+  amount: number,
+  currency: string | null,
+): number | null => {
+  if ((currency ?? '').toUpperCase() !== 'PLN') {
+    return null;
+  }
+  if (
+    !Number.isFinite(AIRBNB_SENT_MONEY_TOTAL_PER_GUEST_PLN)
+    || AIRBNB_SENT_MONEY_TOTAL_PER_GUEST_PLN <= 0
+  ) {
+    return null;
+  }
+  const raw = amount / AIRBNB_SENT_MONEY_TOTAL_PER_GUEST_PLN;
+  const rounded = Math.round(raw);
+  if (rounded < 1 || rounded > 100) {
+    return null;
+  }
+  return Math.abs(raw - rounded) < 0.005 ? rounded : null;
+};
+
+const parseAirbnbSentMoneyDateRange = (
+  text: string,
+): { experienceDate: string | null; endIndex: number | null } => {
+  const pattern = new RegExp(
+    `\\b${MONTH_PATTERN}\\s+(\\d{1,2})(?:\\s*[-\\u2013\\u2014]\\s*(?:${MONTH_PATTERN}\\s+)?(\\d{1,2}))?,\\s*(\\d{4})\\b`,
+    'i',
+  );
+  const match = text.match(pattern);
+  if (!match) {
+    return { experienceDate: null, endIndex: null };
+  }
+
+  const monthLabel = match[1]?.toLowerCase();
+  const month = monthLabel ? MONTH_NUMBER_BY_LABEL[monthLabel] : null;
+  const day = Number.parseInt(match[2] ?? '', 10);
+  const year = Number.parseInt(match[match.length - 1] ?? '', 10);
+  if (!month || Number.isNaN(day) || Number.isNaN(year)) {
+    return { experienceDate: null, endIndex: null };
+  }
+
+  const parsed = dayjs.tz(
+    `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    'YYYY-MM-DD',
+    AIRBNB_TIMEZONE,
+  );
+  return {
+    experienceDate: parsed.isValid() ? parsed.format('YYYY-MM-DD') : null,
+    endIndex: typeof match.index === 'number' ? match.index + match[0].length : null,
+  };
+};
+
+const extractAirbnbSentMoneyDetails = (
+  context: BookingParserContext,
+  text: string,
+): AirbnbSentMoneyDetails | null => {
+  const subject = context.subject ?? '';
+  const subjectGuestMatch = subject.match(/^You sent\s+(.+?)\s+money\b/i);
+  const sentMatch = text.match(
+    new RegExp(
+      `\\bYou sent\\s+((?:[A-Za-z\\u0141\\u0142$€£]{1,5}\\s*)?[\\d.,]+(?:\\s*[A-Za-z\\u0141\\u0142$€£]{1,5})?)\\s+to\\s+(.+?)(?=\\s+${MONTH_PATTERN}\\b|$)`,
+      'iu',
+    ),
+  );
+  if (!subjectGuestMatch && !sentMatch) {
+    return null;
+  }
+
+  const money = parseSentMoneyAmount(sentMatch?.[1] ?? null);
+  if (money.amount === null) {
+    return null;
+  }
+
+  const dateRange = parseAirbnbSentMoneyDateRange(text);
+  let productName: string | null = null;
+  if (dateRange.endIndex !== null) {
+    const productMatch = text
+      .slice(dateRange.endIndex)
+      .trim()
+      .match(/^(.+?)(?=\s+View Details\b|\s+Airbnb\b|$)/i);
+    if (productMatch?.[1]) {
+      productName = cleanListingTitle(productMatch[1]);
+    }
+  }
+
+  const guestName = (
+    subjectGuestMatch?.[1] ??
+    sentMatch?.[2] ??
+    null
+  )?.trim() ?? null;
+
+  return {
+    amount: money.amount,
+    currency: money.currency,
+    guestName,
+    experienceDate: dateRange.experienceDate,
+    productName,
+    inferredPartySize: inferAirbnbSentMoneyPartySize(money.amount, money.currency),
+  };
 };
 
 const stripWeekday = (value: string): string => {
@@ -584,6 +749,9 @@ const extractEarningsTotal = (text: string): { amount: number | null; currency: 
 const deriveStatusFromContext = (context: BookingParserContext, text: string): BookingStatus => {
   const subject = (context.subject ?? '').toLowerCase();
   const body = text.toLowerCase();
+  if (extractAirbnbSentMoneyDetails(context, text)) {
+    return 'cancelled';
+  }
   if (subject.includes('cancelled') || subject.includes('canceled')) {
     return 'cancelled';
   }
@@ -687,7 +855,8 @@ export class AirbnbBookingParser implements BookingEmailParser {
       return null;
     }
 
-    const status = deriveStatusFromContext(context, text);
+    const sentMoneyDetails = extractAirbnbSentMoneyDetails(context, text);
+    const status = sentMoneyDetails ? 'cancelled' : deriveStatusFromContext(context, text);
     const eventType = statusToEventType(status);
     const bookingId = extractBookingId(text, context.subject);
     if (!bookingId && status !== 'cancelled' && status !== 'amended') {
@@ -699,7 +868,7 @@ export class AirbnbBookingParser implements BookingEmailParser {
     const platformBookingId = bookingId ?? `${placeholderPrefix}${context.messageId}`;
 
     const bookingFields: BookingFieldPatch = {};
-    const listingName = extractListingName(text);
+    const listingName = sentMoneyDetails?.productName ?? extractListingName(text);
     if (listingName) {
       bookingFields.productName = listingName;
     }
@@ -708,7 +877,7 @@ export class AirbnbBookingParser implements BookingEmailParser {
       bookingFields.rawPayloadLocation = reservationLink;
     }
 
-    const guestRaw = extractGuestNameFromSubject(context.subject) ?? extractGuestName(text);
+    const guestRaw = sentMoneyDetails?.guestName ?? extractGuestNameFromSubject(context.subject) ?? extractGuestName(text);
     const guestName = parseName(guestRaw);
     if (guestName.firstName) {
       bookingFields.guestFirstName = guestName.firstName;
@@ -752,6 +921,9 @@ export class AirbnbBookingParser implements BookingEmailParser {
         }
       }
     }
+    if (!bookingFields.experienceDate && sentMoneyDetails?.experienceDate) {
+      bookingFields.experienceDate = sentMoneyDetails.experienceDate;
+    }
 
     const stopLabels = ['Check-in', 'Check out', 'Check-out', 'Checkout', 'Reservation', 'Confirmation', 'Total', 'Listing'];
     const guestsRaw = extractField(text, 'Guests:', stopLabels) ?? extractField(text, 'Guest count:', stopLabels);
@@ -784,6 +956,12 @@ export class AirbnbBookingParser implements BookingEmailParser {
     } else if (adults !== null || children !== null) {
       bookingFields.partySizeTotal = (adults ?? 0) + (children ?? 0);
     }
+    if (sentMoneyDetails?.inferredPartySize && bookingFields.partySizeTotal == null) {
+      bookingFields.partySizeTotal = sentMoneyDetails.inferredPartySize;
+      if (bookingFields.partySizeAdults == null) {
+        bookingFields.partySizeAdults = sentMoneyDetails.inferredPartySize;
+      }
+    }
 
     const notes: string[] = [];
     if (status === 'cancelled') {
@@ -812,13 +990,23 @@ export class AirbnbBookingParser implements BookingEmailParser {
       }
     }
 
+    if (sentMoneyDetails) {
+      bookingFields.refundedAmount = sentMoneyDetails.amount;
+      if (sentMoneyDetails.currency) {
+        bookingFields.refundedCurrency = sentMoneyDetails.currency;
+        bookingFields.currency = bookingFields.currency ?? sentMoneyDetails.currency;
+      }
+      const note = 'Airbnb sent-money email parsed as post-experience cancellation/refund.';
+      bookingFields.notes = bookingFields.notes ? `${bookingFields.notes} | ${note}` : note;
+    }
+
     return {
       platform: 'airbnb',
       platformBookingId,
       platformOrderId: bookingId ?? null,
       eventType,
       status,
-      paymentStatus: 'unknown',
+      paymentStatus: sentMoneyDetails ? 'refunded' : 'unknown',
       bookingFields,
       occurredAt: context.receivedAt ?? context.internalDate ?? null,
       sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,

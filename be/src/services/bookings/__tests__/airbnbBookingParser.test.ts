@@ -89,3 +89,66 @@ describe('Airbnb reservation amendments', () => {
     expect(parsed).toBeNull();
   });
 });
+
+describe('Airbnb sent-money cancellations', () => {
+  it('parses post-experience money-sent emails as refunded cancellations', async () => {
+    const parsed = await new AirbnbBookingParser().parse({
+      messageId: 'airbnb-sent-money-single',
+      subject: 'You sent Thomas money',
+      from: 'Airbnb <automated@airbnb.com>',
+      headers: { from: 'Airbnb <automated@airbnb.com>' },
+      receivedAt: new Date('2026-09-30T00:47:00.000Z'),
+      textBody: [
+        'You sent zł 125 PLN to Thomas',
+        'Thomas',
+        'Sep 29 – 30, 2026',
+        'Krawl Through Krakow Pub Crawl',
+        'View Details',
+      ].join('\n'),
+    });
+
+    expect(parsed).toEqual(expect.objectContaining({
+      platform: 'airbnb',
+      platformBookingId: 'airbnb-cancel-airbnb-sent-money-single',
+      platformOrderId: null,
+      eventType: 'cancelled',
+      status: 'cancelled',
+      paymentStatus: 'refunded',
+      bookingFields: expect.objectContaining({
+        guestFirstName: 'Thomas',
+        experienceDate: '2026-09-29',
+        productName: 'Krawl Through Krakow Pub Crawl',
+        partySizeTotal: 1,
+        partySizeAdults: 1,
+        refundedAmount: 125,
+        refundedCurrency: 'PLN',
+        currency: 'PLN',
+      }),
+    }));
+  });
+
+  it('infers multi-person Airbnb refund cancellations from the total sent amount', async () => {
+    const parsed = await new AirbnbBookingParser().parse({
+      messageId: 'airbnb-sent-money-multiple',
+      subject: 'You sent Taylor money',
+      from: 'Airbnb <automated@airbnb.com>',
+      headers: { from: 'Airbnb <automated@airbnb.com>' },
+      receivedAt: new Date('2026-09-30T00:47:00.000Z'),
+      textBody: [
+        'You sent zł 375 PLN to Taylor',
+        'Taylor',
+        'Sep 29 – 30, 2026',
+        'Krawl Through Krakow Pub Crawl',
+        'View Details',
+      ].join('\n'),
+    });
+
+    expect(parsed?.bookingFields).toEqual(expect.objectContaining({
+      guestFirstName: 'Taylor',
+      partySizeTotal: 3,
+      partySizeAdults: 3,
+      refundedAmount: 375,
+      refundedCurrency: 'PLN',
+    }));
+  });
+});
