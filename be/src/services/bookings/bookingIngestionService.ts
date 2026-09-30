@@ -1718,12 +1718,13 @@ const normalizeNameForMatch = (value: unknown): string | null => {
   return normalized || null;
 };
 
-const normalizeProductForMatch = (value: unknown): string | null => {
+export const normalizeProductForMatch = (value: unknown): string | null => {
   if (typeof value !== 'string') {
     return null;
   }
   const canonical = canonicalizeProductLabel(value) ?? value;
-  const normalized = sanitizeProductSource(canonical)
+  const mappedName = CANONICAL_TO_PRODUCT_NAME[canonical] ?? canonical;
+  const normalized = sanitizeProductSource(mappedName)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
