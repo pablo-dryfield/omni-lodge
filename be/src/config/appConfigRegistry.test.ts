@@ -40,4 +40,13 @@ describe('application configuration registry', () => {
       validation: { required: true, integer: true, min: 1, max: 336 },
     });
   });
+
+  it('registers Airbnb sent-money cancellation amount inference', () => {
+    expect(CONFIG_DEFINITION_MAP.get('AIRBNB_SENT_MONEY_TOTAL_PER_GUEST_PLN')).toMatchObject({
+      category: 'Booking Parsers',
+      valueType: 'number',
+      defaultValue: 125,
+      validation: { required: true, min: 1 },
+    });
+  });
 });

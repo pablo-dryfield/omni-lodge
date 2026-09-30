@@ -342,6 +342,16 @@ Best,
     validation: { format: 'timezone' },
   },
   {
+    key: 'AIRBNB_SENT_MONEY_TOTAL_PER_GUEST_PLN',
+    label: 'Airbnb sent-money amount per guest',
+    description:
+      'Total PLN amount Airbnb reports when money is sent after an experience cancellation, including Airbnb service fees.',
+    category: 'Booking Parsers',
+    valueType: 'number',
+    defaultValue: 125,
+    validation: { required: true, min: 1 },
+  },
+  {
     key: 'ECWID_TIMEZONE',
     label: 'Ecwid parser timezone',
     description: 'Override timezone for Ecwid booking emails.',
