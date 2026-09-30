@@ -1718,6 +1718,20 @@ const normalizeNameForMatch = (value: unknown): string | null => {
   return normalized || null;
 };
 
+const normalizeProductForMatch = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const canonical = canonicalizeProductLabel(value) ?? value;
+  const normalized = sanitizeProductSource(canonical)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  return normalized || null;
+};
+
 const isAirbnbCancellationPlaceholderId = (platform: BookingPlatform, platformBookingId: string): boolean =>
   platform === 'airbnb' && platformBookingId.startsWith(AIRBNB_CANCELLATION_PLACEHOLDER_PREFIX);
 
@@ -1748,8 +1762,9 @@ const findAirbnbCancellationMatch = async (
     ? fields.experienceDate.trim()
     : null;
   const targetStartAt = isValidDateValue(fields.experienceStartAt) ? fields.experienceStartAt : null;
+  const targetProduct = normalizeProductForMatch(fields.productName ?? null);
 
-  if (!targetExperienceDate && !targetStartAt && targetPartySize == null) {
+  if (!targetExperienceDate && !targetStartAt && targetPartySize == null && !targetProduct) {
     return null;
   }
 
@@ -1810,6 +1825,16 @@ const findAirbnbCancellationMatch = async (
     }
     if (targetExperienceDate && candidate.experienceDate === targetExperienceDate) {
       score += 2;
+    }
+    if (targetProduct) {
+      const candidateProduct = normalizeProductForMatch(candidate.productName ?? null);
+      if (candidateProduct) {
+        if (candidateProduct === targetProduct) {
+          score += 2;
+        } else {
+          return -1;
+        }
+      }
     }
     if (targetStartAt && isValidDateValue(candidate.experienceStartAt)) {
       const minutesDiff = Math.abs(candidate.experienceStartAt.getTime() - targetStartAt.getTime()) / 60000;
