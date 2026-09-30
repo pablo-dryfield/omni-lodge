@@ -36,6 +36,7 @@ import {
   normalizeManagerRoleBundle,
   type ManagerRoleBundleRole,
   normalizeShiftRequestNote,
+  shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest,
 } from './shiftRequestRulesService.js';
 
 dayjs.extend(utc);
@@ -70,6 +71,11 @@ type AssignmentDetails = ShiftAssignment & {
   shiftInstance?: (ShiftInstance & {
     shiftType?: ShiftType | null;
   }) | null;
+};
+
+type StaffReceiveAssignmentOptions = {
+  excludedAssignmentIds?: number[];
+  enforceLiveInVolunteerWorkingDayLimit?: boolean;
 };
 
 type RequestDetails = SwapRequest & {
@@ -256,8 +262,10 @@ const assertStaffCanReceiveAssignment = async (
   requesterId: number,
   targetAssignment: AssignmentDetails,
   transaction: Transaction,
-  excludedAssignmentIds: number[] = [targetAssignment.id],
+  options: StaffReceiveAssignmentOptions = {},
 ): Promise<void> => {
+  const excludedAssignmentIds = options.excludedAssignmentIds ?? [targetAssignment.id];
+  const enforceLiveInVolunteerWorkingDayLimit = options.enforceLiveInVolunteerWorkingDayLimit ?? true;
   const requester = await User.findByPk(requesterId, {
     attributes: ['id', 'status', 'approved', 'arrivalDate', 'departureDate'],
     include: [{ model: StaffProfile, as: 'staffProfile' }],
@@ -309,7 +317,11 @@ const assertStaffCanReceiveAssignment = async (
   if (!targetShift) {
     throw new HttpError(404, 'Shift assignment details are unavailable');
   }
-  if (requester.staffProfile.staffType === 'volunteer' && requester.staffProfile.livesInAccom) {
+  if (
+    enforceLiveInVolunteerWorkingDayLimit
+    && requester.staffProfile.staffType === 'volunteer'
+    && requester.staffProfile.livesInAccom
+  ) {
     const weekAssignments = await ShiftAssignment.findAll({
       where: {
         userId: requesterId,
@@ -772,13 +784,13 @@ export async function createShiftChangeRequest(
         payload.requesterId,
         toAssignment,
         transaction,
-        swapAssignmentIds,
+        { excludedAssignmentIds: swapAssignmentIds },
       );
       await assertStaffCanReceiveAssignment(
         toAssignment.userId,
         fromAssignment,
         transaction,
-        swapAssignmentIds,
+        { excludedAssignmentIds: swapAssignmentIds },
       );
       partnerId = toAssignment.userId;
       if (roleBundle) {
@@ -811,7 +823,10 @@ export async function createShiftChangeRequest(
       }
       partnerId = fromAssignment.userId;
       await lockReceivingStaffRows([payload.requesterId], transaction);
-      await assertStaffCanReceiveAssignment(payload.requesterId, fromAssignment, transaction);
+      await assertStaffCanReceiveAssignment(payload.requesterId, fromAssignment, transaction, {
+        enforceLiveInVolunteerWorkingDayLimit:
+          shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest(requestType),
+      });
     } else if (fromAssignment.userId !== payload.requesterId) {
       throw new HttpError(403, 'You can only drop your own assignment');
     }
@@ -994,20 +1009,23 @@ const assertRequestAssignmentsStillValid = async (
       request.requesterId,
       toAssignment,
       transaction,
-      swapAssignmentIds,
+      { excludedAssignmentIds: swapAssignmentIds },
     );
     await assertStaffCanReceiveAssignment(
       request.partnerId,
       fromAssignment,
       transaction,
-      swapAssignmentIds,
+      { excludedAssignmentIds: swapAssignmentIds },
     );
   } else if (requestType === 'takeover') {
     if (!isPositiveInteger(request.partnerId) || fromAssignment.userId !== request.partnerId) {
       throw new HttpError(409, 'The assignment owner changed after this request was created');
     }
     await lockReceivingStaffRows([request.requesterId], transaction);
-    await assertStaffCanReceiveAssignment(request.requesterId, fromAssignment, transaction);
+    await assertStaffCanReceiveAssignment(request.requesterId, fromAssignment, transaction, {
+      enforceLiveInVolunteerWorkingDayLimit:
+        shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest(requestType),
+    });
   } else if (fromAssignment.userId !== request.requesterId) {
     throw new HttpError(409, 'The dropped assignment owner changed after this request was created');
   }

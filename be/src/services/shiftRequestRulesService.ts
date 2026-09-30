@@ -60,6 +60,16 @@ export const isActiveShiftRequestStatus = (status: SwapRequestStatus): boolean =
 export const getInitialShiftRequestStatus = (requestType: ShiftRequestType): SwapRequestStatus =>
   requestType === 'drop' ? 'pending_manager' : 'pending_partner';
 
+/**
+ * The live-in volunteer 4-working-days cap protects the normal planned roster
+ * and shift swaps. A takeover is different: the volunteer is explicitly
+ * volunteering to cover someone else's already-published shift, so the cap
+ * should not block that request or its later approvals.
+ */
+export const shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest = (
+  requestType: ShiftRequestType,
+): boolean => requestType !== 'takeover';
+
 export const canPartnerRespondToShiftRequest = (
   requestType: ShiftRequestType,
   status: SwapRequestStatus,

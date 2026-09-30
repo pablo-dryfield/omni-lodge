@@ -13,6 +13,7 @@ import {
   normalizeShiftRequestNote,
   normalizeManagerRoleBundle,
   parseStrictBoolean,
+  shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest,
 } from '../shiftRequestRulesService';
 
 describe('strict shift-request boolean parsing', () => {
@@ -144,6 +145,17 @@ describe('shift-request lifecycle rules', () => {
     expect(isActiveShiftRequestStatus(status)).toBe(expected);
     expect(canCancelShiftRequest(status)).toBe(expected);
   });
+
+  it.each([
+    ['swap', true],
+    ['takeover', false],
+    ['drop', true],
+  ] as const)(
+    'sets live-in volunteer weekly-day enforcement for %s requests to %p',
+    (requestType, expected) => {
+      expect(shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest(requestType)).toBe(expected);
+    },
+  );
 });
 
 describe('affected assignment and active-request conflicts', () => {
