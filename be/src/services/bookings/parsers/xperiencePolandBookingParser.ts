@@ -208,6 +208,16 @@ const parseMoney = (value?: string | null): { amount: number | null; currency: s
 
 const roundMoney = (value: number): number => Math.round(value * 100) / 100;
 
+const isPaidOnlineOnlyText = (value?: string | null): boolean => {
+  const folded = foldText(value);
+  return /\bpaid online\b/i.test(folded) && !/\b(?:deposit|cash|arrival|collect)\b/i.test(folded);
+};
+
+const isNoCashToCollectText = (value?: string | null): boolean => {
+  const folded = foldText(value);
+  return /\bnothing\b/i.test(folded) || /\bfully prepaid\b/i.test(folded);
+};
+
 const parsePartySize = (value?: string | null): number | null => {
   if (!value) {
     return null;
@@ -533,6 +543,7 @@ const extractResaleBookingDetails = (
   const cash = parseMoney(cashText);
   const fullValue = parseMoney(fullValueText);
   const parsedDate = parseExperienceDate(dateText, timeText, null);
+  const fullyPrepaid = isPaidOnlineOnlyText(paymentText) || isNoCashToCollectText(cashText);
 
   return {
     guestName,
@@ -548,6 +559,7 @@ const extractResaleBookingDetails = (
     cashAmount: cash.amount,
     fullValueAmount: fullValue.amount,
     currency: fullValue.currency ?? deposit.currency ?? cash.currency ?? 'PLN',
+    fullyPrepaid,
   };
 };
 
@@ -653,10 +665,12 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
     if (kind === 'resale_booking') {
       const resale = extractResaleBookingDetails(context, body, subject);
       const cashToCollectAmount =
-        resale.cashAmount ??
-        (resale.fullValueAmount !== null && resale.depositAmount !== null
-          ? roundMoney(Math.max(resale.fullValueAmount - resale.depositAmount, 0))
-          : null);
+        resale.fullyPrepaid
+          ? 0
+          : resale.cashAmount ??
+            (resale.fullValueAmount !== null && resale.depositAmount !== null
+              ? roundMoney(Math.max(resale.fullValueAmount - resale.depositAmount, 0))
+              : null);
       const partnerCommissionAmount =
         resale.depositAmount ??
         (resale.fullValueAmount !== null && cashToCollectAmount !== null
@@ -667,10 +681,14 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
         guestEmail: resale.guestEmail,
         guestPhone: resale.guestPhone,
         currency: resale.currency,
-        paymentMethod: 'Cash on arrival',
+        paymentMethod: resale.fullyPrepaid ? 'Paid Online' : 'Cash on arrival',
         notes: appendNote([
           'XperiencePoland resale booking via Pub Crawl Krakow.',
-          cashToCollectAmount !== null ? `Cash to collect on arrival: ${cashToCollectAmount.toFixed(2)} ${resale.currency}` : null,
+          resale.fullyPrepaid
+            ? 'Fully prepaid online; no cash to collect on arrival.'
+            : cashToCollectAmount !== null
+              ? `Cash to collect on arrival: ${cashToCollectAmount.toFixed(2)} ${resale.currency}`
+              : null,
           partnerCommissionAmount !== null
             ? `XperiencePoland commission/deposit retained: ${partnerCommissionAmount.toFixed(2)} ${resale.currency}`
             : null,
@@ -707,7 +725,9 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
         platformBookingId: reservation,
         platformOrderId: reservation,
         status: 'confirmed',
-        paymentStatus: cashToCollectAmount !== null && cashToCollectAmount > 0 ? 'unpaid' : 'unknown',
+        paymentStatus: resale.fullyPrepaid
+          ? 'paid'
+          : cashToCollectAmount !== null && cashToCollectAmount > 0 ? 'unpaid' : 'unknown',
         eventType: 'created',
         bookingFields,
         occurredAt,
@@ -721,6 +741,7 @@ export class XperiencePolandBookingParser implements BookingEmailParser {
           partnerCommissionAmount,
           cashToCollectAmount,
           externalFullValueAmount: resale.fullValueAmount,
+          fullyPrepaid: resale.fullyPrepaid,
         },
       };
     }

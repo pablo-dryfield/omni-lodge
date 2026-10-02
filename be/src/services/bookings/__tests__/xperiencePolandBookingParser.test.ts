@@ -105,6 +105,79 @@ describe('XperiencePoland Pub Crawl Krakow resale bookings', () => {
     expect(parsed?.bookingFields?.notes).toContain('External full value: 120.00 PLN');
   });
 
+  it('parses fully prepaid Pub Crawl Krakow resale bookings without cash collection', async () => {
+    const parser = new XperiencePolandBookingParser();
+    const context = buildResaleContext({
+      messageId: '1a0fdfd971c6b0bf',
+      subject: 'New Booking: Joel Sousa - 1 pax - Friday, October 2, 2026',
+      headers: {
+        from: 'Pub Crawl Krakow <noreply@pubcrawlkrakow.pl>',
+        'reply-to': 'jsousa.89@example.com',
+      },
+      textBody: [
+        'New Resale Booking',
+        'Joel Sousa',
+        '1 pax — Friday, October 2, 2026, Krakow',
+        '',
+        'New booking made through Pub Crawl Krakow. Reference 0ETFFARS.',
+        '',
+        'Customer Details',
+        '',
+        'NameJoel Sousa Emailjsousa.89@example.com Phone+351912345678',
+        '',
+        'Booking Details',
+        '',
+        'DateFriday, October 2, 2026 Time21:00 Group Size1 people PaymentPaid Online Collect on arrivalNothing — fully prepaid',
+        '',
+        'Reply to this email to contact Joel Sousa directly.',
+      ].join('\n'),
+      snippet: 'New Resale Booking Joel Sousa 1 pax — Friday, October 2, 2026, Krakow',
+      receivedAt: new Date('2026-10-02T19:00:49.000Z'),
+    });
+
+    expect(parser.canParse(context)).toBe(true);
+
+    const parsed = await parser.parse(context);
+
+    expect(parsed).toEqual(
+      expect.objectContaining({
+        platform: 'xperiencepoland',
+        platformBookingId: '0ETFFARS',
+        platformOrderId: '0ETFFARS',
+        status: 'confirmed',
+        paymentStatus: 'paid',
+        eventType: 'created',
+        rawPayload: expect.objectContaining({
+          xperienceEmailKind: 'resale_booking',
+          resaleSource: 'pubcrawlkrakow.pl',
+          cashAmount: null,
+          cashToCollectAmount: 0,
+          fullyPrepaid: true,
+        }),
+      }),
+    );
+    expect(parsed?.bookingFields).toEqual(
+      expect.objectContaining({
+        productName: 'Pub Crawl Krakow',
+        guestFirstName: 'Joel',
+        guestLastName: 'Sousa',
+        guestEmail: 'jsousa.89@example.com',
+        guestPhone: '+351912345678',
+        partySizeTotal: 1,
+        partySizeAdults: 1,
+        currency: 'PLN',
+        paymentMethod: 'Paid Online',
+        priceGross: 0,
+        priceNet: 0,
+        baseAmount: 0,
+        experienceDate: '2026-10-02',
+        experienceStartAt: new Date('2026-10-02T19:00:00.000Z'),
+      }),
+    );
+    expect(parsed?.bookingFields?.notes).toContain('Fully prepaid online; no cash to collect on arrival.');
+    expect(parsed?.bookingFields?.notes).not.toContain('Cash to collect on arrival:');
+  });
+
   it('does not parse reply threads as new resale bookings', () => {
     const parser = new XperiencePolandBookingParser();
 
