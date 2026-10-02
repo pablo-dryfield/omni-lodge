@@ -3,6 +3,11 @@ export type CompensationEarningBreakdownEntry = {
   amount: number;
 };
 
+export type CompensationUnitCreditBreakdownEntry = {
+  date: string;
+  units: number;
+};
+
 export type CompensationEligibilityPeriod = {
   userId: number;
   effectiveStart: string;
@@ -186,6 +191,68 @@ export const allocateCompensationAmountByDateWeights = (
   return allocations
     .sort((left, right) => left.date.localeCompare(right.date))
     .map((entry) => ({ date: entry.date, amount: sign * entry.amountMinor / 100 }));
+};
+
+export const allocateTieredCompensationAmountByUnitCredits = (params: {
+  credits: Iterable<CompensationUnitCreditBreakdownEntry>;
+  minUnits: number;
+  maxUnits: number | null;
+  rate: number;
+}): CompensationEarningBreakdownEntry[] => {
+  const { credits, maxUnits, rate } = params;
+  if (!Number.isFinite(params.minUnits) || params.minUnits <= 0) {
+    return [];
+  }
+  if (!Number.isFinite(rate) || rate === 0) {
+    return [];
+  }
+
+  const minUnits = Math.max(1, Math.floor(params.minUnits));
+  const normalizedMaxUnits = maxUnits === null
+    ? Number.POSITIVE_INFINITY
+    : Math.max(minUnits, Math.floor(maxUnits));
+  if (maxUnits !== null && !Number.isFinite(normalizedMaxUnits)) {
+    return [];
+  }
+
+  const unitsByDate = new Map<string, number>();
+  Array.from(credits).forEach(({ date, units }) => {
+    if (!isIsoDate(date) || !Number.isFinite(units) || units <= 0) {
+      return;
+    }
+    unitsByDate.set(date, (unitsByDate.get(date) ?? 0) + units);
+  });
+
+  const sortedCredits = Array.from(unitsByDate.entries())
+    .map(([date, units]) => ({ date, units }))
+    .sort((left, right) => left.date.localeCompare(right.date));
+  if (sortedCredits.length === 0) {
+    return [];
+  }
+
+  const lowerExclusiveBound = minUnits - 1;
+  let cumulativeUnits = 0;
+  const earningBreakdown: CompensationEarningBreakdownEntry[] = [];
+
+  for (const credit of sortedCredits) {
+    const nextCumulativeUnits = cumulativeUnits + credit.units;
+    const tierUnitsOnDate = Math.max(
+      0,
+      Math.min(nextCumulativeUnits, normalizedMaxUnits) - Math.max(cumulativeUnits, lowerExclusiveBound),
+    );
+    if (tierUnitsOnDate > 0) {
+      earningBreakdown.push({
+        date: credit.date,
+        amount: tierUnitsOnDate * rate,
+      });
+    }
+    cumulativeUnits = nextCumulativeUnits;
+    if (cumulativeUnits >= normalizedMaxUnits) {
+      break;
+    }
+  }
+
+  return mergeCompensationEarningBreakdown(earningBreakdown);
 };
 
 export const scaleCompensationEarningBreakdown = (

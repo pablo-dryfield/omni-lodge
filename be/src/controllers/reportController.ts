@@ -39,7 +39,11 @@ import ReviewArchive from "../models/ReviewArchive.js";
 import ReviewAssignment from "../models/ReviewAssignment.js";
 import ReviewManualCredit from "../models/ReviewManualCredit.js";
 import ReviewMonthLock from "../models/ReviewMonthLock.js";
-import { reviewDateRangeInWarsaw, reviewPeriodStartInWarsaw } from "../utils/reviewCreditMonth.js";
+import {
+  REVIEW_CREDIT_TIMEZONE,
+  reviewDateRangeInWarsaw,
+  reviewPeriodStartInWarsaw,
+} from "../utils/reviewCreditMonth.js";
 import ReportTemplate, {
   ReportTemplateFieldSelection,
   ReportTemplateOptions,
@@ -152,6 +156,7 @@ import {
 import {
   allocateCompensationAmountAcrossDates,
   allocateCompensationAmountByDateWeights,
+  allocateTieredCompensationAmountByUnitCredits,
   buildCompensationEligibilityDateIndex,
   enumerateInclusiveIsoDates,
   mergeCompensationEarningBreakdown,
@@ -205,6 +210,8 @@ type CommissionBreakdownEntry = {
 type ReviewTotals = {
   totalEligibleReviews: number;
   totalTrackedReviews: number;
+  undatedEligibleReviews: number;
+  creditBreakdown: Array<{ date: string; credit: number }>;
 };
 
 type PlatformGuestTotals = {
@@ -6489,6 +6496,36 @@ const createEmptyAffiliateSalesSummary = (): StaffAffiliateSalesSummary => ({
   bookings: [],
 });
 
+const REVIEW_CREDIT_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
+
+const createEmptyReviewTotals = (): ReviewTotals => ({
+  totalEligibleReviews: 0,
+  totalTrackedReviews: 0,
+  undatedEligibleReviews: 0,
+  creditBreakdown: [],
+});
+
+const recordReviewCredit = (
+  stats: Map<number, ReviewTotals>,
+  userIdCandidate: unknown,
+  credit: number,
+  creditDate: string | null = null,
+) => {
+  const userId = Number(userIdCandidate);
+  if (!Number.isSafeInteger(userId) || userId <= 0 || !Number.isFinite(credit) || credit <= 0) {
+    return;
+  }
+  const current = stats.get(userId) ?? createEmptyReviewTotals();
+  current.totalTrackedReviews += credit;
+  current.totalEligibleReviews += credit;
+  if (creditDate && REVIEW_CREDIT_DATE_PATTERN.test(creditDate)) {
+    current.creditBreakdown.push({ date: creditDate, credit });
+  } else {
+    current.undatedEligibleReviews += credit;
+  }
+  stats.set(userId, current);
+};
+
 const createEmptySummary = (
   userId: number,
   firstName: unknown,
@@ -6520,7 +6557,7 @@ const createEmptySummary = (
   counterIncentiveMarkers: {},
   counterIncentiveTotals: {},
   counterIncentiveDetails: {},
-  reviewTotals: { totalEligibleReviews: 0, totalTrackedReviews: 0 },
+  reviewTotals: createEmptyReviewTotals(),
   reviewPaymentOverride: false,
   incentiveOverride: false,
   baseOverrideApproved: false,
@@ -6823,13 +6860,7 @@ const fetchReviewStats = async (
     }
     const roundedCountRaw = entry.get("roundedCount");
     const roundedCount = Number(roundedCountRaw ?? 0);
-    if (!Number.isFinite(roundedCount) || roundedCount <= 0) {
-      return;
-    }
-    const current = stats.get(userId) ?? { totalEligibleReviews: 0, totalTrackedReviews: 0 };
-    current.totalTrackedReviews += roundedCount;
-    current.totalEligibleReviews += roundedCount;
-    stats.set(userId, current);
+    recordReviewCredit(stats, userId, roundedCount);
   });
 
   const applicableReviewLocks = includesArchiveReviews ? (await ReviewMonthLock.findAll({
@@ -6871,6 +6902,13 @@ const fetchReviewStats = async (
     if (lockedPeriods.has(periodStart)) return false;
     return !review.isDeleted;
   }).map((review) => review.id);
+  const archivedReviewCreditDateById = new Map(
+    archivedReviews.map((review) => [
+      review.id,
+      review.creditMonth
+        ?? dayjs(review.reviewCreatedAt).tz(REVIEW_CREDIT_TIMEZONE).format("YYYY-MM-DD"),
+    ]),
+  );
   if (archivedReviewIds.length > 0) {
     const archiveAssignments = await ReviewAssignment.findAll({
       attributes: ["reviewId", "userId"],
@@ -6889,15 +6927,17 @@ const fetchReviewStats = async (
         return;
       }
       const credit = 1 / assignmentCount;
-      const current = stats.get(assignment.userId) ?? { totalEligibleReviews: 0, totalTrackedReviews: 0 };
-      current.totalTrackedReviews += credit;
-      current.totalEligibleReviews += credit;
-      stats.set(assignment.userId, current);
+      recordReviewCredit(
+        stats,
+        assignment.userId,
+        credit,
+        archivedReviewCreditDateById.get(assignment.reviewId) ?? null,
+      );
     });
   }
 
   const manualCredits = includesArchiveReviews ? await ReviewManualCredit.findAll({
-    attributes: ["userId", "credit"],
+    attributes: ["userId", "credit", "date"],
     where: {
       date: { [Op.between]: [archiveReviewStart.format("YYYY-MM-DD"), endIso] },
       category: "staff",
@@ -6913,13 +6953,7 @@ const fetchReviewStats = async (
       return;
     }
     const credit = Number(entry.credit ?? 0);
-    if (!Number.isFinite(credit) || credit <= 0) {
-      return;
-    }
-    const current = stats.get(entry.userId) ?? { totalEligibleReviews: 0, totalTrackedReviews: 0 };
-    current.totalTrackedReviews += credit;
-    current.totalEligibleReviews += credit;
-    stats.set(entry.userId, current);
+    recordReviewCredit(stats, entry.userId, credit, entry.date);
   });
 
   return stats;
@@ -7324,7 +7358,14 @@ const computeAssignmentAmount = (
 
   const reviewSettings = resolveReviewPayoutSettings(component, assignment);
   if (reviewSettings) {
-    return applyCompensationGates(computeReviewPayoutAmount(summary, reviewSettings));
+    const reviewPayout = computeReviewPayout(summary, reviewSettings);
+    return applyCompensationGates(
+      reviewPayout.amount,
+      undefined,
+      undefined,
+      undefined,
+      reviewPayout.earningBreakdown,
+    );
   }
 
   const platformGuestSettings = resolvePlatformGuestSettings(component, assignment);
@@ -9704,6 +9745,39 @@ const computeReviewPayoutAmount = (
   }
 
   return units * settings.rate;
+};
+
+const computeReviewPayout = (
+  summary: CommissionSummary,
+  settings: ReviewPayoutSettings,
+): {
+  amount: number;
+  earningBreakdown?: CompensationEarningBreakdownEntry[];
+} => {
+  const amount = computeReviewPayoutAmount(summary, settings);
+  if (!amount) {
+    return { amount: 0 };
+  }
+
+  const reviewTotals = summary.reviewTotals ?? createEmptyReviewTotals();
+  if (reviewTotals.undatedEligibleReviews > 0) {
+    return { amount };
+  }
+
+  const earningBreakdown = allocateTieredCompensationAmountByUnitCredits({
+    credits: reviewTotals.creditBreakdown.map((entry) => ({
+      date: entry.date,
+      units: entry.credit,
+    })),
+    minUnits: settings.minReviews,
+    maxUnits: settings.maxReviews,
+    rate: settings.rate,
+  });
+
+  return {
+    amount,
+    ...(earningBreakdown.length > 0 ? { earningBreakdown } : {}),
+  };
 };
 
 const resolvePlatformGuestSettings = (

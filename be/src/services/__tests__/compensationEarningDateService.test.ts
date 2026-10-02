@@ -1,6 +1,7 @@
 import {
   allocateCompensationAmountAcrossDates,
   allocateCompensationAmountByDateWeights,
+  allocateTieredCompensationAmountByUnitCredits,
   buildCompensationEligibilityDateIndex,
   mergeCompensationEarningBreakdown,
   restrictCompensationEligibilityDateIndex,
@@ -59,5 +60,59 @@ describe('compensation earning-date helpers', () => {
     const scaled = scaleCompensationEarningBreakdown(weighted, 6);
     expect(scaled.reduce((sum, row) => sum + row.amount, 0)).toBe(6);
     expect(scaled.map((row) => row.date)).toEqual(['2026-08-01', '2026-08-02']);
+  });
+
+  it('dates review payout tiers to the credits consumed by that tier', () => {
+    const credits = [
+      { date: '2026-09-14', units: 2 },
+      { date: '2026-09-15', units: 13 },
+      { date: '2026-09-16', units: 4 },
+    ];
+
+    expect(allocateTieredCompensationAmountByUnitCredits({
+      credits,
+      minUnits: 1,
+      maxUnits: 15,
+      rate: 10,
+    })).toEqual([
+      { date: '2026-09-14', amount: 20 },
+      { date: '2026-09-15', amount: 130 },
+    ]);
+
+    expect(allocateTieredCompensationAmountByUnitCredits({
+      credits,
+      minUnits: 16,
+      maxUnits: 20,
+      rate: 10,
+    })).toEqual([
+      { date: '2026-09-16', amount: 40 },
+    ]);
+  });
+
+  it('splits fractional review credits across a tier boundary', () => {
+    expect(allocateTieredCompensationAmountByUnitCredits({
+      credits: [
+        { date: '2026-09-14', units: 14.5 },
+        { date: '2026-09-15', units: 1 },
+      ],
+      minUnits: 1,
+      maxUnits: 15,
+      rate: 10,
+    })).toEqual([
+      { date: '2026-09-14', amount: 145 },
+      { date: '2026-09-15', amount: 5 },
+    ]);
+
+    expect(allocateTieredCompensationAmountByUnitCredits({
+      credits: [
+        { date: '2026-09-14', units: 14.5 },
+        { date: '2026-09-15', units: 1 },
+      ],
+      minUnits: 16,
+      maxUnits: 20,
+      rate: 10,
+    })).toEqual([
+      { date: '2026-09-15', amount: 5 },
+    ]);
   });
 });
