@@ -441,8 +441,8 @@ const extractExperienceDateTime = (
   text: string,
 ): { dateText: string; timeText: string } | null => {
   const patterns = [
-    /Date\s+New[.:]?\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})[^\S\r\n]*(?:at|\@)?[^\S\r\n]*(\d{1,2}:\d{2}\s*(?:AM|PM))/i,
-    /Date[:\s]+([A-Za-z]+\s+\d{1,2},\s+\d{4})[^\S\r\n]*(?:at|\@)?[^\S\r\n]*(\d{1,2}:\d{2}\s*(?:AM|PM))/i,
+    /Date\s+New[.:]?\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})[^\S\r\n]*,?[^\S\r\n]*(?:at|\@)?[^\S\r\n]*(\d{1,2}:\d{2}\s*(?:AM|PM))/i,
+    /Date[:\s]+([A-Za-z]+\s+\d{1,2},\s+\d{4})[^\S\r\n]*,?[^\S\r\n]*(?:at|\@)?[^\S\r\n]*(\d{1,2}:\d{2}\s*(?:AM|PM))/i,
   ];
 
   for (const pattern of patterns) {
