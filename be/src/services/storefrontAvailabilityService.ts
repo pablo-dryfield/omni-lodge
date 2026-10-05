@@ -7,7 +7,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 export const STOREFRONT_AVAILABILITY_TIMEZONE = 'Europe/Warsaw';
-export const DEFAULT_STOREFRONT_CUTOFF_MINUTES = 30;
+export const DEFAULT_STOREFRONT_CUTOFF_MINUTES = 0;
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;

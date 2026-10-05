@@ -1,5 +1,7 @@
 import {
   ActionIcon,
+  Badge,
+  Box,
   Button,
   Divider,
   Group,
@@ -9,12 +11,15 @@ import {
   SimpleGrid,
   Stack,
   Switch,
+  SegmentedControl,
   TagsInput,
   Text,
   TextInput,
   Textarea,
 } from "@mantine/core";
+import { DatePicker, type DatesRangeValue } from "@mantine/dates";
 import { IconPlus, IconTrash } from "@tabler/icons-react";
+import { useMemo, useState } from "react";
 import type { StorefrontProductConfig } from "../../types/products/Product";
 import type {
   StorefrontAvailabilityBlockedDate,
@@ -29,6 +34,59 @@ type ProductRulesProps = {
   value: StorefrontProductConfig;
   onChange: (value: StorefrontProductConfig) => void;
   productOptions?: Array<{ value: string; label: string }>;
+};
+
+type AvailabilityCalendarMode = "blocked" | "available";
+
+type CalendarRuleState = {
+  kind: "blocked" | "redirect";
+  label: string;
+};
+
+const dateInputPattern = /^\d{4}-\d{2}-\d{2}$/;
+
+const dateKeyFromDate = (date: Date | null): string => {
+  if (!date) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const dateFromDateKey = (value: string): Date | null => {
+  if (!dateInputPattern.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+};
+
+const enumerateDateRange = (startDate: Date | null, endDate: Date | null): string[] => {
+  if (!startDate) return [];
+  const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const endSource = endDate ?? startDate;
+  const end = new Date(endSource.getFullYear(), endSource.getMonth(), endSource.getDate());
+  const first = start <= end ? start : end;
+  const last = start <= end ? end : start;
+  const dates: string[] = [];
+  const cursor = new Date(first);
+  while (cursor <= last) {
+    dates.push(dateKeyFromDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+};
+
+const sortByDate = <T extends { date: string }>(items: T[]): T[] =>
+  [...items].sort((left, right) => left.date.localeCompare(right.date));
+
+const formatRuleDate = (value: string): string => {
+  const date = dateFromDateKey(value);
+  if (!date) return value || "No date";
+  return date.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 };
 
 const cleanAvailability = (
@@ -90,7 +148,11 @@ export const ProductStorefrontRulesEditor = ({
   const updateAvailability = (
     nextAvailability: StorefrontProductConfig["availability"],
   ) => {
-    onChange({ ...value, availability: nextAvailability ?? {} });
+    const cleaned = cleanAvailability(nextAvailability);
+    const nextConfig = { ...value };
+    if (cleaned) nextConfig.availability = cleaned;
+    else delete nextConfig.availability;
+    onChange(nextConfig);
   };
   const updateBlockedDate = (
     index: number,
@@ -107,6 +169,155 @@ export const ProductStorefrontRulesEditor = ({
     const dateOverrides = [...(availability.dateOverrides ?? [])];
     dateOverrides[index] = { ...dateOverrides[index], ...patch };
     updateAvailability({ ...availability, dateOverrides });
+  };
+  const [calendarMode, setCalendarMode] = useState<AvailabilityCalendarMode>("blocked");
+  const [calendarRange, setCalendarRange] = useState<DatesRangeValue>([null, null]);
+  const [calendarMessage, setCalendarMessage] = useState("");
+  const [calendarRedirectProductId, setCalendarRedirectProductId] = useState<string | null>(null);
+  const [calendarCutoffMinutes, setCalendarCutoffMinutes] = useState<number | "">(
+    availability.cutoffMinutes ?? 0,
+  );
+  const selectedCalendarDates = useMemo(
+    () => enumerateDateRange(calendarRange[0], calendarRange[1] ?? calendarRange[0]),
+    [calendarRange],
+  );
+  const productLabelById = useMemo(
+    () =>
+      new Map(
+        productOptions.map((option) => [Number(option.value), option.label]),
+      ),
+    [productOptions],
+  );
+  const calendarRuleByDate = useMemo(() => {
+    const rules = new Map<string, CalendarRuleState>();
+    (availability.blockedDates ?? []).forEach((rule) => {
+      if (!rule.date) return;
+      const redirectLabel = rule.redirectProductId
+        ? productLabelById.get(Number(rule.redirectProductId)) ?? "another product"
+        : "";
+      rules.set(rule.date, {
+        kind: rule.redirectProductId ? "redirect" : "blocked",
+        label: redirectLabel ? `Redirects to ${redirectLabel}` : rule.reason || "Blocked date",
+      });
+    });
+    (availability.dateOverrides ?? []).forEach((rule) => {
+      if (!rule.date || rule.enabled === false) return;
+      if ((rule.mode ?? "available") === "blocked") {
+        const redirectLabel = rule.redirectProductId
+          ? productLabelById.get(Number(rule.redirectProductId)) ?? "another product"
+          : "";
+        rules.set(rule.date, {
+          kind: rule.redirectProductId ? "redirect" : "blocked",
+          label: redirectLabel ? `Redirects to ${redirectLabel}` : rule.reason || "Blocked override",
+        });
+        return;
+      }
+      rules.delete(rule.date);
+    });
+    return rules;
+  }, [availability.blockedDates, availability.dateOverrides, productLabelById]);
+  const getCalendarDayProps = (date: Date) => {
+    const dateKey = dateKeyFromDate(date);
+    const rule = calendarRuleByDate.get(dateKey);
+    if (!rule) return {};
+    const tone = rule.kind === "redirect"
+        ? {
+            background: "var(--mantine-color-yellow-0)",
+            borderColor: "var(--mantine-color-yellow-5)",
+            color: "var(--mantine-color-yellow-9)",
+          }
+        : {
+            background: "var(--mantine-color-red-0)",
+            borderColor: "var(--mantine-color-red-5)",
+            color: "var(--mantine-color-red-9)",
+          };
+    return {
+      title: rule.label,
+      "aria-label": `${formatRuleDate(dateKey)}. ${rule.label}`,
+      style: {
+        ...tone,
+        borderStyle: "solid",
+        borderWidth: 1,
+        fontWeight: 800,
+      },
+    };
+  };
+  const renderCalendarDay = (date: Date) => {
+    const rule = calendarRuleByDate.get(dateKeyFromDate(date));
+    const color = rule?.kind === "redirect"
+        ? "var(--mantine-color-yellow-6)"
+        : "var(--mantine-color-red-6)";
+    return (
+      <Box
+        component="span"
+        style={{
+          alignItems: "center",
+          display: "inline-flex",
+          flexDirection: "column",
+          gap: 2,
+          lineHeight: 1,
+        }}
+      >
+        <span>{date.getDate()}</span>
+        {rule && (
+          <Box
+            component="span"
+            aria-hidden="true"
+            style={{
+              background: color,
+              borderRadius: 999,
+              height: 4,
+              width: 14,
+            }}
+          />
+        )}
+      </Box>
+    );
+  };
+  const applyCalendarRange = () => {
+    if (selectedCalendarDates.length === 0) return;
+    const selectedDateSet = new Set(selectedCalendarDates);
+
+    if (calendarMode === "blocked") {
+      const nextBlockedDates = sortByDate([
+        ...(availability.blockedDates ?? []).filter((rule) => !selectedDateSet.has(rule.date)),
+        ...selectedCalendarDates.map((date) => ({
+          date,
+          ...(calendarMessage.trim() ? { reason: calendarMessage.trim() } : {}),
+          ...(calendarRedirectProductId
+            ? { redirectProductId: Number(calendarRedirectProductId) }
+            : {}),
+        })),
+      ]);
+      updateAvailability({
+        ...availability,
+        blockedDates: nextBlockedDates,
+        dateOverrides: (availability.dateOverrides ?? []).filter(
+          (rule) => !selectedDateSet.has(rule.date),
+        ),
+      });
+    } else {
+      const cutoffMinutes = calendarCutoffMinutes === ""
+        ? undefined
+        : Math.max(0, Math.trunc(Number(calendarCutoffMinutes) || 0));
+      const nextDateOverrides = sortByDate([
+        ...(availability.dateOverrides ?? []).filter((rule) => !selectedDateSet.has(rule.date)),
+        ...selectedCalendarDates.map((date) => ({
+          date,
+          enabled: true,
+          mode: "available" as const,
+          ...(cutoffMinutes === undefined ? {} : { cutoffMinutes }),
+          ...(calendarMessage.trim() ? { reason: calendarMessage.trim() } : {}),
+        })),
+      ]);
+      updateAvailability({
+        ...availability,
+        dateOverrides: nextDateOverrides,
+      });
+    }
+
+    setCalendarRange([null, null]);
+    setCalendarMessage("");
   };
   const content = value.content ?? {};
   const meetingPoint = content.meetingPoint ?? {};
@@ -221,7 +432,7 @@ export const ProductStorefrontRulesEditor = ({
           description="Bookings close this many minutes before the start time unless a date override changes it."
           min={0}
           allowDecimal={false}
-          value={availability.cutoffMinutes ?? 30}
+          value={availability.cutoffMinutes ?? 0}
           onChange={(next) =>
             updateAvailability({
               ...availability,
@@ -229,11 +440,127 @@ export const ProductStorefrontRulesEditor = ({
             })
           }
         />
+        <Paper
+          withBorder
+          radius="lg"
+          p="md"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(34,139,230,0.08), rgba(255,255,255,0.9))",
+          }}
+        >
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+            <Stack gap="sm">
+              <Group justify="space-between" align="flex-start">
+                <div>
+                  <Text size="sm" fw={700}>Calendar rules</Text>
+                  <Text size="xs" c="dimmed">
+                    Select a start and finish date. The rule will be created for every day in the range.
+                  </Text>
+                </div>
+                <Badge variant="light" color={selectedCalendarDates.length > 0 ? "blue" : "gray"}>
+                  {selectedCalendarDates.length || "No"} day{selectedCalendarDates.length === 1 ? "" : "s"}
+                </Badge>
+              </Group>
+              <Box
+                style={{
+                  background: "var(--mantine-color-body)",
+                  border: "1px solid var(--mantine-color-gray-2)",
+                  borderRadius: 16,
+                  display: "grid",
+                  justifyItems: "center",
+                  overflowX: "auto",
+                  padding: 12,
+                }}
+              >
+                <DatePicker
+                  type="range"
+                  value={calendarRange}
+                  onChange={setCalendarRange}
+                  allowSingleDateInRange
+                  numberOfColumns={2}
+                  getDayProps={getCalendarDayProps}
+                  renderDay={renderCalendarDay}
+                />
+              </Box>
+              <Group gap="xs">
+                <Badge color="red" variant="light">Blocked</Badge>
+                <Badge color="yellow" variant="light">Redirect</Badge>
+              </Group>
+            </Stack>
+            <Stack gap="md">
+              <SegmentedControl
+                fullWidth
+                value={calendarMode}
+                onChange={(next) => setCalendarMode(next as AvailabilityCalendarMode)}
+                data={[
+                  { value: "blocked", label: "Block dates" },
+                  { value: "available", label: "Allow dates" },
+                ]}
+              />
+              <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                <TextInput
+                  label="Start date"
+                  value={selectedCalendarDates[0] ?? ""}
+                  placeholder="Select on calendar"
+                  readOnly
+                />
+                <TextInput
+                  label="Finish date"
+                  value={selectedCalendarDates[selectedCalendarDates.length - 1] ?? ""}
+                  placeholder="Select on calendar"
+                  readOnly
+                />
+              </SimpleGrid>
+              <TextInput
+                label={calendarMode === "blocked" ? "Customer message" : "Internal note"}
+                placeholder={calendarMode === "blocked"
+                  ? "New Year's Eve Pub Crawl"
+                  : "Reopened for extra capacity"}
+                value={calendarMessage}
+                onChange={(event) => setCalendarMessage(event.currentTarget.value)}
+              />
+              {calendarMode === "blocked" ? (
+                <Select
+                  label="Redirect product"
+                  description="Optional. Use this when a special event replaces the normal product."
+                  placeholder="No redirect"
+                  clearable
+                  searchable
+                  data={productOptions}
+                  value={calendarRedirectProductId}
+                  onChange={setCalendarRedirectProductId}
+                />
+              ) : (
+                <NumberInput
+                  label="Cutoff minutes for this range"
+                  description="Use 0 to keep bookings open until the start time."
+                  min={0}
+                  allowDecimal={false}
+                  value={calendarCutoffMinutes}
+                  onChange={(next) =>
+                    setCalendarCutoffMinutes(next === "" ? "" : Number(next))
+                  }
+                />
+              )}
+              <Button
+                leftSection={<IconPlus size={16} />}
+                disabled={selectedCalendarDates.length === 0}
+                onClick={applyCalendarRange}
+              >
+                {calendarMode === "blocked" ? "Block selected range" : "Allow selected range"}
+              </Button>
+              <Text size="xs" c="dimmed">
+                Existing dates in the selected range are updated instead of duplicated.
+              </Text>
+            </Stack>
+          </SimpleGrid>
+        </Paper>
         <Stack gap="sm">
           <Group justify="space-between" align="flex-end">
             <div>
-              <Text size="sm" fw={500}>Blocked dates</Text>
-              <Text size="xs" c="dimmed">Customers cannot book these dates. Add a redirect for special events.</Text>
+              <Text size="sm" fw={500}>Blocked date details</Text>
+              <Text size="xs" c="dimmed">Review, edit, or remove the individual blocked dates created from the calendar.</Text>
             </div>
             <Button
               variant="light"
@@ -249,7 +576,7 @@ export const ProductStorefrontRulesEditor = ({
                 })
               }
             >
-              Block date
+              Add one date
             </Button>
           </Group>
           {(availability.blockedDates ?? []).length === 0 ? (
@@ -308,8 +635,8 @@ export const ProductStorefrontRulesEditor = ({
         <Stack gap="sm">
           <Group justify="space-between" align="flex-end">
             <div>
-              <Text size="sm" fw={500}>Date overrides</Text>
-              <Text size="xs" c="dimmed">Override the default cutoff or reopen a normally blocked date.</Text>
+              <Text size="sm" fw={500}>Date override details</Text>
+              <Text size="xs" c="dimmed">Review, edit, or remove single-day rules that reopen dates or change cutoff times.</Text>
             </div>
             <Button
               variant="light"
@@ -324,13 +651,13 @@ export const ProductStorefrontRulesEditor = ({
                       date: "",
                       enabled: true,
                       mode: "available",
-                      cutoffMinutes: 30,
+                      cutoffMinutes: 0,
                     },
                   ],
                 })
               }
             >
-              Add override
+              Add one override
             </Button>
           </Group>
           {(availability.dateOverrides ?? []).length === 0 ? (
@@ -370,7 +697,7 @@ export const ProductStorefrontRulesEditor = ({
                       description="Used when bookings are allowed."
                       min={0}
                       allowDecimal={false}
-                      value={rule.cutoffMinutes ?? 30}
+                      value={rule.cutoffMinutes ?? 0}
                       disabled={(rule.mode ?? "available") === "blocked"}
                       onChange={(next) =>
                         updateDateOverride(index, {
