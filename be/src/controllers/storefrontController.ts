@@ -15,6 +15,10 @@ import {
   type AddonInventoryAvailability,
 } from '../services/inventoryService.js';
 import { getStorefrontPublicConfig } from '../services/storefrontPublicConfigService.js';
+import {
+  collectAvailabilityRedirectProductIds,
+  withAvailabilityRedirectSlugs,
+} from '../services/storefrontAvailabilityService.js';
 
 const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -177,6 +181,7 @@ const serializeProduct = (
   effectivePrices: ReadonlyMap<number, number>,
   channelPrices: ReadonlyMap<number, number>,
   inventoryByAddon: ReadonlyMap<number, AddonInventoryAvailability>,
+  redirectSlugByProductId: ReadonlyMap<number, string> = new Map(),
 ): StorefrontProduct => {
   const productType = product.get('ProductType') as ProductType | undefined;
   const productAddons = product.productAddons ?? [];
@@ -201,7 +206,7 @@ const serializeProduct = (
       amount: toMoneyAmount(effectivePrice),
       currency: STOREFRONT_CURRENCY,
     },
-    config: product.storefrontConfig ?? {},
+    config: withAvailabilityRedirectSlugs(product.storefrontConfig ?? {}, redirectSlugByProductId),
     addons: productAddons
       .map((record) => {
         const addon = record.addon as Addon | undefined;
@@ -294,9 +299,10 @@ export const loadStorefrontProducts = async (
     loadStorefrontChannelPrices(productIds),
     getAddonInventoryAvailability(addonIds),
   ]);
+  const redirectSlugByProductId = new Map(products.map((product) => [product.id, createProductSlug(product)]));
 
   return products.map((product) =>
-    serializeProduct(product, effectivePrices, channelPrices, inventoryByAddon),
+    serializeProduct(product, effectivePrices, channelPrices, inventoryByAddon, redirectSlugByProductId),
   );
 };
 
@@ -338,15 +344,37 @@ export const getStorefrontProduct = async (req: Request, res: Response): Promise
     const addonIds = Array.from(
       new Set((product.productAddons ?? []).map((productAddon) => productAddon.addonId)),
     );
+    const redirectProductIds = collectAvailabilityRedirectProductIds(product.storefrontConfig ?? {});
     const [effectivePrices, channelPrices, inventoryByAddon] = await Promise.all([
       loadEffectiveProductPrices([product.id]),
       loadStorefrontChannelPrices([product.id]),
       getAddonInventoryAvailability(addonIds),
     ]);
+    const redirectProducts = redirectProductIds.length > 0
+      ? await Product.findAll({
+          where: {
+            id: { [Op.in]: redirectProductIds },
+            status: { [Op.ne]: false },
+          },
+          attributes: ['id', 'name'],
+        })
+      : [];
+    const redirectSlugByProductId = new Map(
+      redirectProducts.map((redirectProduct) => [
+        redirectProduct.id,
+        createProductSlug(redirectProduct),
+      ]),
+    );
 
     res.status(200).json({
       version: 3,
-      product: serializeProduct(product, effectivePrices, channelPrices, inventoryByAddon),
+      product: serializeProduct(
+        product,
+        effectivePrices,
+        channelPrices,
+        inventoryByAddon,
+        redirectSlugByProductId,
+      ),
       storefrontConfig: getStorefrontPublicConfig(),
     });
   } catch (error) {

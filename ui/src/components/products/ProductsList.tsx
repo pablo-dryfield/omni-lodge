@@ -46,7 +46,10 @@ import {
 import { fetchProductTypes } from "../../actions/productTypeActions";
 import { Product } from "../../types/products/Product";
 import { useModuleAccess } from "../../hooks/useModuleAccess";
-import { ProductStorefrontRulesEditor } from "../storefront/StorefrontRulesEditors";
+import {
+  ProductStorefrontRulesEditor,
+  cleanProductStorefrontConfig,
+} from "../storefront/StorefrontRulesEditors";
 import ProductMediaEditor from "./ProductMediaEditor";
 
 const DEFAULT_MODULE_SLUG = "product-catalog";
@@ -148,6 +151,13 @@ const ProductList = ({
         .map((type) => ({ value: String(type.id), label: type.name ?? `Type ${type.id}` })),
     [productTypes],
   );
+  const productOptions = useMemo(
+    () =>
+      products
+        .filter((product) => typeof product.id === "number" && product.status !== false)
+        .map((product) => ({ value: String(product.id), label: product.name ?? `Product ${product.id}` })),
+    [products],
+  );
 
   const filteredProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -246,7 +256,7 @@ const ProductList = ({
       status: form.status,
       requiresNightReportCostReconciliation:
         form.requiresNightReportCostReconciliation,
-      storefrontConfig: form.storefrontConfig,
+      storefrontConfig: cleanProductStorefrontConfig(form.storefrontConfig),
       imageUrl: form.imageUrl,
       images: form.images.map((image, index) => ({ ...image, order: index + 1 })),
     };
@@ -579,6 +589,7 @@ const ProductList = ({
           </Paper>
           <ProductStorefrontRulesEditor
             value={form.storefrontConfig}
+            productOptions={productOptions.filter((option) => option.value !== String(editingProduct?.id ?? ""))}
             onChange={(storefrontConfig) =>
               setForm((current) => ({ ...current, storefrontConfig }))
             }
