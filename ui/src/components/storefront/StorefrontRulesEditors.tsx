@@ -19,8 +19,8 @@ import {
 } from "@mantine/core";
 import { DatePicker, type DatesRangeValue } from "@mantine/dates";
 import { IconPlus, IconTrash } from "@tabler/icons-react";
-import { useMemo, useState } from "react";
-import type { StorefrontProductConfig } from "../../types/products/Product";
+import { useEffect, useMemo, useState } from "react";
+import type { StorefrontDateMode, StorefrontProductConfig } from "../../types/products/Product";
 import type {
   StorefrontAvailabilityBlockedDate,
   StorefrontAvailabilityDateOverride,
@@ -36,10 +36,10 @@ type ProductRulesProps = {
   productOptions?: Array<{ value: string; label: string }>;
 };
 
-type AvailabilityCalendarMode = "blocked" | "available";
+type AvailabilityCalendarMode = "blocked" | "available" | "allowed";
 
 type CalendarRuleState = {
-  kind: "blocked" | "redirect";
+  kind: "allowed" | "blocked" | "redirect";
   label: string;
 };
 
@@ -89,10 +89,25 @@ const formatRuleDate = (value: string): string => {
   });
 };
 
+const normalizeDateMode = (value: StorefrontProductConfig["availability"]): StorefrontDateMode => {
+  if (value?.dateMode === "fixed") return "fixed";
+  if (value?.dateMode === "allowed_dates") return "allowed_dates";
+  if (value?.fixedDate) return "fixed";
+  if ((value?.allowedDates ?? []).length > 0) return "allowed_dates";
+  return "flexible";
+};
+
 const cleanAvailability = (
   availability: StorefrontProductConfig["availability"] | undefined,
 ): StorefrontProductConfig["availability"] | undefined => {
   if (!availability) return undefined;
+  const dateMode = normalizeDateMode(availability);
+  const fixedDate = availability.fixedDate && dateInputPattern.test(availability.fixedDate)
+    ? availability.fixedDate
+    : undefined;
+  const allowedDates = Array.from(new Set(
+    (availability.allowedDates ?? []).filter((date) => dateInputPattern.test(date)),
+  )).sort((left, right) => left.localeCompare(right));
   const cutoffMinutes =
     availability.cutoffMinutes === undefined || availability.cutoffMinutes === null
       ? undefined
@@ -118,6 +133,9 @@ const cleanAvailability = (
     }));
 
   const cleaned = {
+    ...(dateMode !== "flexible" ? { dateMode } : {}),
+    ...(dateMode === "fixed" && fixedDate ? { fixedDate } : {}),
+    ...(dateMode === "allowed_dates" && allowedDates.length > 0 ? { allowedDates } : {}),
     ...(cutoffMinutes !== undefined ? { cutoffMinutes } : {}),
     ...(blockedDates.length > 0 ? { blockedDates } : {}),
     ...(dateOverrides.length > 0 ? { dateOverrides } : {}),
@@ -145,6 +163,7 @@ export const ProductStorefrontRulesEditor = ({
     nextValue: StorefrontProductConfig[K],
   ) => onChange({ ...value, [key]: nextValue });
   const availability = value.availability ?? {};
+  const dateMode = normalizeDateMode(availability);
   const updateAvailability = (
     nextAvailability: StorefrontProductConfig["availability"],
   ) => {
@@ -181,6 +200,14 @@ export const ProductStorefrontRulesEditor = ({
     () => enumerateDateRange(calendarRange[0], calendarRange[1] ?? calendarRange[0]),
     [calendarRange],
   );
+  useEffect(() => {
+    if (dateMode === "allowed_dates" && calendarMode === "available") {
+      setCalendarMode("allowed");
+    }
+    if (dateMode !== "allowed_dates" && calendarMode === "allowed") {
+      setCalendarMode("blocked");
+    }
+  }, [calendarMode, dateMode]);
   const productLabelById = useMemo(
     () =>
       new Map(
@@ -190,6 +217,15 @@ export const ProductStorefrontRulesEditor = ({
   );
   const calendarRuleByDate = useMemo(() => {
     const rules = new Map<string, CalendarRuleState>();
+    if (dateMode === "allowed_dates") {
+      (availability.allowedDates ?? []).forEach((date) => {
+        if (!date) return;
+        rules.set(date, {
+          kind: "allowed",
+          label: "Allowed date",
+        });
+      });
+    }
     (availability.blockedDates ?? []).forEach((rule) => {
       if (!rule.date) return;
       const redirectLabel = rule.redirectProductId
@@ -215,12 +251,24 @@ export const ProductStorefrontRulesEditor = ({
       rules.delete(rule.date);
     });
     return rules;
-  }, [availability.blockedDates, availability.dateOverrides, productLabelById]);
+  }, [
+    availability.allowedDates,
+    availability.blockedDates,
+    availability.dateOverrides,
+    dateMode,
+    productLabelById,
+  ]);
   const getCalendarDayProps = (date: Date) => {
     const dateKey = dateKeyFromDate(date);
     const rule = calendarRuleByDate.get(dateKey);
     if (!rule) return {};
-    const tone = rule.kind === "redirect"
+    const tone = rule.kind === "allowed"
+        ? {
+            background: "var(--mantine-color-blue-0)",
+            borderColor: "var(--mantine-color-blue-5)",
+            color: "var(--mantine-color-blue-9)",
+          }
+        : rule.kind === "redirect"
         ? {
             background: "var(--mantine-color-yellow-0)",
             borderColor: "var(--mantine-color-yellow-5)",
@@ -244,7 +292,9 @@ export const ProductStorefrontRulesEditor = ({
   };
   const renderCalendarDay = (date: Date) => {
     const rule = calendarRuleByDate.get(dateKeyFromDate(date));
-    const color = rule?.kind === "redirect"
+    const color = rule?.kind === "allowed"
+        ? "var(--mantine-color-blue-6)"
+        : rule?.kind === "redirect"
         ? "var(--mantine-color-yellow-6)"
         : "var(--mantine-color-red-6)";
     return (
@@ -278,7 +328,15 @@ export const ProductStorefrontRulesEditor = ({
     if (selectedCalendarDates.length === 0) return;
     const selectedDateSet = new Set(selectedCalendarDates);
 
-    if (calendarMode === "blocked") {
+    if (calendarMode === "allowed") {
+      updateAvailability({
+        ...availability,
+        allowedDates: Array.from(new Set([
+          ...(availability.allowedDates ?? []),
+          ...selectedCalendarDates,
+        ])).sort((left, right) => left.localeCompare(right)),
+      });
+    } else if (calendarMode === "blocked") {
       const nextBlockedDates = sortByDate([
         ...(availability.blockedDates ?? []).filter((rule) => !selectedDateSet.has(rule.date)),
         ...selectedCalendarDates.map((date) => ({
@@ -386,8 +444,13 @@ export const ProductStorefrontRulesEditor = ({
         </SimpleGrid>
         <Switch
           label="Require booking date"
-          description="Guests must select a date before adding this product to the cart."
-          checked={value.dateRequired === true}
+          description={
+            dateMode === "flexible"
+              ? "Guests must select a date before adding this product to the cart."
+              : "Fixed-date and allowed-date products always require an activity date."
+          }
+          checked={dateMode !== "flexible" || value.dateRequired === true}
+          disabled={dateMode !== "flexible"}
           onChange={(event) => update("dateRequired", event.currentTarget.checked)}
         />
         <SimpleGrid cols={{ base: 1, sm: 2 }}>
@@ -427,19 +490,69 @@ export const ProductStorefrontRulesEditor = ({
         <Text size="sm" c="dimmed">
           Block full dates, stop late bookings before the start time, or redirect special dates to another product.
         </Text>
-        <NumberInput
-          label="Default booking cutoff"
-          description="Bookings close this many minutes before the start time unless a date override changes it."
-          min={0}
-          allowDecimal={false}
-          value={availability.cutoffMinutes ?? 0}
-          onChange={(next) =>
-            updateAvailability({
-              ...availability,
-              cutoffMinutes: next === "" ? undefined : Number(next),
-            })
-          }
-        />
+        <SimpleGrid cols={{ base: 1, sm: 2 }}>
+          <Select
+            label="Booking date mode"
+            description="Choose how the storefront asks for the activity date."
+            data={[
+              { value: "flexible", label: "Flexible dates" },
+              { value: "fixed", label: "Fixed date" },
+              { value: "allowed_dates", label: "Allowed dates only" },
+            ]}
+            value={dateMode}
+            allowDeselect={false}
+            onChange={(next) =>
+              updateAvailability({
+                ...availability,
+                dateMode: (next ?? "flexible") as StorefrontDateMode,
+              })
+            }
+          />
+          {dateMode === "fixed" ? (
+            <TextInput
+              type="date"
+              label="Fixed activity date"
+              description="The storefront displays this date without a date picker."
+              value={availability.fixedDate ?? ""}
+              onChange={(event) =>
+                updateAvailability({
+                  ...availability,
+                  dateMode: "fixed",
+                  fixedDate: event.currentTarget.value,
+                })
+              }
+            />
+          ) : (
+            <NumberInput
+              label="Default booking cutoff"
+              description="Bookings close this many minutes before the start time unless a date override changes it."
+              min={0}
+              allowDecimal={false}
+              value={availability.cutoffMinutes ?? 0}
+              onChange={(next) =>
+                updateAvailability({
+                  ...availability,
+                  cutoffMinutes: next === "" ? undefined : Number(next),
+                })
+              }
+            />
+          )}
+        </SimpleGrid>
+        {dateMode === "fixed" && (
+          <NumberInput
+            label="Default booking cutoff"
+            description="Bookings close this many minutes before the fixed start time. Use 0 for no cutoff."
+            min={0}
+            allowDecimal={false}
+            value={availability.cutoffMinutes ?? 0}
+            onChange={(next) =>
+              updateAvailability({
+                ...availability,
+                cutoffMinutes: next === "" ? undefined : Number(next),
+              })
+            }
+          />
+        )}
         <Paper
           withBorder
           radius="lg"
@@ -455,7 +568,7 @@ export const ProductStorefrontRulesEditor = ({
                 <div>
                   <Text size="sm" fw={700}>Calendar rules</Text>
                   <Text size="xs" c="dimmed">
-                    Select a start and finish date. The rule will be created for every day in the range.
+                    Select a start and finish date. The rule will be applied to every day in the range.
                   </Text>
                 </div>
                 <Badge variant="light" color={selectedCalendarDates.length > 0 ? "blue" : "gray"}>
@@ -484,6 +597,7 @@ export const ProductStorefrontRulesEditor = ({
                 />
               </Box>
               <Group gap="xs">
+                {dateMode === "allowed_dates" && <Badge color="blue" variant="light">Allowed</Badge>}
                 <Badge color="red" variant="light">Blocked</Badge>
                 <Badge color="yellow" variant="light">Redirect</Badge>
               </Group>
@@ -493,10 +607,15 @@ export const ProductStorefrontRulesEditor = ({
                 fullWidth
                 value={calendarMode}
                 onChange={(next) => setCalendarMode(next as AvailabilityCalendarMode)}
-                data={[
-                  { value: "blocked", label: "Block dates" },
-                  { value: "available", label: "Allow dates" },
-                ]}
+                data={dateMode === "allowed_dates"
+                  ? [
+                      { value: "allowed", label: "Allowed dates" },
+                      { value: "blocked", label: "Block dates" },
+                    ]
+                  : [
+                      { value: "blocked", label: "Block dates" },
+                      { value: "available", label: "Allow dates" },
+                    ]}
               />
               <SimpleGrid cols={{ base: 1, sm: 2 }}>
                 <TextInput
@@ -512,15 +631,21 @@ export const ProductStorefrontRulesEditor = ({
                   readOnly
                 />
               </SimpleGrid>
-              <TextInput
-                label={calendarMode === "blocked" ? "Customer message" : "Internal note"}
-                placeholder={calendarMode === "blocked"
-                  ? "New Year's Eve Pub Crawl"
-                  : "Reopened for extra capacity"}
-                value={calendarMessage}
-                onChange={(event) => setCalendarMessage(event.currentTarget.value)}
-              />
-              {calendarMode === "blocked" ? (
+              {calendarMode !== "allowed" && (
+                <TextInput
+                  label={calendarMode === "blocked" ? "Customer message" : "Internal note"}
+                  placeholder={calendarMode === "blocked"
+                    ? "New Year's Eve Pub Crawl"
+                    : "Reopened for extra capacity"}
+                  value={calendarMessage}
+                  onChange={(event) => setCalendarMessage(event.currentTarget.value)}
+                />
+              )}
+              {calendarMode === "allowed" ? (
+                <Text size="sm" c="dimmed">
+                  These dates become selectable on the storefront. All other dates stay unavailable.
+                </Text>
+              ) : calendarMode === "blocked" ? (
                 <Select
                   label="Redirect product"
                   description="Optional. Use this when a special event replaces the normal product."
@@ -548,7 +673,11 @@ export const ProductStorefrontRulesEditor = ({
                 disabled={selectedCalendarDates.length === 0}
                 onClick={applyCalendarRange}
               >
-                {calendarMode === "blocked" ? "Block selected range" : "Allow selected range"}
+                {calendarMode === "allowed"
+                  ? "Add allowed range"
+                  : calendarMode === "blocked"
+                    ? "Block selected range"
+                    : "Allow selected range"}
               </Button>
               <Text size="xs" c="dimmed">
                 Existing dates in the selected range are updated instead of duplicated.
@@ -556,6 +685,75 @@ export const ProductStorefrontRulesEditor = ({
             </Stack>
           </SimpleGrid>
         </Paper>
+        {dateMode === "allowed_dates" && (
+          <Stack gap="sm">
+            <Group justify="space-between" align="flex-end">
+              <div>
+                <Text size="sm" fw={500}>Allowed date details</Text>
+                <Text size="xs" c="dimmed">
+                  These are the only dates customers can select for this product.
+                </Text>
+              </div>
+              <Button
+                variant="light"
+                size="xs"
+                leftSection={<IconPlus size={14} />}
+                onClick={() =>
+                  updateAvailability({
+                    ...availability,
+                    dateMode: "allowed_dates",
+                    allowedDates: [...(availability.allowedDates ?? []), ""],
+                  })
+                }
+              >
+                Add one date
+              </Button>
+            </Group>
+            {(availability.allowedDates ?? []).length === 0 ? (
+              <Text size="sm" c="dimmed">No allowed dates configured.</Text>
+            ) : (
+              <Stack gap="xs">
+                {(availability.allowedDates ?? []).map((date, index) => (
+                  <Paper key={`allowed-${index}`} withBorder radius="sm" p="sm">
+                    <Group align="flex-end" wrap="nowrap">
+                      <TextInput
+                        type="date"
+                        label="Date"
+                        value={date}
+                        style={{ flex: 1 }}
+                        onChange={(event) => {
+                          const allowedDates = [...(availability.allowedDates ?? [])];
+                          allowedDates[index] = event.currentTarget.value;
+                          updateAvailability({
+                            ...availability,
+                            dateMode: "allowed_dates",
+                            allowedDates,
+                          });
+                        }}
+                      />
+                      <ActionIcon
+                        color="red"
+                        variant="subtle"
+                        aria-label="Remove allowed date"
+                        onClick={() =>
+                          updateAvailability({
+                            ...availability,
+                            dateMode: "allowed_dates",
+                            allowedDates: (availability.allowedDates ?? []).filter(
+                              (_, ruleIndex) => ruleIndex !== index,
+                            ),
+                          })
+                        }
+                      >
+                        <IconTrash size={17} />
+                      </ActionIcon>
+                    </Group>
+                  </Paper>
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        )}
         <Stack gap="sm">
           <Group justify="space-between" align="flex-end">
             <div>

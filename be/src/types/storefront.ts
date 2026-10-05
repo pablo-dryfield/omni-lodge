@@ -1,4 +1,5 @@
 export type StorefrontParticipantMode = 'quantity' | 'gender_split';
+export type StorefrontDateMode = 'flexible' | 'fixed' | 'allowed_dates';
 export type StorefrontTimeMode = 'fixed' | 'select' | 'manual';
 
 export type StorefrontMeetingPoint = {
@@ -36,6 +37,9 @@ export type StorefrontAvailabilityDateOverride = {
 };
 
 export type StorefrontAvailabilityConfig = {
+  dateMode?: StorefrontDateMode;
+  fixedDate?: string;
+  allowedDates?: string[];
   cutoffMinutes?: number;
   blockedDates?: StorefrontAvailabilityBlockedDate[];
   dateOverrides?: StorefrontAvailabilityDateOverride[];

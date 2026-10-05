@@ -17,7 +17,10 @@ import {
   getAddonInventoryAvailability,
   type AddonInventoryAvailability,
 } from './inventoryService.js';
-import { evaluateStorefrontAvailability } from './storefrontAvailabilityService.js';
+import {
+  evaluateStorefrontAvailability,
+  normalizeStorefrontAvailability,
+} from './storefrontAvailabilityService.js';
 
 export const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -422,6 +425,41 @@ const normalizeExperienceTime = (
   return supplied || null;
 };
 
+const resolveExperienceDate = (
+  value: string | null,
+  config: StorefrontProductConfig,
+  productName: string,
+  options: Pick<StorefrontQuoteOptions, 'allowPastExperienceDates'>,
+): string | null => {
+  const availability = normalizeStorefrontAvailability(config.availability);
+  const dateMode = availability?.dateMode ?? 'flexible';
+
+  if (dateMode === 'fixed') {
+    if (!availability?.fixedDate) {
+      throw new HttpError(409, `${productName} does not have a configured activity date.`);
+    }
+    const fixedDate = normalizeDate(availability.fixedDate, options);
+    if (value && value !== fixedDate) {
+      throw new HttpError(400, `${productName} can only be booked for ${fixedDate}.`);
+    }
+    return fixedDate;
+  }
+
+  if ((config.dateRequired || dateMode === 'allowed_dates') && !value) {
+    throw new HttpError(400, `Please select an activity date for ${productName}.`);
+  }
+
+  if (
+    dateMode === 'allowed_dates'
+    && value
+    && !(availability?.allowedDates ?? []).includes(value)
+  ) {
+    throw new HttpError(400, `${productName} is not available on the selected date.`);
+  }
+
+  return value;
+};
+
 const productIncludes: Includeable[] = [
   {
     model: ProductAddon,
@@ -675,10 +713,9 @@ export const quoteStorefrontCart = async (
       item.index,
     );
     const quantity = participantSelection.quantity;
-    const experienceDate = item.experienceDate;
-    if (productConfig.dateRequired && !experienceDate) {
-      throw new HttpError(400, `Please select an activity date for ${product.name}.`);
-    }
+    const experienceDate = resolveExperienceDate(item.experienceDate, productConfig, product.name, {
+      allowPastExperienceDates: options.allowPastExperienceDates,
+    });
     const experienceTime = normalizeExperienceTime(item.experienceTime, productConfig);
     const availability = evaluateStorefrontAvailability(productConfig, {
       experienceDate,

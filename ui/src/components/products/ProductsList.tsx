@@ -113,7 +113,7 @@ const ProductList = ({
   const permissions = useModuleAccess(moduleSlug);
 
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string | null>("all");
+  const [statusFilter, setStatusFilter] = useState<string | null>("active");
   const [typeFilter, setTypeFilter] = useState<string | null>("all");
   const [formOpen, setFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);

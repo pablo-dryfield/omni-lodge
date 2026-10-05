@@ -11,6 +11,10 @@ always validates and prices submitted selections.
 | `participantMode` | `quantity`, `gender_split` | Use one participant count or separate Man/Woman counts. |
 | `minParticipants` / `maxParticipants` | integer | Enforced against the calculated participant total. |
 | `dateRequired` | boolean | Requires a valid activity date. |
+| `availability.dateMode` | `flexible`, `fixed`, `allowed_dates` | Controls whether guests choose any valid date, see one fixed date, or choose only configured dates. |
+| `availability.fixedDate` | `YYYY-MM-DD` | Required when `dateMode` is `fixed`; quote/checkout auto-submit this date and reject any other date. |
+| `availability.allowedDates` | `YYYY-MM-DD[]` | Required when `dateMode` is `allowed_dates`; all other dates are unavailable. |
+| `availability.cutoffMinutes` | integer | Minutes before the start time when same-day booking closes; `0` means no cutoff. |
 | `timeMode` | `fixed`, `select`, `manual` | Fixed default, configured list, or customer-entered time. |
 | `defaultStartTime` | `HH:mm` | Submitted automatically for fixed-time products. |
 | `startTimes` | `HH:mm[]` | Allowed choices for select-time products. |
@@ -46,6 +50,36 @@ Participant pricing uses the total participant count. For `gender_split`, that i
       "instructions": "Look for the Krawl Through Krakow team.",
       "mapUrl": "https://maps.google.com/..."
     }
+  }
+}
+```
+
+### Fixed-date event example
+
+Use this for one-off products such as NYE Pub Crawl where the customer should
+see the event date but not choose a different date:
+
+```json
+{
+  "dateRequired": true,
+  "timeMode": "fixed",
+  "defaultStartTime": "21:00",
+  "availability": {
+    "dateMode": "fixed",
+    "fixedDate": "2026-12-31",
+    "cutoffMinutes": 0
+  }
+}
+```
+
+Use `allowed_dates` for products that run only on a small configured set of
+dates:
+
+```json
+{
+  "availability": {
+    "dateMode": "allowed_dates",
+    "allowedDates": ["2026-10-31", "2026-12-31"]
   }
 }
 ```
