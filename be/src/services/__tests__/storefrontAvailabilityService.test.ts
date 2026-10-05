@@ -31,7 +31,7 @@ describe('storefront availability rules', () => {
     }));
   });
 
-  it('uses a 30 minute default cutoff before the product start time', () => {
+  it('uses a zero minute default cutoff before the product start time', () => {
     const result = evaluateStorefrontAvailability({}, {
       experienceDate: '2026-08-29',
       experienceTime: '21:00',
@@ -39,9 +39,9 @@ describe('storefront availability rules', () => {
     });
 
     expect(result).toEqual(expect.objectContaining({
-      available: false,
-      reason: 'cutoff',
-      cutoffMinutes: 30,
+      available: true,
+      reason: 'available',
+      cutoffMinutes: 0,
     }));
   });
 
