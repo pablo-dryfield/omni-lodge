@@ -172,7 +172,7 @@ jobs:
     name: Release / ui-server
     needs: metadata
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
