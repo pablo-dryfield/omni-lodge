@@ -17,6 +17,10 @@ import {
 import { IconPlus, IconTrash } from "@tabler/icons-react";
 import type { StorefrontProductConfig } from "../../types/products/Product";
 import type {
+  StorefrontAvailabilityBlockedDate,
+  StorefrontAvailabilityDateOverride,
+} from "../../types/products/Product";
+import type {
   StorefrontAddonConfig,
   StorefrontAddonOption,
 } from "../../types/productAddons/ProductAddon";
@@ -24,13 +28,86 @@ import type {
 type ProductRulesProps = {
   value: StorefrontProductConfig;
   onChange: (value: StorefrontProductConfig) => void;
+  productOptions?: Array<{ value: string; label: string }>;
 };
 
-export const ProductStorefrontRulesEditor = ({ value, onChange }: ProductRulesProps) => {
+const cleanAvailability = (
+  availability: StorefrontProductConfig["availability"] | undefined,
+): StorefrontProductConfig["availability"] | undefined => {
+  if (!availability) return undefined;
+  const cutoffMinutes =
+    availability.cutoffMinutes === undefined || availability.cutoffMinutes === null
+      ? undefined
+      : Math.max(0, Math.trunc(Number(availability.cutoffMinutes) || 0));
+  const blockedDates = (availability.blockedDates ?? [])
+    .filter((rule) => rule.date)
+    .map((rule) => ({
+      date: rule.date,
+      ...(rule.reason?.trim() ? { reason: rule.reason.trim() } : {}),
+      ...(rule.redirectProductId ? { redirectProductId: Number(rule.redirectProductId) } : {}),
+    }));
+  const dateOverrides = (availability.dateOverrides ?? [])
+    .filter((rule) => rule.date)
+    .map((rule) => ({
+      date: rule.date,
+      enabled: rule.enabled !== false,
+      mode: rule.mode ?? "available",
+      ...(rule.cutoffMinutes === undefined || rule.cutoffMinutes === null
+        ? {}
+        : { cutoffMinutes: Math.max(0, Math.trunc(Number(rule.cutoffMinutes) || 0)) }),
+      ...(rule.reason?.trim() ? { reason: rule.reason.trim() } : {}),
+      ...(rule.redirectProductId ? { redirectProductId: Number(rule.redirectProductId) } : {}),
+    }));
+
+  const cleaned = {
+    ...(cutoffMinutes !== undefined ? { cutoffMinutes } : {}),
+    ...(blockedDates.length > 0 ? { blockedDates } : {}),
+    ...(dateOverrides.length > 0 ? { dateOverrides } : {}),
+  };
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+};
+
+export const cleanProductStorefrontConfig = (
+  config: StorefrontProductConfig,
+): StorefrontProductConfig => {
+  const cleaned = { ...config };
+  const availability = cleanAvailability(cleaned.availability);
+  if (availability) cleaned.availability = availability;
+  else delete cleaned.availability;
+  return cleaned;
+};
+
+export const ProductStorefrontRulesEditor = ({
+  value,
+  onChange,
+  productOptions = [],
+}: ProductRulesProps) => {
   const update = <K extends keyof StorefrontProductConfig>(
     key: K,
     nextValue: StorefrontProductConfig[K],
   ) => onChange({ ...value, [key]: nextValue });
+  const availability = value.availability ?? {};
+  const updateAvailability = (
+    nextAvailability: StorefrontProductConfig["availability"],
+  ) => {
+    onChange({ ...value, availability: nextAvailability ?? {} });
+  };
+  const updateBlockedDate = (
+    index: number,
+    patch: Partial<StorefrontAvailabilityBlockedDate>,
+  ) => {
+    const blockedDates = [...(availability.blockedDates ?? [])];
+    blockedDates[index] = { ...blockedDates[index], ...patch };
+    updateAvailability({ ...availability, blockedDates });
+  };
+  const updateDateOverride = (
+    index: number,
+    patch: Partial<StorefrontAvailabilityDateOverride>,
+  ) => {
+    const dateOverrides = [...(availability.dateOverrides ?? [])];
+    dateOverrides[index] = { ...dateOverrides[index], ...patch };
+    updateAvailability({ ...availability, dateOverrides });
+  };
   const content = value.content ?? {};
   const meetingPoint = content.meetingPoint ?? {};
   const updateContent = <K extends keyof typeof content>(
@@ -135,6 +212,212 @@ export const ProductStorefrontRulesEditor = ({ value, onChange }: ProductRulesPr
             splitChars={[",", " "]}
           />
         )}
+        <Divider label="Booking availability" labelPosition="left" />
+        <Text size="sm" c="dimmed">
+          Block full dates, stop late bookings before the start time, or redirect special dates to another product.
+        </Text>
+        <NumberInput
+          label="Default booking cutoff"
+          description="Bookings close this many minutes before the start time unless a date override changes it."
+          min={0}
+          allowDecimal={false}
+          value={availability.cutoffMinutes ?? 30}
+          onChange={(next) =>
+            updateAvailability({
+              ...availability,
+              cutoffMinutes: next === "" ? undefined : Number(next),
+            })
+          }
+        />
+        <Stack gap="sm">
+          <Group justify="space-between" align="flex-end">
+            <div>
+              <Text size="sm" fw={500}>Blocked dates</Text>
+              <Text size="xs" c="dimmed">Customers cannot book these dates. Add a redirect for special events.</Text>
+            </div>
+            <Button
+              variant="light"
+              size="xs"
+              leftSection={<IconPlus size={14} />}
+              onClick={() =>
+                updateAvailability({
+                  ...availability,
+                  blockedDates: [
+                    ...(availability.blockedDates ?? []),
+                    { date: "", reason: "", redirectProductId: null },
+                  ],
+                })
+              }
+            >
+              Block date
+            </Button>
+          </Group>
+          {(availability.blockedDates ?? []).length === 0 ? (
+            <Text size="sm" c="dimmed">No blocked dates.</Text>
+          ) : (
+            <Stack gap="xs">
+              {(availability.blockedDates ?? []).map((rule, index) => (
+                <Paper key={`blocked-${index}`} withBorder radius="sm" p="sm">
+                  <SimpleGrid cols={{ base: 1, sm: 3 }}>
+                    <TextInput
+                      type="date"
+                      label="Date"
+                      value={rule.date ?? ""}
+                      onChange={(event) => updateBlockedDate(index, { date: event.currentTarget.value })}
+                    />
+                    <TextInput
+                      label="Message"
+                      placeholder="This date has a special event."
+                      value={rule.reason ?? ""}
+                      onChange={(event) => updateBlockedDate(index, { reason: event.currentTarget.value })}
+                    />
+                    <Select
+                      label="Redirect product"
+                      placeholder="No redirect"
+                      clearable
+                      searchable
+                      data={productOptions}
+                      value={rule.redirectProductId ? String(rule.redirectProductId) : null}
+                      onChange={(selected) =>
+                        updateBlockedDate(index, {
+                          redirectProductId: selected ? Number(selected) : null,
+                        })
+                      }
+                    />
+                  </SimpleGrid>
+                  <Group justify="flex-end" mt="xs">
+                    <ActionIcon
+                      color="red"
+                      variant="subtle"
+                      aria-label="Remove blocked date"
+                      onClick={() =>
+                        updateAvailability({
+                          ...availability,
+                          blockedDates: (availability.blockedDates ?? []).filter((_, ruleIndex) => ruleIndex !== index),
+                        })
+                      }
+                    >
+                      <IconTrash size={17} />
+                    </ActionIcon>
+                  </Group>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+        <Stack gap="sm">
+          <Group justify="space-between" align="flex-end">
+            <div>
+              <Text size="sm" fw={500}>Date overrides</Text>
+              <Text size="xs" c="dimmed">Override the default cutoff or reopen a normally blocked date.</Text>
+            </div>
+            <Button
+              variant="light"
+              size="xs"
+              leftSection={<IconPlus size={14} />}
+              onClick={() =>
+                updateAvailability({
+                  ...availability,
+                  dateOverrides: [
+                    ...(availability.dateOverrides ?? []),
+                    {
+                      date: "",
+                      enabled: true,
+                      mode: "available",
+                      cutoffMinutes: 30,
+                    },
+                  ],
+                })
+              }
+            >
+              Add override
+            </Button>
+          </Group>
+          {(availability.dateOverrides ?? []).length === 0 ? (
+            <Text size="sm" c="dimmed">No date overrides.</Text>
+          ) : (
+            <Stack gap="xs">
+              {(availability.dateOverrides ?? []).map((rule, index) => (
+                <Paper key={`override-${index}`} withBorder radius="sm" p="sm">
+                  <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                    <TextInput
+                      type="date"
+                      label="Date"
+                      value={rule.date ?? ""}
+                      onChange={(event) => updateDateOverride(index, { date: event.currentTarget.value })}
+                    />
+                    <Switch
+                      label="Override is active"
+                      checked={rule.enabled !== false}
+                      onChange={(event) => updateDateOverride(index, { enabled: event.currentTarget.checked })}
+                    />
+                    <Select
+                      label="Override action"
+                      data={[
+                        { value: "available", label: "Allow booking" },
+                        { value: "blocked", label: "Block booking" },
+                      ]}
+                      value={rule.mode ?? "available"}
+                      allowDeselect={false}
+                      onChange={(selected) =>
+                        updateDateOverride(index, {
+                          mode: selected as StorefrontAvailabilityDateOverride["mode"],
+                        })
+                      }
+                    />
+                    <NumberInput
+                      label="Cutoff minutes"
+                      description="Used when bookings are allowed."
+                      min={0}
+                      allowDecimal={false}
+                      value={rule.cutoffMinutes ?? 30}
+                      disabled={(rule.mode ?? "available") === "blocked"}
+                      onChange={(next) =>
+                        updateDateOverride(index, {
+                          cutoffMinutes: next === "" ? undefined : Number(next),
+                        })
+                      }
+                    />
+                    <TextInput
+                      label="Message"
+                      placeholder="Optional customer-facing note"
+                      value={rule.reason ?? ""}
+                      onChange={(event) => updateDateOverride(index, { reason: event.currentTarget.value })}
+                    />
+                    <Select
+                      label="Redirect product"
+                      placeholder="No redirect"
+                      clearable
+                      searchable
+                      data={productOptions}
+                      value={rule.redirectProductId ? String(rule.redirectProductId) : null}
+                      onChange={(selected) =>
+                        updateDateOverride(index, {
+                          redirectProductId: selected ? Number(selected) : null,
+                        })
+                      }
+                    />
+                  </SimpleGrid>
+                  <Group justify="flex-end" mt="xs">
+                    <ActionIcon
+                      color="red"
+                      variant="subtle"
+                      aria-label="Remove date override"
+                      onClick={() =>
+                        updateAvailability({
+                          ...availability,
+                          dateOverrides: (availability.dateOverrides ?? []).filter((_, ruleIndex) => ruleIndex !== index),
+                        })
+                      }
+                    >
+                      <IconTrash size={17} />
+                    </ActionIcon>
+                  </Group>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </Stack>
         <Divider label="Guest details" labelPosition="left" />
         <SimpleGrid cols={{ base: 1, sm: 3 }}>
           <Switch

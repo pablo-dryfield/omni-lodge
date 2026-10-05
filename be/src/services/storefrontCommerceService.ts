@@ -17,6 +17,7 @@ import {
   getAddonInventoryAvailability,
   type AddonInventoryAvailability,
 } from './inventoryService.js';
+import { evaluateStorefrontAvailability } from './storefrontAvailabilityService.js';
 
 export const STOREFRONT_CURRENCY = 'PLN';
 const STOREFRONT_PRICE_CHANNEL = process.env.STOREFRONT_PRICE_CHANNEL?.trim() || 'Ecwid';
@@ -679,6 +680,13 @@ export const quoteStorefrontCart = async (
       throw new HttpError(400, `Please select an activity date for ${product.name}.`);
     }
     const experienceTime = normalizeExperienceTime(item.experienceTime, productConfig);
+    const availability = evaluateStorefrontAvailability(productConfig, {
+      experienceDate,
+      experienceTime,
+    });
+    if (!availability.available) {
+      throw new HttpError(400, availability.message || `${product.name} is unavailable for this date.`);
+    }
     const normalizedOptions = validateCustomerOptions(
       participantSelection.options,
       productConfig,

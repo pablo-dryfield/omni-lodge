@@ -116,6 +116,39 @@ describe('quoteStorefrontCart validation', () => {
     }));
   });
 
+  it('rejects a product date blocked by storefront availability rules', async () => {
+    productFindAll.mockResolvedValue([{
+      id: 1,
+      name: 'Pub Crawl',
+      slug: 'pub-crawl',
+      price: 100,
+      storefrontConfig: {
+        dateRequired: true,
+        timeMode: 'fixed',
+        defaultStartTime: '21:00',
+        availability: {
+          blockedDates: [{
+            date: '2026-12-31',
+            reason: 'Book the New Year party instead.',
+          }],
+        },
+      },
+      productAddons: [],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+
+    await expect(
+      quoteStorefrontCart({
+        items: [{
+          productId: 1,
+          quantity: 1,
+          experienceDate: '2026-12-31',
+          experienceTime: '21:00',
+        }],
+      }),
+    ).rejects.toThrow('Book the New Year party instead.');
+  });
+
   it('applies a manual amount before discount calculation', async () => {
     productFindAll.mockResolvedValue([{
       id: 1,

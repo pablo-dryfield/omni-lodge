@@ -16,6 +16,31 @@ export type StorefrontProductContent = {
   meetingPoint?: StorefrontMeetingPoint;
 };
 
+export type StorefrontAvailabilityBlockedDate = {
+  date: string;
+  reason?: string;
+  redirectProductId?: number | null;
+  redirectProductSlug?: string | null;
+  redirectUrl?: string | null;
+};
+
+export type StorefrontAvailabilityDateOverride = {
+  date: string;
+  enabled?: boolean;
+  mode?: 'available' | 'blocked';
+  cutoffMinutes?: number;
+  reason?: string;
+  redirectProductId?: number | null;
+  redirectProductSlug?: string | null;
+  redirectUrl?: string | null;
+};
+
+export type StorefrontAvailabilityConfig = {
+  cutoffMinutes?: number;
+  blockedDates?: StorefrontAvailabilityBlockedDate[];
+  dateOverrides?: StorefrontAvailabilityDateOverride[];
+};
+
 export type StorefrontProductConfig = {
   participantMode?: StorefrontParticipantMode;
   minParticipants?: number;
@@ -28,6 +53,7 @@ export type StorefrontProductConfig = {
   emailRequired?: boolean;
   phoneRequired?: boolean;
   content?: StorefrontProductContent;
+  availability?: StorefrontAvailabilityConfig;
 };
 
 export type StorefrontCancellationPolicy = {
