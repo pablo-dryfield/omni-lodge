@@ -20,7 +20,7 @@ type RedirectableRule = {
 
 export type StorefrontAvailabilityEvaluation = {
   available: boolean;
-  reason: 'available' | 'blocked_date' | 'cutoff';
+  reason: 'available' | 'blocked_date' | 'cutoff' | 'fixed_date_mismatch' | 'not_allowed_date';
   message: string | null;
   cutoffMinutes: number;
   redirectProductId: number | null;
@@ -55,6 +55,29 @@ const minuteValue = (value: unknown): number | null => {
   return Math.min(10080, Math.max(0, Math.trunc(parsed)));
 };
 
+const normalizeDateMode = (value: unknown): StorefrontAvailabilityConfig['dateMode'] | null => {
+  const normalized = text(value, 32).toLowerCase().replace(/[-\s]+/g, '_');
+  if (normalized === 'fixed' || normalized === 'fixed_date') return 'fixed';
+  if (
+    normalized === 'allowed'
+    || normalized === 'allowed_dates'
+    || normalized === 'allowed_dates_only'
+    || normalized === 'allowlist'
+  ) {
+    return 'allowed_dates';
+  }
+  if (normalized === 'flexible' || normalized === 'open') return 'flexible';
+  return null;
+};
+
+const uniqueDateKeys = (values: unknown): string[] => {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.flatMap((value) => {
+    const date = dateKey(value);
+    return date ? [date] : [];
+  }))).sort((left, right) => left.localeCompare(right));
+};
+
 const productIdValue = (value: unknown): number | null => {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
@@ -82,6 +105,11 @@ export const normalizeStorefrontAvailability = (
   const record = asRecord(value);
   if (!record) return null;
 
+  const fixedDate = dateKey(record.fixedDate ?? record.date);
+  const allowedDates = uniqueDateKeys(record.allowedDates ?? record.availableDates);
+  const explicitDateMode = normalizeDateMode(record.dateMode ?? record.bookingDateMode);
+  const dateMode = explicitDateMode
+    ?? (fixedDate ? 'fixed' : allowedDates.length > 0 ? 'allowed_dates' : null);
   const cutoffMinutes = minuteValue(record.cutoffMinutes);
   const blockedDates = Array.isArray(record.blockedDates)
     ? record.blockedDates.flatMap((item) => {
@@ -120,16 +148,31 @@ export const normalizeStorefrontAvailability = (
       })
     : [];
 
-  if (cutoffMinutes === null && blockedDates.length === 0 && dateOverrides.length === 0) {
+  if (
+    !dateMode
+    && !fixedDate
+    && allowedDates.length === 0
+    && cutoffMinutes === null
+    && blockedDates.length === 0
+    && dateOverrides.length === 0
+  ) {
     return null;
   }
 
   return {
+    ...(dateMode ? { dateMode } : {}),
+    ...(fixedDate ? { fixedDate } : {}),
+    ...(allowedDates.length > 0 ? { allowedDates } : {}),
     ...(cutoffMinutes !== null ? { cutoffMinutes } : {}),
     ...(blockedDates.length > 0 ? { blockedDates } : {}),
     ...(dateOverrides.length > 0 ? { dateOverrides } : {}),
   };
 };
+
+const displayDate = (value: string): string =>
+  dayjs(value).isValid()
+    ? dayjs(value).format('D MMM YYYY')
+    : value;
 
 const ruleRedirect = (rule: RedirectableRule | null | undefined) => ({
   redirectProductId: rule?.redirectProductId ?? null,
@@ -157,8 +200,43 @@ export const evaluateStorefrontAvailability = (
     redirectUrl: null,
   };
 
-  const selectedDate = dateKey(input.experienceDate);
+  const requestedDate = dateKey(input.experienceDate);
+  const selectedDate = availability?.dateMode === 'fixed' && availability.fixedDate
+    ? availability.fixedDate
+    : requestedDate;
+
+  if (availability?.dateMode === 'fixed') {
+    if (!availability.fixedDate) {
+      return {
+        ...availableResult,
+        available: false,
+        reason: 'fixed_date_mismatch',
+        message: 'This experience does not have its fixed date configured yet.',
+      };
+    }
+    if (requestedDate && requestedDate !== availability.fixedDate) {
+      return {
+        ...availableResult,
+        available: false,
+        reason: 'fixed_date_mismatch',
+        message: `This experience is only available on ${displayDate(availability.fixedDate)}.`,
+      };
+    }
+  }
+
   if (!selectedDate) return availableResult;
+
+  if (
+    availability?.dateMode === 'allowed_dates'
+    && !(availability.allowedDates ?? []).includes(selectedDate)
+  ) {
+    return {
+      ...availableResult,
+      available: false,
+      reason: 'not_allowed_date',
+      message: 'This date is not available for this experience.',
+    };
+  }
 
   const override = (availability?.dateOverrides ?? []).find(
     (rule) => rule.enabled !== false && rule.date === selectedDate,

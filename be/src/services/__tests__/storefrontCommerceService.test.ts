@@ -149,6 +149,86 @@ describe('quoteStorefrontCart validation', () => {
     ).rejects.toThrow('Book the New Year party instead.');
   });
 
+  it('uses the configured fixed date when the cart omits an activity date', async () => {
+    productFindAll.mockResolvedValue([{
+      id: 1,
+      name: 'NYE Pub Crawl',
+      slug: 'nye-pub-crawl',
+      price: 120,
+      storefrontConfig: {
+        timeMode: 'fixed',
+        defaultStartTime: '21:00',
+        availability: {
+          dateMode: 'fixed',
+          fixedDate: '2026-12-31',
+        },
+      },
+      productAddons: [],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+
+    await expect(
+      quoteStorefrontCart({
+        items: [{ productId: 1, quantity: 1 }],
+      }),
+    ).resolves.toEqual(expect.objectContaining({
+      total: 120,
+      items: [
+        expect.objectContaining({
+          productId: 1,
+          experienceDate: '2026-12-31',
+          experienceTime: '21:00',
+        }),
+      ],
+    }));
+  });
+
+  it('rejects a date that differs from the configured fixed product date', async () => {
+    productFindAll.mockResolvedValue([{
+      id: 1,
+      name: 'NYE Pub Crawl',
+      slug: 'nye-pub-crawl',
+      price: 120,
+      storefrontConfig: {
+        availability: {
+          dateMode: 'fixed',
+          fixedDate: '2026-12-31',
+        },
+      },
+      productAddons: [],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+
+    await expect(
+      quoteStorefrontCart({
+        items: [{ productId: 1, quantity: 1, experienceDate: '2026-12-30' }],
+      }),
+    ).rejects.toThrow('NYE Pub Crawl can only be booked for 2026-12-31.');
+  });
+
+  it('rejects allowed-date products outside their configured dates', async () => {
+    productFindAll.mockResolvedValue([{
+      id: 1,
+      name: 'Halloween Pub Crawl',
+      slug: 'halloween-pub-crawl',
+      price: 120,
+      storefrontConfig: {
+        availability: {
+          dateMode: 'allowed_dates',
+          allowedDates: ['2026-10-31'],
+        },
+      },
+      productAddons: [],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+
+    await expect(
+      quoteStorefrontCart({
+        items: [{ productId: 1, quantity: 1, experienceDate: '2026-11-01' }],
+      }),
+    ).rejects.toThrow('Halloween Pub Crawl is not available on the selected date.');
+  });
+
   it('applies a manual amount before discount calculation', async () => {
     productFindAll.mockResolvedValue([{
       id: 1,
