@@ -98,7 +98,9 @@ jobs:
 
   ui:
     name: Release / ui
-    needs: metadata
+    needs:
+      - metadata
+      - backend
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     defaults:
@@ -170,7 +172,9 @@ jobs:
 
   ui_server:
     name: Release / ui-server
-    needs: metadata
+    needs:
+      - metadata
+      - ui
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -212,7 +216,9 @@ jobs:
 
   migrations:
     name: Release / migrations
-    needs: metadata
+    needs:
+      - metadata
+      - ui_server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
