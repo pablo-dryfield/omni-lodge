@@ -135,8 +135,10 @@ jobs:
 
   ui:
     name: CI / ui
-    needs: changes
-    if: needs.changes.outputs.run_full_ci == 'true'
+    needs:
+      - changes
+      - backend
+    if: needs.changes.outputs.run_full_ci == 'true' && needs.backend.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     defaults:
@@ -192,10 +194,12 @@ jobs:
 
   ui_server:
     name: CI / ui-server
-    needs: changes
-    if: needs.changes.outputs.run_full_ci == 'true'
+    needs:
+      - changes
+      - ui
+    if: needs.changes.outputs.run_full_ci == 'true' && needs.ui.result == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -234,8 +238,10 @@ jobs:
 
   release_tooling:
     name: CI / release tooling
-    needs: changes
-    if: needs.changes.outputs.run_full_ci == 'true'
+    needs:
+      - changes
+      - ui_server
+    if: needs.changes.outputs.run_full_ci == 'true' && needs.ui_server.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -282,8 +288,10 @@ jobs:
 
   migrations:
     name: CI / migrations
-    needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.run_full_ci == 'true'
+    needs:
+      - changes
+      - release_tooling
+    if: github.event_name == 'pull_request' && needs.changes.outputs.run_full_ci == 'true' && needs.release_tooling.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
