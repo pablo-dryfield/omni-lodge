@@ -29,6 +29,7 @@ import type {
   StorefrontAddonConfig,
   StorefrontAddonOption,
 } from "../../types/productAddons/ProductAddon";
+import { normalizeStartTimeTags } from "./startTimeTags";
 
 type ProductRulesProps = {
   value: StorefrontProductConfig;
@@ -147,6 +148,11 @@ export const cleanProductStorefrontConfig = (
   config: StorefrontProductConfig,
 ): StorefrontProductConfig => {
   const cleaned = { ...config };
+  if (Array.isArray(cleaned.startTimes)) {
+    const startTimes = normalizeStartTimeTags(cleaned.startTimes);
+    if (startTimes.length > 0) cleaned.startTimes = startTimes;
+    else delete cleaned.startTimes;
+  }
   const availability = cleanAvailability(cleaned.availability);
   if (availability) cleaned.availability = availability;
   else delete cleaned.availability;
@@ -199,6 +205,10 @@ export const ProductStorefrontRulesEditor = ({
   const selectedCalendarDates = useMemo(
     () => enumerateDateRange(calendarRange[0], calendarRange[1] ?? calendarRange[0]),
     [calendarRange],
+  );
+  const startTimes = useMemo(
+    () => normalizeStartTimeTags(value.startTimes ?? []),
+    [value.startTimes],
   );
   useEffect(() => {
     if (dateMode === "allowed_dates" && calendarMode === "available") {
@@ -481,9 +491,9 @@ export const ProductStorefrontRulesEditor = ({
             label="Available start times"
             description="Type a time such as 10:00 and press Enter."
             placeholder="Add a start time"
-            value={value.startTimes ?? []}
-            onChange={(times) => update("startTimes", times)}
-            splitChars={[",", " "]}
+            value={startTimes}
+            onChange={(times) => update("startTimes", normalizeStartTimeTags(times))}
+            splitChars={[","]}
           />
         )}
         <Divider label="Booking availability" labelPosition="left" />
