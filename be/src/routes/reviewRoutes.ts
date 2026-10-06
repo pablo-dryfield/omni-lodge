@@ -2,7 +2,7 @@ import express, { Router } from 'express';
 import * as reviewController from '../controllers/reviewController.js'; // Adjust import path as necessary
 import authMiddleware from '../middleware/authMiddleware.js';
 import { authorizeModuleAction, requireRoles } from '../middleware/authorizationMiddleware.js';
-import {completeFastReviewSync,completeReviewSync,createManualReviewCredit,deleteManualReviewCredit,getReviewCreditSummary,getReviewMonthLock,getReviewTrends,ingestReviewSyncPage,listArchivedReviews,lockReviewMonth,replaceReviewAssignments,startReviewSync,unlockReviewMonth,updateManualReviewCredit,updateReviewCreditMonth,updateReviewFlags} from '../controllers/reviewArchiveController.js';
+import {completeFastReviewSync,completeReviewSync,createManualReviewCredit,deleteManualReviewCredit,failReviewSync,getReviewCreditSummary,getReviewMonthLock,getReviewTrends,ingestReviewSyncPage,listArchivedReviews,lockReviewMonth,replaceReviewAssignments,startReviewSync,unlockReviewMonth,updateManualReviewCredit,updateReviewCreditMonth,updateReviewFlags} from '../controllers/reviewArchiveController.js';
 
 const router: Router = express.Router();
 const archiveView=authorizeModuleAction('review-counter-management','view');
@@ -32,9 +32,11 @@ router.get('/archive/trends',authMiddleware,archiveView,getReviewTrends);
 router.post('/archive/sync/fast/start',authMiddleware,archiveView,startReviewSync);
 router.post('/archive/sync/fast/:runId/page',authMiddleware,archiveView,ingestReviewSyncPage);
 router.post('/archive/sync/fast/:runId/complete',authMiddleware,archiveView,completeFastReviewSync);
+router.post('/archive/sync/fast/:runId/fail',authMiddleware,archiveView,failReviewSync);
 router.post('/archive/sync/start',authMiddleware,reviewManager,archiveCreate,startReviewSync);
 router.post('/archive/sync/:runId/page',authMiddleware,reviewManager,archiveCreate,ingestReviewSyncPage);
 router.post('/archive/sync/:runId/complete',authMiddleware,reviewManager,archiveCreate,completeReviewSync);
+router.post('/archive/sync/:runId/fail',authMiddleware,reviewManager,archiveCreate,failReviewSync);
 router.put('/archive/:id/assignments',authMiddleware,reviewManager,archiveUpdate,replaceReviewAssignments);
 router.put('/archive/:id/flags',authMiddleware,reviewManager,archiveUpdate,updateReviewFlags);
 router.put('/archive/:id/credit-month',authMiddleware,reviewManager,archiveUpdate,updateReviewCreditMonth);

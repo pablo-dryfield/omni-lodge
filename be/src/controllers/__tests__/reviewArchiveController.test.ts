@@ -4,7 +4,7 @@ jest.mock('../../config/database.js', () => ({
 }));
 jest.mock('../../models/ReviewArchive.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../../models/ReviewAssignment.js', () => ({ __esModule: true, default: {} }));
-jest.mock('../../models/ReviewSyncRun.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/ReviewSyncRun.js', () => ({ __esModule: true, default: { findByPk: jest.fn() } }));
 jest.mock('../../models/ReviewManualCredit.js', () => ({
   __esModule: true,
   default: { create: jest.fn(), findByPk: jest.fn() },
@@ -19,13 +19,15 @@ jest.mock('../../__mocks__/sequelizeModelStub', () => ({
 import ReviewManualCredit from '../../models/ReviewManualCredit';
 import ReviewArchive from '../../models/ReviewArchive';
 import ReviewDailySnapshot from '../../models/ReviewDailySnapshot';
-import { createManualReviewCredit, deleteManualReviewCredit, getReviewTrends, updateManualReviewCredit } from '../reviewArchiveController';
+import ReviewSyncRun from '../../models/ReviewSyncRun';
+import { createManualReviewCredit, deleteManualReviewCredit, failReviewSync, getReviewTrends, updateManualReviewCredit } from '../reviewArchiveController';
 
 const findManualCredit = ReviewManualCredit.findByPk as jest.Mock;
 const createManualCredit = ReviewManualCredit.create as jest.Mock;
 const countUsers = jest.requireMock('../../__mocks__/sequelizeModelStub').default.count as jest.Mock;
 const findArchivedReviews = ReviewArchive.findAll as jest.Mock;
 const findDailySnapshots = ReviewDailySnapshot.findAll as jest.Mock;
+const findReviewSyncRun = ReviewSyncRun.findByPk as jest.Mock;
 
 const createResponse = () => {
   const response = {
@@ -105,6 +107,53 @@ describe('getReviewTrends', () => {
         activeCount: 2,
       })],
     });
+  });
+});
+
+describe('failReviewSync', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('marks a running sync as failed so a client-side scraper error does not leave it stuck', async () => {
+    const run = {
+      id: 941,
+      status: 'running',
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    findReviewSyncRun.mockResolvedValue(run);
+    const response = createResponse();
+
+    await failReviewSync(
+      { params: { runId: '941' } } as never,
+      response as never,
+    );
+
+    expect(findReviewSyncRun).toHaveBeenCalledWith(941);
+    expect(run.update).toHaveBeenCalledWith({
+      status: 'failed',
+      completedAt: expect.any(Date),
+    });
+    expect(response.json).toHaveBeenCalledWith({ run });
+  });
+
+  it('does not change a sync run that already left the running state', async () => {
+    const run = {
+      id: 941,
+      status: 'completed',
+      update: jest.fn(),
+    };
+    findReviewSyncRun.mockResolvedValue(run);
+    const response = createResponse();
+
+    await failReviewSync(
+      { params: { runId: '941' } } as never,
+      response as never,
+    );
+
+    expect(run.update).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.json).toHaveBeenCalledWith([{ message: 'Active sync run not found' }]);
   });
 });
 

@@ -170,6 +170,15 @@ export async function completeFastReviewSync(req: AuthenticatedRequest, res: Res
   await completeReviewSync(req, res);
 }
 
+export async function failReviewSync(req: AuthenticatedRequest, res: Response) {
+  try {
+    const run = await ReviewSyncRun.findByPk(Number(req.params.runId));
+    if (!run || run.status !== 'running') throw new Error('Active sync run not found');
+    await run.update({ status: 'failed', completedAt: new Date() });
+    res.json({ run });
+  } catch (error) { fail(res, error); }
+}
+
 export async function listArchivedReviews(req: AuthenticatedRequest, res: Response) {
   try {
     const platform = String(req.query.platform ?? '').toLowerCase();
