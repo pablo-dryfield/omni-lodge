@@ -56,6 +56,7 @@ jest.mock('../../controllers/reviewArchiveController.js', () => {
     completeReviewSync: jest.fn(respond),
     createManualReviewCredit: jest.fn(respond),
     deleteManualReviewCredit: jest.fn(respond),
+    failReviewSync: jest.fn(respond),
     getReviewCreditSummary: jest.fn(respond),
     getReviewMonthLock: jest.fn(respond),
     getReviewTrends: jest.fn(respond),

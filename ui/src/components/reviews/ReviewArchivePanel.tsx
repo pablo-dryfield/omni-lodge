@@ -124,10 +124,11 @@ export default function ReviewArchivePanel({
       setLoading(true);
       setError('');
       setManualReviewUrl(null);
+      const syncBase = full ? '/reviews/archive/sync' : '/reviews/archive/sync/fast';
+      let runId: number | null = null;
       try {
-        const syncBase = full ? '/reviews/archive/sync' : '/reviews/archive/sync/fast';
         const started = await axiosInstance.post(`${syncBase}/start`, { platform });
-        const runId = started.data.run.id;
+        runId = started.data.run.id;
         let token: string | undefined;
         let cursor: string | undefined;
         let offset = 0;
@@ -177,6 +178,13 @@ export default function ReviewArchivePanel({
         setSourceStats({ totalCount: sourceTotalCount, averageRating });
         setPage(1);
       } catch (caught: any) {
+        if (runId !== null) {
+          try {
+            await axiosInstance.post(`${syncBase}/${runId}/fail`);
+          } catch {
+            // Keep the original sync error visible to the user.
+          }
+        }
         setError(caught.response?.data?.error ?? caught.response?.data?.[0]?.message ?? caught.message);
         if (platform === 'getyourguide') {
           const responseUrl = caught.response?.data?.reviewsUrl;
