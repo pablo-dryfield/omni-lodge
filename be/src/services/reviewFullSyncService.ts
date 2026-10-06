@@ -5,6 +5,7 @@ import ReviewArchive from '../models/ReviewArchive.js';
 import ReviewDailySnapshot from '../models/ReviewDailySnapshot.js';
 import ReviewSyncRun from '../models/ReviewSyncRun.js';
 import { getAirbnbReviews, getAllGoogleReviews, getTripAdvisorReviews } from '../controllers/reviewController.js';
+import { assertReviewSyncCanMarkMissingDeleted } from './reviewSyncSafety.js';
 
 type Platform = 'google' | 'tripadvisor' | 'airbnb';
 type SourcePayload = { data?: any[]; columns?: any[] };
@@ -57,6 +58,13 @@ export async function runFullReviewSync(platform: Platform): Promise<{ seen: num
     }
     await run.update({ seenCount: seen });
     const now = new Date();
+    const activeBeforeDelete = await ReviewArchive.count({ where: { platform, isDeleted: false } });
+    assertReviewSyncCanMarkMissingDeleted({
+      platform,
+      partial: false,
+      seenCount: seen,
+      activeCount: activeBeforeDelete,
+    });
     const [deleted] = await ReviewArchive.update({ isDeleted: true, deletedDetectedAt: now }, { where: { platform, [Op.or]: [{ lastSeenRunId: { [Op.ne]: run.id } }, { lastSeenRunId: null }], isDeleted: false } });
     await run.update({ status: 'completed', deletedCount: deleted, completedAt: now });
     const [archivedCount, activeCount, newReviewsCount] = await Promise.all([ReviewArchive.count({ where: { platform } }), ReviewArchive.count({ where: { platform, isDeleted: false } }), ReviewArchive.count({ where: { platform, firstSeenAt: { [Op.gte]: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) } } })]);

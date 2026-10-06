@@ -9,6 +9,7 @@ import ReviewManualCredit from '../models/ReviewManualCredit.js';
 import ReviewDailySnapshot from '../models/ReviewDailySnapshot.js';
 import ReviewMonthLock from '../models/ReviewMonthLock.js';
 import User from '../models/User.js';
+import { assertReviewSyncCanMarkMissingDeleted } from '../services/reviewSyncSafety.js';
 import { reviewDateRangeInWarsaw, reviewPeriodStartInWarsaw } from '../utils/reviewCreditMonth.js';
 
 const actor = (req: AuthenticatedRequest) => {
@@ -127,6 +128,20 @@ export async function completeReviewSync(req: AuthenticatedRequest, res: Respons
     const partial = req.body.partial === true;
     const snapshotAt = run.completedAt ?? now;
     const snapshotDate = snapshotAt.toISOString().slice(0, 10);
+    if (run.status !== 'completed') {
+      const activeBeforeDelete = await ReviewArchive.count({ where: { platform: run.platform, isDeleted: false } });
+      try {
+        assertReviewSyncCanMarkMissingDeleted({
+          platform: run.platform,
+          partial,
+          seenCount: Number(run.seenCount ?? 0),
+          activeCount: activeBeforeDelete,
+        });
+      } catch (error) {
+        await run.update({ status: 'failed', completedAt: now });
+        throw error;
+      }
+    }
     const result = await sequelize.transaction(async transaction => {
       const deleted = partial || run.status === 'completed' ? [run.deletedCount] : await ReviewArchive.update(
         { isDeleted: true, deletedDetectedAt: now },

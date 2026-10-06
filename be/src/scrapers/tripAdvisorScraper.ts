@@ -68,7 +68,12 @@ type TripAdvisorApiPage = {
   reviews?: TripAdvisorApiReview[];
 };
 
+type TripAdvisorApiError = {
+  message?: string;
+};
+
 type TripAdvisorApiResponse = {
+  errors?: TripAdvisorApiError[];
   data?: {
     ReviewsProxy_getReviewListPageForLocation?: TripAdvisorApiPage[];
     locations?: Array<{ reviewListPage?: TripAdvisorApiPage }>;
@@ -254,6 +259,13 @@ const normalizeReview = (review: TripAdvisorApiReview): TripAdvisorReview => {
 
 const extractPage = (response: unknown): TripAdvisorApiPage => {
   if (!Array.isArray(response)) return { totalCount: 0, reviews: [] };
+  const errors = (response as TripAdvisorApiResponse[])
+    .flatMap((item) => Array.isArray(item?.errors) ? item.errors : [])
+    .map((error) => error?.message?.trim())
+    .filter((message): message is string => Boolean(message));
+  if (errors.length > 0) {
+    throw new Error(`TripAdvisor GraphQL error: ${errors.join('; ')}`);
+  }
   const page = (response as TripAdvisorApiResponse[]).map(item =>
     item?.data?.ReviewsProxy_getReviewListPageForLocation?.[0] ??
     item?.data?.locations?.[0]?.reviewListPage,
