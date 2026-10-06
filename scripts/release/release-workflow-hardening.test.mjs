@@ -8,7 +8,7 @@ const workflow = fs.readFileSync(workflowPath, 'utf8');
 const packageJobStart = workflow.indexOf('\n  package:');
 const packageJob = packageJobStart === -1 ? '' : workflow.slice(packageJobStart);
 
-test('release package job keeps artifact provenance attestation enabled', () => {
+test('release package job keeps artifact provenance attestation enabled when GitHub supports it', () => {
   assert.notEqual(packageJobStart, -1, 'Release workflow must contain the package job');
 
   assert.match(
@@ -33,6 +33,11 @@ test('release package job keeps artifact provenance attestation enabled', () => 
 
   assert.match(
     packageJob,
+    /\n      - name: Attest immutable release artifact provenance\n        if: \$\{\{ !github\.event\.repository\.private \}\}\n/,
+    'Stored GitHub attestations must be skipped only for private repositories that do not support them',
+  );
+  assert.match(
+    packageJob,
     /uses: actions\/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8/,
     'Attestation action must stay pinned to the reviewed v4.2.2 commit',
   );
@@ -40,5 +45,10 @@ test('release package job keeps artifact provenance attestation enabled', () => 
     packageJob,
     /\n          subject-path: \|\n            \$\{\{ runner\.temp \}\}\/omnilodge-release\/\$\{\{ needs\.metadata\.outputs\.release_id \}\}\.tar\.gz\n            \$\{\{ runner\.temp \}\}\/omnilodge-release\/\$\{\{ needs\.metadata\.outputs\.release_id \}\}\.tar\.gz\.sha256\n/,
     'Attestation must cover the immutable release tarball and its detached checksum',
+  );
+  assert.match(
+    packageJob,
+    /\n      - name: Report private repository attestation skip\n        if: \$\{\{ github\.event\.repository\.private \}\}\n/,
+    'Private repositories must report why stored provenance attestation was skipped',
   );
 });
