@@ -415,11 +415,24 @@ jobs:
 
       # actions/attest-build-provenance v4.2.2.
       - name: Attest immutable release artifact provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: |
             ${{ runner.temp }}/omnilodge-release/${{ needs.metadata.outputs.release_id }}.tar.gz
             ${{ runner.temp }}/omnilodge-release/${{ needs.metadata.outputs.release_id }}.tar.gz.sha256
+
+      - name: Report private repository attestation skip
+        if: ${{ github.event.repository.private }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '### Release artifact provenance attestation'
+            echo
+            echo 'GitHub stored attestations are unavailable for user-owned private repositories, so the provenance attestation step was skipped.'
+            echo 'The release artifact is still packaged from the trusted master SHA, verified locally, uploaded immutably, and validated by checksum before deployment.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # actions/upload-artifact v7.0.1. This is the single deployable release
       # artifact; its name is bound into the release manifest provenance.
