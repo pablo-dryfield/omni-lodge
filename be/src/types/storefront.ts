@@ -1,6 +1,7 @@
 export type StorefrontParticipantMode = 'quantity' | 'gender_split';
 export type StorefrontDateMode = 'flexible' | 'fixed' | 'allowed_dates';
 export type StorefrontTimeMode = 'fixed' | 'select' | 'manual';
+export type StorefrontBookingSection = 'date_time' | 'group_size' | 'contact_details' | 'addons';
 
 export type StorefrontMeetingPoint = {
   name?: string;
@@ -49,6 +50,7 @@ export type StorefrontProductConfig = {
   participantMode?: StorefrontParticipantMode;
   minParticipants?: number;
   maxParticipants?: number;
+  sectionOrder?: StorefrontBookingSection[];
   dateRequired?: boolean;
   timeMode?: StorefrontTimeMode;
   defaultStartTime?: string;

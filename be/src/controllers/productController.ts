@@ -11,6 +11,36 @@ import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import HttpError from '../errors/HttpError.js';
 import { getAllowedProductTypeIds, requireProductAccess, requireProductTypeAccess, scopeProductWhere } from '../services/productScopeService.js';
 import { deleteProductMedia, uploadProductMedia } from '../services/storefrontMediaService.js';
+import type { StorefrontBookingSection } from '../types/storefront.js';
+
+const DEFAULT_STOREFRONT_SECTION_ORDER: StorefrontBookingSection[] = [
+  'date_time',
+  'group_size',
+  'contact_details',
+  'addons',
+];
+
+const normalizeStorefrontSectionOrder = (value: unknown): StorefrontBookingSection[] => {
+  const seen = new Set<StorefrontBookingSection>();
+  const normalized = (Array.isArray(value) ? value : [])
+    .filter((section): section is StorefrontBookingSection =>
+      DEFAULT_STOREFRONT_SECTION_ORDER.includes(section as StorefrontBookingSection),
+    )
+    .filter((section) => {
+      if (seen.has(section)) return false;
+      seen.add(section);
+      return true;
+    });
+
+  return [
+    ...normalized,
+    ...DEFAULT_STOREFRONT_SECTION_ORDER.filter((section) => !seen.has(section)),
+  ];
+};
+
+const isDefaultStorefrontSectionOrder = (sections: StorefrontBookingSection[]): boolean =>
+  sections.length === DEFAULT_STOREFRONT_SECTION_ORDER.length
+  && sections.every((section, index) => section === DEFAULT_STOREFRONT_SECTION_ORDER[index]);
 
 function buildProductColumns() {
   const attributes = Product.getAttributes();
@@ -32,6 +62,13 @@ function normalizeProductPayload(
     if (config === null || Array.isArray(config) || typeof config !== 'object') {
       throw new Error('storefrontConfig must be a JSON object');
     }
+    const storefrontConfig = { ...(config as Record<string, unknown>) };
+    if ('sectionOrder' in storefrontConfig) {
+      const sectionOrder = normalizeStorefrontSectionOrder(storefrontConfig.sectionOrder);
+      if (isDefaultStorefrontSectionOrder(sectionOrder)) delete storefrontConfig.sectionOrder;
+      else storefrontConfig.sectionOrder = sectionOrder;
+    }
+    normalized.storefrontConfig = storefrontConfig;
   } else if (options.isCreate) {
     normalized.storefrontConfig = {};
   }
