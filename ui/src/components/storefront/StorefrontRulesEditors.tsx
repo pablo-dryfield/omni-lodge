@@ -18,9 +18,13 @@ import {
   Textarea,
 } from "@mantine/core";
 import { DatePicker, type DatesRangeValue } from "@mantine/dates";
-import { IconPlus, IconTrash } from "@tabler/icons-react";
+import { IconArrowDown, IconArrowUp, IconPlus, IconTrash } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
-import type { StorefrontDateMode, StorefrontProductConfig } from "../../types/products/Product";
+import type {
+  StorefrontBookingSection,
+  StorefrontDateMode,
+  StorefrontProductConfig,
+} from "../../types/products/Product";
 import type {
   StorefrontAvailabilityBlockedDate,
   StorefrontAvailabilityDateOverride,
@@ -45,6 +49,54 @@ type CalendarRuleState = {
 };
 
 const dateInputPattern = /^\d{4}-\d{2}-\d{2}$/;
+const defaultSectionOrder: StorefrontBookingSection[] = [
+  "date_time",
+  "group_size",
+  "contact_details",
+  "addons",
+];
+const sectionLabels: Record<StorefrontBookingSection, string> = {
+  date_time: "Date / time",
+  group_size: "Group size",
+  contact_details: "Contact details",
+  addons: "Add-ons",
+};
+
+const normalizeSectionOrder = (
+  value: StorefrontProductConfig["sectionOrder"],
+): StorefrontBookingSection[] => {
+  const seen = new Set<StorefrontBookingSection>();
+  const normalized = (Array.isArray(value) ? value : [])
+    .filter((section): section is StorefrontBookingSection =>
+      defaultSectionOrder.includes(section as StorefrontBookingSection),
+    )
+    .filter((section) => {
+      if (seen.has(section)) return false;
+      seen.add(section);
+      return true;
+    });
+
+  return [
+    ...normalized,
+    ...defaultSectionOrder.filter((section) => !seen.has(section)),
+  ];
+};
+
+const isDefaultSectionOrder = (sections: StorefrontBookingSection[]): boolean =>
+  sections.length === defaultSectionOrder.length
+  && sections.every((section, index) => section === defaultSectionOrder[index]);
+
+const moveSection = (
+  sections: StorefrontBookingSection[],
+  fromIndex: number,
+  direction: -1 | 1,
+): StorefrontBookingSection[] => {
+  const toIndex = fromIndex + direction;
+  if (toIndex < 0 || toIndex >= sections.length) return sections;
+  const next = [...sections];
+  [next[fromIndex], next[toIndex]] = [next[toIndex], next[fromIndex]];
+  return next;
+};
 
 const dateKeyFromDate = (date: Date | null): string => {
   if (!date) return "";
@@ -148,6 +200,9 @@ export const cleanProductStorefrontConfig = (
   config: StorefrontProductConfig,
 ): StorefrontProductConfig => {
   const cleaned = { ...config };
+  const sectionOrder = normalizeSectionOrder(cleaned.sectionOrder);
+  if (isDefaultSectionOrder(sectionOrder)) delete cleaned.sectionOrder;
+  else cleaned.sectionOrder = sectionOrder;
   if (Array.isArray(cleaned.startTimes)) {
     const startTimes = normalizeStartTimeTags(cleaned.startTimes);
     if (startTimes.length > 0) cleaned.startTimes = startTimes;
@@ -209,6 +264,10 @@ export const ProductStorefrontRulesEditor = ({
   const startTimes = useMemo(
     () => normalizeStartTimeTags(value.startTimes ?? []),
     [value.startTimes],
+  );
+  const sectionOrder = useMemo(
+    () => normalizeSectionOrder(value.sectionOrder),
+    [value.sectionOrder],
   );
   useEffect(() => {
     if (dateMode === "allowed_dates" && calendarMode === "available") {
@@ -414,6 +473,59 @@ export const ProductStorefrontRulesEditor = ({
             Control what guests choose and which details are required at checkout.
           </Text>
         </div>
+        <Divider />
+        <Stack gap="xs">
+          <Group justify="space-between" align="flex-end">
+            <div>
+              <Text size="sm" fw={500}>Booking section order</Text>
+              <Text size="xs" c="dimmed">
+                Controls the product page flow. The final summary and add-to-cart button stay fixed at the end.
+              </Text>
+            </div>
+            <Button
+              variant="subtle"
+              size="xs"
+              disabled={isDefaultSectionOrder(sectionOrder)}
+              onClick={() => update("sectionOrder", undefined)}
+            >
+              Reset order
+            </Button>
+          </Group>
+          <Stack gap={6}>
+            {sectionOrder.map((section, index) => (
+              <Paper key={section} withBorder radius="sm" p="xs">
+                <Group justify="space-between" wrap="nowrap">
+                  <div>
+                    <Text size="sm" fw={600}>{sectionLabels[section]}</Text>
+                    <Text size="xs" c="dimmed">Position {index + 1}</Text>
+                  </div>
+                  <Group gap={4} wrap="nowrap">
+                    <ActionIcon
+                      variant="subtle"
+                      aria-label={`Move ${sectionLabels[section]} up`}
+                      disabled={index === 0}
+                      onClick={() =>
+                        update("sectionOrder", moveSection(sectionOrder, index, -1))
+                      }
+                    >
+                      <IconArrowUp size={16} />
+                    </ActionIcon>
+                    <ActionIcon
+                      variant="subtle"
+                      aria-label={`Move ${sectionLabels[section]} down`}
+                      disabled={index === sectionOrder.length - 1}
+                      onClick={() =>
+                        update("sectionOrder", moveSection(sectionOrder, index, 1))
+                      }
+                    >
+                      <IconArrowDown size={16} />
+                    </ActionIcon>
+                  </Group>
+                </Group>
+              </Paper>
+            ))}
+          </Stack>
+        </Stack>
         <Divider />
         <SimpleGrid cols={{ base: 1, sm: 2 }}>
           <Select

@@ -37,10 +37,11 @@ type ProductMediaEditorProps = {
   onUploadingChange: (uploading: boolean) => void;
 };
 
+const normalizeImageOrder = (images: ProductImage[]) =>
+  images.map((image, index) => ({ ...image, order: index + 1 }));
+
 const orderedImages = (images: ProductImage[]) =>
-  [...images]
-    .sort((left, right) => left.order - right.order)
-    .map((image, index) => ({ ...image, order: index + 1 }));
+  normalizeImageOrder([...images].sort((left, right) => left.order - right.order));
 
 const ProductMediaEditor = ({
   productId,
@@ -56,7 +57,7 @@ const ProductMediaEditor = ({
   const sortedImages = useMemo(() => orderedImages(images), [images]);
 
   const emitImages = (nextImages: ProductImage[], nextCover = imageUrl) => {
-    const normalized = orderedImages(nextImages);
+    const normalized = normalizeImageOrder(nextImages);
     const coverExists = nextCover && normalized.some((image) => image.url === nextCover);
     onChange({
       images: normalized,
@@ -64,30 +65,48 @@ const ProductMediaEditor = ({
     });
   };
 
-  const handleUpload = async (file: File | null) => {
-    if (!file || !productId) return;
+  const handleUpload = async (selectedFiles: File[] | null) => {
+    const files = selectedFiles ?? [];
+    if (files.length === 0 || !productId) return;
     setUploading(true);
     onUploadingChange(true);
     setUploadError(null);
+    let nextImages = sortedImages;
+    let nextCover = imageUrl;
+    const uploadFailures: string[] = [];
+
     try {
-      const preparedFile = await compressImageFile(file, {
-        force: true,
-        maxWidth: 1800,
-        maxHeight: 1800,
-        quality: 0.84,
-        maxSizeBytes: 1200 * 1024,
-        outputMimeType: 'image/webp',
-      });
-      const uploaded = await uploadProductImage(productId, preparedFile);
-      const nextImage = {
-        ...uploaded,
-        alt: productName.trim() || uploaded.alt,
-        order: sortedImages.length + 1,
-      };
-      onUploaded(nextImage.url);
-      emitImages([...sortedImages, nextImage], imageUrl ?? nextImage.url);
-    } catch (error) {
-      setUploadError(error instanceof Error ? error.message : 'Unable to upload this image.');
+      for (const file of files) {
+        try {
+          const preparedFile = await compressImageFile(file, {
+            force: true,
+            maxWidth: 1800,
+            maxHeight: 1800,
+            quality: 0.84,
+            maxSizeBytes: 1200 * 1024,
+            outputMimeType: 'image/webp',
+          });
+          const uploaded = await uploadProductImage(productId, preparedFile);
+          const nextImage = {
+            ...uploaded,
+            alt: productName.trim() || uploaded.alt,
+            order: nextImages.length + 1,
+          };
+          onUploaded(nextImage.url);
+          nextImages = [...nextImages, nextImage];
+          nextCover = nextCover ?? nextImage.url;
+        } catch (error) {
+          uploadFailures.push(
+            error instanceof Error
+              ? `${file.name}: ${error.message}`
+              : `${file.name}: unable to upload this image.`,
+          );
+        }
+      }
+      emitImages(nextImages, nextCover);
+      if (uploadFailures.length > 0) {
+        setUploadError(uploadFailures.join(' '));
+      }
     } finally {
       setUploading(false);
       onUploadingChange(false);
@@ -117,11 +136,12 @@ const ProductMediaEditor = ({
           <FileButton
             onChange={handleUpload}
             accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            multiple
             disabled={!productId || uploading}
           >
             {(props) => (
               <Button {...props} loading={uploading} leftSection={<IconUpload size={16} />}>
-                Upload image
+                Upload images
               </Button>
             )}
           </FileButton>
