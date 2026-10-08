@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { UniqueConstraintError, ValidationError } from 'sequelize';
 import StorefrontPromotion from '../models/StorefrontPromotion.js';
+import { promotionRules, requireEcwidPromotionSupport, supportsEcwidPromotion } from '../services/storefrontPromotionRules.js';
 import {
   createEcwidDiscountCoupon,
   fetchAllEcwidDiscountCoupons,
@@ -22,6 +23,8 @@ type PromotionPayload = {
   validTo?: string | null;
   isActive?: boolean;
   productIds?: number[];
+  applicationBasis?: 'booking' | 'person';
+  discountScope?: 'tour' | 'tour_and_addons';
 };
 
 const serialize = (promotion: StorefrontPromotion) => ({
@@ -38,6 +41,7 @@ const serialize = (promotion: StorefrontPromotion) => ({
   validTo: promotion.validTo,
   isActive: promotion.isActive,
   productIds: Array.isArray(promotion.metadata?.productIds) ? promotion.metadata.productIds : [],
+  ...promotionRules(promotion.metadata),
   ecwidCouponId: Number(promotion.metadata?.ecwidCouponId) || null,
   ecwidStatus: promotion.metadata?.ecwidStatus ?? null,
   ecwidLastSyncedAt: promotion.metadata?.ecwidLastSyncedAt ?? null,
@@ -59,6 +63,11 @@ const normalizePayload = (body: PromotionPayload, existing?: StorefrontPromotion
   const productIds = body.productIds ?? (
     Array.isArray(existing?.metadata?.productIds) ? existing.metadata.productIds as number[] : []
   );
+  const existingRules = promotionRules(existing?.metadata);
+  const applicationBasis = body.applicationBasis ?? existingRules.applicationBasis;
+  const discountScope = body.discountScope ?? existingRules.discountScope;
+  if (!['booking', 'person'].includes(applicationBasis)) throw new Error('Invalid discount application basis.');
+  if (!['tour', 'tour_and_addons'].includes(discountScope)) throw new Error('Invalid discount scope.');
   const validFrom = body.validFrom === undefined
     ? existing?.validFrom ?? null
     : body.validFrom
@@ -88,7 +97,7 @@ const normalizePayload = (body: PromotionPayload, existing?: StorefrontPromotion
     validFrom,
     validTo,
     isActive: body.isActive ?? existing?.isActive ?? true,
-    metadata: { ...(existing?.metadata ?? {}), productIds },
+    metadata: { ...(existing?.metadata ?? {}), productIds, applicationBasis, discountScope },
   };
 };
 
@@ -122,6 +131,7 @@ const ecwidPayload = (promotion: StorefrontPromotion): EcwidDiscountCouponPayloa
 });
 
 const syncOneToEcwid = async (promotion: StorefrontPromotion) => {
+  requireEcwidPromotionSupport(promotion.metadata);
   const existingId = Number(promotion.metadata?.ecwidCouponId) || null;
   let ecwidCouponId = existingId;
   if (existingId) {
@@ -173,6 +183,7 @@ export const listPromotions = async (_req: Request, res: Response): Promise<void
 export const createPromotion = async (req: Request, res: Response): Promise<void> => {
   try {
     const payload = normalizePayload(req.body);
+    if (req.body.syncToEcwid === true) requireEcwidPromotionSupport(payload.metadata);
     const duplicate = await StorefrontPromotion.findOne({ where: { code: payload.code } });
     if (duplicate) {
       res.status(409).json({ message: 'A promotion with this discount code already exists.' });
@@ -191,6 +202,7 @@ export const updatePromotion = async (req: Request, res: Response): Promise<void
     const promotion = await StorefrontPromotion.findByPk(req.params.id);
     if (!promotion) { res.status(404).json({ message: 'Promotion not found' }); return; }
     const payload = normalizePayload(req.body, promotion);
+    if (req.body.syncToEcwid === true) requireEcwidPromotionSupport(payload.metadata);
     const duplicate = await StorefrontPromotion.findOne({
       where: { code: payload.code, id: { [Op.ne]: promotion.id } },
     });
@@ -232,9 +244,14 @@ export const importEcwidPromotions = async (_req: Request, res: Response): Promi
     const byCode = new Map(existing.map((row) => [row.code.toUpperCase(), row]));
     let created = 0;
     let updated = 0;
+    let skipped = coupons.length - supported.length;
     for (const coupon of supported) {
       const code = coupon.code.trim().toUpperCase();
       const row = byCode.get(code);
+      if (row && !supportsEcwidPromotion(row.metadata)) {
+        skipped += 1;
+        continue;
+      }
       if (row) {
         await row.update(ecwidToLocal(coupon, row));
         updated += 1;
@@ -243,7 +260,7 @@ export const importEcwidPromotions = async (_req: Request, res: Response): Promi
         created += 1;
       }
     }
-    res.json({ created, updated, skipped: coupons.length - supported.length });
+    res.json({ created, updated, skipped });
   } catch (error) {
     res.status(502).json({ message: error instanceof Error ? error.message : 'Ecwid import failed' });
   }
