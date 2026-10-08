@@ -2424,7 +2424,7 @@ const PaymentLinksPage = () => {
               }}
             />
           )}
-          <TextInput label="Discount codes" description="Separate multiple codes with commas" value={discountCodes} onChange={(event) => { setDiscountCodes(event.currentTarget.value); setQuote(null); }} />
+          <TextInput label="Discount code" value={discountCodes} onChange={(event) => { setDiscountCodes(event.currentTarget.value); setQuote(null); }} />
 
           {quote && (
             <Box py="sm" style={{ borderTop: "1px solid var(--mantine-color-gray-3)", borderBottom: "1px solid var(--mantine-color-gray-3)" }}>

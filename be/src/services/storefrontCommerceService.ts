@@ -9,6 +9,7 @@ import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
 import ProductPrice from '../models/ProductPrice.js';
 import StorefrontPromotion from '../models/StorefrontPromotion.js';
+import { promotionRules } from './storefrontPromotionRules.js';
 import type {
   StorefrontAddonConfig,
   StorefrontProductConfig,
@@ -96,6 +97,11 @@ export type StorefrontQuote = {
     name: string;
     amount: number;
     productIds: number[] | null;
+    applicationBasis?: 'booking' | 'person';
+    discountScope?: 'tour' | 'tour_and_addons';
+    type?: 'fixed' | 'percentage';
+    value?: number;
+    participantCount?: number;
   }>;
   items: StorefrontQuoteItem[];
 };
@@ -528,7 +534,9 @@ const resolveProductPrices = async (
 
 const normalizeDiscountCodes = (input: StorefrontCartInput): string[] => {
   const values = [...(Array.isArray(input.discountCodes) ? input.discountCodes : []), input.discountCode];
-  return [...new Set(values.map((value) => normalizeText(value, 64).toUpperCase()).filter(Boolean))].slice(0, 10);
+  const codes = [...new Set(values.map((value) => normalizeText(value, 64).toUpperCase()).filter(Boolean))];
+  if (codes.length > 1) throw new HttpError(400, 'Only one discount code can be applied per booking. Remove the previous code first.');
+  return codes;
 };
 
 const promotionProductIds = (promotion: StorefrontPromotion): number[] | null => {
@@ -573,13 +581,6 @@ const resolvePromotions = async (
   const missing = codes.find((code) => !byCode.has(code));
   if (missing) throw new HttpError(400, `Discount code ${missing} is invalid or expired.`);
 
-  const remainingByProduct = new Map<number, number>();
-  quoteItems.forEach((item) => {
-    remainingByProduct.set(
-      item.productId,
-      roundMoney((remainingByProduct.get(item.productId) ?? 0) + item.total),
-    );
-  });
   const discounts: StorefrontQuote['discounts'] = [];
 
   codes.forEach((code) => {
@@ -600,9 +601,11 @@ const resolvePromotions = async (
     }
 
     const scopedProductIds = promotionProductIds(promotion);
-    const eligibleIds = scopedProductIds ?? [...remainingByProduct.keys()];
+    const rules = promotionRules(promotion.metadata);
+    const eligibleItems = quoteItems.filter((item) => !scopedProductIds || scopedProductIds.includes(item.productId));
+    const eligibleAmount = (item: StorefrontQuoteItem) => rules.discountScope === 'tour' ? item.baseTotal : item.total;
     const eligibleRemaining = roundMoney(
-      eligibleIds.reduce((sum, productId) => sum + (remainingByProduct.get(productId) ?? 0), 0),
+      eligibleItems.reduce((sum, item) => sum + eligibleAmount(item), 0),
     );
     if (eligibleRemaining <= 0) {
       throw new HttpError(400, `Discount code ${code} does not apply to the products in this cart.`);
@@ -610,32 +613,12 @@ const resolvePromotions = async (
     const rawDiscount =
       promotion.type === 'percentage'
         ? eligibleRemaining * (Number(promotion.value) / 100)
-        : Number(promotion.value);
+        : rules.applicationBasis === 'person'
+          // Cap each line so cheap/free tickets cannot transfer excess discounts to another product.
+          ? eligibleItems.reduce((sum, item) => sum + Math.min(eligibleAmount(item), Number(promotion.value) * item.quantity), 0)
+          : Number(promotion.value);
     const amount = roundMoney(Math.min(eligibleRemaining, Math.max(0, rawDiscount)));
     if (amount <= 0) throw new HttpError(400, `Discount code ${code} has no applicable value.`);
-
-    let undistributed = amount;
-    eligibleIds.forEach((productId, index) => {
-      const remaining = remainingByProduct.get(productId) ?? 0;
-      if (remaining <= 0) return;
-      const reduction =
-        index === eligibleIds.length - 1
-          ? undistributed
-          : roundMoney(amount * (remaining / eligibleRemaining));
-      const applied = Math.min(remaining, undistributed, reduction);
-      remainingByProduct.set(productId, roundMoney(remaining - applied));
-      undistributed = roundMoney(undistributed - applied);
-    });
-    if (undistributed > 0) {
-      for (const productId of eligibleIds) {
-        const remaining = remainingByProduct.get(productId) ?? 0;
-        if (remaining <= 0) continue;
-        const applied = Math.min(remaining, undistributed);
-        remainingByProduct.set(productId, roundMoney(remaining - applied));
-        undistributed = roundMoney(undistributed - applied);
-        if (undistributed <= 0) break;
-      }
-    }
 
     discounts.push({
       promotionId: promotion.id,
@@ -643,6 +626,10 @@ const resolvePromotions = async (
       name: promotion.name,
       amount,
       productIds: scopedProductIds,
+      ...rules,
+      type: promotion.type,
+      value: Number(promotion.value),
+      participantCount: eligibleItems.reduce((sum, item) => sum + item.quantity, 0),
     });
   });
 
@@ -658,6 +645,7 @@ export const quoteStorefrontCart = async (
     throw new HttpError(400, 'The cart must contain at least one item.');
   }
   if (input.items.length > 20) throw new HttpError(400, 'The cart cannot contain more than 20 items.');
+  const requestedCodes = normalizeDiscountCodes(input);
   const currencyCode = normalizeStorefrontCurrencyCode(options.currencyCode);
   const currencyExchangeRateToPln = await resolveCurrencyExchangeRate(currencyCode, transaction);
 
@@ -865,7 +853,6 @@ export const quoteStorefrontCart = async (
   const pricedSubtotal = roundMoney(pricedQuoteItems.reduce((sum, item) => sum + item.baseTotal, 0));
   const pricedAddonTotal = roundMoney(pricedQuoteItems.reduce((sum, item) => sum + item.addonTotal, 0));
   const merchandiseSubtotal = roundMoney(pricedSubtotal + pricedAddonTotal);
-  const requestedCodes = normalizeDiscountCodes(input);
   const discounts = await resolvePromotions(requestedCodes, merchandiseSubtotal, pricedQuoteItems, currencyCode, transaction);
   const discountTotal = roundMoney(discounts.reduce((sum, discount) => sum + discount.amount, 0));
 

@@ -47,6 +47,8 @@ type Promotion = {
   code: string;
   name: string;
   type: "percentage" | "fixed";
+  applicationBasis?: "booking" | "person";
+  discountScope?: "tour" | "tour_and_addons";
   value: number;
   currency: string | null;
   minSubtotal: number;
@@ -65,6 +67,8 @@ type FormState = {
   code: string;
   name: string;
   type: "percentage" | "fixed";
+  applicationBasis: "booking" | "person";
+  discountScope: "tour" | "tour_and_addons";
   value: number | string;
   currency: string;
   minSubtotal: number | string;
@@ -80,6 +84,8 @@ const emptyForm: FormState = {
   code: "",
   name: "",
   type: "percentage",
+  applicationBasis: "booking",
+  discountScope: "tour",
   value: 10,
   currency: "PLN",
   minSubtotal: 0,
@@ -88,8 +94,12 @@ const emptyForm: FormState = {
   validTo: "",
   isActive: true,
   productIds: [],
-  syncToEcwid: true,
+  syncToEcwid: false,
 };
+
+const canSyncEcwid = (promotion: Pick<Promotion, "applicationBasis" | "discountScope">) =>
+  (promotion.applicationBasis ?? "booking") === "booking" &&
+  (promotion.discountScope ?? "tour_and_addons") === "tour_and_addons";
 
 const toLocalDateTime = (value: string | null) => {
   if (!value) return "";
@@ -163,6 +173,8 @@ const PromotionsContent = () => {
       code: promotion.code,
       name: promotion.name,
       type: promotion.type,
+      applicationBasis: promotion.applicationBasis ?? "booking",
+      discountScope: promotion.discountScope ?? "tour_and_addons",
       value: promotion.value,
       currency: promotion.currency ?? "PLN",
       minSubtotal: promotion.minSubtotal,
@@ -171,7 +183,7 @@ const PromotionsContent = () => {
       validTo: toLocalDateTime(promotion.validTo),
       isActive: promotion.isActive,
       productIds: promotion.productIds.map(String),
-      syncToEcwid: Boolean(promotion.ecwidCouponId),
+      syncToEcwid: Boolean(promotion.ecwidCouponId) && canSyncEcwid(promotion),
     });
     setError(null);
     setFormOpen(true);
@@ -290,7 +302,7 @@ const PromotionsContent = () => {
                   <Menu.Target><ActionIcon variant="subtle"><IconDotsVertical size={18} /></ActionIcon></Menu.Target>
                   <Menu.Dropdown>
                     {permissions.canUpdate && <Menu.Item leftSection={<IconEdit size={15} />} onClick={() => openEdit(promotion)}>Edit</Menu.Item>}
-                    {permissions.canUpdate && <Menu.Item leftSection={<IconCloudUpload size={15} />} onClick={() => pushEcwid(promotion)}>Sync to Ecwid</Menu.Item>}
+                    {permissions.canUpdate && <Menu.Item disabled={!canSyncEcwid(promotion)} leftSection={<IconCloudUpload size={15} />} onClick={() => pushEcwid(promotion)}>Sync to Ecwid</Menu.Item>}
                     {permissions.canDelete && <Menu.Item color="red" leftSection={<IconTrash size={15} />} onClick={() => remove(promotion)}>Delete from OmniLodge</Menu.Item>}
                   </Menu.Dropdown>
                 </Menu>
@@ -298,7 +310,9 @@ const PromotionsContent = () => {
               <Group gap="xs">
                 <Badge color={promotion.isActive ? "teal" : "gray"}>{promotion.isActive ? "Active" : "Inactive"}</Badge>
                 <Badge variant="light">{promotion.type === "percentage" ? `${promotion.value}% off` : `${promotion.value.toFixed(2)} ${promotion.currency ?? "PLN"} off`}</Badge>
-                <Badge color={promotion.ecwidCouponId ? "blue" : "gray"} variant="light">{promotion.ecwidCouponId ? "Ecwid synced" : "OmniLodge only"}</Badge>
+                <Badge variant="light">{promotion.applicationBasis === "person" ? "Per person" : "Per booking"}</Badge>
+                <Badge variant="light">{promotion.discountScope === "tour" ? "Tour only" : "Tour + add-ons"}</Badge>
+                <Badge color={promotion.ecwidCouponId && canSyncEcwid(promotion) ? "blue" : "gray"} variant="light">{promotion.ecwidCouponId && canSyncEcwid(promotion) ? "Ecwid synced" : "OmniLodge only"}</Badge>
               </Group>
               <SimpleGrid cols={2} mt="auto">
                 <div><Text size="xs" c="dimmed">Minimum subtotal</Text><Text size="sm" fw={600}>{promotion.minSubtotal.toFixed(2)}</Text></div>
@@ -316,16 +330,18 @@ const PromotionsContent = () => {
           <SimpleGrid cols={{ base: 1, sm: 2 }}>
             <TextInput label="Code" required value={form.code} onChange={(e) => setForm({ ...form, code: e.currentTarget.value.toUpperCase() })} />
             <TextInput label="Promotion name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.currentTarget.value })} />
-            <Select label="Discount type" data={[{ value: "percentage", label: "Percentage" }, { value: "fixed", label: "Fixed amount" }]} value={form.type} allowDeselect={false} onChange={(value) => setForm({ ...form, type: value as FormState["type"] })} />
+            <Select comboboxProps={{ withinPortal: false }} label="Discount type" data={[{ value: "percentage", label: "Percentage" }, { value: "fixed", label: "Fixed amount" }]} value={form.type} allowDeselect={false} onChange={(value) => setForm({ ...form, type: value as FormState["type"] })} />
             <NumberInput label={form.type === "percentage" ? "Discount percentage" : "Discount amount"} min={0} max={form.type === "percentage" ? 100 : undefined} value={form.value} onChange={(value) => setForm({ ...form, value })} />
+            <Select comboboxProps={{ withinPortal: false }} label="Apply discount" data={[{ value: "booking", label: "Per booking" }, { value: "person", label: "Per person" }]} value={form.applicationBasis} allowDeselect={false} onChange={(value) => setForm({ ...form, applicationBasis: value as FormState["applicationBasis"], syncToEcwid: false })} />
+            <Select comboboxProps={{ withinPortal: false }} label="Discount applies to" data={[{ value: "tour", label: "Tour price only" }, { value: "tour_and_addons", label: "Tour price and add-ons" }]} value={form.discountScope} allowDeselect={false} onChange={(value) => setForm({ ...form, discountScope: value as FormState["discountScope"], syncToEcwid: false })} />
             <NumberInput label="Minimum subtotal" min={0} value={form.minSubtotal} onChange={(value) => setForm({ ...form, minSubtotal: value })} />
             <NumberInput label="Maximum redemptions" description="Leave blank for unlimited." min={1} allowDecimal={false} value={form.maxRedemptions} onChange={(value) => setForm({ ...form, maxRedemptions: value })} />
             <TextInput type="datetime-local" label="Valid from" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.currentTarget.value })} />
             <TextInput type="datetime-local" label="Valid until" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.currentTarget.value })} />
           </SimpleGrid>
-          <MultiSelect label="Eligible products" description="Leave empty to apply to every product. OmniLodge scope only." searchable clearable data={productOptions} value={form.productIds} onChange={(productIds) => setForm({ ...form, productIds })} />
+          <MultiSelect comboboxProps={{ withinPortal: false }} label="Eligible products" description="Leave empty to apply to every product. OmniLodge scope only." searchable clearable data={productOptions} value={form.productIds} onChange={(productIds) => setForm({ ...form, productIds })} />
           <Switch label="Promotion is active" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.currentTarget.checked })} />
-          <Checkbox label="Also synchronize this code to Ecwid" checked={form.syncToEcwid} onChange={(e) => setForm({ ...form, syncToEcwid: e.currentTarget.checked })} />
+          <Checkbox label="Also synchronize this code to Ecwid" disabled={!canSyncEcwid(form)} checked={form.syncToEcwid} onChange={(e) => setForm({ ...form, syncToEcwid: e.currentTarget.checked })} />
           {form.maxRedemptions !== "" && Number(form.maxRedemptions) > 1 && form.syncToEcwid && <Alert color="yellow">Ecwid cannot enforce arbitrary total redemption limits. OmniLodge will enforce this limit; Ecwid will receive an unlimited coupon.</Alert>}
           {error && <Alert color="red">{error}</Alert>}
           <Group justify="flex-end"><Button variant="default" onClick={() => setFormOpen(false)} disabled={submitting}>Cancel</Button><Button loading={submitting} onClick={save}>Save promotion</Button></Group>

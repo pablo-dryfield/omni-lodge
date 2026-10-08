@@ -23,6 +23,9 @@ jest.mock('../../models/StorefrontPromotion.js', () => ({
 jest.mock('../storefrontResourceReservationAvailabilityService.js', () => ({
   getActivePromotionReservationCounts: jest.fn(async () => new Map()),
 }));
+jest.mock('../inventoryService.js', () => ({
+  getAddonInventoryAvailability: jest.fn(async () => new Map()),
+}));
 
 import Product from '../../models/Product.js';
 import ProductPrice from '../../models/ProductPrice.js';
@@ -288,5 +291,96 @@ describe('quoteStorefrontCart validation', () => {
         })),
       }),
     ).rejects.toThrow('The cart cannot contain more than 20 items.');
+  });
+});
+
+describe('storefront discount rules', () => {
+  const promotion = (overrides: Record<string, unknown> = {}) => ({
+    id: 1, code: 'SAVE', name: 'Save', type: 'fixed', value: 10, currency: 'PLN',
+    maxRedemptions: null, redemptionCount: 0, minSubtotal: null, metadata: null, ...overrides,
+  });
+  const items = [{ productId: 28, quantity: 2, addons: [{ addonId: 7, quantity: 2 }] }];
+  beforeEach(() => {
+    jest.clearAllMocks();
+    productFindAll.mockResolvedValue([{
+      id: 28, name: 'Pub Crawl', price: 120, storefrontConfig: {},
+      productAddons: [{
+        addonId: 7, maxPerAttendee: 1, priceOverride: null, storefrontConfig: {},
+        addon: { id: 7, name: 'Cocktail', isActive: true, basePrice: 30 },
+      }],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+    promotionFindAll.mockResolvedValue([promotion()]);
+  });
+
+  it('rejects different codes before loading products, including the legacy singular field', async () => {
+    for (const codes of [
+      { discountCodes: ['DISCOUNTED-PC', 'NOMADTABLE'] },
+      { discountCodes: ['SAVE'], discountCode: 'OTHER' },
+    ]) {
+      await expect(quoteStorefrontCart({ items, ...codes })).rejects.toThrow('Only one discount code');
+    }
+    expect(productFindAll).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates repeated codes and preserves legacy booking-wide fixed discounts', async () => {
+    const quote = await quoteStorefrontCart({ items, discountCodes: ['save', ' SAVE '], discountCode: 'SAVE' });
+    expect(quote).toMatchObject({ subtotal: 240, addonTotal: 60, discountTotal: 10, total: 290, discountCodes: ['SAVE'] });
+  });
+
+  it.each(['tour', 'tour_and_addons'])('applies fixed 10 PLN per participant, not per cocktail (%s)', async (discountScope) => {
+    promotionFindAll.mockResolvedValue([promotion({ metadata: { applicationBasis: 'person', discountScope } })]);
+    const quote = await quoteStorefrontCart({ items, discountCode: 'SAVE' });
+    expect(quote).toMatchObject({ discountTotal: 20, total: 280 });
+    expect(quote.discounts[0]).toMatchObject({ applicationBasis: 'person', discountScope, participantCount: 2, value: 10 });
+  });
+
+  it.each([
+    ['booking', 'tour', 24], ['person', 'tour', 24],
+    ['booking', 'tour_and_addons', 30], ['person', 'tour_and_addons', 30],
+  ])('calculates 10 percent with %s / %s rules without multiplying the rate by participant count', async (applicationBasis, discountScope, expected) => {
+    promotionFindAll.mockResolvedValue([promotion({ type: 'percentage', currency: null, metadata: { applicationBasis, discountScope } })]);
+    expect((await quoteStorefrontCart({ items, discountCode: 'SAVE' })).discountTotal).toBe(expected);
+  });
+
+  it('keeps legacy percentage totals and rounds money once', async () => {
+    promotionFindAll.mockResolvedValue([promotion({ type: 'percentage', value: 8.33, currency: null })]);
+    const quote = await quoteStorefrontCart({ items: [{ productId: 28, quantity: 2 }], discountCode: 'SAVE' });
+    expect(quote).toMatchObject({ discountTotal: 19.99, total: 220.01 });
+  });
+
+  it.each(['booking', 'person'])('caps a large %s tour-only discount without consuming add-on charges', async (applicationBasis) => {
+    promotionFindAll.mockResolvedValue([promotion({ value: 1000, metadata: { applicationBasis, discountScope: 'tour' } })]);
+    expect(await quoteStorefrontCart({ items, discountCode: 'SAVE' })).toMatchObject({ discountTotal: 240, total: 60 });
+  });
+
+  it('counts participants only for eligible products across multiple cart lines', async () => {
+    const products = await productFindAll();
+    productFindAll.mockResolvedValue([...products, { id: 32, name: 'NYE', price: 250, storefrontConfig: {}, productAddons: [] }]);
+    promotionFindAll.mockResolvedValue([promotion({ metadata: { applicationBasis: 'person', discountScope: 'tour', productIds: [28] } })]);
+    expect(await quoteStorefrontCart({ items: [...items, { productId: 28, quantity: 1 }, { productId: 32, quantity: 3 }], discountCode: 'SAVE' }))
+      .toMatchObject({ discountTotal: 30, total: 1140, discounts: [expect.objectContaining({ participantCount: 3 })] });
+  });
+
+  it('does not transfer unused per-person discounts from cheap tickets to expensive tickets', async () => {
+    productFindAll.mockResolvedValue([
+      { id: 28, name: 'Small', price: 5, storefrontConfig: {}, productAddons: [] },
+      { id: 32, name: 'Large', price: 100, storefrontConfig: {}, productAddons: [] },
+    ]);
+    promotionFindAll.mockResolvedValue([promotion({ metadata: { applicationBasis: 'person', discountScope: 'tour' } })]);
+    expect(await quoteStorefrontCart({ items: [{ productId: 28, quantity: 2 }, { productId: 32, quantity: 1 }], discountCode: 'SAVE' }))
+      .toMatchObject({ discountTotal: 20, total: 90 });
+  });
+
+  it('retains currency, redemption, minimum and product eligibility checks', async () => {
+    for (const [override, message] of [
+      [{ currency: 'EUR' }, 'not available for this currency'],
+      [{ maxRedemptions: 1, redemptionCount: 1 }, 'redemption limit'],
+      [{ minSubtotal: 500 }, 'minimum subtotal'],
+      [{ metadata: { productIds: [32] } }, 'does not apply'],
+    ] as const) {
+      promotionFindAll.mockResolvedValue([promotion(override)]);
+      await expect(quoteStorefrontCart({ items, discountCode: 'SAVE' })).rejects.toThrow(message);
+    }
   });
 });
