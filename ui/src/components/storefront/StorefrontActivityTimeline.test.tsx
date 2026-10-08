@@ -19,6 +19,23 @@ const event = (
 });
 
 describe("storefront journey cart item formatting", () => {
+  it("identifies homepage buttons by label, placement and destination", () => {
+    const clicked = event("homepage_button_clicked", {
+      buttonId: "hero-halloween", buttonLabel: "Book Halloween",
+      placement: "Hero: Halloweekend", destination: "/store2/halloween-pub-crawl-51/#book",
+    });
+    expect(storefrontJourneyEventDescription(clicked)).toBe("Clicked Book Halloween");
+    expect(storefrontJourneyEventSummary(clicked)).toBe("Hero: Halloweekend | /store2/halloween-pub-crawl-51/#book");
+    expect(storefrontJourneyEventDescription(event("homepage_button_clicked", {}))).toBe("Clicked a homepage button");
+  });
+
+  it("describes homepage views without mislabelling missing campaign data", () => {
+    expect(storefrontJourneyEventDescription(event("homepage_viewed", {}))).toBe("Viewed homepage");
+    expect(storefrontJourneyEventSummary(event("homepage_viewed", { campaign: "nye" }))).toBe("New Year's Eve homepage");
+    expect(storefrontJourneyEventSummary(event("homepage_viewed", { campaign: "halloween" }))).toBe("Halloweekend homepage");
+    expect(storefrontJourneyEventSummary(event("homepage_viewed", {}))).toBe("Homepage");
+  });
+
   it("identifies the removed duplicate item and describes its complete selection", () => {
     const removed = event("cart_item_removed", {
       cartItemId: "28-1788016027000",

@@ -116,6 +116,13 @@ const cartItemSummary = (snapshot: Record<string, unknown> | null): string => {
 
 export const storefrontJourneyEventSummary = (event: StorefrontJourneyEvent): string => {
   const details = event.details || {};
+  if (event.type === "homepage_viewed") {
+    return details.campaign === "nye" ? "New Year's Eve homepage"
+      : details.campaign === "halloween" ? "Halloweekend homepage" : "Homepage";
+  }
+  if (event.type === "homepage_button_clicked") {
+    return [eventValue(details.placement), eventValue(details.destination)].filter(Boolean).join(" | ");
+  }
   if (event.type === "cart_item_updated") {
     const previous = cartItemSummary(detailRecord(details.previousItem));
     const next = cartItemSummary(detailRecord(details.newItem) || details);
@@ -139,6 +146,8 @@ export const storefrontJourneyEventDescription = (event: StorefrontJourneyEvent)
   const number = itemNumber(details);
   const numberedProduct = number ? `item ${number}: ${product}` : product;
   const descriptions: Record<string, string> = {
+    homepage_viewed: "Viewed homepage",
+    homepage_button_clicked: `Clicked ${eventValue(details.buttonLabel) || "a homepage button"}`,
     product_viewed: `Viewed ${product}`,
     booking_builder_reached: "Build Your Booking reached",
     participant_changed: `${participant} changed from ${previous} to ${next}`,
