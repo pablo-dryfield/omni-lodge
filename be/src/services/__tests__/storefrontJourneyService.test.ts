@@ -28,6 +28,40 @@ const context = {
 describe('storefront journey service', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it('accepts homepage activity in the existing visit and strips URL parameters and unapproved details', () => {
+    const result = normalizeClientJourneyEvents(['homepage_viewed', 'homepage_button_clicked'].map((type, index) => ({
+      eventId: index ? '319a56f6-57ab-4d40-8cdd-2d9949f30ab2' : '85cf256c-3147-4f6e-a276-b364c7b9bdb4',
+      visitId: 'c3c7d60f-b420-4925-892f-00484ce786cd',
+      pageId: context.pageId,
+      type,
+      occurredAt: '2026-10-08T12:00:00Z',
+      sequence: index + 1,
+      details: {
+        pagePath: '/', environment: 'production', campaign: 'halloween',
+        buttonId: 'hero-halloween', buttonLabel: 'Book Halloween', placement: 'Hero: Halloweekend',
+        destination: '/store2/halloween-pub-crawl-51/?email=private@example.com&utm_source=example#book',
+        arbitraryField: 'not-retained', email: 'private@example.com',
+      },
+    })), context, new Date('2026-10-08T12:00:00Z'));
+    expect(result).toHaveLength(2);
+    expect(result.map(item => item.sequence)).toEqual([1, 2]);
+    expect(result[1]).toMatchObject({
+      type: 'homepage_button_clicked', pageId: context.pageId,
+      details: { buttonId: 'hero-halloween', buttonLabel: 'Book Halloween', destination: '/store2/halloween-pub-crawl-51/#book' },
+    });
+    expect(JSON.stringify(result)).not.toContain('private@example.com');
+    expect(JSON.stringify(result)).not.toContain('utm_source');
+    expect(JSON.stringify(result)).not.toContain('not-retained');
+  });
+
+  it('does not retain unsafe homepage destinations or arbitrary page paths', () => {
+    const result = normalizeClientJourneyEvents([{
+      eventId: '319a56f6-57ab-4d40-8cdd-2d9949f30ab2', visitId: 'c3c7d60f-b420-4925-892f-00484ce786cd',
+      type: 'homepage_button_clicked', details: { destination: 'javascript:alert(1)', pagePath: '/private-token/' },
+    }], context);
+    expect(result[0].details).toEqual({});
+  });
+
   it('accepts known activity and removes contact values from details', () => {
     const now = new Date('2026-08-28T12:00:00Z');
     const result = normalizeClientJourneyEvents([{
@@ -170,14 +204,31 @@ describe('storefront journey service', () => {
       occurredAt: new Date().toISOString(),
       sequence: 11,
       details: { productName: 'Pub Crawl' },
+    }, {
+      eventId: '419a56f6-57ab-4d40-8cdd-2d9949f30ab2',
+      visitId: 'c3c7d60f-b420-4925-892f-00484ce786cd',
+      pageId: '519a56f6-57ab-4d40-8cdd-2d9949f30ab2',
+      type: 'homepage_button_clicked',
+      occurredAt: new Date().toISOString(),
+      sequence: 10,
+      details: { buttonLabel: 'Book Halloween', placement: 'Hero: Halloweekend' },
     }], context);
 
-    expect(result.acceptedEventIds).toEqual(['319a56f6-57ab-4d40-8cdd-2d9949f30ab2']);
+    expect(result.acceptedEventIds).toEqual(['319a56f6-57ab-4d40-8cdd-2d9949f30ab2', '419a56f6-57ab-4d40-8cdd-2d9949f30ab2']);
     expect(eventModel.bulkCreate).toHaveBeenCalledWith([
       expect.objectContaining({
         ongoingCartId: 73,
         visitId: 41,
         type: 'add_to_cart',
+        source: 'client',
+      }),
+      expect.objectContaining({
+        ongoingCartId: 73,
+        visitId: 41,
+        pageId: '519a56f6-57ab-4d40-8cdd-2d9949f30ab2',
+        type: 'homepage_button_clicked',
+        sequence: 10,
+        details: { buttonLabel: 'Book Halloween', placement: 'Hero: Halloweekend' },
         source: 'client',
       }),
     ], { ignoreDuplicates: true });

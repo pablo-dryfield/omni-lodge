@@ -21,6 +21,8 @@ const PERMANENT_CLIENT_EVENT_TYPES = [
 ];
 
 const CLIENT_EVENT_TYPES = new Set([
+  'homepage_viewed',
+  'homepage_button_clicked',
   'product_viewed',
   'booking_builder_reached',
   'participant_changed',
@@ -136,6 +138,29 @@ const sanitizeDetails = (value: unknown): Record<string, unknown> | null => {
     : null;
 };
 
+const sanitizeHomepageDetails = (value: unknown): Record<string, unknown> | null => {
+  const input = sanitizeDetails(value);
+  if (!input) return null;
+  const details: Record<string, unknown> = {};
+  for (const key of ['buttonId', 'buttonLabel', 'placement', 'campaign', 'environment']) {
+    if (typeof input[key] === 'string') details[key] = text(input[key], 120);
+  }
+  if (input.pagePath === '/' || input.pagePath === '/staging/') details.pagePath = input.pagePath;
+  if (input.destination === 'contact:email' || input.destination === 'contact:telephone') {
+    details.destination = input.destination;
+  } else if (typeof input.destination === 'string') {
+    try {
+      const url = new URL(input.destination, 'https://krawlthroughkrakow.com');
+      if (url.protocol === 'http:' || url.protocol === 'https:') {
+        const origin = url.origin === 'https://krawlthroughkrakow.com' ? '' : url.origin;
+        const hash = /^#[a-z\d_-]{1,60}$/i.test(url.hash) ? url.hash : '';
+        details.destination = `${origin}${url.pathname}${hash}`.slice(0, 240);
+      }
+    } catch { /* Invalid navigation targets are not event details. */ }
+  }
+  return details;
+};
+
 const eventDate = (value: unknown, now: Date): Date => {
   const parsed = new Date(String(value ?? ''));
   if (!Number.isFinite(parsed.getTime())) return now;
@@ -180,7 +205,7 @@ export const normalizeClientJourneyEvents = (
       type,
       occurredAt: eventDate(input.occurredAt, now),
       sequence: Number.isInteger(sequenceValue) && sequenceValue >= 0 ? sequenceValue : null,
-      details: sanitizeDetails(input.details),
+      details: type.startsWith('homepage_') ? sanitizeHomepageDetails(input.details) : sanitizeDetails(input.details),
     }];
   });
 };
