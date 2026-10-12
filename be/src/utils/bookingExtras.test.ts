@@ -18,11 +18,22 @@ describe('normalizeBookingExtrasSnapshot', () => {
         addons: [
           { addonId: 1, name: 'Cocktails', quantity: 4 },
           { label: 'T-shirt', quantity: 2 },
-          { category: 'Photo package', quantity: 1 },
+          { category: 'Photo package', quantity: 1, value: '3' },
         ],
         partyBreakdown: { men: 4, women: 0 },
       }),
-    ).toEqual({ cocktails: 4, tshirts: 2, photos: 1 });
+    ).toEqual({ cocktails: 4, tshirts: 2, photos: 3 });
+  });
+
+  it('falls back to the storefront photo add-on quantity when no numeric option value exists', () => {
+    expect(
+      normalizeBookingExtrasSnapshot({
+        addons: [
+          { category: 'Photo package', quantity: 2 },
+          { name: 'Photos', quantity: 1, value: 'custom package' },
+        ],
+      }),
+    ).toEqual({ cocktails: 0, tshirts: 0, photos: 3 });
   });
 
   it('keeps canonical extras authoritative over stale raw add-on rows', () => {

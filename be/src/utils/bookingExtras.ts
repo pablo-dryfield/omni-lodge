@@ -103,11 +103,21 @@ export const normalizeBookingExtrasSnapshot = (snapshot: unknown): OrderExtras =
 
     const record = addon as Record<string, unknown>;
     const quantity = Math.max(0, Math.round(Number(record.quantity) || 0));
+    const keyParts = addonIdentity(record);
+
+    if (keyParts.includes('photo')) {
+      const selectedPhotoCount = Math.max(0, Math.round(Number(record.value) || 0));
+      const photoQuantity = selectedPhotoCount > 0 ? selectedPhotoCount : quantity;
+      if (photoQuantity > 0) {
+        normalized.photos += photoQuantity;
+      }
+      return;
+    }
+
     if (quantity <= 0) {
       return;
     }
 
-    const keyParts = addonIdentity(record);
     if (keyParts.includes('cocktail') || keyParts.includes('drink')) {
       normalized.cocktails += quantity;
       return;
@@ -115,9 +125,6 @@ export const normalizeBookingExtrasSnapshot = (snapshot: unknown): OrderExtras =
     if (keyParts.includes('shirt')) {
       normalized.tshirts += quantity;
       return;
-    }
-    if (keyParts.includes('photo')) {
-      normalized.photos += quantity;
     }
   });
 
