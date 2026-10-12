@@ -34,6 +34,7 @@ import {
   Edit,
   ExpandMore,
   InsertDriveFile,
+  VpnKey,
   PictureAsPdf,
   Save,
   Send,
@@ -197,8 +198,19 @@ type LinkedCostGroup = {
 
 const OPEN_BAR_INDEX = 0;
 const DATE_FORMAT = "YYYY-MM-DD";
+const OPEN_BAR_MANAGER_ROLES = new Set(["admin", "administrator", "manager", "owner"]);
+const ASSISTANT_MANAGER_ROLE_KEYS = new Set(["assistantmanager", "assistant-manager", "assistant_manager"]);
 
 const generateTempKey = (): string => `tmp-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
+
+const normalizeRoleKey = (value?: string | null): string =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+
+const collapseRoleKey = (value?: string | null): string =>
+  normalizeRoleKey(value).replace(/[^a-z0-9]+/g, "");
 
 const createEmptyVenue = (isOpenBar = true, routeIndex = 1): EditableVenue => ({
   tempKey: generateTempKey(),
@@ -553,6 +565,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const financeAccounts = useAppSelector(selectFinanceAccounts);
   const financeCategories = useAppSelector(selectFinanceCategories);
   const financeVendors = useAppSelector(selectFinanceVendors);
+  const sessionRoleSlug = useAppSelector((state) => state.session.roleSlug);
 
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [formState, setFormState] = useState<EditableReport>(() => toEditableReport(null));
@@ -564,6 +577,7 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   const [saving, setSaving] = useState<boolean>(false);
   const [reportDisplayTotals, setReportDisplayTotals] = useState<Record<number, number>>({});
   const [editableVenueKeys, setEditableVenueKeys] = useState<Set<string>>(() => new Set());
+  const [openBarFieldsUnlocked, setOpenBarFieldsUnlocked] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [photoPreviews, setPhotoPreviews] = useState<Record<number, string>>({});
   const [photoPreviewErrors, setPhotoPreviewErrors] = useState<Record<number, boolean>>({});
@@ -809,6 +823,14 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   );
   const isPubCrawlProduct = openBarMode === "pubCrawl";
   const isBottomlessBrunchProduct = openBarMode === "bottomlessBrunch";
+  const normalizedSessionRole = normalizeRoleKey(sessionRoleSlug);
+  const collapsedSessionRole = collapseRoleKey(sessionRoleSlug);
+  const isOpenBarManagerRole = OPEN_BAR_MANAGER_ROLES.has(normalizedSessionRole);
+  const isAssistantManagerRole =
+    ASSISTANT_MANAGER_ROLE_KEYS.has(normalizedSessionRole) ||
+    ASSISTANT_MANAGER_ROLE_KEYS.has(collapsedSessionRole);
+  const openBarFieldsRequireUnlock = isAssistantManagerRole && !isOpenBarManagerRole;
+  const openBarFieldsLocked = openBarFieldsRequireUnlock && !openBarFieldsUnlocked;
   useEffect(() => {
     if (selectedReportId == null) {
       return;
@@ -959,6 +981,10 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
   useEffect(() => {
     photoPreviewUrlsRef.current = photoPreviews;
   }, [photoPreviews]);
+
+  useEffect(() => {
+    setOpenBarFieldsUnlocked(false);
+  }, [selectedReportId, activeReportMode]);
 
   useEffect(() => {
     return () => {
@@ -4075,6 +4101,24 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
           <Typography variant="h6" flexGrow={1}>
             Venues
           </Typography>
+          {!readOnly && openBarFieldsRequireUnlock && (
+            <Tooltip
+              title={
+                openBarFieldsUnlocked
+                  ? "Emergency open-bar editing is unlocked for this report"
+                  : "Unlock open-bar count fields for an emergency correction"
+              }
+            >
+              <IconButton
+                size="small"
+                color={openBarFieldsUnlocked ? "warning" : "default"}
+                onClick={() => setOpenBarFieldsUnlocked((prev) => !prev)}
+                aria-label={openBarFieldsUnlocked ? "Lock open bar fields" : "Unlock open bar fields"}
+              >
+                <VpnKey fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
           {!readOnly && (
             <Button
               variant={didNotOperate ? "contained" : "outlined"}
@@ -4108,6 +4152,11 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
             const venueKey = getVenueKey(venue, index);
             const isEditableVenue = editableVenueKeys.has(venueKey);
             const fieldsDisabled = readOnly || !isEditableVenue;
+            const openBarCountFieldsDisabled = fieldsDisabled || (isOpenBar && openBarFieldsLocked);
+            const openBarCountHelperText =
+              isOpenBar && openBarFieldsLocked
+                ? "Assistant managers must use the key toggle above to edit open-bar counts."
+                : undefined;
             const normalizedVenueName = venue.venueName.trim();
             const showVenueError =
               !fieldsDisabled &&
@@ -4238,7 +4287,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                                   type="number"
                                   inputProps={{ min: 0 }}
                                   fullWidth
-                                  disabled={fieldsDisabled}
+                                  disabled={openBarCountFieldsDisabled}
+                                  helperText={openBarCountHelperText}
                                 />
                               </Grid>
                             )}
@@ -4251,7 +4301,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                                   type="number"
                                   inputProps={{ min: 0 }}
                                   fullWidth
-                                  disabled={fieldsDisabled}
+                                  disabled={openBarCountFieldsDisabled}
+                                  helperText={openBarCountHelperText}
                                 />
                               </Grid>
                             )}
@@ -4264,7 +4315,8 @@ const VenueNumbersList = ({ active = true }: { active?: boolean }) => {
                                   type="number"
                                   inputProps={{ min: 0 }}
                                   fullWidth
-                                  disabled={fieldsDisabled}
+                                  disabled={openBarCountFieldsDisabled}
+                                  helperText={openBarCountHelperText}
                                 />
                               </Grid>
                             )}

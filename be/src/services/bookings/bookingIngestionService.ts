@@ -41,6 +41,7 @@ import { syncEcwidBookingProcessingFeeByBookingId } from './ecwidProcessingFeeSy
 import { syncEcwidBookingAddonPricingByBookingId } from './ecwidAddonPricingSyncService.js';
 import { maybeSendTshirtSizeSelectionEmail } from './tshirtSizeEmailAutomationService.js';
 import { normalizeForwardedBackupPayload } from './forwardedEmailNormalizer.js';
+import { applyAutomaticBookingReassignmentRules } from './bookingReassignmentRulesService.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -2116,6 +2117,20 @@ const applyParsedEvent = async (
     const derivedViatorStartAt = isScopedReprocess ? null : deriveViatorAmendedStartAt(bookingRecord, patch, event);
     if (derivedViatorStartAt) {
       patch.experienceStartAt = derivedViatorStartAt;
+    }
+    if (!isScopedReprocess) {
+      const reassignment = await applyAutomaticBookingReassignmentRules(
+        {
+          platform: event.platform,
+          productId: bookingRecord.productId,
+          productName: bookingRecord.productName,
+          experienceDate: bookingRecord.experienceDate,
+          experienceStartAt: bookingRecord.experienceStartAt,
+        },
+        patch as BookingFieldPatch,
+        { transaction, timezoneName: DEFAULT_BOOKING_TIMEZONE },
+      );
+      patch = normalizePatch(reassignment.patch);
     }
     const refundReconciliationOutcome =
       !isScopedReprocess || includesScopedRefund
