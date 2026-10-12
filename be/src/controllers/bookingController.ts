@@ -6541,11 +6541,24 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
       );
     }
     const peopleRefundAmount = roundMoney(requestedPeopleQuantity * people.unitPrice);
-    const addonsRefundAmount = roundMoney(
-      resolvedAddons.reduce((sum, entry) => {
+    const addonRefundBreakdown = resolvedAddons
+      .map((entry) => {
         const refundQty = requestedAddonQuantities.get(entry.bookingAddon.id) ?? 0;
-        return sum + roundMoney(refundQty * entry.unitPrice);
-      }, 0),
+        if (refundQty <= 0) {
+          return null;
+        }
+        return {
+          bookingAddonId: entry.bookingAddon.id,
+          name: entry.displayName,
+          refundQty,
+          unitPrice: entry.unitPrice,
+          refundAmount: roundMoney(refundQty * entry.unitPrice),
+          remainingQty: Math.max(entry.quantity - refundQty, 0),
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    const addonsRefundAmount = roundMoney(
+      addonRefundBreakdown.reduce((sum, entry) => sum + entry.refundAmount, 0),
     );
     const computedAmount = roundMoney(peopleRefundAmount + addonsRefundAmount);
     const rawAmount = body.amount;
@@ -6602,6 +6615,14 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
     booking.baseAmount = formatMoneyValue(Math.max(roundMoney(currentBase - refundedAmount), 0));
     booking.refundedAmount = formatMoneyValue(refundedBefore + refundedAmount);
     booking.refundedCurrency = (booking.currency ?? stripe.currency ?? '').toUpperCase() || null;
+    const currentAddonsAmount = parseMoneyValue(booking.addonsAmount);
+    const nextAddonsAmount =
+      currentAddonsAmount !== null
+        ? Math.max(roundMoney(currentAddonsAmount - addonsRefundAmount), 0)
+        : null;
+    if (nextAddonsAmount !== null) {
+      booking.addonsAmount = formatMoneyValue(nextAddonsAmount);
+    }
     if (currentPartySizeTotal !== previousPartySizeTotal) {
       booking.partySizeTotal = currentPartySizeTotal;
     }
@@ -6613,6 +6634,44 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
     }
 
     await sequelizeClient.transaction(async (transaction) => {
+      if (addonRefundBreakdown.length > 0) {
+        const snapshotBase =
+          booking.addonsSnapshot && typeof booking.addonsSnapshot === 'object'
+            ? { ...(booking.addonsSnapshot as Record<string, unknown>) }
+            : {};
+        const previousExtras = normalizeExtras(snapshotBase);
+        const nextExtras: OrderExtras = {
+          tshirts: previousExtras.tshirts,
+          cocktails: previousExtras.cocktails,
+          photos: previousExtras.photos,
+        };
+
+        await Promise.all(
+          addonRefundBreakdown.map(async (entry) => {
+            const addonEntry = addonByBookingAddonId.get(entry.bookingAddonId);
+            if (!addonEntry) {
+              return;
+            }
+            const bookingAddon = addonEntry.bookingAddon;
+            const nextQuantity = Math.max(addonEntry.quantity - entry.refundQty, 0);
+            bookingAddon.quantity = nextQuantity;
+            bookingAddon.unitPrice = formatMoneyValue(addonEntry.unitPrice);
+            bookingAddon.totalPrice = formatMoneyValue(nextQuantity * addonEntry.unitPrice);
+            bookingAddon.currency = bookingAddon.currency ?? addonEntry.currency ?? booking.currency ?? null;
+            bookingAddon.updatedAt = new Date();
+
+            const category = classifyAddonExtraKey(entry.name);
+            if (category) {
+              nextExtras[category] = Math.max(nextExtras[category] - entry.refundQty, 0);
+            }
+
+            await bookingAddon.save({ transaction });
+          }),
+        );
+
+        snapshotBase.extras = nextExtras;
+        booking.addonsSnapshot = snapshotBase;
+      }
       await booking.save({ transaction });
       if (isStorefrontBooking(booking)) {
         const storefrontOrder = await findStorefrontOrderForBooking(booking, transaction);
@@ -6633,6 +6692,14 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
         previousPartySizeTotal,
         currentPartySizeTotal,
         addonQuantities: Object.fromEntries(requestedAddonQuantities),
+        addons: addonRefundBreakdown.map((entry) => ({
+          bookingAddonId: entry.bookingAddonId,
+          name: entry.name,
+          refundedQty: entry.refundQty,
+          unitPrice: entry.unitPrice,
+          amount: entry.refundAmount,
+          remainingQty: entry.remainingQty,
+        })),
         manualAmount: useManualAmount || computedAmount <= 0 ? amountMajor : null,
       }, transaction);
     });
