@@ -106,7 +106,7 @@ jobs:
             ${{ steps.request.outputs.request_result_path }}
             ${{ steps.request.outputs.request_path }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
           compression-level: 0
           include-hidden-files: false
 
@@ -266,6 +266,6 @@ jobs:
             ${{ runner.temp }}/production-rollback-request/host-v2-submit-result.json
             ${{ runner.temp }}/production-rollback-request/host-v2-status-result.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
           compression-level: 0
           include-hidden-files: false
