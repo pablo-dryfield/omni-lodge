@@ -15,6 +15,7 @@ import ShiftTypeProduct from '../models/ShiftTypeProduct.js';
 import HttpError from '../errors/HttpError.js';
 import { getConfigValue } from './configService.js';
 import { listScheduledStaffForProduct } from './scheduleService.js';
+import { applyAutomaticBookingReassignmentRules } from './bookings/bookingReassignmentRulesService.js';
 import type { BookingEventType, BookingStatus } from '../constants/bookings.js';
 import type { BookingFieldPatch } from './bookings/types.js';
 
@@ -895,8 +896,20 @@ export const ingestGetYourGuidePayload = async (
     const eventType: BookingEventType =
       normalized.status === 'cancelled' ? 'cancelled' : existingBooking ? 'amended' : normalized.eventType;
 
+    const reassignment = await applyAutomaticBookingReassignmentRules(
+      {
+        platform: GYG_PLATFORM,
+        productId: existingBooking?.productId ?? null,
+        productName: existingBooking?.productName ?? null,
+        experienceDate: existingBooking?.experienceDate ?? null,
+        experienceStartAt: existingBooking?.experienceStartAt ?? null,
+      },
+      normalized.bookingFields,
+      { transaction, timezoneName: DEFAULT_TIMEZONE },
+    );
+
     const bookingFields = cleanObject({
-      ...normalized.bookingFields,
+      ...reassignment.patch,
       platformOrderId: normalized.platformOrderId,
       status: normalized.status,
       statusChangedAt: normalized.occurredAt,

@@ -799,6 +799,8 @@ const normalizePlatformLookupKey = (value?: string | null): string => {
 
 const XPERIENCEPOLAND_PLATFORM_KEY = 'xperiencepoland';
 const XPERIENCEPOLAND_RESALE_CASH_TICKET_PREFIX = 'booking-cash:xperiencepoland:';
+const AUTOMATIC_ADDON_REFUND_PLATFORM_KEYS = new Set(['ecwid', 'omnilodge']);
+const OMNILODGE_PLATFORM_KEY = 'omnilodge';
 
 const isXperiencePolandCashArrivalOrder = (order: UnifiedOrder): boolean => {
   if (normalizePlatformLookupKey(order.platform) !== XPERIENCEPOLAND_PLATFORM_KEY) {
@@ -6661,10 +6663,15 @@ useEffect(() => {
     () => String(partialCheckInEditorOrder?.customerEmail ?? '').trim(),
     [partialCheckInEditorOrder],
   );
-  const partialEditorIsEcwid = useMemo(
-    () => normalizePlatformLookupKey(partialEditorPlatformLabel) === 'ecwid',
+  const partialEditorPlatformKey = useMemo(
+    () => normalizePlatformLookupKey(partialEditorPlatformLabel),
     [partialEditorPlatformLabel],
   );
+  const partialEditorCanAutoRefund = useMemo(
+    () => AUTOMATIC_ADDON_REFUND_PLATFORM_KEYS.has(partialEditorPlatformKey),
+    [partialEditorPlatformKey],
+  );
+  const partialEditorIsStorefrontRefund = partialEditorPlatformKey === OMNILODGE_PLATFORM_KEY;
   const partialEditorRemovedAddonSummary = useMemo(() => {
     const source = partialCheckInPendingRemovedAddons;
     if (!source) {
@@ -6681,8 +6688,8 @@ useEffect(() => {
     if (!partialEditorRemovedAddonSummary.length) {
       return 'No add-ons were removed.';
     }
-    if (!partialEditorIsEcwid) {
-      return 'Partial refunds are currently available only for Ecwid bookings.';
+    if (!partialEditorCanAutoRefund) {
+      return 'Automatic add-on refunds are currently available only for Ecwid and OmniLodge bookings.';
     }
     if (!partialEditorBookingId) {
       return 'Booking ID is missing, so refund cannot be issued.';
@@ -6691,7 +6698,7 @@ useEffect(() => {
       return 'Customer email is missing, so refund email cannot be sent.';
     }
     return null;
-  }, [partialEditorBookingId, partialEditorCustomerEmail, partialEditorIsEcwid, partialEditorRemovedAddonSummary.length]);
+  }, [partialEditorBookingId, partialEditorCanAutoRefund, partialEditorCustomerEmail, partialEditorRemovedAddonSummary.length]);
 
   const resolvePartialRefundTemplateForPreview = useCallback(async (): Promise<EmailTemplate | null> => {
     const response = await axiosInstance.get<EmailTemplateListResponse>('/email-templates', {
@@ -7103,12 +7110,16 @@ useEffect(() => {
     }));
 
     try {
+      const refundEndpoint = partialEditorIsStorefrontRefund
+        ? `/bookings/${bookingId}/direct-actions/partial-refund`
+        : `/bookings/${bookingId}/partial-refund`;
       await axiosInstance.post(
-        `/bookings/${bookingId}/partial-refund`,
+        refundEndpoint,
         {
           amount: partialCheckInRefundState.amount,
           peopleQuantity: 0,
           addonQuantities: partialCheckInRefundState.addonQuantities,
+          ...(partialEditorIsStorefrontRefund ? { sendCustomerEmail: false } : {}),
         },
         { withCredentials: true },
       );
@@ -7147,7 +7158,7 @@ useEffect(() => {
         error: extractErrorMessage(error),
       }));
     }
-  }, [completePartialCheckInApply, partialCheckInEditorOrder, partialCheckInRefundState]);
+  }, [completePartialCheckInApply, partialCheckInEditorOrder, partialCheckInRefundState, partialEditorIsStorefrontRefund]);
 
   const handlePartialEditorContinueWithoutRefund = useCallback(() => {
     completePartialCheckInApply();
@@ -12047,9 +12058,9 @@ type SummaryRowOptions = {
               )}
               {partialCheckInModalStep === 'refund_decision' && (
                 <>
-                  <Alert severity={partialEditorIsEcwid ? 'warning' : 'info'}>
-                    {partialEditorIsEcwid
-                      ? 'You removed add-ons from this check-in. Do you want to issue a partial refund before applying the check-in?'
+                  <Alert severity={partialEditorCanAutoRefund ? 'warning' : 'info'}>
+                    {partialEditorCanAutoRefund
+                      ? `You removed add-ons from this ${partialEditorPlatformChipLabel || 'booking'} check-in. Refund them automatically before applying the check-in.`
                       : `You removed add-ons from this ${partialEditorPlatformChipLabel} check-in. Choose how the external refund should be tracked.`}
                   </Alert>
                   {partialEditorRemovedAddonSummary.length > 0 && (
@@ -12091,7 +12102,7 @@ type SummaryRowOptions = {
                     >
                       Back
                     </Button>
-                    {partialEditorIsEcwid ? (
+                    {partialEditorCanAutoRefund ? (
                       <>
                         <Button
                           variant="outlined"
@@ -12115,7 +12126,7 @@ type SummaryRowOptions = {
                                 Boolean(partialEditorIssueRefundDisabledReason)
                               }
                             >
-                              Issue a Refund
+                              Refund
                             </Button>
                           </span>
                         </Tooltip>

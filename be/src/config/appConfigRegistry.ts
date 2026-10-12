@@ -203,6 +203,16 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     impact: 'medium',
   },
   {
+    key: 'BOOKING_AUTOMATIC_REASSIGNMENT_RULES',
+    label: 'Automatic booking reassignment rules',
+    description:
+      'JSON payload with rules that rewrite incoming booking product/date/time. Example: {"rules":[{"id":"halloween-viator-9pm","platform":"viator","sourceProductName":"Pub Crawl","sourceDate":"2026-10-31","sourceTime":"21:00","targetProductName":"Halloween Pub Crawl"}]}. Omit platform/product/date/time fields to match any value.',
+    category: 'Booking Email Ingestion',
+    valueType: 'json',
+    defaultValue: '{"rules":[]}',
+    impact: 'medium',
+  },
+  {
     key: 'AFFILIATE_TAG_ASSIGNMENTS',
     label: 'Affiliate tag assignments',
     description: 'JSON payload mapping UTM tags to affiliate users for the affiliate sales portal.',

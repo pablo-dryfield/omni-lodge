@@ -114,6 +114,7 @@ import { resolveCustomerEmailActionsForReply } from '../services/bookings/custom
 import { getTshirtVariantAvailability } from '../services/inventoryService.js';
 import { refreshStorefrontOrderInventoryReservationExpiries } from '../services/storefrontOrderResourceReservationService.js';
 import { buildManifestBookingSearchWhere } from '../utils/manifestBookingSearch.js';
+import { applyAutomaticBookingReassignmentRules } from '../services/bookings/bookingReassignmentRulesService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -4012,6 +4013,23 @@ export const importEcwidBooking = async (req: AuthenticatedRequest, res: Respons
         ? Number(req.user.id)
         : null;
 
+    const reassignment = await applyAutomaticBookingReassignmentRules(
+      {
+        platform: 'ecwid',
+        productId,
+        productName: unified.productName ?? null,
+        experienceDate: unified.date,
+        experienceStartAt: pickupMoment?.isValid() ? pickupMoment.toDate() : null,
+      },
+      {
+        productId,
+        productName: unified.productName ?? null,
+        experienceDate: unified.date,
+        experienceStartAt: pickupMoment?.isValid() ? pickupMoment.toDate() : null,
+      },
+      { timezoneName: STORE_TIMEZONE },
+    );
+
     const payload = {
       platform: 'ecwid',
       platformBookingId: unified.platformBookingId,
@@ -4034,6 +4052,7 @@ export const importEcwidBooking = async (req: AuthenticatedRequest, res: Respons
       processedAt: now,
       createdBy: userId,
       updatedBy: userId,
+      ...reassignment.patch,
     } as unknown as Parameters<typeof Booking.create>[0];
 
     const created = await Booking.create(payload as unknown as any);
