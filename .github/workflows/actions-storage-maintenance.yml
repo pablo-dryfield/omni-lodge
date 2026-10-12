@@ -1,0 +1,139 @@
+name: Actions Storage Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview deletions without removing artifacts or caches
+        required: false
+        default: false
+        type: boolean
+      artifact_retention_days:
+        description: Delete GitHub Actions artifacts last updated before this many days
+        required: false
+        default: "14"
+        type: string
+      cache_retention_days:
+        description: Delete GitHub Actions caches not accessed within this many days
+        required: false
+        default: "14"
+        type: string
+  schedule:
+    - cron: "37 2 * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: actions-storage-maintenance
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Cleanup expired Actions storage
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DRY_RUN: ${{ github.event.inputs.dry_run }}
+      ARTIFACT_RETENTION_DAYS: ${{ github.event.inputs.artifact_retention_days }}
+      CACHE_RETENTION_DAYS: ${{ github.event.inputs.cache_retention_days }}
+    steps:
+      - name: Remove expired artifacts and caches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dry_run="${DRY_RUN:-false}"
+          artifact_retention_days="${ARTIFACT_RETENTION_DAYS:-14}"
+          cache_retention_days="${CACHE_RETENTION_DAYS:-14}"
+
+          dry_run="$(printf '%s' "$dry_run" | tr '[:upper:]' '[:lower:]')"
+
+          if [[ "$dry_run" != "true" && "$dry_run" != "false" ]]; then
+            echo "::error::dry_run must be true or false"
+            exit 1
+          fi
+
+          if ! [[ "$artifact_retention_days" =~ ^[0-9]+$ ]] || (( artifact_retention_days < 1 )); then
+            echo "::error::artifact_retention_days must be a positive integer"
+            exit 1
+          fi
+
+          if ! [[ "$cache_retention_days" =~ ^[0-9]+$ ]] || (( cache_retention_days < 1 )); then
+            echo "::error::cache_retention_days must be a positive integer"
+            exit 1
+          fi
+
+          artifact_cutoff_epoch="$(date -u -d "$artifact_retention_days days ago" +%s)"
+          cache_cutoff_epoch="$(date -u -d "$cache_retention_days days ago" +%s)"
+
+          deleted_artifacts=0
+          deleted_artifact_bytes=0
+          deleted_caches=0
+          deleted_cache_bytes=0
+
+          while IFS=$'\t' read -r artifact_id artifact_name updated_at size_in_bytes; do
+            if [[ -z "$artifact_id" ]]; then
+              continue
+            fi
+
+            updated_epoch="$(date -u -d "$updated_at" +%s)"
+            if (( updated_epoch >= artifact_cutoff_epoch )); then
+              continue
+            fi
+
+            echo "Deleting artifact ${artifact_id} (${artifact_name}), updated ${updated_at}, size ${size_in_bytes} bytes"
+            if [[ "$dry_run" == "false" ]]; then
+              gh api \
+                --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" >/dev/null
+            fi
+            deleted_artifacts=$((deleted_artifacts + 1))
+            deleted_artifact_bytes=$((deleted_artifact_bytes + size_in_bytes))
+          done < <(
+            gh api \
+              --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+              --jq '.artifacts[] | [.id, .name, .updated_at, .size_in_bytes] | @tsv'
+          )
+
+          while IFS=$'\t' read -r cache_id cache_key cache_ref last_accessed_at created_at size_in_bytes; do
+            if [[ -z "$cache_id" ]]; then
+              continue
+            fi
+
+            reference_time="$last_accessed_at"
+            if [[ -z "$reference_time" || "$reference_time" == "null" ]]; then
+              reference_time="$created_at"
+            fi
+
+            accessed_epoch="$(date -u -d "$reference_time" +%s)"
+            if (( accessed_epoch >= cache_cutoff_epoch )); then
+              continue
+            fi
+
+            echo "Deleting cache ${cache_id} (${cache_key}) for ${cache_ref}, last used ${reference_time}, size ${size_in_bytes} bytes"
+            if [[ "$dry_run" == "false" ]]; then
+              gh api \
+                --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/actions/caches/${cache_id}" >/dev/null
+            fi
+            deleted_caches=$((deleted_caches + 1))
+            deleted_cache_bytes=$((deleted_cache_bytes + size_in_bytes))
+          done < <(
+            gh api \
+              --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100" \
+              --jq '.actions_caches[] | [.id, .key, .ref, .last_accessed_at, .created_at, .size_in_bytes] | @tsv'
+          )
+
+          {
+            echo "### Actions storage maintenance"
+            echo
+            echo "- Mode: ${dry_run}"
+            echo "- Artifact retention: ${artifact_retention_days} days"
+            echo "- Cache retention: ${cache_retention_days} days"
+            echo "- Artifacts selected: ${deleted_artifacts} (${deleted_artifact_bytes} bytes)"
+            echo "- Caches selected: ${deleted_caches} (${deleted_cache_bytes} bytes)"
+          } >> "$GITHUB_STEP_SUMMARY"
