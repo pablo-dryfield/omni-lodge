@@ -34,6 +34,17 @@ export type PromotionRoutePolicyJson = {
   requiredParticipantProof?: 'self' | 'all_assigned';
   participantProofMaxAgeSeconds?: number;
   participantProofMaxDistanceMeters?: number;
+  hostelRoutes?: Array<{
+    hostelName: string;
+    hostelVenueId?: number | null;
+    finishLabel?: string | null;
+    finish?: {
+      latitude: number;
+      longitude: number;
+      radiusMeters: number;
+    };
+    polyline?: PromotionCoordinateJson[];
+  }>;
 };
 
 export type PromotionCoordinateJson = {

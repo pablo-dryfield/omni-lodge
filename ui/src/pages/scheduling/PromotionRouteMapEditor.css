@@ -1,0 +1,80 @@
+.promotion-route-map-shell {
+  position: relative;
+  min-height: 520px;
+  overflow: hidden;
+}
+
+.promotion-route-map {
+  height: 520px;
+  width: 100%;
+  min-height: 520px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #e2e8f0;
+}
+
+.promotion-route-map-hint {
+  position: absolute;
+  z-index: 500;
+  left: 16px;
+  bottom: 16px;
+  max-width: min(520px, calc(100% - 32px));
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #ffffff;
+  font-size: 13px;
+  line-height: 1.35;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.22);
+  pointer-events: none;
+}
+
+.promotion-route-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 3px solid #ffffff;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 7px 18px rgba(15, 23, 42, 0.28);
+}
+
+.promotion-route-marker--small {
+  width: 24px;
+  height: 24px;
+  border-width: 2px;
+  font-size: 10px;
+}
+
+.promotion-route-marker--start {
+  background: #16a34a;
+}
+
+.promotion-route-marker--checkpoint {
+  background: #2563eb;
+}
+
+.promotion-route-marker--street-waypoint {
+  background: #0f766e;
+}
+
+.promotion-route-marker--hostel-atlantis {
+  background: #7c3aed;
+}
+
+.promotion-route-marker--hostel-bubble {
+  background: #db2777;
+}
+
+.promotion-route-marker--hostel-draggo {
+  background: #ea580c;
+}
+
+.promotion-route-marker--hostel-waypoint {
+  background: #475569;
+}

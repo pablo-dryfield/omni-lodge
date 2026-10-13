@@ -26,6 +26,28 @@ describe('promotion tracking feature gate', () => {
     expect(loadRoutes).not.toHaveBeenCalled();
   });
 
+  it('never loads live promotion routes in dry-run mode, even when the feature flag is enabled', async () => {
+    const loadRoutes = jest.fn<Promise<{ default: ExpressRouter }>, []>();
+    const app = express();
+    app.use('/api/promotion-tracking', createPromotionTrackingFeatureGate({
+      env: {
+        APP_RUNTIME_MODE: 'dry-run',
+        FEATURE_PROMOTION_TRACKING_SERVER: 'true',
+      },
+      loadRoutes,
+    }));
+
+    const response = await request(app)
+      .post('/api/promotion-tracking/sessions/start')
+      .expect(503);
+
+    expect(response.body).toEqual({
+      error: 'Promotion tracking is not enabled on this server.',
+      code: PROMOTION_TRACKING_DISABLED_CODE,
+    });
+    expect(loadRoutes).not.toHaveBeenCalled();
+  });
+
   it('loads and delegates to promotion tracking routes only when enabled', async () => {
     const promotionRoutes = Router();
     promotionRoutes.get('/me/today', (_req, res) => {

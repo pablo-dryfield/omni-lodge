@@ -118,6 +118,39 @@ export const normalizePromotionPolicy = (value: unknown): PromotionRoutePolicyJs
   };
 };
 
+export type PromotionTrackingWindow = {
+  opensAt: Date;
+  closesAt: Date;
+};
+
+export const resolvePromotionTrackingWindow = (input: {
+  policyJson: unknown;
+  scheduledStartUtc: Date;
+  scheduledEndUtc?: Date | null;
+}): PromotionTrackingWindow => {
+  const policy = normalizePromotionPolicy(input.policyJson);
+  const reminderLeadMinutes = Math.max(0, ...policy.reminderOffsetsMinutes);
+  const earlyLeadMinutes = Math.max(policy.preShiftCheckInWindowMinutes, reminderLeadMinutes);
+  const startMs = input.scheduledStartUtc.valueOf();
+  const expectedEndMs = input.scheduledEndUtc?.valueOf()
+    ?? startMs + (policy.streetExpectedDurationMinutes + policy.hostelExpectedDurationMinutes + 120) * 60_000;
+  return {
+    opensAt: new Date(startMs - earlyLeadMinutes * 60_000),
+    closesAt: new Date(expectedEndMs + 2 * 60 * 60_000),
+  };
+};
+
+export const isPromotionAssignmentVisibleAt = (input: {
+  policyJson: unknown;
+  scheduledStartUtc: Date;
+  scheduledEndUtc?: Date | null;
+  now: Date;
+}): boolean => {
+  const window = resolvePromotionTrackingWindow(input);
+  return input.now.valueOf() >= window.opensAt.valueOf()
+    && input.now.valueOf() <= window.closesAt.valueOf();
+};
+
 export const coerceProofs = (value: unknown): PromotionLocationProofPayload[] => {
   const list = Array.isArray(value) ? value : value ? [value] : [];
   return list

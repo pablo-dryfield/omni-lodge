@@ -53,6 +53,7 @@ import venueCompensationTermRoutes from './routes/venueCompensationTermRoutes.js
 import venueCompensationTermRateRoutes from './routes/venueCompensationTermRateRoutes.js';
 import schedulesRoutes from './routes/schedules.js';
 import { createPromotionTrackingFeatureGate } from './routes/promotionTrackingFeatureGate.js';
+import promotionTrackingTestRoutes from './routes/promotionTrackingTestRoutes.js';
 import staffProfileRoutes from './routes/staffProfileRoutes.js';
 import shiftRoleRoutes from './routes/shiftRoles.js';
 import sqlHelperRoutes from './routes/sqlHelperRoutes.js';
@@ -353,6 +354,7 @@ app.use('/api/storefront-ongoing-carts', storefrontOngoingCartRoutes);
 app.use('/api/storefront-promotions', storefrontPromotionRoutes);
 app.use('/api/storefront-bank-transfer-orders', storefrontBankTransferOrderRoutes);
 app.use('/api/schedules', schedulesRoutes);
+app.use('/api/promotion-tracking/test', promotionTrackingTestRoutes);
 app.use('/api/promotion-tracking', createPromotionTrackingFeatureGate());
 app.use('/api/sql-helper', sqlHelperRoutes);
 app.use('/api/db-backups', dbBackupRoutes);
