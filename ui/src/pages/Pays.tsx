@@ -861,6 +861,12 @@ type PaidEntriesModalState = {
   selectedIds: number[];
 };
 
+type LedgerReconciliationModalState = {
+  open: boolean;
+  staff: Pay | null;
+  reason: string;
+};
+
 const extractRequestErrorMessage = (error: unknown, fallback: string): string => {
   const responseData = (error as { response?: { data?: unknown } })?.response?.data;
   const firstEntry = Array.isArray(responseData) ? responseData[0] : responseData;
@@ -955,6 +961,12 @@ const createEmptyPaidEntriesModalState = (): PaidEntriesModalState => ({
   open: false,
   staff: null,
   selectedIds: [],
+});
+
+const createEmptyLedgerReconciliationModalState = (): LedgerReconciliationModalState => ({
+  open: false,
+  staff: null,
+  reason: '',
 });
 
 const createEmptyReceiptEvidenceModalState = (): ReceiptEvidenceModalState => ({
@@ -1111,8 +1123,8 @@ const renderSettlementReconciliationDetails = (
       </Stack>
       {hasFrozenMoney ? (
         <Text size="xs" c="red.8">
-          This period is frozen because payment or fund allocation records already exist. Reverse those records first if the
-          historical ledger should be recalculated.
+          This period is frozen because payment or fund allocation records already exist. Use the reconcile action to adopt
+          the current breakdown with an audit trail, or reverse the recorded entries if they were wrong.
         </Text>
       ) : null}
       {!compact && details.reasonCodes?.length ? (
@@ -3098,6 +3110,8 @@ const PaysContent: React.FC = () => {
   const [selfDetailsOpen, setSelfDetailsOpen] = useState(false);
   const [entryModal, setEntryModal] = useState<EntryModalState>(createEmptyEntryModalState());
   const [paidEntriesModal, setPaidEntriesModal] = useState<PaidEntriesModalState>(createEmptyPaidEntriesModalState());
+  const [ledgerReconciliationModal, setLedgerReconciliationModal] =
+    useState<LedgerReconciliationModalState>(createEmptyLedgerReconciliationModalState());
   const [receiptEvidenceModal, setReceiptEvidenceModal] = useState<ReceiptEvidenceModalState>(
     createEmptyReceiptEvidenceModalState(),
   );
@@ -3112,6 +3126,9 @@ const PaysContent: React.FC = () => {
   const [entryMessage, setEntryMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [entrySubmitting, setEntrySubmitting] = useState(false);
   const [paidEntriesSubmitting, setPaidEntriesSubmitting] = useState(false);
+  const [ledgerReconciliationSubmitting, setLedgerReconciliationSubmitting] = useState(false);
+  const [ledgerReconciliationMessage, setLedgerReconciliationMessage] =
+    useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [paidEntriesMessage, setPaidEntriesMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [actionAlert, setActionAlert] = useState<StaffPayoutActionAlert | null>(null);
   const [recoveringSettlementIds, setRecoveringSettlementIds] = useState<Set<number>>(
@@ -3623,6 +3640,82 @@ const resolveStaffCounterpartyDefaults = useCallback(
     setPaidEntriesMessage(null);
   }, []);
 
+  const openLedgerReconciliationModal = useCallback((staff: Pay) => {
+    setLedgerReconciliationModal({
+      open: true,
+      staff,
+      reason: '',
+    });
+    setLedgerReconciliationMessage(null);
+  }, []);
+
+  const closeLedgerReconciliationModal = useCallback(() => {
+    setLedgerReconciliationModal(createEmptyLedgerReconciliationModalState());
+    setLedgerReconciliationMessage(null);
+  }, []);
+
+  const handleReconcileLedger = useCallback(async () => {
+    const staff = ledgerReconciliationModal.staff;
+    const staffUserId = Number(staff?.userId);
+    const ledgerId = Number(staff?.settlementReconciliationDetails?.ledgerId);
+    const rangeStartValue = staff?.range?.startDate ?? startDate?.format('YYYY-MM-DD') ?? null;
+    const rangeEndValue = staff?.range?.endDate ?? endDate?.format('YYYY-MM-DD') ?? null;
+    const reason = ledgerReconciliationModal.reason.trim();
+    if (!staff || !Number.isSafeInteger(staffUserId) || staffUserId <= 0 || !Number.isSafeInteger(ledgerId) || ledgerId <= 0) {
+      setLedgerReconciliationMessage({ type: 'error', text: 'Unable to identify the payout ledger.' });
+      return;
+    }
+    if (!rangeStartValue || !rangeEndValue) {
+      setLedgerReconciliationMessage({ type: 'error', text: 'Unable to identify the payout month.' });
+      return;
+    }
+    if (!reason) {
+      setLedgerReconciliationMessage({ type: 'error', text: 'Add a short reason for the audit trail.' });
+      return;
+    }
+    if (!Array.isArray(staff.settlementSources)) {
+      setLedgerReconciliationMessage({ type: 'error', text: 'The current payout source breakdown is missing. Refresh Pays and try again.' });
+      return;
+    }
+
+    try {
+      setLedgerReconciliationSubmitting(true);
+      setLedgerReconciliationMessage(null);
+      await axiosInstance.post(
+        '/reports/staffPayouts/reconcileLedger',
+        {
+          staffUserId,
+          ledgerId,
+          rangeStart: rangeStartValue,
+          rangeEnd: rangeEndValue,
+          reason,
+          settlementSources: staff.settlementSources,
+        },
+        { withCredentials: true },
+      );
+      closeLedgerReconciliationModal();
+      await refetchPaysForRange(rangeStartValue, rangeEndValue);
+      setActionAlert({
+        type: 'success',
+        text: `Reconciled the closed payout ledger for ${formatPayStaffName(staff)}. The current source breakdown is now the saved historical record.`,
+      });
+    } catch (reconciliationError) {
+      setLedgerReconciliationMessage({
+        type: 'error',
+        text: extractRequestErrorMessage(reconciliationError, 'Unable to reconcile the payout ledger.'),
+      });
+    } finally {
+      setLedgerReconciliationSubmitting(false);
+    }
+  }, [
+    closeLedgerReconciliationModal,
+    endDate,
+    ledgerReconciliationModal.reason,
+    ledgerReconciliationModal.staff,
+    refetchPaysForRange,
+    startDate,
+  ]);
+
   const closeReceiptHistoryBrowserModal = useCallback(() => {
     receiptHistoryBrowserRequestRef.current += 1;
     setReceiptHistoryBrowserModal(createEmptyReceiptHistoryBrowserModalState());
@@ -3883,6 +3976,17 @@ const resolveStaffCounterpartyDefaults = useCallback(
               ?? 'The saved liability and historical source breakdown no longer match.'}
           </Text>
           {renderSettlementReconciliationDetails(item, { compact: true })}
+          {canRecordStaffPayments ? (
+            <Button
+              variant="light"
+              size="xs"
+              color="red"
+              fullWidth={fullWidth}
+              onClick={() => openLedgerReconciliationModal(item)}
+            >
+              Reconcile ledger
+            </Button>
+          ) : null}
           {canRecordStaffPayments && item.interruptedSettlementRecoveryAvailable ? (
             <Button
               variant="light"
@@ -5435,6 +5539,13 @@ const renderVolunteerFundSnapshot = (
   const allPaidEntriesSelected =
     deletablePaidEntries.length > 0 &&
     deletablePaidEntries.every((entry) => paidEntriesModal.selectedIds.includes(entry.id));
+  const ledgerReconciliationStaff = ledgerReconciliationModal.staff;
+  const ledgerReconciliationDetails = ledgerReconciliationStaff?.settlementReconciliationDetails ?? null;
+  const ledgerReconciliationCurrency =
+    ledgerReconciliationDetails?.currency ?? ledgerReconciliationStaff?.payouts?.currency ?? DEFAULT_CURRENCY;
+  const ledgerReconciliationDueDelta = ledgerReconciliationDetails
+    ? ledgerReconciliationDetails.current.personalDue - ledgerReconciliationDetails.ledger.dueAmount
+    : 0;
 
   return (
       <>
@@ -5447,6 +5558,89 @@ const renderVolunteerFundSnapshot = (
           radius="lg"
         >
           {renderOpeningBalanceDetails()}
+        </Modal>
+        <Modal
+          opened={ledgerReconciliationModal.open}
+          onClose={() => {
+            if (!ledgerReconciliationSubmitting) {
+              closeLedgerReconciliationModal();
+            }
+          }}
+          title={
+            ledgerReconciliationStaff
+              ? `Reconcile ledger for ${formatPayStaffName(ledgerReconciliationStaff)}`
+              : 'Reconcile payout ledger'
+          }
+          size={isDesktop ? '60vw' : '100%'}
+          fullScreen={!isDesktop}
+          radius={isDesktop ? 'lg' : 0}
+          styles={{ title: { fontWeight: 700 } }}
+        >
+          <Stack gap="md">
+            <Alert color="yellow" title="This updates a closed payout ledger">
+              <Stack gap={4}>
+                <Text size="sm">
+                  The saved source snapshot and staff payable amount will be replaced with the current calculation,
+                  then an audit log will keep the before/after ledger and source snapshots.
+                </Text>
+                {ledgerReconciliationDetails ? (
+                  <Text size="sm" fw={600}>
+                    Staff due change:{' '}
+                    {formatCurrency(ledgerReconciliationDetails.ledger.dueAmount, ledgerReconciliationCurrency)}
+                    {' -> '}
+                    {formatCurrency(ledgerReconciliationDetails.current.personalDue, ledgerReconciliationCurrency)}
+                    {ledgerReconciliationDueDelta !== 0
+                      ? ` (${ledgerReconciliationDueDelta > 0 ? '+' : ''}${formatCurrency(ledgerReconciliationDueDelta, ledgerReconciliationCurrency)})`
+                      : ' (no total change)'}
+                  </Text>
+                ) : null}
+              </Stack>
+            </Alert>
+
+            {renderSettlementReconciliationDetails(ledgerReconciliationStaff)}
+
+            <Textarea
+              label="Reason"
+              description="Saved in the audit trail with the old and new ledger snapshots."
+              placeholder="Example: September reviews were re-locked after a deleted review was reinstated."
+              autosize
+              minRows={3}
+              maxRows={6}
+              value={ledgerReconciliationModal.reason}
+              onChange={(event) =>
+                setLedgerReconciliationModal((current) => ({
+                  ...current,
+                  reason: event.currentTarget.value,
+                }))
+              }
+              disabled={ledgerReconciliationSubmitting}
+              required
+            />
+
+            {ledgerReconciliationMessage ? (
+              <Alert color={ledgerReconciliationMessage.type === 'error' ? 'red' : 'teal'} variant="light">
+                {ledgerReconciliationMessage.text}
+              </Alert>
+            ) : null}
+
+            <Group justify="flex-end" grow={!isDesktop}>
+              <Button
+                variant="subtle"
+                onClick={closeLedgerReconciliationModal}
+                disabled={ledgerReconciliationSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                color="red"
+                onClick={() => void handleReconcileLedger()}
+                loading={ledgerReconciliationSubmitting}
+                disabled={!ledgerReconciliationModal.reason.trim()}
+              >
+                Reconcile ledger
+              </Button>
+            </Group>
+          </Stack>
         </Modal>
         <Modal
           opened={paidEntriesModal.open}
