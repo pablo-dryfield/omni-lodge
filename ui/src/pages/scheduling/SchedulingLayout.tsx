@@ -8,6 +8,7 @@ import {
   IconChevronDown,
   IconHistory,
   IconLayoutGrid,
+  IconMap2,
   IconRefresh,
   IconTemplate,
   IconUsersGroup,
@@ -33,6 +34,7 @@ const BASE_TABS: SchedulingTabDefinition[] = [
   { label: "Availability", value: "availability", icon: IconCalendarCheck, module: "scheduling-availability" },
   { label: "My Shifts", value: "my-shifts", icon: IconUsersGroup, module: "scheduling-my-shifts" },
   { label: "Shift Requests", value: "swaps", icon: IconRefresh, module: "scheduling-swaps" },
+  { label: "Promotion Routes", value: "promotion-routes", icon: IconMap2, module: "scheduling-promotion-routes" },
   { label: "History", value: "history", icon: IconHistory, module: "scheduling-history" },
 ];
 

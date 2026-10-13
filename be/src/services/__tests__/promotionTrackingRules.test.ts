@@ -1,6 +1,7 @@
 import {
   calculateDistanceMeters,
   evaluateLocationDwell,
+  isPromotionAssignmentVisibleAt,
   normalizePromotionPolicy,
 } from '../promotionTrackingRules.js';
 
@@ -109,6 +110,44 @@ describe('promotionTrackingRules', () => {
     expect(policy.streetExpectedDurationMinutes).toBe(42);
     expect(policy.hostelExpectedDurationMinutes).toBe(12);
     expect(policy.requiredParticipantProof).toBe('all_assigned');
+  });
+
+  it('shows an inactive assignment at the exact 30-minute check-in boundary', () => {
+    const scheduledStartUtc = new Date('2026-09-28T12:30:00.000Z');
+    const policyJson = {
+      preShiftCheckInWindowMinutes: 30,
+      reminderOffsetsMinutes: [10],
+    };
+
+    expect(isPromotionAssignmentVisibleAt({
+      policyJson,
+      scheduledStartUtc,
+      now: new Date('2026-09-28T12:00:00.000Z'),
+    })).toBe(true);
+    expect(isPromotionAssignmentVisibleAt({
+      policyJson,
+      scheduledStartUtc,
+      now: new Date('2026-09-28T11:59:59.999Z'),
+    })).toBe(false);
+  });
+
+  it('uses the earliest configured reminder when it precedes check-in', () => {
+    const scheduledStartUtc = new Date('2026-09-28T12:45:00.000Z');
+    const policyJson = {
+      preShiftCheckInWindowMinutes: 20,
+      reminderOffsetsMinutes: [45, 5],
+    };
+
+    expect(isPromotionAssignmentVisibleAt({
+      policyJson,
+      scheduledStartUtc,
+      now: new Date('2026-09-28T12:00:00.000Z'),
+    })).toBe(true);
+    expect(isPromotionAssignmentVisibleAt({
+      policyJson,
+      scheduledStartUtc,
+      now: new Date('2026-09-28T11:59:59.999Z'),
+    })).toBe(false);
   });
 
   it('computes realistic distance in metres for geofence checks', () => {

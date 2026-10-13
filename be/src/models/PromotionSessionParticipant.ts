@@ -15,7 +15,12 @@ import User from './User.js';
 import ShiftAssignment from './ShiftAssignment.js';
 import PromotionSession, { type PromotionVerificationQuality } from './PromotionSession.js';
 
-export type PromotionParticipantProofStatus = 'pending' | 'own_device' | 'group_selfie_review' | 'manager_override';
+export type PromotionParticipantProofStatus =
+  | 'pending'
+  | 'own_device'
+  | 'group_selfie_review'
+  | 'service_device'
+  | 'manager_override';
 
 @Table({
   tableName: 'promotion_session_participants',

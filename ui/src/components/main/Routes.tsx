@@ -91,6 +91,7 @@ const ScheduleOverviewPage = lazy(() => import("../../pages/scheduling/ScheduleO
 const MyShiftsPage = lazy(() => import("../../pages/scheduling/MyShiftsPage"));
 const SwapsPage = lazy(() => import("../../pages/scheduling/SwapsPage"));
 const HistoryPage = lazy(() => import("../../pages/scheduling/HistoryPage"));
+const PromotionRoutesPage = lazy(() => import("../../pages/scheduling/PromotionRoutesPage"));
 const FinanceLayout = lazyRoute(() => import("../../pages/Finance/FinanceLayout"), loadFinanceReducers);
 const FinanceDashboard = lazy(() => import("../../pages/Finance/FinanceDashboard"));
 const FinanceTransactions = lazy(() => import("../../pages/Finance/FinanceTransactions"));
@@ -161,6 +162,7 @@ const Routes = () => {
           <Route path="templates" element={<TemplatesPage />} />
           <Route path="my-shifts" element={<MyShiftsPage />} />
           <Route path="swaps" element={<SwapsPage />} />
+          <Route path="promotion-routes" element={<PromotionRoutesPage />} />
           <Route path="history" element={<HistoryPage />} />
         </Route>
         <Route path="/finance" element={<FinanceLayout />}>

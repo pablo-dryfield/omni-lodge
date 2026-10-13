@@ -13,6 +13,7 @@ import type { NonAttribute } from 'sequelize';
 import User from './User.js';
 import Venue from './Venue.js';
 import ShiftInstance from './ShiftInstance.js';
+import ShiftAssignment from './ShiftAssignment.js';
 import PromotionRouteVersion from './PromotionRouteVersion.js';
 
 @Table({
@@ -36,6 +37,11 @@ export default class PromotionTeamAssignment extends Model {
   @AllowNull(false)
   @Column({ field: 'route_version_id', type: DataType.BIGINT })
   declare routeVersionId: number;
+
+  @ForeignKey(() => ShiftAssignment)
+  @AllowNull(true)
+  @Column({ field: 'shift_assignment_id', type: DataType.INTEGER })
+  declare shiftAssignmentId: number | null;
 
   @ForeignKey(() => Venue)
   @AllowNull(true)
@@ -64,6 +70,9 @@ export default class PromotionTeamAssignment extends Model {
 
   @BelongsTo(() => PromotionRouteVersion, { foreignKey: 'route_version_id', as: 'routeVersion' })
   declare routeVersion?: NonAttribute<PromotionRouteVersion | null>;
+
+  @BelongsTo(() => ShiftAssignment, { foreignKey: 'shift_assignment_id', as: 'shiftAssignment' })
+  declare shiftAssignment?: NonAttribute<ShiftAssignment | null>;
 
   @BelongsTo(() => Venue, { foreignKey: 'hostel_venue_id', as: 'hostelVenue' })
   declare hostelVenue?: NonAttribute<Venue | null>;
