@@ -9,6 +9,7 @@ import {
   MigrationDatabaseSafetyError,
 } from '../migrationRuntimeStatus.js';
 import {
+  hashMigrationNames,
   PRE_CI_PRODUCTION_METADATA_PROFILE,
   type MigrationDatabaseInventory,
 } from '../migrationSafety.js';
@@ -45,6 +46,30 @@ describe('migration runtime status', () => {
 
     const collisions = [...migrationsBySequence.values()].filter((names) => names.length > 1);
     expect(collisions).toEqual([]);
+  });
+
+  it('preserves the production-applied prefix and appends pending migrations after it', () => {
+    const compiled = compiledMigrationNames();
+    const productionBoundary = '202610060002-tripadvisor-stale-sync-runs.js';
+    const boundaryIndex = compiled.indexOf(productionBoundary);
+    expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+
+    const productionApplied = compiled.slice(0, boundaryIndex + 1);
+    expect(productionApplied).toHaveLength(203);
+    expect(hashMigrationNames(productionApplied)).toBe(
+      'edb2c0963083efef2955bb50d544124063b7900ad229f28b886885e4966bbb48',
+    );
+
+    const result = createMigrationRuntimeStatus({
+      inventory: inventory(productionApplied),
+      compiledMigrationNames: compiled,
+    });
+    expect(result.pendingMigrationNames).toEqual(compiled.slice(boundaryIndex + 1));
+    expect(result.pendingMigrationNames.slice(0, 2)).toEqual([
+      '202610060003-promotion-assignment-hostels.js',
+      '202610130001-direct-booking-stripe-merchant.js',
+    ]);
+    expect(compiled).not.toContain('202609290001-promotion-assignment-hostels.js');
   });
 
   it('reports a valid managed database and exact pending names', () => {

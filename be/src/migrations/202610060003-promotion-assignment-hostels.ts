@@ -4,6 +4,9 @@ type MigrationParams = { context: QueryInterface };
 
 const TEAM_ASSIGNMENTS = 'promotion_team_assignments';
 
+// Keep this migration directly after the production-applied 202610060002
+// boundary. The original backdated filename caused preflight to fail closed.
+
 export async function up({ context }: MigrationParams): Promise<void> {
   await context.sequelize.transaction(async (transaction) => {
     await context.addColumn(TEAM_ASSIGNMENTS, 'shift_assignment_id', {
