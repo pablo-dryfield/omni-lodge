@@ -4,7 +4,16 @@ import { getConfigValueRaw } from '../../services/configService.js';
 
 const cachedClients = new Map<string, Stripe>();
 
-const getStripeClientForConfigKey = (configKey: 'STRIPE_SECRET_KEY' | 'STRIPE_TEST_SECRET_KEY'): Stripe => {
+export type StripeMode = 'live' | 'test';
+export type DirectStripeMerchant = 'food-tour';
+
+type StripeSecretConfigKey =
+  | 'STRIPE_SECRET_KEY'
+  | 'STRIPE_TEST_SECRET_KEY'
+  | 'FOOD_TOUR_STRIPE_SECRET_KEY'
+  | 'FOOD_TOUR_STRIPE_TEST_SECRET_KEY';
+
+const getStripeClientForConfigKey = (configKey: StripeSecretConfigKey): Stripe => {
   const key = getConfigValueRaw(configKey);
   if (!key) {
     throw new HttpError(503, `${configKey} is not configured.`);
@@ -21,6 +30,48 @@ const getStripeClientForConfigKey = (configKey: 'STRIPE_SECRET_KEY' | 'STRIPE_TE
 export const getStripeClient = (): Stripe => getStripeClientForConfigKey('STRIPE_SECRET_KEY');
 
 export const getStripeTestClient = (): Stripe => getStripeClientForConfigKey('STRIPE_TEST_SECRET_KEY');
+
+export const normalizeDirectStripeMerchant = (value: unknown): DirectStripeMerchant | null => {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    throw new HttpError(400, 'Unsupported Stripe merchant.');
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'food-tour') {
+    return normalized;
+  }
+  throw new HttpError(400, 'Unsupported Stripe merchant.');
+};
+
+export const resolveDirectStripeMerchantAssignment = (
+  isPersistedBooking: boolean,
+  currentValue: unknown,
+  incomingValue: unknown,
+): DirectStripeMerchant | null => {
+  const current = normalizeDirectStripeMerchant(currentValue);
+  const incoming = normalizeDirectStripeMerchant(incomingValue);
+  if (current && incoming && current !== incoming) {
+    throw new HttpError(409, 'stripeMerchant cannot be changed after it is assigned to a booking');
+  }
+  return isPersistedBooking ? current : incoming;
+};
+
+export const directStripeConfigKey = (
+  merchant: unknown,
+  mode: StripeMode,
+): StripeSecretConfigKey => {
+  if (normalizeDirectStripeMerchant(merchant) === 'food-tour') {
+    return mode === 'live' ? 'FOOD_TOUR_STRIPE_SECRET_KEY' : 'FOOD_TOUR_STRIPE_TEST_SECRET_KEY';
+  }
+  return mode === 'live' ? 'STRIPE_SECRET_KEY' : 'STRIPE_TEST_SECRET_KEY';
+};
+
+export const getDirectStripeClient = (
+  merchant: unknown,
+  mode: StripeMode,
+): Stripe => getStripeClientForConfigKey(directStripeConfigKey(merchant, mode));
 
 export const isStripeConfigured = (): boolean => Boolean(getConfigValueRaw('STRIPE_SECRET_KEY'));
 

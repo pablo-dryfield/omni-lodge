@@ -47,6 +47,7 @@ Common fields supported:
 - `paymentStatus`
 - `paymentMethod`
 - `paymentMethodCountry`
+- `stripeMerchant` (`food-tour` selects the dedicated Food Tour Stripe credentials)
 - `stripeLivemode`
 - `currency`
 - `baseAmount`
@@ -106,13 +107,21 @@ Food Tour bookings ingested with `platform: "direct"` expose these manifest acti
 
 Each action sends the customer email and a separate internal notification email to `DIRECT_BOOKINGS_NOTIFICATION_EMAIL`. Email failures are reported in the action response but do not roll back the Omni-Lodge booking action.
 
-Cancellation and partial refund actions select the Stripe key from the original payment mode:
+Cancellation and partial refund actions select the Stripe credentials from the immutable merchant marker and original payment mode:
 
-- `stripeLivemode: true` or `Stripe livemode: true` in notes uses `STRIPE_SECRET_KEY`.
-- `stripeLivemode: false` or `Stripe livemode: false` in notes uses `STRIPE_TEST_SECRET_KEY`.
-- older direct bookings without a stored mode are treated as legacy records: Omni-Lodge tries the test key first, then the live key.
+- `stripeMerchant: "food-tour"` with live mode uses `FOOD_TOUR_STRIPE_SECRET_KEY`.
+- `stripeMerchant: "food-tour"` with test mode uses `FOOD_TOUR_STRIPE_TEST_SECRET_KEY`.
+- bookings without `stripeMerchant` retain the legacy behavior and use `STRIPE_SECRET_KEY` or `STRIPE_TEST_SECRET_KEY`. Those global keys continue to serve the KTK/Omni storefront.
+- unknown non-empty merchant markers are rejected and never fall back to the global KTK credentials.
+- `stripeLivemode: true` or `Stripe livemode: true` in notes selects live mode.
+- `stripeLivemode: false` or `Stripe livemode: false` in notes selects test mode.
+- older direct bookings without a stored mode are treated as legacy records: Omni-Lodge tries the test key first, then the live key, within the selected merchant only.
 
-Set both `STRIPE_SECRET_KEY` and `STRIPE_TEST_SECRET_KEY` in the Omni-Lodge Control Panel under Stripe if you need to refund both production and sandbox direct bookings.
+Configure the two `FOOD_TOUR_STRIPE_*` secret keys in the Omni-Lodge Control Panel before the Food Tour checkout starts sending `stripeMerchant: "food-tour"`. The database migration deliberately does not backfill historical bookings: existing pre-cutover Food Tour bookings remain unmarked and continue using the global KTK credentials. The marker is assigned only when the Omni-Lodge booking is first created and cannot be added or changed by a replay. This prevents an older shared-account payment from being rerouted accidentally. The marker is selected per booking, so the originating checkout can choose it from its product configuration without changing the global KTK Stripe settings.
+
+Cutover order is mandatory: deploy and migrate Omni-Lodge, configure both dedicated Food Tour keys, and verify a test ingestion response echoes `"stripeMerchant": "food-tour"` before enabling the new Food Tour Stripe account. Switch the Food Tour payment credentials and emitted marker together. An older Omni-Lodge version ignores the new payload field; if it creates an unmarked booking for a new-account payment, a later replay intentionally cannot relabel that booking and it requires an evidence-backed manual repair.
+
+After the first new-account booking is created, treat this schema and routing code as forward-only. Rolling back the application or removing `stripe_merchant` would make Omni-Lodge lose the credential selector for those payments. If a post-cutover problem occurs, pause new Food Tour checkouts and reconcile affected bookings instead of running the migration down or reverting to code that does not understand the marker.
 
 ## Response
 
@@ -124,6 +133,7 @@ Created:
   "bookingId": 123,
   "platform": "direct",
   "platformBookingId": "ftk_...",
+  "stripeMerchant": "food-tour",
   "eventType": "created",
   "customerEmailStatus": "sent",
   "customerEmailMessageId": "18f..."
@@ -138,6 +148,7 @@ Replay without changes:
   "bookingId": 123,
   "platform": "direct",
   "platformBookingId": "ftk_...",
+  "stripeMerchant": "food-tour",
   "eventType": "replayed"
 }
 ```
@@ -150,6 +161,7 @@ Replay with changed fields:
   "bookingId": 123,
   "platform": "direct",
   "platformBookingId": "ftk_...",
+  "stripeMerchant": "food-tour",
   "eventType": "amended"
 }
 ```

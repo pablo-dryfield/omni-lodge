@@ -17,6 +17,10 @@ import type { BookingEventType, BookingPaymentStatus, BookingStatus } from '../c
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
 import { canonicalizeProductLabelFromSources, sanitizeProductSource } from '../utils/productName.js';
+import {
+  normalizeDirectStripeMerchant,
+  resolveDirectStripeMerchantAssignment,
+} from '../finance/services/stripeClient.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -29,6 +33,7 @@ type DirectBookingPayload = {
   paymentStatus?: BookingPaymentStatus | null;
   paymentMethod?: string | null;
   paymentMethodCountry?: string | null;
+  stripeMerchant?: string | null;
   stripeLivemode?: boolean | string | null;
   currency?: string | null;
   baseAmount?: number | string | null;
@@ -74,6 +79,7 @@ type BookingPatch = {
   paymentStatus: BookingPaymentStatus;
   paymentMethod: string | null;
   paymentMethodCountry: string | null;
+  stripeMerchant: 'food-tour' | null;
   currency: string | null;
   baseAmount: string | null;
   addonsAmount: string | null;
@@ -471,6 +477,7 @@ const buildPatch = async (payload: DirectBookingPayload, req: AuthenticatedReque
     paymentStatus: payload.paymentStatus ?? DEFAULT_PAYMENT_STATUS,
     paymentMethod: normalizeOptionalString(payload.paymentMethod),
     paymentMethodCountry: normalizeOptionalString(payload.paymentMethodCountry),
+    stripeMerchant: normalizeDirectStripeMerchant(payload.stripeMerchant),
     currency: normalizeCurrency(payload.currency),
     baseAmount: normalizeNullableDecimal(payload.baseAmount),
     addonsAmount: normalizeNullableDecimal(payload.addonsAmount),
@@ -514,8 +521,14 @@ const buildPatch = async (payload: DirectBookingPayload, req: AuthenticatedReque
 };
 
 const assignBookingPatch = (booking: Booking, patch: BookingPatch, userId: number | null): boolean => {
+  const stripeMerchant = resolveDirectStripeMerchantAssignment(
+    Boolean(booking.id),
+    booking.stripeMerchant,
+    patch.stripeMerchant,
+  );
   const nextState = {
     ...patch,
+    stripeMerchant,
     createdBy: booking.id ? booking.createdBy : userId,
     updatedBy: userId,
   };
@@ -978,6 +991,7 @@ export const ingestDirectBooking = async (req: AuthenticatedRequest, res: Respon
       bookingId: result.booking.id,
       platform: result.booking.platform,
       platformBookingId: result.booking.platformBookingId,
+      stripeMerchant: result.booking.stripeMerchant,
       eventType: result.eventType,
       customerEmailStatus,
       customerEmailMessageId,

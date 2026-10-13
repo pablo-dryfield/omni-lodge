@@ -49,4 +49,21 @@ describe('application configuration registry', () => {
       validation: { required: true, min: 1 },
     });
   });
+
+  it('registers isolated Food Tour Stripe credentials as secrets', () => {
+    expect(CONFIG_DEFINITION_MAP.get('FOOD_TOUR_STRIPE_SECRET_KEY')).toMatchObject({
+      category: 'Stripe',
+      valueType: 'string',
+      defaultValue: null,
+      isSecret: true,
+      impact: 'high',
+    });
+    expect(CONFIG_DEFINITION_MAP.get('FOOD_TOUR_STRIPE_TEST_SECRET_KEY')).toMatchObject({
+      category: 'Stripe',
+      valueType: 'string',
+      defaultValue: null,
+      isSecret: true,
+      impact: 'high',
+    });
+  });
 });
