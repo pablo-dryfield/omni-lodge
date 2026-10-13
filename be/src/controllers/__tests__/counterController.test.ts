@@ -48,6 +48,7 @@ import { finalizeCounterReservations } from '../counterController';
 const mockBookingFindAll = Booking.findAll as jest.Mock;
 const mockCounterFindByPk = Counter.findByPk as jest.Mock;
 const mockGetCounterById = CounterRegistryService.getCounterById as jest.Mock;
+const mockUpsertMetrics = CounterRegistryService.upsertMetrics as jest.Mock;
 
 describe('finalizeCounterReservations', () => {
   beforeEach(() => {
@@ -113,6 +114,7 @@ describe('finalizeCounterReservations', () => {
       photos: 0,
     });
     expect(booking.attendanceStatus).toBe('checked_in_full');
+    expect(mockUpsertMetrics).toHaveBeenCalledWith(920, [], 191);
     expect(response.status).toHaveBeenCalledWith(200);
   });
 });
