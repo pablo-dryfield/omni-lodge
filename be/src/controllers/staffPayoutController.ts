@@ -7,7 +7,9 @@ import { Op, col, fn, where, type Transaction as SequelizeTransaction } from 'se
 import sequelize from '../config/database.js';
 import StaffPayoutCollectionLog from '../models/StaffPayoutCollectionLog.js';
 import StaffPayoutLedger, {
+  type StaffPayoutSettlementSnapshot,
   type StaffPayoutSettlementSnapshotSource,
+  type StaffPayoutSettlementSnapshotV1,
 } from '../models/StaffPayoutLedger.js';
 import StaffProfile from '../models/StaffProfile.js';
 import StaffProfileTypePeriod from '../models/StaffProfileTypePeriod.js';
@@ -16,6 +18,7 @@ import StaffPayoutReceipt from '../models/StaffPayoutReceipt.js';
 import StaffPayoutReceiptItem from '../models/StaffPayoutReceiptItem.js';
 import RequiredAction from '../models/RequiredAction.js';
 import User from '../models/User.js';
+import AuditLog from '../models/AuditLog.js';
 import CompensationComponent from '../models/CompensationComponent.js';
 import FinanceAccount from '../finance/models/FinanceAccount.js';
 import FinanceCategory from '../finance/models/FinanceCategory.js';
@@ -60,6 +63,12 @@ import {
   reverseFundAllocationsForFullyDeletedPayoutBatches,
 } from '../services/staffPayoutSettlementDeletionService.js';
 import { isStaffPayoutReimbursementCollection } from '../services/staffPayoutCollectionClassificationService.js';
+import { isStaffPayoutPeriodClosedInWarsaw } from '../services/staffPayoutPeriodService.js';
+import {
+  buildStaffPayoutSettlementSnapshotV2,
+  sortStaffPayoutSettlementSnapshotSources,
+} from '../services/staffPayoutSettlementSnapshotService.js';
+import { filterStaffPayoutLedgerSources } from '../services/staffPayoutLiabilityService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -142,6 +151,42 @@ type NormalizedStaffPayoutFundAllocation = {
   description: string | null;
   settlementIntent: string;
   verifiedIntent: CompensationSettlementIntentPayload;
+};
+
+type StaffPayoutLedgerReconciliationSourcePayload = {
+  sourceKey?: unknown;
+  label?: unknown;
+  componentId?: unknown;
+  segmentKey?: unknown;
+  earningStart?: unknown;
+  earningEnd?: unknown;
+  staffTypePeriodId?: unknown;
+  staffType?: unknown;
+  legacyExtrapolation?: unknown;
+  category?: unknown;
+  amount?: unknown;
+  destination?: unknown;
+  fundId?: unknown;
+  ruleId?: unknown;
+  currency?: unknown;
+};
+
+type NormalizedStaffPayoutLedgerReconciliationSource = {
+  sourceKey: string;
+  label: string;
+  componentId: number | null;
+  segmentKey: string | null;
+  earningStart: string | null;
+  earningEnd: string | null;
+  staffTypePeriodId: number | null;
+  staffType: string | null;
+  legacyExtrapolation: boolean;
+  category: string;
+  amount: number;
+  destination: 'staff_vendor' | 'volunteer_fund' | 'excluded';
+  fundId: number | null;
+  ruleId: number;
+  currency: string;
 };
 
 type NormalizedStaffPayoutBatchReimbursement = {
@@ -325,6 +370,168 @@ const ensureCanonicalMonthRange = (rangeStartRaw: string, rangeEndRaw: string): 
   }
   return { rangeStart, rangeEnd };
 };
+
+const parseNullablePositiveInteger = (value: unknown, field: string): number | null => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  return parsePositiveInteger(value, field);
+};
+
+const parseFiniteCurrencyAmountMinor = (value: unknown, field: string): number => {
+  if (value === null || value === undefined || value === '') {
+    return 0;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new HttpError(400, `${field} must be a valid amount.`);
+  }
+  const minor = Math.round(parsed * 100);
+  if (!Number.isSafeInteger(minor)) {
+    throw new HttpError(400, `${field} exceeds safe currency limits.`);
+  }
+  return minor;
+};
+
+const parseLedgerReconciliationDateOnly = (value: unknown, field: string): string | null => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    throw new HttpError(400, `${field} must be a date.`);
+  }
+  const parsed = dayjs(value);
+  if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== value) {
+    throw new HttpError(400, `${field} must be a valid YYYY-MM-DD date.`);
+  }
+  return value;
+};
+
+const normalizeLedgerReconciliationIdentifier = (
+  value: unknown,
+  field: string,
+): string => {
+  if (typeof value !== 'string') {
+    throw new HttpError(400, `${field} is required.`);
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new HttpError(400, `${field} is required.`);
+  }
+  return normalized;
+};
+
+const normalizeLedgerReconciliationCurrency = (value: unknown, field: string): string => {
+  const currency = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw new HttpError(400, `${field} must be a valid currency code.`);
+  }
+  return currency;
+};
+
+const normalizeLedgerReconciliationDestination = (
+  value: unknown,
+  field: string,
+): NormalizedStaffPayoutLedgerReconciliationSource['destination'] => {
+  if (value === 'staff_vendor' || value === 'volunteer_fund' || value === 'excluded') {
+    return value;
+  }
+  throw new HttpError(400, `${field} must be staff_vendor, volunteer_fund, or excluded.`);
+};
+
+const normalizeLedgerReconciliationSources = (
+  rawSources: unknown,
+): NormalizedStaffPayoutLedgerReconciliationSource[] => {
+  if (!Array.isArray(rawSources)) {
+    throw new HttpError(400, 'settlementSources must be an array.');
+  }
+  return rawSources.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new HttpError(400, `settlementSources[${index}] is invalid.`);
+    }
+    const source = entry as StaffPayoutLedgerReconciliationSourcePayload;
+    const label = typeof source.label === 'string' && source.label.trim()
+      ? source.label.trim()
+      : normalizeLedgerReconciliationIdentifier(source.sourceKey, `settlementSources[${index}].sourceKey`);
+    return {
+      sourceKey: normalizeLedgerReconciliationIdentifier(source.sourceKey, `settlementSources[${index}].sourceKey`),
+      label,
+      componentId: parseNullablePositiveInteger(source.componentId, `settlementSources[${index}].componentId`),
+      segmentKey: typeof source.segmentKey === 'string' && source.segmentKey.trim()
+        ? source.segmentKey.trim()
+        : null,
+      earningStart: parseLedgerReconciliationDateOnly(source.earningStart, `settlementSources[${index}].earningStart`),
+      earningEnd: parseLedgerReconciliationDateOnly(source.earningEnd, `settlementSources[${index}].earningEnd`),
+      staffTypePeriodId: parseNullablePositiveInteger(source.staffTypePeriodId, `settlementSources[${index}].staffTypePeriodId`),
+      staffType: typeof source.staffType === 'string' && source.staffType.trim()
+        ? source.staffType.trim()
+        : null,
+      legacyExtrapolation: source.legacyExtrapolation === true,
+      category: normalizeLedgerReconciliationIdentifier(source.category, `settlementSources[${index}].category`),
+      amount: parseFiniteCurrencyAmountMinor(source.amount, `settlementSources[${index}].amount`) / 100,
+      destination: normalizeLedgerReconciliationDestination(source.destination, `settlementSources[${index}].destination`),
+      fundId: parseNullablePositiveInteger(source.fundId, `settlementSources[${index}].fundId`),
+      ruleId: parsePositiveInteger(source.ruleId, `settlementSources[${index}].ruleId`),
+      currency: normalizeLedgerReconciliationCurrency(source.currency, `settlementSources[${index}].currency`),
+    };
+  });
+};
+
+const buildLedgerReconciliationSettlementSnapshot = (
+  sources: NormalizedStaffPayoutLedgerReconciliationSource[],
+  rangeStart: string,
+  rangeEnd: string,
+): StaffPayoutSettlementSnapshot => {
+  const ledgerSources = filterStaffPayoutLedgerSources(sources);
+  const isSegmented = ledgerSources.length > 0 && ledgerSources.every((source) => (
+    source.segmentKey !== null
+    && source.earningStart !== null
+    && source.earningEnd !== null
+    && source.staffTypePeriodId !== null
+    && source.staffType !== null
+  ));
+  if (isSegmented) {
+    return buildStaffPayoutSettlementSnapshotV2(
+      ledgerSources.map((source) => ({
+        sourceKey: source.sourceKey,
+        componentId: source.componentId,
+        category: source.category,
+        grossAmountMinor: parseFiniteCurrencyAmountMinor(source.amount, 'source amount'),
+        destination: source.destination,
+        fundId: source.fundId,
+        ruleId: source.ruleId,
+        currency: source.currency,
+        segmentKey: source.segmentKey as string,
+        earningStart: source.earningStart as string,
+        earningEnd: source.earningEnd as string,
+        staffTypePeriodId: source.staffTypePeriodId as number,
+        staffType: source.staffType as string,
+        legacyExtrapolation: source.legacyExtrapolation,
+      })),
+      { rangeStart, rangeEnd },
+    );
+  }
+
+  return {
+    version: 1,
+    sources: sortStaffPayoutSettlementSnapshotSources(ledgerSources.map((source) => ({
+      sourceKey: source.sourceKey,
+      componentId: source.componentId,
+      category: source.category,
+      grossAmountMinor: parseFiniteCurrencyAmountMinor(source.amount, 'source amount'),
+      destination: source.destination,
+      fundId: source.fundId,
+      ruleId: source.ruleId,
+      currency: source.currency,
+    }))),
+  } satisfies StaffPayoutSettlementSnapshotV1;
+};
+
+const calculatePersonalDueMinorFromSnapshot = (
+  snapshot: StaffPayoutSettlementSnapshot,
+): number => snapshot.sources
+  .filter((source) => source.destination === 'staff_vendor' && source.sourceKey !== 'reimbursement')
+  .reduce((sum, source) => sum + Number(source.grossAmountMinor ?? 0), 0);
 
 const normalizeBatchLines = (rawLines: unknown): NormalizedStaffPayoutBatchLine[] => {
   if (!Array.isArray(rawLines)) {
@@ -2460,6 +2667,156 @@ export const deleteStaffPayoutEntries = async (
       return;
     }
     res.status(500).json([{ message: 'Failed to delete paid entries' }]);
+  }
+};
+
+export const reconcileStaffPayoutLedger = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    const staffUserId = parsePositiveInteger(req.body.staffUserId, 'staffUserId');
+    const ledgerId = parsePositiveInteger(req.body.ledgerId, 'ledgerId');
+    const rangeStartRaw = typeof req.body.rangeStart === 'string' ? req.body.rangeStart : '';
+    const rangeEndRaw = typeof req.body.rangeEnd === 'string' ? req.body.rangeEnd : '';
+    const { rangeStart, rangeEnd } = ensureCanonicalMonthRange(rangeStartRaw, rangeEndRaw);
+    const rangeStartIso = rangeStart.format('YYYY-MM-DD');
+    const rangeEndIso = rangeEnd.format('YYYY-MM-DD');
+    if (!isStaffPayoutPeriodClosedInWarsaw(rangeEndIso)) {
+      throw new HttpError(400, 'Only closed payout months need historical ledger reconciliation.');
+    }
+    const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason) {
+      throw new HttpError(400, 'A reconciliation reason is required.');
+    }
+    if (reason.length > 2000) {
+      throw new HttpError(400, 'A reconciliation reason must be 2000 characters or fewer.');
+    }
+    const normalizedSources = normalizeLedgerReconciliationSources(req.body.settlementSources);
+    const currentSnapshot = buildLedgerReconciliationSettlementSnapshot(
+      normalizedSources,
+      rangeStartIso,
+      rangeEndIso,
+    );
+    const currentDueAmountMinor = calculatePersonalDueMinorFromSnapshot(currentSnapshot);
+    if (!Number.isSafeInteger(currentDueAmountMinor)) {
+      throw new HttpError(400, 'The reconciled staff due exceeds safe currency limits.');
+    }
+
+    const reconciliation = await sequelize.transaction(async (transaction) => {
+      const lockedUser = await User.findByPk(staffUserId, {
+        attributes: ['id'],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!lockedUser) {
+        throw new HttpError(404, 'Staff user not found.');
+      }
+
+      const ledger = await StaffPayoutLedger.findOne({
+        where: {
+          id: ledgerId,
+          staffUserId,
+          rangeStart: rangeStartIso,
+          rangeEnd: rangeEndIso,
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!ledger) {
+        throw new HttpError(404, 'Staff payout ledger not found.');
+      }
+
+      const ledgerCurrency = ledger.currencyCode.trim().toUpperCase();
+      const mismatchedCurrency = currentSnapshot.sources.find(
+        (source) => source.currency.trim().toUpperCase() !== ledgerCurrency,
+      );
+      if (mismatchedCurrency) {
+        throw new HttpError(
+          400,
+          `The reconciled sources must use the ledger currency (${ledgerCurrency}).`,
+        );
+      }
+
+      const before = {
+        openingBalanceMinor: Number(ledger.openingBalanceMinor),
+        dueAmountMinor: Number(ledger.dueAmountMinor),
+        paidAmountMinor: Number(ledger.paidAmountMinor),
+        closingBalanceMinor: Number(ledger.closingBalanceMinor),
+        settlementSnapshot: ledger.settlementSnapshot,
+        updatedAt: ledger.updatedAt ? ledger.updatedAt.toISOString() : null,
+      };
+
+      await ledger.update(
+        {
+          dueAmountMinor: currentDueAmountMinor,
+          settlementSnapshot: currentSnapshot,
+        },
+        { transaction },
+      );
+
+      await reconcilePersistedStaffPayoutLedgers({
+        staffUserId,
+        affectedRangeStart: rangeStartIso,
+        affectedRangeEnd: rangeEndIso,
+        transaction,
+      });
+
+      const updatedLedger = await StaffPayoutLedger.findByPk(ledger.id, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!updatedLedger) {
+        throw new HttpError(409, 'The reconciled payout ledger could not be reloaded.');
+      }
+
+      const after = {
+        openingBalanceMinor: Number(updatedLedger.openingBalanceMinor),
+        dueAmountMinor: Number(updatedLedger.dueAmountMinor),
+        paidAmountMinor: Number(updatedLedger.paidAmountMinor),
+        closingBalanceMinor: Number(updatedLedger.closingBalanceMinor),
+        settlementSnapshot: updatedLedger.settlementSnapshot,
+        updatedAt: updatedLedger.updatedAt ? updatedLedger.updatedAt.toISOString() : null,
+      };
+
+      await AuditLog.create(
+        {
+          actorId,
+          action: 'staff_payout.ledger_reconciled',
+          entity: 'staff_payout_ledger',
+          entityId: String(ledger.id),
+          metaJson: {
+            staffUserId,
+            rangeStart: rangeStartIso,
+            rangeEnd: rangeEndIso,
+            reason,
+            sourceCount: currentSnapshot.sources.length,
+            before,
+            after,
+          },
+        },
+        { transaction },
+      );
+
+      return {
+        ledgerId: Number(updatedLedger.id),
+        staffUserId,
+        rangeStart: rangeStartIso,
+        rangeEnd: rangeEndIso,
+        currency: updatedLedger.currencyCode,
+        before,
+        after,
+      };
+    });
+
+    res.status(200).json({ reconciled: true, reconciliation });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json([{ message: error.message }]);
+      return;
+    }
+    res.status(500).json([{ message: 'Failed to reconcile staff payout ledger' }]);
   }
 };
 
