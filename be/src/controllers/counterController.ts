@@ -1063,8 +1063,8 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
       }
     }
 
-    if (body.metrics !== undefined) {
-      const rows = parseBodyAsArray(body.metrics);
+    if (body.metrics !== undefined || attendanceUpdates.length > 0) {
+      const rows = body.metrics !== undefined ? parseBodyAsArray(body.metrics) : [];
       await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
     }
 

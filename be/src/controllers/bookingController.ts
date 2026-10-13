@@ -1578,6 +1578,46 @@ const refreshCounterMetricsForAddonRefundAction = async (
   }
 };
 
+const refreshCounterMetricsForBookingAttendance = async (
+  bookings: Booking[],
+  actorId: number | null | undefined,
+): Promise<void> => {
+  if (!actorId || bookings.length === 0) {
+    return;
+  }
+
+  const targets = new Map<string, { date: string; productId: number | null }>();
+  bookings.forEach((booking) => {
+    const date = booking.experienceDate;
+    if (!date) {
+      return;
+    }
+    const productId = booking.productId ?? null;
+    targets.set(`${date}|${productId ?? 'null'}`, { date, productId });
+  });
+
+  for (const target of targets.values()) {
+    try {
+      const counter = await Counter.findOne({
+        where: {
+          date: target.date,
+          productId: target.productId,
+        },
+        attributes: ['id'],
+      });
+      if (!counter) {
+        continue;
+      }
+      await CounterRegistryService.upsertMetrics(counter.id, [], actorId);
+    } catch (error) {
+      logger.warn(
+        `Failed to refresh counter metrics after booking attendance update for ${target.date}`,
+        error,
+      );
+    }
+  }
+};
+
 const deriveBookingPartySize = (booking: Booking): number => {
   const fromTotal = Number(booking.partySizeTotal);
   if (Number.isFinite(fromTotal) && fromTotal > 0) {
@@ -4289,6 +4329,7 @@ export const updateBookingAttendance = async (req: AuthenticatedRequest, res: Re
     }
 
     const result = await applyBookingAttendanceUpdate(booking, payload, req.authContext?.id ?? null);
+    await refreshCounterMetricsForBookingAttendance([booking], req.authContext?.id ?? null);
     res.status(200).json(result);
   } catch (error) {
     if (error instanceof HttpError) {
@@ -4450,6 +4491,7 @@ export const updateBulkBookingAttendance = async (req: AuthenticatedRequest, res
     bookings.forEach((booking) => bookingById.set(booking.id, booking));
 
     const results: BookingAttendanceBulkUpdateResult[] = [];
+    const refreshedBookings: Booking[] = [];
 
     for (const row of updates) {
       const bookingId = Number.parseInt(String(row?.bookingId ?? ''), 10);
@@ -4473,6 +4515,7 @@ export const updateBulkBookingAttendance = async (req: AuthenticatedRequest, res
           },
           req.authContext?.id ?? null,
         );
+        refreshedBookings.push(booking);
         results.push(result);
       } catch (error) {
         const message =
@@ -4487,6 +4530,7 @@ export const updateBulkBookingAttendance = async (req: AuthenticatedRequest, res
 
     const failed = results.filter((result) => 'error' in result).length;
     const updated = results.length - failed;
+    await refreshCounterMetricsForBookingAttendance(refreshedBookings, req.authContext?.id ?? null);
 
     res.status(200).json({
       updated,
