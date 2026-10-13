@@ -98,9 +98,9 @@ const matchesAssignmentIdChurnIdentity = (submission: CleaningSubmission, assign
     && String(snapshot.timeEnd ?? '') === String(shift.timeEnd ?? '')
     && canonicalSlots(submission.requiredSlots) === canonicalSlots(slotsFor(assignment, sources));
 };
-/** The task planner assignee is the sole reviewer; they may also be on the cleaning roster that day. */
-const reviewerIds = (log: Pick<AssistantManagerTaskLog, 'userId'>, _assignment: RosterAssignment): number[] =>
-  positiveId(log.userId) ? [log.userId] : [];
+/** The task planner assignee is the sole reviewer when they can independently review the cleaner's proof. */
+const reviewerIds = (log: Pick<AssistantManagerTaskLog, 'userId'>, assignment: RosterAssignment): number[] =>
+  positiveId(log.userId) && log.userId !== assignment.userId ? [log.userId] : [];
 const latestPhotos = (photos: CleaningPhotoVersion[]) => {
   const map = new Map<string, CleaningPhotoVersion>();
   for (const photo of photos) if (!map.has(photo.slotKey) || map.get(photo.slotKey)!.version < photo.version) map.set(photo.slotKey, photo);
@@ -289,9 +289,12 @@ const loadContext = async (submissionId: number, actor: CleaningActor, transacti
   return { submission, log, template, assignment, reviewers, actor, photos };
 };
 
-const canReviewContext = (context: Context) => Boolean(context.assignment)
-  && ['pending', 'missed'].includes(context.log.status)
-  && context.reviewers.includes(context.actor.actorId);
+const canReviewContext = (context: Context) => {
+  if (!context.assignment || !['pending', 'missed'].includes(context.log.status)) return false;
+  if (context.actor.actorId === context.submission.userId) return false;
+  if (context.reviewers.includes(context.actor.actorId)) return true;
+  return context.reviewers.length === 0 && isCleaningGlobalManager(context.actor);
+};
 
 const serialize = async (context: Context, transaction?: Transaction) => {
   const { submission, log, template, assignment, reviewers, actor, photos } = context;
@@ -559,7 +562,10 @@ export const reviewCleaningSubmissionPhoto = async (params: CleaningActor & { su
     if (!photo || latestPhotos(context.photos).get(photo.slotKey)?.id !== photo.id || photo.status !== 'pending') throw new HttpError(409, 'Only the latest pending photo can be reviewed.');
     // Re-read task ownership after acquiring assignment locks: a planner reassignment removes authority immediately.
     const liveReviewers = context.assignment ? reviewerIds(context.log, context.assignment) : [];
-    if (!liveReviewers.includes(params.actorId)) throw new HttpError(403, 'Your task planner review assignment changed. Refresh before continuing.');
+    const canLiveReview = liveReviewers.includes(params.actorId)
+      || (liveReviewers.length === 0 && isCleaningGlobalManager(params) && params.actorId !== context.submission.userId);
+    if (!canLiveReview) throw new HttpError(403, 'Your task planner review assignment changed. Refresh before continuing.');
+    if (liveReviewers.length === 0 && !escalationReason) throw new HttpError(400, 'Enter why management is reviewing this cleaning submission.');
     context.reviewers = liveReviewers;
     await photo.update({ status: body.decision, reviewedBy: params.actorId, reviewedAt: new Date(), rejectionReason: body.decision === 'rejected' ? reason : null }, { transaction });
     await updateSubmissionStatus(context, transaction);
