@@ -784,13 +784,21 @@ export async function createShiftChangeRequest(
         payload.requesterId,
         toAssignment,
         transaction,
-        { excludedAssignmentIds: swapAssignmentIds },
+        {
+          excludedAssignmentIds: swapAssignmentIds,
+          enforceLiveInVolunteerWorkingDayLimit:
+            shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest(requestType),
+        },
       );
       await assertStaffCanReceiveAssignment(
         toAssignment.userId,
         fromAssignment,
         transaction,
-        { excludedAssignmentIds: swapAssignmentIds },
+        {
+          excludedAssignmentIds: swapAssignmentIds,
+          enforceLiveInVolunteerWorkingDayLimit:
+            shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest(requestType),
+        },
       );
       partnerId = toAssignment.userId;
       if (roleBundle) {
@@ -1009,13 +1017,21 @@ const assertRequestAssignmentsStillValid = async (
       request.requesterId,
       toAssignment,
       transaction,
-      { excludedAssignmentIds: swapAssignmentIds },
+      {
+        excludedAssignmentIds: swapAssignmentIds,
+        enforceLiveInVolunteerWorkingDayLimit:
+          shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest(requestType),
+      },
     );
     await assertStaffCanReceiveAssignment(
       request.partnerId,
       fromAssignment,
       transaction,
-      { excludedAssignmentIds: swapAssignmentIds },
+      {
+        excludedAssignmentIds: swapAssignmentIds,
+        enforceLiveInVolunteerWorkingDayLimit:
+          shouldEnforceLiveInVolunteerWorkingDayLimitForShiftRequest(requestType),
+      },
     );
   } else if (requestType === 'takeover') {
     if (!isPositiveInteger(request.partnerId) || fromAssignment.userId !== request.partnerId) {

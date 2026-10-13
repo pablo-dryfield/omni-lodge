@@ -1031,6 +1031,122 @@ const formatSettlementSourceDisplayLabel = (
   return `${source.label} (${period})`;
 };
 
+const SETTLEMENT_RECONCILIATION_REASON_LABELS: Record<string, string> = {
+  missing_saved_snapshot: 'The closed ledger has no saved source snapshot.',
+  source_breakdown_changed: 'The live source breakdown changed since the ledger was saved.',
+  saved_personal_due_differs_from_ledger: 'The saved source snapshot no longer matches the frozen staff due.',
+  current_personal_due_differs_from_ledger: 'The current source breakdown no longer matches the frozen staff due.',
+  personal_payment_recorded: 'A staff payment has already been recorded for this closed period.',
+  volunteer_fund_allocation_recorded: 'A Volunteer Fund allocation has already been recorded for this closed period.',
+};
+
+const formatSettlementDestinationLabel = (destination: PaySettlementSource['destination']) => {
+  switch (destination) {
+    case 'staff_vendor':
+      return 'Staff pay';
+    case 'volunteer_fund':
+      return 'Volunteer Fund';
+    case 'excluded':
+      return 'Excluded';
+    default:
+      return destination;
+  }
+};
+
+const renderSettlementReconciliationDetails = (
+  staff: Pay | null | undefined,
+  options?: { compact?: boolean },
+) => {
+  const details = staff?.settlementReconciliationDetails;
+  if (!details) {
+    return null;
+  }
+
+  const compact = options?.compact ?? false;
+  const sourceDifferences = details.sourceDifferences ?? [];
+  const shownDifferences = sourceDifferences.slice(0, compact ? 2 : 8);
+  const hiddenDifferenceCount = Math.max(sourceDifferences.length - shownDifferences.length, 0);
+  const freezeReasons = new Set(details.reasonCodes ?? []);
+  const hasFrozenMoney =
+    freezeReasons.has('personal_payment_recorded')
+    || freezeReasons.has('volunteer_fund_allocation_recorded');
+
+  const amountRows = [
+    {
+      label: 'Staff pay',
+      saved: details.saved.personalDue,
+      current: details.current.personalDue,
+    },
+    {
+      label: 'Volunteer Fund',
+      saved: details.saved.volunteerFund,
+      current: details.current.volunteerFund,
+    },
+    {
+      label: 'Excluded',
+      saved: details.saved.excluded,
+      current: details.current.excluded,
+    },
+  ].filter((row) => (
+    !compact
+    || row.saved !== 0
+    || row.current !== 0
+  ));
+
+  return (
+    <Stack gap={compact ? 4 : 'xs'} mt={compact ? 2 : 'xs'}>
+      <Stack gap={2}>
+        {amountRows.map((row) => (
+          <Text key={row.label} size="xs" c={row.saved === row.current ? 'dimmed' : 'red.8'}>
+            {row.label}: saved {formatCurrency(row.saved, details.currency)} - now {formatCurrency(row.current, details.currency)}
+          </Text>
+        ))}
+        <Text size="xs" c="dimmed">
+          Ledger #{details.ledgerId}: due {formatCurrency(details.ledger.dueAmount, details.currency)}
+          {details.ledger.paidAmount > 0 ? `, paid ${formatCurrency(details.ledger.paidAmount, details.currency)}` : ''}
+          {details.ledger.volunteerFundAllocated > 0
+            ? `, fund allocated ${formatCurrency(details.ledger.volunteerFundAllocated, details.currency)}`
+            : ''}
+        </Text>
+      </Stack>
+      {hasFrozenMoney ? (
+        <Text size="xs" c="red.8">
+          This period is frozen because payment or fund allocation records already exist. Reverse those records first if the
+          historical ledger should be recalculated.
+        </Text>
+      ) : null}
+      {!compact && details.reasonCodes?.length ? (
+        <Stack gap={2}>
+          {details.reasonCodes.map((reason) => (
+            <Text key={reason} size="xs" c="dimmed">
+              - {SETTLEMENT_RECONCILIATION_REASON_LABELS[reason] ?? reason}
+            </Text>
+          ))}
+        </Stack>
+      ) : null}
+      {shownDifferences.length > 0 ? (
+        <Stack gap={2}>
+          <Text size="xs" fw={600} c={compact ? 'red.8' : undefined}>
+            Changed sources
+          </Text>
+          {shownDifferences.map((difference) => (
+            <Text key={difference.key} size="xs" c="dimmed">
+              {difference.label} ({formatSettlementDestinationLabel(difference.destination)}): saved{' '}
+              {formatCurrency(difference.storedAmount, difference.currency)} - now{' '}
+              {formatCurrency(difference.currentAmount, difference.currency)}
+            </Text>
+          ))}
+          {hiddenDifferenceCount > 0 ? (
+            <Text size="xs" c="dimmed">
+              +{hiddenDifferenceCount} more changed source{hiddenDifferenceCount === 1 ? '' : 's'}
+            </Text>
+          ) : null}
+        </Stack>
+      ) : null}
+    </Stack>
+  );
+};
+
 const computeSelectedLineTotal = (lines: EntryPaymentLine[]) =>
   lines
     .filter((line) => line.include && line.amount > 0)
@@ -3766,6 +3882,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
             {item.settlementReconciliationMessage
               ?? 'The saved liability and historical source breakdown no longer match.'}
           </Text>
+          {renderSettlementReconciliationDetails(item, { compact: true })}
           {canRecordStaffPayments && item.interruptedSettlementRecoveryAvailable ? (
             <Button
               variant="light"
@@ -5902,6 +6019,7 @@ const renderVolunteerFundSnapshot = (
                   <Alert color="red" title="Historical payout reconciliation required">
                     {entryModal.staff.settlementReconciliationMessage
                       ?? 'The saved liability and historical source breakdown no longer match.'}
+                    {renderSettlementReconciliationDetails(entryModal.staff)}
                   </Alert>
                 ) : null}
                 {renderVolunteerRoutingNotice(entryModal.staff)}

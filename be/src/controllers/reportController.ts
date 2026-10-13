@@ -25,6 +25,7 @@ import AffiliatePayoutLog from "../models/AffiliatePayoutLog.js";
 import StaffPayoutCollectionLog from "../models/StaffPayoutCollectionLog.js";
 import StaffPayoutLedger, {
   type StaffPayoutSettlementSnapshot,
+  type StaffPayoutSettlementSnapshotSource,
   type StaffPayoutSettlementSnapshotV1,
 } from "../models/StaffPayoutLedger.js";
 import StaffPayoutReceipt from "../models/StaffPayoutReceipt.js";
@@ -405,6 +406,46 @@ type SettlementSourceSummary = {
   settlementIntent: string | null;
 };
 
+type SettlementReconciliationReasonCode =
+  | "missing_saved_snapshot"
+  | "source_breakdown_changed"
+  | "saved_personal_due_differs_from_ledger"
+  | "current_personal_due_differs_from_ledger"
+  | "personal_payment_recorded"
+  | "volunteer_fund_allocation_recorded";
+
+type SettlementReconciliationAmountSummary = {
+  personalDue: number;
+  volunteerFund: number;
+  excluded: number;
+};
+
+type SettlementReconciliationSourceDifference = {
+  key: string;
+  label: string;
+  category: string;
+  destination: CompensationSettlementDestination;
+  currency: string;
+  storedAmount: number;
+  currentAmount: number;
+  difference: number;
+};
+
+type SettlementReconciliationDetails = {
+  ledgerId: number;
+  currency: string;
+  canAutoRefresh: boolean;
+  reasonCodes: SettlementReconciliationReasonCode[];
+  saved: SettlementReconciliationAmountSummary;
+  current: SettlementReconciliationAmountSummary;
+  ledger: {
+    dueAmount: number;
+    paidAmount: number;
+    volunteerFundAllocated: number;
+  };
+  sourceDifferences: SettlementReconciliationSourceDifference[];
+};
+
 type StaffAffiliateSaleBooking = {
   id: number;
   platformBookingId: string;
@@ -512,6 +553,9 @@ type CommissionSummary = {
   reimbursements: ReimbursementSummary;
   paidEntries: PaidPayoutEntry[];
   affiliateSales: StaffAffiliateSalesSummary;
+  settlementReconciliationRequired?: boolean;
+  settlementReconciliationMessage?: string | null;
+  settlementReconciliationDetails?: SettlementReconciliationDetails | null;
 };
 
 type GuideDailyBreakdown = {
@@ -705,6 +749,220 @@ const buildStaffPayoutSettlementSnapshot = (
       currency: source.currency,
     }))),
   } satisfies StaffPayoutSettlementSnapshotV1;
+};
+
+const buildSettlementSnapshotSourceIdentity = (
+  source: StaffPayoutSettlementSnapshotSource,
+): string => [
+  source.sourceKey,
+  source.category,
+  String(source.componentId ?? 0),
+  source.destination,
+  String(source.fundId ?? 0),
+  String(source.ruleId),
+  source.currency,
+  source.segmentKey ?? "",
+  source.earningStart ?? "",
+  source.earningEnd ?? "",
+  String(source.staffTypePeriodId ?? 0),
+  source.staffType ?? "",
+  source.legacyExtrapolation === undefined ? "" : String(source.legacyExtrapolation),
+].join("|");
+
+const buildSettlementSummarySourceIdentity = (
+  source: SettlementSourceSummary,
+): string => buildSettlementSnapshotSourceIdentity({
+  sourceKey: source.sourceKey,
+  componentId: source.componentId,
+  category: source.category,
+  grossAmountMinor: convertMajorUnitsToMinor(source.amount),
+  destination: source.destination,
+  fundId: source.fundId,
+  ruleId: source.ruleId,
+  currency: source.currency,
+  segmentKey: source.segmentKey ?? undefined,
+  earningStart: source.earningStart ?? undefined,
+  earningEnd: source.earningEnd ?? undefined,
+  staffTypePeriodId: source.staffTypePeriodId ?? undefined,
+  staffType: source.staffType ?? undefined,
+  legacyExtrapolation: source.segmentKey ? source.legacyExtrapolation : undefined,
+});
+
+const buildSettlementReconciliationAmountSummary = (
+  snapshot: StaffPayoutSettlementSnapshot | null,
+): SettlementReconciliationAmountSummary => {
+  const empty: SettlementReconciliationAmountSummary = {
+    personalDue: 0,
+    volunteerFund: 0,
+    excluded: 0,
+  };
+  if (!snapshot) {
+    return empty;
+  }
+
+  const totalsMinor = snapshot.sources.reduce((totals, source) => {
+    if (source.destination === "staff_vendor" && source.sourceKey !== "reimbursement") {
+      totals.personalDue += source.grossAmountMinor;
+    } else if (source.destination === "volunteer_fund") {
+      totals.volunteerFund += source.grossAmountMinor;
+    } else if (source.destination === "excluded") {
+      totals.excluded += source.grossAmountMinor;
+    }
+    return totals;
+  }, {
+    personalDue: 0,
+    volunteerFund: 0,
+    excluded: 0,
+  });
+
+  return {
+    personalDue: convertMinorUnitsToMajor(totalsMinor.personalDue),
+    volunteerFund: convertMinorUnitsToMajor(totalsMinor.volunteerFund),
+    excluded: convertMinorUnitsToMajor(totalsMinor.excluded),
+  };
+};
+
+const buildSnapshotSourceAmountMap = (
+  snapshot: StaffPayoutSettlementSnapshot | null,
+): Map<string, { source: StaffPayoutSettlementSnapshotSource; amountMinor: number }> => {
+  const entries = new Map<string, { source: StaffPayoutSettlementSnapshotSource; amountMinor: number }>();
+  if (!snapshot) {
+    return entries;
+  }
+  snapshot.sources.forEach((source) => {
+    const key = buildSettlementSnapshotSourceIdentity(source);
+    const existing = entries.get(key);
+    if (existing) {
+      existing.amountMinor += source.grossAmountMinor;
+    } else {
+      entries.set(key, { source, amountMinor: source.grossAmountMinor });
+    }
+  });
+  return entries;
+};
+
+const formatSettlementSnapshotSourceLabel = (
+  source: StaffPayoutSettlementSnapshotSource,
+): string => {
+  const sourceName = source.sourceKey
+    .split(/[_:-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ") || "Settlement source";
+  const period = source.earningStart && source.earningEnd
+    ? source.earningStart === source.earningEnd
+      ? source.earningStart
+      : `${source.earningStart} - ${source.earningEnd}`
+    : null;
+  const componentSuffix = source.componentId ? ` #${source.componentId}` : "";
+  return period
+    ? `${sourceName}${componentSuffix} (${period})`
+    : `${sourceName}${componentSuffix}`;
+};
+
+const buildSettlementReconciliationDetails = ({
+  ledger,
+  storedSnapshot,
+  currentSnapshot,
+  currentSources,
+  canAutoRefresh,
+  canonicalPaidMinor,
+  liveFundAllocatedMinor,
+}: {
+  ledger: StaffPayoutLedger;
+  storedSnapshot: StaffPayoutSettlementSnapshot | null;
+  currentSnapshot: StaffPayoutSettlementSnapshot;
+  currentSources: SettlementSourceSummary[];
+  canAutoRefresh: boolean;
+  canonicalPaidMinor: number;
+  liveFundAllocatedMinor: number;
+}): SettlementReconciliationDetails => {
+  const storedAmounts = buildSettlementReconciliationAmountSummary(storedSnapshot);
+  const currentAmounts = buildSettlementReconciliationAmountSummary(currentSnapshot);
+  const storedPersonalDueMinor = convertMajorUnitsToMinor(storedAmounts.personalDue);
+  const currentPersonalDueMinor = convertMajorUnitsToMinor(currentAmounts.personalDue);
+  const ledgerDueMinor = Number(ledger.dueAmountMinor ?? 0);
+
+  const reasonCodes = new Set<SettlementReconciliationReasonCode>();
+  if (!storedSnapshot) {
+    reasonCodes.add("missing_saved_snapshot");
+  } else if (!staffPayoutSettlementSnapshotsMatch(storedSnapshot, currentSnapshot, {
+    rangeStart: ledger.rangeStart,
+    rangeEnd: ledger.rangeEnd,
+  })) {
+    reasonCodes.add("source_breakdown_changed");
+  }
+  if (storedSnapshot && storedPersonalDueMinor !== ledgerDueMinor) {
+    reasonCodes.add("saved_personal_due_differs_from_ledger");
+  }
+  if (currentPersonalDueMinor !== ledgerDueMinor) {
+    reasonCodes.add("current_personal_due_differs_from_ledger");
+  }
+  if (canonicalPaidMinor > 0 || Number(ledger.paidAmountMinor ?? 0) > 0) {
+    reasonCodes.add("personal_payment_recorded");
+  }
+  if (liveFundAllocatedMinor > 0) {
+    reasonCodes.add("volunteer_fund_allocation_recorded");
+  }
+
+  const labelByIdentity = new Map<string, string>();
+  currentSources
+    .filter(isStaffPayoutLedgerSource)
+    .forEach((source) => {
+      const key = buildSettlementSummarySourceIdentity(source);
+      labelByIdentity.set(key, source.label);
+    });
+
+  const storedSourceAmounts = buildSnapshotSourceAmountMap(storedSnapshot);
+  const currentSourceAmounts = buildSnapshotSourceAmountMap(currentSnapshot);
+  const sourceKeys = new Set<string>([
+    ...storedSourceAmounts.keys(),
+    ...currentSourceAmounts.keys(),
+  ]);
+
+  const sourceDifferences = Array.from(sourceKeys)
+    .map((key) => {
+      const stored = storedSourceAmounts.get(key);
+      const current = currentSourceAmounts.get(key);
+      const source = current?.source ?? stored?.source;
+      if (!source) {
+        return null;
+      }
+      const storedAmountMinor = stored?.amountMinor ?? 0;
+      const currentAmountMinor = current?.amountMinor ?? 0;
+      if (storedAmountMinor === currentAmountMinor) {
+        return null;
+      }
+      return {
+        key,
+        label: labelByIdentity.get(key) ?? formatSettlementSnapshotSourceLabel(source),
+        category: source.category,
+        destination: source.destination,
+        currency: source.currency,
+        storedAmount: convertMinorUnitsToMajor(storedAmountMinor),
+        currentAmount: convertMinorUnitsToMajor(currentAmountMinor),
+        difference: convertMinorUnitsToMajor(currentAmountMinor - storedAmountMinor),
+      } satisfies SettlementReconciliationSourceDifference;
+    })
+    .filter((difference): difference is SettlementReconciliationSourceDifference => Boolean(difference))
+    .sort((left, right) => Math.abs(right.difference) - Math.abs(left.difference));
+
+  return {
+    ledgerId: Number(ledger.id),
+    currency: ledger.currencyCode,
+    canAutoRefresh,
+    reasonCodes: Array.from(reasonCodes),
+    saved: storedAmounts,
+    current: currentAmounts,
+    ledger: {
+      dueAmount: convertMinorUnitsToMajor(ledgerDueMinor),
+      paidAmount: convertMinorUnitsToMajor(
+        Math.max(Number(ledger.paidAmountMinor ?? 0), canonicalPaidMinor),
+      ),
+      volunteerFundAllocated: convertMinorUnitsToMajor(liveFundAllocatedMinor),
+    },
+    sourceDifferences,
+  };
 };
 
 type DialectQuoter = {
@@ -4040,18 +4298,21 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         rangeStartIso,
         rangeEndIso,
       );
+      const canonicalPaidMinor = convertMajorUnitsToMinor(payouts.payablePaid ?? 0);
+      const liveFundAllocatedMinor = convertMajorUnitsToMinor(
+        entry.volunteerFundAllocatedTotal ?? 0,
+      );
       const canRefreshClosedSnapshot = Boolean(
         isClosedLedgerPeriod
         && exactLedger
         && canRefreshClosedSettlementSnapshot({
-          canonicalPaidMinor: convertMajorUnitsToMinor(payouts.payablePaid ?? 0),
-          liveFundAllocatedMinor: convertMajorUnitsToMinor(
-            entry.volunteerFundAllocatedTotal ?? 0,
-          ),
+          canonicalPaidMinor,
+          liveFundAllocatedMinor,
         }),
       );
       let settlementReconciliationRequired = false;
       let settlementReconciliationMessage: string | null = null;
+      let settlementReconciliationDetails: SettlementReconciliationDetails | null = null;
       let authoritativeLegacyPresentation: LegacySettledPayoutSnapshotPresentation | null = null;
       if (isClosedLedgerPeriod && exactLedger) {
         if (canRefreshClosedSnapshot) {
@@ -4123,6 +4384,15 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
             settlementReconciliationRequired = true;
             settlementReconciliationMessage =
               "This closed period's source breakdown no longer matches its saved payout ledger. Reconcile the historical breakdown before processing more compensation.";
+            settlementReconciliationDetails = buildSettlementReconciliationDetails({
+              ledger: exactLedger,
+              storedSnapshot,
+              currentSnapshot: currentSettlementSnapshot,
+              currentSources: entry.settlementSources,
+              canAutoRefresh: canRefreshClosedSnapshot,
+              canonicalPaidMinor,
+              liveFundAllocatedMinor,
+            });
           }
         }
       } else {
@@ -4229,6 +4499,7 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         })),
         settlementReconciliationRequired,
         settlementReconciliationMessage,
+        settlementReconciliationDetails,
         productTotals,
         counterIncentiveDetails: Object.fromEntries(
           Object.entries(entry.counterIncentiveDetails ?? {}).map(([counterId, details]) => [

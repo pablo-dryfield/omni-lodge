@@ -147,7 +147,7 @@ describe('shift-request lifecycle rules', () => {
   });
 
   it.each([
-    ['swap', true],
+    ['swap', false],
     ['takeover', false],
     ['drop', true],
   ] as const)(

@@ -100,6 +100,36 @@ export type PaySettlementSource = {
   settlementIntent: string | null;
 };
 
+export type PaySettlementReconciliationAmountSummary = {
+  personalDue: number;
+  volunteerFund: number;
+  excluded: number;
+};
+
+export type PaySettlementReconciliationDetails = {
+  ledgerId: number;
+  currency: string;
+  canAutoRefresh: boolean;
+  reasonCodes: string[];
+  saved: PaySettlementReconciliationAmountSummary;
+  current: PaySettlementReconciliationAmountSummary;
+  ledger: {
+    dueAmount: number;
+    paidAmount: number;
+    volunteerFundAllocated: number;
+  };
+  sourceDifferences: Array<{
+    key: string;
+    label: string;
+    category: string;
+    destination: PaySettlementDestination;
+    currency: string;
+    storedAmount: number;
+    currentAmount: number;
+    difference: number;
+  }>;
+};
+
 export type LockedComponentRequirement =
   | {
       type: 'review_target';
@@ -335,6 +365,7 @@ export type Pay = {
   settlementSources?: PaySettlementSource[];
   settlementReconciliationRequired?: boolean;
   settlementReconciliationMessage?: string | null;
+  settlementReconciliationDetails?: PaySettlementReconciliationDetails | null;
   interruptedSettlementRecoveryAvailable?: boolean;
   totalCustomers?: number;
   bucketTotals?: Record<string, number>;
