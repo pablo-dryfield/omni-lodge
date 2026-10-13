@@ -1,10 +1,15 @@
 import {
+  directStripeConfigKey,
+  getDirectStripeClient,
   getStorefrontStripePublishableKey,
+  normalizeDirectStripeMerchant,
+  resolveDirectStripeMerchantAssignment,
   storefrontStripeConfigKey,
   storefrontStripePublishableConfigKey,
   storefrontStripeWebhookConfigKey,
 } from '../stripeClient';
 import { getConfigValueRaw } from '../../../services/configService';
+import HttpError from '../../../errors/HttpError';
 
 jest.mock('../../../services/configService.js', () => ({ getConfigValueRaw: jest.fn() }));
 
@@ -46,5 +51,65 @@ describe('storefront Stripe environment selection', () => {
 
     mockedGetConfig.mockReturnValue('pk_test_wrong_mode');
     expect(getStorefrontStripePublishableKey('production')).toBeNull();
+  });
+});
+
+describe('direct Stripe merchant routing', () => {
+  beforeEach(() => {
+    mockedGetConfig.mockReset();
+  });
+
+  it.each([
+    ['food-tour', 'live', 'FOOD_TOUR_STRIPE_SECRET_KEY'],
+    ['food-tour', 'test', 'FOOD_TOUR_STRIPE_TEST_SECRET_KEY'],
+    [null, 'live', 'STRIPE_SECRET_KEY'],
+    [null, 'test', 'STRIPE_TEST_SECRET_KEY'],
+  ] as const)('maps merchant %s in %s mode to %s', (merchant, mode, expected) => {
+    expect(directStripeConfigKey(merchant, mode)).toBe(expected);
+  });
+
+  it('normalizes the supported marker', () => {
+    expect(normalizeDirectStripeMerchant('  FOOD-TOUR ')).toBe('food-tour');
+  });
+
+  it.each([undefined, null, '', '   '])('normalizes legacy marker %p to null', (value) => {
+    expect(normalizeDirectStripeMerchant(value)).toBeNull();
+  });
+
+  it('fails closed for an unknown non-empty merchant', () => {
+    expect(() => directStripeConfigKey('other-business', 'live')).toThrow(HttpError);
+    expect(mockedGetConfig).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for a non-string merchant without reflecting the value', () => {
+    expect(() => normalizeDirectStripeMerchant({ merchant: 'food-tour' })).toThrow(
+      'Unsupported Stripe merchant.',
+    );
+  });
+
+  it('preserves an assigned merchant when a replay omits the marker', () => {
+    expect(resolveDirectStripeMerchantAssignment(true, 'food-tour', null)).toBe('food-tour');
+  });
+
+  it('preserves an assigned merchant when a replay repeats it', () => {
+    expect(resolveDirectStripeMerchantAssignment(true, 'food-tour', 'food-tour')).toBe('food-tour');
+  });
+
+  it('assigns the supported merchant when a booking is first created', () => {
+    expect(resolveDirectStripeMerchantAssignment(false, null, 'food-tour')).toBe('food-tour');
+  });
+
+  it('does not attach a new merchant to an unmarked legacy booking during replay', () => {
+    expect(resolveDirectStripeMerchantAssignment(true, null, 'food-tour')).toBeNull();
+  });
+
+  it('does not fall back to the global key when Food Tour credentials are missing', () => {
+    mockedGetConfig.mockImplementation((key: string) => (key === 'STRIPE_SECRET_KEY' ? 'global-live-key' : null));
+
+    expect(() => getDirectStripeClient('food-tour', 'live')).toThrow(
+      'FOOD_TOUR_STRIPE_SECRET_KEY is not configured.',
+    );
+    expect(mockedGetConfig).toHaveBeenCalledTimes(1);
+    expect(mockedGetConfig).toHaveBeenCalledWith('FOOD_TOUR_STRIPE_SECRET_KEY');
   });
 });

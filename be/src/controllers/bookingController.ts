@@ -24,7 +24,12 @@ import type StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 import { getBookingStorefrontActivity } from '../services/storefrontBookingActivityService.js';
 import RequiredAction from '../models/RequiredAction.js';
 import HttpError from '../errors/HttpError.js';
-import { getStripeClient, getStripeTestClient } from '../finance/services/stripeClient.js';
+import {
+  getDirectStripeClient,
+  getStripeClient,
+  normalizeDirectStripeMerchant,
+  type DirectStripeMerchant,
+} from '../finance/services/stripeClient.js';
 import type Stripe from 'stripe';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getAllowedProductTypeIds } from '../services/productScopeService.js';
@@ -5357,8 +5362,10 @@ const extractDirectStripeTransactionId = (booking: Booking): string | null => {
 
 type DirectStripeMode = 'test' | 'live';
 
-const getDirectStripeClientForMode = (mode: DirectStripeMode): Stripe =>
-  mode === 'live' ? getStripeClient() : getStripeTestClient();
+const getDirectStripeClientForMode = (
+  mode: DirectStripeMode,
+  merchant: DirectStripeMerchant | null,
+): Stripe => getDirectStripeClient(merchant, mode);
 
 const extractDirectStripeMode = (booking: Booking): DirectStripeMode | null => {
   const candidates = [booking.notes, booking.rawPayloadLocation];
@@ -5386,15 +5393,17 @@ const isStripeTransactionNotFound = (error: unknown): boolean =>
 const resolveDirectStripeTransactionForMode = async (
   externalTransactionId: string,
   stripeMode: DirectStripeMode,
+  stripeMerchant: DirectStripeMerchant | null,
 ): Promise<{
   externalTransactionId: string;
   stripe: StripeTransactionSummary;
   stripeClient: Stripe;
   stripeMode: DirectStripeMode;
+  stripeMerchant: DirectStripeMerchant | null;
 }> => {
-  const stripeClient = getDirectStripeClientForMode(stripeMode);
+  const stripeClient = getDirectStripeClientForMode(stripeMode, stripeMerchant);
   const stripe = await resolveStripeTransaction(externalTransactionId, stripeClient);
-  return { externalTransactionId, stripe, stripeClient, stripeMode };
+  return { externalTransactionId, stripe, stripeClient, stripeMode, stripeMerchant };
 };
 
 const resolveDirectStripeTransaction = async (booking: Booking): Promise<{
@@ -5402,6 +5411,7 @@ const resolveDirectStripeTransaction = async (booking: Booking): Promise<{
   stripe: StripeTransactionSummary;
   stripeClient: Stripe;
   stripeMode: DirectStripeMode;
+  stripeMerchant: DirectStripeMerchant | null;
 }> => {
   assertStripeRefundEligiblePayment(booking);
   if (isStorefrontBooking(booking)) {
@@ -5411,7 +5421,7 @@ const resolveDirectStripeTransaction = async (booking: Booking): Promise<{
     if (!externalTransactionId) {
       throw new HttpError(400, 'Storefront order is missing its Stripe payment intent ID.');
     }
-    return resolveDirectStripeTransactionForMode(externalTransactionId, 'live');
+    return resolveDirectStripeTransactionForMode(externalTransactionId, 'live', null);
   }
 
   const externalTransactionId = extractDirectStripeTransactionId(booking);
@@ -5419,9 +5429,11 @@ const resolveDirectStripeTransaction = async (booking: Booking): Promise<{
     throw new HttpError(400, 'Direct booking is missing the Stripe payment intent or charge ID in notes.');
   }
 
+  const stripeMerchant = normalizeDirectStripeMerchant(booking.stripeMerchant);
+
   const storedStripeMode = extractDirectStripeMode(booking);
   if (storedStripeMode) {
-    return resolveDirectStripeTransactionForMode(externalTransactionId, storedStripeMode);
+    return resolveDirectStripeTransactionForMode(externalTransactionId, storedStripeMode, stripeMerchant);
   }
 
   logger.warn(
@@ -5431,7 +5443,7 @@ const resolveDirectStripeTransaction = async (booking: Booking): Promise<{
   let lastError: unknown = null;
   for (const fallbackMode of ['test', 'live'] as const) {
     try {
-      return await resolveDirectStripeTransactionForMode(externalTransactionId, fallbackMode);
+      return await resolveDirectStripeTransactionForMode(externalTransactionId, fallbackMode, stripeMerchant);
     } catch (error) {
       lastError = error;
       if (error instanceof HttpError && error.status === 503) {
@@ -6385,7 +6397,8 @@ export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res
       return;
     }
 
-    const { externalTransactionId, stripe, stripeClient, stripeMode } = await resolveDirectStripeTransaction(booking);
+    const { externalTransactionId, stripe, stripeClient, stripeMode, stripeMerchant } =
+      await resolveDirectStripeTransaction(booking);
     const storefrontBooking = isStorefrontBooking(booking);
     const refundedBefore = parseMoneyValue(booking.refundedAmount) ?? 0;
     const storefrontOutstandingMajor = Math.max(
@@ -6453,6 +6466,7 @@ export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res
         stripeTransactionId: stripe.id,
         stripeTransactionType: stripe.type,
         stripeMode,
+        stripeMerchant,
         stripeRefundId: refund?.id ?? null,
         refundedAmount: refundAmount,
         currency: booking.refundedCurrency,
@@ -6478,6 +6492,7 @@ export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res
       refund,
       stripe,
       stripeMode,
+      stripeMerchant,
       ...email,
       ...internalEmail,
     });
@@ -6505,7 +6520,8 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
       return;
     }
 
-    const { externalTransactionId, stripe, stripeClient, stripeMode } = await resolveDirectStripeTransaction(booking);
+    const { externalTransactionId, stripe, stripeClient, stripeMode, stripeMerchant } =
+      await resolveDirectStripeTransaction(booking);
     const resolvedAddons = await resolvePartialRefundAddons(booking, stripe.currency);
     const addonsTotalAmount = resolveAddonsTotalAmount(resolvedAddons);
     const people = resolvePartialRefundPeopleFromBaseAmount(booking, stripe.currency, addonsTotalAmount);
@@ -6685,6 +6701,7 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
         stripeTransactionId: stripe.id,
         stripeTransactionType: stripe.type,
         stripeMode,
+        stripeMerchant,
         stripeRefundId: refund?.id ?? null,
         refundedAmount,
         currency: booking.refundedCurrency,
@@ -6726,6 +6743,7 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
       refund,
       stripe,
       stripeMode,
+      stripeMerchant,
       ...email,
       ...internalEmail,
     });
@@ -6798,6 +6816,7 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
             externalTransactionId: direct.externalTransactionId,
             stripe: direct.stripe,
             stripeMode: direct.stripeMode,
+            stripeMerchant: direct.stripeMerchant,
             refundAvailable: true,
             refundBlockedReason: null,
           };

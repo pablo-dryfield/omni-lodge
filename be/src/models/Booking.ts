@@ -122,6 +122,13 @@ export default class Booking extends Model<Booking> {
 
   @AllowNull(true)
   @Column({
+    field: 'stripe_merchant',
+    type: DataType.STRING(64),
+  })
+  declare stripeMerchant: string | null;
+
+  @AllowNull(true)
+  @Column({
     field: 'ip_address',
     type: DataType.STRING(45),
   })
