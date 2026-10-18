@@ -74,8 +74,10 @@ const MIN_VOLUNTEER_WEEKLY_ASSIGNMENTS = 4;
 const DEFAULT_SHIFT_DURATION_HOURS = 2;
 
 function getWeekStart(year: number, week: number): dayjs.Dayjs {
-  // Derive the Monday of the ISO week directly to avoid parsing quirks around year boundaries.
-  return dayjs().tz(resolveScheduleTimezone()).year(year).isoWeek(week).startOf('isoWeek');
+  // January 4 always belongs to ISO week 1. Do calendar arithmetic in UTC:
+  // timezone-aware isoWeek setters can use the host's previous day near midnight.
+  const monday = dayjs.utc(`${year}-01-04`).startOf('isoWeek').add((week - 1) * 7, 'day');
+  return dayjs.tz(monday.format('YYYY-MM-DD'), resolveScheduleTimezone());
 }
 
 function formatWeekLabel(year: number, week: number): string {
@@ -105,7 +107,8 @@ export function parseWeekParam(weekParam?: string | null): WeekIdentifier {
       return { year: Number(year), isoWeek: Number(week) };
     }
   }
-  const target = dayjs().tz(resolveScheduleTimezone()).add(1, 'week');
+  const localDate = dayjs().tz(resolveScheduleTimezone()).format('YYYY-MM-DD');
+  const target = dayjs.utc(localDate).add(1, 'week');
   return { year: target.isoWeekYear(), isoWeek: target.isoWeek() };
 }
 
