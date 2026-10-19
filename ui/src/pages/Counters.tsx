@@ -445,23 +445,6 @@ const normalizePartialRefundPreview = (preview: PartialRefundPreview): PartialRe
   };
 };
 
-const resolveOrderExtraKeyFromLabel = (value?: string | null): keyof OrderExtras | null => {
-  const raw = String(value ?? '').toLowerCase();
-  if (!raw) {
-    return null;
-  }
-  if (raw.includes('cocktail') || raw.includes('drink')) {
-    return 'cocktails';
-  }
-  if (raw.includes('t-shirt') || raw.includes('tshirt') || raw.includes('shirt')) {
-    return 'tshirts';
-  }
-  if (raw.includes('photo') || raw.includes('picture') || raw.includes('instant')) {
-    return 'photos';
-  }
-  return null;
-};
-
 const getOrderEntryAllowance = (order: UnifiedOrder): number => {
   const qty = Math.max(0, Math.round(Number(order.quantity) || 0));
   if (!MANIFEST_INCLUDED_STATUSES.has(order.status)) {
@@ -777,7 +760,6 @@ const normalizePlatformLookupKey = (value?: string | null): string => {
 const XPERIENCEPOLAND_PLATFORM_KEY = 'xperiencepoland';
 const XPERIENCEPOLAND_RESALE_CASH_TICKET_PREFIX = 'booking-cash:xperiencepoland:';
 const AUTOMATIC_ADDON_REFUND_PLATFORM_KEYS = new Set(['ecwid', 'omnilodge']);
-const OMNILODGE_PLATFORM_KEY = 'omnilodge';
 
 const isXperiencePolandCashArrivalOrder = (order: UnifiedOrder): boolean => {
   if (normalizePlatformLookupKey(order.platform) !== XPERIENCEPOLAND_PLATFORM_KEY) {
