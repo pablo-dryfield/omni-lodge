@@ -11,6 +11,7 @@ import {
   fetchVolunteerStayList,
   saveVolunteerStay,
   updateVolunteerStayFeedback,
+  updateVolunteerStayAssessment,
   shouldRetryVolunteerStayQuery,
   type VolunteerMilestoneApiError,
 } from "./volunteerMilestones";
@@ -30,6 +31,13 @@ const mockPut = axiosInstance.put as jest.MockedFunction<typeof axiosInstance.pu
 const mockPatch = axiosInstance.patch as jest.MockedFunction<typeof axiosInstance.patch>;
 
 describe("volunteer milestones API", () => {
+  it("sends assessment decisions with the expected revision and no forged actor identity", async () => {
+    mockPatch.mockResolvedValueOnce({ data: {} });
+    await updateVolunteerStayAssessment({ userId: 42, stayId: 8, expectedRevision: 3, action: "review", vote: "up", feedback: "Observed work" });
+    expect(mockPatch).toHaveBeenCalledWith("/volunteerMilestones/42/stays/8/assessment", {
+      expectedRevision: 3, action: "review", vote: "up", feedback: "Observed work",
+    });
+  });
   afterEach(() => {
     jest.clearAllMocks();
   });

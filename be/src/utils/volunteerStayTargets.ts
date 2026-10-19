@@ -8,6 +8,22 @@ export type VolunteerMonthlyTargets = {
   cleaningTasks: number;
   attendancePercent: number;
 };
+export type VolunteerStayTargetOverrides = Partial<Pick<VolunteerMonthlyTargets,
+  'reviews' | 'guidingShifts' | 'promotionShifts' | 'socialMediaShifts'>>;
+
+export const normalizeVolunteerStayTargetOverrides = (input: unknown): VolunteerStayTargetOverrides | null => {
+  if (input == null) return null;
+  if (typeof input !== 'object' || Array.isArray(input)) throw new RangeError('Whole-stay target overrides must be an object.');
+  const result: VolunteerStayTargetOverrides = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!['reviews', 'guidingShifts', 'promotionShifts', 'socialMediaShifts'].includes(key)
+      || typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 10000) {
+      throw new RangeError('Whole-stay overrides must be review/shift targets using whole numbers between 0 and 10000.');
+    }
+    result[key as keyof VolunteerStayTargetOverrides] = value;
+  }
+  return Object.keys(result).length ? result : null;
+};
 
 export const DEFAULT_VOLUNTEER_MONTHLY_TARGETS: Readonly<VolunteerMonthlyTargets> = Object.freeze({
   reviews: 15,
@@ -25,6 +41,7 @@ export type VolunteerStayTargetInput = {
   asOfDate: string;
   position: VolunteerPosition;
   monthlyTargets?: Partial<VolunteerMonthlyTargets>;
+  targetOverrides?: VolunteerStayTargetOverrides | null;
 };
 
 export type VolunteerStayTargetResult = {
@@ -143,10 +160,19 @@ export const calculateVolunteerStayTargets = (
     arrival,
     new Date(Math.max(arrival.getTime(), Math.min(asOf.getTime(), departure.getTime()))),
   );
+  const targets = targetsForMonths(monthly, equivalentMonths, input.position);
+  const expectedToDate = targetsForMonths(monthly, elapsedMonths, input.position);
+  const overrides = normalizeVolunteerStayTargetOverrides(input.targetOverrides);
+  for (const [key, value] of Object.entries(overrides ?? {})) {
+    if ((key === 'socialMediaShifts' && input.position !== 'social_media')
+      || (['guidingShifts', 'promotionShifts'].includes(key) && input.position !== 'guide')) continue;
+    targets[key as keyof VolunteerStayTargetOverrides] = value;
+    expectedToDate[key as keyof VolunteerStayTargetOverrides] = Math.min(value, wholeCountTarget(value, elapsedMonths / equivalentMonths));
+  }
   return {
     equivalentMonths,
     elapsedMonths,
-    targets: targetsForMonths(monthly, equivalentMonths, input.position),
-    expectedToDate: targetsForMonths(monthly, elapsedMonths, input.position),
+    targets,
+    expectedToDate,
   };
 };

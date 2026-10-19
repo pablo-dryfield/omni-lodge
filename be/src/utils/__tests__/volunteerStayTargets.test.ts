@@ -9,6 +9,19 @@ const calculate = (overrides: Partial<VolunteerStayTargetInput> = {}) => calcula
 });
 
 describe('volunteer stay targets', () => {
+  it('keeps monthly defaults until explicitly overridden, and overrides only the selected whole-stay totals', () => {
+    expect(calculate().targets).toMatchObject({ reviews: 23, guidingShifts: 18, promotionShifts: 18 });
+    const result = calculate({ asOfDate: '2026-09-15', targetOverrides: { reviews: 10, guidingShifts: 7 } });
+    expect(result.targets).toMatchObject({ reviews: 10, guidingShifts: 7, promotionShifts: 18, attendancePercent: 90 });
+    expect(result.expectedToDate).toMatchObject({ reviews: 7, guidingShifts: 5, promotionShifts: 12 });
+    expect(calculate({ targetOverrides: null }).targets.reviews).toBe(23);
+    expect(calculate({ targetOverrides: { reviews: 0 } }).targets.reviews).toBe(0);
+  });
+  it.each([{ cleaningTasks: 3 }, { attendancePercent: 80 }, { reviews: -1 }, { guidingShifts: 2.5 }, { reviews: '10' }])(
+    'rejects unsupported or invalid exact target overrides %j', (targetOverrides) => {
+      expect(() => calculate({ targetOverrides: targetOverrides as never })).toThrow();
+    },
+  );
   it('uses 1.5 months for August 15 through September 30 and rounds review requirements upward', () => {
     const result = calculate();
     expect(result.equivalentMonths).toBe(1.5);

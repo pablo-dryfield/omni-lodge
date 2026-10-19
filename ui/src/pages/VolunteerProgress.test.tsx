@@ -37,6 +37,7 @@ jest.mock("../api/volunteerMilestones", () => {
     useUpdateVolunteerAttendance: jest.fn(),
     useUpdateVolunteerFeedback: jest.fn(),
     useUpdateVolunteerStayFeedback: jest.fn(),
+    useUpdateVolunteerStayAssessment: jest.fn(),
     useVolunteerStayList: jest.fn(),
     useVolunteerStayProgress: jest.fn(),
     useSaveVolunteerStay: jest.fn(),

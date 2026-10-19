@@ -17,6 +17,7 @@ import ReviewMonthLock from '../models/ReviewMonthLock.js';
 import ScheduleWeek from '../models/ScheduleWeek.js';
 import ShiftAssignment from '../models/ShiftAssignment.js';
 import ShiftInstance from '../models/ShiftInstance.js';
+import ShiftRole from '../models/ShiftRole.js';
 import ShiftTemplate from '../models/ShiftTemplate.js';
 import ShiftType from '../models/ShiftType.js';
 import StaffProfile from '../models/StaffProfile.js';
@@ -29,19 +30,19 @@ import VolunteerStayRevision from '../models/VolunteerStayRevision.js';
 import {
   calculateVolunteerStayTargets,
   DEFAULT_VOLUNTEER_MONTHLY_TARGETS,
+  normalizeVolunteerStayTargetOverrides,
   type VolunteerMonthlyTargets,
 } from '../utils/volunteerStayTargets.js';
 import {
   deduplicateVolunteerAttendanceAssignments,
   currentVolunteerAttendance,
-  isCleaningTaskTemplate,
   isPastShift,
-  selectVolunteerCleaningEvidence,
   VOLUNTEER_MILESTONE_TIMEZONE,
   type VolunteerAttendanceAssignment,
   type VolunteerMilestone,
   type VolunteerMilestoneEvidence,
 } from './volunteerMilestoneService.js';
+import { evaluateStayAssessment, inAssessmentScope, type StayAssessment } from './volunteerStayAssessmentPolicy.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -54,6 +55,7 @@ type ShiftRecord = ShiftAssignment & {
   volunteerAttendance?: VolunteerShiftAttendance & { recordedByUser?: User };
 };
 type TaskRecord = AssistantManagerTaskLog & { template?: AssistantManagerTaskTemplate };
+type ManagerAssignment = ShiftAssignment & { shiftRole?: ShiftRole; assignee?: User };
 type ReviewCredit = { userId: number; date: string; amount: number; evidence: VolunteerMilestoneEvidence };
 type LegacyReviewCredit = ReviewCredit & { nextMonth: string };
 type LegacyReviewBackfill = { userId: number; month: string };
@@ -92,7 +94,8 @@ const storedProfilePhotoVersion = (user: UserRecord): string | null => {
 export const serializeVolunteerStay = (stay: VolunteerStay) => ({
   id: stay.id, userId: stay.userId, startDate: stay.startDate, endDate: stay.endDate,
   position: stay.position, monthlyTargets: stay.monthlyTargets, shiftTypeIds: stay.shiftTypeIds,
-  feedback: stay.feedback ?? null, changeReason: stay.changeReason ?? null, revision: stay.revision,
+  feedback: stay.feedback ?? null, assessment: stay.assessment ?? null, targetOverrides: stay.targetOverrides ?? null,
+  changeReason: stay.changeReason ?? null, revision: stay.revision,
   createdBy: stay.createdBy, updatedBy: stay.updatedBy, createdAt: iso(stay.createdAt), updatedAt: iso(stay.updatedAt),
 });
 
@@ -258,7 +261,7 @@ const loadDatedReviewCredits = async (
 
 const loadEvidence = async (stays: VolunteerStay[], today: string, transaction?: Transaction) => {
   const emptyReviews = { credits: [] as ReviewCredit[], legacyCredits: [] as LegacyReviewCredit[], legacyBackfills: [] as LegacyReviewBackfill[] };
-  if (!stays.length) return { ...emptyReviews, assignments: [] as ShiftRecord[], tasks: [] as TaskRecord[], cleaningTasks: [] as TaskRecord[], cleaningSubmissions: [] as CleaningSubmission[] };
+  if (!stays.length) return { ...emptyReviews, assignments: [] as ShiftRecord[], tasks: [] as TaskRecord[], cleaningTasks: [] as TaskRecord[], cleaningSubmissions: [] as CleaningSubmission[], managers: [] as ManagerAssignment[] };
   const userIds = [...new Set(stays.map((stay) => stay.userId))];
   const startDate = stays.map((stay) => stay.startDate).sort()[0];
   const endDate = stays.map((stay) => stay.endDate).sort().at(-1)!;
@@ -302,7 +305,14 @@ const loadEvidence = async (stays: VolunteerStay[], today: string, transaction?:
     attributes: ['id', 'taskLogId', 'shiftAssignmentId', 'userId', 'status', 'scheduleSnapshot', 'updatedAt'], transaction,
     include: [{ model: AssistantManagerTaskLog, as: 'taskLog', required: true, attributes: ['id', 'taskDate'] }],
   }) : [];
-  return { ...reviews, assignments, tasks, cleaningTasks, cleaningSubmissions };
+  const sharedShiftIds = [...new Set(assignments.map((assignment) => assignment.shiftInstanceId))];
+  const managers = sharedShiftIds.length ? await ShiftAssignment.findAll({
+    where: { shiftInstanceId: { [Op.in]: sharedShiftIds } }, attributes: ['id', 'userId', 'shiftInstanceId', 'roleInShift'],
+    include: [{ model: ShiftRole, as: 'shiftRole', attributes: ['slug', 'name'], required: false },
+      { model: User, as: 'assignee', attributes: ['id', 'firstName', 'lastName', 'profilePhotoUrl', 'profilePhotoPath', 'updatedAt'], required: true }],
+    transaction,
+  }) as ManagerAssignment[] : [];
+  return { ...reviews, assignments, tasks, cleaningTasks, cleaningSubmissions, managers };
 };
 
 const assignmentPayload = (assignment: ShiftRecord, now: Date): VolunteerAttendanceAssignment => {
@@ -348,12 +358,13 @@ const buildProgress = (
   };
   if (!stay) return { ...common, targetSummary: null, starsEarned: 0, milestones: [] as VolunteerStayMilestone[],
     attendanceAssignments: [] as VolunteerAttendanceAssignment[], managementFeedback: null,
+    assessment: null, cleaningWaiver: null,
     warnings: ['A manager must confirm this volunteer’s stay and targets before progress can be calculated.'] };
 
   const targetSummary = calculateVolunteerStayTargets({
     startDate: stay.startDate, endDate: stay.endDate,
     asOfDate: dayjs(today).add(1, 'day').format('YYYY-MM-DD'), position: stay.position,
-    monthlyTargets: stay.monthlyTargets,
+    monthlyTargets: stay.monthlyTargets, targetOverrides: stay.targetOverrides,
   });
   const { targets, expectedToDate } = targetSummary;
   const rawAssignments = evidence.assignments.filter((assignment) => assignment.userId === user.id
@@ -416,19 +427,41 @@ const buildProgress = (
     approvedCleaning.set(assignment.shiftInstanceId, { id: `cleaning-submission-${submission.id}`, label: 'Approved cleaning photos',
       detail: String(record(submission.scheduleSnapshot).shiftName ?? 'Cleaning'), occurredAt: assignment.shiftInstance!.date, status: 'approved' });
   }
-  const managedDates = new Set(rawAssignments.filter((assignment) => managedShiftIds.has(assignment.shiftInstanceId)).map((assignment) => assignment.shiftInstance!.date));
-  const cleaningTasks = evidence.tasks.filter((task) => task.userId === user.id && isInStay(task.taskDate, stay)
-    && (!task.completedAt || new Date(task.completedAt).valueOf() <= now.valueOf())
-    && task.template?.scheduleConfig?.cleaningPhotoApprovalEnabled !== true && !record(task.meta).cleaningPhotoWorkflow
-    && !managedDates.has(task.taskDate)
-    && isCleaningTaskTemplate(task.template, task.meta));
   const cleaningShiftIds = new Set(rawAssignments.filter((assignment) =>
-    /\bclean(?:ing)?\b/iu.test([assignment.shiftInstance?.shiftType?.key, assignment.shiftInstance?.shiftType?.name, assignment.shiftInstance?.template?.name].filter(Boolean).join(' ')))
+    /\b(clean(?:ing)?|housekeeping|house[\s_-]*care)\b/iu.test([assignment.shiftInstance?.shiftType?.key, assignment.shiftInstance?.shiftType?.name, assignment.shiftInstance?.template?.name].filter(Boolean).join(' ')))
     .map((assignment) => assignment.shiftInstanceId));
-  const cleaningEvidence = [...selectVolunteerCleaningEvidence(cleaningTasks.map((task) => ({
-    id: task.id, label: task.template?.name ?? 'Cleaning task', detail: task.notes ?? undefined,
-    occurredAt: iso(task.completedAt) ?? task.taskDate, status: 'completed',
-  })), shiftEvidence(confirmed.filter((assignment) => cleaningShiftIds.has(assignment.shiftInstanceId) && !managedShiftIds.has(assignment.shiftInstanceId)))), ...approvedCleaning.values()];
+  const requiredCleaning = attendanceAssignments.filter((assignment) => cleaningShiftIds.has(assignment.shiftInstanceId) && assignment.status !== 'excused');
+  const completedCleaning = requiredCleaning.filter((assignment) => assignment.isPast && (managedShiftIds.has(assignment.shiftInstanceId)
+    ? approvedCleaning.has(assignment.shiftInstanceId) : ['attended', 'late'].includes(assignment.status ?? '')));
+  const completedCleaningIds = new Set(completedCleaning.map((assignment) => assignment.shiftInstanceId));
+  const cleaningEvidence = requiredCleaning.map((assignment) => approvedCleaning.get(assignment.shiftInstanceId)
+    ?? { ...shiftEvidence([assignment])[0],
+      ...(managedShiftIds.has(assignment.shiftInstanceId) ? { detail: 'Required cleaning photos are not yet approved.' } : {}),
+      status: completedCleaningIds.has(assignment.shiftInstanceId) ? 'attended'
+        : assignment.status === 'absent' ? 'absent' : 'pending' });
+  const cleaningWaiver = requiredCleaning.length === 0 && inAssessmentScope(stay.assessment?.cleaningWaiver, stay)
+    ? stay.assessment!.cleaningWaiver! : null;
+  targets.cleaningTasks = requiredCleaning.length;
+  expectedToDate.cleaningTasks = requiredCleaning.filter((assignment) => assignment.isPast).length;
+
+  const sharedManagers = new Map<number, { user: User; shiftIds: Set<number> }>();
+  const attendedIds = new Set(confirmed.map((assignment) => assignment.shiftInstanceId));
+  for (const assignment of evidence.managers) {
+    const role = normalizedIdentity(assignment.shiftRole?.slug ?? assignment.roleInShift).replace(/_/gu, '');
+    if (!['manager', 'assistantmanager'].includes(role) || !attendedIds.has(assignment.shiftInstanceId)
+      || assignment.userId === user.id || !assignment.assignee) continue;
+    const manager = sharedManagers.get(assignment.userId) ?? { user: assignment.assignee, shiftIds: new Set<number>() };
+    manager.shiftIds.add(assignment.shiftInstanceId);
+    sharedManagers.set(assignment.userId, manager);
+  }
+  const result = evaluateStayAssessment([...sharedManagers.keys()], stay.assessment, stay);
+  const assessment = { ...result, reviewers: result.reviewers.map((reviewer) => {
+    const manager = sharedManagers.get(reviewer.userId)!;
+    return { ...reviewer, firstName: manager.user.firstName, lastName: manager.user.lastName,
+      profilePhotoUrl: manager.user.profilePhotoUrl ?? null, hasStoredProfilePhoto: Boolean(manager.user.profilePhotoPath),
+      profilePhotoVersion: storedProfilePhotoVersion(manager.user), sharedShiftCount: manager.shiftIds.size,
+      sharedShiftIds: [...manager.shiftIds].sort((a, b) => a - b) };
+  }).sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)) };
   const feedback = stay.feedback;
   const managementFeedback = feedback ? {
     ...feedback,
@@ -460,8 +493,16 @@ const buildProgress = (
         reason: stay.position === 'guide' ? 'Both guiding and promotion targets must be met; extra shifts in one do not replace the other.'
           : 'Counts confirmed shifts from the Social Media shift types saved for this stay.',
       }),
-    buildMilestone('cleaning', 'Cleaning & house care', cleaningEvidence.length, targets.cleaningTasks, expectedToDate.cleaningTasks, 'tasks', cleaningEvidence),
+    buildMilestone('cleaning', 'Cleaning & house care', completedCleaning.length, targets.cleaningTasks, expectedToDate.cleaningTasks, 'assigned cleanings', cleaningEvidence, {
+      earned: requiredCleaning.length > 0 ? completedCleaning.length === requiredCleaning.length : Boolean(cleaningWaiver),
+      reason: requiredCleaning.length > 0
+        ? 'Complete every published cleaning assignment within this stay. Photo-managed shifts require approved photos; other shifts require confirmed attendance. Excused and removed assignments are excluded.'
+        : cleaningWaiver ? `No cleaning assigned. Requirement waived: ${cleaningWaiver.reason}` : 'No cleaning assigned. Management must explicitly waive this requirement; zero assignments do not automatically earn a star.',
+    }),
   ];
+  measurable[3].progressPercent = requiredCleaning.length === 0 ? (cleaningWaiver ? 100 : 0) : measurable[3].progressPercent;
+  measurable[3].remainingText = requiredCleaning.length === 0 ? (cleaningWaiver ? 'No cleaning assigned — requirement waived' : 'No cleaning assigned — waiver required')
+    : measurable[3].earned ? 'All assigned cleanings completed — up to date' : `${requiredCleaning.length - completedCleaning.length} assigned cleanings remaining`;
   if (!measurable[1].earned) {
     measurable[1].remainingText = pending ? pendingSummary
       : eligible === 0 ? 'Complete one non-excused shift'
@@ -469,17 +510,22 @@ const buildProgress = (
           : !attendanceMet ? `Attendance target not yet reached (${targets.attendancePercent}%)`
             : `On-time target not yet reached (${targets.attendancePercent}%)`;
   }
-  const firstFourComplete = measurable.every((milestone) => milestone.earned);
-  const management = buildMilestone('management_feedback', 'Management feedback', firstFourComplete && feedback?.approved ? 1 : 0, 1, 1, 'approval',
-    feedback ? [{ label: feedback.approved ? 'Management approved' : 'Feedback draft', detail: feedback.feedback ?? undefined,
-      occurredAt: feedback.approvedAt ?? feedback.updatedAt, status: feedback.approved ? 'approved' : 'draft' }] : []);
-  if (!firstFourComplete) {
-    management.state = 'locked'; management.reason = 'Complete the first four stay milestones before management approval.';
-    management.remainingText = 'Complete the first four milestones';
-  }
+  const management = buildMilestone('management_feedback', 'Management assessment', assessment.earned ? 1 : 0, 1, 1, 'approval',
+    [...assessment.reviewers.map((reviewer) => ({ id: `reviewer-${reviewer.userId}`, label: `${reviewer.firstName} ${reviewer.lastName}`,
+      detail: reviewer.waiver?.reason ?? reviewer.review?.feedback ?? `${reviewer.sharedShiftCount} shared shifts; feedback pending`,
+      occurredAt: reviewer.waiver?.updatedAt ?? reviewer.review?.updatedAt,
+      status: reviewer.waiver ? 'excused' : reviewer.review?.vote === 'up' ? 'approved' : reviewer.review ? 'negative' : 'pending' })),
+      ...(assessment.fallback ? [{ id: 'fallback', label: 'Owner/admin assessment', detail: assessment.fallback.feedback,
+        occurredAt: assessment.fallback.updatedAt, status: assessment.fallback.vote === 'up' ? 'approved' : 'negative' }] : [])], {
+      earned: assessment.earned,
+      reason: 'Independent of the other four stars. Every required shift manager must submit written feedback and a vote. Half or more positive votes earn the star; ties are positive. Waivers do not count as votes.',
+    });
+  management.remainingText = assessment.pendingCount ? `${assessment.pendingCount} manager feedback pending`
+    : assessment.needsFallback ? 'Owner/admin assessment required — no votes available'
+      : assessment.earned ? 'Management star earned' : 'Management assessment not positive';
   const milestones = [...measurable, management];
   return { ...common, targetSummary, starsEarned: milestones.filter((milestone) => milestone.earned).length,
-    milestones, attendanceAssignments, managementFeedback,
+    milestones, attendanceAssignments, managementFeedback, assessment, cleaningWaiver,
     warnings: excludedLegacy ? ['Monthly-only legacy review totals from partial or ongoing calendar months are excluded because individual review dates are unavailable. Complete calendar months contained within this stay are included.'] : [],
   };
 };
@@ -557,7 +603,7 @@ export const listVolunteerStayProgress = async (options: { now?: Date } = {}) =>
 
 const parseStayValues = (body: unknown, previous?: VolunteerStay) => {
   const input = record(body);
-  const allowed = new Set(['startDate', 'endDate', 'position', 'monthlyTargets', 'shiftTypeIds', 'changeReason', ...(previous ? ['expectedRevision'] : [])]);
+  const allowed = new Set(['startDate', 'endDate', 'position', 'monthlyTargets', 'shiftTypeIds', 'targetOverrides', 'changeReason', ...(previous ? ['expectedRevision'] : [])]);
   const unknown = Object.keys(input).find((key) => !allowed.has(key));
   if (unknown) throw new HttpError(400, `Unknown stay field: ${unknown}`);
   const startDate = dateOnly(Object.prototype.hasOwnProperty.call(input, 'startDate') ? input.startDate : previous?.startDate);
@@ -580,6 +626,12 @@ const parseStayValues = (body: unknown, previous?: VolunteerStay) => {
     monthlyTargets[key] = value;
   }
   if (Object.keys(monthlyInput).some((key) => !Object.prototype.hasOwnProperty.call(DEFAULT_VOLUNTEER_MONTHLY_TARGETS, key))) throw new HttpError(400, 'Unknown monthly target field.');
+  let targetOverrides;
+  try {
+    targetOverrides = normalizeVolunteerStayTargetOverrides(Object.prototype.hasOwnProperty.call(input, 'targetOverrides') ? input.targetOverrides : previous?.targetOverrides);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : 'Invalid whole-stay targets.');
+  }
   const rawMappings = record(input.shiftTypeIds ?? previous?.shiftTypeIds);
   const shiftTypeIds: ShiftMappings = { guiding: [], promotion: [], socialMedia: [] };
   const seen = new Set<number>();
@@ -593,19 +645,19 @@ const parseStayValues = (body: unknown, previous?: VolunteerStay) => {
     shiftTypeIds[key] = [...values].sort((left, right) => left - right);
   }
   if (Object.keys(rawMappings).some((key) => !(key in shiftTypeIds))) throw new HttpError(400, 'Unknown shift type mapping.');
-  if ((position === 'guide' && monthlyTargets.guidingShifts > 0 && !shiftTypeIds.guiding.length)
-    || (position === 'guide' && monthlyTargets.promotionShifts > 0 && !shiftTypeIds.promotion.length)
-    || (position === 'social_media' && monthlyTargets.socialMediaShifts > 0 && !shiftTypeIds.socialMedia.length)) {
+  if ((position === 'guide' && (monthlyTargets.guidingShifts > 0 || (targetOverrides?.guidingShifts ?? 0) > 0) && !shiftTypeIds.guiding.length)
+    || (position === 'guide' && (monthlyTargets.promotionShifts > 0 || (targetOverrides?.promotionShifts ?? 0) > 0) && !shiftTypeIds.promotion.length)
+    || (position === 'social_media' && (monthlyTargets.socialMediaShifts > 0 || (targetOverrides?.socialMediaShifts ?? 0) > 0) && !shiftTypeIds.socialMedia.length)) {
     throw new HttpError(400, 'Choose the shift types for every non-zero commitment before saving the stay.');
   }
   if (input.changeReason != null && typeof input.changeReason !== 'string') throw new HttpError(400, 'changeReason must be text.');
   const changeReason = typeof input.changeReason === 'string' ? input.changeReason.trim() : null;
   if ((previous && !changeReason) || (changeReason && changeReason.length > 2000)) throw new HttpError(400, 'A reason of at most 2000 characters is required for stay edits.');
-  if (!previous && !changeReason && (Object.keys(monthlyTargets) as Array<keyof VolunteerMonthlyTargets>)
-    .some((key) => monthlyTargets[key] !== DEFAULT_VOLUNTEER_MONTHLY_TARGETS[key])) {
+  if (!previous && !changeReason && (targetOverrides || (Object.keys(monthlyTargets) as Array<keyof VolunteerMonthlyTargets>)
+    .some((key) => monthlyTargets[key] !== DEFAULT_VOLUNTEER_MONTHLY_TARGETS[key]))) {
     throw new HttpError(400, 'Explain why the stay uses custom monthly targets before saving.');
   }
-  return { startDate, endDate, position: position as Position, monthlyTargets, shiftTypeIds, changeReason: changeReason || null };
+  return { startDate, endDate, position: position as Position, monthlyTargets, targetOverrides, shiftTypeIds, changeReason: changeReason || null };
 };
 
 const assertExpectedRevision = (value: unknown, stay: VolunteerStay): void => {
@@ -769,6 +821,7 @@ export const saveVolunteerStay = async (params: { userId: number; stayId?: numbe
     if (previous) {
       const comparable = (stay: typeof values | VolunteerStay) => JSON.stringify({
         startDate: stay.startDate, endDate: stay.endDate, position: stay.position,
+        targetOverrides: Object.entries(stay.targetOverrides ?? {}).sort(([a], [b]) => a.localeCompare(b)),
         monthlyTargets: (Object.keys(DEFAULT_VOLUNTEER_MONTHLY_TARGETS) as Array<keyof VolunteerMonthlyTargets>)
           .map((key) => [key, stay.monthlyTargets[key]]),
         shiftTypeIds: (['guiding', 'promotion', 'socialMedia'] as const)
@@ -794,8 +847,9 @@ export const saveVolunteerStayFeedback = async (params: { userId: number; stayId
   const body = record(params.body);
   if (Object.keys(body).some((key) => !['feedback', 'approved', 'expectedRevision'].includes(key))) throw new HttpError(400, 'Unknown feedback field.');
   if (typeof body.approved !== 'boolean') throw new HttpError(400, 'approved must be boolean.');
+  if (body.approved) throw new HttpError(409, 'The management star is calculated from shift-manager votes. Submit your own management assessment instead.');
   const feedback = typeof body.feedback === 'string' ? body.feedback.trim() || null : null;
-  if ((feedback?.length ?? 0) > 5000 || (body.approved && !feedback)) throw new HttpError(400, 'Written feedback of at most 5000 characters is required for approval.');
+  if ((feedback?.length ?? 0) > 5000) throw new HttpError(400, 'Written feedback must be at most 5000 characters.');
   await sequelize.transaction({ isolationLevel: Transaction.ISOLATION_LEVELS.REPEATABLE_READ }, async (transaction) => {
     await User.findByPk(params.userId, { attributes: ['id'], transaction, lock: transaction.LOCK.UPDATE });
     const stay = await VolunteerStay.findOne({ where: { id: params.stayId, userId: params.userId }, transaction, lock: transaction.LOCK.UPDATE });
@@ -803,26 +857,12 @@ export const saveVolunteerStayFeedback = async (params: { userId: number; stayId
     assertExpectedRevision(body.expectedRevision, stay);
     const today = dayjs().tz(VOLUNTEER_MILESTONE_TIMEZONE).format('YYYY-MM-DD');
     if (stay.startDate > today) throw new HttpError(400, 'Management feedback cannot be recorded before the stay begins.');
-    let approvalEvidence: Record<string, unknown> | undefined;
-    if (body.approved) {
-      const progress = await getVolunteerStayProgress(params.userId, { stayId: stay.id, transaction });
-      const incomplete = progress.milestones.filter((milestone) => milestone.key !== 'management_feedback' && !milestone.earned).map((milestone) => milestone.key);
-      if (incomplete.length) throw new HttpError(409, 'The first four stay milestones must be earned before management approval.', { incompleteMilestones: incomplete });
-      approvalEvidence = {
-        asOfDate: progress.asOfDate, timezone: progress.timezone, targetSummary: progress.targetSummary,
-        milestones: progress.milestones.filter((milestone) => milestone.key !== 'management_feedback').map((milestone) => ({
-          key: milestone.key, current: milestone.current, target: milestone.target, earned: milestone.earned,
-          subtargets: milestone.subtargets ?? [], evidence: milestone.evidence,
-        })),
-      };
-    }
     const now = new Date().toISOString();
-    const approved = body.approved as boolean;
     await stay.update({ revision: stay.revision + 1, updatedBy: params.actorId,
-      feedback: { approved, feedback, approvedBy: approved ? stay.feedback?.approvedBy ?? params.actorId : null,
-        approvedAt: approved ? stay.feedback?.approvedAt ?? now : null, updatedBy: params.actorId, updatedAt: now },
+      feedback: { approved: false, feedback, approvedBy: null,
+        approvedAt: null, updatedBy: params.actorId, updatedAt: now },
     }, { transaction });
-    await writeRevision(stay, params.actorId, 'Management feedback updated', 'volunteer_stay.feedback_updated', transaction, approvalEvidence);
+    await writeRevision(stay, params.actorId, 'Management feedback draft updated', 'volunteer_stay.feedback_updated', transaction);
   }).catch((error: unknown) => {
     const failure = record(error);
     const code = record(failure.original).code ?? record(failure.parent).code ?? failure.code;
@@ -830,4 +870,81 @@ export const saveVolunteerStayFeedback = async (params: { userId: number; stayId
     throw error;
   });
   return getVolunteerStayProgress(params.userId, { stayId: params.stayId });
+};
+
+export const saveVolunteerStayAssessment = async (params: {
+  userId: number; stayId: number; body: unknown; actorId: number; roleSlug: string;
+}): Promise<VolunteerStayProgress> => {
+  const body = record(params.body);
+  const action = body.action;
+  const fields: Record<string, string[]> = {
+    review: ['vote', 'feedback'], fallback: ['vote', 'feedback'],
+    'waive-reviewer': ['reviewerId', 'reason', 'waived'], 'waive-cleaning': ['reason', 'waived'],
+  };
+  if (typeof action !== 'string' || !Object.prototype.hasOwnProperty.call(fields, action)
+    || Object.keys(body).some((key) => !['action', 'expectedRevision', ...fields[action]].includes(key))) {
+    throw new HttpError(400, 'Unknown assessment action or field.');
+  }
+  const role = normalizedIdentity(params.roleSlug).replace(/_/gu, '');
+  if (!['owner', 'admin', 'administrator', 'manager', 'assistantmanager'].includes(role) || params.actorId === params.userId) {
+    throw new HttpError(403, 'Another authorized manager must assess this volunteer.');
+  }
+  if (['waive-reviewer', 'fallback'].includes(action) && !['owner', 'admin', 'administrator'].includes(role)) {
+    throw new HttpError(403, 'Only an owner or administrator can waive reviewer feedback or provide the no-vote assessment.');
+  }
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : '';
+  if (action === 'review' || action === 'fallback') {
+    if (!['up', 'down'].includes(String(body.vote)) || !feedback || feedback.length > 5000) {
+      throw new HttpError(400, 'A thumbs-up/down vote and written feedback of at most 5000 characters are required.');
+    }
+  } else if (typeof body.waived !== 'boolean' || !reason || reason.length > 2000) {
+    throw new HttpError(400, 'A waiver decision and reason of at most 2000 characters are required.');
+  }
+  await sequelize.transaction({ isolationLevel: Transaction.ISOLATION_LEVELS.REPEATABLE_READ }, async (transaction) => {
+    await User.findByPk(params.userId, { attributes: ['id'], transaction, lock: transaction.LOCK.UPDATE });
+    const stay = await VolunteerStay.findOne({ where: { id: params.stayId, userId: params.userId }, transaction, lock: transaction.LOCK.UPDATE });
+    if (!stay) throw new HttpError(404, 'Volunteer stay was not found for this person.');
+    assertExpectedRevision(body.expectedRevision, stay);
+    if (stay.startDate > dayjs().tz(VOLUNTEER_MILESTONE_TIMEZONE).format('YYYY-MM-DD')) throw new HttpError(400, 'The stay has not started.');
+    const progress = await getVolunteerStayProgress(params.userId, { stayId: stay.id, transaction });
+    const assessment = progress.assessment!;
+    const saved: StayAssessment = { ...stay.assessment };
+    const scope = { startDate: stay.startDate, endDate: stay.endDate, actorId: params.actorId, updatedAt: new Date().toISOString() };
+    if (action === 'review') {
+      const reviewer = assessment.reviewers.find((row) => row.userId === params.actorId);
+      if (!reviewer || reviewer.waiver) throw new HttpError(403, 'Only a required, non-waived shift manager may submit their own feedback.');
+      saved.reviews = { ...saved.reviews, [String(params.actorId)]: { ...scope, vote: body.vote as 'up' | 'down', feedback } };
+    } else if (action === 'waive-reviewer') {
+      if (!Number.isInteger(body.reviewerId) || !assessment.reviewers.some((row) => row.userId === body.reviewerId)) throw new HttpError(400, 'Choose a required shift manager.');
+      saved.reviewerWaivers = { ...saved.reviewerWaivers };
+      if (body.waived) saved.reviewerWaivers[String(body.reviewerId)] = { ...scope, reason };
+      else delete saved.reviewerWaivers[String(body.reviewerId)];
+      // A changed electorate requires a fresh no-vote assessment if one is needed later.
+      saved.fallback = null;
+    } else if (action === 'fallback') {
+      if (assessment.reviewers.some((row) => !row.waiver)) throw new HttpError(409, 'Required shift-manager votes cannot be replaced by a fallback assessment.');
+      saved.fallback = { ...scope, vote: body.vote as 'up' | 'down', feedback };
+    } else {
+      if (progress.milestones.find((row) => row.key === 'cleaning')?.target !== 0) throw new HttpError(409, 'Assigned cleaning shifts must be completed or individually excused; the whole requirement cannot be waived.');
+      saved.cleaningWaiver = body.waived ? { ...scope, reason } : null;
+    }
+    await stay.update({ assessment: saved, revision: stay.revision + 1, updatedBy: params.actorId }, { transaction });
+    await writeRevision(stay, params.actorId, reason || feedback, `volunteer_stay.assessment.${action}`, transaction,
+      { assessment, cleaningTarget: progress.targetSummary?.targets.cleaningTasks }, { reviewerId: body.reviewerId ?? null });
+  }).catch((error: unknown) => {
+    const failure = record(error);
+    const code = record(failure.original).code ?? record(failure.parent).code ?? failure.code;
+    if (code === '40001' || code === '40P01') throw new HttpError(409, 'This stay changed while feedback was saved. Refresh before trying again.');
+    throw error;
+  });
+  return getVolunteerStayProgress(params.userId, { stayId: params.stayId });
+};
+
+export const getVolunteerReviewerPhotoRecord = async (userId: number, stayId: number, reviewerId: number) => {
+  const progress = await getVolunteerStayProgress(userId, { stayId });
+  if (!progress.assessment?.reviewers.some((row) => row.userId === reviewerId)) throw new HttpError(404, 'Shift-manager photo was not found.');
+  const reviewer = await User.findByPk(reviewerId, { attributes: ['profilePhotoPath'] });
+  if (!reviewer?.profilePhotoPath) throw new HttpError(404, 'Shift-manager photo was not found.');
+  return { storagePath: reviewer.profilePhotoPath };
 };
