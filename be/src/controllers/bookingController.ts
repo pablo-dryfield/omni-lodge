@@ -120,6 +120,12 @@ import { getTshirtVariantAvailability } from '../services/inventoryService.js';
 import { refreshStorefrontOrderInventoryReservationExpiries } from '../services/storefrontOrderResourceReservationService.js';
 import { buildManifestBookingSearchWhere } from '../utils/manifestBookingSearch.js';
 import { applyAutomaticBookingReassignmentRules } from '../services/bookings/bookingReassignmentRulesService.js';
+import {
+  parseCounterRefundExtras,
+  runCounterAddonRefund,
+  type CounterAddonRefundOperation,
+  type CounterRefundPayment,
+} from '../services/counterAddonRefundService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -5997,6 +6003,88 @@ const createStripeRefundFromSummary = async (
     { ...basePayload, charge: summary.id },
     idempotencyKey ? { idempotencyKey } : undefined,
   );
+};
+
+export const counterBookingAddonRefund = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const operation = String(req.params.operation) as CounterAddonRefundOperation;
+    if (!Number.isSafeInteger(bookingId) || bookingId <= 0 || !['verify', 'refund', 'rectify'].includes(operation)) {
+      throw new HttpError(400, 'A valid booking and add-on refund operation are required.');
+    }
+    const actorId = req.authContext?.id;
+    if (!actorId) throw new HttpError(401, 'Authentication is required.');
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (body.peopleQuantity !== undefined || body.amount !== undefined) {
+      throw new HttpError(400, 'This operation accepts add-on quantities only; people and custom amounts are not supported.');
+    }
+    const result = await runCounterAddonRefund({
+      bookingId, actorId, operation, extras: parseCounterRefundExtras(body.extras),
+      expectedExtras: body.expectedExtras,
+      selectionKey: typeof body.selectionKey === 'string' ? body.selectionKey : undefined,
+      resolvePayment: async (booking, transaction): Promise<CounterRefundPayment> => {
+        const direct = booking.platform === 'omnilodge' ? await resolveDirectStripeTransaction(booking) : null;
+        const ecwid = direct ? null : requireStripeRefundPreview(await buildEcwidRefundPreview(booking));
+        const stripe = direct?.stripe ?? ecwid!.stripe;
+        const stripeClient = direct?.stripeClient ?? getStripeClient();
+        if (String(booking.currency ?? stripe.currency).toLowerCase() !== stripe.currency.toLowerCase() ||
+            ((parseMoneyValue(booking.refundedAmount) ?? 0) > 0 && booking.refundedCurrency && booking.refundedCurrency.toLowerCase() !== stripe.currency.toLowerCase())) {
+          throw new HttpError(409, 'Booking and Stripe refund currencies differ. A manager must reconcile the currency before proceeding.');
+        }
+        const addons = await resolvePartialRefundAddons(booking, stripe.currency);
+        const bookingAmount = Math.round((
+          parseMoneyValue(booking.priceNet) ?? parseMoneyValue(booking.priceGross) ??
+          ((parseMoneyValue(booking.baseAmount) ?? 0) + (parseMoneyValue(booking.refundedAmount) ?? 0))
+        ) * 100);
+        const storefrontOrder = booking.platform === 'omnilodge'
+          ? await findStorefrontOrderForBooking(booking, transaction, true) : null;
+        return {
+          stripeClient, transactionId: stripe.id, transactionType: stripe.type,
+          currency: stripe.currency, paidAmount: stripe.amount, bookingAmount: Math.min(bookingAmount, stripe.amount),
+          lines: addons.flatMap((entry) => {
+            const key = classifyAddonExtraKey(entry.displayName);
+            if (!key) return [];
+            // Use the purchased line's historical price, not today's product price.
+            const unitPrice = parseMoneyValue(entry.bookingAddon.unitPrice) ??
+              (parseMoneyValue(entry.bookingAddon.totalPrice) !== null && entry.quantity > 0
+                ? parseMoneyValue(entry.bookingAddon.totalPrice)! / entry.quantity : null);
+            return [{ addon: entry.bookingAddon, key, name: entry.displayName, quantity: entry.quantity,
+              unitAmount: unitPrice === null ? 0 : Math.round(unitPrice * 100), currency: entry.currency ?? stripe.currency }];
+          }),
+          ...(storefrontOrder ? { onApplied: async () => {
+            await storefrontOrder.update({ paymentStatus: 'partial' }, { transaction });
+          } } : {}),
+        };
+      },
+    });
+    let metricsUpdated = true;
+    if (result.applied && result.booking.experienceDate) {
+      try {
+        const counter = await Counter.findOne({ where: { date: result.booking.experienceDate, productId: result.booking.productId ?? null }, attributes: ['id'] });
+        if (counter) await CounterRegistryService.upsertMetrics(counter.id, [], actorId);
+      } catch (error) {
+        metricsUpdated = false;
+        logger.warn(`Counter refresh failed after Stripe add-on reconciliation for booking ${bookingId}`, error);
+      }
+    }
+    const internalEmail = result.applied && operation === 'refund' && result.booking.platform === 'omnilodge'
+      ? await sendInternalDirectActionEmailWithStatus(result.booking, {
+          kind: 'partial_refund', refundedAmount: result.verification.amount / 100,
+          refundCurrency: result.verification.currency,
+        }) : {};
+    res.status(200).json({
+      bookingId, applied: result.applied, verification: result.verification, metricsUpdated,
+      order: result.applied ? bookingToUnifiedOrder(result.booking) : null,
+      ...internalEmail,
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.status).json({ message: error.message, details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Stripe add-on refund verification failed.';
+    res.status(502).json({ message });
+  }
 };
 
 const recordManualCancellationEvent = async (

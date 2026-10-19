@@ -80,7 +80,10 @@ describe('CounterRegistryService.upsertMetrics', () => {
     jest.restoreAllMocks();
   });
 
-  it('rebuilds booked and attended add-on metrics from a storefront snapshot', async () => {
+  it.each([
+    ['original storefront snapshot', 4],
+    ['Stripe-rectified canonical extras', 2],
+  ])('rebuilds add-ons and normal people from %s', async (_source, remainingCocktails) => {
     const counter = {
       id: 920,
       date: '2026-08-20',
@@ -135,18 +138,20 @@ describe('CounterRegistryService.upsertMetrics', () => {
         partySizeChildren: 0,
         addonsSnapshot: {
           addons: [{ addonId: 1, name: 'Cocktails', quantity: 4 }],
+          ...(remainingCocktails === 2 ? { extras: { cocktails: 2, tshirts: 0, photos: 0 } } : {}),
           partyBreakdown: { men: 4, women: 0 },
         },
         attendedTotal: 4,
-        attendedAddonsSnapshot: { cocktails: 4, tshirts: 0, photos: 0 },
+        attendedAddonsSnapshot: { cocktails: remainingCocktails, tshirts: 0, photos: 0 },
         addonRefundActions: null,
         attendanceStatus: 'checked_in_full',
       },
     ]);
-    mockMetricFindAll.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
-    mockMetricBulkCreate.mockResolvedValue([]);
+    let persisted: Array<Record<string, unknown>> = [];
+    mockMetricFindAll.mockResolvedValueOnce([]).mockImplementationOnce(async () => persisted);
+    mockMetricBulkCreate.mockImplementationOnce(async (rows) => { persisted = rows; return rows; });
 
-    await CounterRegistryService.upsertMetrics(920, [], 191);
+    const result = await CounterRegistryService.upsertMetrics(920, [], 191);
 
     expect(mockMetricBulkCreate).toHaveBeenCalledTimes(1);
     expect(mockMetricBulkCreate.mock.calls[0][0]).toEqual(
@@ -158,7 +163,7 @@ describe('CounterRegistryService.upsertMetrics', () => {
           addonId: 1,
           tallyType: 'booked',
           period: 'before_cutoff',
-          qty: 4,
+          qty: remainingCocktails,
         }),
         expect.objectContaining({
           counterId: 920,
@@ -167,10 +172,12 @@ describe('CounterRegistryService.upsertMetrics', () => {
           addonId: 1,
           tallyType: 'attended',
           period: null,
-          qty: 4,
+          qty: remainingCocktails,
         }),
       ]),
     );
+    expect(result.derivedSummary.totals.addons.cocktails).toMatchObject({ attended: remainingCocktails, nonShow: 0 });
+    expect(result.derivedSummary.totals.people.attended).toBe(4 - Number(remainingCocktails));
   });
 
   it('keeps declined external add-ons as booked no-shows while preserving the people split', async () => {
