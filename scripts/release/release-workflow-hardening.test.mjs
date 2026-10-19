@@ -7,6 +7,54 @@ const workflow = fs.readFileSync(workflowPath, 'utf8');
 
 const packageJobStart = workflow.indexOf('\n  package:');
 const packageJob = packageJobStart === -1 ? '' : workflow.slice(packageJobStart);
+const deployWorkflow = fs.readFileSync(
+  new URL('../../.github/workflows/deploy-production.yml', import.meta.url),
+  'utf8',
+).replace(/\r\n/g, '\n');
+const submitJobStart = deployWorkflow.indexOf('\n  submit_request:');
+const prepareJob = deployWorkflow.slice(0, submitJobStart);
+const submitJob = deployWorkflow.slice(submitJobStart);
+
+test('production queues carry trusted release inputs, never an expiring host request', () => {
+  assert.ok(submitJobStart > -1);
+  assert.match(prepareJob, /node scripts\/deploy\/github-release-evidence\.mjs/);
+  assert.match(prepareJob, /gh api "repos\/\$GITHUB_REPOSITORY\/actions\/artifacts\/\$ARTIFACT_ID\/zip"/);
+  assert.match(prepareJob, /steps\.request\.outputs\.evidence_path/);
+  assert.match(prepareJob, /steps\.request\.outputs\.artifact_zip_path/);
+  assert.doesNotMatch(prepareJob, /create-host-v2-request\.mjs|requested_at_utc|randomUUID|host-v2-request\.bin/);
+  assert.match(submitJob, /environment: production/);
+});
+
+test('production creates a fresh host identity after SSH setup and immediately before submission', () => {
+  const sshSetup = submitJob.indexOf('- name: Prepare pinned SSH transport');
+  const createAndSubmit = submitJob.indexOf('- name: Create and submit fresh host request');
+  const poll = submitJob.indexOf('- name: Poll host request status');
+  assert.ok(sshSetup > -1 && sshSetup < createAndSubmit && createAndSubmit < poll);
+  const step = submitJob.slice(createAndSubmit, poll);
+  const timestamp = step.indexOf('requested_at_utc="$(date -u');
+  const create = step.indexOf('node scripts/deploy/create-host-v2-request.mjs');
+  const submit = step.indexOf('node scripts/deploy/submit-host-v2-request.mjs');
+  assert.ok(timestamp > -1 && timestamp < create && create < submit);
+  assert.match(step, /randomUUID\(\)/);
+  assert.match(step, /set -euo pipefail/);
+  assert.match(step, /--artifact-zip "\$REQUEST_DIR\/github-artifact\.zip"/);
+  assert.match(step, /--evidence-json "\$REQUEST_DIR\/release-evidence\.json"/);
+  assert.match(step, /--request-id "\$request_id"/);
+  assert.match(step, /--requested-at-utc "\$requested_at_utc"/);
+  assert.match(step, /OPERATION: \$\{\{ needs\.prepare_request\.outputs\.operation \}\}/);
+  assert.match(step, /TRIGGER: \$\{\{ needs\.prepare_request\.outputs\.trigger \}\}/);
+  // Submission must stay in the same run block: no new queue/approval boundary.
+  assert.doesNotMatch(step.slice(create, submit), /\n      - name:|\n    runs-on:|\n    environment:/);
+});
+
+test('production retains the actual submitted identity and host rejection response as audit evidence', () => {
+  const upload = submitJob.slice(submitJob.indexOf('- name: Upload host response evidence'));
+  assert.match(upload, /if: always\(\)/);
+  for (const filename of ['host-v2-request-identity.json', 'host-v2-request-result.json', 'host-v2-submit-result.json']) {
+    assert.ok(upload.includes(`/production-deploy-request/${filename}`), `${filename} must be retained`);
+  }
+  assert.match(upload, /retention-days: 3/);
+});
 
 test('release package job keeps artifact provenance attestation enabled when GitHub supports it', () => {
   assert.notEqual(packageJobStart, -1, 'Release workflow must contain the package job');

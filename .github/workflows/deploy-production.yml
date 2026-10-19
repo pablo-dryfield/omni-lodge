@@ -59,7 +59,6 @@ jobs:
       trigger: ${{ steps.select.outputs.trigger }}
       operation: ${{ steps.select.outputs.operation }}
       release_id: ${{ steps.release_metadata.outputs.release_id }}
-      request_id: ${{ steps.request.outputs.request_id }}
       request_artifact_name: production-request-${{ steps.release_metadata.outputs.release_id }}-${{ steps.select.outputs.operation }}-${{ steps.select.outputs.trigger }}
     steps:
       # actions/checkout v7.0.1.
@@ -253,7 +252,7 @@ jobs:
             printf 'release_id=%s\n' "$release_id"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Validate release evidence and create host request
+      - name: Validate and prepare trusted release inputs
         if: steps.select.outputs.selected == 'true'
         id: request
         shell: bash
@@ -273,8 +272,6 @@ jobs:
           set -euo pipefail
           evidence_path="$WORK_DIR/release-evidence.json"
           artifact_zip_path="$WORK_DIR/github-artifact.zip"
-          request_path="$WORK_DIR/host-v2-request.bin"
-          identity_path="$WORK_DIR/host-v2-request-identity.json"
           node scripts/deploy/github-release-evidence.mjs \
             --run-json "$RUN_JSON" \
             --artifacts-json "$ARTIFACTS_JSON" \
@@ -287,41 +284,20 @@ jobs:
             --operation "$OPERATION" \
             > "$evidence_path"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$artifact_zip_path"
-          request_id="$(node --input-type=module -e "import { randomUUID } from 'node:crypto'; process.stdout.write(randomUUID());")"
-          requested_at_utc="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
-          actor="${GITHUB_ACTOR:-github-actions[bot]}"
-          node scripts/deploy/create-host-v2-request.mjs \
-            --artifact-zip "$artifact_zip_path" \
-            --evidence-json "$evidence_path" \
-            --request-id "$request_id" \
-            --requested-at-utc "$requested_at_utc" \
-            --actor "$actor" \
-            --operation "$OPERATION" \
-            --trigger "$TRIGGER" \
-            --output "$request_path" \
-            --identity-output "$identity_path" \
-            > "$WORK_DIR/host-v2-request-result.json"
           {
             printf 'evidence_path=%s\n' "$evidence_path"
             printf 'artifact_zip_path=%s\n' "$artifact_zip_path"
-            printf 'request_path=%s\n' "$request_path"
-            printf 'identity_path=%s\n' "$identity_path"
-            printf 'request_result_path=%s\n' "$WORK_DIR/host-v2-request-result.json"
-            printf 'request_id=%s\n' "$request_id"
-            printf 'requested_at_utc=%s\n' "$requested_at_utc"
           } >> "$GITHUB_OUTPUT"
 
       # actions/upload-artifact v7.0.1.
-      - name: Upload prepared host request evidence
+      - name: Upload trusted release inputs
         if: steps.select.outputs.selected == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: production-request-${{ steps.release_metadata.outputs.release_id }}-${{ steps.select.outputs.operation }}-${{ steps.select.outputs.trigger }}
           path: |
             ${{ steps.request.outputs.evidence_path }}
-            ${{ steps.request.outputs.identity_path }}
-            ${{ steps.request.outputs.request_result_path }}
-            ${{ steps.request.outputs.request_path }}
+            ${{ steps.request.outputs.artifact_zip_path }}
           if-no-files-found: error
           retention-days: 3
           compression-level: 0
@@ -356,7 +332,7 @@ jobs:
           test "$(npm --version)" = "${NPM_VERSION}"
 
       # actions/download-artifact v8.0.1.
-      - name: Download prepared host request
+      - name: Download trusted release inputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: ${{ needs.prepare_request.outputs.request_artifact_name }}
@@ -411,11 +387,15 @@ jobs:
             printf 'user=%s\n' "$PRODUCTION_DEPLOY_USER"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Submit host request
+      # Mint the nonce/timestamp only after runner queues, environment approval,
+      # artifact download, and SSH setup. Failed-job reruns also get a fresh request.
+      - name: Create and submit fresh host request
         id: submit
         shell: bash
         env:
           REQUEST_DIR: ${{ runner.temp }}/production-deploy-request
+          OPERATION: ${{ needs.prepare_request.outputs.operation }}
+          TRIGGER: ${{ needs.prepare_request.outputs.trigger }}
           DEPLOY_HOST: ${{ steps.ssh.outputs.host }}
           DEPLOY_PORT: ${{ steps.ssh.outputs.port }}
           DEPLOY_USER: ${{ steps.ssh.outputs.user }}
@@ -424,6 +404,19 @@ jobs:
         run: |
           set -euo pipefail
           result_path="$REQUEST_DIR/host-v2-submit-result.json"
+          request_id="$(node --input-type=module -e "import { randomUUID } from 'node:crypto'; process.stdout.write(randomUUID());")"
+          requested_at_utc="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          node scripts/deploy/create-host-v2-request.mjs \
+            --artifact-zip "$REQUEST_DIR/github-artifact.zip" \
+            --evidence-json "$REQUEST_DIR/release-evidence.json" \
+            --request-id "$request_id" \
+            --requested-at-utc "$requested_at_utc" \
+            --actor "${GITHUB_ACTOR:-github-actions[bot]}" \
+            --operation "$OPERATION" \
+            --trigger "$TRIGGER" \
+            --output "$REQUEST_DIR/host-v2-request.bin" \
+            --identity-output "$REQUEST_DIR/host-v2-request-identity.json" \
+            > "$REQUEST_DIR/host-v2-request-result.json"
           node scripts/deploy/submit-host-v2-request.mjs \
             --request "$REQUEST_DIR/host-v2-request.bin" \
             --identity "$REQUEST_DIR/host-v2-request-identity.json" \
@@ -481,6 +474,8 @@ jobs:
         with:
           name: production-response-${{ needs.prepare_request.outputs.release_id }}-${{ needs.prepare_request.outputs.operation }}-${{ needs.prepare_request.outputs.trigger }}
           path: |
+            ${{ runner.temp }}/production-deploy-request/host-v2-request-identity.json
+            ${{ runner.temp }}/production-deploy-request/host-v2-request-result.json
             ${{ runner.temp }}/production-deploy-request/host-v2-submit-result.json
             ${{ runner.temp }}/production-deploy-request/host-v2-status-result.json
           if-no-files-found: error
