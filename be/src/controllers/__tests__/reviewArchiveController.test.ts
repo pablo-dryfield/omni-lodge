@@ -2,7 +2,7 @@ jest.mock('../../config/database.js', () => ({
   __esModule: true,
   default: { transaction: jest.fn() },
 }));
-jest.mock('../../models/ReviewArchive.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
+jest.mock('../../models/ReviewArchive.js', () => ({ __esModule: true, default: { findAll: jest.fn(), count: jest.fn(), update: jest.fn() } }));
 jest.mock('../../models/ReviewAssignment.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ReviewSyncRun.js', () => ({ __esModule: true, default: { findByPk: jest.fn() } }));
 jest.mock('../../models/ReviewManualCredit.js', () => ({
@@ -20,7 +20,7 @@ import ReviewManualCredit from '../../models/ReviewManualCredit';
 import ReviewArchive from '../../models/ReviewArchive';
 import ReviewDailySnapshot from '../../models/ReviewDailySnapshot';
 import ReviewSyncRun from '../../models/ReviewSyncRun';
-import { createManualReviewCredit, deleteManualReviewCredit, failReviewSync, getReviewTrends, updateManualReviewCredit } from '../reviewArchiveController';
+import { completeReviewSync, createManualReviewCredit, deleteManualReviewCredit, failReviewSync, getReviewTrends, updateManualReviewCredit } from '../reviewArchiveController';
 
 const findManualCredit = ReviewManualCredit.findByPk as jest.Mock;
 const createManualCredit = ReviewManualCredit.create as jest.Mock;
@@ -38,6 +38,18 @@ const createResponse = () => {
   response.status.mockReturnValue(response);
   return response;
 };
+
+test('the browser sync completion endpoint refuses an incomplete TripAdvisor total before deletion', async () => {
+  const run = { id: 941, platform: 'tripadvisor', status: 'running', seenCount: 2500, update: jest.fn() };
+  findReviewSyncRun.mockResolvedValue(run);
+  (ReviewArchive.count as jest.Mock).mockResolvedValue(3038);
+  const res = createResponse();
+  await completeReviewSync({ params: { runId: '941' }, body: { sourceTotalCount: 3038 } } as never, res as never);
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(res.json).toHaveBeenCalledWith([{ message: expect.stringContaining('fetched 2500 of 3038') }]);
+  expect(ReviewArchive.update).not.toHaveBeenCalled();
+  expect(run.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+});
 
 describe('createManualReviewCredit', () => {
   beforeEach(() => {

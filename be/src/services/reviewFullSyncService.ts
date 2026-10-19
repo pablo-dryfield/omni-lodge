@@ -31,7 +31,8 @@ export async function runFullReviewSync(platform: Platform): Promise<{ seen: num
   let token: string | undefined, cursor: string | undefined, offset = 0, seen = 0;
   let sourceTotalCount: number | null = null, averageRating: number | null = null;
   try {
-    for (let pageNumber = 0; pageNumber < 250; pageNumber++) {
+    let paginationComplete = false;
+    for (let pageNumber = 0; pageNumber < (platform === 'tripadvisor' ? 1000 : 250); pageNumber++) {
       const query: Record<string, string | number> = platform === 'google' ? (token ? { pageToken: token } : {}) : platform === 'tripadvisor' ? (offset ? { offset } : {}) : (cursor ? { cursor } : {});
       const payload = await fetchPage(platform, query);
       const reviews = payload.data ?? [], meta = payload.columns?.[0] ?? {};
@@ -49,14 +50,19 @@ export async function runFullReviewSync(platform: Platform): Promise<{ seen: num
       seen += reviews.length;
       if (platform === 'google') {
         token = meta.nextPageToken || undefined; sourceTotalCount = Number(meta.totalCount ?? sourceTotalCount); averageRating = Number(meta.averageRating ?? averageRating);
-        if (!token) break;
+        if (!token) { paginationComplete = true; break; }
       } else if (platform === 'tripadvisor') {
-        sourceTotalCount = Number(meta.totalCount ?? sourceTotalCount); if (!meta.hasMore) break; offset = Number(meta.nextOffset);
+        sourceTotalCount = Number(meta.totalCount ?? sourceTotalCount);
+        if (!meta.hasMore) { paginationComplete = true; break; }
+        const nextOffset = Number(meta.nextOffset);
+        if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) throw new Error('TripAdvisor reviews pagination did not advance.');
+        offset = nextOffset;
       } else {
-        sourceTotalCount = Number(meta.totalCount ?? sourceTotalCount); if (!meta.hasMore || !meta.endCursor) break; cursor = String(meta.endCursor);
+        sourceTotalCount = Number(meta.totalCount ?? sourceTotalCount); if (!meta.hasMore || !meta.endCursor) { paginationComplete = true; break; } cursor = String(meta.endCursor);
       }
     }
     await run.update({ seenCount: seen });
+    if (!paginationComplete) throw new Error('Review sync reached its page limit before pagination completed. No missing reviews were marked deleted.');
     const now = new Date();
     const activeBeforeDelete = await ReviewArchive.count({ where: { platform, isDeleted: false } });
     assertReviewSyncCanMarkMissingDeleted({
@@ -64,6 +70,7 @@ export async function runFullReviewSync(platform: Platform): Promise<{ seen: num
       partial: false,
       seenCount: seen,
       activeCount: activeBeforeDelete,
+      sourceTotalCount,
     });
     const [deleted] = await ReviewArchive.update({ isDeleted: true, deletedDetectedAt: now }, { where: { platform, [Op.or]: [{ lastSeenRunId: { [Op.ne]: run.id } }, { lastSeenRunId: null }], isDeleted: false } });
     await run.update({ status: 'completed', deletedCount: deleted, completedAt: now });

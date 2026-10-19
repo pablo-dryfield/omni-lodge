@@ -135,7 +135,9 @@ export default function ReviewArchivePanel({
         let sourceTotalCount: number | undefined;
         let averageRating: number | undefined;
 
-        for (let current = 0; current < (full ? 250 : 2); current++) {
+        const pageLimit = full ? (platform === 'tripadvisor' ? 1000 : 250) : 2;
+        let paginationComplete = false;
+        for (let current = 0; current < pageLimit; current++) {
           const response =
             platform === 'google'
               ? await axiosInstance.get('/reviews/googleReviews', {
@@ -162,18 +164,24 @@ export default function ReviewArchivePanel({
             sourceTotalCount = googleMeta.totalCount;
             averageRating = googleMeta.averageRating;
             token = googleMeta.nextPageToken || undefined;
-            if (!token) break;
+            if (!token) { paginationComplete = true; break; }
           } else if (platform === 'tripadvisor' || platform === 'getyourguide') {
             sourceTotalCount = meta?.totalCount ?? sourceTotalCount;
-            if (!meta?.hasMore) break;
+            if (!meta?.hasMore) { paginationComplete = true; break; }
+            if (!Number.isSafeInteger(meta.nextOffset) || meta.nextOffset <= offset) {
+              throw new Error('Reviews pagination did not advance. Sync was stopped to protect the archive.');
+            }
             offset = meta.nextOffset;
           } else {
             sourceTotalCount = meta?.totalCount ?? sourceTotalCount;
-            if (!meta?.hasMore || !meta?.endCursor) break;
+            if (!meta?.hasMore || !meta?.endCursor) { paginationComplete = true; break; }
             cursor = meta.endCursor;
           }
         }
 
+        if (full && !paginationComplete) {
+          throw new Error('Full sync reached its page limit before all reviews were retrieved. No missing reviews were marked deleted.');
+        }
         await axiosInstance.post(`${syncBase}/${runId}/complete`, { sourceTotalCount, averageRating });
         setSourceStats({ totalCount: sourceTotalCount, averageRating });
         setPage(1);

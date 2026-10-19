@@ -137,6 +137,7 @@ export async function completeReviewSync(req: AuthenticatedRequest, res: Respons
           partial,
           seenCount: Number(run.seenCount ?? 0),
           activeCount: activeBeforeDelete,
+          sourceTotalCount: req.body.sourceTotalCount == null ? null : Number(req.body.sourceTotalCount),
         });
       } catch (error) {
         await run.update({ status: 'failed', completedAt: now });
