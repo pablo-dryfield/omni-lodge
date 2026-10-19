@@ -29,6 +29,7 @@ import {
   IconDiscount2,
   IconMail,
   IconBrandWhatsapp,
+  IconStars,
 } from "@tabler/icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ActiveNavLink } from "./ActiveNavLink";
@@ -171,6 +172,12 @@ const settingsNav: SettingsNavSection[] = [
   {
     title: "Integrations",
     links: [
+      {
+        label: "Review Platforms",
+        to: "/settings/review-platforms",
+        slug: PAGE_SLUGS.settingsReviewPlatforms,
+        icon: <IconStars size={20} />,
+      },
       {
         label: "Channels",
         to: "/settings/channels",

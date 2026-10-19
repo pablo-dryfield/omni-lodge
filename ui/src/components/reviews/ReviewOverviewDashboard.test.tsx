@@ -22,9 +22,16 @@ jest.mock('../reviewCounters/ReviewMonthlySummary', () => ({
 const mockedGet = axiosInstance.get as jest.Mock;
 const mockedPatch = axiosInstance.patch as jest.Mock;
 const mockedDelete = axiosInstance.delete as jest.Mock;
+const configuredPlatforms = [
+  { name: 'FreeTour', slug: 'freetour', isActive: true },
+  { name: 'Civitatis', slug: 'civitatis', isActive: true },
+  { name: 'GetYourGuide', slug: 'reviews-from-getyourguide', isActive: true },
+  { name: 'Retired', slug: 'retired', isActive: false },
+];
 
 describe('ReviewOverviewDashboard', () => {
   beforeEach(() => {
+    Element.prototype.scrollIntoView = jest.fn();
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       value: jest.fn().mockImplementation((query: string) => ({
@@ -134,6 +141,35 @@ describe('ReviewOverviewDashboard', () => {
       expect(within(personalKpi).getByText('3.500')).toBeInTheDocument();
     });
     expect(screen.queryByText('Needs assignment')).not.toBeInTheDocument();
+  });
+
+  it.each([['FreeTour', 'freetour'], ['Civitatis', 'civitatis']])('adds a manual credit using configured %s without a Settings API request', async (name, platform) => {
+    mockedGet.mockResolvedValue({ data: {
+      staff: [], reviewCount: 0, deletedCount: 0, unassignedCount: 0, lock: null,
+      users: [{ id: 42, firstName: 'Current', lastName: 'User', username: 'current-user' }],
+      reviewPlatforms: configuredPlatforms,
+    } });
+    (axiosInstance.post as jest.Mock).mockResolvedValue({ data: { credit: { id: 101 } } });
+    render(<MantineProvider><ReviewOverviewDashboard canManage month="2026-10" onMonthChange={jest.fn()} /></MantineProvider>);
+    await waitFor(() => expect(mockedGet).toHaveBeenCalledWith('/reviews/archive/summary', expect.anything()));
+    fireEvent.click(screen.getByRole('button', { name: 'Add manual counter entry' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add manual counter entry' });
+    const teamSelect = within(dialog).getByLabelText(/Team member/);
+    fireEvent.click(teamSelect);
+    await waitFor(() => expect(teamSelect).toHaveAttribute('data-expanded', 'true'));
+    // Mantine renders the dropdown in a portal outside the modal's aria scope in jsdom.
+    fireEvent.click(await screen.findByRole('option', { name: 'Current User', hidden: true }));
+    const platformSelect = within(dialog).getByLabelText('Platform');
+    fireEvent.click(platformSelect);
+    await waitFor(() => expect(platformSelect).toHaveAttribute('data-expanded', 'true'));
+    expect(await screen.findByRole('option', { name: 'FreeTour', hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Civitatis', hidden: true })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Retired', hidden: true })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name, hidden: true }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add entry' }));
+    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledWith('/reviews/archive/manual-credits', expect.objectContaining({ userId: 42, platform, credit: 1, date: '2026-10-01' })));
+    expect(mockedGet.mock.calls.every(([url]) => url === '/reviews/archive/summary')).toBe(true);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('removes an exact manual addition and reloads the monthly totals', async () => {
@@ -246,6 +282,7 @@ describe('ReviewOverviewDashboard', () => {
 
   it('edits an exact manual addition and shows its refreshed description', async () => {
     const baseSummary = {
+      reviewPlatforms: configuredPlatforms,
       reviewCount: 2,
       deletedCount: 0,
       unassignedCount: 0,
@@ -345,6 +382,12 @@ describe('ReviewOverviewDashboard', () => {
     fireEvent.click(editButtons[0]);
 
     const dialog = await screen.findByRole('dialog', { name: 'Edit manual addition' });
+    const editPlatformSelect = within(dialog).getByLabelText(/Platform/);
+    fireEvent.click(editPlatformSelect);
+    await waitFor(() => expect(editPlatformSelect).toHaveAttribute('data-expanded', 'true'));
+    expect(await screen.findByRole('option', { name: 'FreeTour', hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Civitatis', hidden: true })).toBeInTheDocument();
+    fireEvent.keyDown(editPlatformSelect, { key: 'Escape', code: 'Escape' });
     fireEvent.change(within(dialog).getByLabelText(/Credit amount/), { target: { value: '0.5' } });
     fireEvent.change(within(dialog).getByLabelText(/Description/), {
       target: { value: 'Updated description' },

@@ -41,6 +41,7 @@ import axiosInstance from "../../utils/axiosInstance";
 import { effectiveReviewMonth } from "../../utils/reviewCreditMonth";
 import ReviewMonthlySummary from "../reviewCounters/ReviewMonthlySummary";
 import DailyReviewTrend, { type TrendSnapshot } from "./DailyReviewTrend";
+import { reviewPlatformLabel, reviewPlatformOptions, type ConfiguredReviewPlatform } from "./reviewPlatformOptions";
 type Staff = {
   userId: number;
   name: string;
@@ -90,6 +91,7 @@ type UnassignedReview = {
   isDeleted: boolean;
 };
 type OverviewSummary = {
+  reviewPlatforms?: ConfiguredReviewPlatform[];
   staff: Staff[];
   reviewCount: number;
   deletedCount: number;
@@ -262,7 +264,8 @@ export default function ReviewOverviewDashboard({
     onMonthChange(dayjs(`${month}-01`).add(amount, "month").format("YYYY-MM"));
   const toggleUser = (userId: number) => setExpandedUsers(current => { const next = new Set(current); next.has(userId) ? next.delete(userId) : next.add(userId); return next; });
   const togglePlatform = (key: string) => setExpandedPlatforms(current => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next; });
-  const platformLabel = (platform: string) => ({ google: "Google", tripadvisor: "TripAdvisor", airbnb: "Airbnb", getyourguide: "GetYourGuide", manual: "Manual" }[platform] ?? platform);
+  const configuredPlatforms = summary.reviewPlatforms ?? [];
+  const platformLabel = (platform: string) => reviewPlatformLabel(platform, configuredPlatforms);
 
   const renderStaffDetails = (staff: Staff) => (
     <Stack p={{ base: "xs", sm: "md" }} gap="xs" bg="var(--mantine-color-gray-0)">
@@ -798,13 +801,7 @@ export default function ReviewOverviewDashboard({
             <Select
               required
               label="Platform"
-              data={[
-                { value: "google", label: "Google" },
-                { value: "tripadvisor", label: "TripAdvisor" },
-                { value: "airbnb", label: "Airbnb" },
-                { value: "getyourguide", label: "GetYourGuide" },
-                { value: "manual", label: "Manual / Other" },
-              ]}
+              data={reviewPlatformOptions(configuredPlatforms, manualEditForm.platform)}
               value={manualEditForm.platform}
               onChange={(value) => setManualEditForm((current) => ({ ...current, platform: value ?? "manual" }))}
             />
@@ -994,13 +991,7 @@ export default function ReviewOverviewDashboard({
               )}
               <Select
                 label="Platform"
-                data={[
-                  { value: "google", label: "Google" },
-                  { value: "tripadvisor", label: "TripAdvisor" },
-                  { value: "airbnb", label: "Airbnb" },
-                  { value: "getyourguide", label: "GetYourGuide" },
-                  { value: "manual", label: "Manual / Other" },
-                ]}
+                data={reviewPlatformOptions(configuredPlatforms)}
                 value={form.platform}
                 onChange={(value) => setForm({ ...form, platform: value ?? "manual" })}
               />

@@ -8,6 +8,7 @@ import ReviewSyncRun from '../models/ReviewSyncRun.js';
 import ReviewManualCredit from '../models/ReviewManualCredit.js';
 import ReviewDailySnapshot from '../models/ReviewDailySnapshot.js';
 import ReviewMonthLock from '../models/ReviewMonthLock.js';
+import ReviewPlatform from '../models/ReviewPlatform.js';
 import User from '../models/User.js';
 import { assertReviewSyncCanMarkMissingDeleted } from '../services/reviewSyncSafety.js';
 import { reviewDateRangeInWarsaw, reviewPeriodStartInWarsaw } from '../utils/reviewCreditMonth.js';
@@ -519,7 +520,7 @@ export async function getReviewCreditSummary(req: AuthenticatedRequest, res: Res
     }
     const trendSince = new Date();
     trendSince.setUTCDate(trendSince.getUTCDate() - 89);
-    const [allUsers, trendSnapshots] = await Promise.all([
+    const [allUsers, trendSnapshots, reviewPlatforms] = await Promise.all([
       User.findAll({
         attributes: ['id', 'firstName', 'lastName', 'username'],
         order: [['firstName', 'ASC'], ['lastName', 'ASC']],
@@ -527,6 +528,11 @@ export async function getReviewCreditSummary(req: AuthenticatedRequest, res: Res
       ReviewDailySnapshot.findAll({
         where: { snapshotDate: { [Op.gte]: trendSince.toISOString().slice(0, 10) } },
         order: [['snapshotDate', 'ASC'], ['platform', 'ASC']],
+      }),
+      // Review readers need these choices without permission to administer Settings.
+      ReviewPlatform.findAll({
+        attributes: ['slug', 'name', 'isActive', 'sourceKey', 'aliases'],
+        order: [['name', 'ASC']],
       }),
     ]);
     const users = totals.size ? allUsers.filter(user => totals.has(user.id)) : [];
@@ -563,6 +569,7 @@ export async function getReviewCreditSummary(req: AuthenticatedRequest, res: Res
       unassignedReviews,
       users: allUsers,
       trendSnapshots,
+      reviewPlatforms,
       manualCategoryTotals: {
         noName: manual.filter(row => row.category === 'no_name').reduce((sum, row) => sum + Number(row.credit), 0),
         bad: manual.filter(row => row.category === 'bad').reduce((sum, row) => sum + Number(row.credit), 0),
