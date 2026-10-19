@@ -69,7 +69,7 @@ const upcomingReport: StayReport = {
 };
 const query = (data: unknown) => ({ data, isLoading: false, isFetching: false, error: null, refetch: jest.fn() });
 const save = jest.fn();
-const renderProgress = jest.fn(() => <div>Calculated stay milestones</div>);
+const renderProgress = jest.fn((_report: StayReport, _canEdit: boolean, _onEditTargets: (section: "reviews" | "attendance" | "monthly_shifts") => void) => <div>Calculated stay milestones</div>);
 const view = () => <MantineProvider><VolunteerStayProgress renderProgress={renderProgress} /></MantineProvider>;
 
 describe("Volunteer stay progress", () => {
@@ -91,6 +91,16 @@ describe("Volunteer stay progress", () => {
   });
 
   afterEach(() => jest.clearAllMocks());
+
+  it("opens the target-specific editor from the milestone callback", async () => {
+    renderProgress.mockImplementationOnce((_report, _canEdit, onEditTargets) => <button onClick={() => onEditTargets("reviews")}>Adjust review goal</button>);
+    render(view());
+    fireEvent.click(screen.getByRole("button", { name: "View Former Volunteer volunteer progress" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Adjust review goal" }));
+    expect(await screen.findByRole("heading", { name: "Edit review target" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Reviews for entire stay/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Cleaning tasks per month/)).not.toBeInTheDocument();
+  });
 
   it("shows every volunteer from the bulk roster with profile photos before loading an individual detail", () => {
     (api.useVolunteerStayList as jest.Mock).mockReturnValue(query({
@@ -121,8 +131,9 @@ describe("Volunteer stay progress", () => {
     expect(await screen.findByText(report.warnings[0])).toBeInTheDocument();
     expect(screen.getByText(/1.5 months equivalent/)).toBeInTheDocument();
     expect(screen.getByText(/through the day before departure/)).toBeInTheDocument();
-    expect(renderProgress).toHaveBeenCalledWith(report, true);
-    expect(screen.getByText(/Photo-managed cleaning shifts count only after every required photo is approved/)).toBeInTheDocument();
+    expect(renderProgress).toHaveBeenCalledWith(report, true, expect.any(Function));
+    expect(screen.getByText(/Photo-managed shifts require every required photo to be approved/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Cleaning tasks per month/)).not.toBeInTheDocument();
   });
 
   it("lets Social Media users view only their own stay without manager controls", () => {

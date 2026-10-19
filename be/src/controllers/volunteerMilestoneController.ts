@@ -12,6 +12,8 @@ import {
   listVolunteerStayProgress,
   saveVolunteerStay,
   saveVolunteerStayFeedback,
+  saveVolunteerStayAssessment,
+  getVolunteerReviewerPhotoRecord,
 } from '../services/volunteerStayService.js';
 import type { VolunteerAttendanceStatus } from '../models/VolunteerShiftAttendance.js';
 import { openProfilePhotoStream } from '../services/profilePhotoStorageService.js';
@@ -110,7 +112,8 @@ export const streamVolunteerProfilePhoto = async (
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const userId = positiveId(req.params.userId, 'userId');
-    const photo = await getVolunteerProfilePhotoRecord(userId);
+    const photo = req.params.reviewerId == null ? await getVolunteerProfilePhotoRecord(userId)
+      : await getVolunteerReviewerPhotoRecord(userId, positiveId(req.params.stayId, 'stayId'), positiveId(req.params.reviewerId, 'reviewerId'));
     const { stream, mimeType } = await openProfilePhotoStream(photo.storagePath);
     if (res.destroyed) {
       stream.destroy();
@@ -247,5 +250,14 @@ export const putVolunteerStayFeedback = async (req: AuthenticatedRequest, res: R
     res.json(progress);
   } catch (error) {
     sendError(res, error, 'Unable to save volunteer stay feedback.');
+  }
+};
+
+export const putVolunteerStayAssessment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    res.json(await saveVolunteerStayAssessment({ userId: positiveId(req.params.userId, 'userId'),
+      stayId: positiveId(req.params.stayId, 'stayId'), body: req.body, actorId: actorId(req), roleSlug: req.authContext?.roleSlug ?? '' }));
+  } catch (error) {
+    sendError(res, error, 'Unable to save the volunteer assessment.');
   }
 };

@@ -112,6 +112,7 @@ describe("volunteer milestone helpers", () => {
   });
 
   it("formats exact progress in plain language", () => {
+    expect(formatMilestoneAmount({ ...milestone("cleaning"), current: 0, target: 0, unit: "assigned cleanings" })).toBe("No cleaning assigned");
     expect(formatMilestoneAmount(milestone("reviews"))).toBe("1 of 2 items");
     expect(
       formatMilestoneAmount({ ...milestone("attendance"), current: 90, target: 90, unit: "%" }),

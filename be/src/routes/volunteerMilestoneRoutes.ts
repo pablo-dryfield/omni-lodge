@@ -9,6 +9,7 @@ import {
   createVolunteerStay,
   updateVolunteerStay,
   putVolunteerStayFeedback,
+  putVolunteerStayAssessment,
   streamVolunteerProfilePhoto,
 } from '../controllers/volunteerMilestoneController.js';
 import authMiddleware from '../middleware/authMiddleware.js';
@@ -66,7 +67,7 @@ const userIdValidator = param('userId')
 const stayIdQueryValidator = query('stayId').optional().isInt({ gt: 0 }).withMessage('stayId must be a positive integer').toInt();
 const stayIdValidator = param('stayId').isInt({ gt: 0 }).withMessage('stayId must be a positive integer').toInt();
 const revisionValidator = body('expectedRevision').isInt({ gt: 0 }).withMessage('expectedRevision must be a positive integer').toInt();
-const stayFields = ['startDate', 'endDate', 'position', 'monthlyTargets', 'shiftTypeIds', 'changeReason'] as const;
+const stayFields = ['startDate', 'endDate', 'position', 'monthlyTargets', 'shiftTypeIds', 'targetOverrides', 'changeReason'] as const;
 
 const selfOrManagerGuard = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
   const requestedUserId = Number(req.params.userId);
@@ -109,6 +110,18 @@ router.patch(
   authMiddleware, managerGuard, authorizeModuleAction(MODULE_SLUG, 'update'),
   validateBodyKeys([...stayFields, 'expectedRevision']), userIdValidator, stayIdValidator,
   revisionValidator, validate, updateVolunteerStay,
+);
+
+router.patch(
+  '/:userId/stays/:stayId/assessment',
+  authMiddleware, managerGuard, authorizeModuleAction(MODULE_SLUG, 'update'),
+  userIdValidator, stayIdValidator, revisionValidator, validate, putVolunteerStayAssessment,
+);
+
+router.get(
+  '/:userId/stays/:stayId/reviewers/:reviewerId/profile-photo',
+  authMiddleware, authorizeModuleAction(MODULE_SLUG, 'view'), userIdValidator, stayIdValidator,
+  param('reviewerId').isInt({ gt: 0 }).toInt(), validate, selfOrManagerGuard, streamVolunteerProfilePhoto,
 );
 
 router.patch(

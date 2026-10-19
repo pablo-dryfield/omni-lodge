@@ -52,6 +52,21 @@ export type VolunteerMilestone = {
 };
 
 export type VolunteerStayPosition = "guide" | "social_media";
+export type StayAssessmentReview = {
+  vote: "up" | "down"; feedback: string; actorId: number; updatedAt: string; startDate: string; endDate: string;
+};
+export type StayAssessmentWaiver = {
+  reason: string; actorId: number; updatedAt: string; startDate: string; endDate: string;
+};
+export type VolunteerStayAssessment = {
+  reviewers: Array<{
+    userId: number; firstName: string; lastName: string; profilePhotoUrl: string | null;
+    hasStoredProfilePhoto: boolean; profilePhotoVersion: string | null; sharedShiftCount: number; sharedShiftIds: number[];
+    review: StayAssessmentReview | null; waiver: StayAssessmentWaiver | null;
+  }>;
+  pendingCount: number; upCount: number; downCount: number; waivedCount: number;
+  earned: boolean; needsFallback: boolean; fallback: StayAssessmentReview | null;
+};
 export type VolunteerStayTargets = {
   reviews: number;
   guidingShifts: number;
@@ -60,6 +75,7 @@ export type VolunteerStayTargets = {
   cleaningTasks: number;
   attendancePercent: number;
 };
+export type VolunteerStayTargetOverrides = Partial<Pick<VolunteerStayTargets, "reviews" | "guidingShifts" | "promotionShifts" | "socialMediaShifts">>;
 export type VolunteerStayShiftTypes = {
   guiding: number[];
   promotion: number[];
@@ -72,6 +88,7 @@ export type VolunteerStay = {
   endDate: string;
   position: VolunteerStayPosition;
   monthlyTargets: VolunteerStayTargets;
+  targetOverrides?: VolunteerStayTargetOverrides | null;
   shiftTypeIds: VolunteerStayShiftTypes;
   changeReason: string | null;
   revision: number;
@@ -167,6 +184,8 @@ export type VolunteerStayProgress = {
   milestones: VolunteerMilestone[];
   attendanceAssignments: VolunteerAttendanceAssignment[];
   managementFeedback: VolunteerManagementFeedback | null;
+  assessment?: VolunteerStayAssessment | null;
+  cleaningWaiver?: StayAssessmentWaiver | null;
   warnings: string[];
   shiftTypes: Array<{ id: number; key: string; name: string }>;
 };
@@ -187,6 +206,7 @@ export type SaveVolunteerStayInput = {
   endDate: string;
   position: VolunteerStayPosition;
   monthlyTargets: VolunteerStayTargets;
+  targetOverrides?: VolunteerStayTargetOverrides | null;
   shiftTypeIds: VolunteerStayShiftTypes;
   changeReason?: string;
 };
@@ -284,6 +304,26 @@ export const useUpdateVolunteerStayFeedback = () => {
     Parameters<typeof updateVolunteerStayFeedback>[0]
   >({
     mutationFn: updateVolunteerStayFeedback,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: volunteerMilestoneKeys.all }),
+    onError: async (error) => {
+      if (error.response?.status === 409) await queryClient.invalidateQueries({ queryKey: volunteerMilestoneKeys.all });
+    },
+  });
+};
+
+export type StayAssessmentInput = { userId: number; stayId: number; expectedRevision: number } & (
+  | { action: "review" | "fallback"; vote: "up" | "down"; feedback: string }
+  | { action: "waive-reviewer"; reviewerId: number; waived: boolean; reason: string }
+  | { action: "waive-cleaning"; waived: boolean; reason: string }
+);
+export const updateVolunteerStayAssessment = async ({ userId, stayId, ...payload }: StayAssessmentInput): Promise<VolunteerStayProgress> => {
+  const response = await axiosInstance.patch<VolunteerStayProgress>(`/volunteerMilestones/${userId}/stays/${stayId}/assessment`, payload);
+  return response.data;
+};
+export const useUpdateVolunteerStayAssessment = () => {
+  const queryClient = useQueryClient();
+  return useMutation<VolunteerStayProgress, VolunteerMilestoneApiError, StayAssessmentInput>({
+    mutationFn: updateVolunteerStayAssessment,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: volunteerMilestoneKeys.all }),
     onError: async (error) => {
       if (error.response?.status === 409) await queryClient.invalidateQueries({ queryKey: volunteerMilestoneKeys.all });

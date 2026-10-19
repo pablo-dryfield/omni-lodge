@@ -59,6 +59,7 @@ jest.mock('../../controllers/volunteerMilestoneController.js', () => {
     createVolunteerStay: jest.fn(respond),
     updateVolunteerStay: jest.fn(respond),
     putVolunteerStayFeedback: jest.fn(respond),
+    putVolunteerStayAssessment: jest.fn(respond),
     streamVolunteerProfilePhoto: jest.fn(respond),
   };
 });
@@ -85,6 +86,27 @@ const buildApp = () => {
 
 describe('volunteer milestone route authorization and contract', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it.each(['owner', 'admin', 'manager', 'assistant_manager'])('allows %s to submit an assessment through the guarded endpoint', async (role) => {
+    const response = await request(buildApp()).patch('/api/volunteerMilestones/42/stays/8/assessment')
+      .set('x-test-role', role).set('x-test-actions', 'update')
+      .send({ action: 'review', expectedRevision: 1, vote: 'up', feedback: 'Observed work' });
+    expect(response.status).toBe(204);
+  });
+  it('blocks guide writes, missing module permission and invalid revisions on assessments', async () => {
+    const path = '/api/volunteerMilestones/42/stays/8/assessment';
+    const payload = { action: 'review', expectedRevision: 1, vote: 'up', feedback: 'Observed work' };
+    expect((await request(buildApp()).patch(path).set('x-test-role', 'guide').set('x-test-actions', 'update').send(payload)).status).toBe(403);
+    expect((await request(buildApp()).patch(path).set('x-test-role', 'owner').send(payload)).status).toBe(403);
+    expect((await request(buildApp()).patch(path).set('x-test-role', 'owner').set('x-test-actions', 'update').send({ ...payload, expectedRevision: 0 })).status).toBe(400);
+  });
+  it('restricts reviewer profile photos to the subject or management', async () => {
+    const own = await request(buildApp()).get('/api/volunteerMilestones/91/stays/8/reviewers/44/profile-photo')
+      .set('x-test-role', 'guide').set('x-test-actions', 'view');
+    const another = await request(buildApp()).get('/api/volunteerMilestones/42/stays/8/reviewers/44/profile-photo')
+      .set('x-test-role', 'guide').set('x-test-actions', 'view');
+    expect([own.status, another.status]).toEqual([204, 403]);
+  });
 
   it('allows a guide to read only their own selected historical period', async () => {
     const response = await request(buildApp())

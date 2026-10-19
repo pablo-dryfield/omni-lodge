@@ -43,7 +43,7 @@ import {
   getVolunteerProfilePhotoUrl,
   orderVolunteerMilestones,
 } from "../../utils/volunteerMilestones";
-import VolunteerStayEditor from "./VolunteerStayEditor";
+import VolunteerStayEditor, { type VolunteerTargetSection } from "./VolunteerStayEditor";
 
 type StayStatus = "setup" | "current" | "upcoming" | "past";
 
@@ -231,7 +231,7 @@ const VolunteerGroup = ({
 const VolunteerStayProgress = ({
   renderProgress,
 }: {
-  renderProgress: (report: StayReport, canEdit: boolean) => ReactNode;
+  renderProgress: (report: StayReport, canEdit: boolean, onEditTargets: (section: VolunteerTargetSection) => void) => ReactNode;
 }) => {
   const role = useAppSelector((state) => state.session.roleSlug);
   const access = useModuleAccess(PAGE_SLUGS.volunteerProgress);
@@ -242,6 +242,7 @@ const VolunteerStayProgress = ({
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [selectedStayId, setSelectedStayId] = useState<number | null>(null);
   const [editorMode, setEditorMode] = useState<"new" | "edit" | null>(null);
+  const [targetSection, setTargetSection] = useState<VolunteerTargetSection | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const listQuery = useVolunteerStayList(canView && isManager);
   const reportQuery = useVolunteerStayProgress(
@@ -294,6 +295,7 @@ const VolunteerStayProgress = ({
 
   const closeVolunteer = () => {
     setEditorMode(null);
+    setTargetSection(null);
     setSavedMessage(null);
     setSelectedUserId(null);
     setSelectedStayId(null);
@@ -331,8 +333,8 @@ const VolunteerStayProgress = ({
               </Box>
               {canEdit ? (
                 <Group gap="xs">
-                  <Button variant="light" onClick={() => setEditorMode("edit")}>Edit stay</Button>
-                  <Button variant="default" onClick={() => setEditorMode("new")}>Add stay</Button>
+                  <Button variant="light" onClick={() => { setTargetSection(null); setEditorMode("edit"); }}>Edit stay</Button>
+                  <Button variant="default" onClick={() => { setTargetSection(null); setEditorMode("new"); }}>Add stay</Button>
                 </Group>
               ) : null}
             </Group>
@@ -354,9 +356,9 @@ const VolunteerStayProgress = ({
             ) : null}
           </Paper>
           {report.warnings.map((warning, index) => <Alert key={`${index}-${warning}`} color="yellow">{warning}</Alert>)}
-          {renderProgress(report, canEdit)}
+          {renderProgress(report, canEdit, (section) => { setTargetSection(section); setEditorMode("edit"); })}
           <Text size="sm" c="dimmed">
-            Photo-managed cleaning shifts count only after every required photo is approved. Other cleaning work uses completed tasks or manager-confirmed shifts.
+            Cleaning counts approved work against published cleaning assignments within the saved stay. New assignments can return the star to in progress. Photo-managed shifts require every required photo to be approved; other cleaning shifts require confirmed attendance.
           </Text>
         </>
       )}
@@ -366,6 +368,7 @@ const VolunteerStayProgress = ({
           key={`${report.user.id}-${editorMode}`}
           report={{ ...report, shiftTypes: report.shiftTypes ?? listQuery.data?.shiftTypes ?? [] }}
           mode={editorMode}
+          targetSection={targetSection}
           onClose={() => setEditorMode(null)}
           onSaved={(saved) => {
             setSelectedStayId(saved.stay?.id ?? null);

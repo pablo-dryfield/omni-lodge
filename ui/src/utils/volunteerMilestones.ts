@@ -106,6 +106,7 @@ export const formatVolunteerProgressNumber = (value: number): string => Number.i
 
 export const formatMilestoneAmount = (milestone: VolunteerMilestone): string => {
   const unit = milestone.unit.trim();
+  if (milestone.key === "cleaning" && unit === "assigned cleanings" && milestone.target === 0) return "No cleaning assigned";
   const current = formatVolunteerProgressNumber(milestone.current);
   const target = formatVolunteerProgressNumber(milestone.target);
   if (unit === "%" || unit.toLowerCase() === "percent" || unit.toLowerCase() === "percentage") {

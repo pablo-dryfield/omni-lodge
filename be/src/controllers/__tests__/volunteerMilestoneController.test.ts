@@ -13,6 +13,8 @@ jest.mock('../../services/volunteerStayService.js', () => ({
   listVolunteerStayProgress: jest.fn(),
   saveVolunteerStay: jest.fn(),
   saveVolunteerStayFeedback: jest.fn(),
+  saveVolunteerStayAssessment: jest.fn(),
+  getVolunteerReviewerPhotoRecord: jest.fn(),
 }));
 jest.mock('../../services/volunteerProfilePhotoService.js', () => ({
   getVolunteerProfilePhotoRecord: jest.fn(),
@@ -22,7 +24,7 @@ jest.mock('../../services/profilePhotoStorageService.js', () => ({
 }));
 
 import { getVolunteerMilestoneProgress, listActiveVolunteerMilestoneProgress } from '../../services/volunteerMilestoneService.js';
-import { getVolunteerStayProgress, listVolunteerStayProgress, saveVolunteerStay, saveVolunteerStayFeedback } from '../../services/volunteerStayService.js';
+import { getVolunteerStayProgress, listVolunteerStayProgress, saveVolunteerStay, saveVolunteerStayFeedback, saveVolunteerStayAssessment } from '../../services/volunteerStayService.js';
 import { getVolunteerProfilePhotoRecord } from '../../services/volunteerProfilePhotoService.js';
 import { openProfilePhotoStream } from '../../services/profilePhotoStorageService.js';
 import {
@@ -31,6 +33,7 @@ import {
   getVolunteerMilestones,
   listVolunteerMilestones,
   putVolunteerStayFeedback,
+  putVolunteerStayAssessment,
   streamVolunteerProfilePhoto,
   updateVolunteerStay,
 } from '../volunteerMilestoneController.js';
@@ -44,6 +47,13 @@ const response = (): Response => {
 
 describe('volunteer milestone controller ownership', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it('takes assessment actor and role only from the authenticated context', async () => {
+    (saveVolunteerStayAssessment as jest.Mock).mockResolvedValue({ mode: 'stay' });
+    const body = { action: 'review', vote: 'up', feedback: 'Observed', expectedRevision: 1 };
+    await putVolunteerStayAssessment({ authContext: { id: 99, roleSlug: 'manager' }, params: { userId: '42', stayId: '12' }, body } as unknown as AuthenticatedRequest, response());
+    expect(saveVolunteerStayAssessment).toHaveBeenCalledWith({ userId: 42, stayId: 12, actorId: 99, roleSlug: 'manager', body });
+  });
 
   it('derives the self-service subject only from auth context and preserves period', async () => {
     const payload = { user: { id: 91 } };

@@ -12,6 +12,7 @@ jest.mock('../../models/ReviewMonthLock.js', () => ({ __esModule: true, default:
 jest.mock('../../models/ScheduleWeek.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ShiftAssignment.js', () => ({ __esModule: true, default: { findAll: jest.fn(), findByPk: jest.fn() } }));
 jest.mock('../../models/ShiftInstance.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/ShiftRole.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ShiftTemplate.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ShiftType.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../../models/StaffProfile.js', () => ({ __esModule: true, default: { findAll: jest.fn(), findOne: jest.fn() } }));
@@ -48,6 +49,8 @@ import {
   resolveVolunteerStayPosition,
   saveVolunteerStay,
   saveVolunteerStayFeedback,
+  saveVolunteerStayAssessment,
+  getVolunteerReviewerPhotoRecord,
   suggestVolunteerShiftMappings,
 } from '../volunteerStayService.js';
 
@@ -62,7 +65,7 @@ const types = [{ id: 1, key: 'pub_crawl', name: 'Pub Crawl' }, { id: 2, key: 'pr
 const makeStay = (overrides: Record<string, unknown> = {}) => {
   const stay = { id: 70, userId: 7, startDate: '2026-08-15', endDate: '2026-09-30', position: 'guide',
     monthlyTargets: { ...DEFAULT_VOLUNTEER_MONTHLY_TARGETS }, shiftTypeIds: { guiding: [1], promotion: [2], socialMedia: [3] },
-    feedback: null, changeReason: null, revision: 1, createdBy: 9, updatedBy: 9,
+    feedback: null, assessment: null, changeReason: null, revision: 1, createdBy: 9, updatedBy: 9,
     createdAt: new Date('2026-08-01T10:00:00Z'), updatedAt: new Date('2026-08-01T10:00:00Z'), ...overrides,
     update: jest.fn(),
   };
@@ -301,6 +304,123 @@ describe('volunteer stay integration regressions', () => {
     }
     (ShiftAssignment.findAll as jest.Mock).mockResolvedValue([{ ...row, volunteerAttendance: evidence }]);
     expect(milestone(await report(), 'monthly_shifts').current).toBe(1);
+  });
+
+  const cleaningShift = (id: number, date = '2026-08-20', status: string | null = 'attended') => {
+    const row = shift(id, 7, date, status);
+    row.shiftInstance.shiftType = { id: 7, key: 'cleaning', name: 'Cleaning' } as never;
+    return row;
+  };
+  const withManagers = (rows: ReturnType<typeof shift>[], managers: Array<Record<string, unknown>>) => {
+    (ShiftAssignment.findAll as jest.Mock).mockImplementation(async (options) => options.where.userId ? rows : managers);
+  };
+  const manager = (userId: number, shiftInstanceId: number, overrides: Record<string, unknown> = {}) => ({
+    id: userId + shiftInstanceId, userId, shiftInstanceId, roleInShift: 'Manager', shiftRole: { slug: 'manager' },
+    assignee: { id: userId, firstName: `Manager ${userId}`, lastName: 'Test', profilePhotoPath: 'drive:private-photo', updatedAt: new Date('2026-09-01') }, ...overrides,
+  });
+
+  it('moves 0/1 to 1/1, then 1/2 and 2/2 as cleaning shifts are assigned and completed', async () => {
+    const first = cleaningShift(1, '2026-08-20', null);
+    withManagers([first], []);
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 0, target: 1, earned: false });
+    first.volunteerAttendance = shift(1, 7).volunteerAttendance;
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 1, target: 1, earned: true });
+    const second = cleaningShift(2, '2026-09-10', null);
+    withManagers([first, second], []);
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 1, target: 2, earned: false, expectedToDate: 1 });
+    second.volunteerAttendance = shift(2, 7).volunteerAttendance;
+    expect(milestone(await report(new Date('2026-09-11T12:00:00Z')), 'cleaning')).toMatchObject({ current: 2, target: 2, earned: true });
+  });
+
+  it('counts only stay-window assignments, excludes excused shifts and deduplicates physical shifts', async () => {
+    const first = cleaningShift(1, '2026-08-15');
+    withManagers([first, { ...first, id: 9 }, cleaningShift(2, '2026-08-14'), cleaningShift(3, '2026-09-30'),
+      cleaningShift(4, '2026-08-21', 'excused'), cleaningShift(5, '2026-08-22', 'absent')], []);
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 1, target: 2, earned: false });
+    // A removed/cancelled assignment is no longer an obligation.
+    withManagers([first], []);
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 1, target: 1, earned: true });
+  });
+
+  it('does not erase an unexcused missed cleaning at the end of a stay', async () => {
+    stay = makeStay({ endDate: '2026-09-01' });
+    withManagers([cleaningShift(1), cleaningShift(2, '2026-08-21'), cleaningShift(3, '2026-08-22', 'absent')], []);
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 2, target: 3, earned: false });
+  });
+
+  it('requires an explicit zero-assignment waiver, ignores the old quota and unrelated completed tasks', async () => {
+    (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([{ id: 4, userId: 7, taskDate: '2026-08-20', template: { name: 'Cleaning' } }]);
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 0, target: 0, earned: false, progressPercent: 0 });
+    (VolunteerStay.findOne as jest.Mock).mockResolvedValue(stay);
+    let progress = await saveVolunteerStayAssessment({ userId: 7, stayId: 70, actorId: 9, roleSlug: 'manager',
+      body: { action: 'waive-cleaning', expectedRevision: 1, waived: true, reason: 'Arrived late in the week; no cleaning assigned' } });
+    expect(milestone(progress, 'cleaning')).toMatchObject({ earned: true, current: 0, target: 0 });
+    withManagers([cleaningShift(1, '2026-09-10', null)], []);
+    progress = await report();
+    expect(milestone(progress, 'cleaning')).toMatchObject({ earned: false, target: 1 });
+    expect(progress.cleaningWaiver).toBeNull();
+  });
+
+  it('finds actual shared shift managers, not same-day managers or guide-role duplicates', async () => {
+    const rows = [shift(1, 1), shift(2, 2, '2026-08-21', 'late'), shift(3, 1, '2026-09-10', 'attended'), shift(4, 1, '2026-08-22', 'absent')];
+    withManagers(rows, [manager(91, 1001), manager(91, 1001), manager(91, 1002), manager(92, 1001), manager(93, 9999),
+      manager(94, 1003), manager(95, 1004), manager(7, 1001), manager(96, 1001, { shiftRole: { slug: 'guide' }, roleInShift: 'Guide' })]);
+    const progress = await report();
+    expect(progress.assessment?.reviewers.map((row) => [row.userId, row.sharedShiftCount])).toEqual([[91, 2], [92, 1]]);
+    expect(JSON.stringify(progress.assessment)).not.toContain('drive:private-photo');
+    expect(progress.assessment?.pendingCount).toBe(2);
+  });
+
+  it('accepts only a manager’s own required vote, audits edits and rejects stale revisions', async () => {
+    withManagers([shift(1, 1)], [manager(91, 1001), manager(92, 1001)]);
+    (VolunteerStay.findOne as jest.Mock).mockResolvedValue(stay);
+    const input = { userId: 7, stayId: 70, actorId: 91, roleSlug: 'assistant-manager',
+      body: { action: 'review', expectedRevision: 1, vote: 'up', feedback: 'Reliable on our shifts' } };
+    expect((await saveVolunteerStayAssessment(input)).assessment).toMatchObject({ earned: false, upCount: 1, pendingCount: 1 });
+    expect(VolunteerStayRevision.create).toHaveBeenCalledWith(expect.objectContaining({ actorId: 91, revision: 2 }), { transaction });
+    await expect(saveVolunteerStayAssessment(input)).rejects.toMatchObject({ status: 409 });
+    await expect(saveVolunteerStayAssessment({ ...input, actorId: 93, body: { ...input.body, expectedRevision: 2 } })).rejects.toMatchObject({ status: 403 });
+    const progress = await saveVolunteerStayAssessment({ ...input, actorId: 92, body: { ...input.body, expectedRevision: 2, vote: 'down', feedback: 'Needs improvement' } });
+    expect(progress.assessment).toMatchObject({ earned: true, upCount: 1, downCount: 1, pendingCount: 0 });
+    expect(milestone(progress, 'management_feedback').earned).toBe(true);
+    expect(milestone(progress, 'reviews').earned).toBe(false);
+    expect(milestone(progress, 'cleaning').earned).toBe(false);
+    const changed = await saveVolunteerStayAssessment({ ...input, body: { ...input.body, expectedRevision: 3,
+      vote: 'down', feedback: 'Updated assessment after review' } });
+    expect(changed.assessment).toMatchObject({ earned: false, upCount: 0, downCount: 2 });
+    expect(changed.stay?.revision).toBe(4);
+  });
+
+  it('restricts reviewer waivers and no-vote assessments to owner/admin and never manufactures votes', async () => {
+    withManagers([shift(1, 1)], [manager(91, 1001)]);
+    (VolunteerStay.findOne as jest.Mock).mockResolvedValue(stay);
+    const waiver = { action: 'waive-reviewer', reviewerId: 91, waived: true, reason: 'Departed and unavailable', expectedRevision: 1 };
+    await expect(saveVolunteerStayAssessment({ userId: 7, stayId: 70, actorId: 9, roleSlug: 'manager', body: waiver })).rejects.toMatchObject({ status: 403 });
+    let progress = await saveVolunteerStayAssessment({ userId: 7, stayId: 70, actorId: 9, roleSlug: 'administrator', body: waiver });
+    expect(progress.assessment).toMatchObject({ earned: false, upCount: 0, waivedCount: 1, needsFallback: true });
+    progress = await saveVolunteerStayAssessment({ userId: 7, stayId: 70, actorId: 9, roleSlug: 'owner',
+      body: { action: 'fallback', expectedRevision: 2, vote: 'up', feedback: 'Personally reviewed the stay' } });
+    expect(progress.assessment).toMatchObject({ earned: true, upCount: 0, fallback: { actorId: 9 } });
+    progress = await saveVolunteerStayAssessment({ userId: 7, stayId: 70, actorId: 9, roleSlug: 'owner', body: { ...waiver, waived: false, expectedRevision: 3 } });
+    expect(progress.assessment).toMatchObject({ earned: false, pendingCount: 1, fallback: null });
+  });
+
+  it('rejects self assessment, missing reasons, vote spoofing and an assigned-cleaning blanket waiver', async () => {
+    (VolunteerStay.findOne as jest.Mock).mockResolvedValue(stay);
+    withManagers([cleaningShift(1)], []);
+    const input = { userId: 7, stayId: 70, actorId: 9, roleSlug: 'owner', body: { action: 'waive-cleaning', expectedRevision: 1, waived: true, reason: 'Not permitted' } };
+    await expect(saveVolunteerStayAssessment(input)).rejects.toMatchObject({ status: 409 });
+    await expect(saveVolunteerStayAssessment({ ...input, actorId: 7 })).rejects.toMatchObject({ status: 403 });
+    await expect(saveVolunteerStayAssessment({ ...input, body: { ...input.body, reason: '' } })).rejects.toMatchObject({ status: 400 });
+    await expect(saveVolunteerStayAssessment({ ...input, body: { action: 'review', expectedRevision: 1, reviewerId: 91, vote: 'up', feedback: 'Spoofed' } })).rejects.toMatchObject({ status: 400 });
+    expect(stay.update).not.toHaveBeenCalled();
+  });
+
+  it('serves private profile photos only for reviewers of the requested stay', async () => {
+    withManagers([shift(1, 1)], [manager(91, 1001)]);
+    await expect(getVolunteerReviewerPhotoRecord(7, 70, 92)).rejects.toMatchObject({ status: 404 });
+    userModel.findByPk.mockImplementation(async (id: number) => id === 91 ? { profilePhotoPath: 'drive:manager-photo' } : user);
+    await expect(getVolunteerReviewerPhotoRecord(7, 70, 91)).resolves.toEqual({ storagePath: 'drive:manager-photo' });
   });
 
   it('treats late attendance as attended but requires a separate on-time target', async () => {
@@ -728,13 +848,26 @@ describe('volunteer stay integration regressions', () => {
     expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ action: 'volunteer_stay.updated', actorId: 10 }), { transaction });
   });
 
-  it('rejects feedback approval when any first-four milestone remains incomplete', async () => {
+  it('prevents legacy direct approval from bypassing the automatic manager vote', async () => {
     (VolunteerStay.findOne as jest.Mock).mockResolvedValue(stay);
     await expect(saveVolunteerStayFeedback({ userId: 7, stayId: 70, actorId: 9,
-      body: { expectedRevision: 1, approved: true, feedback: 'Reviewed' } })).rejects.toMatchObject({ status: 409,
-      details: { incompleteMilestones: expect.arrayContaining(['reviews', 'attendance', 'monthly_shifts', 'cleaning']) } });
+      body: { expectedRevision: 1, approved: true, feedback: 'Reviewed' } })).rejects.toMatchObject({ status: 409 });
     expect(stay.update).not.toHaveBeenCalled();
     expect(VolunteerStayRevision.create).not.toHaveBeenCalled();
+  });
+
+  it('audits exact whole-stay target edits without changing monthly defaults or unedited targets', async () => {
+    (VolunteerStay.findOne as jest.Mock).mockResolvedValueOnce(stay).mockResolvedValueOnce(null);
+    let progress = await saveVolunteerStay({ userId: 7, stayId: 70, actorId: 9,
+      body: { expectedRevision: 1, targetOverrides: { reviews: 10, guidingShifts: 7 }, changeReason: 'Agreed adjusted stay goals' } });
+    expect(progress.stay).toMatchObject({ revision: 2, targetOverrides: { reviews: 10, guidingShifts: 7 }, monthlyTargets: DEFAULT_VOLUNTEER_MONTHLY_TARGETS });
+    expect(progress.targetSummary?.targets).toMatchObject({ reviews: 10, guidingShifts: 7, promotionShifts: 18 });
+    expect(VolunteerStayRevision.create).toHaveBeenCalledWith(expect.objectContaining({ reason: 'Agreed adjusted stay goals',
+      snapshot: expect.objectContaining({ targetOverrides: { reviews: 10, guidingShifts: 7 } }) }), { transaction });
+    (VolunteerStay.findOne as jest.Mock).mockResolvedValueOnce(stay).mockResolvedValueOnce(null);
+    progress = await saveVolunteerStay({ userId: 7, stayId: 70, actorId: 9,
+      body: { expectedRevision: 2, targetOverrides: null, changeReason: 'Restore automatic monthly defaults' } });
+    expect(progress.targetSummary?.targets).toMatchObject({ reviews: 23, guidingShifts: 18, promotionShifts: 18 });
   });
 
   it('serializes feedback revisions and rejects future or stale feedback without writes', async () => {
@@ -747,7 +880,7 @@ describe('volunteer stay integration regressions', () => {
     expect(stay.update).not.toHaveBeenCalled();
   });
 
-  it('records written approval only after all first-four milestones, with auditable actor and version', async () => {
+  it('records a zero-vote owner assessment independently of the other stars, with auditable actor and version', async () => {
     stay = makeStay({ startDate: '2026-08-01', endDate: '2026-09-01', monthlyTargets: {
       reviews: 1, guidingShifts: 0, promotionShifts: 0, socialMediaShifts: 0, cleaningTasks: 0, attendancePercent: 90,
     } });
@@ -756,19 +889,18 @@ describe('volunteer stay integration regressions', () => {
     (ReviewArchive.findAll as jest.Mock).mockResolvedValue([archive(41, '2026-08-20T12:00:00Z')]);
     (ReviewAssignment.findAll as jest.Mock).mockResolvedValue([{ reviewId: 41, userId: 7 }, { reviewId: 41, userId: 8 }]);
     (ReviewManualCredit.findAll as jest.Mock).mockResolvedValue([{ id: 5, userId: 7, date: '2026-08-20', credit: '0.5', platform: 'Google', notes: null }]);
-    const progress = await saveVolunteerStayFeedback({ userId: 7, stayId: 70, actorId: 9,
-      body: { expectedRevision: 1, approved: true, feedback: 'Agreed duties met' } });
-    expect(progress).toMatchObject({ starsEarned: 5, stay: { revision: 2, feedback: { approved: true, approvedBy: 9 } } });
+    const progress = await saveVolunteerStayAssessment({ userId: 7, stayId: 70, actorId: 9, roleSlug: 'owner',
+      body: { action: 'fallback', expectedRevision: 1, vote: 'up', feedback: 'Agreed duties met' } });
+    expect(progress).toMatchObject({ starsEarned: 4, stay: { revision: 2 }, assessment: { earned: true } });
+    expect(milestone(progress, 'cleaning').earned).toBe(false);
     expect(sequelize.transaction).toHaveBeenCalledWith({ isolationLevel: 'REPEATABLE READ' }, expect.any(Function));
     for (const model of [ReviewArchive, ReviewAssignment, ReviewCounterEntry, ReviewManualCredit, ReviewMonthLock, ShiftAssignment, AssistantManagerTaskLog, VolunteerStay, ShiftType]) {
       expect((model.findAll as jest.Mock).mock.calls[0][0].transaction).toBe(transaction);
     }
     expect(VolunteerStayRevision.create).toHaveBeenCalledWith(expect.objectContaining({ revision: 2, actorId: 9,
-      snapshot: expect.objectContaining({ approvalEvidence: expect.objectContaining({ asOfDate: '2026-09-06',
-        milestones: expect.arrayContaining([expect.objectContaining({ key: 'reviews', current: 1, earned: true,
-          evidence: expect.arrayContaining([expect.objectContaining({ id: 'archive-41-7' }), expect.objectContaining({ id: 'manual-5' })]) })]) }) }),
+      snapshot: expect.objectContaining({ assessment: expect.objectContaining({ fallback: expect.objectContaining({ actorId: 9, vote: 'up', feedback: 'Agreed duties met' }) }) }),
     }), { transaction });
-    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ action: 'volunteer_stay.feedback_updated' }), { transaction });
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ action: 'volunteer_stay.assessment.fallback' }), { transaction });
   });
 
   it('returns a refresh conflict for concurrent snapshot serialization failures', async () => {

@@ -4,6 +4,8 @@ import {
 } from 'sequelize-typescript';
 import type { NonAttribute } from 'sequelize';
 import User from './User.js';
+import type { StayAssessment } from '../services/volunteerStayAssessmentPolicy.js';
+import type { VolunteerStayTargetOverrides } from '../utils/volunteerStayTargets.js';
 
 export type VolunteerStayPosition = 'guide' | 'social_media';
 export type VolunteerStayMonthlyTargets = {
@@ -55,6 +57,12 @@ export default class VolunteerStay extends Model {
 
   @AllowNull(true) @Column(DataType.JSONB)
   declare feedback: VolunteerStayFeedback | null;
+
+  @AllowNull(true) @Column(DataType.JSONB)
+  declare assessment: StayAssessment | null;
+
+  @AllowNull(true) @Column({ field: 'target_overrides', type: DataType.JSONB })
+  declare targetOverrides: VolunteerStayTargetOverrides | null;
 
   @AllowNull(true) @Column({ field: 'change_reason', type: DataType.TEXT })
   declare changeReason: string | null;

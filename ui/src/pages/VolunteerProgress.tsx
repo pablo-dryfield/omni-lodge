@@ -55,6 +55,8 @@ import {
   type VolunteerProgressReport,
 } from "../api/volunteerMilestones";
 import VolunteerStayProgress from "../components/volunteer/VolunteerStayProgress";
+import VolunteerAssessmentPanel from "../components/volunteer/VolunteerAssessmentPanel";
+import type { VolunteerTargetSection } from "../components/volunteer/VolunteerStayEditor";
 import { useAppSelector } from "../store/hooks";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
@@ -108,7 +110,7 @@ const attendanceStatusMeta = (status: VolunteerAttendanceStatus | null) => {
 
 const evidenceStatusMeta = (status: string | null | undefined) => {
   const normalized = String(status ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (["absent", "missed", "failed", "rejected", "declined"].includes(normalized)) {
+  if (["absent", "missed", "failed", "rejected", "declined", "negative"].includes(normalized)) {
     return { color: "red", Icon: IconAlertCircle, label: "Negative evidence" };
   }
   if (normalized === "late") {
@@ -161,10 +163,12 @@ const MilestoneCard = ({
   milestone,
   index,
   periodTimezone,
+  onEditTargets,
 }: {
   milestone: VolunteerMilestone;
   index: number;
   periodTimezone: string;
+  onEditTargets?: () => void;
 }) => {
   const Icon = MILESTONE_ICONS[milestone.key];
   const evidenceListId = useId();
@@ -207,6 +211,8 @@ const MilestoneCard = ({
             {status.label}
           </Badge>
         </Group>
+
+        {onEditTargets && <Button size="xs" variant="light" onClick={onEditTargets} aria-label={`Edit ${milestone.title.toLowerCase()} targets`}>Edit targets</Button>}
 
         <Box>
           <Group justify="space-between" mb={6} align="end">
@@ -739,7 +745,7 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerProgressReport }) =>
           )}
         </Box>
 
-        <Divider />
+        {!context.stay && <><Divider />
 
         <Box>
           <Group justify="space-between" align="flex-start" mb="md">
@@ -845,7 +851,7 @@ const ManagementWorkspace = ({ detail }: { detail: VolunteerProgressReport }) =>
               </Alert>
             )}
           </Stack>
-        </Box>
+        </Box></>}
       </Stack>
     </Paper>
   );
@@ -1103,15 +1109,17 @@ export const LegacyVolunteerProgress = () => {
 const VolunteerProgress = () => (
   <PageAccessGuard pageSlug={PAGE_SLUGS.volunteerProgress}>
     <Box maw={1440} w="100%" mx="auto" pb="xl">
-      <VolunteerStayProgress renderProgress={(detail, canEdit) => (
+      <VolunteerStayProgress renderProgress={(detail, canEdit, onEditTargets) => (
         <>
           <ProgressHero detail={detail} />
           <SimpleGrid cols={{ base: 1, md: 2, xl: 5 }} spacing="md">
             {orderVolunteerMilestones(detail.milestones).map((milestone, index) => (
-              <MilestoneCard key={`${detail.stay?.id}-${milestone.key}`} milestone={milestone} index={index} periodTimezone={detail.timezone} />
+              <MilestoneCard key={`${detail.stay?.id}-${milestone.key}`} milestone={milestone} index={index} periodTimezone={detail.timezone}
+                onEditTargets={canEdit && ["reviews", "attendance", "monthly_shifts"].includes(milestone.key)
+                  ? () => onEditTargets(milestone.key as VolunteerTargetSection) : undefined} />
             ))}
           </SimpleGrid>
-          <VolunteerFeedbackSummary detail={detail} />
+          <VolunteerAssessmentPanel report={detail} canEdit={canEdit} />
           {canEdit ? <ManagementWorkspace key={`stay-${detail.stay?.id}`} detail={detail} /> : null}
         </>
       )} />
