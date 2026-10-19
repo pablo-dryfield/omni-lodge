@@ -1289,7 +1289,7 @@ Best,
     description: 'Pre-registered GraphQL query ID used by the TripAdvisor reviews request.',
     category: 'Review Scrapers',
     valueType: 'string',
-    defaultValue: 'ef1a9f94012220d3',
+    defaultValue: '1eeac11193438f8a',
   },
   {
     key: 'TRIP_ADVISOR_COOKIE',

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { fetchTripAdvisorRaw, TRIP_ADVISOR_PAGE_SIZE } from '../scrapers/tripAdvisorScraper.js';
+import { describeTripAdvisorError, fetchTripAdvisorRaw, TRIP_ADVISOR_PAGE_SIZE } from '../scrapers/tripAdvisorScraper.js';
 import { fetchGetYourGuideReviews, GET_YOUR_GUIDE_PAGE_SIZE } from '../scrapers/getYourGuideScraper.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -161,14 +161,16 @@ export const getTripAdvisorReviews = async (req: Request, res: Response) => {
       columns: [{
         offset: safeOffset,
         nextOffset,
-        pageSize: TRIP_ADVISOR_PAGE_SIZE,
+        pageSize: Number(getConfigValue('TRIP_ADVISOR_PAGE_SIZE') ?? TRIP_ADVISOR_PAGE_SIZE),
         totalCount: page.totalCount ?? normalized.length,
         hasMore: nextOffset < (page.totalCount ?? nextOffset),
       }],
     }]);
   } catch (error) {
-    console.error('Error scraping TripAdvisor:', error);
-    res.status(500).json({ error: 'Failed to fetch reviews from TripAdvisor' });
+    const details = describeTripAdvisorError(error);
+    // Axios errors include request headers; never log the configured cookie.
+    console.error('Error scraping TripAdvisor:', details);
+    res.status(500).json({ error: `Failed to fetch reviews from TripAdvisor: ${details}` });
   }
 };
 

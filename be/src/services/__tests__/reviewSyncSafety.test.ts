@@ -34,4 +34,21 @@ describe('review sync deletion safety', () => {
       activeCount: 40,
     })).toBe(false);
   });
+
+  it('refuses deletion marking when TripAdvisor pagination stops before the reported total', () => {
+    expect(() => assertReviewSyncCanMarkMissingDeleted({
+      platform: 'tripadvisor', partial: false, seenCount: 2500, activeCount: 3038, sourceTotalCount: 3038,
+    })).toThrow('fetched 2500 of 3038');
+  });
+
+  it('accepts a completed TripAdvisor archive and leaves partial syncs non-destructive', () => {
+    for (const input of [
+      { partial: false, seenCount: 3038 },
+      { partial: true, seenCount: 20 },
+    ]) {
+      expect(() => assertReviewSyncCanMarkMissingDeleted({
+        platform: 'tripadvisor', activeCount: 3038, sourceTotalCount: 3038, ...input,
+      })).not.toThrow();
+    }
+  });
 });

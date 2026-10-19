@@ -3,6 +3,7 @@ type ReviewSyncDeletionSafetyInput = {
   partial: boolean;
   seenCount: number;
   activeCount: number;
+  sourceTotalCount?: number | null;
 };
 
 export const shouldBlockZeroSeenReviewSyncDeletion = ({
@@ -13,6 +14,13 @@ export const shouldBlockZeroSeenReviewSyncDeletion = ({
   !partial && seenCount === 0 && activeCount > 0;
 
 export const assertReviewSyncCanMarkMissingDeleted = (input: ReviewSyncDeletionSafetyInput): void => {
+  if (!input.partial && input.platform === 'tripadvisor'
+    && input.sourceTotalCount != null && Number.isFinite(input.sourceTotalCount)
+    && input.seenCount < input.sourceTotalCount) {
+    throw new Error(
+      `Refusing to complete tripadvisor review sync: fetched ${input.seenCount} of ${input.sourceTotalCount} source reviews. No missing reviews were marked deleted.`,
+    );
+  }
   if (!shouldBlockZeroSeenReviewSyncDeletion(input)) {
     return;
   }
