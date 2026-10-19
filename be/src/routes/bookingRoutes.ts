@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import authMiddleware from '../middleware/authMiddleware.js';
+import { requireRoles } from '../middleware/authorizationMiddleware.js';
+import { MANAGER_ROLES } from './schedulingRoles.js';
 import { requireBookingProductScope } from '../services/productScopeService.js';
 import {
   backfillEcwidPaymentMetadata,
@@ -45,6 +47,7 @@ import {
   updateBookingAttendance,
   completeBookingAddonRefundAction,
   deleteBookingAddonRefundAction,
+  counterBookingAddonRefund,
 } from '../controllers/bookingController.js';
 import { listBookingsWithSummary } from '../controllers/bookingSummaryController.js';
 
@@ -75,6 +78,7 @@ router.post('/ingest-emails', authMiddleware, ingestBookingEmails);
 router.post('/import-ecwid', authMiddleware, importEcwidBooking);
 router.patch('/attendance/bulk', authMiddleware, updateBulkBookingAttendance);
 router.patch('/:bookingId/attendance', authMiddleware, requireBookingProductScope, updateBookingAttendance);
+router.post('/:bookingId/counter-addon-refunds/:operation', authMiddleware, requireRoles(MANAGER_ROLES), requireBookingProductScope, counterBookingAddonRefund);
 router.patch('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, completeBookingAddonRefundAction);
 router.delete('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, deleteBookingAddonRefundAction);
 router.get('/:bookingId/details', authMiddleware, requireBookingProductScope, getBookingDetails);

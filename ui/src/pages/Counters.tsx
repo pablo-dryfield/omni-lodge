@@ -99,6 +99,8 @@ import { buildMetricKey } from '../utils/counterMetrics';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports';
 import type { Counter } from '../types/counters/Counter';
 import axiosInstance from '../utils/axiosInstance';
+import CounterAddonRefundVerificationPanel from '../components/counters/CounterAddonRefundVerification';
+import { counterAddonRefund, type CounterAddonRefundResult, type CounterAddonRefundVerification } from '../api/counterAddonRefunds';
 import type { ServerResponse } from '../types/general/ServerResponse';
 import type { NightReport, NightReportSummary } from '../types/nightReports/NightReport';
 import type {
@@ -364,31 +366,6 @@ const parseMoney = (value?: string | null): number => {
   const normalized = value.replace(/\s+/g, '').replace(',', '.');
   const parsed = Number.parseFloat(normalized);
   return Number.isNaN(parsed) ? 0 : parsed;
-};
-
-const computeAddonRefundTotal = (addons: PartialRefundAddon[], quantities: Record<number, number>): number => {
-  return addons.reduce((total, addon) => {
-    const qty = quantities[addon.id] ?? 0;
-    if (qty <= 0) {
-      return total;
-    }
-    const unitPrice = addon.unitPrice ? parseMoney(addon.unitPrice) : 0;
-    if (unitPrice > 0) {
-      return total + unitPrice * qty;
-    }
-    const totalPrice = addon.totalPrice ? parseMoney(addon.totalPrice) : 0;
-    if (totalPrice > 0 && addon.quantity > 0) {
-      return total + (totalPrice / addon.quantity) * qty;
-    }
-    return total;
-  }, 0);
-};
-
-const getPartialRefundRemainingAmountMajor = (preview: PartialRefundPreview | null | undefined): number => {
-  if (!preview) {
-    return 0;
-  }
-  return Math.max(Number((preview.remainingAmount / 100).toFixed(2)), 0);
 };
 
 const isReactEmailSource = (value: string): boolean => value.includes(REACT_EMAIL_SOURCE_MARKER);
@@ -2438,6 +2415,7 @@ const Counters = (props: GenericPageProps) => {
     extraKey: keyof OrderExtras;
     addonLabel: string;
     bucketLabel: string;
+    bucket: 'booked_before' | 'booked_after' | 'attended' | 'no_show';
   } | null>(null);
   const [revealedCustomerPhoneKeys, setRevealedCustomerPhoneKeys] = useState<Set<string>>(() => new Set());
   const [syncingPendingAttendance, setSyncingPendingAttendance] = useState(false);
@@ -2450,6 +2428,8 @@ const Counters = (props: GenericPageProps) => {
     useState<OrderExtras | null>(null);
   const [partialCheckInRefundState, setPartialCheckInRefundState] =
     useState<PartialCheckInRefundState>(createDefaultPartialCheckInRefundState());
+  const [partialCounterRefundVerification, setPartialCounterRefundVerification] = useState<CounterAddonRefundVerification | null>(null);
+  const [counterRefundVerificationRefreshKey, setCounterRefundVerificationRefreshKey] = useState(0);
   const [pendingBookingAttendanceById, setPendingBookingAttendanceById] = useState<
     Record<number, StagedBookingAttendance>
   >({});
@@ -3241,6 +3221,24 @@ const loadCounterById = useCallback(
   },
   [dispatch],
 );
+
+  const applyCounterAddonRefundResult = useCallback(async (result: CounterAddonRefundResult) => {
+    if (!result.applied || !result.order) return;
+    const updatedOrder = result.order;
+    setOnlineReservationOrders((orders) => orders.map((order) => getOrderBookingId(order) === result.bookingId ? updatedOrder : order));
+    setSummaryAddonDialogState((current) => current ? {
+      ...current,
+      orders: current.orders.map((order) => getOrderBookingId(order) === result.bookingId ? updatedOrder : order)
+        .filter((order) => current.bucket !== 'no_show' || getOrderPurchasedExtraQty(order, current.extraKey) > getOrderAttendedExtraQty(order, current.extraKey)),
+    } : null);
+    setOnlineReservationsRefreshToken((value) => value + 1);
+    const counterId = registry.counter?.counter?.id;
+    if (counterId) {
+      try { await dispatch(fetchCounterById(counterId)).unwrap(); }
+      catch (_error) { setOnlineReservationsError('The booking was rectified. Refresh the counter to reload its updated metrics.'); }
+    }
+    if (!result.metricsUpdated) setOnlineReservationsError('The booking was rectified, but the counter refresh needs retrying. Refresh the counter before closing it.');
+  }, [dispatch, registry.counter?.counter?.id]);
 
   const metricsMap = registry.metricsByKey;
   const mergedMetrics = useMemo<MetricCell[]>(() => {
@@ -6360,6 +6358,7 @@ useEffect(() => {
     setPartialCheckInModalStep('edit');
     setPartialCheckInPendingRemovedAddons(null);
     setPartialCheckInRefundState(createDefaultPartialCheckInRefundState());
+    setPartialCounterRefundVerification(null);
   }, []);
 
   const openPartialCheckInEditor = useCallback(
@@ -6484,15 +6483,16 @@ useEffect(() => {
     addonRefundRequests?: Partial<OrderExtras>;
     addonRefundDisposition?: AddonRefundDisposition;
     addonRefundReason?: string | null;
+    orderOverride?: UnifiedOrder;
   } = {}): boolean => {
     if (!partialCheckInEditorOrder || !partialCheckInEditorDraft) {
       return false;
     }
     const bookingId = getOrderBookingId(partialCheckInEditorOrder);
-    const sourceOrder =
+    const sourceOrder = options.orderOverride ?? (
       bookingId != null
         ? onlineReservationOrders.find((entry) => getOrderBookingId(entry) === bookingId) ?? partialCheckInEditorOrder
-        : partialCheckInEditorOrder;
+        : partialCheckInEditorOrder);
     const applied = applyBookingAttendanceLocally(sourceOrder, {
       attendedTotal: partialCheckInEditorDraft.attendedTotal,
       attendedExtras: partialCheckInEditorDraft.attendedExtras,
@@ -6514,13 +6514,14 @@ useEffect(() => {
     addonRefundRequests?: Partial<OrderExtras>;
     addonRefundDisposition?: AddonRefundDisposition;
     addonRefundReason?: string | null;
+    orderOverride?: UnifiedOrder;
   } = {}): boolean => {
     if (partialCheckInEditorOrder && partialCheckInEditorDraft) {
       const bookingId = getOrderBookingId(partialCheckInEditorOrder);
-      const sourceOrder =
+      const sourceOrder = options.orderOverride ?? (
         bookingId != null
           ? onlineReservationOrders.find((entry) => getOrderBookingId(entry) === bookingId) ?? partialCheckInEditorOrder
-          : partialCheckInEditorOrder;
+          : partialCheckInEditorOrder);
       const shouldMarkNoShowWhenAbsent =
         isXperiencePolandCashArrivalOrder(sourceOrder) &&
         Math.max(0, Math.round(Number(partialCheckInEditorDraft.attendedTotal) || 0)) <= 0;
@@ -6570,6 +6571,14 @@ useEffect(() => {
     resolveBookingCashCollection,
     stageBookingCashCollection,
   ]);
+
+  const handlePartialAddonRefundRectified = useCallback(async (result: CounterAddonRefundResult) => {
+    if (!result.order) return;
+    await applyCounterAddonRefundResult(result);
+    if (completePartialCheckInApply({ orderOverride: result.order })) {
+      setOnlineReservationsNotice('Stripe refund verified and booking rectified. No additional refund was sent.');
+    }
+  }, [applyCounterAddonRefundResult, completePartialCheckInApply]);
 
   const handleBookingCashConfirmationCancel = useCallback(() => {
     setBookingCashConfirmation(null);
@@ -6671,7 +6680,6 @@ useEffect(() => {
     () => AUTOMATIC_ADDON_REFUND_PLATFORM_KEYS.has(partialEditorPlatformKey),
     [partialEditorPlatformKey],
   );
-  const partialEditorIsStorefrontRefund = partialEditorPlatformKey === OMNILODGE_PLATFORM_KEY;
   const partialEditorRemovedAddonSummary = useMemo(() => {
     const source = partialCheckInPendingRemovedAddons;
     if (!source) {
@@ -6697,8 +6705,10 @@ useEffect(() => {
     if (!partialEditorCustomerEmail) {
       return 'Customer email is missing, so refund email cannot be sent.';
     }
+    if (!partialCounterRefundVerification) return 'Verify the add-ons directly with Stripe before refunding.';
+    if (partialCounterRefundVerification.status !== 'clear') return partialCounterRefundVerification.message;
     return null;
-  }, [partialEditorBookingId, partialEditorCanAutoRefund, partialEditorCustomerEmail, partialEditorRemovedAddonSummary.length]);
+  }, [partialEditorBookingId, partialEditorCanAutoRefund, partialEditorCustomerEmail, partialEditorRemovedAddonSummary.length, partialCounterRefundVerification]);
 
   const resolvePartialRefundTemplateForPreview = useCallback(async (): Promise<EmailTemplate | null> => {
     const response = await axiosInstance.get<EmailTemplateListResponse>('/email-templates', {
@@ -6964,66 +6974,26 @@ useEffect(() => {
     });
 
     try {
+      if (!partialCounterRefundVerification || partialCounterRefundVerification.status !== 'clear') {
+        throw new Error('Verify with Stripe before preparing another refund.');
+      }
       const response = await axiosInstance.get<PartialRefundPreview>(`/bookings/${bookingId}/partial-refund-preview`, {
         withCredentials: true,
       });
       const preview = normalizePartialRefundPreview(response.data);
-      const requestedByType: OrderExtras = {
-        cocktails: Math.max(0, Math.round(Number(partialCheckInPendingRemovedAddons.cocktails) || 0)),
-        tshirts: Math.max(0, Math.round(Number(partialCheckInPendingRemovedAddons.tshirts) || 0)),
-        photos: Math.max(0, Math.round(Number(partialCheckInPendingRemovedAddons.photos) || 0)),
-      };
+      preview.addons = preview.addons.map((addon) => {
+        const verified = partialCounterRefundVerification.addons.find((line) => line.id === addon.id);
+        return verified ? { ...addon, unitPrice: verified.unitPrice, currency: verified.currency } : addon;
+      });
       const addonQuantities: Record<number, number> = {};
-      preview.addons.forEach((addon) => {
-        addonQuantities[addon.id] = 0;
-      });
-
-      const sortedAddons = [...preview.addons].sort((left, right) => left.id - right.id);
-      sortedAddons.forEach((addon) => {
-        const key = resolveOrderExtraKeyFromLabel(addon.platformAddonName);
-        if (!key) {
-          return;
+      for (const line of partialCounterRefundVerification.addons) {
+        if (!preview.addons.some((addon) => addon.id === line.id && addon.quantity >= line.refundQty)) {
+          throw new Error('The booking changed. Verify the selected add-ons with Stripe again.');
         }
-        const needed = requestedByType[key];
-        if (needed <= 0) {
-          return;
-        }
-        const available = Math.max(0, Math.round(Number(addon.quantity) || 0));
-        const assigned = Math.min(needed, available);
-        if (assigned <= 0) {
-          return;
-        }
-        addonQuantities[addon.id] = assigned;
-        requestedByType[key] -= assigned;
-      });
-
-      let unresolvedTotal =
-        requestedByType.cocktails +
-        requestedByType.tshirts +
-        requestedByType.photos;
-      if (unresolvedTotal > 0) {
-        sortedAddons.forEach((addon) => {
-          if (unresolvedTotal <= 0) {
-            return;
-          }
-          const alreadyAssigned = addonQuantities[addon.id] ?? 0;
-          const available = Math.max(0, Math.round(Number(addon.quantity) || 0) - alreadyAssigned);
-          if (available <= 0) {
-            return;
-          }
-          const assigned = Math.min(unresolvedTotal, available);
-          addonQuantities[addon.id] = alreadyAssigned + assigned;
-          unresolvedTotal -= assigned;
-        });
+        addonQuantities[line.id] = line.refundQty;
       }
 
-      if (unresolvedTotal > 0) {
-        throw new Error('Unable to map all removed add-ons to refundable quantities for this booking.');
-      }
-
-      const computedAmount = computeAddonRefundTotal(preview.addons, addonQuantities);
-      const maxAmount = getPartialRefundRemainingAmountMajor(preview);
-      const amount = Math.min(computedAmount, maxAmount);
+      const amount = partialCounterRefundVerification.amount / 100;
       if (amount <= 0) {
         throw new Error('No refundable add-on amount available for the selected removal.');
       }
@@ -7063,6 +7033,7 @@ useEffect(() => {
     buildPartialCheckInRefundEmailPayload,
     partialCheckInEditorOrder,
     partialCheckInPendingRemovedAddons,
+    partialCounterRefundVerification,
   ]);
 
   const handlePartialEditorIssueRefund = useCallback(() => {
@@ -7110,19 +7081,15 @@ useEffect(() => {
     }));
 
     try {
-      const refundEndpoint = partialEditorIsStorefrontRefund
-        ? `/bookings/${bookingId}/direct-actions/partial-refund`
-        : `/bookings/${bookingId}/partial-refund`;
-      await axiosInstance.post(
-        refundEndpoint,
-        {
-          amount: partialCheckInRefundState.amount,
-          peopleQuantity: 0,
-          addonQuantities: partialCheckInRefundState.addonQuantities,
-          ...(partialEditorIsStorefrontRefund ? { sendCustomerEmail: false } : {}),
-        },
-        { withCredentials: true },
-      );
+      if (!partialCounterRefundVerification || !partialCheckInPendingRemovedAddons) throw new Error('Verify the add-ons with Stripe again.');
+      const result = await counterAddonRefund(bookingId, 'refund', partialCheckInPendingRemovedAddons, partialCounterRefundVerification.selectionKey, partialCheckInEditorOrder.extras);
+      if (!result.applied || !result.order) {
+        setPartialCheckInRefundState((previous) => ({ ...previous, submitting: false, error: result.verification.message }));
+        setPartialCheckInModalStep('refund_decision');
+        setCounterRefundVerificationRefreshKey((value) => value + 1);
+        return;
+      }
+      await applyCounterAddonRefundResult(result);
 
       let emailSendError: string | null = null;
       try {
@@ -7133,7 +7100,7 @@ useEffect(() => {
         emailSendError = extractErrorMessage(error);
       }
 
-      const applied = completePartialCheckInApply();
+      const applied = completePartialCheckInApply({ orderOverride: result.order });
       if (!applied) {
         setPartialCheckInRefundState((prev) => ({
           ...prev,
@@ -7157,8 +7124,11 @@ useEffect(() => {
         submitting: false,
         error: extractErrorMessage(error),
       }));
+      setPartialCheckInModalStep('refund_decision');
+      setPartialCounterRefundVerification(null);
+      setCounterRefundVerificationRefreshKey((value) => value + 1);
     }
-  }, [completePartialCheckInApply, partialCheckInEditorOrder, partialCheckInRefundState, partialEditorIsStorefrontRefund]);
+  }, [applyCounterAddonRefundResult, completePartialCheckInApply, partialCheckInEditorOrder, partialCheckInRefundState, partialCounterRefundVerification, partialCheckInPendingRemovedAddons]);
 
   const handlePartialEditorContinueWithoutRefund = useCallback(() => {
     completePartialCheckInApply();
@@ -10534,6 +10504,7 @@ type SummaryRowOptions = {
         extraKey,
         addonLabel: addonConfig.name,
         bucketLabel,
+        bucket: params.bucket,
       });
     },
     [
@@ -12058,6 +12029,17 @@ type SummaryRowOptions = {
               )}
               {partialCheckInModalStep === 'refund_decision' && (
                 <>
+                  {partialEditorCanAutoRefund && partialEditorBookingId && partialCheckInPendingRemovedAddons && (
+                    <CounterAddonRefundVerificationPanel
+                      bookingId={partialEditorBookingId}
+                      extras={partialCheckInPendingRemovedAddons}
+                      expectedExtras={partialCheckInEditorOrder!.extras ?? { cocktails: 0, tshirts: 0, photos: 0 }}
+                      autoVerify
+                      refreshKey={counterRefundVerificationRefreshKey}
+                      onVerificationChange={setPartialCounterRefundVerification}
+                      onRectified={handlePartialAddonRefundRectified}
+                    />
+                  )}
                   <Alert severity={partialEditorCanAutoRefund ? 'warning' : 'info'}>
                     {partialEditorCanAutoRefund
                       ? `You removed add-ons from this ${partialEditorPlatformChipLabel || 'booking'} check-in. Refund them automatically before applying the check-in.`
@@ -12662,6 +12644,16 @@ type SummaryRowOptions = {
                           Email
                         </Button>
                       </Stack>
+                      {summaryAddonDialogState.bucket === 'no_show' &&
+                        getOrderBookingId(order) &&
+                        AUTOMATIC_ADDON_REFUND_PLATFORM_KEYS.has(normalizePlatformLookupKey(order.platform)) && (
+                        <CounterAddonRefundVerificationPanel
+                          bookingId={getOrderBookingId(order)!}
+                          extras={{ [summaryAddonDialogState.extraKey]: Math.max(0, purchasedQty - attendedQty) }}
+                          expectedExtras={order.extras ?? { cocktails: 0, tshirts: 0, photos: 0 }}
+                          onRectified={applyCounterAddonRefundResult}
+                        />
+                      )}
                     </Stack>
                   );
                 })
