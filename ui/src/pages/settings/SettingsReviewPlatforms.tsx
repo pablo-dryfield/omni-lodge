@@ -10,7 +10,7 @@ const SettingsReviewPlatforms = () => {
         <div>
           <Title order={3}>Review Platforms</Title>
           <Text size="sm" c="dimmed">
-            Configure the list of review platforms used to log counters.
+            Configure review platforms used by counters and manual review credits. Active platforms appear in the review overview dropdowns.
           </Text>
         </div>
         <ReviewPlatformList />
