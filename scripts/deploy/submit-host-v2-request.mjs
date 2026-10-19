@@ -260,9 +260,9 @@ export const submitHostV2Request = async ({
 export const serializeHostV2SubmitResult = (result) =>
   `${JSON.stringify(result, null, 2)}\n`;
 
-export const runCli = async (argv = process.argv.slice(2)) => {
+export const runCli = async (argv = process.argv.slice(2), { submit = submitHostV2Request } = {}) => {
   const { values } = parseStrictCliArguments(argv, { valueOptions: VALUE_OPTIONS });
-  const result = await submitHostV2Request({
+  const result = await submit({
     requestPath: requiredCliValue(values, 'request'),
     identityPath: requiredCliValue(values, 'identity'),
     host: requiredCliValue(values, 'host'),
@@ -273,6 +273,12 @@ export const runCli = async (argv = process.argv.slice(2)) => {
     sshCommand: values['ssh-command'] ?? DEFAULT_SSH_COMMAND,
     timeoutMs: values['timeout-ms'] ?? String(DEFAULT_TIMEOUT_MS),
   });
+  // SSH/protocol success is not host acceptance. Preserve the structured response
+  // for audit artifacts, but fail the step before downstream status polling.
+  if (result.responseStatus === 'rejected' || result.responseStatus === 'failed') {
+    process.stderr.write(`Host v2 request submission failed: ${result.responseCode}: ${result.responseMessage}\n`);
+    process.exitCode = 1;
+  }
   return serializeHostV2SubmitResult(result);
 };
 

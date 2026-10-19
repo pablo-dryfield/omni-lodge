@@ -13,6 +13,7 @@ import {
 } from './create-host-v2-request.mjs';
 import {
   buildSshArguments,
+  runCli,
   serializeHostV2SubmitResult,
   submitHostV2Request,
 } from './submit-host-v2-request.mjs';
@@ -276,6 +277,67 @@ test('returns status details for a host v2 status query', async (context) => {
   assert.equal(result.releaseId, null);
   assert.equal(result.operation, null);
   assert.equal(result.trigger, null);
+});
+
+for (const responseCode of [
+  'REQUEST_ACCEPTED',
+  'REQUEST_SUCCEEDED',
+  'REQUEST_TIMESTAMP_REJECTED',
+  'POLICY_DENIED',
+  'HOST_BUSY',
+  'REPLAY_REJECTED',
+  'REQUEST_REJECTED',
+  'REQUEST_FAILED',
+]) {
+  test(`CLI preserves the ${responseCode} response and exits according to host acceptance`, async (context) => {
+    const fixture = await makeFixture(context);
+    const previousExitCode = process.exitCode;
+    context.after(() => { process.exitCode = previousExitCode; });
+    process.exitCode = 0;
+    const errors = [];
+    context.mock.method(process.stderr, 'write', (text) => { errors.push(text); return true; });
+    const serialized = await runCli([
+      '--request', fixture.requestPath,
+      '--identity', fixture.identityPath,
+      '--host', '23.95.192.213',
+      '--port', '22',
+      '--user', 'omnilodge-deploy',
+      '--key', fixture.keyPath,
+      '--known-hosts', fixture.knownHostsPath,
+    ], {
+      submit: (options) => submitHostV2Request({
+        ...options,
+        spawnCommand: createMockSpawn({ responseCode }),
+      }),
+    });
+    const result = JSON.parse(serialized);
+    assert.equal(result.responseCode, responseCode);
+    assert.equal(result.requestId, REQUEST_ID);
+    assert.equal(result.responseReceived, true);
+    const accepted = responseCode === 'REQUEST_ACCEPTED' || responseCode === 'REQUEST_SUCCEEDED';
+    assert.equal(process.exitCode, accepted ? 0 : 1);
+    if (accepted) {
+      assert.deepEqual(errors, []);
+    } else {
+      assert.match(errors.join(''), new RegExp(`${responseCode}:`));
+      assert.ok(errors.join('').includes(result.responseMessage));
+    }
+  });
+}
+
+test('library returns rejection details without changing exit status so status queries can retry', async (context) => {
+  const fixture = await makeStatusFixture(context);
+  const previousExitCode = process.exitCode;
+  const result = await submitHostV2Request({
+    ...fixture,
+    host: '23.95.192.213',
+    port: '22',
+    user: 'omnilodge-deploy',
+    spawnCommand: createMockSpawn({ responseCode: 'HOST_BUSY' }),
+  });
+  assert.equal(result.responseStatus, 'rejected');
+  assert.equal(result.responseCode, 'HOST_BUSY');
+  assert.equal(process.exitCode, previousExitCode);
 });
 
 test('rejects a protocol response that does not match the saved request identity', async (context) => {
