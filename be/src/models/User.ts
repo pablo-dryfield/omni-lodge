@@ -125,6 +125,11 @@ export default class User extends Model {
   @Column({ field: 'profile_photo_url', type: DataType.STRING })
   declare profilePhotoUrl: string | null;
 
+  @AllowNull(false)
+  @Default(true)
+  @Column({ field: 'badge_required', type: DataType.BOOLEAN })
+  declare badgeRequired: boolean;
+
   @AllowNull(true)
   @Column({ field: 'badge_name', type: DataType.STRING })
   declare badgeName: string | null;

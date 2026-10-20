@@ -3,6 +3,7 @@ import axios from 'axios';
 import axiosInstance from './../utils/axiosInstance';
 import { ServerResponse } from '../types/general/ServerResponse';
 import { User } from '../types/users/User';
+import type { RootState } from '../store/store';
 
 const extractErrorMessage = (error: unknown): string => {
   if (axios.isAxiosError(error)) {
@@ -92,9 +93,10 @@ export const fetchActiveUsers = createAsyncThunk(
 
 export const createUser = createAsyncThunk(
   'users/createUser',
-  async (userData: Partial<User> | FormData, { rejectWithValue }) => {
+  async (userData: Partial<User> | FormData, { rejectWithValue, getState }) => {
     try {
-      const response = await axiosInstance.post<Partial<User>>('/users/register', userData, {
+      const scoped = ((getState() as RootState).accessControl.productTypeIds?.length ?? 0) > 0;
+      const response = await axiosInstance.post<Partial<User>>(scoped ? '/users' : '/users/register', userData, {
         withCredentials: true,
         headers: userData instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : undefined,
       });

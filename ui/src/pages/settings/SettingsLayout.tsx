@@ -1,11 +1,12 @@
 import React, { useEffect } from "react";
 import { Outlet } from "react-router-dom";
 import { Stack, Title, Text } from "@mantine/core";
-import { useAppDispatch } from "../../store/hooks";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { navigateToPage } from "../../actions/navigationActions";
 
 const SettingsLayout = () => {
   const dispatch = useAppDispatch();
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
 
   useEffect(() => {
     dispatch(navigateToPage("Settings"));
@@ -14,9 +15,9 @@ const SettingsLayout = () => {
   return (
     <Stack gap="lg">
       <div>
-        <Title order={2}>Control Panel</Title>
+        <Title order={2}>{productScoped ? 'Product settings' : 'Control Panel'}</Title>
         <Text size="sm" c="dimmed">
-          Manage people access, navigation structure, and module permissions.
+          {productScoped ? 'Manage your product catalog and exclusively assigned team. Company-wide administration remains restricted.' : 'Manage people access, navigation structure, and module permissions.'}
         </Text>
       </div>
       <Outlet />

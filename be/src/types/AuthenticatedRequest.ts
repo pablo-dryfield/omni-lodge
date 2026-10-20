@@ -28,6 +28,8 @@ export interface StaffPayoutReceiptAccessContext {
 }
 
 export interface AuthenticatedRequest extends Request {
+  /** Resolved once per authenticated request; null means company-wide access. */
+  productTypeScope?: number[] | null;
   user?: string | JwtPayload;
   authContext?: AuthorizationContext;
   staffPayoutAccessScope?: 'all' | 'self';

@@ -34,6 +34,37 @@ npm start                 # CRA dev server with /api proxy to http://localhost:3
 
 The dev client now defaults to the proxy (`/api`) so cross-origin CORS is no longer required during local development. Set `BACKEND_URL` before `npm start` if the API runs on a non-default host (the proxy middleware uses this environment variable).
 
+### Product-scoped management
+
+A non-empty User Type product scope enables a server-side, default-deny API
+boundary, not just filtered navigation. Delegated owners can manage exclusively
+scoped users, products, currency prices and product add-on overrides, and view
+scoped bookings and finance reports. Company-wide users/roles, shared scopes,
+unassigned financial entries, bank balances, budgets, credentials, generic report
+queries and global settings remain inaccessible. User roles must also have no
+more module-action permissions than the delegating owner. User deletion, badge
+printing, affiliate changes and password resets remain company-administration
+operations; scoped user creation creates no staff badge or external side effects.
+
+Assign explicit product types to a separate owner User Type first. For local
+testing only, an existing active company-wide owner/admin can then enable the
+curated permissions and create a separate scoped team-member role:
+
+```powershell
+cd be
+npm run build:dev
+$env:NODE_ENV='development'
+node dist/scripts/configureProductScopedOwner.js --role-id=<scoped-role-id> --actor-id=<company-owner-id>
+```
+
+The helper requires a loopback database connection, refuses company-wide target
+roles, and audits its changes. It does not modify existing shared staff roles or
+assign legacy financial data. Reload the browser after configuration. Scoped
+finance reports include only ledger entries explicitly linked through `productId`;
+booking revenue remains in Bookings Summary and must not be added to the ledger
+report a second time. Production activation still requires the approved release
+and administration workflow, never this local helper.
+
 ## Database & Migrations
 
 All new schema changes live under `be/src/migrations`. We use Umzug with Sequelize's query interface:

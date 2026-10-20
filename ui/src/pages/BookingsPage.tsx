@@ -46,7 +46,7 @@ import {
   IconSend,
 } from "@tabler/icons-react";
 import dayjs, { Dayjs } from "dayjs";
-import { useAppDispatch } from "../store/hooks";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
@@ -603,6 +603,8 @@ const BOOKINGS_MODULE = "booking-management";
 const BookingsPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
+  const availableBookingTabs = BOOKING_TAB_OPTIONS.filter(tab => !productScoped || ['calendar', 'summary', 'manifest'].includes(tab.value));
   const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [activeTab, setActiveTab] = useState<BookingsTab>("calendar");
   const [mobileTabsMenuOpen, setMobileTabsMenuOpen] = useState<string | null>(null);
@@ -739,6 +741,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
   const handleBookingsTabChange = useCallback(
     (value: string | null) => {
+      if (productScoped && value && !['calendar', 'summary', 'manifest'].includes(value)) return;
       if (value === "manifest") {
         openManifestForCurrentDate();
         return;
@@ -749,7 +752,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       }
       setActiveTab((value as BookingsTab) ?? "calendar");
     },
-    [navigate, openManifestForCurrentDate],
+    [navigate, openManifestForCurrentDate, productScoped],
   );
 
   const handleCloseEmailPreview = useCallback(() => {
@@ -1998,7 +2001,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     </Accordion.Control>
                     <Accordion.Panel>
                       <Stack gap="xs">
-                        {BOOKING_TAB_OPTIONS.map((tab) => (
+                        {availableBookingTabs.map((tab) => (
                           <Button
                             key={tab.value}
                             variant={tab.value === activeTab ? "light" : "subtle"}
@@ -2019,10 +2022,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                 <Tabs.List>
                   <Tabs.Tab value="calendar">Calendar</Tabs.Tab>
                   <Tabs.Tab value="manifest">Manifest</Tabs.Tab>
-                  <Tabs.Tab value="payment-links">Payment Links</Tabs.Tab>
+                  {!productScoped && <Tabs.Tab value="payment-links">Payment Links</Tabs.Tab>}
                   <Tabs.Tab value="summary">Summary</Tabs.Tab>
-                  <Tabs.Tab value="emails">Emails</Tabs.Tab>
-                  <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>
+                  {!productScoped && <Tabs.Tab value="emails">Emails</Tabs.Tab>}
+                  {!productScoped && <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>}
                 </Tabs.List>
               )}
               <Tabs.Panel value="calendar" pt="md">

@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Box,
+  Alert,
   Group,
   Loader,
   ScrollArea,
@@ -123,6 +124,8 @@ type ClientSummaryRow = {
 };
 
 type FinanceReportsResponse = {
+  productTypeIds?: number[] | null;
+  excludesCompanyWideBalances?: boolean;
   period: { start: string; end: string };
   currency: string;
   profitAndLoss: {
@@ -311,6 +314,11 @@ const FinanceReports = () => {
         icon={<IconReportMoney size={24} />}
       />
 
+      {data?.excludesCompanyWideBalances && <Alert color="blue" title="Product-scoped financial report">
+        Only transactions explicitly assigned to your products are included. Shared or unassigned entries,
+        company budgets and bank balances are excluded. These are finance-ledger figures, not a combined booking-revenue total.
+      </Alert>}
+
       <FinanceToolbar>
         <Box style={{ flex: "1 1 360px", minWidth: 0 }}>
           <SegmentedControl
@@ -362,8 +370,8 @@ const FinanceReports = () => {
             <Tabs.List style={{ flexWrap: "nowrap", minWidth: "max-content" }} aria-label="Finance report sections">
               <Tabs.Tab value="pl">Profit &amp; Loss</Tabs.Tab>
               <Tabs.Tab value="cf">Cash Flow</Tabs.Tab>
-              <Tabs.Tab value="bva">Budgets vs Actual</Tabs.Tab>
-              <Tabs.Tab value="accounts">Accounts</Tabs.Tab>
+              {!data.excludesCompanyWideBalances && <Tabs.Tab value="bva">Budgets vs Actual</Tabs.Tab>}
+              {!data.excludesCompanyWideBalances && <Tabs.Tab value="accounts">Accounts</Tabs.Tab>}
               <Tabs.Tab value="categories">Categories</Tabs.Tab>
               <Tabs.Tab value="counterparties">Counterparties</Tabs.Tab>
             </Tabs.List>

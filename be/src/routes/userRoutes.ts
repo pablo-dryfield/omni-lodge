@@ -47,6 +47,9 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 router.post('/register', upload.single('profilePhoto'), validateUserPOST, validate, userController.registerUser);
 router.post('/login', validateUserLogin, validate, userController.loginUser);
 router.post('/logout', validate, userController.logoutUser);
+// Scoped authenticated creation is handled by the product boundary. It must
+// never fall back to the public signup/approval workflow for other callers.
+router.post('/', authMiddleware, (_req, res) => { res.status(403).json([{ message: 'Use the registration workflow' }]); });
 
 router.get('/', authMiddleware, authorizeModuleAction('user-directory', 'view'), validate, userController.getAllUsers);
 router.get('/active', authMiddleware, authorizeModuleAction('user-directory', 'view'), validate, userController.getAllActiveUsers);

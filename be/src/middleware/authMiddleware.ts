@@ -9,6 +9,7 @@ import { getRequestContextValue, setRequestContextValue } from '../services/requ
 import { performanceMonitorService } from '../services/performanceMonitorService.js';
 import { queryDiagnosticsService } from '../services/queryDiagnosticsService.js';
 import { isStaffPayoutReceiptAccessPayload } from '../services/staffPayoutReceiptAccessTokenService.js';
+import { enforceProductScopedApiBoundary } from './productScopedApiBoundary.js';
 
 dotenv.config();
 
@@ -145,7 +146,7 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     setRequestContextValue('roleName', role?.name ?? null);
     setRequestContextValue('roleSlug', roleSlug);
 
-    next();
+    await enforceProductScopedApiBoundary(req, res, next);
   } catch (error) {
     res.status(403).json({ error: 'Forbidden, invalid or expired token' });
   }

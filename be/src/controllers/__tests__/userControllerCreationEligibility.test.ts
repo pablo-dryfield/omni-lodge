@@ -81,7 +81,9 @@ import {
 } from '../../services/staffEligibilityHistoryService';
 import { ensureDefaultVolunteerStay } from '../../services/volunteerStayService';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
-import { deleteUser, registerUser, updateUser } from '../userController';
+import { deleteUser, registerUser, updateUser, sendUserBadgeToPrint } from '../userController';
+import { sendBadgeToPrint } from '../../services/badgePrintService';
+import { upsertBadgeAffiliateAssignment } from '../../services/affiliateService';
 
 const userAndTypeModel = jest.requireMock('../../__mocks__/sequelizeModelStub').default as {
   findOne: jest.Mock;
@@ -246,6 +248,27 @@ describe('updateUser volunteer stay lifecycle', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (ensureDefaultVolunteerStay as jest.Mock).mockResolvedValue({ status: 'created', stayId: 73 });
+  });
+
+  it('approves a badge-free account without printing or creating badge affiliate data', async () => {
+    const user = { id: 28, approved: false, status: true, userTypeId: 4, badgeRequired: true,
+      profilePhotoPath: null, update: jest.fn(), reload: jest.fn() };
+    user.update.mockImplementation(async data => { Object.assign(user, data); return user; });
+    userAndTypeModel.findByPk.mockResolvedValue(user);
+    const response = createResponse();
+    await updateUser({ params: { id: '28' }, body: { approved: true, badgeRequired: false }, authContext: { id: 7 } } as unknown as AuthenticatedRequest, response);
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(user.badgeRequired).toBe(false);
+    expect(sendBadgeToPrint).not.toHaveBeenCalled();
+    expect(upsertBadgeAffiliateAssignment).not.toHaveBeenCalled();
+  });
+
+  it('blocks manual printing for a badge-free account', async () => {
+    userAndTypeModel.findByPk.mockResolvedValue({ id: 28, badgeRequired: false });
+    const response = createResponse();
+    await sendUserBadgeToPrint({ params: { id: '28' }, body: {}, authContext: { id: 28 } } as unknown as AuthenticatedRequest, response);
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(sendBadgeToPrint).not.toHaveBeenCalled();
   });
 
   it('retries default stay creation after dates or other user prerequisites are updated', async () => {

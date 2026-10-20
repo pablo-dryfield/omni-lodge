@@ -2,6 +2,7 @@ jest.mock('../../models/FinanceTransaction.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn() },
 }));
+jest.mock('../../../models/Product.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 
 jest.mock('../../models/FinanceBudget.js', () => ({
   __esModule: true,
@@ -34,6 +35,8 @@ jest.mock('../../../services/configService.js', () => ({
 
 import type { Request, Response } from 'express';
 import FinanceTransaction from '../../models/FinanceTransaction';
+import Product from '../../../models/Product';
+import { Op } from 'sequelize';
 import FinanceBudget from '../../models/FinanceBudget';
 import FinanceAccount from '../../models/FinanceAccount';
 import FinanceVendor from '../../models/FinanceVendor';
@@ -89,6 +92,27 @@ describe('finance report actual and forecast accounting', () => {
     ]);
     (FinanceVendor.findAll as jest.Mock).mockResolvedValue([{ id: 11, name: 'Supplier' }]);
     (FinanceClient.findAll as jest.Mock).mockResolvedValue([{ id: 21, name: 'Customer' }]);
+  });
+
+  it('limits finance data to explicit products and never reads company budgets or bank balances', async () => {
+    (Product.findAll as jest.Mock).mockResolvedValue([{ id: 48 }, { id: 49 }]);
+    (FinanceTransaction.findAll as jest.Mock).mockImplementation(async ({ where }) => {
+      const ids = where.productId[Op.in];
+      return [makeTransaction({ productId: 48, kind: 'income', amountMinor: 9000, baseAmountMinor: 9000 }),
+        makeTransaction({ productId: 1, amountMinor: 999999, baseAmountMinor: 999999 }),
+        makeTransaction({ productId: null, amountMinor: 777777, baseAmountMinor: 777777 })]
+        .filter(record => ids.includes(record.productId));
+    });
+    const res = createResponse();
+    await getFinanceReports({ productTypeScope: [3], query: { startDate: '2026-08-01', endDate: '2026-08-31' } } as unknown as Request, res);
+    expect(Product.findAll).toHaveBeenCalledWith(expect.objectContaining({ where: { productTypeId: { [Op.in]: [3] } } }));
+    expect(FinanceTransaction.findAll).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ productId: { [Op.in]: [48, 49] } }) }));
+    const result = res.json.mock.calls[0][0];
+    expect(result.profitAndLoss.totals).toEqual({ income: 90, expense: 0, net: 90 });
+    expect(result.accountSummary).toEqual([]);
+    expect(result.excludesCompanyWideBalances).toBe(true);
+    expect(FinanceAccount.findAll).not.toHaveBeenCalled();
+    expect(FinanceBudget.findAll).not.toHaveBeenCalled();
   });
 
   it('keeps planned activity out of actuals and avoids double-counting staff reimbursements', async () => {
