@@ -41,12 +41,14 @@ export function buildApplicationRuntimeModePolicy({
   skipDbSync,
   alterSchema,
   seedAccessControl,
+  backgroundJobsEnabled = true,
 }: {
   value: unknown;
   nodeEnv: string | undefined;
   skipDbSync: boolean;
   alterSchema: boolean;
   seedAccessControl: boolean;
+  backgroundJobsEnabled?: boolean;
 }): ApplicationRuntimeModePolicy {
   const mode = resolveApplicationRuntimeMode(value);
   if (isNonPrimaryRuntimeMode(mode)) {
@@ -68,6 +70,6 @@ export function buildApplicationRuntimeModePolicy({
   return Object.freeze({
     mode,
     allowStartupMutations: primary,
-    allowBackgroundJobs: primary,
+    allowBackgroundJobs: primary && backgroundJobsEnabled,
   });
 }

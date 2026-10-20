@@ -408,6 +408,7 @@ async function bootstrap(): Promise<void> {
       skipDbSync: shouldSkipDbSync,
       alterSchema: shouldAlterSchema,
       seedAccessControl: shouldSeedAccessControl,
+      backgroundJobsEnabled: process.env.DISABLE_BACKGROUND_JOBS !== 'true',
     });
 
     assertDatabaseSyncPolicy({
@@ -485,9 +486,13 @@ async function bootstrap(): Promise<void> {
         }
       });
     } else {
-      app.listen(PORT, '0.0.0.0', () => {
+      app.listen(PORT, process.env.HOST || '0.0.0.0', () => {
         logger.info(`Server is running on port ${PORT}`);
-        startApplicationBackgroundJobs();
+        if (runtimePolicy.allowBackgroundJobs) {
+          startApplicationBackgroundJobs();
+        } else {
+          logger.info('[runtime] Background jobs are disabled for this process.');
+        }
       });
     }
   } catch (err) {

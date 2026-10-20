@@ -18,6 +18,13 @@ npm run migrate           # runs Sequelize + Umzug migrations
 npm run dev               # watches and restarts on change
 ```
 
+When testing a local production database clone, set `HOST=127.0.0.1`,
+`DISABLE_BACKGROUND_JOBS=true`, `SKIP_DB_SYNC=true`, `DB_SYNC_ALTER=false`, and
+`SEED_ACCESS_CONTROL=false` in the ignored `be/.env.dev`. Apply pending migrations
+to the local database first. This disables automatic background jobs (including
+mailbox polling and reminder emails); manually triggered integration actions can
+still contact external services if live credentials are configured.
+
 ### Frontend
 ```bash
 cd ui
