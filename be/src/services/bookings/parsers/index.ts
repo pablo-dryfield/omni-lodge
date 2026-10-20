@@ -5,11 +5,13 @@ import { EcwidBookingParser } from './ecwidBookingParser.js';
 import { FareHarborBookingParser } from './fareHarborBookingParser.js';
 import { FreeTourBookingParser } from './freeTourBookingParser.js';
 import { GetYourGuideBookingParser } from './getYourGuideBookingParser.js';
+import { RezdyBookingParser } from './rezdyBookingParser.js';
 import { ViatorBookingParser } from './viatorBookingParser.js';
 import { XperiencePolandBookingParser } from './xperiencePolandBookingParser.js';
 
 const staticParserInstances: BookingEmailParser[] = [
   new GetYourGuideBookingParser(),
+  new RezdyBookingParser(),
   new ViatorBookingParser(),
   new EcwidBookingParser(),
   new FreeTourBookingParser(),

@@ -168,6 +168,34 @@ The Counters page is fully responsive (three columns collapse to stacked cards o
 - Run `npm run build` in `be` before deploying to ensure migrations and TypeScript succeed.
 - Apply migrations as part of your release pipeline.
 
+## Rezdy booking email ingestion
+
+Rezdy uses a built-in parser, not a `BOOKING_DYNAMIC_PARSERS` rule. It reads both MIME alternatives:
+real Rezdy plain-text messages omit the product, agent reference and commission that are present in HTML.
+Departures use `REZDY_TIMEZONE`, falling back to `BOOKING_PARSER_TIMEZONE` (Europe/Warsaw by default).
+The Rezdy channel migration adds only a missing channel, preserves existing configuration and does not queue historical emails.
+If a customized Gmail query is used with processing-all-messages disabled, include `from:(rezdy.com)` in that query.
+
+- New confirmed/pending orders, dated amendments and cancellations are supported. A cancellation alone is **not** evidence of a refund.
+- Partial/full refunds require an explicit cumulative `Total Refunded`, or `Refund Amount` plus a stable `Refund Reference`/`Refund ID`.
+  Requests, pending refunds and failed refunds are not treated as completed refunds. Reprocessing a refund does not add it again.
+- `priceGross` retains the customer order total; `commissionAmount` retains the reported supplier commission.
+  `priceNet` uses the explicit supplier `Net amount` where provided, otherwise gross minus commission;
+  `baseAmount` is that pre-refund supplier net minus cumulative refunds (minimum zero).
+  Some real agent emails report commission on a different basis: their explicit net remains authoritative, with the discrepancy noted in booking notes and event metadata.
+  No commission rate or returned-commission amount is guessed. Missing payment data does not erase a known paid status.
+- An explicit Viator agent reference uses the existing `BR-*` booking identity, while `platformOrderId` retains the Rezdy `R*` order ID.
+  Direct online orders use platform `rezdy`. Possible cross-provider duplicates without an explicit link fail for manual review rather than merge by customer name.
+  After linking, a second Viator confirmation is an audited no-op. A Viator cancellation can close the booking, but its supplier-net refund
+  is not mixed with the Rezdy customer-gross ledger; financial amendments require the Rezdy snapshot or manual review.
+- Older Rezdy snapshots are audited without overwriting newer status, refunds or attendance. A newly discovered out-of-order refund fails with
+  a refund-only reprocessing instruction instead of being silently skipped. No destructive timeline rebuild is used for these orders.
+- Undated vouchers, missing departure times, multi-product orders, conflicting identities/currencies and incomplete refund evidence require manual review.
+  Archived new-order/cancellation formats are covered; amendment/refund variants are additionally covered by synthetic regression tests.
+
+Deploy through the normal immutable release workflow, apply migrations, then explicitly reprocess affected original order emails before
+their amendments/refunds/cancellations, in received-time order. Existing ignored emails are not reprocessed automatically by this change.
+
 ## Logs & Progress
 
 See `docs/progress-log.md` for a running history of major implementation steps.

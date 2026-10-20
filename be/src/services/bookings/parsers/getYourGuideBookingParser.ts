@@ -543,7 +543,7 @@ const buildPubCrawlUpsellEvent = (
   attendeeCount: number,
   status: BookingStatus,
   eventType: BookingEventType,
-  paymentStatus: 'paid' | 'unknown',
+  paymentStatus: 'paid' | 'unknown' | undefined,
   occurredAt: Date | null,
 ): ParsedBookingEvent | null => {
   if (!Number.isFinite(attendeeCount) || attendeeCount <= 0) {
@@ -681,7 +681,8 @@ export class GetYourGuideBookingParser implements BookingEmailParser {
 
     const status = deriveStatusFromContext(context, text);
     const eventType = statusToEventType(status);
-    const paymentStatus: 'paid' | 'unknown' = bookingFields.priceGross ? 'paid' : 'unknown';
+    // Missing price on an amendment/cancellation is not evidence that a paid booking is unknown.
+    const paymentStatus = bookingFields.priceGross !== undefined ? 'paid' as const : undefined;
     const occurredAt = context.receivedAt ?? context.internalDate ?? null;
 
     const tourLanguageMatch = text.match(/Tour language\s+(.+?)\s+Price/i);

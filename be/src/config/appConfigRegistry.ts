@@ -142,7 +142,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     category: 'Booking Email Ingestion',
     valueType: 'string',
     defaultValue:
-      'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR pubcrawlkrakow.pl OR civitatis.com OR airbnb.com OR airbnbmail.com))',
+      'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR rezdy.com OR xperiencepoland.com OR pubcrawlkrakow.pl OR civitatis.com OR airbnb.com OR airbnbmail.com))',
     validation: { maxLength: 2000 },
   },
   {
@@ -199,7 +199,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     category: 'Booking Email Ingestion',
     valueType: 'json',
     defaultValue:
-      '{"fareharbor":"Fareharbor","viator":"Viator","getyourguide":"GetYourGuide","freetour":"FreeTour","ecwid":"Ecwid","airbnb":"Airbnb","xperiencepoland":"XperiencePoland"}',
+      '{"fareharbor":"Fareharbor","viator":"Viator","getyourguide":"GetYourGuide","rezdy":"Rezdy","freetour":"FreeTour","ecwid":"Ecwid","airbnb":"Airbnb","xperiencepoland":"XperiencePoland"}',
     impact: 'medium',
   },
   {
@@ -341,6 +341,15 @@ Best,
     valueType: 'json',
     defaultValue: '[]',
     impact: 'medium',
+  },
+  {
+    key: 'REZDY_TIMEZONE',
+    label: 'Rezdy parser timezone',
+    description: 'Timezone for Rezdy experience departures; falls back to the booking parser timezone.',
+    category: 'Booking Parsers',
+    valueType: 'string',
+    defaultValue: null,
+    validation: { format: 'timezone' },
   },
   {
     key: 'AIRBNB_TIMEZONE',

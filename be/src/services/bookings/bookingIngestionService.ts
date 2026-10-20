@@ -42,13 +42,14 @@ import { syncEcwidBookingAddonPricingByBookingId } from './ecwidAddonPricingSync
 import { maybeSendTshirtSizeSelectionEmail } from './tshirtSizeEmailAutomationService.js';
 import { normalizeForwardedBackupPayload } from './forwardedEmailNormalizer.js';
 import { applyAutomaticBookingReassignmentRules } from './bookingReassignmentRulesService.js';
+import { applyRezdyFinancials, getRezdySource, isRezdyLinkedViatorBooking, prepareRezdyLinkedViatorEvent, resolveRezdyBookingIdentity } from './rezdyIngestionPolicy.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const FALLBACK_QUERY =
-  'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR pubcrawlkrakow.pl OR civitatis.com OR airbnb.com OR airbnbmail.com))';
+  'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR rezdy.com OR xperiencepoland.com OR pubcrawlkrakow.pl OR civitatis.com OR airbnb.com OR airbnbmail.com))';
 const ALL_INCOMING_GMAIL_QUERY = 'in:anywhere -in:sent -in:drafts';
 
 const DEFAULT_BOOKING_TIMEZONE =
@@ -85,6 +86,7 @@ const DEFAULT_PLATFORM_CHANNEL_NAMES: Record<KnownBookingPlatform, string> = {
   fareharbor: 'Fareharbor',
   viator: 'Viator',
   getyourguide: 'GetYourGuide',
+  rezdy: 'Rezdy',
   freetour: 'FreeTour',
   ecwid: 'Ecwid',
   airbnb: 'Airbnb',
@@ -359,6 +361,9 @@ const resolveChannelIdForPlatform = async (platform: BookingPlatform): Promise<n
     attributes: ['id'],
   });
   const id = record?.id ?? null;
+  if (!id && platformKey === 'rezdy') {
+    throw new Error('Rezdy channel is missing. Apply the Rezdy channel migration or configure the booking platform-channel map before importing.');
+  }
   channelIdCache.set(channelName, id);
   return id;
 };
@@ -1601,7 +1606,7 @@ const consumePendingAddonRefundActionsFromExternalRefund = (
   patch: Record<string, unknown>,
   eventOccurredAt: Date,
 ): Record<string, unknown> | null => {
-  if (event.platform !== 'viator') {
+  if (event.platform !== 'viator' || getRezdySource(event)) {
     return null;
   }
   if (event.paymentStatus !== 'partial' && event.paymentStatus !== 'refunded' && patch.refundedAmount === undefined) {
@@ -1943,7 +1948,7 @@ const findAirbnbAmendmentMatch = async (
   return scored[0].candidate;
 };
 
-const applyParsedEvent = async (
+export const applyParsedEvent = async (
   email: BookingEmail,
   event: ParsedBookingEvent,
   options: { isReprocess?: boolean; scopedHints?: ScopedReprocessHint[] } = {},
@@ -1953,6 +1958,7 @@ const applyParsedEvent = async (
     const isScopedReprocess = scopedHints.length > 0;
     const includesScopedRefund = scopedHints.includes('refund');
     const eventOccurredAt = event.occurredAt ?? event.sourceReceivedAt ?? email.receivedAt ?? new Date();
+    const rezdyMatch = await resolveRezdyBookingIdentity(event, transaction);
     let priorEvent: BookingEvent | null = null;
     if (options.isReprocess && email.messageId && !isScopedReprocess) {
       const priorEventForSameBooking = await BookingEvent.findOne({
@@ -1990,7 +1996,7 @@ const applyParsedEvent = async (
       }
     }
 
-    let booking = await Booking.findOne({
+    let booking = rezdyMatch ?? await Booking.findOne({
       where: {
         platform: event.platform,
         platformBookingId: event.platformBookingId,
@@ -2042,7 +2048,8 @@ const applyParsedEvent = async (
     if (bookingRecord.platform === 'unknown' && event.platform !== 'unknown') {
       bookingRecord.platform = event.platform;
     }
-    if (options.isReprocess && priorEvent?.bookingId && bookingRecord.id === priorEvent.bookingId) {
+    if (options.isReprocess && priorEvent?.bookingId && bookingRecord.id === priorEvent.bookingId
+      && !isRezdyLinkedViatorBooking(bookingRecord, event)) {
       const normalizedBookingId = event.platformBookingId?.trim() ?? '';
       if (normalizedBookingId && bookingRecord.platformBookingId !== normalizedBookingId) {
         bookingRecord.platformBookingId = normalizedBookingId;
@@ -2055,6 +2062,35 @@ const applyParsedEvent = async (
 
     const lastMutationAt = bookingRecord.statusChangedAt ?? bookingRecord.createdAt ?? null;
     const isOlderEvent = Boolean(lastMutationAt && eventOccurredAt < lastMutationAt);
+    const isStaleRezdySnapshot = isOlderEvent && (getRezdySource(event) || isRezdyLinkedViatorBooking(bookingRecord, event));
+    const staleSource = getRezdySource(event);
+    if (isStaleRezdySnapshot && staleSource && !isScopedReprocess
+      && (staleSource.refundTotal !== undefined || staleSource.refundAmount !== undefined)) {
+      const refundCheck: ParsedBookingEvent = { ...event, bookingFields: { currency: bookingRecord.currency } };
+      await applyRezdyFinancials(bookingRecord, refundCheck, transaction, { refundOnly: true });
+      if (Number(refundCheck.bookingFields?.refundedAmount ?? 0) > Number(bookingRecord.refundedAmount ?? 0)) {
+        throw new Error('Out-of-order Rezdy refund has not been recorded. Use refund-only reprocessing to reconcile it without overwriting the newer booking snapshot.');
+      }
+    }
+    const isDuplicateViatorConfirmation = !isScopedReprocess && !isStaleRezdySnapshot && prepareRezdyLinkedViatorEvent(bookingRecord, event);
+    if ((isStaleRezdySnapshot || isDuplicateViatorConfirmation) && !isScopedReprocess) {
+      // Do not invoke the legacy destructive timeline rebuild for an old Rezdy snapshot.
+      // Preserve attendance, manager edits and newer refunds/cancellations, but retain an audit event.
+      const source = getRezdySource(event);
+      if (source && bookingRecord.platformOrderId !== source.orderId) {
+        // An explicit old BR/R identity link remains useful even when its financial snapshot is stale.
+        bookingRecord.platformOrderId = source.orderId;
+        await bookingRecord.save({ fields: ['platformOrderId'], transaction });
+      }
+      if (!priorEvent) await BookingEvent.create({
+        bookingId: bookingRecord.id, emailId: email.id, emailMessageId: email.messageId,
+        platform: bookingRecord.platform, eventType: 'note', statusAfter: bookingRecord.status,
+        occurredAt: eventOccurredAt, ingestedAt: new Date(), processedAt: new Date(),
+        eventPayload: { ...event.rawPayload, rezdySnapshotSkipped: isDuplicateViatorConfirmation
+          ? 'duplicate_viator_confirmation' : 'older_than_current_booking' },
+      } as unknown as BookingEvent, { transaction });
+      return bookingRecord.id;
+    }
     if (isOlderEvent && !isScopedReprocess) {
       const canApplyOlderEvent = event.eventType === 'created' || event.eventType === 'amended';
       if (!canApplyOlderEvent) {
@@ -2062,6 +2098,7 @@ const applyParsedEvent = async (
       }
     }
 
+    if (!isScopedReprocess || includesScopedRefund) await applyRezdyFinancials(bookingRecord, event, transaction, { refundOnly: isScopedReprocess });
     const bookingFields = { ...(event.bookingFields ?? {}) };
     if (!isScopedReprocess && bookingFields.channelId == null) {
       const inferredChannelId = await resolveChannelIdForPlatform(event.platform);
@@ -2133,7 +2170,7 @@ const applyParsedEvent = async (
       patch = normalizePatch(reassignment.patch);
     }
     const refundReconciliationOutcome =
-      !isScopedReprocess || includesScopedRefund
+      (!isScopedReprocess || includesScopedRefund) && !getRezdySource(event)
         ? await reconcileRefundDerivedFields(bookingRecord, event, patch, {
             priorEventPayload: priorEvent?.eventPayload ?? null,
             eventOccurredAt,
@@ -2648,7 +2685,8 @@ const applyParsedEvent = async (
     if (event.paymentStatus && (!isScopedReprocess || includesScopedRefund)) {
       bookingRecord.paymentStatus = event.paymentStatus;
     }
-    if (!isScopedReprocess && event.platformOrderId) {
+    if (!isScopedReprocess && event.platformOrderId
+      && !isRezdyLinkedViatorBooking(bookingRecord, event)) {
       bookingRecord.platformOrderId = event.platformOrderId;
     }
 
@@ -2673,7 +2711,7 @@ const applyParsedEvent = async (
         (event.addons && event.addons.length > 0 ? { items: event.addons } : null);
       bookingRecord.addonsSnapshot = addonsSnapshot ?? bookingRecord.addonsSnapshot ?? null;
       if (event.notes) {
-        bookingRecord.notes = event.notes;
+        bookingRecord.notes = getRezdySource(event) ? mergeNoteSegments(bookingRecord.notes, event.notes) : event.notes;
       }
     }
 
@@ -2685,7 +2723,7 @@ const applyParsedEvent = async (
     let addonsForSync: ParsedBookingEvent['addons'] = event.addons;
     if (
       !isScopedReprocess &&
-      (event.platform === 'viator' || event.platform === 'getyourguide') &&
+      (event.platform === 'viator' || event.platform === 'getyourguide' || event.platform === 'rezdy') &&
       (!addonsForSync || addonsForSync.length === 0)
     ) {
       const derivedAddons = deriveNormalizedAddonsFromSnapshot(bookingRecord.addonsSnapshot);
