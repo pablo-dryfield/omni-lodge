@@ -12,6 +12,7 @@ import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import type { Transaction } from 'sequelize';
 import ProductType from '../models/ProductType.js';
 import UserTypeProductType from '../models/UserTypeProductType.js';
+import HttpError from '../errors/HttpError.js';
 
 const buildColumns = () => {
   const attributes = UserType.getAttributes();
@@ -38,10 +39,10 @@ const ensurePayload = (payload: Record<string, unknown>) => {
 
 const parseProductTypeIds = (value: unknown): number[] | undefined => {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new Error('productTypeIds must be an array');
+  if (!Array.isArray(value)) throw new HttpError(400, 'productTypeIds must be an array');
   const ids = [...new Set(value.map(Number))];
   if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
-    throw new Error('productTypeIds must contain positive integers');
+    throw new HttpError(400, 'productTypeIds must contain positive integers');
   }
   return ids;
 };
@@ -49,7 +50,7 @@ const parseProductTypeIds = (value: unknown): number[] | undefined => {
 const syncProductTypeScope = async (userTypeId: number, ids: number[], transaction: Transaction) => {
   if (ids.length > 0) {
     const count = await ProductType.count({ where: { id: ids }, transaction });
-    if (count !== ids.length) throw new Error('One or more product types do not exist');
+    if (count !== ids.length) throw new HttpError(400, 'One or more product types do not exist');
   }
   await UserTypeProductType.destroy({ where: { userTypeId }, transaction });
   if (ids.length > 0) {
@@ -198,23 +199,21 @@ export const updateUserType = async (req: Request, res: Response): Promise<void>
     const productTypeIds = parseProductTypeIds(req.body?.productTypeIds);
     const payload = ensurePayload(req.body);
     delete payload.productTypeIds;
-    const updated = await sequelize.transaction(async (transaction) => {
-      const [count] = await UserType.update(payload, { where: { id }, transaction });
-      if (count && productTypeIds !== undefined) await syncProductTypeScope(Number(id), productTypeIds, transaction);
-      return count;
+    const updatedUserType = await sequelize.transaction(async (transaction) => {
+      const record = await UserType.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+      if (!record) throw new HttpError(404, 'UserType not found');
+      // Scope-only updates have no userTypes columns to change, but their
+      // product links still need to be saved atomically.
+      if (Object.keys(payload).length > 0) await record.update(payload, { transaction });
+      if (productTypeIds !== undefined) await syncProductTypeScope(record.id, productTypeIds, transaction);
+      return record;
     });
 
-    if (!updated) {
-      res.status(404).json([{ message: 'UserType not found' }]);
-      return;
-    }
-
-    const updatedUserType = await UserType.findByPk(id);
-    const [serialized] = updatedUserType ? await serializeUserTypes([updatedUserType]) : [];
+    const [serialized] = await serializeUserTypes([updatedUserType]);
     res.status(200).json([serialized]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 

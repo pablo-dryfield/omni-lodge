@@ -28,6 +28,12 @@ const Table = <T extends object>({
 }: TableProps<T>) => {
   const [createModalOpened, setCreateModalOpened] = useState(false);
   const [updateModalOpened, setUpdateModalOpened] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const displaySaveError = (error: unknown) => setSaveError(
+    typeof error === 'string' ? error : error instanceof Error ? error.message : 'Unable to save. Please try again.',
+  );
 
   const modulePermissions = useModuleAccess(moduleSlug);
 
@@ -96,32 +102,44 @@ const Table = <T extends object>({
         borderTop: "2px solid #e0e0e0",
       },
     },
-    onCreatingRowSave: ({ values, exitCreatingMode }) => {
+    onCreatingRowSave: async ({ values, exitCreatingMode }) => {
       if (!canCreate) {
         exitCreatingMode();
         return;
       }
-      if (typeof values.id === "object") {
-        actions.handleCreate(values.customModal);
-      } else {
-        actions.handleCreate(values);
+      setSaveError(null);
+      setIsSaving(true);
+      try {
+        await actions.handleCreate(typeof values.id === "object" ? values.customModal : values);
+        setCreateModalOpened(false);
+        exitCreatingMode();
+      } catch (error) {
+        displaySaveError(error);
+      } finally {
+        setIsSaving(false);
       }
-      setCreateModalOpened(false);
-      exitCreatingMode();
     },
     onCreatingRowCancel: () => {
       setCreateModalOpened(false);
     },
-    onEditingRowSave: ({ values, table, row }) => {
+    onEditingRowSave: async ({ values, table, row }) => {
       if (!canUpdate) {
         table.setEditingRow(null);
         table.setRowSelection({});
         return;
       }
-      actions.handleUpdate(row.original, values);
-      table.setEditingRow(null);
-      table.setRowSelection({});
-      setUpdateModalOpened(false);
+      setSaveError(null);
+      setIsSaving(true);
+      try {
+        await actions.handleUpdate(row.original, values);
+        table.setEditingRow(null);
+        table.setRowSelection({});
+        setUpdateModalOpened(false);
+      } catch (error) {
+        displaySaveError(error);
+      } finally {
+        setIsSaving(false);
+      }
     },
     mantineProgressProps: ({ isTopToolbar }) => ({
       color: "orange",
@@ -131,6 +149,7 @@ const Table = <T extends object>({
       animated: true,
     }),
     state: {
+      isSaving,
       isLoading: loading,
       showAlertBanner: Boolean(error),
       showProgressBars: loading,
@@ -149,6 +168,8 @@ const Table = <T extends object>({
         setOpened={setCreateModalOpened}
         title={createTitle}
         action="create"
+        saveError={saveError}
+        saving={isSaving}
         custom={Boolean(renderDetailPanel)}
       />
     ),
@@ -161,6 +182,8 @@ const Table = <T extends object>({
         setOpened={setUpdateModalOpened}
         title={editTitle}
         action="edit"
+        saveError={saveError}
+        saving={isSaving}
         custom={Boolean(renderDetailPanel)}
       />
     ),
@@ -180,6 +203,7 @@ const Table = <T extends object>({
           return;
         }
         setCreateModalOpened(true);
+        setSaveError(null);
         table.setCreatingRow(true);
       };
 
@@ -192,6 +216,7 @@ const Table = <T extends object>({
           return;
         }
         setUpdateModalOpened(true);
+        setSaveError(null);
         selectedRows.forEach((row) => {
           table.setEditingRow(row);
         });

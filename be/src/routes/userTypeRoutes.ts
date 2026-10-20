@@ -15,6 +15,13 @@ const validateBody = [
   check('slug').optional().isString().withMessage('Slug must be a string')
 ];
 
+const validateUpdateBody = [
+  check('name').optional().isString().trim().notEmpty().withMessage('Name must not be empty'),
+  check('slug').optional().isString().trim().notEmpty().withMessage('Slug must not be empty'),
+  check('productTypeIds').optional().isArray().withMessage('productTypeIds must be an array'),
+  check('productTypeIds.*').isInt({ gt: 0 }).withMessage('Product type IDs must be positive integers'),
+];
+
 const validatePermissionsBody = [
   check('action')
     .isString()
@@ -46,7 +53,7 @@ router.post(
   validate,
   userTypeController.applyUserTypePermissions,
 );
-router.put('/:id', authMiddleware, [...validateId, ...validateBody], validate, userTypeController.updateUserType);
+router.put('/:id', authMiddleware, [...validateId, ...validateUpdateBody], validate, userTypeController.updateUserType);
 router.delete('/:id', authMiddleware, validateId, validate, userTypeController.deleteUserType);
 
 export default router;

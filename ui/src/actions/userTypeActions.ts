@@ -3,6 +3,17 @@ import axiosInstance from './../utils/axiosInstance';
 import { ServerResponse } from '../types/general/ServerResponse';
 import { UserType } from '../types/userTypes/UserType';
 
+const errorMessage = (error: unknown): string => {
+  const data = (error as { response?: { data?: unknown } } | null)?.response?.data;
+  if (Array.isArray(data) && typeof data[0]?.message === 'string') return data[0].message;
+  if (data && typeof data === 'object') {
+    const payload = data as { message?: string; errors?: Array<{ msg?: string }> };
+    if (payload.errors?.[0]?.msg) return payload.errors[0].msg;
+    if (payload.message) return payload.message;
+  }
+  return error instanceof Error ? error.message : 'An unknown error occurred';
+};
+
 // Async thunk for fetching userTypes
 export const fetchUserTypes = createAsyncThunk(
   'userTypes/fetchUserTypes',
@@ -26,15 +37,13 @@ export const createUserType = createAsyncThunk(
   'userTypes/createUserType',
   async (userTypeData: Partial<UserType>, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.post<Partial<UserType>>('/userTypes', userTypeData, {
+      const response = await axiosInstance.post<[Partial<UserType>]>('/userTypes', userTypeData, {
         withCredentials: true
       });
-      return response.data;
+      if (!response.data[0]) throw new Error('The server did not return the saved user type');
+      return response.data[0];
     } catch (error) {
-      if (error instanceof Error) {
-        return rejectWithValue(error.message);
-      }
-      return rejectWithValue('An unknown error occurred');
+      return rejectWithValue(errorMessage(error));
     }
   }
 );
@@ -44,15 +53,13 @@ export const updateUserType = createAsyncThunk(
   'userTypes/updateUserType',
   async ({ userTypeId, userTypeData }: { userTypeId: number; userTypeData: Partial<UserType>; }, { rejectWithValue }) => {
     try {
-      const response = await axiosInstance.put<Partial<UserType>>(`/userTypes/${userTypeId}`, userTypeData, {
+      const response = await axiosInstance.put<[Partial<UserType>]>(`/userTypes/${userTypeId}`, userTypeData, {
         withCredentials: true
       });
-      return response.data;
+      if (!response.data[0]) throw new Error('The server did not return the saved user type');
+      return response.data[0];
     } catch (error) {
-      if (error instanceof Error) {
-        return rejectWithValue(error.message);
-      }
-      return rejectWithValue('An unknown error occurred');
+      return rejectWithValue(errorMessage(error));
     }
   }
 );
