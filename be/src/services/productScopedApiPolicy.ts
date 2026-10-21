@@ -37,10 +37,12 @@ export function productScopedApiRoute(method: string, path: string): ScopedApiRo
     productAddons: 'product-addon-management', addons: 'product-addon-management',
   };
   if (resource === 'users' && !['GET', 'POST', 'PUT'].includes(method)) return null; // Deactivate; never destroy history.
-  if (['userTypes', 'productTypes', 'addons'].includes(resource) && !read) return null;
+  if (resource === 'userTypes' && !read && !(method === 'POST' && !suffix)) return null;
+  if (['productTypes', 'addons'].includes(resource) && !read) return null;
   if (suffix === 'active' && (!read || !['users', 'products'].includes(resource))) return null;
   if (!read && !['POST', 'PUT', 'DELETE'].includes(method)) return null;
   if (!read && ((method === 'POST' && id !== undefined) || (method !== 'POST' && id === undefined))) return null;
+  if (resource === 'userTypes' && !read) return { resource, module: 'user-directory', action: 'create' };
   return { resource, module: modules[resource], id, passthrough: resource === 'products' };
 }
 

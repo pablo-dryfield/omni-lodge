@@ -7,6 +7,7 @@ import RolePagePermission from "../models/RolePagePermission.js";
 import RoleModulePermission from "../models/RoleModulePermission.js";
 import { getAllowedProductTypeIds } from '../services/productScopeService.js';
 import { PRODUCT_SCOPED_PAGES, PRODUCT_SCOPED_MODULES } from '../services/productScopedApiPolicy.js';
+import { isFoodTourOwner } from '../services/foodTourRolePolicy.js';
 
 const ACCESS_CONTROL_CACHE_TTL_MS = Number(process.env.ACCESS_CONTROL_CACHE_TTL_MS ?? 10 * 60_000);
 type AccessControlPayload = {
@@ -165,7 +166,12 @@ export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Respo
   if (productTypeIds !== null) {
     // Delegated access reflects revocations immediately, not a 10-minute menu cache.
     res.setHeader('Cache-Control', 'private, no-store');
-    res.status(200).json({ ...scopedPayload(await loadAccessControlPayload(userTypeId)), openBarModeAccess, productTypeIds });
+    const payload = scopedPayload(await loadAccessControlPayload(userTypeId));
+    if (payload.modules['user-directory']?.includes('create') && payload.modules['user-directory']?.includes('view') &&
+      userTypeSlug === 'food-tour-owner' && await isFoodTourOwner(req, productTypeIds)) {
+      payload.pages.push('settings-user-types');
+    }
+    res.status(200).json({ ...payload, openBarModeAccess, productTypeIds });
     return;
   }
   const cached = getCachedAccessControlPayload(userTypeId);

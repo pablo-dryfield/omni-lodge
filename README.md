@@ -41,9 +41,21 @@ boundary, not just filtered navigation. Delegated owners can manage exclusively
 scoped users, products, currency prices and product add-on overrides, and view
 scoped bookings and finance reports. Company-wide users/roles, shared scopes,
 unassigned financial entries, bank balances, budgets, credentials, generic report
-queries and global settings remain inaccessible. User roles must also have no
-more module-action permissions than the delegating owner. User deletion, badge
-printing, affiliate changes and password resets remain company-administration
+queries and global settings remain inaccessible. Normally, user roles must have
+no more module-action permissions than the delegating account. A Food Tour-only
+`food-tour-owner` can instead assign any active `food-tour-*` User Type that is
+explicitly scoped only to Food Tour, including Food Tour Manager. Its extra raw
+permissions do not bypass the product-scoped API boundary. Other scoped roles
+cannot assign the Food Tour Owner role. Migration `202610210001` restricts existing
+unscoped Food Tour-prefixed roles to Food Tour without replacing explicit scopes;
+Food Tour Owners also have a restricted Settings / User Types screen to create
+new `Food Tour ...` roles. It fixes the scope to Food Tour and copies only the
+scoped page/module permissions from an existing Food Tour role selected as a
+template. It cannot edit/delete roles, change product scopes, grant global
+permissions or change company-wide defaults. Creation is atomic and audited.
+Company administrators creating roles through the full editor must still assign
+the explicit Food Tour product scope.
+User deletion, badge printing, affiliate changes and password resets remain company-administration
 operations; scoped user creation creates no staff badge or external side effects.
 
 Assign explicit product types to a separate owner User Type first. For local

@@ -48,18 +48,39 @@ const audit = async (req: AuthenticatedRequest, action: string, entity: string, 
   metaJson: { ...metaJson, productTypeIds: req.productTypeScope },
 }, { transaction });
 
-/** Delegated roles must be wholly inside the actor's scope and cannot carry
- * permissions the actor does not hold. Empty scopes mean global, not empty. */
+const FOOD_TOUR_OWNER = 'food-tour-owner';
+
+/** Empty scopes mean global, not empty. Food Tour owners may delegate their
+ * explicitly scoped role family; other actors still need a permission subset. */
 export async function manageableRoleIds(req: AuthenticatedRequest, scope: number[], transaction?: Transaction): Promise<number[]> {
   const links = await UserTypeProductType.findAll({ transaction });
   const scopes = new Map<number, number[]>();
   for (const link of links) scopes.set(link.userTypeId, [...(scopes.get(link.userTypeId) ?? []), link.productTypeId]);
   const candidates = [...scopes].filter(([, ids]) => isExclusiveProductScope(ids, scope)).map(([id]) => id);
+  // Resolve role identity from the database, including inside the write
+  // transaction, rather than trusting a potentially stale session role slug.
+  const roles = await UserType.findAll({
+    where: { id: { [Op.in]: [...candidates, req.authContext!.userTypeId!] } },
+    attributes: ['id', 'slug', 'status'], transaction,
+  });
+  const actor = roles.find(role => role.id === req.authContext!.userTypeId);
+  if (!actor?.status) return [];
+  const activeCandidates = roles.filter(role => role.status && candidates.includes(role.id));
+  if (actor.slug === FOOD_TOUR_OWNER) {
+    const products = await ProductType.findAll({ where: { id: { [Op.in]: scope } }, attributes: ['id', 'name'], transaction });
+    // A role name alone never grants access: both sides must be explicitly
+    // Food Tour-only. The API boundary still clips every delegated permission.
+    if (scope.length !== 1 || products.length !== 1 || !/^food tour(?:$|[ -])/i.test(products[0].name.trim())) return [];
+    return activeCandidates.filter(role => role.slug.startsWith('food-tour-')).map(role => role.id);
+  }
   const permissions = await RoleModulePermission.findAll({
     where: { userTypeId: { [Op.in]: [...candidates, req.authContext!.userTypeId!] }, allowed: true, status: true }, transaction,
   });
   const own = new Set(permissions.filter(p => p.userTypeId === req.authContext!.userTypeId).map(p => `${p.moduleId}:${p.actionId}`));
-  return candidates.filter(id => !permissions.some(p => p.userTypeId === id && !own.has(`${p.moduleId}:${p.actionId}`)));
+  // The owner role carries special delegation authority, so a manager cannot
+  // promote somebody to owner merely because its raw permission set is larger.
+  return activeCandidates.filter(role => role.slug !== FOOD_TOUR_OWNER &&
+    !permissions.some(p => p.userTypeId === role.id && !own.has(`${p.moduleId}:${p.actionId}`))).map(role => role.id);
 }
 
 async function directory(req: AuthenticatedRequest, res: Response, route: ScopedApiRoute, scope: number[]): Promise<void> {
@@ -215,6 +236,10 @@ export async function handleProductScopedManagement(req: AuthenticatedRequest, r
       await getFinanceReports(req, res); return;
     }
     if (route.resource === 'userTypes') {
+      if (req.method === 'POST') {
+        const { createFoodTourUserType } = await import('./foodTourUserTypeController.js');
+        res.status(201).json([await createFoodTourUserType(req, scope)]); return;
+      }
       const ids = await manageableRoleIds(req, scope);
       if (route.id && !ids.includes(route.id)) throw new HttpError(404, 'Role not found in your product scope');
       const roles = await UserType.findAll({ where: { id: route.id ?? { [Op.in]: ids }, status: true }, attributes: ['id', 'name', 'slug'] });

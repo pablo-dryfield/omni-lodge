@@ -44,3 +44,11 @@ it('routes approved management operations to the scoped handler, never a legacy 
   expect(handleProductScopedManagement).toHaveBeenCalledWith(req, res, expect.objectContaining({ resource: 'users', id: 215 }), [3]);
   expect(next).not.toHaveBeenCalled();
 });
+it('sends role creation through the isolated handler with user-directory create permission, never global role administration', async () => {
+  const req = { originalUrl: '/api/userTypes', method: 'POST' } as AuthenticatedRequest;
+  const res = response(), next = jest.fn();
+  await enforceProductScopedApiBoundary(req, res, next);
+  expect(hasModuleActionPermission).toHaveBeenCalledWith(req, 'user-directory', 'create');
+  expect(handleProductScopedManagement).toHaveBeenCalledWith(req, res, { resource: 'userTypes', module: 'user-directory', action: 'create' }, [3]);
+  expect(next).not.toHaveBeenCalled();
+});
