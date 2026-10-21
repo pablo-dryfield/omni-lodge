@@ -13,7 +13,8 @@ it('allows only reviewed routes and positive integer identifiers', () => {
   for (const path of ['/api/users/0', '/api/users/-1', '/api/users/1/anything', '/api/users/9007199254740992']) expect(productScopedApiRoute('GET', path)).toBeNull();
   expect(productScopedApiRoute('DELETE', '/api/users/25')).toBeNull();
   expect(productScopedApiRoute('POST', '/api/userTypes')).toEqual({ resource: 'userTypes', module: 'user-directory', action: 'create' });
-  expect(productScopedApiRoute('PUT', '/api/userTypes/16')).toBeNull();
+  expect(productScopedApiRoute('PUT', '/api/userTypes/16')).toEqual({ resource: 'userTypes', module: 'user-directory', action: 'update', id: 16 });
+  expect(productScopedApiRoute('PUT', '/api/userTypes')).toBeNull();
   expect(productScopedApiRoute('DELETE', '/api/userTypes/16')).toBeNull();
   expect(productScopedApiRoute('PUT', '/api/productTypes/3')).toBeNull();
 });

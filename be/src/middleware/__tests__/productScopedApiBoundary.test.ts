@@ -52,3 +52,11 @@ it('sends role creation through the isolated handler with user-directory create 
   expect(handleProductScopedManagement).toHaveBeenCalledWith(req, res, { resource: 'userTypes', module: 'user-directory', action: 'create' }, [3]);
   expect(next).not.toHaveBeenCalled();
 });
+it('requires update permission and the isolated metadata handler for user type edits', async () => {
+  const req = { originalUrl: '/api/userTypes/18', method: 'PUT' } as AuthenticatedRequest;
+  const res = response(), next = jest.fn();
+  await enforceProductScopedApiBoundary(req, res, next);
+  expect(hasModuleActionPermission).toHaveBeenCalledWith(req, 'user-directory', 'update');
+  expect(handleProductScopedManagement).toHaveBeenCalledWith(req, res, { resource: 'userTypes', module: 'user-directory', action: 'update', id: 18 }, [3]);
+  expect(next).not.toHaveBeenCalled();
+});

@@ -240,9 +240,13 @@ export async function handleProductScopedManagement(req: AuthenticatedRequest, r
         const { createFoodTourUserType } = await import('./foodTourUserTypeController.js');
         res.status(201).json([await createFoodTourUserType(req, scope)]); return;
       }
+      if (req.method === 'PUT' && route.id) {
+        const { updateFoodTourUserType } = await import('./foodTourUserTypeController.js');
+        res.json([await updateFoodTourUserType(req, scope, route.id)]); return;
+      }
       const ids = await manageableRoleIds(req, scope);
       if (route.id && !ids.includes(route.id)) throw new HttpError(404, 'Role not found in your product scope');
-      const roles = await UserType.findAll({ where: { id: route.id ?? { [Op.in]: ids }, status: true }, attributes: ['id', 'name', 'slug'] });
+      const roles = await UserType.findAll({ where: { id: route.id ?? { [Op.in]: ids }, status: true }, attributes: ['id', 'name', 'slug', 'description'] });
       res.json([{ data: route.id ? roles[0] : roles, columns: columns(UserType, ['id', 'name', 'slug']) }]); return;
     }
     if (route.resource === 'productTypes') {

@@ -60,7 +60,7 @@ export async function configureProductScopedOwner(roleId: number, actorId: numbe
     // A new, separate member role avoids changing any existing shared users.
     const memberSlug = `${role.slug}-member`;
     const [member, created] = await UserType.findOrCreate({ where: { slug: memberSlug },
-      defaults: { slug: memberSlug, name: `${role.name} — Team member`, status: true, isDefault: false, createdBy: actorId }, transaction });
+      defaults: { slug: memberSlug, name: role.slug === 'food-tour-owner' ? 'Food Tour Guide' : `${role.name} — Team member`, status: true, isDefault: false, createdBy: actorId }, transaction });
     const memberScope = await UserTypeProductType.findAll({ where: { userTypeId: member.id }, transaction });
     const scopeIds = scope.map(link => link.productTypeId);
     if (!created && (!memberScope.length || memberScope.some(link => !scopeIds.includes(link.productTypeId)))) throw new Error('Existing member role is not exclusively assigned to this product scope');

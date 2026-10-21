@@ -51,8 +51,12 @@ unscoped Food Tour-prefixed roles to Food Tour without replacing explicit scopes
 Food Tour Owners also have a restricted Settings / User Types screen to create
 new `Food Tour ...` roles. It fixes the scope to Food Tour and copies only the
 scoped page/module permissions from an existing Food Tour role selected as a
-template. It cannot edit/delete roles, change product scopes, grant global
-permissions or change company-wide defaults. Creation is atomic and audited.
+template. Owners can also edit a Food Tour role's name and description, without
+changing its internal slug/ID, assigned users or permissions. Role edits and
+creation are atomic and audited. Deletion, scope changes, global permissions
+and company-wide defaults remain unavailable. Migration `202610210002` renames
+the legacy Food Tour Owner team-member label to Food Tour Guide without changing
+its existing ID, slug, members or permissions; custom names are preserved.
 Company administrators creating roles through the full editor must still assign
 the explicit Food Tour product scope.
 User deletion, badge printing, affiliate changes and password resets remain company-administration

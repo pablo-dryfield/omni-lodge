@@ -18,17 +18,23 @@ import ProductType from '../../models/ProductType';
 import Page from '../../models/Page';
 import RolePagePermission from '../../models/RolePagePermission';
 import AuditLog from '../../models/AuditLog';
-import { createFoodTourUserType } from '../foodTourUserTypeController';
+import { createFoodTourUserType, updateFoodTourUserType } from '../foodTourUserTypeController';
 
-let roles: Array<{ id: number; slug: string; status: boolean }>;
+const roleRow = (data: { id: number; slug: string; status: boolean; name?: string; description?: string | null }) => ({ ...data,
+  get: jest.fn(() => ({ ...data })),
+  update: jest.fn(async function(this: any, changes) { Object.assign(data, changes); Object.assign(this, changes); return this; }),
+});
+let roles: ReturnType<typeof roleRow>[];
 const request = (body: object = {}) => ({ authContext: { id: 215, userTypeId: 16, roleSlug: 'food-tour-owner' },
   body: { name: 'Guide', description: 'Food Tour guides', sourceUserTypeId: 15, ...body } } as AuthenticatedRequest);
 beforeEach(() => {
   jest.clearAllMocks();
-  roles = [{ id: 16, slug: 'food-tour-owner', status: true }, { id: 15, slug: 'food-tour-manager', status: true },
-    { id: 25, slug: 'food-tour-shared', status: true }, { id: 1, slug: 'owner', status: true }];
+  roles = [roleRow({ id: 16, slug: 'food-tour-owner', name: 'Food Tour Owner', status: true }),
+    roleRow({ id: 15, slug: 'food-tour-manager', name: 'Food Tour Manager', status: true }),
+    roleRow({ id: 18, slug: 'food-tour-owner-member', name: 'Food Tour Owner — Team member', description: 'Original description', status: true }),
+    roleRow({ id: 25, slug: 'food-tour-shared', status: true }), roleRow({ id: 1, slug: 'owner', status: true })];
   const links = [{ userTypeId: 16, productTypeId: 3 }, { userTypeId: 15, productTypeId: 3 },
-    { userTypeId: 25, productTypeId: 3 }, { userTypeId: 25, productTypeId: 1 }];
+    { userTypeId: 18, productTypeId: 3 }, { userTypeId: 25, productTypeId: 3 }, { userTypeId: 25, productTypeId: 1 }];
   (Links.findAll as jest.Mock).mockImplementation(async options => options?.where ? links.filter(link => link.userTypeId === options.where.userTypeId) : links);
   (Common.findByPk as jest.Mock).mockImplementation(async id => roles.find(role => role.id === id));
   (ProductType.findByPk as jest.Mock).mockResolvedValue({ id: 3, name: 'Food Tour Krakow' });
@@ -90,4 +96,38 @@ it('does not leave a successful audit or response when writing the product scope
   (Links.bulkCreate as jest.Mock).mockRejectedValueOnce(new Error('Write failed'));
   await expect(createFoodTourUserType(request(), [3])).rejects.toThrow('Write failed');
   expect(AuditLog.create).not.toHaveBeenCalled();
+});
+
+describe('metadata edits', () => {
+  const editRequest = (body: object) => ({ ...request(), body } as AuthenticatedRequest);
+  it('renames the existing member to Food Tour Guide while preserving its ID, slug, users, scope and permissions', async () => {
+    expect(await updateFoodTourUserType(editRequest({ name: 'Food Tour Guide', description: 'Tour guiding staff' }), [3], 18))
+      .toMatchObject({ id: 18, slug: 'food-tour-owner-member', name: 'Food Tour Guide', description: 'Tour guiding staff', productTypeIds: [3] });
+    expect(roles.find(role => role.id === 18)!.update).toHaveBeenCalledWith({ name: 'Food Tour Guide', description: 'Tour guiding staff', updatedBy: 215 }, expect.anything());
+    expect(Links.bulkCreate).not.toHaveBeenCalled(); expect(Common.bulkCreate).not.toHaveBeenCalled();
+    expect(RolePagePermission.bulkCreate).not.toHaveBeenCalled(); expect(Common.create).not.toHaveBeenCalled();
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ action: 'product_scope.user_type_updated', entityId: '18',
+      metaJson: expect.objectContaining({ previous: { name: 'Food Tour Owner — Team member', description: 'Original description' }, next: { name: 'Food Tour Guide', description: 'Tour guiding staff' } }) }), expect.anything());
+  });
+  it('supports description-only edits and clearing descriptions without changing the name', async () => {
+    expect(await updateFoodTourUserType(editRequest({ description: null }), [3], 18)).toMatchObject({ name: 'Food Tour Owner — Team member', description: null });
+  });
+  it('allows editing the owner display name without removing owner authority', async () => {
+    expect(await updateFoodTourUserType(editRequest({ name: 'Food Tour Business Owner' }), [3], 16)).toMatchObject({ id: 16, slug: 'food-tour-owner', name: 'Food Tour Business Owner' });
+  });
+  it.each([{ slug: 'owner' }, { status: false }, { isDefault: true }, { productTypeIds: [1] }, { permissions: [] }, { sourceUserTypeId: 1 }, { updatedBy: 1 }, {}])('rejects edits to protected fields %j', async body => {
+    await expect(updateFoodTourUserType(editRequest(body), [3], 18)).rejects.toMatchObject({ status: 400 });
+    expect(roles.find(role => role.id === 18)!.update).not.toHaveBeenCalled();
+  });
+  it.each([1, 25, 999])('rejects global, shared or missing role %s', async id => {
+    await expect(updateFoodTourUserType(editRequest({ name: 'Food Tour Guide' }), [3], id)).rejects.toMatchObject({ status: 404 });
+  });
+  it('rejects a manager with a stale owner slug', async () => {
+    const req = editRequest({ name: 'Food Tour Guide' }); req.authContext!.userTypeId = 15;
+    await expect(updateFoodTourUserType(req, [3], 18)).rejects.toMatchObject({ status: 403 });
+  });
+  it('rechecks actor scope before editing', async () => {
+    (Links.findAll as jest.Mock).mockResolvedValue([{ userTypeId: 16, productTypeId: 1 }]);
+    await expect(updateFoodTourUserType(editRequest({ name: 'Food Tour Guide' }), [3], 18)).rejects.toMatchObject({ status: 409 });
+  });
 });

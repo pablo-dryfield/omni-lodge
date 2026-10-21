@@ -167,7 +167,8 @@ export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Respo
     // Delegated access reflects revocations immediately, not a 10-minute menu cache.
     res.setHeader('Cache-Control', 'private, no-store');
     const payload = scopedPayload(await loadAccessControlPayload(userTypeId));
-    if (payload.modules['user-directory']?.includes('create') && payload.modules['user-directory']?.includes('view') &&
+    const directoryActions = payload.modules['user-directory'] ?? [];
+    if ((directoryActions.includes('create') || directoryActions.includes('update')) && directoryActions.includes('view') &&
       userTypeSlug === 'food-tour-owner' && await isFoodTourOwner(req, productTypeIds)) {
       payload.pages.push('settings-user-types');
     }

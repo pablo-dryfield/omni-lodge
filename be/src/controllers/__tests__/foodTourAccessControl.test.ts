@@ -41,3 +41,11 @@ it('does not use a stale session owner slug as authorization', async () => {
   (isFoodTourOwner as jest.Mock).mockResolvedValue(false);
   expect((await load('food-tour-owner')).pages).not.toContain('settings-user-types');
 });
+it('keeps metadata editing available to an owner with update/view but not create permission', async () => {
+  (Common.findAll as jest.Mock).mockImplementation(async options => options?.where
+    ? [1, 2].map(actionId => ({ moduleId: 1, actionId, allowed: true, status: true }))
+    : [{ id: 1, slug: 'user-directory', key: 'view' }, { id: 2, slug: 'settings-user-types-admin', key: 'update' }]);
+  const payload = await load('food-tour-owner');
+  expect(payload.pages).toContain('settings-user-types');
+  expect(payload.modules['user-directory']).toEqual(['view', 'update']);
+});

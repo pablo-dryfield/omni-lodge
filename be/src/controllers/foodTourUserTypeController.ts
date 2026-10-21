@@ -14,6 +14,17 @@ import { getAllowedProductTypeIds } from '../services/productScopeService.js';
 import { PRODUCT_SCOPED_MODULES, PRODUCT_SCOPED_PAGES } from '../services/productScopedApiPolicy.js';
 import { manageableRoleIds } from './productScopedManagementController.js';
 
+const roleName = (value: unknown): { name: string; slug: string } => {
+  if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, 'A user type name is required.');
+  const name = /^food tour(?:$|[ -])/i.test(value.trim()) ? value.trim() : `Food Tour ${value.trim()}`;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  if (name.length > 100 || !slug.startsWith('food-tour-') || slug.length > 100) throw new HttpError(400, 'Choose a Food Tour role name of at most 100 characters.');
+  return { name, slug };
+};
+const validateDescription = (value: unknown): void => {
+  if (value != null && (typeof value !== 'string' || value.length > 255)) throw new HttpError(400, 'Description must be at most 255 characters.');
+};
+
 /** Create a product-local role by cloning an already delegated role. Never
  * accept arbitrary permissions, global defaults, or an empty/global scope. */
 export async function createFoodTourUserType(req: AuthenticatedRequest, scope: number[]): Promise<Record<string, unknown>> {
@@ -22,11 +33,8 @@ export async function createFoodTourUserType(req: AuthenticatedRequest, scope: n
     Object.keys(body).some(key => !['name', 'description', 'sourceUserTypeId', 'productTypeIds'].includes(key))) {
     throw new HttpError(400, 'Only name, description and an existing Food Tour permission template can be configured.');
   }
-  if (typeof body.name !== 'string' || !body.name.trim()) throw new HttpError(400, 'A user type name is required.');
-  const name = /^food tour(?:$|[ -])/i.test(body.name.trim()) ? body.name.trim() : `Food Tour ${body.name.trim()}`;
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-  if (name.length > 100 || !slug.startsWith('food-tour-') || slug.length > 100) throw new HttpError(400, 'Choose a Food Tour role name of at most 100 characters.');
-  if (body.description != null && (typeof body.description !== 'string' || body.description.length > 255)) throw new HttpError(400, 'Description must be at most 255 characters.');
+  const { name, slug } = roleName(body.name);
+  validateDescription(body.description);
   const sourceId = Number(body.sourceUserTypeId);
   if (!['string', 'number'].includes(typeof body.sourceUserTypeId) || !Number.isSafeInteger(sourceId) || sourceId <= 0) throw new HttpError(400, 'Select an existing Food Tour permission template.');
   if (body.productTypeIds !== undefined && (!Array.isArray(body.productTypeIds) || body.productTypeIds.length !== 1 || body.productTypeIds[0] !== scope[0])) {
@@ -60,5 +68,32 @@ export async function createFoodTourUserType(req: AuthenticatedRequest, scope: n
       metaJson: { name, slug, productTypeIds: currentScope, sourceUserTypeId: sourceId,
         pagesCopied: pagePermissions.length, moduleActionsCopied: modulePermissions.length } }, { transaction });
     return { ...created.get({ plain: true }), productTypeIds: currentScope };
+  });
+}
+
+/** Metadata only: preserve role identity, members, scopes and permissions. */
+export async function updateFoodTourUserType(req: AuthenticatedRequest, scope: number[], id: number): Promise<Record<string, unknown>> {
+  const body = req.body as Record<string, unknown>;
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.keys(body).length ||
+    Object.keys(body).some(key => !['name', 'description'].includes(key))) {
+    throw new HttpError(400, 'Only the user type name and description can be edited.');
+  }
+  const changes: Record<string, unknown> = {};
+  if (body.name !== undefined) changes.name = roleName(body.name).name;
+  if (body.description !== undefined) { validateDescription(body.description); changes.description = body.description; }
+  return sequelize.transaction(async transaction => {
+    const locked = await UserType.findAll({ where: { id: { [Op.in]: [req.authContext!.userTypeId!, id] } },
+      transaction, lock: transaction.LOCK.UPDATE, order: [['id', 'ASC']] });
+    const currentScope = await getAllowedProductTypeIds(req, transaction);
+    if (!currentScope || currentScope.length !== scope.length || !currentScope.every(type => scope.includes(type))) throw new HttpError(409, 'Your product scope changed. Reload before retrying.');
+    if (!(await isFoodTourOwner(req, currentScope, transaction))) throw new HttpError(403, 'Only a Food Tour Owner can edit Food Tour user types.');
+    const allowed = await manageableRoleIds(req, currentScope, transaction);
+    const target = locked.find(role => role.id === id);
+    if (!target || !allowed.includes(id)) throw new HttpError(404, 'User type not found in your Food Tour scope.');
+    const previous = { name: target.name, description: target.description };
+    await target.update({ ...changes, updatedBy: req.authContext!.id }, { transaction });
+    await AuditLog.create({ actorId: req.authContext!.id, action: 'product_scope.user_type_updated', entity: 'userType', entityId: String(id),
+      metaJson: { previous, next: { name: target.name, description: target.description }, productTypeIds: currentScope } }, { transaction });
+    return { ...target.get({ plain: true }), productTypeIds: currentScope };
   });
 }
