@@ -59,6 +59,7 @@ import { prepareBookingGrid, BookingGrid } from "../utils/prepareBookingGrid";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
+import { selectCanAccessBookingSanityCheck } from "../selectors/accessControlSelectors";
 import {
   serializeProductTypeSelection,
 } from "../utils/productTypeQuery";
@@ -604,7 +605,12 @@ const BookingsPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
-  const availableBookingTabs = BOOKING_TAB_OPTIONS.filter(tab => !productScoped || ['calendar', 'summary', 'manifest'].includes(tab.value));
+  const canAccessSanityCheck = useAppSelector(selectCanAccessBookingSanityCheck);
+  const availableBookingTabs = BOOKING_TAB_OPTIONS.filter(tab =>
+    tab.value === "sanity"
+      ? canAccessSanityCheck
+      : !productScoped || ['calendar', 'summary', 'manifest'].includes(tab.value),
+  );
   const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [activeTab, setActiveTab] = useState<BookingsTab>("calendar");
   const [mobileTabsMenuOpen, setMobileTabsMenuOpen] = useState<string | null>(null);
@@ -741,6 +747,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
   const handleBookingsTabChange = useCallback(
     (value: string | null) => {
+      if (value === "sanity" && !canAccessSanityCheck) return;
       if (productScoped && value && !['calendar', 'summary', 'manifest'].includes(value)) return;
       if (value === "manifest") {
         openManifestForCurrentDate();
@@ -752,7 +759,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       }
       setActiveTab((value as BookingsTab) ?? "calendar");
     },
-    [navigate, openManifestForCurrentDate, productScoped],
+    [canAccessSanityCheck, navigate, openManifestForCurrentDate, productScoped],
   );
 
   const handleCloseEmailPreview = useCallback(() => {
@@ -801,6 +808,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     if (!nextTab) {
       return;
     }
+    if (nextTab === "sanity" && !canAccessSanityCheck) {
+      setActiveTab("calendar");
+      return;
+    }
     if (nextTab === "manifest") {
       openManifestForCurrentDate();
       return;
@@ -810,7 +821,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       return;
     }
     setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
-  }, [emailPreviewParam, navigate, openManifestForCurrentDate, searchParams]);
+  }, [canAccessSanityCheck, emailPreviewParam, navigate, openManifestForCurrentDate, searchParams]);
 
   useEffect(() => {
     const nextDateField = parseBookingsSummaryDateField(searchParams.get("summaryDateField"));
@@ -2025,7 +2036,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   {!productScoped && <Tabs.Tab value="payment-links">Payment Links</Tabs.Tab>}
                   <Tabs.Tab value="summary">Summary</Tabs.Tab>
                   {!productScoped && <Tabs.Tab value="emails">Emails</Tabs.Tab>}
-                  {!productScoped && <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>}
+                  {canAccessSanityCheck && <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>}
                 </Tabs.List>
               )}
               <Tabs.Panel value="calendar" pt="md">
@@ -2534,9 +2545,11 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   </Stack>
               </Tabs.Panel>
 
-              <Tabs.Panel value="sanity" pt="md">
-                <BookingsSanityCheck />
-              </Tabs.Panel>
+              {canAccessSanityCheck && (
+                <Tabs.Panel value="sanity" pt="md">
+                  <BookingsSanityCheck />
+                </Tabs.Panel>
+              )}
             </Tabs>
             <Modal
               opened={createEmailOpen}

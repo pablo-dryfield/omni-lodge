@@ -51,7 +51,8 @@ import dayjs, { Dayjs } from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { useAppDispatch } from "../store/hooks";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { selectCanAccessBookingSanityCheck } from "../selectors/accessControlSelectors";
 
 import { navigateToPage } from "../actions/navigationActions";
 
@@ -1910,6 +1911,10 @@ const pickDateChangeTemplate = (templates: EmailTemplate[]): EmailTemplate | nul
 const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const dispatch = useAppDispatch();
+  const canAccessSanityCheck = useAppSelector(selectCanAccessBookingSanityCheck);
+  const availableBookingNavOptions = BOOKING_NAV_OPTIONS.filter(
+    option => option.value !== "sanity" || canAccessSanityCheck,
+  );
 
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -1920,6 +1925,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const isMobile = useMediaQuery("(max-width: 900px)");
 
   const handleBookingsNavigation = (value: string | null) => {
+    if (value === "sanity" && !canAccessSanityCheck) return;
     if (!value || value === "manifest") {
       setMobileBookingsNavOpen(null);
       return;
@@ -5253,7 +5259,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                   </Accordion.Control>
                   <Accordion.Panel>
                     <Stack gap="xs">
-                      {BOOKING_NAV_OPTIONS.map((option) => (
+                      {availableBookingNavOptions.map((option) => (
                         <Button
                           key={option.value}
                           variant={option.value === "manifest" ? "light" : "subtle"}
@@ -5270,7 +5276,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
             ) : (
               <Tabs value="manifest" onChange={handleBookingsNavigation}>
                 <Tabs.List>
-                  {BOOKING_NAV_OPTIONS.map((option) => (
+                  {availableBookingNavOptions.map((option) => (
                     <Tabs.Tab key={option.value} value={option.value}>
                       {option.label}
                     </Tabs.Tab>
