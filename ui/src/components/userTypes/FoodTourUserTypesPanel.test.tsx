@@ -47,6 +47,8 @@ async function fillCreator() {
 
 it('fixes the product scope and exposes no company-wide permission tools', async () => {
   await openCreator();
+  expect(screen.queryByText('Food Tour-only user types', { exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByText(/New roles are always restricted to Food Tour/)).not.toBeInTheDocument();
   expect(screen.getByLabelText('Product type')).toHaveValue('Food Tour (restricted)');
   expect(screen.getByLabelText('Product type')).toHaveAttribute('readonly');
   expect(screen.getByRole('button', { name: 'Create', exact: true })).toBeDisabled();

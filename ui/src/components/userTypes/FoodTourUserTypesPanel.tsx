@@ -47,11 +47,6 @@ export default function FoodTourUserTypesPanel() {
     finally { setSaving(false); }
   };
   return <Stack gap="md">
-    <Alert color="blue" title="Food Tour-only user types">
-      New roles are always restricted to Food Tour. Choose an existing Food Tour role as the permission template;
-      only its product-scoped access is copied. Global permissions and role administration are not copied.
-      You can edit existing names and descriptions without changing permissions or product scope.
-    </Alert>
     {error && <Alert color="red">{error}</Alert>}
     {success && <Alert color="teal">{success}</Alert>}
     <Group justify="space-between">
