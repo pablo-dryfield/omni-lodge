@@ -4,7 +4,8 @@ import { google } from 'googleapis';
 import { Op } from 'sequelize';
 import Booking from '../models/Booking.js';
 import Product from '../models/Product.js';
-import { getConfigValue } from './configService.js';
+import { getConfigValue, refreshConfigCacheKeys } from './configService.js';
+import { DEFAULT_GOOGLE_ADS_API_VERSION, GOOGLE_ADS_API_VERSION_PATTERN } from '../config/googleAdsConfig.js';
 import { isBookingRevenueRecognized } from './bookings/bookingRevenuePolicy.js';
 
 type MarketingSource = 'Google Ads' | 'Meta Ads';
@@ -117,11 +118,12 @@ type MarketingOverview = {
   startDate: string;
   endDate: string;
   overall: TabData & {
-    googleAdsCost: number;
+    googleAdsCost: number | null;
     googleCostCurrency: string | null;
+    costError: string | null;
   };
   googleAds: TabData & {
-    googleAdsCost: number;
+    googleAdsCost: number | null;
     costCurrency: string | null;
     costError: string | null;
     googleCostRows: GoogleCostRow[];
@@ -131,7 +133,6 @@ type MarketingOverview = {
 
 const GOOGLE_ADS_SOURCE_LABEL = 'Google Ads';
 const META_ADS_SOURCE_LABEL = 'Meta Ads';
-const GOOGLE_ADS_API_VERSION = 'v22';
 const GOOGLE_ADS_BOOKING_DATA_CUTOFF_DATE = '2026-02-28';
 const GOOGLE_ADS_NON_REVENUE_CAMPAIGN_PREFIXES = ['smart campaign'];
 const GOOGLE_ADS_MEDIUM_LEFTOVER_IGNORE_THRESHOLD = 0.01;
@@ -146,6 +147,7 @@ type MarketingOverviewCacheEntry = {
 
 const marketingOverviewCache = new Map<string, MarketingOverviewCacheEntry>();
 const marketingOverviewInFlight = new Map<string, Promise<MarketingOverview>>();
+let activeGoogleAdsApiVersion: string | null = null;
 
 const parseAmount = (value: unknown): number => {
   const numeric = typeof value === 'number' ? value : Number(value ?? 0);
@@ -582,9 +584,10 @@ const extractGoogleAdsErrorMessage = (error: unknown): string => {
 const fetchGoogleAdsCurrency = async (
   accessToken: string,
   settings: { developerToken: string; customerId: string; loginCustomerId: string | null },
+  apiVersion: string,
 ): Promise<string | null> => {
   const response = await axios.post(
-    `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${settings.customerId}/googleAds:search`,
+    `https://googleads.googleapis.com/${apiVersion}/customers/${settings.customerId}/googleAds:search`,
     {
       query: 'SELECT customer.currency_code FROM customer LIMIT 1',
     },
@@ -602,8 +605,12 @@ const fetchGoogleAdsCurrency = async (
   return normalizeText(currency);
 };
 
-const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<GoogleCostResult> => {
+const fetchGoogleAdsCosts = async (startDate: string, endDate: string, apiVersion: string): Promise<GoogleCostResult> => {
   try {
+    // Also validate environment/database values that bypassed Control Panel validation.
+    if (!new RegExp(GOOGLE_ADS_API_VERSION_PATTERN).test(apiVersion)) {
+      throw new Error('GOOGLE_ADS_API_VERSION must be a Google Ads API major version such as v26');
+    }
     const oauthClient = buildOauthClient();
     const settings = resolveGoogleAdsSettings();
     const accessTokenResponse = await oauthClient.getAccessToken();
@@ -621,9 +628,9 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
     };
 
     const [currency, campaignResponse, adGroupResponse] = await Promise.all([
-      fetchGoogleAdsCurrency(accessToken, settings),
+      fetchGoogleAdsCurrency(accessToken, settings, apiVersion),
       axios.post(
-        `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${settings.customerId}/googleAds:searchStream`,
+        `https://googleads.googleapis.com/${apiVersion}/customers/${settings.customerId}/googleAds:searchStream`,
         {
           query: [
             'SELECT campaign.name, metrics.cost_micros, metrics.clicks, metrics.conversions, metrics.conversions_value, segments.date',
@@ -634,7 +641,7 @@ const fetchGoogleAdsCosts = async (startDate: string, endDate: string): Promise<
         { headers, timeout: 20000 },
       ),
       axios.post(
-        `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${settings.customerId}/googleAds:searchStream`,
+        `https://googleads.googleapis.com/${apiVersion}/customers/${settings.customerId}/googleAds:searchStream`,
         {
           query: [
             'SELECT campaign.name, ad_group.name, metrics.cost_micros, metrics.clicks, metrics.conversions, metrics.conversions_value, segments.date',
@@ -849,8 +856,8 @@ const fetchMarketingBookings = async (startDate: string, endDate: string): Promi
     }));
 };
 
-const buildMarketingOverviewCacheKey = (startDate: string, endDate: string): string =>
-  `${startDate}\u0000${endDate}`;
+const buildMarketingOverviewCacheKey = (startDate: string, endDate: string, apiVersion: string): string =>
+  `${apiVersion}\u0000${startDate}\u0000${endDate}`;
 
 const getCachedMarketingOverview = (key: string): MarketingOverview | null => {
   const entry = marketingOverviewCache.get(key);
@@ -884,14 +891,14 @@ const setCachedMarketingOverview = (key: string, value: MarketingOverview): void
   }
 };
 
-const buildMarketingOverview = async (startDate: string, endDate: string): Promise<MarketingOverview> => {
+const buildMarketingOverview = async (startDate: string, endDate: string, apiVersion: string): Promise<MarketingOverview> => {
   const normalizedStartDate = dayjs(startDate).format('YYYY-MM-DD');
   const normalizedEndDate = dayjs(endDate).format('YYYY-MM-DD');
   const bookings = await fetchMarketingBookings(normalizedStartDate, normalizedEndDate);
 
   const googleBookings = bookings.filter((booking) => booking.marketingSource === GOOGLE_ADS_SOURCE_LABEL);
   const metaBookings = bookings.filter((booking) => booking.marketingSource === META_ADS_SOURCE_LABEL);
-  const googleCostResult = await fetchGoogleAdsCosts(normalizedStartDate, normalizedEndDate);
+  const googleCostResult = await fetchGoogleAdsCosts(normalizedStartDate, normalizedEndDate, apiVersion);
   const googleHistoricalMetricRows = buildHistoricalGoogleMetricRows(googleCostResult.performanceRows);
   const googleHistoricalMediumMetricRows = buildHistoricalGoogleMediumMetricRows(
     googleCostResult.mediumPerformanceRows,
@@ -914,12 +921,12 @@ const buildMarketingOverview = async (startDate: string, endDate: string): Promi
     ...googleHistoricalMediumMetricRows,
   ];
   const metaMetricRows = buildMetricRowsFromBookings(metaBookings);
-  const totalGoogleCost = roundMoney(googleCostResult.campaignRows.reduce((sum, row) => sum + row.cost, 0));
-  const totalGoogleClicks = roundMetricCount(googleCostResult.campaignRows.reduce((sum, row) => sum + row.clicks, 0));
+  const totalGoogleCost = googleCostResult.error ? null : roundMoney(googleCostResult.campaignRows.reduce((sum, row) => sum + row.cost, 0));
+  const totalGoogleClicks = googleCostResult.error ? null : roundMetricCount(googleCostResult.campaignRows.reduce((sum, row) => sum + row.clicks, 0));
   const dailyCostByDate = new Map<string, number>(googleCostResult.dailyRows.map((row) => [row.date, row.cost]));
   const dailyClickByDate = new Map<string, number>(googleCostResult.dailyRows.map((row) => [row.date, row.clicks]));
-  const sourceCostByLabel = new Map<string, number>([[GOOGLE_ADS_SOURCE_LABEL, totalGoogleCost]]);
-  const sourceClickByLabel = new Map<string, number>([[GOOGLE_ADS_SOURCE_LABEL, totalGoogleClicks]]);
+  const sourceCostByLabel = totalGoogleCost === null ? undefined : new Map<string, number>([[GOOGLE_ADS_SOURCE_LABEL, totalGoogleCost]]);
+  const sourceClickByLabel = totalGoogleClicks === null ? undefined : new Map<string, number>([[GOOGLE_ADS_SOURCE_LABEL, totalGoogleClicks]]);
   const mediumCostByLabel = buildMediumCostByLabel(googleCostResult.rows, googleCostResult.campaignRows);
   const mediumClickByLabel = aggregateClicksByLabel(googleCostResult.rows, (row) => row.medium);
   const campaignCostByLabel = aggregateCampaignCostByLabel(googleCostResult.campaignRows, (row) => row.campaign);
@@ -960,6 +967,7 @@ const buildMarketingOverview = async (startDate: string, endDate: string): Promi
       ...overall,
       googleAdsCost: totalGoogleCost,
       googleCostCurrency: googleCostResult.currency,
+      costError: googleCostResult.error,
     },
     googleAds: {
       ...googleAds,
@@ -973,9 +981,18 @@ const buildMarketingOverview = async (startDate: string, endDate: string): Promi
 };
 
 export const getMarketingOverview = async (startDate: string, endDate: string): Promise<MarketingOverview> => {
+  // Read just this non-secret setting from DB so edits on another process are
+  // honored too. Keep the chosen version fixed for all three calls in a report.
+  await refreshConfigCacheKeys(['GOOGLE_ADS_API_VERSION']);
+  const apiVersion = normalizeText(getConfigValue('GOOGLE_ADS_API_VERSION') as string | null) ?? DEFAULT_GOOGLE_ADS_API_VERSION;
+  if (activeGoogleAdsApiVersion !== apiVersion) {
+    marketingOverviewCache.clear();
+    marketingOverviewInFlight.clear();
+    activeGoogleAdsApiVersion = apiVersion;
+  }
   const normalizedStartDate = dayjs(startDate).format('YYYY-MM-DD');
   const normalizedEndDate = dayjs(endDate).format('YYYY-MM-DD');
-  const cacheKey = buildMarketingOverviewCacheKey(normalizedStartDate, normalizedEndDate);
+  const cacheKey = buildMarketingOverviewCacheKey(normalizedStartDate, normalizedEndDate, apiVersion);
   const cached = getCachedMarketingOverview(cacheKey);
   if (cached) {
     return cached;
@@ -986,13 +1003,13 @@ export const getMarketingOverview = async (startDate: string, endDate: string): 
     return inFlight;
   }
 
-  const pending = buildMarketingOverview(normalizedStartDate, normalizedEndDate)
+  const pending = buildMarketingOverview(normalizedStartDate, normalizedEndDate, apiVersion)
     .then((overview) => {
-      setCachedMarketingOverview(cacheKey, overview);
+      if (activeGoogleAdsApiVersion === apiVersion) setCachedMarketingOverview(cacheKey, overview);
       return overview;
     })
     .finally(() => {
-      marketingOverviewInFlight.delete(cacheKey);
+      if (marketingOverviewInFlight.get(cacheKey) === pending) marketingOverviewInFlight.delete(cacheKey);
     });
 
   marketingOverviewInFlight.set(cacheKey, pending);

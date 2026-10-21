@@ -517,7 +517,7 @@ const TabContent = ({
   accent,
 }: {
   data: MarketingTabData;
-  costValue?: number;
+  costValue?: number | null;
   costCurrency?: string | null;
   costLabel?: string;
   costError?: string | null;
@@ -526,8 +526,8 @@ const TabContent = ({
   isMobile: boolean;
   accent: string;
 }) => {
-  const roas =
-    typeof costValue === "number" && costValue > 0 ? (data.revenueTotal > 0 ? data.revenueTotal / costValue : 0) : null;
+  const hasCost = !costError && typeof costValue === "number";
+  const roas = hasCost && costValue > 0 ? (data.revenueTotal > 0 ? data.revenueTotal / costValue : 0) : null;
 
   const breakdowns = (
     <SimpleGrid cols={{ base: 1, xl: 3 }} spacing="lg" verticalSpacing="lg">
@@ -581,24 +581,24 @@ const TabContent = ({
         <div style={{ flex: 1, minWidth: 0 }}>
           <MetricCard
             label="Clicks"
-            value={data.clickTotal == null ? "-" : formatCount(data.clickTotal)}
-            description={data.clickTotal == null ? "Unavailable for this source" : "Tracked"}
+            value={costError ? "Unavailable" : data.clickTotal == null ? "-" : formatCount(data.clickTotal)}
+            description={costError ? "Google Ads lookup failed" : data.clickTotal == null ? "Unavailable for this source" : "Tracked"}
             accent="dark"
           />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <MetricCard
             label={costLabel ?? "Cost"}
-            value={typeof costValue === "number" ? formatMoney(costValue, costCurrency) : "-"}
-            description={typeof costValue === "number" ? "Spent" : "Cost is not available for this source"}
+            value={costError ? "Unavailable" : hasCost ? formatMoney(costValue, costCurrency) : "-"}
+            description={costError ? "Google Ads lookup failed" : hasCost ? "Spent" : "Cost is not available for this source"}
             accent={accent}
           />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <MetricCard
             label="ROAS"
-            value={roas == null ? "-" : `${roas.toFixed(2)}x`}
-            description={roas == null ? "Revenue only" : "Revenue/Cost"}
+            value={costError ? "Unavailable" : roas == null ? "-" : `${roas.toFixed(2)}x`}
+            description={costError ? "Requires ad cost data" : roas == null ? "Revenue only" : "Revenue/Cost"}
             accent="orange"
           />
         </div>
@@ -607,7 +607,7 @@ const TabContent = ({
       <Suspense fallback={<Group justify="center" py="xl"><Loader /></Group>}>
         <MarketingChartSection
           data={data}
-          costValue={costValue}
+          costValue={costError ? null : costValue}
           costCurrency={costCurrency}
           formatCompactNumber={formatCompactNumber}
           formatCount={formatCount}
@@ -987,6 +987,7 @@ const MarketingPage = ({ title }: GenericPageProps) => {
                 data={data.overall}
                 costValue={data.overall.googleAdsCost}
                 costCurrency={data.overall.googleCostCurrency}
+                costError={data.overall.costError ?? data.googleAds.costError}
                 costLabel="Cost"
                 isMobile={Boolean(isMobile)}
                 accent="red"

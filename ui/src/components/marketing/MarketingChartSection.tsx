@@ -18,7 +18,7 @@ import type { MarketingDailySeriesPoint, MarketingTabData } from "../../api/mark
 
 type MarketingChartSectionProps = {
   costCurrency?: string | null;
-  costValue?: number;
+  costValue?: number | null;
   data: MarketingTabData;
   formatCompactNumber: (value: number) => string;
   formatCount: (value: number) => string;

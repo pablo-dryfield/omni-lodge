@@ -1,3 +1,5 @@
+import { DEFAULT_GOOGLE_ADS_API_VERSION, GOOGLE_ADS_API_VERSION_PATTERN } from './googleAdsConfig.js';
+
 export type ConfigValueType = 'string' | 'number' | 'boolean' | 'enum' | 'json';
 
 export type ConfigDefinition = {
@@ -616,6 +618,21 @@ Best,
     valueType: 'string',
     defaultValue: null,
     isSecret: true,
+  },
+  {
+    key: 'GOOGLE_ADS_API_VERSION',
+    label: 'Google Ads API version',
+    description: 'Pinned Google Ads reporting API major version, such as v26. Applies to marketing costs, clicks and campaign reports only, not Gmail, Reviews, Maps or Search Console. Takes effect on the next marketing request without a restart. Use a supported version; future breaking changes may still require code updates.',
+    category: 'Google API',
+    valueType: 'string',
+    defaultValue: DEFAULT_GOOGLE_ADS_API_VERSION,
+    impact: 'medium',
+    validation: {
+      required: true,
+      maxLength: 4,
+      pattern: GOOGLE_ADS_API_VERSION_PATTERN,
+      patternDescription: 'a Google Ads API major version such as v26',
+    },
   },
   {
     key: 'GOOGLE_ADS_CUSTOMER_ID',

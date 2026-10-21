@@ -59,11 +59,12 @@ export type MarketingOverviewResponse = {
   startDate: string;
   endDate: string;
   overall: MarketingTabData & {
-    googleAdsCost: number;
+    googleAdsCost: number | null;
     googleCostCurrency: string | null;
+    costError?: string | null;
   };
   googleAds: MarketingTabData & {
-    googleAdsCost: number;
+    googleAdsCost: number | null;
     costCurrency: string | null;
     costError: string | null;
     googleCostRows: GoogleCostRow[];

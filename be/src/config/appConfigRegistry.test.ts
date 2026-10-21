@@ -1,6 +1,20 @@
 import { CONFIG_DEFINITION_MAP } from './appConfigRegistry';
 
 describe('application configuration registry', () => {
+  it('registers the Google Ads-only API version with a validated safe default', () => {
+    const definition = CONFIG_DEFINITION_MAP.get('GOOGLE_ADS_API_VERSION');
+    expect(definition).toMatchObject({
+      label: 'Google Ads API version',
+      category: 'Google API',
+      valueType: 'string',
+      defaultValue: 'v26',
+      impact: 'medium',
+      validation: { required: true, maxLength: 4, pattern: '^v[1-9]\\d{0,2}$' },
+    });
+    expect(definition?.isSecret).not.toBe(true);
+    expect(definition?.isEditable).not.toBe(false);
+  });
+
   it('registers the automatic notification inbox polling control', () => {
     expect(CONFIG_DEFINITION_MAP.get('NOTIFICATION_INBOX_POLLING_ENABLED')).toMatchObject({
       category: 'Notifications',
