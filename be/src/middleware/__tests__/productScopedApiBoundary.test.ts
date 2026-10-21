@@ -37,6 +37,16 @@ it('requires an action permission as well as product scope', async () => {
   expect(res.status).toHaveBeenCalledWith(403);
   expect(handleProductScopedManagement).not.toHaveBeenCalled();
 });
+it.each(['profile-fields', 'prompted'])('lets a scoped user reach their self-profile %s controller without directory administration', async suffix => {
+  (hasModuleActionPermission as jest.Mock).mockResolvedValue(false);
+  const req = { originalUrl: `/api/required-actions/actions/42/${suffix}`, method: 'POST' } as AuthenticatedRequest;
+  const res = response(), next = jest.fn();
+  await enforceProductScopedApiBoundary(req, res, next);
+  expect(next).toHaveBeenCalledTimes(1);
+  expect(hasModuleActionPermission).not.toHaveBeenCalled();
+  expect(handleProductScopedManagement).not.toHaveBeenCalled();
+  expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-store');
+});
 it('routes approved management operations to the scoped handler, never a legacy controller', async () => {
   const req = { originalUrl: '/api/users/215?productTypeIds=1', method: 'PUT' } as AuthenticatedRequest;
   const res = response(), next = jest.fn();

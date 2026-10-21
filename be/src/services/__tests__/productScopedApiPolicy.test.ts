@@ -23,6 +23,22 @@ it('does not treat global, unassigned, or partly shared roles as exclusively del
   expect(isExclusiveProductScope([1, 3], [3])).toBe(false);
   expect(isExclusiveProductScope([3], [3])).toBe(true);
 });
+it('allows only the two reviewed self-profile onboarding writes, never generic completion or administration', () => {
+  for (const suffix of ['profile-fields', 'prompted']) {
+    expect(productScopedApiRoute('POST', `/api/required-actions/actions/42/${suffix}`))
+      .toEqual({ resource: 'profile-requirement', id: 42, passthrough: true });
+    for (const method of ['GET', 'PUT', 'PATCH', 'DELETE']) {
+      expect(productScopedApiRoute(method, `/api/required-actions/actions/42/${suffix}`)).toBeNull();
+    }
+    for (const id of ['0', '-1', '1.5', '9007199254740992', 'other']) {
+      expect(productScopedApiRoute('POST', `/api/required-actions/actions/${id}/${suffix}`)).toBeNull();
+    }
+  }
+  for (const path of ['/api/required-actions/actions', '/api/required-actions/actions/42/status',
+    '/api/required-actions/actions/42/complete', '/api/required-actions/actions/42/profile-fields/extra']) {
+    for (const method of ['GET', 'POST', 'PATCH', 'DELETE']) expect(productScopedApiRoute(method, path)).toBeNull();
+  }
+});
 it('allows booking-bound email tools, but not bulk ingestion, backfills or global galleries', () => {
   expect(productScopedApiRoute('GET', '/api/bookings/emails/mailbox')).toMatchObject({ resource: 'booking-email', action: 'view' });
   expect(productScopedApiRoute('GET', '/api/bookings/emails/message/preview')).toMatchObject({ action: 'view' });
