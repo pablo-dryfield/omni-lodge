@@ -13,6 +13,15 @@ export const PRODUCT_SCOPED_MODULES = new Set([
 export type ScopedApiRoute = { resource: string; module?: string; id?: number; passthrough?: boolean; action?: string };
 export function productScopedApiRoute(method: string, path: string): ScopedApiRoute | null {
   const read = method === 'GET';
+  const cancellation = method === 'POST' ? /^\/api\/bookings\/([1-9]\d*)\/direct-actions\/cancellation$/.exec(path) : null;
+  if (cancellation) {
+    const id = Number(cancellation[1]);
+    // The controller additionally checks the current Food Tour management role,
+    // Direct channel, actual product type, and refund eligibility before Stripe.
+    return Number.isSafeInteger(id)
+      ? { resource: 'booking-cancellation', module: 'booking-management', id, passthrough: true, action: 'update' }
+      : null;
+  }
   if ((read && /^\/api\/bookings\/emails\/(?:mailbox|(?:gmail\/)?[^/]+\/preview)$/.test(path)) ||
     (method === 'POST' && /^\/api\/bookings\/emails\/(?:send|render-preview|[^/]+\/reprocess)$/.test(path))) {
     return { resource: 'booking-email', module: 'booking-management', passthrough: true,

@@ -18,6 +18,23 @@ it('allows only reviewed routes and positive integer identifiers', () => {
   expect(productScopedApiRoute('DELETE', '/api/userTypes/16')).toBeNull();
   expect(productScopedApiRoute('PUT', '/api/productTypes/3')).toBeNull();
 });
+it('permits only POST cancellation with update permission, not other Direct actions or platforms', () => {
+  expect(productScopedApiRoute('POST', '/api/bookings/10627/direct-actions/cancellation')).toEqual({
+    resource: 'booking-cancellation', module: 'booking-management', id: 10627, passthrough: true, action: 'update',
+  });
+  for (const method of ['GET', 'PATCH', 'PUT', 'DELETE']) {
+    expect(productScopedApiRoute(method, '/api/bookings/10627/direct-actions/cancellation')).toBeNull();
+  }
+  for (const suffix of ['confirmation', 'amend', 'partial-refund', 'cancellation/extra']) {
+    expect(productScopedApiRoute('POST', `/api/bookings/10627/direct-actions/${suffix}`)).toBeNull();
+  }
+  for (const id of ['0', '-1', '1.5', '9007199254740992', 'other']) {
+    expect(productScopedApiRoute('POST', `/api/bookings/${id}/direct-actions/cancellation`)).toBeNull();
+  }
+  for (const suffix of ['cancel-ecwid', 'cancel-xperience', 'cancel-civitatis']) {
+    expect(productScopedApiRoute('POST', `/api/bookings/10627/${suffix}`)).toBeNull();
+  }
+});
 it('does not treat global, unassigned, or partly shared roles as exclusively delegated', () => {
   expect(isExclusiveProductScope([], [3])).toBe(false);
   expect(isExclusiveProductScope([1, 3], [3])).toBe(false);

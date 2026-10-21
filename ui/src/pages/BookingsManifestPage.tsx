@@ -70,6 +70,7 @@ import {
   isExplicitlyUnpaidBooking,
 } from "../utils/bookingPayment";
 import { getManifestTshirtSizeLabels } from "../utils/manifestTshirtSizes";
+import { canManageDirectCancellations, isDirectCancellationOrder } from "../utils/bookingCancellation";
 import BookingDetailsModal, {
   getBookingIdFromOrder,
   type BookingEmailPreview,
@@ -1913,6 +1914,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const canAccessSanityCheck = useAppSelector(selectCanAccessBookingSanityCheck);
   const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
+  const roleSlug = useAppSelector(state => state.session.roleSlug);
+  const bookingPermissions = useModuleAccess('booking-management');
+  const canCancelDirect = bookingPermissions.ready && canManageDirectCancellations(roleSlug, productScoped, bookingPermissions.canUpdate);
   const availableBookingNavOptions = BOOKING_NAV_OPTIONS.filter(
     option => (option.value !== "sanity" || canAccessSanityCheck) &&
       (!productScoped || ["calendar", "manifest", "summary"].includes(option.value)),
@@ -3493,7 +3497,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     const order = mobileActionsOrder;
     closeMobileActionsModal();
-    if (isDirectFoodTourOrder(order)) {
+    if (isDirectCancellationOrder(order)) {
       await handleDirectCancellation(order);
       return;
     }
@@ -3520,7 +3524,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   };
 
   const handleDirectCancellation = async (order: UnifiedOrder) => {
-    if (!canUseStripeRefundActions(order)) {
+    if (!canCancelDirect || !isDirectCancellationOrder(order) || !canUseStripeRefundActions(order)) {
       return;
     }
     const bookingId = getBookingIdFromOrder(order);
@@ -5063,12 +5067,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     mobileActionsOrder &&
       (
         (
-          (isEcwidOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder)) &&
+          ((!productScoped && (isEcwidOrder(mobileActionsOrder) || isStorefrontOrder(mobileActionsOrder))) ||
+            (isDirectCancellationOrder(mobileActionsOrder) && canCancelDirect)) &&
           canUseStripeRefundActions(mobileActionsOrder)
         ) ||
-        isXperiencePolandOrder(mobileActionsOrder) ||
+        (!productScoped && isXperiencePolandOrder(mobileActionsOrder)) ||
         (
-          isCivitatisOrder(mobileActionsOrder) &&
+          !productScoped && isCivitatisOrder(mobileActionsOrder) &&
           isOrderExperienceDateOnOrBeforeToday(mobileActionsOrder) &&
           isOrderAttendanceNoShow(mobileActionsOrder)
         )

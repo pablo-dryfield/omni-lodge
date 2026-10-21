@@ -36,7 +36,7 @@ import {
   amendXperiencePolandBooking,
   resendDirectFoodTourConfirmation,
   amendDirectFoodTourBooking,
-  cancelDirectFoodTourBooking,
+  cancelDirectBooking,
   partialRefundDirectFoodTourBooking,
   cancelEcwidBooking,
   cancelCivitatisBooking,
@@ -90,7 +90,7 @@ router.post('/:bookingId/amend-ecwid', authMiddleware, requireBookingProductScop
 router.post('/:bookingId/amend-xperience', authMiddleware, requireBookingProductScope, amendXperiencePolandBooking);
 router.post('/:bookingId/direct-actions/confirmation', authMiddleware, requireBookingProductScope, resendDirectFoodTourConfirmation);
 router.post('/:bookingId/direct-actions/amend', authMiddleware, requireBookingProductScope, amendDirectFoodTourBooking);
-router.post('/:bookingId/direct-actions/cancellation', authMiddleware, requireBookingProductScope, cancelDirectFoodTourBooking);
+router.post('/:bookingId/direct-actions/cancellation', authMiddleware, requireBookingProductScope, cancelDirectBooking);
 router.post('/:bookingId/direct-actions/partial-refund', authMiddleware, requireBookingProductScope, partialRefundDirectFoodTourBooking);
 router.get('/:bookingId/refund-preview', authMiddleware, requireBookingProductScope, getEcwidRefundPreview);
 router.get('/:bookingId/partial-refund-preview', authMiddleware, requireBookingProductScope, getPartialRefundPreview);

@@ -85,6 +85,7 @@ import {
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
 import { getConfigValue } from '../services/configService.js';
 import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
+import { assertDirectBookingCancellationAccess, isDirectBooking } from '../services/directBookingCancellationPolicy.js';
 import { FINANCE_ALLOWED_ROLES } from '../finance/middleware/financeAccessMiddleware.js';
 import {
   getBookingSummaryCostInsights,
@@ -6572,7 +6573,7 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
   }
 };
 
-export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const cancelDirectBooking = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const bookingIdParam = Number.parseInt(String(req.params?.bookingId ?? ''), 10);
     if (Number.isNaN(bookingIdParam)) {
@@ -6580,7 +6581,12 @@ export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res
       return;
     }
 
-    const booking = await requireDirectManifestActionBooking(bookingIdParam);
+    const booking = await Booking.findByPk(bookingIdParam);
+    if (!booking) throw new HttpError(404, 'Booking not found');
+    if (!isDirectBooking(booking) && !isStorefrontBooking(booking)) {
+      throw new HttpError(400, 'Only Direct and OmniLodge bookings support this cancellation action.');
+    }
+    await assertDirectBookingCancellationAccess(req, booking);
     if (booking.status === 'cancelled') {
       res.status(400).json({ message: 'Booking is already cancelled' });
       return;
@@ -6650,7 +6656,7 @@ export const cancelDirectFoodTourBooking = async (req: AuthenticatedRequest, res
         );
       }
       await saveDirectBookingEvent(booking, 'cancelled', req.authContext?.id ?? null, {
-        action: storefrontBooking ? 'cancel-storefront-booking' : 'cancel-direct-food-tour',
+        action: storefrontBooking ? 'cancel-storefront-booking' : 'cancel-direct-booking',
         externalTransactionId,
         stripeTransactionId: stripe.id,
         stripeTransactionType: stripe.type,

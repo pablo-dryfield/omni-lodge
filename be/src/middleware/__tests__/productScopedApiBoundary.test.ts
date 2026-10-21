@@ -37,6 +37,16 @@ it('requires an action permission as well as product scope', async () => {
   expect(res.status).toHaveBeenCalledWith(403);
   expect(handleProductScopedManagement).not.toHaveBeenCalled();
 });
+it.each([true, false])('gates cancellation by booking-management update (%s) before reaching the controller role/product check', async allowed => {
+  (hasModuleActionPermission as jest.Mock).mockResolvedValue(allowed);
+  const req = { originalUrl: '/api/bookings/10627/direct-actions/cancellation?productTypeId=1', method: 'POST' } as AuthenticatedRequest;
+  const res = response(), next = jest.fn();
+  await enforceProductScopedApiBoundary(req, res, next);
+  expect(hasModuleActionPermission).toHaveBeenCalledWith(req, 'booking-management', 'update');
+  expect(next).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  if (!allowed) expect(res.status).toHaveBeenCalledWith(403);
+  expect(handleProductScopedManagement).not.toHaveBeenCalled();
+});
 it.each(['profile-fields', 'prompted'])('lets a scoped user reach their self-profile %s controller without directory administration', async suffix => {
   (hasModuleActionPermission as jest.Mock).mockResolvedValue(false);
   const req = { originalUrl: `/api/required-actions/actions/42/${suffix}`, method: 'POST' } as AuthenticatedRequest;
