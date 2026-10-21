@@ -96,6 +96,7 @@ import {
   StaffOption,
 } from '../types/counters/CounterRegistry';
 import { buildMetricKey } from '../utils/counterMetrics';
+import { getCounterVenueCounts } from '../utils/counterVenueCounts';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports';
 import type { Counter } from '../types/counters/Counter';
 import axiosInstance from '../utils/axiosInstance';
@@ -7943,14 +7944,19 @@ useEffect(() => {
       brunchAttended = hasBrunchData ? Math.max(0, Math.round(brunchBucket.attended ?? 0)) : 0;
     }
 
-    const cocktailsCountWithFree = Math.max(0, Math.round(cocktailsAttended + freeCocktailTotal));
-    const brunchCountWithFree = Math.max(
-      0,
-      Math.round((hasBrunchData ? brunchAttended : 0) + freeBrunchTotal),
-    );
-    const totalPeopleWithFree = Math.max(0, Math.round(peopleAttended + totalFreePeople));
-    const normalCount = Math.max(0, totalPeopleWithFree - cocktailsCountWithFree - brunchCountWithFree);
-    const computedTotalPeople = normalCount + cocktailsCountWithFree + brunchCountWithFree;
+    const {
+      normalCount,
+      cocktailsCount: cocktailsCountWithFree,
+      brunchCount: brunchCountWithFree,
+      totalPeople: computedTotalPeople,
+    } = getCounterVenueCounts({
+      peopleAttended,
+      cocktailsAttended,
+      brunchAttended: hasBrunchData ? brunchAttended : 0,
+      freePeople: totalFreePeople,
+      freeCocktails: freeCocktailTotal,
+      freeBrunch: freeBrunchTotal,
+    });
 
     if (
       computedTotalPeople === 0 &&
