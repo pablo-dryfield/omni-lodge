@@ -1,5 +1,13 @@
 # OmniLodge Project Instructions
 
+## Runtime configuration and Control Panel
+
+- Operational values that administrators may need to change (for example, third-party API versions, integration identifiers, limits, thresholds, and feature switches) belong in the existing Settings / Control Panel configuration system, not only in hardcoded constants or environment variables. Reuse `be/src/config/appConfigRegistry.ts` and `configService`; do not introduce a parallel settings store.
+- Register a clear label, category, scope/impact description, validation rules, and a safe default where appropriate. Keep credentials marked secret and preserve the existing administrator authorization, encryption, actor/reason audit history, and config synchronization behavior.
+- Read configurable values through `configService`. For live-change settings, refresh the relevant keys and invalidate affected caches so a saved change takes effect as documented without an unnecessary deployment or restart.
+- Scope integration settings precisely: `GOOGLE_ADS_API_VERSION` controls Google Ads marketing reports only, not Gmail, Reviews, Maps, or Search Console. A configurable API version does not eliminate the need to check compatibility when a provider makes breaking changes.
+- Keep infrastructure/bootstrap settings in the environment when they are required before the database/configuration service can start. Explain any other exception to the Control Panel approach in the task handoff.
+
 ## Production deployment
 
 - Never run `npm run build`, `craco build`, or another UI bundle-generation command on the production host.
