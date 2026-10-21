@@ -15,7 +15,7 @@ import AuditLog from '../models/AuditLog.js';
 import { PRODUCT_SCOPED_PAGES } from '../services/productScopedApiPolicy.js';
 
 export const SCOPED_OWNER_ACTIONS: Record<string, string[]> = {
-  'booking-management': ['view'],
+  'booking-management': ['view', 'create', 'update'],
   'booking-manifest': ['view'],
   'user-directory': ['view', 'create', 'update'],
   'product-catalog': ['view', 'create', 'update', 'delete'],

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 import type { UnifiedOrder } from "../../store/bookingPlatformsTypes";
@@ -132,5 +132,20 @@ describe("BookingDetailsModal", () => {
     expect(getBookingIdFromOrder({ ...baseOrder, id: "summary-row", rawData: { bookingId: 82518 } })).toBe(82518);
     expect(getBookingIdFromOrder({ ...baseOrder, id: "92002", rawData: null })).toBe(92002);
     expect(getBookingIdFromOrder({ ...baseOrder, id: "external-reference", rawData: null })).toBeNull();
+  });
+  it("binds preview and reprocessing requests to the booking being inspected", async () => {
+    const details = { booking: { id: 12, platform: "getyourguide", status: "confirmed" },
+      emails: [{ id: 1, messageId: "food-email", subject: "Food booking", ingestionStatus: "processed" }], events: [] };
+    mockedGet.mockImplementation(async (url: string) => ({ data: url.endsWith('/details') ? details : { subject: "Food booking", previewText: "Saved email" } }));
+    (axiosInstance.post as jest.Mock).mockResolvedValue({ data: { status: "processed" } });
+    render(<MantineProvider><BookingDetailsModal opened bookingId={12} onClose={jest.fn()} /></MantineProvider>);
+    const dialog = await screen.findByRole('dialog', { name: /booking details/i });
+    fireEvent.click(await within(dialog).findByRole('tab', { name: 'Emails (1)' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reprocess' }));
+    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledWith('/bookings/emails/food-email/reprocess', { bookingId: 12 }, { withCredentials: true }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Reprocess' })).toBeEnabled());
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Preview' }));
+    await waitFor(() => expect(mockedGet).toHaveBeenCalledWith('/bookings/emails/food-email/preview', { params: { bookingId: 12 } }));
+    expect(await screen.findByText('Saved email')).toBeInTheDocument();
   });
 });

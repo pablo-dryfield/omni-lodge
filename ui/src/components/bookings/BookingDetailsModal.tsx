@@ -410,7 +410,7 @@ const BookingDetailsModal = ({
       previewOpen: true,
     }));
     try {
-      const response = await axiosInstance.get(`/bookings/emails/${encodeURIComponent(messageId)}/preview`);
+      const response = await axiosInstance.get(`/bookings/emails/${encodeURIComponent(messageId)}/preview`, { params: { bookingId: requestedBookingId } });
       if (
         previewRequestRef.current !== requestId
         || activeBookingIdRef.current !== requestedBookingId
@@ -451,7 +451,7 @@ const BookingDetailsModal = ({
     try {
       await axiosInstance.post(
         `/bookings/emails/${encodeURIComponent(messageId)}/reprocess`,
-        {},
+        { bookingId: requestedBookingId },
         { withCredentials: true },
       );
       onReprocessed?.();

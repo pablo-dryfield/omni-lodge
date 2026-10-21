@@ -13,6 +13,16 @@ export const PRODUCT_SCOPED_MODULES = new Set([
 export type ScopedApiRoute = { resource: string; module?: string; id?: number; passthrough?: boolean; action?: string };
 export function productScopedApiRoute(method: string, path: string): ScopedApiRoute | null {
   const read = method === 'GET';
+  if ((read && /^\/api\/bookings\/emails\/(?:mailbox|(?:gmail\/)?[^/]+\/preview)$/.test(path)) ||
+    (method === 'POST' && /^\/api\/bookings\/emails\/(?:send|render-preview|[^/]+\/reprocess)$/.test(path))) {
+    return { resource: 'booking-email', module: 'booking-management', passthrough: true,
+      action: read || path.endsWith('/render-preview') ? 'view' : path.endsWith('/reprocess') ? 'update' : 'create' };
+  }
+  if ((path === '/api/email-templates' && ['GET', 'POST'].includes(method)) ||
+    (method === 'PATCH' && /^\/api\/email-templates\/[1-9]\d*$/.test(path))) {
+    return { resource: 'email-templates', module: 'booking-management', passthrough: true,
+      action: read ? 'view' : method === 'POST' ? 'create' : 'update' };
+  }
   if (read && path === '/api/reports/home-preferences') return { resource: 'home' };
   if (read && ['/api/session', '/api/session/profile-photo', '/api/accessControl/me',
     '/api/required-actions/me', '/api/notifications', '/api/currencies/options'].includes(path)) {

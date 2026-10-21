@@ -263,7 +263,8 @@ describe('Gmail threaded replies', () => {
         data: { id: 'backup-message-id', threadId: 'backup-thread-id', labelIds: ['SENT'] },
       });
 
-    await sendMessage({
+    const sent = await sendMessage({
+      returnAccountReference: true,
       to: 'customer@example.com',
       subject: 'Booking information',
       textBody: 'Thanks for getting back to us.',
@@ -273,6 +274,7 @@ describe('Gmail threaded replies', () => {
     });
 
     expect(mockGmailSend).toHaveBeenCalledTimes(2);
+    expect(sent.id).toBe('backup:backup-message-id');
     const request = mockGmailSend.mock.calls[1][0];
     expect(request.requestBody).toEqual({ raw: expect.any(String) });
     const rawMessage = Buffer.from(request.requestBody.raw, 'base64url').toString('utf-8');

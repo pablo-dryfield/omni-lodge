@@ -23,3 +23,14 @@ it('does not treat global, unassigned, or partly shared roles as exclusively del
   expect(isExclusiveProductScope([1, 3], [3])).toBe(false);
   expect(isExclusiveProductScope([3], [3])).toBe(true);
 });
+it('allows booking-bound email tools, but not bulk ingestion, backfills or global galleries', () => {
+  expect(productScopedApiRoute('GET', '/api/bookings/emails/mailbox')).toMatchObject({ resource: 'booking-email', action: 'view' });
+  expect(productScopedApiRoute('GET', '/api/bookings/emails/message/preview')).toMatchObject({ action: 'view' });
+  expect(productScopedApiRoute('POST', '/api/bookings/emails/send')).toMatchObject({ action: 'create' });
+  expect(productScopedApiRoute('POST', '/api/bookings/emails/message/reprocess')).toMatchObject({ action: 'update' });
+  expect(productScopedApiRoute('PATCH', '/api/email-templates/4')).toMatchObject({ action: 'update' });
+  for (const path of ['/api/bookings/emails/reprocess', '/api/bookings/emails/backfill', '/api/bookings/emails/template-gallery']) {
+    expect(productScopedApiRoute('POST', path)).toBeNull();
+    expect(productScopedApiRoute('GET', path)).toBeNull();
+  }
+});

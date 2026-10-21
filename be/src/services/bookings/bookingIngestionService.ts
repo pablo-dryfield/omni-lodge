@@ -13,6 +13,9 @@ import BookingAddon from '../../models/BookingAddon.js';
 import Channel from '../../models/Channel.js';
 import Product from '../../models/Product.js';
 import ProductAlias from '../../models/ProductAlias.js';
+import AuditLog from '../../models/AuditLog.js';
+import HttpError from '../../errors/HttpError.js';
+import { assertReprocessedBookingScope } from '../bookingEmailScopeService.js';
 import logger from '../../utils/logger.js';
 import {
   fetchMessagePayload,
@@ -1951,9 +1954,10 @@ const findAirbnbAmendmentMatch = async (
 export const applyParsedEvent = async (
   email: BookingEmail,
   event: ParsedBookingEvent,
-  options: { isReprocess?: boolean; scopedHints?: ScopedReprocessHint[] } = {},
+  options: { isReprocess?: boolean; scopedHints?: ScopedReprocessHint[]; transaction?: Transaction;
+    productAccess?: { productTypeIds: number[]; bookingIds: number[] } } = {},
 ): Promise<number | null> => {
-  const bookingId = await sequelize.transaction(async (transaction): Promise<number | null> => {
+  const apply = async (transaction: Transaction): Promise<number | null> => {
     const scopedHints = normalizeScopedReprocessHints(options.scopedHints);
     const isScopedReprocess = scopedHints.length > 0;
     const includesScopedRefund = scopedHints.includes('refund');
@@ -2014,6 +2018,12 @@ export const applyParsedEvent = async (
 
     if (!booking && priorEvent?.bookingId) {
       booking = await Booking.findByPk(priorEvent.bookingId, { transaction });
+    }
+    if (options.productAccess) {
+      await assertReprocessedBookingScope(booking, options.productAccess, transaction);
+      if (priorEvent && String(priorEvent.bookingId) !== String(booking!.id)) {
+        throw new HttpError(409, 'Reprocessing would merge booking identities. Company administration must review it.');
+      }
     }
 
     if (!booking && isAirbnbCancellationPlaceholderId(event.platform, event.platformBookingId)) {
@@ -2732,6 +2742,7 @@ export const applyParsedEvent = async (
       }
     }
 
+    if (options.productAccess) await assertReprocessedBookingScope(bookingRecord, options.productAccess, transaction);
     await bookingRecord.save({ transaction });
 
     if (priorEvent && !isScopedReprocess) {
@@ -2815,10 +2826,57 @@ export const applyParsedEvent = async (
     }
 
     return bookingRecord.id;
-  });
+  };
+  const bookingId = options.transaction ? await apply(options.transaction) : await sequelize.transaction(apply);
 
   return bookingId;
 };
+
+/** Replay the saved original atomically. Never invoke global cleanup, timeline
+ * deletion or customer-email automation from product-scoped reprocessing. */
+export async function reprocessProductBookingEmail(messageId: string, productTypeIds: number[], actorId: number): Promise<'processed'> {
+  return sequelize.transaction(async transaction => {
+    const email = await BookingEmail.findOne({ where: { messageId }, transaction, lock: transaction.LOCK.UPDATE });
+    if (!email?.rawPayload || email.labelIds?.includes('SENT')) throw new HttpError(409, 'Only saved incoming booking emails can be reprocessed.');
+    const events = await BookingEvent.findAll({ where: { [Op.or]: [{ emailMessageId: messageId }, { emailId: email.id }] }, transaction });
+    const bookings = await Booking.findAll({ where: { [Op.or]: [{ id: { [Op.in]: events.map(e => e.bookingId) } }, { lastEmailMessageId: messageId }] }, transaction, lock: transaction.LOCK.UPDATE });
+    if (!bookings.length) throw new HttpError(403, 'This email has no verified booking association.');
+    const productAccess = { productTypeIds, bookingIds: bookings.map(b => b.id) };
+    for (const booking of bookings) await assertReprocessedBookingScope(booking, productAccess, transaction);
+    const auditFields = ['id', 'productId', 'experienceDate', 'experienceStartAt', 'partySizeTotal', 'priceGross', 'priceNet', 'baseAmount', 'commissionAmount', 'refundedAmount', 'status', 'paymentStatus'] as const;
+    const snapshot = (booking: Booking) => Object.fromEntries(auditFields.map(key => [key, booking.getDataValue(key)]));
+    const before = bookings.map(snapshot);
+    let message: GmailMessagePayload['message'];
+    try { message = JSON.parse(email.rawPayload); } catch { throw new HttpError(409, 'The saved email payload is invalid.'); }
+    const text: string[] = []; const html: string[] = [];
+    const collect = (part: NonNullable<GmailMessagePayload['message']['payload']>) => {
+      if (part.body?.data && /^text\/(plain|html)/.test(part.mimeType ?? '')) {
+        (part.mimeType?.startsWith('text/html') ? html : text).push(Buffer.from(part.body.data, 'base64url').toString('utf8'));
+      }
+      part.parts?.forEach(collect);
+    };
+    if (message.payload) collect(message.payload);
+    const payload = normalizeForwardedBackupPayload({ message, textBody: text.join('\n'), htmlBody: html.join('\n') || null,
+      headers: email.headers ?? {}, sourceAccount: messageId.startsWith('backup:') ? 'backup' : 'primary' });
+    const { parsed } = await runParsers(buildParserContext(email, payload));
+    if (!parsed) throw new HttpError(409, 'No booking parser recognized this email. The booking was left unchanged.');
+    const pending = [parsed];
+    while (pending.length) {
+      const event = pending.shift()!;
+      try { await applyParsedEvent(email, event, { isReprocess: true, transaction, productAccess }); }
+      catch (error) {
+        if (error instanceof StaleBookingEventError) throw new HttpError(409, 'This older event requires a chronological rebuild by company administration. Nothing was changed.');
+        throw error;
+      }
+      pending.push(...(event.spawnedEvents ?? []));
+    }
+    await email.update({ ingestionStatus: 'processed', failureReason: null }, { transaction });
+    const after = (await Booking.findAll({ where: { id: { [Op.in]: productAccess.bookingIds } }, transaction })).map(snapshot);
+    await AuditLog.create({ actorId, action: 'product_scope.booking_email_reprocessed', entity: 'bookingEmail', entityId: String(email.id),
+      metaJson: { messageId, bookingIds: productAccess.bookingIds, productTypeIds, before, after } }, { transaction });
+    return 'processed' as const;
+  });
+}
 
 type ProcessResult = 'processed' | 'skipped_lower' | 'skipped_upper' | 'ignored' | 'failed';
 

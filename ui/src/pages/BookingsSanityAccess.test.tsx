@@ -115,6 +115,14 @@ it('lets an administrator open diagnostics directly', async () => {
   await renderPage(false, '/bookings?tab=sanity');
   expect(await screen.findByTestId('sanity-content')).toBeInTheDocument();
 });
+it('refreshes scoped manifests without starting company-wide email ingestion', async () => {
+  await renderPage(true);
+  const previous = (axiosInstance.get as jest.Mock).mock.calls.length;
+  fireEvent.click(await screen.findByRole('button', { name: 'Refresh manifest' }));
+  await waitFor(() => expect((axiosInstance.get as jest.Mock).mock.calls.length).toBeGreaterThan(previous));
+  expect(axiosInstance.post).not.toHaveBeenCalled();
+  expect(screen.queryByRole('tab', { name: 'Emails', exact: true })).not.toBeInTheDocument();
+});
 
 it('unmounts diagnostics if the active session loses the global role', async () => {
   mockRoleSlug = 'owner';

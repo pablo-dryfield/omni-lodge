@@ -1912,8 +1912,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const dispatch = useAppDispatch();
   const canAccessSanityCheck = useAppSelector(selectCanAccessBookingSanityCheck);
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
   const availableBookingNavOptions = BOOKING_NAV_OPTIONS.filter(
-    option => option.value !== "sanity" || canAccessSanityCheck,
+    option => (option.value !== "sanity" || canAccessSanityCheck) &&
+      (!productScoped || ["calendar", "manifest", "summary"].includes(option.value)),
   );
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2040,6 +2042,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const mailReactSourceInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const loadTshirtAvailability = useCallback(async (): Promise<void> => {
+    if (productScoped) return;
     setTshirtAvailabilityState((current) => ({ ...current, loading: true, error: null }));
     try {
       const response = await axiosInstance.get<{
@@ -2057,7 +2060,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         variants: [],
       });
     }
-  }, []);
+  }, [productScoped]);
 
   useEffect(() => {
     if (!mailComposerState.opened) {
@@ -3660,6 +3663,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         ? `/bookings/emails/${encodeURIComponent(messageId)}/preview`
         : `/bookings/emails/gmail/${encodeURIComponent(messageId)}/preview`;
       const response = await axiosInstance.get(previewPath, {
+        params: { bookingId: mailboxState.sourceOrder ? getBookingIdFromOrder(mailboxState.sourceOrder) : undefined },
         withCredentials: true,
       });
       setMailboxState((prev) => ({
@@ -3680,6 +3684,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const fetchMailboxMessages = async (
     email: string,
     options?: {
+      bookingId?: number | null;
       pageToken?: string | null;
       append?: boolean;
     },
@@ -3704,6 +3709,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       const response = await axiosInstance.get<MailboxResponse>("/bookings/emails/mailbox", {
         params: {
           email,
+          bookingId: options?.bookingId ?? (mailboxState.sourceOrder ? getBookingIdFromOrder(mailboxState.sourceOrder) : undefined),
           limit: 25,
           pageToken: pageToken || undefined,
         },
@@ -3756,7 +3762,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       previewError: null,
       previewData: null,
     });
-    void fetchMailboxMessages(to);
+    void fetchMailboxMessages(to, { bookingId: getBookingIdFromOrder(order) });
   };
 
   const handleMailboxFilterChange = (value: string) => {
@@ -4689,6 +4695,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
         "/bookings/emails/render-preview",
         {
           to: to || undefined,
+          bookingId: mailComposerState.sourceOrder ? getBookingIdFromOrder(mailComposerState.sourceOrder) : undefined,
           subject,
           body: isReactTemplateSelected ? undefined : body,
           templateId: templateId ?? undefined,
@@ -4715,6 +4722,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
   }, [
     mailComposerState.to,
+    mailComposerState.sourceOrder,
     mailComposerState.subject,
     mailComposerState.body,
     mailComposerState.reactLiveSource,
@@ -4772,13 +4780,14 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }));
 
     try {
-      await axiosInstance.post(
+      const sentResponse = await axiosInstance.post<{ bookingLinkRecorded?: boolean }>(
         "/bookings/emails/send",
         {
           to,
           subject,
           body: isReactTemplateSelected ? undefined : body,
           replyToMessageId: mailComposerState.replyToMessageId ?? undefined,
+          bookingId: mailComposerState.sourceOrder ? getBookingIdFromOrder(mailComposerState.sourceOrder) : undefined,
           templateId: templateId ?? undefined,
           templateContext: buildMailTemplateContextForRequest(to),
         },
@@ -4790,7 +4799,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       setMailComposerState((prev) => ({
         ...prev,
         sending: false,
-        success: "Email sent successfully.",
+        success: sentResponse.data?.bookingLinkRecorded === false
+          ? "Email sent, but its booking link could not be saved. Do not resend; ask an administrator to repair the link."
+          : "Email sent successfully.",
       }));
     } catch (error) {
       setMailComposerState((prev) => ({
@@ -5149,6 +5160,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
 
   const handleReload = async () => {
+    if (productScoped) {
+      // Refresh this product's data, never start company-wide Gmail ingestion.
+      setErrorMessage(null);
+      setReloadToken((token) => token + 1);
+      return;
+    }
     if (ingestStatus === "loading") {
       return;
     }
@@ -7481,7 +7498,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                       <Box>
                         <Text fw={700} size="lg">Use a template</Text>
                         <Text size="sm" c="dimmed" mt={4}>
-                          Pick an approved plain-text or React Email template and personalize it for this booking.
+                          {productScoped ? "Pick a Food Tour template and personalize it for this booking." : "Pick an approved plain-text or React Email template and personalize it for this booking."}
                         </Text>
                       </Box>
                       <Group gap={6} c="blue" mt="auto">
@@ -7654,7 +7671,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           onClick={closeMailVariableDropdown}
                           placeholder="recipient@example.com"
                           required
-                          disabled={isMailReply || mailComposerState.sending}
+                          disabled={productScoped || isMailReply || mailComposerState.sending}
                           size="md"
                         />
                         <TextInput
@@ -7713,7 +7730,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                   </Paper>
 
                   <Stack gap="md">
-                    <Paper withBorder radius="lg" p="md">
+                    {!productScoped && <Paper withBorder radius="lg" p="md">
                       <Stack gap="sm">
                         <Group justify="space-between" align="center" wrap="nowrap">
                           <Group gap="xs" wrap="nowrap">
@@ -7775,7 +7792,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           Templates receive only the in-stock sizes automatically. Quantities shown here are internal.
                         </Text>
                       </Stack>
-                    </Paper>
+                    </Paper>}
 
                     <Paper withBorder radius="lg" p="md">
                       <Stack gap="sm">
@@ -7814,7 +7831,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                                 label="Template format"
                                 data={[
                                   { value: "plain_text", label: "Plain text" },
-                                  { value: "react_email", label: "React Email" },
+                                  ...(!productScoped ? [{ value: "react_email", label: "React Email" }] : []),
                                 ]}
                                 value={mailTemplateState.editorType}
                                 onChange={handleTemplateTypeChange}

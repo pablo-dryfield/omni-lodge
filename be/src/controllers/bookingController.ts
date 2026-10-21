@@ -5,6 +5,8 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import Booking from '../models/Booking.js';
+import sequelize from '../config/database.js';
+import AuditLog from '../models/AuditLog.js';
 import BookingEmail from '../models/BookingEmail.js';
 import BookingAddon from '../models/BookingAddon.js';
 import BookingEvent from '../models/BookingEvent.js';
@@ -33,6 +35,7 @@ import {
 import type Stripe from 'stripe';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getAllowedProductTypeIds } from '../services/productScopeService.js';
+import { getBookingEmailAccess, assertEmailMessageAccess, canAccessEmailMessage, assertEmailRecipient, assertTemplateAccess } from '../services/bookingEmailScopeService.js';
 import {
   canonicalizeProductKeyFromLabel,
   canonicalizeProductKeyFromSources,
@@ -43,6 +46,7 @@ import {
   ingestAllBookingEmails,
   ingestLatestBookingEmails,
   processBookingEmail,
+  reprocessProductBookingEmail,
 } from '../services/bookings/bookingIngestionService.js';
 import {
   fetchMessagePayload as fetchGmailMessagePayload,
@@ -1043,7 +1047,11 @@ const buildEmailGalleryMockContext = (): EmailTemplateContext => ({
   signature: 'The Krawl Through Krakow team',
 });
 
-const resolveRenderedEmailFromPayload = async (payload: SendBookingEmailBody): Promise<RenderedEmailResult> => {
+const resolveRenderedEmailFromPayload = async (payload: SendBookingEmailBody, req?: AuthenticatedRequest): Promise<RenderedEmailResult> => {
+  const scope = req ? await getAllowedProductTypeIds(req) : null;
+  if (scope && (payload.templateContext?.reactTemplateSource || payload.htmlBodyOverride || payload.textBodyOverride)) {
+    throw new HttpError(403, 'Product-scoped emails use plain-text templates, not executable template source or HTML overrides.');
+  }
   const subjectInput = sanitizeHeaderValue(String(payload?.subject ?? ''));
   const bodyInput = String(payload?.body ?? '').trim();
   const htmlBodyOverrideInput = normalizeOptionalString(payload?.htmlBodyOverride);
@@ -1051,7 +1059,7 @@ const resolveRenderedEmailFromPayload = async (payload: SendBookingEmailBody): P
   const templateId = parseOptionalInteger(payload?.templateId);
   const normalizedContext = {
     ...enrichTemplateContextAliases(normalizeTemplateContext(payload?.templateContext)),
-    ...(await buildTshirtAvailabilityTemplateContext()),
+    ...(scope ? {} : await buildTshirtAvailabilityTemplateContext()),
   };
   const reactTemplateSourceRaw = normalizedContext.reactTemplateSource;
   const reactTemplateSource =
@@ -1087,6 +1095,7 @@ const resolveRenderedEmailFromPayload = async (payload: SendBookingEmailBody): P
     if (!template) {
       throw new HttpError(404, 'Email template not found');
     }
+    if (req) await assertTemplateAccess(req, template);
     if (!template.isActive) {
       throw new HttpError(400, 'Email template is inactive');
     }
@@ -2862,8 +2871,9 @@ export const listBookingEmails = async (req: Request, res: Response): Promise<vo
   }
 };
 
-export const getBookingEmailPreview = async (req: Request, res: Response): Promise<void> => {
+export const getBookingEmailPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const access = await getBookingEmailAccess(req);
     const messageId = String(req.params?.messageId ?? '').trim();
     if (!messageId) {
       res.status(400).json({ message: 'messageId is required' });
@@ -2893,6 +2903,7 @@ export const getBookingEmailPreview = async (req: Request, res: Response): Promi
       res.status(404).json({ message: 'Booking email not found' });
       return;
     }
+    assertEmailMessageAccess(access, messageId, email.threadId);
 
     let message: StoredGmailMessage | null = null;
     if (email.rawPayload) {
@@ -2955,7 +2966,7 @@ export const getBookingEmailPreview = async (req: Request, res: Response): Promi
       internalDate: email.internalDate,
       ingestionStatus: email.ingestionStatus,
       failureReason: email.failureReason,
-      gmailQuery: resolveBookingQuery(),
+      gmailQuery: access ? null : resolveBookingQuery(),
       bookings,
       bookingEvents: bookingEventsPayload,
       bookingAddons: bookingAddonsPayload,
@@ -2966,12 +2977,13 @@ export const getBookingEmailPreview = async (req: Request, res: Response): Promi
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load booking email preview';
-    res.status(500).json({ message });
+    res.status(error instanceof HttpError ? error.status : 500).json({ message });
   }
 };
 
 export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const access = await getBookingEmailAccess(req);
     const query = req.query as BookingMailboxQueryParams;
     const email = String(query?.email ?? '').trim().toLowerCase();
     if (!email) {
@@ -2982,6 +2994,7 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
       res.status(400).json({ message: 'email must be a valid email address' });
       return;
     }
+    assertEmailRecipient(access, email);
 
     const limit = parseMailboxLimitParam(query?.limit);
     const pageTokenRaw = String(query?.pageToken ?? '').trim();
@@ -2995,6 +3008,7 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
     const emailPattern = `%${email}%`;
     const databaseRows = await BookingEmail.findAll({
       where: {
+        ...(access ? { [Op.and]: [{ messageId: { [Op.in]: access.messageIds } }] } : {}),
         [Op.or]: [
           { fromAddress: { [Op.iLike]: emailPattern } },
           { toAddresses: { [Op.iLike]: emailPattern } },
@@ -3022,7 +3036,7 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
     const databaseHasMore = databaseRows.length > limit;
     const receivedMessages = databaseRows
       .slice(0, limit)
-      .filter((row) => !row.labelIds?.includes('SENT'))
+      .filter((row) => access || !row.labelIds?.includes('SENT'))
       .map((row) => ({
         messageId: row.messageId,
         threadId: row.threadId,
@@ -3032,7 +3046,7 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
         snippet: row.snippet,
         internalDate: (row.receivedAt ?? row.internalDate)?.toISOString() ?? null,
         labelIds: row.labelIds ?? [],
-        direction: 'received' as const,
+        direction: access && row.labelIds?.includes('SENT') ? 'sent' as const : 'received' as const,
         source: 'database' as const,
       }));
 
@@ -3064,7 +3078,7 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
         }
         sentMailbox = sentResult.account;
         sentMessages = sentResult.messages
-          .filter((message) => message.direction === 'sent')
+          .filter((message) => message.direction === 'sent' && canAccessEmailMessage(access, message.messageId, message.threadId))
           .map((message) => ({ ...message, source: 'gmail' as const }));
       } catch (sentError) {
         sentWarning = 'Sent emails are temporarily unavailable because Gmail is rate limited.';
@@ -3074,7 +3088,7 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
       }
     }
 
-    const resultMessages = [...receivedMessages, ...sentMessages].sort((left, right) => {
+    const resultMessages = [...receivedMessages, ...sentMessages.filter(m => !receivedMessages.some(r => r.messageId === m.messageId))].sort((left, right) => {
       const leftTime = left.internalDate ? Date.parse(left.internalDate) : 0;
       const rightTime = right.internalDate ? Date.parse(right.internalDate) : 0;
       return rightTime - leftTime;
@@ -3090,7 +3104,8 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
       order: [['id', 'DESC']],
     });
     const actionByGmailMessageId = new Map<string, RequiredAction>();
-    customerEmailActions.forEach((action) => {
+    const visibleActions = access ? customerEmailActions.filter(action => resultMessages.some(m => m.messageId === action.payload?.gmailMessageId)) : customerEmailActions;
+    visibleActions.forEach((action) => {
       const gmailMessageId = String(action.payload?.gmailMessageId ?? '').trim();
       if (gmailMessageId && !actionByGmailMessageId.has(gmailMessageId)) {
         actionByGmailMessageId.set(gmailMessageId, action);
@@ -3112,7 +3127,7 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
         requiredActionId: action ? Number(action.id) : null,
       };
     });
-    const awaitingReplyCount = customerEmailActions.filter((action) => action.status).length;
+    const awaitingReplyCount = visibleActions.filter((action) => action.status).length;
 
     res.status(200).json({
       email,
@@ -3136,12 +3151,13 @@ export const listBookingMailboxEmails = async (req: AuthenticatedRequest, res: R
       return;
     }
     const message = error instanceof Error ? error.message : 'Failed to load mailbox emails';
-    res.status(500).json({ message });
+    res.status(error instanceof HttpError ? error.status : 500).json({ message });
   }
 };
 
 export const getMailboxEmailPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const access = await getBookingEmailAccess(req);
     const messageId = String(req.params?.messageId ?? '').trim();
     if (!messageId) {
       res.status(400).json({ message: 'messageId is required' });
@@ -3153,6 +3169,7 @@ export const getMailboxEmailPreview = async (req: AuthenticatedRequest, res: Res
       res.status(404).json({ message: 'Email not found in Gmail mailbox' });
       return;
     }
+    assertEmailMessageAccess(access, messageId, payload.message.threadId);
 
     const htmlBody = payload.htmlBody ?? null;
     const textBody = payload.textBody?.trim() ? payload.textBody.trim() : null;
@@ -3207,7 +3224,7 @@ export const getMailboxEmailPreview = async (req: AuthenticatedRequest, res: Res
       return;
     }
     const message = error instanceof Error ? error.message : 'Failed to load mailbox email preview';
-    res.status(500).json({ message });
+    res.status(error instanceof HttpError ? error.status : 500).json({ message });
   }
 };
 
@@ -3591,7 +3608,9 @@ export const getBookingEmailTemplateGallery = async (
 
 export const listEmailTemplates = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const scope = await getAllowedProductTypeIds(req);
     const templates = await EmailTemplate.findAll({
+      ...(scope ? { where: { productTypeId: { [Op.in]: scope }, templateType: 'plain_text' } } : {}),
       order: [
         ['isActive', 'DESC'],
         ['name', 'ASC'],
@@ -3610,10 +3629,12 @@ export const listEmailTemplates = async (req: AuthenticatedRequest, res: Respons
 
 export const createEmailTemplate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const scope = await getAllowedProductTypeIds(req);
     const payload = req.body as CreateEmailTemplateBody;
     const name = normalizeTemplateName(payload?.name);
     const description = normalizeOptionalString(payload?.description);
     const templateType = normalizeEmailTemplateType(payload?.templateType);
+    if (scope && (scope.length !== 1 || templateType !== 'plain_text')) throw new HttpError(403, 'Create plain-text templates for your single assigned product type.');
     const subjectTemplate = normalizeOptionalString(payload?.subjectTemplate);
     const bodyTemplate = normalizeOptionalString(payload?.bodyTemplate);
     const isActive = payload?.isActive === undefined ? true : Boolean(payload?.isActive);
@@ -3648,6 +3669,7 @@ export const createEmailTemplate = async (req: AuthenticatedRequest, res: Respon
 
     const template = EmailTemplate.build();
     template.name = name;
+    template.productTypeId = scope ? scope[0] : null;
     template.description = description;
     template.templateType = templateType;
     template.subjectTemplate = subjectTemplate;
@@ -3660,7 +3682,7 @@ export const createEmailTemplate = async (req: AuthenticatedRequest, res: Respon
     res.status(201).json(toEmailTemplateResponse(template));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create email template';
-    res.status(500).json({ message });
+    res.status(error instanceof HttpError ? error.status : 500).json({ message });
   }
 };
 
@@ -3677,6 +3699,9 @@ export const updateEmailTemplate = async (req: AuthenticatedRequest, res: Respon
       res.status(404).json({ message: 'Email template not found' });
       return;
     }
+    await assertTemplateAccess(req, template);
+    const scope = await getAllowedProductTypeIds(req);
+    if (scope && req.body?.templateType !== undefined && req.body.templateType !== 'plain_text') throw new HttpError(403, 'Product-scoped templates must be plain text.');
 
     const payload = req.body as UpdateEmailTemplateBody;
 
@@ -3741,7 +3766,7 @@ export const updateEmailTemplate = async (req: AuthenticatedRequest, res: Respon
     res.status(200).json(toEmailTemplateResponse(template));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to update email template';
-    res.status(500).json({ message });
+    res.status(error instanceof HttpError ? error.status : 500).json({ message });
   }
 };
 
@@ -3757,8 +3782,10 @@ export const getBookingEmailTshirtAvailability = async (_req: AuthenticatedReque
 
 export const renderBookingEmailPreview = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const access = await getBookingEmailAccess(req);
     const payload = req.body as SendBookingEmailBody;
-    const rendered = await resolveRenderedEmailFromPayload(payload);
+    assertEmailRecipient(access, payload.to);
+    const rendered = await resolveRenderedEmailFromPayload(payload, req);
 
     res.status(200).json({
       templateId: rendered.templateId,
@@ -3779,6 +3806,7 @@ export const renderBookingEmailPreview = async (req: AuthenticatedRequest, res: 
 
 export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const access = await getBookingEmailAccess(req);
     const payload = req.body as SendBookingEmailBody;
     const to = String(payload?.to ?? '').trim();
 
@@ -3791,7 +3819,8 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
       return;
     }
 
-    const rendered = await resolveRenderedEmailFromPayload(payload);
+    assertEmailRecipient(access, to);
+    const rendered = await resolveRenderedEmailFromPayload(payload, req);
     const unresolvedPlaceholders = findUnresolvedEmailPlaceholders(
       rendered.subject,
       rendered.textBody,
@@ -3813,6 +3842,7 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
 
     if (replyToMessageId) {
       const replyTarget = await fetchGmailMessagePayload(replyToMessageId);
+      assertEmailMessageAccess(access, replyToMessageId, replyTarget?.message.threadId);
       const threadId = String(replyTarget?.message.threadId ?? '').trim();
       const inReplyTo = String(replyTarget?.headers['message-id'] ?? '').trim();
       const replySubject = sanitizeHeaderValue(String(replyTarget?.headers['subject'] ?? ''));
@@ -3833,6 +3863,7 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
     }
 
     const sendResult = await sendGmailMessage({
+      ...(access ? { returnAccountReference: true } : {}),
       to,
       subject: rendered.subject,
       textBody: rendered.textBody,
@@ -3843,6 +3874,28 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
       references: replyContext?.references,
     });
     const actorId = req.authContext?.id ?? null;
+    // Persist the outgoing message's booking link so new customer threads stay
+    // discoverable without granting access to the company mailbox.
+    let bookingLinkRecorded = !access;
+    if (access) {
+      try {
+        if (!sendResult.id) throw new Error('Gmail returned no message ID');
+        const sentMessageId = sendResult.id;
+        await sequelize.transaction(async transaction => {
+          const [email] = await BookingEmail.findOrCreate({ where: { messageId: sentMessageId },
+            defaults: { messageId: sentMessageId, threadId: sendResult.threadId, bookingId: access.booking.id, toAddresses: to,
+              subject: rendered.subject, snippet: rendered.textBody.slice(0, 250), labelIds: ['SENT'],
+              receivedAt: new Date(), ingestionStatus: 'sent',
+              rawPayload: JSON.stringify({ id: sendResult.id, threadId: sendResult.threadId, payload: { mimeType: 'text/plain', body: { data: Buffer.from(rendered.textBody).toString('base64url') } } }) } as BookingEmail,
+            transaction });
+          await AuditLog.create({ actorId, action: 'product_scope.customer_email_sent', entity: 'bookingEmail', entityId: String(email.id),
+            metaJson: { bookingId: access.booking.id, messageId: sentMessageId, threadId: sendResult.threadId, templateId: rendered.templateId } }, { transaction });
+        });
+        bookingLinkRecorded = true;
+      } catch (linkError) {
+        logger.error(`[booking-email] Email sent but booking link could not be recorded: ${(linkError as Error).message}`);
+      }
+    }
     let threadOwnershipRecorded = false;
     if (actorId && sendResult.threadId) {
       try {
@@ -3875,6 +3928,7 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
     }
     res.status(200).json({
       status: 'sent',
+      bookingLinkRecorded,
       id: sendResult.id,
       threadId: sendResult.threadId,
       replyToMessageId: replyToMessageId || null,
@@ -3895,17 +3949,20 @@ export const sendBookingEmail = async (req: AuthenticatedRequest, res: Response)
 
 export const reprocessBookingEmail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const access = await getBookingEmailAccess(req);
     const messageId = String(req.params?.messageId ?? '').trim();
     if (!messageId) {
       res.status(400).json({ message: 'messageId is required' });
       return;
     }
 
-    const result = await processBookingEmail(messageId, { force: true });
+    assertEmailMessageAccess(access, messageId);
+    const result = access ? await reprocessProductBookingEmail(messageId, access.productTypeIds, req.authContext!.id)
+      : await processBookingEmail(messageId, { force: true });
     res.status(200).json({ status: result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to reprocess booking email';
-    res.status(500).json({ message });
+    res.status(error instanceof HttpError ? error.status : 500).json({ message });
   }
 };
 

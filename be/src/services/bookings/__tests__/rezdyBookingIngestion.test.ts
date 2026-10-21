@@ -4,13 +4,18 @@ jest.mock('../../../models/Booking.js', () => ({ __esModule: true, default: { fi
 jest.mock('../../../models/BookingEvent.js', () => ({ __esModule: true, default: { findOne: jest.fn(), findAll: jest.fn(), build: jest.fn(), create: jest.fn() } }));
 jest.mock('../../../models/BookingAddon.js', () => ({ __esModule: true, default: { destroy: jest.fn(), build: jest.fn() } }));
 jest.mock('../bookingReassignmentRulesService.js', () => ({ applyAutomaticBookingReassignmentRules: jest.fn(async (_booking, patch) => ({ patch })) }));
+jest.mock('../parsers/index.js', () => ({ getBookingParsers: jest.fn(() => []) }));
 
 import sequelize from '../../../config/database.js';
 import Booking from '../../../models/Booking.js';
 import BookingEmail from '../../../models/BookingEmail.js';
 import BookingEvent from '../../../models/BookingEvent.js';
 import BookingAddon from '../../../models/BookingAddon.js';
-import { applyParsedEvent } from '../bookingIngestionService.js';
+import Product from '../../../models/Product.js';
+import AuditLog from '../../../models/AuditLog.js';
+import { getBookingParsers } from '../parsers/index.js';
+import { applyAutomaticBookingReassignmentRules } from '../bookingReassignmentRulesService.js';
+import { applyParsedEvent, reprocessProductBookingEmail } from '../bookingIngestionService.js';
 import type { ParsedBookingEvent } from '../types.js';
 import type { RezdySource } from '../parsers/rezdyBookingParser.js';
 
@@ -27,6 +32,7 @@ let events: BookingEvent[];
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(applyAutomaticBookingReassignmentRules).mockReset().mockImplementation(async (_booking, patch) => ({ patch }) as any);
   events = [];
   record = {
     id: 12, platform: 'rezdy', platformBookingId: 'RTEST01', platformOrderId: 'RTEST01',
@@ -42,6 +48,7 @@ beforeEach(() => {
   jest.mocked(sequelize.query).mockResolvedValue([[], {}] as never);
   jest.mocked(Booking.findAll).mockImplementation(async () => [record]);
   jest.mocked(Booking.findOne).mockImplementation(async () => record);
+  jest.mocked(BookingEvent.findAll).mockImplementation(async () => events);
   jest.mocked(BookingEvent.findOne).mockImplementation(async (options: any) => {
     const w = options.where;
     return events.find((entry) => w.emailMessageId ? entry.emailMessageId === w.emailMessageId
@@ -63,6 +70,48 @@ beforeEach(() => {
 });
 
 describe('Rezdy events through the booking ingestion transaction', () => {
+  it('reuses the caller transaction and rejects a cross-product reassignment before saving', async () => {
+    const tx = { LOCK: { SHARE: 'share' } } as any;
+    const product = jest.spyOn(Product, 'findByPk').mockImplementation(async (id) => ({ productTypeId: id === 48 ? 3 : 1 }) as Product);
+    jest.mocked(applyAutomaticBookingReassignmentRules).mockResolvedValueOnce({ patch: { productId: 1 } } as any);
+    try {
+      await expect(applyParsedEvent(email, incoming(), { isReprocess: true, transaction: tx, productAccess: { bookingIds: [12], productTypeIds: [3] } })).rejects.toMatchObject({ status: 403 });
+      expect(record.save).not.toHaveBeenCalled();
+      expect(sequelize.transaction).not.toHaveBeenCalled();
+    } finally { product.mockRestore(); }
+  });
+
+  it('replays all parsed events in a single transaction and records the actor', async () => {
+    const tx = { LOCK: { UPDATE: 'update', SHARE: 'share' } } as any;
+    jest.mocked(sequelize.transaction).mockImplementation(async (cb: any) => cb(tx));
+    const saved = { ...email, rawPayload: JSON.stringify({ payload: { mimeType: 'text/plain', body: { data: Buffer.from('saved original').toString('base64url') } } }), headers: {}, update: jest.fn() } as unknown as BookingEmail;
+    const emailFind = jest.spyOn(BookingEmail, 'findOne').mockResolvedValue(saved);
+    const product = jest.spyOn(Product, 'findByPk').mockResolvedValue({ productTypeId: 3 } as Product);
+    const audit = jest.spyOn(AuditLog, 'create').mockResolvedValue({} as AuditLog);
+    const parsed = incoming(); parsed.spawnedEvents = [incoming()];
+    jest.mocked(getBookingParsers).mockReturnValue([{ name: 'test', canParse: () => true, parse: async () => parsed }]);
+    try {
+      await expect(reprocessProductBookingEmail(email.messageId, [3], 215)).resolves.toBe('processed');
+      expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+      expect(record.save).toHaveBeenCalledTimes(2);
+      for (const call of jest.mocked(record.save).mock.calls) expect(call[0]).toMatchObject({ transaction: tx });
+      expect(audit).toHaveBeenCalledWith(expect.objectContaining({ actorId: 215, action: 'product_scope.booking_email_reprocessed' }), { transaction: tx });
+    } finally { emailFind.mockRestore(); product.mockRestore(); audit.mockRestore(); }
+  });
+
+  it('does not delete bookings or mark success when the saved email no longer parses', async () => {
+    const saved = { ...email, rawPayload: '{}', update: jest.fn() } as unknown as BookingEmail;
+    const emailFind = jest.spyOn(BookingEmail, 'findOne').mockResolvedValue(saved);
+    const product = jest.spyOn(Product, 'findByPk').mockResolvedValue({ productTypeId: 3 } as Product);
+    jest.mocked(sequelize.transaction).mockImplementation(async (cb: any) => cb({ LOCK: { UPDATE: 'update', SHARE: 'share' } }));
+    jest.mocked(getBookingParsers).mockReturnValue([]);
+    try {
+      await expect(reprocessProductBookingEmail(email.messageId, [3], 215)).rejects.toMatchObject({ status: 409 });
+      expect(record.save).not.toHaveBeenCalled();
+      expect(BookingAddon.destroy).not.toHaveBeenCalled();
+      expect(saved.update).not.toHaveBeenCalled();
+    } finally { emailFind.mockRestore(); product.mockRestore(); }
+  });
   it('retains one cumulative refund, one event and the correct net amount when the same email is reprocessed', async () => {
     await applyParsedEvent(email, incoming({ refundTotal: 100, refundCurrency: 'PLN' }));
     expect(record.baseAmount).toBe('140.00');
