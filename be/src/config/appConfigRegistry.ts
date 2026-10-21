@@ -1,3 +1,5 @@
+import { DEFAULT_GOOGLE_ADS_API_VERSION, GOOGLE_ADS_API_VERSION_PATTERN } from './googleAdsConfig.js';
+
 export type ConfigValueType = 'string' | 'number' | 'boolean' | 'enum' | 'json';
 
 export type ConfigDefinition = {
@@ -142,7 +144,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     category: 'Booking Email Ingestion',
     valueType: 'string',
     defaultValue:
-      'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR xperiencepoland.com OR pubcrawlkrakow.pl OR civitatis.com OR airbnb.com OR airbnbmail.com))',
+      'in:anywhere (subject:(booking OR reservation OR cancel OR cancellation OR "new order" OR "booking detail change" OR rebooked) OR from:(ecwid.com OR fareharbor.com OR freetour.com OR viator.com OR getyourguide.com OR rezdy.com OR xperiencepoland.com OR pubcrawlkrakow.pl OR civitatis.com OR airbnb.com OR airbnbmail.com))',
     validation: { maxLength: 2000 },
   },
   {
@@ -199,7 +201,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     category: 'Booking Email Ingestion',
     valueType: 'json',
     defaultValue:
-      '{"fareharbor":"Fareharbor","viator":"Viator","getyourguide":"GetYourGuide","freetour":"FreeTour","ecwid":"Ecwid","airbnb":"Airbnb","xperiencepoland":"XperiencePoland"}',
+      '{"fareharbor":"Fareharbor","viator":"Viator","getyourguide":"GetYourGuide","rezdy":"Rezdy","freetour":"FreeTour","ecwid":"Ecwid","airbnb":"Airbnb","xperiencepoland":"XperiencePoland"}',
     impact: 'medium',
   },
   {
@@ -341,6 +343,15 @@ Best,
     valueType: 'json',
     defaultValue: '[]',
     impact: 'medium',
+  },
+  {
+    key: 'REZDY_TIMEZONE',
+    label: 'Rezdy parser timezone',
+    description: 'Timezone for Rezdy experience departures; falls back to the booking parser timezone.',
+    category: 'Booking Parsers',
+    valueType: 'string',
+    defaultValue: null,
+    validation: { format: 'timezone' },
   },
   {
     key: 'AIRBNB_TIMEZONE',
@@ -607,6 +618,21 @@ Best,
     valueType: 'string',
     defaultValue: null,
     isSecret: true,
+  },
+  {
+    key: 'GOOGLE_ADS_API_VERSION',
+    label: 'Google Ads API version',
+    description: 'Pinned Google Ads reporting API major version, such as v26. Applies to marketing costs, clicks and campaign reports only, not Gmail, Reviews, Maps or Search Console. Takes effect on the next marketing request without a restart. Use a supported version; future breaking changes may still require code updates.',
+    category: 'Google API',
+    valueType: 'string',
+    defaultValue: DEFAULT_GOOGLE_ADS_API_VERSION,
+    impact: 'medium',
+    validation: {
+      required: true,
+      maxLength: 4,
+      pattern: GOOGLE_ADS_API_VERSION_PATTERN,
+      patternDescription: 'a Google Ads API major version such as v26',
+    },
   },
   {
     key: 'GOOGLE_ADS_CUSTOMER_ID',

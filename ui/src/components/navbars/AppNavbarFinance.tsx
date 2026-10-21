@@ -1,6 +1,7 @@
 import { Box, Group, NavLink, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { Link, useLocation } from "react-router-dom";
 import { IconWallet } from "@tabler/icons-react";
+import { useAppSelector } from '../../store/hooks';
 import {
   financeNavigationGroups,
   isFinanceNavigationItemActive,
@@ -12,6 +13,10 @@ type AppNavbarFinanceProps = {
 
 export const AppNavbarFinance = ({ onNavigate }: AppNavbarFinanceProps) => {
   const location = useLocation();
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
+  const navigationGroups = financeNavigationGroups.map(group => ({ ...group,
+    items: group.items.filter(item => !productScoped || item.path === '/finance/reports'),
+  })).filter(group => group.items.length > 0);
 
   return (
     <Stack gap="lg" pb="md">
@@ -26,7 +31,7 @@ export const AppNavbarFinance = ({ onNavigate }: AppNavbarFinanceProps) => {
           </Text>
         </Box>
       </Group>
-      {financeNavigationGroups.map((group) => (
+      {navigationGroups.map((group) => (
         <Stack key={group.label} gap={5}>
           <Text px={8} size="10px" fw={800} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.11em" }}>
             {group.label}

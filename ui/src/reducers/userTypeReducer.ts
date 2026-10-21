@@ -47,7 +47,7 @@ const userTypeSlice = createSlice({
       })
       .addCase(createUserType.rejected, (state, action) => {
         state[0].loading = false;
-        state[0].error = action.error.message || 'Failed to create userType';
+        state[0].error = typeof action.payload === 'string' ? action.payload : action.error.message || 'Failed to create userType';
       })
       
       // Update UserType
@@ -63,7 +63,7 @@ const userTypeSlice = createSlice({
       })
       .addCase(updateUserType.rejected, (state, action) => {
         state[0].loading = false;
-        state[0].error = action.error.message || 'Failed to update userType';
+        state[0].error = typeof action.payload === 'string' ? action.payload : action.error.message || 'Failed to update userType';
       })
       
       // Delete UserType

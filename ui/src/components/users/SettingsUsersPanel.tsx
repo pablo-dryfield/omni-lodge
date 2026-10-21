@@ -62,6 +62,7 @@ type UserFormState = {
   userTypeId: string | null;
   status: boolean;
   approved: boolean;
+  badgeRequired: boolean;
 };
 
 const INITIAL_FORM_STATE: UserFormState = {
@@ -77,6 +78,7 @@ const INITIAL_FORM_STATE: UserFormState = {
   userTypeId: null,
   status: true,
   approved: true,
+  badgeRequired: true,
 };
 
 const coerceUserPayload = (payload: Partial<User>) => {
@@ -188,6 +190,7 @@ const mapUserToFormState = (user?: Partial<User> | null): UserFormState => {
     userTypeId: typeof user.userTypeId === "number" ? String(user.userTypeId) : null,
     status: Boolean(user.status),
     approved: user.approved !== false,
+    badgeRequired: user.badgeRequired !== false,
   };
 };
 
@@ -280,7 +283,8 @@ const SettingsUsersPanel = () => {
   const userTypesState = useAppSelector((state) => state.userTypes[0]);
   const loggedUserId = useAppSelector((state) => state.session.loggedUserId);
   const moduleAccess = useModuleAccess(MODULE_SLUG);
-  const cerebroBootstrapQuery = useCerebroBootstrap();
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
+  const cerebroBootstrapQuery = useCerebroBootstrap({ enabled: !productScoped });
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
@@ -442,7 +446,7 @@ const SettingsUsersPanel = () => {
   const openCreateEditor = () => {
     setEditorMode("create");
     setSelectedUser(null);
-    setFormState({ ...INITIAL_FORM_STATE });
+    setFormState({ ...INITIAL_FORM_STATE, badgeRequired: !productScoped });
     setEditorError(null);
     setEditorOpen(true);
   };
@@ -507,9 +511,16 @@ const SettingsUsersPanel = () => {
       userTypeId: formState.userTypeId ? Number(formState.userTypeId) : undefined,
       status: formState.status,
       approved: formState.approved,
+      badgeRequired: formState.badgeRequired,
     };
     if (password) {
       basePayload.password = password;
+    }
+    if (productScoped) {
+      // Company-wide badge/affiliate integrations and password resets are not
+      // part of delegated product management.
+      if (editorMode === 'create') basePayload.badgeRequired = false;
+      else { delete basePayload.badgeRequired; delete basePayload.password; }
     }
 
     setSubmitLoading(true);
@@ -519,7 +530,10 @@ const SettingsUsersPanel = () => {
 
     try {
       if (editorMode === "create") {
-        const createPayload = removeEmptyKeys(coerceUserPayload(basePayload), loggedUserId);
+        // Registration creates an unapproved account. Save the badge preference
+        // with approval in the authenticated update, before its print side effect.
+        const { badgeRequired, ...registrationPayload } = basePayload;
+        const createPayload = removeEmptyKeys(coerceUserPayload(registrationPayload), loggedUserId);
         const createResult = await dispatch(createUser(createPayload)).unwrap();
         const createdUserId = extractCreatedUserId(createResult);
         const createFollowUp: Partial<User> = {};
@@ -530,7 +544,8 @@ const SettingsUsersPanel = () => {
           createFollowUp.status = false;
         }
         createFollowUp.approved = basePayload.approved;
-        if (createdUserId && Object.keys(createFollowUp).length > 0) {
+        createFollowUp.badgeRequired = badgeRequired;
+        if (!productScoped && createdUserId && Object.keys(createFollowUp).length > 0) {
           const followUpPayload = removeEmptyKeys(coerceUserPayload(createFollowUp), loggedUserId);
           await dispatch(updateUser({ userId: createdUserId, userData: followUpPayload })).unwrap();
         }
@@ -920,6 +935,7 @@ const SettingsUsersPanel = () => {
               value={formState.password}
               onChange={(event) => setFormState((prev) => ({ ...prev, password: event.currentTarget.value }))}
               required={editorMode === "create"}
+              disabled={productScoped && editorMode === 'edit'}
             />
             <TextInput
               label="WhatsApp"
@@ -974,6 +990,14 @@ const SettingsUsersPanel = () => {
               description="Approved users can sign in and use the role assigned above."
               checked={formState.approved}
               onChange={(event) => setFormState((prev) => ({ ...prev, approved: event.currentTarget.checked }))}
+              mt="xl"
+            />
+            <Switch
+              label="Staff badge required"
+              description="Turn off for users who do not need a badge. Approval will not send a badge print request or create a badge QR affiliate assignment."
+              checked={formState.badgeRequired}
+              onChange={(event) => setFormState((prev) => ({ ...prev, badgeRequired: event.currentTarget.checked }))}
+              disabled={submitLoading || productScoped}
               mt="xl"
             />
           </SimpleGrid>

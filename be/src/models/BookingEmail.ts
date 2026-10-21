@@ -35,6 +35,11 @@ export default class BookingEmail extends Model<BookingEmail> {
   })
   declare threadId: string | null;
 
+  // Explicit customer correspondence link; booking ingestion history remains in BookingEvent.
+  @AllowNull(true)
+  @Column({ field: 'booking_id', type: DataType.BIGINT })
+  declare bookingId: number | null;
+
   @AllowNull(true)
   @Column({
     field: 'history_id',

@@ -164,6 +164,15 @@ export const sendApprovedUserBadgeToPrint = async (options: {
   role: UserType | null;
   actorId?: number | null;
 }): Promise<void> => {
+  if (options.user.badgeRequired === false) {
+    await recordUserAuditLog({
+      actorId: options.actorId,
+      action: 'user.badge_print_skipped',
+      userId: options.user.id,
+      meta: { trigger: 'approval', reason: 'badge_not_required' },
+    });
+    return;
+  }
   const badgeName = normalizeOptionalString(options.user.badgeName) ?? normalizeOptionalString(options.user.firstName);
   if (!badgeName) {
     await recordUserAuditLog({
@@ -695,6 +704,17 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     const previousApproved = Boolean(existingUser.approved);
     const previousStatus = Boolean(existingUser.status);
     const previousUserTypeId = existingUser.userTypeId ?? null;
+    const previousBadgeRequired = existingUser.badgeRequired !== false;
+    const hasBadgeRequiredChange = Object.prototype.hasOwnProperty.call(data, 'badgeRequired');
+    if (hasBadgeRequiredChange) {
+      if (![true, false, 'true', 'false'].includes(data.badgeRequired as boolean | string)) {
+        res.status(400).json([{ message: 'badgeRequired must be true or false.' }]);
+        return;
+      }
+      data.badgeRequired = data.badgeRequired === true || data.badgeRequired === 'true';
+    }
+    // The API accepts the application field only, never a raw database-column bypass.
+    delete data.badge_required;
     const hasUserTypeChange = Object.prototype.hasOwnProperty.call(data, 'userTypeId');
     const requestedUserTypeId = data.userTypeId;
     const eligibilityEffectiveDate = data.effectiveDate == null || typeof data.effectiveDate === 'string'
@@ -876,13 +896,24 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
         approved: previousApproved,
         status: previousStatus,
         userTypeId: previousUserTypeId,
+        badgeRequired: previousBadgeRequired,
       },
       next: {
         approved: nextApproved,
         status: nextStatus,
         userTypeId: nextUserTypeId,
+        badgeRequired: existingUser.badgeRequired !== false,
       },
     };
+
+    if (hasBadgeRequiredChange && previousBadgeRequired !== existingUser.badgeRequired) {
+      await recordUserAuditLog({
+        actorId,
+        action: 'user.badge_requirement_changed',
+        userId: existingUser.id,
+        meta: { previous: previousBadgeRequired, next: existingUser.badgeRequired },
+      });
+    }
 
     if (hasApprovedChange && !previousApproved && nextApproved) {
       await recordUserAuditLog({
@@ -975,6 +1006,11 @@ export const sendUserBadgeToPrint = async (req: Request, res: Response): Promise
     });
     if (!user) {
       res.status(404).json([{ message: 'User not found' }]);
+      return;
+    }
+
+    if (user.badgeRequired === false) {
+      res.status(409).json([{ message: 'This account does not require a staff badge. Enable it in Settings → Users before requesting a print.' }]);
       return;
     }
 

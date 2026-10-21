@@ -9,6 +9,9 @@ import FinanceAccount from '../models/FinanceAccount.js';
 import FinanceVendor from '../models/FinanceVendor.js';
 import FinanceClient from '../models/FinanceClient.js';
 import { getConfigValue } from '../../services/configService.js';
+import { getAllowedProductTypeIds } from '../../services/productScopeService.js';
+import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest.js';
+import Product from '../../models/Product.js';
 
 dayjs.extend(isSameOrBefore);
 
@@ -53,6 +56,10 @@ const isStaffReimbursementSettlement = (transaction: FinanceTransaction): boolea
 
 export const getFinanceReports = async (req: Request, res: Response): Promise<void> => {
   try {
+    const scope = await getAllowedProductTypeIds(req as AuthenticatedRequest);
+    const scopedProductIds = scope === null ? null : (await Product.findAll({
+      where: { productTypeId: { [Op.in]: scope } }, attributes: ['id'],
+    })).map(product => product.id);
     const today = dayjs().endOf('month');
     const endParam = typeof req.query.endDate === 'string' ? req.query.endDate : undefined;
     const startParam = typeof req.query.startDate === 'string' ? req.query.startDate : undefined;
@@ -89,6 +96,7 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
 
     const rangeTransactions = await FinanceTransaction.findAll({
       where: {
+        ...(scopedProductIds === null ? {} : { productId: { [Op.in]: scopedProductIds } }),
         date: { [Op.between]: [startIso, endIso] },
         status: { [Op.notIn]: NON_REPORTABLE_STATUSES },
       },
@@ -244,12 +252,12 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
       .sort((a, b) => b.total - a.total)
       .slice(0, 5);
 
-    const budgets = await FinanceBudget.findAll({
+    const budgets = scope === null ? await FinanceBudget.findAll({
       where: {
         period: { [Op.in]: monthKeys },
       },
       include: [{ model: FinanceCategory, attributes: ['id', 'name'] }],
-    });
+    }) : [];
 
     const budgetByCategory = new Map<
       number | 'uncategorized',
@@ -357,13 +365,15 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
     budgetTotals.variance = budgetTotals.actual - budgetTotals.budget;
     budgetTotals.projectedVariance = budgetTotals.projected - budgetTotals.budget;
 
-    const accounts = await FinanceAccount.findAll({
+    const accounts = scope === null ? await FinanceAccount.findAll({
       attributes: ['id', 'name', 'currency', 'openingBalanceMinor', 'isActive'],
-    });
+    }) : [];
     const vendors = await FinanceVendor.findAll({
+      ...(scope === null ? {} : { where: { id: { [Op.in]: reportableTransactions.filter(t => t.counterpartyType === 'vendor').map(t => t.counterpartyId).filter(Boolean) } } }),
       attributes: ['id', 'name'],
     });
     const clients = await FinanceClient.findAll({
+      ...(scope === null ? {} : { where: { id: { [Op.in]: reportableTransactions.filter(t => t.counterpartyType === 'client').map(t => t.counterpartyId).filter(Boolean) } } }),
       attributes: ['id', 'name'],
     });
 
@@ -684,6 +694,8 @@ export const getFinanceReports = async (req: Request, res: Response): Promise<vo
     );
 
     res.status(200).json({
+      productTypeIds: scope,
+      excludesCompanyWideBalances: scope !== null,
       period: {
         start: startDate.format('YYYY-MM-DD'),
         end: endDate.format('YYYY-MM-DD'),

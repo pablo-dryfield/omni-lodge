@@ -18,6 +18,11 @@ export type EmailTemplateType = 'plain_text' | 'react_email';
   underscored: true,
 })
 export default class EmailTemplate extends Model<EmailTemplate> {
+  // null is a company template; scoped editors can never change it.
+  @AllowNull(true)
+  @Column({ field: 'product_type_id', type: DataType.INTEGER })
+  declare productTypeId: number | null;
+
   @PrimaryKey
   @AutoIncrement
   @Column(DataType.BIGINT)

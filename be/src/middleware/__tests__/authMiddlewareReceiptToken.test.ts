@@ -3,6 +3,7 @@ jest.mock('../../__mocks__/sequelizeModelStub.ts', () => ({
   default: { findByPk: jest.fn() },
 }));
 jest.mock('../../models/UserType.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/UserTypeProductType.js', () => ({ __esModule: true, default: { findAll: jest.fn(async () => []) } }));
 jest.mock('../../models/ShiftRole.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../services/requestContextService.js', () => ({
   getRequestContextValue: jest.fn(),

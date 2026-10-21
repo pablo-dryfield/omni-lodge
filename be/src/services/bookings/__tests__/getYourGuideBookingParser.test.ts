@@ -46,3 +46,14 @@ describe('GetYourGuide booking date parsing', () => {
     );
   });
 });
+
+describe('GetYourGuide payment updates', () => {
+  it('does not downgrade a paid booking when an amendment omits its price', async () => {
+    const context = buildContext('Date October 1, 2026, 9:00 PM');
+    context.subject = 'Booking detail change: - S264786 - GYGBLHA3ZMHH';
+    context.textBody = context.textBody.replace(/Price .*? Open booking/, 'Open booking');
+    const parsed = await new GetYourGuideBookingParser().parse(context);
+    expect(parsed?.status).toBe('amended');
+    expect(parsed?.paymentStatus).toBeUndefined();
+  });
+});

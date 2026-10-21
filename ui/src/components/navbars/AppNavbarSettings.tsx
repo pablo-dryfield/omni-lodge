@@ -266,15 +266,16 @@ export const AppNavbarSettings = ({ onNavigate }: AppNavbarSettingsProps) => {
   const location = useLocation();
   const navigate = useNavigate();
   const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
 
   const visibleSections = useMemo(() => {
     return settingsNav
       .map((section) => ({
         ...section,
-        links: section.links.filter((link) => allowedPageSlugs.has(link.slug)),
+        links: section.links.filter((link) => allowedPageSlugs.has(link.slug) && (!productScoped || link.to !== '/settings/currencies')),
       }))
       .filter((section) => section.links.length > 0);
-  }, [allowedPageSlugs]);
+  }, [allowedPageSlugs, productScoped]);
 
   const handleNavigate = (to: string) => {
     navigate(to);

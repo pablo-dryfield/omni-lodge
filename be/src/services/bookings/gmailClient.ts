@@ -344,6 +344,8 @@ export type GmailMessagePayload = {
 };
 
 type SendMessageParams = {
+  /** Keep backup message references addressable by the read/reply endpoints. */
+  returnAccountReference?: boolean;
   to: string;
   from?: string | null;
   subject: string;
@@ -1015,13 +1017,14 @@ export const sendMessage = async (params: SendMessageParams): Promise<SendMessag
   const mimeMessage = buildMimeMessage(resolvedParams, rfcMessageId);
 
   try {
-    return await sendMessageWithAccount(
+    const sent = await sendMessageWithAccount(
       'primary',
       resolvedParams,
       requestedRfcMessageId,
       rfcMessageId,
       mimeMessage,
     );
+    return resolvedParams.returnAccountReference && sent.id ? { ...sent, id: buildMessageReference('primary', sent.id) } : sent;
   } catch (primaryError) {
     const canFailOver = hasBackupGmailAccount()
       && (isGmailCooldownError(primaryError) || isGmailRateLimitError(primaryError));
@@ -1034,13 +1037,14 @@ export const sendMessage = async (params: SendMessageParams): Promise<SendMessag
       `[booking-email] Gmail primary account is rate limited; attempting delivery with the configured backup account.`,
     );
     try {
-      return await sendMessageWithAccount(
+      const sent = await sendMessageWithAccount(
         'backup',
         resolvedParams,
         requestedRfcMessageId,
         rfcMessageId,
         mimeMessage,
       );
+      return resolvedParams.returnAccountReference && sent.id ? { ...sent, id: buildMessageReference('backup', sent.id) } : sent;
     } catch (backupError) {
       logger.error(
         `[booking-email] Gmail backup account delivery failed: ${(backupError as Error).message}`,

@@ -53,6 +53,12 @@ type SettingsSection = {
 };
 
 const sections: SettingsSection[] = [
+  { label: 'Products', description: 'Manage your experiences and their storefront settings.', icon: IconTag,
+    to: '/settings/products', pageSlug: PAGE_SLUGS.settingsProducts },
+  { label: 'Product Prices', description: 'Manage currency prices for your products.', icon: IconCurrencyEuro,
+    to: '/settings/product-prices', pageSlug: PAGE_SLUGS.settingsProductPrices },
+  { label: 'Product Add-Ons', description: 'Manage add-on availability and price overrides for your products.', icon: IconTag,
+    to: '/settings/product-addons', pageSlug: PAGE_SLUGS.settingsProductAddons },
   {
     label: "Users",
     description: "Invite, deactivate, and reset access for platform members.",
@@ -208,6 +214,7 @@ const extractErrorMessage = (error: unknown): string => {
 const SettingsLanding = () => {
   const navigate = useNavigate();
   const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
   const { roleSlug } = useAppSelector((state) => state.session);
   const isProduction = process.env.NODE_ENV === "production";
   const [refreshing, setRefreshing] = useState(false);
@@ -233,8 +240,8 @@ const SettingsLanding = () => {
   const canRunGygSelfTest = ["admin", "owner", "manager"].includes(compareString(roleSlug).toLowerCase());
 
   const visibleSections = useMemo(
-    () => sections.filter((section) => allowedPageSlugs.has(section.pageSlug)),
-    [allowedPageSlugs],
+    () => sections.filter((section) => allowedPageSlugs.has(section.pageSlug) && (!productScoped || section.to !== '/settings/currencies')),
+    [allowedPageSlugs, productScoped],
   );
 
   const processOptions = useMemo(

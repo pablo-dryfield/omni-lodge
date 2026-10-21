@@ -46,7 +46,7 @@ import {
   IconSend,
 } from "@tabler/icons-react";
 import dayjs, { Dayjs } from "dayjs";
-import { useAppDispatch } from "../store/hooks";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { navigateToPage } from "../actions/navigationActions";
 import { GenericPageProps } from "../types/general/GenericPageProps";
@@ -59,6 +59,7 @@ import { prepareBookingGrid, BookingGrid } from "../utils/prepareBookingGrid";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
+import { selectCanAccessBookingSanityCheck } from "../selectors/accessControlSelectors";
 import {
   serializeProductTypeSelection,
 } from "../utils/productTypeQuery";
@@ -603,6 +604,13 @@ const BOOKINGS_MODULE = "booking-management";
 const BookingsPage = ({ title }: GenericPageProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
+  const canAccessSanityCheck = useAppSelector(selectCanAccessBookingSanityCheck);
+  const availableBookingTabs = BOOKING_TAB_OPTIONS.filter(tab =>
+    tab.value === "sanity"
+      ? canAccessSanityCheck
+      : !productScoped || ['calendar', 'summary', 'manifest'].includes(tab.value),
+  );
   const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [activeTab, setActiveTab] = useState<BookingsTab>("calendar");
   const [mobileTabsMenuOpen, setMobileTabsMenuOpen] = useState<string | null>(null);
@@ -739,6 +747,8 @@ const BookingsPage = ({ title }: GenericPageProps) => {
 
   const handleBookingsTabChange = useCallback(
     (value: string | null) => {
+      if (value === "sanity" && !canAccessSanityCheck) return;
+      if (productScoped && value && !['calendar', 'summary', 'manifest'].includes(value)) return;
       if (value === "manifest") {
         openManifestForCurrentDate();
         return;
@@ -749,7 +759,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       }
       setActiveTab((value as BookingsTab) ?? "calendar");
     },
-    [navigate, openManifestForCurrentDate],
+    [canAccessSanityCheck, navigate, openManifestForCurrentDate, productScoped],
   );
 
   const handleCloseEmailPreview = useCallback(() => {
@@ -798,6 +808,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
     if (!nextTab) {
       return;
     }
+    if (nextTab === "sanity" && !canAccessSanityCheck) {
+      setActiveTab("calendar");
+      return;
+    }
     if (nextTab === "manifest") {
       openManifestForCurrentDate();
       return;
@@ -807,7 +821,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
       return;
     }
     setActiveTab((prev) => (prev === nextTab ? prev : nextTab));
-  }, [emailPreviewParam, navigate, openManifestForCurrentDate, searchParams]);
+  }, [canAccessSanityCheck, emailPreviewParam, navigate, openManifestForCurrentDate, searchParams]);
 
   useEffect(() => {
     const nextDateField = parseBookingsSummaryDateField(searchParams.get("summaryDateField"));
@@ -1998,7 +2012,7 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                     </Accordion.Control>
                     <Accordion.Panel>
                       <Stack gap="xs">
-                        {BOOKING_TAB_OPTIONS.map((tab) => (
+                        {availableBookingTabs.map((tab) => (
                           <Button
                             key={tab.value}
                             variant={tab.value === activeTab ? "light" : "subtle"}
@@ -2019,10 +2033,10 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                 <Tabs.List>
                   <Tabs.Tab value="calendar">Calendar</Tabs.Tab>
                   <Tabs.Tab value="manifest">Manifest</Tabs.Tab>
-                  <Tabs.Tab value="payment-links">Payment Links</Tabs.Tab>
+                  {!productScoped && <Tabs.Tab value="payment-links">Payment Links</Tabs.Tab>}
                   <Tabs.Tab value="summary">Summary</Tabs.Tab>
-                  <Tabs.Tab value="emails">Emails</Tabs.Tab>
-                  <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>
+                  {!productScoped && <Tabs.Tab value="emails">Emails</Tabs.Tab>}
+                  {canAccessSanityCheck && <Tabs.Tab value="sanity">Sanity Check</Tabs.Tab>}
                 </Tabs.List>
               )}
               <Tabs.Panel value="calendar" pt="md">
@@ -2531,9 +2545,11 @@ const BookingsPage = ({ title }: GenericPageProps) => {
                   </Stack>
               </Tabs.Panel>
 
-              <Tabs.Panel value="sanity" pt="md">
-                <BookingsSanityCheck />
-              </Tabs.Panel>
+              {canAccessSanityCheck && (
+                <Tabs.Panel value="sanity" pt="md">
+                  <BookingsSanityCheck />
+                </Tabs.Panel>
+              )}
             </Tabs>
             <Modal
               opened={createEmailOpen}

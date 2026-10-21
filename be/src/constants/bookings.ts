@@ -3,6 +3,7 @@ export const BOOKING_PLATFORMS = [
   'ecwid',
   'viator',
   'getyourguide',
+  'rezdy',
   'freetour',
   'xperiencepoland',
   'airbnb',

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { Outlet, useNavigate, useLocation } from "react-router-dom";
+import { Navigate, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Select, Stack, useMantineTheme } from "@mantine/core";
-import { useAppDispatch } from "../../store/hooks";
+import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { navigateToPage } from "../../actions/navigationActions";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
@@ -16,6 +16,10 @@ import {
 
 const FinanceLayout = () => {
   const dispatch = useAppDispatch();
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
+  const navigationGroups = financeNavigationGroups.map(group => ({ ...group,
+    items: group.items.filter(item => !productScoped || item.path === '/finance/reports'),
+  })).filter(group => group.items.length > 0);
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useMantineTheme();
@@ -39,7 +43,7 @@ const FinanceLayout = () => {
               aria-label="Finance section"
               leftSection={<ActiveNavigationIcon size={17} />}
               value={activeNavigationItem?.path ?? "/finance"}
-              data={financeNavigationGroups.map((group) => ({
+              data={navigationGroups.map((group) => ({
                 group: group.label,
                 items: group.items.map((item) => ({ value: item.path, label: item.label })),
               }))}
@@ -52,7 +56,7 @@ const FinanceLayout = () => {
               searchable
             />
           ) : null}
-          <Outlet />
+          {productScoped && location.pathname !== '/finance/reports' ? <Navigate to="/finance/reports" replace /> : <Outlet />}
         </Stack>
       </FinanceWorkspace>
     </PageAccessGuard>

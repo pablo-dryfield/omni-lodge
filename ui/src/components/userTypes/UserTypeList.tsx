@@ -142,8 +142,7 @@ const UserTypeList = ({ pageTitle, moduleSlug = DEFAULT_MODULE_SLUG }: UserTypeL
       Object.keys(dataCreated).some((key) => key !== "createdBy") &&
       Object.keys(dataCreated).length !== 0
     ) {
-      await dispatch(createUserType(dataCreated));
-      dispatch(fetchUserTypes());
+      await dispatch(createUserType(dataCreated)).unwrap();
     }
   };
 
@@ -160,8 +159,7 @@ const UserTypeList = ({ pageTitle, moduleSlug = DEFAULT_MODULE_SLUG }: UserTypeL
       ) {
         await dispatch(
           updateUserType({ userTypeId: dataId, userTypeData: dataUpdate })
-        );
-        dispatch(fetchUserTypes());
+        ).unwrap();
       }
     } else {
       console.error("UserType ID is undefined.");

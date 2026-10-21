@@ -24,6 +24,7 @@ export type User = {
   discoverySource?: string | null;
   profilePhotoPath?: string | null;
   profilePhotoUrl?: string | null;
+  badgeRequired?: boolean;
   badgeName?: string | null;
   badgePrefixEmoji?: string | null;
   badgeSuffixEmoji?: string | null;

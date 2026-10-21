@@ -1579,6 +1579,7 @@ const Home = (props: GenericPageProps) => {
   }, [dispatch, props.title]);
 
   const allowedPages = useAppSelector(selectAllowedNavigationPages);
+  const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
   const sessionRoleSlug = useAppSelector((state) => state.session.roleSlug);
   const moduleDescriptionAudience = isHomeManagementRole(sessionRoleSlug)
     ? "management"
@@ -3463,7 +3464,7 @@ const Home = (props: GenericPageProps) => {
       onOpenMiniGame={handleOpenMiniGame}
       quickActions={(
         <Stack spacing={{ xs: 2.5, md: 3.5 }}>
-          <HomeCleaningTasks />
+          {!productScoped && <HomeCleaningTasks />}
           <HomeQuickActions
             quickActionVisibility={quickActionVisibility}
             audienceReady={homeExperienceAudienceReady}
@@ -3644,7 +3645,7 @@ const Home = (props: GenericPageProps) => {
           >
             {effectiveViewMode === "dashboard" ? (
               <Stack gap={1.5}>
-                <HomeCleaningTasks />
+                {!productScoped && <HomeCleaningTasks />}
                 <HomeQuickActions
                   compact
                   quickActionVisibility={quickActionVisibility}

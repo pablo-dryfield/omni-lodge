@@ -18,6 +18,13 @@ npm run migrate           # runs Sequelize + Umzug migrations
 npm run dev               # watches and restarts on change
 ```
 
+When testing a local production database clone, set `HOST=127.0.0.1`,
+`DISABLE_BACKGROUND_JOBS=true`, `SKIP_DB_SYNC=true`, `DB_SYNC_ALTER=false`, and
+`SEED_ACCESS_CONTROL=false` in the ignored `be/.env.dev`. Apply pending migrations
+to the local database first. This disables automatic background jobs (including
+mailbox polling and reminder emails); manually triggered integration actions can
+still contact external services if live credentials are configured.
+
 ### Frontend
 ```bash
 cd ui
@@ -26,6 +33,53 @@ npm start                 # CRA dev server with /api proxy to http://localhost:3
 ```
 
 The dev client now defaults to the proxy (`/api`) so cross-origin CORS is no longer required during local development. Set `BACKEND_URL` before `npm start` if the API runs on a non-default host (the proxy middleware uses this environment variable).
+
+### Product-scoped management
+
+A non-empty User Type product scope enables a server-side, default-deny API
+boundary, not just filtered navigation. Delegated owners can manage exclusively
+scoped users, products, currency prices and product add-on overrides, and view
+scoped bookings and finance reports. Company-wide users/roles, shared scopes,
+unassigned financial entries, bank balances, budgets, credentials, generic report
+queries and global settings remain inaccessible. Normally, user roles must have
+no more module-action permissions than the delegating account. A Food Tour-only
+`food-tour-owner` can instead assign any active `food-tour-*` User Type that is
+explicitly scoped only to Food Tour, including Food Tour Manager. Its extra raw
+permissions do not bypass the product-scoped API boundary. Other scoped roles
+cannot assign the Food Tour Owner role. Migration `202610210001` restricts existing
+unscoped Food Tour-prefixed roles to Food Tour without replacing explicit scopes;
+Food Tour Owners also have a restricted Settings / User Types screen to create
+new `Food Tour ...` roles. It fixes the scope to Food Tour and copies only the
+scoped page/module permissions from an existing Food Tour role selected as a
+template. Owners can also edit a Food Tour role's name and description, without
+changing its internal slug/ID, assigned users or permissions. Role edits and
+creation are atomic and audited. Deletion, scope changes, global permissions
+and company-wide defaults remain unavailable. Migration `202610210002` renames
+the legacy Food Tour Owner team-member label to Food Tour Guide without changing
+its existing ID, slug, members or permissions; custom names are preserved.
+Company administrators creating roles through the full editor must still assign
+the explicit Food Tour product scope.
+User deletion, badge printing, affiliate changes and password resets remain company-administration
+operations; scoped user creation creates no staff badge or external side effects.
+
+Assign explicit product types to a separate owner User Type first. For local
+testing only, an existing active company-wide owner/admin can then enable the
+curated permissions and create a separate scoped team-member role:
+
+```powershell
+cd be
+npm run build:dev
+$env:NODE_ENV='development'
+node dist/scripts/configureProductScopedOwner.js --role-id=<scoped-role-id> --actor-id=<company-owner-id>
+```
+
+The helper requires a loopback database connection, refuses company-wide target
+roles, and audits its changes. It does not modify existing shared staff roles or
+assign legacy financial data. Reload the browser after configuration. Scoped
+finance reports include only ledger entries explicitly linked through `productId`;
+booking revenue remains in Bookings Summary and must not be added to the ledger
+report a second time. Production activation still requires the approved release
+and administration workflow, never this local helper.
 
 ## Database & Migrations
 
@@ -129,6 +183,34 @@ The Counters page is fully responsive (three columns collapse to stacked cards o
 - Keep the backend CORS disabled in production; the UI should be served behind the same host and reverse proxy.
 - Run `npm run build` in `be` before deploying to ensure migrations and TypeScript succeed.
 - Apply migrations as part of your release pipeline.
+
+## Rezdy booking email ingestion
+
+Rezdy uses a built-in parser, not a `BOOKING_DYNAMIC_PARSERS` rule. It reads both MIME alternatives:
+real Rezdy plain-text messages omit the product, agent reference and commission that are present in HTML.
+Departures use `REZDY_TIMEZONE`, falling back to `BOOKING_PARSER_TIMEZONE` (Europe/Warsaw by default).
+The Rezdy channel migration adds only a missing channel, preserves existing configuration and does not queue historical emails.
+If a customized Gmail query is used with processing-all-messages disabled, include `from:(rezdy.com)` in that query.
+
+- New confirmed/pending orders, dated amendments and cancellations are supported. A cancellation alone is **not** evidence of a refund.
+- Partial/full refunds require an explicit cumulative `Total Refunded`, or `Refund Amount` plus a stable `Refund Reference`/`Refund ID`.
+  Requests, pending refunds and failed refunds are not treated as completed refunds. Reprocessing a refund does not add it again.
+- `priceGross` retains the customer order total; `commissionAmount` retains the reported supplier commission.
+  `priceNet` uses the explicit supplier `Net amount` where provided, otherwise gross minus commission;
+  `baseAmount` is that pre-refund supplier net minus cumulative refunds (minimum zero).
+  Some real agent emails report commission on a different basis: their explicit net remains authoritative, with the discrepancy noted in booking notes and event metadata.
+  No commission rate or returned-commission amount is guessed. Missing payment data does not erase a known paid status.
+- An explicit Viator agent reference uses the existing `BR-*` booking identity, while `platformOrderId` retains the Rezdy `R*` order ID.
+  Direct online orders use platform `rezdy`. Possible cross-provider duplicates without an explicit link fail for manual review rather than merge by customer name.
+  After linking, a second Viator confirmation is an audited no-op. A Viator cancellation can close the booking, but its supplier-net refund
+  is not mixed with the Rezdy customer-gross ledger; financial amendments require the Rezdy snapshot or manual review.
+- Older Rezdy snapshots are audited without overwriting newer status, refunds or attendance. A newly discovered out-of-order refund fails with
+  a refund-only reprocessing instruction instead of being silently skipped. No destructive timeline rebuild is used for these orders.
+- Undated vouchers, missing departure times, multi-product orders, conflicting identities/currencies and incomplete refund evidence require manual review.
+  Archived new-order/cancellation formats are covered; amendment/refund variants are additionally covered by synthetic regression tests.
+
+Deploy through the normal immutable release workflow, apply migrations, then explicitly reprocess affected original order emails before
+their amendments/refunds/cancellations, in received-time order. Existing ignored emails are not reprocessed automatically by this change.
 
 ## Logs & Progress
 

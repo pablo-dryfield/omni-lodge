@@ -22,6 +22,16 @@ const normalizeRoleSlug = (roleSlug: string | null | undefined): string => {
   return normalized;
 };
 
+export const canAccessBookingSanityCheck = (roleSlug: string | null | undefined): boolean =>
+  ["admin", "owner"].includes(normalizeRoleSlug(roleSlug));
+
+export const selectCanAccessBookingSanityCheck = createSelector(
+  selectSessionState,
+  selectAccessControlState,
+  (session, accessControl): boolean =>
+    canAccessBookingSanityCheck(session.roleSlug) && (accessControl.productTypeIds?.length ?? 0) === 0,
+);
+
 export const canShowVolunteerProgressNavigation = (
   roleSlug: string | null | undefined,
   staffType: string | null | undefined,

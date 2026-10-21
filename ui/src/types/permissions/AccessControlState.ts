@@ -1,4 +1,5 @@
 export type AccessControlState = {
+  productTypeIds?: number[] | null;
   loading: boolean;
   loaded: boolean;
   error: string | null;

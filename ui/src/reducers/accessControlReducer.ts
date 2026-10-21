@@ -10,6 +10,7 @@ const createInitialState = (): AccessControlState => ({
   pages: [],
   modules: {},
   openBarModeAccess: null,
+  productTypeIds: null,
 });
 
 const initialState: AccessControlState = createInitialState();
@@ -33,6 +34,7 @@ const accessControlSlice = createSlice({
         state.pages = action.payload.pages;
         state.modules = action.payload.modules;
         state.openBarModeAccess = action.payload.openBarModeAccess ?? null;
+        state.productTypeIds = action.payload.productTypeIds ?? null;
       })
       .addCase(fetchAccessSnapshot.rejected, (state, action) => {
         state.loading = false;
@@ -41,6 +43,7 @@ const accessControlSlice = createSlice({
         state.pages = [];
         state.modules = {};
         state.openBarModeAccess = null;
+        state.productTypeIds = null;
       })
       .addCase(logoutUser.fulfilled, () => createInitialState())
       .addCase(logoutUser.rejected, () => createInitialState());

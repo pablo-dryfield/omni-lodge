@@ -1153,8 +1153,13 @@ const MyAccount = () => {
   const badgePrefixEmoji = compareString(badgeForm.badgePrefixEmoji).trim();
   const badgeName = compareString(badgeForm.badgeName).trim();
   const badgeSuffixEmoji = compareString(badgeForm.badgeSuffixEmoji).trim();
+  const badgeRequired = currentUser?.badgeRequired !== false;
 
   useEffect(() => {
+    if (!badgeRequired) {
+      setBadgeBacksideQrSrc(null);
+      return;
+    }
     let active = true;
     const qrSourceName = buildBadgeCampaignSourceName(currentUser?.firstName, currentUser?.id ?? loggedUserId);
 
@@ -1180,7 +1185,7 @@ const MyAccount = () => {
     return () => {
       active = false;
     };
-  }, [badgeCampaignBaseUrl, currentUser?.firstName, currentUser?.id, loggedUserId]);
+  }, [badgeRequired, badgeCampaignBaseUrl, currentUser?.firstName, currentUser?.id, loggedUserId]);
 
   if (!loggedUserId) {
     return (
@@ -1708,7 +1713,7 @@ const MyAccount = () => {
             </Stack>
           </Card>
 
-          <Card withBorder radius="lg" shadow="sm">
+          {badgeRequired && <Card withBorder radius="lg" shadow="sm">
             <Stack gap="md">
               <Group justify="space-between" align="flex-start">
                 <div>
@@ -1831,7 +1836,7 @@ const MyAccount = () => {
                 </Stack>
               </SimpleGrid>
             </Stack>
-          </Card>
+          </Card>}
 
           <Card withBorder radius="lg" shadow="sm">
             <Stack gap="md">

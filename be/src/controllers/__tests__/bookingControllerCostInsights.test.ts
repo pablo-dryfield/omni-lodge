@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+jest.mock('../../config/database.js', () => ({ __esModule: true, default: { transaction: jest.fn() } }));
 
 jest.mock('../../models/Booking.js', () => ({
   __esModule: true,

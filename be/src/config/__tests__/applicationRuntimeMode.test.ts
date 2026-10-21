@@ -44,6 +44,13 @@ describe('application runtime mode', () => {
     });
   });
 
+  it('can disable development background jobs without changing account/API behavior', () => {
+    expect(buildApplicationRuntimeModePolicy({
+      value: 'primary', nodeEnv: 'development', skipDbSync: true,
+      alterSchema: false, seedAccessControl: false, backgroundJobsEnabled: false,
+    })).toEqual({ mode: 'primary', allowStartupMutations: true, allowBackgroundJobs: false });
+  });
+
   it('disables startup mutation and background jobs for a safe dry-run candidate', () => {
     expect(resolveApplicationRuntimeMode('dry-run')).toBe('dry-run');
     expect(buildApplicationRuntimeModePolicy(safeDryRunPolicy())).toEqual({

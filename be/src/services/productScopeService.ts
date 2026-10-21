@@ -14,11 +14,13 @@ export async function getAllowedProductTypeIds(
   req: AuthenticatedRequest,
   transaction?: Transaction,
 ): Promise<ProductTypeScope> {
+  if (!transaction && req.productTypeScope !== undefined) return req.productTypeScope;
   const userTypeId = req.authContext?.userTypeId;
   if (!userTypeId) return null;
   const rows = await UserTypeProductType.findAll({ where: { userTypeId }, attributes: ['productTypeId'], transaction });
-  if (rows.length === 0) return null;
-  return [...new Set(rows.map((row) => row.productTypeId))];
+  const scope = rows.length === 0 ? null : [...new Set(rows.map((row) => row.productTypeId))];
+  if (!transaction) req.productTypeScope = scope;
+  return scope;
 }
 
 export const scopeProductWhere = (allowed: ProductTypeScope, base: WhereOptions = {}): WhereOptions =>

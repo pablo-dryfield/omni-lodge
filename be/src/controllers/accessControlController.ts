@@ -5,6 +5,9 @@ import Module from "../models/Module.js";
 import Action from "../models/Action.js";
 import RolePagePermission from "../models/RolePagePermission.js";
 import RoleModulePermission from "../models/RoleModulePermission.js";
+import { getAllowedProductTypeIds } from '../services/productScopeService.js';
+import { PRODUCT_SCOPED_PAGES, PRODUCT_SCOPED_MODULES } from '../services/productScopedApiPolicy.js';
+import { isFoodTourOwner } from '../services/foodTourRolePolicy.js';
 
 const ACCESS_CONTROL_CACHE_TTL_MS = Number(process.env.ACCESS_CONTROL_CACHE_TTL_MS ?? 10 * 60_000);
 type AccessControlPayload = {
@@ -130,6 +133,11 @@ const loadAccessControlPayload = async (userTypeId: number): Promise<AccessContr
 };
 
 export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const productTypeIds = await getAllowedProductTypeIds(req);
+  const scopedPayload = (payload: AccessControlPayload) => productTypeIds === null ? payload : {
+    pages: payload.pages.filter(page => PRODUCT_SCOPED_PAGES.has(page)),
+    modules: Object.fromEntries(Object.entries(payload.modules).filter(([module]) => PRODUCT_SCOPED_MODULES.has(module))),
+  };
   const userTypeId = req.authContext?.userTypeId;
   const userTypeSlug = normalizeRole(req.authContext?.userTypeSlug ?? req.authContext?.roleSlug ?? null);
   const shiftRoleSlugs = Array.from(
@@ -144,23 +152,35 @@ export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Respo
   const canUseManagerMode = hasManagerShiftRole || hasPrivilegedUserType;
 
   const openBarModeAccess = {
-    canUseBartenderMode,
-    canUseManagerMode,
+    canUseBartenderMode: productTypeIds === null && canUseBartenderMode,
+    canUseManagerMode: productTypeIds === null && canUseManagerMode,
     shiftRoleSlugs,
     userTypeSlug,
   };
 
   if (!userTypeId) {
-    res.status(200).json({ pages: [], modules: {}, openBarModeAccess });
+    res.status(200).json({ pages: [], modules: {}, openBarModeAccess, productTypeIds });
     return;
   }
 
+  if (productTypeIds !== null) {
+    // Delegated access reflects revocations immediately, not a 10-minute menu cache.
+    res.setHeader('Cache-Control', 'private, no-store');
+    const payload = scopedPayload(await loadAccessControlPayload(userTypeId));
+    const directoryActions = payload.modules['user-directory'] ?? [];
+    if ((directoryActions.includes('create') || directoryActions.includes('update')) && directoryActions.includes('view') &&
+      userTypeSlug === 'food-tour-owner' && await isFoodTourOwner(req, productTypeIds)) {
+      payload.pages.push('settings-user-types');
+    }
+    res.status(200).json({ ...payload, openBarModeAccess, productTypeIds });
+    return;
+  }
   const cached = getCachedAccessControlPayload(userTypeId);
   if (cached) {
     res.status(200).json({
-      pages: cached.pages,
-      modules: cached.modules,
+      ...scopedPayload(cached),
       openBarModeAccess,
+      productTypeIds,
     });
     return;
   }
@@ -181,8 +201,8 @@ export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Respo
   const payload = await pending;
 
   res.status(200).json({
-    pages: payload.pages,
-    modules: payload.modules,
+    ...scopedPayload(payload),
     openBarModeAccess,
+    productTypeIds,
   });
 };

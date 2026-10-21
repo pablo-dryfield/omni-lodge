@@ -9,4 +9,6 @@ export type ModalContentProps<T extends MRT_RowData> = {
     title: string;
     action: string;
     custom: boolean;
+    saveError?: string | null;
+    saving?: boolean;
 }
