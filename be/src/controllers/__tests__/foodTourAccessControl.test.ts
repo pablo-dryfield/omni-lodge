@@ -11,6 +11,7 @@ import RolePagePermission from '../../models/RolePagePermission';
 import { getAllowedProductTypeIds } from '../../services/productScopeService';
 import { isFoodTourOwner } from '../../services/foodTourRolePolicy';
 import { getCurrentUserAccess } from '../accessControlController';
+import { PAGE_GRANTS, MODULE_GRANTS } from '../../migrations/202610210005-food-tour-owner-access-repair';
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -48,4 +49,29 @@ it('keeps metadata editing available to an owner with update/view but not create
   const payload = await load('food-tour-owner');
   expect(payload.pages).toContain('settings-user-types');
   expect(payload.modules['user-directory']).toEqual(['view', 'update']);
+});
+it('exposes the restored owner workspace and delegated role screen without company-wide permissions', async () => {
+  const modules = [...new Set(MODULE_GRANTS.map(grant => grant.module_slug))]
+    .map((slug, index) => ({ id: index + 1, slug }));
+  const actions = ['view', 'create', 'update', 'delete'].map((key, index) => ({ id: index + 101, key }));
+  const permissions = MODULE_GRANTS.map(grant => ({
+    moduleId: modules.find(module => module.slug === grant.module_slug)!.id,
+    actionId: actions.find(action => action.key === grant.action_key)!.id,
+    allowed: true, status: true,
+  }));
+  (Page.findAll as jest.Mock).mockResolvedValue([...PAGE_GRANTS, 'settings-permissions', 'settings-control-panel']
+    .map((slug, index) => ({ id: index + 1, slug })));
+  (RolePagePermission.findAll as jest.Mock).mockResolvedValue([...PAGE_GRANTS, 'settings-permissions', 'settings-control-panel']
+    .map((_, index) => ({ pageId: index + 1, status: true, canView: true })));
+  (Common.findAll as jest.Mock).mockImplementation(async options => options?.where
+    ? [...permissions, { moduleId: 999, actionId: 101, allowed: true, status: true }]
+    : [...modules, ...actions, { id: 999, slug: 'settings-user-types-admin' }]);
+  const payload = await load('food-tour-owner');
+  expect(payload.pages.sort()).toEqual([...PAGE_GRANTS, 'settings-user-types'].sort());
+  expect(payload.modules['booking-management']).toEqual(['view', 'create', 'update']);
+  expect(payload.modules['finance-reports']).toEqual(['view']);
+  expect(payload.modules['user-directory']).toEqual(['view', 'create', 'update']);
+  expect(Object.keys(payload.modules).sort()).toEqual(modules.map(module => module.slug).sort());
+  expect(payload.productTypeIds).toEqual([3]);
+  expect(payload.openBarModeAccess).toMatchObject({ canUseBartenderMode: false, canUseManagerMode: false });
 });
