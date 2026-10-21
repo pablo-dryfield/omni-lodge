@@ -39,7 +39,7 @@ import { assertCleaningEvidencePreserved, assertCleaningTaskLogMutable, ensureCl
   listMyCleaningSubmissions, prepareCleaningTaskLogDeletion, reviewCleaningSubmissionPhoto, uploadCleaningSubmissionPhoto,
   waiveCanceledCleaningTask } from '../cleaningSubmissionService.js';
 
-const tx = { LOCK: { UPDATE: 'UPDATE' } };
+const tx = { LOCK: { UPDATE: 'UPDATE', SHARE: 'SHARE' } };
 const userModel = Object.assign(UserStub, { findAll: jest.fn(), findByPk: jest.fn() });
 const volunteer = { actorId: 7, roleSlug: 'guide' };
 const manager = { actorId: 9, roleSlug: 'assistant-manager' };
@@ -115,7 +115,8 @@ describe('assignment-scoped cleaning workflow', () => {
     (VolunteerShiftAttendance.destroy as jest.Mock).mockResolvedValue(0);
     userModel.findAll.mockImplementation(async (options) => options?.include
       ? [{ id: 99, role: { slug: 'owner' } }] : [{ id: 9, firstName: 'Manager', lastName: 'Surname' }]);
-    userModel.findByPk.mockImplementation(async (id) => ({ id, status: true, approved: true, role: { slug: id === 99 ? 'owner' : 'assistant-manager' } }));
+    userModel.findByPk.mockImplementation(async (id) => ({ id, status: true, approved: true,
+      role: { slug: id === 99 ? 'owner' : id === 7 ? 'guide' : 'assistant-manager', status: true } }));
     (normalizeCleaningPhoto as jest.Mock).mockResolvedValue({ data: Buffer.from('normalized'), mimeType: 'image/jpeg', fileName: 'cleaning-photo.jpg', width: 100, height: 100, sha256: 'a'.repeat(64) });
     (storeAssistantManagerTaskEvidenceImage as jest.Mock).mockImplementation(async () => ({ storagePath: `drive:file-${nextPhotoId}`, driveFileId: `file-${nextPhotoId}`, driveWebViewLink: null, mimeType: 'image/jpeg', fileSize: 10 }));
     (deleteAssistantManagerTaskEvidenceImage as jest.Mock).mockResolvedValue(undefined);
@@ -259,7 +260,7 @@ describe('assignment-scoped cleaning workflow', () => {
     await expect(review(sub, 'approved', { actorId: 7, roleSlug: 'owner' })).rejects.toMatchObject({ status: 403 });
     expect(photos[0].status).toBe('pending');
   });
-  it('escalates a task assignee cleaning their own shift to management review without allowing self-review', async () => {
+  it('escalates an ordinary task assignee cleaning their own shift without allowing self-review', async () => {
     log.userId = 7;
     const sub = await materialize(); await upload(sub);
     expect(actions).toEqual([]);
@@ -273,6 +274,81 @@ describe('assignment-scoped cleaning workflow', () => {
     expect(result.taskCompleted).toBe(true);
     expect(photos[0]).toMatchObject({ status: 'approved', reviewedBy: owner.actorId });
     expect(log.status).toBe('completed');
+  });
+  it('lets the assigned assistant manager review their own photo, complete the task and audit the exception', async () => {
+    rows[0] = assignment(11, manager.actorId, 7);
+    const sub = await materialize(); await upload(sub, manager);
+    expect(sub.reviewerUserIds).toEqual([manager.actorId]);
+    expect(actions[0]).toMatchObject({ targetUserIds: [manager.actorId], status: true });
+    const queue = await listMyCleaningSubmissions(manager);
+    expect(queue.submissions.map((item) => item.id)).toContain(sub.id);
+    expect(queue.reviewSubmissions).toEqual([expect.objectContaining({ id: sub.id, canReview: true, reviewerMissing: false })]);
+    expect(await getCleaningReviewActionPayload(actions[0].id, sub.id, manager.actorId)).toMatchObject({ pendingPhotos: 1 });
+    const result = await review(sub);
+    expect(result.taskCompleted).toBe(true); expect(log.status).toBe('completed');
+    expect(photos[0]).toMatchObject({ reviewedBy: manager.actorId, selfReviewAuthorized: true, status: 'approved' });
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ action: 'cleaning.photo_reviewed',
+      actorId: manager.actorId, metaJson: expect.objectContaining({ selfReview: true, reviewAuthority: 'assigned_assistant_manager' }) }), { transaction: tx });
+    expect(userModel.findByPk).toHaveBeenCalledWith(manager.actorId, expect.objectContaining({ transaction: tx, lock: 'SHARE',
+      include: [expect.objectContaining({ as: 'role', required: true })] }));
+  });
+  it('repairs an already escalated pending self-review on refresh without re-uploading or changing the photo', async () => {
+    rows[0] = assignment(11, manager.actorId, 7);
+    const sub = await materialize(); await upload(sub, manager);
+    const savedPhoto = photos[0]; const revision = sub.revision;
+    sub.reviewerUserIds = []; sub.status = 'escalated'; actions = [];
+    const queue = await listMyCleaningSubmissions(manager);
+    expect(queue.reviewSubmissions).toEqual([expect.objectContaining({ id: sub.id, canReview: true, reviewerMissing: false })]);
+    expect(sub).toMatchObject({ status: 'awaiting_review', reviewerUserIds: [manager.actorId], revision: revision + 1 });
+    expect(photos).toEqual([savedPhoto]); expect(savedPhoto.update).not.toHaveBeenCalled();
+    await listMyCleaningSubmissions(manager);
+    expect(sub.revision).toBe(revision + 1);
+  });
+  it('supports an audited self-review retake and preserves the rejected original photo', async () => {
+    rows[0] = assignment(11, manager.actorId, 7);
+    const sub = await materialize(); await upload(sub, manager);
+    const original = photos[0];
+    expect((await review(sub, 'rejected', manager, { reason: 'Clean the sink again' })).taskCompleted).toBe(false);
+    expect(original).toMatchObject({ status: 'rejected', selfReviewAuthorized: true, rejectionReason: 'Clean the sink again' });
+    await upload(sub, manager); await review(sub);
+    expect(log.status).toBe('completed'); expect(photos).toHaveLength(2);
+    expect(original.status).toBe('rejected'); expect(photos[1].selfReviewAuthorized).toBe(true);
+  });
+  it.each([
+    ['ordinary user', { status: true, approved: true, role: { slug: 'guide', status: true } }],
+    ['global manager', { status: true, approved: true, role: { slug: 'manager', status: true } }],
+    ['disabled user', { status: false, approved: true, role: { slug: 'assistant-manager', status: true } }],
+    ['unapproved user', { status: true, approved: false, role: { slug: 'assistant-manager', status: true } }],
+    ['disabled role', { status: true, approved: true, role: { slug: 'assistant-manager', status: false } }],
+  ])('denies self-review for a %s even with an assistant-manager actor claim', async (_label, savedUser) => {
+    rows[0] = assignment(11, manager.actorId, 7);
+    const sub = await materialize(); await upload(sub, manager);
+    userModel.findByPk.mockResolvedValue({ id: manager.actorId, ...savedUser });
+    await expect(review(sub)).rejects.toMatchObject({ status: 403 });
+    expect(photos[0].status).toBe('pending'); expect(photos[0].selfReviewAuthorized).not.toBe(true);
+  });
+  it('removes self-review authority as soon as the task is assigned to someone else', async () => {
+    rows[0] = assignment(11, manager.actorId, 7);
+    const sub = await materialize(); await upload(sub, manager);
+    log.userId = 10;
+    await expect(review(sub)).rejects.toMatchObject({ status: 403 });
+    expect(photos[0].status).toBe('pending');
+  });
+  it('rechecks current self-review eligibility immediately before updating the photo', async () => {
+    rows[0] = assignment(11, manager.actorId, 7);
+    const sub = await materialize(); await upload(sub, manager);
+    userModel.findByPk.mockReset()
+      .mockResolvedValueOnce({ id: manager.actorId, status: true, approved: true, role: { slug: 'assistant-manager', status: true } })
+      .mockResolvedValueOnce({ id: manager.actorId, status: true, approved: true, role: { slug: 'assistant-manager', status: true } })
+      .mockResolvedValue({ id: manager.actorId, status: true, approved: true, role: { slug: 'guide', status: true } });
+    await expect(review(sub)).rejects.toMatchObject({ status: 403 });
+    expect(photos[0].update).not.toHaveBeenCalled();
+  });
+  it('does not accept a client-supplied self-review authorization flag', async () => {
+    const sub = await materialize(); await upload(sub);
+    await expect(review(sub, 'approved', manager, { selfReviewAuthorized: true })).rejects.toMatchObject({ status: 400 });
+    await review(sub);
+    expect(photos[0]).toMatchObject({ selfReviewAuthorized: false, reviewedBy: manager.actorId });
   });
   it('does not let a global manager bypass a live scheduled reviewer', async () => {
     const sub = await materialize(); await upload(sub);

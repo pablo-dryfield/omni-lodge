@@ -21,6 +21,7 @@ export default class CleaningPhotoVersion extends Model {
   @ForeignKey(() => User) @AllowNull(false) @Column({ field: 'uploaded_by', type: DataType.INTEGER }) declare uploadedBy: number;
   @AllowNull(false) @Column({ field: 'uploaded_at', type: DataType.DATE }) declare uploadedAt: Date;
   @ForeignKey(() => User) @AllowNull(true) @Column({ field: 'reviewed_by', type: DataType.INTEGER }) declare reviewedBy: number | null;
+  @AllowNull(false) @Default(false) @Column({ field: 'self_review_authorized', type: DataType.BOOLEAN }) declare selfReviewAuthorized: boolean;
   @AllowNull(true) @Column({ field: 'reviewed_at', type: DataType.DATE }) declare reviewedAt: Date | null;
   @AllowNull(true) @Column({ field: 'rejection_reason', type: DataType.TEXT }) declare rejectionReason: string | null;
   declare createdAt: Date;
