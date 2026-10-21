@@ -23,6 +23,15 @@ export function productScopedApiRoute(method: string, path: string): ScopedApiRo
     return { resource: 'email-templates', module: 'booking-management', passthrough: true,
       action: read ? 'view' : method === 'POST' ? 'create' : 'update' };
   }
+  // Self-service onboarding is not company administration. The controller
+  // checks the action's type, active window and authenticated-user audience.
+  const profileAction = method === 'POST'
+    ? /^\/api\/required-actions\/actions\/([1-9]\d*)\/(?:profile-fields|prompted)$/.exec(path)
+    : null;
+  if (profileAction) {
+    const id = Number(profileAction[1]);
+    return Number.isSafeInteger(id) ? { resource: 'profile-requirement', id, passthrough: true } : null;
+  }
   if (read && path === '/api/reports/home-preferences') return { resource: 'home' };
   if (read && ['/api/session', '/api/session/profile-photo', '/api/accessControl/me',
     '/api/required-actions/me', '/api/notifications', '/api/currencies/options'].includes(path)) {

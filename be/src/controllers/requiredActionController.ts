@@ -188,12 +188,18 @@ const getProfileFieldKeys = (action: RequiredAction): UserFieldKey[] => {
   return fields.filter(isUserFieldKey);
 };
 
-const actionTargetsUser = (action: RequiredAction, user: User, shiftRoleIds: number[]): boolean => {
+type RequiredActionAudience = {
+  id: number;
+  userTypeId: number | null;
+  staffProfile?: { staffType?: string | null } | null;
+};
+
+const actionTargetsUser = (action: RequiredAction, user: RequiredActionAudience, shiftRoleIds: number[]): boolean => {
   const targetUserIds = normalizeNumberArray(action.targetUserIds);
   const targetUserTypeIds = normalizeNumberArray(action.targetUserTypeIds);
   const targetShiftRoleIds = normalizeNumberArray(action.targetShiftRoleIds);
   const targetStaffProfileTypes = normalizeStringArray(action.targetStaffProfileTypes);
-  const staffProfile = (user as User & { staffProfile?: StaffProfile | null }).staffProfile ?? null;
+  const staffProfile = user.staffProfile ?? null;
 
   if (targetUserIds?.length && !targetUserIds.includes(user.id)) {
     return false;
@@ -208,6 +214,22 @@ const actionTargetsUser = (action: RequiredAction, user: User, shiftRoleIds: num
     return false;
   }
   return true;
+};
+
+// These two personal routes are the only required-action writes allowed past
+// the product boundary. Never use submitted user IDs/roles as authorization.
+const scopedProfileActionTargetsActor = (action: RequiredAction, req: AuthenticatedRequest): boolean => {
+  if (req.productTypeScope == null) return true; // Preserve company-wide flows.
+  const actor = req.authContext;
+  const now = Date.now();
+  return Boolean(actor && action.type === 'profile_fields' && action.status
+    && (!action.startsAt || action.startsAt.getTime() <= now)
+    && (!action.expiresAt || action.expiresAt.getTime() > now)
+    && actionTargetsUser(action, {
+      id: actor.id,
+      userTypeId: actor.userTypeId,
+      staffProfile: { staffType: actor.staffType },
+    }, actor.shiftRoleIds ?? []));
 };
 
 const matchesAudience = (targetUserTypeIds: unknown, userTypeId: number | null | undefined): boolean => {
@@ -776,6 +798,10 @@ export const markRequiredActionPrompted = async (req: Request, res: Response): P
       res.status(404).json([{ message: 'Required action not found' }]);
       return;
     }
+    if (!scopedProfileActionTargetsActor(action, req as AuthenticatedRequest)) {
+      res.status(403).json([{ message: 'This profile requirement is not available to your account.' }]);
+      return;
+    }
 
     const now = new Date();
     const [existing, created] = await RequiredActionCompletion.findOrCreate({
@@ -821,12 +847,16 @@ export const completeProfileFieldsAction = async (req: Request, res: Response): 
   try {
     const userId = getActorId(req as AuthenticatedRequest);
     const action = await RequiredAction.findByPk(req.params.id);
-    const user = await User.findByPk(userId);
     const profilePhotoFile = req.file;
     if (!action || !action.status || action.type !== 'profile_fields') {
       res.status(404).json([{ message: 'Profile field request not found' }]);
       return;
     }
+    if (!scopedProfileActionTargetsActor(action, req as AuthenticatedRequest)) {
+      res.status(403).json([{ message: 'This profile requirement is not available to your account.' }]);
+      return;
+    }
+    const user = await User.findByPk(userId);
     if (!user) {
       res.status(404).json([{ message: 'User not found' }]);
       return;
