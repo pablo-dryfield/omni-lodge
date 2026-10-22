@@ -51,6 +51,12 @@ import {
   cleanProductStorefrontConfig,
 } from "../storefront/StorefrontRulesEditors";
 import ProductMediaEditor from "./ProductMediaEditor";
+import AdvancedStorefrontJsonEditor from "../storefront/AdvancedStorefrontJsonEditor";
+import {
+  getAdvancedStorefrontConfig,
+  mergeAdvancedStorefrontConfig,
+  parseAdvancedStorefrontJson,
+} from "../storefront/advancedStorefrontConfig";
 
 const DEFAULT_MODULE_SLUG = "product-catalog";
 
@@ -66,6 +72,7 @@ type ProductForm = {
   status: boolean;
   requiresNightReportCostReconciliation: boolean;
   storefrontConfig: Product["storefrontConfig"];
+  advancedStorefrontJson: string;
   imageUrl: string | null;
   images: Product["images"];
 };
@@ -77,6 +84,7 @@ const EMPTY_FORM: ProductForm = {
   status: true,
   requiresNightReportCostReconciliation: false,
   storefrontConfig: {},
+  advancedStorefrontJson: "{}",
   imageUrl: null,
   images: [],
 };
@@ -124,6 +132,14 @@ const ProductList = ({
   const [initialImageUrls, setInitialImageUrls] = useState<string[]>([]);
   const [sessionUploadedUrls, setSessionUploadedUrls] = useState<string[]>([]);
   const [mediaUploading, setMediaUploading] = useState(false);
+  const advancedStorefrontError = useMemo(() => {
+    try {
+      parseAdvancedStorefrontJson(form.advancedStorefrontJson);
+      return null;
+    } catch (error) {
+      return getErrorMessage(error, "Invalid storefront JSON.");
+    }
+  }, [form.advancedStorefrontJson]);
 
   useEffect(() => {
     dispatch(fetchProducts());
@@ -225,6 +241,7 @@ const ProductList = ({
       requiresNightReportCostReconciliation:
         product.requiresNightReportCostReconciliation === true,
       storefrontConfig: product.storefrontConfig ?? {},
+      advancedStorefrontJson: JSON.stringify(getAdvancedStorefrontConfig(product.storefrontConfig ?? {}), null, 2),
       imageUrl: product.imageUrl ?? images[0]?.url ?? null,
       images,
     });
@@ -235,6 +252,10 @@ const ProductList = ({
   };
 
   const handleSubmit = async () => {
+    if (advancedStorefrontError) {
+      setFormError(advancedStorefrontError);
+      return;
+    }
     if (!form.name.trim()) {
       setFormError("Product name is required.");
       return;
@@ -256,7 +277,9 @@ const ProductList = ({
       status: form.status,
       requiresNightReportCostReconciliation:
         form.requiresNightReportCostReconciliation,
-      storefrontConfig: cleanProductStorefrontConfig(form.storefrontConfig),
+      storefrontConfig: cleanProductStorefrontConfig(
+        mergeAdvancedStorefrontConfig(form.storefrontConfig, form.advancedStorefrontJson),
+      ),
       imageUrl: form.imageUrl,
       images: form.images.map((image, index) => ({ ...image, order: index + 1 })),
     };
@@ -594,6 +617,13 @@ const ProductList = ({
               setForm((current) => ({ ...current, storefrontConfig }))
             }
           />
+          <AdvancedStorefrontJsonEditor
+            value={form.advancedStorefrontJson}
+            error={advancedStorefrontError}
+            onChange={(advancedStorefrontJson) =>
+              setForm((current) => ({ ...current, advancedStorefrontJson }))
+            }
+          />
           <ProductMediaEditor
             productId={editingProduct?.id}
             productName={form.name}
@@ -612,7 +642,7 @@ const ProductList = ({
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={closeForm} disabled={submitting || mediaUploading}>Cancel</Button>
-            <Button loading={submitting} disabled={mediaUploading} onClick={handleSubmit}>
+            <Button loading={submitting} disabled={mediaUploading || Boolean(advancedStorefrontError)} onClick={handleSubmit}>
               {editingProduct ? "Save changes" : "Create product"}
             </Button>
           </Group>
