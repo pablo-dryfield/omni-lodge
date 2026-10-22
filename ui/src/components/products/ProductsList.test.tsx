@@ -1,6 +1,5 @@
 import { MantineProvider } from "@mantine/core";
-import { act } from "react";
-import { configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ProductsList from "./ProductsList";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { createProduct, updateProduct } from "../../actions/productActions";
