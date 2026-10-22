@@ -18,8 +18,11 @@ import { createProduct, updateProduct } from '../productController';
 
 const response = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() });
 const config = {
-  defaultStartTime: '21:00', content: { summary: 'Experience' },
-  duration: '3 hours', inclusions: ['Guide'],
+  defaultStartTime: '21:00', content: {
+    summary: 'Experience', description: 'Long description',
+    card: { subtitle: 'Food tour', description: 'Short description', stats: [{ icon: 'plate', count: 5, label: 'Tastings' }] },
+  },
+  durationMinutes: 180, inclusions: ['Guide'],
   faqs: [{ question: 'Vegetarian?', answer: 'Yes', available: true }],
   details: { optional: null, empty: {}, list: [], quantity: 2.5 },
 };

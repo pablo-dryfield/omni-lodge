@@ -26,9 +26,10 @@ const AdvancedStorefrontJsonEditor = ({ value, onChange, error }: Props) => (
             Never enter passwords, API keys, or private customer information.
           </Alert>
           <Text size="sm" c="dimmed">
-            Add custom fields such as duration, inclusions, or faqs. They are saved directly in
-            storefrontConfig, without an extra wrapper. Booking rules and product information
-            stay controlled by the form above. Your storefront must support a field to display it.
+            Add custom fields such as durationMinutes, inclusions, or faqs, and nested content
+            such as content.card. They are saved directly in storefrontConfig, without an extra
+            wrapper. Standard booking rules and product information stay controlled by the form
+            above. Your storefront must support a field to display it.
           </Text>
           <Textarea
             label="Additional storefront fields (JSON)"

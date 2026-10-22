@@ -110,14 +110,20 @@ describe('public storefront custom JSON', () => {
     [48, 'Food Tour', 3, 'food-tour-48'],
   ])('exposes custom fields for product %s in both catalog and product responses', async (id, name, typeId, slug) => {
     const custom = {
-      duration: '3 hours', inclusions: ['Local guide'],
+      durationMinutes: 180, inclusions: ['Local guide'],
       faqs: [{ question: 'Vegetarian?', answer: 'Yes' }],
       details: { enabled: true, optional: null, quantity: 2.5, empty: {}, list: [] },
       price: { amount: 1, currency: 'EUR' },
     };
     const storefrontConfig = {
       ...custom,
-      defaultStartTime: '21:00', content: { summary: 'Existing content' },
+      defaultStartTime: '21:00', content: {
+        summary: 'Existing content', description: 'Full product description',
+        card: {
+          subtitle: 'Local food & drinks', description: 'Short card description',
+          stats: [{ icon: 'plate', count: 10, label: 'Food tastings' }],
+        },
+      },
       availability: { blockedDates: [{ date: '2026-12-31', reason: 'Closed' }] },
     };
     const product = {
@@ -138,6 +144,9 @@ describe('public storefront custom JSON', () => {
     for (const item of [catalogProduct, detailProduct]) {
       expect(item.config).toMatchObject(storefrontConfig);
       expect(item.config).not.toHaveProperty('extra');
+      expect(item.config.durationMinutes).toBe(180);
+      expect(item.config.content.card).toEqual(storefrontConfig.content.card);
+      expect(item.config.content.description).toBe('Full product description');
       // Custom metadata does not change the real commerce price.
       expect(item.price).toEqual({ amount: 120, currency: 'PLN' });
       expect(item.productType.id).toBe(typeId);

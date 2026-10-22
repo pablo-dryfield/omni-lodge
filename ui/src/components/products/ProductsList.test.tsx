@@ -1,5 +1,5 @@
 import { MantineProvider } from "@mantine/core";
-import { act, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ProductsList from "./ProductsList";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { createProduct, updateProduct } from "../../actions/productActions";
@@ -18,7 +18,10 @@ jest.mock("./ProductMediaEditor", () => () => <div>Product media</div>);
 jest.mock("../storefront/StorefrontRulesEditors", () => ({
   cleanProductStorefrontConfig: (config: StorefrontProductConfig) => config,
   ProductStorefrontRulesEditor: ({ value, onChange }: { value: StorefrontProductConfig; onChange: (config: StorefrontProductConfig) => void }) => (
-    <button onClick={() => onChange({ ...value, defaultStartTime: "20:00" })}>Set normal start time</button>
+    <>
+      <button onClick={() => onChange({ ...value, defaultStartTime: "20:00" })}>Set normal start time</button>
+      <button onClick={() => onChange({ ...value, content: { ...value.content, description: "Updated long description" } })}>Update normal description</button>
+    </>
   ),
 }));
 
@@ -34,6 +37,7 @@ const originalConfig = {
   content: { summary: "Original summary" },
   duration: "3 hours", faqs: [{ question: "Vegetarian?", answer: "Yes" }],
 };
+let storedConfig: StorefrontProductConfig = originalConfig;
 
 jest.setTimeout(20_000);
 beforeAll(() => configure({ asyncUtilTimeout: 5000 }));
@@ -44,11 +48,12 @@ const finishMockedRequests = async () => { await act(async () => { await Promise
 
 beforeEach(() => {
   jest.clearAllMocks();
+  storedConfig = originalConfig;
   dispatchMock.mockReturnValue({ unwrap: () => Promise.resolve({}) });
   (useAppDispatch as jest.Mock).mockReturnValue(dispatchMock);
   (useAppSelector as jest.Mock).mockImplementation((select) => select({
     products: [{ loading: false, error: null, data: [{ data: [{
-      id: 48, name: "Food Tour", productTypeId: 3, price: 200, storefrontConfig: originalConfig,
+      id: 48, name: "Food Tour", productTypeId: 3, price: 200, storefrontConfig: storedConfig,
       images: [], imageUrl: null,
     }] }] }],
     productTypes: [{ data: [{ data: [{ id: 3, name: "Food Tour" }] }] }],
@@ -93,7 +98,7 @@ it("loads custom fields, formats them and saves alongside the latest normal sett
   await waitFor(() => expect(screen.queryByLabelText(/^Product name/)).not.toBeInTheDocument());
 });
 
-it.each(['{"duration":}', '[]', '{"phoneRequired":false}'])("blocks saving invalid or protected JSON %s and allows correction", async (text) => {
+it.each(['{"duration":}', '[]', '{"phoneRequired":false}', '{"content":{"description":"Blocked"}}', '{"content":null}'])("blocks saving invalid or protected JSON %s and allows correction", async (text) => {
   const input = await openEdit();
   fireEvent.change(input, { target: { value: text } });
   expect(input).toHaveAttribute("aria-invalid", "true");
@@ -131,13 +136,46 @@ it("creates a new product with direct custom fields", async () => {
   fireEvent.click(await screen.findByRole("option", { name: "Food Tour" }));
   fireEvent.click(screen.getByRole("button", { name: /Advanced storefront JSON/ }));
   fireEvent.change(screen.getByLabelText("Additional storefront fields (JSON)"), {
-    target: { value: '{"duration":"2 hours","details":{"available":true}}' },
+    target: { value: '{"durationMinutes":120,"content":{"card":{"subtitle":"Local flavours","description":"Short card copy","stats":[{"icon":"plate","count":5,"label":"Tastings"}]}}}' },
   });
   fireEvent.click(screen.getByRole("button", { name: "Create product" }));
   await finishMockedRequests();
   await waitFor(() => expect(createProduct).toHaveBeenCalledWith(expect.objectContaining({
     name: "New tour", productTypeId: 3,
-    storefrontConfig: { duration: "2 hours", details: { available: true } },
+    storefrontConfig: { durationMinutes: 120, content: { card: {
+      subtitle: "Local flavours", description: "Short card copy",
+      stats: [{ icon: "plate", count: 5, label: "Tastings" }],
+    } } },
   })));
+  await waitFor(() => expect(screen.queryByLabelText(/^Product name/)).not.toBeInTheDocument());
+});
+
+it("edits and reloads card content while preserving normal long descriptions and booking rules", async () => {
+  const card = { subtitle: "Food tour", description: "Short description", stats: [{ icon: "plate", count: 10, label: "Tastings" }] };
+  storedConfig = { ...originalConfig, durationMinutes: 180, content: { ...originalConfig.content, description: "Long description", card } };
+  const input = await openEdit();
+  const initialAdvanced = JSON.parse((input as HTMLTextAreaElement).value);
+  expect(initialAdvanced.content).toEqual({ card });
+  expect(initialAdvanced.durationMinutes).toBe(180);
+  const updatedCard = { ...card, subtitle: "New subtitle", description: "New short description" };
+  const advanced = { ...initialAdvanced, durationMinutes: 150, content: { card: updatedCard } };
+  fireEvent.change(input, { target: { value: JSON.stringify(advanced) } });
+  fireEvent.click(screen.getByRole("button", { name: "Format JSON" }));
+  expect(input).toHaveValue(JSON.stringify(advanced, null, 2));
+  fireEvent.click(screen.getByRole("button", { name: "Update normal description" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await finishMockedRequests();
+  await waitFor(() => expect(screen.queryByLabelText(/^Product name/)).not.toBeInTheDocument());
+  storedConfig = (updateProduct as unknown as jest.Mock).mock.calls[0][0].productData.storefrontConfig;
+  expect(storedConfig).toEqual({
+    ...originalConfig, durationMinutes: 150,
+    content: { summary: "Original summary", description: "Updated long description", card: updatedCard },
+  });
+  cleanup();
+  const reloadedInput = await openEdit();
+  expect(JSON.parse((reloadedInput as HTMLTextAreaElement).value)).toEqual(advanced);
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await finishMockedRequests();
+  expect(updateProduct).toHaveBeenLastCalledWith(expect.objectContaining({ productData: expect.objectContaining({ storefrontConfig: storedConfig }) }));
   await waitFor(() => expect(screen.queryByLabelText(/^Product name/)).not.toBeInTheDocument());
 });

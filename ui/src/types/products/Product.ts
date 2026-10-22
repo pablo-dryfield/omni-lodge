@@ -11,6 +11,8 @@ export type StorefrontMeetingPoint = {
 };
 
 export type StorefrontProductContent = {
+    /** Additional public content, such as card copy and icon statistics. */
+    [key: string]: unknown;
     summary?: string;
     description?: string;
     highlights?: string[];
