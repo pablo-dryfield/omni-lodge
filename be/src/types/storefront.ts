@@ -47,6 +47,8 @@ export type StorefrontAvailabilityConfig = {
 };
 
 export type StorefrontProductConfig = {
+  /** Additional public JSON fields consumed by storefronts. */
+  [key: string]: unknown;
   participantMode?: StorefrontParticipantMode;
   minParticipants?: number;
   maxParticipants?: number;

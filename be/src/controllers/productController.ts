@@ -60,8 +60,16 @@ function normalizeProductPayload(
   if ('storefrontConfig' in normalized) {
     const config = normalized.storefrontConfig;
     if (config === null || Array.isArray(config) || typeof config !== 'object') {
-      throw new Error('storefrontConfig must be a JSON object');
+      throw new HttpError(400, 'storefrontConfig must be a JSON object');
     }
+    // Reject JSON numbers that JavaScript parsed as Infinity (e.g. 1e400),
+    // rather than letting JSONB reject them or silently changing them to null.
+    JSON.stringify(config, (_key, value: unknown) => {
+      if (typeof value === 'number' && !Number.isFinite(value)) {
+        throw new HttpError(400, 'storefrontConfig numbers must be finite');
+      }
+      return value;
+    });
     const storefrontConfig = { ...(config as Record<string, unknown>) };
     if ('sectionOrder' in storefrontConfig) {
       const sectionOrder = normalizeStorefrontSectionOrder(storefrontConfig.sectionOrder);
