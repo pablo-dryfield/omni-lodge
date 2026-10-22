@@ -1,16 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  Badge,
-  Button,
-  Group,
-  Pagination,
-  Paper,
-  Select,
-  Stack,
-  Table,
-  Text,
-} from "@mantine/core";
+import { useMemo } from "react";
+import { Badge, Button, Group, Paper, Text } from "@mantine/core";
+import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from "mantine-react-table";
+import { bookingTableCalendarDate, sourceReceivedCalendarDate } from "../../utils/revenueBookingTableDate";
 import { BOOKINGS_SUMMARY_TIMEZONE } from "../../utils/bookingsSummaryDate";
+import BookingTableExportControls from "./BookingTableExportControls";
+import { useMediaQuery } from "@mantine/hooks";
 
 export type RevenueBookingRow = {
   bookingId: string | number;
@@ -98,246 +92,142 @@ export const sortRevenueBookingRowsBySourceReceivedAt = (
   })
   .map(({ row }) => row);
 
+
+const TEXT_FILTER_MODES = ["contains", "equals", "notEquals", "startsWith", "endsWith", "empty", "notEmpty"];
+const COMPARISON_FILTER_MODES = ["equals", "notEquals", "greaterThan", "greaterThanOrEqualTo", "lessThan", "lessThanOrEqualTo", "between", "betweenInclusive", "empty", "notEmpty"];
+const OPTIONAL_COLUMNS = { experienceTime: false, currency: false };
+const BookingTextCell = ({ value, strong = false }: { value: unknown; strong?: boolean }) =>
+  <Text size="sm" fw={strong ? 700 : undefined} ta="center" style={{ maxWidth: "100%", whiteSpace: "normal", overflowWrap: "anywhere" }}>{cleanText(value)}</Text>;
+
 const RevenueBookingsTable = ({ rows }: RevenueBookingsTableProps) => {
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState<number>(PAGE_SIZE_OPTIONS[0]);
-
-  const sortedRows = useMemo(
-    () => sortRevenueBookingRowsBySourceReceivedAt(rows),
-    [rows],
-  );
-  const pageCount = Math.max(1, Math.ceil(sortedRows.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const firstVisibleIndex = (currentPage - 1) * pageSize;
-  const visibleRows = useMemo(
-    () => sortedRows.slice(firstVisibleIndex, firstVisibleIndex + pageSize),
-    [firstVisibleIndex, pageSize, sortedRows],
-  );
-  const lastVisibleIndex = Math.min(firstVisibleIndex + visibleRows.length, sortedRows.length);
-
-  useEffect(() => {
-    setPage((current) => Math.min(current, pageCount));
-  }, [pageCount]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [rows]);
-
-  const handlePageSizeChange = (value: string | null) => {
-    const parsed = Number(value);
-    if (!PAGE_SIZE_OPTIONS.some((option) => option === parsed)) return;
-    setPageSize(parsed);
-    setPage(1);
-  };
-
-  return (
-    <Paper withBorder radius="lg" p={{ base: "sm", sm: "md" }} shadow="sm">
-      <Group justify="space-between" align="center" gap="sm" wrap="wrap" mb="sm">
-        <Group gap="xs" align="center" wrap="nowrap">
-          <Text fw={800} size="lg">
-            Bookings
-          </Text>
-          <Badge variant="light" color="blue" size="lg">
-            {`${rows.length.toLocaleString()} total`}
-          </Badge>
-        </Group>
-      </Group>
-
-      <Table.ScrollContainer minWidth={1260}>
-        <Table
-          aria-label="Bookings revenue table"
-          striped
-          highlightOnHover
-          withColumnBorders
-          verticalSpacing="sm"
-          horizontalSpacing="sm"
-        >
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th
-                scope="col"
-                ta="center"
-                style={{
-                  position: "sticky",
-                  left: 0,
-                  zIndex: 3,
-                  background: "var(--mantine-color-body)",
-                  boxShadow: "2px 0 4px rgba(0, 0, 0, 0.06)",
-                }}
-              >
-                Booking
-              </Table.Th>
-              <Table.Th scope="col" ta="center">Customer</Table.Th>
-              <Table.Th scope="col" ta="center">Platform</Table.Th>
-              <Table.Th scope="col" ta="center">Product</Table.Th>
-              <Table.Th scope="col" ta="center" aria-sort="descending">
-                <span>{`Source Received At (${BOOKINGS_SUMMARY_TIMEZONE})`}</span>{" "}
-                <span aria-hidden="true">↓</span>
-              </Table.Th>
-              <Table.Th scope="col" ta="center">Experience Date</Table.Th>
-              <Table.Th scope="col" ta="center">Guests</Table.Th>
-              <Table.Th scope="col" ta="center">Status</Table.Th>
-              <Table.Th scope="col" ta="center">Payment</Table.Th>
-              <Table.Th scope="col" ta="center">Revenue</Table.Th>
-              <Table.Th
-                scope="col"
-                ta="center"
-                style={{
-                  position: "sticky",
-                  right: 0,
-                  zIndex: 3,
-                  background: "var(--mantine-color-body)",
-                  boxShadow: "-2px 0 4px rgba(0, 0, 0, 0.06)",
-                }}
-              >
-                Action
-              </Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {visibleRows.length === 0 ? (
-              <Table.Tr>
-                <Table.Td colSpan={11} ta="center" py="xl">
-                  <Text c="dimmed" size="sm">No bookings found for the selected filters.</Text>
-                </Table.Td>
-              </Table.Tr>
-            ) : (
-              visibleRows.map((row, index) => {
-                const bookingId = cleanText(row.bookingId);
-                const reference = cleanText(row.reference, bookingId);
-                const customerName = cleanText(row.customerName, "Unknown customer");
-                const detailsLabel = `See details for ${customerName} (${reference}, booking #${bookingId})`;
-
-                return (
-                  <Table.Tr key={`${bookingId}-${reference}-${firstVisibleIndex + index}`}>
-                    <Table.Td
-                      ta="center"
-                      style={{
-                        position: "sticky",
-                        left: 0,
-                        zIndex: 2,
-                        background: "var(--mantine-color-body)",
-                        boxShadow: "2px 0 4px rgba(0, 0, 0, 0.06)",
-                      }}
-                    >
-                      <Stack gap={1} align="center">
-                        <Text size="sm" fw={700} style={{ overflowWrap: "anywhere" }}>
-                          {reference}
-                        </Text>
-                        <Text size="xs" c="dimmed">{`#${bookingId}`}</Text>
-                      </Stack>
-                    </Table.Td>
-                    <Table.Td ta="center">
-                      <Stack gap={1} align="center">
-                        <Text size="sm" fw={700} ta="center" style={{ overflowWrap: "anywhere" }}>
-                          {customerName}
-                        </Text>
-                        {row.customerEmail ? (
-                          <Text size="xs" c="dimmed" ta="center" style={{ overflowWrap: "anywhere" }}>
-                            {row.customerEmail}
-                          </Text>
-                        ) : null}
-                      </Stack>
-                    </Table.Td>
-                    <Table.Td ta="center">{cleanText(row.platform, "Unknown")}</Table.Td>
-                    <Table.Td ta="center">
-                      <Text size="sm" ta="center" style={{ overflowWrap: "anywhere" }}>
-                        {cleanText(row.productName, "Unknown product")}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td ta="center">
-                      <Text size="sm" fw={600} ta="center" style={{ whiteSpace: "nowrap" }}>
-                        {cleanText(row.sourceReceivedAtLabel)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td ta="center">
-                      <Text size="sm" fw={600} ta="center" style={{ whiteSpace: "nowrap" }}>
-                        {formatExperience(row.experienceDate, row.experienceTime)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td ta="center">
-                      {Math.max(0, Number(row.guests) || 0).toLocaleString()}
-                    </Table.Td>
-                    <Table.Td ta="center">
-                      <Badge size="sm" variant="light" color={getStatusColor(row.status)}>
-                        {formatStatus(row.status)}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td ta="center">
-                      <Badge size="sm" variant="light" color={getStatusColor(row.paymentStatus)}>
-                        {formatStatus(row.paymentStatus)}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td ta="center">
-                      <Text size="sm" fw={800} ta="center" style={{ whiteSpace: "nowrap" }}>
-                        {formatMoney(row.revenue, row.currency)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td
-                      ta="center"
-                      style={{
-                        position: "sticky",
-                        right: 0,
-                        zIndex: 2,
-                        background: "var(--mantine-color-body)",
-                        boxShadow: "-2px 0 4px rgba(0, 0, 0, 0.06)",
-                      }}
-                    >
-                      <Button
-                        size="xs"
-                        variant="light"
-                        aria-label={detailsLabel}
-                        onClick={row.onSeeDetails}
-                        style={{ whiteSpace: "nowrap" }}
-                      >
-                        See Details
-                      </Button>
-                    </Table.Td>
-                  </Table.Tr>
-                );
-              })
-            )}
-          </Table.Tbody>
-        </Table>
-      </Table.ScrollContainer>
-
-      {rows.length > 0 ? (
-        <Group justify="space-between" align="center" gap="sm" wrap="wrap" mt="md">
-          <Text size="xs" c="dimmed" ta="center">
-            {`Showing ${firstVisibleIndex + 1}\u2013${lastVisibleIndex} of ${rows.length.toLocaleString()}`}
-          </Text>
-          <Group gap="sm" align="center" justify="center" wrap="wrap">
-            <Group gap={6} align="center" wrap="nowrap">
-              <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>Rows per page</Text>
-              <Select
-                aria-label="Rows per page"
-                value={String(pageSize)}
-                onChange={handlePageSizeChange}
-                data={PAGE_SIZE_OPTIONS.map((option) => ({ value: String(option), label: String(option) }))}
-                allowDeselect={false}
-                size="xs"
-                w={76}
-                styles={{
-                  input: { textAlign: "center", fontWeight: 700 },
-                  option: { justifyContent: "center" },
-                }}
-              />
-            </Group>
-            {pageCount > 1 ? (
-              <Pagination
-                value={currentPage}
-                onChange={setPage}
-                total={pageCount}
-                size="xs"
-                boundaries={1}
-                siblings={1}
-              />
-            ) : null}
-          </Group>
-        </Group>
-      ) : null}
-    </Paper>
-  );
+  const canPinColumns = useMediaQuery('(min-width: 48em)');
+  const data = useMemo(() => sortRevenueBookingRowsBySourceReceivedAt(rows), [rows]);
+  const columns = useMemo<MRT_ColumnDef<RevenueBookingRow>[]>(() => [
+    {
+      accessorKey: "reference", header: "Booking", size: 220, filterFn: "contains",
+      Cell: ({ row }) => <BookingTextCell strong value={cleanText(row.original.reference, String(row.original.bookingId))} />,
+    },
+    {
+      accessorKey: "customerName", header: "Customer", size: 220, filterFn: "contains",
+      Cell: ({ row }) => <BookingTextCell strong value={cleanText(row.original.customerName, "Unknown customer")} />,
+    },
+    { accessorKey: "bookingId", header: "Booking ID", size: 160, filterFn: "contains", Cell: ({ row }) => `#${cleanText(row.original.bookingId)}` },
+    { accessorKey: "customerEmail", header: "Customer Email", size: 240, filterFn: "contains", Cell: ({ cell }) => <BookingTextCell value={cell.getValue()} /> },
+    { accessorKey: "platform", header: "Platform", filterVariant: "autocomplete", filterFn: "equals", size: 160, Cell: ({ cell }) => <BookingTextCell value={cell.getValue()} /> },
+    { accessorKey: "productName", header: "Product", filterVariant: "autocomplete", filterFn: "contains", size: 220, Cell: ({ cell }) => <BookingTextCell value={cell.getValue()} /> },
+    {
+      id: "sourceReceivedAt", header: `Source Received At (${BOOKINGS_SUMMARY_TIMEZONE})`, size: 260,
+      // Filter by Warsaw calendar days; sort by the actual instant, including time.
+      accessorFn: row => sourceReceivedCalendarDate(row.sourceReceivedAt),
+      filterVariant: "date", filterFn: "greaterThanOrEqualTo", columnFilterModeOptions: COMPARISON_FILTER_MODES,
+      sortUndefined: "last",
+      sortingFn: (left, right) => (parseSourceReceivedTimestamp(left.original.sourceReceivedAt) ?? 0)
+        - (parseSourceReceivedTimestamp(right.original.sourceReceivedAt) ?? 0),
+      Cell: ({ row }) => <Text size="sm" fw={600} style={{ whiteSpace: "nowrap" }}>{cleanText(row.original.sourceReceivedAtLabel)}</Text>,
+    },
+    {
+      id: "experienceDate", header: "Experience Date", size: 220,
+      accessorFn: row => bookingTableCalendarDate(row.experienceDate),
+      filterVariant: "date", filterFn: "greaterThanOrEqualTo", columnFilterModeOptions: COMPARISON_FILTER_MODES,
+      sortUndefined: "last",
+      sortingFn: (left, right) => formatExperience(left.original.experienceDate, left.original.experienceTime)
+        .localeCompare(formatExperience(right.original.experienceDate, right.original.experienceTime)),
+      Cell: ({ row }) => <Text size="sm" fw={600} style={{ whiteSpace: "nowrap" }}>{formatExperience(row.original.experienceDate, row.original.experienceTime)}</Text>,
+    },
+    {
+      accessorKey: "guests", header: "Guests", size: 150, filterFn: "greaterThanOrEqualTo", columnFilterModeOptions: COMPARISON_FILTER_MODES,
+      Cell: ({ cell }) => Math.max(0, Number(cell.getValue()) || 0).toLocaleString(),
+    },
+    {
+      id: "status", header: "Status", accessorFn: row => formatStatus(row.status),
+      filterVariant: "autocomplete", filterFn: "equals", size: 170,
+      Cell: ({ row }) => <Badge size="sm" variant="light" color={getStatusColor(row.original.status)}>{formatStatus(row.original.status)}</Badge>,
+    },
+    {
+      id: "paymentStatus", header: "Payment", accessorFn: row => formatStatus(row.paymentStatus),
+      filterVariant: "autocomplete", filterFn: "equals", size: 180,
+      Cell: ({ row }) => <Badge size="sm" variant="light" color={getStatusColor(row.original.paymentStatus)}>{formatStatus(row.original.paymentStatus)}</Badge>,
+    },
+    {
+      accessorKey: "revenue", header: "Revenue", size: 170, filterFn: "greaterThanOrEqualTo", columnFilterModeOptions: COMPARISON_FILTER_MODES,
+      Cell: ({ row }) => <Text size="sm" fw={800} style={{ whiteSpace: "nowrap" }}>{formatMoney(row.original.revenue, row.original.currency)}</Text>,
+    },
+    { accessorKey: "experienceTime", header: "Experience Time", size: 180, filterFn: "contains" },
+    { accessorKey: "currency", header: "Currency", size: 150, filterVariant: "autocomplete", filterFn: "equals" },
+    {
+      id: "actions", header: "Action", columnDefType: "display", size: 145,
+      enableHiding: false, enableColumnActions: false, enableColumnOrdering: false,
+      Cell: ({ row }) => <Button size="xs" variant="light" style={{ whiteSpace: "nowrap" }}
+        aria-label={`See details for ${cleanText(row.original.customerName, "Unknown customer")} (${cleanText(row.original.reference, String(row.original.bookingId))}, booking #${cleanText(row.original.bookingId)})`}
+        onClick={row.original.onSeeDetails}>See Details</Button>,
+    },
+  ], []);
+  const defaultFilterFns = useMemo(() => Object.fromEntries(columns
+    .filter(column => column.columnDefType !== "display")
+    .map(column => [column.id ?? column.accessorKey, column.filterFn])), [columns]);
+  const table = useMantineReactTable({
+    columns, data,
+    enableColumnFilters: true, enableColumnFilterModes: true, columnFilterModeOptions: TEXT_FILTER_MODES,
+    enableFacetedValues: true, enableGlobalFilter: true, globalFilterFn: "contains",
+    enableGlobalFilterRankedResults: false, enableFilterMatchHighlighting: false,
+    enableMultiSort: true, enableHiding: true,
+    enableColumnActions: false,
+    enableColumnPinning: canPinColumns, enableColumnResizing: true, enableStickyHeader: true, enableRowSelection: false,
+    paginationDisplayMode: "pages", sortDescFirst: false,
+    initialState: {
+      showColumnFilters: true, showGlobalFilter: true, density: "xs",
+      sorting: [{ id: "sourceReceivedAt", desc: true }],
+      pagination: { pageIndex: 0, pageSize: PAGE_SIZE_OPTIONS[0] },
+      columnVisibility: OPTIONAL_COLUMNS, columnPinning: { left: ["reference"], right: ["actions"] },
+    },
+    mantineTableProps: { "aria-label": "Bookings revenue table", striped: true, highlightOnHover: true, withColumnBorders: true },
+    mantineTableHeadCellProps: ({ column }) => ({
+      scope: "col", align: "center", "aria-label": column.columnDef.header,
+      style: { verticalAlign: "middle", justifyContent: "center", textAlign: "center" },
+      "aria-sort": column.getIsSorted() === "asc" ? "ascending" : column.getIsSorted() === "desc" ? "descending" : "none",
+    }),
+    mantineTableBodyCellProps: { align: "center", style: { verticalAlign: "middle", justifyContent: "center", alignItems: "center", textAlign: "center", overflowWrap: "anywhere" } },
+    mantineTableContainerProps: { style: { maxHeight: 640 } },
+    mantinePaperProps: { withBorder: false, shadow: undefined },
+    mantinePaginationProps: { rowsPerPageOptions: PAGE_SIZE_OPTIONS.map(String) },
+    mantineSearchTextInputProps: { placeholder: "Search all booking columns", "aria-label": "Search all booking columns" },
+    mantineFilterTextInputProps: ({ column, rangeFilterIndex }) => ({
+      "aria-label": `Filter ${column.columnDef.header}${rangeFilterIndex === 0 ? " minimum" : rangeFilterIndex === 1 ? " maximum" : ""}`,
+      type: ["revenue", "guests"].includes(column.id) ? "number" : "text",
+    }),
+    mantineFilterAutocompleteProps: ({ column }) => ({ "aria-label": `Filter ${column.columnDef.header}` }),
+    mantineFilterDateInputProps: ({ column, rangeFilterIndex }) => ({
+      valueFormat: "YYYY-MM-DD",
+      "aria-label": `Filter ${column.columnDef.header}${rangeFilterIndex === 0 ? " minimum" : rangeFilterIndex === 1 ? " maximum" : ""}`,
+    }),
+    renderTopToolbarCustomActions: ({ table }) => <Group gap="xs" wrap="wrap">
+      <Badge variant="light">{`${table.getFilteredRowModel().rows.length.toLocaleString()} matching`}</Badge>
+      <Button size="xs" variant="subtle" onClick={() => {
+        table.resetColumnFilters(); table.resetGlobalFilter(); table.setColumnFilterFns(defaultFilterFns);
+        table.resetSorting(); table.resetColumnVisibility(); table.resetColumnOrder();
+        table.resetColumnPinning(); table.resetPagination();
+      }}>Reset table</Button>
+    </Group>,
+    renderBottomToolbarCustomActions: ({ table }) => {
+      const total = table.getFilteredRowModel().rows.length;
+      const { pageIndex, pageSize } = table.getState().pagination;
+      const first = total ? pageIndex * pageSize + 1 : 0;
+      return <Text size="xs" c="dimmed">{`Showing ${first}\u2013${Math.min((pageIndex + 1) * pageSize, total)} of ${total.toLocaleString()}`}</Text>;
+    },
+    renderEmptyRowsFallback: () => <Text ta="center" p="xl" c="dimmed">No bookings found for the selected filters.</Text>,
+  });
+  return <Paper withBorder radius="lg" p={{ base: "sm", sm: "md" }} shadow="sm">
+    <Group gap="xs" mb="xs">
+      <Text fw={800} size="lg">Bookings</Text>
+      <Badge variant="light" color="blue" size="lg">{`${rows.length.toLocaleString()} total`}</Badge>
+    </Group>
+    <Text size="xs" c="dimmed" mb="sm">
+      Filter multiple columns together. Use the filter menus for conditions and ranges; Shift-click headers to sort by multiple columns.
+      Show/hide columns to customize this list. Summary totals above stay unchanged.
+    </Text>
+    <BookingTableExportControls table={table} />
+    <MantineReactTable table={table} />
+  </Paper>;
 };
 
 export default RevenueBookingsTable;
