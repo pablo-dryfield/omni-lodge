@@ -2547,7 +2547,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const isDirectRefund = Boolean(partialRefundState.order && isDirectRefundOrder(partialRefundState.order));
     const isStorefrontRefund = Boolean(partialRefundState.order && isStorefrontOrder(partialRefundState.order));
     if (shouldProceedToCancel) {
-      if ((isDirectRefund && !isStorefrontRefund || productScoped && isStorefrontRefund) && !canCancelDirect) {
+      if (((isDirectRefund && !isStorefrontRefund) || (productScoped && isStorefrontRefund)) && !canCancelDirect) {
         setPartialRefundState((prev) => ({ ...prev,
           error: 'A full refund cancels the booking. Your current account does not have cancellation permission. Refresh the page if your role was recently changed.',
         }));
