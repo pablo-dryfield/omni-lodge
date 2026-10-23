@@ -55,6 +55,8 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { selectCanAccessBookingSanityCheck } from "../selectors/accessControlSelectors";
 
 import { navigateToPage } from "../actions/navigationActions";
+import { fetchSession } from "../actions/sessionActions";
+import { fetchAccessSnapshot } from "../actions/accessControlActions";
 
 import { GenericPageProps } from "../types/general/GenericPageProps";
 
@@ -344,6 +346,7 @@ type StripeTransactionPreview = {
 };
 
 type RefundPreviewResponse = {
+  remainingAmount?: number;
   bookingId: number;
   orderId: string;
   externalTransactionId: string | null;
@@ -1192,6 +1195,9 @@ const isStorefrontOrder = (order: UnifiedOrder): boolean =>
 
 const isDirectManifestActionOrder = (order: UnifiedOrder): boolean =>
   isDirectFoodTourOrder(order) || isStorefrontOrder(order);
+
+const isDirectRefundOrder = (order: UnifiedOrder): boolean =>
+  isDirectManifestActionOrder(order) || isDirectCancellationOrder(order);
 
 const isOrderExperienceDateOnOrBeforeToday = (order: UnifiedOrder): boolean => {
   const rawDate = String(order.date ?? "").trim();
@@ -2488,7 +2494,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       }
       const nextUnlocked = !prev.manualAmountUnlocked;
       if (nextUnlocked) {
-        if (prev.order && isDirectManifestActionOrder(prev.order)) {
+        if (prev.order && isDirectRefundOrder(prev.order)) {
           const resetAddonQuantities = Object.keys(prev.addonQuantities).reduce<Record<number, number>>((acc, key) => {
             const parsedKey = Number.parseInt(key, 10);
             if (Number.isFinite(parsedKey)) {
@@ -2538,9 +2544,15 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     }
     const remainingMajor = getPartialRefundRemainingAmountMajor(partialRefundState.preview);
     const shouldProceedToCancel = remainingMajor > 0 && partialRefundState.amount + 0.0001 >= remainingMajor;
-    const isDirectRefund = Boolean(partialRefundState.order && isDirectManifestActionOrder(partialRefundState.order));
+    const isDirectRefund = Boolean(partialRefundState.order && isDirectRefundOrder(partialRefundState.order));
     const isStorefrontRefund = Boolean(partialRefundState.order && isStorefrontOrder(partialRefundState.order));
     if (shouldProceedToCancel) {
+      if ((isDirectRefund && !isStorefrontRefund || productScoped && isStorefrontRefund) && !canCancelDirect) {
+        setPartialRefundState((prev) => ({ ...prev,
+          error: 'A full refund cancels the booking. Your current account does not have cancellation permission. Refresh the page if your role was recently changed.',
+        }));
+        return;
+      }
       if (!partialRefundState.order) {
         setPartialRefundState((prev) => ({ ...prev, error: "Missing booking details for cancellation." }));
         return;
@@ -3160,7 +3172,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     const stripePreview = cancelState.preview.stripe;
     const transactionAmount = stripePreview ? stripePreview.amount / 100 : 0;
     const alreadyRefundedAmount = stripePreview ? stripePreview.amountRefunded / 100 : 0;
-    const currentRefundAmount = stripePreview
+    const currentRefundAmount = cancelState.mode === 'storefront_refund' &&
+      typeof cancelState.preview.remainingAmount === 'number'
+      ? Math.max(0, cancelState.preview.remainingAmount / 100)
+      : stripePreview
       ? stripePreview.fullyRefunded
         ? alreadyRefundedAmount || transactionAmount
         : Math.max(0, (stripePreview.amount - stripePreview.amountRefunded) / 100)
@@ -3525,6 +3540,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
 
   const handleDirectCancellation = async (order: UnifiedOrder) => {
     if (!canCancelDirect || !isDirectCancellationOrder(order) || !canUseStripeRefundActions(order)) {
+      window.alert('Cancellation is not available for this booking or your current account. Refresh the page if your role was recently changed.');
       return;
     }
     const bookingId = getBookingIdFromOrder(order);
@@ -4992,7 +5008,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     partialRefundRemainingMajor > 0 &&
     partialRefundHasPositiveAmount &&
     partialRefundAmountValue + 0.0001 >= partialRefundRemainingMajor;
-  const partialRefundIsDirect = Boolean(partialRefundState.order && isDirectManifestActionOrder(partialRefundState.order));
+  const partialRefundIsDirect = Boolean(partialRefundState.order && isDirectRefundOrder(partialRefundState.order));
   const partialRefundUsesTemplateEmail = Boolean(
     partialRefundState.order && (!partialRefundIsDirect || isStorefrontOrder(partialRefundState.order)),
   );
@@ -5068,7 +5084,7 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
       (
         (
           ((!productScoped && (isEcwidOrder(mobileActionsOrder) || isStorefrontOrder(mobileActionsOrder))) ||
-            (isDirectCancellationOrder(mobileActionsOrder) && canCancelDirect)) &&
+            ((isDirectCancellationOrder(mobileActionsOrder) || isStorefrontOrder(mobileActionsOrder)) && canCancelDirect)) &&
           canUseStripeRefundActions(mobileActionsOrder)
         ) ||
         (!productScoped && isXperiencePolandOrder(mobileActionsOrder)) ||
@@ -5083,7 +5099,9 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   );
   const mobileActionsCanPartialRefund = Boolean(
     mobileActionsOrder &&
-      (isEcwidOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder)) &&
+      (!productScoped || canCancelDirect) &&
+      (isEcwidOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder) ||
+        (productScoped && canCancelDirect && isDirectCancellationOrder(mobileActionsOrder))) &&
       canUseStripeRefundActions(mobileActionsOrder) &&
       mobileActionsBookingId &&
       mobileActionsOrder.status !== "cancelled",
@@ -5168,6 +5186,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
     if (productScoped) {
       // Refresh this product's data, never start company-wide Gmail ingestion.
       setErrorMessage(null);
+      // Role changes can leave an already-open tab with stale button gates.
+      await Promise.all([dispatch(fetchSession()), dispatch(fetchAccessSnapshot())]);
       setReloadToken((token) => token + 1);
       return;
     }
@@ -7015,6 +7035,12 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
                           {cancelState.preview.stripe.type === "payment_intent" ? "Payment intent" : "Charge"})
                         </Table.Td>
                       </Table.Tr>
+                      {cancelState.mode === 'storefront_refund' && typeof cancelState.preview.remainingAmount === 'number' && (
+                        <Table.Tr>
+                          <Table.Th>Refund for this booking</Table.Th>
+                          <Table.Td>{formatStripeAmount(cancelState.preview.remainingAmount, cancelState.preview.stripe.currency)}</Table.Td>
+                        </Table.Tr>
+                      )}
                       <Table.Tr>
                         <Table.Th>Amount</Table.Th>
                         <Table.Td>

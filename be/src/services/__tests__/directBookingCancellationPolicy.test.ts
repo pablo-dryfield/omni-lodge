@@ -11,7 +11,7 @@ import Product from '../../models/Product';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
 import { hasModuleActionPermission } from '../../middleware/authorizationMiddleware';
 import { getAllowedProductTypeIds } from '../productScopeService';
-import { assertDirectBookingCancellationAccess, isDirectBooking } from '../directBookingCancellationPolicy';
+import { assertDirectBookingCancellationAccess, assertScopedBookingRefundAccess, isDirectBooking } from '../directBookingCancellationPolicy';
 
 const booking = (fields = {}) => ({ id: 10627, platform: 'direct', productId: 49,
   productName: 'Krakow: Late Night Bites Polish Street Food and Drinks Tour', ...fields } as Booking);
@@ -46,7 +46,7 @@ it.each([
   { scope: [3, 1] }, { scope: [] }, { productId: null }, { actualProductType: 1 },
   { actualProductType: null }, { productTypeName: 'Pub Crawl' }, { productTypeName: 'Food Tours' },
   { roleSlug: 'food-tour-guide' }, { roleSlug: 'owner' }, { roleSlug: null }, { active: false },
-  { permission: false }, { platform: 'omnilodge' }, { platform: 'viator' },
+  { permission: false }, { platform: 'ecwid' }, { platform: 'viator' },
 ])('rejects an unsafe scoped request %j', async scenario => {
   const values = scenario as Record<string, any>;
   jest.mocked(getAllowedProductTypeIds).mockResolvedValue(values.scope ?? [3]);
@@ -60,6 +60,20 @@ it.each([
     ...('productId' in values ? { productId: values.productId } : {}),
     ...('platform' in values ? { platform: values.platform } : {}),
   }))).rejects.toMatchObject({ status: 403 });
+});
+it.each(['food-tour-owner', 'food-tour-manager'])(
+  'allows current scoped %s to refund its OmniLodge Food Tour product', async slug => {
+    jest.mocked(getAllowedProductTypeIds).mockResolvedValue([3]);
+    roleModel.findByPk.mockResolvedValue({ slug, status: true } as UserType);
+    await expect(assertScopedBookingRefundAccess(request(slug), booking({ platform: 'omnilodge' }))).resolves.toBeUndefined();
+    expect(Product.findByPk).toHaveBeenCalledWith(49, expect.anything());
+  },
+);
+it('keeps legacy global partial-refund access without granting scoped guide access', async () => {
+  await expect(assertScopedBookingRefundAccess(request('assistant-manager'), booking())).resolves.toBeUndefined();
+  jest.mocked(getAllowedProductTypeIds).mockResolvedValue([3]);
+  roleModel.findByPk.mockResolvedValue({ slug: 'food-tour-guide', status: true } as UserType);
+  await expect(assertScopedBookingRefundAccess(request('food-tour-guide'), booking())).rejects.toMatchObject({ status: 403 });
 });
 it('fails closed if scope lookup fails', async () => {
   jest.mocked(getAllowedProductTypeIds).mockRejectedValue(new Error('Unavailable'));

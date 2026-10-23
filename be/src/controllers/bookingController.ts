@@ -85,7 +85,7 @@ import {
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
 import { getConfigValue } from '../services/configService.js';
 import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
-import { assertDirectBookingCancellationAccess, isDirectBooking } from '../services/directBookingCancellationPolicy.js';
+import { assertDirectBookingCancellationAccess, assertScopedBookingRefundAccess, isDirectBooking } from '../services/directBookingCancellationPolicy.js';
 import { FINANCE_ALLOWED_ROLES } from '../finance/middleware/financeAccessMiddleware.js';
 import {
   getBookingSummaryCostInsights,
@@ -5352,20 +5352,31 @@ const isStorefrontBooking = (booking: Booking): boolean =>
   String(booking.platform ?? '').trim().toLowerCase() === 'omnilodge' &&
   Boolean(String(booking.platformOrderId ?? '').trim());
 
+const remainingBookingRefundMinor = (booking: Booking, stripe: StripeTransactionSummary): number => {
+  const stripeRemaining = Math.max(stripe.amount - stripe.amountRefunded, 0);
+  if (!isStorefrontBooking(booking)) return stripeRemaining;
+  const bookingPaid = parseMoneyValue(booking.priceNet) ?? parseMoneyValue(booking.priceGross)
+    ?? parseMoneyValue(booking.baseAmount) ?? 0;
+  const bookingRemaining = Math.max(bookingPaid - (parseMoneyValue(booking.refundedAmount) ?? 0), 0);
+  return Math.min(stripeRemaining, Math.round(bookingRemaining * 100));
+};
+
 const isAirbnbBooking = (booking: Booking): boolean =>
   String(booking.platform ?? '').trim().toLowerCase() === 'airbnb';
 
 const isDirectManifestActionBooking = (booking: Booking): boolean =>
   isDirectFoodTourBooking(booking) || isStorefrontBooking(booking);
 
-const requireDirectManifestActionBooking = async (bookingId: number): Promise<Booking> => {
+const requireDirectManifestActionBooking = async (bookingId: number, refundRequest?: AuthenticatedRequest): Promise<Booking> => {
   const booking = await Booking.findByPk(bookingId, {
     include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
   });
   if (!booking) {
     throw new HttpError(404, 'Booking not found');
   }
-  if (!isDirectManifestActionBooking(booking)) {
+  const scopedDirectRefund = refundRequest && isDirectBooking(booking)
+    && await getAllowedProductTypeIds(refundRequest) !== null;
+  if (!isDirectManifestActionBooking(booking) && !scopedDirectRefund) {
     throw new HttpError(400, 'This booking platform does not support this manifest action.');
   }
   return booking;
@@ -6709,7 +6720,8 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
       return;
     }
 
-    const booking = await requireDirectManifestActionBooking(bookingIdParam);
+    const booking = await requireDirectManifestActionBooking(bookingIdParam, req);
+    await assertScopedBookingRefundAccess(req, booking);
     if (booking.status === 'cancelled') {
       res.status(400).json({ message: 'Cancelled bookings cannot be partially refunded' });
       return;
@@ -6791,7 +6803,7 @@ export const partialRefundDirectFoodTourBooking = async (req: AuthenticatedReque
     }
 
     const amountInMinor = Math.round(roundMoney(amountMajor) * 100);
-    const remaining = Math.max(stripe.amount - stripe.amountRefunded, 0);
+    const remaining = remainingBookingRefundMinor(booking, stripe);
     if (amountInMinor >= remaining) {
       res.status(400).json({ message: 'Partial refund amount must be less than the remaining paid amount. Use Cancellation for full refunds.' });
       return;
@@ -6997,12 +7009,15 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    if (booking.platform !== 'ecwid' && !isDirectManifestActionBooking(booking)) {
+    await assertScopedBookingRefundAccess(req, booking);
+
+    const scopedDirectRefund = isDirectBooking(booking) && await getAllowedProductTypeIds(req) !== null;
+    if (booking.platform !== 'ecwid' && !isDirectManifestActionBooking(booking) && !scopedDirectRefund) {
       res.status(400).json({ message: 'This booking platform does not support refunds through this endpoint' });
       return;
     }
 
-    const preview = isDirectManifestActionBooking(booking)
+    const preview = isDirectManifestActionBooking(booking) || scopedDirectRefund
       ? await (async () => {
           const direct = await resolveDirectStripeTransaction(booking);
           return {
@@ -7017,7 +7032,7 @@ export const getPartialRefundPreview = async (req: AuthenticatedRequest, res: Re
           };
         })()
       : requireStripeRefundPreview(await buildEcwidRefundPreview(booking));
-    const remaining = Math.max(preview.stripe.amount - preview.stripe.amountRefunded, 0);
+    const remaining = remainingBookingRefundMinor(booking, preview.stripe);
     const resolvedAddons = await resolvePartialRefundAddons(booking, preview.stripe.currency);
     const addonsTotalAmount = resolveAddonsTotalAmount(resolvedAddons);
     const people = resolvePartialRefundPeopleFromBaseAmount(

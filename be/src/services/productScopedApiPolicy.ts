@@ -22,6 +22,16 @@ export function productScopedApiRoute(method: string, path: string): ScopedApiRo
       ? { resource: 'booking-cancellation', module: 'booking-management', id, passthrough: true, action: 'update' }
       : null;
   }
+  const refund = (method === 'GET' ? /^\/api\/bookings\/([1-9]\d*)\/partial-refund-preview$/
+    : method === 'POST' ? /^\/api\/bookings\/([1-9]\d*)\/direct-actions\/partial-refund$/ : null)?.exec(path);
+  if (refund) {
+    const id = Number(refund[1]);
+    // Both handlers validate the current management role, actual Food Tour
+    // product assignment and supported channel before contacting Stripe.
+    return Number.isSafeInteger(id)
+      ? { resource: 'booking-refund', module: 'booking-management', id, passthrough: true, action: 'update' }
+      : null;
+  }
   if ((read && /^\/api\/bookings\/emails\/(?:mailbox|(?:gmail\/)?[^/]+\/preview)$/.test(path)) ||
     (method === 'POST' && /^\/api\/bookings\/emails\/(?:send|render-preview|[^/]+\/reprocess)$/.test(path))) {
     return { resource: 'booking-email', module: 'booking-management', passthrough: true,
