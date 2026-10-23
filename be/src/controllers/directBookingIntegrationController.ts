@@ -2,8 +2,7 @@ import type { Response } from 'express';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import { Op } from 'sequelize';
-import type { Transaction } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 import sequelize from '../config/database.js';
 import Booking from '../models/Booking.js';
 import BookingEvent from '../models/BookingEvent.js';
@@ -907,7 +906,15 @@ export const ingestDirectBooking = async (req: AuthenticatedRequest, res: Respon
     const patch = await buildPatch(payload, req);
     const userId = req.authContext?.id ?? null;
 
-    const result = await sequelize.transaction(async (transaction) => {
+    const result = await sequelize.transaction({ isolationLevel: Transaction.ISOLATION_LEVELS.READ_COMMITTED }, async (transaction) => {
+      // A lookup followed by INSERT is not atomic when two checkout callbacks
+      // arrive together. Serialize this identity across processes, including
+      // the initial INSERT (which has no row to lock yet). READ COMMITTED lets
+      // a waiter see the first transaction's committed booking after the lock.
+      await sequelize.query('SELECT pg_advisory_xact_lock(hashtextextended(:identity, 0))', {
+        replacements: { identity: JSON.stringify(['direct-booking-ingestion', patch.platform, patch.platformBookingId]) },
+        transaction,
+      });
       let booking = await Booking.findOne({
         where: {
           platform: patch.platform,
