@@ -6,12 +6,20 @@ import BookingsPage from './BookingsPage';
 import BookingsManifestPage from './BookingsManifestPage';
 import axiosInstance from '../utils/axiosInstance';
 import type { RootState } from '../store/store';
+import { fetchSession } from '../actions/sessionActions';
+import { fetchAccessSnapshot } from '../actions/accessControlActions';
 
 let mockRoleSlug: string | null = 'food-tour-owner';
 let mockProductTypeIds = [3];
 let mockIsMobile = false;
 const mockDispatch = jest.fn();
 const mockSanityMount = jest.fn();
+
+jest.mock('@mui/icons-material', () => ({
+  Checkroom: () => null, LocalBar: () => null, MailOutline: () => null, PhotoCamera: () => null, WhatsApp: () => null,
+}));
+jest.mock('../actions/sessionActions', () => ({ fetchSession: jest.fn(() => ({ type: 'test/refresh-session' })) }));
+jest.mock('../actions/accessControlActions', () => ({ fetchAccessSnapshot: jest.fn(() => ({ type: 'test/refresh-access' })) }));
 
 jest.mock('../store/hooks', () => ({
   useAppDispatch: () => mockDispatch,
@@ -120,6 +128,8 @@ it('refreshes scoped manifests without starting company-wide email ingestion', a
   const previous = (axiosInstance.get as jest.Mock).mock.calls.length;
   fireEvent.click(await screen.findByRole('button', { name: 'Refresh manifest' }));
   await waitFor(() => expect((axiosInstance.get as jest.Mock).mock.calls.length).toBeGreaterThan(previous));
+  expect(fetchSession).toHaveBeenCalled();
+  expect(fetchAccessSnapshot).toHaveBeenCalled();
   expect(axiosInstance.post).not.toHaveBeenCalled();
   expect(screen.queryByRole('tab', { name: 'Emails', exact: true })).not.toBeInTheDocument();
 });

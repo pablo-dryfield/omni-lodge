@@ -25,7 +25,7 @@ it('permits only POST cancellation with update permission, not other Direct acti
   for (const method of ['GET', 'PATCH', 'PUT', 'DELETE']) {
     expect(productScopedApiRoute(method, '/api/bookings/10627/direct-actions/cancellation')).toBeNull();
   }
-  for (const suffix of ['confirmation', 'amend', 'partial-refund', 'cancellation/extra']) {
+  for (const suffix of ['confirmation', 'amend', 'cancellation/extra']) {
     expect(productScopedApiRoute('POST', `/api/bookings/10627/direct-actions/${suffix}`)).toBeNull();
   }
   for (const id of ['0', '-1', '1.5', '9007199254740992', 'other']) {
@@ -33,6 +33,20 @@ it('permits only POST cancellation with update permission, not other Direct acti
   }
   for (const suffix of ['cancel-ecwid', 'cancel-xperience', 'cancel-civitatis']) {
     expect(productScopedApiRoute('POST', `/api/bookings/10627/${suffix}`)).toBeNull();
+  }
+});
+it.each([
+  ['GET', 'partial-refund-preview'], ['POST', 'direct-actions/partial-refund'],
+])('allows only reviewed %s %s refund endpoints with update permission', (method, suffix) => {
+  expect(productScopedApiRoute(method, `/api/bookings/10649/${suffix}`)).toEqual({
+    resource: 'booking-refund', module: 'booking-management', id: 10649, passthrough: true, action: 'update',
+  });
+  for (const id of ['0', '-1', '1.5', '9007199254740992', 'other']) {
+    expect(productScopedApiRoute(method, `/api/bookings/${id}/${suffix}`)).toBeNull();
+  }
+  expect(productScopedApiRoute(method, `/api/bookings/10649/${suffix}/extra`)).toBeNull();
+  for (const other of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].filter(value => value !== method)) {
+    expect(productScopedApiRoute(other, `/api/bookings/10649/${suffix}`)).toBeNull();
   }
 });
 it('does not treat global, unassigned, or partly shared roles as exclusively delegated', () => {
