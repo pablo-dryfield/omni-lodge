@@ -45,6 +45,8 @@ describe("RevenueBookingsTable", () => {
   afterAll(() => configure({ asyncUtilTimeout: 1000 }));
   beforeEach(() => {
     jest.clearAllMocks();
+    // Mantine's select schedules scrolling; jsdom has no layout/scroll implementation.
+    Element.prototype.scrollIntoView = jest.fn();
     (copyBookingExportImage as jest.Mock).mockResolvedValue('copied');
     (downloadBookingExport as jest.Mock).mockResolvedValue(undefined);
     Object.defineProperty(window, "matchMedia", {
