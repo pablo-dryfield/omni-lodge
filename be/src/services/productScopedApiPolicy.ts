@@ -13,6 +13,13 @@ export const PRODUCT_SCOPED_MODULES = new Set([
 export type ScopedApiRoute = { resource: string; module?: string; id?: number; passthrough?: boolean; action?: string };
 export function productScopedApiRoute(method: string, path: string): ScopedApiRoute | null {
   const read = method === 'GET';
+  const localAction = (read ? /^\/api\/bookings\/([1-9]\d*)\/local-actions\/preview$/
+    : method === 'POST' ? /^\/api\/bookings\/([1-9]\d*)\/local-actions\/(?:amend|cancel)$/ : null)?.exec(path);
+  if (localAction) {
+    const id = Number(localAction[1]);
+    return Number.isSafeInteger(id)
+      ? { resource: 'booking-local-action', module: 'booking-management', id, passthrough: true, action: 'update' } : null;
+  }
   const cancellation = method === 'POST' ? /^\/api\/bookings\/([1-9]\d*)\/direct-actions\/cancellation$/.exec(path) : null;
   if (cancellation) {
     const id = Number(cancellation[1]);

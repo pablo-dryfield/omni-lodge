@@ -9,11 +9,12 @@ import type { UnifiedOrder } from '../store/bookingPlatformsTypes';
 
 let mockRoleSlug = 'food-tour-manager';
 let mockCanUpdate = true;
+let mockProductScope: number[] | null = [3];
 const mockDispatch = jest.fn();
 jest.mock('../store/hooks', () => ({
   useAppDispatch: () => mockDispatch,
   useAppSelector: (selector: (state: RootState) => unknown) => selector({
-    session: { roleSlug: mockRoleSlug }, accessControl: { productTypeIds: [3] },
+    session: { roleSlug: mockRoleSlug }, accessControl: { productTypeIds: mockProductScope },
   } as RootState),
 }));
 jest.mock('../hooks/useModuleAccess', () => ({
@@ -71,7 +72,7 @@ const openFullRefund = async (revokeBeforeSubmit = false) => {
 };
 
 beforeEach(() => {
-  jest.clearAllMocks(); mockRoleSlug = 'food-tour-manager'; mockCanUpdate = true;
+  jest.clearAllMocks(); mockRoleSlug = 'food-tour-manager'; mockCanUpdate = true; mockProductScope = [3];
   (axiosInstance.post as jest.Mock).mockResolvedValue({ data: {} });
   jest.spyOn(window, 'confirm').mockReturnValue(true);
   jest.spyOn(window, 'alert').mockImplementation(() => undefined);
@@ -82,6 +83,30 @@ beforeEach(() => {
   global.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
 });
 afterEach(() => jest.restoreAllMocks());
+
+it.each(['viator', 'getyourguide', 'rezdy', 'fareharbor', 'freetour', 'airbnb', 'xperiencepoland', 'civitatis'])(
+  'offers clearly distinguished force actions for external platform %s', async platform => {
+    const actions = await openBookingActions(order({ platform }));
+    expect(within(actions).getByRole('button', { name: 'Force amend' })).toBeEnabled();
+    expect(within(actions).getByRole('button', { name: 'Force cancel' })).toBeEnabled();
+    expect(within(actions).queryByRole('button', { name: 'Cancel', exact: true })).not.toBeInTheDocument();
+    expect(axiosInstance.post).not.toHaveBeenCalled();
+  },
+);
+it.each(['food-tour-guide', 'assistant-manager', 'unrelated-role'])('does not expose privileged local actions to scoped %s', async role => {
+  mockRoleSlug = role;
+  const actions = await openBookingActions(order({ platform: 'viator' }));
+  expect(within(actions).queryByRole('button', { name: 'Force cancel' })).not.toBeInTheDocument();
+  expect(within(actions).queryByRole('button', { name: 'Force amend' })).not.toBeInTheDocument();
+});
+it('retains integrated Ecwid controls alongside the explicit local correction controls for global managers', async () => {
+  mockRoleSlug = 'manager'; mockProductScope = null;
+  const actions = await openBookingActions(order({ platform: 'ecwid' }));
+  for (const name of ['Force amend', 'Force cancel', 'Amend', 'Cancel']) {
+    expect(within(actions).getByRole('button', { name, exact: true })).toBeEnabled();
+  }
+  expect(axiosInstance.post).not.toHaveBeenCalled();
+});
 
 it.each(['food-tour-owner', 'food-tour-manager'])('shows Cancel for %s on an eligible Direct booking', async role => {
   mockRoleSlug = role;

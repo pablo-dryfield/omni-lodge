@@ -3,6 +3,10 @@ import request from 'supertest';
 import type { RequestHandler, Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest.js';
 
+jest.mock('../../controllers/localBookingActionController.js', () => new Proxy({ __esModule: true }, {
+  get: (_target, key) => key === '__esModule' ? true : (_req: unknown, res: Response) => res.sendStatus(204),
+}));
+
 jest.mock('../../middleware/authMiddleware.js', () => ({
   __esModule: true,
   default: ((req: AuthenticatedRequest, res: Response, next: () => void) => {

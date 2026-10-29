@@ -1,5 +1,10 @@
 import type { UnifiedOrder } from '../store/bookingPlatformsTypes';
 
+export const isLocalActionOrder = (order: Pick<UnifiedOrder, 'platform'>): boolean => {
+  const platform = String(order.platform ?? '').trim().toLowerCase();
+  return Boolean(platform) && !['direct', 'omnilodge', 'manual', 'unknown'].includes(platform);
+};
+
 export const isDirectCancellationOrder = (order: Pick<UnifiedOrder, 'platform'>): boolean =>
   String(order.platform ?? '').trim().toLowerCase() === 'direct';
 

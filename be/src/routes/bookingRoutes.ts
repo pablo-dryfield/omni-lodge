@@ -50,6 +50,7 @@ import {
   counterBookingAddonRefund,
 } from '../controllers/bookingController.js';
 import { listBookingsWithSummary } from '../controllers/bookingSummaryController.js';
+import { previewLocalBookingAction, amendLocalBooking, cancelLocalBooking } from '../controllers/localBookingActionController.js';
 
 const router = Router();
 
@@ -84,6 +85,9 @@ router.post('/:bookingId/counter-addon-refunds/:operation', authMiddleware, requ
 router.patch('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, completeBookingAddonRefundAction);
 router.delete('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, deleteBookingAddonRefundAction);
 router.get('/:bookingId/details', authMiddleware, requireBookingProductScope, getBookingDetails);
+router.get('/:bookingId/local-actions/preview', authMiddleware, requireBookingProductScope, previewLocalBookingAction);
+router.post('/:bookingId/local-actions/amend', authMiddleware, requireBookingProductScope, amendLocalBooking);
+router.post('/:bookingId/local-actions/cancel', authMiddleware, requireBookingProductScope, cancelLocalBooking);
 router.get('/:bookingId/amend-ecwid-preview', authMiddleware, requireBookingProductScope, getEcwidAmendPreview);
 router.post('/:bookingId/reconcile-ecwid', authMiddleware, requireBookingProductScope, reconcileEcwidBooking);
 router.post('/:bookingId/amend-ecwid', authMiddleware, requireBookingProductScope, amendEcwidBooking);
