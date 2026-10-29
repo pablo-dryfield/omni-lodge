@@ -1,5 +1,20 @@
 import { isExclusiveProductScope, productScopedApiRoute } from '../productScopedApiPolicy';
 
+it.each([['GET', 'preview'], ['POST', 'amend'], ['POST', 'cancel']])(
+  'requires booking update access for reviewed local action %s %s', (method, operation) => {
+    expect(productScopedApiRoute(method, `/api/bookings/42/local-actions/${operation}`)).toEqual({
+      resource: 'booking-local-action', module: 'booking-management', id: 42, passthrough: true, action: 'update',
+    });
+    for (const id of ['0', '-1', '1.5', '9007199254740992']) {
+      expect(productScopedApiRoute(method, `/api/bookings/${id}/local-actions/${operation}`)).toBeNull();
+    }
+    expect(productScopedApiRoute(method, `/api/bookings/42/local-actions/${operation}/extra`)).toBeNull();
+    for (const other of ['GET', 'POST', 'PATCH', 'DELETE'].filter(value => value !== method)) {
+      expect(productScopedApiRoute(other, `/api/bookings/42/local-actions/${operation}`)).toBeNull();
+    }
+  },
+);
+
 it.each(['/api/config', '/api/sql-helper/execute', '/api/reports/query', '/api/roleModulePermissions',
   '/api/finance/accounts', '/api/finance/transactions', '/api/finance/files/1/download', '/api/channelNumbers/summary',
   '/api/db-backups', '/api/userTypes/16/permissions', '/api/users/1/badge/send-to-print', '/api/bookings/emails'])

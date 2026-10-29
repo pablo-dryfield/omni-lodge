@@ -72,7 +72,8 @@ import {
   isExplicitlyUnpaidBooking,
 } from "../utils/bookingPayment";
 import { getManifestTshirtSizeLabels } from "../utils/manifestTshirtSizes";
-import { canManageDirectCancellations, isDirectCancellationOrder } from "../utils/bookingCancellation";
+import { canManageDirectCancellations, isDirectCancellationOrder, isLocalActionOrder } from "../utils/bookingCancellation";
+import BookingLocalActionModal from '../components/bookings/BookingLocalActionModal';
 import BookingDetailsModal, {
   getBookingIdFromOrder,
   type BookingEmailPreview,
@@ -1923,6 +1924,8 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   const roleSlug = useAppSelector(state => state.session.roleSlug);
   const bookingPermissions = useModuleAccess('booking-management');
   const canCancelDirect = bookingPermissions.ready && canManageDirectCancellations(roleSlug, productScoped, bookingPermissions.canUpdate);
+  const canForceLocalBooking = canCancelDirect && bookingPermissions.canUpdate;
+  const [localAction, setLocalAction] = useState<{ bookingId: number; order: UnifiedOrder; operation: 'amend' | 'cancel' } | null>(null);
   const availableBookingNavOptions = BOOKING_NAV_OPTIONS.filter(
     option => (option.value !== "sanity" || canAccessSanityCheck) &&
       (!productScoped || ["calendar", "manifest", "summary"].includes(option.value)),
@@ -5076,11 +5079,13 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
   );
   const mobileActionsCanAmend = Boolean(
     mobileActionsOrder &&
+      !(canForceLocalBooking && isLocalActionOrder(mobileActionsOrder) && !isEcwidOrder(mobileActionsOrder)) &&
       (isEcwidOrder(mobileActionsOrder) || isXperiencePolandOrder(mobileActionsOrder) || isDirectManifestActionOrder(mobileActionsOrder) || isAirbnbOrder(mobileActionsOrder)) &&
       mobileActionsBookingId,
   );
   const mobileActionsCanCancel = Boolean(
     mobileActionsOrder &&
+      !(canForceLocalBooking && isLocalActionOrder(mobileActionsOrder) && !isEcwidOrder(mobileActionsOrder)) &&
       (
         (
           ((!productScoped && (isEcwidOrder(mobileActionsOrder) || isStorefrontOrder(mobileActionsOrder))) ||
@@ -6335,6 +6340,18 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           <Button variant="default" fullWidth onClick={handleMobileActionsDetails}>
             Details
           </Button>
+          {mobileActionsOrder && mobileActionsBookingId && mobileActionsOrder.status !== 'cancelled'
+            && isLocalActionOrder(mobileActionsOrder) && canForceLocalBooking ? <>
+            <Alert color="orange" variant="light"><Text size="sm">Force actions change OmniLodge only. The platform booking and payments remain unchanged.</Text></Alert>
+            <Button fullWidth variant="light" onClick={() => {
+              setLocalAction({ bookingId: mobileActionsBookingId, order: mobileActionsOrder, operation: 'amend' });
+              closeMobileActionsModal();
+            }}>Force amend</Button>
+            <Button fullWidth variant="outline" color="red" onClick={() => {
+              setLocalAction({ bookingId: mobileActionsBookingId, order: mobileActionsOrder, operation: 'cancel' });
+              closeMobileActionsModal();
+            }}>Force cancel</Button>
+          </> : null}
           {mobileActionsCanDirectConfirmation && (
             <Button
               variant="light"
@@ -6375,6 +6392,10 @@ const BookingsManifestPage = ({ title }: GenericPageProps) => {
           )}
         </Stack>
       </Modal>
+
+      {localAction ? <BookingLocalActionModal key={`${localAction.bookingId}:${localAction.operation}`}
+        {...localAction} canManage={canForceLocalBooking} onClose={() => setLocalAction(null)}
+        onSaved={() => setReloadToken(token => token + 1)} /> : null}
 
       <Modal
         opened={amendState.opened}

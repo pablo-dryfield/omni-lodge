@@ -51,6 +51,7 @@ beforeEach(() => {
   jest.mocked(BookingEvent.findAll).mockImplementation(async () => events);
   jest.mocked(BookingEvent.findOne).mockImplementation(async (options: any) => {
     const w = options.where;
+    if (w.eventPayload?.source === 'manifest-local-action') return events.find(entry => entry.eventPayload?.source === 'manifest-local-action') ?? null;
     return events.find((entry) => w.emailMessageId ? entry.emailMessageId === w.emailMessageId
       : w['eventPayload.rezdy.refundReference'] ? (entry.eventPayload?.rezdy as RezdySource)?.refundReference === w['eventPayload.rezdy.refundReference'] : false) ?? null;
   });
@@ -70,6 +71,36 @@ beforeEach(() => {
 });
 
 describe('Rezdy events through the booking ingestion transaction', () => {
+  it.each(['rezdy', 'viator', 'getyourguide', 'fareharbor', 'freetour', 'airbnb', 'xperiencepoland', 'civitatis', 'ecwid'])(
+    'does not let an older %s snapshot overwrite a force correction', async platform => {
+      record.platform = platform; record.status = 'cancelled'; record.statusChangedAt = new Date('2026-10-21T00:00:00Z');
+      events.push({ id: 100, bookingId: record.id, platform, eventType: 'cancelled',
+        occurredAt: record.statusChangedAt, eventPayload: { source: 'manifest-local-action', localOnly: true } } as BookingEvent);
+      const event = { ...incoming(), platform, rawPayload: {}, bookingFields: { experienceDate: '2026-10-25', partySizeTotal: 8 } };
+      await applyParsedEvent(email, event);
+      expect(record.status).toBe('cancelled'); expect(record.save).not.toHaveBeenCalled();
+      expect(BookingAddon.destroy).not.toHaveBeenCalled();
+      expect(events.at(-1)?.eventPayload).toMatchObject({ localOverrideSkipped: true, localOverrideEventId: 100 });
+    },
+  );
+  it('refreshes a previously read booking under a row lock before comparing it with a local correction', async () => {
+    const stale = { ...record, statusChangedAt: new Date('2026-10-19T10:00:00Z'), save: jest.fn() } as unknown as Booking;
+    record.status = 'cancelled'; record.statusChangedAt = new Date('2026-10-21T00:00:00Z');
+    events.push({ id: 100, bookingId: record.id, platform: record.platform, eventType: 'cancelled',
+      occurredAt: record.statusChangedAt, eventPayload: { source: 'manifest-local-action', localOnly: true } } as BookingEvent);
+    // Rezdy resolves identity with findAll; findOne is the later locked read.
+    jest.mocked(Booking.findAll).mockResolvedValueOnce([stale]);
+    await applyParsedEvent(email, incoming());
+    expect(Booking.findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 12 }, lock: true }));
+    expect(record.status).toBe('cancelled'); expect(stale.save).not.toHaveBeenCalled(); expect(record.save).not.toHaveBeenCalled();
+  });
+  it('continues to apply genuinely newer provider updates after a local force action', async () => {
+    events.push({ id: 100, bookingId: record.id, platform: 'rezdy', eventType: 'amended',
+      occurredAt: record.statusChangedAt, eventPayload: { source: 'manifest-local-action', localOnly: true } } as BookingEvent);
+    await applyParsedEvent(email, incoming());
+    expect(record.save).toHaveBeenCalled(); expect(record.status).toBe('amended');
+    expect(events.at(-1)?.eventPayload?.localOverrideSkipped).not.toBe(true);
+  });
   it('reuses the caller transaction and rejects a cross-product reassignment before saving', async () => {
     const tx = { LOCK: { SHARE: 'share' } } as any;
     const product = jest.spyOn(Product, 'findByPk').mockImplementation(async (id) => ({ productTypeId: id === 48 ? 3 : 1 }) as Product);

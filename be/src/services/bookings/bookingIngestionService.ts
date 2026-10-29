@@ -8,6 +8,7 @@ import timezone from 'dayjs/plugin/timezone.js';
 import sequelize from '../../config/database.js';
 import BookingEmail from '../../models/BookingEmail.js';
 import Booking from '../../models/Booking.js';
+import { findNewerLocalBookingOverride } from './localBookingOverrideHistory.js';
 import BookingEvent from '../../models/BookingEvent.js';
 import BookingAddon from '../../models/BookingAddon.js';
 import Channel from '../../models/Channel.js';
@@ -2019,6 +2020,13 @@ export const applyParsedEvent = async (
     if (!booking && priorEvent?.bookingId) {
       booking = await Booking.findByPk(priorEvent.bookingId, { transaction });
     }
+    if (booking) {
+      // Re-read after acquiring the same row lock used by manual force actions.
+      // A provider snapshot read before a concurrent correction must not save
+      // its stale in-memory values after that correction commits.
+      booking = await Booking.findOne({ where: { id: booking.id }, transaction, lock: true });
+      if (!booking) throw new Error('The booking changed during ingestion. Retry this email.');
+    }
     if (options.productAccess) {
       await assertReprocessedBookingScope(booking, options.productAccess, transaction);
       if (priorEvent && String(priorEvent.bookingId) !== String(booking!.id)) {
@@ -2071,6 +2079,17 @@ export const applyParsedEvent = async (
     }
 
     const lastMutationAt = bookingRecord.statusChangedAt ?? bookingRecord.createdAt ?? null;
+    if (!isScopedReprocess && lastMutationAt && eventOccurredAt <= lastMutationAt) {
+      const localOverride = await findNewerLocalBookingOverride(bookingRecord.id, eventOccurredAt, transaction);
+      if (localOverride) {
+        if (!priorEvent) await BookingEvent.create({ bookingId: bookingRecord.id, emailId: email.id,
+          emailMessageId: email.messageId, platform: bookingRecord.platform, eventType: 'note', statusAfter: bookingRecord.status,
+          occurredAt: eventOccurredAt, ingestedAt: new Date(), processedAt: new Date(),
+          eventPayload: { ...event.rawPayload, localOverrideSkipped: true, localOverrideEventId: localOverride.id,
+            skipReason: 'older_than_local_manifest_action' } } as unknown as BookingEvent, { transaction });
+        return bookingRecord.id;
+      }
+    }
     const isOlderEvent = Boolean(lastMutationAt && eventOccurredAt < lastMutationAt);
     const isStaleRezdySnapshot = isOlderEvent && (getRezdySource(event) || isRezdyLinkedViatorBooking(bookingRecord, event));
     const staleSource = getRezdySource(event);
