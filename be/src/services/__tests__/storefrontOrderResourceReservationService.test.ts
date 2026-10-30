@@ -6,6 +6,7 @@ import InventoryItem from '../../models/InventoryItem.js';
 import StorefrontOrder from '../../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../../models/StorefrontOrderItem.js';
 import StorefrontPromotion from '../../models/StorefrontPromotion.js';
+import { Op } from 'sequelize';
 import {
   consumeStorefrontOrderResourceReservations,
   incrementStorefrontPromotionRedemptions,
@@ -329,6 +330,7 @@ describe('storefront order resource reservation service', () => {
 
     expect(reservationModel.findAll).toHaveBeenCalledWith(expect.objectContaining({
       attributes: ['id', 'inventoryItemId'],
+      where: expect.objectContaining({ status: { [Op.in]: ['held', 'consumed'] } }),
       lock: transaction.LOCK.UPDATE,
     }));
     expect(inventoryItemModel.findAll).toHaveBeenCalledWith(expect.objectContaining({
@@ -380,8 +382,45 @@ describe('storefront order resource reservation service', () => {
       expiresAt: now,
       releasedAt: now,
     }, expect.objectContaining({
-      where: expect.objectContaining({ resourceType: 'inventory', status: 'consumed' }),
+      where: expect.objectContaining({ resourceType: 'inventory', status: { [Op.in]: ['held', 'consumed'] } }),
       transaction,
     }));
+  });
+  it('records late payment after counter reconciliation without reserving the physical stock a second time', async () => {
+    const now = new Date('2026-09-20T12:00:00Z');
+    const reservation = { resourceType: 'inventory', orderItemId: 91, inventoryItemId: 4, status: 'released',
+      expiresAt: new Date('2026-09-18T22:00:00Z'), consumedAt: null, commitExpiresAt: new Date('2026-09-19T20:00:00Z'), update: jest.fn() };
+    reservationModel.findAll.mockResolvedValue([reservation]);
+    inventoryItemModel.findAll.mockResolvedValue([{ id: 4, isActive: true }]);
+    orderItemModel.findAll.mockResolvedValue([{ id: 91, productId: 2, experienceDate: '2026-09-18', experienceTime: '21:00', addons: [] }]);
+    counterModel.findAll.mockResolvedValue([{ date: '2026-09-18', productId: 2 }]);
+    promotionModel.findAll.mockResolvedValue([]); activePromotionCounts.mockResolvedValue(new Map());
+    await consumeStorefrontOrderResourceReservations({ orderId: 41, promotionIds: [], now, transaction });
+    expect(availableStock).not.toHaveBeenCalled();
+    expect(reservation.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'released', expiresAt: now }), { transaction });
+  });
+  it.each([100, 0])('reacquires stock for a future unpaid amendment only when available stock is %s', async stock => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-10T12:00:00Z'));
+    try {
+      const reservation = { orderItemId: 91, inventoryItemId: 4, addonId: 10, variant: null, quantity: '1',
+        status: 'released', consumedAt: null, expiresAt: new Date('2026-09-09T22:00:00Z'),
+        commitExpiresAt: new Date('2026-09-10T20:00:00Z'), update: jest.fn() };
+      reservationModel.findAll.mockResolvedValue([reservation]);
+      inventoryItemModel.findAll.mockResolvedValue([{ id: 4, isActive: true }]);
+      orderItemModel.findAll.mockResolvedValue([{ id: 91, productId: 2, experienceDate: '2026-09-18', experienceTime: '21:00',
+        addons: [{ addonId: 10, quantity: 1, variants: [] }] }]);
+      availableStock.mockResolvedValue(stock);
+      const operation = refreshStorefrontOrderInventoryReservationExpiries({ id: 41, paymentMethod: 'bank_transfer',
+        paymentStatus: 'unpaid', paymentDueAt: null }, transaction);
+      if (stock === 0) {
+        await expect(operation).rejects.toMatchObject({ status: 409 });
+        expect(reservation.update).not.toHaveBeenCalled();
+      } else {
+        await expect(operation).resolves.toBe(1);
+        expect(reservation.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'held', expiresAt: null,
+          releasedAt: null, commitExpiresAt: new Date('2026-09-19T19:00:00Z') }), { transaction });
+      }
+      expect(availableStock).toHaveBeenCalledWith(4, transaction);
+    } finally { jest.useRealTimers(); }
   });
 });
