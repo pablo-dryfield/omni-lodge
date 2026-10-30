@@ -350,7 +350,7 @@ const reacquireInventoryReservation = async (
   if (available + 0.0000001 < Number(reservation.quantity)) {
     throw new HttpError(
       409,
-      'Reserved add-on inventory is no longer available. Adjust the booking before recording payment.',
+      'Reserved add-on inventory is no longer available. Adjust the booking before continuing.',
     );
   }
 };
@@ -619,7 +619,7 @@ export const lockStorefrontInventoryReservationsForCounter = async (
             orderItemId: { [Op.in]: orderItemIds },
             inventoryItemId: { [Op.in]: reconciliationInventoryItemIds },
             resourceType: 'inventory',
-            status: 'consumed',
+            status: { [Op.in]: ['held', 'consumed'] },
           },
           attributes: ['id', 'inventoryItemId'],
           order: [['reservationKey', 'ASC']],
@@ -650,7 +650,7 @@ export const releaseReconciledStorefrontInventoryReservations = async (
     where: {
       id: { [Op.in]: settlement.reservationIds },
       resourceType: 'inventory',
-      status: 'consumed',
+      status: { [Op.in]: ['held', 'consumed'] },
     },
     transaction,
   });
@@ -727,8 +727,8 @@ export const refreshStorefrontOrderInventoryReservationExpiries = async (
     const finalized = finalizedOrderItemIds.has(orderItemId);
     const changes: {
       commitExpiresAt: Date;
-      status?: 'consumed' | 'released';
-      expiresAt?: Date;
+      status?: 'held' | 'consumed' | 'released';
+      expiresAt?: Date | null;
       consumedAt?: Date;
       releasedAt?: Date | null;
     } = { commitExpiresAt };
@@ -747,11 +747,25 @@ export const refreshStorefrontOrderInventoryReservationExpiries = async (
       changes.expiresAt = commitExpiresAt;
       changes.consumedAt = reservation.consumedAt || now;
       changes.releasedAt = commitExpiresAt > now ? null : now;
+    } else if (finalized && reservation.status === 'held') {
+      changes.status = 'released';
+      changes.expiresAt = now;
+      changes.releasedAt = now;
+    } else if (!finalized && (order.paymentDueAt === null || order.paymentDueAt > now)
+      && commitExpiresAt > now && (reservation.status !== 'held'
+      || (reservation.expiresAt !== null && reservation.expiresAt <= now))) {
+      // A previously reconciled/elapsed hold needs stock again when its unpaid
+      // booking moves to a future experience. Keep the transfer itself unpaid.
+      await reacquireInventoryReservation(reservation, transaction, activeInventoryItemIds);
+      changes.status = 'held';
+      changes.expiresAt = order.paymentDueAt;
+      changes.releasedAt = null;
     }
     if (
       reservation.commitExpiresAt?.getTime() === commitExpiresAt.getTime()
       && (!changes.status || reservation.status === changes.status)
-      && (!changes.expiresAt || reservation.expiresAt?.getTime() === changes.expiresAt.getTime())
+      && (changes.expiresAt === undefined || (changes.expiresAt === null
+        ? reservation.expiresAt === null : reservation.expiresAt?.getTime() === changes.expiresAt.getTime()))
     ) {
       continue;
     }
