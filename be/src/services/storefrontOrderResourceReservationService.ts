@@ -159,7 +159,7 @@ export const lockStorefrontCartReservationResources = async (
 
 const buildInventoryDemands = (
   quote: ReservableQuote,
-  paymentDueAt: Date,
+  paymentDueAt: Date | null,
   mappedAddonIds: ReadonlySet<number>,
   orderItems: ReservableOrderItem[],
 ): InventoryReservationDemand[] => {
@@ -171,7 +171,8 @@ const buildInventoryDemands = (
       item.experienceDate,
       item.experienceTime || (item.experienceDate ? '23:59' : null),
     );
-    const commitExpiresAt = resolveInventoryReservationCommitExpiry(paymentDueAt, experienceStartsAt);
+    // This horizon controls paid inventory commitments, not reservation/payment expiry.
+    const commitExpiresAt = resolveInventoryReservationCommitExpiry(paymentDueAt ?? new Date(), experienceStartsAt);
     for (const addon of item.addons) {
       if (!mappedAddonIds.has(addon.addonId)) continue;
       const selections = addon.variants.length > 0
@@ -209,7 +210,7 @@ export const reserveStorefrontOrderResources = async (input: {
   orderId: number;
   orderItems: ReservableOrderItem[];
   quote: ReservableQuote;
-  paymentDueAt: Date;
+  paymentDueAt: Date | null;
   transaction: Transaction;
 }): Promise<void> => {
   const existing = await StorefrontOrderResourceReservation.count({
@@ -439,7 +440,8 @@ export const consumeStorefrontOrderResourceReservations = async (input: {
       continue;
     }
     if (reservation.status === 'consumed') continue;
-    const ownsActiveHold = reservation.status === 'held' && reservation.expiresAt > input.now;
+    const ownsActiveHold = reservation.status === 'held'
+      && (reservation.expiresAt === null || reservation.expiresAt > input.now);
     if (!ownsActiveHold) {
       await reacquireInventoryReservation(reservation, input.transaction, activeInventoryItemIds);
     }
@@ -486,7 +488,8 @@ export const consumeStorefrontOrderResourceReservations = async (input: {
       consumedPromotionIds.push(promotionId);
       continue;
     }
-    const ownsActiveReservation = reservation?.status === 'held' && reservation.expiresAt > input.now;
+    const ownsActiveReservation = reservation?.status === 'held'
+      && (reservation.expiresAt === null || reservation.expiresAt > input.now);
     if (!canAcquireLimitedPromotion({
       redemptionCount: Number(promotion.redemptionCount),
       maxRedemptions: promotion.maxRedemptions,
@@ -656,7 +659,7 @@ export const releaseReconciledStorefrontInventoryReservations = async (
 
 /**
  * Keeps paid inventory commitments aligned with Manifest date amendments.
- * Pending holds continue to expire at the unchanged payment deadline; only
+ * Pending holds keep their existing expiry (null means no expiry); only
  * their post-payment horizon is refreshed. Already-paid commitments move
  * their active expiry immediately.
  */
@@ -664,7 +667,7 @@ export const refreshStorefrontOrderInventoryReservationExpiries = async (
   order: ReservableOrder,
   transaction: Transaction,
 ): Promise<number> => {
-  if (order.paymentMethod !== 'bank_transfer' || !order.paymentDueAt) return 0;
+  if (order.paymentMethod !== 'bank_transfer') return 0;
 
   const reservations = await StorefrontOrderResourceReservation.findAll({
     where: {
@@ -714,7 +717,7 @@ export const refreshStorefrontOrderInventoryReservationExpiries = async (
     const itemSchedule = scheduleByItemId.get(orderItemId);
     if (!itemSchedule) continue;
     const commitExpiresAt = resolveInventoryReservationCommitExpiryForSchedule(
-      order.paymentDueAt,
+      order.paymentDueAt ?? now,
       Number(reservation.addonId),
       reservation.variant,
       [itemSchedule],
@@ -735,7 +738,8 @@ export const refreshStorefrontOrderInventoryReservationExpiries = async (
       changes.consumedAt = reservation.consumedAt || now;
       changes.releasedAt = now;
     } else if (paidCommitment) {
-      const ownsActiveCommitment = reservation.status === 'consumed' && reservation.expiresAt > now;
+      const ownsActiveCommitment = reservation.status === 'consumed'
+        && (reservation.expiresAt === null || reservation.expiresAt > now);
       if (!ownsActiveCommitment && commitExpiresAt > now) {
         await reacquireInventoryReservation(reservation, transaction, activeInventoryItemIds);
       }
@@ -747,7 +751,7 @@ export const refreshStorefrontOrderInventoryReservationExpiries = async (
     if (
       reservation.commitExpiresAt?.getTime() === commitExpiresAt.getTime()
       && (!changes.status || reservation.status === changes.status)
-      && (!changes.expiresAt || reservation.expiresAt.getTime() === changes.expiresAt.getTime())
+      && (!changes.expiresAt || reservation.expiresAt?.getTime() === changes.expiresAt.getTime())
     ) {
       continue;
     }

@@ -21,7 +21,7 @@ export type StorefrontReservationResourceType = 'inventory' | 'promotion';
 export type StorefrontReservationStatus = 'held' | 'consumed' | 'released';
 
 /**
- * A temporary commercial hold owned by a storefront order.
+ * A commercial hold owned by a storefront order (null expiry means no expiry).
  *
  * Inventory rows deliberately do not create InventoryFulfillment records or
  * InventoryMovement rows. They only reduce sellable availability until the
@@ -90,9 +90,9 @@ export default class StorefrontOrderResourceReservation extends Model {
   @Column(DataType.STRING(20))
   declare status: StorefrontReservationStatus;
 
-  @AllowNull(false)
+  @AllowNull(true)
   @Column({ field: 'expires_at', type: DataType.DATE })
-  declare expiresAt: Date;
+  declare expiresAt: Date | null;
 
   @AllowNull(true)
   @Column({ field: 'commit_expires_at', type: DataType.DATE })

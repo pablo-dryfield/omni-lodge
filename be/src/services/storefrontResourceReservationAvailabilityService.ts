@@ -17,7 +17,7 @@ export const getActivePromotionReservationCounts = async (
       resourceType: 'promotion',
       promotionId: { [Op.in]: promotionIds },
       status: 'held',
-      expiresAt: { [Op.gt]: now },
+      [Op.or]: [{ expiresAt: null }, { expiresAt: { [Op.gt]: now } }],
     },
     group: ['promotionId'],
     transaction,

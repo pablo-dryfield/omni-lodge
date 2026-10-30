@@ -41,8 +41,3 @@ export const getStorefrontBankTransferAccount = (
     instructions: clean(source.instructions, 1000) || null,
   };
 };
-
-export const getStorefrontBankTransferDueHours = (): number => {
-  const parsed = Number(getConfigValue('STOREFRONT_BANK_TRANSFER_DUE_HOURS'));
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 336 ? parsed : 48;
-};

@@ -150,7 +150,9 @@ describe('ReviewOverviewDashboard', () => {
       reviewPlatforms: configuredPlatforms,
     } });
     (axiosInstance.post as jest.Mock).mockResolvedValue({ data: { credit: { id: 101 } } });
-    render(<MantineProvider><ReviewOverviewDashboard canManage month="2026-10" onMonthChange={jest.fn()} /></MantineProvider>);
+    render(<MantineProvider theme={{ components: { Modal: { defaultProps: { transitionProps: { duration: 0 } } } } }}>
+      <ReviewOverviewDashboard canManage month="2026-10" onMonthChange={jest.fn()} />
+    </MantineProvider>);
     await waitFor(() => expect(mockedGet).toHaveBeenCalledWith('/reviews/archive/summary', expect.anything()));
     fireEvent.click(screen.getByRole('button', { name: 'Add manual counter entry' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add manual counter entry' });

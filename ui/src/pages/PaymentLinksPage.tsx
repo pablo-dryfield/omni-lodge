@@ -523,7 +523,8 @@ const bankTransferStatusLabel = (status: BankTransferOrder["status"]): string =>
 );
 
 const bankTransferDueState = (order: BankTransferOrder): { color: string; label: string } | null => {
-  if (order.status !== "awaiting_transfer" || !order.paymentDueAt) return null;
+  if (order.status !== "awaiting_transfer") return null;
+  if (!order.paymentDueAt) return { color: "dimmed", label: "No expiry" };
   const dueAt = dayjs(order.paymentDueAt);
   if (!dueAt.isValid()) return null;
   if (dayjs().isAfter(dueAt)) {
@@ -2180,7 +2181,7 @@ const PaymentLinksPage = () => {
           {creatorMode === "bank-transfer" ? (
             <>
               <Alert color="blue" icon={<IconBuildingBank size={18} />}>
-                The booking is reserved immediately as Not paid. Final confirmations are sent only after you mark payment received.
+                The booking is reserved immediately as Not paid, with no expiry. It stays open until you record payment or cancel it. Final confirmations are sent only after you mark payment received.
               </Alert>
               <Paper withBorder radius="md" p="md">
                 <Stack gap="xs">

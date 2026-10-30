@@ -506,7 +506,7 @@ const bankTransferPaymentHtml = (
     ${Number(order.discountTotal) > 0 ? detailRow('Discount', `-${money(order.discountTotal, order.currency)}`) : ''}
     ${detailRow('Amount to transfer', money(order.total, order.currency))}
     ${detailRow('Payment reference', order.paymentReference || order.publicId)}
-    ${detailRow('Pay by', dueAtLabel(order.paymentDueAt))}
+    ${order.paymentDueAt ? detailRow('Pay by', dueAtLabel(order.paymentDueAt)) : detailRow('Reservation expiry', 'No expiry')}
     ${detailRow('Beneficiary', account.beneficiary)}
     ${detailRow('IBAN / account', account.iban)}
     ${account.bankName ? detailRow('Bank', account.bankName) : ''}
@@ -545,7 +545,7 @@ export const buildCustomerBankTransferInstructionsEmail = (
     ...(Number(order.discountTotal) > 0 ? [`Discount: -${money(order.discountTotal, order.currency)}`] : []),
     `Amount to transfer: ${money(order.total, order.currency)}`,
     `Payment reference: ${order.paymentReference || order.publicId}`,
-    `Pay by: ${dueAtLabel(order.paymentDueAt)}`,
+    order.paymentDueAt ? `Pay by: ${dueAtLabel(order.paymentDueAt)}` : 'Reservation expiry: No expiry',
     `Beneficiary: ${account.beneficiary}`,
     `IBAN / account: ${account.iban}`,
     ...(account.bankName ? [`Bank: ${account.bankName}`] : []),

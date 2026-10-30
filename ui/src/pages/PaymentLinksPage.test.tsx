@@ -53,7 +53,7 @@ const awaitingOrder = {
   paymentStatus: "unpaid",
   paymentReference: "KTK-BT-000041",
   receivedPaymentReference: null,
-  paymentDueAt: "2026-09-05T20:00:00.000Z",
+  paymentDueAt: null,
   paymentNote: null,
   total: 240,
   currency: "PLN",
@@ -280,7 +280,7 @@ describe("PaymentLinksPage bank transfer bookings", () => {
     expect(screen.getAllByText("Note: Visible in PLN account").length).toBeGreaterThan(0);
   });
 
-  it("shows the transfer reference and deadline and can resend instructions", async () => {
+  it("shows the transfer reference with no expiry and can resend instructions", async () => {
     const resentOrder = {
       ...awaitingOrder,
       bankTransferInstructionsEmailSentAt: "2026-09-07T12:00:00.000Z",
@@ -289,7 +289,8 @@ describe("PaymentLinksPage bank transfer bookings", () => {
     renderPage();
 
     expect((await screen.findAllByText("Ref KTK-BT-000041")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Overdue since 5 Sep 2026, \d{2}:\d{2}/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('No expiry').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Overdue since/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Resend" }));
 
     await waitFor(() => {

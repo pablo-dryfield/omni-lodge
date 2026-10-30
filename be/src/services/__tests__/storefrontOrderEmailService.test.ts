@@ -188,7 +188,7 @@ describe('storefront paid-order emails', () => {
       paymentStatus: 'unpaid',
       paymentMethod: 'bank_transfer',
       paymentReference: 'KTK-BT-000321',
-      paymentDueAt: new Date('2026-08-14T18:00:00.000Z'),
+      paymentDueAt: null,
     } as unknown as StorefrontOrder;
     const email = buildCustomerBankTransferInstructionsEmail(
       pendingOrder,
@@ -211,6 +211,10 @@ describe('storefront paid-order emails', () => {
     expect(email.textBody).toContain('Your final booking confirmation will be sent');
     expect(email.htmlBody).not.toContain('Paid in full');
     expect(email.textBody).not.toContain('Payment received');
+    expect(email.textBody).toContain('Reservation expiry: No expiry');
+    expect(email.htmlBody).toContain('No expiry');
+    expect(email.textBody).not.toContain('Pay by:');
+    expect(email.htmlBody).not.toContain('Pay by');
   });
 
   it('builds a distinct cancellation notice for an unpaid bank-transfer reservation', () => {
