@@ -49,6 +49,7 @@ describe('application configuration registry', () => {
     });
     expect(CONFIG_DEFINITION_MAP.get('STOREFRONT_BANK_TRANSFER_DUE_HOURS')).toMatchObject({
       category: 'Storefront',
+      isEditable: false,
       valueType: 'number',
       defaultValue: 48,
       validation: { required: true, integer: true, min: 1, max: 336 },

@@ -3,21 +3,30 @@ import FinanceAccount from '../../finance/models/FinanceAccount.js';
 import Product from '../../models/Product.js';
 import StorefrontOrder from '../../models/StorefrontOrder.js';
 import User from '../../models/User.js';
+import sequelize from '../../config/database.js';
+import AuditLog from '../../models/AuditLog.js';
+import BookingEvent from '../../models/BookingEvent.js';
+import StorefrontOrderItem from '../../models/StorefrontOrderItem.js';
 import {
   listBankTransferOrders,
   previewBankTransferOrder,
   serializeBankTransferOrder,
+  createBankTransferOrder,
+  expireOverdueBankTransferOrders,
 } from '../storefrontBankTransferOrderService.js';
 import { quoteStorefrontCart } from '../storefrontCommerceService.js';
 import { normalizeSavedCartFromQuote } from '../storefrontSavedCartService.js';
+import { addCustomerToSavedCart } from '../storefrontSavedCartService.js';
+import { projectStorefrontOrderBookings } from '../storefrontOrderProjectionService.js';
+import { reserveStorefrontOrderResources } from '../storefrontOrderResourceReservationService.js';
 
 jest.mock('../../config/database.js', () => ({
   __esModule: true,
   default: { transaction: jest.fn() },
 }));
-jest.mock('../../models/AuditLog.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/AuditLog.js', () => ({ __esModule: true, default: { create: jest.fn() } }));
 jest.mock('../../models/Booking.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
-jest.mock('../../models/BookingEvent.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/BookingEvent.js', () => ({ __esModule: true, default: { bulkCreate: jest.fn() } }));
 jest.mock('../../finance/models/FinanceAccount.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn(), findByPk: jest.fn() },
@@ -29,7 +38,7 @@ jest.mock('../../models/Currency.js', () => ({
 jest.mock('../../models/Product.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../../models/StorefrontOrder.js', () => ({
   __esModule: true,
-  default: { findAll: jest.fn(), findOne: jest.fn() },
+  default: { findAll: jest.fn(), findOne: jest.fn(), create: jest.fn() },
 }));
 jest.mock('../../models/StorefrontOrderItem.js', () => ({
   __esModule: true,
@@ -66,7 +75,6 @@ jest.mock('../storefrontBookingProjectionService.js', () => ({
 }));
 jest.mock('../storefrontBankTransferConfigService.js', () => ({
   getStorefrontBankTransferAccount: jest.fn(),
-  getStorefrontBankTransferDueHours: jest.fn(),
 }));
 jest.mock('../storefrontOrderEmailService.js', () => ({
   deliverStorefrontBankTransferCancellationEmail: jest.fn(),
@@ -146,6 +154,38 @@ describe('bank-transfer order listing and serialization', () => {
     jest.clearAllMocks();
     bookingModel.findAll.mockResolvedValue([]);
     userModel.findAll.mockResolvedValue([]);
+  });
+  it.each(['2026-01-01', '2027-06-01'])('creates a bank transfer reservation for %s without a payment or hold deadline', async experienceDate => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    (sequelize.transaction as jest.Mock).mockImplementation(async callback => callback(transaction));
+    const stored = { ...buildOrder(41, 10), orderSource: 'backoffice', update: jest.fn() } as unknown as StorefrontOrder;
+    (StorefrontOrder.findOne as jest.Mock).mockImplementation(async options => options.where.idempotencyKey ? null : stored);
+    (StorefrontOrder.create as jest.Mock).mockImplementation(async values => Object.assign(stored, values));
+    (StorefrontOrderItem.bulkCreate as jest.Mock).mockResolvedValue(stored.items);
+    (projectStorefrontOrderBookings as jest.Mock).mockResolvedValue({ bookings: [{ id: 99 }] });
+    const cart = { items: [{ productId: 10, quantity: 1, experienceDate }] };
+    (addCustomerToSavedCart as jest.Mock).mockReturnValue(cart);
+    quoteStorefrontCartMock.mockResolvedValue({ currency: 'PLN', currencyExchangeRateToPln: 1, subtotal: 100,
+      addonTotal: 0, discountTotal: 0, total: 100, discountCode: null, discountCodes: [], promotionId: null,
+      discounts: [], items: [{ ...stored.items[0], experienceDate }] });
+    normalizeSavedCartFromQuoteMock.mockReturnValue(cart);
+    financeAccountModel.findByPk.mockResolvedValue({ id: 4, name: 'Example account', type: 'bank', currency: 'PLN',
+      accountHolderName: 'Example company', accountNumber: 'PL00123456789012345678901234', isActive: true });
+    const result = await createBankTransferOrder({ actorId: 7, allowedProductTypeIds: null,
+      clientRequestId: '00000000-0000-4000-8000-000000000041', cart, bankTransferAccountId: 4,
+      allowPastExperienceDates: true, customer: { firstName: 'Example', email: 'guest@example.test' } });
+    expect(result.created).toBe(true);
+    expect(StorefrontOrder.create).toHaveBeenCalledWith(expect.objectContaining({ paymentDueAt: null,
+      status: 'pending_payment', paymentStatus: 'unpaid' }), { transaction });
+    expect(reserveStorefrontOrderResources).toHaveBeenCalledWith(expect.objectContaining({ paymentDueAt: null, transaction }));
+    expect(AuditLog.create).toHaveBeenCalled(); expect(BookingEvent.bulkCreate).toHaveBeenCalled();
+  });
+  it('never cancels or queries transfers even if an obsolete expiry runner is invoked far in the future', async () => {
+    expect(await expireOverdueBankTransferOrders({ now: new Date('2099-01-01'), limit: 100 })).toEqual({
+      examined: 0, expired: 0, expiredPublicIds: [], failedPublicIds: [],
+    });
+    expect(StorefrontOrder.findAll).not.toHaveBeenCalled();
+    expect(AuditLog.create).not.toHaveBeenCalled();
   });
 
   it('applies the paid-history limit after product scope filtering', async () => {

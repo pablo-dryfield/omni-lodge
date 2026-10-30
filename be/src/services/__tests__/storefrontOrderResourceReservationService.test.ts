@@ -13,6 +13,7 @@ import {
   refreshStorefrontOrderInventoryReservationExpiries,
   releaseReconciledStorefrontInventoryReservations,
   releaseStorefrontOrderResourceReservations,
+  reserveStorefrontOrderResources,
 } from '../storefrontOrderResourceReservationService.js';
 import { getAvailableStock } from '../inventoryService.js';
 import { getActivePromotionReservationCounts } from '../storefrontResourceReservationAvailabilityService.js';
@@ -107,6 +108,33 @@ describe('storefront order resource reservation service', () => {
       second.increment.mock.invocationCallOrder[0],
     );
   });
+  it('reserves stock without an expiry while keeping its separate paid commitment horizon', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-07T12:00:00Z'));
+    try {
+      jest.mocked(StorefrontOrderResourceReservation.count).mockResolvedValue(0);
+      addonInventoryMappingModel.findAll.mockResolvedValue([{ id: 1, addonId: 10, inventoryItemId: 4, quantityPerAddon: 1, variant: null }]);
+      inventoryItemModel.findAll.mockResolvedValue([{ id: 4, isActive: true }]);
+      promotionModel.findAll.mockResolvedValue([]);
+      await reserveStorefrontOrderResources({ orderId: 41, orderItems: [{ id: 91 }], paymentDueAt: null, transaction,
+        quote: { discounts: [], items: [{ experienceDate: '2027-01-10', experienceTime: '21:00',
+          addons: [{ addonId: 10, name: 'Shirt', quantity: 1, variants: [] }] }] } });
+      expect(StorefrontOrderResourceReservation.bulkCreate).toHaveBeenCalledWith([expect.objectContaining({
+        status: 'held', expiresAt: null, commitExpiresAt: new Date('2027-01-11T20:00:00Z'), quantity: 1,
+      })], expect.objectContaining({ transaction }));
+    } finally { jest.useRealTimers(); }
+  });
+  it('settles a permanent stock hold without trying to reacquire its own stock', async () => {
+    const now = new Date('2027-01-10T12:00:00Z');
+    const reservation = { resourceType: 'inventory', inventoryItemId: 4, orderItemId: 91, status: 'held',
+      expiresAt: null, commitExpiresAt: new Date('2027-01-11T20:00:00Z'), update: jest.fn() };
+    reservationModel.findAll.mockResolvedValue([reservation]);
+    inventoryItemModel.findAll.mockResolvedValue([{ id: 4, isActive: true }]);
+    promotionModel.findAll.mockResolvedValue([]); activePromotionCounts.mockResolvedValue(new Map());
+    await consumeStorefrontOrderResourceReservations({ orderId: 41, promotionIds: [], now, transaction });
+    expect(availableStock).not.toHaveBeenCalled();
+    expect(reservation.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'consumed',
+      expiresAt: reservation.commitExpiresAt }), { transaction });
+  });
 
   it('releases only held rows in the caller transaction', async () => {
     reservationModel.update.mockResolvedValue([3]);
@@ -122,13 +150,13 @@ describe('storefront order resource reservation service', () => {
     }));
   });
 
-  it('converts a live limited-promotion hold into exactly one redemption', async () => {
+  it.each([null, new Date('2026-09-08T12:00:00.000Z')])('converts a live limited-promotion hold with expiry %s into exactly one redemption', async expiresAt => {
     const now = new Date('2026-09-07T12:00:00.000Z');
     const reservation = {
       resourceType: 'promotion',
       promotionId: 7,
       status: 'held',
-      expiresAt: new Date('2026-09-08T12:00:00.000Z'),
+      expiresAt,
       update: jest.fn().mockResolvedValue(undefined),
     };
     const promotion = {
@@ -186,7 +214,7 @@ describe('storefront order resource reservation service', () => {
     expect(reservation.update).not.toHaveBeenCalled();
   });
 
-  it('refreshes held and consumed inventory horizons after a Manifest schedule amendment', async () => {
+  it.each([null, new Date('2026-09-08T10:00:00.000Z')])('refreshes held and consumed inventory horizons with payment deadline %s after a Manifest amendment', async paymentDueAt => {
     jest.useFakeTimers().setSystemTime(new Date('2026-09-10T12:00:00.000Z'));
     const held = {
       orderItemId: 91,
@@ -196,7 +224,7 @@ describe('storefront order resource reservation service', () => {
       status: 'held',
       consumedAt: null,
       commitExpiresAt: new Date('2026-09-13T19:00:00.000Z'),
-      expiresAt: new Date('2026-09-08T10:00:00.000Z'),
+      expiresAt: paymentDueAt,
       update: jest.fn().mockResolvedValue(undefined),
     };
     const consumed = {
@@ -219,7 +247,7 @@ describe('storefront order resource reservation service', () => {
         id: 41,
         paymentMethod: 'bank_transfer',
         paymentStatus: 'pending',
-        paymentDueAt: new Date('2026-09-08T10:00:00.000Z'),
+        paymentDueAt,
       }, transaction)).resolves.toBe(2);
     } finally {
       jest.useRealTimers();

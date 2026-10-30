@@ -28,10 +28,8 @@ import {
 import { findLockedStorefrontOrderWithItems } from './storefrontOrderPersistenceService.js';
 import { projectStorefrontOrderBookings } from './storefrontOrderProjectionService.js';
 import { resolveBankTransferCancellation } from './storefrontBankTransferCancellationPolicy.js';
-import { getStorefrontExperienceStartAt } from './storefrontBookingProjectionService.js';
 import {
   getStorefrontBankTransferAccount,
-  getStorefrontBankTransferDueHours,
   type StorefrontBankTransferAccount,
 } from './storefrontBankTransferConfigService.js';
 import {
@@ -524,19 +522,8 @@ const createOrderTransaction = async (
   if (quote.total <= 0) throw new HttpError(400, 'A bank transfer order must have an amount greater than zero.');
   await assertProductScope(quote.items.map((item) => item.productId), allowedProductTypeIds, transaction);
   const now = new Date();
-  const configuredDueAt = new Date(
-    now.getTime() + getStorefrontBankTransferDueHours() * 60 * 60 * 1000,
-  );
-  const earliestExperienceAt = quote.items
-    .map((item) => getStorefrontExperienceStartAt(
-      item.experienceDate,
-      item.experienceTime || (item.experienceDate ? '23:59' : null),
-    ))
-    .filter((value): value is Date => value !== null)
-    .sort((left, right) => left.getTime() - right.getTime())[0] ?? null;
-  const dueAt = earliestExperienceAt && earliestExperienceAt < configuredDueAt
-    ? new Date(Math.max(now.getTime(), earliestExperienceAt.getTime()))
-    : configuredDueAt;
+  // Staff-created transfer reservations remain open until payment or manual cancellation.
+  const dueAt = null;
   const normalizedCart = normalizeSavedCartFromQuote(quote);
   const order = await StorefrontOrder.create({
     status: 'pending_payment',
@@ -966,7 +953,7 @@ export const receiveBankTransferOrder = async (input: ReceiveBankTransferOrderIn
     receivedPaymentReference: receivedReference,
     clientRequestId,
   });
-  // Cancellation/expiry and payment confirmation deliberately compete for the
+  // Manual cancellation and payment confirmation deliberately compete for the
   // same order lock. If cancellation won that race, fulfillment returns the
   // terminal order without reviving it; surface that result as a conflict so
   // the client never reports a cancelled reservation as successfully paid.
@@ -1149,64 +1136,10 @@ export const cancelBankTransferOrder = async (input: CancelBankTransferOrderInpu
   return { order: await loadOrder(publicId), cancelled, emailError };
 };
 
+/** @deprecated Compatibility no-op: staff-created bank transfer bookings never auto-expire. */
 export const expireOverdueBankTransferOrders = async (
-  options: { now?: Date; limit?: number } = {},
-) => {
-  const now = options.now ?? new Date();
-  const limit = Math.max(1, Math.min(500, Math.trunc(options.limit ?? 100)));
-  const candidates = await StorefrontOrder.findAll({
-    where: {
-      orderSource: 'backoffice',
-      paymentMethod: 'bank_transfer',
-      status: 'pending_payment',
-      paymentStatus: 'unpaid',
-      paymentDueAt: { [Op.lte]: now },
-    },
-    attributes: ['publicId'],
-    order: [['paymentDueAt', 'ASC'], ['id', 'ASC']],
-    limit,
-  });
-  const expiredPublicIds: string[] = [];
-  const failedPublicIds: string[] = [];
-
-  for (const candidate of candidates) {
-    try {
-      const expired = await sequelize.transaction(async (transaction): Promise<boolean> => {
-        const order = await lockBankTransferOrderForUpdate(candidate.publicId, transaction);
-        if (order.status !== 'pending_payment' || order.paymentStatus !== 'unpaid') return false;
-        if (!order.paymentDueAt || order.paymentDueAt.getTime() > now.getTime()) return false;
-        return transitionLockedBankTransferOrderToCancelled(order, transaction, {
-          actorId: null,
-          action: 'storefront.bank_transfer_order_expired',
-          source: 'bank_transfer_payment_deadline',
-          reason: 'payment_deadline_expired',
-          now,
-        });
-      });
-      if (!expired) continue;
-      expiredPublicIds.push(candidate.publicId);
-      try {
-        await deliverStorefrontBankTransferCancellationEmail(candidate.publicId);
-      } catch (error) {
-        logger.error(
-          `[storefront-email] Expired bank-transfer cancellation delivery failed for ${candidate.publicId}: ${(error as Error).message}`,
-        );
-      }
-    } catch (error) {
-      failedPublicIds.push(candidate.publicId);
-      logger.error(
-        `[storefront-bank-transfer] Failed to expire ${candidate.publicId}: ${(error as Error).message}`,
-      );
-    }
-  }
-
-  return {
-    examined: candidates.length,
-    expired: expiredPublicIds.length,
-    expiredPublicIds,
-    failedPublicIds,
-  };
-};
+  _options: { now?: Date; limit?: number } = {},
+) => ({ examined: 0, expired: 0, expiredPublicIds: [] as string[], failedPublicIds: [] as string[] });
 
 export const resendBankTransferCancellation = async (
   publicIdInput: unknown,

@@ -40,7 +40,7 @@ const compareTshirtVariants = (left: string, right: string): number => {
 export async function getAvailableStock(inventoryItemId:number, transaction?:Transaction):Promise<number>{
   const onHand=Number(await InventoryMovement.sum('quantityDelta',{where:{inventoryItemId},transaction})??0);
   const reserved=Number(await InventoryFulfillment.sum('quantity',{where:{inventoryItemId,status:{[Op.in]:['ready','packed']}},transaction})??0);
-  const storefrontReserved=Number(await StorefrontOrderResourceReservation.sum('quantity',{where:{resourceType:'inventory',inventoryItemId,status:{[Op.in]:['held','consumed']},expiresAt:{[Op.gt]:new Date()}},transaction})??0);
+  const storefrontReserved=Number(await StorefrontOrderResourceReservation.sum('quantity',{where:{resourceType:'inventory',inventoryItemId,status:{[Op.in]:['held','consumed']},[Op.or]:[{expiresAt:null},{expiresAt:{[Op.gt]:new Date()}}]},transaction})??0);
   return onHand-reserved-storefrontReserved;
 }
 
