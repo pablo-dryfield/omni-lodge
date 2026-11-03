@@ -9,57 +9,22 @@ const CASH_PLN_ACCOUNT_NAMES = new Set([
   "cash in pln",
 ]);
 
-const MANUAL_TRANSACTION_ACCOUNT_RULES = [
-  {
-    names: CASH_PLN_ACCOUNT_NAMES,
-    type: "cash",
-    currency: "PLN",
-  },
-  {
-    names: new Set(["cash register eur", "cash eur", "cash in eur"]),
-    type: "cash",
-    currency: "EUR",
-  },
-  {
-    names: new Set(["dave"]),
-    type: "cash",
-    currency: "PLN",
-  },
-] as const;
-
 export const selectManualTransactionAccounts = (
   accounts: readonly FinanceAccount[],
-  volunteerFundLinkedAccountIds: ReadonlySet<number> = new Set<number>(),
-): FinanceAccount[] => {
-  const operationalAccounts = MANUAL_TRANSACTION_ACCOUNT_RULES.flatMap((rule) => {
-    const matches = accounts
-      .filter((account) => (
-        account.isActive
-        && account.type === rule.type
-        && account.currency.trim().toUpperCase() === rule.currency
-        && rule.names.has(normalizeAccountName(account.name))
-      ))
-      .sort((left, right) => left.id - right.id);
-    return matches.length === 1 ? [matches[0]] : [];
-  });
-  const operationalIds = new Set(operationalAccounts.map(({ id }) => id));
-  const linkedFundAccounts = accounts
-    .filter((account) => (
-      account.isActive
-      && volunteerFundLinkedAccountIds.has(account.id)
-      && !operationalIds.has(account.id)
-    ))
-    .sort((left, right) => left.id - right.id);
-
-  return [...operationalAccounts, ...linkedFundAccounts];
-};
+  excludedAccountIds: ReadonlySet<number> = new Set<number>(),
+): FinanceAccount[] => accounts
+  .filter(account => account.isActive && !excludedAccountIds.has(account.id))
+  .sort((left, right) => left.name.localeCompare(right.name)
+    || left.currency.localeCompare(right.currency) || left.id - right.id);
 
 export const findDefaultCashPlnAccount = (
   accounts: readonly FinanceAccount[],
-): FinanceAccount | null => selectManualTransactionAccounts(accounts).find((account) => (
-  account.currency.trim().toUpperCase() === "PLN"
-  && CASH_PLN_ACCOUNT_NAMES.has(normalizeAccountName(account.name))
-)) ?? null;
+): FinanceAccount | null => {
+  const matches = accounts.filter(account => account.isActive && account.type === "cash"
+    && account.currency.trim().toUpperCase() === "PLN"
+    && CASH_PLN_ACCOUNT_NAMES.has(normalizeAccountName(account.name)));
+  return matches.length === 1 ? matches[0] : null;
+};
 
 export const applyDefaultTransactionAccount = <T extends {
   accountId: number | null;

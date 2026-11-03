@@ -37,6 +37,11 @@ export const activeVolunteerFundLinkedAccountIds = (
   )),
 );
 
+/** A configured fund ledger stays reserved even while its fund is inactive. */
+export const configuredVolunteerFundLinkedAccountIds = (
+  funds: readonly VolunteerFundSummary[],
+): ReadonlySet<number> => new Set(funds.flatMap(fund => fund.linkedAccountId ? [fund.linkedAccountId] : []));
+
 export const transferTouchesActiveVolunteerFund = (
   funds: readonly VolunteerFundSummary[],
   sourceAccountId: number | null | undefined,

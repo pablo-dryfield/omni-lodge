@@ -115,13 +115,13 @@ import {
   type FinanceTransactionModalState,
 } from "./financeTransactionModalPersistence";
 import {
-  activeVolunteerFundLinkedAccountIds,
+  configuredVolunteerFundLinkedAccountIds,
   createVolunteerFundSpendIdempotencyKey,
   isVolunteerFundManagedTransactionMeta,
   resolveActiveVolunteerFundAccount,
-  transferTouchesActiveVolunteerFund,
 } from "./financeVolunteerFundTransaction";
 import classes from "./FinanceTransactions.module.css";
+import FinanceTransactionAmountInput from "../../components/finance/FinanceTransactionAmountInput";
 
 const TRANSACTION_STATUS_OPTIONS = [
   { value: "planned", label: "Planned" },
@@ -328,12 +328,14 @@ const FinanceTransactions = () => {
     [volunteerFundsQuery.data?.funds],
   );
   const volunteerFundLinkedAccountIds = useMemo(
-    () => activeVolunteerFundLinkedAccountIds(volunteerFunds),
+    () => configuredVolunteerFundLinkedAccountIds(volunteerFunds),
     [volunteerFunds],
   );
   const manualTransactionAccounts = useMemo(
-    () => selectManualTransactionAccounts(accounts.data, volunteerFundLinkedAccountIds),
-    [accounts.data, volunteerFundLinkedAccountIds],
+    () => draft.kind === "transfer" && !volunteerFundsQuery.data ? []
+      : selectManualTransactionAccounts(accounts.data,
+        draft.kind === "transfer" ? volunteerFundLinkedAccountIds : undefined),
+    [accounts.data, draft.kind, volunteerFundLinkedAccountIds, volunteerFundsQuery.data],
   );
   const vendorDefaultCategoryOptions = useMemo(
     () => getInlineParentCategoryOptions(categories.data, "expense").map(({ value, label }) => ({
@@ -744,11 +746,8 @@ const FinanceTransactions = () => {
   const transferUsesVolunteerFund = Boolean(
     !editingTransaction
     && draft.kind === "transfer"
-    && transferTouchesActiveVolunteerFund(
-      volunteerFunds,
-      draft.accountId,
-      draft.targetAccountId,
-    ),
+    && (volunteerFundLinkedAccountIds.has(draft.accountId ?? 0)
+      || volunteerFundLinkedAccountIds.has(draft.targetAccountId ?? 0)),
   );
 
   useEffect(() => {
@@ -828,7 +827,7 @@ const FinanceTransactions = () => {
       editingTransaction && editingTransaction.accountId === selectedAccount.id,
     );
     if (!keepsHistoricalAccount && !manualTransactionAccounts.some((account) => account.id === selectedAccount.id)) {
-      setSaveError("Select Cash Register PLN, Cash Register EUR, Dave, or Volunteer Fund.");
+      setSaveError("Select an active finance account available for this transaction.");
       return;
     }
     if (!editingTransaction && selectedVolunteerFundResolution.status === "ambiguous") {
@@ -873,7 +872,7 @@ const FinanceTransactions = () => {
         return;
       }
       if (!manualTransactionAccounts.some((account) => account.id === targetAccount.id)) {
-        setSaveError("Select Cash Register PLN, Cash Register EUR, Dave, or Volunteer Fund as the target account.");
+        setSaveError("Select an active target account available for this transfer.");
         return;
       }
       const targetCurrency = targetAccount.currency.trim().toUpperCase();
@@ -1569,22 +1568,15 @@ const FinanceTransactions = () => {
             )}
 
             <Box className={classes.amountCard}>
-              <NumberInput
+              <FinanceTransactionAmountInput
                 className={classes.amountInput}
-                label="Amount"
-                aria-label="Transaction amount"
-                value={draft.amountMinor / 100}
-                min={0}
-                decimalScale={2}
-                fixedDecimalScale
-                hideControls
+                valueMinor={draft.amountMinor}
+                currency={draft.currency}
+                currencyClassName={classes.amountCurrency}
                 autoFocus={!editingTransaction}
-                rightSection={<Text className={classes.amountCurrency}>{draft.currency}</Text>}
-                rightSectionWidth={58}
-                onValueChange={({ value }) =>
-                  setDraft((state) => ({ ...state, amountMinor: Math.round((Number(value) || 0) * 100) }))
+                onChangeMinor={(amountMinor) =>
+                  setDraft((state) => ({ ...state, amountMinor }))
                 }
-                withAsterisk
               />
             </Box>
 
@@ -1595,6 +1587,7 @@ const FinanceTransactions = () => {
             >
               <Select
                 label={draft.kind === "transfer" ? "From account" : "Account"}
+                disabled={draft.kind === "transfer" && (volunteerFundsQuery.isFetching || volunteerFundsQuery.isError)}
                 data={modalAccountOptions}
                 value={draft.accountId ? String(draft.accountId) : null}
                 onChange={(value) => {
@@ -1612,6 +1605,7 @@ const FinanceTransactions = () => {
               {draft.kind === "transfer" && (
                 <Select
                   label="To account"
+                  disabled={volunteerFundsQuery.isFetching || volunteerFundsQuery.isError}
                   data={transferTargetOptions}
                   value={draft.targetAccountId ? String(draft.targetAccountId) : null}
                   onChange={(value) => {

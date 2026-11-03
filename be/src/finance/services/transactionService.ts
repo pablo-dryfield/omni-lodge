@@ -75,7 +75,8 @@ const assertVolunteerFundAccountUse = async (params: {
   const linkedFunds = await VolunteerFund.findAll({
     attributes: ['id', 'name', 'linkedAccountId'],
     where: {
-      isActive: true,
+      // A closed fund's linked ledger remains reserved for fund workflows.
+      ...(params.operation === 'transfer' ? {} : { isActive: true }),
       linkedAccountId: { [Op.in]: accountIds },
     },
     order: [['id', 'ASC']],
@@ -116,7 +117,7 @@ const assertVolunteerFundAccountUse = async (params: {
   }
   if (params.operation === 'transfer') {
     throw new Error(
-      `This transfer uses an account linked to active Volunteer Fund${fundLabel}. Use the Volunteer Fund allocation flow so both ledgers stay synchronized.`,
+      `This transfer uses an account linked to Volunteer Fund${fundLabel}. Use the Volunteer Fund allocation flow so both ledgers stay synchronized.`,
     );
   }
   throw new Error(

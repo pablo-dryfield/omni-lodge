@@ -68,6 +68,7 @@ import {
 } from './paysReceiptUtils';
 import TaskCompletionDailyBreakdown from '../components/pays/TaskCompletionDailyBreakdown';
 import FinanceInfoButton from '../components/finance/FinanceInfoButton';
+import UnclaimedReviewFundControl from '../components/pays/UnclaimedReviewFundControl';
 
 const EARLIEST_DATA_DATE = dayjs('2020-01-01');
 const DEFAULT_CURRENCY = 'PLN';
@@ -3125,6 +3126,7 @@ const PaysContent: React.FC = () => {
   } | null>(null);
   const [entryMessage, setEntryMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [entrySubmitting, setEntrySubmitting] = useState(false);
+  const [reviewFundRoutingSubmitting, setReviewFundRoutingSubmitting] = useState(false);
   const [paidEntriesSubmitting, setPaidEntriesSubmitting] = useState(false);
   const [ledgerReconciliationSubmitting, setLedgerReconciliationSubmitting] = useState(false);
   const [ledgerReconciliationMessage, setLedgerReconciliationMessage] =
@@ -4084,9 +4086,40 @@ const resolveStaffCounterpartyDefaults = useCallback(
   };
 
   const closeEntryModal = useCallback(() => {
+    if (reviewFundRoutingSubmitting) return;
     setEntryModal(createEmptyEntryModalState());
     setEntryMessage(null);
-  }, []);
+  }, [reviewFundRoutingSubmitting]);
+
+  const handleReviewsRoutedToFund = async (componentIds: number[]) => {
+    const { rangeStart, rangeEnd, staff } = entryModal;
+    if (!staff || !rangeStart || !rangeEnd) return;
+    try {
+      const bootstrap = await dispatch(fetchPays({ startDate: rangeStart, endDate: rangeEnd, scope: scopeParam })).unwrap();
+      const updatedStaff = bootstrap.pays[0].data.find(candidate => candidate.userId === staff.userId);
+      if (!updatedStaff) throw new Error('Staff entry unavailable');
+      const freshLines = buildDefaultPaymentLines(updatedStaff, categoryLookup, entryModal.categoryId, compensationComponentLookup);
+      setEntryModal(previous => {
+        const lines = previous.lines.filter(line => !line.componentId || !componentIds.includes(line.componentId))
+          .map(line => {
+            const refreshed = freshLines.find(candidate => candidate.label === line.label
+              && candidate.sourceKey === line.sourceKey && candidate.componentId === line.componentId);
+            return refreshed ? { ...line, settlementIntent: refreshed.settlementIntent } : line;
+          });
+        const fundAllocations = buildDefaultFundAllocationLines(updatedStaff).map(line => {
+          const existing = previous.fundAllocations.find(candidate => candidate.label === line.label
+            && candidate.componentId === line.componentId && candidate.fundId === line.fundId);
+          return existing ? { ...line, include: existing.include, description: existing.description } : line;
+        });
+        return { ...previous, staff: updatedStaff, requestId: createStaffPayoutSettlementRequestId(),
+          lines, amount: computeSelectedLineTotal(lines), fundAllocations };
+      });
+      setEntryMessage({ type: 'success', text: 'Review pay moved to the Volunteer Fund section. Process compensation to record the allocation.' });
+    } catch {
+      setEntryModal(createEmptyEntryModalState());
+      setActionAlert({ type: 'error', text: 'Review routing was saved. Refresh Staff Payments to complete the fund allocation.' });
+    }
+  };
 
   const handleEntryAccountChange = useCallback(
     (value: string | null) => {
@@ -4235,7 +4268,7 @@ const resolveStaffCounterpartyDefaults = useCallback(
   }, [startDate, endDate, dispatch, permissionsReady, permissionsLoading, canViewFull, canViewSelf, scopeParam]);
 
   const handleEntrySubmit = async () => {
-    if (entrySubmitting) {
+    if (entrySubmitting || reviewFundRoutingSubmitting) {
       return;
     }
     setEntryMessage(null);
@@ -6301,6 +6334,12 @@ const renderVolunteerFundSnapshot = (
                 </Alert>
               )}
 
+              {canRecordStaffPayments && entryModal.staff && entryModal.rangeStart && entryModal.rangeEnd && (
+                <UnclaimedReviewFundControl key={`${entryModal.staff.userId}:${entryModal.rangeStart}`}
+                  staff={entryModal.staff} rangeStart={entryModal.rangeStart} rangeEnd={entryModal.rangeEnd}
+                  disabled={entrySubmitting} onBusyChange={setReviewFundRoutingSubmitting} onRouted={handleReviewsRoutedToFund} />
+              )}
+
               {entryModal.fundAllocations.length > 0 && (
                 <Card
                   withBorder
@@ -6610,13 +6649,13 @@ const renderVolunteerFundSnapshot = (
             }
           >
             <Group justify={isDesktop ? 'flex-end' : 'space-between'} grow={!isDesktop}>
-              <Button variant="subtle" onClick={closeEntryModal}>
+              <Button variant="subtle" onClick={closeEntryModal} disabled={entrySubmitting || reviewFundRoutingSubmitting}>
                 Cancel
               </Button>
               <Button
                 onClick={handleEntrySubmit}
                 loading={entrySubmitting}
-                disabled={Boolean(entryModal.staff?.settlementReconciliationRequired)}
+                disabled={reviewFundRoutingSubmitting || Boolean(entryModal.staff?.settlementReconciliationRequired)}
               >
                 Process compensation
               </Button>

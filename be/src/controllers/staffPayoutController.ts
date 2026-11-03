@@ -20,6 +20,7 @@ import RequiredAction from '../models/RequiredAction.js';
 import User from '../models/User.js';
 import AuditLog from '../models/AuditLog.js';
 import CompensationComponent from '../models/CompensationComponent.js';
+import CompensationSettlementRule from '../models/CompensationSettlementRule.js';
 import FinanceAccount from '../finance/models/FinanceAccount.js';
 import FinanceCategory from '../finance/models/FinanceCategory.js';
 import FinanceTransaction from '../finance/models/FinanceTransaction.js';
@@ -69,6 +70,7 @@ import {
   sortStaffPayoutSettlementSnapshotSources,
 } from '../services/staffPayoutSettlementSnapshotService.js';
 import { filterStaffPayoutLedgerSources } from '../services/staffPayoutLiabilityService.js';
+import { buildReviewFundRoutingPlan, rerouteReviewFundSources } from '../services/reviewPaymentFundRoutingService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -2667,6 +2669,116 @@ export const deleteStaffPayoutEntries = async (
       return;
     }
     res.status(500).json([{ message: 'Failed to delete paid entries' }]);
+  }
+};
+
+export const routeUnclaimedReviewPayToFund = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    const actorId = requireActorId(req);
+    if (!['admin', 'administrator', 'owner', 'manager'].includes(String(req.authContext?.roleSlug ?? ''))
+      || Array.isArray(req.productTypeScope)) throw new HttpError(403, 'Forbidden');
+    const staffUserId = parsePositiveInteger(req.body.staffUserId, 'staffUserId');
+    const { rangeStart, rangeEnd } = ensureCanonicalMonthRange(req.body.rangeStart, req.body.rangeEnd);
+    const rangeStartIso = rangeStart.format('YYYY-MM-DD');
+    const rangeEndIso = rangeEnd.format('YYYY-MM-DD');
+    const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason || reason.length > 2000) throw new HttpError(400, 'A reason of 1–2000 characters is required.');
+    if (!Array.isArray(req.body.settlementIntents) || !req.body.settlementIntents.length)
+      throw new HttpError(400, 'Select unpaid review payments.');
+    const intents = req.body.settlementIntents.map((token: unknown) => {
+      if (typeof token !== 'string') throw new HttpError(400, 'Invalid review payment authorization.');
+      return verifyCompensationSettlementIntent(token);
+    });
+    const result = await sequelize.transaction(async transaction => {
+      const user = await User.findByPk(staffUserId, {
+        attributes: ['id'], transaction, lock: transaction.LOCK.UPDATE,
+      });
+      if (!user) throw new HttpError(404, 'Staff user not found.');
+      const profile = await StaffProfile.findOne({ where: { userId: staffUserId },
+        transaction, lock: transaction.LOCK.UPDATE });
+      if (!profile) throw new HttpError(404, 'Staff profile not found.');
+      const ledger = await StaffPayoutLedger.findOne({ where: { staffUserId,
+        rangeStart: rangeStartIso, rangeEnd: rangeEndIso }, transaction, lock: transaction.LOCK.UPDATE });
+      if (!ledger) throw new HttpError(409, 'Refresh Staff Payments to prepare the payout ledger.');
+      const plan = buildReviewFundRoutingPlan({ snapshot: ledger.settlementSnapshot, intents,
+        userId: staffUserId, rangeStart: rangeStartIso, rangeEnd: rangeEndIso });
+      if (calculatePersonalDueMinorFromSnapshot(plan.snapshot) !== Number(ledger.dueAmountMinor)
+        || Number(ledger.closingBalanceMinor) < plan.amountMinor)
+        throw new HttpError(409, 'Reconcile the payout ledger before routing unpaid reviews.');
+      const components = await CompensationComponent.findAll({ where: { id: plan.componentIds },
+        attributes: ['id', 'category', 'isActive'], transaction, lock: transaction.LOCK.SHARE });
+      if (components.length !== plan.componentIds.length || components.some(component => component.category !== 'review' || !component.isActive))
+        throw new HttpError(409, 'Only review compensation can be routed with this action.');
+      const router = await loadCompensationSettlementRouter({ effectiveDate: rangeStartIso, transaction });
+      const periods = await StaffProfileTypePeriod.findAll({ where: {
+        id: [...new Set(plan.sources.map(source => source.staffTypePeriodId))], userId: staffUserId,
+      }, transaction, lock: transaction.LOCK.SHARE });
+      for (const source of plan.sources) {
+        const route = router.resolve({ userId: staffUserId, staffType: 'volunteer',
+          componentId: source.componentId, componentCategory: 'review' });
+        const period = periods.find(candidate => Number(candidate.id) === source.staffTypePeriodId);
+        if (route.ruleId !== source.ruleId || route.destination !== 'staff_vendor' || route.fundId !== null
+          || source.currency !== ledger.currencyCode.trim().toUpperCase()
+          || !period || period.staffType !== 'volunteer' || period.effectiveStart > source.earningStart
+          || (period.effectiveEnd !== null && period.effectiveEnd < source.earningEnd)
+          || (period.metadata?.legacyExtrapolation === true) !== source.legacyExtrapolation)
+          throw new HttpError(409, 'Review eligibility or routing changed. Refresh Staff Payments before continuing.');
+      }
+      const legacyCollections = await StaffPayoutCollectionLog.findAll({ where: {
+        staffProfileId: staffUserId, direction: 'payable', rangeStart: rangeStartIso, rangeEnd: rangeEndIso,
+        financeTransactionId: null, amountMinor: { [Op.gt]: 0 },
+      }, transaction });
+      if (legacyCollections.length)
+        throw new HttpError(409, 'Legacy payments need reconciliation before unpaid reviews can be identified safely.');
+      for (const componentId of plan.componentIds) {
+        const identity = { staffUserId, rangeStart: rangeStartIso, rangeEnd: rangeEndIso,
+          sourceKey: 'compensation_component', componentId, transaction };
+        if (await getRecordedPersonalSettlementMinor(identity) > 0
+          || await getNetFundAllocationForSource(identity) !== 0)
+          throw new HttpError(409, 'A selected review component already has a payment or fund allocation. Refresh Staff Payments.');
+      }
+      const currency = ledger.currencyCode.trim().toUpperCase();
+      const funds = await VolunteerFund.findAll({ where: { isActive: true }, transaction, lock: transaction.LOCK.SHARE });
+      const fund = funds.filter(candidate => candidate.currency.trim().toUpperCase() === currency)
+        .sort((left, right) => Number(right.name.trim().toLowerCase() === 'volunteer fund')
+          - Number(left.name.trim().toLowerCase() === 'volunteer fund') || left.id - right.id)[0];
+      if (!fund) throw new HttpError(409, `Configure an active ${currency} Volunteer Fund first.`);
+      const before = { dueAmountMinor: Number(ledger.dueAmountMinor), settlementSnapshot: ledger.settlementSnapshot };
+      const rulesByComponent = new Map<number, number>();
+      for (const componentId of plan.componentIds) {
+        const rule = await CompensationSettlementRule.create({ targetScope: 'user', userId: staffUserId,
+          staffType: null, matchKind: 'component', componentId, matchKey: null,
+          destination: 'volunteer_fund', fundId: fund.id, effectiveStart: rangeStartIso,
+          effectiveEnd: rangeEndIso, isActive: true, createdBy: actorId, updatedBy: actorId }, { transaction });
+        rulesByComponent.set(componentId, rule.id);
+      }
+      const snapshot = rerouteReviewFundSources({ sources: plan.snapshot.sources,
+        selectedSegmentKeys: new Set(plan.sources.map(source => source.segmentKey)),
+        rulesByComponent, fundId: fund.id });
+      const dueAmountMinor = calculatePersonalDueMinorFromSnapshot(snapshot);
+      if (dueAmountMinor !== Number(ledger.dueAmountMinor) - plan.amountMinor)
+        throw new HttpError(409, 'The review routing amount no longer matches the payout ledger.');
+      await ledger.update({ dueAmountMinor, settlementSnapshot: snapshot }, { transaction });
+      await reconcilePersistedStaffPayoutLedgers({ staffUserId, affectedRangeStart: rangeStartIso,
+        affectedRangeEnd: rangeEndIso, transaction });
+      await AuditLog.create({ actorId, action: 'staff_payout.unclaimed_reviews_routed',
+        entity: 'staff_payout_ledger', entityId: String(ledger.id), metaJson: {
+          staffUserId, rangeStart: rangeStartIso, rangeEnd: rangeEndIso, reason,
+          amountMinor: plan.amountMinor, fundId: fund.id, currency,
+          ruleIds: [...rulesByComponent.values()], before,
+          after: { dueAmountMinor, settlementSnapshot: snapshot },
+          allocationPending: true,
+        } }, { transaction });
+      return { amount: plan.amountMinor / 100, currency, fundId: fund.id, fundName: fund.name };
+    });
+    res.status(200).json({ routed: true, ...result });
+  } catch (error) {
+    if (error instanceof HttpError) { res.status(error.status).json([{ message: error.message }]); return; }
+    console.error('Failed to route unclaimed review pay', error);
+    res.status(500).json([{ message: 'Failed to route unclaimed review pay to the Volunteer Fund' }]);
   }
 };
 
