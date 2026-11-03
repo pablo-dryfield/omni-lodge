@@ -1114,11 +1114,14 @@ Best,
   {
     key: 'DB_BACKUP_STORAGE',
     label: 'DB backup storage',
-    description: 'Storage backend for backups.',
+    description: 'Where new database backups are retained: server only, Google Drive (optionally keep the server copy), or both. Database Workspace always inventories both locations independently.',
     category: 'Backups',
     valueType: 'enum',
     defaultValue: 'drive',
-    options: ['local', 'drive'],
+    options: ['local', 'drive', 'both'],
+  },
+  {
+    key:'DB_BACKUP_KEEP_LOCAL_COPY',label:'Keep server backup after Drive upload',description:'When backup storage is Google Drive, retain the successfully uploaded server archive too. Both storage mode always retains it. This does not disable any separately configured server-script retention.',category:'Backups',valueType:'boolean',defaultValue:false,impact:'high',
   },
   {
     key: 'DB_BACKUP_DRIVE_FOLDER',

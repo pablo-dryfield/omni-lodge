@@ -6,6 +6,8 @@ import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import { authenticateWorkspace as workspaceBodyAuth } from './middleware/databaseWorkspaceAuthentication.js';
+import { requireRoles as workspaceBodyRoles } from './middleware/authorizationMiddleware.js';
 import { collectDefaultMetrics } from 'prom-client';
 import { ValidationError } from 'sequelize';
 
@@ -136,6 +138,7 @@ import {
 } from './services/errorMonitoringService.js';
 import { installConsoleErrorMonitoringBridge } from './services/consoleErrorMonitoringBridge.js';
 import { resolveProductionTrustProxyHops } from './utils/trustProxy.js';
+import {startWorkspaceSupervisor} from './services/databaseWorkspace/supervisor.js';
 
 const WINSTON_LEVEL = Symbol.for('level');
 const WINSTON_SPLAT = Symbol.for('splat');
@@ -196,6 +199,7 @@ const startApplicationBackgroundJobs = (): void => {
     startScheduleJobs();
   }
   startDbBackupJob();
+  startWorkspaceSupervisor();
   startBookingEmailIngestionJob();
   if (ENABLE_AM_TASK_PUSH_CRON_JOBS) {
     startAmTaskPushNotificationsJob();
@@ -273,6 +277,9 @@ app.post(
 // payment/WhatsApp webhooks above retain their byte-exact parsers.
 app.use('/api/client-errors', clientErrorRoutes);
 
+// Authenticate before accepting bounded import content; other endpoints retain
+// Express's small default body budget. The workspace applies its live lower cap.
+app.use('/api/database-workspace',workspaceBodyAuth,workspaceBodyRoles(['admin']),express.json({limit:'70mb'}));
 app.use(express.json());
 
 app.use(

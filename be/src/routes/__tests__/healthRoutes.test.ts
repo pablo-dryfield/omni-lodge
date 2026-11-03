@@ -21,6 +21,13 @@ const buildApp = (options: Parameters<typeof createHealthRouter>[0] = {}) => {
 };
 
 describe('health routes', () => {
+  it('waits for the enabled workspace worker before deployment readiness while liveness remains independent',async()=>{
+    const app=buildApp({env:completeEnvironment,checkDatabase:async()=>{},checkWorkspace:async()=>({required:true,ready:false})});
+    expect((await request(app).get('/api/health/ready')).status).toBe(503);
+    expect((await request(app).get('/api/health/live')).status).toBe(200);
+    const ready=await request(buildApp({env:completeEnvironment,checkDatabase:async()=>{},checkWorkspace:async()=>({required:true,ready:true})})).get('/api/health/ready');
+    expect(ready.status).toBe(200);expect(ready.body.checks.databaseWorkspace).toEqual({required:true,ok:true});
+  });
   it('preserves the legacy process health response without authentication or caching', async () => {
     const response = await request(buildApp({ uptime: () => 12.9 })).get('/api/health');
 
@@ -81,6 +88,7 @@ describe('health routes', () => {
       checks: {
         configuration: { ok: true, missing: [], invalid: [] },
         database: { ok: true },
+        databaseWorkspace: {required:false,ok:true},
       },
     });
     expect(checkDatabase).toHaveBeenCalledTimes(1);

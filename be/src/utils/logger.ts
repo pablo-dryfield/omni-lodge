@@ -23,7 +23,7 @@ const logger = winston.createLogger({
       return `${timestamp} ${level}: ${message}`;
     })
   ),
-  transports: [
+  transports: process.env.OMNILODGE_WORKSPACE_WORKER==='true'?[new winston.transports.Console({level:consoleLevel as string})]:[
     new winston.transports.Console({ level: consoleLevel as string }), // Log to console
     new winston.transports.File({ filename: 'error.log', level: 'error' }), // Log errors to a file
     new winston.transports.File({ filename: 'combined.log' }), // Log all levels to another file

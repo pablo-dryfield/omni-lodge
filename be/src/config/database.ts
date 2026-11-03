@@ -228,7 +228,9 @@ const sequelize = new Sequelize({
   host: DB_HOST,
   port: parseInt(DB_PORT || "5432", 10),
   benchmark: true,
+  ...(process.env.OMNILODGE_WORKSPACE_WORKER === 'true' ? { pool: { max: 2, min: 0, acquire: 10000, idle: 10000 } } : {}),
   logging: (sql: string, timing?: number) => {
+    if (process.env.OMNILODGE_WORKSPACE_WORKER === 'true') return;
     // Sequelize may inline bind values in diagnostic SQL. WhatsApp rows contain
     // short-lived customer content, so never retain those statements in the
     // longer-lived query diagnostics buffer.

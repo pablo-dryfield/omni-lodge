@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from 'react-router-dom';
 import {
   Alert,
   Badge,
@@ -230,7 +231,7 @@ const DbBackupsPanel = () => {
                 variant="light"
                 leftSection={<IconRotateClockwise size={14} />}
                 onClick={() => confirmRestore(backup)}
-                disabled={busy}
+                disabled={busy || process.env.NODE_ENV === 'production'}
               >
                 Restore
               </Button>
@@ -244,6 +245,7 @@ const DbBackupsPanel = () => {
     <>
       <Card withBorder radius="lg" padding="lg" shadow="sm">
         <Stack gap="md">
+          <Alert color="blue" title="Server and Google Drive backup management">Use Database Workspace to inspect both locations, delete a selected copy, and restore into a separate private database. Production replacement follows the recovery runbook.<Button component={Link} to="/settings/sql-helper?section=recovery" variant="light" mt="sm">Open backups & recovery</Button></Alert>
           <Group justify="space-between" align="flex-start">
             <Stack gap={6}>
               <Title order={3}>Database Backups</Title>
@@ -266,7 +268,7 @@ const DbBackupsPanel = () => {
                 color="grape"
                 leftSection={<IconUpload size={16} />}
                 onClick={openUploadModal}
-                disabled={busy}
+                disabled={busy || process.env.NODE_ENV === 'production'}
               >
                 Import & Restore
               </Button>

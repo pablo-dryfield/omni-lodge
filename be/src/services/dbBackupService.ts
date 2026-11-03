@@ -10,7 +10,8 @@ import sequelize from '../config/database.js';
 import { initializeAccessControl } from '../utils/initializeAccessControl.js';
 import logger from '../utils/logger.js';
 import { ensureFolderPath, getDriveClient } from './googleDrive.js';
-import { getConfigValue } from './configService.js';
+import { getConfigValue,refreshConfigCacheKeys } from './configService.js';
+import {backupCopyFingerprint,streamLocalBackup,deleteLocalBackup} from './backupCopyStorage.js';
 
 const DEFAULT_BACKUP_DIRECTORY = '/home/postgres/backups';
 const DEFAULT_BACKUP_SCRIPT = '/home/postgres/backup.sh';
@@ -32,16 +33,15 @@ const resolveRestoreRole = (): string =>
 const databaseHost = process.env.DB_HOST ?? '127.0.0.1';
 const databasePort = process.env.DB_PORT ?? '5432';
 const adminDatabaseName = process.env.DB_ADMIN_DATABASE ?? 'postgres';
-type BackupStorageMode = 'local' | 'drive';
+type BackupStorageMode = 'local' | 'drive' | 'both';
+export type BackupLocation='local'|'drive';
 const nodeEnv = (process.env.NODE_ENV ?? 'development').trim().toLowerCase();
 const driveEnvironmentFolderName = nodeEnv === 'production' ? 'Production' : 'Development';
 const utcMonthFormatter = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'UTC' });
-let driveEnvironmentFolderIdPromise: Promise<string> | null = null;
-let cachedDriveEnvironmentPath: string | null = null;
 
 const resolveBackupStorageMode = (): BackupStorageMode => {
   const value = ((getConfigValue('DB_BACKUP_STORAGE') as string | null) ?? 'local').toLowerCase();
-  return value === 'drive' ? 'drive' : 'local';
+  return value === 'drive'||value==='both' ? value : 'local';
 };
 
 const resolveDriveBackupRootFolder = (): string =>
@@ -62,7 +62,39 @@ export type BackupFileDescriptor = {
   createdAt: string;
   modifiedAt: string;
   driveFileId?: string;
-  location: BackupStorageMode;
+  location: BackupLocation;
+  sha256Checksum?:string;
+};
+export type BackupCopy=BackupFileDescriptor&{id:string;fingerprint:string};
+const backupConfigKeys=['DB_BACKUP_STORAGE','DB_BACKUP_KEEP_LOCAL_COPY','DB_BACKUP_DIRECTORY','DB_BACKUP_SCRIPT','DB_BACKUP_DRIVE_FOLDER','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','GOOGLE_REFRESH_TOKEN'];
+const backupCopy=(file:BackupFileDescriptor):BackupCopy=>{const id=file.location==='drive'?`drive:${file.driveFileId}`:`local:${file.filename}`;return {...file,id,fingerprint:backupCopyFingerprint({...file,id})};};
+
+export const listBackupCopies=async():Promise<{files:BackupCopy[];stores:Array<{location:BackupLocation;available:boolean;count:number;message?:string}>;storageMode:BackupStorageMode;keepLocalAfterUpload:boolean}>=>{
+  await refreshConfigCacheKeys(backupConfigKeys);
+  const results=await Promise.allSettled([listLocalBackupFiles(),listDriveBackupFiles()]),files:BackupCopy[]=[],stores:Array<{location:BackupLocation;available:boolean;count:number;message?:string}>=[];
+  results.forEach((result,index)=>{const location=index===0?'local':'drive';if(result.status==='fulfilled'){files.push(...result.value.map(backupCopy));stores.push({location,available:true,count:result.value.length});}else stores.push({location,available:false,count:0,message:location==='local'?'Server backup directory is unavailable or not readable by this service.':'Google Drive backup inventory is unavailable. Check its configured folder, OAuth credentials and permissions.'});});
+  return {files:files.sort((a,b)=>b.modifiedAt.localeCompare(a.modifiedAt)||a.id.localeCompare(b.id)),stores,storageMode:resolveBackupStorageMode(),keepLocalAfterUpload:resolveBackupStorageMode()==='both'||getConfigValue('DB_BACKUP_KEEP_LOCAL_COPY')===true};
+};
+export const findBackupCopy=async(id:string,expectedFingerprint?:string):Promise<BackupCopy>=>{
+  const inventory=await listBackupCopies(),copy=inventory.files.find(f=>f.id===id);
+  if(!copy)throw new HttpError(404,'This backup copy is unavailable in the configured server/Drive inventory.');
+  if(expectedFingerprint&&copy.fingerprint!==expectedFingerprint)throw new HttpError(409,'The selected backup copy changed. Refresh and review it again.');return copy;
+};
+export const streamBackupCopy=async(id:string,destination:NodeJS.WritableStream,expectedFingerprint?:string):Promise<void>=>{
+  const copy=await findBackupCopy(id,expectedFingerprint);
+  if(copy.location==='local')await streamLocalBackup(resolveBackupDirectory(),copy,destination);
+  else await streamDriveFileToDestination(copy.driveFileId!,destination);
+};
+export const deleteBackupCopy=async(id:string,expectedFingerprint:string,permanent=false):Promise<void>=>{
+  const copy=await findBackupCopy(id,expectedFingerprint);
+  if(copy.location==='local'){await deleteLocalBackup(resolveBackupDirectory(),copy);return;}
+  const drive=await getDriveClient();
+  // File identity comes from the configured backup-folder inventory, never a
+  // browser-supplied arbitrary Drive file ID.
+  const current=await drive.files.get({fileId:copy.driveFileId!,fields:'id,name,size,modifiedTime,trashed,sha256Checksum',supportsAllDrives:true},{timeout:30000});
+  if(current.data.trashed||current.data.name!==copy.filename||Number(current.data.size)!==copy.sizeBytes||current.data.modifiedTime!==copy.modifiedAt)throw new HttpError(409,'The Drive backup changed. Refresh before deleting this copy.');
+  if(permanent)await drive.files.delete({fileId:copy.driveFileId!,supportsAllDrives:true},{timeout:30000});
+  else await drive.files.update({fileId:copy.driveFileId!,requestBody:{trashed:true},supportsAllDrives:true},{timeout:30000});
 };
 
 export type CommandResult = {
@@ -166,19 +198,6 @@ const runCommand = (command: string, args: string[], workingDirectory?: string):
   });
 };
 
-const getDriveEnvironmentFolderId = async (): Promise<string> => {
-  const driveEnvironmentPath = resolveDriveEnvironmentPath();
-  if (driveEnvironmentPath !== cachedDriveEnvironmentPath) {
-    cachedDriveEnvironmentPath = driveEnvironmentPath;
-    driveEnvironmentFolderIdPromise = null;
-  }
-
-  if (!driveEnvironmentFolderIdPromise) {
-    driveEnvironmentFolderIdPromise = ensureFolderPath(driveEnvironmentPath).then((result) => result.id);
-  }
-  return driveEnvironmentFolderIdPromise;
-};
-
 const getDriveFolderIdForDate = async (date: Date): Promise<string> => {
   const year = date.getUTCFullYear().toString();
   const month = utcMonthFormatter.format(date);
@@ -193,11 +212,25 @@ type DriveFileMetadata = {
   sizeBytes: number;
   createdAt: string;
   modifiedAt: string;
+  sha256Checksum?:string;
+};
+
+const findDriveEnvironmentFolderId=async():Promise<string|null>=>{
+  const drive=await getDriveClient();let parent:string|null=null;
+  for(const name of resolveDriveEnvironmentPath().split('/').filter(Boolean)){
+    const escaped=name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const {data}:{data:{files?:Array<{id?:string|null}>}}=await drive.files.list({q:`name = '${escaped}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false and '${parent||'root'}' in parents`,fields:'files(id)',pageSize:2,supportsAllDrives:true,includeItemsFromAllDrives:true});
+    if(!data.files?.length)return null;
+    if(data.files.length>1)throw new HttpError(409,'Backup folder name is ambiguous. Resolve duplicate Drive folders before managing backups.');
+    parent=data.files[0].id||null;if(!parent)return null;
+  }
+  return parent;
 };
 
 const listDriveFiles = async (): Promise<DriveFileMetadata[]> => {
   const drive = await getDriveClient();
-  const envFolderId = await getDriveEnvironmentFolderId();
+  const envFolderId = await findDriveEnvironmentFolderId();
+  if(!envFolderId)return [];
 
   const gather = async (parentId: string): Promise<DriveFileMetadata[]> => {
     const result: DriveFileMetadata[] = [];
@@ -206,7 +239,7 @@ const listDriveFiles = async (): Promise<DriveFileMetadata[]> => {
     do {
       const { data } = await drive.files.list({
         q: `'${parentId}' in parents and trashed = false`,
-        fields: 'nextPageToken, files(id, name, size, mimeType, createdTime, modifiedTime)',
+        fields: 'nextPageToken, files(id, name, size, mimeType, createdTime, modifiedTime, sha256Checksum)',
         pageSize: 100,
         pageToken,
         includeItemsFromAllDrives: true,
@@ -226,6 +259,7 @@ const listDriveFiles = async (): Promise<DriveFileMetadata[]> => {
           result.push(...childFiles);
           continue;
         }
+        if(!name.endsWith('.backup'))continue;
 
         const size = file.size ? Number(file.size) : 0;
         const created = file.createdTime ?? new Date().toISOString();
@@ -236,6 +270,7 @@ const listDriveFiles = async (): Promise<DriveFileMetadata[]> => {
           sizeBytes: size,
           createdAt: created,
           modifiedAt: modified,
+          sha256Checksum:file.sha256Checksum||undefined,
         });
       }
     } while (pageToken);
@@ -276,6 +311,10 @@ const uploadFileToDrive = async (filePath: string, filename: string, fileDate: D
   if (!fileId) {
     throw new Error(`Drive upload failed for ${filename}`);
   }
+  const stat=await fs.stat(filePath),hash=crypto.createHash('sha256');
+  for await(const chunk of createReadStream(filePath))hash.update(chunk);
+  const checksum=hash.digest('hex'),remote=await drive.files.get({fileId,fields:'id,size,sha256Checksum',supportsAllDrives:true},{timeout:30000});
+  if(Number(remote.data.size)!==stat.size||remote.data.sha256Checksum!==checksum)throw new HttpError(409,'Drive backup upload could not be verified by size and SHA-256. The server archive is retained.');
   return fileId;
 };
 
@@ -306,47 +345,54 @@ type SyncOptions = {
 export const syncLocalBackupsToDrive = async (options: SyncOptions = {}): Promise<{
   uploaded: string[];
   skipped: string[];
+  failed: string[];
 }> => {
-  if (resolveBackupStorageMode() !== 'drive') {
-    return { uploaded: [], skipped: [] };
+  if (resolveBackupStorageMode() === 'local') {
+    return { uploaded: [], skipped: [],failed:[] };
   }
 
   const backups = await listLocalBackupFiles();
   if (backups.length === 0) {
-    return { uploaded: [], skipped: [] };
+    return { uploaded: [], skipped: [],failed:[] };
   }
 
   const uploaded: string[] = [];
   const skipped: string[] = [];
+  const failed:string[]=[];
   const driveExistingFiles = await listDriveFiles();
-  const driveExistingNames = new Set(driveExistingFiles.map((file) => file.name));
 
   for (const backup of backups) {
-    if (driveExistingNames.has(backup.filename) && options.skipExisting) {
-      skipped.push(backup.filename);
-      continue;
-    }
-
     try {
+      const existing = driveExistingFiles.filter((file) => file.name === backup.filename);
+      if (existing.length && options.skipExisting) {
+        const hash = crypto.createHash('sha256');
+        for await (const chunk of createReadStream(backup.fullPath)) hash.update(chunk);
+        const checksum = hash.digest('hex');
+        if (!existing.some((file) => file.sizeBytes === backup.sizeBytes && file.sha256Checksum === checksum))
+          throw new HttpError(409, 'A different or unverifiable Drive archive has this filename. The server copy is retained; resolve it manually.');
+        skipped.push(backup.filename);
+        if (options.deleteAfterUpload) await deleteLocalBackup(resolveBackupDirectory(), { id: `local:${backup.filename}`, filename: backup.filename, location: 'local', sizeBytes: backup.sizeBytes, modifiedAt: backup.modifiedAt });
+        continue;
+      }
       const backupDate = new Date(backup.modifiedAt ?? backup.createdAt ?? new Date().toISOString());
       const fileId = await uploadFileToDrive(backup.fullPath, backup.filename, backupDate);
       uploaded.push(backup.filename);
-      driveExistingNames.add(backup.filename);
       logger.info(`[db-backup] Uploaded ${backup.filename} to Drive (fileId=${fileId})`);
 
       if (options.deleteAfterUpload) {
         try {
-          await fs.unlink(backup.fullPath);
+          await deleteLocalBackup(resolveBackupDirectory(), { id: `local:${backup.filename}`, filename: backup.filename, location: 'local', sizeBytes: backup.sizeBytes, modifiedAt: backup.modifiedAt });
         } catch (error) {
           logger.warn(`Failed to delete local backup ${backup.fullPath}: ${(error as Error).message}`);
         }
       }
     } catch (error) {
+      failed.push(backup.filename);
       logger.error(`Failed to upload backup ${backup.filename} to Drive`, error);
     }
   }
 
-  return { uploaded, skipped };
+  return { uploaded, skipped,failed };
 };
 
 const runSqlCommand = (sql: string, targetDatabase: string = databaseName): Promise<CommandResult> => {
@@ -369,7 +415,7 @@ const runSqlCommand = (sql: string, targetDatabase: string = databaseName): Prom
 };
 
 export const streamBackupFile = async (filename: string, destination: NodeJS.WritableStream): Promise<void> => {
-  if (resolveBackupStorageMode() === 'drive') {
+  if (resolveBackupStorageMode() !== 'local') {
     const driveFile = await findDriveFileByName(filename);
     if (!driveFile) {
       throw new HttpError(404, 'Backup file not found on Drive');
@@ -446,15 +492,16 @@ const listDriveBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
     modifiedAt: file.modifiedAt,
     driveFileId: file.id,
     location: 'drive',
+    sha256Checksum:file.sha256Checksum,
   }));
 };
 
 export const listBackupFiles = async (): Promise<BackupFileDescriptor[]> => {
-  return resolveBackupStorageMode() === 'drive' ? listDriveBackupFiles() : listLocalBackupFiles();
+  return resolveBackupStorageMode() !== 'local' ? listDriveBackupFiles() : listLocalBackupFiles();
 };
 
 export const restoreBackupByFilename = async (filename: string): Promise<CommandResult> => {
-  if (resolveBackupStorageMode() === 'drive') {
+  if (resolveBackupStorageMode() !== 'local') {
     const driveFile = await findDriveFileByName(filename);
     if (!driveFile) {
       throw new HttpError(404, 'Backup file not found on Drive');
@@ -595,6 +642,7 @@ export const restoreBackupFromPath = async (filePath: string): Promise<CommandRe
 };
 
 export const executeBackupScript = async (): Promise<CommandResult> => {
+  await refreshConfigCacheKeys(backupConfigKeys);
   const backupScriptPath = resolveBackupScriptPath();
   try {
     await fs.access(backupScriptPath, fsConstants.X_OK);
@@ -611,10 +659,11 @@ export const executeBackupScript = async (): Promise<CommandResult> => {
 
   const result = await runCommand(backupScriptPath, [], path.dirname(backupScriptPath));
 
-  if (resolveBackupStorageMode() === 'drive') {
+  if (resolveBackupStorageMode() !== 'local') {
     const backupDirectory = resolveBackupDirectory();
     await ensureDirectory(backupDirectory);
-    await syncLocalBackupsToDrive({ deleteAfterUpload: true, skipExisting: true });
+    const sync=await syncLocalBackupsToDrive({ deleteAfterUpload: resolveBackupStorageMode()==='drive'&&getConfigValue('DB_BACKUP_KEEP_LOCAL_COPY')!==true, skipExisting: true });
+    if(sync.failed.length)throw new HttpError(502,'Server backup exists, but one or more Google Drive copies could not be verified. Server archives were retained.');
   }
 
   return result;
@@ -625,7 +674,8 @@ export const persistUploadedBackup = async (tempPath: string, originalName: stri
   const uniqueSuffix = crypto.randomBytes(6).toString('hex');
   const targetName = `${Date.now()}_${uniqueSuffix}_${sanitizedName}`;
 
-  if (resolveBackupStorageMode() === 'drive') {
+  if (resolveBackupStorageMode() !== 'local') {
+    if(resolveBackupStorageMode()==='both'||getConfigValue('DB_BACKUP_KEEP_LOCAL_COPY')===true){const directory=resolveBackupDirectory();await ensureDirectory(directory);await fs.copyFile(tempPath,path.join(directory,targetName),fsConstants.COPYFILE_EXCL);}
     await uploadFileToDrive(tempPath, targetName, new Date());
     logger.info(`[db-backup] Uploaded manual backup ${targetName} to Drive`);
     return targetName;
