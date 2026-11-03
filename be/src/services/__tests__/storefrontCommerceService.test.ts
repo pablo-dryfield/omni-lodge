@@ -38,6 +38,12 @@ const promotionFindAll = StorefrontPromotion.findAll as jest.Mock;
 describe('quoteStorefrontCart validation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Exercise availability rules before the fixture experiences take place.
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-01T12:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   it('rejects an empty cart', async () => {
