@@ -5,6 +5,7 @@ import {
   formatPayStaffName,
 } from './Pays';
 import type { Pay, PayAffiliateSaleBooking, PaySettlementSource } from '../types/pays/Pay';
+import type { CompensationComponent } from '../types/compensation/CompensationComponent';
 
 jest.mock('axios', () => {
   const axiosInstance = {
@@ -139,6 +140,34 @@ describe('createStaffPayoutSettlementRequestId', () => {
 });
 
 describe('buildDefaultPaymentLines', () => {
+  it('prefills separate regular and Halloween guiding with the shared finance defaults', () => {
+    const components: CompensationComponent[] = [
+      { id: 16, name: 'Pub Crawl Guiding', slug: 'pub-crawl-guiding', category: 'commission',
+        calculationMethod: 'per_unit', currencyCode: 'PLN', config: {}, isActive: true,
+        defaultFinanceAccountId: 1, defaultFinanceCategoryId: 42, assignments: [] },
+      { id: 18, name: 'Halloween Pub Crawl Guiding', slug: 'halloween-pub-crawl-guiding', category: 'commission',
+        calculationMethod: 'per_unit', currencyCode: 'PLN', config: {}, isActive: true,
+        defaultFinanceAccountId: 1, defaultFinanceCategoryId: 42, assignments: [] },
+    ];
+    const amounts = [366.60, 141.60];
+    const staff = volunteerCommissionStaff({
+      totalPayout: 508.20, personalPayableTotal: 508.20, closingBalance: 508.20,
+      payouts: { currency: 'PLN', payableDue: 508.20, payablePaid: 0, payableOutstanding: 508.20,
+        receivableDue: 0, receivableCollected: 0, receivableOutstanding: 0 },
+      settlementSources: components.map((component, index) => ({
+        ...createGuideCommissionSource('staff_vendor'), sourceKey: 'compensation_component',
+        componentId: component.id, label: component.name, amount: amounts[index],
+        outstandingAmount: amounts[index], segmentKey: `seg_guiding_${component.id}`,
+        settlementIntent: `signed-guiding-${component.id}`,
+      })),
+    });
+    const lines = buildDefaultPaymentLines(staff, new Map(), '', new Map(components.map(component => [component.id, component])));
+    expect(lines).toEqual(components.map((component, index) => expect.objectContaining({
+      label: component.name, componentId: component.id, amount: amounts[index], accountId: '1', categoryId: '42',
+      settlementIntent: `signed-guiding-${component.id}`,
+    })));
+  });
+
   it('does not let an older Promotion Sales payment consume newly outstanding bookings', () => {
     const paidBooking = createAffiliateBooking(1001, 40, true);
     const outstandingBooking = createAffiliateBooking(1002, 60, false);
