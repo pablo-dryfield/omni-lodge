@@ -154,6 +154,19 @@ describe('Volunteer Fund linked account routing guards', () => {
     expect(FinanceTransaction.create).not.toHaveBeenCalled();
   });
 
+  it('keeps an inactive fund ledger unavailable for ordinary transfers', async () => {
+    (VolunteerFund.findAll as jest.Mock).mockResolvedValue([
+      { id: 4, name: 'Closed fund', linkedAccountId: 2, isActive: false },
+    ]);
+    await expect(createFinanceTransfer({ fromAccountId: 1, toAccountId: 2,
+      amountMinor: 1000, currency: 'PLN', date: '2026-11-03' }, 9, { transaction }))
+      .rejects.toThrow(/Volunteer Fund allocation flow/i);
+    expect(VolunteerFund.findAll).toHaveBeenCalledWith(expect.objectContaining({
+      where: { linkedAccountId: { [Op.in]: [1, 2] } }, transaction,
+    }));
+    expect(FinanceTransaction.create).not.toHaveBeenCalled();
+  });
+
   it('allows the exact trusted fund allocation to create its transfer pair', async () => {
     (VolunteerFund.findAll as jest.Mock).mockResolvedValue([
       { id: 4, name: 'Volunteer Fund', linkedAccountId: 2 },

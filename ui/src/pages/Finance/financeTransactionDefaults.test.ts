@@ -111,20 +111,22 @@ describe("finance transaction defaults", () => {
     expect(result).toMatchObject({ accountId: 8, targetAccountId: null, fxRate: 1 });
   });
 
-  it("returns only the four operational manual-entry accounts in a stable order", () => {
+  it("lists all active account types and names, excluding configured fund accounts", () => {
     const result = selectManualTransactionAccounts([
       account({ id: 10, name: "Staff Reimbursements" }),
       account({ id: 11, name: "Volunteer reserve" }),
-      account({ id: 9, name: "Dave" }),
+      account({ id: 9, name: "Dave PLN" }),
+      account({ id: 12, name: "Dave EUR", type: "bank", currency: "EUR" }),
+      account({ id: 8, name: "Company Account", type: "bank" }),
       account({ id: 2, name: "Cash Register EUR", currency: "EUR" }),
       account({ id: 1, name: "Cash Register PLN" }),
       account({ id: 3, name: "FareHarbor Payouts", type: "other" }),
     ], new Set([11]));
 
-    expect(result.map(({ id }) => id)).toEqual([1, 2, 9, 11]);
+    expect(result.map(({ id }) => id)).toEqual([2, 1, 8, 12, 9, 3, 10]);
   });
 
-  it("does not expose inactive, misconfigured, or duplicate operational accounts", () => {
+  it("hides inactive accounts and keeps distinct accounts even when their names overlap", () => {
     const result = selectManualTransactionAccounts([
       account({ id: 1, name: "Cash Register PLN", isActive: false }),
       account({ id: 2, name: "Cash Register EUR", currency: "PLN" }),
@@ -134,21 +136,18 @@ describe("finance transaction defaults", () => {
       account({ id: 13, name: "Cash PLN" }),
     ]);
 
-    expect(result).toEqual([]);
+    expect(result.map(({ id }) => id)).toEqual([12, 13, 2, 9, 11]);
   });
 
-  it("does not expose an account merely because it is named Volunteer Fund", () => {
-    expect(selectManualTransactionAccounts([
-      account({ id: 11, name: "Volunteer Fund" }),
-    ])).toEqual([]);
+  it("uses configured IDs rather than an account name to reserve fund accounts", () => {
+    const unrelated = account({ id: 11, name: "Volunteer Fund" });
+    expect(selectManualTransactionAccounts([unrelated])).toEqual([unrelated]);
+    expect(selectManualTransactionAccounts([unrelated], new Set([11]))).toEqual([]);
   });
 
-  it("exposes the exact active account linked by Volunteer Fund configuration", () => {
+  it("excludes a renamed linked account while retaining the fund's ordinary funding-source account", () => {
     const linked = account({ id: 42, name: "Volunteer reserve ledger", type: "other", currency: "EUR" });
-
-    expect(selectManualTransactionAccounts([linked], new Set([42]))).toEqual([linked]);
-    expect(selectManualTransactionAccounts([
-      { ...linked, isActive: false },
-    ], new Set([42]))).toEqual([]);
+    const fundingSource = account({ id: 1, name: "Cash Register PLN" });
+    expect(selectManualTransactionAccounts([linked, fundingSource], new Set([42]))).toEqual([fundingSource]);
   });
 });

@@ -1,6 +1,7 @@
 import type { VolunteerFundSummary } from "../../types/finance";
 import {
   activeVolunteerFundLinkedAccountIds,
+  configuredVolunteerFundLinkedAccountIds,
   buildVolunteerFundSpendIdempotencyKey,
   isVolunteerFundManagedTransactionMeta,
   resolveActiveVolunteerFundAccount,
@@ -69,6 +70,13 @@ describe("Finance transaction Volunteer Fund routing", () => {
     expect(transferTouchesActiveVolunteerFund(funds, 20, 30)).toBe(true);
     expect(transferTouchesActiveVolunteerFund(funds, 10, 20)).toBe(true);
     expect(transferTouchesActiveVolunteerFund(funds, 10, 30)).toBe(false);
+  });
+
+  it("reserves all configured fund ledgers for transfer pickers, including inactive funds", () => {
+    expect([...configuredVolunteerFundLinkedAccountIds([
+      fund({ linkedAccountId: 20 }), fund({ linkedAccountId: 20 }),
+      fund({ id: 2, linkedAccountId: 30, isActive: false }), fund({ id: 3, linkedAccountId: null }),
+    ])]).toEqual([20, 30]);
   });
 
   it("builds a namespaced idempotency key", () => {
