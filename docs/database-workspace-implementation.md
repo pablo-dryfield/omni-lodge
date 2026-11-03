@@ -115,3 +115,39 @@ Additional live production discovery was strictly read-only: PostgreSQL 16.8, ap
 Production restore staging now reserves archive copies plus a configurable decompression/database expansion allowance (default six times archive size) and free-space floor. The current host cannot safely restore its approximately 988 MB archive under that policy. This must be shown as a real capacity limitation, not an enabled restore that fills the live disk. A larger/isolated restore volume or target and a measured drill are deployment prerequisites for enabling production restore.
 
 Outstanding qualification: finish endpoint/recipient/revocation tests; Drive adapter tests; scheduler dispatch/overlap/authority tests; schema round trips and drift races; worker Linux isolation/lifetime and offline operator rehearsal; quota/concurrency/cancellation edges; full build and final suites; keyboard/mobile/accessibility and performance remeasurement. Keep the full integration branch local until the complete package passes its gates.
+
+### 4 November local qualification checkpoint
+
+Local commit `01ed9759` records the administration/recovery/durable-tools checkpoint. Subsequent local hardening remains on `codex/database-workspace`; no branch has been pushed, PR opened, production settings changed, or release deployed.
+
+Implemented and exercised since that checkpoint:
+
+- Every workspace route passes the global unscoped administrator/page/module boundary. Sharing tests cover named recipients, expiry, creator/recipient revocation, changed saved revisions, forged result references and export audit. A result share exposes only its selected manifest, without the creator's SQL/notices or other batch results. Underlying invoker-view grants and RLS are included in captured-result authority.
+- Reusable query documents reject current bound values and sensitive defaults. Parameter declarations support name, PostgreSQL type, required/sensitive flags and explicit nonsensitive defaults. Values remain private encrypted drafts. Filter comparators handle PostgreSQL special numerics and CSV parsing distinguishes quoted null tokens.
+- Server and Drive copies have independent identities. Nine adapter tests verify exact-copy trash/permanent deletion, unavailable inventories, changed fingerprints, matching-name checksum failure and retain-both enforcement. Restore selection uses copy IDs and location labels rather than ambiguous filenames. Large backup downloads stream to disk with a bounded browser fallback, timeout and continuing authorization checks.
+- The existing scheduled/manual application backup flow now captures a separate custom-format control-store archive when its bootstrap connection is configured. The helper's real PostgreSQL test verifies it contains the independent journal, not application tables. This does **not** change the external deployment shell backup gate; a fresh control backup before control-schema upgrades remains a coordinated release/operator prerequisite. New operating controls use the existing Control Panel.
+- A process-level offline restore drill succeeds with an unavailable application database name and rejects a completed replay. Last-tested restore metadata now binds the exact source fingerprint. No live backup was deleted, uploaded or restored.
+- Real schedule dispatch tests verify single dispatch, skipped overlap/missed occurrences and disabled revoked approvals. Production readiness tests reject stale heartbeats or the same PID with a different Linux start time.
+- Schema drafts round-trip enum/domain/composite types, sequence cache/ownership/defaults, foreign keys, invoker views, triggers, RLS/policies and comments. Dependency ordering handles column defaults and referenced FK targets. Extension-owned changes require explicit infrastructure resolution. Schema review fingerprints include defaults/indexes/policies/triggers/comments/routines/types/sequences; ordinary transactional DDL locks referenced existing relations before rechecking drift.
+- Ordinary execution rejects owner-authorized application views and callable application security-definer routines. The two installed pg_stat_statements diagnostic views are accepted only with verified extension membership; otherwise their standard PUBLIC SELECT grants made the entire registered local target unavailable. Newly created application views still require security_invoker=true.
+- Retired the legacy Performance Explain application-pool executor. Its UI stages SQL in memory for the workspace, without URL/history/localStorage handoff or automatic execution. Workspace JWT verification uses the same token/account/scope checks with a smaller account/role projection; unrelated authentication retains its existing profile metadata. Request-local permission reuse does not cache authorization between requests.
+- Added a required real systemd/cgroup memory/CPU/task and parent-lifetime rehearsal to both PostgreSQL CI legs, after a backend build on pushes as well as PRs. Windows cannot run this rehearsal (WSL is not installed); its local skip is not qualification. CI must actually pass it before release readiness.
+
+Completed final-suite runs at this checkpoint:
+
+| Command | Result |
+|---|---|
+| `npm.cmd --prefix be run check` | Passed |
+| `npm.cmd --prefix ui run check` | Passed after fixing the Performance JSX cutover and test import order |
+| `npm.cmd --prefix be test -- --runInBand` | 314 suites passed; 3,131 tests passed; one existing skipped test |
+| `CI=true npm.cmd --prefix ui test -- --watchAll=false --runInBand` | 144 suites / 1,043 tests passed |
+| `npm.cmd --prefix be run test:database-workspace` | 33 real PostgreSQL/parser/recovery tests passed |
+| Focused backup/sharing/authentication/cutover suites | Passed; included in the full runs above |
+
+Backend/UI release builds and the release-tooling rerun are currently in progress. They are not yet reported as passed. Logs and all private fixtures remain ignored under `.tmp`; generated output is not staged.
+
+Local services were restarted with the new source: backend session 87251 (PID 29820 at last check), worker session 52534, UI session 83541. Verify PIDs before stopping. Browser page 5 is local only; page 3 is production and untouched. The private local test JWT key is unchanged, with a short-lived test session that must be refreshed when it expires. Local catalog API now returns 100 authorized objects. Mobile 390px chrome has no document overflow, but the full screen/keyboard/a11y matrix still needs visual qualification.
+
+Performance remains an open gate: warm local history requests were approximately 733–1,114 ms in the latest run. Query diagnostics attribute most time to authentication/permission queries. A read-only local PostgreSQL probe measured approximately 424–548 ms cold planning and approximately 3–4 ms repeated planning for a small account/role join, with execution below 1 ms. Investigate that baseline and retest under idle/compiled conditions; do not introduce cross-request permission caching to conceal revocation behavior.
+
+See `database-workspace-operations.md` for the activation, copy-policy, separate control-backup, offline restore, key-retention and rollback procedures. Still open: full acceptance matrix and responsive/keyboard journeys; Linux/PG16 CI evidence; performance and bounded memory/concurrency edges; versioned control-schema upgrade/backup coordination; durable backup-create lifecycle versus the existing awaited integration; production bootstrap/release rehearsal and measured restore capacity. Do not mark W0–W8 or F01–F16 complete from this checkpoint alone.

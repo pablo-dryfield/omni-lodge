@@ -115,13 +115,15 @@ export const downloadResult = workspaceHandler(async (req, res) => {
       );
     let count = 0;
     for (let page = 0; ; page++) {
-      if (page && page % 10 === 0)
+      if (page) {
         await reauthorizeExecution(
           actorId,
           payload.mode,
           payload.policyHash,
           'export',
         );
+        await authorizeResult(store, executionId, actorId);
+      }
       const batch = page
         ? await readResult(store, executionId, index, actorId, {
             page,
@@ -413,10 +415,41 @@ export const openShare = workspaceHandler(async (req, res) => {
     res.json({ kind: 'query', title: share.title, query: doc.value });
   } else {
     await authorizeResult(store, share.executionId!, share.ownerId);
+    const source = await store.get(share.executionId!, share.ownerId),
+      selected = source.outcomes[share.index!];
+    if (!selected?.result)
+      throw new WorkspaceError(
+        410,
+        'RESULT_EXPIRED',
+        'The shared captured result is unavailable.',
+      );
     res.json({
       kind: 'result',
-      job: await store.get(share.executionId!, share.ownerId),
-      index: share.index,
+      job: {
+        id: source.id,
+        actorId: share.ownerId,
+        targetId: source.targetId,
+        mode: 'read',
+        status: source.status,
+        transactionOutcome: source.transactionOutcome,
+        createdAt: source.createdAt,
+        generation: 0,
+        summary: share.title,
+        statementCount: 1,
+        outcomes: [
+          {
+            index: 0,
+            sql: '',
+            sourceStart: 0,
+            sourceEnd: 0,
+            kind: 'read',
+            command: selected.command,
+            durationMs: selected.durationMs,
+            result: selected.result,
+          },
+        ],
+      },
+      index: 0,
       title: share.title,
     });
   }
@@ -444,4 +477,29 @@ export const sharedResult = workspaceHandler(async (req, res) => {
       },
     ),
   );
+});
+export const sharedExportAudit = workspaceHandler(async (req, res) => {
+  const actor = await workspaceAccess(req, 'export'),
+    share = await sharedDocument(String(req.params.id), actor);
+  if (share.kind !== 'result')
+    throw new WorkspaceError(
+      400,
+      'SHARE_KIND',
+      'This share does not contain a captured result.',
+    );
+  await authorizeResult(controlStore(), share.executionId!, share.ownerId);
+  await controlStore().audit(
+    actor,
+    'shared_result_exported',
+    {
+      shareId: req.params.id,
+      ownerId: share.ownerId,
+      index: share.index,
+      format: String(req.body?.format || '').slice(0, 20),
+      scope: String(req.body?.scope || '').slice(0, 100),
+    },
+    undefined,
+    share.executionId,
+  );
+  res.status(204).end();
 });

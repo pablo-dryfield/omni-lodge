@@ -92,8 +92,8 @@ export async function relationDetails(
     credential,
     `SELECT k.conname AS name,k.contype AS kind,pg_get_constraintdef(k.oid,true) AS definition,
     k.confrelid::text AS related_object,n.nspname AS target_schema,c.relname AS target_name,
-    ARRAY(SELECT a.attname FROM unnest(k.conkey) WITH ORDINALITY x(num,ord) JOIN pg_attribute a ON a.attrelid=k.conrelid AND a.attnum=x.num ORDER BY x.ord) AS source_columns,
-    ARRAY(SELECT a.attname FROM unnest(k.confkey) WITH ORDINALITY x(num,ord) JOIN pg_attribute a ON a.attrelid=k.confrelid AND a.attnum=x.num ORDER BY x.ord) AS target_columns
+    ARRAY(SELECT a.attname::text FROM unnest(k.conkey) WITH ORDINALITY x(num,ord) JOIN pg_attribute a ON a.attrelid=k.conrelid AND a.attnum=x.num ORDER BY x.ord) AS source_columns,
+    ARRAY(SELECT a.attname::text FROM unnest(k.confkey) WITH ORDINALITY x(num,ord) JOIN pg_attribute a ON a.attrelid=k.confrelid AND a.attnum=x.num ORDER BY x.ord) AS target_columns
     FROM pg_constraint k LEFT JOIN pg_class c ON c.oid=k.confrelid LEFT JOIN pg_namespace n ON n.oid=c.relnamespace WHERE k.conrelid=$1::oid ORDER BY k.conname`,
     [oid],
   );
@@ -108,7 +108,7 @@ export async function relationDetails(
     target,
     credential,
     `SELECT polname AS name,polcmd AS command,polpermissive AS permissive,
-    ARRAY(SELECT pg_get_userbyid(r) FROM unnest(polroles) r) AS roles,pg_get_expr(polqual,polrelid) AS using,pg_get_expr(polwithcheck,polrelid) AS with_check FROM pg_policy WHERE polrelid=$1::oid`,
+    ARRAY(SELECT pg_get_userbyid(r)::text FROM unnest(polroles) r) AS roles,pg_get_expr(polqual,polrelid) AS using,pg_get_expr(polwithcheck,polrelid) AS with_check FROM pg_policy WHERE polrelid=$1::oid`,
     [oid],
   );
   const triggers = await catalogQuery(
@@ -214,7 +214,7 @@ export async function describeCatalogObject(
       target,
       credential,
       `SELECT n.nspname AS schema,t.typname AS name,pg_get_userbyid(t.typowner) AS owner,t.typtype AS type_kind,format_type(t.typbasetype,t.typtypmod) AS base_type,t.typnotnull AS not_null,t.typdefault AS default_value,
-    ARRAY(SELECT enumlabel FROM pg_enum WHERE enumtypid=t.oid ORDER BY enumsortorder) AS labels,
+    ARRAY(SELECT enumlabel::text FROM pg_enum WHERE enumtypid=t.oid ORDER BY enumsortorder) AS labels,
     ARRAY(SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE contypid=t.oid) AS constraints FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE t.oid=$1::oid AND n.nspname=ANY($2)`,
       [oid, target.schemas],
     );

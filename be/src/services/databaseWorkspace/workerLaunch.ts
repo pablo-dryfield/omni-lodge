@@ -96,6 +96,19 @@ export function linuxProcessStart(stat: string): string {
     );
   return value;
 }
+export function sameLinuxParent(
+  pid: number,
+  start: string,
+  read: (file: string) => string,
+): boolean {
+  if (!Number.isSafeInteger(pid) || pid < 1 || !/^\d+$/.test(start))
+    return false;
+  try {
+    return linuxProcessStart(read(`/proc/${pid}/stat`)) === start;
+  } catch {
+    return false;
+  }
+}
 export function linuxWorkerLimits(
   cgroups: string,
   read: (file: string) => string,

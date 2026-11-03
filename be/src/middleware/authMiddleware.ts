@@ -33,7 +33,7 @@ const normalizeRoleSlug = (value?: string | null): string | null => {
   return withHyphens;
 };
 
-const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: NextFunction, profile: 'full' | 'workspace' = 'full'): Promise<void> => {
   const authHeader = req.headers.authorization;
   const bearerToken =
     typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')
@@ -62,10 +62,11 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     }
 
     const user = await User.findByPk(decoded.id, {
+      ...(profile==='workspace'?{attributes:['id','status','approved','userTypeId','firstName','lastName','roleKey']}:{}),
       include: [
-        { model: UserType, as: 'role', attributes: ['id', 'slug', 'name'] },
-        { model: ShiftRole, as: 'shiftRoles', through: { attributes: [] }, attributes: ['id', 'slug'] },
-        { association: 'staffProfile', attributes: ['staffType', 'active'], required: false },
+        { model: UserType, as: 'role', attributes: profile==='workspace'?['id','slug','name','status']:['id', 'slug', 'name'] },
+        ...(profile==='full'?[{ model: ShiftRole, as: 'shiftRoles', through: { attributes: [] }, attributes: ['id', 'slug'] },
+        { association: 'staffProfile', attributes: ['staffType', 'active'], required: false }]:[]),
       ],
     });
 
@@ -80,6 +81,7 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     }
 
     const role = (user as unknown as { role?: UserType | null }).role ?? null;
+    if(profile==='workspace' && role?.status!==true){res.status(403).json({error:'Account role is inactive'});return;}
     const staffProfile = (user as unknown as {
       staffProfile?: { staffType?: 'volunteer' | 'long_term' | 'assistant_manager' | 'manager' | 'guide'; active?: boolean } | null;
     }).staffProfile ?? null;

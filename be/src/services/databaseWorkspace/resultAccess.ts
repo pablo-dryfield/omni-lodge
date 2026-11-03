@@ -23,10 +23,17 @@ export async function authorizationSnapshot(
     await client.query(`SELECT current_user,current_setting('row_security') AS row_security,
     ARRAY(SELECT rolname FROM pg_roles WHERE pg_has_role(current_user,oid,'MEMBER') ORDER BY rolname) AS memberships`);
   const relations = await client.query(
-    `SELECT c.oid::text,c.relrowsecurity,c.relforcerowsecurity,
+    `WITH RECURSIVE scope(oid) AS (
+      SELECT to_regclass(name)::oid FROM unnest($1::text[]) name
+      UNION SELECT d.refobjid FROM scope s
+        JOIN LATERAL (SELECT r.oid,'pg_rewrite'::regclass AS classid FROM pg_rewrite r WHERE r.ev_class=s.oid
+          UNION ALL SELECT p.oid,'pg_policy'::regclass FROM pg_policy p WHERE p.polrelid=s.oid) definition ON true
+        JOIN pg_depend d ON d.classid=definition.classid AND d.objid=definition.oid AND d.refclassid='pg_class'::regclass
+    ) SELECT c.oid::text,c.relowner,c.reloptions,c.relrowsecurity,c.relforcerowsecurity,
+    CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid) END AS definition,
     has_table_privilege(c.oid,'SELECT') AS selectable,
     COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.oid) FROM pg_policy p WHERE p.polrelid=c.oid),'[]'::jsonb) AS policies,
-    c.relacl::text FROM pg_class c WHERE c.oid=ANY(ARRAY(SELECT to_regclass(x) FROM unnest($1::text[]) x)) ORDER BY c.oid`,
+    c.relacl::text FROM pg_class c WHERE c.oid IN(SELECT oid FROM scope) ORDER BY c.oid`,
     [names],
   );
   return operationHash({ role: role.rows, relations: relations.rows });

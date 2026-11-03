@@ -159,8 +159,12 @@ jobs:
           npm run test:database-workspace
 
       - name: Build and verify backend
-        if: github.event_name == 'pull_request'
         run: npm run build:prod
+
+      - name: Verify real Linux worker resource isolation and lifetime
+        env:
+          WORKSPACE_LINUX_ISOLATION_REQUIRED: 'true'
+        run: node --test ../scripts/tests/databaseWorkspaceWorkerLinux.test.mjs
 
   ui:
     name: CI / ui

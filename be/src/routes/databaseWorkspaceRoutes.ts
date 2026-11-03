@@ -22,6 +22,7 @@ import {
   createShare,
   openShare,
   sharedResult,
+  sharedExportAudit,
   downloadResult,
 } from '../controllers/databaseWorkspaceExportController.js';
 import {
@@ -77,6 +78,7 @@ router.get('/share-recipients', shareRecipients);
 router.post('/shares', createShare);
 router.get('/shares/:id', openShare);
 router.post('/shares/:id/results', sharedResult);
+router.post('/shares/:id/export-audit', sharedExportAudit);
 router.get('/schedules', schedulesList);
 router.post('/schedules', scheduleCreate);
 router.post('/schedules/:id', scheduleAction);

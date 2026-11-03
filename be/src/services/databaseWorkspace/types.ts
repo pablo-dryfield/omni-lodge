@@ -151,6 +151,7 @@ export type JobPayload = {
     bytes: number;
     sourceFilename: string;
     sourceCopyId?: string;
+    sourceFingerprint?: string;
     sourceLocation?: 'local' | 'drive';
     serverMajor: number;
     archiveMajor: number;
@@ -164,6 +165,7 @@ export type JobPayload = {
     atomic: boolean;
     action: string;
     schemaHash?: string;
+    lockRelations?: string[];
     privilegeHash?: string;
     postCheck?: { kind: string; oid: string };
     signal?: {

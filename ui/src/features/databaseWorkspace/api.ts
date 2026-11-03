@@ -194,8 +194,16 @@ export type Document = {
     targetId?: string;
     tags?: string[];
     folder?: string;
+    parameterDefinitions?: ParameterDefinition[];
     [key: string]: unknown;
   };
+};
+export type ParameterDefinition = {
+  name: string;
+  type: string;
+  required: boolean;
+  sensitive: boolean;
+  defaultValue?: WireValue;
 };
 export type Session = {
   id: string;
@@ -392,6 +400,8 @@ export const api = {
   scheduleAction: async (id: string, action: string) =>
     (await axios.post(`${base}/schedules/${id}`, { action })).data,
   backups: async () => (await axios.get(`${base}/backups`)).data,
+  sharedExportAudit: async (id: string, format: string, scope: string) =>
+    axios.post(`${base}/shares/${id}/export-audit`, { format, scope }),
   createBackup: async () => (await axios.post(`${base}/backups`)).data,
   deleteBackup: async (input: Record<string, unknown>) =>
     (await axios.post(`${base}/backups/delete`, input)).data,

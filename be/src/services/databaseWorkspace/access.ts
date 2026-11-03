@@ -33,6 +33,10 @@ export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
 const admin = (slug: string | null | undefined) =>
   ['admin', 'administrator'].includes((slug || '').trim().toLowerCase());
 const pageEligibility = new WeakMap<AuthenticatedRequest, Promise<number>>();
+const enabledActions = new WeakMap<
+  AuthenticatedRequest,
+  Map<WorkspaceAction, Promise<number>>
+>();
 export async function workspaceAccess(
   req: AuthenticatedRequest,
   action: WorkspaceAction,
@@ -85,23 +89,33 @@ export async function workspaceAccess(
       'CAPABILITY_REQUIRED',
       `Your Database Workspace ${action} permission is disabled.`,
     );
-  const enabled = await ModuleAction.count({
-    where: { enabled: true },
-    include: [
-      {
-        model: Module,
-        as: 'module',
-        required: true,
-        where: { slug: 'database-workspace', status: true },
-      },
-      {
-        model: Action,
-        as: 'action',
-        required: true,
-        where: { key: action, status: true },
-      },
-    ],
-  });
+  let requestActions = enabledActions.get(req);
+  if (!requestActions) {
+    requestActions = new Map();
+    enabledActions.set(req, requestActions);
+  }
+  let actionEnabled = requestActions.get(action);
+  if (!actionEnabled) {
+    actionEnabled = ModuleAction.count({
+      where: { enabled: true },
+      include: [
+        {
+          model: Module,
+          as: 'module',
+          required: true,
+          where: { slug: 'database-workspace', status: true },
+        },
+        {
+          model: Action,
+          as: 'action',
+          required: true,
+          where: { key: action, status: true },
+        },
+      ],
+    });
+    requestActions.set(action, actionEnabled);
+  }
+  const enabled = await actionEnabled;
   if (!enabled)
     throw new WorkspaceError(
       403,
@@ -173,11 +187,9 @@ export async function workspaceViewGate(
         .status(error.status)
         .json({ code: error.code, message: error.message });
     else
-      res
-        .status(503)
-        .json({
-          code: 'WORKSPACE_AUTHORITY_UNAVAILABLE',
-          message: 'Workspace authority could not be verified.',
-        });
+      res.status(503).json({
+        code: 'WORKSPACE_AUTHORITY_UNAVAILABLE',
+        message: 'Workspace authority could not be verified.',
+      });
   }
 }

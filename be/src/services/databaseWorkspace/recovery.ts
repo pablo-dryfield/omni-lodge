@@ -166,6 +166,7 @@ export async function stageRecovery(
     id?: string;
     location?: 'local' | 'drive';
     sha256Checksum?: string;
+    fingerprint?: string;
   },
   options: {
     directory: string;
@@ -279,6 +280,7 @@ export async function stageRecovery(
       bytes,
       sourceFilename: source.filename,
       sourceCopyId: source.id,
+      sourceFingerprint: source.fingerprint,
       sourceLocation: source.location,
     };
     await decryptArchive(manifest, plaintext);

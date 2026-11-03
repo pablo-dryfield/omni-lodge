@@ -127,9 +127,23 @@ export function validateSort(input: unknown, columns: Set<string>): Sort[] {
     return { column: s.column, direction: s.direction, nulls: s.nulls };
   });
 }
-const decimal = /^[-+]?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?$/;
+const decimal =
+  /^(?:[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|[-+]?Infinity|NaN)$/i;
 // Compare exact decimals without converting them to binary floating point.
 export function compareDecimal(a: string, b: string): number {
+  a = a.trim();
+  b = b.trim();
+  const special = (value: string) =>
+    /^[-]infinity$/i.test(value)
+      ? 0
+      : /^[+]?infinity$/i.test(value)
+        ? 2
+        : /^nan$/i.test(value)
+          ? 3
+          : 1;
+  const rankA = special(a),
+    rankB = special(b);
+  if (rankA !== 1 || rankB !== 1) return Math.sign(rankA - rankB);
   const normalize = (v: string) => {
     const [mantissa, exp = '0'] = v.toLowerCase().split('e');
     const negative = mantissa.startsWith('-');
@@ -168,8 +182,8 @@ export function compareValues(
     ['int2', 'int4', 'int8', 'numeric', 'float4', 'float8', 'oid'].includes(
       field.pgType,
     ) &&
-    decimal.test(a) &&
-    decimal.test(b)
+    decimal.test(a.trim()) &&
+    decimal.test(b.trim())
   )
     return compareDecimal(a, b);
   return a < b ? -1 : a > b ? 1 : 0;

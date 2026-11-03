@@ -36,6 +36,7 @@ import {
 import { operationHash } from '../services/databaseWorkspace/store.js';
 import { authorizeResult } from '../services/databaseWorkspace/resultAccess.js';
 import HttpError from '../errors/HttpError.js';
+import { savedQueryValue } from '../services/databaseWorkspace/documents.js';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const id = (value: unknown) => {
@@ -414,6 +415,8 @@ export const workspaceSaveDocument = workspaceHandler(async (req, res) => {
       'INVALID_DOCUMENT',
       'SQL content must be text.',
     );
+  if (body.kind === 'query')
+    savedQueryValue(body.value, config.limits.queryMaxBytes);
   res.json(
     await controlStore().saveDocument(
       actorId,

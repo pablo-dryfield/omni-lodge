@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { consumeWorkspaceQuery, hasWorkspaceQuery } from './pendingQuery';
 import { useQuery } from '@tanstack/react-query';
 import {
   ActionIcon,
@@ -81,6 +82,7 @@ type QueryTab = {
   documentRevision?: number;
   objectId?: string;
   parameters?: string;
+  parameterDefinitions?: Document['value']['parameterDefinitions'];
 };
 const newTab = (
   targetId = '',
@@ -680,6 +682,23 @@ export default function DatabaseWorkspace() {
   }, [ready, restored, capabilities.data?.targets]);
   useEffect(() => {
     if (!ready || !restored) return;
+    if (tabs.length >= 20 && hasWorkspaceQuery()) {
+      setError('Close a query tab to open the pending performance query.');
+      return;
+    }
+    const sql = consumeWorkspaceQuery();
+    if (!sql) return;
+    const tab = newTab(
+      capabilities.data?.targets[0]?.id || '',
+      sql,
+      'Performance query',
+    );
+    setTabs((previous) => [...previous, tab]);
+    setActive(tab.id);
+    setSection('query');
+  }, [ready, restored, capabilities.data?.targets, tabs.length]);
+  useEffect(() => {
+    if (!ready || !restored) return;
     const snapshot = JSON.stringify({
       scope: 'workspace',
       tabs,
@@ -896,6 +915,16 @@ export default function DatabaseWorkspace() {
         throw new Error(
           'Parameters must be a JSON array of strings or null, for example ["42", null].',
         );
+      const missing =
+        current.parameterDefinitions?.findIndex(
+          (p, i) =>
+            p.required &&
+            (parsed[i] === undefined || parsed[i] === null || parsed[i] === ''),
+        ) ?? -1;
+      if (missing >= 0)
+        throw new Error(
+          `Enter a value for ${current.parameterDefinitions![missing].name} ($${missing + 1}).`,
+        );
       const scoped = override
         ? { sql: override }
         : all
@@ -957,6 +986,7 @@ export default function DatabaseWorkspace() {
           sql: current.sql,
           targetId: current.targetId,
           plan: undefined,
+          parameterDefinitions: current.parameterDefinitions || [],
         },
       });
       patch({
@@ -987,6 +1017,12 @@ export default function DatabaseWorkspace() {
       ),
       documentId: doc.id || undefined,
       documentRevision: doc.id ? doc.revision : undefined,
+      parameterDefinitions: doc.value.parameterDefinitions || [],
+      parameters: JSON.stringify(
+        (doc.value.parameterDefinitions || []).map((p) =>
+          p.sensitive ? '' : p.defaultValue === undefined ? '' : p.defaultValue,
+        ),
+      ),
     };
     setTabs((p) => [...p, tab]);
     setActive(tab.id);
@@ -1639,6 +1675,10 @@ export default function DatabaseWorkspace() {
                       <ParameterForm
                         value={parameters}
                         onChange={setParameters}
+                        definitions={current.parameterDefinitions}
+                        onDefinitionsChange={(v) =>
+                          patch({ parameterDefinitions: v, dirty: true })
+                        }
                       />
                     </div>
                   )}

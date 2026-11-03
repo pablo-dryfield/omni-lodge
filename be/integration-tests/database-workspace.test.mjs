@@ -7,6 +7,7 @@ import path from 'node:path';
 import pg from 'pg';
 import net from 'node:net';
 import { assertRestrictedIdentity } from '../src/services/databaseWorkspace/connection.ts';
+import { authorizationSnapshot } from '../src/services/databaseWorkspace/resultAccess.ts';
 import dotenv from 'dotenv';
 import { parseSql } from '../src/services/databaseWorkspace/parser.ts';
 import {
@@ -45,10 +46,14 @@ import {
 import {
   parseDDL,
   prepareMaintenance,
+  schemaStateHash,
 } from '../src/services/databaseWorkspace/administration.ts';
 import {
   validateSchedule,
   nextOccurrence,
+  initializeSchedules,
+  saveSchedule,
+  dispatchSchedules,
 } from '../src/services/databaseWorkspace/schedules.ts';
 import {
   initializeRecovery,
@@ -68,8 +73,10 @@ import {
   dependencyOrder,
 } from '../src/services/databaseWorkspace/schemaTools.ts';
 import { activitySnapshot } from '../src/services/databaseWorkspace/monitoring.ts';
+import { backupWorkspaceControl } from '../src/services/databaseWorkspace/controlBackup.ts';
 import { provisionWorkspaceRoles } from '../src/services/databaseWorkspace/provisioning.ts';
 import { prepareRoleChange } from '../src/services/databaseWorkspace/privileges.ts';
+import { savedQueryValue } from '../src/services/databaseWorkspace/documents.ts';
 import {
   systemdWorkerLaunch,
   linuxProcessStart,
@@ -125,6 +132,9 @@ test('typed filters preserve decimals and parameterize hostile values', () => {
   assert.equal(compareDecimal('9007199254740993', '9007199254740992'), 1);
   assert.equal(compareDecimal('-0.01', '0'), -1);
   assert.equal(compareDecimal('1.200', '12e-1'), 0);
+  assert.equal(compareDecimal('-Infinity', '-1'), -1);
+  assert.equal(compareDecimal('NaN', 'Infinity'), 1);
+  assert.equal(compareDecimal('.5', '0.50'), 0);
   const filter = validateFilter(
     {
       group: 'and',
@@ -153,6 +163,10 @@ test('typed filters preserve decimals and parameterize hostile values', () => {
 });
 test('import parsing preserves quoted CSV, SQL null and exact JSON values', async () => {
   const options = { maxBytes: 10000, maxRows: 10, nullToken: '\\N' };
+  assert.deepEqual(
+    (await parseImport('value\n\\N\n"\\N"\n""', 'csv', options)).rows,
+    [[null], ['\\N'], ['']],
+  );
   const data = await parseImport(
     'id,note\r\n9007199254740993,"a,b\nnext"\r\n2,\\N',
     'csv',
@@ -223,6 +237,51 @@ test('review tokens bind the exact operation and actor', () => {
   assert.throws(() => verifyReview(r.token, 'hash', 8));
   const expired = createReview('hash', 7, -1);
   assert.throws(() => verifyReview(expired.token, 'hash', 7));
+});
+test('reusable query documents reject bound values and sensitive defaults', () => {
+  const base = { title: 'Example', sql: 'SELECT $1::bigint', targetId: 'test' };
+  assert.equal(savedQueryValue(base, 10000).sql, base.sql);
+  assert.throws(
+    () => savedQueryValue({ ...base, parameters: ['secret'] }, 10000),
+    { code: 'QUERY_VALUES_PRIVATE' },
+  );
+  assert.throws(
+    () =>
+      savedQueryValue(
+        {
+          ...base,
+          parameterDefinitions: [
+            {
+              name: 'value',
+              type: 'text',
+              required: true,
+              sensitive: true,
+              defaultValue: 'secret',
+            },
+          ],
+        },
+        10000,
+      ),
+    { code: 'QUERY_PARAMETERS' },
+  );
+  assert.equal(
+    savedQueryValue(
+      {
+        ...base,
+        parameterDefinitions: [
+          {
+            name: 'value',
+            type: 'bigint',
+            required: true,
+            sensitive: false,
+            defaultValue: '9007199254740993',
+          },
+        ],
+      },
+      10000,
+    ).parameterDefinitions[0].defaultValue,
+    '9007199254740993',
+  );
 });
 test('production worker launch has independent resource caps and never places credentials in arguments', () => {
   const input = {
@@ -1021,6 +1080,8 @@ test(
   'a trusted custom archive restores into a new private database without replacing its source',
   integration,
   async () => {
+    const beforeDump = await run('SELECT count(*) FROM sample'),
+      sourceRows = (await readResult(store, beforeDump.id, 0, 1)).rows[0][0];
     const archiveFile = path.join(root, 'fixture.backup'),
       connection = admin.connectionParameters;
     const toolEnv = {
@@ -1111,7 +1172,7 @@ test(
             'SELECT count(*)::int AS n FROM public.sample',
           )
         ).rows[0].n,
-        6,
+        Number(sourceRows),
       );
       assert.equal(
         (
@@ -1125,7 +1186,56 @@ test(
       await verification.end();
     }
     const original = await run('SELECT count(*) FROM sample');
-    assert.equal((await readResult(store, original.id, 0, 1)).rows[0][0], '6');
+    assert.equal(
+      (await readResult(store, original.id, 0, 1)).rows[0][0],
+      sourceRows,
+    );
+    // Rehearse the independent operator entry point with an unavailable
+    // application DB name. Only the disposable restore destination is replaced.
+    await admin.query(
+      `DROP DATABASE ${quoteIdentifier(restoreDatabase)} WITH (FORCE)`,
+    );
+    const offlinePayload = {
+      ...payload,
+      target: { ...target, database: 'unavailable_fixture_application' },
+    };
+    const offline = await store.enqueue(
+      offlinePayload,
+      operationHash({ offline: recovery }),
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+    );
+    const offlineArgs = [
+      '--import',
+      'tsx',
+      'src/scripts/offlineDatabaseRecovery.ts',
+      '--job',
+      offline.id,
+      '--confirm-destination',
+      restoreDatabase,
+      '--reason',
+      'Disposable offline recovery rehearsal',
+      '--execute',
+    ];
+    const offlineEnv = {
+      DB_WORKSPACE_CONTROL_URL: store.pool.options.connectionString,
+      CONFIG_ENCRYPTION_KEY: process.env.CONFIG_ENCRYPTION_KEY,
+    };
+    const operatorResult = await runTool(
+      process.execPath,
+      offlineArgs,
+      offlineEnv,
+      30000,
+    );
+    assert.equal(JSON.parse(operatorResult.stdout.trim()).status, 'succeeded');
+    assert.equal(
+      (await store.get(offline.id)).transactionOutcome,
+      'not_applicable',
+    );
+    await assert.rejects(
+      runTool(process.execPath, offlineArgs, offlineEnv, 10000),
+      /failed|exited|unstarted/i,
+    );
   },
 );
 test(
@@ -1153,6 +1263,216 @@ test(
     assert.ok(activity.identity.measured_at);
     assert.ok(activity.tables.some((t) => t.relname === 'sample'));
     assert.equal(activity.workload.available, false);
+  },
+);
+
+test(
+  'worker readiness binds a production heartbeat to the current backend process incarnation',
+  integration,
+  async () => {
+    const id = crypto.randomUUID();
+    await store.workerHeartbeat(id, { parentPid: 1200, parentStart: '100' });
+    assert.equal(
+      await store.workerReady({
+        production: true,
+        parentPid: 1200,
+        parentStart: '100',
+      }),
+      true,
+    );
+    assert.equal(
+      await store.workerReady({
+        production: true,
+        parentPid: 1200,
+        parentStart: '101',
+      }),
+      false,
+    );
+    assert.equal(
+      await store.workerReady({
+        production: true,
+        parentPid: 1201,
+        parentStart: '100',
+      }),
+      false,
+    );
+    await store.pool.query(
+      "UPDATE database_workspace.workers SET heartbeat_at=now()-interval '16 seconds' WHERE id=$1",
+      [id],
+    );
+    assert.equal(
+      await store.workerReady({
+        production: true,
+        parentPid: 1200,
+        parentStart: '100',
+      }),
+      false,
+    );
+  },
+);
+
+test(
+  'scheduled dispatch is single, skips overlap and missed runs, and disables revoked authority',
+  integration,
+  async () => {
+    await initializeSchedules(store);
+    const base = await enqueue('SELECT 1');
+    await runJob(store, base.job, base.payload, async () => {});
+    const spec = validateSchedule({
+      timezone: 'Europe/Warsaw',
+      time: '12:30',
+      weekdays: [0, 1, 2, 3, 4, 5, 6],
+      missed: 'skip',
+      overlap: 'skip',
+      dst: 'skip-gap-once-fold',
+    });
+    const id = await saveSchedule(
+      store,
+      1,
+      { title: 'Fixture', spec, job: base.payload, version: 1 },
+      10,
+    );
+    const due = new Date(Date.now() - 5000);
+    await store.pool.query(
+      'UPDATE database_workspace.schedules SET next_run=$2 WHERE id=$1',
+      [id, due],
+    );
+    await Promise.all([
+      dispatchSchedules(store, async () => {}, 60000),
+      dispatchSchedules(store, async () => {}, 60000),
+    ]);
+    let runs = await store.pool.query(
+      'SELECT state,job_id FROM database_workspace.schedule_runs WHERE schedule_id=$1',
+      [id],
+    );
+    assert.equal(runs.rowCount, 1);
+    assert.equal(runs.rows[0].state, 'dispatched');
+    const dispatched = runs.rows[0].job_id;
+    await store.pool.query(
+      "UPDATE database_workspace.schedules SET next_run=now()-interval '1 second' WHERE id=$1",
+      [id],
+    );
+    await dispatchSchedules(store, async () => {}, 60000);
+    runs = await store.pool.query(
+      'SELECT state FROM database_workspace.schedule_runs WHERE schedule_id=$1 ORDER BY created_at',
+      [id],
+    );
+    assert.equal(runs.rows[1].state, 'overlap_skipped');
+    await store.cancel(dispatched, 1);
+    await store.pool.query(
+      "UPDATE database_workspace.schedules SET next_run=now()-interval '2 hours' WHERE id=$1",
+      [id],
+    );
+    await dispatchSchedules(store, async () => {}, 60000);
+    runs = await store.pool.query(
+      'SELECT state FROM database_workspace.schedule_runs WHERE schedule_id=$1 ORDER BY created_at',
+      [id],
+    );
+    assert.equal(runs.rows[2].state, 'missed');
+    await store.pool.query(
+      "UPDATE database_workspace.schedules SET next_run=now()-interval '1 second' WHERE id=$1",
+      [id],
+    );
+    await dispatchSchedules(
+      store,
+      async () => {
+        throw new Error('authority revoked');
+      },
+      60000,
+    );
+    assert.equal(
+      (
+        await store.pool.query(
+          'SELECT enabled FROM database_workspace.schedules WHERE id=$1',
+          [id],
+        )
+      ).rows[0].enabled,
+      false,
+    );
+  },
+);
+
+test(
+  'schema migration drafts round-trip sequences, defaults, foreign keys, views, policies and comments',
+  integration,
+  async () => {
+    const setup = new pg.Client({
+      ...connectConfig,
+      connectionString: undefined,
+      database: dataName,
+    });
+    await setup.connect();
+    const sourceSchema = 'dw_roundtrip_source',
+      destinationSchema = 'dw_roundtrip_destination';
+    try {
+      await setup.query(`CREATE SCHEMA ${sourceSchema}; CREATE SCHEMA ${destinationSchema};
+      CREATE TYPE ${sourceSchema}.rating AS ENUM ('good','great');
+      CREATE DOMAIN ${sourceSchema}.positive AS integer CONSTRAINT positive_value CHECK (VALUE>0);
+      CREATE TYPE ${sourceSchema}.rated_quantity AS (rating ${sourceSchema}.rating, qty ${sourceSchema}.positive);
+      CREATE SEQUENCE ${sourceSchema}.reference_ids CACHE 5;
+      CREATE TABLE ${sourceSchema}.parent(id integer PRIMARY KEY DEFAULT nextval('${sourceSchema}.reference_ids'),rating ${sourceSchema}.rating NOT NULL,info ${sourceSchema}.rated_quantity);
+      ALTER SEQUENCE ${sourceSchema}.reference_ids OWNED BY ${sourceSchema}.parent.id;
+      CREATE TABLE ${sourceSchema}.child(id integer PRIMARY KEY, parent_id integer REFERENCES ${sourceSchema}.parent(id),qty ${sourceSchema}.positive);
+      CREATE VIEW ${sourceSchema}.parent_view WITH (security_invoker=true) AS SELECT id,rating FROM ${sourceSchema}.parent;
+      CREATE FUNCTION ${sourceSchema}.touch() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';
+      CREATE TRIGGER touch BEFORE INSERT ON ${sourceSchema}.parent FOR EACH ROW EXECUTE FUNCTION ${sourceSchema}.touch();
+      ALTER TABLE ${sourceSchema}.parent ENABLE ROW LEVEL SECURITY;
+      CREATE POLICY visible_rows ON ${sourceSchema}.parent FOR SELECT TO PUBLIC USING (id>0);
+      COMMENT ON TABLE ${sourceSchema}.parent IS 'A fixture''s table';
+      COMMENT ON COLUMN ${sourceSchema}.parent.id IS 'Stable identifier';
+      GRANT USAGE ON SCHEMA ${sourceSchema},${destinationSchema} TO ${quoteIdentifier(readName)};
+      GRANT SELECT ON ALL TABLES IN SCHEMA ${sourceSchema} TO ${quoteIdentifier(readName)};`);
+      const credential = { user: readName, password },
+        sourceTarget = { ...target, schemas: [sourceSchema] },
+        destinationTarget = { ...target, schemas: [destinationSchema] };
+      const source = await schemaSnapshot(sourceTarget, credential, []);
+      assert.deepEqual(source.dependencyCycles, []);
+      const expected = compareSchemas(source, {
+        ...source,
+        objects: [],
+        hash: 'empty',
+      });
+      assert.equal(expected.unresolved, 0);
+      assert.ok(
+        expected.sql.indexOf('CREATE SEQUENCE') <
+          expected.sql.indexOf('DEFAULT nextval'),
+      );
+      await setup.query(
+        expected.sql.replaceAll(sourceSchema, destinationSchema),
+      );
+      await setup.query(
+        `GRANT SELECT ON ALL TABLES IN SCHEMA ${destinationSchema} TO ${quoteIdentifier(readName)}`,
+      );
+      const restored = await schemaSnapshot(destinationTarget, credential, []);
+      const actualDefinitions = restored.objects
+        .map((o) => [
+          o.key.replaceAll(destinationSchema, sourceSchema),
+          o.definition.replaceAll(destinationSchema, sourceSchema),
+        ])
+        .sort();
+      assert.deepEqual(
+        actualDefinitions,
+        source.objects.map((o) => [o.key, o.definition]).sort(),
+      );
+      const hash = await schemaStateHash(sourceTarget, credential);
+      await setup.query(
+        `COMMENT ON COLUMN ${sourceSchema}.parent.id IS 'Changed identifier'`,
+      );
+      assert.notEqual(await schemaStateHash(sourceTarget, credential), hash);
+      const changedHash = await schemaStateHash(sourceTarget, credential);
+      await setup.query(
+        `CREATE OR REPLACE FUNCTION ${sourceSchema}.touch() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN NEW.id=NEW.id; RETURN NEW; END'`,
+      );
+      assert.notEqual(
+        await schemaStateHash(sourceTarget, credential),
+        changedHash,
+      );
+    } finally {
+      await setup.query(
+        `DROP SCHEMA IF EXISTS ${sourceSchema} CASCADE; DROP SCHEMA IF EXISTS ${destinationSchema} CASCADE`,
+      );
+      await setup.end();
+    }
   },
 );
 
@@ -1208,6 +1528,107 @@ test(
       await setup.query(
         'DROP TABLE IF EXISTS public.rls_sample,public.workspace_protected',
       );
+      await setup.end();
+    }
+  },
+);
+
+test(
+  'ordinary credentials reject owner-authorized application views and executable security-definer routines',
+  integration,
+  async () => {
+    const setup = new pg.Client({
+        ...connectConfig,
+        connectionString: undefined,
+        database: dataName,
+      }),
+      reader = new pg.Client({
+        host: target.host,
+        port: target.port,
+        database: dataName,
+        user: readName,
+        password,
+      });
+    await setup.connect();
+    await reader.connect();
+    try {
+      await setup.query(
+        `CREATE VIEW public.unsafe_owner_view AS SELECT * FROM public.sample; GRANT SELECT ON public.unsafe_owner_view TO ${quoteIdentifier(readName)}`,
+      );
+      await assert.rejects(assertRestrictedIdentity(reader, target), {
+        code: 'UNSAFE_DATABASE_IDENTITY',
+      });
+      await setup.query(
+        `REVOKE SELECT ON public.unsafe_owner_view FROM ${quoteIdentifier(readName)}`,
+      );
+      await assertRestrictedIdentity(reader, target);
+      await setup.query(
+        `CREATE FUNCTION public.unsafe_definer() RETURNS int LANGUAGE SQL SECURITY DEFINER AS 'SELECT 1'`,
+      );
+      await assert.rejects(assertRestrictedIdentity(reader, target), {
+        code: 'UNSAFE_DATABASE_IDENTITY',
+      });
+      await setup.query(
+        'REVOKE EXECUTE ON FUNCTION public.unsafe_definer() FROM PUBLIC',
+      );
+      await assertRestrictedIdentity(reader, target);
+    } finally {
+      await reader.end();
+      await setup.query(
+        'DROP VIEW IF EXISTS public.unsafe_owner_view;DROP FUNCTION IF EXISTS public.unsafe_definer()',
+      );
+      await setup.end();
+    }
+  },
+);
+
+test(
+  'captured view results bind grants and RLS on their underlying tables',
+  integration,
+  async () => {
+    const setup = new pg.Client({
+        ...connectConfig,
+        connectionString: undefined,
+        database: dataName,
+      }),
+      reader = new pg.Client({
+        host: target.host,
+        port: target.port,
+        database: dataName,
+        user: readName,
+        password,
+      });
+    await setup.connect();
+    await reader.connect();
+    try {
+      await setup.query(
+        `CREATE VIEW public.context_view WITH (security_invoker=true) AS SELECT id FROM public.sample;GRANT SELECT ON public.context_view TO ${quoteIdentifier(readName)}`,
+      );
+      const payload = {
+        statements: await parseSql(
+          'SELECT * FROM public.context_view',
+          target.major,
+          policy,
+        ),
+      };
+      const expected = await authorizationSnapshot(reader, payload);
+      await setup.query(
+        `REVOKE SELECT ON public.sample FROM ${quoteIdentifier(readName)}`,
+      );
+      assert.notEqual(await authorizationSnapshot(reader, payload), expected);
+      await setup.query(
+        `GRANT SELECT ON public.sample TO ${quoteIdentifier(readName)}`,
+      );
+      const baseline = await authorizationSnapshot(reader, payload);
+      await setup.query(
+        'ALTER TABLE public.sample ENABLE ROW LEVEL SECURITY;CREATE POLICY context_visibility ON public.sample FOR SELECT USING(id>0)',
+      );
+      assert.notEqual(await authorizationSnapshot(reader, payload), baseline);
+    } finally {
+      await setup.query(
+        `DROP VIEW IF EXISTS public.context_view;DROP POLICY IF EXISTS context_visibility ON public.sample;ALTER TABLE public.sample DISABLE ROW LEVEL SECURITY;GRANT SELECT ON public.sample TO ${quoteIdentifier(readName)}`,
+      );
+      await reader.end();
       await setup.end();
     }
   },
@@ -1430,5 +1851,31 @@ test(
           await admin.query(`DROP ROLE IF EXISTS ${quoteIdentifier(name)}`);
       }
     }
+  },
+);
+
+test(
+  'independent control journal backup is a separate private custom archive',
+  integration,
+  async () => {
+    const filename = await backupWorkspaceControl({
+      connectionString: store.pool.options.connectionString,
+      directory: root,
+      binary: process.env.WORKSPACE_PG_DUMP_BIN || 'pg_dump',
+      timeoutMs: 30000,
+    });
+    assert.match(filename, /^workspace-control-\d+-[a-f0-9]{8}\.backup$/);
+    const archived = path.join(root, filename);
+    assert.equal(fs.readFileSync(archived).subarray(0, 5).toString(), 'PGDMP');
+    if (process.platform !== 'win32')
+      assert.equal(fs.statSync(archived).mode & 0o077, 0);
+    const listing = await runTool(
+      process.env.WORKSPACE_PG_RESTORE_BIN || 'pg_restore',
+      ['--list', archived],
+      {},
+      10000,
+    );
+    assert.match(listing.stdout, /TABLE database_workspace jobs/);
+    assert.doesNotMatch(listing.stdout, /TABLE public sample/);
   },
 );

@@ -48,14 +48,18 @@ export async function parseImport(
       delimiter,
       skip_empty_lines: true,
       max_record_size: Math.min(options.maxBytes, 1048576),
+      cast: (value, context) => ({ value, quoted: context.quoting }),
     });
     try {
       for await (const record of parser) {
-        if (!headers.length) headers = record;
+        const cells = record as Array<{ value: string; quoted: boolean }>;
+        if (!headers.length) headers = cells.map((cell) => cell.value);
         else {
           rows.push(
-            (record as string[]).map((value) =>
-              options.nullToken !== undefined && value === options.nullToken
+            cells.map(({ value, quoted }) =>
+              options.nullToken !== undefined &&
+              !quoted &&
+              value === options.nullToken
                 ? null
                 : value,
             ),

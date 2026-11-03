@@ -15,8 +15,13 @@ export const authenticateWorkspace = async (
     next();
     return;
   }
-  await authenticate(req, res, () => {
-    authenticated.add(req);
-    next();
-  });
+  await authenticate(
+    req,
+    res,
+    () => {
+      authenticated.add(req);
+      next();
+    },
+    'workspace',
+  );
 };

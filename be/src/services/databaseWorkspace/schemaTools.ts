@@ -45,22 +45,29 @@ export async function schemaSnapshot(
     target,
     credential,
     `SELECT t.oid::text,n.nspname AS schema,t.typname AS name,t.typtype,format_type(t.typbasetype,t.typtypmod) AS base_type,t.typdefault,t.typnotnull,
-    ARRAY(SELECT enumlabel FROM pg_enum WHERE enumtypid=t.oid ORDER BY enumsortorder) AS labels,
-    ARRAY(SELECT pg_get_constraintdef(oid,true) FROM pg_constraint WHERE contypid=t.oid ORDER BY conname) AS constraints FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname=ANY($1) AND t.typtype IN ('e','d') ORDER BY n.nspname,t.typname`,
+    ARRAY(SELECT enumlabel::text FROM pg_enum WHERE enumtypid=t.oid ORDER BY enumsortorder) AS labels,
+    ARRAY(SELECT 'CONSTRAINT '||quote_ident(conname)||' '||pg_get_constraintdef(oid,true) FROM pg_constraint WHERE contypid=t.oid ORDER BY conname) AS constraints,
+    (SELECT jsonb_agg(jsonb_build_object('name',a.attname,'type',format_type(a.atttypid,a.atttypmod)) ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid=t.typrelid AND a.attnum>0 AND NOT a.attisdropped) AS attributes
+    FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace LEFT JOIN pg_class composite ON composite.oid=t.typrelid WHERE n.nspname=ANY($1) AND (t.typtype IN ('e','d') OR (t.typtype='c' AND composite.relkind='c')) ORDER BY n.nspname,t.typname`,
     [target.schemas],
   );
   const sequences = await catalogQuery(
     target,
     credential,
-    `SELECT c.oid::text,s.schemaname AS schema,s.sequencename AS name,s.data_type::text,s.start_value::text,s.min_value::text,s.max_value::text,s.increment_by::text,s.cycle FROM pg_sequences s JOIN pg_namespace n ON n.nspname=s.schemaname JOIN pg_class c ON c.relnamespace=n.oid AND c.relname=s.sequencename WHERE s.schemaname=ANY($1) AND NOT EXISTS(SELECT 1 FROM pg_depend d LEFT JOIN pg_class owned ON owned.oid=d.refobjid WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND (d.deptype='i' OR owned.relname=ANY($2))) ORDER BY s.schemaname,s.sequencename`,
+    `SELECT c.oid::text,s.schemaname AS schema,s.sequencename AS name,s.data_type::text,s.start_value::text,s.min_value::text,s.max_value::text,s.increment_by::text,s.cache_size::text,s.cycle,
+    owned_n.nspname AS owner_schema,owned_c.relname AS owner_table,owned_a.attname AS owner_column
+    FROM pg_sequences s JOIN pg_namespace n ON n.nspname=s.schemaname JOIN pg_class c ON c.relnamespace=n.oid AND c.relname=s.sequencename
+    LEFT JOIN pg_depend own ON own.classid='pg_class'::regclass AND own.objid=c.oid AND own.refclassid='pg_class'::regclass AND own.deptype='a'
+    LEFT JOIN pg_class owned_c ON owned_c.oid=own.refobjid LEFT JOIN pg_namespace owned_n ON owned_n.oid=owned_c.relnamespace LEFT JOIN pg_attribute owned_a ON owned_a.attrelid=own.refobjid AND owned_a.attnum=own.refobjsubid
+    WHERE s.schemaname=ANY($1) AND NOT EXISTS(SELECT 1 FROM pg_depend d LEFT JOIN pg_class owned ON owned.oid=d.refobjid WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND (d.deptype='i' OR owned.relname=ANY($2))) ORDER BY s.schemaname,s.sequencename`,
     [target.schemas, protectedObjects],
   );
   const edges = await catalogQuery(
     target,
     credential,
     `SELECT k.oid::text AS id,k.conname AS name,k.conrelid::text AS source,k.confrelid::text AS target,
-    ARRAY(SELECT a.attname FROM unnest(k.conkey) WITH ORDINALITY v(num,ord) JOIN pg_attribute a ON a.attrelid=k.conrelid AND a.attnum=v.num ORDER BY v.ord) AS source_columns,
-    ARRAY(SELECT a.attname FROM unnest(k.confkey) WITH ORDINALITY v(num,ord) JOIN pg_attribute a ON a.attrelid=k.confrelid AND a.attnum=v.num ORDER BY v.ord) AS target_columns,
+    ARRAY(SELECT a.attname::text FROM unnest(k.conkey) WITH ORDINALITY v(num,ord) JOIN pg_attribute a ON a.attrelid=k.conrelid AND a.attnum=v.num ORDER BY v.ord) AS source_columns,
+    ARRAY(SELECT a.attname::text FROM unnest(k.confkey) WITH ORDINALITY v(num,ord) JOIN pg_attribute a ON a.attrelid=k.confrelid AND a.attnum=v.num ORDER BY v.ord) AS target_columns,
     pg_get_constraintdef(k.oid,true) AS definition FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE k.contype='f' AND n.nspname=ANY($1) ORDER BY k.conname`,
     [target.schemas],
   );
@@ -77,7 +84,9 @@ export async function schemaSnapshot(
     const definition =
       t.typtype === 'e'
         ? `CREATE TYPE ${name} AS ENUM (${(t.labels as string[]).map(literal).join(', ')});`
-        : `CREATE DOMAIN ${name} AS ${t.base_type}${t.typdefault ? ` DEFAULT ${t.typdefault}` : ''}${t.typnotnull ? ' NOT NULL' : ''} ${(t.constraints as string[]).join(' ')};`;
+        : t.typtype === 'c'
+          ? `CREATE TYPE ${name} AS (${(t.attributes as Array<{ name: string; type: string }>).map((a) => `${q(a.name)} ${a.type}`).join(', ')});`
+          : `CREATE DOMAIN ${name} AS ${t.base_type}${t.typdefault ? ` DEFAULT ${t.typdefault}` : ''}${t.typnotnull ? ' NOT NULL' : ''} ${(t.constraints as string[]).join(' ')};`;
     objects.push({
       key: `type:${t.schema}.${t.name}`,
       family: 'type',
@@ -96,7 +105,7 @@ export async function schemaSnapshot(
       family: 'sequence',
       schema: String(s.schema),
       name: String(s.name),
-      definition: `CREATE SEQUENCE ${qualified(String(s.schema), String(s.name))} AS ${s.data_type} START WITH ${s.start_value} INCREMENT BY ${s.increment_by} MINVALUE ${s.min_value} MAXVALUE ${s.max_value} ${s.cycle ? 'CYCLE' : 'NO CYCLE'};`,
+      definition: `CREATE SEQUENCE ${qualified(String(s.schema), String(s.name))} AS ${s.data_type} START WITH ${s.start_value} INCREMENT BY ${s.increment_by} MINVALUE ${s.min_value} MAXVALUE ${s.max_value} CACHE ${s.cache_size} ${s.cycle ? 'CYCLE' : 'NO CYCLE'};`,
       dependencies: [],
       oid: String(s.oid),
       details: s,
@@ -107,7 +116,7 @@ export async function schemaSnapshot(
       family: 'routine',
       schema: String(r.schema),
       name: String(r.name),
-      definition: String(r.definition),
+      definition: `${String(r.definition).trimEnd().replace(/;$/, '')};`,
       dependencies: [],
       oid: String(r.oid),
       details: r,
@@ -172,7 +181,12 @@ export async function schemaSnapshot(
         schema: String(r.schema),
         name: constraint.name,
         definition: `ALTER TABLE ${name} ADD CONSTRAINT ${q(constraint.name)} ${constraint.definition};`,
-        dependencies: [`relation:${r.schema}.${r.name}`],
+        dependencies: [
+          `relation:${r.schema}.${r.name}`,
+          ...relations
+            .filter((ref) => ref.oid === constraint.target)
+            .map((ref) => `relation:${ref.schema}.${ref.name}`),
+        ],
         oid: `${r.oid}:${constraint.name}`,
         details: { ...constraint, table: name },
       });
@@ -263,9 +277,11 @@ export async function schemaSnapshot(
   const dependencyRows = await catalogQuery(
     target,
     credential,
-    `SELECT d.classid::regclass::text AS family,d.objid::text AS object,d.refclassid::regclass::text AS referenced_family,d.refobjid::text AS referenced,
-    rw.ev_class::text AS view_oid FROM pg_depend d LEFT JOIN pg_rewrite rw ON d.classid='pg_rewrite'::regclass AND rw.oid=d.objid
-    WHERE (d.objid=ANY($1::oid[]) AND d.classid IN ('pg_class'::regclass,'pg_proc'::regclass,'pg_type'::regclass,'pg_trigger'::regclass,'pg_policy'::regclass)) OR rw.ev_class=ANY($1::oid[])`,
+    `SELECT d.classid::regclass::text AS family,d.objid::text AS object,d.refclassid::regclass::text AS referenced_family,d.refobjid::text AS referenced,d.deptype,
+    COALESCE(rw.ev_class,ad.adrelid)::text AS relation_oid,composite.oid::text AS composite_type_oid FROM pg_depend d LEFT JOIN pg_rewrite rw ON d.classid='pg_rewrite'::regclass AND rw.oid=d.objid
+    LEFT JOIN pg_attrdef ad ON d.classid='pg_attrdef'::regclass AND ad.oid=d.objid
+    LEFT JOIN pg_class cc ON d.classid='pg_class'::regclass AND cc.oid=d.objid AND cc.relkind='c' LEFT JOIN pg_type composite ON composite.typrelid=cc.oid AND composite.typtype='c'
+    WHERE (d.objid=ANY($1::oid[]) AND d.classid IN ('pg_class'::regclass,'pg_proc'::regclass,'pg_type'::regclass,'pg_trigger'::regclass,'pg_policy'::regclass)) OR rw.ev_class=ANY($1::oid[]) OR ad.adrelid=ANY($1::oid[]) OR composite.oid=ANY($1::oid[])`,
     [objects.map((o) => o.oid).filter((oid) => /^\d+$/.test(oid))],
   );
   const family = (o: SchemaObject) =>
@@ -276,11 +292,29 @@ export async function schemaSnapshot(
         : o.family === 'type'
           ? 'pg_type'
           : `pg_${o.family}`;
+  const extensionObjects = await catalogQuery(
+    target,
+    credential,
+    `SELECT d.classid::regclass::text AS family,d.objid::text AS oid,e.extname FROM pg_depend d JOIN pg_extension e ON d.refclassid='pg_extension'::regclass AND e.oid=d.refobjid WHERE d.deptype='e' AND d.objid=ANY($1::oid[])`,
+    [objects.map((o) => o.oid).filter((oid) => /^\d+$/.test(oid))],
+  );
+  for (const object of objects) {
+    const extension = extensionObjects.find(
+      (e) => e.family === family(object) && e.oid === object.oid,
+    );
+    if (extension) object.details.extension = extension.extname;
+  }
   for (const edge of dependencyRows) {
     const object = objects.find(
       (o) =>
-        o.oid === (edge.view_oid || edge.object) &&
-        family(o) === (edge.view_oid ? 'pg_class' : edge.family),
+        o.oid ===
+          (edge.composite_type_oid || edge.relation_oid || edge.object) &&
+        family(o) ===
+          (edge.composite_type_oid
+            ? 'pg_type'
+            : edge.relation_oid
+              ? 'pg_class'
+              : edge.family),
     );
     const dependency = objects.find(
       (o) => o.oid === edge.referenced && family(o) === edge.referenced_family,
@@ -288,10 +322,28 @@ export async function schemaSnapshot(
     if (
       object &&
       dependency &&
+      !(object.family === 'sequence' && edge.deptype === 'a') &&
       object !== dependency &&
       !object.dependencies.includes(dependency.key)
     )
       object.dependencies.push(dependency.key);
+  }
+  for (const sequence of sequences) {
+    if (!sequence.owner_column) continue;
+    const sequenceKey = `sequence:${sequence.schema}.${sequence.name}`,
+      relationKey = `relation:${sequence.owner_schema}.${sequence.owner_table}`;
+    if (!objects.some((object) => object.key === relationKey)) continue;
+    objects.push({
+      key: `sequence-owner:${sequence.schema}.${sequence.name}`,
+      family: 'sequence-owner',
+      schema: String(sequence.schema),
+      name: String(sequence.name),
+      oid: `owner:${sequence.oid}`,
+      details: sequence,
+      definition: `ALTER SEQUENCE ${qualified(String(sequence.schema), String(sequence.name))} OWNED BY ${qualified(String(sequence.owner_schema), String(sequence.owner_table))}.${q(String(sequence.owner_column))};`,
+      dropSql: `ALTER SEQUENCE ${qualified(String(sequence.schema), String(sequence.name))} OWNED BY NONE;`,
+      dependencies: [sequenceKey, relationKey],
+    });
   }
   const order: Record<string, number> = {
     type: 0,
@@ -299,6 +351,7 @@ export async function schemaSnapshot(
     routine: 2,
     relation: 3,
     constraint: 4,
+    'sequence-owner': 4,
     index: 5,
     security: 6,
     policy: 7,
@@ -377,6 +430,19 @@ export function compareSchemas(
   for (const object of dependencyOrder(source.objects).objects) {
     const old = target.objects.find((o) => o.key === object.key);
     if (old?.definition === object.definition) continue;
+    if (object.details.extension) {
+      changes.push({
+        key: object.key,
+        status: old ? 'changed' : 'added',
+        source: object,
+        target: old,
+        resolution: `Manual infrastructure resolution required: extension ${object.details.extension}`,
+      });
+      sql.push(
+        `-- Manage extension ${object.details.extension} through trusted infrastructure, then compare again: ${object.key}`,
+      );
+      continue;
+    }
     const changed = Boolean(old),
       replaceable =
         object.family === 'routine' ||
@@ -387,7 +453,9 @@ export function compareSchemas(
       source: object,
       target: old,
       resolution:
-        changed && !replaceable
+        changed &&
+        !replaceable &&
+        !['security', 'comment', 'sequence-owner'].includes(object.family)
           ? 'Manual resolution required'
           : 'Generated create/replace',
     });
@@ -396,7 +464,10 @@ export function compareSchemas(
         'Manual resolution required: dependency cycle';
       sql.push(`-- Manual dependency-cycle resolution required: ${object.key}`);
     } else if (!changed) sql.push(object.definition);
-    else if (replaceable || ['security', 'comment'].includes(object.family))
+    else if (
+      replaceable ||
+      ['security', 'comment', 'sequence-owner'].includes(object.family)
+    )
       sql.push(
         object.definition.replace(/^CREATE VIEW /i, 'CREATE OR REPLACE VIEW '),
       );
@@ -419,6 +490,14 @@ export function compareSchemas(
           : 'Drop excluded',
       });
       if (includeDrops) {
+        if (object.details.extension) {
+          changes[changes.length - 1].resolution =
+            `Manual infrastructure resolution required: extension ${object.details.extension}`;
+          sql.push(
+            `-- Do not drop extension-owned object ${object.key} individually. Review extension ${object.details.extension}.`,
+          );
+          continue;
+        }
         const type =
           object.family === 'relation'
             ? object.details.kind === 'v'

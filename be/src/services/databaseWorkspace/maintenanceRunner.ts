@@ -1,6 +1,7 @@
 import { targetClient } from './connection.js';
 import { schemaStateHash } from './administration.js';
 import { privilegeStateHash } from './privileges.js';
+import { quoteIdentifier } from './filters.js';
 import {
   WorkspaceError,
   errorInfo,
@@ -137,6 +138,22 @@ export async function runMaintenance(
         String(payload.limits.lockTimeoutMs),
       ],
     );
+    if (operation.atomic) {
+      await client.query('BEGIN');
+      transaction = true;
+      if (operation.lockRelations?.length) {
+        const relations = await client.query(
+          `SELECT DISTINCT c.oid,n.nspname,c.relname FROM pg_class referenced
+          LEFT JOIN pg_index i ON i.indexrelid=referenced.oid JOIN pg_class c ON c.oid=COALESCE(i.indrelid,referenced.oid) JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE referenced.oid=ANY(ARRAY(SELECT to_regclass(name) FROM unnest($1::text[]) name)) AND c.relkind IN ('r','p','v','m') ORDER BY c.oid`,
+          [operation.lockRelations],
+        );
+        for (const relation of relations.rows)
+          await client.query(
+            `LOCK TABLE ONLY ${quoteIdentifier(relation.nspname)}.${quoteIdentifier(relation.relname)} IN ACCESS EXCLUSIVE MODE`,
+          );
+      }
+    }
     if (
       operation.schemaHash &&
       (await schemaStateHash(payload.target, inspectionCredential)) !==
@@ -157,10 +174,6 @@ export async function runMaintenance(
         'PRIVILEGES_CHANGED',
         'Roles, memberships or object grants changed after review. Refresh and review the new state.',
       );
-    if (operation.atomic) {
-      await client.query('BEGIN');
-      transaction = true;
-    }
     if (operation.signal) {
       const s = operation.signal;
       const result = await client.query(

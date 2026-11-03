@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import { api, message, activeJob, type Job } from './api';
 import { RecordTable } from './RecordTable';
 import { DeleteBackupDialog } from './DeleteBackupDialog';
+import { downloadBackup } from './backupDownload';
 type Backup = {
   id: string;
   filename: string;
@@ -188,7 +189,7 @@ export function RecoveryPanel({ targetId }: { targetId: string }) {
         ))}
       </Group>
       <Text size="xs" c="dimmed">
-        New backup storage: {inventory.data?.storageMode || 'unknown'} ? Server
+        New backup storage: {inventory.data?.storageMode || 'unknown'} · Server
         copy after Drive upload:{' '}
         {inventory.data?.keepLocalAfterUpload ? 'retained' : 'removed'}.
         Matching names alone do not verify identical archive contents.
@@ -200,6 +201,20 @@ export function RecoveryPanel({ targetId }: { targetId: string }) {
         label="Server and Google Drive backup copies"
         actions={(row) => (
           <Group gap={4}>
+            <Button
+              size="compact-xs"
+              variant="default"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setError('');
+                void downloadBackup(row as unknown as Backup)
+                  .catch((e) => setError(message(e)))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Download
+            </Button>
             <Button
               size="compact-xs"
               variant="light"
@@ -244,8 +259,8 @@ export function RecoveryPanel({ targetId }: { targetId: string }) {
               setArchive(undefined);
             }}
             data={(inventory.data?.files || []).map((f) => ({
-              value: f.filename,
-              label: `${f.filename} · ${(f.sizeBytes / 1048576).toFixed(1)} MiB`,
+              value: f.id,
+              label: `${f.location === 'local' ? 'Server' : 'Google Drive'} · ${f.filename} · ${(f.sizeBytes / 1048576).toFixed(1)} MiB`,
             }))}
           />
           <Button

@@ -32,7 +32,8 @@ export async function assertRestrictedIdentity(
       AND c.relkind IN ('r','p','v','m','f') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns_data,
     pg_has_role(current_user,(SELECT datdba FROM pg_database WHERE datname=current_database()),'MEMBER') AS owns_database,
     EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname=ANY($1::text[]) AND pg_has_role(current_user,n.nspowner,'MEMBER')) AS owns_schema
-    ,EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=ANY($1::text[]) AND c.relkind='v' AND has_table_privilege(c.oid,'SELECT') AND NOT COALESCE(c.reloptions @> ARRAY['security_invoker=true'],false)) AS unsafe_view_grant
+    ,EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=ANY($1::text[]) AND c.relkind='v' AND has_table_privilege(c.oid,'SELECT') AND NOT COALESCE(c.reloptions @> ARRAY['security_invoker=true'],false)
+      AND NOT (c.relname IN ('pg_stat_statements','pg_stat_statements_info') AND EXISTS(SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid=d.refobjid WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.refclassid='pg_extension'::regclass AND d.deptype='e' AND e.extname='pg_stat_statements'))) AS unsafe_view_grant
     ,EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=ANY($1::text[]) AND p.prosecdef AND has_function_privilege(p.oid,'EXECUTE')) AS unsafe_definer_grant
     FROM pg_roles r WHERE r.rolname=current_user`,
     [target.schemas],

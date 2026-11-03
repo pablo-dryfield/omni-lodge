@@ -297,7 +297,8 @@ export function ResultGrid({
     setBusy(true);
     setNotice('');
     try {
-      if (!shareId) await api.auditExport(job.id, index, format, scope);
+      if (shareId) await api.sharedExportAudit(shareId, format, scope);
+      else await api.auditExport(job.id, index, format, scope);
       const visible = table
         .getVisibleLeafColumns()
         .filter((c) => fields.some((f) => f.id === c.id));

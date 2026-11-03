@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import { workspaceHandler } from './databaseWorkspaceController.js';
-import { workspaceAccess } from '../services/databaseWorkspace/access.js';
+import {
+  workspaceAccess,
+  reauthorizeExecution,
+} from '../services/databaseWorkspace/access.js';
 import {
   workspaceConfiguration,
   targetCredential,
@@ -59,6 +62,7 @@ export const backupInventory = workspaceHandler(async (req, res) => {
         tested.find(
           (t) =>
             t.payload.recovery?.sourceCopyId === file.id &&
+            t.payload.recovery?.sourceFingerprint === file.fingerprint &&
             (!file.sha256Checksum ||
               t.payload.recovery.checksum === file.sha256Checksum),
         )?.finishedAt || null,
@@ -76,6 +80,7 @@ export const backupInventory = workspaceHandler(async (req, res) => {
 export const backupDownload = workspaceHandler(async (req, res) => {
   const actor = await workspaceAccess(req, 'backup');
   await workspaceAccess(req, 'export');
+  const config = await workspaceConfiguration();
   const copy = await findBackupCopy(String(req.params.id));
   await controlStore().audit(actor, 'backup_download_started', {
     copyId: copy.id,
@@ -89,6 +94,19 @@ export const backupDownload = workspaceHandler(async (req, res) => {
     `attachment; filename*=UTF-8''${encodeURIComponent(copy.filename)}`,
   );
   res.setHeader('Content-Length', String(copy.sizeBytes));
+  const timeout = setTimeout(
+      () => res.destroy(),
+      Number(getConfigValue('DB_WORKSPACE_EXPORT_TIMEOUT_MS')),
+    ),
+    authority = setInterval(() => {
+      void reauthorizeExecution(actor, 'read', config.policyHash, 'backup')
+        .then(() =>
+          reauthorizeExecution(actor, 'read', config.policyHash, 'export'),
+        )
+        .catch(() => res.destroy());
+    }, 5000);
+  timeout.unref();
+  authority.unref();
   try {
     await streamBackupCopy(copy.id, res, copy.fingerprint);
     await controlStore().audit(actor, 'backup_download_completed', {
@@ -99,6 +117,9 @@ export const backupDownload = workspaceHandler(async (req, res) => {
     await controlStore()
       .audit(actor, 'backup_download_interrupted', { copyId: copy.id })
       .catch(() => {});
+  } finally {
+    clearTimeout(timeout);
+    clearInterval(authority);
   }
 });
 export const backupCreate = workspaceHandler(async (req, res) => {

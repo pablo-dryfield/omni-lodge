@@ -4,8 +4,8 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 import fs from 'node:fs';
 import {
-  linuxProcessStart,
   linuxWorkerLimits,
+  sameLinuxParent,
 } from '../services/databaseWorkspace/workerLaunch.js';
 
 process.env.OMNILODGE_WORKSPACE_WORKER = 'true';
@@ -65,7 +65,13 @@ const resources =
         fs.readFileSync(file, 'utf8'),
       )
     : undefined;
-const heartbeatLimits = resources ? {...resources,parentPid:process.env.DB_WORKSPACE_PARENT_PID,parentStart:process.env.DB_WORKSPACE_PARENT_START} : undefined;
+const heartbeatLimits = resources
+  ? {
+      ...resources,
+      parentPid: process.env.DB_WORKSPACE_PARENT_PID,
+      parentStart: process.env.DB_WORKSPACE_PARENT_START,
+    }
+  : undefined;
 const verifyResources = () => {
   if (
     resources &&
@@ -84,21 +90,14 @@ verifyResources();
 await store.workerHeartbeat(workerId, heartbeatLimits);
 const workerHeartbeat = setInterval(() => {
   if (process.env.DB_WORKSPACE_PARENT_PID) {
-    try {
-      const expected = process.env.DB_WORKSPACE_PARENT_START;
-      if (
-        !expected ||
-        linuxProcessStart(
-          fs.readFileSync(
-            `/proc/${Number(process.env.DB_WORKSPACE_PARENT_PID)}/stat`,
-            'utf8',
-          ),
-        ) !== expected
+    if (
+      !sameLinuxParent(
+        Number(process.env.DB_WORKSPACE_PARENT_PID),
+        process.env.DB_WORKSPACE_PARENT_START || '',
+        (file) => fs.readFileSync(file, 'utf8'),
       )
-        process.exit(1);
-    } catch {
+    )
       process.exit(1);
-    }
   }
   void store.workerHeartbeat(workerId, heartbeatLimits).catch(() => {});
 }, 3000);

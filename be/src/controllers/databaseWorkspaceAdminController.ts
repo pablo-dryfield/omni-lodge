@@ -181,6 +181,7 @@ export const adminOperation = workspaceHandler(async (req, res) => {
       atomic: parsed.atomic,
       action,
       schemaHash: await schemaStateHash(target, read.credential),
+      lockRelations: parsed.lockRelations,
     };
   } else if (kind === 'privilege')
     operation = await preparePrivilege(
