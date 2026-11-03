@@ -14,12 +14,17 @@ Ordinary transfers offer every active Finance account, regardless of name or acc
 
 The Finance transaction form retains its existing guided Volunteer Fund expense workflow for non-transfer transactions. Both transfer sides wait for the fund configuration to load; server-side transfer guards also protect configured fund accounts.
 
+## Amount entry
+
+The Record transaction amount field uses unpadded text while focused, so typing at the end of an initial `0.00` or an existing whole amount works normally. It preserves decimal entry while storing exact minor currency units, then restores two decimal places on blur. Decimal commas and unambiguous grouped decimal pastes are normalized before the number formatter can strip separators. Restored drafts still update the field, and mobile devices receive a decimal keyboard.
+
 ## Local validation
 
 - `npm.cmd --prefix be run check` — passed.
 - `npm.cmd --prefix be test -- --runInBand` — 305 suites, 3,004 tests passed; 1 existing skipped test.
 - `npm.cmd --prefix ui run check` — TypeScript and ESLint passed.
-- `$env:CI='true'; npm.cmd --prefix ui test -- --watchAll=false --maxWorkers=2` — 141 suites, 1,021 tests passed.
+- `$env:CI='true'; npm.cmd --prefix ui test -- --watchAll=false --maxWorkers=2` — 142 suites, 1,032 tests passed.
+- `$env:CI='true'; npm.cmd --prefix ui test -- --watchAll=false --runInBand FinanceTransactionAmountInput` — 11 amount-editing keyboard, clipboard, precision, focus and draft-restoration tests passed. The initial-zero regression was first reproduced against the previous field implementation.
 - `git diff --check` — passed.
 
 The initial full UI run with the default worker count timed out in three existing Food Tour role/review dashboard tests while backend tests and both type/lint checks ran concurrently. The complete UI rerun with two workers passed, as did focused reruns of the changed UI behavior. No unrelated test timeouts or application behavior were modified.

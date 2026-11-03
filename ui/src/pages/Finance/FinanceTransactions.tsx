@@ -121,6 +121,7 @@ import {
   resolveActiveVolunteerFundAccount,
 } from "./financeVolunteerFundTransaction";
 import classes from "./FinanceTransactions.module.css";
+import FinanceTransactionAmountInput from "../../components/finance/FinanceTransactionAmountInput";
 
 const TRANSACTION_STATUS_OPTIONS = [
   { value: "planned", label: "Planned" },
@@ -1567,22 +1568,15 @@ const FinanceTransactions = () => {
             )}
 
             <Box className={classes.amountCard}>
-              <NumberInput
+              <FinanceTransactionAmountInput
                 className={classes.amountInput}
-                label="Amount"
-                aria-label="Transaction amount"
-                value={draft.amountMinor / 100}
-                min={0}
-                decimalScale={2}
-                fixedDecimalScale
-                hideControls
+                valueMinor={draft.amountMinor}
+                currency={draft.currency}
+                currencyClassName={classes.amountCurrency}
                 autoFocus={!editingTransaction}
-                rightSection={<Text className={classes.amountCurrency}>{draft.currency}</Text>}
-                rightSectionWidth={58}
-                onValueChange={({ value }) =>
-                  setDraft((state) => ({ ...state, amountMinor: Math.round((Number(value) || 0) * 100) }))
+                onChangeMinor={(amountMinor) =>
+                  setDraft((state) => ({ ...state, amountMinor }))
                 }
-                withAsterisk
               />
             </Box>
 
