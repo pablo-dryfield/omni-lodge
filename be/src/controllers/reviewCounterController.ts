@@ -32,6 +32,8 @@ const REVIEW_COUNTER_COLUMNS = [
 ];
 
 const FLOAT_TOLERANCE = 1e-9;
+const isStaffUserId = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const MINIMUM_REVIEWS_FOR_PAYMENT = 15;
 const UNDER_MINIMUM_APPROVER_ROLES = new Set(['admin', 'owner', 'manager']);
 const DEFAULT_ANALYTICS_WINDOW_DAYS = 90;
@@ -1002,7 +1004,7 @@ type StaffBucket = {
 
   counters.forEach((counter) => {
     (counter.entries ?? []).forEach((entry) => {
-      if (entry.category !== 'staff' || entry.userId == null) {
+      if (entry.category !== 'staff' || !isStaffUserId(entry.userId)) {
         return;
       }
       const amount = toNumber(entry.rawCount);
@@ -1069,18 +1071,21 @@ type StaffBucket = {
   // here to avoid counting the same historical amount twice.
   const manualCredits = await ReviewManualCredit.findAll({
     where: {
+      category: 'staff',
+      userId: { [Op.ne]: null },
       date: { [Op.between]: [startValue, endValue] },
       [Op.or]: [
         { notes: null },
         { notes: { [Op.notLike]: 'Backfilled from legacy review counter #%'} },
       ],
     },
-    attributes: ['userId', 'platform', 'credit'],
+    attributes: ['userId', 'category', 'platform', 'credit'],
   });
 
   const archiveCreditByUserPlatform = new Map<string, number>();
   archivedReviews.forEach((review) => {
-    const assignments = archivedAssignments.filter((assignment) => assignment.reviewId === review.id);
+    const assignments = archivedAssignments.filter((assignment) =>
+      assignment.reviewId === review.id && isStaffUserId(assignment.userId));
     if (assignments.length === 0) {
       return;
     }
@@ -1091,12 +1096,14 @@ type StaffBucket = {
     });
   });
   manualCredits.forEach((manual) => {
+    if (manual.category !== 'staff' || !isStaffUserId(manual.userId)) return;
     const key = `${manual.userId}|${manual.platform}`;
     archiveCreditByUserPlatform.set(key, (archiveCreditByUserPlatform.get(key) ?? 0) + toNumber(manual.credit));
   });
 
   const archiveUserIds = Array.from(
-    new Set(Array.from(archiveCreditByUserPlatform.keys()).map((key) => Number(key.split('|')[0]))),
+    new Set(Array.from(archiveCreditByUserPlatform.keys())
+      .map((key) => Number(key.split('|')[0])).filter(isStaffUserId)),
   );
   const archiveUsers = archiveUserIds.length
     ? await User.findAll({
@@ -1499,7 +1506,7 @@ export const updateReviewCounterMonthlyApproval = async (
 ): Promise<void> => {
   try {
     const userId = Number(req.params.userId);
-    if (!Number.isFinite(userId)) {
+    if (!isStaffUserId(userId)) {
       res.status(400).json([{ message: 'Provide a valid userId parameter' }]);
       return;
     }

@@ -145,9 +145,13 @@ import {
   type CompensationSettlementRoutingOverrideReason,
 } from "../services/compensationSettlementIntentService.js";
 import {
-  isPubCrawlGuidingComponentName,
   shouldRoutePubCrawlGuidingToVolunteerBudget,
 } from "../services/pubCrawlGuidingReviewTargetRoutingService.js";
+import {
+  canAttributeGuidingComponent,
+  guidingSettlementPolicy,
+  partitionGuideCommission,
+} from "../services/guideCommissionSettlementService.js";
 import {
   getShiftRoleMembersForRange,
   getStaffProfileTypePeriodsForRange,
@@ -597,13 +601,6 @@ type ProductBucketLookup = Map<number, Map<string, ProductBucket>>;
 type GuideCommissionRateLookup = {
   defaultRate: number;
   ratesByProduct: Map<string, number>;
-};
-
-type GuideCommissionSplit = {
-  pubCrawlEntries: CommissionBreakdownEntry[];
-  otherEntries: CommissionBreakdownEntry[];
-  pubCrawlAmount: number;
-  otherAmount: number;
 };
 
 type StaffCollectionAggregate = {
@@ -2456,14 +2453,14 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       isActive: component.isActive,
     }));
     const guideCommissionRates = buildGuideCommissionRateLookup(typedComponents);
-    const pubCrawlGuidingCommissionComponent =
-      findPubCrawlGuidingCommissionComponent(typedComponents);
-    const pubCrawlGuidingProductKeys = pubCrawlGuidingCommissionComponent
-      ? collectGuideCommissionProductKeys(pubCrawlGuidingCommissionComponent)
-      : new Set<string>();
-    const pubCrawlGuidingReviewTargetMinReviews = pubCrawlGuidingCommissionComponent
-      ? resolvePubCrawlGuidingReviewTargetMinReviews(pubCrawlGuidingCommissionComponent)
-      : REVIEW_MINIMUM_THRESHOLD;
+    const guidingSettlementComponents = typedComponents
+      .filter((component) => component.category === "commission")
+      .map((component) => ({
+        component,
+        policy: guidingSettlementPolicy(component),
+        productKeys: collectGuideCommissionProductKeys(component),
+      }))
+      .filter(({ policy, productKeys }) => policy.enabled && productKeys.size > 0);
 
     const platformGuestTotals = await computePlatformGuestTotals(counterIds);
     commissionDataByUser.forEach((summary) => {
@@ -3388,6 +3385,24 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
       return parsed.isValid() ? parsed.tz("Europe/Warsaw").format("YYYY-MM-DD") : null;
     };
 
+    // Opt-in component identities may be introduced after a period was settled.
+    // Keep those periods on their saved sources rather than moving paid money.
+    const guidingSavedLedgers = new Map<number, StaffPayoutLedger>();
+    if (guidingSettlementComponents.some(({ policy }) => !policy.legacy) && commissionDataByUser.size > 0) {
+      const ledgers = await StaffPayoutLedger.findAll({
+        where: {
+          staffUserId: { [Op.in]: Array.from(commissionDataByUser.keys()) },
+          rangeStart: rangeStartIso,
+          rangeEnd: rangeEndIso,
+        },
+        attributes: ["staffUserId", "settlementSnapshot", "paidAmountMinor"],
+        order: [["id", "DESC"]],
+      });
+      ledgers.forEach((ledger) => {
+        if (!guidingSavedLedgers.has(ledger.staffUserId)) guidingSavedLedgers.set(ledger.staffUserId, ledger);
+      });
+    }
+
     for (const summary of commissionDataByUser.values()) {
       const grossBucketTotals = { ...summary.bucketTotals };
       const personalBucketTotals: Record<string, number> = {};
@@ -3797,59 +3812,51 @@ export const getCommissionByDateRange = async (req: Request, res: Response): Pro
         }
       };
 
-      if (pubCrawlGuidingCommissionComponent && pubCrawlGuidingProductKeys.size > 0) {
-        const commissionSplit = splitGuideCommissionForPubCrawlGuiding(
-          summary,
-          pubCrawlGuidingProductKeys,
-        );
-        await addSettlementSource({
-          sourceKey: "guide_commission",
-          label: "Guide commission",
-          category: "commission",
-          amount: commissionSplit.otherAmount,
-          earnings: buildExactDatedMinorEarnings(
-            commissionSplit.otherAmount,
-            commissionSplit.otherEntries.map((entry) => ({
-              date: entry.date,
-              amount: entry.commission,
-            })),
-          ),
-        });
-        await addSettlementSource({
-          sourceKey: "compensation_component",
-          label: pubCrawlGuidingCommissionComponent.name,
-          componentId: pubCrawlGuidingCommissionComponent.id,
-          category: pubCrawlGuidingCommissionComponent.category,
-          amount: commissionSplit.pubCrawlAmount,
-          earnings: buildExactDatedMinorEarnings(
-            commissionSplit.pubCrawlAmount,
-            commissionSplit.pubCrawlEntries.map((entry) => ({
-              date: entry.date,
-              amount: entry.commission,
-            })),
-          ),
-          routingOverrideReason: shouldRoutePubCrawlGuidingToVolunteerBudget({
+      const savedGuidingLedger = guidingSavedLedgers.get(summary.userId);
+      const hasSettlementActivity = Number(savedGuidingLedger?.paidAmountMinor ?? 0) > 0
+        || (summary.paidEntries ?? []).some((entry) => entry.amount > 0)
+        || (summary.staffProfileId ? (collectionMap.get(summary.staffProfileId)?.payable ?? 0) > 0 : false)
+        || Array.from(allocatedMinorBySourceAndFund.entries()).some(([key, byFund]) =>
+          key.startsWith(`${summary.userId}:`) && Array.from(byFund.values()).some((amount) => amount > 0));
+      const applicableGuidingComponents = guidingSettlementComponents.filter(({ component, policy }) =>
+        canAttributeGuidingComponent({
+          legacy: policy.legacy,
+          componentId: component.id,
+          hasSettlementActivity,
+          savedSnapshot: savedGuidingLedger?.settlementSnapshot,
+        }));
+      const guidingById = new Map(applicableGuidingComponents.map((definition) => [definition.component.id, definition]));
+      const commissionPartitions = partitionGuideCommission(summary.totalCommission, summary.breakdown,
+        applicableGuidingComponents.map(({ component, policy, productKeys }) => ({
+          componentId: component.id, productKeys, preserveLegacyRounding: policy.legacy,
+        })));
+      // Keep the legacy generic source first so existing intent ordering stays stable.
+      commissionPartitions.sort((left, right) => (left.componentId === null ? -1 : right.componentId === null ? 1 : 0));
+      for (const partition of commissionPartitions) {
+        const definition = partition.componentId === null ? undefined : guidingById.get(partition.componentId);
+        const routingOverrideReason = definition?.policy.reviewTargetRequired
+          && shouldRoutePubCrawlGuidingToVolunteerBudget({
             staffType: summary.staffType,
             livesInAccom: summary.livesInAccom,
             userTypeSlug: summary.userTypeSlug,
             userTypeName: summary.userTypeName,
             reviewPaymentOverride: summary.reviewPaymentOverride,
             totalEligibleReviews: summary.reviewTotals.totalEligibleReviews,
-            minReviews: pubCrawlGuidingReviewTargetMinReviews,
+            minReviews: resolvePubCrawlGuidingReviewTargetMinReviews(definition.component),
           })
             ? COMPENSATION_SETTLEMENT_ROUTING_OVERRIDE_PUB_CRAWL_GUIDING_REVIEW_TARGET
-            : null,
-        });
-      } else {
+            : null;
         await addSettlementSource({
-          sourceKey: "guide_commission",
-          label: "Guide commission",
-          category: "commission",
-          amount: summary.totalCommission,
+          sourceKey: definition ? "compensation_component" : "guide_commission",
+          label: definition?.component.name ?? "Guide commission",
+          componentId: definition?.component.id ?? null,
+          category: definition?.component.category ?? "commission",
+          amount: partition.amount,
           earnings: buildExactDatedMinorEarnings(
-            summary.totalCommission,
-            summary.breakdown.map((entry) => ({ date: entry.date, amount: entry.commission })),
+            partition.amount,
+            partition.entries.map((entry) => ({ date: entry.date, amount: entry.commission })),
           ),
+          routingOverrideReason,
         });
       }
       for (const component of summary.componentTotals) {
@@ -8408,13 +8415,6 @@ type GuideCommissionConfig = {
 const guideCommissionProductKey = (productId: number | null): string =>
   productId === null ? "__null__" : `${productId}`;
 
-const findPubCrawlGuidingCommissionComponent = (
-  components: Array<CompensationComponent & { assignments?: CompensationComponentAssignment[] }>,
-): (CompensationComponent & { assignments?: CompensationComponentAssignment[] }) | null =>
-  components.find((component) => (
-    component.isActive && isPubCrawlGuidingComponentName(component.name)
-  )) ?? null;
-
 const collectGuideCommissionProductKeys = (
   component: CompensationComponent & { assignments?: CompensationComponentAssignment[] },
 ): Set<string> => {
@@ -8446,31 +8446,6 @@ const resolvePubCrawlGuidingReviewTargetMinReviews = (
     minReviews = normalizeReviewRequirementConfig(assignment.config ?? {}).minReviews ?? minReviews;
   });
   return minReviews && minReviews > 0 ? minReviews : REVIEW_MINIMUM_THRESHOLD;
-};
-
-const splitGuideCommissionForPubCrawlGuiding = (
-  summary: CommissionSummary,
-  productKeys: Set<string>,
-): GuideCommissionSplit => {
-  const pubCrawlEntries: CommissionBreakdownEntry[] = [];
-  const otherEntries: CommissionBreakdownEntry[] = [];
-  summary.breakdown.forEach((entry) => {
-    if (productKeys.has(guideCommissionProductKey(entry.productId))) {
-      pubCrawlEntries.push(entry);
-    } else {
-      otherEntries.push(entry);
-    }
-  });
-  const pubCrawlAmount = roundCurrencyValue(
-    pubCrawlEntries.reduce((sum, entry) => sum + entry.commission, 0),
-  );
-  const otherAmount = roundCurrencyValue(summary.totalCommission - pubCrawlAmount);
-  return {
-    pubCrawlEntries,
-    otherEntries,
-    pubCrawlAmount,
-    otherAmount,
-  };
 };
 
 function buildGuideCommissionRateLookup(

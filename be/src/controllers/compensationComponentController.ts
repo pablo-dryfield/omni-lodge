@@ -9,6 +9,7 @@ import UserType from '../models/UserType.js';
 import FinanceAccount from '../finance/models/FinanceAccount.js';
 import FinanceCategory from '../finance/models/FinanceCategory.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
+import { validateGuidingSettlementPolicy } from '../services/guideCommissionSettlementService.js';
 
 const CATEGORY_VALUES = new Set(['base', 'commission', 'incentive', 'bonus', 'review', 'deduction', 'adjustment']);
 const CALCULATION_METHOD_VALUES = new Set([
@@ -352,6 +353,8 @@ export const createCompensationComponent = async (req: AuthenticatedRequest, res
   try {
     const actorId = getActorId(req);
     const payload = sanitizeComponentPayload(req.body ?? {});
+    const policyError = validateGuidingSettlementPolicy(payload.config);
+    if (policyError) { res.status(400).json([{ message: policyError }]); return; }
     if (!payload.name || !payload.slug) {
       res.status(400).json([{ message: 'Name (and slug) are required' }]);
       return;
@@ -391,6 +394,8 @@ export const updateCompensationComponent = async (req: AuthenticatedRequest, res
     }
     const actorId = getActorId(req);
     const payload = sanitizeComponentPayload(req.body ?? {});
+    const policyError = validateGuidingSettlementPolicy(payload.config);
+    if (policyError) { res.status(400).json([{ message: policyError }]); return; }
     payload.updatedBy = actorId;
 
     const [updated] = await CompensationComponent.update(payload, { where: { id } });
