@@ -1,0 +1,60 @@
+import type { ConfigDefinition } from './appConfigRegistry.js';
+
+const category = 'Database Workspace';
+const flag = (key: string, label: string, description: string): ConfigDefinition => ({
+  key: `DB_WORKSPACE_${key}`, label, description, category, valueType: 'boolean', defaultValue: false, impact: 'high',
+});
+const limit = (key: string, label: string, value: number, min: number, max: number): ConfigDefinition => ({
+  key: `DB_WORKSPACE_${key}`, label, description: 'Database Workspace limit. Applies to new jobs and is enforced by the execution worker; lowering a limit never broadens an active operation.',
+  category, valueType: 'number', defaultValue: value, validation: { min, max }, impact: 'high',
+});
+
+export const DATABASE_WORKSPACE_CONFIG: ConfigDefinition[] = [
+  flag('ENABLED', 'Database Workspace enabled', 'Admit new Database Workspace operations. Existing jobs retain their observed outcome when this is disabled.'),
+  flag('WRITES_ENABLED', 'Database Workspace writes enabled', 'Allow reviewed writes with separate database credentials and permissions.'),
+  flag('MAINTENANCE_ENABLED', 'Database Workspace maintenance enabled', 'Allow reviewed database maintenance operations through the maintenance worker.'),
+  { key: 'DB_WORKSPACE_TARGETS', label: 'Database Workspace connections', category, valueType: 'json', defaultValue: '[]',
+    description: 'Registered target IDs, host, database, environment, supported PostgreSQL major, TLS and allowed schemas. Credentials are stored separately. Changes apply to new jobs.', impact: 'high' },
+  { key: 'DB_WORKSPACE_TARGET_CREDENTIALS', label: 'Database Workspace connection credentials', category, valueType: 'json', defaultValue: '{}', isSecret: true,
+    description: 'Secret object keyed by target ID, then read/write/maintenance. Each contains user and password. Never use the application superuser for ordinary queries.', impact: 'high' },
+  { key: 'DB_WORKSPACE_PROTECTED_OBJECTS', label: 'Database Workspace protected objects', category, valueType: 'json',
+    defaultValue: '["config_keys","config_values","config_history","users","userTypes","user_type_product_types","roleModulePermissions","rolePagePermissions","audit_logs","migration_audit_runs","migration_audit_steps","SequelizeMeta"]',
+    description: 'Relations excluded from ad hoc data access and editing. Catalog definitions remain subject to permission checks. Changes invalidate new operation reviews.', impact: 'high' },
+  { key: 'DB_WORKSPACE_ARTIFACT_DIRECTORY', label: 'Database Workspace artifact directory', category, valueType: 'string', defaultValue: 'runtime/database-workspace',
+    description: 'Private encrypted result/import/export directory on the execution worker. Must not be served publicly. Changing it requires worker drain; existing artifacts use their recorded location.', impact: 'high', validation: { maxLength: 1024 } },
+  ...([
+    ['QUERY_MAX_BYTES', 'Maximum SQL bytes', 102400, 1024, 1048576],
+    ['BATCH_MAX_STATEMENTS', 'Maximum statements per job', 20, 1, 100],
+    ['READ_TIMEOUT_MS', 'Read statement timeout (ms)', 30000, 1000, 300000],
+    ['WRITE_TIMEOUT_MS', 'Write statement timeout (ms)', 60000, 1000, 300000],
+    ['LOCK_TIMEOUT_MS', 'Lock timeout (ms)', 2000, 100, 10000],
+    ['JOB_MAX_DURATION_MS', 'Maximum ordinary job duration (ms)', 120000, 1000, 600000],
+    ['SESSION_IDLE_MS', 'Expert session idle timeout (ms)', 30000, 5000, 120000],
+    ['SESSION_TRANSACTION_MAX_MS', 'Expert transaction lifetime (ms)', 120000, 10000, 300000],
+    ['SESSION_MAX_MS', 'Expert session lifetime (ms)', 300000, 30000, 900000],
+    ['ACTIVE_JOBS_PER_USER', 'Active jobs per user', 1, 1, 3],
+    ['ACTIVE_JOBS_PER_TARGET', 'Active jobs per connection', 2, 1, 8],
+    ['ACTIVE_WRITES_PER_TARGET', 'Active writes per connection', 1, 1, 2],
+    ['ACTIVE_SESSIONS_PER_TARGET', 'Expert sessions per connection', 1, 1, 4],
+    ['QUEUE_MAX_JOBS', 'Maximum queued jobs', 50, 1, 500],
+    ['QUEUE_WAIT_MS', 'Maximum queue wait (ms)', 60000, 1000, 300000],
+    ['RESULT_PAGE_ROWS', 'Result page rows', 200, 10, 500],
+    ['RESULT_MAX_ROWS', 'Captured result row limit', 10000, 100, 100000],
+    ['RESULT_MAX_BYTES', 'Captured result bytes', 16777216, 65536, 67108864],
+    ['CELL_DISPLAY_MAX_BYTES', 'Displayed cell bytes', 65536, 1024, 1048576],
+    ['EXPORT_MAX_ROWS', 'Export row limit', 100000, 100, 1000000],
+    ['EXPORT_MAX_BYTES', 'Export byte limit', 52428800, 65536, 268435456],
+    ['EXPORT_TIMEOUT_MS', 'Export timeout (ms)', 300000, 1000, 900000],
+    ['IMPORT_MAX_BYTES', 'Import byte limit', 20971520, 1024, 67108864],
+    ['IMPORT_MAX_ROWS_PER_TX', 'Atomic import row limit', 5000, 1, 50000],
+    ['WRITE_MAX_ROWS', 'Maximum affected rows per transaction', 1000, 1, 10000],
+    ['METADATA_TTL_SECONDS', 'Catalog cache lifetime (seconds)', 60, 0, 600],
+    ['ACTIVITY_REFRESH_SECONDS', 'Activity refresh (seconds)', 10, 5, 120],
+    ['RESULT_TTL_MINUTES', 'Result retention (minutes)', 60, 1, 1440],
+    ['DRAFT_RETENTION_DAYS', 'Draft retention (days)', 7, 1, 90],
+    ['HISTORY_RETENTION_DAYS', 'Personal history retention (days)', 30, 1, 365],
+    ['AUDIT_RETENTION_DAYS', 'Execution audit retention (days)', 365, 30, 3650],
+    ['REVIEW_TOKEN_TTL_SECONDS', 'Operation review lifetime (seconds)', 300, 30, 900],
+    ['STORAGE_BUDGET_BYTES', 'Encrypted artifact storage budget', 1073741824, 10485760, 10737418240],
+  ] as Array<[string, string, number, number, number]>).map(([key, label, value, min, max]) => limit(key, label, value, min, max)),
+];

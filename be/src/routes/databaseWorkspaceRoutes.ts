@@ -1,0 +1,24 @@
+import { Router } from 'express';
+import authMiddleware from '../middleware/authMiddleware.js';
+import { requireRoles } from '../middleware/authorizationMiddleware.js';
+import * as controller from '../controllers/databaseWorkspaceController.js';
+
+const router=Router();
+router.use(authMiddleware,requireRoles(['admin']));
+router.get('/capabilities',controller.workspaceCapabilities);
+router.post('/validate',controller.workspaceValidate);
+router.post('/reviews',controller.workspaceReview);
+router.post('/executions',controller.workspaceExecute);
+router.get('/executions/:id',controller.workspaceStatus);
+router.post('/executions/:id/cancel',controller.workspaceCancel);
+router.post('/executions/:id/results/:index',controller.workspaceResult);
+router.get('/history',controller.workspaceHistory);
+router.get('/catalog',controller.workspaceCatalog);
+router.get('/catalog/:oid',controller.workspaceObject);
+router.get('/documents',controller.workspaceDocuments);
+router.post('/documents',controller.workspaceSaveDocument);
+router.delete('/documents/:id',controller.workspaceDeleteDocument);
+router.post('/table-views',controller.workspaceTableView);
+router.get('/table-views/:id/page',controller.workspaceTablePage);
+router.post('/data-changes',controller.workspaceDataChange);
+export default router;

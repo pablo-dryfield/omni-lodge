@@ -52,7 +52,7 @@ const paint = (model: BookingExportModel, plan: Layout, footer: string): HTMLCan
   context.scale(scale, scale);
   context.fillStyle = '#ffffff'; context.fillRect(0, 0, plan.width, plan.height);
   context.fillStyle = '#172b42'; context.font = `bold 26px ${FONT}`;
-  context.fillText('OmniLodge · Bookings', PADDING, 42);
+  context.fillText(model.title || 'OmniLodge · Bookings', PADDING, 42);
   context.font = `14px ${FONT}`; context.fillStyle = '#526576';
   plan.details.forEach((line, index) => context.fillText(line, PADDING, 70 + index * LINE_HEIGHT));
   const drawRow = (cells: string[][], y: number, height: number, heading: boolean, stripe: boolean) => {
@@ -80,7 +80,7 @@ const paint = (model: BookingExportModel, plan: Layout, footer: string): HTMLCan
 export const bookingExportPng = async (model: BookingExportModel): Promise<Blob> => {
   if (!model.rows.length || !model.columns.length) throw new Error('No visible booking data to share.');
   const plan = layout(model, createSurface().context);
-  const canvas = paint(model, plan, `${model.rows.length} bookings · ${model.columns.length} columns`);
+  const canvas = paint(model, plan, `${model.rows.length} ${model.rowLabel || 'bookings'} · ${model.columns.length} columns`);
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Image creation failed. Try Excel or CSV.')), 'image/png'));
 };
 
@@ -119,7 +119,7 @@ export const downloadBookingPdf = async (model: BookingExportModel): Promise<voi
     plan: { ...band.plan, top, headerHeight, height: range.height, cells: band.plan.cells.slice(range.start, range.end), heights: heights.slice(range.start, range.end) },
   })));
   const pdf = new jsPDF({ unit: 'pt', orientation: 'landscape', format: 'a3', compress: true });
-  pdf.setProperties({ title: 'OmniLodge · Bookings', subject: model.details.join(' | '), creator: 'OmniLodge' });
+  pdf.setProperties({ title: model.title || 'OmniLodge · Bookings', subject: model.details.join(' | '), creator: 'OmniLodge' });
   const scale = Math.min(
     (pdf.internal.pageSize.getWidth() - 32) / Math.max(...pages.map(page => page.plan.width)),
     (pdf.internal.pageSize.getHeight() - 32) / Math.max(1000, ...pages.map(page => page.plan.height)),
@@ -127,7 +127,7 @@ export const downloadBookingPdf = async (model: BookingExportModel): Promise<voi
   for (let index = 0; index < pages.length; index++) {
     if (index) pdf.addPage('a3', 'landscape');
     const page = pages[index];
-    const canvas = paint(page.model, page.plan, `Page ${index + 1} of ${pages.length} · Bookings ${page.start + 1}–${page.end} of ${model.rows.length} · Column group ${page.bandIndex + 1}/${bands.length}`);
+    const canvas = paint(page.model, page.plan, `Page ${index + 1} of ${pages.length} · ${model.rowLabel || 'Bookings'} ${page.start + 1}–${page.end} of ${model.rows.length} · Column group ${page.bandIndex + 1}/${bands.length}`);
     // Canvas rendering preserves Unicode names and currency symbols without remote fonts.
     pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 16, 16, page.plan.width * scale, page.plan.height * scale);
     canvas.width = 0; canvas.height = 0;

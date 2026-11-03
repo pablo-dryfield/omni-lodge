@@ -1,7 +1,19 @@
 const cracoConfig = {
   webpack: {
     configure: (webpackConfig) => {
-      const sourceMapLoaderExclude = /node_modules[\\/]fast-equals[\\/]/;
+      const sourceMapLoaderExclude = /node_modules[\\/](?:fast-equals|sql-formatter)[\\/]/;
+
+      // Some dependencies publish maps referencing source files absent from
+      // their npm package. Keep application maps, but skip only those packages.
+      const patchSourceMapRule = (rule) => {
+        const entries = [rule?.loader, ...(Array.isArray(rule?.use) ? rule.use : rule?.use ? [rule.use] : [])];
+        if (entries.some(entry => (typeof entry === 'string' ? entry : entry?.loader || '').includes('source-map-loader'))) {
+          rule.exclude = rule.exclude ? [rule.exclude, sourceMapLoaderExclude] : sourceMapLoaderExclude;
+        }
+        (rule?.oneOf || []).forEach(patchSourceMapRule);
+        (rule?.rules || []).forEach(patchSourceMapRule);
+      };
+      webpackConfig.module?.rules?.forEach(patchSourceMapRule);
 
       webpackConfig.module?.rules?.forEach((rule) => {
         if (!Array.isArray(rule?.oneOf)) {

@@ -1,0 +1,37 @@
+import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest.js';
+import { hasModuleActionPermission } from '../../middleware/authorizationMiddleware.js';
+import User from '../../models/User.js';
+import UserType from '../../models/UserType.js';
+import RolePagePermission from '../../models/RolePagePermission.js';
+import Page from '../../models/Page.js';
+import ModuleAction from '../../models/ModuleAction.js';
+import Module from '../../models/Module.js';
+import Action from '../../models/Action.js';
+import { workspaceConfiguration } from './config.js';
+import { WorkspaceError, type ExecutionMode } from './types.js';
+
+export const WORKSPACE_ACTIONS = ['view','read','write','export','schema','monitor','session','maintenance','backup','restore','schedule','audit'] as const;
+export type WorkspaceAction = typeof WORKSPACE_ACTIONS[number];
+const admin = (slug: string|null|undefined) => ['admin','administrator'].includes((slug||'').trim().toLowerCase());
+export async function workspaceAccess(req: AuthenticatedRequest,action: WorkspaceAction): Promise<number> {
+  if(!req.authContext||!admin(req.authContext.roleSlug)||(req.productTypeScope?.length??0)>0)throw new WorkspaceError(403,'FORBIDDEN','Database Workspace requires a global administrator account.');
+  const visible=await RolePagePermission.count({where:{userTypeId:req.authContext.userTypeId,canView:true,status:true},include:[{model:Page,as:'page',required:true,where:{slug:'settings-sql-helper',status:true}}]});
+  if(!visible)throw new WorkspaceError(403,'CAPABILITY_REQUIRED','Your Database Workspace page permission is disabled.');
+  if(!await hasModuleActionPermission(req,'database-workspace','view'))throw new WorkspaceError(403,'CAPABILITY_REQUIRED','Your Database Workspace view permission is disabled.');
+  if(!await hasModuleActionPermission(req,'database-workspace',action))throw new WorkspaceError(403,'CAPABILITY_REQUIRED',`Your Database Workspace ${action} permission is disabled.`);
+  const enabled=await ModuleAction.count({where:{enabled:true},include:[{model:Module,as:'module',required:true,where:{slug:'database-workspace',status:true}},{model:Action,as:'action',required:true,where:{key:action,status:true}}]});
+  if(!enabled)throw new WorkspaceError(403,'CAPABILITY_REQUIRED','This database action is disabled.');
+  return req.authContext.id;
+}
+export async function reauthorizeExecution(actorId: number,mode: ExecutionMode,policyHash: string): Promise<void> {
+  const user=await User.findByPk(actorId,{include:[{model:UserType,as:'role'}]});
+  const role=(user as unknown as {role?:UserType})?.role;
+  if(!user?.status||!user.approved||!role?.status||!admin(role.slug))throw new WorkspaceError(403,'AUTHORITY_REVOKED','The account is no longer authorized to execute database jobs.');
+  // Product-scoped roles cannot acquire the workspace by changing ordinary module grants.
+  const { default: UserTypeProductType } = await import('../../models/UserTypeProductType.js');
+  if(await UserTypeProductType.count({where:{userTypeId:user.userTypeId}}))throw new WorkspaceError(403,'AUTHORITY_REVOKED','Product-scoped accounts cannot execute database jobs.');
+  const req={authContext:{id:user.id,userTypeId:user.userTypeId,roleSlug:role.slug},permissionCache:new Map()} as AuthenticatedRequest;
+  await workspaceAccess(req,mode==='read'?'read':mode==='write'?'write':'maintenance');
+  const config=await workspaceConfiguration();
+  if(!config.enabled||config.policyHash!==policyHash)throw new WorkspaceError(409,'POLICY_CHANGED','The connection policy changed. Review and submit a new operation.');
+}

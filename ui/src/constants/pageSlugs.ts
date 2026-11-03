@@ -70,6 +70,7 @@ export const PAGE_SLUGS = {
   assistantManagerTasks: "assistant-manager-tasks",
   settingsReviewPlatforms: "settings-review-platforms",
   settingsActions: "settings-actions",
+  settingsSqlHelper: "settings-sql-helper",
   settingsChannels: "settings-channels",
   settingsStaffProfiles: "settings-staff-profiles",
   settingsShiftRoles: "settings-shift-roles",

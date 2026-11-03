@@ -243,9 +243,9 @@ const settingsNav: SettingsNavSection[] = [
         icon: <IconBolt size={20} />,
       },
       {
-        label: "SQL Helper",
+        label: "Database Workspace",
         to: "/settings/sql-helper",
-        slug: PAGE_SLUGS.settingsActions,
+        slug: PAGE_SLUGS.settingsSqlHelper,
         icon: <IconDatabase size={20} />,
       },
       {

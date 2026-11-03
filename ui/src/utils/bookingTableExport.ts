@@ -5,6 +5,9 @@ export type BookingExportFormat = 'png' | 'xlsx' | 'pdf' | 'csv';
 export type BookingExportColumn = { id: string; label: string; width: number };
 export type BookingExportCell = { value: string | number; text: string; numberFormat?: string };
 export type BookingExportModel = {
+  title?: string;
+  rowLabel?: string;
+  sheetName?: string;
   columns: BookingExportColumn[];
   rows: BookingExportCell[][];
   details: string[];
@@ -85,7 +88,7 @@ export const downloadBookingBlob = (blob: Blob, filename: string) => {
 };
 
 export const downloadBookingExport = async (model: BookingExportModel, format: BookingExportFormat): Promise<void> => {
-  if (!model.columns.length || !model.rows.length) throw new Error('Choose at least one data column and one booking to export.');
+  if (!model.columns.length || !model.rows.length) throw new Error('Choose at least one data column and one row to export.');
   if (format === 'csv') {
     downloadBookingBlob(new Blob([bookingExportCsv(model)], { type: 'text/csv;charset=utf-8' }), `${model.filename}.csv`);
   } else if (format === 'xlsx') {
@@ -93,7 +96,7 @@ export const downloadBookingExport = async (model: BookingExportModel, format: B
     const { Workbook } = await import('exceljs');
     const workbook = new Workbook();
     workbook.creator = 'OmniLodge';
-    const sheet = workbook.addWorksheet('Bookings', { views: [{ state: 'frozen', ySplit: 1 }] });
+    const sheet = workbook.addWorksheet(model.sheetName || 'Bookings', { views: [{ state: 'frozen', ySplit: 1 }] });
     sheet.columns = model.columns.map(column => ({ header: column.label, width: Math.max(14, Math.min(45, column.width / 7)) }));
     sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: model.rows.length + 1, column: model.columns.length } };
     sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -106,7 +109,7 @@ export const downloadBookingExport = async (model: BookingExportModel, format: B
     });
     const info = workbook.addWorksheet('Report scope');
     info.getColumn(1).width = 110;
-    ['OmniLodge · Bookings', ...model.details, `${model.rows.length} bookings · ${model.columns.length} columns`]
+    [model.title || 'OmniLodge · Bookings', ...model.details, `${model.rows.length} ${model.rowLabel || 'bookings'} · ${model.columns.length} columns`]
       .forEach(detail => info.addRow([detail]));
     const buffer = await workbook.xlsx.writeBuffer();
     downloadBookingBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${model.filename}.xlsx`);

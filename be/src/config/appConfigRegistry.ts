@@ -1,4 +1,5 @@
 import { DEFAULT_GOOGLE_ADS_API_VERSION, GOOGLE_ADS_API_VERSION_PATTERN } from './googleAdsConfig.js';
+import { DATABASE_WORKSPACE_CONFIG } from './databaseWorkspaceConfig.js';
 
 export type ConfigValueType = 'string' | 'number' | 'boolean' | 'enum' | 'json';
 
@@ -19,6 +20,7 @@ export type ConfigDefinition = {
 };
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
+  ...DATABASE_WORKSPACE_CONFIG,
   {
     key: 'SCHED_TZ',
     label: 'Scheduling timezone',

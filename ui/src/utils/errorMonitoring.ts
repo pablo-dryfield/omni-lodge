@@ -844,6 +844,12 @@ const shouldIgnoreApiFailure = (failure: ApiFailureCapture): boolean => {
 };
 
 export const captureApiFailure = (failure: ApiFailureCapture): string | null => {
+  // Database diagnostics may contain SQL literals or returned values. Keep their
+  // detail inside the protected workspace, out of ordinary telemetry/storage.
+  if (/\/(?:database-workspace|sql-helper)(?:\/|\?|$)/.test(failure.url || "")) {
+    failure = { ...failure, message: "Database Workspace request failed", stack: undefined,
+      responseSummary: undefined, tags: undefined };
+  }
   if (shouldIgnoreApiFailure(failure)) {
     return null;
   }

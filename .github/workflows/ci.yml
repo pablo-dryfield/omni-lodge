@@ -95,6 +95,19 @@ jobs:
     if: needs.changes.outputs.run_full_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: workspace-ci-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         shell: bash
@@ -128,6 +141,11 @@ jobs:
 
       - name: Test backend
         run: npm test -- --runInBand
+
+      - name: Test Database Workspace against PostgreSQL
+        env:
+          WORKSPACE_TEST_ADMIN_URL: postgresql://postgres:workspace-ci-only@127.0.0.1:5432/postgres
+        run: npm run test:database-workspace
 
       - name: Build and verify backend
         if: github.event_name == 'pull_request'

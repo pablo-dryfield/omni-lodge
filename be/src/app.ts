@@ -57,6 +57,7 @@ import promotionTrackingTestRoutes from './routes/promotionTrackingTestRoutes.js
 import staffProfileRoutes from './routes/staffProfileRoutes.js';
 import shiftRoleRoutes from './routes/shiftRoles.js';
 import sqlHelperRoutes from './routes/sqlHelperRoutes.js';
+import databaseWorkspaceRoutes from './routes/databaseWorkspaceRoutes.js';
 import dbBackupRoutes from './routes/dbBackupRoutes.js';
 import pm2Routes from './routes/pm2Routes.js';
 import configRoutes from './routes/configRoutes.js';
@@ -355,6 +356,7 @@ app.use('/api/schedules', schedulesRoutes);
 app.use('/api/promotion-tracking/test', promotionTrackingTestRoutes);
 app.use('/api/promotion-tracking', createPromotionTrackingFeatureGate());
 app.use('/api/sql-helper', sqlHelperRoutes);
+app.use('/api/database-workspace', databaseWorkspaceRoutes);
 app.use('/api/db-backups', dbBackupRoutes);
 app.use('/api/pm2', pm2Routes);
 app.use('/api/config', configRoutes);
