@@ -33,14 +33,14 @@ it('allows only reviewed routes and positive integer identifiers', () => {
   expect(productScopedApiRoute('DELETE', '/api/userTypes/16')).toBeNull();
   expect(productScopedApiRoute('PUT', '/api/productTypes/3')).toBeNull();
 });
-it('permits only POST cancellation with update permission, not other Direct actions or platforms', () => {
+it('permits only POST cancellation with update permission, not unreviewed Direct actions or platforms', () => {
   expect(productScopedApiRoute('POST', '/api/bookings/10627/direct-actions/cancellation')).toEqual({
     resource: 'booking-cancellation', module: 'booking-management', id: 10627, passthrough: true, action: 'update',
   });
   for (const method of ['GET', 'PATCH', 'PUT', 'DELETE']) {
     expect(productScopedApiRoute(method, '/api/bookings/10627/direct-actions/cancellation')).toBeNull();
   }
-  for (const suffix of ['confirmation', 'amend', 'cancellation/extra']) {
+  for (const suffix of ['confirmation', 'cancellation/extra']) {
     expect(productScopedApiRoute('POST', `/api/bookings/10627/direct-actions/${suffix}`)).toBeNull();
   }
   for (const id of ['0', '-1', '1.5', '9007199254740992', 'other']) {
@@ -49,6 +49,13 @@ it('permits only POST cancellation with update permission, not other Direct acti
   for (const suffix of ['cancel-ecwid', 'cancel-xperience', 'cancel-civitatis']) {
     expect(productScopedApiRoute('POST', `/api/bookings/10627/${suffix}`)).toBeNull();
   }
+});
+it.each([['GET', 'amend-products'], ['POST', 'direct-actions/amend']])('permits scoped %s %s only through checked amendment controllers', (method, suffix) => {
+  expect(productScopedApiRoute(method, `/api/bookings/42/${suffix}`)).toEqual({
+    resource: 'booking-amendment', module: 'booking-management', id: 42, passthrough: true, action: 'update',
+  });
+  for (const id of ['0', '-1', '1.5', '9007199254740992']) expect(productScopedApiRoute(method, `/api/bookings/${id}/${suffix}`)).toBeNull();
+  for (const other of ['GET', 'POST', 'PUT', 'DELETE'].filter(value => value !== method)) expect(productScopedApiRoute(other, `/api/bookings/42/${suffix}`)).toBeNull();
 });
 it.each([
   ['GET', 'partial-refund-preview'], ['POST', 'direct-actions/partial-refund'],

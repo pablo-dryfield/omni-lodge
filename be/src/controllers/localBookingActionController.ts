@@ -5,18 +5,21 @@ import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import sequelize from '../config/database.js';
 import Booking from '../models/Booking.js';
+import Product from '../models/Product.js';
 import BookingEvent from '../models/BookingEvent.js';
 import AuditLog from '../models/AuditLog.js';
 import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
-import { assertLocalBookingActionAccess } from '../services/localBookingActionPolicy.js';
+import { assertBookingManagementAccess, assertLocalBookingActionAccess } from '../services/localBookingActionPolicy.js';
+import { getAllowedProductTypeIds, scopeProductWhere } from '../services/productScopeService.js';
+import { resolveBookingAmendmentProduct } from '../services/bookings/bookingAmendmentProductService.js';
 import { notifyLocalBookingAction, type LocalBookingAction } from '../services/localBookingActionEmailService.js';
 import logger from '../utils/logger.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
 dayjs.extend(timezone);
-const snapshot = (b: Booking) => ({ id: b.id, status: b.status, experienceDate: b.experienceDate,
+const snapshot = (b: Booking) => ({ id: b.id, status: b.status, productId: b.productId, productName: b.productName, experienceDate: b.experienceDate,
   experienceStartAt: b.experienceStartAt, experienceEndAt: b.experienceEndAt, partySizeTotal: b.partySizeTotal,
   paymentStatus: b.paymentStatus, priceNet: b.priceNet, refundedAmount: b.refundedAmount });
 const bookingId = (req: AuthenticatedRequest) => {
@@ -40,11 +43,24 @@ export const previewLocalBookingAction = async (req: AuthenticatedRequest, res: 
   } catch (error) { respondError(error, res); }
 };
 
+export const getBookingAmendProducts = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const booking = await Booking.findByPk(bookingId(req));
+    if (!booking) throw new HttpError(404, 'Booking not found.');
+    await assertBookingManagementAccess(req, booking);
+    const allowed = await getAllowedProductTypeIds(req);
+    const products = await Product.findAll({ where: scopeProductWhere(allowed, { status: true }),
+      attributes: ['id', 'name'], order: [['name', 'ASC']] });
+    res.json({ currentProductId: booking.productId, currentProductName: booking.productName,
+      products: products.map(product => ({ id: product.id, name: product.name })) });
+  } catch (error) { respondError(error, res); }
+};
+
 const applyLocalAction = async (req: AuthenticatedRequest, res: Response, operation: LocalBookingAction) => {
   try {
     const id = bookingId(req);
     const body = req.body as Record<string, unknown>;
-    const allowed = ['reason', 'expectedUpdatedAt', 'sendCustomerEmail', ...(operation === 'amend' ? ['pickupDate', 'pickupTime'] : [])];
+    const allowed = ['reason', 'expectedUpdatedAt', 'sendCustomerEmail', ...(operation === 'amend' ? ['pickupDate', 'pickupTime', 'productId'] : [])];
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !allowed.includes(key))) {
       throw new HttpError(400, 'Unsupported local booking action fields.');
     }
@@ -69,10 +85,13 @@ const applyLocalAction = async (req: AuthenticatedRequest, res: Response, operat
       if (new Date(booking.updatedAt).getTime() !== Date.parse(body.expectedUpdatedAt as string)) throw new HttpError(409, 'The booking changed. Refresh and review it before trying again.');
       if (booking.status === 'cancelled') throw new HttpError(409, 'This booking is already cancelled.');
       const before = snapshot(booking);
+      const previousProductName = booking.productName;
       const previousStartAt = booking.experienceStartAt ?? null;
       const now = new Date();
       if (operation === 'amend') {
-        if (previousStartAt && previousStartAt.getTime() === start!.getTime()) throw new HttpError(409, 'Change the date or time before saving.');
+        const product = await resolveBookingAmendmentProduct(req, booking, body.productId, transaction);
+        if (!product && previousStartAt && previousStartAt.getTime() === start!.getTime()) throw new HttpError(409, 'Change the product, date or time before saving.');
+        if (product) { booking.productId = product.id; booking.productName = product.name; }
         const duration = previousStartAt && booking.experienceEndAt ? booking.experienceEndAt.getTime() - previousStartAt.getTime() : null;
         booking.experienceDate = body.pickupDate as string;
         booking.experienceStartAt = start;
@@ -94,12 +113,12 @@ const applyLocalAction = async (req: AuthenticatedRequest, res: Response, operat
       } as unknown as BookingEvent, { transaction });
       await AuditLog.create({ actorId: req.authContext!.id, action: `booking.local_${operation}`, entity: 'booking', entityId: String(id),
         metaJson: { eventId: event.id, reason, localOnly: true, before, after }, createdAt: now }, { transaction });
-      return { booking, event, emailFamily, previousStartAt };
+      return { booking, event, emailFamily, previousStartAt, previousProductName };
     });
     let notifications: Awaited<ReturnType<typeof notifyLocalBookingAction>>;
     try {
       notifications = await notifyLocalBookingAction(result.booking, { operation, reason,
-        actorId: req.authContext!.id, previousStartAt: result.previousStartAt, emailFamily: result.emailFamily,
+        actorId: req.authContext!.id, previousStartAt: result.previousStartAt, previousProductName: result.previousProductName, emailFamily: result.emailFamily,
         sendCustomerEmail: body.sendCustomerEmail !== false });
     } catch (error) {
       logger.error(`[local-booking-actions] Notifications failed after booking ${id} was saved.`, error);

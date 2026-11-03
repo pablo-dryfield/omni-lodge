@@ -58,6 +58,12 @@ describe('direct booking action email', () => {
     expect(email.textBody).not.toContain("St. Mary's Basilica");
     expect(email.htmlBody).not.toContain('pretzel on a stick');
   });
+  it('includes the previous and destination products in an amendment notification', () => {
+    const email = buildDirectBookingActionEmail(booking, { kind: 'amend', previousProductName: 'Previous tour' });
+    expect(email.textBody).toContain('Previous product: Previous tour');
+    expect(email.subject).toContain('Pub Crawl');
+    expect(email.htmlBody).toContain('Previous tour');
+  });
 
   it('uses the OmniLodge Pub Crawl mailbox for Airbnb amendment notifications', async () => {
     const airbnbBooking = { ...booking, platform: 'airbnb', platformBookingId: 'HMABC123' } as unknown as Booking;

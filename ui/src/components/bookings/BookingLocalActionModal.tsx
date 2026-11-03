@@ -6,6 +6,8 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import axiosInstance from '../../utils/axiosInstance';
 import type { UnifiedOrder } from '../../store/bookingPlatformsTypes';
+import { useBookingAmendProducts } from './useBookingAmendProducts';
+import BookingAmendProductSelect from './BookingAmendProductSelect';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -26,6 +28,7 @@ export default function BookingLocalActionModal({ bookingId, order, operation, c
   const [preview, setPreview] = useState<Preview | null>(null);
   const [loading, setLoading] = useState(true);
   const [refresh, setRefresh] = useState(0);
+  const products = useBookingAmendProducts(operation === 'amend' ? bookingId : null, refresh);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [reason, setReason] = useState('');
@@ -51,14 +54,15 @@ export default function BookingLocalActionModal({ bookingId, order, operation, c
     : Boolean(date && time);
   const canSubmit = canManage && preview && !loading && !submitting && !result
     && preview.booking.status !== 'cancelled' && reason.trim()
-    && (operation === 'cancel' || (date && time && scheduleChanged));
+    && (operation === 'cancel' || (!products.loading && date && time && (scheduleChanged || products.changed)));
   const submit = async () => {
     if (!canSubmit || !preview) return;
     setSubmitting(true); setError(null);
     try {
       const response = await axiosInstance.post<Result>(`/bookings/${bookingId}/local-actions/${operation}`, {
         expectedUpdatedAt: preview.booking.updatedAt, reason: reason.trim(), sendCustomerEmail,
-        ...(operation === 'amend' ? { pickupDate: date, pickupTime: time } : {}),
+        ...(operation === 'amend' ? { pickupDate: date, pickupTime: time,
+          ...(products.changed ? { productId: products.productId } : {}) } : {}),
       });
       setResult(response.data); onSaved();
     } catch (e) { setError(errorMessage(e)); } finally { setSubmitting(false); }
@@ -79,12 +83,14 @@ export default function BookingLocalActionModal({ bookingId, order, operation, c
       {loading ? <Group justify="center"><Loader size="sm" /><Text size="sm">Checking booking access and latest details…</Text></Group> : null}
       {!canManage ? <Alert color="red">Your current account cannot force booking changes.</Alert> : null}
       {preview?.booking.status === 'cancelled' && !result ? <Alert color="yellow">This booking is already cancelled.</Alert> : null}
-      {!result && operation === 'amend' ? <SimpleGrid cols={{ base: 1, sm: 2 }}>
+      {!result && operation === 'amend' ? <>
+        <BookingAmendProductSelect products={products} disabled={submitting || loading} />
+        <SimpleGrid cols={{ base: 1, sm: 2 }}>
         <TextInput type="date" label="New date (Warsaw)" value={date} required disabled={submitting || loading}
           onChange={event => setDate(event.currentTarget.value)} />
         <TextInput type="time" label="New time (Warsaw)" value={time} required disabled={submitting || loading}
           onChange={event => setTime(event.currentTarget.value)} />
-      </SimpleGrid> : null}
+      </SimpleGrid></> : null}
       {!result ? <>
         <Textarea label="Reason for this force action" description="Recorded in the internal audit history; not included in the customer email."
           value={reason} onChange={event => setReason(event.currentTarget.value)} required maxLength={2000} autosize minRows={2}
