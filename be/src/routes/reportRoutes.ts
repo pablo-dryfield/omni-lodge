@@ -14,6 +14,7 @@ import {
   deleteStaffPayoutEntries,
   reconcileStaffPayoutLedger,
   recoverInterruptedStaffPayoutSettlement,
+  routeUnclaimedReviewPayToFund,
 } from '../controllers/staffPayoutController.js';
 import { getStaffPayoutBootstrap } from '../controllers/staffPayoutBootstrapController.js';
 import { check, param, validationResult } from 'express-validator';
@@ -71,6 +72,7 @@ router.post(
 router.post('/staffPayouts/batch', authMiddleware, staffPayoutManagerGuard, createStaffPayoutBatch);
 router.post('/staffPayouts/deleteEntries', authMiddleware, staffPayoutManagerGuard, deleteStaffPayoutEntries);
 router.post('/staffPayouts/reconcileLedger', authMiddleware, staffPayoutManagerGuard, reconcileStaffPayoutLedger);
+router.post('/staffPayouts/routeUnclaimedReviews', authMiddleware, staffPayoutManagerGuard, routeUnclaimedReviewPayToFund);
 router.post(
   '/staffPayouts/recoverInterruptedSettlement',
   authMiddleware,
