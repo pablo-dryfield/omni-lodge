@@ -1,15 +1,8 @@
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest.js';
 import type { Response, NextFunction } from 'express';
-import { hasModuleActionPermission } from '../../middleware/authorizationMiddleware.js';
-import User from '../../models/User.js';
-import UserType from '../../models/UserType.js';
-import RolePagePermission from '../../models/RolePagePermission.js';
-import Page from '../../models/Page.js';
-import ModuleAction from '../../models/ModuleAction.js';
-import Module from '../../models/Module.js';
-import Action from '../../models/Action.js';
 import { workspaceConfiguration } from './config.js';
 import { WorkspaceError, type ExecutionMode } from './types.js';
+import { loadWorkspaceAccount, loadWorkspaceAuthority } from './appMetadata.js';
 
 export const WORKSPACE_ACTIONS = [
   'view',
@@ -32,10 +25,9 @@ export const WORKSPACE_ACTIONS = [
 export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
 const admin = (slug: string | null | undefined) =>
   ['admin', 'administrator'].includes((slug || '').trim().toLowerCase());
-const pageEligibility = new WeakMap<AuthenticatedRequest, Promise<number>>();
-const enabledActions = new WeakMap<
+const requestAuthority = new WeakMap<
   AuthenticatedRequest,
-  Map<WorkspaceAction, Promise<number>>
+  ReturnType<typeof loadWorkspaceAuthority>
 >();
 export async function workspaceAccess(
   req: AuthenticatedRequest,
@@ -51,76 +43,29 @@ export async function workspaceAccess(
       'FORBIDDEN',
       'Database Workspace requires a global administrator account.',
     );
-  let eligibility = pageEligibility.get(req);
-  if (!eligibility) {
-    eligibility = RolePagePermission.count({
-      where: {
-        userTypeId: req.authContext.userTypeId,
-        canView: true,
-        status: true,
-      },
-      include: [
-        {
-          model: Page,
-          as: 'page',
-          required: true,
-          where: { slug: 'settings-sql-helper', status: true },
-        },
-      ],
-    });
-    pageEligibility.set(req, eligibility);
+  let pending = requestAuthority.get(req);
+  if (!pending) {
+    pending = loadWorkspaceAuthority(req.authContext.userTypeId || 0);
+    requestAuthority.set(req, pending);
   }
-  const visible = await eligibility;
-  if (!visible)
+  const authority = await pending;
+  if (!authority.page)
     throw new WorkspaceError(
       403,
       'CAPABILITY_REQUIRED',
       'Your Database Workspace page permission is disabled.',
     );
-  if (!(await hasModuleActionPermission(req, 'database-workspace', 'view')))
+  if (!authority.actions.includes('view'))
     throw new WorkspaceError(
       403,
       'CAPABILITY_REQUIRED',
       'Your Database Workspace view permission is disabled.',
     );
-  if (!(await hasModuleActionPermission(req, 'database-workspace', action)))
+  if (!authority.actions.includes(action))
     throw new WorkspaceError(
       403,
       'CAPABILITY_REQUIRED',
-      `Your Database Workspace ${action} permission is disabled.`,
-    );
-  let requestActions = enabledActions.get(req);
-  if (!requestActions) {
-    requestActions = new Map();
-    enabledActions.set(req, requestActions);
-  }
-  let actionEnabled = requestActions.get(action);
-  if (!actionEnabled) {
-    actionEnabled = ModuleAction.count({
-      where: { enabled: true },
-      include: [
-        {
-          model: Module,
-          as: 'module',
-          required: true,
-          where: { slug: 'database-workspace', status: true },
-        },
-        {
-          model: Action,
-          as: 'action',
-          required: true,
-          where: { key: action, status: true },
-        },
-      ],
-    });
-    requestActions.set(action, actionEnabled);
-  }
-  const enabled = await actionEnabled;
-  if (!enabled)
-    throw new WorkspaceError(
-      403,
-      'CAPABILITY_REQUIRED',
-      'This database action is disabled.',
+      `Your Database Workspace ${action} permission is disabled or this action is inactive.`,
     );
   return req.authContext.id;
 }
@@ -130,11 +75,15 @@ export async function reauthorizeExecution(
   policyHash: string,
   additional?: WorkspaceAction,
 ): Promise<void> {
-  const user = await User.findByPk(actorId, {
-    include: [{ model: UserType, as: 'role' }],
-  });
-  const role = (user as unknown as { role?: UserType })?.role;
-  if (!user?.status || !user.approved || !role?.status || !admin(role.slug))
+  const user = await loadWorkspaceAccount(actorId),
+    role = user?.role;
+  if (
+    !user?.status ||
+    !user.approved ||
+    !user.userTypeId ||
+    !role?.status ||
+    !admin(role.slug)
+  )
     throw new WorkspaceError(
       403,
       'AUTHORITY_REVOKED',

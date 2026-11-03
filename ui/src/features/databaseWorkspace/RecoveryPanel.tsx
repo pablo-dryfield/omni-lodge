@@ -38,6 +38,7 @@ export function RecoveryPanel({ targetId }: { targetId: string }) {
     }[];
     storageMode: string;
     keepLocalAfterUpload: boolean;
+    restore: { enabled: boolean; message: string };
     pitr: { verified: boolean; reason: string };
   }>({ queryKey: ['dw-backup-inventory'], queryFn: api.backups, retry: false });
   const [deleteCopy, setDeleteCopy] = useState<Backup>();
@@ -244,6 +245,14 @@ export function RecoveryPanel({ targetId }: { targetId: string }) {
           Restore into a new private database
         </summary>
         <Stack mt="md">
+          {inventory.data?.restore && (
+            <Alert
+              color={inventory.data.restore.enabled ? 'blue' : 'orange'}
+              title="Restore as an additional database"
+            >
+              {inventory.data.restore.message}
+            </Alert>
+          )}
           <Text size="sm">
             The source/application database is preserved. The worker validates
             archive format, checksum, disk headroom and tool/server
@@ -265,7 +274,7 @@ export function RecoveryPanel({ targetId }: { targetId: string }) {
           />
           <Button
             variant="light"
-            disabled={!filename}
+            disabled={!filename || inventory.data?.restore?.enabled === false}
             loading={busy}
             onClick={() => void stage()}
           >

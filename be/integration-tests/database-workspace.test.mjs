@@ -1,3 +1,7 @@
+import {
+  WORKSPACE_ACCOUNT_SQL,
+  WORKSPACE_AUTHORITY_SQL,
+} from '../src/services/databaseWorkspace/appMetadata.ts';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -8,6 +12,11 @@ import pg from 'pg';
 import net from 'node:net';
 import { assertRestrictedIdentity } from '../src/services/databaseWorkspace/connection.ts';
 import { authorizationSnapshot } from '../src/services/databaseWorkspace/resultAccess.ts';
+import { migrateControlStore } from '../src/services/databaseWorkspace/controlMigrations.ts';
+import {
+  publicFunctionHazards,
+  restrictPublicFunctions,
+} from '../src/services/databaseWorkspace/functionBoundary.ts';
 import dotenv from 'dotenv';
 import { parseSql } from '../src/services/databaseWorkspace/parser.ts';
 import {
@@ -1877,5 +1886,172 @@ test(
     );
     assert.match(listing.stdout, /TABLE database_workspace jobs/);
     assert.doesNotMatch(listing.stdout, /TABLE public sample/);
+  },
+);
+
+test(
+  'control migrations serialize, apply once and refuse changed applied SQL',
+  integration,
+  async () => {
+    const migration = {
+      id: '099-fixture',
+      sql: 'CREATE TABLE database_workspace.migration_fixture(id integer PRIMARY KEY)',
+    };
+    await Promise.all([
+      migrateControlStore(store.pool, [migration]),
+      migrateControlStore(store.pool, [migration]),
+    ]);
+    assert.equal(
+      (
+        await store.pool.query(
+          "SELECT count(*)::int AS count FROM database_workspace.control_migrations WHERE id='099-fixture'",
+        )
+      ).rows[0].count,
+      1,
+    );
+    await assert.rejects(
+      migrateControlStore(store.pool, [
+        {
+          ...migration,
+          sql:
+            migration.sql +
+            ';ALTER TABLE database_workspace.migration_fixture ADD COLUMN changed integer',
+        },
+      ]),
+      { code: 'CONTROL_MIGRATION_CHANGED' },
+    );
+    assert.equal(
+      (
+        await store.pool.query(
+          "SELECT 1 FROM information_schema.columns WHERE table_schema='database_workspace' AND table_name='migration_fixture' AND column_name='changed'",
+        )
+      ).rowCount,
+      0,
+    );
+  },
+);
+
+test(
+  'unsafe PUBLIC network routines are refused before provisioning and restricted without removing application access',
+  integration,
+  async () => {
+    const setup = new pg.Client({
+        ...connectConfig,
+        connectionString: undefined,
+        database: dataName,
+      }),
+      reader = new pg.Client({
+        host: target.host,
+        port: target.port,
+        database: dataName,
+        user: readName,
+        password,
+      });
+    await setup.connect();
+    await reader.connect();
+    try {
+      // Synthetic scalar routine: this test performs no network operation.
+      await setup.query(
+        "CREATE FUNCTION public.http_workspace_fixture() RETURNS int LANGUAGE SQL AS 'SELECT 1'",
+      );
+      await assert.rejects(assertRestrictedIdentity(reader, target), {
+        code: 'UNSAFE_DATABASE_IDENTITY',
+      });
+      await assert.rejects(
+        provisionWorkspaceRoles(setup, {
+          database: dataName,
+          controlDatabase: `omni_hazard_${suffix}`,
+          prefix: `dw_hazard_${suffix}`,
+          protectedObjects: [],
+          manageOwnership: false,
+        }),
+        { code: 'PUBLIC_FUNCTION_PRIVILEGES' },
+      );
+      const hazards = await publicFunctionHazards(setup, ['public']);
+      assert.equal(hazards.length, 1);
+      await restrictPublicFunctions(
+        setup,
+        setup.connectionParameters.user,
+        hazards,
+      );
+      await assertRestrictedIdentity(reader, target);
+      assert.equal(
+        (
+          await setup.query(
+            "SELECT has_function_privilege($1,'public.http_workspace_fixture()','EXECUTE') AS allowed",
+            [readName],
+          )
+        ).rows[0].allowed,
+        false,
+      );
+      assert.equal(
+        (
+          await setup.query(
+            "SELECT has_function_privilege(current_user,'public.http_workspace_fixture()','EXECUTE') AS allowed",
+          )
+        ).rows[0].allowed,
+        true,
+      );
+    } finally {
+      await reader.end();
+      await setup.query(
+        'DROP FUNCTION IF EXISTS public.http_workspace_fixture()',
+      );
+      await setup.end();
+    }
+  },
+);
+
+test(
+  'prepared authorization plans read fresh account, page and action state on real PostgreSQL',
+  integration,
+  async () => {
+    const c = new pg.Client({
+      ...connectConfig,
+      connectionString: undefined,
+      database: controlName,
+    });
+    await c.connect();
+    try {
+      await c.query(`CREATE TABLE public.users(id int PRIMARY KEY,status bool,approved bool,"userTypeId" int,"firstName" text,"lastName" text);
+    CREATE TABLE public."userTypes"(id int PRIMARY KEY,slug text,name text,status bool);
+    CREATE TABLE public.pages(id int PRIMARY KEY,slug text,status bool);
+    CREATE TABLE public.modules(id int PRIMARY KEY,slug text,status bool);
+    CREATE TABLE public.actions(id int PRIMARY KEY,key text,status bool);
+    CREATE TABLE public."rolePagePermissions"("userTypeId" int,"pageId" int,"canView" bool,status bool);
+    CREATE TABLE public."roleModulePermissions"("userTypeId" int,"moduleId" int,"actionId" int,allowed bool,status bool);
+    CREATE TABLE public."moduleActions"("moduleId" int,"actionId" int,enabled bool);
+    INSERT INTO public.users VALUES(17,true,true,2,'Synthetic','Administrator');INSERT INTO public."userTypes" VALUES(2,'admin','Administrator',true);
+    INSERT INTO public.pages VALUES(1,'settings-sql-helper',true);INSERT INTO public.modules VALUES(1,'database-workspace',true);
+    INSERT INTO public.actions VALUES(1,'view',true),(2,'read',true);
+    INSERT INTO public."rolePagePermissions" VALUES(2,1,true,true);
+    INSERT INTO public."roleModulePermissions" VALUES(2,1,1,true,true),(2,1,2,true,true);
+    INSERT INTO public."moduleActions" VALUES(1,1,true),(1,2,true);SET plan_cache_mode='force_generic_plan';`);
+      const account = {
+          name: 'metadata-account',
+          text: WORKSPACE_ACCOUNT_SQL,
+          values: [17],
+        },
+        authority = {
+          name: 'metadata-authority',
+          text: WORKSPACE_AUTHORITY_SQL,
+          values: [2],
+        };
+      assert.equal((await c.query(account)).rows[0].role.status, true);
+      assert.deepEqual((await c.query(authority)).rows[0].actions.sort(), [
+        'read',
+        'view',
+      ]);
+      await c.query(
+        'UPDATE public."moduleActions" SET enabled=false WHERE "actionId"=2',
+      );
+      assert.deepEqual((await c.query(authority)).rows[0].actions, ['view']);
+      await c.query('UPDATE public."rolePagePermissions" SET "canView"=false');
+      assert.equal((await c.query(authority)).rows[0].page, false);
+      await c.query('UPDATE public.users SET status=false');
+      assert.equal((await c.query(account)).rows[0].status, false);
+    } finally {
+      await c.end();
+    }
   },
 );

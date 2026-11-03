@@ -1,5 +1,7 @@
 # Database Workspace implementation record
 
+**Current evidence:** `database-workspace-acceptance.md` supersedes checkpoint-only outstanding-work notes below. The user subsequently authorized publication, deployment/health verification and safe local cleanup, and accepted unavailable additional-database restores on the current small production disk as a capability limitation rather than a release blocker. Historical investigation notes are retained for traceability.
+
 The user authorized implementation on 3 November 2026 using GPT-6.1 Sol Extra High throughout. Deliver the complete architecture in `sql-helper-postgresql-workbench-plan.md` as one release. Current instruction is to work until everything is ready to push, open the PR and deploy; do not open an early auto-merging PR.
 
 ## Branch and preserved work

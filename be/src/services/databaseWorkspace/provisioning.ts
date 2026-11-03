@@ -2,6 +2,10 @@ import crypto from 'node:crypto';
 import type pg from 'pg';
 import { quoteIdentifier as q } from './filters.js';
 import { WorkspaceError } from './types.js';
+import {
+  publicFunctionHazards,
+  restrictPublicFunctions,
+} from './functionBoundary.js';
 
 /** Store a SCRAM verifier in DDL, never a usable plaintext password in pg_stat_activity. */
 export function scramVerifier(password: string): string {
@@ -27,6 +31,7 @@ export async function provisionWorkspaceRoles(
     prefix: string;
     protectedObjects: readonly string[];
     manageOwnership: boolean;
+    restrictPublicFunctions?: boolean;
   },
 ) {
   if (
@@ -81,6 +86,19 @@ export async function provisionWorkspaceRoles(
       'Another provisioning operation is active.',
     );
   try {
+    const functionHazards = await publicFunctionHazards(client, ['public']);
+    if (functionHazards.length && !input.restrictPublicFunctions)
+      throw new WorkspaceError(
+        409,
+        'PUBLIC_FUNCTION_PRIVILEGES',
+        'Network/security-definer routines have PUBLIC execution grants. Review the function inventory and explicitly authorize restricting those grants before provisioning workspace identities. Existing named grants and application access are retained.',
+      );
+    if (functionHazards.length)
+      await restrictPublicFunctions(
+        client,
+        String(identity.role),
+        functionHazards,
+      );
     for (const [kind, name] of Object.entries(names)) {
       const old = (
         await client.query(
@@ -168,9 +186,9 @@ export async function provisionWorkspaceRoles(
       )
         continue;
       const table = `public.${q(name)}`;
-      if (input.manageOwnership && relation.relkind !== 'v') {
+      if (input.manageOwnership) {
         await client.query(
-          `ALTER ${relation.relkind === 'm' ? 'MATERIALIZED VIEW' : 'TABLE'} ${table} OWNER TO ${q(names.objects)}`,
+          `ALTER ${relation.relkind === 'm' ? 'MATERIALIZED VIEW' : relation.relkind === 'v' ? 'VIEW' : 'TABLE'} ${table} OWNER TO ${q(names.objects)}`,
         );
         ownershipChanges++;
         // An application that later becomes nonsuperuser retains explicit DML.

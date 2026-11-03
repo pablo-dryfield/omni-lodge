@@ -1,3 +1,8 @@
+jest.mock('../../services/databaseWorkspace/appMetadata.js', () => ({
+  loadWorkspaceAuthority: jest.fn(),
+}));
+import { loadWorkspaceAuthority } from '../../services/databaseWorkspace/appMetadata';
+import { WORKSPACE_ACTIONS } from '../../services/databaseWorkspace/access';
 import express from 'express';
 import request from 'supertest';
 import type { Response } from 'express';
@@ -173,7 +178,10 @@ const endpoints = (
 );
 beforeEach(() => {
   jest.clearAllMocks();
-  (RolePagePermission.count as jest.Mock).mockResolvedValue(1);
+  (loadWorkspaceAuthority as jest.Mock).mockResolvedValue({
+    page: true,
+    actions: [...WORKSPACE_ACTIONS],
+  });
 });
 it.each(endpoints)(
   '%s %s rejects anonymous, business roles, scoped admins and revoked workspace access before its handler',
@@ -193,7 +201,10 @@ it.each(endpoints)(
       (await call().set('x-test-role', 'admin').set('x-test-scoped', 'yes'))
         .status,
     ).toBe(403);
-    (RolePagePermission.count as jest.Mock).mockResolvedValue(0);
+    (loadWorkspaceAuthority as jest.Mock).mockResolvedValue({
+      page: false,
+      actions: [],
+    });
     expect((await call().set('x-test-role', 'admin')).status).toBe(403);
   },
 );

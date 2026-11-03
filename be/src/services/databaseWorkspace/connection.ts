@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { WorkspaceError, type Credential, type Target } from './types.js';
+import { NETWORK_FUNCTION_PATTERN } from './functionBoundary.js';
 
 export function targetClient(
   target: Target,
@@ -35,8 +36,9 @@ export async function assertRestrictedIdentity(
     ,EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=ANY($1::text[]) AND c.relkind='v' AND has_table_privilege(c.oid,'SELECT') AND NOT COALESCE(c.reloptions @> ARRAY['security_invoker=true'],false)
       AND NOT (c.relname IN ('pg_stat_statements','pg_stat_statements_info') AND EXISTS(SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid=d.refobjid WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.refclassid='pg_extension'::regclass AND d.deptype='e' AND e.extname='pg_stat_statements'))) AS unsafe_view_grant
     ,EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=ANY($1::text[]) AND p.prosecdef AND has_function_privilege(p.oid,'EXECUTE')) AS unsafe_definer_grant
+    ,EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.proname~$2 AND has_schema_privilege(n.oid,'USAGE') AND has_function_privilege(p.oid,'EXECUTE')) AS unsafe_network_grant
     FROM pg_roles r WHERE r.rolname=current_user`,
-    [target.schemas],
+    [target.schemas, NETWORK_FUNCTION_PATTERN],
   );
   const role = r.rows[0];
   if (
@@ -60,11 +62,12 @@ export async function assertRestrictedIdentity(
     role.owns_database ||
     role.owns_schema ||
     role.unsafe_view_grant ||
-    role.unsafe_definer_grant
+    role.unsafe_definer_grant ||
+    role.unsafe_network_grant
   )
     throw new WorkspaceError(
       503,
       'UNSAFE_DATABASE_IDENTITY',
-      'Provision a restricted database identity. Ordinary SQL cannot use superusers, owners, privileged memberships, owner-authorized views or executable application security-definer routines. Revoke broad PUBLIC function grants through trusted infrastructure maintenance and use security-invoker views.',
+      'Provision a restricted database identity. Ordinary SQL cannot use superusers, owners, privileged memberships, owner-authorized views, callable application security-definer routines or network extension functions. Restrict unsafe PUBLIC function grants through trusted provisioning and use security-invoker views.',
     );
 }

@@ -1,3 +1,7 @@
+import {
+  migrateControlStore,
+  SCHEDULE_MIGRATION,
+} from './controlMigrations.js';
 import crypto from 'node:crypto';
 import { sealed, opened, type WorkspaceStore } from './store.js';
 import { WorkspaceError, type JobPayload } from './types.js';
@@ -115,10 +119,7 @@ export type ScheduledPayload = {
 export async function initializeSchedules(
   store: WorkspaceStore,
 ): Promise<void> {
-  await store.pool
-    .query(`ALTER TABLE database_workspace.schedules ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1;
-    ALTER TABLE database_workspace.schedules ADD COLUMN IF NOT EXISTS disabled_reason text;
-    CREATE TABLE IF NOT EXISTS database_workspace.schedule_runs(id uuid PRIMARY KEY,schedule_id uuid NOT NULL,scheduled_for timestamptz NOT NULL,state text NOT NULL,job_id uuid,detail text,created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(schedule_id,scheduled_for));`);
+  await migrateControlStore(store.pool, [SCHEDULE_MIGRATION]);
 }
 export async function listSchedules(store: WorkspaceStore, actorId: number) {
   const r = await store.pool.query(

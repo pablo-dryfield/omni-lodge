@@ -58,6 +58,10 @@ export type WorkspaceErrorInfo = {
   statementIndex?: number;
   detail?: string;
   hint?: string;
+  freeBytes?: number;
+  requiredBytes?: number;
+  minFreeBytes?: number;
+  scope?: 'additional_private_database';
 };
 export type Statement = {
   sql: string;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ActionIcon,
@@ -15,7 +15,6 @@ import {
   Tooltip,
 } from '@mantine/core';
 import {
-  IconCopy,
   IconDownload,
   IconFilter,
   IconRefresh,
@@ -46,7 +45,7 @@ import { ValueInspector } from './ValueInspector';
 import { downloadBookingBlob } from '../../utils/bookingTableExport';
 
 type GridRow = Record<string, WireValue>;
-export function ResultGrid({
+export const ResultGrid = memo(function ResultGrid({
   job,
   index,
   canExport,
@@ -556,4 +555,4 @@ export function ResultGrid({
       )}
     </div>
   );
-}
+});

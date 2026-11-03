@@ -7,7 +7,8 @@ export type JsonNode = {
 /** A bounded display parser: numeric tokens stay text, including >2^53. */
 export function jsonTree(raw: string, maxNodes = 1000): JsonNode {
   const token =
-    /\s*("(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\]:,])/y;
+    // eslint-disable-next-line no-control-regex -- JSON forbids unescaped ASCII controls inside string tokens.
+    /\s*("(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\]:,])/y;
   let offset = 0,
     nodes = 0;
   const next = () => {

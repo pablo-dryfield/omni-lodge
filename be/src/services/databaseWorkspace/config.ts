@@ -60,7 +60,7 @@ export async function workspaceConfiguration() {
       !t.database ||
       typeof t.label !== 'string' ||
       !t.label ||
-      ![15, 16, 17].includes(Number(t.major)) ||
+      ![16, 17].includes(Number(t.major)) ||
       !['production', 'staging', 'development', 'test'].includes(
         String(t.environment),
       ) ||

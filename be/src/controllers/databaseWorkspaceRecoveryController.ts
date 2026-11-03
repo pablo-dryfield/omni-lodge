@@ -36,6 +36,7 @@ import {
 
 export const backupInventory = workspaceHandler(async (req, res) => {
   await workspaceAccess(req, 'backup');
+  await workspaceConfiguration();
   const inventory = await listBackupCopies(),
     files = inventory.files,
     jobs = await controlStore().pool.query(
@@ -55,6 +56,9 @@ export const backupInventory = workspaceHandler(async (req, res) => {
       createdAt: file.createdAt,
       modifiedAt: file.modifiedAt,
       location: file.location,
+      scope: file.filename.startsWith('workspace-control-')
+        ? 'Workspace control store'
+        : 'Backup archive — inspect before restoring',
       checksum: file.sha256Checksum || null,
       matchingNameCopies: files.filter((f) => f.filename === file.filename)
         .length,
@@ -70,6 +74,13 @@ export const backupInventory = workspaceHandler(async (req, res) => {
     stores: inventory.stores,
     storageMode: inventory.storageMode,
     keepLocalAfterUpload: inventory.keepLocalAfterUpload,
+    restore: {
+      enabled: getConfigValue('DB_WORKSPACE_RESTORE_ENABLED') === true,
+      message:
+        getConfigValue('DB_WORKSPACE_RESTORE_ENABLED') === true
+          ? 'Restores create an additional private database; free-space checks still apply.'
+          : 'Additional-database restores are disabled in Control Panel until capacity and the restore drill are verified. Backups and downloads remain available.',
+    },
     pitr: {
       verified: false,
       reason:

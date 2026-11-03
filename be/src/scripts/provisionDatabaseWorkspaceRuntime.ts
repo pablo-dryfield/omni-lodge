@@ -4,6 +4,7 @@ import path from 'node:path';
 import pg from 'pg';
 import { provisionWorkspaceRoles } from '../services/databaseWorkspace/provisioning.js';
 import { WORKSPACE_CONTROL_OBJECTS } from '../config/databaseWorkspacePolicy.js';
+import { publicFunctionHazards } from '../services/databaseWorkspace/functionBoundary.js';
 
 // Trusted-host bootstrap from the reviewed immutable release only. Never mount
 // this entry point behind an API. Default invocation performs SELECTs only.
@@ -65,8 +66,11 @@ try {
         ...info,
         controlConfigured: !!process.env.DB_WORKSPACE_CONTROL_URL,
         ownershipRequested: manageOwnership,
+        unsafePublicFunctions: (
+          await publicFunctionHazards(client, ['public'])
+        ).map((f) => f.address),
         changes:
-          'Create independent control database and restricted roles, register encrypted Control Panel credentials, write protected bootstrap URL, enable workspace last. No changes executed.',
+          'Create independent control database and restricted roles, register encrypted Control Panel credentials, write protected bootstrap URL. Reload the protected environment through the release control plane before enabling admission in Control Panel. No changes executed.',
       }),
     );
   } else {
@@ -106,6 +110,9 @@ try {
         prefix: 'omnilodge_dw',
         protectedObjects: protection,
         manageOwnership,
+        restrictPublicFunctions: process.argv.includes(
+          '--restrict-unsafe-public-functions',
+        ),
       });
       const url = new URL('postgresql://127.0.0.1');
       url.port = process.env.DB_PORT || '5432';
@@ -196,7 +203,9 @@ try {
         { mode: 0o600, flag: 'wx' },
       );
       await fs.rename(temp, envFile);
-      await set('DB_WORKSPACE_ENABLED', true);
+      // Activate only after the primary backend has reloaded the newly written
+      // bootstrap URL through the release control plane.
+      await set('DB_WORKSPACE_ENABLED', false);
       console.log(
         JSON.stringify({
           ok: true,
@@ -204,7 +213,7 @@ try {
           grantedRelations: result.granted,
           ownershipChanges: result.ownershipChanges,
           restoreEnabled: false,
-          next: 'Restart/activate backend through the release control plane; verify isolated worker heartbeat and restricted-role smoke before public UI activation.',
+          next: 'Reload the protected environment through the release control plane, then enable Database Workspace in Control Panel and verify its worker heartbeat/restricted-role smoke. Admission remains disabled until that activation.',
           credentials: 'stored privately, not displayed',
         }),
       );

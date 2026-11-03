@@ -30,12 +30,15 @@ After reviewing that plan, apply from the same trusted release context using the
 
 ```sh
 node --env-file=/etc/omnilodge/backend.env dist/scripts/provisionDatabaseWorkspaceRuntime.js \
-  --apply --confirm-database=omni_lodge_db --manage-unprotected-ownership
+  --apply --confirm-database=omni_lodge_db --manage-unprotected-ownership \
+  --restrict-unsafe-public-functions
 ```
 
 The ownership option is a substantive schema-administration change. PostgreSQL 16 maintenance needs ownership for several supported operations because that version has no MAINTAIN privilege. It moves eligible, unprotected relations into a dedicated nonsuperuser NOLOGIN owner group; it never grants the application superuser role to an ordinary workspace identity. Explicit application grants are retained. Review dependent views and sequences, and rehearse this option before production use.
 
-Provisioning creates separate read, write, maintenance, restore, role-administration and control identities, SCRAM verifiers, encrypted Control Panel credentials and the independent control database. It initializes the control store before enabling admission. It refuses implicit adoption or credential rotation if the bootstrap URL is already present. Preserve a partial failure for investigation rather than blindly rerunning it.
+The PUBLIC-function option is also substantive: it retains explicit execution grants for the original application role, then revokes PUBLIC execution on network-capable extension routines and application security-definer routines in the registered schemas. Existing named grants remain. Discovery found dblink installed with PUBLIC execution. Without this restriction, dedicated nonsuperuser roles would still inherit dangerous capabilities; provisioning and runtime identity checks fail closed. Review the printed routine addresses before applying. The application superuser retains its existing access.
+
+Provisioning creates separate read, write, maintenance, restore, role-administration and control identities, SCRAM verifiers, encrypted Control Panel credentials and the independent control database. It initializes the control store and leaves admission disabled. It refuses implicit adoption or credential rotation if the bootstrap URL is already present. Preserve a partial failure for investigation rather than blindly rerunning it. Reload the protected environment through the release control plane, then enable `DB_WORKSPACE_ENABLED` in Control Panel and verify restricted execution and the current worker heartbeat. Enabling admission before the primary process has loaded its bootstrap URL would unnecessarily fail readiness.
 
 The release control plane must load the updated protected environment when activating the backend. Candidate/dry-run readiness does not start primary workers. The primary production backend supervises a transient systemd worker using the compiled script from that same release. Public UI activation follows primary readiness, including a heartbeat bound to the new backend PID and Linux start time. An old-release heartbeat cannot satisfy this check.
 

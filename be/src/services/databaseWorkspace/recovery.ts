@@ -1,3 +1,7 @@
+import {
+  migrateControlStore,
+  RECOVERY_MIGRATION,
+} from './controlMigrations.js';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { promises as fs, createReadStream, createWriteStream } from 'node:fs';
@@ -34,9 +38,7 @@ const archivePath = (directory: string, id: string) => {
   return path.join(path.resolve(directory), `restore-${id}`);
 };
 export async function initializeRecovery(store: WorkspaceStore): Promise<void> {
-  await store.pool.query(
-    `CREATE TABLE IF NOT EXISTS database_workspace.restore_archives(id uuid PRIMARY KEY,actor_id bigint NOT NULL,directory text NOT NULL,bytes bigint NOT NULL,metadata jsonb NOT NULL,expires_at timestamptz NOT NULL,job_id uuid,created_at timestamptz NOT NULL DEFAULT now());`,
-  );
+  await migrateControlStore(store.pool, [RECOVERY_MIGRATION]);
 }
 export async function diskHeadroom(
   directory: string,
@@ -45,11 +47,19 @@ export async function diskHeadroom(
 ): Promise<void> {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   const info = await fs.statfs(directory);
-  if (Number(info.bavail) * Number(info.bsize) < required + minFree)
+  const freeBytes = Number(info.bavail) * Number(info.bsize),
+    requiredBytes = required + minFree;
+  if (freeBytes < requiredBytes)
     throw new WorkspaceError(
       507,
       'RESTORE_DISK_SPACE',
-      'The worker does not have enough verified free disk space for staging and restore temporary files.',
+      `This isolated restore keeps the existing database and creates an additional database. The conservative staging/expansion reservation is ${(requiredBytes / 1073741824).toFixed(1)} GiB; currently ${(freeBytes / 1073741824).toFixed(1)} GiB is free. Normal backups and downloads remain available.`,
+      {
+        freeBytes,
+        requiredBytes,
+        minFreeBytes: minFree,
+        scope: 'additional_private_database',
+      },
     );
 }
 export async function runTool(

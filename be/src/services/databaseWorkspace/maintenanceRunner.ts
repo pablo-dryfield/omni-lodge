@@ -2,6 +2,7 @@ import { targetClient } from './connection.js';
 import { schemaStateHash } from './administration.js';
 import { privilegeStateHash } from './privileges.js';
 import { quoteIdentifier } from './filters.js';
+import { NETWORK_FUNCTION_PATTERN } from './functionBoundary.js';
 import {
   WorkspaceError,
   errorInfo,
@@ -100,9 +101,14 @@ export async function runMaintenance(
     client.on('error', () => {
       leaseLost = true;
     });
-    const identity =
-      await client.query(`SELECT current_database() AS database,current_setting('server_version_num')::int/10000 AS major,
-      r.rolsuper,r.rolbypassrls,r.rolreplication,r.rolcreaterole,r.rolcreatedb FROM pg_roles r WHERE r.rolname=current_user`);
+    const identity = await client.query(
+      `SELECT current_database() AS database,current_setting('server_version_num')::int/10000 AS major,
+      r.rolsuper,r.rolbypassrls,r.rolreplication,r.rolcreaterole,r.rolcreatedb,
+      EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.proname~$1 AND has_schema_privilege(n.oid,'USAGE') AND has_function_privilege(p.oid,'EXECUTE')) AS unsafe_network_grant,
+      EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=ANY($2::text[]) AND p.prosecdef AND has_function_privilege(p.oid,'EXECUTE')) AS unsafe_definer_grant
+      FROM pg_roles r WHERE r.rolname=current_user`,
+      [NETWORK_FUNCTION_PATTERN, payload.target.schemas],
+    );
     const role = identity.rows[0];
     if (
       !role ||
@@ -112,7 +118,9 @@ export async function runMaintenance(
       role.rolbypassrls ||
       role.rolreplication ||
       (role.rolcreaterole && operation.kind !== 'role') ||
-      role.rolcreatedb
+      role.rolcreatedb ||
+      role.unsafe_network_grant ||
+      role.unsafe_definer_grant
     )
       throw new WorkspaceError(
         503,

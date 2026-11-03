@@ -4,6 +4,7 @@
   --dw-active-line: #eaf2ff66;
   --dw-text: #17212f;
   --dw-muted: #697586;
+  --dw-surface: #fff;
   background: #fff;
   border: 1px solid var(--dw-border);
   border-radius: 14px;
@@ -21,6 +22,7 @@
   --dw-active-line: #33557855;
   --dw-text: #ecf1f7;
   --dw-muted: #a7b2c2;
+  --dw-surface: #172130;
   background: #172130;
 }
 .dw-header {
@@ -43,6 +45,9 @@
   padding: 8px;
   color: #1971c2;
   display: flex;
+}
+.dw-brand > div {
+  min-width: 0;
 }
 .dw-brand h1 {
   font-family: inherit;
@@ -176,7 +181,7 @@
   cursor: pointer;
 }
 .dw-query-tab[aria-selected='true'] {
-  background: #fff;
+  background: var(--dw-surface);
   color: var(--dw-text);
   box-shadow: inset 0 2px #228be6;
 }
@@ -383,8 +388,21 @@
   }
   .dw-brand h1 {
     font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dw-category {
+    display: none;
+  }
+  .dw[data-section='objects'] .dw-category {
+    display: block;
+    order: 4;
+    width: 100% !important;
   }
   .dw-brand p {
+    display: none;
+  }
+  .dw-brand-icon {
     display: none;
   }
   .dw-target {
@@ -434,6 +452,18 @@
   .dw-toolbar button {
     min-height: 40px;
   }
+  .dw-toolbar > * {
+    order: 2;
+  }
+  .dw-toolbar > .dw-run-control {
+    order: 0;
+  }
+  .dw-toolbar > .dw-mode {
+    order: 1;
+  }
+  .dw-toolbar > .mantine-Button-root {
+    padding-inline: 8px;
+  }
   .dw-editor-section {
     height: 45%;
     min-height: 180px;
@@ -463,6 +493,21 @@
   }
   .dw-review-sql {
     font-size: 11px;
+  }
+}
+@media (max-width: 760px) and (pointer: coarse) {
+  .dw .mantine-Button-root,
+  .dw .mantine-ActionIcon-root {
+    min-height: 44px;
+  }
+  .dw .mantine-ActionIcon-root {
+    min-width: 44px;
+  }
+  .dw .mantine-Input-input:not(textarea) {
+    min-height: 44px;
+  }
+  .dw-keyboard-shortcuts {
+    display: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -571,6 +616,20 @@
     padding: 4px;
   }
   .dw[data-keyboard='true'] .dw-toolbar button {
-    min-height: 34px;
+    min-height: 44px;
+  }
+  .dw[data-keyboard='true'] .dw-recent {
+    display: none;
+  }
+  .dw[data-keyboard='true'] .dw-toolbar > *:not(.dw-run-control):not(.dw-mode) {
+    display: none;
+  }
+  .dw[data-keyboard='true'] .dw-target {
+    width: auto;
+    order: 2;
+    margin-left: 0;
+  }
+  .dw[data-keyboard='true'] .dw-target > .mantine-Select-root {
+    display: none;
   }
 }

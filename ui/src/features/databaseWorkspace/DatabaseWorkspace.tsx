@@ -1055,6 +1055,7 @@ export default function DatabaseWorkspace() {
   return (
     <div
       className="dw"
+      data-section={section}
       data-keyboard={keyboardOpen}
       style={{ '--dw-viewport': `${viewportHeight}px` } as React.CSSProperties}
     >
@@ -1081,6 +1082,7 @@ export default function DatabaseWorkspace() {
         </div>
         <Select
           aria-label="Catalog object category"
+          className="dw-category"
           size="xs"
           w={125}
           value={category}
@@ -1140,6 +1142,7 @@ export default function DatabaseWorkspace() {
         px="sm"
         py={4}
         gap={6}
+        className="dw-recent"
         style={{ borderBottom: '1px solid var(--dw-border)' }}
       >
         <Menu>
@@ -1218,7 +1221,7 @@ export default function DatabaseWorkspace() {
               : 'Favorite selected object'}
           </Button>
         )}
-        <Text size="xs" c="dimmed" ml="auto">
+        <Text size="xs" c="dimmed" ml="auto" className="dw-keyboard-shortcuts">
           Ctrl/Cmd+S: save · Ctrl/Cmd+Shift+Enter: run script
         </Text>
       </Group>
@@ -1453,6 +1456,7 @@ export default function DatabaseWorkspace() {
                       <Button
                         size="xs"
                         color="red"
+                        className="dw-run-control"
                         variant="light"
                         leftSection={<IconPlayerStop size={14} />}
                         disabled={job?.status === 'cancel_requested'}
@@ -1469,7 +1473,7 @@ export default function DatabaseWorkspace() {
                           : 'Cancel query'}
                       </Button>
                     ) : (
-                      <Group gap={1}>
+                      <Group gap={1} className="dw-run-control">
                         <Button
                           size="xs"
                           leftSection={<IconPlayerPlay size={14} />}
@@ -1645,7 +1649,7 @@ export default function DatabaseWorkspace() {
                     >
                       Parameters
                     </Button>
-                    <div style={{ marginLeft: 'auto' }}>
+                    <div style={{ marginLeft: 'auto' }} className="dw-mode">
                       <Select
                         aria-label="SQL execution mode"
                         size="xs"

@@ -4,6 +4,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 import pg from 'pg';
+import {
+  publicFunctionHazards,
+  restrictPublicFunctions,
+} from '../services/databaseWorkspace/functionBoundary.js';
 
 // This bootstrap deliberately refuses remote hosts. Production provisioning is
 // a reviewed release-control-plane operation, never a browser request.
@@ -60,10 +64,20 @@ try {
   const info = await c.query(
     "SELECT current_setting('server_version_num')::int/10000 AS major",
   );
-  if (![15, 16, 17].includes(info.rows[0].major))
+  if (![16, 17].includes(info.rows[0].major))
     throw new Error(
       'Local PostgreSQL major is not supported by the configured parser.',
     );
+  const hazards = await publicFunctionHazards(c, ['public']);
+  if (
+    hazards.length &&
+    !process.argv.includes('--restrict-unsafe-public-functions')
+  )
+    throw new Error(
+      'Review the unsafe PUBLIC routine grants, then use --restrict-unsafe-public-functions to retain application access and restrict them before local workspace provisioning.',
+    );
+  if (hazards.length)
+    await restrictPublicFunctions(c, process.env.DB_USER!, hazards);
   for (const [kind, name] of Object.entries(names)) {
     const exists = await c.query('SELECT 1 FROM pg_roles WHERE rolname=$1', [
       name,
@@ -124,8 +138,8 @@ try {
   for (const { relname, relkind, invoker_view } of relations.rows) {
     if (
       protectedObjects.includes(relname) ||
-      protectedObjects.includes(`public.${relname}`)
-      || (relkind==='v' && !invoker_view)
+      protectedObjects.includes(`public.${relname}`) ||
+      (relkind === 'v' && !invoker_view)
     )
       continue;
     await c.query(

@@ -1,3 +1,7 @@
+jest.mock('../../services/databaseWorkspace/appMetadata.js', () => ({
+  loadWorkspaceAccount: jest.fn(),
+}));
+import { loadWorkspaceAccount } from '../../services/databaseWorkspace/appMetadata';
 jest.mock('../../__mocks__/sequelizeModelStub.ts', () => ({
   __esModule: true,
   default: { findByPk: jest.fn() },
@@ -118,7 +122,7 @@ describe('normal auth receipt-token isolation', () => {
   });
 
   it('workspace authentication checks current account and role without loading staff/profile associations', async () => {
-    (User.findByPk as jest.Mock).mockResolvedValue({
+    (loadWorkspaceAccount as jest.Mock).mockResolvedValue({
       id: 28,
       status: true,
       approved: true,
@@ -136,24 +140,9 @@ describe('normal auth receipt-token isolation', () => {
     } as unknown as AuthenticatedRequest;
     await authenticateJWT(req, createResponse(), next, 'workspace');
     expect(next).toHaveBeenCalledTimes(1);
-    expect(User.findByPk).toHaveBeenCalledWith(
-      28,
-      expect.objectContaining({
-        attributes: expect.arrayContaining([
-          'id',
-          'status',
-          'approved',
-          'userTypeId',
-        ]),
-        include: [
-          expect.objectContaining({
-            as: 'role',
-            attributes: expect.arrayContaining(['status']),
-          }),
-        ],
-      }),
-    );
-    (User.findByPk as jest.Mock).mockResolvedValue({
+    expect(loadWorkspaceAccount).toHaveBeenCalledWith(28);
+    expect(User.findByPk).not.toHaveBeenCalled();
+    (loadWorkspaceAccount as jest.Mock).mockResolvedValue({
       id: 28,
       status: true,
       approved: true,
