@@ -62,7 +62,10 @@ import {
 import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { Link, useSearchParams } from 'react-router-dom';
+import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
+import type { RootState } from '../store/store';
+import { useCounterSaveAndExit } from '../hooks/useCounterSaveAndExit';
 import { deleteCounter, fetchCounters } from '../actions/counterActions';
 import { createNightReport, fetchNightReports, submitNightReport, updateNightReport } from '../actions/nightReportActions';
 import { GenericPageProps } from '../types/general/GenericPageProps';
@@ -97,6 +100,7 @@ import {
 } from '../types/counters/CounterRegistry';
 import { buildMetricKey } from '../utils/counterMetrics';
 import { getCounterVenueCounts } from '../utils/counterVenueCounts';
+import { buildCounterNightReportVenues } from '../utils/counterNightReportVenues';
 import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports';
 import type { Counter } from '../types/counters/Counter';
 import axiosInstance from '../utils/axiosInstance';
@@ -2248,6 +2252,7 @@ const Counters = (props: GenericPageProps) => {
   );
   const catalog = useAppSelector(selectCatalog);
   const registry = useAppSelector(selectCounterRegistry);
+  const reduxStore = useStore<RootState>();
   const session = useAppSelector((state) => state.session);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const shiftRoleRecords = useMemo(() => catalog.shiftRoles ?? [], [catalog.shiftRoles]);
@@ -2389,7 +2394,6 @@ const Counters = (props: GenericPageProps) => {
   const [onlineReservationsSyncing, setOnlineReservationsSyncing] = useState(false);
   const [addonRefundActionSavingKey, setAddonRefundActionSavingKey] = useState<string | null>(null);
   const [advancingToSummary, setAdvancingToSummary] = useState(false);
-  const [saveAndExitSubmitting, setSaveAndExitSubmitting] = useState(false);
   const [summaryAttendedDialogOpen, setSummaryAttendedDialogOpen] = useState(false);
   const [summaryNoShowDialogOpen, setSummaryNoShowDialogOpen] = useState(false);
   const [summaryAddonDialogState, setSummaryAddonDialogState] = useState<{
@@ -2424,7 +2428,6 @@ const Counters = (props: GenericPageProps) => {
   const hydratedReservationDraftKeyRef = useRef<string | null>(null);
   const skipReservationDraftPersistRef = useRef(false);
   const pendingBookingAttendanceRef = useRef<Record<number, StagedBookingAttendance>>({});
-  const saveAndExitSubmittingRef = useRef(false);
   const blurActiveElement = useCallback(() => {
     if (typeof document === 'undefined') {
       return;
@@ -7837,10 +7840,16 @@ useEffect(() => {
   );
 
   const ensureNightReportFromSummary = useCallback(async () => {
-    const counterRecord = registry.counter?.counter;
-    const summary = registry.summary;
+    // A commit can update attendance before React has rerendered this callback.
+    // Read the committed registry rather than the summary captured before Save.
+    const savedRegistry = selectCounterRegistry(reduxStore.getState());
+    const counterRecord = savedRegistry.counter?.counter;
+    const summary = savedRegistry.summary;
     if (!counterRecord) {
-      return;
+      throw new Error('The counter is unavailable. Reopen it and try again.');
+    }
+    if (counterRecord.id !== counterId) {
+      throw new Error('The selected counter changed. Reopen it and try again.');
     }
     if (counterRecord.status !== 'final') {
       return;
@@ -7853,59 +7862,54 @@ useEffect(() => {
     const existingSummary =
       nightReportSummaries.find((report) => report.counterId === counterRecord.id) ?? null;
     let reportId = existingSummary?.id ?? null;
-    let creationErrorMessage: string | null = null;
 
     const ensureDidNotOperateNightReport = async (): Promise<void> => {
-      try {
-        if ((counterNotes ?? '').trim() !== DID_NOT_OPERATE_NOTE) {
-          await dispatch(
-            updateCounterNotes({
-              counterId: counterRecord.id,
-              notes: DID_NOT_OPERATE_NOTE,
-            }),
-          ).unwrap();
-          setShouldRefreshCounterList(true);
-        }
+      if ((counterNotes ?? '').trim() !== DID_NOT_OPERATE_NOTE) {
+        await dispatch(
+          updateCounterNotes({
+            counterId: counterRecord.id,
+            notes: DID_NOT_OPERATE_NOTE,
+          }),
+        ).unwrap();
+        setShouldRefreshCounterList(true);
+      }
 
-        if (!reportId) {
-          const createdReport = await dispatch(
-            createNightReport({
-              counterId: counterRecord.id,
+      if (!reportId) {
+        const createdReport = await dispatch(
+          createNightReport({
+            counterId: counterRecord.id,
+            leaderId,
+            activityDate: counterRecord.date,
+            notes: DID_NOT_OPERATE_NOTE,
+            venues: [],
+          }),
+        ).unwrap();
+        reportId = createdReport.id;
+      } else {
+        await dispatch(
+          updateNightReport({
+            reportId,
+            payload: {
               leaderId,
               activityDate: counterRecord.date,
               notes: DID_NOT_OPERATE_NOTE,
               venues: [],
-            }),
-          ).unwrap();
-          reportId = createdReport.id;
-        } else {
-          await dispatch(
-            updateNightReport({
-              reportId,
-              payload: {
-                leaderId,
-                activityDate: counterRecord.date,
-                notes: DID_NOT_OPERATE_NOTE,
-                venues: [],
-              },
-            }),
-          ).unwrap();
-        }
-
-        if (reportId) {
-          await dispatch(submitNightReport(reportId)).unwrap();
-        }
-        await dispatch(fetchNightReports());
-      } catch (error) {
-        const message = typeof error === 'string' ? error : (error as Error)?.message ?? '';
-        // eslint-disable-next-line no-console
-        console.warn('Failed to auto-create did-not-operate night report:', message || error);
+            },
+          }),
+        ).unwrap();
       }
+
+      if (reportId) {
+        await dispatch(submitNightReport(reportId)).unwrap();
+      }
+      await dispatch(fetchNightReports());
     };
 
     if (!summary) {
       if ((counterNotes ?? '').trim() === DID_NOT_OPERATE_NOTE) {
         await ensureDidNotOperateNightReport();
+      } else {
+        throw new Error('The counter summary is unavailable. Refresh and try again.');
       }
       return;
     }
@@ -7923,7 +7927,7 @@ useEffect(() => {
       hasBrunchData = true;
     } else {
       const cocktailsAddonKey =
-        registry.addons.find((addon) => {
+        savedRegistry.addons.find((addon) => {
           const nameLower = addon.name?.toLowerCase() ?? '';
           const keyLower = addon.key?.toLowerCase() ?? '';
           return nameLower.includes('cocktail') || keyLower.includes('cocktail');
@@ -7933,7 +7937,7 @@ useEffect(() => {
         Math.round(summary.totals?.addons?.[cocktailsAddonKey]?.attended ?? 0),
       );
 
-      const brunchAddonLookup = registry.addons.find((addon) => {
+      const brunchAddonLookup = savedRegistry.addons.find((addon) => {
         const nameLower = addon.name?.toLowerCase() ?? '';
         const keyLower = addon.key?.toLowerCase() ?? '';
         return nameLower.includes('brunch') || keyLower.includes('brunch');
@@ -7993,110 +7997,66 @@ useEffect(() => {
         await dispatch(createNightReport(creationPayload)).unwrap();
         return;
       } catch (error) {
-        creationErrorMessage = typeof error === 'string' ? error : (error as Error)?.message ?? '';
-        if (!(creationErrorMessage ?? '').toLowerCase().includes('night report already exists')) {
-          // eslint-disable-next-line no-console
-          console.warn('Failed to auto-create night report from counter summary:', creationErrorMessage || error);
-          return;
+        const message = typeof error === 'string' ? error : (error as Error)?.message ?? '';
+        if (!message.toLowerCase().includes('night report already exists')) {
+          throw error;
         }
       }
     }
 
-    try {
-      if (!reportId) {
-        const summariesResponse = await axiosInstance.get<ServerResponse<NightReportSummary>>('/nightReports', {
-          params: { counterId: counterRecord.id },
-          withCredentials: true,
-        });
-        reportId = summariesResponse.data?.[0]?.data?.[0]?.id ?? null;
-      }
-      if (!reportId) {
-        return;
-      }
-
-      const detailResponse = await axiosInstance.get<NightReport[]>(`/nightReports/${reportId}`, {
+    if (!reportId) {
+      const summariesResponse = await axiosInstance.get<ServerResponse<NightReportSummary>>('/nightReports', {
+        params: { counterId: counterRecord.id },
         withCredentials: true,
       });
-      const reportDetail = detailResponse.data?.[0];
-      if (!reportDetail) {
-        return;
-      }
-
-      const existingVenues = [...(reportDetail.venues ?? [])].sort(
-        (a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0),
-      );
-      const existingOpenBar = existingVenues.find((venue) => venue.isOpenBar) ?? existingVenues[0];
-      const existingBrunch = Math.max(existingOpenBar?.brunchCount ?? 0, 0);
-      const brunchCount = brunchCountWithFree > 0 ? brunchCountWithFree : existingBrunch;
-      const totalPeople = normalCount + cocktailsCountWithFree + brunchCount;
-
-      const openBarVenue = {
-        orderIndex: 1,
-        venueName: existingOpenBar?.venueName ?? baseVenue.venueName,
-        totalPeople,
-        isOpenBar: true,
-        normalCount,
-        cocktailsCount: cocktailsCountWithFree,
-        brunchCount,
-      };
-
-      const otherVenues = existingVenues
-        .filter((venue) => !venue.isOpenBar)
-        .map((venue, index) => ({
-          orderIndex: index + 2,
-          venueName: venue.venueName ?? '',
-          totalPeople: Math.max(0, venue.totalPeople ?? 0),
-          isOpenBar: false,
-          normalCount: venue.normalCount ?? null,
-          cocktailsCount: venue.cocktailsCount ?? null,
-          brunchCount: venue.brunchCount ?? null,
-        }));
-
-      await dispatch(
-        updateNightReport({
-          reportId,
-          payload: {
-            leaderId,
-            activityDate: counterRecord.date,
-            venues: [openBarVenue, ...otherVenues],
-          },
-        }),
-      ).unwrap();
-    } catch (error) {
-      const message = typeof error === 'string' ? error : (error as Error)?.message ?? '';
-      // eslint-disable-next-line no-console
-      console.warn('Failed to upsert night report from counter summary:', message || creationErrorMessage || error);
+      reportId = summariesResponse.data?.[0]?.data?.[0]?.id ?? null;
     }
+    if (!reportId) {
+      throw new Error('Unable to find the venue report. Please try saving again.');
+    }
+
+    const detailResponse = await axiosInstance.get<NightReport[]>(`/nightReports/${reportId}`, {
+      withCredentials: true,
+    });
+    const reportDetail = detailResponse.data?.[0];
+    if (!reportDetail) {
+      throw new Error('Unable to load the venue report. Please try saving again.');
+    }
+
+    const venues = buildCounterNightReportVenues(reportDetail.venues ?? [], {
+      normalCount,
+      cocktailsCount: cocktailsCountWithFree,
+      brunchCount: hasBrunchData || freeBrunchTotal > 0 ? brunchCountWithFree : undefined,
+    });
+
+    await dispatch(
+      updateNightReport({
+        reportId,
+        payload: {
+          leaderId,
+          activityDate: counterRecord.date,
+          venues,
+        },
+      }),
+    ).unwrap();
   }, [
     dispatch,
     freeBrunchTotal,
     freeCocktailTotal,
     nightReportSummaries,
-    registry.addons,
-    registry.counter,
-    registry.summary,
+    counterId,
+    reduxStore,
     totalFreePeople,
     counterNotes,
     setShouldRefreshCounterList,
   ]);
 
-  const handleSaveAndExit = useCallback(async () => {
-    if (saveAndExitSubmittingRef.current) {
-      return;
-    }
-    saveAndExitSubmittingRef.current = true;
-    setSaveAndExitSubmitting(true);
-    try {
-      const saved = await flushMetrics();
-      if (saved) {
-        await ensureNightReportFromSummary();
-        handleCloseModal();
-      }
-    } finally {
-      saveAndExitSubmittingRef.current = false;
-      setSaveAndExitSubmitting(false);
-    }
-  }, [ensureNightReportFromSummary, flushMetrics, handleCloseModal]);
+  const { save: handleSaveAndExit, saving: saveAndExitSubmitting, error: saveAndExitError } = useCounterSaveAndExit({
+    contextKey: `${counterId ?? ''}:${isModalOpen}`,
+    saveCounter: flushMetrics,
+    syncVenueNumbers: ensureNightReportFromSummary,
+    close: handleCloseModal,
+  });
   const renderStepper = (
     label: string,
     metric: MetricCell | null,
@@ -11313,6 +11273,7 @@ type SummaryRowOptions = {
         <Stack spacing={3} sx={{ pb: 2 }}>
           {isSaving && <LinearProgress />}
           {registry.error && <Alert severity="error">{registry.error}</Alert>}
+          {saveAndExitError && <Alert severity="error">{saveAndExitError}</Alert>}
           <Stack spacing={1}>
             <Stepper nonLinear activeStep={Math.max(stepIndex, 0)} alternativeLabel>
               {STEP_CONFIGS.map((step) => (
