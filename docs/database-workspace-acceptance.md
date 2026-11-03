@@ -15,7 +15,7 @@ Windows HP ZBook Studio G7, 12 logical processors, approximately 32 GiB RAM, Nod
 | `npm.cmd --prefix ui run check` | Passed after final presentation changes |
 | `CI=true npm.cmd --prefix ui test -- --watchAll=false --runInBand` | 144 suites; 1,043 tests passed |
 | Focused UI workspace tests after presentation/value changes | Two suites; seven tests passed |
-| `CI=true npm.cmd --prefix ui run build` | Compiled successfully; generated files remain ignored; final presentation changes also validated by required PR build |
+| `CI=true npm.cmd --prefix ui run build` | Final build compiled successfully; generated files remain ignored |
 | Release-tooling Node test list from `.github/workflows/ci.yml` | 297 passed; ten platform skips; zero failures |
 | `git diff --check` | Passed |
 
@@ -34,6 +34,8 @@ API suites cover administrator/scope boundaries, named sharing/revocation, backu
 ## Linux and production gates
 
 Windows has no Linux/systemd runtime. Required CI uses the actual compiled launch policy, verifies memory/CPU/task limits, allocates external Buffer memory until the bounded worker is killed and verifies shutdown after its exact parent exits. Both PostgreSQL 16 and 17 legs must pass before opening the ready PR. Linux results, PR URL, immutable release SHA and production health are recorded at final handoff; local skips are not qualification.
+
+The first branch CI run exposed runner/fixture setup issues: Ubuntu lacked the additional PostgreSQL 17 client package, and five fixtures discarded URL authentication while switching databases. CI now installs matching clients from the official PGDG signed repository, verifies its signing-key fingerprint, and uses an explicit database user in service health checks. Fixtures retain the URL credentials; a fresh local URL-based run passed all 36 tests. The workflow-hardening suite passed four tests after the change. Package setup follows [PostgreSQL's Ubuntu instructions](https://www.postgresql.org/download/linux/ubuntu/).
 
 Production setup uses the reviewed immutable bootstrap, restricted nonsuperuser identities, private control database, encrypted Control Panel credentials and protected environment. PUBLIC dblink/network routine grants are restricted while retaining application access. Admission stays off until the primary backend reloads the new environment, then must demonstrate its own current worker heartbeat and restricted read smoke.
 

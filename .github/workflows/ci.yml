@@ -108,7 +108,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready --username=postgres --dbname=postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -153,6 +153,17 @@ jobs:
           WORKSPACE_PG_RESTORE_BIN: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_restore
         run: |
           if [[ ! -x "$WORKSPACE_PG_DUMP_BIN" ]]; then
+            # Ubuntu's default repository may not contain the additional
+            # supported major. Use PGDG's signed repository and matching clients.
+            sudo install -d /usr/share/postgresql-common/pgdg
+            sudo curl --fail --silent --show-error --location \
+              https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+              --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+            fingerprint="$(gpg --with-colons --show-keys /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc | awk -F: '$1=="fpr" {print $10; exit}')"
+            test "$fingerprint" = B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
+            . /etc/os-release
+            printf 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "$VERSION_CODENAME" \
+              | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
             sudo apt-get update
             sudo apt-get install --yes postgresql-client-${{ matrix.postgres }}
           fi

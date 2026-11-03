@@ -431,7 +431,15 @@ const password = crypto.randomBytes(24).toString('hex');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omnilodge-dw-test-'));
 let admin, store, target, config;
 const connectConfig = supplied
-  ? { connectionString: supplied }
+  ? {
+      connectionString: supplied,
+      // Tests switch between disposable databases by clearing connectionString.
+      // Retain the URL's authentication fields for those connections too.
+      host: new URL(supplied).hostname.replace(/^\[|\]$/g, ''),
+      port: Number(new URL(supplied).port || 5432),
+      user: decodeURIComponent(new URL(supplied).username),
+      password: decodeURIComponent(new URL(supplied).password),
+    }
   : {
       host: local.DB_HOST,
       port: Number(local.DB_PORT || 5432),
