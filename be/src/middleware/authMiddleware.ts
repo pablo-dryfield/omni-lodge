@@ -1,3 +1,4 @@
+import { loadWorkspaceAccount } from '../services/databaseWorkspace/appMetadata.js';
 import { Response, NextFunction } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import dotenv from 'dotenv';
@@ -5,7 +6,10 @@ import User from '../models/User.js';
 import UserType from '../models/UserType.js';
 import ShiftRole from '../models/ShiftRole.js';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest';
-import { getRequestContextValue, setRequestContextValue } from '../services/requestContextService.js';
+import {
+  getRequestContextValue,
+  setRequestContextValue,
+} from '../services/requestContextService.js';
 import { performanceMonitorService } from '../services/performanceMonitorService.js';
 import { queryDiagnosticsService } from '../services/queryDiagnosticsService.js';
 import { isStaffPayoutReceiptAccessPayload } from '../services/staffPayoutReceiptAccessTokenService.js';
@@ -33,10 +37,16 @@ const normalizeRoleSlug = (value?: string | null): string | null => {
   return withHyphens;
 };
 
-const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+const authenticateJWT = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+  profile: 'full' | 'workspace' = 'full',
+): Promise<void> => {
   const authHeader = req.headers.authorization;
   const bearerToken =
-    typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')
+    typeof authHeader === 'string' &&
+    authHeader.toLowerCase().startsWith('bearer ')
       ? authHeader.slice(7).trim()
       : null;
   const token = bearerToken || req.cookies['token'];
@@ -54,20 +64,45 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       res.status(403).json({ error: 'Forbidden, invalid or expired token' });
       return;
     }
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || '') as JwtPayload;
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || '',
+    ) as JwtPayload;
 
-    if (!decoded || typeof decoded === 'string' || typeof decoded.id !== 'number') {
+    if (
+      !decoded ||
+      typeof decoded === 'string' ||
+      typeof decoded.id !== 'number'
+    ) {
       res.status(403).json({ error: 'Forbidden, invalid or expired token' });
       return;
     }
 
-    const user = await User.findByPk(decoded.id, {
-      include: [
-        { model: UserType, as: 'role', attributes: ['id', 'slug', 'name'] },
-        { model: ShiftRole, as: 'shiftRoles', through: { attributes: [] }, attributes: ['id', 'slug'] },
-        { association: 'staffProfile', attributes: ['staffType', 'active'], required: false },
-      ],
-    });
+    const user =
+      profile === 'workspace'
+        ? ((await loadWorkspaceAccount(decoded.id)) as unknown as
+            | User
+            | undefined)
+        : await User.findByPk(decoded.id, {
+            include: [
+              {
+                model: UserType,
+                as: 'role',
+                attributes: ['id', 'slug', 'name'],
+              },
+              {
+                model: ShiftRole,
+                as: 'shiftRoles',
+                through: { attributes: [] },
+                attributes: ['id', 'slug'],
+              },
+              {
+                association: 'staffProfile',
+                attributes: ['staffType', 'active'],
+                required: false,
+              },
+            ],
+          });
 
     if (!user) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -75,16 +110,39 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
     }
 
     if (!user.status || !user.approved || !user.userTypeId) {
-      res.status(403).json({ error: 'Account is inactive or waiting for approval' });
+      res
+        .status(403)
+        .json({ error: 'Account is inactive or waiting for approval' });
       return;
     }
 
     const role = (user as unknown as { role?: UserType | null }).role ?? null;
-    const staffProfile = (user as unknown as {
-      staffProfile?: { staffType?: 'volunteer' | 'long_term' | 'assistant_manager' | 'manager' | 'guide'; active?: boolean } | null;
-    }).staffProfile ?? null;
-    const shiftRoles = (user as unknown as { shiftRoles?: Array<Pick<ShiftRole, 'id' | 'slug'>> }).shiftRoles ?? [];
-    const explicitRole = (user as unknown as { roleKey?: string | null }).roleKey ?? null;
+    if (profile === 'workspace' && role?.status !== true) {
+      res.status(403).json({ error: 'Account role is inactive' });
+      return;
+    }
+    const staffProfile =
+      (
+        user as unknown as {
+          staffProfile?: {
+            staffType?:
+              | 'volunteer'
+              | 'long_term'
+              | 'assistant_manager'
+              | 'manager'
+              | 'guide';
+            active?: boolean;
+          } | null;
+        }
+      ).staffProfile ?? null;
+    const shiftRoles =
+      (
+        user as unknown as {
+          shiftRoles?: Array<Pick<ShiftRole, 'id' | 'slug'>>;
+        }
+      ).shiftRoles ?? [];
+    const explicitRole =
+      (user as unknown as { roleKey?: string | null }).roleKey ?? null;
     const roleSlug = normalizeRoleSlug(role?.slug ?? explicitRole ?? null);
     const shiftRoleSlugs = Array.from(
       new Set(
@@ -97,12 +155,15 @@ const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: N
       new Set(
         shiftRoles
           .map((roleRecord) => roleRecord.id)
-          .filter((value): value is number => Number.isInteger(value) && value > 0),
+          .filter(
+            (value): value is number => Number.isInteger(value) && value > 0,
+          ),
       ),
     );
-    const profilePhotoPath = typeof user.profilePhotoPath === 'string' && user.profilePhotoPath.trim()
-      ? user.profilePhotoPath.trim()
-      : null;
+    const profilePhotoPath =
+      typeof user.profilePhotoPath === 'string' && user.profilePhotoPath.trim()
+        ? user.profilePhotoPath.trim()
+        : null;
 
     req.user = decoded;
     req.authContext = {

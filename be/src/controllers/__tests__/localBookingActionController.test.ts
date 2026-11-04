@@ -2,17 +2,20 @@ jest.mock('../../config/database.js', () => ({ __esModule: true, default: { tran
 jest.mock('../../models/Booking.js', () => ({ __esModule: true, default: { findByPk: jest.fn() } }));
 jest.mock('../../models/BookingEvent.js', () => ({ __esModule: true, default: { create: jest.fn() } }));
 jest.mock('../../models/AuditLog.js', () => ({ __esModule: true, default: { create: jest.fn() } }));
-jest.mock('../../services/localBookingActionPolicy.js', () => ({ assertLocalBookingActionAccess: jest.fn() }));
+jest.mock('../../services/localBookingActionPolicy.js', () => ({ assertLocalBookingActionAccess: jest.fn(), assertBookingManagementAccess: jest.fn() }));
+jest.mock('../../models/Product.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn() } }));
 jest.mock('../../services/localBookingActionEmailService.js', () => ({ notifyLocalBookingAction: jest.fn() }));
 import type { Response } from 'express';
 import sequelize from '../../config/database.js';
 import Booking from '../../models/Booking.js';
+import Product from '../../models/Product.js';
 import BookingEvent from '../../models/BookingEvent.js';
 import AuditLog from '../../models/AuditLog.js';
 import HttpError from '../../errors/HttpError.js';
-import { assertLocalBookingActionAccess } from '../../services/localBookingActionPolicy.js';
+import { assertLocalBookingActionAccess, assertBookingManagementAccess } from '../../services/localBookingActionPolicy.js';
+import { scopeProductWhere } from '../../services/productScopeService.js';
 import { notifyLocalBookingAction } from '../../services/localBookingActionEmailService.js';
-import { amendLocalBooking, cancelLocalBooking, previewLocalBookingAction } from '../localBookingActionController.js';
+import { amendLocalBooking, cancelLocalBooking, previewLocalBookingAction, getBookingAmendProducts } from '../localBookingActionController.js';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest.js';
 
 const tx = { LOCK: { UPDATE: 'UPDATE' } };
@@ -24,7 +27,7 @@ const request = (body: Record<string, unknown> = {}) => ({ params: { bookingId: 
   body: { expectedUpdatedAt: initialVersion, reason: 'Customer requested this correction', ...body } } as unknown as AuthenticatedRequest);
 beforeEach(() => {
   jest.clearAllMocks();
-  booking = { id: 42, platform: 'viator', platformBookingId: 'TEST-42', productName: 'Test experience',
+  booking = { id: 42, platform: 'viator', platformBookingId: 'TEST-42', productId: 10, productName: 'Test experience',
     status: 'confirmed', paymentStatus: 'paid', paymentMethod: 'stripe', priceNet: '200.00', refundedAmount: '10.00',
     partySizeTotal: 2, attendedTotal: 1, attendanceStatus: 'checked_in_partial',
     experienceDate: '2027-01-10', experienceStartAt: new Date('2027-01-10T20:00:00Z'),
@@ -36,6 +39,8 @@ beforeEach(() => {
   jest.mocked(BookingEvent.create).mockResolvedValue(event);
   jest.mocked(sequelize.transaction).mockImplementation(async (callback: any) => callback(tx));
   jest.mocked(assertLocalBookingActionAccess).mockResolvedValue('STOREFRONT');
+  jest.mocked(assertBookingManagementAccess).mockResolvedValue('STOREFRONT');
+  jest.mocked(Product.findByPk).mockResolvedValue({ id: 20, name: 'New experience', status: true } as Product);
   jest.mocked(notifyLocalBookingAction).mockResolvedValue({ customer: { status: 'sent', messageId: 'c' }, internal: { status: 'sent', messageId: 'i' } });
 });
 
@@ -44,6 +49,21 @@ it('previews current version only after checking management/product authority', 
   expect(assertLocalBookingActionAccess).toHaveBeenCalledWith(expect.anything(), booking);
   expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ booking: expect.objectContaining({ id: 42, updatedAt: new Date(initialVersion) }), localOnly: true }));
   expect(booking.save).not.toHaveBeenCalled(); expect(notifyLocalBookingAction).not.toHaveBeenCalled();
+});
+it('lists only active products inside the current account product scope', async () => {
+  const req = request(); req.productTypeScope = [3];
+  jest.mocked(Product.findAll).mockResolvedValue([{ id: 20, name: 'Scoped experience' }] as Product[]);
+  const res = response(); await getBookingAmendProducts(req, res);
+  expect(Product.findAll).toHaveBeenCalledWith(expect.objectContaining({
+    where: scopeProductWhere([3], { status: true }), attributes: ['id', 'name'],
+  }));
+  expect(res.json).toHaveBeenCalledWith({ currentProductId: 10, currentProductName: 'Test experience',
+    products: [{ id: 20, name: 'Scoped experience' }] });
+});
+it('does not disclose amendment product options after management access is revoked', async () => {
+  jest.mocked(assertBookingManagementAccess).mockRejectedValue(new HttpError(403, 'Outside scope'));
+  const res = response(); await getBookingAmendProducts(request(), res);
+  expect(res.status).toHaveBeenCalledWith(403); expect(Product.findAll).not.toHaveBeenCalled();
 });
 it.each(['viator', 'getyourguide', 'rezdy', 'fareharbor', 'freetour', 'airbnb', 'xperiencepoland', 'civitatis', 'ecwid', 'new-email-channel'])(
   'cancels %s locally with audit and notifications, preserving money, attendance and guests', async platform => {
@@ -68,6 +88,19 @@ it('amends Warsaw date/time and preserves duration without changing financial/at
   expect(booking.status).toBe('amended'); expect(booking.refundedAmount).toBe('10.00');
   expect(booking.partySizeTotal).toBe(2); expect(booking.attendedTotal).toBe(1);
   expect(notifyLocalBookingAction).toHaveBeenCalledWith(booking, expect.objectContaining({ previousStartAt: new Date('2027-01-10T20:00:00Z'), operation: 'amend' }));
+});
+it('allows a product-only amendment and records both products in the audit without repricing', async () => {
+  const res = response();
+  await amendLocalBooking(request({ productId: 20, pickupDate: '2027-01-10', pickupTime: '21:00', sendCustomerEmail: false }), res);
+  expect(booking).toMatchObject({ productId: 20, productName: 'New experience', priceNet: '200.00',
+    refundedAmount: '10.00', attendedTotal: 1, partySizeTotal: 2 });
+  expect(BookingEvent.create).toHaveBeenCalledWith(expect.objectContaining({ eventPayload: expect.objectContaining({
+    before: expect.objectContaining({ productId: 10, productName: 'Test experience' }),
+    after: expect.objectContaining({ productId: 20, productName: 'New experience' }),
+  }) }), { transaction: tx });
+  expect(notifyLocalBookingAction).toHaveBeenCalledWith(booking, expect.objectContaining({
+    previousProductName: 'Test experience', sendCustomerEmail: false,
+  }));
 });
 it.each([
   { pickupDate: '2027-02-30', pickupTime: '21:00' }, { pickupDate: '2027-01-10', pickupTime: '25:00' },

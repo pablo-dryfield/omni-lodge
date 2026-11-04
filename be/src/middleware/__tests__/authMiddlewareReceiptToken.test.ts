@@ -1,10 +1,23 @@
+jest.mock('../../services/databaseWorkspace/appMetadata.js', () => ({
+  loadWorkspaceAccount: jest.fn(),
+}));
+import { loadWorkspaceAccount } from '../../services/databaseWorkspace/appMetadata';
 jest.mock('../../__mocks__/sequelizeModelStub.ts', () => ({
   __esModule: true,
   default: { findByPk: jest.fn() },
 }));
-jest.mock('../../models/UserType.js', () => ({ __esModule: true, default: {} }));
-jest.mock('../../models/UserTypeProductType.js', () => ({ __esModule: true, default: { findAll: jest.fn(async () => []) } }));
-jest.mock('../../models/ShiftRole.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../models/UserType.js', () => ({
+  __esModule: true,
+  default: {},
+}));
+jest.mock('../../models/UserTypeProductType.js', () => ({
+  __esModule: true,
+  default: { findAll: jest.fn(async () => []) },
+}));
+jest.mock('../../models/ShiftRole.js', () => ({
+  __esModule: true,
+  default: {},
+}));
 jest.mock('../../services/requestContextService.js', () => ({
   getRequestContextValue: jest.fn(),
   setRequestContextValue: jest.fn(),
@@ -23,10 +36,11 @@ import { issueStaffPayoutReceiptAccessToken } from '../../services/staffPayoutRe
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
 import authenticateJWT from '../authMiddleware';
 
-const createResponse = () => ({
-  status: jest.fn().mockReturnThis(),
-  json: jest.fn().mockReturnThis(),
-} as unknown as Response & { status: jest.Mock; json: jest.Mock });
+const createResponse = () =>
+  ({
+    status: jest.fn().mockReturnThis(),
+    json: jest.fn().mockReturnThis(),
+  }) as unknown as Response & { status: jest.Mock; json: jest.Mock };
 
 describe('normal auth receipt-token isolation', () => {
   const originalJwtSecret = process.env.JWT_SECRET;
@@ -42,7 +56,8 @@ describe('normal auth receipt-token isolation', () => {
   afterAll(() => {
     if (originalJwtSecret === undefined) delete process.env.JWT_SECRET;
     else process.env.JWT_SECRET = originalJwtSecret;
-    if (originalReceiptSecret === undefined) delete process.env.STAFF_PAYOUT_RECEIPT_ACCESS_SECRET;
+    if (originalReceiptSecret === undefined)
+      delete process.env.STAFF_PAYOUT_RECEIPT_ACCESS_SECRET;
     else process.env.STAFF_PAYOUT_RECEIPT_ACCESS_SECRET = originalReceiptSecret;
   });
 
@@ -81,7 +96,9 @@ describe('normal auth receipt-token isolation', () => {
       shiftRoles: [{ id: 7, slug: 'manager' }],
       staffProfile: { staffType: 'volunteer', active: true },
     });
-    const token = jwt.sign({ id: 28 }, process.env.JWT_SECRET as string, { expiresIn: '1h' });
+    const token = jwt.sign({ id: 28 }, process.env.JWT_SECRET as string, {
+      expiresIn: '1h',
+    });
     const req = {
       headers: { authorization: `Bearer ${token}` },
       cookies: {},
@@ -104,6 +121,40 @@ describe('normal auth receipt-token isolation', () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
+  it('workspace authentication checks current account and role without loading staff/profile associations', async () => {
+    (loadWorkspaceAccount as jest.Mock).mockResolvedValue({
+      id: 28,
+      status: true,
+      approved: true,
+      userTypeId: 3,
+      firstName: 'Test',
+      lastName: 'Admin',
+      role: { slug: 'admin', name: 'Administrator', status: true },
+    });
+    const token = jwt.sign({ id: 28 }, process.env.JWT_SECRET as string, {
+      expiresIn: '1h',
+    });
+    const req = {
+      headers: { authorization: `Bearer ${token}` },
+      cookies: {},
+    } as unknown as AuthenticatedRequest;
+    await authenticateJWT(req, createResponse(), next, 'workspace');
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(loadWorkspaceAccount).toHaveBeenCalledWith(28);
+    expect(User.findByPk).not.toHaveBeenCalled();
+    (loadWorkspaceAccount as jest.Mock).mockResolvedValue({
+      id: 28,
+      status: true,
+      approved: true,
+      userTypeId: 3,
+      role: { slug: 'admin', status: false },
+    });
+    const res = createResponse();
+    await authenticateJWT({ ...req }, res, next, 'workspace');
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
   it('normalizes a whitespace-only profile photo path to absent metadata', async () => {
     (User.findByPk as jest.Mock).mockResolvedValue({
       id: 28,
@@ -117,7 +168,9 @@ describe('normal auth receipt-token isolation', () => {
       role: { slug: 'assistant-manager', name: 'Assistant Manager' },
       shiftRoles: [{ slug: 'manager' }],
     });
-    const token = jwt.sign({ id: 28 }, process.env.JWT_SECRET as string, { expiresIn: '1h' });
+    const token = jwt.sign({ id: 28 }, process.env.JWT_SECRET as string, {
+      expiresIn: '1h',
+    });
     const req = {
       headers: { authorization: `Bearer ${token}` },
       cookies: {},

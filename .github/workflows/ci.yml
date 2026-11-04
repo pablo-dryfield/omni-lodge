@@ -95,6 +95,23 @@ jobs:
     if: needs.changes.outputs.run_full_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [16, 17]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: workspace-ci-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=postgres --dbname=postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         shell: bash
@@ -129,9 +146,36 @@ jobs:
       - name: Test backend
         run: npm test -- --runInBand
 
+      - name: Test Database Workspace against PostgreSQL
+        env:
+          WORKSPACE_TEST_ADMIN_URL: postgresql://postgres:workspace-ci-only@127.0.0.1:5432/postgres
+          WORKSPACE_PG_DUMP_BIN: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_dump
+          WORKSPACE_PG_RESTORE_BIN: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_restore
+        run: |
+          if [[ ! -x "$WORKSPACE_PG_DUMP_BIN" ]]; then
+            # Ubuntu's default repository may not contain the additional
+            # supported major. Use PGDG's signed repository and matching clients.
+            sudo install -d /usr/share/postgresql-common/pgdg
+            sudo curl --fail --silent --show-error --location \
+              https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+              --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+            fingerprint="$(gpg --with-colons --show-keys /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc | awk -F: '$1=="fpr" {print $10; exit}')"
+            test "$fingerprint" = B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
+            . /etc/os-release
+            printf 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "$VERSION_CODENAME" \
+              | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+            sudo apt-get update
+            sudo apt-get install --yes postgresql-client-${{ matrix.postgres }}
+          fi
+          npm run test:database-workspace
+
       - name: Build and verify backend
-        if: github.event_name == 'pull_request'
         run: npm run build:prod
+
+      - name: Verify real Linux worker resource isolation and lifetime
+        env:
+          WORKSPACE_LINUX_ISOLATION_REQUIRED: 'true'
+        run: node --test ../scripts/tests/databaseWorkspaceWorkerLinux.test.mjs
 
   ui:
     name: CI / ui

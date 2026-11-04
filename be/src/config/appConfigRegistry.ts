@@ -1,4 +1,8 @@
-import { DEFAULT_GOOGLE_ADS_API_VERSION, GOOGLE_ADS_API_VERSION_PATTERN } from './googleAdsConfig.js';
+import {
+  DEFAULT_GOOGLE_ADS_API_VERSION,
+  GOOGLE_ADS_API_VERSION_PATTERN,
+} from './googleAdsConfig.js';
+import { DATABASE_WORKSPACE_CONFIG } from './databaseWorkspaceConfig.js';
 
 export type ConfigValueType = 'string' | 'number' | 'boolean' | 'enum' | 'json';
 
@@ -19,6 +23,7 @@ export type ConfigDefinition = {
 };
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
+  ...DATABASE_WORKSPACE_CONFIG,
   {
     key: 'SCHED_TZ',
     label: 'Scheduling timezone',
@@ -49,7 +54,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'SCHED_REMINDER1_DAY',
     label: 'Reminder 1 day',
-    description: 'Day of week (0=Sun..6=Sat) for the first scheduling reminder.',
+    description:
+      'Day of week (0=Sun..6=Sat) for the first scheduling reminder.',
     category: 'Scheduling',
     valueType: 'number',
     defaultValue: 6,
@@ -67,7 +73,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'SCHED_REMINDER2_DAY',
     label: 'Reminder 2 day',
-    description: 'Day of week (0=Sun..6=Sat) for the second scheduling reminder.',
+    description:
+      'Day of week (0=Sun..6=Sat) for the second scheduling reminder.',
     category: 'Scheduling',
     valueType: 'number',
     defaultValue: 0,
@@ -85,7 +92,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'AM_TASK_PLANNER_START_DATE',
     label: 'Assistant manager task planner start date',
-    description: 'First date to include in assistant manager task planner history and generation (YYYY-MM-DD).',
+    description:
+      'First date to include in assistant manager task planner history and generation (YYYY-MM-DD).',
     category: 'Assistant Manager Tasks',
     valueType: 'string',
     defaultValue: '2026-01-01',
@@ -94,7 +102,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'AM_TASK_PUSH_ENABLED',
     label: 'Assistant manager task push enabled',
-    description: 'Enables Web Push background notifications for assistant manager tasks.',
+    description:
+      'Enables Web Push background notifications for assistant manager tasks.',
     category: 'Assistant Manager Tasks',
     valueType: 'boolean',
     defaultValue: true,
@@ -112,7 +121,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'AM_TASK_PUSH_VAPID_SUBJECT',
     label: 'Assistant manager task push VAPID subject',
-    description: 'VAPID subject used for Web Push (for example: mailto:ops@omni-lodge.com).',
+    description:
+      'VAPID subject used for Web Push (for example: mailto:ops@omni-lodge.com).',
     category: 'Assistant Manager Tasks',
     valueType: 'string',
     defaultValue: 'mailto:ops@omni-lodge.com',
@@ -121,7 +131,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'AM_TASK_PUSH_VAPID_PUBLIC_KEY',
     label: 'Assistant manager task push VAPID public key',
-    description: 'Public VAPID key used by clients to subscribe for background push notifications.',
+    description:
+      'Public VAPID key used by clients to subscribe for background push notifications.',
     category: 'Assistant Manager Tasks',
     valueType: 'string',
     defaultValue: '',
@@ -130,7 +141,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'AM_TASK_PUSH_VAPID_PRIVATE_KEY',
     label: 'Assistant manager task push VAPID private key',
-    description: 'Private VAPID key used by backend to sign Web Push notifications.',
+    description:
+      'Private VAPID key used by backend to sign Web Push notifications.',
     category: 'Assistant Manager Tasks',
     valueType: 'string',
     defaultValue: '',
@@ -140,7 +152,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'BOOKING_GMAIL_QUERY',
     label: 'Booking Gmail query',
-    description: 'Fallback provider query used only when processing every incoming Gmail message is disabled.',
+    description:
+      'Fallback provider query used only when processing every incoming Gmail message is disabled.',
     category: 'Booking Email Ingestion',
     valueType: 'string',
     defaultValue:
@@ -179,7 +192,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'BOOKING_TSHIRT_SIZE_EMAIL_TEMPLATE_NAME',
     label: 'T-shirt size-selection template',
-    description: 'Exact name of the active email template used by the automatic T-shirt size request.',
+    description:
+      'Exact name of the active email template used by the automatic T-shirt size request.',
     category: 'Booking Email Automation',
     valueType: 'string',
     defaultValue: '',
@@ -197,7 +211,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'BOOKING_PLATFORM_CHANNEL_MAP',
     label: 'Booking platform-channel map',
-    description: 'JSON object mapping booking platform slug to Channel name for auto-assignment.',
+    description:
+      'JSON object mapping booking platform slug to Channel name for auto-assignment.',
     category: 'Booking Email Ingestion',
     valueType: 'json',
     defaultValue:
@@ -217,7 +232,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'AFFILIATE_TAG_ASSIGNMENTS',
     label: 'Affiliate tag assignments',
-    description: 'JSON payload mapping UTM tags to affiliate users for the affiliate sales portal.',
+    description:
+      'JSON payload mapping UTM tags to affiliate users for the affiliate sales portal.',
     category: 'Affiliate Sales',
     valueType: 'json',
     defaultValue: '{"rules":[]}',
@@ -246,7 +262,8 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
     key: 'BADGE_PRINT_EMAIL_BODY',
     label: 'Badge print email body',
-    description: 'Body text used for badge print request emails. Plain text with line breaks preserved.',
+    description:
+      'Body text used for badge print request emails. Plain text with line breaks preserved.',
     category: 'Badge Printing',
     valueType: 'string',
     defaultValue: `Hello!
@@ -299,7 +316,8 @@ Best,
   {
     key: 'CUSTOMER_EMAIL_ACTION_POLL_CRON',
     label: 'Customer email request poll cron',
-    description: 'Cron schedule for checking Gmail for customer emails that should become popup requests.',
+    description:
+      'Cron schedule for checking Gmail for customer emails that should become popup requests.',
     category: 'Booking Email Ingestion',
     valueType: 'string',
     defaultValue: '* * * * *',
@@ -347,7 +365,8 @@ Best,
   {
     key: 'REZDY_TIMEZONE',
     label: 'Rezdy parser timezone',
-    description: 'Timezone for Rezdy experience departures; falls back to the booking parser timezone.',
+    description:
+      'Timezone for Rezdy experience departures; falls back to the booking parser timezone.',
     category: 'Booking Parsers',
     valueType: 'string',
     defaultValue: null,
@@ -411,7 +430,8 @@ Best,
   {
     key: 'GYG_TEST_SUPPLIER_API_USERNAME',
     label: 'GetYourGuide test supplier API username',
-    description: 'HTTP Basic Auth username accepted by the testing supplier API endpoint.',
+    description:
+      'HTTP Basic Auth username accepted by the testing supplier API endpoint.',
     category: 'GetYourGuide Integration',
     valueType: 'string',
     defaultValue: null,
@@ -420,7 +440,8 @@ Best,
   {
     key: 'GYG_TEST_SUPPLIER_API_PASSWORD',
     label: 'GetYourGuide test supplier API password',
-    description: 'HTTP Basic Auth password accepted by the testing supplier API endpoint.',
+    description:
+      'HTTP Basic Auth password accepted by the testing supplier API endpoint.',
     category: 'GetYourGuide Integration',
     valueType: 'string',
     defaultValue: null,
@@ -430,7 +451,8 @@ Best,
   {
     key: 'GYG_PROD_SUPPLIER_API_USERNAME',
     label: 'GetYourGuide production supplier API username',
-    description: 'HTTP Basic Auth username accepted by the production supplier API endpoint.',
+    description:
+      'HTTP Basic Auth username accepted by the production supplier API endpoint.',
     category: 'GetYourGuide Integration',
     valueType: 'string',
     defaultValue: null,
@@ -439,7 +461,8 @@ Best,
   {
     key: 'GYG_PROD_SUPPLIER_API_PASSWORD',
     label: 'GetYourGuide production supplier API password',
-    description: 'HTTP Basic Auth password accepted by the production supplier API endpoint.',
+    description:
+      'HTTP Basic Auth password accepted by the production supplier API endpoint.',
     category: 'GetYourGuide Integration',
     valueType: 'string',
     defaultValue: null,
@@ -449,7 +472,8 @@ Best,
   {
     key: 'GYG_OUTBOUND_SUPPLIER_API_USERNAME_TEST',
     label: 'GetYourGuide outbound test API username',
-    description: 'HTTP Basic Auth username used by OmniLodge when calling the GetYourGuide sandbox supplier API.',
+    description:
+      'HTTP Basic Auth username used by OmniLodge when calling the GetYourGuide sandbox supplier API.',
     category: 'GetYourGuide Integration',
     valueType: 'string',
     defaultValue: null,
@@ -458,7 +482,8 @@ Best,
   {
     key: 'GYG_OUTBOUND_SUPPLIER_API_PASSWORD_TEST',
     label: 'GetYourGuide outbound test API password',
-    description: 'HTTP Basic Auth password used by OmniLodge when calling the GetYourGuide sandbox supplier API.',
+    description:
+      'HTTP Basic Auth password used by OmniLodge when calling the GetYourGuide sandbox supplier API.',
     category: 'GetYourGuide Integration',
     valueType: 'string',
     defaultValue: null,
@@ -468,7 +493,8 @@ Best,
   {
     key: 'GYG_OUTBOUND_SUPPLIER_API_USERNAME_PROD',
     label: 'GetYourGuide outbound production API username',
-    description: 'HTTP Basic Auth username used by OmniLodge when calling the GetYourGuide production supplier API.',
+    description:
+      'HTTP Basic Auth username used by OmniLodge when calling the GetYourGuide production supplier API.',
     category: 'GetYourGuide Integration',
     valueType: 'string',
     defaultValue: null,
@@ -477,7 +503,8 @@ Best,
   {
     key: 'GYG_OUTBOUND_SUPPLIER_API_PASSWORD_PROD',
     label: 'GetYourGuide outbound production API password',
-    description: 'HTTP Basic Auth password used by OmniLodge when calling the GetYourGuide production supplier API.',
+    description:
+      'HTTP Basic Auth password used by OmniLodge when calling the GetYourGuide production supplier API.',
     category: 'GetYourGuide Integration',
     valueType: 'string',
     defaultValue: null,
@@ -541,7 +568,8 @@ Best,
   {
     key: 'GOOGLE_REFRESH_TOKEN',
     label: 'Google refresh token',
-    description: 'OAuth refresh token used for Gmail, Drive, and other Google APIs.',
+    description:
+      'OAuth refresh token used for Gmail, Drive, and other Google APIs.',
     category: 'Google API',
     valueType: 'string',
     defaultValue: null,
@@ -604,7 +632,8 @@ Best,
   {
     key: 'GMAIL_DEFAULT_FROM_NAME',
     label: 'Default Gmail From name',
-    description: 'Friendly sender name paired with the default Gmail From address.',
+    description:
+      'Friendly sender name paired with the default Gmail From address.',
     category: 'Google API',
     valueType: 'string',
     defaultValue: 'Krawl Through Krakow',
@@ -622,7 +651,8 @@ Best,
   {
     key: 'GOOGLE_ADS_API_VERSION',
     label: 'Google Ads API version',
-    description: 'Pinned Google Ads reporting API major version, such as v26. Applies to marketing costs, clicks and campaign reports only, not Gmail, Reviews, Maps or Search Console. Takes effect on the next marketing request without a restart. Use a supported version; future breaking changes may still require code updates.',
+    description:
+      'Pinned Google Ads reporting API major version, such as v26. Applies to marketing costs, clicks and campaign reports only, not Gmail, Reviews, Maps or Search Console. Takes effect on the next marketing request without a restart. Use a supported version; future breaking changes may still require code updates.',
     category: 'Google API',
     valueType: 'string',
     defaultValue: DEFAULT_GOOGLE_ADS_API_VERSION,
@@ -637,7 +667,8 @@ Best,
   {
     key: 'GOOGLE_ADS_CUSTOMER_ID',
     label: 'Google Ads customer ID',
-    description: 'Customer ID for the Google Ads account used to load daily spend.',
+    description:
+      'Customer ID for the Google Ads account used to load daily spend.',
     category: 'Google API',
     valueType: 'string',
     defaultValue: null,
@@ -645,7 +676,8 @@ Best,
   {
     key: 'GOOGLE_ADS_LOGIN_CUSTOMER_ID',
     label: 'Google Ads login customer ID',
-    description: 'Optional manager account ID sent as login-customer-id on Google Ads API requests.',
+    description:
+      'Optional manager account ID sent as login-customer-id on Google Ads API requests.',
     category: 'Google API',
     valueType: 'string',
     defaultValue: null,
@@ -674,7 +706,8 @@ Best,
   {
     key: 'GOOGLE_DRIVE_SOCIAL_MEDIA_PARENT_ID',
     label: 'Google Drive social media folder',
-    description: 'Root folder ID where each creator\'s "Full Name - Social Media" folder is stored.',
+    description:
+      'Root folder ID where each creator\'s "Full Name - Social Media" folder is stored.',
     category: 'Google API',
     valueType: 'string',
     defaultValue: null,
@@ -683,7 +716,8 @@ Best,
   {
     key: 'GOOGLE_DRIVE_STAFF_PAYOUT_RECEIPTS_PARENT_ID',
     label: 'Google Drive staff payout receipts folder',
-    description: 'Owner-only private parent folder ID where staff payout photos and signatures are uploaded.',
+    description:
+      'Owner-only private parent folder ID where staff payout photos and signatures are uploaded.',
     category: 'Google API',
     valueType: 'string',
     defaultValue: null,
@@ -710,7 +744,8 @@ Best,
   {
     key: 'SERPAPI_API_KEY',
     label: 'SerpApi API key',
-    description: 'API key used to fetch live Google SERP samples for SEO analysis.',
+    description:
+      'API key used to fetch live Google SERP samples for SEO analysis.',
     category: 'SEO',
     valueType: 'string',
     defaultValue: null,
@@ -806,7 +841,8 @@ Best,
   {
     key: 'STRIPE_PUBLISHABLE_KEY',
     label: 'Stripe publishable key',
-    description: 'Live-mode publishable key (pk_live_...) used to initialize the Stripe Payment Element.',
+    description:
+      'Live-mode publishable key (pk_live_...) used to initialize the Stripe Payment Element.',
     category: 'Stripe',
     valueType: 'string',
     defaultValue: null,
@@ -816,7 +852,8 @@ Best,
   {
     key: 'STRIPE_TEST_SECRET_KEY',
     label: 'Stripe test secret key',
-    description: 'Test-mode Stripe secret key used for sandbox refunds and direct booking test transactions.',
+    description:
+      'Test-mode Stripe secret key used for sandbox refunds and direct booking test transactions.',
     category: 'Stripe',
     valueType: 'string',
     defaultValue: null,
@@ -849,7 +886,8 @@ Best,
   {
     key: 'STRIPE_TEST_PUBLISHABLE_KEY',
     label: 'Stripe test publishable key',
-    description: 'Test-mode publishable key (pk_test_...) used to initialize the Stripe Payment Element outside production.',
+    description:
+      'Test-mode publishable key (pk_test_...) used to initialize the Stripe Payment Element outside production.',
     category: 'Stripe',
     valueType: 'string',
     defaultValue: null,
@@ -859,7 +897,8 @@ Best,
   {
     key: 'STOREFRONT_PUBLIC_URL',
     label: 'Storefront public URL',
-    description: 'Public storefront base URL used for Stripe checkout success and cancellation redirects.',
+    description:
+      'Public storefront base URL used for Stripe checkout success and cancellation redirects.',
     category: 'Storefront',
     valueType: 'string',
     defaultValue: null,
@@ -880,7 +919,8 @@ Best,
   {
     key: 'STOREFRONT_STRIPE_WEBHOOK_SECRET',
     label: 'Storefront Stripe live webhook signing secret',
-    description: 'Live-mode Stripe webhook signing secret (whsec_...) used in production.',
+    description:
+      'Live-mode Stripe webhook signing secret (whsec_...) used in production.',
     category: 'Storefront',
     valueType: 'string',
     defaultValue: null,
@@ -891,7 +931,8 @@ Best,
   {
     key: 'STOREFRONT_STRIPE_TEST_WEBHOOK_SECRET',
     label: 'Storefront Stripe test webhook signing secret',
-    description: 'Test-mode Stripe webhook signing secret (whsec_...) used outside production.',
+    description:
+      'Test-mode Stripe webhook signing secret (whsec_...) used outside production.',
     category: 'Storefront',
     valueType: 'string',
     defaultValue: null,
@@ -902,7 +943,8 @@ Best,
   {
     key: 'STOREFRONT_EMAIL_FROM_ADDRESS',
     label: 'Storefront email from address',
-    description: 'Gmail address (or verified send-as alias) used for storefront order emails, Airbnb amendments, and local force-action notifications for non-Food-Tour bookings.',
+    description:
+      'Gmail address (or verified send-as alias) used for storefront order emails, Airbnb amendments, and local force-action notifications for non-Food-Tour bookings.',
     category: 'Storefront',
     valueType: 'string',
     defaultValue: 'pubthroughkrakow@gmail.com',
@@ -911,7 +953,8 @@ Best,
   {
     key: 'STOREFRONT_EMAIL_FROM_NAME',
     label: 'Storefront email from name',
-    description: 'Friendly sender name shown on storefront emails, Airbnb amendments, and non-Food-Tour local force-action notifications.',
+    description:
+      'Friendly sender name shown on storefront emails, Airbnb amendments, and non-Food-Tour local force-action notifications.',
     category: 'Storefront',
     valueType: 'string',
     defaultValue: 'Krawl Through Krakow',
@@ -920,7 +963,8 @@ Best,
   {
     key: 'STOREFRONT_NOTIFICATION_EMAIL',
     label: 'Storefront notification email',
-    description: 'Internal recipient for storefront notifications, Airbnb amendments, and non-Food-Tour local force-action notifications. Local force actions refresh this value immediately before sending.',
+    description:
+      'Internal recipient for storefront notifications, Airbnb amendments, and non-Food-Tour local force-action notifications. Local force actions refresh this value immediately before sending.',
     category: 'Storefront',
     valueType: 'string',
     defaultValue: 'pubthroughkrakow@gmail.com',
@@ -940,7 +984,8 @@ Best,
   {
     key: 'STOREFRONT_BANK_TRANSFER_DUE_HOURS',
     label: 'Legacy bank transfer payment deadline',
-    description: 'Retained for configuration history only. Staff-created bank transfer bookings have no expiry and stay open until payment is recorded or staff cancel them.',
+    description:
+      'Retained for configuration history only. Staff-created bank transfer bookings have no expiry and stay open until payment is recorded or staff cancel them.',
     isEditable: false,
     category: 'Storefront',
     valueType: 'number',
@@ -951,7 +996,8 @@ Best,
   {
     key: 'STOREFRONT_ABANDONED_CART_EMAIL_ENABLED',
     label: 'Abandoned cart recovery emails',
-    description: 'Send a recovery email when an ongoing storefront cart has been inactive for the configured delay.',
+    description:
+      'Send a recovery email when an ongoing storefront cart has been inactive for the configured delay.',
     category: 'Storefront',
     valueType: 'boolean',
     defaultValue: false,
@@ -960,7 +1006,8 @@ Best,
   {
     key: 'STOREFRONT_ABANDONED_CART_DELAY_MINUTES',
     label: 'Abandoned cart delay',
-    description: 'Minutes of inactivity before the customer receives the cart recovery email.',
+    description:
+      'Minutes of inactivity before the customer receives the cart recovery email.',
     category: 'Storefront',
     valueType: 'number',
     defaultValue: 60,
@@ -969,7 +1016,8 @@ Best,
   {
     key: 'STOREFRONT_ONGOING_CART_DEDUPE_WINDOW_MINUTES',
     label: 'Ongoing cart duplicate window',
-    description: 'Minutes during which identical carts from the same customer are treated as one ongoing cart.',
+    description:
+      'Minutes during which identical carts from the same customer are treated as one ongoing cart.',
     category: 'Storefront',
     valueType: 'number',
     defaultValue: 30,
@@ -978,7 +1026,8 @@ Best,
   {
     key: 'STOREFRONT_CLARITY_REPLAY_ENABLED',
     label: 'Storefront cart session replay',
-    description: 'Enable consent-aware Microsoft Clarity replay after a customer reaches the cart.',
+    description:
+      'Enable consent-aware Microsoft Clarity replay after a customer reaches the cart.',
     category: 'Storefront',
     valueType: 'boolean',
     defaultValue: true,
@@ -987,7 +1036,8 @@ Best,
   {
     key: 'STOREFRONT_CLARITY_PROJECT_ID',
     label: 'Microsoft Clarity project ID',
-    description: 'Public Clarity project identifier used only after a customer reaches the cart.',
+    description:
+      'Public Clarity project identifier used only after a customer reaches the cart.',
     category: 'Storefront',
     valueType: 'string',
     defaultValue: 'ufswk29c79',
@@ -996,7 +1046,8 @@ Best,
   {
     key: 'STOREFRONT_CLARITY_SAMPLE_PERCENT',
     label: 'Storefront replay sample',
-    description: 'Percentage of eligible cart visits selected for session replay.',
+    description:
+      'Percentage of eligible cart visits selected for session replay.',
     category: 'Storefront',
     valueType: 'number',
     defaultValue: 20,
@@ -1005,7 +1056,8 @@ Best,
   {
     key: 'STOREFRONT_CLARITY_REQUIRE_ANALYTICS_CONSENT',
     label: 'Require analytics consent for replay',
-    description: 'Do not load Clarity unless the storefront receives an analytics consent signal.',
+    description:
+      'Do not load Clarity unless the storefront receives an analytics consent signal.',
     category: 'Storefront',
     valueType: 'boolean',
     defaultValue: true,
@@ -1014,7 +1066,8 @@ Best,
   {
     key: 'STOREFRONT_JOURNEY_RETENTION_DAYS',
     label: 'Storefront journey retention',
-    description: 'Days to retain detailed browsing and selection activity. Payment and recovery milestones are preserved.',
+    description:
+      'Days to retain detailed browsing and selection activity. Payment and recovery milestones are preserved.',
     category: 'Storefront',
     valueType: 'number',
     defaultValue: 90,
@@ -1033,7 +1086,8 @@ Best,
   {
     key: 'STOREFRONT_MEDIA_R2_ACCESS_KEY_ID',
     label: 'Storefront media R2 access key ID',
-    description: 'R2 S3 API access key used only by OmniLodge for product media uploads.',
+    description:
+      'R2 S3 API access key used only by OmniLodge for product media uploads.',
     category: 'Storefront Media',
     valueType: 'string',
     defaultValue: null,
@@ -1044,7 +1098,8 @@ Best,
   {
     key: 'STOREFRONT_MEDIA_R2_SECRET_ACCESS_KEY',
     label: 'Storefront media R2 secret access key',
-    description: 'R2 S3 API secret used only by OmniLodge for product media uploads.',
+    description:
+      'R2 S3 API secret used only by OmniLodge for product media uploads.',
     category: 'Storefront Media',
     valueType: 'string',
     defaultValue: null,
@@ -1075,7 +1130,8 @@ Best,
   {
     key: 'DIRECT_BOOKINGS_API_KEY',
     label: 'Direct bookings API key',
-    description: 'Shared secret for website-to-Omni direct booking ingestion requests.',
+    description:
+      'Shared secret for website-to-Omni direct booking ingestion requests.',
     category: 'Integrations',
     valueType: 'string',
     defaultValue: null,
@@ -1094,7 +1150,8 @@ Best,
   {
     key: 'DIRECT_BOOKINGS_EMAIL_FROM_NAME',
     label: 'Direct bookings email from name',
-    description: 'Sender name used for direct booking customer emails and Food Tour local force-action notifications.',
+    description:
+      'Sender name used for direct booking customer emails and Food Tour local force-action notifications.',
     category: 'Integrations',
     valueType: 'string',
     defaultValue: 'Food Tour Krakow',
@@ -1103,7 +1160,8 @@ Best,
   {
     key: 'DIRECT_BOOKINGS_NOTIFICATION_EMAIL',
     label: 'Direct bookings notification email',
-    description: 'Internal recipient for direct bookings and Food Tour local force-action notifications. Local force actions refresh this value immediately before sending.',
+    description:
+      'Internal recipient for direct bookings and Food Tour local force-action notifications. Local force actions refresh this value immediately before sending.',
     category: 'Integrations',
     valueType: 'string',
     defaultValue: 'foodtourkrk@gmail.com',
@@ -1112,11 +1170,22 @@ Best,
   {
     key: 'DB_BACKUP_STORAGE',
     label: 'DB backup storage',
-    description: 'Storage backend for backups.',
+    description:
+      'Where new database backups are retained: server only, Google Drive (optionally keep the server copy), or both. Database Workspace always inventories both locations independently.',
     category: 'Backups',
     valueType: 'enum',
     defaultValue: 'drive',
-    options: ['local', 'drive'],
+    options: ['local', 'drive', 'both'],
+  },
+  {
+    key: 'DB_BACKUP_KEEP_LOCAL_COPY',
+    label: 'Keep server backup after Drive upload',
+    description:
+      'When backup storage is Google Drive, retain the successfully uploaded server archive too. Both storage mode always retains it. This does not disable any separately configured server-script retention.',
+    category: 'Backups',
+    valueType: 'boolean',
+    defaultValue: false,
+    impact: 'high',
   },
   {
     key: 'DB_BACKUP_DRIVE_FOLDER',
@@ -1169,6 +1238,38 @@ Best,
     defaultValue: null,
   },
   {
+    key: 'DB_BACKUP_WORKSPACE_CONTROL_ENABLED',
+    label: 'Back up Database Workspace control store',
+    description:
+      'Include a separate custom-format archive of the independent workspace job/audit database whenever the existing backup script runs. Applies when its private loopback bootstrap connection is configured. Uses the same server/Drive copy policy; the application archive remains separate.',
+    category: 'Backups',
+    valueType: 'boolean',
+    defaultValue: true,
+    impact: 'high',
+  },
+  {
+    key: 'PG_DUMP_BIN',
+    label: 'Database backup pg_dump executable',
+    description:
+      'Trusted pg_dump executable used to capture the independent Database Workspace control database. Use a client compatible with the configured PostgreSQL server major. No browser-supplied executable is accepted.',
+    category: 'Backups',
+    valueType: 'string',
+    defaultValue: 'pg_dump',
+    validation: { maxLength: 1024 },
+    impact: 'high',
+  },
+  {
+    key: 'DB_BACKUP_COMMAND_TIMEOUT_MS',
+    label: 'Backup command timeout (ms)',
+    description:
+      'Maximum runtime for a control-store dump and for the existing backup script. A timed-out or unverifiable backup is not reported as successful.',
+    category: 'Backups',
+    valueType: 'number',
+    defaultValue: 900000,
+    validation: { min: 10000, max: 7200000 },
+    impact: 'high',
+  },
+  {
     key: 'PG_RESTORE_BIN',
     label: 'pg_restore binary',
     description: 'Path to the pg_restore binary.',
@@ -1205,7 +1306,8 @@ Best,
   {
     key: 'FINANCE_RECURRING_ENABLED',
     label: 'Finance recurring automation enabled',
-    description: 'Automatically generate due planned transactions from active recurring rules.',
+    description:
+      'Automatically generate due planned transactions from active recurring rules.',
     category: 'Finance',
     valueType: 'boolean',
     defaultValue: true,
@@ -1223,7 +1325,8 @@ Best,
   {
     key: 'STAFF_LEDGER_START_DATE',
     label: 'Staff ledger start date',
-    description: 'Start date for staff payout ledger calculations (YYYY-MM-DD).',
+    description:
+      'Start date for staff payout ledger calculations (YYYY-MM-DD).',
     category: 'Finance',
     valueType: 'string',
     defaultValue: '2025-10-01',
@@ -1280,7 +1383,8 @@ Best,
   {
     key: 'PUPPETEER_HEADLESS',
     label: 'Puppeteer headless mode',
-    description: 'Controls headless mode for schedule rendering (true, false, shell).',
+    description:
+      'Controls headless mode for schedule rendering (true, false, shell).',
     category: 'Scheduling',
     valueType: 'enum',
     defaultValue: 'true',
@@ -1313,7 +1417,8 @@ Best,
   {
     key: 'TRIP_ADVISOR_QUERY_ID',
     label: 'TripAdvisor reviews query ID',
-    description: 'Pre-registered GraphQL query ID used by the TripAdvisor reviews request.',
+    description:
+      'Pre-registered GraphQL query ID used by the TripAdvisor reviews request.',
     category: 'Review Scrapers',
     valueType: 'string',
     defaultValue: '1eeac11193438f8a',
@@ -1358,7 +1463,8 @@ Best,
     description: 'Persisted query hash used for Airbnb reviews requests.',
     category: 'Review Scrapers',
     valueType: 'string',
-    defaultValue: '04698412017b60fca29eb960d89ed9a84a5ea612800a3ea6964ec42c39aa4323',
+    defaultValue:
+      '04698412017b60fca29eb960d89ed9a84a5ea612800a3ea6964ec42c39aa4323',
   },
   {
     key: 'AIRBNB_REVIEWS_ACTIVITY_LISTING_ID',
@@ -1371,7 +1477,8 @@ Best,
   {
     key: 'AIRBNB_REVIEWS_API_KEY',
     label: 'Airbnb reviews API key',
-    description: 'API key sent as x-airbnb-api-key for Airbnb reviews requests.',
+    description:
+      'API key sent as x-airbnb-api-key for Airbnb reviews requests.',
     category: 'Review Scrapers',
     valueType: 'string',
     defaultValue: 'd306zoyjsyarp7ifhu67rjxn52tv0t20',
@@ -1395,7 +1502,8 @@ Best,
   {
     key: 'WHATSAPP_WEBHOOK_VERIFY_TOKEN',
     label: 'WhatsApp webhook verify token',
-    description: 'Shared token used by Meta when verifying the WhatsApp webhook endpoint.',
+    description:
+      'Shared token used by Meta when verifying the WhatsApp webhook endpoint.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1406,7 +1514,8 @@ Best,
   {
     key: 'WHATSAPP_META_APP_ID',
     label: 'WhatsApp Meta app ID',
-    description: 'Numeric Meta app identifier used to launch and validate Embedded Signup.',
+    description:
+      'Numeric Meta app identifier used to launch and validate Embedded Signup.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: '828737393371751',
@@ -1421,7 +1530,8 @@ Best,
   {
     key: 'WHATSAPP_META_APP_SECRET',
     label: 'WhatsApp Meta app secret',
-    description: 'Meta app secret used to authenticate WhatsApp webhook signatures.',
+    description:
+      'Meta app secret used to authenticate WhatsApp webhook signatures.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1439,7 +1549,8 @@ Best,
   {
     key: 'WHATSAPP_META_GRAPH_API_VERSION',
     label: 'WhatsApp Meta Graph API version',
-    description: 'Pinned Meta Graph API version used by Embedded Signup onboarding requests.',
+    description:
+      'Pinned Meta Graph API version used by Embedded Signup onboarding requests.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: 'v25.0',
@@ -1454,7 +1565,8 @@ Best,
   {
     key: 'WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID',
     label: 'WhatsApp Embedded Signup configuration ID',
-    description: 'Facebook Login for Business configuration used for WhatsApp Embedded Signup.',
+    description:
+      'Facebook Login for Business configuration used for WhatsApp Embedded Signup.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1469,7 +1581,8 @@ Best,
   {
     key: 'WHATSAPP_BUSINESS_ACCESS_TOKEN',
     label: 'WhatsApp business access token',
-    description: 'System-managed token produced by the most recent successful Embedded Signup.',
+    description:
+      'System-managed token produced by the most recent successful Embedded Signup.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1483,7 +1596,8 @@ Best,
   {
     key: 'WHATSAPP_WABA_ID',
     label: 'WhatsApp Business Account ID',
-    description: 'Numeric Meta WhatsApp Business Account identifier accepted by the webhook.',
+    description:
+      'Numeric Meta WhatsApp Business Account identifier accepted by the webhook.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1500,7 +1614,8 @@ Best,
   {
     key: 'WHATSAPP_PHONE_NUMBER_ID',
     label: 'WhatsApp phone number ID',
-    description: 'Numeric Meta phone-number identifier accepted by the webhook and brief reader.',
+    description:
+      'Numeric Meta phone-number identifier accepted by the webhook and brief reader.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1517,7 +1632,8 @@ Best,
   {
     key: 'WHATSAPP_BRIEF_API_TOKEN',
     label: 'WhatsApp brief API token',
-    description: 'Bearer token granting read-only access to the private WhatsApp brief endpoints.',
+    description:
+      'Bearer token granting read-only access to the private WhatsApp brief endpoints.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1528,7 +1644,8 @@ Best,
   {
     key: 'WHATSAPP_TEST_API_TOKEN',
     label: 'WhatsApp test API token',
-    description: 'Dedicated bearer token for the fixed-recipient WhatsApp delivery test endpoint.',
+    description:
+      'Dedicated bearer token for the fixed-recipient WhatsApp delivery test endpoint.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1540,7 +1657,8 @@ Best,
   {
     key: 'WHATSAPP_TEST_RECIPIENT',
     label: 'WhatsApp test recipient',
-    description: 'Only destination permitted by the machine-authenticated WhatsApp delivery test.',
+    description:
+      'Only destination permitted by the machine-authenticated WhatsApp delivery test.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1554,7 +1672,8 @@ Best,
   {
     key: 'WHATSAPP_TEST_TEMPLATE_NAME',
     label: 'WhatsApp test template name',
-    description: 'Exact approved, parameter-free template permitted by the delivery test endpoint.',
+    description:
+      'Exact approved, parameter-free template permitted by the delivery test endpoint.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1564,7 +1683,8 @@ Best,
   {
     key: 'WHATSAPP_TEST_TEMPLATE_LANGUAGE',
     label: 'WhatsApp test template language',
-    description: 'Exact language code of the template permitted by the delivery test endpoint.',
+    description:
+      'Exact language code of the template permitted by the delivery test endpoint.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: null,
@@ -1574,7 +1694,8 @@ Best,
   {
     key: 'WHATSAPP_ONBOARDING_GENERATION',
     label: 'WhatsApp onboarding generation',
-    description: 'Version label incremented when the WhatsApp Business account is onboarded again.',
+    description:
+      'Version label incremented when the WhatsApp Business account is onboarded again.',
     category: 'WhatsApp Business',
     valueType: 'string',
     defaultValue: '1',
@@ -1585,7 +1706,8 @@ Best,
       required: true,
       maxLength: 64,
       pattern: '^[A-Za-z0-9._-]{1,64}$',
-      patternDescription: '1-64 letters, numbers, dots, underscores, or hyphens',
+      patternDescription:
+        '1-64 letters, numbers, dots, underscores, or hyphens',
     },
   },
   {
@@ -1614,7 +1736,8 @@ Best,
       required: true,
       maxLength: 64,
       pattern: '^[A-Za-z0-9._-]{1,64}$',
-      patternDescription: '1-64 letters, numbers, dots, underscores, or hyphens',
+      patternDescription:
+        '1-64 letters, numbers, dots, underscores, or hyphens',
     },
   },
   {
@@ -1665,7 +1788,8 @@ Best,
   {
     key: 'WHATSAPP_RETENTION_DAYS',
     label: 'WhatsApp message retention (days)',
-    description: 'Number of days normalized WhatsApp message content is retained (maximum seven).',
+    description:
+      'Number of days normalized WhatsApp message content is retained (maximum seven).',
     category: 'WhatsApp Business',
     valueType: 'number',
     defaultValue: 7,
@@ -1675,7 +1799,8 @@ Best,
   {
     key: 'WHATSAPP_SOURCE_STALE_HOURS',
     label: 'WhatsApp source stale threshold (hours)',
-    description: 'Hours without a successful ingest before the WhatsApp source is considered stale.',
+    description:
+      'Hours without a successful ingest before the WhatsApp source is considered stale.',
     category: 'WhatsApp Business',
     valueType: 'number',
     defaultValue: 96,
@@ -1684,7 +1809,8 @@ Best,
   {
     key: 'DB_SYNC_ALTER',
     label: 'DB sync alter',
-    description: 'Allow sequelize.sync to alter tables (use migrations instead).',
+    description:
+      'Allow sequelize.sync to alter tables (use migrations instead).',
     category: 'Maintenance',
     valueType: 'boolean',
     defaultValue: false,
@@ -1710,4 +1836,6 @@ Best,
   },
 ];
 
-export const CONFIG_DEFINITION_MAP = new Map(CONFIG_DEFINITIONS.map((definition) => [definition.key, definition]));
+export const CONFIG_DEFINITION_MAP = new Map(
+  CONFIG_DEFINITIONS.map((definition) => [definition.key, definition]),
+);

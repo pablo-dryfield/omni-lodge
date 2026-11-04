@@ -20,6 +20,7 @@ const matchesSection = (target: string, currentPage: string, pathname: string) =
 };
 
 export const getNavbarSettings = (currentPage: string, pathname = ""): NavbarSettings | undefined => {
+  if (pathname.replace(/\/$/, '') === '/settings/sql-helper') return undefined;
   if (matchesSection("finance", currentPage, pathname)) {
     return {
       width: 260,

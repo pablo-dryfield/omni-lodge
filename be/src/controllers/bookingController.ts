@@ -35,6 +35,9 @@ import {
 import type Stripe from 'stripe';
 import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getAllowedProductTypeIds } from '../services/productScopeService.js';
+import { amendmentProductSnapshot, resolveBookingAmendmentProduct } from '../services/bookings/bookingAmendmentProductService.js';
+import { assertBookingManagementAccess } from '../services/localBookingActionPolicy.js';
+import { createProductSlug } from '../utils/storefrontProductSlug.js';
 import { getBookingEmailAccess, assertEmailMessageAccess, canAccessEmailMessage, assertEmailRecipient, assertTemplateAccess } from '../services/bookingEmailScopeService.js';
 import {
   canonicalizeProductKeyFromLabel,
@@ -209,6 +212,7 @@ type AmendPickupRequestBody = {
   pickupDate?: string;
   pickupTime?: string;
   sendCustomerEmail?: boolean;
+  productId?: unknown;
 };
 
 type ReconcileEcwidRequestBody = {
@@ -5013,6 +5017,11 @@ export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response
       res.status(400).json({ message: 'Only Ecwid bookings can be amended through this endpoint' });
       return;
     }
+    if (booking.status === 'cancelled') throw new HttpError(400, 'Cancelled bookings cannot be amended');
+    await assertBookingManagementAccess(req, booking);
+    const product = await resolveBookingAmendmentProduct(req, booking, req.body.productId);
+    const previousProduct = amendmentProductSnapshot(booking);
+    const previousExperienceStartAt = booking.experienceStartAt ?? null;
 
     const orderId = booking.platformBookingId?.trim();
     if (!orderId) {
@@ -5024,28 +5033,38 @@ export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response
     const ecwidPickupTime = pickupUtc.format('YYYY-MM-DD HH:mm:ss ZZ');
     const activityDate = pickupMoment.format(DATE_FORMAT);
 
-    const ecwidOrder = await getEcwidOrder(orderId);
-    const pickupExtraField = buildPickupExtraFieldPayload(ecwidOrder.orderExtraFields, ecwidPickupTime);
-    const itemsPatch = buildEcwidItemsActivityDatePatch(
-      Array.isArray(ecwidOrder.items) ? (ecwidOrder.items as Array<Record<string, unknown>>) : undefined,
-      activityDate,
-    );
-
-    const updatePayload: Record<string, unknown> = {
-      pickupTime: ecwidPickupTime,
-      orderExtraFields: [pickupExtraField],
-    };
-    if (itemsPatch) {
-      updatePayload.items = itemsPatch;
+    const scheduleChanged = booking.experienceDate !== activityDate
+      || booking.experienceStartAt?.getTime() !== pickupUtc.valueOf();
+    if (scheduleChanged) {
+      const ecwidOrder = await getEcwidOrder(orderId);
+      const pickupExtraField = buildPickupExtraFieldPayload(ecwidOrder.orderExtraFields, ecwidPickupTime);
+      const itemsPatch = buildEcwidItemsActivityDatePatch(
+        Array.isArray(ecwidOrder.items) ? (ecwidOrder.items as Array<Record<string, unknown>>) : undefined,
+        activityDate,
+      );
+      const updatePayload: Record<string, unknown> = {
+        pickupTime: ecwidPickupTime,
+        orderExtraFields: [pickupExtraField],
+      };
+      if (itemsPatch) updatePayload.items = itemsPatch;
+      await updateEcwidOrder(orderId, updatePayload);
     }
 
-    await updateEcwidOrder(orderId, updatePayload);
-
-    booking.experienceDate = activityDate;
-    booking.experienceStartAt = pickupUtc.toDate();
-    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
-
-    await booking.save();
+    await sequelize.transaction(async transaction => {
+      await assertNativeAmendmentSourceCurrent(booking, transaction);
+      booking.experienceDate = activityDate;
+      booking.experienceStartAt = pickupUtc.toDate();
+      if (product) { booking.productId = product.id; booking.productName = product.name; }
+      booking.status = 'amended';
+      booking.statusChangedAt = new Date();
+      booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+      await booking.save({ transaction });
+      await saveDirectBookingEvent(booking, 'amended', req.authContext?.id ?? null, {
+        action: 'amend-ecwid-booking', before: previousProduct, after: amendmentProductSnapshot(booking),
+        previousExperienceStartAt, nextExperienceStartAt: booking.experienceStartAt,
+        sendCustomerEmail: req.body.sendCustomerEmail !== false, productChangeLocalOnly: Boolean(product),
+      }, transaction);
+    });
 
     res.status(200).json({
       message: 'Pickup time updated successfully',
@@ -5057,7 +5076,7 @@ export const amendEcwidBooking = async (req: AuthenticatedRequest, res: Response
       },
     });
   } catch (error) {
-    const status = isAxiosError(error) ? error.response?.status ?? 502 : 500;
+    const status = error instanceof HttpError ? error.status : isAxiosError(error) ? error.response?.status ?? 502 : 500;
     let message = 'Failed to amend Ecwid booking';
     if (isAxiosError(error)) {
       if (typeof error.response?.data === 'string') {
@@ -5104,13 +5123,29 @@ export const amendXperiencePolandBooking = async (req: AuthenticatedRequest, res
       res.status(400).json({ message: 'Only XperiencePoland bookings can be amended through this endpoint' });
       return;
     }
+    if (booking.status === 'cancelled') throw new HttpError(400, 'Cancelled bookings cannot be amended');
+    await assertBookingManagementAccess(req, booking);
+    const product = await resolveBookingAmendmentProduct(req, booking, req.body.productId);
+    const previousProduct = amendmentProductSnapshot(booking);
+    const previousExperienceStartAt = booking.experienceStartAt ?? null;
 
     const pickupUtc = pickupMoment.utc();
-    booking.experienceDate = pickupMoment.format(DATE_FORMAT);
-    booking.experienceStartAt = pickupUtc.toDate();
-    booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
-
-    await booking.save();
+    await sequelize.transaction(async transaction => {
+      await assertNativeAmendmentSourceCurrent(booking, transaction);
+      booking.experienceDate = pickupMoment.format(DATE_FORMAT);
+      booking.experienceStartAt = pickupUtc.toDate();
+      if (product) { booking.productId = product.id; booking.productName = product.name; }
+      booking.status = 'amended';
+      booking.statusChangedAt = new Date();
+      booking.updatedBy = req.authContext?.id ?? booking.updatedBy;
+      await booking.save({ transaction });
+      await saveDirectBookingEvent(booking, 'amended', req.authContext?.id ?? null, {
+        action: 'amend-xperience-booking', before: previousProduct, after: amendmentProductSnapshot(booking),
+        previousExperienceStartAt, nextExperienceStartAt: booking.experienceStartAt,
+        sendCustomerEmail: req.body.sendCustomerEmail !== false,
+        productChangeLocalOnly: Boolean(product),
+      }, transaction);
+    });
 
     res.status(200).json({
       message: 'Pickup time updated successfully',
@@ -5123,7 +5158,7 @@ export const amendXperiencePolandBooking = async (req: AuthenticatedRequest, res
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to amend XperiencePoland booking';
-    res.status(500).json({ message });
+    res.status(error instanceof HttpError ? error.status : 500).json({ message });
   }
 };
 
@@ -5389,10 +5424,18 @@ const requireManifestAmendBooking = async (bookingId: number): Promise<Booking> 
   if (!booking) {
     throw new HttpError(404, 'Booking not found');
   }
-  if (!isDirectManifestActionBooking(booking) && !isAirbnbBooking(booking)) {
+  if (!isDirectBooking(booking) && !isStorefrontBooking(booking) && !isAirbnbBooking(booking)) {
     throw new HttpError(400, 'This booking platform does not support this manifest action.');
   }
   return booking;
+};
+
+const assertNativeAmendmentSourceCurrent = async (booking: Booking, transaction: Transaction): Promise<void> => {
+  const current = await Booking.findByPk(booking.id, { transaction, lock: transaction.LOCK.UPDATE });
+  if (!current) throw new HttpError(404, 'Booking not found');
+  if (current.status === 'cancelled' || current.productId !== booking.productId) {
+    throw new HttpError(409, 'The booking changed. Refresh and review it before trying again.');
+  }
 };
 
 const findStorefrontOrderForBooking = async (
@@ -5437,6 +5480,7 @@ const syncStorefrontBookingSchedule = async (
   experienceTime: string,
   transaction: Transaction,
   canUpdateBankTransferBookings: boolean,
+  product?: Product | null,
 ): Promise<void> => {
   if (!isStorefrontBooking(booking)) return;
   // The order row is the shared mutex for payment, cancellation, expiry and
@@ -5453,11 +5497,16 @@ const syncStorefrontBookingSchedule = async (
   if (!canAmendLockedStorefrontSchedule(order.status, lockedBooking.status)) {
     throw new HttpError(409, 'Cancelled bookings cannot be amended');
   }
+  if (lockedBooking.productId !== booking.productId) {
+    throw new HttpError(409, 'The booking product changed. Refresh and review it before trying again.');
+  }
   if (isBackofficeBankTransferOrder(order) && !canUpdateBankTransferBookings) {
     throw new HttpError(403, 'You do not have permission to amend bank-transfer bookings.');
   }
   const item = await findStorefrontOrderItemForBooking(booking, order, transaction, true);
-  await item.update({ experienceDate, experienceTime }, { transaction });
+  await item.update({ experienceDate, experienceTime,
+    ...(product ? { productId: product.id, productName: product.name, productSlug: createProductSlug(product) } : {}),
+  }, { transaction });
   await refreshStorefrontOrderInventoryReservationExpiries(order, transaction);
 };
 
@@ -6491,7 +6540,8 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
       return;
     }
 
-    const { pickupDate, pickupTime } = req.body as AmendPickupRequestBody;
+    const { pickupDate, pickupTime, productId, sendCustomerEmail = true } = req.body as AmendPickupRequestBody;
+    if (typeof sendCustomerEmail !== 'boolean') throw new HttpError(400, 'Invalid customer notification option.');
     const date = typeof pickupDate === 'string' ? pickupDate.trim() : '';
     const time = typeof pickupTime === 'string' ? pickupTime.trim() : '';
     const nextDate = dayjs(date, DATE_FORMAT, true);
@@ -6503,6 +6553,7 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
     const normalizedTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
 
     const booking = await requireManifestAmendBooking(bookingIdParam);
+    await assertBookingManagementAccess(req, booking);
     if (booking.status === 'cancelled') {
       res.status(400).json({ message: 'Cancelled bookings cannot be amended' });
       return;
@@ -6521,6 +6572,7 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
     }
 
     const previousExperienceStartAt = booking.experienceStartAt ?? null;
+    const previousProduct = amendmentProductSnapshot(booking);
     const nextStartAt = dayjs.tz(`${nextDate.format(DATE_FORMAT)} ${normalizedTime}`, 'YYYY-MM-DD HH:mm', STORE_TIMEZONE);
     const now = new Date();
     booking.experienceDate = nextDate.format(DATE_FORMAT);
@@ -6535,13 +6587,17 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
     }
 
     await sequelizeClient.transaction(async (transaction) => {
+      if (!isStorefrontBooking(booking)) await assertNativeAmendmentSourceCurrent(booking, transaction);
+      const product = await resolveBookingAmendmentProduct(req, booking, productId, transaction);
       await syncStorefrontBookingSchedule(
         booking,
         nextDate.format(DATE_FORMAT),
         normalizedTime,
         transaction,
         canUpdateBankTransferBookings,
+        product,
       );
+      if (product) { booking.productId = product.id; booking.productName = product.name; }
       await booking.save({ transaction });
       await saveDirectBookingEvent(booking, 'amended', req.authContext?.id ?? null, {
         action: isStorefrontBooking(booking)
@@ -6551,15 +6607,16 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
             : 'amend-direct-food-tour',
         previousExperienceStartAt: previousExperienceStartAt ? previousExperienceStartAt.toISOString() : null,
         nextExperienceStartAt: booking.experienceStartAt ? booking.experienceStartAt.toISOString() : null,
+        before: previousProduct, after: amendmentProductSnapshot(booking), sendCustomerEmail,
+        productChangeLocalOnly: Boolean(product),
       }, transaction);
     });
 
     const emailOptions: DirectBookingActionEmailOptions = {
       kind: 'amend',
       previousExperienceStartAt,
+      previousProductName: previousProduct.productName,
     };
-    const sendCustomerEmail =
-      (!isStorefrontBooking(booking) && !isAirbnbBooking(booking)) || req.body?.sendCustomerEmail !== false;
     const email = await sendDirectActionEmailWithStatus(booking, emailOptions, sendCustomerEmail);
     const internalEmail = await sendInternalDirectActionEmailWithStatus(booking, emailOptions);
 
@@ -6570,6 +6627,7 @@ export const amendDirectFoodTourBooking = async (req: AuthenticatedRequest, res:
         status: booking.status,
         experienceDate: booking.experienceDate,
         experienceStartAt: booking.experienceStartAt,
+        productId: booking.productId, productName: booking.productName,
       },
       ...email,
       ...internalEmail,

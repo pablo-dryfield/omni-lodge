@@ -36,6 +36,11 @@ it('does not claim a cancellation processed a refund', () => {
   expect(email.subject).toContain('cancelled'); expect(email.textBody).toContain('No payment or refund was processed.');
   expect(email.textBody).not.toMatch(/Stripe will|refund is processing/i);
 });
+it('describes both products when an amendment reassigns the booking', () => {
+  const email = buildLocalBookingActionEmail(booking, { ...context, previousProductName: 'Original tour' }, false);
+  expect(email.textBody).toContain('Previous product: Original tour');
+  expect(email.textBody).toContain(`New product: ${booking.productName}`);
+});
 it('keeps management reason and actor in internal notifications only', () => {
   const email = buildLocalBookingActionEmail(booking, context, true);
   expect(email.textBody).toContain(context.reason); expect(email.textBody).toContain('Changed by user: 7');

@@ -45,6 +45,8 @@ const preview = {
 const openBookingActions = async (booking = order(), refundPreview = preview) => {
   (axiosInstance.get as jest.Mock).mockImplementation(async (url: string) => {
     if (url.endsWith('/partial-refund-preview')) return { data: refundPreview };
+    if (url.endsWith('/amend-products')) return { data: { currentProductId: 49, currentProductName: 'Food Tour Krakow',
+      products: [{ id: 49, name: 'Food Tour Krakow' }, { id: 50, name: 'Late Night Bites' }] } };
     return { data: { manifest: [{
       productId: booking.productId, productName: booking.productName, date: booking.date, time: booking.timeslot,
       totalPeople: 1, men: 0, women: 0, extras, orders: [booking], platformBreakdown: [],
@@ -169,3 +171,36 @@ it.each([{ paymentMethod: 'bank_transfer' }, { paymentStatus: 'unpaid' }, { plat
     expect(within(actions).queryByRole('button', { name: 'Partial Refund' })).not.toBeInTheDocument();
   },
 );
+
+it.each(['direct', 'omnilodge'])('reassigns a %s booking without changing time or sending a customer email', async platform => {
+  const actions = await openBookingActions(order({ platform }));
+  fireEvent.click(within(actions).getByRole('button', { name: 'Amend', exact: true }));
+  const modal = await screen.findByRole('dialog', { name: 'Amend booking ftk_test' });
+  const product = within(modal).getByLabelText('Product');
+  await waitFor(() => expect(product).toHaveValue('Food Tour Krakow'));
+  fireEvent.click(within(modal).getByRole('checkbox', { name: 'Notify customer' }));
+  expect(within(modal).getByRole('button', { name: 'Save Changes', exact: true })).toBeDisabled();
+  fireEvent.click(product);
+  fireEvent.click(await screen.findByRole('option', { name: 'Late Night Bites', hidden: true }));
+  fireEvent.click(within(modal).getByRole('button', { name: 'Save Changes', exact: true }));
+  await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledWith('/bookings/99/direct-actions/amend', {
+    productId: 50, pickupDate: '2027-01-10', pickupTime: '14:00', sendCustomerEmail: false,
+  }));
+  expect((axiosInstance.post as jest.Mock).mock.calls.some(call => /emails\/(send|render-preview)/.test(call[0]))).toBe(false);
+});
+
+it('includes the destination product in the customer email preview before a storefront amendment', async () => {
+  const actions = await openBookingActions(order({ platform: 'omnilodge' }));
+  fireEvent.click(within(actions).getByRole('button', { name: 'Amend', exact: true }));
+  const modal = await screen.findByRole('dialog', { name: 'Amend booking ftk_test' });
+  const product = within(modal).getByLabelText('Product');
+  await waitFor(() => expect(product).toHaveValue('Food Tour Krakow'));
+  fireEvent.click(product);
+  fireEvent.click(await screen.findByRole('option', { name: 'Late Night Bites', hidden: true }));
+  fireEvent.click(within(modal).getByRole('button', { name: 'Preview Email' }));
+  await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledWith('/bookings/emails/render-preview',
+    expect.objectContaining({ templateContext: expect.objectContaining({
+      productName: 'Late Night Bites', previousProductName: 'Food Tour Krakow', newProductName: 'Late Night Bites',
+    }) }), expect.anything()));
+  expect((axiosInstance.post as jest.Mock).mock.calls.every(call => call[0] === '/bookings/emails/render-preview')).toBe(true);
+});

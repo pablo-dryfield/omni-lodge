@@ -15,6 +15,7 @@ export type DirectBookingActionEmailKind = 'confirmation' | 'cancellation' | 'am
 export type DirectBookingActionEmailOptions = {
   kind: DirectBookingActionEmailKind;
   previousExperienceStartAt?: Date | null;
+  previousProductName?: string | null;
   refundedAmount?: number | null;
   refundCurrency?: string | null;
   previousPartySizeTotal?: number | null;
@@ -177,7 +178,7 @@ const getEmailCopy = (
       return {
         eyebrow: 'Booking updated',
         headline: 'Your tour was updated',
-        body: `Hi ${guestName}, your ${tourName} booking details have been updated. Please check the new date and start time below.`,
+        body: `Hi ${guestName}, your ${tourName} booking details have been updated. Please check the product, date and start time below.`,
         subject: `Your ${tourName} booking was updated`,
       };
     case 'partial_refund':
@@ -290,6 +291,7 @@ export const buildDirectBookingActionEmail = (
 
         <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;margin:28px 0 0;border-collapse:collapse;table-layout:fixed;border-top:1px solid #f0ded6;border-bottom:1px solid #f0ded6;">
           ${bookingInfoRow('Tour', tourName)}
+          ${options.previousProductName && options.previousProductName !== booking.productName ? bookingInfoRow('Previous product', options.previousProductName) : ''}
           ${previousDateTime ? bookingInfoRow('Previous start', previousDateTime) : ''}
           ${bookingInfoRow('Date', date)}
           ${bookingInfoRow('Start time', time)}
@@ -330,6 +332,7 @@ export const buildDirectBookingActionEmail = (
     '',
     copy.body,
     `Order number: ${orderNumber}`,
+    options.previousProductName && options.previousProductName !== booking.productName ? `Previous product: ${options.previousProductName}` : null,
     previousDateTime ? `Previous start: ${previousDateTime}` : null,
     `Date: ${date}`,
     `Start time: ${time}`,
@@ -427,6 +430,7 @@ export const buildInternalDirectBookingActionEmail = (
         <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;border-top:1px solid #f0ded6;border-bottom:1px solid #f0ded6;">
           ${bookingInfoRow('Action', copy.headline)}
           ${bookingInfoRow('Tour', tourName)}
+          ${options.previousProductName && options.previousProductName !== booking.productName ? bookingInfoRow('Previous product', options.previousProductName) : ''}
           ${previousDateTime ? bookingInfoRow('Previous start', previousDateTime) : ''}
           ${bookingInfoRow('Date', date)}
           ${bookingInfoRow('Start time', time)}
@@ -458,6 +462,7 @@ export const buildInternalDirectBookingActionEmail = (
     `Action: ${copy.headline}`,
     `Omni-Lodge reference: ${booking.id}`,
     `Tour: ${tourName}`,
+    options.previousProductName && options.previousProductName !== booking.productName ? `Previous product: ${options.previousProductName}` : null,
     previousDateTime ? `Previous start: ${previousDateTime}` : null,
     `Date: ${date}`,
     `Start time: ${time}`,

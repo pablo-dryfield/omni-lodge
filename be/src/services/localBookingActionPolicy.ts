@@ -15,7 +15,7 @@ export const isLocalActionPlatform = (platform: unknown): boolean => {
   return Boolean(value) && !['direct', 'omnilodge', 'manual', 'unknown'].includes(value);
 };
 
-export const assertLocalBookingActionAccess = async (
+export const assertBookingManagementAccess = async (
   req: AuthenticatedRequest, booking: Booking, transaction?: Transaction,
 ): Promise<'DIRECT_BOOKINGS' | 'STOREFRONT'> => {
   if (!req.authContext?.userTypeId || !await hasModuleActionPermission(req, 'booking-management', 'update')) {
@@ -40,8 +40,15 @@ export const assertLocalBookingActionAccess = async (
     || !foodTour || product?.productTypeId !== scope[0]) {
     throw new HttpError(403, 'This booking is outside your Food Tour management scope.');
   }
+  return foodTour ? 'DIRECT_BOOKINGS' : 'STOREFRONT';
+};
+
+export const assertLocalBookingActionAccess = async (
+  req: AuthenticatedRequest, booking: Booking, transaction?: Transaction,
+): Promise<'DIRECT_BOOKINGS' | 'STOREFRONT'> => {
+  const family = await assertBookingManagementAccess(req, booking, transaction);
   if (!isLocalActionPlatform(booking.platform)) {
     throw new HttpError(400, 'Use the existing payment-aware actions for this booking channel.');
   }
-  return foodTour ? 'DIRECT_BOOKINGS' : 'STOREFRONT';
+  return family;
 };

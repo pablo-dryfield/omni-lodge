@@ -13,12 +13,18 @@ type HealthRouterOptions = {
   databaseTimeoutMs?: number;
   databaseCacheMs?: number;
   checkDatabase?: () => Promise<void>;
+  checkWorkspace?: () => Promise<{ required: boolean; ready: boolean }>;
 };
 
-const cleanPublicValue = (value: string | undefined, maxLength: number): string | null => {
+const cleanPublicValue = (
+  value: string | undefined,
+  maxLength: number,
+): string | null => {
   const normalized = value?.trim();
   if (!normalized) return null;
-  return normalized.replace(/[^a-zA-Z0-9._:/@+-]/g, '').slice(0, maxLength) || null;
+  return (
+    normalized.replace(/[^a-zA-Z0-9._:/@+-]/g, '').slice(0, maxLength) || null
+  );
 };
 
 const defaultDatabaseCheck = async (): Promise<void> => {
@@ -27,14 +33,51 @@ const defaultDatabaseCheck = async (): Promise<void> => {
   const { default: sequelize } = await import('../config/database.js');
   await sequelize.query('SELECT 1');
 };
+const defaultWorkspaceCheck = async (): Promise<{
+  required: boolean;
+  ready: boolean;
+}> => {
+  if (
+    process.env.NODE_ENV !== 'production' ||
+    ['deployment-candidate', 'dry-run'].includes(
+      process.env.APP_RUNTIME_MODE || '',
+    )
+  )
+    return { required: false, ready: true };
+  const { getConfigValue, refreshConfigCacheKeys } = await import(
+    '../services/configService.js'
+  );
+  await refreshConfigCacheKeys(['DB_WORKSPACE_ENABLED']);
+  if (getConfigValue('DB_WORKSPACE_ENABLED') !== true)
+    return { required: false, ready: true };
+  try {
+    const { controlStore } = await import(
+      '../services/databaseWorkspace/store.js'
+    );
+    return {
+      required: true,
+      ready:
+        (await controlStore().healthy()) &&
+        (await controlStore().workerReady()),
+    };
+  } catch {
+    return { required: true, ready: false };
+  }
+};
 
-const withTimeout = async <T>(operation: Promise<T>, timeoutMs: number): Promise<T> => {
+const withTimeout = async <T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       operation,
       new Promise<T>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error('Database readiness check timed out')), timeoutMs);
+        timeout = setTimeout(
+          () => reject(new Error('Database readiness check timed out')),
+          timeoutMs,
+        );
         timeout.unref?.();
       }),
     ]);
@@ -43,23 +86,35 @@ const withTimeout = async <T>(operation: Promise<T>, timeoutMs: number): Promise
   }
 };
 
-export const createHealthRouter = (options: HealthRouterOptions = {}): Router => {
+export const createHealthRouter = (
+  options: HealthRouterOptions = {},
+): Router => {
   const router = Router();
   const env = options.env ?? process.env;
   const uptime = options.uptime ?? process.uptime;
   const now = options.now ?? Date.now;
   const checkDatabase = options.checkDatabase ?? defaultDatabaseCheck;
-  const databaseTimeoutMs = options.databaseTimeoutMs ?? DEFAULT_DATABASE_TIMEOUT_MS;
+  const checkWorkspace =
+    options.checkWorkspace ??
+    (options.env
+      ? async () => ({ required: false, ready: true })
+      : defaultWorkspaceCheck);
+  const databaseTimeoutMs =
+    options.databaseTimeoutMs ?? DEFAULT_DATABASE_TIMEOUT_MS;
   const databaseCacheMs = options.databaseCacheMs ?? DEFAULT_DATABASE_CACHE_MS;
   let databaseInFlight: Promise<boolean> | null = null;
   let databaseCached: { ok: boolean; expiresAt: number } | null = null;
 
   const probeDatabase = async (): Promise<boolean> => {
-    if (databaseCached && databaseCached.expiresAt > now()) return databaseCached.ok;
+    if (databaseCached && databaseCached.expiresAt > now())
+      return databaseCached.ok;
     if (!databaseInFlight) {
       const operation = Promise.resolve()
         .then(checkDatabase)
-        .then(() => true, () => false);
+        .then(
+          () => true,
+          () => false,
+        );
       databaseInFlight = operation;
       void operation.then((ok) => {
         databaseCached = { ok, expiresAt: now() + databaseCacheMs };
@@ -121,7 +176,15 @@ export const createHealthRouter = (options: HealthRouterOptions = {}): Router =>
       databaseOk = await probeDatabase();
     }
 
-    const ready = configurationOk && databaseOk;
+    let workspace = { required: false, ready: true };
+    if (configurationOk && databaseOk)
+      try {
+        workspace = await withTimeout(checkWorkspace(), databaseTimeoutMs);
+      } catch {
+        workspace = { required: true, ready: false };
+      }
+    const ready =
+      configurationOk && databaseOk && (!workspace.required || workspace.ready);
     res.status(ready ? 200 : 503).json({
       status: ready ? 'ok' : 'not_ready',
       ready,
@@ -135,6 +198,10 @@ export const createHealthRouter = (options: HealthRouterOptions = {}): Router =>
         },
         database: {
           ok: databaseOk,
+        },
+        databaseWorkspace: {
+          required: workspace.required,
+          ok: workspace.ready,
         },
       },
     });

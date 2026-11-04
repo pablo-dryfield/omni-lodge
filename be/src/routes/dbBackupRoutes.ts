@@ -36,8 +36,12 @@ router.use(authMiddleware, requireRoles(['admin']));
 
 router.post('/create', createDbBackup);
 router.get('/', getDbBackups);
-router.post('/upload/restore', upload.single('backup'), uploadAndRestoreDbBackup);
-router.post('/:filename/restore', restoreDbBackup);
+const requireLocalRestore: import('express').RequestHandler = (_req,res,next) => {
+  if(process.env.NODE_ENV === 'production') { res.status(410).json({code:'LEGACY_RESTORE_RETIRED',message:'Use Database Workspace for reviewed isolated restores. Production replacement requires the infrastructure recovery runbook.'}); return; }
+  next();
+};
+router.post('/upload/restore', requireLocalRestore, upload.single('backup'), uploadAndRestoreDbBackup);
+router.post('/:filename/restore', requireLocalRestore, restoreDbBackup);
 router.get('/:filename/download', downloadDbBackup);
 
 export default router;

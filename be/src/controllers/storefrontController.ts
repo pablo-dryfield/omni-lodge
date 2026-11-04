@@ -15,6 +15,7 @@ import {
   type AddonInventoryAvailability,
 } from '../services/inventoryService.js';
 import { getStorefrontPublicConfig } from '../services/storefrontPublicConfigService.js';
+import { createProductSlug } from '../utils/storefrontProductSlug.js';
 import {
   collectAvailabilityRedirectProductIds,
   withAvailabilityRedirectSlugs,
@@ -87,17 +88,6 @@ const productIncludes: Includeable[] = [
     ],
   },
 ];
-
-const slugify = (value: string): string =>
-  value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
-const createProductSlug = (product: Pick<Product, 'id' | 'name'>): string =>
-  `${slugify(product.name) || 'experience'}-${product.id}`;
 
 const toMoneyAmount = (value: number | string | null | undefined): number =>
   Number(Number(value ?? 0).toFixed(2));

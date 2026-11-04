@@ -19,7 +19,10 @@ const renderModal = (operation: 'amend' | 'cancel' = 'cancel', canManage = true)
   </MantineProvider>);
 };
 beforeEach(() => {
-  jest.clearAllMocks(); (axiosInstance.get as jest.Mock).mockResolvedValue({ data: preview });
+  jest.clearAllMocks(); (axiosInstance.get as jest.Mock).mockImplementation(async (url: string) => ({ data:
+    url.endsWith('/amend-products') ? { currentProductId: 10, currentProductName: 'Pub Crawl',
+      products: [{ id: 10, name: 'Pub Crawl' }, { id: 20, name: 'Special Pub Crawl' }] } : preview,
+  }));
   (axiosInstance.post as jest.Mock).mockResolvedValue({ data: success });
   Object.defineProperty(window, 'matchMedia', { writable: true, value: jest.fn(query => ({
     matches: false, media: query, onchange: null, addListener: jest.fn(), removeListener: jest.fn(),
@@ -61,6 +64,22 @@ it('supports missing customer email without hiding the correction', async () => 
   fireEvent.change(screen.getByLabelText(/Reason for this force action/), { target: { value: 'Verified platform cancellation' } });
   expect(screen.getByRole('button', { name: 'Confirm force cancellation' })).toBeEnabled();
   expect(screen.getByRole('checkbox', { name: 'Send customer notification' })).toBeDisabled();
+});
+it('allows a product-only correction without notifying the customer', async () => {
+  renderModal('amend');
+  const reason = screen.getByLabelText(/Reason for this force action/);
+  await waitFor(() => expect(reason).toBeEnabled());
+  fireEvent.change(reason, { target: { value: 'Internal product correction' } });
+  const product = screen.getByRole('textbox', { name: 'Product' });
+  await waitFor(() => expect(product).toHaveValue('Pub Crawl'));
+  expect(screen.getByRole('button', { name: 'Confirm force amendment' })).toBeDisabled();
+  fireEvent.click(product);
+  fireEvent.click(await screen.findByRole('option', { name: 'Special Pub Crawl', hidden: true }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Send customer notification' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm force amendment' }));
+  await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledWith('/bookings/42/local-actions/amend', expect.objectContaining({
+    productId: 20, pickupDate: '2027-01-10', pickupTime: '21:00', sendCustomerEmail: false,
+  })));
 });
 it('does not allow an account with revoked authority to submit', async () => {
   renderModal('cancel', false);

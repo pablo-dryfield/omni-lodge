@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom";
+import { stageWorkspaceQuery } from "../features/databaseWorkspace/pendingQuery";
 import { Suspense, lazy, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -43,9 +45,7 @@ import type { GenericPageProps } from "../types/general/GenericPageProps";
 import {
   capturePerformanceHeapSnapshot,
   fetchPerformanceSnapshot,
-  runPerformanceExplain,
   type CaptureHeapSnapshotResponse,
-  type PerformanceExplainResponse,
   type PerformanceSnapshotResponse,
 } from "../api/performance";
 
@@ -721,9 +721,6 @@ const PerformancePage = ({ title }: GenericPageProps) => {
   const [sessionScope, setSessionScope] = useState<SessionScope>("current");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
-  const [explainResult, setExplainResult] = useState<PerformanceExplainResponse | null>(null);
-  const [explainLoadingSql, setExplainLoadingSql] = useState<string | null>(null);
-  const [explainError, setExplainError] = useState<string | null>(null);
   const [heapCaptureState, setHeapCaptureState] = useState<{
     loading: boolean;
     error: string | null;
@@ -1166,24 +1163,6 @@ const PerformancePage = ({ title }: GenericPageProps) => {
       setCopyState("copied");
     } catch {
       setCopyState("error");
-    }
-  };
-
-  const handleRunExplain = async (sql: string) => {
-    setExplainLoadingSql(sql);
-    setExplainError(null);
-    try {
-      const response = await runPerformanceExplain(sql);
-      setExplainResult(response);
-    } catch (caughtError) {
-      const message = isAxiosError<{ message?: string }>(caughtError)
-        ? caughtError.response?.data?.message ?? caughtError.message
-        : caughtError instanceof Error
-          ? caughtError.message
-          : "Failed to run EXPLAIN ANALYZE";
-      setExplainError(message);
-    } finally {
-      setExplainLoadingSql(null);
     }
   };
 
@@ -1866,12 +1845,11 @@ const PerformancePage = ({ title }: GenericPageProps) => {
                                   radius="xl"
                                   variant="light"
                                   color="dark"
-                                  loading={explainLoadingSql === query.sampleSql}
-                                  onClick={() => {
-                                    void handleRunExplain(query.sampleSql);
-                                  }}
+                                  component={Link}
+                                  to="/settings/sql-helper"
+                                  onClick={() => stageWorkspaceQuery(query.sampleSql)}
                                 >
-                                  Explain
+                                  Plan in workspace
                                 </Button>
                               </Table.Td>
                             </Table.Tr>
@@ -1949,40 +1927,6 @@ const PerformancePage = ({ title }: GenericPageProps) => {
               </SectionCard>
             </SimpleGrid>
 
-            {(explainResult || explainError) ? (
-              <SectionCard icon={<IconSql size={20} />} title="Explain Analyze">
-                <Stack gap="sm">
-                  {explainError ? (
-                    <Alert radius="xl" color="red" icon={<IconAlertTriangle size={18} />} title="Explain failed">
-                      {explainError}
-                    </Alert>
-                  ) : null}
-                  {explainResult ? (
-                    <>
-                      <Text size="sm" c="dimmed">
-                        Generated {formatTimestamp(explainResult.generatedAt)}
-                      </Text>
-                      <Paper withBorder radius="xl" p="md" bg="gray.0">
-                        <Text size="sm" fw={700} mb="xs">
-                          SQL
-                        </Text>
-                        <Text ff="monospace" size="xs">
-                          {explainResult.sql}
-                        </Text>
-                      </Paper>
-                      <Paper withBorder radius="xl" p="md" bg="gray.0">
-                        <Text size="sm" fw={700} mb="xs">
-                          Plan
-                        </Text>
-                        <Text ff="monospace" size="xs" style={{ whiteSpace: "pre-wrap" }}>
-                          {explainResult.plan.join("\n")}
-                        </Text>
-                      </Paper>
-                    </>
-                  ) : null}
-                </Stack>
-              </SectionCard>
-            ) : null}
 
             <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="lg">
               <SectionCard
