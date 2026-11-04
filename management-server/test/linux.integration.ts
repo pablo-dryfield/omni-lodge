@@ -505,7 +505,11 @@ test(
                   if ((res.statusCode || 500) >= 400)
                     reject(
                       Object.assign(
-                        new Error(data.message || "Fixture request rejected"),
+                        new Error(
+                          route +
+                            ": " +
+                            (data.message || "Fixture request rejected"),
+                        ),
                         { code: data.code, status: res.statusCode },
                       ),
                     );
@@ -686,6 +690,19 @@ test(
           "[redacted database URL]",
         ),
       );
+      if (brokerUnit) {
+        const journal = await run("/usr/bin/journalctl", [
+          "--no-pager",
+          "--unit=" + brokerUnit,
+          "--lines=40",
+        ]).catch(() => ({ stdout: "Broker diagnostic unavailable" }));
+        console.error(
+          journal.stdout.replace(
+            /(postgresql:\/\/)[^\s]+/g,
+            "[redacted database URL]",
+          ),
+        );
+      }
       throw error;
     } finally {
       for (const unit of childUnits)

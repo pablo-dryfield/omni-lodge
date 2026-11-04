@@ -480,6 +480,7 @@ export async function authorityRpc(
       chmod: "changePermissions",
       checksum: "readFiles",
       statvfs: "readFiles",
+      registerStaging: "writeFiles",
     };
     const required = operationActions[String(args.operation)];
     if (!required || action !== required)
@@ -493,6 +494,15 @@ export async function authorityRpc(
       fail(400, "INVALID_OPERATION", "Invalid adapter parameters.");
     const params = {
       ...(inputParams as Record<string, unknown>),
+      stagingExpiresAt: Math.max(
+        Date.now() +
+          Number(
+            (policy.values.SYSTEM_MANAGEMENT_RETENTION as { tempHours: number })
+              .tempHours,
+          ) *
+            3600000,
+        row.expires_at.getTime() + 300000,
+      ),
       runtimeBudget: policy.values.SYSTEM_MANAGEMENT_REMOTE_BUDGET,
       storagePolicy: policy.values.SYSTEM_MANAGEMENT_STORAGE_POLICY,
       remoteLeaseSeconds: (

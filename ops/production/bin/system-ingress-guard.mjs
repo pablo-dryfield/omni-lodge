@@ -13,6 +13,8 @@ const incomingHeaders = new Set([
   "content-type",
   "content-length",
   "accept",
+  "range",
+  "if-range",
   "x-management-csrf",
   "x-upload-offset",
   "x-chunk-sha256",

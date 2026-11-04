@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -80,7 +81,7 @@ func cleanup(p Policy) error {
 			}
 		}
 	}
-	return nil
+	return cleanupStaging(p, now)
 }
 func cleanupRootTrash(policy RootPolicy, rootID, actorID string, now time.Time) error {
 	root, err := os.OpenRoot(policy.Path)
@@ -137,6 +138,113 @@ func cleanupRootTrash(policy RootPolicy, rootID, actorID string, now time.Time) 
 		if err = root.Remove(name); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+type StagingRecord struct {
+	ID      string `json:"id"`
+	ActorID int    `json:"actorId"`
+	RootID  string `json:"rootId"`
+	Expires int64  `json:"expires"`
+}
+
+func registerStaging(e Envelope, p Policy) (map[string]any, error) {
+	id := str(e.Params, "stagingId")
+	rootID := str(e.Params, "rootId")
+	actor := p.Actors[strconv.Itoa(e.ActorID)]
+	root, ok := actor.Roots[rootID]
+	if !ok || !root.Writable || root.Staging == "" || !uuid.MatchString(id) {
+		return nil, errors.New("staging registration rejected")
+	}
+	deadline := int64(integer(e.Params, "stagingExpiresAt"))
+	if deadline < time.Now().UnixMilli() || deadline > time.Now().Add(7*24*time.Hour+time.Minute).UnixMilli() {
+		return nil, errors.New("invalid staging expiry")
+	}
+	directory := filepath.Join(statePath, "staging")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return nil, err
+	}
+	file := filepath.Join(directory, id+".json")
+	if _, err := os.Lstat(file); err == nil {
+		return nil, errors.New("staging already registered")
+	}
+	dir, err := os.Open(directory)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := dir.ReadDir(10001)
+	dir.Close()
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if len(entries) >= 10000 {
+		return nil, errors.New("staging journal quota reached")
+	}
+	return map[string]any{"registered": true}, atomicJSON(file, StagingRecord{id, e.ActorID, rootID, deadline})
+}
+func cleanupStaging(p Policy, now time.Time) error {
+	directory := filepath.Join(statePath, "staging")
+	dir, err := os.Open(directory)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	entries, err := dir.ReadDir(10001)
+	dir.Close()
+	if err != nil && err != io.EOF {
+		return err
+	}
+	if len(entries) > 10000 {
+		return errors.New("staging inventory quota exceeded")
+	}
+	for _, entry := range entries {
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		if !uuid.MatchString(id) {
+			continue
+		}
+		file := filepath.Join(directory, entry.Name())
+		b, err := os.ReadFile(file)
+		if err != nil || len(b) > 8192 {
+			continue
+		}
+		var record StagingRecord
+		if json.Unmarshal(b, &record) != nil || record.ID != id || record.Expires > now.UnixMilli() {
+			continue
+		}
+		actor, ok := p.Actors[strconv.Itoa(record.ActorID)]
+		if !ok {
+			continue
+		}
+		policy, ok := actor.Roots[record.RootID]
+		if !ok || !policy.Writable {
+			continue
+		}
+		guard, err := namedLock(record.RootID)
+		if err != nil {
+			continue
+		}
+		// Expire the lease first. An uncertain publishing worker retains its records and files.
+		lease, leaseErr := readCopyLease(id)
+		if leaseErr == nil && (lease.State == "publishing" || (lease.State == "running" && lease.Until > now.UnixMilli())) {
+			guard.Close()
+			continue
+		}
+		for _, location := range []struct{ base, name string }{{policy.Staging, id}, {policy.Path, filepath.Join(".omnilodge-private", id+".partial")}, {policy.Path, filepath.Join(".omnilodge-private", id+".copy")}} {
+			root, openErr := os.OpenRoot(location.base)
+			if openErr != nil {
+				continue
+			}
+			info, statErr := root.Lstat(location.name)
+			if statErr == nil && info.Mode().IsRegular() && noLinks(root, location.name, false) == nil {
+				_ = root.Remove(location.name)
+			}
+			root.Close()
+		}
+		_ = os.Remove(file)
+		guard.Close()
 	}
 	return nil
 }

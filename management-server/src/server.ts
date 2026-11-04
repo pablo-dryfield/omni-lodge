@@ -452,38 +452,121 @@ export async function start() {
         send(res, 200, await files.execute(token, ctx, input.id));
         return;
       }
-      if (route === "/management/download-folder" && req.method === "GET") {
+      if (route === "/management/downloads") {
         await requireAction("readFiles");
-        res.setHeader("Content-Type", "application/zip");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename*=UTF-8''${encodeURIComponent(path.posix.basename(input.path || "folder"))}.zip`,
-        );
-        await files.downloadFolder(
+        const relative = String(input.path || ".");
+        const listing = await files.list(
           token,
           ctx,
           input.hostId,
           input.rootId,
-          input.path,
-          res,
+          path.posix.dirname(relative),
         );
+        const entry = listing.entries.find(
+          (item: any) => item.path === relative,
+        ) as
+          | { path: string; type: string; version: string; size: string }
+          | undefined;
+        requireValue(
+          entry,
+          404,
+          "NOT_FOUND",
+          "Download source is no longer present.",
+        );
+        requireValue(
+          ["file", "directory"].includes(entry.type),
+          409,
+          "CAPABILITY_UNAVAILABLE",
+          "Links and special files cannot be downloaded.",
+        );
+        const job = await store.create(ctx.actorId, input.hostId, "download", {
+          rootId: input.rootId,
+          path: relative,
+          version: entry.version,
+          directory: entry.type === "directory",
+          expires: Date.now() + 120000,
+          policyHash: ctx.policyHash,
+          size: entry.size,
+        });
+        send(res, 201, { id: job.id });
         return;
       }
-      if (route === "/management/download" && req.method === "GET") {
+      if (
+        (route === "/management/download" ||
+          route === "/management/download-folder") &&
+        req.method === "GET"
+      ) {
         await requireAction("readFiles");
-        res.setHeader("Content-Type", "application/octet-stream");
+        const job = await store.get(String(input.id), ctx.actorId),
+          d = job.data;
+        requireValue(
+          job.kind === "download" &&
+            Number(d.expires) > Date.now() &&
+            d.policyHash === ctx.policyHash,
+          410,
+          "DOWNLOAD_EXPIRED",
+          "Prepare a new download from Files.",
+        );
+        requireValue(
+          !["streaming"].includes(job.state),
+          409,
+          "TRANSFER_STATE",
+          "This download is already streaming.",
+        );
+        requireValue(
+          Boolean(d.directory) === route.endsWith("-folder"),
+          400,
+          "INVALID_DOWNLOAD",
+          "Download format differs from the selected source.",
+        );
+        res.setHeader(
+          "Content-Type",
+          d.directory ? "application/zip" : "application/octet-stream",
+        );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename*=UTF-8''${encodeURIComponent(path.posix.basename(input.path || "download"))}`,
+          `attachment; filename*=UTF-8''${encodeURIComponent(path.posix.basename(String(d.path)))}${d.directory ? ".zip" : ""}`,
         );
-        await files.download(
-          token,
-          ctx,
-          input.hostId,
-          input.rootId,
-          input.path,
-          res,
-        );
+        await store.claim(job, ["queued", "completed", "failed"], "streaming");
+        try {
+          if (d.directory)
+            await files.downloadFolder(
+              token,
+              ctx,
+              job.hostId,
+              String(d.rootId),
+              String(d.path),
+              res,
+            );
+          else
+            await files.download(
+              token,
+              ctx,
+              job.hostId,
+              String(d.rootId),
+              String(d.path),
+              res,
+              String(d.version),
+              req.headers.range,
+              typeof req.headers["if-range"] === "string"
+                ? req.headers["if-range"]
+                : undefined,
+            );
+          await store.update(job, "completed", {
+            verification: "Stream finished; device save unconfirmed",
+          });
+        } catch (error) {
+          await store.update(job, "failed", {
+            error:
+              "Download stream interrupted. The browser may have an incomplete file.",
+          });
+          throw error;
+        }
+        return;
+      }
+      if (route === "/management/transfers/review") {
+        await requireAction("transfer");
+        send(res, 200, await files.destination(token, ctx, input));
         return;
       }
       if (route === "/management/transfers" && req.method === "POST") {
@@ -492,7 +575,7 @@ export async function start() {
         return;
       }
       const transfer = route.match(
-        /^\/management\/transfers\/([0-9a-f-]{36})\/(chunks|publish|resume|cancel)$/,
+        /^\/management\/transfers\/([0-9a-f-]{36})\/(chunks|publish|resume|pause|cancel)$/,
       );
       if (transfer) {
         await requireAction("transfer");
@@ -510,7 +593,9 @@ export async function start() {
               String(req.headers["x-chunk-sha256"] || ""),
             ),
           );
-        } else if (transfer[2] === "resume")
+        } else if (transfer[2] === "pause")
+          send(res, 200, await files.pause(token, ctx, transfer[1]));
+        else if (transfer[2] === "resume")
           send(
             res,
             200,
@@ -674,6 +759,22 @@ export async function start() {
       }
       throw new Fault(404, "NOT_FOUND", "Management route not found.");
     } catch (error) {
+      if (!(error instanceof Fault)) {
+        const code = /^[A-Z0-9_]{1,40}$/.test(
+          String((error as { code?: unknown })?.code),
+        )
+          ? String((error as { code?: unknown }).code)
+          : "UNEXPECTED";
+        const frames =
+          error instanceof Error
+            ? String(error.stack || "")
+                .split("\n")
+                .slice(1, 4)
+                .map((x) => x.trim())
+                .join(" | ")
+            : "";
+        console.error(`Management request failed (${code}): ${frames}`);
+      }
       if (res.headersSent) {
         res.destroy();
         return;

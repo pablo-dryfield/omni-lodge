@@ -49,6 +49,7 @@ import {
 import "./styles.css";
 import { HostProfiles } from "./HostProfiles";
 import { Dialog } from "./Dialog";
+import { UploadConflict, type ConflictChoice } from "./UploadConflict";
 import { ActiveSessions } from "./ActiveSessions";
 import { Credentials } from "./Credentials";
 
@@ -147,6 +148,12 @@ function App() {
       total: number;
     } | null>(null),
     [searchPath, setSearchPath] = useState("");
+  const [uploadConflict, setUploadConflict] = useState<{
+    path: string;
+    size: number;
+  } | null>(null);
+  const conflictResolve = useRef<((v: ConflictChoice) => void) | null>(null),
+    abortUploadMode = useRef("pause");
   const pendingResume = useRef<Job | null>(null);
   const abortUpload = useRef(false),
     fileInput = useRef<HTMLInputElement>(null),
@@ -170,6 +177,9 @@ function App() {
   }, [session?.actorId]);
   const clearWorkspace = useCallback(() => {
     abortUpload.current = true;
+    conflictResolve.current?.({ choice: "cancel" });
+    conflictResolve.current = null;
+    setUploadConflict(null);
     pendingResume.current = null;
     setDocument(null);
     setFileOperation(null);
@@ -429,58 +439,98 @@ function App() {
     }
   };
   const download = async (entry: Entry) => {
+    let writer: any;
     try {
-      const route = `/download${entry.type === "directory" ? "-folder" : ""}?${query({ hostId, rootId, path: entry.path })}`;
-      const response = await fetch(`/management${route}`);
-      if (!response.ok) {
-        const result = await response.json();
-        throw new ApiError(result.code, result.message);
-      }
       const picker = (window as any).showSaveFilePicker;
-      if (picker) {
-        const handle = await picker({
+      // The picker must run directly in the click gesture, before network awaits.
+      const handle = picker
+        ? await picker({
             suggestedName:
               entry.name + (entry.type === "directory" ? ".zip" : ""),
-          }),
-          writer = await handle.createWritable(),
-          reader = response.body!.getReader();
-        try {
-          for (;;) {
-            const part = await reader.read();
-            if (part.done) break;
-            await writer.write(part.value);
-          }
-          await writer.close();
-          setNotice(`Saved ${entry.name}.`);
-        } catch (e) {
-          await writer.abort();
-          throw e;
+          })
+        : null;
+      const intent = await api("/downloads", {
+        hostId,
+        rootId,
+        path: entry.path,
+      });
+      const route = `/management/download${entry.type === "directory" ? "-folder" : ""}?${query({ id: intent.id })}`;
+      if (handle) {
+        writer = await handle.createWritable();
+        const response = await fetch(route);
+        if (!response.ok) {
+          const result = await response.json();
+          throw new ApiError(result.code, result.message);
         }
+        const reader = response.body!.getReader();
+        for (;;) {
+          const part = await reader.read();
+          if (part.done) break;
+          await writer.write(part.value);
+        }
+        await writer.close();
+        writer = null;
+        setNotice(`Saved ${entry.name}.`);
       } else {
-        await response.body?.cancel();
         const link = documentGlobal.createElement("a");
-        link.href = `/management${route}`;
+        link.href = route;
         link.download = entry.name;
         link.click();
         setNotice(
           "Download handed to browser. Check its download manager for completion.",
         );
       }
+      void loadJobs();
     } catch (e) {
+      if (writer) await writer.abort().catch(() => {});
       if ((e as Error).name !== "AbortError") onError(e);
     }
   };
   const uploadFiles = async (files: FileList | null) => {
     if (!files?.length) return;
     abortUpload.current = false;
+    abortUploadMode.current = "pause";
     try {
       for (const file of Array.from(files)) {
         if (abortUpload.current) break;
         const relative =
           (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
           file.name;
-        const destination =
+        let destination =
           currentPath === "." ? relative : `${currentPath}/${relative}`;
+        let destinationReview: any = null;
+        if (!pendingResume.current) {
+          for (;;) {
+            destinationReview = await api("/transfers/review", {
+              hostId,
+              rootId,
+              path: destination,
+            });
+            if (!destinationReview.exists) break;
+            const choice = await new Promise<ConflictChoice>((resolve) => {
+              conflictResolve.current = resolve;
+              setUploadConflict({
+                path: destination,
+                size: Number(destinationReview.size),
+              });
+            });
+            if (choice.choice === "cancel") {
+              abortUpload.current = true;
+              break;
+            }
+            if (choice.choice === "skip") {
+              destination = "";
+              break;
+            }
+            if (choice.choice === "rename") {
+              destination = choice.path!;
+              continue;
+            }
+            break;
+          }
+          if (abortUpload.current) break;
+          if (!destination) continue;
+        }
         setUploadProgress({
           name: `Checking ${relative}`,
           done: 0,
@@ -522,6 +572,9 @@ function App() {
               hostId,
               rootId,
               path: destination,
+              overwrite: destinationReview?.exists === true,
+              destinationVersion: destinationReview?.version,
+              destinationSha256: destinationReview?.sha256,
               size: file.size,
               sha256: sourceHash,
               createParents: relative.includes("/"),
@@ -530,7 +583,7 @@ function App() {
         pendingResume.current = null;
         for (let offset = Number(job.data.offset) || 0; offset < file.size; ) {
           if (abortUpload.current) {
-            await api(`/transfers/${job.id}/cancel`, {});
+            await api(`/transfers/${job.id}/${abortUploadMode.current}`, {});
             break;
           }
           const chunk = new Uint8Array(
@@ -558,7 +611,7 @@ function App() {
       await loadFiles();
       setNotice(
         abortUpload.current
-          ? "Upload paused or cancellation requested. Check Transfers."
+          ? `Upload ${abortUploadMode.current === "pause" ? "paused" : "cancellation requested"}. Check Transfers.`
           : "Uploads verified and published.",
       );
     } catch (e) {
@@ -1705,7 +1758,16 @@ function App() {
               abortUpload.current = true;
             }}
           >
-            Pause / cancel
+            Pause
+          </button>
+          <button
+            className="danger"
+            onClick={() => {
+              abortUploadMode.current = "cancel";
+              abortUpload.current = true;
+            }}
+          >
+            Cancel upload
           </button>
         </div>
       )}
@@ -1914,6 +1976,17 @@ function App() {
             <button onClick={() => setConnectionTest(null)}>Close</button>
           </div>
         </Dialog>
+      )}
+      {uploadConflict && (
+        <UploadConflict
+          {...uploadConflict}
+          onChoose={(choice) => {
+            setUploadConflict(null);
+            const resolve = conflictResolve.current;
+            conflictResolve.current = null;
+            resolve?.(choice);
+          }}
+        />
       )}
       {jobDetails && (
         <Dialog

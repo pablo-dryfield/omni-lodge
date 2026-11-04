@@ -647,6 +647,13 @@ export class Files {
                   (d.bom ? "\ufeff" : "") + String(d.text),
                   "utf8",
                 );
+                await this.adapter(
+                  session,
+                  job.hostId,
+                  "registerStaging",
+                  { rootId: root.id, stagingId: id },
+                  "writeFiles",
+                );
                 const staging = `/.staging/${id}`;
                 await this.writeExclusive(s, staging, bytes);
                 Object.assign(params, {
@@ -844,6 +851,9 @@ export class Files {
     rootId: string,
     relative: string,
     response: Writable,
+    expectedVersion?: string,
+    range?: string,
+    ifRange?: string,
   ) {
     relative = safeRelative(relative);
     await this.withRoot(
@@ -862,6 +872,58 @@ export class Files {
           "NOT_A_FILE",
           "Choose a file to download.",
         );
+        const version = fingerprint(before);
+        requireValue(
+          !expectedVersion || version === expectedVersion,
+          409,
+          "SOURCE_CHANGED",
+          "The source changed since download preparation.",
+        );
+        const output = response as Writable & {
+          setHeader?: (name: string, value: string) => void;
+          statusCode?: number;
+        };
+        const etag =
+          '"' + crypto.createHash("sha256").update(version).digest("hex") + '"';
+        let start = 0,
+          end = before.size - 1;
+        output.setHeader?.("Accept-Ranges", "bytes");
+        output.setHeader?.("ETag", etag);
+        if (range && (!ifRange || ifRange === etag)) {
+          const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+          requireValue(
+            match && (match[1] || match[2]),
+            416,
+            "INVALID_RANGE",
+            "Only a single byte range is supported.",
+          );
+          start = match[1]
+            ? Number(match[1])
+            : Math.max(0, before.size - Number(match[2]));
+          end =
+            match[1] && match[2]
+              ? Math.min(Number(match[2]), before.size - 1)
+              : before.size - 1;
+          requireValue(
+            Number.isSafeInteger(start) &&
+              Number.isSafeInteger(end) &&
+              start >= 0 &&
+              end >= start &&
+              start < before.size,
+            416,
+            "INVALID_RANGE",
+            "Requested byte range is unavailable.",
+          );
+          output.statusCode = 206;
+          output.setHeader?.(
+            "Content-Range",
+            `bytes ${start}-${end}/${before.size}`,
+          );
+        }
+        output.setHeader?.(
+          "Content-Length",
+          String(Math.max(0, end - start + 1)),
+        );
         await this.store.event(
           ctx.actorId,
           hostId,
@@ -870,7 +932,7 @@ export class Files {
           undefined,
           { rootId, path: relative },
         );
-        const source = s.createReadStream(p),
+        const source = s.createReadStream(p, before.size ? { start, end } : {}),
           guard = new Transform({
             transform(chunk, _encoding, callback) {
               callback(null, chunk);
@@ -1321,6 +1383,75 @@ export class Files {
       ),
     };
   }
+  async destination(
+    session: string,
+    ctx: Context,
+    input: Record<string, unknown>,
+  ) {
+    const relative = safeRelative(input.path);
+    return this.withRoot(
+      session,
+      ctx,
+      String(input.hostId),
+      String(input.rootId),
+      "transfer",
+      async (_c, s, _h, root) => {
+        await this.noLinks(s, root, relative, true);
+        const name = remotePath(root, relative);
+        let attrs: Stats;
+        try {
+          attrs = await stat(s, name);
+        } catch (e) {
+          if ((e as { code?: number }).code === 2)
+            return { exists: false, path: relative };
+          throw e;
+        }
+        requireValue(
+          attrs.isFile() &&
+            attrs.size <=
+              limit(ctx, "TRANSFER_LIMITS", "fileBytes", 10737418240),
+          409,
+          "DESTINATION_CONFLICT",
+          "The destination is not a replaceable regular file.",
+        );
+        const version = fingerprint(attrs),
+          sha256 = await digest(s, name);
+        requireValue(
+          fingerprint(await stat(s, name)) === version,
+          409,
+          "VERSION_CONFLICT",
+          "Destination changed while reviewing.",
+        );
+        return {
+          exists: true,
+          path: relative,
+          version,
+          sha256,
+          size: attrs.size,
+        };
+      },
+      true,
+    );
+  }
+  async pause(session: string, ctx: Context, id: string) {
+    return this.serialize(id, async () => {
+      const job = await this.store.get(id, ctx.actorId);
+      requireValue(
+        job.kind === "upload" &&
+          ["paused", "transferring"].includes(job.state) &&
+          job.data.phase !== "publication",
+        409,
+        "TRANSFER_STATE",
+        "This transfer cannot be paused during publication.",
+      );
+      await this.authority.rpc("authorize", {
+        session,
+        hostId: job.hostId,
+        action: "transfer",
+      });
+      return this.store.update(job, "paused");
+    });
+  }
   async uploadCreate(
     session: string,
     ctx: Context,
@@ -1340,6 +1471,16 @@ export class Files {
       "INVALID_SOURCE",
       "File size and complete SHA-256 are required.",
     );
+    const destination = await this.destination(session, ctx, input);
+    if (destination.exists)
+      requireValue(
+        input.overwrite === true &&
+          input.destinationVersion === destination.version &&
+          input.destinationSha256 === destination.sha256,
+        409,
+        "DESTINATION_CONFLICT",
+        "Destination exists or changed. Review overwrite, rename, or skip it.",
+      );
     const job = await this.store.create(
       ctx.actorId,
       hostId,
@@ -1351,6 +1492,9 @@ export class Files {
         offset: 0,
         sha256: input.sha256,
         createParents: input.createParents === true,
+        destinationVersion: destination.version,
+        destinationSha256: destination.sha256,
+        overwrite: destination.exists,
         policyHash: ctx.policyHash,
       },
       String(input.idempotencyKey || crypto.randomUUID()),
@@ -1390,6 +1534,14 @@ export class Files {
             }
           }
           if (!managed) await this.noLinks(s, root, relative, true);
+          if (managed)
+            await this.adapter(
+              session,
+              hostId,
+              "registerStaging",
+              { rootId: root.id, stagingId: job.id },
+              "writeFiles",
+            );
           const handle = await new Promise<Buffer>((resolve, reject) =>
             s.open(this.staging(job, root), "wx", 0o600, (e, h) =>
               e ? reject(e) : resolve(h),
@@ -1620,105 +1772,124 @@ export class Files {
   }
   async publish(session: string, ctx: Context, id: string) {
     return this.serialize(id, async () => {
-      const job = await this.store.get(id, ctx.actorId),
-        d = job.data;
-      if (job.state === "completed") return job;
-      requireValue(
-        job.kind === "upload" &&
-          job.state === "paused" &&
-          Number(d.offset) === Number(d.size) &&
-          d.policyHash === ctx.policyHash,
-        409,
-        "TRANSFER_INCOMPLETE",
-        "Upload is incomplete or its policy changed.",
-      );
-      await this.store.update(job, "verifying", { phase: "verification" });
+      const release = this.admit(ctx);
       try {
-        const sha256 = await this.withRoot(
-          session,
-          ctx,
-          job.hostId,
-          String(d.rootId),
-          "transfer",
-          async (_c, s, _h, root) => digest(s, this.staging(job, root)),
-        );
+        const job = await this.store.get(id, ctx.actorId),
+          d = job.data;
+        if (job.state === "completed") return job;
         requireValue(
-          sha256 === d.sha256,
+          job.kind === "upload" &&
+            job.state === "paused" &&
+            Number(d.offset) === Number(d.size) &&
+            d.policyHash === ctx.policyHash,
           409,
-          "SOURCE_CHANGED",
-          "Uploaded file checksum differs from the selected source.",
+          "TRANSFER_INCOMPLETE",
+          "Upload is incomplete or its policy changed.",
         );
-        await this.store.update(job, "publishing", { phase: "publication" });
-        let outcome: Record<string, unknown>;
-        if (d.managed)
-          outcome = await this.adapter(
-            session,
-            job.hostId,
-            "publish",
-            {
-              rootId: d.rootId,
-              path: d.path,
-              stagingId: id,
-              operationId: id,
-              fence: 1,
-              size: d.size,
-              sha256,
-              createOnly: true,
-              createParents: d.createParents === true,
-            },
-            "writeFiles",
-          );
-        else
-          outcome = await this.withRoot(
+        await this.store.update(job, "verifying", { phase: "verification" });
+        try {
+          const sha256 = await this.withRoot(
             session,
             ctx,
             job.hostId,
             String(d.rootId),
-            "writeFiles",
-            async (_c, s, _h, root) => {
-              const destination = remotePath(root, safeRelative(d.path));
-              await this.noLinks(s, root, safeRelative(d.path), true);
-              try {
-                await stat(s, destination);
-                throw new Fault(
-                  409,
-                  "VERSION_CONFLICT",
-                  "Destination already exists. Choose another name or review an overwrite.",
-                );
-              } catch (error) {
-                if ((error as { code?: number }).code !== 2) throw error;
-              }
-              await new Promise<void>((resolve, reject) =>
-                s.rename(this.staging(job, root), destination, (e) =>
-                  e ? reject(e) : resolve(),
-                ),
-              );
-              return {
+            "transfer",
+            async (_c, s, _h, root) => digest(s, this.staging(job, root)),
+          );
+          requireValue(
+            sha256 === d.sha256,
+            409,
+            "SOURCE_CHANGED",
+            "Uploaded file checksum differs from the selected source.",
+          );
+          await this.store.update(job, "publishing", { phase: "publication" });
+          let outcome: Record<string, unknown>;
+          if (d.managed)
+            outcome = await this.adapter(
+              session,
+              job.hostId,
+              "publish",
+              {
+                rootId: d.rootId,
+                path: d.path,
+                stagingId: id,
+                operationId: id,
+                fence: 1,
+                size: d.size,
                 sha256,
-                atomicCreateOnly: true,
-                externalWriterProtection: "best effort",
-              };
+                createOnly: d.overwrite !== true,
+                source: d.destinationVersion,
+                originalSha256: d.destinationSha256,
+                createParents: d.createParents === true,
+              },
+              "writeFiles",
+            );
+          else
+            outcome = await this.withRoot(
+              session,
+              ctx,
+              job.hostId,
+              String(d.rootId),
+              "writeFiles",
+              async (_c, s, _h, root) => {
+                const destination = remotePath(root, safeRelative(d.path));
+                await this.noLinks(s, root, safeRelative(d.path), true);
+                if (d.overwrite === true) {
+                  requireValue(
+                    fingerprint(await stat(s, destination)) ===
+                      d.destinationVersion &&
+                      (await digest(s, destination)) === d.destinationSha256,
+                    409,
+                    "VERSION_CONFLICT",
+                    "Destination changed before replacement.",
+                  );
+                  await rename(s, this.staging(job, root), destination);
+                } else {
+                  try {
+                    await stat(s, destination);
+                    throw new Fault(
+                      409,
+                      "VERSION_CONFLICT",
+                      "Destination appeared before publication.",
+                    );
+                  } catch (error) {
+                    if ((error as { code?: number }).code !== 2) throw error;
+                  }
+                  await new Promise<void>((resolve, reject) =>
+                    s.rename(this.staging(job, root), destination, (e) =>
+                      e ? reject(e) : resolve(),
+                    ),
+                  );
+                }
+                return {
+                  sha256,
+                  atomicCreateOnly: d.overwrite !== true,
+                  externalWriterProtection: "best effort",
+                };
+              },
+            );
+          await this.store.reservationProgress(id, 0);
+          return await this.store.update(job, "completed", {
+            verification: "remote read-back SHA-256",
+            outcome,
+          });
+        } catch (error) {
+          await this.store.update(
+            job,
+            error instanceof Fault && error.code === "SOURCE_CHANGED"
+              ? "failed"
+              : "outcome_unknown",
+            {
+              error:
+                error instanceof Fault
+                  ? error.message
+                  : "Publication outcome is unconfirmed.",
             },
           );
-        await this.store.reservationProgress(id, 0);
-        return await this.store.update(job, "completed", {
-          verification: "remote read-back SHA-256",
-          outcome,
-        });
-      } catch (error) {
-        await this.store.update(
-          job,
-          error instanceof Fault && error.code === "SOURCE_CHANGED"
-            ? "failed"
-            : "outcome_unknown",
-          {
-            error:
-              error instanceof Fault
-                ? error.message
-                : "Publication outcome is unconfirmed.",
-          },
-        );
-        throw error;
+          throw error;
+        }
+      } finally {
+        release();
       }
     });
   }

@@ -382,6 +382,9 @@ func watchdog() error {
 	return expireCopies()
 }
 func dispatch(e Envelope, p Policy) (map[string]any, error) {
+	if e.Action == "registerStaging" {
+		return registerStaging(e, p)
+	}
 	if e.Action == "renewOperation" {
 		return renewCopy(e)
 	}

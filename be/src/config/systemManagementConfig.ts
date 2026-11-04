@@ -382,6 +382,14 @@ export function validateSystemManagementValue(key: string, raw: string): void {
       throw new Error(
         "Storage reserve must remain at least 1 GiB and 15%, and trash cannot exceed the provisioned 256 MiB ceiling.",
       );
+    if (
+      suffix === "RETENTION" &&
+      (Number(value.tempHours) > 168 ||
+        Number(value.transferDays) > 365 ||
+        Number(value.activityDays) > 3650 ||
+        Number(value.recordingDays) > 365)
+    )
+      throw new Error("Retention exceeds the supported cleanup ceiling.");
     if (suffix === "RETENTION" && Number(value.trashDays) > 30)
       throw new Error("Trash retention cannot exceed 30 days.");
     if (

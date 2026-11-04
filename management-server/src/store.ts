@@ -208,6 +208,19 @@ export class Store {
     if (!r.rows[0]) throw new Fault(404, "NOT_FOUND", "Operation not found.");
     return this.decode(r.rows[0]);
   }
+  async claim(job: Job, states: string[], next: string) {
+    const result = await this.pool.query(
+      "UPDATE system_management.jobs SET state=$3,updated_at=now() WHERE id=$1 AND actor_id=$2 AND state=ANY($4::text[]) RETURNING id",
+      [job.id, job.actorId, next, states],
+    );
+    if (result.rowCount !== 1)
+      throw new Fault(
+        409,
+        "TRANSFER_STATE",
+        "Another request owns this operation.",
+      );
+    job.state = next;
+  }
   async update(job: Job, state: string, patch: Record<string, unknown> = {}) {
     const data = { ...job.data, ...patch };
     await this.pool.query(
