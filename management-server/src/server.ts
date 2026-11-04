@@ -200,6 +200,7 @@ export async function start() {
         "/management/session",
         "/management/sessions",
         "/management/files/list",
+        "/management/files/inventory",
         "/management/files/content",
         "/management/download",
         "/management/jobs",
@@ -405,6 +406,79 @@ export async function start() {
         );
         return;
       }
+      if (route === "/management/files/inventory") {
+        await requireAction("readFiles");
+        send(res, 200, {
+          entries: await files.inventory(
+            token,
+            ctx,
+            input.hostId,
+            input.rootId,
+            input.path,
+          ),
+        });
+        return;
+      }
+      if (route === "/management/download-folders") {
+        await requireAction("readFiles");
+        await authority.rpc("authorize", {
+          session: token,
+          hostId: input.hostId,
+          action: "readFiles",
+        });
+        const job = await store.create(
+          ctx.actorId,
+          input.hostId,
+          "folder-download",
+          {
+            rootId: input.rootId,
+            path: input.path,
+            policyHash: ctx.policyHash,
+          },
+        );
+        send(res, 201, { id: job.id });
+        return;
+      }
+      if (route === "/management/download-folders/finish") {
+        const job = await store.get(input.id, ctx.actorId);
+        requireValue(
+          job.kind === "folder-download",
+          400,
+          "INVALID_OPERATION",
+          "Not a folder download.",
+        );
+        await authority.rpc("authorize", {
+          session: token,
+          hostId: job.hostId,
+          action: "readFiles",
+        });
+        requireValue(
+          Array.isArray(input.results) && input.results.length <= 10000,
+          413,
+          "INVENTORY_LIMIT",
+          "Too many download results.",
+        );
+        const results = input.results.map((v: any) => ({
+          path: String(v.path).slice(0, 4096),
+          state: ["saved", "failed", "skipped"].includes(v.state)
+            ? v.state
+            : "failed",
+          ...(v.jobId ? { jobId: String(v.jobId).slice(0, 36) } : {}),
+        }));
+        await store.update(
+          job,
+          results.some((v: any) => v.state !== "saved")
+            ? "partially_completed"
+            : "completed",
+          {
+            results,
+            verification:
+              "Browser-reported device file saves; see child streams for server verification",
+          },
+        );
+        send(res, 200, { ok: true });
+        return;
+      }
       if (route === "/management/files/list") {
         send(
           res,
@@ -478,6 +552,12 @@ export async function start() {
           409,
           "CAPABILITY_UNAVAILABLE",
           "Links and special files cannot be downloaded.",
+        );
+        requireValue(
+          !input.version || input.version === entry.version,
+          409,
+          "SOURCE_CHANGED",
+          "The source changed since folder planning.",
         );
         const job = await store.create(ctx.actorId, input.hostId, "download", {
           rootId: input.rootId,
@@ -758,7 +838,24 @@ export async function start() {
         return;
       }
       throw new Fault(404, "NOT_FOUND", "Management route not found.");
-    } catch (error) {
+    } catch (failure) {
+      const remoteCode = Number((failure as { code?: unknown })?.code);
+      const error =
+        !(failure instanceof Fault) && [2, 3, 8].includes(remoteCode)
+          ? new Fault(
+              remoteCode === 3 ? 403 : remoteCode === 2 ? 404 : 409,
+              remoteCode === 3
+                ? "REMOTE_PERMISSION_DENIED"
+                : remoteCode === 2
+                  ? "REMOTE_NOT_FOUND"
+                  : "CAPABILITY_UNAVAILABLE",
+              remoteCode === 3
+                ? "The assigned SSH/SFTP identity cannot access this path or operation."
+                : remoteCode === 2
+                  ? "The remote item no longer exists. Refresh the directory."
+                  : "This SSH/SFTP server does not support the requested operation.",
+            )
+          : failure;
       if (!(error instanceof Fault)) {
         const code = /^[A-Z0-9_]{1,40}$/.test(
           String((error as { code?: unknown })?.code),

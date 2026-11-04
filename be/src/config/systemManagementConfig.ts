@@ -268,6 +268,8 @@ export function validateSystemManagementValue(key: string, raw: string): void {
             typeof r.name !== "string" ||
             typeof r.path !== "string" ||
             !r.path.startsWith("/") ||
+            r.path.length > 4096 ||
+            /[\\\0]/.test(r.path) ||
             r.path === "/" ||
             (r.path.endsWith("/") && r.path.length > 1) ||
             r.path.includes("//") ||

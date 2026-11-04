@@ -33,6 +33,7 @@ export function FileOperationDialog({
   const [target, setTarget] = useState(
       operation === "mkdir" ? "" : entries[0]?.path || "",
     ),
+    [overwrite, setOverwrite] = useState(false),
     [mode, setMode] = useState(((entries[0]?.mode || 0) & 0o777).toString(8)),
     [reason, setReason] = useState(""),
     [confirmation, setConfirmation] = useState(""),
@@ -63,6 +64,7 @@ export function FileOperationDialog({
                 : entry.path,
             version: entry.version,
             target: ["rename", "copy"].includes(operation) ? target : undefined,
+            overwrite,
             mode: operation === "chmod" ? parseInt(mode, 8) : undefined,
             reason: reason.trim() || names[operation],
           }),
@@ -148,6 +150,21 @@ export function FileOperationDialog({
                   : "Relative path inside this root"
               }
             />
+          </label>
+        )}
+        {operation === "copy" && (
+          <label className="check-line">
+            <input
+              type="checkbox"
+              checked={overwrite}
+              disabled={busy}
+              onChange={(event) => {
+                setOverwrite(event.target.checked);
+                invalidate();
+              }}
+            />
+            Allow replacing the destination after checking its current identity
+            and checksum
           </label>
         )}
         {operation === "chmod" && (

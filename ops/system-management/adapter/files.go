@@ -211,7 +211,7 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 			if !info.Mode().IsRegular() {
 				return nil, errors.New("copy directories through a reviewed comparison manifest")
 			}
-			err = atomicCopy(root, name, target, id, policy, p.ReserveBytes, p.ReservePercent)
+			err = atomicCopy(root, name, target, id, policy, p.ReserveBytes, p.ReservePercent, e)
 		case "trash":
 			hash, count, size, scanErr := treeSnapshot(root, name)
 			if scanErr != nil {
@@ -421,7 +421,7 @@ func intValue(value any) int {
 }
 
 // The published name is created only after a private, verified, fsynced copy.
-func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reserve int64, reservePercent int) error {
+func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reserve int64, reservePercent int, envelope Envelope) error {
 	info, err := root.Lstat(name)
 	if err != nil {
 		return err
@@ -429,8 +429,36 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 	if !info.Mode().IsRegular() || hardlinks(info) != 1 {
 		return errors.New("copy source is not a singly-linked regular file")
 	}
-	if _, err = root.Lstat(target); !os.IsNotExist(err) {
-		return errors.New("destination already exists")
+	validateTarget := func() error {
+		expected := str(envelope.Params, "targetVersion")
+		if expected == "" {
+			if _, err := root.Lstat(target); !os.IsNotExist(err) {
+				return errors.New("copy destination already exists")
+			}
+			return nil
+		}
+		version, err := currentVersion(root, target)
+		if err != nil || version != expected {
+			return errors.New("copy destination changed")
+		}
+		info, err := root.Lstat(target)
+		if err != nil || !info.Mode().IsRegular() || hardlinks(info) != 1 || info.Mode().Perm()&0022 != 0 {
+			return errors.New("copy destination is not exclusively managed")
+		}
+		file, err := root.Open(target)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		hash := sha256.New()
+		_, err = io.Copy(hash, file)
+		if err != nil || hex.EncodeToString(hash.Sum(nil)) != str(envelope.Params, "targetSha256") {
+			return errors.New("copy destination content changed")
+		}
+		return nil
+	}
+	if err = validateTarget(); err != nil {
+		return err
 	}
 	capacity, err := diskInfo(policy.Path)
 	if err != nil {
@@ -491,8 +519,8 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), hex.EncodeToString(verify.Sum(nil))) {
 		return errors.New("source content changed while copying")
 	}
-	if _, err = root.Lstat(target); !os.IsNotExist(err) {
-		return errors.New("destination appeared before publication")
+	if err = validateTarget(); err != nil {
+		return err
 	}
 	return copyPublication(id, func() error {
 		if err := root.Rename(temporary, target); err != nil {

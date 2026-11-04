@@ -132,6 +132,24 @@ export async function connect(connection: Connection): Promise<Client> {
     });
   });
 }
+export function guardSftpStreams(s: SFTPWrapper) {
+  const read = s.createReadStream.bind(s),
+    write = s.createWriteStream.bind(s);
+  // ssh2 can emit a delayed CLOSE error after an iterator has completed and the
+  // connection is ending. Consumers still observe in-flight errors through their
+  // iterator/pipeline; this listener also owns errors from late handle cleanup.
+  s.createReadStream = ((...args: Parameters<typeof read>) => {
+    const stream = read(...args);
+    stream.on("error", () => {});
+    return stream;
+  }) as typeof s.createReadStream;
+  s.createWriteStream = ((...args: Parameters<typeof write>) => {
+    const stream = write(...args);
+    stream.on("error", () => {});
+    return stream;
+  }) as typeof s.createWriteStream;
+  return s;
+}
 export async function sftp(client: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) =>
     client.sftp((err, s) =>
@@ -143,7 +161,10 @@ export async function sftp(client: Client): Promise<SFTPWrapper> {
               "SFTP is unavailable for this server identity.",
             ),
           )
-        : resolve(s),
+        : (() => {
+            s.on("error", () => client.destroy());
+            resolve(guardSftpStreams(s));
+          })(),
     ),
   );
 }

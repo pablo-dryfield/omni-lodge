@@ -210,6 +210,7 @@ export class Terminals {
         hostId,
         managed: terminal.managed,
         recording: Boolean(recording),
+        scrollback: limit(ctx, "TERMINAL_LIMITS", "scrollback", 10000),
       };
     } finally {
       this.pending.set(ctx.actorId, (this.pending.get(ctx.actorId) || 1) - 1);

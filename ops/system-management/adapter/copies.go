@@ -64,7 +64,7 @@ func queueCopy(e Envelope, p Policy) (map[string]any, error) {
 	if err = os.MkdirAll(filepath.Join(statePath, "leases"), 0700); err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(filepath.Join(statePath, "leases"))
+	entries, err := boundedEntries(filepath.Join(statePath, "leases"))
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func copyPublication(id string, fn func() error) error {
 	return atomicJSON(copyLeasePath(id), lease)
 }
 func expireCopies() error {
-	entries, err := os.ReadDir(filepath.Join(statePath, "leases"))
+	entries, err := boundedEntries(filepath.Join(statePath, "leases"))
 	if os.IsNotExist(err) {
 		return nil
 	}

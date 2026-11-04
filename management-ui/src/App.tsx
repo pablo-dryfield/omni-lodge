@@ -152,6 +152,9 @@ function App() {
       name: string;
       done: number;
       total: number;
+      kind?: "download";
+      rate?: number;
+      publishing?: boolean;
     } | null>(null),
     [searchPath, setSearchPath] = useState("");
   const [uploadConflict, setUploadConflict] = useState<{
@@ -160,6 +163,7 @@ function App() {
   } | null>(null);
   const conflictResolve = useRef<((v: ConflictChoice) => void) | null>(null),
     abortUploadMode = useRef("pause");
+  const downloadAbort = useRef<AbortController | null>(null);
   const pendingResume = useRef<Job | null>(null);
   const abortUpload = useRef(false),
     fileInput = useRef<HTMLInputElement>(null),
@@ -187,6 +191,10 @@ function App() {
     conflictResolve.current = null;
     setUploadConflict(null);
     pendingResume.current = null;
+    fileEpoch.current++;
+    downloadAbort.current?.abort();
+    setFolderDownload(null);
+    setDeviceDownloadResults(null);
     setDocument(null);
     setFileOperation(null);
     setConnectionTest(null);
@@ -431,10 +439,13 @@ function App() {
       return;
     }
     try {
+      const epoch = fileEpoch.current;
+      const opened = await api<Document>(
+        `/files/content?${query({ hostId, rootId, path: entry.path })}`,
+      );
+      if (epoch !== fileEpoch.current) return;
       setDocument({
-        ...(await api<Document>(
-          `/files/content?${query({ hostId, rootId, path: entry.path })}`,
-        )),
+        ...opened,
         hostId,
         rootId,
         editable: Boolean(
@@ -445,10 +456,127 @@ function App() {
       onError(e);
     }
   };
-  const download = async (entry: Entry) => {
+  const [folderDownload, setFolderDownload] = useState<Entry | null>(null);
+  const [deviceDownloadResults, setDeviceDownloadResults] = useState<
+    { path: string; state: string }[] | null
+  >(null);
+  const downloadDirectory = async (entry: Entry) => {
+    const results: { path: string; state: string; jobId?: string }[] = [];
+    let parent: any;
+    const controller = new AbortController();
+    downloadAbort.current = controller;
+    try {
+      const selectedDirectory = await (window as any).showDirectoryPicker({
+        mode: "readwrite",
+      });
+      setFolderDownload(null);
+      const directory = await selectedDirectory.getDirectoryHandle(
+        `${entry.name}-download-${crypto.randomUUID().slice(0, 8)}`,
+        { create: true },
+      );
+      parent = await api("/download-folders", {
+        hostId,
+        rootId,
+        path: entry.path,
+      });
+      const manifest = await api(
+        `/files/inventory?${query({ hostId, rootId, path: entry.path })}`,
+      );
+      for (const item of manifest.entries) {
+        if (controller.signal.aborted) {
+          results.push({ path: item.relative, state: "failed" });
+          break;
+        }
+        try {
+          let target = directory;
+          const parts = String(item.relative).split("/");
+          for (const name of parts.slice(0, -1))
+            target = await target.getDirectoryHandle(name, { create: true });
+          if (item.type === "directory") {
+            await target.getDirectoryHandle(parts.at(-1), { create: true });
+            results.push({ path: item.relative, state: "saved" });
+            continue;
+          }
+          const intent = await api("/downloads", {
+              hostId,
+              rootId,
+              path: item.path,
+              version: item.version,
+            }),
+            file = await target.getFileHandle(parts.at(-1), { create: true }),
+            writer = await file.createWritable();
+          try {
+            const response = await fetch(
+              `/management/download?${query({ id: intent.id })}`,
+              { signal: controller.signal },
+            );
+            if (!response.ok) {
+              const data = await response.json();
+              throw new ApiError(data.code, data.message);
+            }
+            const reader = response.body!.getReader();
+            for (;;) {
+              const part = await reader.read();
+              if (part.done) break;
+              await writer.write(part.value);
+            }
+            await writer.close();
+            results.push({
+              path: item.relative,
+              state: "saved",
+              jobId: intent.id,
+            });
+          } catch (error) {
+            await writer.abort();
+            throw error;
+          }
+        } catch (error) {
+          results.push({ path: item.relative, state: "failed" });
+          if (
+            error instanceof ApiError &&
+            ["STEP_UP_REQUIRED", "SESSION_EXPIRED", "POLICY_CHANGED"].includes(
+              error.code,
+            )
+          ) {
+            onError(error);
+            break;
+          }
+        }
+        setUploadProgress({
+          name: `Downloading ${item.relative}`,
+          done: results.length,
+          total: manifest.entries.length,
+          kind: "download",
+        });
+      }
+      await api("/download-folders/finish", { id: parent.id, results });
+      if (!controller.signal.aborted) setDeviceDownloadResults(results);
+      void loadJobs();
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") onError(e);
+      if (parent)
+        await api("/download-folders/finish", {
+          id: parent.id,
+          results: [...results, { path: entry.path, state: "failed" }],
+        }).catch(() => {});
+    } finally {
+      setUploadProgress(null);
+    }
+  };
+  const download = async (entry: Entry, zip = false) => {
+    if (
+      entry.type === "directory" &&
+      window.top === window &&
+      (window as any).showDirectoryPicker &&
+      !zip
+    ) {
+      setFolderDownload(entry);
+      return;
+    }
     let writer: any;
     try {
-      const picker = (window as any).showSaveFilePicker;
+      const picker =
+        window.top === window ? (window as any).showSaveFilePicker : null;
       // The picker must run directly in the click gesture, before network awaits.
       const handle = picker
         ? await picker({
@@ -588,7 +716,9 @@ function App() {
               idempotencyKey: crypto.randomUUID(),
             });
         pendingResume.current = null;
-        for (let offset = Number(job.data.offset) || 0; offset < file.size; ) {
+        const uploadStarted = performance.now(),
+          baseOffset = Number(job.data.offset) || 0;
+        for (let offset = baseOffset; offset < file.size; ) {
           if (abortUpload.current) {
             await api(`/transfers/${job.id}/${abortUploadMode.current}`, {});
             break;
@@ -610,9 +740,24 @@ function App() {
           );
           await uploadChunk(job.id, offset, chunk, hex(sha256(chunk)));
           offset += chunk.length;
-          setUploadProgress({ name: relative, done: offset, total: file.size });
+          setUploadProgress({
+            name: relative,
+            done: offset,
+            total: file.size,
+            rate:
+              (offset - baseOffset) /
+              Math.max(0.001, (performance.now() - uploadStarted) / 1000),
+          });
         }
-        if (!abortUpload.current) await api(`/transfers/${job.id}/publish`, {});
+        if (!abortUpload.current) {
+          setUploadProgress({
+            name: `Verifying and publishing ${relative}`,
+            done: file.size,
+            total: file.size,
+            publishing: true,
+          });
+          await api(`/transfers/${job.id}/publish`, {});
+        }
         await loadJobs();
       }
       await loadFiles();
@@ -1792,10 +1937,16 @@ function App() {
               value={uploadProgress.done}
             />
             <small>
-              {bytes(uploadProgress.done)} / {bytes(uploadProgress.total)}
+              {uploadProgress.kind === "download"
+                ? `${uploadProgress.done} / ${uploadProgress.total} items`
+                : `${bytes(uploadProgress.done)} / ${bytes(uploadProgress.total)}`}
+              {uploadProgress.rate
+                ? ` - ${bytes(uploadProgress.rate)}/s - ${Math.ceil((uploadProgress.total - uploadProgress.done) / uploadProgress.rate)}s remaining`
+                : ""}
             </small>
           </div>
           <button
+            disabled={uploadProgress.kind === "download"}
             onClick={() => {
               abortUpload.current = true;
             }}
@@ -1804,12 +1955,14 @@ function App() {
           </button>
           <button
             className="danger"
+            disabled={uploadProgress.publishing}
             onClick={() => {
               abortUploadMode.current = "cancel";
               abortUpload.current = true;
+              downloadAbort.current?.abort();
             }}
           >
-            Cancel upload
+            Cancel transfer
           </button>
         </div>
       )}
@@ -2019,6 +2172,49 @@ function App() {
           </div>
         </Dialog>
       )}
+      {folderDownload && (
+        <Dialog title="Download folder" onClose={() => setFolderDownload(null)}>
+          <p>
+            Save files into a new folder on your device, or download a streaming
+            ZIP64 archive. Keep this page open for device-folder downloads.
+          </p>
+          <div className="dialog-actions">
+            <button onClick={() => void downloadDirectory(folderDownload)}>
+              Choose device folder
+            </button>
+            <button
+              onClick={() => {
+                const entry = folderDownload;
+                setFolderDownload(null);
+                void download(entry, true);
+              }}
+            >
+              Download ZIP
+            </button>
+            <button onClick={() => setFolderDownload(null)}>Cancel</button>
+          </div>
+        </Dialog>
+      )}
+      {deviceDownloadResults && (
+        <Dialog
+          title="Device folder download"
+          onClose={() => setDeviceDownloadResults(null)}
+        >
+          <p>
+            {deviceDownloadResults.filter((r) => r.state === "saved").length}{" "}
+            saved,{" "}
+            {deviceDownloadResults.filter((r) => r.state !== "saved").length}{" "}
+            failed. Per-file outcomes are recorded in Transfers.
+          </p>
+          <div className="scope-list">
+            {deviceDownloadResults.slice(0, 200).map((r, i) => (
+              <p key={i}>
+                {r.path}: {r.state}
+              </p>
+            ))}
+          </div>
+        </Dialog>
+      )}
       {restartTarget && (
         <Dialog
           title={`Restart ${restartTarget.service.name || restartTarget.service.id}`}
@@ -2110,12 +2306,14 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {jobDetails.results.map((item: any, index: number) => (
-                    <tr key={index}>
-                      <td>{String(item.path)}</td>
-                      <td>{String(item.state).replace(/_/g, " ")}</td>
-                    </tr>
-                  ))}
+                  {jobDetails.results
+                    .slice(0, 200)
+                    .map((item: any, index: number) => (
+                      <tr key={index}>
+                        <td>{String(item.path)}</td>
+                        <td>{String(item.state).replace(/_/g, " ")}</td>
+                      </tr>
+                    ))}
                 </tbody>
               </table>
             </div>

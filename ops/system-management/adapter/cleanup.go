@@ -19,7 +19,7 @@ func cleanup(p Policy) error {
 	if err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(filepath.Join(statePath, "nonces"))
+	entries, err := boundedEntries(filepath.Join(statePath, "nonces"))
 	if err != nil {
 		authorityLock.Close()
 		return err
@@ -37,7 +37,7 @@ func cleanup(p Policy) error {
 		}
 	}
 	authorityLock.Close()
-	records, err := os.ReadDir(filepath.Join(statePath, "operations"))
+	records, err := boundedEntries(filepath.Join(statePath, "operations"))
 	if err != nil {
 		return err
 	}

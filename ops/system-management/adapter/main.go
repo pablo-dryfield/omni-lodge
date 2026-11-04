@@ -190,7 +190,25 @@ func atomicJSON(name string, value any) error {
 	defer dir.Close()
 	return dir.Sync()
 }
+func boundedEntries(directory string) ([]os.DirEntry, error) {
+	dir, err := os.Open(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(10001)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if len(entries) > 10000 {
+		return nil, errors.New("root journal quota exceeded")
+	}
+	return entries, nil
+}
 func consume(nonce string) error {
+	if entries, err := boundedEntries(filepath.Join(statePath, "nonces")); err != nil || len(entries) >= 10000 {
+		return errors.New("nonce quota exceeded; wait for owned cleanup")
+	}
 	f, err := os.OpenFile(filepath.Join(statePath, "nonces", nonce), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return errors.New("authorization nonce already consumed or journal unavailable")
@@ -299,7 +317,7 @@ func stopCapability(line string) error {
 }
 func terminal(e Envelope, p Policy, input io.Reader, unlock func()) error {
 	id := str(e.Params, "sessionId")
-	entries, readErr := os.ReadDir(filepath.Join(statePath, "operations"))
+	entries, readErr := boundedEntries(filepath.Join(statePath, "operations"))
 	if readErr != nil {
 		return readErr
 	}
@@ -354,7 +372,7 @@ func terminal(e Envelope, p Policy, input io.Reader, unlock func()) error {
 	return err
 }
 func watchdog() error {
-	entries, err := os.ReadDir(filepath.Join(statePath, "operations"))
+	entries, err := boundedEntries(filepath.Join(statePath, "operations"))
 	if err != nil {
 		return err
 	}

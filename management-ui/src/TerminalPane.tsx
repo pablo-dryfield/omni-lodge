@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
+import { Dialog } from "./Dialog";
 import { api, ApiError } from "./api";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 export type TerminalTab = {
@@ -11,6 +12,7 @@ export type TerminalTab = {
   title: string;
   managed: boolean;
   recording?: boolean;
+  scrollback?: number;
 };
 export function TerminalPane({
   tab,
@@ -55,9 +57,17 @@ export function TerminalPane({
       );
       return;
     }
-    const sequence = ++inputSequence.current;
+    const sequence = inputSequence.current + 1;
+    const frame = JSON.stringify({ type: "input", data, sequence });
+    if (new TextEncoder().encode(frame).length > 65536) {
+      setInputNotice(
+        "Input exceeds one safe terminal frame. Split the paste into smaller parts.",
+      );
+      return;
+    }
+    inputSequence.current = sequence;
     unacknowledged.current.add(sequence);
-    socket.current.send(JSON.stringify({ type: "input", data, sequence }));
+    socket.current.send(frame);
   };
   useEffect(() => {
     if (!container.current) return;
@@ -65,7 +75,7 @@ export function TerminalPane({
       cursorBlink: true,
       fontSize: font,
       fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
-      scrollback: 10000,
+      scrollback: Math.min(50000, tab.scrollback || 10000),
       allowProposedApi: false,
       theme: {
         background: "#0c1220",

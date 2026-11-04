@@ -468,6 +468,28 @@ export class Files {
       reason: String(input.reason || "File management").slice(0, 500),
     };
     if (input.target !== undefined) data.target = safeRelative(input.target);
+    if (operation === "copy") {
+      requireValue(
+        data.target && data.target !== relative,
+        400,
+        "INVALID_PATH",
+        "Choose a different copy destination.",
+      );
+      const destination = await this.destination(
+        session,
+        ctx,
+        { hostId, rootId, path: data.target },
+        "writeFiles",
+      );
+      requireValue(
+        !destination.exists || input.overwrite === true,
+        409,
+        "DESTINATION_CONFLICT",
+        "Destination exists. Choose another path or explicitly review replacement.",
+      );
+      data.targetVersion = destination.version;
+      data.targetSha256 = destination.sha256;
+    }
     if (operation === "save")
       requireValue(
         typeof input.text === "string" &&
@@ -794,11 +816,21 @@ export class Files {
                   "SOURCE_CHANGED",
                   "Source changed while copying. The destination was not published.",
                 );
-                await new Promise<void>((resolve, reject) =>
-                  s.rename(temporary, target, (e) =>
-                    e ? reject(e) : resolve(),
-                  ),
-                );
+                if (d.targetVersion) {
+                  requireValue(
+                    fingerprint(await stat(s, target)) === d.targetVersion &&
+                      (await digest(s, target)) === d.targetSha256,
+                    409,
+                    "VERSION_CONFLICT",
+                    "Copy destination changed since review.",
+                  );
+                  await rename(s, temporary, target);
+                } else
+                  await new Promise<void>((resolve, reject) =>
+                    s.rename(temporary, target, (e) =>
+                      e ? reject(e) : resolve(),
+                    ),
+                  );
               } finally {
                 await unlink(s, temporary).catch(() => {});
               }
@@ -1387,6 +1419,7 @@ export class Files {
     session: string,
     ctx: Context,
     input: Record<string, unknown>,
+    action: Action = "transfer",
   ) {
     const relative = safeRelative(input.path);
     return this.withRoot(
@@ -1394,7 +1427,7 @@ export class Files {
       ctx,
       String(input.hostId),
       String(input.rootId),
-      "transfer",
+      action,
       async (_c, s, _h, root) => {
         await this.noLinks(s, root, relative, true);
         const name = remotePath(root, relative);
