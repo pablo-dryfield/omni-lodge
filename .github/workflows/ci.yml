@@ -324,6 +324,7 @@ jobs:
             scripts/deploy/host/protocol-v2.test.mjs \
             scripts/deploy/host-protocol-client.test.mjs \
             ops/production/bootstrap-assets.test.mjs \
+            ops/production/system-ingress-guard.test.mjs \
             ops/production/host-submit-endpoint.test.mjs \
             ops/production/host-state-primitives.test.mjs \
             ops/production/host-worker-staging.test.mjs \
@@ -421,11 +422,18 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: node scripts/ci/verify-compiled-database.mjs
 
+  system_management:
+    name: CI / system management
+    needs: changes
+    if: needs.changes.outputs.run_full_ci == 'true'
+    uses: ./.github/workflows/system-management-validation.yml
+
   required:
     name: ${{ github.event_name == 'pull_request' && 'CI / required' || 'Branch / required' }}
     if: always()
     needs:
       - changes
+      - system_management
       - backend
       - ui
       - ui_server
@@ -439,6 +447,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           RUN_FULL_CI: ${{ needs.changes.outputs.run_full_ci }}
+          SYSTEM_MANAGEMENT_RESULT: ${{ needs.system_management.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           UI_RESULT: ${{ needs.ui.result }}
           UI_SERVER_RESULT: ${{ needs.ui_server.result }}
@@ -454,6 +463,7 @@ jobs:
             "$MIGRATIONS_RESULT"
           test "$CHANGES_RESULT" = success
           if [[ "$RUN_FULL_CI" != true ]]; then
+            test "$SYSTEM_MANAGEMENT_RESULT" = skipped
             test "$BACKEND_RESULT" = skipped
             test "$UI_RESULT" = skipped
             test "$UI_SERVER_RESULT" = skipped
@@ -461,6 +471,7 @@ jobs:
             test "$MIGRATIONS_RESULT" = skipped
             exit 0
           fi
+          test "$SYSTEM_MANAGEMENT_RESULT" = success
           case "$EVENT_NAME" in
             pull_request)
               test "$BACKEND_RESULT" = success

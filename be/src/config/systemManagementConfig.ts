@@ -86,6 +86,7 @@ export const SYSTEM_DEFAULTS = {
     trashDays: 7,
     recordingDays: 7,
   },
+  JOURNAL_LIMITS: { jobs: 4000, events: 90000, bytes: 100663296 },
   RECORDING: { enabled: false, sessionBytes: 10485760, totalBytes: 67108864 },
   BROKER_BUDGET: { memoryMiB: 256, cpuPercent: 25, tasks: 64 },
   REMOTE_BUDGET: { memoryMiB: 256, cpuPercent: 25, tasks: 64 },
@@ -181,9 +182,7 @@ export function validateSystemManagementValue(key: string, raw: string): void {
         !Array.isArray(h.addresses) ||
         !h.addresses.length ||
         h.addresses.length > 32 ||
-        h.addresses.some(
-          (x) => typeof x !== "string" || net.isIP(x) === 0,
-        )
+        h.addresses.some((x) => typeof x !== "string" || net.isIP(x) === 0)
       )
         throw new Error("Explicit permitted IP addresses are required.");
       if (
@@ -205,7 +204,8 @@ export function validateSystemManagementValue(key: string, raw: string): void {
           !/^\d+$/.test(actor) ||
           !record(identity) ||
           typeof identity.username !== "string" ||
-          (!id.test(identity.username) || ["root","0"].includes(identity.username)) ||
+          !id.test(identity.username) ||
+          ["root", "0"].includes(identity.username) ||
           typeof identity.credentialId !== "string" ||
           !id.test(identity.credentialId)
         )
@@ -214,14 +214,17 @@ export function validateSystemManagementValue(key: string, raw: string): void {
           if (
             identity[key] !== undefined &&
             (typeof identity[key] !== "string" ||
-              (!id.test(identity[key] as string) || (key === "fileUsername" && ["root","0"].includes(identity[key] as string))))
+              !id.test(identity[key] as string) ||
+              (key === "fileUsername" &&
+                ["root", "0"].includes(identity[key] as string)))
           )
             throw new Error("Invalid SFTP identity.");
       }
       if (
         !Array.isArray(h.roots) ||
         h.roots.length > 20 ||
-        new Set(h.roots.map((r:Record<string,unknown>)=>r.id)).size !== h.roots.length ||
+        new Set(h.roots.map((r: Record<string, unknown>) => r.id)).size !==
+          h.roots.length ||
         h.roots.some(
           (r) =>
             !record(r) ||
@@ -230,8 +233,12 @@ export function validateSystemManagementValue(key: string, raw: string): void {
             typeof r.name !== "string" ||
             typeof r.path !== "string" ||
             !r.path.startsWith("/") ||
-            r.path === "/" || (r.path.endsWith("/") && r.path.length > 1) || r.path.includes("//") ||
-            r.path.split("/").some((x)=>x === "." || x.startsWith(".omnilodge-")) ||
+            r.path === "/" ||
+            (r.path.endsWith("/") && r.path.length > 1) ||
+            r.path.includes("//") ||
+            r.path
+              .split("/")
+              .some((x) => x === "." || x.startsWith(".omnilodge-")) ||
             r.path.includes("\0") ||
             r.path.split("/").includes("..") ||
             typeof r.writable !== "boolean" ||
@@ -299,8 +306,35 @@ export function validateSystemManagementValue(key: string, raw: string): void {
       )
         throw new Error(`Invalid ${k} limit.`);
     }
-    if (["BROKER_BUDGET","REMOTE_BUDGET"].includes(suffix) && (Number(value.memoryMiB)<64 || Number(value.memoryMiB)>256 || Number(value.cpuPercent)>25 || Number(value.tasks)<16 || Number(value.tasks)>64)) throw new Error("Resource policy exceeds the provisioned host ceiling (64?256 MiB, 1?25% CPU, 16?64 tasks).");
-    if (suffix === "TRANSFER_LIMITS" && (Number(value.chunkBytes)>4194304 || Number(value.files)>10000 || Number(value.depth)>32)) throw new Error("Transfer batch limits exceed the protocol ceiling.");
+    if (
+      suffix === "JOURNAL_LIMITS" &&
+      (Number(value.jobs) > 4000 ||
+        Number(value.events) > 90000 ||
+        Number(value.bytes) > 100663296)
+    )
+      throw new Error(
+        "Journal admission must leave room below the root-owned database quota for final outcomes.",
+      );
+    if (
+      ["BROKER_BUDGET", "REMOTE_BUDGET"].includes(suffix) &&
+      (Number(value.memoryMiB) < 64 ||
+        Number(value.memoryMiB) > 256 ||
+        Number(value.cpuPercent) > 25 ||
+        Number(value.tasks) < 16 ||
+        Number(value.tasks) > 64)
+    )
+      throw new Error(
+        "Resource policy exceeds the provisioned host ceiling (64?256 MiB, 1?25% CPU, 16?64 tasks).",
+      );
+    if (
+      suffix === "TRANSFER_LIMITS" &&
+      (Number(value.total) > 2 ||
+        Number(value.perActor) > 1 ||
+        Number(value.chunkBytes) > 4194304 ||
+        Number(value.files) > 10000 ||
+        Number(value.depth) > 32)
+    )
+      throw new Error("Transfer batch limits exceed the protocol ceiling.");
     if (
       suffix === "SESSION_POLICY" &&
       (Number(value.authoritySeconds) > 15 ||
@@ -313,7 +347,17 @@ export function validateSystemManagementValue(key: string, raw: string): void {
   }
 }
 
-export function validateManagementOrigin(raw:string):void {
- const url=new URL(raw);
- if (url.origin!==raw || url.protocol!=="https:" || url.hostname!=="system.omni-lodge.com" || url.username || url.password || url.port) throw new Error("Use the provisioned isolated origin https://system.omni-lodge.com. Changing ingress requires a reviewed host bootstrap update.");
+export function validateManagementOrigin(raw: string): void {
+  const url = new URL(raw);
+  if (
+    url.origin !== raw ||
+    url.protocol !== "https:" ||
+    url.hostname !== "system.omni-lodge.com" ||
+    url.username ||
+    url.password ||
+    url.port
+  )
+    throw new Error(
+      "Use the provisioned isolated origin https://system.omni-lodge.com. Changing ingress requires a reviewed host bootstrap update.",
+    );
 }

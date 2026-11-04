@@ -3,13 +3,14 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
-import { api } from "./api";
+import { api, ApiError } from "./api";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 export type TerminalTab = {
   id: string;
   hostId: string;
   title: string;
   managed: boolean;
-  recording?:boolean;
+  recording?: boolean;
 };
 export function TerminalPane({
   tab,
@@ -22,7 +23,12 @@ export function TerminalPane({
     terminal = useRef<Terminal>(),
     socket = useRef<WebSocket>(),
     search = useRef<SearchAddon>();
-  const [recordingNotice,setRecordingNotice]=useState('');
+  const [recordingNotice, setRecordingNotice] = useState(""),
+    [inputNotice, setInputNotice] = useState(""),
+    [light, setLight] = useState(false),
+    [accessible, setAccessible] = useState(false);
+  const connected = useRef(false),
+    unacknowledged = useRef(new Set<number>());
   const [state, setState] = useState("Connecting"),
     [incomplete, setIncomplete] = useState(false),
     [modifier, setModifier] = useState<"ctrl" | "alt" | null>(null);
@@ -37,14 +43,21 @@ export function TerminalPane({
     inputSequence = useRef(0),
     reconnect = useRef<() => void>(() => {});
   const send = (data: string) => {
-    if (socket.current?.readyState === 1)
-      socket.current.send(
-        JSON.stringify({
-          type: "input",
-          data,
-          sequence: ++inputSequence.current,
-        }),
+    if (!connected.current || socket.current?.readyState !== 1) {
+      setInputNotice(
+        "Input was not sent while the terminal is disconnected or locked.",
       );
+      return;
+    }
+    if (unacknowledged.current.size >= 128) {
+      setInputNotice(
+        "Waiting for input acknowledgements. Inspect the connection before typing again.",
+      );
+      return;
+    }
+    const sequence = ++inputSequence.current;
+    unacknowledged.current.add(sequence);
+    socket.current.send(JSON.stringify({ type: "input", data, sequence }));
   };
   useEffect(() => {
     if (!container.current) return;
@@ -63,6 +76,8 @@ export function TerminalPane({
     });
     const fit = new FitAddon(),
       finder = new SearchAddon();
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
     term.loadAddon(fit);
     term.loadAddon(finder);
     search.current = finder;
@@ -77,6 +92,7 @@ export function TerminalPane({
       fresh = true;
     const attach = async (takeover = false) => {
       try {
+        connected.current = false;
         setState("Connecting");
         const { ticket } = await api<{ ticket: string }>(
           `/terminals/${tab.id}/attach-ticket`,
@@ -92,6 +108,8 @@ export function TerminalPane({
         ws.onmessage = (e) => {
           const m = JSON.parse(e.data);
           if (m.type === "attached") {
+            connected.current = true;
+            setInputNotice("");
             setState("Connected");
             setIncomplete(!m.screenRestored);
             fresh = false;
@@ -103,6 +121,15 @@ export function TerminalPane({
                 rows: term.rows,
               }),
             );
+          }
+          if (m.type === "inputAck") {
+            for (const sequence of unacknowledged.current)
+              if (sequence <= m.sequence)
+                unacknowledged.current.delete(sequence);
+          }
+          if (m.type === "unlocked") {
+            connected.current = true;
+            setState("Connected");
           }
           if (m.type === "output") {
             const bytes = Uint8Array.from(atob(m.data), (x: string) =>
@@ -120,20 +147,32 @@ export function TerminalPane({
             setIncomplete(true);
             term.write("\r\n[Earlier output is no longer retained]\r\n");
           }
-          if(m.type==='recordingNotice')setRecordingNotice(m.message);
+          if (m.type === "recordingNotice") setRecordingNotice(m.message);
           if (m.type === "exit")
             setState(`Ended${m.code === null ? "" : ` (${m.code})`}`);
-          if (m.type === "locked") setState("Authentication required");
+          if (m.type === "locked") {
+            connected.current = false;
+            setState("Authentication required");
+            onError(new ApiError("STEP_UP_REQUIRED", m.message));
+          }
           if (m.type === "error") {
             setState(
               m.code === "STEP_UP_REQUIRED"
                 ? "Authentication required"
                 : "Connection needs attention",
             );
-            onError(new Error(m.message));
+            connected.current = false;
+            onError(new ApiError(m.code, m.message));
           }
         };
         ws.onclose = (e) => {
+          connected.current = false;
+          if (unacknowledged.current.size) {
+            setInputNotice(
+              "Some input was not acknowledged. It will not be replayed; inspect the terminal before typing again.",
+            );
+            unacknowledged.current.clear();
+          }
           if (cancelled) return;
           setState(
             e.code === 4001 ? "Taken over in another tab" : "Disconnected",
@@ -203,6 +242,8 @@ export function TerminalPane({
     }, 20000);
     return () => {
       cancelled = true;
+      connected.current = false;
+      unacknowledged.current.clear();
       clearTimeout(timer);
       clearInterval(heartbeat);
       observer.disconnect();
@@ -217,6 +258,14 @@ export function TerminalPane({
   useEffect(() => {
     if (terminal.current) terminal.current.options.fontSize = font;
   }, [font]);
+  useEffect(() => {
+    if (terminal.current) {
+      terminal.current.options.theme = light
+        ? { background: "#fafcff", foreground: "#152b45", cursor: "#2364c5" }
+        : { background: "#0c1220", foreground: "#dde7f4", cursor: "#78ddba" };
+      terminal.current.options.screenReaderMode = accessible;
+    }
+  }, [light, accessible]);
   const key = (value: string) => {
     if (modifier === "ctrl" && value.length === 1)
       value = String.fromCharCode(value.toUpperCase().charCodeAt(0) & 31);
@@ -269,11 +318,30 @@ export function TerminalPane({
         >
           A+
         </button>
+        <button aria-pressed={light} onClick={() => setLight(!light)}>
+          {light ? "Dark terminal" : "Light terminal"}
+        </button>
+        <button
+          aria-pressed={accessible}
+          onClick={() => setAccessible(!accessible)}
+        >
+          Screen reader
+        </button>
         <button onClick={() => reconnect.current()}>
           Take over / reconnect
         </button>
       </div>
-      {tab.recording&&<div className="notice">Recording enabled ? terminal output may contain sensitive information. {recordingNotice}</div>}
+      {inputNotice && (
+        <div role="status" className="notice">
+          {inputNotice}
+        </div>
+      )}
+      {tab.recording && (
+        <div className="notice">
+          Recording enabled ? terminal output may contain sensitive information.{" "}
+          {recordingNotice}
+        </div>
+      )}
       {incomplete && (
         <div className="notice">
           Session reattached. Earlier screen state is unavailable. Use the

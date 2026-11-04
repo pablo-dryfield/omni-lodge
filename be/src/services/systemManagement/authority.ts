@@ -5,7 +5,6 @@ import pg from "pg";
 import bcrypt from "bcryptjs";
 import { QueryTypes } from "sequelize";
 import sequelize from "../../config/database.js";
-import User from "../../models/User.js";
 import {
   getConfigValue,
   refreshConfigCacheKeys,
@@ -120,7 +119,7 @@ type SessionRow = {
   parent_jti: string;
   policy_hash: string;
   expires_at: Date;
-  last_activity_at:Date;
+  last_activity_at: Date;
   step_up_until: Date | null;
 };
 async function session(token: unknown, action: SystemAction, stepUp = true) {
@@ -140,7 +139,23 @@ async function session(token: unknown, action: SystemAction, stepUp = true) {
     );
   const actor = await actorAuthority(row.actor_id, action),
     policy = await systemPolicy();
-  if (row.last_activity_at.getTime() + Number((policy.values.SYSTEM_MANAGEMENT_SESSION_POLICY as {idleSeconds:number}).idleSeconds)*1000 < Date.now()) fail(401,"SESSION_EXPIRED","Management session timed out after inactivity. Open it again from Settings.");
+  if (
+    row.last_activity_at.getTime() +
+      Number(
+        (
+          policy.values.SYSTEM_MANAGEMENT_SESSION_POLICY as {
+            idleSeconds: number;
+          }
+        ).idleSeconds,
+      ) *
+        1000 <
+    Date.now()
+  )
+    fail(
+      401,
+      "SESSION_EXPIRED",
+      "Management session timed out after inactivity. Open it again from Settings.",
+    );
   if (!policy.enabled || policy.revision !== row.policy_hash)
     fail(
       409,
@@ -183,9 +198,17 @@ export async function authorityRpc(
         "POLICY_CHANGED",
         "Policy or console origin changed. Launch again from Settings.",
       );
-    if(typeof args.existingSession==='string'){
-      try{const current=await session(args.existingSession,'view',false);if(current.row.actor_id===row.actor_id&&current.row.parent_jti===row.parent_jti)return {token:args.existingSession};}
-      catch(error){if(!(error instanceof ManagementError))throw error;}
+    if (typeof args.existingSession === "string") {
+      try {
+        const current = await session(args.existingSession, "view", false);
+        if (
+          current.row.actor_id === row.actor_id &&
+          current.row.parent_jti === row.parent_jti
+        )
+          return { token: args.existingSession };
+      } catch (error) {
+        if (!(error instanceof ManagementError)) throw error;
+      }
     }
     const token = nonce();
     await authorityPool().query(
@@ -210,10 +233,17 @@ export async function authorityRpc(
   const ctx = await session(
     args.session,
     ["config", "profiles"].includes(method) ? "manageHosts" : action,
-    !["check","touch","step-up","logout"].includes(method),
+    !["check", "touch", "step-up", "logout"].includes(method) &&
+      !(method === "envelope" && args.operation === "renewOperation"),
   );
   const { row, actor, policy } = ctx;
-  if(method==='touch') {await authorityPool().query('UPDATE system_management.authority_sessions SET last_activity_at=now() WHERE token_hash=$1',[row.token_hash]);return {ok:true};}
+  if (method === "touch") {
+    await authorityPool().query(
+      "UPDATE system_management.authority_sessions SET last_activity_at=now() WHERE token_hash=$1",
+      [row.token_hash],
+    );
+    return { ok: true };
+  }
   if (method === "logout") {
     await authorityPool().query(
       "UPDATE system_management.authority_sessions SET revoked_at=now() WHERE token_hash=$1",
@@ -232,7 +262,12 @@ export async function authorityRpc(
         "RATE_LIMITED",
         "Too many authentication attempts. Try again later.",
       );
-    const user = await User.findByPk(row.actor_id);
+    const user = (
+      await sequelize.query<{ password: string }>(
+        "SELECT password FROM users WHERE id=$1",
+        { bind: [row.actor_id], type: QueryTypes.SELECT },
+      )
+    )[0];
     if (
       typeof args.password !== "string" ||
       args.password.length > 1024 ||
@@ -366,7 +401,7 @@ export async function authorityRpc(
       "HOST_FORBIDDEN",
       "The requested action is not granted on this server.",
     );
-  if(method==="authorize")return {ok:true};
+  if (method === "authorize") return { ok: true };
   if (method === "connection") {
     const identity = host.identities[String(actor.id)];
     const file = args.kind === "sftp";
@@ -394,7 +429,8 @@ export async function authorityRpc(
   }
   if (method === "envelope") {
     const operationActions: Record<string, SystemAction> = {
-      status: "viewActivity",
+      status: "view",
+      renewOperation: "writeFiles",
       trashList: "readFiles",
       terminal: "connectTerminal",
       renew: "connectTerminal",
@@ -442,12 +478,47 @@ export async function authorityRpc(
   fail(400, "INVALID_OPERATION", "Unknown management authority operation.");
 }
 
-export async function startSystemManagementAuthority(): Promise<void> {
+export async function cleanupSystemManagementHistory(): Promise<void> {
+  const policy = await systemPolicy(),
+    retention = policy.values.SYSTEM_MANAGEMENT_RETENTION as {
+      activityDays: number;
+      transferDays: number;
+      tempHours: number;
+    };
+  const db = authorityPool();
+  await db.query(
+    "DELETE FROM system_management.launch_grants WHERE token_hash IN(SELECT token_hash FROM system_management.launch_grants WHERE expires_at<now()-interval '1 day' LIMIT 1000)",
+  );
+  await db.query(
+    "DELETE FROM system_management.authority_sessions WHERE token_hash IN(SELECT token_hash FROM system_management.authority_sessions WHERE expires_at<now()-interval '1 day' OR revoked_at<now()-interval '1 day' LIMIT 1000)",
+  );
+  await db.query(
+    "DELETE FROM system_management.auth_attempts WHERE window_start<now()-interval '1 day'",
+  );
+  await db.query(
+    "DELETE FROM system_management.reservations WHERE job_id IN(SELECT job_id FROM system_management.reservations WHERE expires_at<now() LIMIT 1000)",
+  );
+  await db.query(
+    "DELETE FROM system_management.jobs WHERE id IN(SELECT j.id FROM system_management.jobs j WHERE NOT EXISTS(SELECT 1 FROM system_management.reservations r WHERE r.job_id=j.id) AND ((j.state IN('completed','closed','expired','failed','cancelled','skipped') AND j.updated_at<now()-($1*interval '1 day')) OR(j.state='reviewed' AND j.updated_at<now()-($2*interval '1 hour'))) LIMIT 500)",
+    [retention.transferDays, retention.tempHours],
+  );
+  await db.query(
+    "DELETE FROM system_management.audit_events WHERE id IN(SELECT id FROM system_management.audit_events WHERE created_at<now()-($1*interval '1 day') LIMIT 5000)",
+    [retention.activityDays],
+  );
+}
+
+export async function startSystemManagementAuthority(): Promise<
+  () => Promise<void>
+> {
   const socket = process.env.SYSTEM_MANAGEMENT_AUTHORITY_SOCKET;
-  if (!socket) return;
+  if (!socket) return async () => {};
   const secret = await fs.readFile(
     process.env.SYSTEM_MANAGEMENT_RPC_SECRET_FILE || "",
     "utf8",
+  );
+  await authorityPool().query(
+    "UPDATE system_management.authority_sessions SET revoked_at=now() WHERE revoked_at IS NULL",
   );
   const used = new Map<string, number>();
   const server = http.createServer(async (req, res) => {
@@ -488,7 +559,8 @@ export async function startSystemManagementAuthority(): Promise<void> {
         used.has(n)
       )
         fail(401, "AUTH_REJECTED", "Invalid authority signature.");
-      if(used.size>=10000)fail(429,"RATE_LIMITED","Authority request window is full.");
+      if (used.size >= 10000)
+        fail(429, "RATE_LIMITED", "Authority request window is full.");
       used.set(n, Date.now());
       const input = JSON.parse(body.toString());
       const result = await authorityRpc(input.method, input.args || {});
@@ -527,4 +599,21 @@ export async function startSystemManagementAuthority(): Promise<void> {
     server.listen(socket, resolve);
   });
   await fs.chmod(socket, 0o660);
+  let cleanupRunning = false;
+  const cleanupTimer = setInterval(() => {
+    if (cleanupRunning) return;
+    cleanupRunning = true;
+    void cleanupSystemManagementHistory()
+      .catch(() => {})
+      .finally(() => {
+        cleanupRunning = false;
+      });
+  }, 60000);
+  cleanupTimer.unref();
+  return () => {
+    clearInterval(cleanupTimer);
+    return new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  };
 }

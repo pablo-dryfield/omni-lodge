@@ -7,17 +7,63 @@ import net from "node:net";
 import crypto from "node:crypto";
 import { Fault, requireValue, type Connection } from "./types.js";
 
-export function blockedAddress(address:string):boolean {
- const lower=address.toLowerCase();
- if(net.isIP(address)===4){const parts=address.split('.').map(Number);return parts[0]===0 || parts[0]>=224 || (parts[0]===169 && parts[1]===254);}
- return lower==='::' || lower.startsWith('::ffff:') || lower.startsWith('ff') || /^fe[89ab]/.test(lower);
+export function blockedAddress(address: string): boolean {
+  const lower = address.toLowerCase();
+  if (net.isIP(address) === 4) {
+    const parts = address.split(".").map(Number);
+    return (
+      parts[0] === 0 ||
+      parts[0] >= 224 ||
+      (parts[0] === 169 && parts[1] === 254)
+    );
+  }
+  return (
+    lower === "::" ||
+    lower.startsWith("::ffff:") ||
+    lower.startsWith("ff") ||
+    /^fe[89ab]/.test(lower)
+  );
 }
-async function verifyNonRoot(client:Client):Promise<void>{
- await new Promise<void>((resolve,reject)=>{
-  const fail=()=>{client.destroy();reject(new Fault(403,'IDENTITY_UNVERIFIED','A generic server must allow the fixed id -u capability probe and return a nonroot UID.'));};
-  const timer=setTimeout(fail,5000);timer.unref();
-  client.exec('id -u',(error,channel)=>{if(error){clearTimeout(timer);fail();return;}let output='';channel.on('data',(bytes:Buffer)=>{output+=bytes.toString();if(output.length>32){channel.close();clearTimeout(timer);fail();}});channel.once('close',(code:number)=>{clearTimeout(timer);if(code===0 && /^[1-9][0-9]*\s*$/.test(output))resolve();else fail();});channel.once('error',()=>{clearTimeout(timer);fail();});});
- });
+async function verifyNonRoot(client: Client): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const fail = () => {
+      client.destroy();
+      reject(
+        new Fault(
+          403,
+          "IDENTITY_UNVERIFIED",
+          "A generic server must allow the fixed id -u capability probe and return a nonroot UID.",
+        ),
+      );
+    };
+    const timer = setTimeout(fail, 5000);
+    timer.unref();
+    client.exec("id -u", (error, channel) => {
+      if (error) {
+        clearTimeout(timer);
+        fail();
+        return;
+      }
+      let output = "";
+      channel.on("data", (bytes: Buffer) => {
+        output += bytes.toString();
+        if (output.length > 32) {
+          channel.close();
+          clearTimeout(timer);
+          fail();
+        }
+      });
+      channel.once("close", (code: number) => {
+        clearTimeout(timer);
+        if (code === 0 && /^[1-9][0-9]*\s*$/.test(output)) resolve();
+        else fail();
+      });
+      channel.once("error", () => {
+        clearTimeout(timer);
+        fail();
+      });
+    });
+  });
 }
 export async function resolveTarget(connection: Connection): Promise<string> {
   const host = connection.host;
@@ -39,8 +85,7 @@ export async function resolveTarget(connection: Connection): Promise<string> {
   );
   const address = addresses[0].address;
   requireValue(
-    net.isIP(address) !== 0 &&
-      !blockedAddress(address),
+    net.isIP(address) !== 0 && !blockedAddress(address),
     403,
     "NETWORK_DENIED",
     "This network destination is not permitted.",
@@ -52,7 +97,10 @@ export async function connect(connection: Connection): Promise<Client> {
     client = new Client();
   return new Promise((resolve, reject) => {
     let mismatch = false;
-    client.once("ready", () => {if(connection.host.managed)resolve(client);else void verifyNonRoot(client).then(()=>resolve(client),reject);});
+    client.once("ready", () => {
+      if (connection.host.managed) resolve(client);
+      else void verifyNonRoot(client).then(() => resolve(client), reject);
+    });
     client.on("error", () => {
       client.destroy();
       reject(

@@ -159,11 +159,13 @@ try {
           backend: {
             name: "Backend",
             pm2Name: "omni-lodge-be",
+            healthKind: "backend",
             restartable: true,
           },
           ui: {
             name: "UI server",
             pm2Name: "omni-lodge-ui-server",
+            healthKind: "ui",
             restartable: true,
           },
         },
@@ -282,6 +284,16 @@ try {
         "broker.env",
         `NODE_ENV=production\nSYSTEM_MANAGEMENT_CONTROL_URL=${url("broker")}\nSYSTEM_MANAGEMENT_AUTHORITY_SOCKET=/run/omnilodge-system/authority.sock\nSYSTEM_MANAGEMENT_RPC_SECRET_FILE=${base}/rpc-secret\nSYSTEM_MANAGEMENT_ARTIFACT_KEY_FILE=${base}/artifact-key\nSYSTEM_MANAGEMENT_PUBLIC_ORIGIN=https://system.omni-lodge.com\nSYSTEM_MANAGEMENT_PORT=3011\n`,
         true,
+      );
+      execFileSync(
+        "/usr/bin/systemctl",
+        [
+          "enable",
+          "--now",
+          "omnilodge-system-watchdog.timer",
+          "omnilodge-system-cleanup.timer",
+        ],
+        { stdio: "ignore" },
       );
       console.log(
         JSON.stringify({

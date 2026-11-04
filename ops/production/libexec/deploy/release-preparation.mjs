@@ -27,7 +27,7 @@ import {
   CANONICAL_REPOSITORY,
   CANONICAL_WORKFLOW_PATH,
   RELEASE_LIMITS,
-  REQUIRED_PAYLOAD_FILES,
+  requiredPayloadPathsForManifest,
   assertPayloadPathAllowed,
   assertSafeRelativePath,
   serializeReleaseManifest,
@@ -541,7 +541,7 @@ const validateManifestIdentity = ({ manifest, expectedReleaseId, expectedSourceS
     }
   }
   for (const required of [
-    ...REQUIRED_PAYLOAD_FILES,
+    ...requiredPayloadPathsForManifest(seen),
     'ui-server/package-lock.json',
   ]) {
     if (!seen.has(required)) fail(`Manifest is missing a runtime dependency input: ${required}`);

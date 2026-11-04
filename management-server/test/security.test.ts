@@ -5,7 +5,7 @@ import ssh2 from "ssh2";
 const { Server, utils } = ssh2;
 import { safeRelative, remotePath } from "../src/files.js";
 import { connect, resolveTarget, shell } from "../src/ssh.js";
-import { Store } from "../src/store.js";
+import { Store, publicJobData } from "../src/store.js";
 import { Fault, type Connection } from "../src/types.js";
 
 test("file tokens reject absolute paths, traversal, NUL and Windows separators", () => {
@@ -67,7 +67,14 @@ test("connection is pinned to the enrolled IP and key; real PTY carries bidirect
     client.on("ready", () =>
       client.on("session", (accept) => {
         const session = accept();
-        session.on("exec", (accept,_reject,info)=>{const stream=accept();if(info.command==="id -u"){stream.write("1001\n");stream.exit(0);}else stream.exit(1);stream.end();});
+        session.on("exec", (accept, _reject, info) => {
+          const stream = accept();
+          if (info.command === "id -u") {
+            stream.write("1001\n");
+            stream.exit(0);
+          } else stream.exit(1);
+          stream.end();
+        });
         session.on("pty", (accept) => accept?.());
         session.on("shell", (accept) => {
           const stream = accept();
@@ -135,4 +142,24 @@ test("connection is pinned to the enrolled IP and key; real PTY carries bidirect
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("history summaries never contain editor drafts, credentials or arbitrary nested values", () => {
+  const data = {
+    path: "work/report.txt",
+    offset: 0,
+    size: 22,
+    text: "private draft",
+    privateKey: "private-key",
+    password: "credential",
+    stopCapability: "stop-secret",
+    result: { text: "another private draft" },
+    phase: "staging",
+  };
+  assert.deepEqual(publicJobData(data), {
+    path: "work/report.txt",
+    offset: 0,
+    size: 22,
+    phase: "staging",
+  });
 });

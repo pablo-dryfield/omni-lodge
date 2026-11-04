@@ -1,4 +1,4 @@
-import {Recordings,type RecordingBuffer} from './recordings.js';
+import { Recordings, type RecordingBuffer } from "./recordings.js";
 import crypto from "node:crypto";
 import type { Client, ClientChannel } from "ssh2";
 import type { WebSocket } from "ws";
@@ -8,12 +8,13 @@ import { connect, shell, execAdapter } from "./ssh.js";
 import { Fault, requireValue, limit, type Context } from "./types.js";
 
 type TerminalSession = {
-  recording?:RecordingBuffer; recordingContext:Context;
+  recording?: RecordingBuffer;
+  recordingContext: Context;
   id: string;
   actorId: number;
   hostId: string;
   session: string;
-  initialSession:string;
+  initialSession: string;
   client: Client;
   channel: ClientChannel;
   job: Job;
@@ -30,6 +31,7 @@ type TerminalSession = {
   managed: boolean;
   stopCapability: string;
   closing: boolean;
+  locked?: boolean;
 };
 export class Terminals {
   private sessions = new Map<string, TerminalSession>();
@@ -47,7 +49,7 @@ export class Terminals {
   constructor(
     private authority: Authority,
     private store: Store,
-    private recordings:Recordings,
+    private recordings: Recordings,
   ) {}
   async create(
     session: string,
@@ -93,13 +95,27 @@ export class Terminals {
         "connectTerminal",
       );
       const job = await this.store.create(ctx.actorId, hostId, "terminal", {});
-      const client=await connect(connection).catch(async error=>{await this.store.update(job,"failed");throw error;});
+      const client = await connect(connection).catch(async (error) => {
+        await this.store.update(job, "failed");
+        throw error;
+      });
       const stopCapability = crypto.randomBytes(32).toString("base64url");
-    let terminalForNotice:TerminalSession|undefined;
-    let recording:RecordingBuffer|undefined;
+      let terminalForNotice: TerminalSession | undefined;
+      let recording: RecordingBuffer | undefined;
       let channel: ClientChannel;
       try {
-        recording=await this.recordings.create(ctx,hostId,job.id,message=>{if(terminalForNotice)this.send(terminalForNotice,{type:"recordingNotice",message});});
+        recording = await this.recordings.create(
+          ctx,
+          hostId,
+          job.id,
+          (message) => {
+            if (terminalForNotice)
+              this.send(terminalForNotice, {
+                type: "recordingNotice",
+                message,
+              });
+          },
+        );
         if (connection.host.managed) {
           const ticket = await this.authority.ticket(
             session,
@@ -111,7 +127,14 @@ export class Terminals {
           channel = await new Promise((resolve, reject) =>
             client.exec(
               "omnilodge-system-v1",
-              { pty: { term: "xterm-256color", cols, rows, modes:{ECHO:0,ICANON:0,ISIG:0} } },
+              {
+                pty: {
+                  term: "xterm-256color",
+                  cols,
+                  rows,
+                  modes: { ECHO: 0, ICANON: 0, ISIG: 0 },
+                },
+              },
               (err, stream) => {
                 if (err) reject(err);
                 else {
@@ -124,17 +147,21 @@ export class Terminals {
         } else channel = await shell(client, cols, rows);
       } catch (error) {
         client.end();
-        if(recording){recording.truncated=true;await recording.finish().catch(()=>{});}
+        if (recording) {
+          recording.truncated = true;
+          await recording.finish().catch(() => {});
+        }
         await this.store.update(job, "failed");
         throw error;
       }
       const terminal: TerminalSession = {
-      recording,recordingContext:ctx,
+        recording,
+        recordingContext: ctx,
         id: job.id,
         actorId: ctx.actorId,
         hostId,
         session,
-        initialSession:session,
+        initialSession: session,
         client,
         channel,
         job,
@@ -150,10 +177,16 @@ export class Terminals {
         stopCapability,
         closing: false,
       };
-      terminalForNotice=terminal;
-    this.sessions.set(terminal.id, terminal);
-    terminal.detached=setTimeout(()=>void this.close(terminal,"closed"),limit(ctx,"SESSION_POLICY","detachSeconds",120)*1000);
-      terminal.timer = setInterval(() => void this.validate(terminal).catch(()=>{}), 15000);
+      terminalForNotice = terminal;
+      this.sessions.set(terminal.id, terminal);
+      terminal.detached = setTimeout(
+        () => void this.close(terminal, "closed"),
+        limit(ctx, "SESSION_POLICY", "detachSeconds", 120) * 1000,
+      );
+      terminal.timer = setInterval(
+        () => void this.validate(terminal).catch(() => {}),
+        15000,
+      );
       channel.on("data", (bytes: Buffer) => this.output(terminal, bytes));
       channel.stderr.on("data", (bytes: Buffer) =>
         this.output(terminal, bytes),
@@ -164,19 +197,27 @@ export class Terminals {
           code: typeof code === "number" ? code : null,
           signal: signal || null,
         });
-        void this.close(terminal, "closed").catch(()=>{});
+        void this.close(terminal, "closed").catch(() => {});
       });
       channel.on("error", () => void this.close(terminal, "transport_lost"));
       client.on("close", () => void this.close(terminal, "transport_lost"));
-      await this.store.update(job, "active", { managed: terminal.managed,recording:Boolean(recording) });
-      return { id: terminal.id, hostId, managed: terminal.managed,recording:Boolean(recording) };
+      await this.store.update(job, "active", {
+        managed: terminal.managed,
+        recording: Boolean(recording),
+      });
+      return {
+        id: terminal.id,
+        hostId,
+        managed: terminal.managed,
+        recording: Boolean(recording),
+      };
     } finally {
       this.pending.set(ctx.actorId, (this.pending.get(ctx.actorId) || 1) - 1);
     }
   }
   private async validate(t: TerminalSession) {
     try {
-      await this.authority.check(t.initialSession,"connectTerminal");
+      await this.authority.check(t.initialSession, "connectTerminal");
       const ctx = await this.authority.check(t.session, "connectTerminal");
       if (
         Date.now() - t.lastInput >
@@ -184,11 +225,17 @@ export class Terminals {
       )
         throw new Fault(401, "EXPIRED", "Terminal idle timeout.");
       if (!ctx.stepUpUntil || Date.parse(ctx.stepUpUntil) < Date.now()) {
-        this.send(t, {
-          type: "locked",
-          message: "Confirm your password to continue.",
-        });
+        if (!t.locked)
+          this.send(t, {
+            type: "locked",
+            message: "Confirm your password to continue.",
+          });
+        t.locked = true;
         return;
+      }
+      if (t.locked) {
+        t.locked = false;
+        this.send(t, { type: "unlocked" });
       }
       if (t.managed) {
         const ticket = await this.authority.ticket(
@@ -243,7 +290,7 @@ export class Terminals {
       "ATTACHMENT_EXISTS",
       "This terminal is open in another tab. Choose Take over.",
     );
-    await this.authority.check(t.initialSession,"connectTerminal");
+    await this.authority.check(t.initialSession, "connectTerminal");
     const token = crypto.randomBytes(32).toString("base64url");
     for (const [key, value] of this.tickets)
       if (value.expires < Date.now()) this.tickets.delete(key);
@@ -288,7 +335,7 @@ export class Terminals {
       );
       t.socket.close(4001, "Terminal taken over.");
     }
-    t.session=session;
+    t.session = session;
     t.attachment++;
     const generation = t.attachment;
     clearTimeout(t.detached);
@@ -326,12 +373,23 @@ export class Terminals {
     t.channel.resume();
     let inputBytes = 0,
       inputWindow = Date.now();
-    let messageQueue = Promise.resolve(),pendingMessages=0,pendingBytes=0,lastInputSequence=0;
-    let lastCheck=Date.now(),cachedContext=ctx;
+    let messageQueue = Promise.resolve(),
+      pendingMessages = 0,
+      pendingBytes = 0,
+      lastInputSequence = 0;
+    let lastCheck = Date.now(),
+      cachedContext = ctx;
     socket.on("message", (raw) => {
-      const size=Buffer.byteLength(raw.toString());
-      if(pendingMessages>=128 || pendingBytes+size>262144){socket.close(1008,'Terminal input queue is full; unacknowledged input was not replayed.');return;}
-      pendingMessages++;pendingBytes+=size;
+      const size = Buffer.byteLength(raw.toString());
+      if (pendingMessages >= 128 || pendingBytes + size > 262144) {
+        socket.close(
+          1008,
+          "Terminal input queue is full; unacknowledged input was not replayed.",
+        );
+        return;
+      }
+      pendingMessages++;
+      pendingBytes += size;
       messageQueue = messageQueue
         .then(async () => {
           if (t.attachment !== generation || t.socket !== socket) return;
@@ -345,9 +403,15 @@ export class Terminals {
             this.send(t, { type: "heartbeat" });
             return;
           }
-          if(Date.now()-lastCheck>1000){cachedContext=await this.authority.check(session,"connectTerminal");lastCheck=Date.now();}
-          const fresh=cachedContext;
-          if(t.attachment!==generation || t.socket!==socket)return;
+          if (Date.now() - lastCheck > 1000) {
+            cachedContext = await this.authority.check(
+              session,
+              "connectTerminal",
+            );
+            lastCheck = Date.now();
+          }
+          const fresh = cachedContext;
+          if (t.attachment !== generation || t.socket !== socket) return;
           requireValue(
             fresh.stepUpUntil && Date.parse(fresh.stepUpUntil) > Date.now(),
             401,
@@ -372,8 +436,14 @@ export class Terminals {
               "RATE_LIMITED",
               "Terminal input rate exceeded.",
             );
-            requireValue(Number.isSafeInteger(m.sequence)&&m.sequence>lastInputSequence,409,'INPUT_SEQUENCE','Input was already acknowledged or is out of order. Do not replay uncertain keystrokes.');
-            lastInputSequence=m.sequence;
+            requireValue(
+              Number.isSafeInteger(m.sequence) &&
+                m.sequence > lastInputSequence,
+              409,
+              "INPUT_SEQUENCE",
+              "Input was already acknowledged or is out of order. Do not replay uncertain keystrokes.",
+            );
+            lastInputSequence = m.sequence;
             t.lastInput = Date.now();
             t.channel.write(m.data);
             this.send(t, { type: "inputAck", sequence: m.sequence });
@@ -397,14 +467,18 @@ export class Terminals {
                 ? error.message
                 : "Invalid terminal message.",
           }),
-        ).finally(()=>{pendingMessages--;pendingBytes-=size;});
+        )
+        .finally(() => {
+          pendingMessages--;
+          pendingBytes -= size;
+        });
     });
     socket.on("close", () => {
       if (t.attachment !== generation) return;
       t.socket = undefined;
       t.channel.resume();
       t.detached = setTimeout(
-        () => void this.close(t, "closed").catch(()=>{}),
+        () => void this.close(t, "closed").catch(() => {}),
         limit(ctx, "SESSION_POLICY", "detachSeconds", 120) * 1000,
       );
     });
@@ -417,14 +491,62 @@ export class Terminals {
       { attachment: key.slice(0, 12) },
     );
   }
-  async terminate(ctx: Context, id: string) {
+  async list(session: string, ctx: Context) {
+    const result = [];
+    for (const t of this.sessions.values()) {
+      if (t.actorId !== ctx.actorId) {
+        if (!ctx.actions.includes("terminateOthers")) continue;
+        try {
+          await this.authority.rpc("authorize", {
+            session,
+            hostId: t.hostId,
+            action: "terminateOthers",
+          });
+        } catch {
+          continue;
+        }
+      }
+      result.push({
+        id: t.id,
+        actorId: t.actorId,
+        hostId: t.hostId,
+        managed: t.managed,
+        attached: Boolean(t.socket),
+        expiresAt: t.recordingContext.expiresAt,
+      });
+    }
+    return result;
+  }
+  async terminate(session: string, ctx: Context, id: string, reason?: string) {
     const t = this.sessions.get(id);
     requireValue(
-      t && t.actorId === ctx.actorId,
+      t &&
+        (t.actorId === ctx.actorId || ctx.actions.includes("terminateOthers")),
       404,
       "NOT_FOUND",
       "Terminal is no longer available.",
     );
+    if (t.actorId !== ctx.actorId) {
+      requireValue(
+        typeof reason === "string" && reason.trim().length >= 3,
+        400,
+        "REASON_REQUIRED",
+        "Record a reason for terminating another administrator session.",
+      );
+      await this.authority.rpc("authorize", {
+        session,
+        hostId: t.hostId,
+        action: "terminateOthers",
+      });
+      await this.store.event(
+        ctx.actorId,
+        t.hostId,
+        "terminal.terminateOther",
+        "accepted",
+        t.id,
+        { owner: t.actorId, reason: reason.slice(0, 500) },
+      );
+    }
     await this.close(t, "closed");
     return {
       ok: true,
@@ -451,7 +573,14 @@ export class Terminals {
     t.channel.close();
     t.client.end();
     t.socket?.close(1000, "Session ended.");
-    if(t.recording)try{await t.recording.finish();}catch{await this.store.event(t.actorId,t.hostId,"recording.storage","incomplete",t.id).catch(()=>{});}
+    if (t.recording)
+      try {
+        await t.recording.finish();
+      } catch {
+        await this.store
+          .event(t.actorId, t.hostId, "recording.storage", "incomplete", t.id)
+          .catch(() => {});
+      }
     await this.store.update(t.job, state, {
       remoteStop: t.managed
         ? "requested; watchdog bounds orphan lifetime"

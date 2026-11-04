@@ -1,6 +1,6 @@
 # System Management implementation ledger
 
-Status: **in progress; not pushed, not deployed**. User authorized implementation and production deployment on 4 November 2026. Deliver all agreed scope together; this ledger is not a release acceptance claim.
+Status: **in progress; not deployed**. User authorized implementation and production deployment on 4 November 2026. Deliver all agreed scope together; this ledger is not a release acceptance claim.
 
 Branch: `codex/system-management`, based on `b0bd3dd4e615dec51a070e29ea123c51b06dae4c`. Architecture: [complete plan](system-management-architecture-plan.md).
 
@@ -47,3 +47,18 @@ Bundle broker dependencies in CI with esbuild as a single Node ESM artifact; tes
 ## Rollback ingress requirement
 
 The root-owned runtime launcher must preload `system-ingress-guard.mjs` before **every** UI release, including pre-feature releases. It reserves `system.omni-lodge.com`, strips main-application credentials, forwards only to the loopback broker and returns a console-only 503 if unavailable. The guard is installed through the reviewed production bootstrap, outside immutable release directories. Install/update this host control plane from the trusted merged SHA before activating the release or adding public DNS; do not rely on release-owned SPA middleware for isolation. The isolated-origin Control Panel value is validated against this provisioned hostname. Rollback never removes the guard or revives an old console authorization generation.
+
+
+## Second checkpoint: durability and executable release gates
+
+- Local commit `989efc1f` preserves the initial isolated runtime; subsequent work adds encrypted bounded history summaries, PostgreSQL-enforced quotas and transactional intent/audit insertion, one-use terminal input fencing, optional authenticated recordings, idle/absolute session lifetimes and retained-session handling.
+- Managed copies/publication now use separate bounded root workers with renewable leases and a publication critical section; root service restarts run independently of SSH and check actual backend/UI readiness. Generic copies use a private verified temporary file and create-only rename. Uncertain publication cannot be relabelled cancelled or resumed as a staging write.
+- Managed recursive permanent deletion uses a bounded directory digest that is rebuilt before mutation. Trash quota/expiry and root-owned cleanup are implemented. Authority-owned history cleanup retains uncertain operations. Further tests and UX work below remain necessary.
+- Old main-app PM2 endpoints return 410 and Settings directs users to System Management. Console sessions are revoked on authority/backend restart; broker-only recovery can retain a still-valid authority session.
+- A root-owned ingress preload permanently reserves the console hostname across application rollback. Release verification accepts complete legacy payloads for rollback, while any payload containing console files must contain the complete console runtime. New release construction still requires all console assets.
+- Shared CI/release Linux validation provisions disposable OS identities/chroots and PostgreSQL databases, tests actual broker authority/SSH/SFTP/PTY/restart recovery, and verifies orphan shutdown. It must pass before deployment; Windows skips are not acceptance.
+- Real local PostgreSQL integration passed using a temporary database and unique restricted roles, all removed afterwards. It caught and fixed an attempted `SELECT FOR UPDATE` that would have required inappropriate UPDATE privileges on quota counters. Tests cover role boundaries, atomic intent rollback, concurrent idempotency, secret-free history summaries, update failure semantics, capacity reservations and hard quota triggers.
+- Latest local results: broker 8 tests passed; isolated UI 3 passed; backend configuration/health 13 passed; Settings landing 6 passed; release/preparation 101 passed with five Windows platform skips; broker/isolated UI/backend/main UI type checks passed at their checkpoints. Full backend/UI suites must still be rerun after final edits. Linux execution and visual desktop/mobile QA remain pending.
+
+
+The next branch push is for Linux CI validation while final UX/recovery work continues. It does not publish an incomplete application release. No PR is opened and no production activation occurs until the full checklist is cleared. The real PostgreSQL test command is `MANAGEMENT_TEST_ADMIN_URL=<local test cluster> node management-server/node_modules/tsx/dist/cli.mjs --test management-server/test/postgres.integration.ts`; no connection secret belongs in this document or CI logs.

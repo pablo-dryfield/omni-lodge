@@ -325,10 +325,16 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: node scripts/ci/verify-compiled-database.mjs
 
+  system_management:
+    name: Release / system management
+    needs: metadata
+    uses: ./.github/workflows/system-management-validation.yml
+
   package:
     name: Release / package
     needs:
       - metadata
+      - system_management
       - backend
       - ui
       - ui_server

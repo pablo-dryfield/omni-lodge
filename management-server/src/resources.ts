@@ -75,9 +75,13 @@ export function assertProductionResources() {
     (file) => fs.readFileSync(file, "utf8"),
   );
   requireValue(
-    limits.memoryBytes <= Math.min(256,Number(process.env.SYSTEM_MANAGEMENT_MEMORY_MIB)||256)*1048576 &&
-      limits.cpuPercent <= Math.min(25,Number(process.env.SYSTEM_MANAGEMENT_CPU_PERCENT)||25) &&
-      limits.tasks <= Math.min(64,Number(process.env.SYSTEM_MANAGEMENT_TASKS)||64),
+    limits.memoryBytes <=
+      Math.min(256, Number(process.env.SYSTEM_MANAGEMENT_MEMORY_MIB) || 256) *
+        1048576 &&
+      limits.cpuPercent <=
+        Math.min(25, Number(process.env.SYSTEM_MANAGEMENT_CPU_PERCENT) || 25) &&
+      limits.tasks <=
+        Math.min(64, Number(process.env.SYSTEM_MANAGEMENT_TASKS) || 64),
     503,
     "RESOURCE_UNBOUNDED",
     "Broker resource limits exceed the host ceiling.",

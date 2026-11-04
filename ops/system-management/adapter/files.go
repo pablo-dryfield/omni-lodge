@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -212,16 +213,38 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 			}
 			err = atomicCopy(root, name, target, id, policy, p.ReserveBytes)
 		case "trash":
+			hash, count, size, scanErr := treeSnapshot(root, name)
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			if boolean(e.Params, "recursive") && (hash != str(e.Params, "manifestHash") || count != integer(e.Params, "manifestCount")) {
+				return nil, errors.New("directory contents changed since review")
+			}
+			budget := integer(e.Params, "trashBytes")
+			if budget < 1 || budget > 256<<20 {
+				budget = 256 << 20
+			}
 			if err = root.MkdirAll(".omnilodge-trash", 0700); err != nil {
 				return nil, err
 			}
+			_, _, used, scanErr := treeSnapshot(root, ".omnilodge-trash")
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			if size+used > int64(budget) {
+				return nil, errors.New("trash quota exceeded; remove expired trash or explicitly review permanent deletion")
+			}
+			days := integer(e.Params, "trashDays")
+			if days < 1 || days > 30 {
+				days = 7
+			}
 			destination := filepath.Join(".omnilodge-trash", id)
-			if err = root.Rename(name, destination); err != nil {
+			metadata := map[string]any{"actorId": e.ActorID, "rootId": rootID, "original": name, "entry": destination, "bytes": size, "expires": time.Now().Add(time.Duration(days) * 24 * time.Hour).UnixMilli()}
+			b, _ := json.Marshal(metadata)
+			if err = root.WriteFile(destination+".metadata.json", b, 0600); err != nil {
 				return nil, err
 			}
-			metadata := map[string]any{"actorId": e.ActorID, "rootId": rootID, "original": name, "entry": destination, "expires": time.Now().Add(7 * 24 * time.Hour).UnixMilli()}
-			b, _ := json.Marshal(metadata)
-			err = root.WriteFile(destination+".metadata.json", b, 0600)
+			err = root.Rename(name, destination)
 			result["trashId"] = id
 		case "restore":
 			trashID := str(e.Params, "trashId")
@@ -252,9 +275,18 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 				return nil, statErr
 			}
 			if info.IsDir() {
-				return nil, errors.New("permanent recursive deletion requires an explicit bounded manifest")
+				hash, count, _, scanErr := treeSnapshot(root, name)
+				if scanErr != nil {
+					return nil, scanErr
+				}
+				if !boolean(e.Params, "recursive") || hash != str(e.Params, "manifestHash") || count != integer(e.Params, "manifestCount") {
+					return nil, errors.New("recursive deletion requires an unchanged reviewed inventory")
+				}
+				err = root.RemoveAll(name)
+				result["removedEntries"] = count
+			} else {
+				err = root.Remove(name)
 			}
-			err = root.Remove(name)
 		}
 		return result, err
 	})
@@ -351,15 +383,17 @@ func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id st
 			return nil, errors.New("destination exists; explicit overwrite review required")
 		}
 	}
-	if err = root.Rename(temporary, name); err != nil {
-		return nil, err
-	}
-	dir, err := root.Open(filepath.Dir(name))
-	if err == nil {
-		err = dir.Sync()
-		_ = dir.Close()
-	}
-	if err != nil {
+	if err = copyPublication(id, func() error {
+		if err := root.Rename(temporary, name); err != nil {
+			return err
+		}
+		dir, err := root.Open(filepath.Dir(name))
+		if err != nil {
+			return err
+		}
+		defer dir.Close()
+		return dir.Sync()
+	}); err != nil {
 		return nil, err
 	}
 	_ = staging.Remove(stagingID)
@@ -448,13 +482,89 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 	if _, err = root.Lstat(target); !os.IsNotExist(err) {
 		return errors.New("destination appeared before publication")
 	}
-	if err = root.Rename(temporary, target); err != nil {
-		return err
-	}
-	directory, err := root.Open(filepath.Dir(target))
+	return copyPublication(id, func() error {
+		if err := root.Rename(temporary, target); err != nil {
+			return err
+		}
+		directory, err := root.Open(filepath.Dir(target))
+		if err != nil {
+			return err
+		}
+		defer directory.Close()
+		return directory.Sync()
+	})
+}
+
+// Metadata inventory is bounded and link-free. The adapter serializes managed
+// mutations on the root, then rebuilds this digest before recursive changes.
+func treeSnapshot(root *os.Root, name string) (string, int, int64, error) {
+	rows := []string{}
+	var bytes int64
+	base, err := root.Lstat(name)
 	if err != nil {
-		return err
+		return "", 0, 0, err
 	}
-	defer directory.Close()
-	return directory.Sync()
+	if base.Mode().IsRegular() {
+		if hardlinks(base) != 1 {
+			return "", 0, 0, errors.New("hard link denied")
+		}
+		return "", 0, base.Size(), nil
+	}
+	if !base.IsDir() {
+		return "", 0, 0, errors.New("special file denied")
+	}
+	var visit func(string, int) error
+	visit = func(current string, depth int) error {
+		if depth > 32 {
+			return errors.New("inventory depth exceeded")
+		}
+		dir, err := root.Open(current)
+		if err != nil {
+			return err
+		}
+		entries, err := dir.ReadDir(10001)
+		dir.Close()
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if len(entries) > 10000 {
+			return errors.New("inventory size exceeded")
+		}
+		for _, entry := range entries {
+			if len(rows) >= 10000 {
+				return errors.New("inventory size exceeded")
+			}
+			if strings.HasPrefix(entry.Name(), ".omnilodge-") {
+				return errors.New("protected internal path in recursive scope")
+			}
+			p := filepath.Join(current, entry.Name())
+			if err = noLinks(root, p, false); err != nil {
+				return err
+			}
+			info, err := root.Lstat(p)
+			if err != nil {
+				return err
+			}
+			kind := "file"
+			if info.IsDir() {
+				kind = "directory"
+			} else {
+				bytes += info.Size()
+			}
+			relative, _ := filepath.Rel(name, p)
+			rows = append(rows, filepath.ToSlash(relative)+"\x00"+kind+"\x00"+fileFingerprint(info)+"\n")
+			if info.IsDir() {
+				if err = visit(p, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err = visit(name, 0); err != nil {
+		return "", 0, 0, err
+	}
+	sort.Strings(rows)
+	hash := sha256.Sum256([]byte(strings.Join(rows, "")))
+	return hex.EncodeToString(hash[:]), len(rows), bytes, nil
 }

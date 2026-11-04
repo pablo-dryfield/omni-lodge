@@ -23,7 +23,7 @@ export type Document = {
   size: string;
 };
 export function TextEditor({
-  document:initialDocument,
+  document: initialDocument,
   hostId,
   rootId,
   onClose,
@@ -37,8 +37,8 @@ export function TextEditor({
   onSaved: () => void;
   onError: (e: unknown) => void;
 }) {
-  const [document,setDocument]=useState(initialDocument);
-  useEffect(()=>setDocument(initialDocument),[initialDocument]);
+  const [document, setDocument] = useState(initialDocument);
+  useEffect(() => setDocument(initialDocument), [initialDocument]);
   const container = useRef<HTMLDivElement>(null),
     view = useRef<EditorView>(),
     [dirty, setDirty] = useState(false),
@@ -58,7 +58,7 @@ export function TextEditor({
     const editor = new EditorView({
       parent: container.current,
       state: EditorState.create({
-        doc: document.text.replace(/\r\n/g,"\n"),
+        doc: document.text.replace(/\r\n/g, "\n"),
         extensions: [
           lineNumbers(),
           history(),
@@ -69,14 +69,19 @@ export function TextEditor({
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
             if (update.docChanged)
-              setDirty(update.state.doc.toString() !== document.text.replace(/\r\n/g,"\n"));
+              setDirty(
+                update.state.doc.toString() !==
+                  document.text.replace(/\r\n/g, "\n"),
+              );
           }),
         ],
       }),
     });
     view.current = editor;
     const unload = (e: BeforeUnloadEvent) => {
-      if (editor.state.doc.toString() !== document.text.replace(/\r\n/g,"\n")) {
+      if (
+        editor.state.doc.toString() !== document.text.replace(/\r\n/g, "\n")
+      ) {
         e.preventDefault();
         e.returnValue = "";
       }
@@ -90,7 +95,10 @@ export function TextEditor({
   const save = async (saveAs = false) => {
     setBusy(true);
     try {
-      const text = (view.current?.state.doc.toString() || "").replace(/\r?\n/g,document.newline === "CRLF" ? "\r\n" : "\n"),
+      const text = (view.current?.state.doc.toString() || "").replace(
+          /\r?\n/g,
+          document.newline === "CRLF" ? "\r\n" : "\n",
+        ),
         target = saveAs
           ? prompt("Save as relative path", document.path)
           : document.path;
@@ -180,7 +188,12 @@ export function TextEditor({
             <button onClick={() => void save(true)}>Save draft as</button>
             <button
               onClick={() => {
-                if (confirm("Discard this draft and reload?")) {setDocument(conflict);setConflict(null);setDirty(false);onSaved();}
+                if (confirm("Discard this draft and reload?")) {
+                  setDocument(conflict);
+                  setConflict(null);
+                  setDirty(false);
+                  onSaved();
+                }
               }}
             >
               Reload remote file

@@ -35,6 +35,7 @@ import {
   preflightPayloadTree,
   RELEASE_LIMITS,
   REQUIRED_PAYLOAD_FILES,
+  requiredPayloadPathsForManifest,
   serializeReleaseManifest,
   sha256,
   validatePayloadResourceSummary,
@@ -1762,4 +1763,12 @@ test('concurrent extractors cannot replace or corrupt the same immutable release
   } finally {
     cleanup(fixture);
   }
+});
+
+test('host rollback accepts a complete legacy payload, but cannot accept a partial console runtime',()=>{
+ const legacy=new Set(REQUIRED_PAYLOAD_FILES.filter(p=>!p.startsWith('be/dist/systemManagement/')&&!p.startsWith('ui/build/system-management/')));
+ assert.equal(requiredPayloadPathsForManifest(legacy).length,legacy.size);
+ const partial=new Set([...legacy,'be/dist/systemManagement/server.mjs']);
+ assert(requiredPayloadPathsForManifest(partial).includes('ui/build/system-management/index.html'));
+ assert(requiredPayloadPathsForManifest(partial).includes('be/dist/systemManagement/adapter'));
 });

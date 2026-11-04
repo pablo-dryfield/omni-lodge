@@ -44,9 +44,14 @@ export function startSystemManagementSupervisor(): () => void {
         stop();
         return;
       }
-      const requestedBudget=JSON.stringify(getConfigValue("SYSTEM_MANAGEMENT_BROKER_BUDGET"));
-      if(child){if(requestedBudget!==runningBudget)stop();return;}
-      if(Date.now()<next)return;
+      const requestedBudget = JSON.stringify(
+        getConfigValue("SYSTEM_MANAGEMENT_BROKER_BUDGET"),
+      );
+      if (child) {
+        if (requestedBudget !== runningBudget) stop();
+        return;
+      }
+      if (Date.now() < next) return;
       if (!fs.statSync(script).isFile())
         throw new Error("Broker artifact is missing.");
       const budget = getConfigValue("SYSTEM_MANAGEMENT_BROKER_BUDGET") as {
@@ -102,7 +107,7 @@ export function startSystemManagementSupervisor(): () => void {
         `--max-old-space-size=${Math.floor(budget.memoryMiB * 0.6)}`,
         script,
       ];
-      runningBudget=requestedBudget;
+      runningBudget = requestedBudget;
       child = spawn("/usr/bin/systemd-run", args, {
         stdio: "ignore",
         windowsHide: true,

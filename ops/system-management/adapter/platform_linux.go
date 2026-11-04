@@ -51,6 +51,14 @@ func diskInfo(name string) (map[string]any, error) {
 }
 func metrics(p Policy) (map[string]any, error) {
 	result := map[string]any{"sampledAt": time.Now().UTC().Format(time.RFC3339), "cpuPercent": nil}
+	total, idle, readErr := cpuSample()
+	if readErr == nil {
+		time.Sleep(200 * time.Millisecond)
+		nextTotal, nextIdle, nextErr := cpuSample()
+		if nextErr == nil && nextTotal > total {
+			result["cpuPercent"] = 100 * (1 - float64(nextIdle-idle)/float64(nextTotal-total))
+		}
+	}
 	if b, err := os.ReadFile("/proc/uptime"); err == nil {
 		fields := strings.Fields(string(b))
 		if len(fields) > 0 {
@@ -80,4 +88,31 @@ func metrics(p Policy) (map[string]any, error) {
 		result["bootId"] = strings.TrimSpace(string(boot))
 	}
 	return result, nil
+}
+
+func cpuSample() (uint64, uint64, error) {
+	b, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, 0, err
+	}
+	line := strings.SplitN(string(b), "\n", 2)[0]
+	fields := strings.Fields(line)
+	if len(fields) < 5 || fields[0] != "cpu" {
+		return 0, 0, errors.New("CPU counters unavailable")
+	}
+	var total, idle uint64
+	for i, field := range fields[1:] {
+		if i >= 8 {
+			break
+		}
+		value, err := strconv.ParseUint(field, 10, 64)
+		if err != nil {
+			return 0, 0, err
+		}
+		total += value
+		if i == 3 || i == 4 {
+			idle += value
+		}
+	}
+	return total, idle, nil
 }

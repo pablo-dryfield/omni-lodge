@@ -92,6 +92,9 @@ const RUNTIME_ENTRYPOINT_FILES = [
   'ui/build/pwa-manifest-selector.js',
 ];
 
+const MANAGEMENT_PREFIXES=['be/dist/systemManagement/','ui/build/system-management/'];
+export const requiredPayloadPathsForManifest=(paths)=>REQUIRED_PAYLOAD_FILES.filter(required=>[...paths].some(p=>MANAGEMENT_PREFIXES.some(prefix=>p.startsWith(prefix)))||!MANAGEMENT_PREFIXES.some(prefix=>required.startsWith(prefix)));
+
 export const REQUIRED_PAYLOAD_FILES = Object.freeze(
   [...new Set([...FIXED_RUNTIME_FILES, ...RUNTIME_ENTRYPOINT_FILES])].sort(compareText),
 );
@@ -359,8 +362,8 @@ const inspectContainedInput = (repoRoot, relativePath, expectedType) => {
   return { absolutePath: realPath, stat };
 };
 
-const assertRequiredPayloadPaths = (paths) => {
-  for (const requiredPath of REQUIRED_PAYLOAD_FILES) {
+const assertRequiredPayloadPaths = (paths,legacy=false) => {
+  for (const requiredPath of legacy?requiredPayloadPathsForManifest(paths):REQUIRED_PAYLOAD_FILES) {
     invariant(paths.has(requiredPath), `Required release payload file is missing: ${requiredPath}`);
   }
 };
@@ -1114,7 +1117,7 @@ const validateManifestShape = (manifest) => {
     'Manifest files must be sorted by path',
   );
   invariant(new Set(filePaths).size === filePaths.length, 'Manifest contains duplicate file paths');
-  assertRequiredPayloadPaths(new Set(filePaths));
+  assertRequiredPayloadPaths(new Set(filePaths),true);
   validatePayloadResourceSummary(manifest.files);
 
   validateStringKeys(manifest.workflow, [

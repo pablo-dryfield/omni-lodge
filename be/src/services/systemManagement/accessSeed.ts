@@ -4,6 +4,7 @@ import Action from "../../models/Action.js";
 import ModuleAction from "../../models/ModuleAction.js";
 import RolePagePermission from "../../models/RolePagePermission.js";
 import RoleModulePermission from "../../models/RoleModulePermission.js";
+import UserTypeProductType from "../../models/UserTypeProductType.js";
 import UserType from "../../models/UserType.js";
 import { SYSTEM_ACTIONS } from "../../config/systemManagementConfig.js";
 
@@ -28,9 +29,16 @@ export async function ensureSystemManagementAccess(): Promise<void> {
       status: true,
     },
   });
-  const roles = await UserType.findAll({
+  const candidates = await UserType.findAll({
     where: { slug: ["admin", "administrator"] },
   });
+  const roles: UserType[] = [];
+  for (const role of candidates)
+    if (
+      (await UserTypeProductType.count({ where: { userTypeId: role.id } })) ===
+      0
+    )
+      roles.push(role);
   for (const role of roles)
     await RolePagePermission.findOrCreate({
       where: { userTypeId: role.id, pageId: page.id },

@@ -1,6 +1,6 @@
 import pg from "pg";
 import crypto from "node:crypto";
-import { Fault } from "./types.js";
+import { Fault, limit, type Context } from "./types.js";
 export type Job = {
   id: string;
   actorId: number;
@@ -10,8 +10,46 @@ export type Job = {
   data: Record<string, unknown>;
   updatedAt?: string;
 };
+export function publicJobData(
+  data: Record<string, unknown>,
+): Record<string, string | number | boolean> {
+  const result: Record<string, string | number | boolean> = {};
+  for (const key of [
+    "path",
+    "rootId",
+    "serviceId",
+    "offset",
+    "size",
+    "sha256",
+    "error",
+    "verification",
+    "phase",
+    "managed",
+    "recording",
+    "expires",
+    "cleanup",
+  ]) {
+    const value = data[key];
+    if (typeof value === "string")
+      result[key] = value.slice(0, key === "error" ? 1000 : 4096);
+    else if (typeof value === "number" || typeof value === "boolean")
+      result[key] = value;
+  }
+  return result;
+}
 export class Store {
   readonly pool: pg.Pool;
+  private admission = { jobs: 4000, events: 90000, bytes: 100663296 };
+  configure(ctx: Context) {
+    this.admission = {
+      jobs: Math.min(4000, limit(ctx, "JOURNAL_LIMITS", "jobs", 4000)),
+      events: Math.min(90000, limit(ctx, "JOURNAL_LIMITS", "events", 90000)),
+      bytes: Math.min(
+        100663296,
+        limit(ctx, "JOURNAL_LIMITS", "bytes", 100663296),
+      ),
+    };
+  }
   constructor(
     url: string,
     private key: Buffer,
@@ -45,8 +83,14 @@ export class Store {
     ) as Record<string, unknown>;
   }
   async ready() {
-    const version=await this.pool.query("SELECT version,checksum FROM system_management.schema_versions ORDER BY version DESC LIMIT 1");
-    if(version.rows[0]?.version!==1 || version.rows[0]?.checksum!=='system-management-v1')throw new Error('Management control schema is incompatible.');
+    const version = await this.pool.query(
+      "SELECT version,checksum FROM system_management.schema_versions ORDER BY version DESC LIMIT 1",
+    );
+    if (
+      version.rows[0]?.version !== 1 ||
+      version.rows[0]?.checksum !== "system-management-v1"
+    )
+      throw new Error("Management control schema is incompatible.");
     await this.pool.query("SELECT 1 FROM system_management.jobs LIMIT 0");
   }
   async create(
@@ -67,29 +111,83 @@ export class Store {
         "INVALID_IDEMPOTENCY",
         "Invalid operation idempotency key.",
       );
-    const result = await this.pool.query(
-      `INSERT INTO system_management.jobs(id,actor_id,host_id,kind,state,payload,idempotency_key,intent_hash) VALUES($1,$2,$3,$4,'queued',$5,$6,$7) ON CONFLICT(actor_id,idempotency_key) DO NOTHING RETURNING id`,
-      [id, actorId, hostId, kind, this.seal(data), idempotency || id, intent],
-    );
-    if (!result.rowCount) {
-      const old = await this.pool.query(
-        "SELECT * FROM system_management.jobs WHERE actor_id=$1 AND idempotency_key=$2",
-        [actorId, idempotency],
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext('system-management.admission'))",
       );
+      const usage = (
+        await client.query(
+          "SELECT jobs,events,bytes FROM system_management.journal_usage WHERE singleton",
+        )
+      ).rows[0];
+      const prior = (
+        await client.query(
+          "SELECT * FROM system_management.jobs WHERE actor_id=$1 AND idempotency_key=$2",
+          [actorId, idempotency || id],
+        )
+      ).rows[0];
+      if (prior) {
+        if (
+          prior.intent_hash !== intent ||
+          prior.host_id !== hostId ||
+          prior.kind !== kind
+        )
+          throw new Fault(
+            409,
+            "IDEMPOTENCY_CONFLICT",
+            "This idempotency key belongs to a different operation.",
+          );
+        await client.query("COMMIT");
+        return this.decode(prior);
+      }
+      const payload = this.seal(data),
+        publicPayload = this.seal(publicJobData(data));
       if (
-        old.rows[0].intent_hash !== intent ||
-        old.rows[0].host_id !== hostId ||
-        old.rows[0].kind !== kind
+        Number(usage.jobs) >= this.admission.jobs ||
+        Number(usage.events) >= this.admission.events ||
+        Number(usage.bytes) +
+          Buffer.byteLength(payload) +
+          Buffer.byteLength(publicPayload) >
+          this.admission.bytes
       )
         throw new Fault(
-          409,
-          "IDEMPOTENCY_CONFLICT",
-          "This idempotency key belongs to a different operation.",
+          507,
+          "JOURNAL_FULL",
+          "Management history is at its admission limit. Clean expired records before starting another operation.",
         );
-      return this.decode(old.rows[0]);
+      await client.query(
+        "INSERT INTO system_management.jobs(id,actor_id,host_id,kind,state,payload,idempotency_key,intent_hash,public_payload) VALUES($1,$2,$3,$4,'queued',$5,$6,$7,$8)",
+        [
+          id,
+          actorId,
+          hostId,
+          kind,
+          payload,
+          idempotency || id,
+          intent,
+          publicPayload,
+        ],
+      );
+      await client.query(
+        "INSERT INTO system_management.audit_events(actor_id,host_id,action,outcome,operation_id,summary) VALUES($1,$2,$3,'accepted',$4,$5)",
+        [actorId, hostId, kind, id, this.seal({})],
+      );
+      await client.query("COMMIT");
+      return { id, actorId, hostId, kind, state: "queued", data };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if ((error as { code?: string }).code === "54000")
+        throw new Fault(
+          507,
+          "JOURNAL_FULL",
+          "Management history is full. Existing uncertain outcomes have been retained.",
+        );
+      throw error;
+    } finally {
+      client.release();
     }
-    await this.event(actorId, hostId, kind, "accepted", id);
-    return { id, actorId, hostId, kind, state: "queued", data };
   }
   private decode(r: Record<string, unknown>): Job {
     return {
@@ -111,17 +209,24 @@ export class Store {
     return this.decode(r.rows[0]);
   }
   async update(job: Job, state: string, patch: Record<string, unknown> = {}) {
-    job.state = state;
-    Object.assign(job.data, patch);
+    const data = { ...job.data, ...patch };
     await this.pool.query(
-      "UPDATE system_management.jobs SET state=$2,payload=$3,updated_at=now() WHERE id=$1 AND actor_id=$4",
-      [job.id, state, this.seal(job.data), job.actorId],
+      "UPDATE system_management.jobs SET state=$2,payload=$3,public_payload=$5,updated_at=now() WHERE id=$1 AND actor_id=$4",
+      [
+        job.id,
+        state,
+        this.seal(data),
+        job.actorId,
+        this.seal(publicJobData(data)),
+      ],
     );
+    job.state = state;
+    job.data = data;
     return job;
   }
   async list(actorId: number, kind?: string) {
     const r = await this.pool.query(
-      "SELECT * FROM system_management.jobs WHERE actor_id=$1 AND ($2::text IS NULL OR kind=$2) ORDER BY created_at DESC LIMIT 100",
+      "SELECT id,actor_id,host_id,kind,state,public_payload AS payload,updated_at FROM system_management.jobs WHERE actor_id=$1 AND ($2::text IS NULL OR kind=$2) ORDER BY created_at DESC LIMIT 100",
       [actorId, kind || null],
     );
     return r.rows.map((row) => this.decode(row));

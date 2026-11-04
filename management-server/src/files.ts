@@ -24,7 +24,9 @@ export function safeRelative(value: unknown): string {
       Buffer.byteLength(value) <= 4096 &&
       !/[\0\\]/.test(value) &&
       !value.startsWith("/") &&
-      !value.split("/").some((part) => part === ".." || part.startsWith(".omnilodge-")),
+      !value
+        .split("/")
+        .some((part) => part === ".." || part.startsWith(".omnilodge-")),
     400,
     "INVALID_PATH",
     "Choose a path inside the selected root.",
@@ -84,6 +86,28 @@ async function digest(s: SFTPWrapper, p: string) {
 export class Files {
   private locks = new Map<string, Promise<unknown>>();
   private active = 0;
+  private actorStreams = new Map<number, number>();
+  private admit(ctx: Context) {
+    const own = this.actorStreams.get(ctx.actorId) || 0;
+    requireValue(
+      this.active < limit(ctx, "TRANSFER_LIMITS", "total", 2) &&
+        own < limit(ctx, "TRANSFER_LIMITS", "perActor", 1),
+      429,
+      "CAPACITY_EXCEEDED",
+      "Transfer concurrency is full. Pause another transfer and retry.",
+    );
+    this.active++;
+    this.actorStreams.set(ctx.actorId, own + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active--;
+      const remaining = (this.actorStreams.get(ctx.actorId) || 1) - 1;
+      if (remaining) this.actorStreams.set(ctx.actorId, remaining);
+      else this.actorStreams.delete(ctx.actorId);
+    };
+  }
   constructor(
     private authority: Authority,
     private store: Store,
@@ -95,31 +119,59 @@ export class Files {
     rootId: string,
     action: Action,
     fn: (client: Client, s: SFTPWrapper, host: Host, root: Root) => Promise<T>,
+    stream = false,
   ): Promise<T> {
-    const c = await this.authority.connection(session, hostId, "sftp", action),
-      root = c.host.roots.find((r) => r.id === rootId);
-    requireValue(
-      root,
-      403,
-      "PROTECTED_PATH",
-      "This file root is not approved.",
-    );
-    if (
-      ["writeFiles", "deleteFiles", "changePermissions", "transfer"].includes(
-        action,
-      )
-    )
+    const release = stream ? this.admit(ctx) : () => {};
+    let client: Client | undefined,
+      timer: NodeJS.Timeout | undefined,
+      checking = false;
+    try {
+      const c = await this.authority.connection(
+          session,
+          hostId,
+          "sftp",
+          action,
+        ),
+        root = c.host.roots.find((r) => r.id === rootId);
       requireValue(
-        root.writable,
+        root,
         403,
         "PROTECTED_PATH",
-        "This root is read-only.",
+        "This file root is not approved.",
       );
-    const client = await connect(c);
-    try {
+      if (
+        ["writeFiles", "deleteFiles", "changePermissions", "transfer"].includes(
+          action,
+        )
+      )
+        requireValue(
+          root.writable,
+          403,
+          "PROTECTED_PATH",
+          "This root is read-only.",
+        );
+      client = await connect(c);
+      const current = client;
+      timer = setInterval(
+        () => {
+          if (checking) return;
+          checking = true;
+          void this.authority
+            .rpc("authorize", { session, hostId, action })
+            .catch(() => current.destroy())
+            .finally(() => {
+              checking = false;
+            });
+        },
+        Math.min(15, limit(ctx, "SESSION_POLICY", "authoritySeconds", 15)) *
+          1000,
+      );
+      timer.unref();
       return await fn(client, await sftp(client), c.host, root);
     } finally {
-      client.end();
+      if (timer) clearInterval(timer);
+      client?.end();
+      release();
     }
   }
   async adapter(
@@ -137,9 +189,52 @@ export class Files {
       ),
       client = await connect(c);
     try {
-      return await execAdapter(
+      const accepted = await execAdapter(
         client,
         await this.authority.ticket(session, hostId, operation, params, action),
+      );
+      if (!accepted.queued) return accepted;
+      const id = String(accepted.operationId),
+        deadline = Date.now() + 1200000;
+      let renewAt = 0;
+      while (Date.now() < deadline) {
+        const result = await execAdapter(
+          client,
+          await this.authority.ticket(
+            session,
+            hostId,
+            "status",
+            { operationId: id },
+            "view",
+          ),
+        );
+        if (result.state === "completed")
+          return result.result as Record<string, unknown>;
+        if (!["queued", "running"].includes(String(result.state)))
+          throw new Fault(
+            409,
+            "OUTCOME_UNKNOWN",
+            "The remote operation needs reconciliation. It will not be replayed.",
+          );
+        if (Date.now() >= renewAt) {
+          await execAdapter(
+            client,
+            await this.authority.ticket(
+              session,
+              hostId,
+              "renewOperation",
+              { operationId: id },
+              "writeFiles",
+            ),
+          );
+          renewAt = Date.now() + 15000;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      throw new Fault(
+        504,
+        "OUTCOME_UNKNOWN",
+        "The operation exceeded its bounded runtime. Verify its outcome before retrying.",
       );
     } finally {
       client.end();
@@ -209,7 +304,11 @@ export class Files {
             );
             if (!batch) break;
             for (const item of batch) {
-              if ([".", ".."].includes(item.filename) || item.filename.startsWith(".omnilodge-")) continue;
+              if (
+                [".", ".."].includes(item.filename) ||
+                item.filename.startsWith(".omnilodge-")
+              )
+                continue;
               if (entries.length >= max) {
                 complete = false;
                 break;
@@ -340,6 +439,16 @@ export class Files {
       "INVALID_OPERATION",
       "Unknown file operation.",
     );
+    await this.authority.rpc("authorize", { session, hostId, action });
+    const approvedRoot = ctx.hosts
+      .find((h) => h.id === hostId)
+      ?.roots.find((r) => r.id === rootId);
+    requireValue(
+      approvedRoot?.writable,
+      403,
+      "PROTECTED_PATH",
+      "Choose an approved writable root.",
+    );
     const source =
       operation === "mkdir" ||
       operation === "restore" ||
@@ -384,6 +493,83 @@ export class Files {
         "TOO_LARGE",
         "Edited text is too large.",
       );
+    if (operation === "save" && input.createOnly !== true) {
+      const currentHash = await this.withRoot(
+        session,
+        ctx,
+        hostId,
+        rootId,
+        "writeFiles",
+        async (_c, s, _h, r) => {
+          const name = remotePath(r, relative),
+            before = await stat(s, name);
+          requireValue(
+            before.isFile() &&
+              before.size <= limit(ctx, "FILE_POLICY", "editBytes", 2097152),
+            413,
+            "TOO_LARGE",
+            "The existing file is too large for a text replacement.",
+          );
+          const hash = await digest(s, name);
+          requireValue(
+            fingerprint(await stat(s, name)) === source,
+            409,
+            "VERSION_CONFLICT",
+            "The original file changed during review.",
+          );
+          return hash;
+        },
+      );
+      if (input.sha256 !== undefined)
+        requireValue(
+          input.sha256 === currentHash,
+          409,
+          "VERSION_CONFLICT",
+          "The original file content changed since opening.",
+        );
+      data.sha256 = currentHash;
+    }
+    if (operation === "delete" || operation === "trash") {
+      const kind = await this.withRoot(
+        session,
+        ctx,
+        hostId,
+        rootId,
+        action,
+        async (_c, s, _h, r) =>
+          (await stat(s, remotePath(r, relative))).isDirectory()
+            ? "directory"
+            : "file",
+      );
+      if (kind === "directory") {
+        requireValue(
+          ctx.hosts
+            .find((h) => h.id === hostId)
+            ?.roots.find((r) => r.id === rootId)?.managed,
+          409,
+          "CAPABILITY_UNAVAILABLE",
+          "Recursive operations require a managed root.",
+        );
+        const inventory = await this.inventory(
+          session,
+          ctx,
+          hostId,
+          rootId,
+          relative,
+        );
+        const rows = inventory
+          .map((i) => `${i.relative}\0${i.type}\0${i.version}\n`)
+          .sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+        data.manifestHash = crypto
+          .createHash("sha256")
+          .update(rows.join(""))
+          .digest("hex");
+        data.manifestCount = inventory.length;
+        data.recursive = true;
+      }
+      data.trashBytes = limit(ctx, "STORAGE_POLICY", "trashBytes", 268435456);
+      data.trashDays = limit(ctx, "RETENTION", "trashDays", 7);
+    }
     const job = await this.store.create(
       ctx.actorId,
       hostId,
@@ -397,6 +583,7 @@ export class Files {
       path: relative,
       target: input.target,
       version: source,
+      affectedEntries: data.manifestCount,
       expiresAt: data.expires,
       managed: ctx.hosts
         .find((h) => h.id === hostId)
@@ -572,15 +759,58 @@ export class Files {
                 "CAPABILITY_UNAVAILABLE",
                 "Folder copy requires the managed adapter.",
               );
-              const capacity = await this.capacity(session, ctx, job.hostId, s, host, root);
-              requireValue(attrs.size <= limit(ctx,'TRANSFER_LIMITS','fileBytes',10737418240) && capacity.free-attrs.size >= capacity.reserve,507,'CAPACITY_EXCEEDED','Copy exceeds the file or destination reserve limit.');
-              const temporary=remotePath(root,path.posix.join(path.posix.dirname(safeRelative(d.target)),`.omnilodge-${id}.partial`)),hash=crypto.createHash('sha256');
+              const capacity = await this.capacity(
+                session,
+                ctx,
+                job.hostId,
+                s,
+                host,
+                root,
+              );
+              requireValue(
+                attrs.size <=
+                  limit(ctx, "TRANSFER_LIMITS", "fileBytes", 10737418240) &&
+                  capacity.free - attrs.size >= capacity.reserve,
+                507,
+                "CAPACITY_EXCEEDED",
+                "Copy exceeds the file or destination reserve limit.",
+              );
+              const temporary = remotePath(
+                  root,
+                  path.posix.join(
+                    path.posix.dirname(safeRelative(d.target)),
+                    `.omnilodge-${id}.partial`,
+                  ),
+                ),
+                hash = crypto.createHash("sha256");
               try {
-                await pipeline(s.createReadStream(p),new Transform({transform(chunk,_encoding,callback){hash.update(chunk);callback(null,chunk);}}),s.createWriteStream(temporary,{flags:'wx',mode:0o600}));
-                const copied=hash.digest('hex');
-                requireValue(fingerprint(await stat(s,p))===fingerprint(attrs) && await digest(s,p)===copied && await digest(s,temporary)===copied,409,'SOURCE_CHANGED','Source changed while copying. The destination was not published.');
-                await new Promise<void>((resolve,reject)=>s.rename(temporary,target,e=>e?reject(e):resolve()));
-              } finally {await unlink(s,temporary).catch(()=>{});}
+                await pipeline(
+                  s.createReadStream(p),
+                  new Transform({
+                    transform(chunk, _encoding, callback) {
+                      hash.update(chunk);
+                      callback(null, chunk);
+                    },
+                  }),
+                  s.createWriteStream(temporary, { flags: "wx", mode: 0o600 }),
+                );
+                const copied = hash.digest("hex");
+                requireValue(
+                  fingerprint(await stat(s, p)) === fingerprint(attrs) &&
+                    (await digest(s, p)) === copied &&
+                    (await digest(s, temporary)) === copied,
+                  409,
+                  "SOURCE_CHANGED",
+                  "Source changed while copying. The destination was not published.",
+                );
+                await new Promise<void>((resolve, reject) =>
+                  s.rename(temporary, target, (e) =>
+                    e ? reject(e) : resolve(),
+                  ),
+                );
+              } finally {
+                await unlink(s, temporary).catch(() => {});
+              }
             }
           },
         );
@@ -656,8 +886,38 @@ export class Files {
           undefined,
           { rootId, path: relative },
         );
-        await pipeline(s.createReadStream(p), response);
+        const source = s.createReadStream(p),
+          guard = new Transform({
+            transform(chunk, _encoding, callback) {
+              callback(null, chunk);
+            },
+            flush(callback) {
+              void stat(s, p)
+                .then((after) =>
+                  callback(
+                    fingerprint(after) === fingerprint(before)
+                      ? undefined
+                      : new Fault(
+                          409,
+                          "SOURCE_CHANGED",
+                          "Source changed during download. The received file is incomplete.",
+                        ),
+                  ),
+                )
+                .catch(callback);
+            },
+          });
+        await pipeline(source, guard, response);
+        await this.store.event(
+          ctx.actorId,
+          hostId,
+          "file.download",
+          "streamed",
+          undefined,
+          { rootId, path: relative, browserSaved: false },
+        );
       },
+      true,
     );
   }
   async inventory(
@@ -710,7 +970,11 @@ export class Files {
               );
               if (!entries) break;
               for (const item of entries) {
-                if ([".", ".."].includes(item.filename) || item.filename.startsWith(".omnilodge-")) continue;
+                if (
+                  [".", ".."].includes(item.filename) ||
+                  item.filename.startsWith(".omnilodge-")
+                )
+                  continue;
                 requireValue(
                   result.length < limit(ctx, "TRANSFER_LIMITS", "files", 10000),
                   413,
@@ -958,6 +1222,8 @@ export class Files {
               },
             );
         }
+        let manifestName = "omnilodge-download-manifest.json";
+        while (names.has(manifestName)) manifestName = "_" + manifestName;
         zip.addBuffer(
           Buffer.from(
             JSON.stringify(
@@ -976,7 +1242,7 @@ export class Files {
               2,
             ),
           ),
-          "omnilodge-download-manifest.json",
+          manifestName,
         );
         zip.end({ forceZip64Format: true, comment: "" });
         await this.store.event(
@@ -989,6 +1255,7 @@ export class Files {
         );
         await pipeline(zip.outputStream, response);
       },
+      true,
     );
   }
   private staging(job: Job, root: Root) {
@@ -1170,13 +1437,7 @@ export class Files {
     expectedHash: string,
   ) {
     return this.serialize(id, async () => {
-      requireValue(
-        this.active < limit(ctx, "TRANSFER_LIMITS", "total", 2),
-        429,
-        "CAPACITY_EXCEEDED",
-        "Transfer concurrency is full. Retry this chunk later.",
-      );
-      this.active++;
+      const release = this.admit(ctx);
       let job: Job | undefined;
       try {
         job = await this.store.get(id, ctx.actorId);
@@ -1257,7 +1518,7 @@ export class Files {
           });
         throw error;
       } finally {
-        this.active--;
+        release();
       }
     });
   }
@@ -1268,6 +1529,7 @@ export class Files {
       requireValue(
         job.kind === "upload" &&
           ["paused", "outcome_unknown"].includes(job.state) &&
+          d.phase !== "publication" &&
           d.sha256 === sourceHash &&
           d.policyHash === ctx.policyHash,
         409,
@@ -1335,7 +1597,10 @@ export class Files {
       const job = await this.store.get(id, ctx.actorId);
       requireValue(
         job.kind === "upload" &&
-          !["publishing", "completed"].includes(job.state),
+          !["publishing", "completed"].includes(job.state) &&
+          !(
+            job.state === "outcome_unknown" && job.data.phase === "publication"
+          ),
         409,
         "OUTCOME_UNKNOWN",
         "Publication cannot be cancelled safely. Reconcile its outcome.",
@@ -1383,7 +1648,7 @@ export class Files {
         "TRANSFER_INCOMPLETE",
         "Upload is incomplete or its policy changed.",
       );
-      await this.store.update(job, "verifying");
+      await this.store.update(job, "verifying", { phase: "verification" });
       try {
         const sha256 = await this.withRoot(
           session,
@@ -1399,7 +1664,7 @@ export class Files {
           "SOURCE_CHANGED",
           "Uploaded file checksum differs from the selected source.",
         );
-        await this.store.update(job, "publishing");
+        await this.store.update(job, "publishing", { phase: "publication" });
         let outcome: Record<string, unknown>;
         if (d.managed)
           outcome = await this.adapter(

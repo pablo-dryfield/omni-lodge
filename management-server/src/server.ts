@@ -1,5 +1,5 @@
-import {testHost} from './capabilities.js';
-import {Recordings} from './recordings.js';
+import { testHost } from "./capabilities.js";
+import { Recordings } from "./recordings.js";
 import { assertProductionResources } from "./resources.js";
 import http from "node:http";
 import fs from "node:fs/promises";
@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { Authority } from "./authority.js";
-import { Store } from "./store.js";
+import { Store, publicJobData } from "./store.js";
 import { Terminals } from "./terminals.js";
 import { Files } from "./files.js";
 import { Fault, requireValue, type Action } from "./types.js";
@@ -39,7 +39,18 @@ function cookie(req: http.IncomingMessage) {
 function send(res: http.ServerResponse, status: number, value: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(value));
+  res.end(
+    JSON.stringify(value, (_key, v) =>
+      v &&
+      typeof v === "object" &&
+      typeof v.actorId === "number" &&
+      typeof v.kind === "string" &&
+      typeof v.state === "string" &&
+      v.data
+        ? { ...v, data: publicJobData(v.data) }
+        : v,
+    ),
+  );
 }
 async function body(req: http.IncomingMessage, max = 262144) {
   const chunks: Buffer[] = [];
@@ -81,10 +92,21 @@ export async function start() {
     "Another broker owns the active generation.",
   );
   await store.recover();
-  const recordings=new Recordings(store,path.resolve(process.env.SYSTEM_MANAGEMENT_ARTIFACT_DIRECTORY||'/var/lib/omnilodge-system/broker/recordings'),key);
+  const recordings = new Recordings(
+    store,
+    path.resolve(
+      process.env.SYSTEM_MANAGEMENT_ARTIFACT_DIRECTORY ||
+        "/var/lib/omnilodge-system/broker/recordings",
+    ),
+    key,
+  );
   await recordings.recover();
-  const recordingCleanup=setInterval(()=>void recordings.cleanup().catch(()=>{}),60000);recordingCleanup.unref();
-  const terminals = new Terminals(authority, store,recordings),
+  const recordingCleanup = setInterval(
+    () => void recordings.cleanup().catch(() => {}),
+    60000,
+  );
+  recordingCleanup.unref();
+  const terminals = new Terminals(authority, store, recordings),
     files = new Files(authority, store);
   const csrf = (session: string) =>
     crypto
@@ -129,7 +151,8 @@ export async function start() {
       );
       if (req.method !== "GET" && req.method !== "HEAD")
         requireValue(
-          req.headers.origin === (route === "/management/session/launch" ? appOrigin : origin),
+          req.headers.origin ===
+            (route === "/management/session/launch" ? appOrigin : origin),
           403,
           "ORIGIN_REJECTED",
           "Management origin required.",
@@ -175,6 +198,7 @@ export async function start() {
       );
       const readOnly = new Set([
         "/management/session",
+        "/management/sessions",
         "/management/files/list",
         "/management/files/content",
         "/management/download",
@@ -201,16 +225,28 @@ export async function start() {
         "METHOD_NOT_ALLOWED",
         "This operation does not support that HTTP method.",
       );
-      if(route==='/management/session/launch'&&req.method==='POST'){
-        const form=new URLSearchParams((await body(req,4096)).toString()),result=await authority.rpc<{token:string}>('redeem',{grant:form.get('grant'),origin,existingSession:cookie(req)});
-        res.setHeader('Set-Cookie',`${cookieName}=${result.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=7200${production?'; Secure':''}`);res.statusCode=303;res.setHeader('Location','/');res.end();return;
+      if (route === "/management/session/launch" && req.method === "POST") {
+        const form = new URLSearchParams((await body(req, 4096)).toString()),
+          result = await authority.rpc<{ token: string }>("redeem", {
+            grant: form.get("grant"),
+            origin,
+            existingSession: cookie(req),
+          });
+        res.setHeader(
+          "Set-Cookie",
+          `${cookieName}=${result.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=7200${production ? "; Secure" : ""}`,
+        );
+        res.statusCode = 303;
+        res.setHeader("Location", "/");
+        res.end();
+        return;
       }
       if (route === "/management/session/redeem" && req.method === "POST") {
         const input = JSON.parse((await body(req, 4096)).toString());
         const result = await authority.rpc<{ token: string }>("redeem", {
           grant: input.grant,
           origin,
-          existingSession:cookie(req),
+          existingSession: cookie(req),
         });
         res.setHeader(
           "Set-Cookie",
@@ -246,7 +282,10 @@ export async function start() {
           : route.endsWith("/chunks")
             ? {}
             : JSON.parse((await body(req, 3 * 1048576)).toString() || "{}");
-      if(route==='/management/session/touch'){send(res,200,await authority.rpc('touch',{session:token}));return;}
+      if (route === "/management/session/touch") {
+        send(res, 200, await authority.rpc("touch", { session: token }));
+        return;
+      }
       if (route === "/management/session/step-up") {
         send(
           res,
@@ -286,10 +325,23 @@ export async function start() {
         return;
       }
       const ctx = await authority.check(token);
+      store.configure(ctx);
       const requireAction = async (action: Action) => {
         await authority.check(token, action);
       };
-      if(route==='/management/hosts/test'){await requireAction('readFiles');send(res,200,await testHost(authority,store,token,ctx,input.hostId));return;}
+      if (route === "/management/hosts/test") {
+        await requireAction("readFiles");
+        send(
+          res,
+          200,
+          await testHost(authority, store, token, ctx, input.hostId),
+        );
+        return;
+      }
+      if (route === "/management/sessions") {
+        send(res, 200, { sessions: await terminals.list(token, ctx) });
+        return;
+      }
       if (route === "/management/terminals" && req.method === "POST") {
         await requireAction("connectTerminal");
         send(
@@ -320,7 +372,7 @@ export async function start() {
                 terminal[1],
                 input.takeover === true,
               )
-            : await terminals.terminate(ctx, terminal[1]),
+            : await terminals.terminate(token, ctx, terminal[1], input.reason),
         );
         return;
       }
@@ -461,25 +513,54 @@ export async function start() {
       }
       if (route === "/management/operations/reconcile") {
         const job = await store.get(input.id, ctx.actorId);
-        await requireAction("viewActivity");
+        await requireAction("view");
         const result = await files.adapter(
           token,
           job.hostId,
           "status",
           { operationId: job.id },
-          "viewActivity",
+          "view",
         );
-        if (result.state === "completed")
-          await store.update(job, "completed", { outcome: result.result });
+        if (["completed", "failed"].includes(String(result.state))) {
+          await store.update(job, String(result.state), {
+            outcome: result.result,
+          });
+          await store.event(
+            ctx.actorId,
+            job.hostId,
+            "operation.reconciled",
+            String(result.state),
+            job.id,
+          );
+        }
         send(res, 200, result);
         return;
       }
-      if(route==='/management/recordings'){await requireAction('viewRecordings');send(res,200,{recordings:await recordings.list(ctx.actorId)});return;}
-      if(route==='/management/recording'||route==='/management/recording/download'){
-        await requireAction('viewRecordings');const artifact=await recordings.metadata(ctx.actorId,input.id);
-        await authority.rpc('authorize',{session:token,hostId:artifact.host_id,action:'viewRecordings'});
-        if(route.endsWith('/download')){res.setHeader('Content-Type','text/plain; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="terminal-${input.id}.txt"`);await recordings.download(ctx.actorId,input.id,res);}
-        else send(res,200,await recordings.read(ctx.actorId,input.id));return;
+      if (route === "/management/recordings") {
+        await requireAction("viewRecordings");
+        send(res, 200, { recordings: await recordings.list(ctx.actorId) });
+        return;
+      }
+      if (
+        route === "/management/recording" ||
+        route === "/management/recording/download"
+      ) {
+        await requireAction("viewRecordings");
+        const artifact = await recordings.metadata(ctx.actorId, input.id);
+        await authority.rpc("authorize", {
+          session: token,
+          hostId: artifact.host_id,
+          action: "viewRecordings",
+        });
+        if (route.endsWith("/download")) {
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="terminal-${input.id}.txt"`,
+          );
+          await recordings.download(ctx.actorId, input.id, res);
+        } else send(res, 200, await recordings.read(ctx.actorId, input.id));
+        return;
       }
       if (route === "/management/activity") {
         await requireAction("viewActivity");
@@ -550,7 +631,13 @@ export async function start() {
               { serviceId: input.serviceId, operationId: job.id, fence: 1 },
               "controlServices",
             )
-            .then((result) => store.update(job, "completed", { result }))
+            .then((result) =>
+              store.update(
+                job,
+                result.verifiedHealthy === true ? "completed" : "running",
+                { result },
+              ),
+            )
             .catch(() => store.update(job, "outcome_unknown"));
         }
         send(res, 202, job);

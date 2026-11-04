@@ -100,7 +100,8 @@ function App() {
     [descending, setDescending] = useState(false),
     [selected, setSelected] = useState<string[]>([]),
     [page, setPage] = useState(0);
-  const [recordingList,setRecordingList]=useState<any[]|null>(null),[recordingPreview,setRecordingPreview]=useState<any>(null);
+  const [recordingList, setRecordingList] = useState<any[] | null>(null),
+    [recordingPreview, setRecordingPreview] = useState<any>(null);
   const [comparison, setComparison] = useState<any>(null),
     [trashEntries, setTrashEntries] = useState<any[] | null>(null);
   const [document, setDocument] = useState<Document | null>(null),
@@ -127,7 +128,21 @@ function App() {
     folderInput = useRef<HTMLInputElement>(null);
   const host = session?.hosts.find((h) => h.id === hostId),
     root = host?.roots.find((r) => r.id === rootId);
-  useEffect(()=>{if(!session)return;let last=0;const touch=()=>{if(Date.now()-last<15000)return;last=Date.now();void api('/session/touch',{}).catch(()=>{});};window.addEventListener('pointerdown',touch);window.addEventListener('keydown',touch);return()=>{window.removeEventListener('pointerdown',touch);window.removeEventListener('keydown',touch);};},[session?.actorId]);
+  useEffect(() => {
+    if (!session) return;
+    let last = 0;
+    const touch = () => {
+      if (Date.now() - last < 15000) return;
+      last = Date.now();
+      void api("/session/touch", {}).catch(() => {});
+    };
+    window.addEventListener("pointerdown", touch);
+    window.addEventListener("keydown", touch, true);
+    return () => {
+      window.removeEventListener("pointerdown", touch);
+      window.removeEventListener("keydown", touch, true);
+    };
+  }, [session?.actorId]);
   const onError = useCallback((value: unknown) => {
     const e = value as Error;
     setError(e.message || "Operation failed.");
@@ -135,9 +150,26 @@ function App() {
       setStepUp(true);
     if (
       value instanceof ApiError &&
-      ["SESSION_EXPIRED", "POLICY_CHANGED","CSRF_REJECTED"].includes(value.code)
+      [
+        "SESSION_EXPIRED",
+        "POLICY_CHANGED",
+        "CSRF_REJECTED",
+        "SIGN_IN_REQUIRED",
+        "AUTHORITY_REVOKED",
+      ].includes(value.code)
     ) {
       setDocument(null);
+      setPrivateKey("");
+      setPassphrase("");
+      setPassword("");
+      setLogs("");
+      setEntries([]);
+      setOverview(null);
+      setActivity([]);
+      setComparison(null);
+      setRecordingPreview(null);
+      setJobs([]);
+      setHostDraft("");
       setTabs([]);
       setSession(null);
     }
@@ -193,7 +225,15 @@ function App() {
       }
     };
     window.addEventListener("message", receive);
-    void init().then(valid=>{if(!valid&&window.parent!==window)window.parent.postMessage({type:'omnilodge-management-ready'},location.hostname==='localhost'?'http://localhost:3000':'https://omni-lodge.com');});
+    void init().then((valid) => {
+      if (!valid && window.parent !== window)
+        window.parent.postMessage(
+          { type: "omnilodge-management-ready" },
+          location.hostname === "localhost"
+            ? "http://localhost:3000"
+            : "https://omni-lodge.com",
+        );
+    });
     return () => {
       done = true;
       window.removeEventListener("message", receive);
@@ -336,7 +376,7 @@ function App() {
       const review = await api("/file-operations/review", input);
       if (
         !confirm(
-          `${operation === "delete" ? "Permanently delete" : operation} ${input.path}${input.target ? ` → ${input.target}` : ""}?${review.warning ? `\n${review.warning}` : ""}`,
+          `${operation === "delete" ? "Permanently delete" : operation} ${input.path}${input.target ? ` → ${input.target}` : ""}?${review.affectedEntries !== undefined ? `\n${review.affectedEntries} entries were inventoried and will be rechecked.` : ""}${review.warning ? `\n${review.warning}` : ""}`,
         )
       )
         return;
@@ -474,7 +514,19 @@ function App() {
             break;
           }
           const chunk = new Uint8Array(
-            await file.slice(offset, offset + Number((session?.limits.SYSTEM_MANAGEMENT_TRANSFER_LIMITS as {chunkBytes?:number})?.chunkBytes||4194304)).arrayBuffer(),
+            await file
+              .slice(
+                offset,
+                offset +
+                  Number(
+                    (
+                      session?.limits.SYSTEM_MANAGEMENT_TRANSFER_LIMITS as {
+                        chunkBytes?: number;
+                      }
+                    )?.chunkBytes || 4194304,
+                  ),
+              )
+              .arrayBuffer(),
           );
           await uploadChunk(job.id, offset, chunk, hex(sha256(chunk)));
           offset += chunk.length;
@@ -1057,6 +1109,23 @@ function App() {
                   >
                     {root?.managed ? "Move to trash" : "Permanently delete"}
                   </button>
+                  {root?.managed && (
+                    <button
+                      className="danger"
+                      disabled={
+                        !root?.writable ||
+                        !session?.actions.includes("deleteFiles")
+                      }
+                      onClick={() => {
+                        void (async () => {
+                          for (const entry of selectedEntries)
+                            await fileAction("delete", entry);
+                        })();
+                      }}
+                    >
+                      Permanently delete
+                    </button>
+                  )}
                 </div>
               )}
               <div className="file-table-container">
@@ -1231,7 +1300,7 @@ function App() {
                   <span className={`state ${job.state}`}>
                     {job.state.replace(/_/g, " ")}
                   </span>
-                  {job.state === "outcome_unknown" &&
+                  {["outcome_unknown", "running"].includes(job.state) &&
                     session.hosts.find((h) => h.id === job.hostId)?.managed && (
                       <button
                         onClick={() =>
@@ -1246,9 +1315,29 @@ function App() {
                         Verify outcome
                       </button>
                     )}
-                  {job.kind==='terminal'&&job.state==='active'&&<button onClick={()=>{if(!tabs.some(t=>t.id===job.id))setTabs(t=>[...t,{id:job.id,hostId:job.hostId,title:`${job.hostId} ? retained session`,managed:Boolean(job.data.managed),recording:Boolean(job.data.recording)}]);setActiveTab(job.id);setSection('terminal');}}>Reattach terminal</button>}
+                  {job.kind === "terminal" && job.state === "active" && (
+                    <button
+                      onClick={() => {
+                        if (!tabs.some((t) => t.id === job.id))
+                          setTabs((t) => [
+                            ...t,
+                            {
+                              id: job.id,
+                              hostId: job.hostId,
+                              title: `${job.hostId} ? retained session`,
+                              managed: Boolean(job.data.managed),
+                              recording: Boolean(job.data.recording),
+                            },
+                          ]);
+                        setActiveTab(job.id);
+                        setSection("terminal");
+                      }}
+                    >
+                      Reattach terminal
+                    </button>
+                  )}
                   {job.kind === "upload" &&
-                    ["paused", "outcome_unknown"].includes(job.state) && (
+                    ["paused", "outcome_unknown"].includes(job.state) && job.data.phase!=="publication" && (
                       <button
                         onClick={() => {
                           pendingResume.current = job;
@@ -1373,6 +1462,21 @@ function App() {
                 <button onClick={() => setFollowing(!following)}>
                   {following ? "Pause live logs" : "Follow logs"}
                 </button>
+                <button
+                  disabled={!logs}
+                  onClick={() => {
+                    const url = URL.createObjectURL(
+                      new Blob([logs], { type: "text/plain;charset=utf-8" }),
+                    );
+                    const link = window.document.createElement("a");
+                    link.href = url;
+                    link.download = `${hostId}-${serviceId}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
+                    link.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  }}
+                >
+                  Export logs
+                </button>
                 <input
                   placeholder="Search retained logs"
                   aria-label="Search logs"
@@ -1398,7 +1502,18 @@ function App() {
             <div className="section-heading">
               <div>
                 <span className="eyebrow">Administrative history</span>
-                <h2>Activity</h2>{session.actions.includes('viewRecordings')&&<button onClick={()=>void api('/recordings').then(result=>setRecordingList(result.recordings)).catch(onError)}>Terminal recordings</button>}
+                <h2>Activity</h2>
+                {session.actions.includes("viewRecordings") && (
+                  <button
+                    onClick={() =>
+                      void api("/recordings")
+                        .then((result) => setRecordingList(result.recordings))
+                        .catch(onError)
+                    }
+                  >
+                    Terminal recordings
+                  </button>
+                )}
                 <p className="muted">
                   Session metadata and structured operation outcomes. Terminal
                   commands are not inferred from keystrokes.
@@ -1597,8 +1712,81 @@ function App() {
           </button>
         </div>
       )}
-      {recordingList!==null&&<div className="dialog-backdrop"><section className="dialog wide-dialog"><span className="eyebrow">Restricted recordings</span><h2>Terminal output recordings</h2><p>Output can include passwords, tokens and private file contents. Access and retention are controlled separately from normal activity.</p>{!recordingList.length&&<p>No retained recordings.</p>}{recordingList.map(item=><article className="job-row" key={item.id}><div className="job-main"><strong>{item.host_id} ? {item.kind.replace(/-/g,' ')}</strong><small>{new Date(item.created_at).toLocaleString()} ? {bytes(Number(item.bytes))}</small></div><button onClick={()=>void api(`/recording?${query({id:item.id})}`).then(result=>setRecordingPreview({...result,id:item.id})).catch(onError)}>View</button><a className="button" href={`/management/recording/download?${query({id:item.id})}`}>Download</a></article>)}<div className="dialog-actions"><button onClick={()=>setRecordingList(null)}>Close</button></div></section></div>}
-      {recordingPreview&&<div className="dialog-backdrop"><section className="dialog wide-dialog"><h2>Recorded terminal output</h2>{recordingPreview.truncated&&<p className="error-text">This recording is incomplete or still active.</p>}{recordingPreview.previewTruncated&&<p>Showing the first 256 KiB. Download the recording for the full retained output.</p>}<pre className="log-output">{recordingPreview.text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,'')}</pre><div className="dialog-actions"><button onClick={()=>setRecordingPreview(null)}>Close preview</button></div></section></div>}
+      {recordingList !== null && (
+        <div className="dialog-backdrop">
+          <section className="dialog wide-dialog">
+            <span className="eyebrow">Restricted recordings</span>
+            <h2>Terminal output recordings</h2>
+            <p>
+              Output can include passwords, tokens and private file contents.
+              Access and retention are controlled separately from normal
+              activity.
+            </p>
+            {!recordingList.length && <p>No retained recordings.</p>}
+            {recordingList.map((item) => (
+              <article className="job-row" key={item.id}>
+                <div className="job-main">
+                  <strong>
+                    {item.host_id} ? {item.kind.replace(/-/g, " ")}
+                  </strong>
+                  <small>
+                    {new Date(item.created_at).toLocaleString()} ?{" "}
+                    {bytes(Number(item.bytes))}
+                  </small>
+                </div>
+                <button
+                  onClick={() =>
+                    void api(`/recording?${query({ id: item.id })}`)
+                      .then((result) =>
+                        setRecordingPreview({ ...result, id: item.id }),
+                      )
+                      .catch(onError)
+                  }
+                >
+                  View
+                </button>
+                <a
+                  className="button"
+                  href={`/management/recording/download?${query({ id: item.id })}`}
+                >
+                  Download
+                </a>
+              </article>
+            ))}
+            <div className="dialog-actions">
+              <button onClick={() => setRecordingList(null)}>Close</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {recordingPreview && (
+        <div className="dialog-backdrop">
+          <section className="dialog wide-dialog">
+            <h2>Recorded terminal output</h2>
+            {recordingPreview.truncated && (
+              <p className="error-text">
+                This recording is incomplete or still active.
+              </p>
+            )}
+            {recordingPreview.previewTruncated && (
+              <p>
+                Showing the first 256 KiB. Download the recording for the full
+                retained output.
+              </p>
+            )}
+            <pre className="log-output">
+              {recordingPreview.text
+                .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+                .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")}
+            </pre>
+            <div className="dialog-actions">
+              <button onClick={() => setRecordingPreview(null)}>
+                Close preview
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {comparison && (
         <div className="dialog-backdrop">
           <section className="dialog wide-dialog">

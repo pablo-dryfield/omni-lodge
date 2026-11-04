@@ -20,6 +20,15 @@ install -d -m 0755 -o root -g root /etc/ssh/authorized_keys /usr/local/libexec/o
 if [[ -e /usr/local/libexec/omnilodge/system-adapter ]]; then
   cmp --silent "$script_dir/adapter" /usr/local/libexec/omnilodge/system-adapter || { echo 'Adapter upgrade needs a reviewed compatibility/drain procedure.' >&2; exit 1; }
 else install -m 0755 -o root -g root "$script_dir/adapter" /usr/local/libexec/omnilodge/system-adapter; fi
+cat > /usr/local/libexec/omnilodge/system-gateway <<'GATEWAY'
+#!/bin/sh
+set -eu
+[ "$#" -eq 0 ] || exit 64
+cd /
+exec /usr/bin/env -i PATH=/usr/bin:/bin TERM=xterm-256color LANG=C.UTF-8 /usr/bin/systemd-run --quiet --scope --slice=omnilodge-console.slice --property=MemoryMax=134217728 --property=CPUQuota=25% --property=TasksMax=64 -- /usr/local/libexec/omnilodge/system-adapter
+GATEWAY
+chmod 0755 /usr/local/libexec/omnilodge/system-gateway
+chown root:root /usr/local/libexec/omnilodge/system-gateway
 for actor in "${actors[@]}"; do
   [[ "$actor" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid administrator ID' >&2; exit 1; }
   execution="omnilodge-op-$actor"; files="omnilodge-sftp-$actor"
@@ -33,8 +42,15 @@ for actor in "${actors[@]}"; do
   for entry in "/srv/omnilodge-operations/u$actor /srv/omnilodge-sftp/$files/work" "/srv/omnilodge-staging/u$actor /srv/omnilodge-sftp/$files/.staging"; do
     read -r source destination <<< "$entry"
     mountpoint -q "$destination" || mount --bind "$source" "$destination"
+    mount -o remount,bind,nosuid,nodev "$destination"
     line="$source $destination none bind,nosuid,nodev 0 0"
     grep -Fxq "$line" /etc/fstab || printf '%s\n' "$line" >> /etc/fstab
+  done
+  for restricted in "$files" omnilodge-sys-gw; do
+    slice="user-$(id -u "$restricted").slice"
+    install -d -m 0755 -o root -g root "/etc/systemd/system/$slice.d"
+    printf '[Slice]\nMemoryMax=67108864\nCPUQuota=10%%\nTasksMax=32\n' > "/etc/systemd/system/$slice.d/50-omnilodge-system.conf"
+    chmod 0644 "/etc/systemd/system/$slice.d/50-omnilodge-system.conf"
   done
   loginctl disable-linger "$execution" >/dev/null 2>&1 || true
   systemctl mask "user@$(id -u "$execution").service" >/dev/null
@@ -56,7 +72,7 @@ Match User omnilodge-sys-gw
     PermitTunnel no
     PermitUserRC no
     PermitTTY yes
-    ForceCommand /usr/bin/sudo -n /usr/local/libexec/omnilodge/system-adapter
+    ForceCommand /usr/bin/sudo -n /usr/local/libexec/omnilodge/system-gateway
 Match User omnilodge-sftp-*
     AuthenticationMethods publickey
     AuthorizedKeysFile /etc/ssh/authorized_keys/%u
@@ -74,7 +90,7 @@ Match User omnilodge-sftp-*
 Match all
 SSH
 chmod 0600 /etc/ssh/sshd_config.d/91-omnilodge-system.conf
-printf '%s\n' 'omnilodge-sys-gw ALL=(root) NOPASSWD: /usr/local/libexec/omnilodge/system-adapter ""' > /etc/sudoers.d/omnilodge-system
+printf '%s\n' 'omnilodge-sys-gw ALL=(root) NOPASSWD: /usr/local/libexec/omnilodge/system-gateway ""' > /etc/sudoers.d/omnilodge-system
 chmod 0440 /etc/sudoers.d/omnilodge-system
 visudo -cf /etc/sudoers.d/omnilodge-system
 /usr/sbin/sshd -t
@@ -108,6 +124,29 @@ AccuracySec=1s
 WantedBy=timers.target
 UNIT
 printf '%s\n' 'd /run/omnilodge-system 2750 root omnilodge-system -' > /etc/tmpfiles.d/omnilodge-system.conf
+cat > /etc/systemd/system/omnilodge-system-cleanup.service <<'UNIT'
+[Unit]
+Description=Clean owned expired console artifacts and replay nonces
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/omnilodge/system-adapter cleanup
+User=root
+Group=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+MemoryMax=67108864
+CPUQuota=10%
+TasksMax=16
+UNIT
+cat > /etc/systemd/system/omnilodge-system-cleanup.timer <<'UNIT'
+[Unit]
+Description=Bound console journal and trash retention
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+[Install]
+WantedBy=timers.target
+UNIT
 systemctl daemon-reload
 # Start the timer only after adapter.json has been provisioned.
 systemctl reload ssh

@@ -42,6 +42,7 @@ type Service struct {
 	Name        string `json:"name"`
 	Unit        string `json:"unit"`
 	PM2Name     string `json:"pm2Name"`
+	HealthKind  string `json:"healthKind"`
 	Restartable bool   `json:"restartable"`
 }
 type Policy struct {
@@ -66,6 +67,7 @@ type Envelope struct {
 	PolicyHash string                     `json:"policyHash"`
 }
 type Record struct {
+	Envelope    *Envelope      `json:"envelope,omitempty"`
 	PayloadHash string         `json:"payloadHash"`
 	ID          string         `json:"id"`
 	ActorID     int            `json:"actorId"`
@@ -75,6 +77,7 @@ type Record struct {
 	Result      map[string]any `json:"result,omitempty"`
 	LeaseUntil  int64          `json:"leaseUntil,omitempty"`
 	StopHash    string         `json:"stopHash,omitempty"`
+	ServiceID   string         `json:"serviceId,omitempty"`
 }
 
 func output(value any) { _ = json.NewEncoder(os.Stdout).Encode(value) }
@@ -187,7 +190,15 @@ func consume(nonce string) error {
 	if err != nil {
 		return err
 	}
-	return f.Sync()
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	directory, err := os.Open(filepath.Join(statePath, "nonces"))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 func recordPath(id string) string { return filepath.Join(statePath, "operations", id+".json") }
 func loadRecord(id string) (Record, error) {
@@ -358,9 +369,15 @@ func watchdog() error {
 			_ = guard.Close()
 		}
 	}
-	return nil
+	return expireCopies()
 }
 func dispatch(e Envelope, p Policy) (map[string]any, error) {
+	if e.Action == "renewOperation" {
+		return renewCopy(e)
+	}
+	if e.Action == "publish" || e.Action == "copy" {
+		return queueCopy(e, p)
+	}
 	actor := p.Actors[strconv.Itoa(e.ActorID)]
 	if e.Action == "status" {
 		r, err := loadRecord(str(e.Params, "operationId"))
@@ -369,6 +386,11 @@ func dispatch(e Envelope, p Policy) (map[string]any, error) {
 		}
 		if r.ActorID != e.ActorID {
 			return nil, errors.New("operation belongs to another actor")
+		}
+		if r.Action == "copy" || r.Action == "publish" {
+			if lease, leaseErr := readCopyLease(r.ID); leaseErr == nil && lease.State == "expired" && r.State != "completed" {
+				return map[string]any{"state": "outcome_unknown", "operationId": r.ID, "message": "Copy lease expired; no uncertain mutation is replayed."}, nil
+			}
 		}
 		return map[string]any{"state": r.State, "result": r.Result, "operationId": r.ID}, nil
 	}
@@ -432,15 +454,7 @@ func dispatch(e Envelope, p Policy) (map[string]any, error) {
 		if !service.Restartable {
 			return nil, errors.New("service restart disabled")
 		}
-		id = str(e.Params, "operationId")
-		return journaled(e, id, func() (map[string]any, error) {
-			out, err := serviceCommand(service, true)
-			if err != nil {
-				return nil, err
-			}
-			state, err := serviceCommand(service, false)
-			return map[string]any{"accepted": true, "output": out, "observedState": strings.TrimSpace(state), "verifiedHealthy": false}, err
-		})
+		return startServiceOperation(e, p, id)
 	}
 	return fileOperation(e, p, actor)
 }
@@ -482,7 +496,9 @@ func journaled(e Envelope, id string, fn func() (map[string]any, error)) (map[st
 		if old.State == "completed" {
 			return old.Result, nil
 		}
-		return nil, errors.New("prior operation outcome requires reconciliation")
+		if !(old.State == "queued" && len(os.Args) == 3 && os.Args[1] == "copy-operation" && os.Args[2] == id) {
+			return nil, errors.New("prior operation outcome requires reconciliation")
+		}
 	}
 	r := Record{ID: id, ActorID: e.ActorID, Action: e.Action, PayloadHash: payloadHash, Fence: integer(e.Params, "fence"), State: "running"}
 	if err := atomicJSON(recordPath(id), r); err != nil {
@@ -505,6 +521,15 @@ func run() error {
 	p, err := loadPolicy()
 	if err != nil {
 		return err
+	}
+	if len(os.Args) == 3 && os.Args[1] == "copy-operation" {
+		return completeCopy(os.Args[2], p)
+	}
+	if len(os.Args) == 3 && os.Args[1] == "service-operation" {
+		return completeServiceOperation(os.Args[2], p)
+	}
+	if len(os.Args) == 2 && os.Args[1] == "cleanup" {
+		return cleanup(p)
 	}
 	if len(os.Args) == 2 && os.Args[1] == "watchdog" {
 		return watchdog()
