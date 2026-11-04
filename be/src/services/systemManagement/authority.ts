@@ -454,6 +454,7 @@ export async function authorityRpc(
         ? identity.fileUsername || identity.username
         : identity.username,
       credential,
+      connectionLimits: policy.values.SYSTEM_MANAGEMENT_CONNECTION_LIMITS,
       actorId: actor.id,
       policyHash: policy.revision,
     };

@@ -126,6 +126,22 @@ test("connection is pinned to the enrolled IP and key; real PTY carries bidirect
       }),
       /host key/,
     );
+    const held = await Promise.all(
+      Array.from({ length: 4 }, () => connect(connection)),
+    );
+    try {
+      await assert.rejects(connect(connection), /capacity is full/);
+    } finally {
+      await Promise.all(
+        held.map(
+          (client) =>
+            new Promise<void>((resolve) => {
+              client.once("close", resolve);
+              client.end();
+            }),
+        ),
+      );
+    }
     const client = await connect(connection),
       channel = await shell(client, 80, 24);
     const output = await new Promise<string>((resolve, reject) => {

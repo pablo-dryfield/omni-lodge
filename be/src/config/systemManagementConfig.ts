@@ -49,6 +49,7 @@ export type SystemHost = {
   services: string[];
 };
 export const SYSTEM_DEFAULTS = {
+  CONNECTION_LIMITS: { perActor: 4, total: 8 },
   SESSION_POLICY: {
     stepUpSeconds: 600,
     idleSeconds: 900,
@@ -392,6 +393,15 @@ export function validateSystemManagementValue(key: string, raw: string): void {
         Number(value.recordingDays) > 365)
     )
       throw new Error("Retention exceeds the supported cleanup ceiling.");
+    if (
+      suffix === "CONNECTION_LIMITS" &&
+      (Number(value.perActor) > 4 ||
+        Number(value.total) > 8 ||
+        Number(value.perActor) > Number(value.total))
+    )
+      throw new Error(
+        "SSH connection limits exceed the isolated host ceiling.",
+      );
     if (suffix === "RETENTION" && Number(value.trashDays) > 30)
       throw new Error("Trash retention cannot exceed 30 days.");
     if (

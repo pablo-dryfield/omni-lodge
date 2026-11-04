@@ -92,9 +92,37 @@ export async function resolveTarget(connection: Connection): Promise<string> {
   );
   return address;
 }
+let activeConnections = 0;
+const actorConnections = new Map<number, number>();
 export async function connect(connection: Connection): Promise<Client> {
-  const address = await resolveTarget(connection),
-    client = new Client();
+  const own = actorConnections.get(connection.actorId) || 0;
+  requireValue(
+    activeConnections < Math.min(8, connection.connectionLimits?.total || 8) &&
+      own < Math.min(4, connection.connectionLimits?.perActor || 4),
+    429,
+    "CAPACITY_EXCEEDED",
+    "SSH connection capacity is full. Close a terminal or wait for another operation.",
+  );
+  activeConnections++;
+  actorConnections.set(connection.actorId, own + 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeConnections--;
+    const next = (actorConnections.get(connection.actorId) || 1) - 1;
+    if (next) actorConnections.set(connection.actorId, next);
+    else actorConnections.delete(connection.actorId);
+  };
+  let address: string;
+  try {
+    address = await resolveTarget(connection);
+  } catch (error) {
+    release();
+    throw error;
+  }
+  const client = new Client();
+  client.once("close", release);
   return new Promise((resolve, reject) => {
     let mismatch = false;
     client.once("ready", () => {
@@ -102,6 +130,7 @@ export async function connect(connection: Connection): Promise<Client> {
       else void verifyNonRoot(client).then(() => resolve(client), reject);
     });
     client.on("error", () => {
+      release();
       client.destroy();
       reject(
         new Fault(
@@ -113,23 +142,35 @@ export async function connect(connection: Connection): Promise<Client> {
         ),
       );
     });
-    client.connect({
-      host: address,
-      port: connection.host.port,
-      username: connection.username,
-      ...connection.credential,
-      readyTimeout: 15000,
-      keepaliveInterval: 15000,
-      keepaliveCountMax: 3,
-      hostVerifier: (key: Buffer) => {
-        const fingerprint = `SHA256:${crypto.createHash("sha256").update(key).digest("base64").replace(/=+$/, "")}`;
-        const valid = connection.host.fingerprints.includes(fingerprint);
-        mismatch = !valid;
-        return valid;
-      },
-      agentForward: false,
-      tryKeyboard: false,
-    });
+    try {
+      client.connect({
+        host: address,
+        port: connection.host.port,
+        username: connection.username,
+        ...connection.credential,
+        readyTimeout: 15000,
+        keepaliveInterval: 15000,
+        keepaliveCountMax: 3,
+        hostVerifier: (key: Buffer) => {
+          const fingerprint = `SHA256:${crypto.createHash("sha256").update(key).digest("base64").replace(/=+$/, "")}`;
+          const valid = connection.host.fingerprints.includes(fingerprint);
+          mismatch = !valid;
+          return valid;
+        },
+        agentForward: false,
+        tryKeyboard: false,
+      });
+    } catch {
+      release();
+      client.destroy();
+      reject(
+        new Fault(
+          503,
+          "CREDENTIAL_UNAVAILABLE",
+          "The assigned SSH credential could not initialize a connection.",
+        ),
+      );
+    }
   });
 }
 export function guardSftpStreams(s: SFTPWrapper) {

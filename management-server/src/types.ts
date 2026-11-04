@@ -51,6 +51,7 @@ export type Credential = {
   revision?: string;
 };
 export type Connection = {
+  connectionLimits?: { perActor: number; total: number };
   host: Host;
   username: string;
   credential: Credential;

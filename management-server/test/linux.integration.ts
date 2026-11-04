@@ -603,6 +603,14 @@ test(
           ).stdout.trim(),
         ),
       );
+      const listing = await request(
+        "/files/list?hostId=fixture&rootId=work&path=.",
+      );
+      assert.equal(listing.complete, true);
+      assert(
+        listing.entries.some((v: any) => v.name === "large-stream.bin"),
+        "Real directory enumeration must handle OpenSSH EOF and include the source.",
+      );
       const download = await request("/downloads", {
           hostId: "fixture",
           rootId: "work",

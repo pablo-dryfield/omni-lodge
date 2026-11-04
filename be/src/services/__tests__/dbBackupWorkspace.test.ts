@@ -1,47 +1,56 @@
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import crypto from 'node:crypto';
-import {EventEmitter} from 'node:events';
-import {spawn} from 'child_process';
-jest.mock('child_process',()=>({spawn:jest.fn()}));
-jest.mock('../databaseWorkspace/controlBackup.js',()=>({backupWorkspaceControl:jest.fn()}));
-import {backupWorkspaceControl} from '../databaseWorkspace/controlBackup';
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import { EventEmitter } from "node:events";
+import { spawn } from "child_process";
+jest.mock("child_process", () => ({ spawn: jest.fn() }));
+jest.mock("../databaseWorkspace/controlBackup.js", () => ({
+  ...jest.requireActual("../databaseWorkspace/controlBackup.js"),
+  backupWorkspaceControl: jest.fn(),
+}));
+import { backupWorkspaceControl } from "../databaseWorkspace/controlBackup";
 
-jest.mock('../../config/database.js', () => ({
+jest.mock("../../config/database.js", () => ({
   __esModule: true,
   default: {},
 }));
-jest.mock('../../utils/initializeAccessControl.js', () => ({
+jest.mock("../../utils/initializeAccessControl.js", () => ({
   initializeAccessControl: jest.fn(),
 }));
-jest.mock('../../utils/logger.js', () => ({
+jest.mock("../../utils/logger.js", () => ({
   __esModule: true,
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
-jest.mock('../googleDrive.js', () => ({
+jest.mock("../googleDrive.js", () => ({
   getDriveClient: jest.fn(),
   ensureFolderPath: jest.fn(),
 }));
-jest.mock('../configService.js', () => ({
+jest.mock("../configService.js", () => ({
   getConfigValue: jest.fn(),
   refreshConfigCacheKeys: jest.fn(async () => {}),
 }));
-import { getDriveClient, ensureFolderPath } from '../googleDrive';
-import { getConfigValue } from '../configService';
+import { getDriveClient, ensureFolderPath } from "../googleDrive";
+import { getConfigValue } from "../configService";
 import {
   listBackupCopies,
   deleteBackupCopy,
   syncLocalBackupsToDrive,
   executeBackupScript,
-} from '../dbBackupService';
+} from "../dbBackupService";
 
 let directory: string;
 let values: Record<string, unknown>;
 let remote: Array<Record<string, unknown>>;
-const content = Buffer.from('synthetic custom archive for adapter tests');
-const originalControlUrl=process.env.DB_WORKSPACE_CONTROL_URL;
-const hash = crypto.createHash('sha256').update(content).digest('hex');
+const content = Buffer.from("synthetic custom archive for adapter tests");
+const originalControlUrl = process.env.DB_WORKSPACE_CONTROL_URL;
+const originalDbEnvironment = Object.fromEntries(
+  ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD"].map((key) => [
+    key,
+    process.env[key],
+  ]),
+);
+const hash = crypto.createHash("sha256").update(content).digest("hex");
 const drive = {
   files: {
     list: jest.fn(),
@@ -54,35 +63,35 @@ const drive = {
 beforeEach(async () => {
   jest.clearAllMocks();
   directory = await fs.mkdtemp(
-    path.join(os.tmpdir(), 'omnilodge-backup-adapter-'),
+    path.join(os.tmpdir(), "omnilodge-backup-adapter-"),
   );
   values = {
     DB_BACKUP_DIRECTORY: directory,
-    DB_BACKUP_STORAGE: 'drive',
-    DB_BACKUP_DRIVE_FOLDER: 'Backups',
+    DB_BACKUP_STORAGE: "drive",
+    DB_BACKUP_DRIVE_FOLDER: "Backups",
     DB_BACKUP_KEEP_LOCAL_COPY: false,
   };
   (getConfigValue as jest.Mock).mockImplementation(
     (key: string) => values[key],
   );
   (getDriveClient as jest.Mock).mockResolvedValue(drive);
-  (ensureFolderPath as jest.Mock).mockResolvedValue({ id: 'month' });
+  (ensureFolderPath as jest.Mock).mockResolvedValue({ id: "month" });
   remote = [
     {
-      id: 'copy-a',
-      name: 'fixture.backup',
+      id: "copy-a",
+      name: "fixture.backup",
       size: String(content.length),
-      createdTime: '2026-11-03T00:00:00.000Z',
-      modifiedTime: '2026-11-03T00:00:00.000Z',
+      createdTime: "2026-11-03T00:00:00.000Z",
+      modifiedTime: "2026-11-03T00:00:00.000Z",
       sha256Checksum: hash,
     },
   ];
   drive.files.list.mockImplementation(async ({ q }: { q: string }) => ({
     data: {
       files: q.includes("name = 'Backups'")
-        ? [{ id: 'root-folder' }]
+        ? [{ id: "root-folder" }]
         : q.includes("name = 'Development'")
-          ? [{ id: 'environment' }]
+          ? [{ id: "environment" }]
           : remote,
     },
   }));
@@ -93,64 +102,99 @@ beforeEach(async () => {
   );
   drive.files.update.mockResolvedValue({ data: {} });
   drive.files.delete.mockResolvedValue({ data: {} });
-  await fs.writeFile(path.join(directory, 'fixture.backup'), content);
+  await fs.writeFile(path.join(directory, "fixture.backup"), content);
 });
 afterEach(async () => {
-  if(originalControlUrl===undefined)delete process.env.DB_WORKSPACE_CONTROL_URL;else process.env.DB_WORKSPACE_CONTROL_URL=originalControlUrl;
+  if (originalControlUrl === undefined)
+    delete process.env.DB_WORKSPACE_CONTROL_URL;
+  else process.env.DB_WORKSPACE_CONTROL_URL = originalControlUrl;
+  for (const [key, value] of Object.entries(originalDbEnvironment)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   // This path is allocated by mkdtemp above; never a configured real backup directory.
   if (
-    !path.basename(directory).startsWith('omnilodge-backup-adapter-') ||
+    !path.basename(directory).startsWith("omnilodge-backup-adapter-") ||
     path.dirname(directory) !== os.tmpdir()
   )
-    throw new Error('Unsafe fixture cleanup');
+    throw new Error("Unsafe fixture cleanup");
   await fs.rm(directory, { recursive: true, force: true });
 });
-it('captures the independent journal after the application backup and respects its Control Panel switch',async()=>{
-  const script=path.join(directory,'synthetic-script');await fs.writeFile(script,'synthetic',{mode:0o700});
-  values.DB_BACKUP_SCRIPT=script;values.DB_BACKUP_STORAGE='local';
-  process.env.DB_WORKSPACE_CONTROL_URL='postgresql://fixture:synthetic@127.0.0.1/control';
-  (backupWorkspaceControl as jest.Mock).mockResolvedValue('workspace-control-fixture.backup');
-  (spawn as jest.Mock).mockImplementation(()=>{const child=new EventEmitter() as EventEmitter&{stdout:EventEmitter;stderr:EventEmitter};child.stdout=new EventEmitter();child.stderr=new EventEmitter();queueMicrotask(()=>child.emit('close',0));return child;});
+it("captures the independent journal after the application backup and respects its Control Panel switch", async () => {
+  const script = path.join(directory, "synthetic-script");
+  await fs.writeFile(script, "synthetic", { mode: 0o700 });
+  values.DB_BACKUP_SCRIPT = script;
+  values.DB_BACKUP_STORAGE = "local";
+  process.env.DB_WORKSPACE_CONTROL_URL =
+    "postgresql://fixture:synthetic@127.0.0.1/control";
+  Object.assign(process.env, {
+    DB_HOST: "127.0.0.1",
+    DB_PORT: "5432",
+    DB_USER: "backup-maintenance",
+    DB_PASSWORD: "fixture-backup-secret",
+  });
+  (backupWorkspaceControl as jest.Mock).mockResolvedValue(
+    "workspace-control-fixture.backup",
+  );
+  (spawn as jest.Mock).mockImplementation(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    queueMicrotask(() => child.emit("close", 0));
+    return child;
+  });
   await executeBackupScript();
-  expect(backupWorkspaceControl).toHaveBeenCalledWith(expect.objectContaining({directory,connectionString:process.env.DB_WORKSPACE_CONTROL_URL,binary:'pg_dump',timeoutMs:900000}));
-  values.DB_BACKUP_WORKSPACE_CONTROL_ENABLED=false;
-  await executeBackupScript();expect(backupWorkspaceControl).toHaveBeenCalledTimes(1);
+  expect(backupWorkspaceControl).toHaveBeenCalledWith(
+    expect.objectContaining({
+      directory,
+      connectionString:
+        "postgresql://backup-maintenance:fixture-backup-secret@127.0.0.1/control",
+      binary: "pg_dump",
+      timeoutMs: 900000,
+    }),
+  );
+  values.DB_BACKUP_WORKSPACE_CONTROL_ENABLED = false;
+  await executeBackupScript();
+  expect(backupWorkspaceControl).toHaveBeenCalledTimes(1);
 });
-it('lists server and Drive copies separately without creating Drive folders', async () => {
-  remote.push({ ...remote[0], id: 'copy-b' });
+it("lists server and Drive copies separately without creating Drive folders", async () => {
+  remote.push({ ...remote[0], id: "copy-b" });
   const inventory = await listBackupCopies();
   expect(inventory.files.map((f) => f.id).sort()).toEqual([
-    'drive:copy-a',
-    'drive:copy-b',
-    'local:fixture.backup',
+    "drive:copy-a",
+    "drive:copy-b",
+    "local:fixture.backup",
   ]);
   expect(new Set(inventory.files.map((f) => f.fingerprint)).size).toBe(3);
   expect(inventory.stores.every((s) => s.available)).toBe(true);
   expect(ensureFolderPath).not.toHaveBeenCalled();
 });
-it('trashes the exact selected Drive ID and leaves the server and other Drive copy intact', async () => {
-  remote.push({ ...remote[0], id: 'copy-b' });
+it("trashes the exact selected Drive ID and leaves the server and other Drive copy intact", async () => {
+  remote.push({ ...remote[0], id: "copy-b" });
   const copy = (await listBackupCopies()).files.find(
-    (f) => f.id === 'drive:copy-b',
+    (f) => f.id === "drive:copy-b",
   )!;
   await deleteBackupCopy(copy.id, copy.fingerprint);
   expect(drive.files.update).toHaveBeenCalledWith(
     expect.objectContaining({
-      fileId: 'copy-b',
+      fileId: "copy-b",
       requestBody: { trashed: true },
     }),
     { timeout: 30000 },
   );
   expect(drive.files.delete).not.toHaveBeenCalled();
-  expect(await fs.readFile(path.join(directory, 'fixture.backup'))).toEqual(
+  expect(await fs.readFile(path.join(directory, "fixture.backup"))).toEqual(
     content,
   );
 });
-it('requires explicit permanent deletion and rejects a changed fingerprint', async () => {
+it("requires explicit permanent deletion and rejects a changed fingerprint", async () => {
   const copy = (await listBackupCopies()).files.find(
-    (f) => f.id === 'drive:copy-a',
+    (f) => f.id === "drive:copy-a",
   )!;
-  remote[0].modifiedTime = '2026-11-04T00:00:00.000Z';
+  remote[0].modifiedTime = "2026-11-04T00:00:00.000Z";
   await expect(
     deleteBackupCopy(copy.id, copy.fingerprint, true),
   ).rejects.toThrow(/changed/);
@@ -160,43 +204,43 @@ it('requires explicit permanent deletion and rejects a changed fingerprint', asy
   )!;
   await deleteBackupCopy(current.id, current.fingerprint, true);
   expect(drive.files.delete).toHaveBeenCalledWith(
-    expect.objectContaining({ fileId: 'copy-a' }),
+    expect.objectContaining({ fileId: "copy-a" }),
     { timeout: 30000 },
   );
 });
-it('does not treat unavailable Drive as an empty successful inventory', async () => {
+it("does not treat unavailable Drive as an empty successful inventory", async () => {
   (getDriveClient as jest.Mock).mockRejectedValue(
-    new Error('OAuth unavailable'),
+    new Error("OAuth unavailable"),
   );
   const inventory = await listBackupCopies();
   expect(inventory.stores).toEqual(
     expect.arrayContaining([
       {
-        location: 'drive',
+        location: "drive",
         available: false,
         count: 0,
         message: expect.any(String),
       },
     ]),
   );
-  expect(inventory.files.map((f) => f.id)).toEqual(['local:fixture.backup']);
+  expect(inventory.files.map((f) => f.id)).toEqual(["local:fixture.backup"]);
 });
-it('retains a server archive when the existing same-name Drive copy cannot be verified', async () => {
-  remote[0].sha256Checksum = 'different';
+it("retains a server archive when the existing same-name Drive copy cannot be verified", async () => {
+  remote[0].sha256Checksum = "different";
   const result = await syncLocalBackupsToDrive({
     deleteAfterUpload: true,
     skipExisting: true,
   });
-  expect(result.failed).toEqual(['fixture.backup']);
+  expect(result.failed).toEqual(["fixture.backup"]);
   expect(result.skipped).toEqual([]);
-  expect(await fs.readFile(path.join(directory, 'fixture.backup'))).toEqual(
+  expect(await fs.readFile(path.join(directory, "fixture.backup"))).toEqual(
     content,
   );
 });
-it.each(['both', 'keep-local'])(
-  'retains the server archive for %s even if a caller asks to delete after upload',
+it.each(["both", "keep-local"])(
+  "retains the server archive for %s even if a caller asks to delete after upload",
   async (mode) => {
-    if (mode === 'both') values.DB_BACKUP_STORAGE = 'both';
+    if (mode === "both") values.DB_BACKUP_STORAGE = "both";
     else values.DB_BACKUP_KEEP_LOCAL_COPY = true;
     expect(
       (
@@ -205,13 +249,13 @@ it.each(['both', 'keep-local'])(
           skipExisting: true,
         })
       ).skipped,
-    ).toEqual(['fixture.backup']);
-    expect(await fs.readFile(path.join(directory, 'fixture.backup'))).toEqual(
+    ).toEqual(["fixture.backup"]);
+    expect(await fs.readFile(path.join(directory, "fixture.backup"))).toEqual(
       content,
     );
   },
 );
-it('removes only a verified server copy in Drive-only mode', async () => {
+it("removes only a verified server copy in Drive-only mode", async () => {
   expect(
     (
       await syncLocalBackupsToDrive({
@@ -219,10 +263,10 @@ it('removes only a verified server copy in Drive-only mode', async () => {
         skipExisting: true,
       })
     ).skipped,
-  ).toEqual(['fixture.backup']);
+  ).toEqual(["fixture.backup"]);
   await expect(
-    fs.access(path.join(directory, 'fixture.backup')),
-  ).rejects.toMatchObject({ code: 'ENOENT' });
+    fs.access(path.join(directory, "fixture.backup")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
   expect(drive.files.update).not.toHaveBeenCalled();
   expect(drive.files.delete).not.toHaveBeenCalled();
 });

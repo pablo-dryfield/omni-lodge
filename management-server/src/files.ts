@@ -300,7 +300,9 @@ export class Files {
               false | { filename: string; attrs: Stats }[]
             >((resolve, reject) =>
               s.readdir(handle, (e, list) =>
-                e ? reject(e) : resolve(list || false),
+                e && (e as { code?: number }).code !== 1
+                  ? reject(e)
+                  : resolve(list || false),
               ),
             );
             if (!batch) break;
@@ -1055,7 +1057,9 @@ export class Files {
                 false | { filename: string; attrs: Stats }[]
               >((resolve, reject) =>
                 s.readdir(handle, (e, v) =>
-                  e ? reject(e) : resolve(v || false),
+                  e && (e as { code?: number }).code !== 1
+                    ? reject(e)
+                    : resolve(v || false),
                 ),
               );
               if (!entries) break;
