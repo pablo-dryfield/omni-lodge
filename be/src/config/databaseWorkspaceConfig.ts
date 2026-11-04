@@ -181,6 +181,13 @@ export const DATABASE_WORKSPACE_CONFIG: ConfigDefinition[] = [
         10000,
       ],
       ['METADATA_TTL_SECONDS', 'Catalog cache lifetime (seconds)', 60, 0, 600],
+      [
+        'COMPLETION_COLUMNS',
+        'Maximum SQL autocomplete columns',
+        20000,
+        100,
+        50000,
+      ],
       ['ACTIVITY_REFRESH_SECONDS', 'Activity refresh (seconds)', 10, 5, 120],
       [
         'CONTROL_STORAGE_BUDGET_BYTES',
@@ -243,7 +250,13 @@ export const DATABASE_WORKSPACE_CONFIG: ConfigDefinition[] = [
         2048,
       ],
       ['WORKER_CPU_PERCENT', 'Execution worker CPU quota (%)', 100, 10, 200],
-      ['RESTORE_EXPANSION_FACTOR', 'Restore database expansion allowance', 6, 2, 100],
+      [
+        'RESTORE_EXPANSION_FACTOR',
+        'Restore database expansion allowance',
+        6,
+        2,
+        100,
+      ],
       [
         'RESTORE_MAX_BACKUP_BYTES',
         'Maximum isolated restore archive bytes',

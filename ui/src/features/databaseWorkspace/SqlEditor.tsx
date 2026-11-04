@@ -10,6 +10,8 @@ import {
   rectangularSelection,
 } from '@codemirror/view';
 import { sql, PostgreSQL } from '@codemirror/lang-sql';
+import { completionSchema, columnCompletionSource } from './sqlCompletions';
+import type { CompletionColumn } from './api';
 import {
   defaultKeymap,
   history,
@@ -43,7 +45,8 @@ type Props = {
   value: string;
   onChange: (value: string) => void;
   onRun: () => void;
-  schema: Record<string, string[]>;
+  schema: CompletionColumn[];
+  defaultSchema?: string;
   readOnly?: boolean;
   wrapping?: boolean;
   fontSize?: number;
@@ -55,6 +58,7 @@ export const SqlEditor = forwardRef<EditorHandle, Props>(
       onChange,
       onRun,
       schema,
+      defaultSchema = 'public',
       readOnly,
       wrapping = true,
       fontSize = 14,
@@ -147,9 +151,17 @@ export const SqlEditor = forwardRef<EditorHandle, Props>(
             highlightSelectionMatches(),
             autocompletion(),
             syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-            language.current.of(
-              sql({ dialect: PostgreSQL, schema, upperCaseKeywords: true }),
-            ),
+            language.current.of([
+              sql({
+                dialect: PostgreSQL,
+                schema: completionSchema(schema),
+                defaultSchema,
+                upperCaseKeywords: true,
+              }),
+              PostgreSQL.language.data.of({
+                autocomplete: columnCompletionSource(schema, defaultSchema),
+              }),
+            ]),
             editing.current.of(EditorState.readOnly.of(Boolean(readOnly))),
             EditorView.contentAttributes.of({
               'aria-label': 'SQL editor',
@@ -215,11 +227,19 @@ export const SqlEditor = forwardRef<EditorHandle, Props>(
     }, [value]);
     useEffect(() => {
       view.current?.dispatch({
-        effects: language.current.reconfigure(
-          sql({ dialect: PostgreSQL, schema, upperCaseKeywords: true }),
-        ),
+        effects: language.current.reconfigure([
+          sql({
+            dialect: PostgreSQL,
+            schema: completionSchema(schema),
+            defaultSchema,
+            upperCaseKeywords: true,
+          }),
+          PostgreSQL.language.data.of({
+            autocomplete: columnCompletionSource(schema, defaultSchema),
+          }),
+        ]),
       });
-    }, [schema]);
+    }, [schema, defaultSchema]);
     useEffect(() => {
       view.current?.dispatch({
         effects: editing.current.reconfigure(

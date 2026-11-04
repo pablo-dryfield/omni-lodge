@@ -94,4 +94,58 @@ describe("System Management Control Panel validation", () => {
       ),
     ).toThrow();
   });
+  test("root filesystem enrollment requires all explicit capabilities and a dedicated file identity", () => {
+    const host = {
+      id: "production",
+      name: "Production",
+      environment: "production",
+      hostname: "127.0.0.1",
+      port: 22,
+      addresses: ["127.0.0.1"],
+      fingerprints: ["SHA256:" + "a".repeat(43)],
+      enabled: true,
+      managed: true,
+      rootFiles: true,
+      identities: {
+        "1": {
+          username: "gateway",
+          credentialId: "gateway",
+          fileUsername: "omnilodge-root-files-1",
+          fileCredentialId: "root-key",
+        },
+      },
+      roots: [
+        {
+          id: "server",
+          name: "Server filesystem",
+          path: "/",
+          writable: true,
+          managed: true,
+          privileged: true,
+        },
+      ],
+      services: [],
+    };
+    const validate = (h: unknown) =>
+      validateSystemManagementValue(
+        "SYSTEM_MANAGEMENT_HOSTS",
+        JSON.stringify([h]),
+      );
+    expect(() => validate(host)).not.toThrow();
+    for (const change of [
+      { rootFiles: false },
+      { managed: false },
+      { roots: [{ ...host.roots[0], privileged: false }] },
+      {
+        identities: {
+          "1": { ...host.identities["1"], fileUsername: "omnilodge-sftp-1" },
+        },
+      },
+    ])
+      expect(() => validate({ ...host, ...change })).toThrow();
+    expect(
+      SYSTEM_MANAGEMENT_CONFIG.find((c) => c.key.endsWith("ROOT_FILES_ENABLED"))
+        ?.defaultValue,
+    ).toBe(false);
+  });
 });

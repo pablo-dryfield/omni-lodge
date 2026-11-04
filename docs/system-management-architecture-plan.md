@@ -2,6 +2,18 @@
 
 Status: **implementation authorized on 4 November 2026; in progress**.
 
+## Root filesystem extension requested on 4 November 2026
+
+The administrator requested the real server filesystem rather than only the initial empty operations workspace. This explicitly expands file access to root-owned files; the earlier restricted-file-identity boundary remains the default for ordinary profiles.
+
+- Add a default-off Control Panel switch, an explicit `rootFiles` role/host grant and an enrolled managed-host capability. Require the existing current global-administrator session and password confirmation. Configuration changes revoke old console sessions.
+- Give each enrolled administrator a dedicated SSH identity and encrypted key for a fixed root SFTP gateway. It has no shell, forwarding or PTY. Serve the real `/` in a bounded transient service, with the filesystem read-only and only that actor's private staging bind writable. Do not reuse the maintenance SSH key.
+- The read transport keeps only `CAP_DAC_READ_SEARCH`, uses private minimal devices, and masks `/proc` and `/sys`. Kernel virtual filesystems are outside Files. This prevents process-root magic links or raw devices from bypassing the read-only mount namespace. Ordinary server files, logs and backups remain readable across owners.
+- Publish mutations through the signed, reviewed, journaled root adapter. Preserve existing destination ownership/mode. Keep deployment-controlled releases, dependency layers and host deployment tooling read-only through this interface. Preserve storage reserves, version checks, private-copy publication, trash and recovery rules.
+- Show root access and the actual absolute path clearly. Support navigating a symlink to its canonical target without allowing mutation-path symlink bypasses. Do not silently change terminal execution identities.
+- Provision only from the qualified immutable release, verify root-owned fixture reads, staging isolation, reviewed changes outside the operations workspace, protected deployment-path denials and revocation on real Linux before production activation. Test production only with owned temporary fixtures; never open or print real secret file contents.
+- Enabling root browsing necessarily lets an authorized root administrator read sensitive server files, including configuration credentials. This is an explicit privileged mode, not the restricted workspace's original secret-isolation guarantee. Root writes still use the existing reviewed action flow.
+
 Prepared: 4 November 2026. Repository baseline: `b0bd3dd4e615dec51a070e29ea123c51b06dae4c`. Planning branch: `codex/system-management-plan`.
 
 ## 1. Outcome and delivery boundary

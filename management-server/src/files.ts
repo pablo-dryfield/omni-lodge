@@ -45,6 +45,29 @@ export function remotePath(root: Root, relative: string) {
   );
   return p;
 }
+export function managedStaging(root: Root, id: string) {
+  return `${root.privileged ? "/.omnilodge-root-staging" : "/.staging"}/${id}`;
+}
+export function rootMutationPath(root: Root, relative: string) {
+  if (!root.privileged) return;
+  const resolved = remotePath(root, relative);
+  requireValue(
+    ![
+      "/opt/omnilodge",
+      "/usr/local/libexec/omnilodge",
+      "/var/lib/omnilodge/deploy",
+    ].some(
+      (p) =>
+        resolved === "/" ||
+        resolved === p ||
+        resolved.startsWith(p + "/") ||
+        p.startsWith(resolved + "/"),
+    ),
+    403,
+    "DEPLOYMENT_PATH",
+    "Deployment-controlled files are read-only. Use the release workflow.",
+  );
+}
 export function fingerprint(stat: Stats) {
   return `${stat.size}:${stat.mtime}:${stat.mode}:${stat.uid}:${stat.gid}`;
 }
@@ -270,6 +293,43 @@ export class Files {
       }
     }
   }
+  async resolveLink(
+    session: string,
+    ctx: Context,
+    hostId: string,
+    rootId: string,
+    input: string,
+  ) {
+    const relative = safeRelative(input);
+    return this.withRoot(
+      session,
+      ctx,
+      hostId,
+      rootId,
+      "readFiles",
+      async (_c, s, _h, root) => {
+        requireValue(
+          root.privileged === true,
+          403,
+          "LINK_FORBIDDEN",
+          "Links require explicit root filesystem access.",
+        );
+        const resolved = await new Promise<string>((resolve, reject) =>
+          s.realpath(remotePath(root, relative), (e, value) =>
+            e ? reject(e) : resolve(value),
+          ),
+        );
+        const target = safeRelative(resolved.replace(/^\/+/, ""));
+        await this.noLinks(s, root, target);
+        const info = await stat(s, remotePath(root, target));
+        return {
+          path: target,
+          name: path.posix.basename(target),
+          type: info.isDirectory() ? "directory" : "file",
+        };
+      },
+    );
+  }
   async list(
     session: string,
     ctx: Context,
@@ -445,12 +505,17 @@ export class Files {
       "PROTECTED_PATH",
       "Choose an approved writable root.",
     );
+    if (operation !== "copy") rootMutationPath(approvedRoot, relative);
+    if (operation === "copy" || operation === "rename")
+      rootMutationPath(approvedRoot, safeRelative(input.target));
     if (operation === "chmod")
       requireValue(
         Number.isInteger(input.mode) &&
           Number(input.mode) >= 0 &&
           Number(input.mode) <= 0o777 &&
-          (!approvedRoot.managed || (Number(input.mode) & 0o022) === 0),
+          (!approvedRoot.managed ||
+            approvedRoot.privileged ||
+            (Number(input.mode) & 0o022) === 0),
         400,
         "INVALID_MODE",
         approvedRoot.managed
@@ -697,10 +762,10 @@ export class Files {
                   session,
                   job.hostId,
                   "registerStaging",
-                  { rootId: root.id, stagingId: id },
+                  { rootId: root.id, stagingId: id, path: relative },
                   "writeFiles",
                 );
-                const staging = `/.staging/${id}`;
+                const staging = managedStaging(root, id);
                 await this.writeExclusive(s, staging, bytes);
                 Object.assign(params, {
                   stagingId: id,
@@ -1424,7 +1489,7 @@ export class Files {
   }
   private staging(job: Job, root: Root) {
     return job.data.managed === true
-      ? `/.staging/${job.id}`
+      ? managedStaging(root, job.id)
       : remotePath(
           root,
           path.posix.join(
@@ -1515,6 +1580,7 @@ export class Files {
       String(input.rootId),
       action,
       async (_c, s, _h, root) => {
+        rootMutationPath(root, relative);
         await this.noLinks(s, root, relative, true);
         const name = remotePath(root, relative);
         let attrs: Stats;
@@ -1658,7 +1724,7 @@ export class Files {
               session,
               hostId,
               "registerStaging",
-              { rootId: root.id, stagingId: job.id },
+              { rootId: root.id, stagingId: job.id, path: relative },
               "writeFiles",
             );
           const handle = await new Promise<Buffer>((resolve, reject) =>

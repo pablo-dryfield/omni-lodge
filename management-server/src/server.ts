@@ -493,6 +493,20 @@ export async function start() {
         );
         return;
       }
+      if (route === "/management/files/resolve-link" && req.method === "GET") {
+        send(
+          res,
+          200,
+          await files.resolveLink(
+            token,
+            ctx,
+            input.hostId,
+            input.rootId,
+            input.path,
+          ),
+        );
+        return;
+      }
       if (route === "/management/files/content" && req.method === "GET") {
         send(
           res,

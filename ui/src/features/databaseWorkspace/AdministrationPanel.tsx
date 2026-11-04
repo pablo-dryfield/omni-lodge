@@ -248,7 +248,7 @@ export function AdministrationPanel({
                 value={sql}
                 onChange={setSql}
                 onRun={() => void review('ddl')}
-                schema={{}}
+                schema={[]}
               />
             </div>
             <Textarea

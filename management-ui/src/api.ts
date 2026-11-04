@@ -9,12 +9,14 @@ export type Host = {
   fingerprints: string[];
   enabled: boolean;
   managed: boolean;
+  rootFiles?: boolean;
   roots: {
     id: string;
     name: string;
     path: string;
     writable: boolean;
     managed: boolean;
+    privileged?: boolean;
   }[];
   services: string[];
 };

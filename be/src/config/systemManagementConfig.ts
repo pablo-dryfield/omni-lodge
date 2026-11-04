@@ -17,6 +17,7 @@ export const SYSTEM_ACTIONS = [
   "viewActivity",
   "viewRecordings",
   "terminateOthers",
+  "rootFiles",
 ] as const;
 export type SystemAction = (typeof SYSTEM_ACTIONS)[number];
 export type SystemRoot = {
@@ -25,6 +26,7 @@ export type SystemRoot = {
   path: string;
   writable: boolean;
   managed: boolean;
+  privileged?: boolean;
 };
 export type SystemHost = {
   id: string;
@@ -36,6 +38,7 @@ export type SystemHost = {
   fingerprints: string[];
   enabled: boolean;
   managed: boolean;
+  rootFiles?: boolean;
   identities: Record<
     string,
     {
@@ -129,6 +132,16 @@ export const SYSTEM_MANAGEMENT_CONFIG: ConfigDefinition[] = [
       "Admit administration sessions only after isolated-origin, broker, identity and resource checks pass. Disabling revokes active management authority.",
   },
   {
+    key: "SYSTEM_MANAGEMENT_ROOT_FILES_ENABLED",
+    label: "Root filesystem access enabled",
+    category: "System Management",
+    valueType: "boolean",
+    defaultValue: false,
+    impact: "high",
+    description:
+      "Allow explicitly enrolled global administrators with the rootFiles host grant to browse the complete server filesystem and submit reviewed root file operations. Requires the separately provisioned root file gateway. This includes sensitive root-owned files. Changes revoke existing console sessions; deployment-controlled files remain read-only.",
+  },
+  {
     key: "SYSTEM_MANAGEMENT_ORIGIN",
     label: "System Management browser origin",
     category: "System Management",
@@ -177,6 +190,7 @@ export function validateSystemManagementValue(key: string, raw: string): void {
               "fingerprints",
               "enabled",
               "managed",
+              "rootFiles",
               "identities",
               "roots",
               "services",
@@ -205,6 +219,13 @@ export function validateSystemManagementValue(key: string, raw: string): void {
         typeof h.managed !== "boolean"
       )
         throw new Error("Invalid server environment, port or flags.");
+      if (
+        (h.rootFiles !== undefined && typeof h.rootFiles !== "boolean") ||
+        (h.rootFiles === true && h.managed !== true)
+      )
+        throw new Error(
+          "Root files require a managed, explicitly enrolled host.",
+        );
       if (
         !Array.isArray(h.addresses) ||
         !h.addresses.length ||
@@ -255,6 +276,17 @@ export function validateSystemManagementValue(key: string, raw: string): void {
                 ["root", "0"].includes(identity[key] as string)))
           )
             throw new Error("Invalid SFTP identity.");
+        if (
+          h.rootFiles === true
+            ? identity.fileUsername !== `omnilodge-root-files-${actor}` ||
+              typeof identity.fileCredentialId !== "string"
+            : String(identity.fileUsername || "").startsWith(
+                "omnilodge-root-files-",
+              )
+        )
+          throw new Error(
+            "Root files require the dedicated enrolled file gateway.",
+          );
       }
       if (
         !Array.isArray(h.roots) ||
@@ -266,7 +298,14 @@ export function validateSystemManagementValue(key: string, raw: string): void {
             !record(r) ||
             Object.keys(r).some(
               (key) =>
-                !["id", "name", "path", "writable", "managed"].includes(key),
+                ![
+                  "id",
+                  "name",
+                  "path",
+                  "writable",
+                  "managed",
+                  "privileged",
+                ].includes(key),
             ) ||
             typeof r.id !== "string" ||
             !id.test(r.id) ||
@@ -275,7 +314,15 @@ export function validateSystemManagementValue(key: string, raw: string): void {
             !r.path.startsWith("/") ||
             r.path.length > 4096 ||
             /[\\\0]/.test(r.path) ||
-            r.path === "/" ||
+            (r.path === "/" &&
+              !(h.rootFiles === true && r.privileged === true)) ||
+            (r.privileged !== undefined && typeof r.privileged !== "boolean") ||
+            (r.privileged === true &&
+              !(
+                h.rootFiles === true &&
+                r.path === "/" &&
+                r.managed === true
+              )) ||
             (r.path.endsWith("/") && r.path.length > 1) ||
             r.path.includes("//") ||
             r.path

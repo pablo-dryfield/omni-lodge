@@ -67,10 +67,11 @@ func cleanup(p Policy) error {
 	seen := map[string]bool{}
 	for actorID, actor := range p.Actors {
 		for rootID, policy := range actor.Roots {
-			if !policy.Writable || seen[policy.Path] {
+			key := policy.Path + ":" + actorID
+			if !policy.Writable || seen[key] {
 				continue
 			}
-			seen[policy.Path] = true
+			seen[key] = true
 			guard, lockErr := namedLock("root-" + rootID)
 			if lockErr != nil {
 				continue
@@ -148,6 +149,7 @@ type StagingRecord struct {
 	ActorID int    `json:"actorId"`
 	RootID  string `json:"rootId"`
 	Expires int64  `json:"expires"`
+	Parent  string `json:"parent,omitempty"`
 }
 
 func registerStaging(e Envelope, p Policy) (map[string]any, error) {
@@ -187,7 +189,18 @@ func registerStaging(e Envelope, p Policy) (map[string]any, error) {
 	if len(entries) >= 10000 {
 		return nil, errors.New("staging journal quota reached")
 	}
-	return map[string]any{"registered": true}, atomicJSON(file, StagingRecord{id, e.ActorID, rootID, deadline})
+	parent := ""
+	if root.Privileged {
+		name, pathErr := safePath(str(e.Params, "path"))
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		if pathErr = rootMutationPath(root, name); pathErr != nil {
+			return nil, pathErr
+		}
+		parent = filepath.Dir(name)
+	}
+	return map[string]any{"registered": true}, atomicJSON(file, StagingRecord{ID: id, ActorID: e.ActorID, RootID: rootID, Expires: deadline, Parent: parent})
 }
 func cleanupStaging(p Policy, now time.Time) error {
 	directory := filepath.Join(statePath, "staging")
@@ -240,7 +253,7 @@ func cleanupStaging(p Policy, now time.Time) error {
 		}
 		// Keep the root-owned record until every owned file is confirmed absent.
 		// A failed removal must remain retryable by the next timer invocation.
-		err = removeStagingFiles(policy, id)
+		err = removeStagingFiles(policy, id, record.Parent)
 		if err == nil {
 			err = os.Remove(file)
 		}
@@ -252,8 +265,16 @@ func cleanupStaging(p Policy, now time.Time) error {
 	return nil
 }
 
-func removeStagingFiles(policy RootPolicy, id string) error {
-	for _, location := range []struct{ base, name string }{{policy.Staging, id}, {policy.Path, filepath.Join(".omnilodge-private", id+".partial")}, {policy.Path, filepath.Join(".omnilodge-private", id+".copy")}} {
+func removeStagingFiles(policy RootPolicy, id string, parents ...string) error {
+	private := ".omnilodge-private"
+	if policy.Privileged && len(parents) > 0 && parents[0] != "" {
+		parent, err := safePath(parents[0])
+		if err != nil {
+			return err
+		}
+		private = filepath.Join(parent, private)
+	}
+	for _, location := range []struct{ base, name string }{{policy.Staging, id}, {policy.Path, filepath.Join(private, id+".partial")}, {policy.Path, filepath.Join(private, id+".copy")}} {
 		root, err := os.OpenRoot(location.base)
 		if err != nil {
 			return err
