@@ -74,6 +74,7 @@ test(
       url.pathname = "/" + database;
       url.username = username;
       url.password = password;
+      url.searchParams.set("sslmode", "disable");
       return url.toString();
     };
     const importBackend = async () => {
@@ -310,7 +311,7 @@ test(
               gid,
             },
           },
-          services: [],
+          services: ["database"],
         };
       }
       await fs.writeFile(
@@ -320,7 +321,13 @@ test(
           hostId: "fixture",
           publicKey,
           actors,
-          services: {},
+          services: {
+            database: {
+              name: "Read-only database status",
+              unit: "postgresql.service",
+              restartable: false,
+            },
+          },
           memoryMiB: 256,
           cpuPercent: 25,
           tasks: 64,
@@ -362,7 +369,7 @@ test(
                 managed: true,
               },
             ],
-            services: [],
+            services: ["database"],
           },
         ],
         SYSTEM_MANAGEMENT_CREDENTIALS: credentials,
@@ -389,6 +396,7 @@ test(
           base,
           "authority-signing.pem",
         ),
+        PGSSLMODE: "prefer", // Production inherits this; local runtime URLs must override it.
       });
       const authority = await module("services/systemManagement/authority"),
         logins = await module("services/systemManagement/loginSessions");
@@ -593,6 +601,25 @@ test(
           confirm: "arbitrary-service",
           reason: "Fixture negative test",
         }),
+        { code: "SERVICE_FORBIDDEN" },
+      );
+      await assert.rejects(
+        request("/services/restart", {
+          hostId: "fixture",
+          serviceId: "database",
+          confirm: "database",
+          reason: "Fixture read-only service test",
+        }),
+        { code: "SERVICE_FORBIDDEN" },
+      );
+      assert.equal(
+        (
+          await control!.query(
+            "SELECT count(*)::int AS n FROM system_management.jobs WHERE kind='restart'",
+          )
+        ).rows[0].n,
+        0,
+        "Rejected service requests must not create queued operations.",
       );
       const source = crypto.randomBytes(9000),
         upload = await request("/transfers", {
@@ -882,6 +909,19 @@ test(
         true,
       );
     } catch (error) {
+      if (brokerUnit) {
+        const brokerDiagnostics = await run("/bin/journalctl", [
+          "--no-pager",
+          "--unit=" + brokerUnit,
+          "--lines=40",
+        ]).catch(() => ({ stdout: "Broker diagnostics unavailable" }));
+        console.error(
+          brokerDiagnostics.stdout.replace(
+            /postgresql:\/\/[^\s]+/g,
+            "[redacted database URL]",
+          ),
+        );
+      }
       const diagnostics = await run("/usr/bin/journalctl", [
         "--no-pager",
         "--unit=ssh",

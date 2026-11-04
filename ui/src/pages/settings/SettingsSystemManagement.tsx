@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -46,12 +46,35 @@ export default function SettingsSystemManagement() {
   useEffect(() => {
     void load();
   }, []);
-  const openFullWindow=async()=>{
-    if(!capabilities)return;const target=`omnilodge-system-${crypto.randomUUID()}`,popup=window.open('about:blank',target);
-    if(!popup){setError('Allow this site to open the standalone console window.');return;}popup.opener=null;
-    try{const result=(await axios.post('/system-management/launch')).data;const form=document.createElement('form');form.method='POST';form.action=capabilities.origin+'/management/session/launch';form.target=target;const input=document.createElement('input');input.type='hidden';input.name='grant';input.value=result.grant;form.appendChild(input);document.body.appendChild(form);form.submit();form.remove();}catch(error){popup.close();setError((error as Error).message);}
+  const openFullWindow = async () => {
+    if (!capabilities) return;
+    const target = `omnilodge-system-${crypto.randomUUID()}`,
+      popup = window.open("about:blank", target);
+    if (!popup) {
+      setError("Allow this site to open the standalone console window.");
+      return;
+    }
+    popup.opener = null;
+    try {
+      const result = (await axios.post("/system-management/launch")).data;
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = capabilities.origin + "/management/session/launch";
+      form.target = target;
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "grant";
+      input.value = result.grant;
+      form.appendChild(input);
+      document.body.appendChild(form);
+      form.submit();
+      form.remove();
+    } catch (error) {
+      popup.close();
+      setError((error as Error).message);
+    }
   };
-  const launch = async () => {
+  const launch = useCallback(async () => {
     if (!capabilities || !iframe.current?.contentWindow) return;
     try {
       const result = (await axios.post("/system-management/launch")).data;
@@ -68,7 +91,7 @@ export default function SettingsSystemManagement() {
           ?.message || (e as Error).message,
       );
     }
-  };
+  }, [capabilities]);
   useEffect(() => {
     if (!capabilities) return;
     const receive = (event: MessageEvent) => {
@@ -89,7 +112,7 @@ export default function SettingsSystemManagement() {
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
-  }, [capabilities]);
+  }, [capabilities, launch]);
   return (
     <PageAccessGuard pageSlug={PAGE_SLUGS.settingsSystemManagement}>
       <Stack gap="md">
@@ -116,7 +139,7 @@ export default function SettingsSystemManagement() {
               <Button
                 variant="light"
                 leftSection={<IconExternalLink size={16} />}
-                onClick={()=>void openFullWindow()}
+                onClick={() => void openFullWindow()}
               >
                 Open full window
               </Button>

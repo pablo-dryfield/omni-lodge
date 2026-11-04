@@ -30,11 +30,24 @@ const adminOptions = {
   port: Number(process.env.DB_PORT || 5432),
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
+  ssl: false, // This infrastructure path is pinned to the local cluster.
   connectionTimeoutMillis: 5000,
 };
-const controlDatabase = process.env.DB_WORKSPACE_CONTROL_URL
-  ? new URL(process.env.DB_WORKSPACE_CONTROL_URL).pathname.slice(1)
-  : "";
+const controlUrl = process.env.DB_WORKSPACE_CONTROL_URL
+  ? new URL(process.env.DB_WORKSPACE_CONTROL_URL)
+  : undefined;
+const loopback = (host: string) =>
+  ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host);
+if (
+  !controlUrl ||
+  !loopback(controlUrl.hostname) ||
+  Number(controlUrl.port || 5432) !== adminOptions.port ||
+  !loopback(process.env.DB_HOST || "127.0.0.1")
+)
+  throw new Error(
+    "System Management bootstrap requires the verified local application/control cluster.",
+  );
+const controlDatabase = controlUrl.pathname.slice(1);
 if (!/^[a-zA-Z0-9_]{1,63}$/.test(controlDatabase))
   throw new Error("Provision the independent control database first.");
 const control = new pg.Client({ ...adminOptions, database: controlDatabase });
@@ -120,6 +133,7 @@ try {
         );
         u.username = `omnilodge_system_${kind}`;
         u.password = passwords[kind];
+        u.searchParams.set("sslmode", "disable");
         return u.toString();
       };
       const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
@@ -296,7 +310,7 @@ try {
         true,
       );
       execFileSync(
-        "/usr/bin/systemctl",
+        "/bin/systemctl",
         [
           "enable",
           "--now",
