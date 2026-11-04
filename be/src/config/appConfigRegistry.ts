@@ -1,3 +1,4 @@
+import { SYSTEM_MANAGEMENT_CONFIG } from './systemManagementConfig.js';
 import {
   DEFAULT_GOOGLE_ADS_API_VERSION,
   GOOGLE_ADS_API_VERSION_PATTERN,
@@ -24,6 +25,7 @@ export type ConfigDefinition = {
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   ...DATABASE_WORKSPACE_CONFIG,
+  ...SYSTEM_MANAGEMENT_CONFIG,
   {
     key: 'SCHED_TZ',
     label: 'Scheduling timezone',

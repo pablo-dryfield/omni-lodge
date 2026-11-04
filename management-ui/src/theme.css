@@ -1,0 +1,64 @@
+:root {
+  --canvas: #f4f7fb;
+  --surface: #fff;
+  --side: #f8fafc;
+  --text: #1c2c43;
+  --muted: #7a899e;
+  --border: #e0e7ef;
+  --border-strong: #b8c7d9;
+  --border-subtle: #edf1f6;
+  --hover: #f2f6fc;
+  --accent: #256cdd;
+  --accent-hover: #1c59bc;
+  --accent-soft: #eaf2ff;
+  --focus: #9cc0ff;
+  --danger: #c54c48;
+  --shadow: 0 3px 12px #14223c03;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #101723;
+    --surface: #172130;
+    --side: #141d2b;
+    --text: #dfe7f2;
+    --muted: #92a4bd;
+    --border: #2a374b;
+    --border-strong: #4d6381;
+    --border-subtle: #243044;
+    --hover: #223149;
+    --accent: #74a7ff;
+    --accent-hover: #4b85e6;
+    --accent-soft: #233b5e;
+    --focus: #87b6ff;
+    --danger: #f08b86;
+    --shadow: none;
+  }
+  .primary {
+    color: #102342;
+  }
+  .environment.production {
+    background: #503724;
+    color: #f4bf96;
+  }
+  .notice {
+    background: #1d354b;
+    border-color: #365873;
+    color: #c1dbee;
+  }
+  .alert {
+    background: #45262c;
+    border-color: #71424a;
+    color: #ffc0c0;
+  }
+  .state.completed {
+    background: #1c3d33;
+    color: #a8e4c4;
+    border-color: #2d5b4b;
+  }
+  .state.outcome_unknown,
+  .state.failed {
+    background: #452a29;
+    color: #edb0ab;
+    border-color: #6d3d3b;
+  }
+}

@@ -422,6 +422,7 @@ validate_source_assets() {
     bin/omnilodge-deploy-worker \
     bin/omnilodge-deploy-recover \
     bin/runtime-launcher.mjs \
+    bin/system-ingress-guard.mjs \
     lib/bootstrap-functions.sh \
     systemd/omnilodge-deploy-worker@.service \
     systemd/omnilodge-deploy-recovery.service \
@@ -495,6 +496,7 @@ validate_source_assets() {
   node_path=$(find_command node /usr/bin/node)
   if [ -n "$node_path" ]; then
     "$node_path" --check "$(source_file bin/runtime-launcher.mjs)"
+    "$node_path" --check "$(source_file bin/system-ingress-guard.mjs)"
     "$node_path" -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" \
       "$(source_file pm2/ecosystem.production.json)"
     "$node_path" --check "$(repository_file ops/production/libexec/deploy/activation-state-store.mjs)"
@@ -713,6 +715,7 @@ validate_installed() {
   assert_exact_file "$SUDOERS_TARGET" '440'
   assert_exact_file "$LIBEXEC_ROOT/ssh-gateway" '755'
   assert_exact_file "$LIBEXEC_ROOT/runtime-launcher.mjs" '755'
+  assert_exact_file "$LIBEXEC_ROOT/system-ingress-guard.mjs" '755'
   for installed_control_plane_file in \
     ops/production/libexec/deploy/activation-state-store.mjs \
     ops/production/libexec/deploy/activation-orchestrator.mjs \
@@ -766,6 +769,8 @@ validate_installed() {
 
   cmp -s "$(source_file bin/ssh-gateway)" "$LIBEXEC_ROOT/ssh-gateway" \
     || die 'installed SSH gateway differs from the reviewed source'
+  cmp -s "$(source_file bin/system-ingress-guard.mjs)" "$LIBEXEC_ROOT/system-ingress-guard.mjs" \
+    || die 'installed console ingress guard differs from the reviewed source'
   cmp -s "$(source_file bin/runtime-launcher.mjs)" "$LIBEXEC_ROOT/runtime-launcher.mjs" \
     || die 'installed runtime launcher differs from the reviewed source'
   cmp -s "$(source_file bin/omnilodge-capture-legacy-baseline)" /usr/local/sbin/omnilodge-capture-legacy-baseline \
@@ -838,6 +843,7 @@ install_assets() {
     bin/omnilodge-deploy-worker \
     bin/omnilodge-deploy-recover \
     bin/runtime-launcher.mjs \
+    bin/system-ingress-guard.mjs \
     lib/bootstrap-functions.sh \
     systemd/omnilodge-deploy-worker@.service \
     systemd/omnilodge-deploy-recovery.service \
@@ -952,6 +958,7 @@ install_assets() {
   touch_if_missing "$STATE_ROOT/logs/deploy/worker.log"
 
   atomic_install "$(source_file bin/ssh-gateway)" "$LIBEXEC_ROOT/ssh-gateway" 755
+  atomic_install "$(source_file bin/system-ingress-guard.mjs)" "$LIBEXEC_ROOT/system-ingress-guard.mjs" 755
   atomic_install "$(source_file bin/runtime-launcher.mjs)" "$LIBEXEC_ROOT/runtime-launcher.mjs" 755
   for control_plane_file in \
     ops/production/libexec/deploy/activation-state-store.mjs \

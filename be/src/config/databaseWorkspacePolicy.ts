@@ -6,6 +6,7 @@ export const WORKSPACE_CONTROL_OBJECTS = [
   'config_history',
   'config_seed_runs',
   'users',
+  'auth_sessions',
   'userTypes',
   'user_type_product_types',
   'roleModulePermissions',

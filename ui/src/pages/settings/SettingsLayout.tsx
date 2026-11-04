@@ -6,7 +6,7 @@ import { navigateToPage } from "../../actions/navigationActions";
 
 const SettingsLayout = () => {
   const dispatch = useAppDispatch();
-  const workspace = useLocation().pathname.replace(/\/$/, '') === '/settings/sql-helper';
+  const workspace = ['/settings/sql-helper','/settings/system-management'].includes(useLocation().pathname.replace(/\/$/, ''));
   const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
 
   useEffect(() => {

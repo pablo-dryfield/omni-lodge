@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   SimpleGrid,
   Card,
@@ -8,7 +8,6 @@ import {
   ActionIcon,
   Alert,
   Button,
-  Select,
   Modal,
   ScrollArea,
   Code,
@@ -24,7 +23,6 @@ import {
   IconStars,
   IconCoin,
   IconRefresh,
-  IconBolt,
   IconSettings,
   IconTools,
   IconCalendarEvent,
@@ -40,9 +38,7 @@ import { useAppSelector } from "../../store/hooks";
 import { selectAllowedPageSlugs } from "../../selectors/accessControlSelectors";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
-import { fetchLogFile, fetchPm2ProcessLogs, usePm2Processes, useRestartPm2Process } from "../../api/pm2";
 import { clearCachedAppFilesAndReload } from "../../utils/refreshApp";
-import { canAccessPm2Controls, canQueryPm2Processes } from "../../utils/pm2Access";
 
 type SettingsSection = {
   label: string;
@@ -53,6 +49,7 @@ type SettingsSection = {
 };
 
 const sections: SettingsSection[] = [
+  {label:"System Management",description:"Open SSH terminals, manage server files, and review service activity.",icon:IconTools,to:"/settings/system-management",pageSlug:PAGE_SLUGS.settingsSystemManagement},
   { label: 'Products', description: 'Manage your experiences and their storefront settings.', icon: IconTag,
     to: '/settings/products', pageSlug: PAGE_SLUGS.settingsProducts },
   { label: 'Product Prices', description: 'Manage currency prices for your products.', icon: IconCurrencyEuro,
@@ -216,74 +213,18 @@ const SettingsLanding = () => {
   const allowedPageSlugs = useAppSelector(selectAllowedPageSlugs);
   const productScoped = useAppSelector(state => (state.accessControl.productTypeIds?.length ?? 0) > 0);
   const { roleSlug } = useAppSelector((state) => state.session);
-  const isProduction = process.env.NODE_ENV === "production";
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
-  const [restartError, setRestartError] = useState<string | null>(null);
-  const [restartFeedback, setRestartFeedback] = useState<string | null>(null);
-  const [logsOpened, setLogsOpened] = useState(false);
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [logsError, setLogsError] = useState<string | null>(null);
-  const [logsOutput, setLogsOutput] = useState<string | null>(null);
-  const logsLines = 200;
-  const [logSource, setLogSource] = useState<"pm2" | "backend" | "ui">("pm2");
   const [gygTestOpened, setGygTestOpened] = useState(false);
   const [gygTestLoading, setGygTestLoading] = useState(false);
   const [gygTestError, setGygTestError] = useState<string | null>(null);
   const [gygTestRequestJson, setGygTestRequestJson] = useState<string>("");
   const [gygTestResponseJson, setGygTestResponseJson] = useState<string>("");
-  const canManagePm2 = canAccessPm2Controls(roleSlug);
-  const pm2ProcessesQuery = usePm2Processes({
-    enabled: canQueryPm2Processes(process.env.NODE_ENV, roleSlug),
-  });
-  const restartPm2Process = useRestartPm2Process();
   const canRunGygSelfTest = ["admin", "owner", "manager"].includes(compareString(roleSlug).toLowerCase());
 
   const visibleSections = useMemo(
     () => sections.filter((section) => allowedPageSlugs.has(section.pageSlug) && (!productScoped || section.to !== '/settings/currencies')),
     [allowedPageSlugs, productScoped],
   );
-
-  const processOptions = useMemo(
-    () =>
-      (pm2ProcessesQuery.data ?? []).map((process) => ({
-        value: process.id.toString(),
-        label: `${process.name} (#${process.id})`,
-        description: process.status,
-      })),
-    [pm2ProcessesQuery.data],
-  );
-
-  const selectedProcessLabel = useMemo(() => {
-    if (!selectedProcessId) {
-      return null;
-    }
-    return processOptions.find((option) => option.value === selectedProcessId)?.label ?? selectedProcessId;
-  }, [processOptions, selectedProcessId]);
-
-  useEffect(() => {
-    if (selectedProcessId && !processOptions.some((option) => option.value === selectedProcessId)) {
-      setSelectedProcessId(null);
-    }
-  }, [processOptions, selectedProcessId]);
-
-  useEffect(() => {
-    setRestartError(null);
-    setRestartFeedback(null);
-    setLogsError(null);
-    setLogsOutput(null);
-  }, [selectedProcessId]);
-
-  useEffect(() => {
-    if (canManagePm2) {
-      return;
-    }
-
-    setSelectedProcessId(null);
-    setLogsOpened(false);
-    setLogsError(null);
-    setLogsOutput(null);
-  }, [canManagePm2]);
 
   const handleRefreshApp = async () => {
     if (refreshing) {
@@ -297,73 +238,6 @@ const SettingsLanding = () => {
     }
     setRefreshing(true);
     await clearCachedAppFilesAndReload();
-  };
-
-  const handleRestartBackend = async () => {
-    if (!canManagePm2) {
-      setRestartError("Your account does not have access to PM2 controls.");
-      return;
-    }
-    if (!isProduction) {
-      setRestartError("PM2 controls are only available in production.");
-      return;
-    }
-    if (!selectedProcessId) {
-      setRestartError("Select a PM2 process to restart.");
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Restart ${selectedProcessLabel ?? "the selected PM2 process"}? This may briefly interrupt backend access.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      setRestartError(null);
-      setRestartFeedback(null);
-      const response = await restartPm2Process.mutateAsync({ id: Number(selectedProcessId) });
-      setRestartFeedback(response.message ?? "Restart request sent.");
-    } catch (error) {
-      setRestartError(extractErrorMessage(error));
-    }
-  };
-
-  const handleOpenLogs = async () => {
-    if (!canManagePm2) {
-      setLogsOpened(false);
-      return;
-    }
-    if (!isProduction) {
-      setLogsError("PM2 logs are only available in production.");
-      setLogsOpened(true);
-      return;
-    }
-
-    setLogsOpened(true);
-    setLogsError(null);
-    setLogsLoading(true);
-    try {
-      if (logSource === "pm2") {
-        if (!selectedProcessId) {
-          setLogsError("Select a PM2 process to load logs.");
-        } else {
-          const response = await fetchPm2ProcessLogs(Number(selectedProcessId), logsLines);
-          const combined = response.stderr
-            ? `${response.output}\n\n[stderr]\n${response.stderr}`.trim()
-            : response.output;
-          setLogsOutput(combined || "(no logs returned)");
-        }
-      } else {
-        const response = await fetchLogFile(logSource, logsLines);
-        setLogsOutput(response.output || "(no logs returned)");
-      }
-    } catch (error) {
-      setLogsError(extractErrorMessage(error));
-    } finally {
-      setLogsLoading(false);
-    }
   };
 
   const handleRunGygSelfTest = async () => {
@@ -448,84 +322,6 @@ const SettingsLanding = () => {
             </Button>
           </Stack>
         </Card>
-        {canManagePm2 ? (
-          <Card withBorder radius="md" padding="lg">
-            <Stack gap="xs">
-              <ActionIcon variant="light" color="teal" size="lg" aria-label="Restart backend">
-                <IconBolt size={22} />
-              </ActionIcon>
-              <Title order={4}>Restart backend</Title>
-              <Text size="sm" c="dimmed">
-                Choose a PM2 process to restart the backend service.
-              </Text>
-              {!isProduction ? (
-                <Alert color="yellow" title="Available in production only">
-                  PM2 process controls are disabled outside the production environment.
-                </Alert>
-              ) : null}
-              {pm2ProcessesQuery.isError && isProduction ? (
-                <Alert color="red" title="Unable to load PM2 processes">
-                  {extractErrorMessage(pm2ProcessesQuery.error)}
-                </Alert>
-              ) : null}
-              {restartError ? (
-                <Alert color="red" title="Restart failed">
-                  {restartError}
-                </Alert>
-              ) : null}
-              {restartFeedback ? (
-                <Alert color="green" title="Restart requested">
-                  {restartFeedback}
-                </Alert>
-              ) : null}
-              <Select
-                label="PM2 process"
-                placeholder={
-                  !isProduction
-                    ? "Available in production only"
-                    : pm2ProcessesQuery.isLoading
-                    ? "Loading PM2 processes..."
-                    : processOptions.length > 0
-                      ? "Select a PM2 process"
-                      : "No active PM2 processes"
-                }
-                data={processOptions}
-                value={selectedProcessId}
-                onChange={setSelectedProcessId}
-                searchable
-                clearable
-                disabled={!isProduction || pm2ProcessesQuery.isLoading || pm2ProcessesQuery.isError || restartPm2Process.isPending}
-                nothingFoundMessage="No active PM2 processes"
-              />
-              <Button
-                variant="light"
-                color="teal"
-                onClick={handleRestartBackend}
-                loading={restartPm2Process.isPending}
-                disabled={
-                  !isProduction ||
-                  !selectedProcessId ||
-                  pm2ProcessesQuery.isLoading ||
-                  pm2ProcessesQuery.isError
-                }
-              >
-                Restart now
-              </Button>
-              <Button
-                variant="default"
-                onClick={handleOpenLogs}
-                disabled={
-                  !isProduction ||
-                  !selectedProcessId ||
-                  pm2ProcessesQuery.isLoading ||
-                  pm2ProcessesQuery.isError
-                }
-              >
-                View logs
-              </Button>
-            </Stack>
-          </Card>
-        ) : null}
         {canRunGygSelfTest && (
           <Card withBorder radius="md" padding="lg">
             <Stack gap="xs">
@@ -543,50 +339,6 @@ const SettingsLanding = () => {
           </Card>
         )}
       </SimpleGrid>
-
-      <Modal
-        opened={canManagePm2 && logsOpened}
-        onClose={() => setLogsOpened(false)}
-        title="PM2 logs"
-        centered
-        size="lg"
-      >
-        <Stack gap="sm">
-          <Select
-            label="Log source"
-            data={[
-              { value: "pm2", label: "PM2 (selected process)" },
-              { value: "backend", label: "Backend combined.log" },
-              { value: "ui", label: "UI combined.log" },
-            ]}
-            value={logSource}
-            onChange={(value) => {
-              const next = value === "backend" || value === "ui" ? value : "pm2";
-              setLogSource(next);
-              setLogsError(null);
-              setLogsOutput(null);
-            }}
-          />
-          {logsError ? (
-            <Alert color="red" title="Unable to load logs">
-              {logsError}
-            </Alert>
-          ) : null}
-          <ScrollArea h={320} type="always">
-            <Code block>
-              {logsLoading ? "Loading logs..." : logsOutput ?? "Select a process to view logs."}
-            </Code>
-          </ScrollArea>
-          <Button
-            variant="default"
-            onClick={handleOpenLogs}
-            disabled={(logSource === "pm2" && !selectedProcessId) || logsLoading}
-            loading={logsLoading}
-          >
-            Refresh logs
-          </Button>
-        </Stack>
-      </Modal>
 
       <Modal
         opened={gygTestOpened}

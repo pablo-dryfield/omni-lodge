@@ -28,6 +28,7 @@ const expectedAssets = [
   'bin/omnilodge-deploy-worker',
   'bin/omnilodge-deploy-recover',
   'bin/runtime-launcher.mjs',
+  'bin/system-ingress-guard.mjs',
   'lib/bootstrap-functions.sh',
   'systemd/omnilodge-deploy-worker@.service',
   'systemd/omnilodge-deploy-recovery.service',

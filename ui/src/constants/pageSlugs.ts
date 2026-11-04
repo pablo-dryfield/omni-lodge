@@ -48,6 +48,7 @@ export const PAGE_SLUGS = {
   financeSettings: "finance-settings",
   availabilityCalendar: "availability-calendar",
   settings: "settings",
+  settingsSystemManagement: "settings-system-management",
   settingsUsers: "settings-users",
   settingsUserTypes: "settings-user-types",
   settingsPages: "settings-pages",

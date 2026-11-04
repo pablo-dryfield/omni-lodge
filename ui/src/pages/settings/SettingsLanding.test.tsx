@@ -107,18 +107,18 @@ describe("SettingsLanding PM2 access", () => {
     (roleSlug) => {
       renderPage(roleSlug);
 
-      expect(mockUsePm2Processes).toHaveBeenCalledWith({ enabled: false });
+      expect(mockUsePm2Processes).not.toHaveBeenCalled();
       expect(screen.queryByRole("heading", { name: "Restart backend" })).not.toBeInTheDocument();
     },
   );
 
   it.each(["admin", "administrator", " Administrator "])(
-    "renders PM2 controls for backend-authorized role %s while retaining the environment gate",
+    "routes administrators away from legacy PM2 controls for %s",
     (roleSlug) => {
       renderPage(roleSlug);
 
-      expect(mockUsePm2Processes).toHaveBeenCalledWith({ enabled: false });
-      expect(screen.getByRole("heading", { name: "Restart backend" })).toBeInTheDocument();
+      expect(mockUsePm2Processes).not.toHaveBeenCalled();
+      expect(screen.queryByRole("heading", { name: "Restart backend" })).not.toBeInTheDocument();
     },
   );
 });

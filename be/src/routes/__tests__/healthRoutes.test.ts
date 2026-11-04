@@ -89,6 +89,7 @@ describe('health routes', () => {
         configuration: { ok: true, missing: [], invalid: [] },
         database: { ok: true },
         databaseWorkspace: {required:false,ok:true},
+        systemManagement: {required:false,ok:true},
       },
     });
     expect(checkDatabase).toHaveBeenCalledTimes(1);

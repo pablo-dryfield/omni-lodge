@@ -1,3 +1,4 @@
+import {validLoginSession} from '../services/systemManagement/loginSessions.js';
 import { loadWorkspaceAccount } from '../services/databaseWorkspace/appMetadata.js';
 import { Response, NextFunction } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
@@ -78,6 +79,9 @@ const authenticateJWT = async (
       return;
     }
 
+    if (decoded.jti && !(await validLoginSession(decoded.jti, decoded.id))) {
+      res.status(403).json({error:'Session expired. Please sign in again.'}); return;
+    }
     const user =
       profile === 'workspace'
         ? ((await loadWorkspaceAccount(decoded.id)) as unknown as

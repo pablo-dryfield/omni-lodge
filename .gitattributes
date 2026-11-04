@@ -3,3 +3,7 @@
 /scripts/codex/** text eol=lf
 /.github/workflows/*.yml text eol=lf
 /.github/workflows/*.yaml text eol=lf
+
+/ops/system-management/** text eol=lf
+/management-server/** text eol=lf
+/management-ui/** text eol=lf
