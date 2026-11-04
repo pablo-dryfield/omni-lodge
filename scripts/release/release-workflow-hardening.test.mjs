@@ -15,6 +15,18 @@ const submitJobStart = deployWorkflow.indexOf('\n  submit_request:');
 const prepareJob = deployWorkflow.slice(0, submitJobStart);
 const submitJob = deployWorkflow.slice(submitJobStart);
 
+test('production-mode migration builds retain TypeScript build dependencies', () => {
+  for (const name of ['release.yml', 'ci.yml']) {
+    const source = fs.readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const start = source.indexOf('\n  migrations:');
+    assert.ok(start > -1, `${name} has its migration gate`);
+    const migration = source.slice(start + 1).split(/\n  [a-z_]+:/)[0];
+    assert.match(migration, /NODE_ENV: production/);
+    assert.match(migration, /name: Install backend dependencies\n(?:\s*#[^\n]*\n)*\s*run: npm ci --include=dev\n/);
+    assert.match(migration, /npm run build:prod/);
+  }
+});
+
 test('production queues carry trusted release inputs, never an expiring host request', () => {
   assert.ok(submitJobStart > -1);
   assert.match(prepareJob, /node scripts\/deploy\/github-release-evidence\.mjs/);

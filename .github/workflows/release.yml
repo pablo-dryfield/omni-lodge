@@ -71,7 +71,7 @@ jobs:
           test "$(npm --version)" = "${NPM_VERSION}"
 
       - name: Install backend dependencies
-        run: npm ci
+        run: npm ci --include=dev
 
       - name: Validate backend
         run: |
@@ -276,7 +276,9 @@ jobs:
           test "$(npm --version)" = "${NPM_VERSION}"
 
       - name: Install backend dependencies
-        run: npm ci
+        # Build with declarations/tools available; immutable runtime layers
+        # continue to install production dependencies with --omit=dev.
+        run: npm ci --include=dev
 
       - name: Build migrations from release source
         run: npm run build:prod
