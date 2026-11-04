@@ -81,7 +81,7 @@ export async function testHost(
       }
     }
     await store.event(ctx.actorId, hostId, "host.test", "completed");
-    return { ok: true, stages };
+    return { ok: true, stages, hostId };
   } catch (error) {
     await store.event(ctx.actorId, hostId, "host.test", "failed");
     if (
@@ -104,6 +104,6 @@ export async function testHost(
             : "The saved server could not complete this check.",
       },
     });
-    return { ok: false, stages };
+    return { ok: false, stages, hostId };
   }
 }

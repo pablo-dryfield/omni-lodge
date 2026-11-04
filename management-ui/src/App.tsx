@@ -313,6 +313,8 @@ function App() {
     setOverview(null);
     setServices([]);
     setServiceId(host?.services[0] || "");
+    setLogs("");
+    setFollowing(false);
   }, [hostId]);
   const fileEpoch = useRef(0);
   useEffect(() => {
@@ -360,18 +362,28 @@ function App() {
   }, [session?.actorId, loadJobs]);
   useEffect(() => {
     if (!hostId || !session) return;
-    if (section === "overview")
+    let active = true;
+    if (section === "overview" && host?.managed)
       void api(`/overview?${query({ hostId })}`)
-        .then(setOverview)
+        .then((r) => {
+          if (active) setOverview(r);
+        })
         .catch(onError);
-    if (section === "services")
+    if (section === "services" && host?.managed)
       void api(`/services?${query({ hostId })}`)
-        .then((result) => setServices(result.services || []))
+        .then((result) => {
+          if (active) setServices(result.services || []);
+        })
         .catch(onError);
     if (section === "activity")
       void api("/activity")
-        .then((result) => setActivity(result.events))
+        .then((result) => {
+          if (active) setActivity(result.events);
+        })
         .catch(onError);
+    return () => {
+      active = false;
+    };
   }, [section, hostId, session?.actorId, session?.stepUpUntil]);
   useEffect(() => {
     if (
@@ -394,14 +406,20 @@ function App() {
   }, [section, session?.stepUpUntil, session?.actorId]);
   useEffect(() => {
     if (!following || !serviceId) return;
+    let active = true;
     const timer = setInterval(
       () =>
         void api(`/logs?${query({ hostId, serviceId })}`)
-          .then((result) => setLogs(result.output || ""))
+          .then((result) => {
+            if (active) setLogs(result.output || "");
+          })
           .catch(onError),
       3000,
     );
-    return () => clearInterval(timer);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
   }, [following, hostId, serviceId]);
   const unlock = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -976,7 +994,7 @@ function App() {
                 <span className="eyebrow">Infrastructure</span>
                 <h2>{host?.name || "Your servers"}</h2>
                 <p className="muted">
-                  Live host health and administration activity.
+                  Host health and administration activity.
                 </p>
               </div>
               <button
@@ -985,7 +1003,7 @@ function App() {
                     .then(setOverview)
                     .catch(onError)
                 }
-                disabled={!host}
+                disabled={!host?.managed}
               >
                 <IconRefresh size={18} />
                 Refresh
@@ -1005,6 +1023,12 @@ function App() {
               </div>
             ) : (
               <>
+                {!host.managed && (
+                  <p className="notice">
+                    This server supports SSH/SFTP. Structured host metrics,
+                    service actions and logs require the managed Linux adapter.
+                  </p>
+                )}
                 <div className="metric-grid">
                   {[
                     [
@@ -2209,6 +2233,7 @@ function App() {
           onClose={() => setConnectionTest(null)}
         >
           <div className="form-stack">
+            <p className="mono">{connectionTest.hostId}</p>
             <p>
               {connectionTest.ok
                 ? "The saved connection passed its available capability checks."
