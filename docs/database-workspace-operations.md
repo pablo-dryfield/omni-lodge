@@ -81,6 +81,8 @@ Keeping both copies can fill the current small server quickly. Review independen
 
 ## Isolated restore and offline operator recovery
 
+The isolated worker mounts only its private artifact directory and the configured existing server-backup data directory as writable. Backup paths must be absolute and outside protected system/release paths; paths with spaces are quoted as systemd data. A Control Panel backup-directory change invalidates workspace reviews and drains/restarts the worker. A missing backup directory does not block ordinary queries, but server-copy removal requires that directory to be available. The Linux rehearsal verifies create/remove access to a synthetic backup copy and denial of writes outside both permitted directories.
+
 The workspace restores trusted custom archives into a **new private database**, preserving the application/source database. It validates copy identity, checksum, authenticated encryption, archive/client/server versions, dedicated nonsuperuser CREATEDB identity and free space. It does not run Sequelize sync, seed permissions, adopt migrations or cut application traffic over afterward.
 
 The default capacity allowance includes archive copies, six times archive size for expansion and a free-space floor. The discovered production disk cannot safely stage/restore its approximately 988 MB archive under this policy. Production restore remains disabled until a larger/isolated volume or target has sufficient measured capacity and the full drill passes. Do not lower the allowance merely to bypass a real disk shortage.

@@ -10,6 +10,7 @@ export function systemdWorkerLaunch(input: {
   memoryMb: number;
   cpuPercent: number;
   artifactDirectory: string;
+  backupDirectory?: string;
 }) {
   if (
     !Number.isSafeInteger(input.pid) ||
@@ -28,7 +29,12 @@ export function systemdWorkerLaunch(input: {
       'WORKER_POLICY',
       'Invalid bounded worker launch policy.',
     );
-  for (const value of [input.script, input.cwd, input.artifactDirectory])
+  for (const value of [
+    input.script,
+    input.cwd,
+    input.artifactDirectory,
+    ...(input.backupDirectory ? [input.backupDirectory] : []),
+  ])
     if (
       !path.posix.isAbsolute(value) ||
       /[\u0000-\u001f$%]/.test(value) ||
@@ -49,6 +55,30 @@ export function systemdWorkerLaunch(input: {
       'WORKER_PATH',
       'Private artifacts must be stored outside immutable releases.',
     );
+  if (
+    input.backupDirectory &&
+    (input.backupDirectory === '/' ||
+      /^\/(?:etc|root|usr|bin|sbin|lib|proc|sys|dev|run)(?:\/|$)/.test(
+        input.backupDirectory,
+      ) ||
+      input.backupDirectory === '/opt/omnilodge/releases' ||
+      input.backupDirectory.startsWith('/opt/omnilodge/releases/'))
+  )
+    throw new WorkspaceError(
+      503,
+      'WORKER_PATH',
+      'Server backups must use a dedicated data directory outside protected system and release paths.',
+    );
+  // This is systemd property data, not a shell command. Quote paths so spaces
+  // cannot accidentally grant access to a second directory.
+  const writablePaths = [
+    ...new Set([
+      input.artifactDirectory,
+      ...(input.backupDirectory ? [input.backupDirectory] : []),
+    ]),
+  ]
+    .map((value) => (/[\s"\\]/.test(value) ? JSON.stringify(value) : value))
+    .join(' ');
   const heap = Math.max(128, Math.floor(input.memoryMb * 0.65));
   return {
     executable: '/usr/bin/systemd-run',
@@ -67,7 +97,7 @@ export function systemdWorkerLaunch(input: {
       '--property=PrivateTmp=yes',
       '--property=ProtectSystem=strict',
       '--property=ProtectHome=read-only',
-      `--property=ReadWritePaths=${input.artifactDirectory}`,
+      `--property=ReadWritePaths=${writablePaths}`,
       `--property=WorkingDirectory=${input.artifactDirectory}`,
       '--property=EnvironmentFile=/etc/omnilodge/backend.env',
       '--property=StandardOutput=null',

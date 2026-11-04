@@ -34,7 +34,7 @@ export async function runBackupDeletion(
     await authorize();
     submitted = true;
     await deleteBackupCopy(copy.copyId, copy.fingerprint, copy.permanent);
-    const sql = `${copy.permanent ? 'Deleted' : 'Moved to Drive trash'} ${copy.location === 'local' ? 'server' : 'Google Drive'} copy: ${copy.filename}. Other copies were not removed.`;
+    const sql = `${copy.location === 'local' || copy.permanent ? 'Deleted' : 'Moved to Drive trash'} ${copy.location === 'local' ? 'server' : 'Google Drive'} copy: ${copy.filename}. Other copies were not removed.`;
     await store.finish(job, 'succeeded', 'not_applicable', [
       {
         index: 0,

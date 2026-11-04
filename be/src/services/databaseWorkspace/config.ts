@@ -11,7 +11,10 @@ import {
   type Target,
 } from './types.js';
 
-const keys = DATABASE_WORKSPACE_CONFIG.map((d) => d.key);
+const keys = [
+  ...DATABASE_WORKSPACE_CONFIG.map((d) => d.key),
+  'DB_BACKUP_DIRECTORY',
+];
 const num = (key: string) => {
   const definition = DATABASE_WORKSPACE_CONFIG.find(
     (d) => d.key === `DB_WORKSPACE_${key}`,
