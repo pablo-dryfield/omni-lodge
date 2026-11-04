@@ -1,6 +1,6 @@
 # System Management implementation ledger
 
-Status: **in progress; not deployed**. User authorized implementation and production deployment on 4 November 2026. Deliver all agreed scope together; this ledger is not a release acceptance claim.
+Status at the last recorded checkpoint: **implemented; final release qualification and activation pending**. This is a chronological engineering record, not a live deployment-status page. Final release/activation evidence is tracked in PRs #229 and #230 and the production readiness endpoint. User authorized implementation and production deployment on 4 November 2026. Deliver all agreed scope together; this ledger is not a release acceptance claim.
 
 Branch: `codex/system-management`, based on `b0bd3dd4e615dec51a070e29ea123c51b06dae4c`. Architecture: [complete plan](system-management-architecture-plan.md).
 
@@ -112,3 +112,9 @@ PR #230's earlier 7ec8a32c Linux PR fixture passed the new Host/Origin/CSRF/path
 Additional local recovery rehearsal used the real backupWorkspaceControl helper, real PostgreSQL 17 pg_dump/pg_restore, actual Workspace migrations and System Management schema in disposable databases. Both schemas restored; the management journal/draft decrypted with the retained artifact key, a wrong key was rejected and public history still excluded the draft. All temporary databases, roles, files and archive were removed. No production data was copied for this rehearsal.
 
 The GitHub master branch was previously unprotected. It now requires the GitHub Actions CI / required aggregate (app 15368) with an up-to-date branch; force pushes and branch deletion are disabled. PR #230 was observed blocked while its aggregate was pending. Its auto-merge was temporarily disabled during the additional bootstrap correction. Repository production activation remains manual; production application/backend/UI readiness still report the previous healthy b0bd3dd4 release. DNS/sign-in remains pending.
+
+
+The final production UI build enforced React Hook warnings as errors and caught a missing launch-handler dependency in the Settings iframe bridge. The handler is now memoized and included in the message-listener effect dependencies. No warning suppression or CI relaxation was introduced. Local UI type/lint checks passed; the optimized CI-mode build and full UI suite are being rerun before the final push. A synthetic native-button/browser probe also verified that the named standalone form target remains the same single popup after its opener is cleared; the opened page has opener=null. This is window-target behavior evidence, not a substitute for a production authenticated launch.
+
+
+The final Settings launch-handler correction passed npm --prefix ui run check and the local optimized UI build with CI=true (compiled successfully under warning-as-error enforcement). The full UI suite continues independently. The final backend check/full suite passed again: 318 suites, 3,143 tests, one existing skip. No production build command has been used.
