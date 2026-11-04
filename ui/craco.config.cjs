@@ -6,6 +6,22 @@ const cracoConfig = {
       // Some dependencies publish maps referencing source files absent from
       // their npm package. Keep application maps, but skip only those packages.
       const patchSourceMapRule = (rule) => {
+        if (Array.isArray(rule?.oneOf)) {
+          rule.oneOf = rule.oneOf.flatMap((entry) => {
+            // CRA also consumes upstream maps through babel-loader. Excluding
+            // source-map-loader alone does not stop Babel importing incomplete
+            // maps from these packages. Generate maps from their shipped JS.
+            const isDependencyBabel = typeof entry?.loader === 'string'
+              && entry.loader.includes('babel-loader')
+              && !entry.include
+              && entry.options?.sourceMaps === true;
+            return isDependencyBabel ? [{
+              ...entry,
+              include: sourceMapLoaderExclude,
+              options: { ...entry.options, inputSourceMap: false },
+            }, entry] : [entry];
+          });
+        }
         const entries = [rule?.loader, ...(Array.isArray(rule?.use) ? rule.use : rule?.use ? [rule.use] : [])];
         if (entries.some(entry => (typeof entry === 'string' ? entry : entry?.loader || '').includes('source-map-loader'))) {
           rule.exclude = rule.exclude ? [rule.exclude, sourceMapLoaderExclude] : sourceMapLoaderExclude;

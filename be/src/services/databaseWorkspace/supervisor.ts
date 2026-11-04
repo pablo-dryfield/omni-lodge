@@ -49,6 +49,7 @@ export function startWorkspaceSupervisor(): () => void {
         'DB_WORKSPACE_WORKER_MEMORY_MB',
         'DB_WORKSPACE_WORKER_CPU_PERCENT',
         'DB_WORKSPACE_ARTIFACT_DIRECTORY',
+        'DB_BACKUP_DIRECTORY',
       ]);
       const enabled =
         getConfigValue('DB_WORKSPACE_ENABLED') === true &&
@@ -62,10 +63,22 @@ export function startWorkspaceSupervisor(): () => void {
         artifactDirectory = String(
           getConfigValue('DB_WORKSPACE_ARTIFACT_DIRECTORY'),
         );
+      const configuredBackups = String(
+        getConfigValue('DB_BACKUP_DIRECTORY') || '',
+      );
+      if (configuredBackups && !path.isAbsolute(configuredBackups))
+        throw new Error(
+          'The worker requires an absolute server backup directory.',
+        );
+      const backupDirectory =
+        configuredBackups && fs.existsSync(configuredBackups)
+          ? fs.realpathSync(configuredBackups)
+          : undefined;
       const desired = JSON.stringify({
         memoryMb,
         cpuPercent,
         artifactDirectory,
+        backupDirectory,
       });
       if (child) {
         if (resourceHash !== desired) stopChild();
@@ -85,6 +98,7 @@ export function startWorkspaceSupervisor(): () => void {
         memoryMb,
         cpuPercent,
         artifactDirectory,
+        backupDirectory,
       });
       fs.mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
       resourceHash = desired;

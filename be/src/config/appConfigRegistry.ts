@@ -1216,10 +1216,12 @@ Best,
   {
     key: 'DB_BACKUP_DIRECTORY',
     label: 'DB backup directory',
-    description: 'Local directory for database backups.',
+    description:
+      'Absolute local directory for database backups. Changing it restarts the Database Workspace worker and invalidates existing workspace reviews. The worker permits backup removal only from the configured data directory.',
     category: 'Backups',
     valueType: 'string',
     defaultValue: '/home/postgres/backups',
+    validation: { maxLength: 1024 },
   },
   {
     key: 'DB_BACKUP_SCRIPT',

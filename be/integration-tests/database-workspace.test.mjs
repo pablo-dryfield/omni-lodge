@@ -323,6 +323,30 @@ test('production worker launch has independent resource caps and never places cr
     }),
   );
   assert.throws(() => systemdWorkerLaunch({ ...input, cpuPercent: 0 }));
+  assert.ok(
+    systemdWorkerLaunch({
+      ...input,
+      backupDirectory: '/home/postgres/backups',
+    }).args.includes(
+      '--property=ReadWritePaths=/var/lib/omnilodge/database-workspace /home/postgres/backups',
+    ),
+  );
+  assert.ok(
+    systemdWorkerLaunch({
+      ...input,
+      backupDirectory: '/srv/backup copies',
+    }).args.includes(
+      '--property=ReadWritePaths=/var/lib/omnilodge/database-workspace "/srv/backup copies"',
+    ),
+  );
+  for (const backupDirectory of [
+    '/',
+    '/etc',
+    '/etc/omnilodge',
+    '/opt/omnilodge/releases/active/be',
+    '/srv/backups/../escape',
+  ])
+    assert.throws(() => systemdWorkerLaunch({ ...input, backupDirectory }));
   const stat =
     '42 (worker (safe)) S ' +
     Array.from({ length: 18 }, () => '0').join(' ') +

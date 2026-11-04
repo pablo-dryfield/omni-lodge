@@ -39,13 +39,21 @@ async function launch(mode) {
     start = linuxProcessStart(await fs.readFile(`/proc/${pid}/stat`, 'utf8'));
   const unit = `omnilodge-workspace-${process.pid}-${Math.random().toString(16).slice(2, 10).padEnd(8, '0')}`;
   const script = path.join(fixture, `${unit}.mjs`),
-    environment = path.join(fixture, 'empty.env');
+    environment = path.join(fixture, 'empty.env'),
+    artifacts = path.join(fixture, 'artifacts'),
+    backups = path.join(fixture, 'backup copies');
+  await fs.mkdir(artifacts, { recursive: true });
+  await fs.mkdir(backups, { recursive: true });
   await fs.writeFile(environment, '', { mode: 0o600 });
   await fs.writeFile(
     script,
     `import fs from 'node:fs';
     import {linuxWorkerLimits,sameLinuxParent} from ${JSON.stringify(pathToFileURL(compiled).href)};
     const read=f=>fs.readFileSync(f,'utf8');
+    const copy=${JSON.stringify(path.join(backups, `synthetic-${mode}.backup`))};
+    fs.writeFileSync(copy,'synthetic backup');fs.unlinkSync(copy);
+    let denied=false;try{fs.writeFileSync(${JSON.stringify(path.join(fixture, 'outside-denied'))},'unexpected');}catch(e){denied=e.code==='EROFS'||e.code==='EACCES';}
+    if(!denied)throw Error('Worker could write outside its data directories');
     console.log(JSON.stringify({resources:linuxWorkerLimits(read('/proc/self/cgroup'),read)}));
     if(${JSON.stringify(mode)}==='memory'){const held=[];setInterval(()=>held.push(Buffer.alloc(8*1024*1024,37)),10);}
     else {setInterval(()=>{if(!sameLinuxParent(${pid},${JSON.stringify(start)},read)){console.log(JSON.stringify({orphanStopped:true}));process.exit(0);}},100);}
@@ -60,7 +68,8 @@ async function launch(mode) {
     cwd: '/opt/omnilodge/releases/omnilodge-ci-test/be',
     memoryMb: 256,
     cpuPercent: 25,
-    artifactDirectory: fixture,
+    artifactDirectory: artifacts,
+    backupDirectory: backups,
   });
   const args = plan.args
     .filter(

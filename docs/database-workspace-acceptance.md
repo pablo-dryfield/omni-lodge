@@ -9,7 +9,7 @@ Windows HP ZBook Studio G7, 12 logical processors, approximately 32 GiB RAM, Nod
 | Check | Result |
 | --- | --- |
 | `npm.cmd --prefix be run check` | Passed |
-| `npm.cmd --prefix be test -- --runInBand` | 315 suites; 3,136 tests passed; one existing skipped test |
+| `npm.cmd --prefix be test -- --runInBand` | Follow-up: 316 suites; 3,137 tests passed; one existing skipped test |
 | `npm.cmd --prefix be run test:database-workspace` | 36 real PostgreSQL/parser/recovery tests passed |
 | `npm.cmd --prefix be run build:prod` | Passed, including compiled monitoring-model verification |
 | `npm.cmd --prefix ui run check` | Passed after final presentation changes |
@@ -33,6 +33,10 @@ API suites cover administrator/scope boundaries, named sharing/revocation, backu
 - Mobile table editing was exercised on a synthetic local table. An intervening database edit caused the reviewed write to roll back with the original change retained. Fixed the terminal-error dialog/focus path so the conflict is visible, added inline preparation errors, and corrected the table-mode badge. Three UI regression tests cover the consumed-review failure, visible preparation rejection and unavailable mutations on a read-only target.
 
 ## Linux and production gates
+
+The original Release UI job correctly rejected an incomplete third-party source map after compilation. SQL formatter's published maps refer to missing original sources. The follow-up leaves the artifact validator strict and configures Babel to map the affected packages from their shipped JavaScript, while retaining application source maps. A build-configuration regression test passes; final rebuild/artifact verification and follow-up Linux mount qualification remain required before production activation.
+
+The main integration branch completed all branch CI gates in run `41744384975`, including PostgreSQL 16/17 and actual Linux resource/lifetime checks. PR 225 was immediately merged by repository automation while PR CI was still pending, so automatic production deployment was temporarily held in manual mode. No workspace activation occurred. A final deployment review found that server backup removal also needs a narrowly writable backup directory; the follow-up fixes that before the single coordinated production activation. The Linux rehearsal now checks a synthetic backup create/remove (including a path with spaces), denial of writes outside both allowed data directories, memory/CPU/task limits and parent shutdown. No real production copy is removed to validate it. A read-only header probe confirmed the existing production `.backup` is a PostgreSQL custom archive; matching pg_dump/pg_restore clients are 16.8.
 
 Windows has no Linux/systemd runtime. Required CI uses the actual compiled launch policy, verifies memory/CPU/task limits, allocates external Buffer memory until the bounded worker is killed and verifies shutdown after its exact parent exits. Both PostgreSQL 16 and 17 legs must pass before opening the ready PR. Linux results, PR URL, immutable release SHA and production health are recorded at final handoff; local skips are not qualification.
 
