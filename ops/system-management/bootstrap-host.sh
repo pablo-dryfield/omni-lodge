@@ -34,11 +34,17 @@ for actor in "${actors[@]}"; do
   execution="omnilodge-op-$actor"; files="omnilodge-sftp-$actor"
   id "$execution" >/dev/null 2>&1 || useradd --system --home-dir "/srv/omnilodge-shell/u$actor" --shell /usr/sbin/nologin "$execution"
   id "$files" >/dev/null 2>&1 || useradd --system --home-dir /work --shell /usr/sbin/nologin "$files"
+  for identity in "$execution" "$files" omnilodge-sys-gw omnilodge-system; do
+    [[ "$(id -u "$identity")" != 0 ]] || { echo 'Refusing a console identity with UID 0' >&2; exit 1; }
+  done
   usermod -a -G "$files" "$execution"
   install -d -m 0750 -o "$execution" -g "$execution" "/srv/omnilodge-shell/u$actor"
   install -d -m 0750 -o root -g "$files" "/srv/omnilodge-operations/u$actor"
   install -d -m 0700 -o "$files" -g "$files" "/srv/omnilodge-staging/u$actor"
-  install -d -m 0755 -o root -g root "/srv/omnilodge-sftp/$files" "/srv/omnilodge-sftp/$files/work" "/srv/omnilodge-sftp/$files/.staging"
+  install -d -m 0755 -o root -g root "/srv/omnilodge-sftp/$files"
+  for destination in "/srv/omnilodge-sftp/$files/work" "/srv/omnilodge-sftp/$files/.staging"; do
+    if ! mountpoint -q "$destination"; then install -d -m 0755 -o root -g root "$destination"; fi
+  done
   for entry in "/srv/omnilodge-operations/u$actor /srv/omnilodge-sftp/$files/work" "/srv/omnilodge-staging/u$actor /srv/omnilodge-sftp/$files/.staging"; do
     read -r source destination <<< "$entry"
     mountpoint -q "$destination" || mount --bind "$source" "$destination"

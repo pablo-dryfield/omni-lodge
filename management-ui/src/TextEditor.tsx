@@ -17,6 +17,12 @@ import {
 } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
 import { api } from "./api";
+import { Dialog } from "./Dialog";
+import { yaml } from "@codemirror/lang-yaml";
+import { StreamLanguage } from "@codemirror/language";
+import { shell as shellLanguage } from "@codemirror/legacy-modes/mode/shell";
+import { properties } from "@codemirror/legacy-modes/mode/properties";
+
 export type Document = {
   text: string;
   path: string;
@@ -69,9 +75,15 @@ export function TextEditor({
         ? javascript({ typescript: true, jsx: true })
         : document.path.endsWith(".sql")
           ? sql()
-          : document.path.endsWith(".md")
-            ? markdown()
-            : [];
+          : /\.ya?ml$/.test(document.path)
+            ? yaml()
+            : /\.(sh|bash|zsh)$/.test(document.path)
+              ? StreamLanguage.define(shellLanguage)
+              : /\.(ini|properties|env|conf)$/.test(document.path)
+                ? StreamLanguage.define(properties)
+                : document.path.endsWith(".md")
+                  ? markdown()
+                  : [];
     const editor = new EditorView({
       parent: container.current,
       state: EditorState.create({
@@ -115,16 +127,31 @@ export function TextEditor({
       editor.destroy();
     };
   }, [document, editable]);
-  const save = async (saveAs = false) => {
+  const [editorError, setEditorError] = useState("");
+  const [saveModal, setSaveModal] = useState<{
+    as: boolean;
+    target: string;
+    overwriteCurrent: boolean;
+    review?: any;
+  } | null>(null);
+  const save = (saveAs = false, overwriteCurrent = false) =>
+    setSaveModal({
+      as: saveAs,
+      target: saveAs ? document.path + ".copy" : document.path,
+      overwriteCurrent,
+    });
+  const prepareSave = async () => {
+    if (!saveModal) return;
+    const saveAs = saveModal.as;
+
     setBusy(true);
+    setEditorError("");
     try {
       const text = (view.current?.state.doc.toString() || "").replace(
           /\r?\n/g,
           lineEnding === "CRLF" ? "\r\n" : lineEnding === "CR" ? "\r" : "\n",
         ),
-        target = saveAs
-          ? prompt("Save as relative path", document.path)
-          : document.path;
+        target = saveModal.target;
       if (!target) return;
       const review = await api("/file-operations/review", {
         hostId,
@@ -133,23 +160,26 @@ export function TextEditor({
         operation: "save",
         text,
         createOnly: saveAs,
-        version: saveAs ? undefined : document.version,
-        sha256: saveAs ? undefined : document.sha256,
+        version: saveAs
+          ? undefined
+          : saveModal.overwriteCurrent
+            ? conflict?.version
+            : document.version,
+        sha256: saveAs
+          ? undefined
+          : saveModal.overwriteCurrent
+            ? conflict?.sha256
+            : document.sha256,
         bom: document.bom,
       });
-      if (
-        !confirm(
-          `Save ${target}? ${review.managed ? "" : "Other processes can still change this file before replacement."}`,
-        )
-      )
-        return;
-      await api("/file-operations/execute", { id: review.id });
-      setDirty(false);
-      onSaved();
-      onClose();
+      setSaveModal((previous) =>
+        previous ? { ...previous, review } : previous,
+      );
     } catch (error) {
+      setEditorError((error as Error).message);
       if ((error as { code?: string }).code === "VERSION_CONFLICT") {
         try {
+          setSaveModal(null);
           setConflict(
             await api(
               `/files/content?${new URLSearchParams({ hostId, rootId, path: document.path })}`,
@@ -160,6 +190,22 @@ export function TextEditor({
         }
       }
       onError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const submitSave = async () => {
+    if (!saveModal?.review) return;
+    setBusy(true);
+    try {
+      await api("/file-operations/execute", { id: saveModal.review.id });
+      setDirty(false);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setEditorError((e as Error).message);
+      onError(e);
+      setSaveModal((m) => (m ? { ...m, review: undefined } : null));
     } finally {
       setBusy(false);
     }
@@ -239,6 +285,78 @@ export function TextEditor({
         </p>
       )}
       <div className="code-editor" ref={container} />
+      {editorError && (
+        <p className="alert" role="alert">
+          {editorError}
+        </p>
+      )}
+      {saveModal && (
+        <Dialog
+          title={saveModal.as ? "Save file as" : "Review file replacement"}
+          onClose={() => {
+            if (!busy) setSaveModal(null);
+          }}
+        >
+          <p className="mono">
+            {hostId} / {rootId}
+          </p>
+          <label>
+            Destination path
+            <input
+              value={saveModal.target}
+              disabled={busy || !saveModal.as}
+              onChange={(event) =>
+                setSaveModal((m) =>
+                  m
+                    ? { ...m, target: event.target.value, review: undefined }
+                    : null,
+                )
+              }
+            />
+          </label>
+          <p>
+            {saveModal.as
+              ? "A new file is created only if the name is still available."
+              : "The reviewed identity and checksum must still match before replacement."}
+          </p>
+          {saveModal.overwriteCurrent && (
+            <p className="notice">
+              You are explicitly replacing the newly observed remote version
+              with this draft.
+            </p>
+          )}
+          {saveModal.review && (
+            <p className="notice">
+              Review expires after one minute.{" "}
+              {saveModal.review.managed
+                ? ""
+                : "An external writer can still change a generic SFTP file between checking and replacement."}
+            </p>
+          )}
+          <div className="dialog-actions">
+            <button disabled={busy} onClick={() => setSaveModal(null)}>
+              Cancel
+            </button>
+            {saveModal.review ? (
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() => void submitSave()}
+              >
+                Confirm save
+              </button>
+            ) : (
+              <button
+                className="primary"
+                disabled={busy || !saveModal.target.trim()}
+                onClick={() => void prepareSave()}
+              >
+                Review save
+              </button>
+            )}
+          </div>
+        </Dialog>
+      )}
       {conflict && (
         <section className="conflict">
           <h3>Remote file changed</h3>
@@ -246,7 +364,18 @@ export function TextEditor({
             Your draft is retained. Compare the current remote version, then
             save your draft under another name or reload.
           </p>
-          <pre>{conflict.text}</pre>
+          <details>
+            <summary>Original version</summary>
+            <pre>{document.text}</pre>
+          </details>
+          <details open>
+            <summary>Current remote version</summary>
+            <pre>{conflict.text}</pre>
+          </details>
+          <p>The editor above retains your proposed draft.</p>
+          <button disabled={busy} onClick={() => save(false, true)}>
+            Review replacing current version
+          </button>
           <button onClick={() => void save(true)}>Save draft as</button>
           <button
             onClick={() => {

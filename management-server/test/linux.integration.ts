@@ -217,6 +217,28 @@ test(
         ],
         pgEnv,
       ); // idempotent boundary installation
+      for (const id of [901, 904]) {
+        const uid = Number(
+          (
+            await run("/usr/bin/id", ["-u", "omnilodge-sftp-" + id])
+          ).stdout.trim(),
+        );
+        const gid = Number(
+          (
+            await run("/usr/bin/id", ["-g", "omnilodge-sftp-" + id])
+          ).stdout.trim(),
+        );
+        assert.equal(
+          (await fs.stat("/srv/omnilodge-staging/u" + id)).uid,
+          uid,
+          "Repeated setup must preserve staging ownership through the bind mount.",
+        );
+        assert.equal(
+          (await fs.stat("/srv/omnilodge-operations/u" + id)).gid,
+          gid,
+          "Repeated setup must preserve approved-root read access.",
+        );
+      }
       const group = Number(
         (await run("/usr/bin/getent", ["group", "omnilodge-system"])).stdout
           .trim()

@@ -433,7 +433,17 @@ func dispatch(e Envelope, p Policy) (map[string]any, error) {
 			if !ok {
 				continue
 			}
-			state, _ := serviceCommand(service, false)
+			state, statusErr := serviceCommand(service, false)
+			if service.PM2Name != "" {
+				if statusErr == nil && regexp.MustCompile(`^[1-9][0-9]*$`).MatchString(strings.TrimSpace(state)) {
+					state = "online"
+				} else {
+					state = "offline"
+				}
+			}
+			if statusErr != nil && state == "" {
+				state = "unavailable"
+			}
 			items = append(items, map[string]any{"id": id, "name": service.Name, "state": strings.TrimSpace(state), "restartable": service.Restartable})
 		}
 		return map[string]any{"services": items}, nil
@@ -472,6 +482,26 @@ func dispatch(e Envelope, p Policy) (map[string]any, error) {
 	return fileOperation(e, p, actor)
 }
 func serviceCommand(s Service, restart bool) (string, error) {
+	if s.HealthKind == "broker" {
+		const file = "/run/omnilodge-system/broker-unit"
+		if err := protectedFile(file); err != nil {
+			return "", err
+		}
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return "", err
+		}
+		unit := strings.TrimSpace(string(b))
+		if !regexp.MustCompile(`^omnilodge-system-[0-9]+-[a-f0-9]{8}\.service$`).MatchString(unit) {
+			return "", errors.New("broker identity unavailable")
+		}
+		action := "is-active"
+		if restart {
+			action = "stop"
+		}
+		return boundedCommand("/usr/bin/systemctl", action, unit)
+	}
+
 	if s.PM2Name != "" {
 		if !identifier.MatchString(s.PM2Name) {
 			return "", errors.New("invalid PM2 service name")

@@ -70,6 +70,11 @@ export function startSystemManagementSupervisor(): () => void {
       )
         throw new Error("Broker resource policy exceeds the host ceiling.");
       unit = `omnilodge-system-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+      fs.writeFileSync(
+        "/run/omnilodge-system/broker-unit",
+        unit + ".service\n",
+        { mode: 0o600 },
+      );
       const ui = path.resolve(
         path.dirname(script),
         "../../../ui/build/system-management",

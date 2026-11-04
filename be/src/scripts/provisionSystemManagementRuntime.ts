@@ -156,6 +156,16 @@ try {
         publicKey: publicBytes.toString("base64"),
         actors: {},
         services: {
+          broker: {
+            name: "System Management broker",
+            healthKind: "broker",
+            restartable: true,
+          },
+          postgresql: {
+            name: "PostgreSQL",
+            unit: "postgresql.service",
+            restartable: false,
+          },
           backend: {
             name: "Backend",
             pm2Name: "omni-lodge-be",
@@ -219,7 +229,7 @@ try {
           username,
           workingDirectory: `/srv/omnilodge-shell/u${actor.id}`,
           roots: { work: { path: work, staging, writable: true, gid } },
-          services: ["backend", "ui"],
+          services: ["backend", "ui", "broker", "postgresql"],
         };
       }
       await privateFile(
@@ -258,7 +268,7 @@ try {
               managed: true,
             },
           ],
-          services: ["backend", "ui"],
+          services: ["backend", "ui", "broker", "postgresql"],
         },
       ];
       const { SYSTEM_ACTIONS } =

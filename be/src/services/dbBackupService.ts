@@ -20,7 +20,7 @@ import {
   streamLocalBackup,
   deleteLocalBackup,
 } from './backupCopyStorage.js';
-import { backupWorkspaceControl } from './databaseWorkspace/controlBackup.js';
+import { backupWorkspaceControl, controlBackupConnection } from './databaseWorkspace/controlBackup.js';
 
 const DEFAULT_BACKUP_DIRECTORY = '/home/postgres/backups';
 const DEFAULT_BACKUP_SCRIPT = '/home/postgres/backup.sh';
@@ -972,7 +972,7 @@ export const executeBackupScript = async (): Promise<CommandResult> => {
     getConfigValue('DB_BACKUP_WORKSPACE_CONTROL_ENABLED') !== false
   ) {
     await backupWorkspaceControl({
-      connectionString: process.env.DB_WORKSPACE_CONTROL_URL,
+      connectionString: controlBackupConnection(process.env.DB_WORKSPACE_CONTROL_URL,process.env),
       directory: resolveBackupDirectory(),
       binary: String(getConfigValue('PG_DUMP_BIN') || 'pg_dump'),
       timeoutMs: Number(

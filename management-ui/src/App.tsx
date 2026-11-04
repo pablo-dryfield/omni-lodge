@@ -138,6 +138,12 @@ function App() {
     [services, setServices] = useState<any[]>([]),
     [serviceId, setServiceId] = useState(""),
     [logs, setLogs] = useState(""),
+    [logLevel, setLogLevel] = useState(""),
+    [logSince, setLogSince] = useState(""),
+    [logWrap, setLogWrap] = useState(false),
+    [restartTarget, setRestartTarget] = useState<any>(null),
+    [restartReason, setRestartReason] = useState(""),
+    [restartConfirm, setRestartConfirm] = useState(""),
     [following, setFollowing] = useState(false);
   const [connectionTest, setConnectionTest] = useState<any>(null),
     [jobDetails, setJobDetails] = useState<any>(null);
@@ -187,6 +193,7 @@ function App() {
     setJobDetails(null);
     setPassword("");
     setLogs("");
+    setRestartTarget(null);
     setEntries([]);
     setSelected([]);
     setOverview(null);
@@ -1516,32 +1523,15 @@ function App() {
                     View logs
                   </button>
                   <button
-                    disabled={!service.restartable}
+                    disabled={
+                      !service.restartable ||
+                      !session.actions.includes("controlServices")
+                    }
                     className="danger"
                     onClick={() => {
-                      const reason = prompt(
-                        `Reason for restarting ${service.name || service.id}`,
-                      );
-                      if (
-                        !reason ||
-                        !confirm(
-                          `Restart ${service.id}? Active connections may be interrupted.`,
-                        )
-                      )
-                        return;
-                      void api("/services/restart", {
-                        hostId,
-                        serviceId: service.id,
-                        confirm: service.id,
-                        reason,
-                        idempotencyKey: crypto.randomUUID(),
-                      })
-                        .then(() =>
-                          setNotice(
-                            "Restart accepted. Follow its outcome in Transfers & operations.",
-                          ),
-                        )
-                        .catch(onError);
+                      setRestartTarget({ hostId, service });
+                      setRestartReason("");
+                      setRestartConfirm("");
                     }}
                   >
                     Restart
@@ -1594,13 +1584,65 @@ function App() {
                   onChange={(e) => setSearchPath(e.target.value)}
                 />
               </div>
-              <pre className="log-output">
+              <div className="file-toolbar">
+                <select
+                  aria-label="Retained log level"
+                  value={logLevel}
+                  onChange={(e) => setLogLevel(e.target.value)}
+                >
+                  <option value="">All levels</option>
+                  <option>error</option>
+                  <option>warn</option>
+                  <option>info</option>
+                  <option>debug</option>
+                </select>
+                <label>
+                  After timestamp (retained lines)
+                  <input
+                    type="datetime-local"
+                    value={logSince}
+                    onChange={(e) => setLogSince(e.target.value)}
+                  />
+                </label>
+                <label className="check-line">
+                  <input
+                    type="checkbox"
+                    checked={logWrap}
+                    onChange={(e) => setLogWrap(e.target.checked)}
+                  />
+                  Wrap lines
+                </label>
+              </div>
+              <p className="muted">
+                Filters apply to the bounded retained tail. Lines without a
+                recognizable timestamp are omitted when a time filter is active.
+                Follow reloads the latest tail; paused views do not accumulate
+                output.
+              </p>
+              <pre
+                className="log-output"
+                style={{ whiteSpace: logWrap ? "pre-wrap" : "pre" }}
+              >
                 {logs
                   .split("\n")
                   .filter(
                     (line) =>
-                      !searchPath ||
-                      line.toLowerCase().includes(searchPath.toLowerCase()),
+                      (!searchPath ||
+                        line
+                          .toLowerCase()
+                          .includes(searchPath.toLowerCase())) &&
+                      (!logLevel || line.toLowerCase().includes(logLevel)) &&
+                      (!logSince ||
+                        (() => {
+                          const match = line.match(
+                            /\d{4}-\d\d-\d\d[T ][\d:.+-]+Z?/,
+                          );
+                          return Boolean(
+                            match &&
+                            Number.isFinite(Date.parse(match[0])) &&
+                            Date.parse(match[0]) >= Date.parse(logSince),
+                          );
+                        })()),
                   )
                   .join("\n") || "Choose a service to inspect its logs."}
               </pre>
@@ -1967,13 +2009,73 @@ function App() {
                 </strong>
                 {stage.message && <p>{stage.message}</p>}
                 {stage.details && (
-                  <pre className="log-output">
+                  <pre className="operation-output">
                     {JSON.stringify(stage.details, null, 2)}
                   </pre>
                 )}
               </section>
             ))}
             <button onClick={() => setConnectionTest(null)}>Close</button>
+          </div>
+        </Dialog>
+      )}
+      {restartTarget && (
+        <Dialog
+          title={`Restart ${restartTarget.service.name || restartTarget.service.id}`}
+          onClose={() => setRestartTarget(null)}
+        >
+          <p>
+            {restartTarget.hostId} - {host?.environment}
+          </p>
+          <p>
+            Connections and active work may be interrupted. A backend or broker
+            restart disconnects this console. The root operation journal
+            verifies readiness independently; reopen from Settings and use
+            Verify outcome.
+          </p>
+          <label>
+            Recorded reason
+            <textarea
+              value={restartReason}
+              maxLength={500}
+              onChange={(e) => setRestartReason(e.target.value)}
+            />
+          </label>
+          <label>
+            Type {restartTarget.service.id} to confirm
+            <input
+              value={restartConfirm}
+              onChange={(e) => setRestartConfirm(e.target.value)}
+            />
+          </label>
+          <div className="dialog-actions">
+            <button onClick={() => setRestartTarget(null)}>Cancel</button>
+            <button
+              className="danger"
+              disabled={
+                restartReason.trim().length < 3 ||
+                restartConfirm !== restartTarget.service.id
+              }
+              onClick={() => {
+                void api("/services/restart", {
+                  hostId: restartTarget.hostId,
+                  serviceId: restartTarget.service.id,
+                  confirm: restartConfirm,
+                  reason: restartReason,
+                  idempotencyKey: crypto.randomUUID(),
+                })
+                  .then(() => {
+                    setRestartTarget(null);
+                    setNotice(
+                      "Restart accepted. Verify its outcome in Transfers & operations.",
+                    );
+                    void loadJobs();
+                  })
+                  .catch(onError);
+              }}
+            >
+              Submit restart
+            </button>
           </div>
         </Dialog>
       )}

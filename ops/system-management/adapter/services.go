@@ -39,7 +39,7 @@ func startServiceOperation(e Envelope, p Policy, serviceID string) (map[string]a
 	if err = atomicJSON(recordPath(id), record); err != nil {
 		return nil, err
 	}
-	_, err = boundedCommand("/usr/bin/systemd-run", "--quiet", "--no-block", "--collect", "--unit=omnilodge-operation-"+id, "--property=Type=exec", "--property=RuntimeMaxSec=120s", "--property=MemoryMax=67108864", "--property=CPUQuota=25%", "--property=TasksMax=32", "--property=NoNewPrivileges=yes", "--property=PrivateTmp=yes", "--", "/usr/local/libexec/omnilodge/system-adapter", "service-operation", id)
+	_, err = boundedCommand("/usr/bin/systemd-run", "--quiet", "--no-block", "--collect", "--unit=omnilodge-operation-"+id, "--property=Type=exec", "--property=RuntimeMaxSec=120s", "--property=MemoryMax=67108864", "--property=CPUQuota=25%", "--property=TasksMax=32", "--property=NoNewPrivileges=yes", "--property=PrivateTmp=yes", "--property=Slice=omnilodge-console.slice", "--", "/usr/local/libexec/omnilodge/system-adapter", "service-operation", id)
 	if err != nil {
 		record.State = "outcome_unknown"
 		_ = atomicJSON(recordPath(id), record)
@@ -94,6 +94,8 @@ func serviceHealth(service Service) (bool, string) {
 	target := ""
 	transport := &http.Transport{}
 	switch service.HealthKind {
+	case "broker":
+		target = "http://127.0.0.1:3011/management/health/ready"
 	case "backend":
 		target = "http://127.0.0.1:3001/api/health/ready"
 	case "ui":
@@ -120,9 +122,10 @@ func serviceHealth(service Service) (bool, string) {
 	}
 	defer response.Body.Close()
 	var result struct {
+		OK      bool   `json:"ok"`
 		Status  string `json:"status"`
 		Release string `json:"release"`
 	}
 	err = json.NewDecoder(io.LimitReader(response.Body, 16384)).Decode(&result)
-	return err == nil && response.StatusCode == 200 && result.Status == "ok" && result.Release != "", result.Release
+	return err == nil && response.StatusCode == 200 && (result.Status == "ok" || (service.HealthKind == "broker" && result.OK)) && result.Release != "", result.Release
 }
