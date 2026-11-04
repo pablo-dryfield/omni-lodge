@@ -74,6 +74,7 @@ test(
       url.pathname = "/" + database;
       url.username = username;
       url.password = password;
+      url.searchParams.set("sslmode", "disable");
       return url.toString();
     };
     const importBackend = async () => {
@@ -395,6 +396,7 @@ test(
           base,
           "authority-signing.pem",
         ),
+        PGSSLMODE: "prefer", // Production inherits this; local runtime URLs must override it.
       });
       const authority = await module("services/systemManagement/authority"),
         logins = await module("services/systemManagement/loginSessions");
