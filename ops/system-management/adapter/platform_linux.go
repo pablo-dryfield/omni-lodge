@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,6 +44,10 @@ func hardlinks(info os.FileInfo) uint64 { return uint64(info.Sys().(*syscall.Sta
 func uid(info os.FileInfo) uint32       { return info.Sys().(*syscall.Stat_t).Uid }
 func gid(info os.FileInfo) uint32       { return info.Sys().(*syscall.Stat_t).Gid }
 func modeBits(info os.FileInfo) uint32  { return info.Sys().(*syscall.Stat_t).Mode }
+func stableIdentity(info os.FileInfo) string {
+	stat := info.Sys().(*syscall.Stat_t)
+	return fmt.Sprintf("%d:%d:%d:%d", stat.Dev, stat.Ino, info.Size(), info.ModTime().UnixNano())
+}
 func diskInfo(name string) (map[string]any, error) {
 	var s syscall.Statfs_t
 	if err := syscall.Statfs(name, &s); err != nil {

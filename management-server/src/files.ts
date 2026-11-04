@@ -158,7 +158,7 @@ export class Files {
           if (checking) return;
           checking = true;
           void this.authority
-            .rpc("authorize", { session, hostId, action })
+            .rpc("authorize", { session, hostId, action, ongoing: true })
             .catch(() => current.destroy())
             .finally(() => {
               checking = false;
@@ -293,7 +293,8 @@ export class Files {
           ),
         );
         const entries: unknown[] = [];
-        let complete = true;
+        let complete = true,
+          inventoryBytes = 0;
         try {
           for (;;) {
             const batch = await new Promise<
@@ -312,7 +313,15 @@ export class Files {
                 item.filename.startsWith(".omnilodge-")
               )
                 continue;
-              if (entries.length >= max) {
+              inventoryBytes +=
+                Buffer.byteLength(path.posix.join(relative, item.filename)) +
+                Buffer.byteLength(item.filename) +
+                160;
+              if (
+                entries.length >= max ||
+                inventoryBytes >
+                  limit(ctx, "FILE_POLICY", "inventoryBytes", 16777216)
+              ) {
                 complete = false;
                 break;
               }
@@ -351,6 +360,7 @@ export class Files {
             : "remote OS confinement required; directory view is not a snapshot",
         };
       },
+      true,
     );
   }
   async read(
@@ -900,6 +910,7 @@ export class Files {
     expectedVersion?: string,
     range?: string,
     ifRange?: string,
+    expectedIdentity?: string,
   ) {
     relative = safeRelative(relative);
     await this.withRoot(
@@ -930,10 +941,25 @@ export class Files {
           statusCode?: number;
         };
         const etag =
-          '"' + crypto.createHash("sha256").update(version).digest("hex") + '"';
+          (expectedIdentity ? "" : "W/") +
+          '"' +
+          crypto
+            .createHash("sha256")
+            .update(expectedIdentity || version)
+            .digest("hex") +
+          '"';
         let start = 0,
           end = before.size - 1;
-        output.setHeader?.("Accept-Ranges", "bytes");
+        output.setHeader?.(
+          "Accept-Ranges",
+          expectedIdentity ? "bytes" : "none",
+        );
+        requireValue(
+          !range || Boolean(expectedIdentity),
+          416,
+          "CAPABILITY_UNAVAILABLE",
+          "This server cannot safely resume a changed file. Start a new full download.",
+        );
         output.setHeader?.("ETag", etag);
         if (range && (!ifRange || ifRange === etag)) {
           const match = /^bytes=(\d*)-(\d*)$/.exec(range);
@@ -978,7 +1004,15 @@ export class Files {
           undefined,
           { rootId, path: relative },
         );
-        const source = s.createReadStream(p, before.size ? { start, end } : {}),
+        const handle = await new Promise<Buffer>((resolve, reject) =>
+          s.open(p, "r", (error, value) =>
+            error ? reject(error) : resolve(value),
+          ),
+        );
+        const source = s.createReadStream(p, {
+            ...(before.size ? { start, end } : {}),
+            handle,
+          }),
           guard = new Transform({
             transform(chunk, _encoding, callback) {
               callback(null, chunk);
@@ -999,7 +1033,29 @@ export class Files {
                 .catch(callback);
             },
           });
-        await pipeline(source, guard, response);
+        try {
+          // The SFTP handle is already open. Managed publications replace names;
+          // their published root-owned files are immutable to the SFTP identity.
+          if (expectedIdentity) {
+            const observed = await this.adapter(
+              session,
+              hostId,
+              "identity",
+              { rootId, path: relative },
+              "readFiles",
+            );
+            requireValue(
+              observed.identity === expectedIdentity,
+              409,
+              "SOURCE_CHANGED",
+              "The managed source identity changed. Start a new download.",
+            );
+          }
+          await pipeline(source, guard, response);
+        } finally {
+          source.destroy();
+        }
+
         await this.store.event(
           ctx.actorId,
           hostId,
@@ -1035,6 +1091,7 @@ export class Files {
           version: string;
           mtime: number;
         }[] = [];
+        let inventoryBytes = 0;
         const visit = async (
           directory: string,
           depth: number,
@@ -1084,6 +1141,17 @@ export class Files {
                   "CAPABILITY_UNAVAILABLE",
                   "Folder operations do not follow links or special files.",
                 );
+                inventoryBytes +=
+                  Buffer.byteLength(p) +
+                  Buffer.byteLength(path.posix.relative(relative, p)) +
+                  160;
+                requireValue(
+                  inventoryBytes <=
+                    limit(ctx, "FILE_POLICY", "inventoryBytes", 16777216),
+                  413,
+                  "INVENTORY_LIMIT",
+                  "Folder metadata exceeds the configured memory budget. Choose a smaller folder.",
+                );
                 result.push({
                   path: p,
                   relative: path.posix.relative(relative, p),
@@ -1104,6 +1172,7 @@ export class Files {
         await visit(relative, 0);
         return result;
       },
+      true,
     );
   }
   async compare(session: string, ctx: Context, input: Record<string, unknown>) {

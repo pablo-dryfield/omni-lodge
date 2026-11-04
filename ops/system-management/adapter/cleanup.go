@@ -60,6 +60,7 @@ func cleanup(p Policy) error {
 		record, readErr := loadRecord(id)
 		if readErr == nil && (record.State == "completed" || record.State == "stopped") && ((record.ExpiresAt > 0 && record.ExpiresAt < now.UnixMilli()) || (record.ExpiresAt == 0 && info.ModTime().Before(now.Add(-30*24*time.Hour)))) {
 			_ = os.Remove(recordPath(id))
+			_ = os.Remove(copyLeasePath(id))
 		}
 		guard.Close()
 	}
@@ -150,6 +151,11 @@ type StagingRecord struct {
 }
 
 func registerStaging(e Envelope, p Policy) (map[string]any, error) {
+	admission, err := namedLock("staging-admission")
+	if err != nil {
+		return nil, err
+	}
+	defer admission.Close()
 	id := str(e.Params, "stagingId")
 	rootID := str(e.Params, "rootId")
 	actor := p.Actors[strconv.Itoa(e.ActorID)]

@@ -238,7 +238,8 @@ export async function authorityRpc(
         ? "manageCredentials"
         : action,
     !["check", "touch", "step-up", "logout"].includes(method) &&
-      !(method === "envelope" && args.operation === "renewOperation"),
+      !(method === "envelope" && args.operation === "renewOperation") &&
+      !(method === "authorize" && args.ongoing === true),
   );
   const { row, actor, policy } = ctx;
   if (method === "touch") {
@@ -480,6 +481,7 @@ export async function authorityRpc(
       restore: "writeFiles",
       chmod: "changePermissions",
       checksum: "readFiles",
+      identity: "readFiles",
       statvfs: "readFiles",
       registerStaging: "writeFiles",
     };

@@ -23,3 +23,5 @@ func managedResourceLimits(Policy) (map[string]any, error) {
 func applyRuntimeBudget(_ Envelope, p Policy) (Policy, error) {
 	return p, errors.New("Linux resource controls required")
 }
+
+func stableIdentity(os.FileInfo) string { return "" }

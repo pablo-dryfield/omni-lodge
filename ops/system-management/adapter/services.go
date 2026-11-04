@@ -36,7 +36,7 @@ func startServiceOperation(e Envelope, p Policy, serviceID string) (map[string]a
 		return map[string]any{"accepted": true, "state": old.State, "operationId": id, "verifiedHealthy": old.State == "completed"}, nil
 	}
 	record := Record{ID: id, ActorID: e.ActorID, Action: "restart", ServiceID: serviceID, PayloadHash: hash, Fence: integer(e.Params, "fence"), State: "running", ExpiresAt: int64(integer(e.Params, "metadataExpiresAt"))}
-	if err = atomicJSON(recordPath(id), record); err != nil {
+	if err = createRecord(record); err != nil {
 		return nil, err
 	}
 	_, err = boundedCommand("/usr/bin/systemd-run", "--quiet", "--no-block", "--collect", "--unit=omnilodge-operation-"+id, "--property=Type=exec", "--property=RuntimeMaxSec=120s", "--property=MemoryMax=67108864", "--property=CPUQuota=25%", "--property=TasksMax=32", "--property=NoNewPrivileges=yes", "--property=PrivateTmp=yes", "--property=Slice=omnilodge-console.slice", "--", "/usr/local/libexec/omnilodge/system-adapter", "service-operation", id)

@@ -82,7 +82,7 @@ func queueCopy(e Envelope, p Policy) (map[string]any, error) {
 		return nil, errors.New("managed copy concurrency reached")
 	}
 	record := Record{ID: id, ActorID: e.ActorID, Action: e.Action, PayloadHash: hash, Fence: integer(e.Params, "fence"), State: "queued", Envelope: &e, ExpiresAt: int64(integer(e.Params, "metadataExpiresAt"))}
-	if err = atomicJSON(recordPath(id), record); err != nil {
+	if err = createRecord(record); err != nil {
 		return nil, err
 	}
 	lease := CopyLease{ID: id, ActorID: e.ActorID, State: "running", Until: time.Now().Add(time.Duration(p.LeaseSeconds) * time.Second).UnixMilli(), Deadline: min(p.RuntimeExpires, time.Now().Add(20*time.Minute).UnixMilli()), PolicyHash: e.PolicyHash, LeaseSeconds: p.LeaseSeconds}

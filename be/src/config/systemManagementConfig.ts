@@ -73,7 +73,11 @@ export const SYSTEM_DEFAULTS = {
     files: 10000,
     depth: 32,
   },
-  FILE_POLICY: { editBytes: 2097152, inventoryEntries: 100000 },
+  FILE_POLICY: {
+    editBytes: 2097152,
+    inventoryEntries: 100000,
+    inventoryBytes: 16777216,
+  },
   STORAGE_POLICY: {
     artifactBytes: 134217728,
     reserveBytes: 1073741824,
@@ -393,6 +397,15 @@ export function validateSystemManagementValue(key: string, raw: string): void {
         Number(value.recordingDays) > 365)
     )
       throw new Error("Retention exceeds the supported cleanup ceiling.");
+    if (
+      suffix === "FILE_POLICY" &&
+      (Number(value.inventoryBytes) > 16777216 ||
+        Number(value.editBytes) > 2097152 ||
+        Number(value.inventoryEntries) > 100000)
+    )
+      throw new Error(
+        "File inventory/editor budgets exceed the isolated runtime ceiling.",
+      );
     if (
       suffix === "CONNECTION_LIMITS" &&
       (Number(value.perActor) > 4 ||

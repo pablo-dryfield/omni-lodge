@@ -617,33 +617,55 @@ test(
           path: "large-stream.bin",
         }),
         started = Date.now();
-      const received = await new Promise<number>((resolve, reject) => {
-        const req = http.get(
-          {
-            hostname: "127.0.0.1",
-            port: 3011,
-            path: "/management/download?id=" + download.id,
-            headers: { Host: "system.omni-lodge.com", Cookie: cookie },
-          },
-          (res) => {
-            if (res.statusCode !== 200) {
-              res.resume();
-              reject(new Error("Large stream returned " + res.statusCode));
-              return;
-            }
-            let count = 0;
-            res.on("data", (part) => {
-              count += part.length;
-            });
-            res.on("error", reject);
-            res.on("end", () => resolve(count));
-          },
-        );
-        req.on("error", reject);
-        req.setTimeout(30000, () =>
-          req.destroy(new Error("Large stream stalled")),
-        );
-      });
+      const probes: number[] = [];
+      const activity = setInterval(() => {
+        const started = Date.now();
+        void request("/session/touch", {})
+          .then(() => probes.push(Date.now() - started))
+          .catch(() => {});
+      }, 30000);
+      let received: number;
+      try {
+        received = await new Promise<number>((resolve, reject) => {
+          const req = http.get(
+            {
+              hostname: "127.0.0.1",
+              port: 3011,
+              path: "/management/download?id=" + download.id,
+              headers: { Host: "system.omni-lodge.com", Cookie: cookie },
+            },
+            (res) => {
+              if (res.statusCode !== 200) {
+                res.resume();
+                reject(new Error("Large stream returned " + res.statusCode));
+                return;
+              }
+              let count = 0,
+                nextProgress = 1024 ** 3;
+              res.on("data", (part) => {
+                count += part.length;
+                if (count >= nextProgress) {
+                  console.log(
+                    JSON.stringify({
+                      streamedBytes: count,
+                      elapsedMs: Date.now() - started,
+                    }),
+                  );
+                  nextProgress += 1024 ** 3;
+                }
+              });
+              res.on("error", reject);
+              res.on("end", () => resolve(count));
+            },
+          );
+          req.on("error", reject);
+          req.setTimeout(30000, () =>
+            req.destroy(new Error("Large stream stalled")),
+          );
+        });
+      } finally {
+        clearInterval(activity);
+      }
       assert.equal(received, largeBytes);
       const resourceSample = (
         await run("/usr/bin/systemctl", [
@@ -665,6 +687,7 @@ test(
         }),
       );
       await fs.unlink(largePath);
+      await request("/session/step-up", { password: "fixture-password" }); // New mutations require a fresh confirmation after a long accepted read.
       const review = await request("/file-operations/review", {
         hostId: "fixture",
         rootId: "work",

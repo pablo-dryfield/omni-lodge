@@ -193,7 +193,7 @@ func atomicJSON(name string, value any) error {
 func lockIdentity(name string) (string, error) {
 	category := ""
 	value := name
-	if name == "authority" || name == "copy-admission" {
+	if name == "authority" || name == "copy-admission" || name == "journal-admission" || name == "staging-admission" {
 		return name, nil
 	}
 	if uuid.MatchString(name) {
@@ -377,7 +377,7 @@ func terminal(e Envelope, p Policy, input io.Reader, unlock func()) error {
 	}
 	h := sha256.Sum256([]byte(stop))
 	r := Record{ID: id, ActorID: e.ActorID, Action: "terminal", State: "active", ExpiresAt: int64(integer(e.Params, "metadataExpiresAt")), LeaseUntil: time.Now().Add(time.Duration(p.LeaseSeconds) * time.Second).UnixMilli(), PolicyHash: e.PolicyHash, Deadline: p.RuntimeExpires, LeaseSeconds: p.LeaseSeconds, StopHash: hex.EncodeToString(h[:])}
-	if err := atomicJSON(recordPath(id), r); err != nil {
+	if err := createRecord(r); err != nil {
 		return err
 	}
 	unlock()
@@ -558,6 +558,23 @@ func serviceCommand(s Service, restart bool) (string, error) {
 	}
 	return boundedCommand("/usr/bin/systemctl", action, s.Unit)
 }
+func createRecord(record Record) error {
+	guard, err := namedLock("journal-admission")
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+	if _, err := os.Stat(recordPath(record.ID)); os.IsNotExist(err) {
+		entries, readErr := boundedEntries(filepath.Join(statePath, "operations"))
+		if readErr != nil {
+			return readErr
+		}
+		if len(entries) >= 10000 {
+			return errors.New("root operation journal capacity reached; reconcile retained outcomes")
+		}
+	}
+	return atomicJSON(recordPath(record.ID), record)
+}
 func journaled(e Envelope, id string, fn func() (map[string]any, error)) (map[string]any, error) {
 	if !uuid.MatchString(id) {
 		return nil, errors.New("invalid operation identity")
@@ -582,7 +599,7 @@ func journaled(e Envelope, id string, fn func() (map[string]any, error)) (map[st
 		}
 	}
 	r := Record{ID: id, ActorID: e.ActorID, Action: e.Action, PayloadHash: payloadHash, Fence: integer(e.Params, "fence"), State: "running", ExpiresAt: int64(integer(e.Params, "metadataExpiresAt"))}
-	if err := atomicJSON(recordPath(id), r); err != nil {
+	if err := createRecord(r); err != nil {
 		return nil, err
 	}
 	result, err := fn()

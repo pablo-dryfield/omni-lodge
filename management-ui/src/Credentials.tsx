@@ -8,10 +8,12 @@ type Metadata = {
 };
 export function Credentials({
   revision,
+  reauthKey,
   onSaved,
   onError,
 }: {
   revision: string;
+  reauthKey: string;
   onSaved: () => void;
   onError: (e: unknown) => void;
 }) {
@@ -33,7 +35,7 @@ export function Credentials({
     return () => {
       done = true;
     };
-  }, [revision]);
+  }, [revision, reauthKey]);
   const save = async (deleting = false) => {
     setBusy(true);
     try {

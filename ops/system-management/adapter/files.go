@@ -114,6 +114,20 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if e.Action == "identity" {
+		if err = noLinks(root, name, false); err != nil {
+			return nil, err
+		}
+		info, err := root.Lstat(name)
+		if err != nil || !info.Mode().IsRegular() {
+			return nil, errors.New("regular managed source required")
+		}
+		identity := ""
+		if uid(info) == 0 && info.Mode().Perm()&0022 == 0 {
+			identity = stableIdentity(info)
+		}
+		return map[string]any{"identity": identity}, nil
+	}
 	if e.Action == "checksum" {
 		if err = noLinks(root, name, false); err != nil {
 			return nil, err

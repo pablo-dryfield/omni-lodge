@@ -559,10 +559,25 @@ export async function start() {
           "SOURCE_CHANGED",
           "The source changed since folder planning.",
         );
+        const approvedHost = ctx.hosts.find((h) => h.id === input.hostId),
+          approvedRoot = approvedHost?.roots.find((r) => r.id === input.rootId);
+        const identity =
+          entry.type === "file" &&
+          approvedHost?.managed &&
+          approvedRoot?.managed
+            ? await files.adapter(
+                token,
+                input.hostId,
+                "identity",
+                { rootId: input.rootId, path: relative },
+                "readFiles",
+              )
+            : null;
         const job = await store.create(ctx.actorId, input.hostId, "download", {
           rootId: input.rootId,
           path: relative,
           version: entry.version,
+          remoteIdentity: identity?.identity,
           directory: entry.type === "directory",
           expires: Date.now() + 120000,
           policyHash: ctx.policyHash,
@@ -631,9 +646,13 @@ export async function start() {
               typeof req.headers["if-range"] === "string"
                 ? req.headers["if-range"]
                 : undefined,
+              typeof d.remoteIdentity === "string"
+                ? d.remoteIdentity
+                : undefined,
             );
           await store.update(job, "completed", {
             verification: "Stream finished; device save unconfirmed",
+            expires: Date.now() + 120000,
           });
         } catch (error) {
           await store.update(job, "failed", {

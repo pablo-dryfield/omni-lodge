@@ -374,6 +374,25 @@ function App() {
         .catch(onError);
   }, [section, hostId, session?.actorId, session?.stepUpUntil]);
   useEffect(() => {
+    if (
+      section === "settings" &&
+      session?.actions.includes("manageHosts") &&
+      !hostDraft &&
+      session.stepUpUntil &&
+      Date.parse(session.stepUpUntil) > Date.now()
+    ) {
+      let active = true;
+      void api("/profiles")
+        .then((r) => {
+          if (active) setHostDraft(JSON.stringify(r.hosts, null, 2));
+        })
+        .catch(onError);
+      return () => {
+        active = false;
+      };
+    }
+  }, [section, session?.stepUpUntil, session?.actorId]);
+  useEffect(() => {
     if (!following || !serviceId) return;
     const timer = setInterval(
       () =>
@@ -1491,10 +1510,11 @@ function App() {
                               className="file-name"
                               onClick={() => void openFile(entry)}
                             >
-                              <IconFolder
-                                size={18}
-                                opacity={entry.type === "directory" ? 1 : 0.35}
-                              />
+                              {entry.type === "directory" ? (
+                                <IconFolder size={18} />
+                              ) : (
+                                <IconFileText size={18} />
+                              )}
                               <span>{entry.name}</span>
                               {entry.type === "link" && <small>Link</small>}
                             </button>
@@ -1624,7 +1644,7 @@ function App() {
                             {
                               id: job.id,
                               hostId: job.hostId,
-                              title: `${job.hostId} ? retained session`,
+                              title: `${job.hostId} - retained session`,
                               managed: Boolean(job.data.managed),
                               recording: Boolean(job.data.recording),
                             },
@@ -1923,6 +1943,7 @@ function App() {
               )}
               {session.actions.includes("manageCredentials") && (
                 <Credentials
+                  reauthKey={session.stepUpUntil || ""}
                   revision={session.policyHash}
                   onError={onError}
                   onSaved={() => {
@@ -2006,182 +2027,181 @@ function App() {
         </div>
       )}
       {recordingList !== null && (
-        <div className="dialog-backdrop">
-          <section className="dialog wide-dialog">
-            <span className="eyebrow">Restricted recordings</span>
-            <h2>Terminal output recordings</h2>
-            <p>
-              Output can include passwords, tokens and private file contents.
-              Access and retention are controlled separately from normal
-              activity.
-            </p>
-            {!recordingList.length && <p>No retained recordings.</p>}
-            {recordingList.map((item) => (
-              <article className="job-row" key={item.id}>
-                <div className="job-main">
-                  <strong>
-                    {item.host_id} ? {item.kind.replace(/-/g, " ")}
-                  </strong>
-                  <small>
-                    {new Date(item.created_at).toLocaleString()} ?{" "}
-                    {bytes(Number(item.bytes))}
-                  </small>
-                </div>
-                <button
-                  onClick={() =>
-                    void api(`/recording?${query({ id: item.id })}`)
-                      .then((result) =>
-                        setRecordingPreview({ ...result, id: item.id }),
-                      )
-                      .catch(onError)
-                  }
-                >
-                  View
-                </button>
-                <a
-                  className="button"
-                  href={`/management/recording/download?${query({ id: item.id })}`}
-                >
-                  Download
-                </a>
-              </article>
-            ))}
-            <div className="dialog-actions">
-              <button onClick={() => setRecordingList(null)}>Close</button>
-            </div>
-          </section>
-        </div>
+        <Dialog
+          title="Terminal output recordings"
+          wide
+          onClose={() => setRecordingList(null)}
+        >
+          <span className="eyebrow">Restricted recordings</span>
+          <p>
+            Output can include passwords, tokens and private file contents.
+            Access and retention are controlled separately from normal activity.
+          </p>
+          {!recordingList.length && <p>No retained recordings.</p>}
+          {recordingList.map((item) => (
+            <article className="job-row" key={item.id}>
+              <div className="job-main">
+                <strong>
+                  {item.host_id} - {item.kind.replace(/-/g, " ")}
+                </strong>
+                <small>
+                  {new Date(item.created_at).toLocaleString()} -{" "}
+                  {bytes(Number(item.bytes))}
+                </small>
+              </div>
+              <button
+                onClick={() =>
+                  void api(`/recording?${query({ id: item.id })}`)
+                    .then((result) =>
+                      setRecordingPreview({ ...result, id: item.id }),
+                    )
+                    .catch(onError)
+                }
+              >
+                View
+              </button>
+              <a
+                className="button"
+                href={`/management/recording/download?${query({ id: item.id })}`}
+              >
+                Download
+              </a>
+            </article>
+          ))}
+          <div className="dialog-actions">
+            <button onClick={() => setRecordingList(null)}>Close</button>
+          </div>
+        </Dialog>
       )}
       {recordingPreview && (
-        <div className="dialog-backdrop">
-          <section className="dialog wide-dialog">
-            <h2>Recorded terminal output</h2>
-            {recordingPreview.truncated && (
-              <p className="error-text">
-                This recording is incomplete or still active.
-              </p>
-            )}
-            {recordingPreview.previewTruncated && (
-              <p>
-                Showing the first 256 KiB. Download the recording for the full
-                retained output.
-              </p>
-            )}
-            <pre className="log-output">
-              {recordingPreview.text
-                .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-                .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")}
-            </pre>
-            <div className="dialog-actions">
-              <button onClick={() => setRecordingPreview(null)}>
-                Close preview
-              </button>
-            </div>
-          </section>
-        </div>
+        <Dialog
+          title="Recorded terminal output"
+          wide
+          onClose={() => setRecordingPreview(null)}
+        >
+          {recordingPreview.truncated && (
+            <p className="error-text">
+              This recording is incomplete or still active.
+            </p>
+          )}
+          {recordingPreview.previewTruncated && (
+            <p>
+              Showing the first 256 KiB. Download the recording for the full
+              retained output.
+            </p>
+          )}
+          <pre className="log-output">
+            {recordingPreview.text
+              .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+              .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")}
+          </pre>
+          <div className="dialog-actions">
+            <button onClick={() => setRecordingPreview(null)}>
+              Close preview
+            </button>
+          </div>
+        </Dialog>
       )}
       {comparison && (
-        <div className="dialog-backdrop">
-          <section className="dialog wide-dialog">
-            <span className="eyebrow">Reviewed copy plan</span>
-            <h2>Folder comparison</h2>
-            <p>
-              {comparison.comparison} Existing files are preserved. This plan
-              copies missing items without deleting anything.
-            </p>
-            <div className="comparison-results">
-              {comparison.plan.map((item: any) => (
-                <div key={item.path} className="comparison-row">
-                  <span className="mono">
-                    {item.path} ? {item.target}
-                  </span>
-                  <span className="state">
-                    {item.status.replace(/_/g, " ")}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="dialog-actions">
-              <button onClick={() => setComparison(null)}>Cancel</button>
-              <button
-                className="primary"
-                disabled={
-                  busy ||
-                  !comparison.plan.some(
-                    (item: any) => item.status === "missing",
-                  )
-                }
-                onClick={() => {
-                  setBusy(true);
-                  void api("/files/copy-plan", { id: comparison.id })
-                    .then((result) => {
-                      setNotice(
-                        `Copied ${result.data.completed} missing items. Existing items were preserved.`,
-                      );
-                      setComparison(null);
-                      void loadFiles();
-                    })
-                    .catch(onError)
-                    .finally(() => setBusy(false));
-                }}
-              >
-                Copy missing items
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-      {trashEntries !== null && (
-        <div className="dialog-backdrop">
-          <section className="dialog wide-dialog">
-            <span className="eyebrow">Recoverable deletion</span>
-            <h2>Trash ? {root?.name}</h2>
-            <p>
-              Restore into the original location. A new file at that location is
-              never overwritten.
-            </p>
-            {!trashEntries.length && <p>No recoverable items in this root.</p>}
-            {trashEntries.map((entry) => (
-              <div className="job-row" key={entry.trashId}>
-                <div className="job-main">
-                  <strong>{entry.original}</strong>
-                  <small>
-                    Expires {new Date(entry.expires).toLocaleString()}
-                  </small>
-                </div>
-                <button
-                  onClick={() => {
-                    if (!confirm(`Restore ${entry.original}?`)) return;
-                    void api("/file-operations/review", {
-                      hostId,
-                      rootId,
-                      path: entry.original,
-                      operation: "restore",
-                      trashId: entry.trashId,
-                    })
-                      .then((review) =>
-                        api("/file-operations/execute", { id: review.id }),
-                      )
-                      .then(() => {
-                        setTrashEntries(
-                          (items) =>
-                            items?.filter((i) => i.trashId !== entry.trashId) ||
-                            [],
-                        );
-                        void loadFiles();
-                      })
-                      .catch(onError);
-                  }}
-                >
-                  Restore
-                </button>
+        <Dialog
+          title="Folder comparison"
+          wide
+          onClose={() => setComparison(null)}
+        >
+          <span className="eyebrow">Reviewed copy plan</span>
+          <p>
+            {comparison.comparison} Existing files are preserved. This plan
+            copies missing items without deleting anything.
+          </p>
+          <div className="comparison-results">
+            {comparison.plan.map((item: any) => (
+              <div key={item.path} className="comparison-row">
+                <span className="mono">
+                  {item.path} to {item.target}
+                </span>
+                <span className="state">{item.status.replace(/_/g, " ")}</span>
               </div>
             ))}
-            <div className="dialog-actions">
-              <button onClick={() => setTrashEntries(null)}>Close</button>
+          </div>
+          <div className="dialog-actions">
+            <button onClick={() => setComparison(null)}>Cancel</button>
+            <button
+              className="primary"
+              disabled={
+                busy ||
+                !comparison.plan.some((item: any) => item.status === "missing")
+              }
+              onClick={() => {
+                setBusy(true);
+                void api("/files/copy-plan", { id: comparison.id })
+                  .then((result) => {
+                    setNotice(
+                      `Copied ${result.data.completed} missing items. Existing items were preserved.`,
+                    );
+                    setComparison(null);
+                    void loadFiles();
+                  })
+                  .catch(onError)
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Copy missing items
+            </button>
+          </div>
+        </Dialog>
+      )}
+      {trashEntries !== null && (
+        <Dialog
+          title="Recoverable trash"
+          wide
+          onClose={() => setTrashEntries(null)}
+        >
+          <span className="eyebrow">Recoverable deletion</span>
+          <p>
+            Restore into the original location. A new file at that location is
+            never overwritten.
+          </p>
+          {!trashEntries.length && <p>No recoverable items in this root.</p>}
+          {trashEntries.map((entry) => (
+            <div className="job-row" key={entry.trashId}>
+              <div className="job-main">
+                <strong>{entry.original}</strong>
+                <small>
+                  Expires {new Date(entry.expires).toLocaleString()}
+                </small>
+              </div>
+              <button
+                onClick={() => {
+                  if (!confirm(`Restore ${entry.original}?`)) return;
+                  void api("/file-operations/review", {
+                    hostId,
+                    rootId,
+                    path: entry.original,
+                    operation: "restore",
+                    trashId: entry.trashId,
+                  })
+                    .then((review) =>
+                      api("/file-operations/execute", { id: review.id }),
+                    )
+                    .then(() => {
+                      setTrashEntries(
+                        (items) =>
+                          items?.filter((i) => i.trashId !== entry.trashId) ||
+                          [],
+                      );
+                      void loadFiles();
+                    })
+                    .catch(onError);
+                }}
+              >
+                Restore
+              </button>
             </div>
-          </section>
-        </div>
+          ))}
+          <div className="dialog-actions">
+            <button onClick={() => setTrashEntries(null)}>Close</button>
+          </div>
+        </Dialog>
       )}
       {connectionTest && (
         <Dialog
@@ -2335,6 +2355,27 @@ function App() {
           <p>Status: {jobDetails.state.replace(/_/g, " ")}</p>
           {jobDetails.error && <p className="alert">{jobDetails.error}</p>}
           {jobDetails.cleanup && <p>Cleanup: {jobDetails.cleanup}</p>}
+          {jobDetails.results?.length > 0 && (
+            <>
+              <p>Showing up to 200 of {jobDetails.results.length} outcomes.</p>
+              <button
+                onClick={() => {
+                  const url = URL.createObjectURL(
+                    new Blob([JSON.stringify(jobDetails, null, 2)], {
+                      type: "application/json",
+                    }),
+                  );
+                  const link = documentGlobal.createElement("a");
+                  link.href = url;
+                  link.download = `operation-${jobDetails.id}.json`;
+                  link.click();
+                  setTimeout(() => URL.revokeObjectURL(url), 1000);
+                }}
+              >
+                Download all outcomes
+              </button>
+            </>
+          )}
           {jobDetails.results?.length > 0 && (
             <div className="table-scroll">
               <table>
