@@ -22,7 +22,10 @@ type MigrationAuditRow = {
 };
 
 const parseLimit = (value: unknown, fallback = 5, max = 25): number => {
-  const parsed = typeof value === 'string' || typeof value === 'number' ? Number(value) : NaN;
+  const parsed =
+    typeof value === 'string' || typeof value === 'number'
+      ? Number(value)
+      : NaN;
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return fallback;
   }
@@ -40,7 +43,10 @@ const tableExists = async (tableName: string): Promise<boolean> => {
   return Boolean(rows[0]?.name);
 };
 
-export const listMigrationAuditRuns = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+export const listMigrationAuditRuns = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
   try {
     const limit = parseLimit(req.query.limit, 5, 25);
     const hasRuns = await tableExists(TABLE_MIGRATION_RUNS);
@@ -122,7 +128,62 @@ export const listMigrationAuditRuns = async (req: AuthenticatedRequest, res: Res
 
     res.json({ runs });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load migration audit runs.';
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'Failed to load migration audit runs.';
     res.status(500).json([{ message }]);
+  }
+};
+export const migrationAuditDetails = async (
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> => {
+  const runId = String(req.params.runId || ''),
+    direction = String(req.query.direction || '');
+  const offset = Number(req.query.offset || 0);
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      runId,
+    ) ||
+    !['up', 'down'].includes(direction) ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset > 100000
+  ) {
+    res
+      .status(400)
+      .json([{ message: 'Choose a valid migration run, direction and page.' }]);
+    return;
+  }
+  try {
+    if (!(await tableExists(TABLE_MIGRATION_RUNS))) {
+      res.status(404).json([{ message: 'Migration run not found.' }]);
+      return;
+    }
+    const runs = await sequelize.query<{ run_id: string }>(
+      `SELECT run_id FROM ${TABLE_MIGRATION_RUNS} WHERE run_id=:runId AND direction=:direction LIMIT 1`,
+      { replacements: { runId, direction }, type: QueryTypes.SELECT },
+    );
+    if (!runs.length) {
+      res.status(404).json([{ message: 'Migration run not found.' }]);
+      return;
+    }
+    if (!(await tableExists(TABLE_MIGRATION_STEPS))) {
+      res.json({ steps: [], nextOffset: null });
+      return;
+    }
+    const steps = await sequelize.query(
+      `SELECT id,migration_name AS "migrationName",status,started_at AS "startedAt",finished_at AS "finishedAt",
+      error_message AS "errorMessage",error_stack AS "errorStack",verify_status AS "verifyStatus",verify_details AS "verifyDetails"
+      FROM ${TABLE_MIGRATION_STEPS} WHERE run_id=:runId AND direction=:direction ORDER BY started_at,id LIMIT 101 OFFSET :offset`,
+      { replacements: { runId, direction, offset }, type: QueryTypes.SELECT },
+    );
+    res.json({
+      steps: steps.slice(0, 100),
+      nextOffset: steps.length > 100 ? offset + 100 : null,
+    });
+  } catch {
+    res.status(500).json([{ message: 'Failed to load migration details.' }]);
   }
 };

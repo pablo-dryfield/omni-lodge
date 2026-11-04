@@ -431,6 +431,49 @@ export async function authorityRpc(
       "HOST_FORBIDDEN",
       "The requested action is not granted on this server.",
     );
+  const requestedRootId =
+    method === "envelope" &&
+    args.params &&
+    typeof args.params === "object" &&
+    !Array.isArray(args.params)
+      ? (args.params as Record<string, unknown>).rootId
+      : undefined;
+  if (
+    requestedRootId !== undefined &&
+    (typeof requestedRootId !== "string" ||
+      !host.roots.some((root) => root.id === requestedRootId))
+  )
+    fail(
+      403,
+      "ROOT_FORBIDDEN",
+      "This file root is not enrolled in the current server profile.",
+    );
+  const rootFileAction =
+    host.rootFiles === true &&
+    ((method === "connection" && args.kind === "sftp") ||
+      [
+        "readFiles",
+        "writeFiles",
+        "deleteFiles",
+        "changePermissions",
+        "transfer",
+      ].includes(action));
+  if (
+    rootFileAction &&
+    (policy.values.SYSTEM_MANAGEMENT_ROOT_FILES_ENABLED !== true ||
+      !actor.actions.includes("rootFiles") ||
+      !grants.some(
+        (g) =>
+          g.actorId === actor.id &&
+          g.hostId === host.id &&
+          g.actions.includes("rootFiles"),
+      ))
+  )
+    fail(
+      403,
+      "ROOT_FILES_FORBIDDEN",
+      "Root filesystem access is not enabled and granted for this administrator.",
+    );
   if (method === "authorize") return { ok: true };
   if (method === "connection") {
     const identity = host.identities[String(actor.id)];
@@ -497,6 +540,9 @@ export async function authorityRpc(
       fail(400, "INVALID_OPERATION", "Invalid adapter parameters.");
     const params = {
       ...(inputParams as Record<string, unknown>),
+      privilegedRoot:
+        host.roots.find((root) => root.id === requestedRootId)?.privileged ===
+        true,
       stagingExpiresAt: Math.max(
         Date.now() +
           Number(

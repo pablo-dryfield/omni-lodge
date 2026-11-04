@@ -492,7 +492,7 @@ test(
         );
       };
       await startBroker();
-      const cookie = "__Host-omnilodge-management=" + token;
+      let cookie = "__Host-omnilodge-management=" + token;
       let csrf = "";
       const request = async (
         route: string,
@@ -908,7 +908,241 @@ test(
         ).rows[0].n > 0,
         true,
       );
+      // Explicit root extension is enrolled only after the default restricted
+      // workspace, terminal isolation and orphan-revocation checks passed.
+      await run(
+        "/bin/bash",
+        [
+          path.join(release, "bootstrap-host.sh"),
+          "--apply",
+          "--root-files",
+          applicationDatabase,
+        ],
+        pgEnv,
+      );
+      const rootPolicy = JSON.parse(
+        await fs.readFile(path.join(base, "adapter.json"), "utf8"),
+      );
+      const rootHosts = config.getConfigValue(
+        "SYSTEM_MANAGEMENT_HOSTS",
+      ) as any[];
+      const restrictedHosts = JSON.parse(JSON.stringify(rootHosts));
+      for (const id of [901, 904]) {
+        const user = "omnilodge-root-files-" + id;
+        credentials["root-files-" + id] = await key("root-files-" + id, user);
+        Object.assign(rootHosts[0].identities[id], {
+          fileUsername: user,
+          fileCredentialId: "root-files-" + id,
+        });
+        rootPolicy.actors[id].roots.server = {
+          path: "/",
+          staging: "/srv/omnilodge-root-staging/u" + id,
+          writable: true,
+          gid: 0,
+          privileged: true,
+        };
+      }
+      rootHosts[0].rootFiles = true;
+      rootHosts[0].roots = [
+        {
+          id: "server",
+          name: "Server filesystem",
+          path: "/",
+          writable: true,
+          managed: true,
+          privileged: true,
+        },
+      ];
+      await fs.writeFile(
+        path.join(base, "adapter.json"),
+        JSON.stringify(rootPolicy),
+        { mode: 0o600 },
+      );
+      const rootConfig = async (key: string, value: unknown) =>
+        config.updateConfigValue({
+          key,
+          value,
+          actorId: 901,
+          reason: "Explicit root filesystem integration fixture",
+        });
+      await rootConfig("SYSTEM_MANAGEMENT_CREDENTIALS", credentials);
+      await rootConfig("SYSTEM_MANAGEMENT_HOSTS", rootHosts);
+      await startBroker();
+      const freshRootSession = async () => {
+        const parent = await logins.createLoginSession(901);
+        const grant = await authority.createLaunch(901, parent);
+        const result = await authority.authorityRpc("redeem", {
+          grant: grant.grant,
+          origin: "https://system.omni-lodge.com",
+        });
+        cookie = "__Host-omnilodge-management=" + result.token;
+        csrf = (await request("/session")).csrf;
+        await request("/session/step-up", { password: "fixture-password" });
+        return result.token;
+      };
+      await freshRootSession();
+      await assert.rejects(
+        request("/files/list?hostId=fixture&rootId=server"),
+        { code: "ROOT_FILES_FORBIDDEN" },
+      );
+      await rootConfig("SYSTEM_MANAGEMENT_ROOT_FILES_ENABLED", true);
+      await rootConfig("SYSTEM_MANAGEMENT_HOST_GRANTS", [
+        {
+          actorId: 901,
+          hostId: "fixture",
+          actions: SYSTEM_ACTIONS.filter((a: string) => a !== "rootFiles"),
+        },
+      ]);
+      await freshRootSession();
+      await assert.rejects(
+        request("/files/list?hostId=fixture&rootId=server"),
+        { code: "ROOT_FILES_FORBIDDEN" },
+      );
+      await rootConfig("SYSTEM_MANAGEMENT_HOST_GRANTS", [
+        { actorId: 901, hostId: "fixture", actions: SYSTEM_ACTIONS },
+      ]);
+      const rootToken = await freshRootSession();
+      const fixture = await fs.mkdtemp("/tmp/omnilodge-root-files-ci-");
+      const name = fixture.slice(1) + "/private.txt";
+      await fs.writeFile(fixture + "/private.txt", "root fixture only", {
+        mode: 0o600,
+      });
+      await fs.chown(fixture + "/private.txt", 1, 1);
+      const rootListing = await request(
+        "/files/list?hostId=fixture&rootId=server",
+      );
+      assert(rootListing.entries.some((v: any) => v.name === "etc"));
+      const opened = await request(
+        "/files/content?hostId=fixture&rootId=server&path=" + name,
+      );
+      assert.equal(opened.text, "root fixture only");
+      const { connect, sftp } = await import("../src/ssh.js");
+      const connection = await authority.authorityRpc("connection", {
+        session: rootToken,
+        hostId: "fixture",
+        action: "readFiles",
+        kind: "sftp",
+      });
+      const client = await connect(connection);
+      try {
+        const files = await sftp(client);
+        await assert.rejects(
+          new Promise<void>((resolve, reject) =>
+            files.writeFile(fixture + "/bypass.txt", "denied", (e) =>
+              e ? reject(e) : resolve(),
+            ),
+          ),
+        );
+        await assert.rejects(
+          new Promise<void>((resolve, reject) =>
+            files.writeFile("/root/root-bypass.txt", "denied", (e) =>
+              e ? reject(e) : resolve(),
+            ),
+          ),
+        );
+        await assert.rejects(
+          new Promise<void>((resolve, reject) =>
+            files.writeFile(
+              "/proc/1/root" + fixture + "/namespace-bypass.txt",
+              "denied",
+              (e) => (e ? reject(e) : resolve()),
+            ),
+          ),
+        );
+        await assert.rejects(
+          new Promise<void>((resolve, reject) =>
+            files.writeFile(
+              "/proc/self/root" + fixture + "/self-bypass.txt",
+              "denied",
+              (e) => (e ? reject(e) : resolve()),
+            ),
+          ),
+        );
+        assert.equal(
+          await fs.readFile(fixture + "/private.txt", "utf8"),
+          "root fixture only",
+        );
+      } finally {
+        client.end();
+      }
+      const edit = await request("/file-operations/review", {
+        hostId: "fixture",
+        rootId: "server",
+        path: name,
+        operation: "save",
+        text: "reviewed root fixture",
+        version: opened.version,
+        sha256: opened.sha256,
+      });
+      await request("/file-operations/execute", { id: edit.id });
+      assert.equal(
+        await fs.readFile(fixture + "/private.txt", "utf8"),
+        "reviewed root fixture",
+      );
+      assert.equal(
+        (await fs.stat(fixture + "/private.txt")).mode & 0o777,
+        0o600,
+      );
+      assert.equal((await fs.stat(fixture + "/private.txt")).uid, 1);
+      assert.equal((await fs.stat(fixture + "/private.txt")).gid, 1);
+      await fs.symlink(fixture, fixture + "/link");
+      const resolved = await request(
+        "/files/resolve-link?hostId=fixture&rootId=server&path=" +
+          fixture.slice(1) +
+          "/link",
+      );
+      assert.equal(resolved.path, fixture.slice(1));
+      for (const target of [
+        "opt",
+        "opt/omnilodge/releases/example",
+        "usr/local/libexec/omnilodge/system-adapter",
+      ])
+        await assert.rejects(
+          request("/file-operations/review", {
+            hostId: "fixture",
+            rootId: "server",
+            path: target,
+            operation: "delete",
+          }),
+          { code: "DEPLOYMENT_PATH" },
+        );
+      const remove = await request("/file-operations/review", {
+        hostId: "fixture",
+        rootId: "server",
+        path: name,
+        operation: "delete",
+      });
+      await request("/file-operations/execute", { id: remove.id });
+      await assert.rejects(fs.stat(fixture + "/private.txt"));
+      await fs.rm(fixture, { recursive: true, force: true });
+      await rootConfig("SYSTEM_MANAGEMENT_ROOT_FILES_ENABLED", false);
+      await assert.rejects(request("/files/list?hostId=fixture&rootId=server"));
+      await rootConfig("SYSTEM_MANAGEMENT_HOSTS", restrictedHosts);
+      const restrictedToken = await freshRootSession();
+      await assert.rejects(
+        authority.authorityRpc("envelope", {
+          session: restrictedToken,
+          hostId: "fixture",
+          action: "writeFiles",
+          operation: "mkdir",
+          params: {
+            rootId: "server",
+            path: fixture.slice(1) + "/not-approved",
+            operationId: crypto.randomUUID(),
+          },
+        }),
+        { code: "ROOT_FORBIDDEN" },
+      );
+      console.log(
+        "Root filesystem: real / inventory, private root read, transport write denial, reviewed edit/delete, link navigation, deployment protection and revocation passed.",
+      );
     } catch (error) {
+      const copyDiagnostics = await run("/bin/journalctl", [
+        "--no-pager",
+        "--unit=omnilodge-copy-*",
+        "--lines=35",
+      ]).catch(() => ({ stdout: "Copy worker diagnostics unavailable" }));
+      console.error(copyDiagnostics.stdout);
       if (brokerUnit) {
         const brokerDiagnostics = await run("/bin/journalctl", [
           "--no-pager",

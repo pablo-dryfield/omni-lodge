@@ -13,13 +13,15 @@ export type Action =
   | "manageCredentials"
   | "viewActivity"
   | "viewRecordings"
-  | "terminateOthers";
+  | "terminateOthers"
+  | "rootFiles";
 export type Root = {
   id: string;
   name: string;
   path: string;
   writable: boolean;
   managed: boolean;
+  privileged?: boolean;
 };
 export type Host = {
   id: string;
@@ -30,6 +32,7 @@ export type Host = {
   addresses: string[];
   fingerprints: string[];
   managed: boolean;
+  rootFiles?: boolean;
   roots: Root[];
   services: string[];
   username: string;

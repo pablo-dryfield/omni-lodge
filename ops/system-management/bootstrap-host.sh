@@ -1,7 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 apply=false
-if [[ "${1:-}" == --apply ]]; then apply=true; shift; fi
+root_files=false
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in --apply) apply=true;; --root-files) root_files=true;; *) echo 'Unknown option' >&2; exit 64;; esac
+  shift
+done
 database="${1:-}"
 if [[ "$EUID" != 0 || ! "$database" =~ ^[a-zA-Z0-9_]{1,63}$ ]]; then echo 'Use root and the exact application database name.' >&2; exit 1; fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -31,9 +35,31 @@ exec /usr/bin/env -i PATH=/usr/bin:/bin TERM=xterm-256color LANG=C.UTF-8 /usr/bi
 GATEWAY
 chmod 0755 /usr/local/libexec/omnilodge/system-gateway
 chown root:root /usr/local/libexec/omnilodge/system-gateway
+cat > /usr/local/libexec/omnilodge/system-root-files <<'ROOTFILES'
+#!/bin/sh
+set -eu
+[ "$#" -eq 0 ] || exit 64
+case "${SUDO_USER:-}" in omnilodge-root-files-*) actor=${SUDO_USER#omnilodge-root-files-};; *) exit 77;; esac
+case "$actor" in ''|*[!0-9]*|0*) exit 77;; esac
+cd /
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 /usr/local/libexec/omnilodge/system-adapter root-sftp "$actor"
+ROOTFILES
+chmod 0755 /usr/local/libexec/omnilodge/system-root-files
+chown root:root /usr/local/libexec/omnilodge/system-root-files
 for actor in "${actors[@]}"; do
   [[ "$actor" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid administrator ID' >&2; exit 1; }
   execution="omnilodge-op-$actor"; files="omnilodge-sftp-$actor"
+  if [[ "$root_files" == true ]]; then
+    root_identity="omnilodge-root-files-$actor"
+    id "$root_identity" >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --shell /bin/sh "$root_identity"
+    [[ "$(id -u "$root_identity")" != 0 ]] || exit 1
+    install -d -m 0755 -o root -g root /srv/omnilodge-root-staging /.omnilodge-root-staging
+    install -d -m 0700 -o root -g root "/srv/omnilodge-root-staging/u$actor"
+    printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/omnilodge/system-root-files ""\n' "$root_identity" > "/etc/sudoers.d/omnilodge-root-files-$actor"
+    chmod 0440 "/etc/sudoers.d/omnilodge-root-files-$actor"
+    visudo -cf "/etc/sudoers.d/omnilodge-root-files-$actor"
+    for deny in /etc/cron.deny /etc/at.deny; do touch "$deny"; grep -Fxq "$root_identity" "$deny" || printf '%s\n' "$root_identity" >> "$deny"; done
+  fi
   id "$execution" >/dev/null 2>&1 || useradd --system --home-dir "/srv/omnilodge-shell/u$actor" --shell /usr/sbin/nologin "$execution"
   id "$files" >/dev/null 2>&1 || useradd --system --home-dir /work --shell /usr/sbin/nologin "$files"
   for identity in "$execution" "$files" omnilodge-sys-gw omnilodge-system; do
@@ -54,7 +80,9 @@ for actor in "${actors[@]}"; do
     line="$source $destination none bind,nosuid,nodev 0 0"
     grep -Fxq "$line" /etc/fstab || printf '%s\n' "$line" >> /etc/fstab
   done
-  for restricted in "$files" omnilodge-sys-gw; do
+  restricted_identities=("$files" omnilodge-sys-gw)
+  if id "omnilodge-root-files-$actor" >/dev/null 2>&1; then restricted_identities+=("omnilodge-root-files-$actor"); fi
+  for restricted in "${restricted_identities[@]}"; do
     slice="user-$(id -u "$restricted").slice"
     install -d -m 0755 -o root -g root "/etc/systemd/system/$slice.d"
     printf '[Slice]\nMemoryMax=67108864\nCPUQuota=10%%\nTasksMax=32\n' > "/etc/systemd/system/$slice.d/50-omnilodge-system.conf"
@@ -88,6 +116,19 @@ Match User omnilodge-sftp-*
     KbdInteractiveAuthentication no
     ChrootDirectory /srv/omnilodge-sftp/%u
     ForceCommand internal-sftp -d /work -u 0077
+    AllowTcpForwarding no
+    AllowStreamLocalForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no
+    PermitUserRC no
+    PermitTTY no
+Match User omnilodge-root-files-*
+    AuthenticationMethods publickey
+    AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    ForceCommand /usr/bin/sudo -n /usr/local/libexec/omnilodge/system-root-files
     AllowTcpForwarding no
     AllowStreamLocalForwarding no
     AllowAgentForwarding no

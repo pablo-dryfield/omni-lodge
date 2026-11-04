@@ -59,6 +59,10 @@ import {
   type Review,
 } from './api';
 import { SqlEditor, type EditorHandle } from './SqlEditor';
+import {
+  WorkspaceLayoutMenu,
+  type WorkspaceVisibility,
+} from './WorkspaceLayoutMenu';
 import { ResultGrid } from './ResultGrid';
 import { TableBrowser } from './TableBrowser';
 import { SessionPanel } from './SessionPanel';
@@ -501,6 +505,23 @@ export default function DatabaseWorkspace() {
     [explorerVisible, setExplorerVisible] = useState(true),
     [error, setError] = useState(''),
     [notice, setNotice] = useState('');
+  const [topSections, setTopSections] = useState({
+    header: true,
+    quickActions: true,
+    navigation: true,
+  });
+  const visibility: WorkspaceVisibility = {
+    ...topSections,
+    explorer: explorerVisible,
+  };
+  const changeVisibility = (next: WorkspaceVisibility) => {
+    setTopSections({
+      header: next.header,
+      quickActions: next.quickActions,
+      navigation: next.navigation,
+    });
+    setExplorerVisible(next.explorer);
+  };
   const [recentObjects, setRecentObjects] = useState<
       Array<{ targetId: string; object: CatalogObject }>
     >([]),
@@ -563,6 +584,17 @@ export default function DatabaseWorkspace() {
     enabled: ready && Boolean(selectedObject),
     retry: false,
     staleTime: 60000,
+  });
+  const completions = useQuery({
+    queryKey: [
+      'database-workspace-completions',
+      current.targetId,
+      capabilities.data?.policyHash,
+    ],
+    queryFn: ({ signal }) => api.completionSchema(current.targetId, signal),
+    enabled: ready && Boolean(current.targetId),
+    retry: false,
+    staleTime: (capabilities.data?.metadataTtlSeconds ?? 60) * 1000,
   });
   const documents = useQuery({
     queryKey: ['database-workspace-documents'],
@@ -629,6 +661,7 @@ export default function DatabaseWorkspace() {
               wrapping?: boolean;
               fontSize?: number;
               explorerVisible?: boolean;
+              topSections?: Partial<WorkspaceVisibility>;
             }
           | undefined;
         if (preferences) {
@@ -640,6 +673,12 @@ export default function DatabaseWorkspace() {
               : 14,
           );
           setExplorerVisible(preferences.explorerVisible !== false);
+          const sections = preferences.topSections;
+          setTopSections({
+            header: sections?.header !== false,
+            quickActions: sections?.quickActions !== false,
+            navigation: sections?.navigation !== false,
+          });
         }
         const previous = last?.value.tabs;
         if (
@@ -705,7 +744,13 @@ export default function DatabaseWorkspace() {
       active,
       recentObjects,
       favoriteObjects,
-      preferences: { plainEditor, wrapping, fontSize, explorerVisible },
+      preferences: {
+        plainEditor,
+        wrapping,
+        fontSize,
+        explorerVisible,
+        topSections,
+      },
     });
     draftSnapshot.current = snapshot;
     if (snapshot !== savedSnapshot.current) setDraftStatus('Unsaved changes');
@@ -748,6 +793,7 @@ export default function DatabaseWorkspace() {
     wrapping,
     fontSize,
     explorerVisible,
+    topSections,
   ]);
   const pendingIdsKey = tabs
     .map((t) => t.jobId)
@@ -792,16 +838,8 @@ export default function DatabaseWorkspace() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [tabs, draftStatus]);
   const schema = useMemo(
-    () =>
-      Object.fromEntries(
-        (catalog.data || []).map((o) => [
-          o.name,
-          details.data?.id === o.id
-            ? details.data.columns.map((c) => c.name)
-            : [],
-        ]),
-      ),
-    [catalog.data, details.data],
+    () => completions.data?.columns || [],
+    [completions.data],
   );
   function addTab(sql?: string, title?: string, targetId = current.targetId) {
     if (tabs.length >= 20) {
@@ -1059,233 +1097,266 @@ export default function DatabaseWorkspace() {
       data-keyboard={keyboardOpen}
       style={{ '--dw-viewport': `${viewportHeight}px` } as React.CSSProperties}
     >
-      <header className="dw-header">
-        <div className="dw-brand">
-          <Tooltip label="Back to settings">
-            <ActionIcon
-              component={Link}
-              to="/settings"
-              variant="subtle"
-              color="gray"
-              aria-label="Back to settings"
-            >
-              <IconArrowLeft size={16} />
-            </ActionIcon>
-          </Tooltip>
-          <span className="dw-brand-icon">
-            <IconDatabase size={20} />
-          </span>
-          <div>
-            <h1>Database Workspace</h1>
-            <p>PostgreSQL development & administration</p>
+      {topSections.header && (
+        <header className="dw-header">
+          <div className="dw-brand">
+            <Tooltip label="Back to settings">
+              <ActionIcon
+                component={Link}
+                to="/settings"
+                variant="subtle"
+                color="gray"
+                aria-label="Back to settings"
+              >
+                <IconArrowLeft size={16} />
+              </ActionIcon>
+            </Tooltip>
+            <span className="dw-brand-icon">
+              <IconDatabase size={20} />
+            </span>
+            <div>
+              <h1>Database Workspace</h1>
+              <p>PostgreSQL development & administration</p>
+            </div>
           </div>
-        </div>
-        <Select
-          aria-label="Catalog object category"
-          className="dw-category"
-          size="xs"
-          w={125}
-          value={category}
-          onChange={(v) => {
-            setCategory(v || 'relations');
-            setCatalogPage(0);
-            setSelectedObject(undefined);
-          }}
-          data={[
-            { value: 'relations', label: 'Tables & views' },
-            { value: 'schemas', label: 'Schemas' },
-            { value: 'routines', label: 'Functions' },
-            { value: 'types', label: 'Types' },
-            { value: 'extensions', label: 'Extensions' },
-            { value: 'infrastructure', label: 'Infrastructure' },
-          ]}
-          allowDeselect={false}
-        />
-        <div className="dw-target">
+          <Select
+            aria-label="Catalog object category"
+            className="dw-category"
+            size="xs"
+            w={125}
+            value={category}
+            onChange={(v) => {
+              setCategory(v || 'relations');
+              setCatalogPage(0);
+              setSelectedObject(undefined);
+            }}
+            data={[
+              { value: 'relations', label: 'Tables & views' },
+              { value: 'schemas', label: 'Schemas' },
+              { value: 'routines', label: 'Functions' },
+              { value: 'types', label: 'Types' },
+              { value: 'extensions', label: 'Extensions' },
+              { value: 'infrastructure', label: 'Infrastructure' },
+            ]}
+            allowDeselect={false}
+          />
+          <div className="dw-target">
+            <Badge
+              variant="light"
+              color={target?.environment === 'production' ? 'red' : 'gray'}
+              size="sm"
+            >
+              {target?.environment || 'No connection'}
+            </Badge>
+            <Select
+              aria-label="Database connection"
+              size="xs"
+              value={current.targetId}
+              data={(capabilities.data?.targets || []).map((t) => ({
+                value: t.id,
+                label: `${t.label} · ${t.database}`,
+              }))}
+              onChange={(id) => {
+                patch({
+                  targetId: id || '',
+                  mode: 'read',
+                  jobId: undefined,
+                  objectId: undefined,
+                });
+                setSelectedObject(undefined);
+                setCatalogPage(0);
+              }}
+              allowDeselect={false}
+            />
+          </div>
           <Badge
+            leftSection={<IconLock size={11} />}
             variant="light"
+            color={
+              current.objectId
+                ? 'blue'
+                : current.mode === 'write'
+                  ? 'orange'
+                  : 'teal'
+            }
+          >
+            {current.objectId
+              ? 'Table data'
+              : current.mode === 'write'
+                ? 'Reviewed write'
+                : 'Read only'}
+          </Badge>
+        </header>
+      )}
+      {topSections.quickActions && (
+        <Group
+          px="sm"
+          py={4}
+          gap={6}
+          className="dw-recent"
+          style={{ borderBottom: '1px solid var(--dw-border)' }}
+        >
+          <Menu>
+            <Menu.Target>
+              <Button size="compact-xs" variant="subtle">
+                Recent objects
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              {recentObjects
+                .filter((r) => r.targetId === current.targetId)
+                .map((r) => (
+                  <Menu.Item
+                    key={r.object.id}
+                    onClick={() => openObject(r.object)}
+                  >
+                    {r.object.schema}.{r.object.name}
+                  </Menu.Item>
+                ))}
+              {!recentObjects.some((r) => r.targetId === current.targetId) && (
+                <Menu.Item disabled>No recent objects</Menu.Item>
+              )}
+            </Menu.Dropdown>
+          </Menu>
+          <Menu>
+            <Menu.Target>
+              <Button size="compact-xs" variant="subtle">
+                Favorite objects
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              {favoriteObjects
+                .filter((r) => r.targetId === current.targetId)
+                .map((r) => (
+                  <Menu.Item
+                    key={r.object.id}
+                    onClick={() => openObject(r.object)}
+                  >
+                    {r.object.schema}.{r.object.name}
+                  </Menu.Item>
+                ))}
+              {!favoriteObjects.some(
+                (r) => r.targetId === current.targetId,
+              ) && <Menu.Item disabled>No favorites</Menu.Item>}
+            </Menu.Dropdown>
+          </Menu>
+          {selectedObject && (section === 'objects' || current.objectId) && (
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              onClick={() =>
+                setFavoriteObjects((previous) =>
+                  previous.some(
+                    (r) =>
+                      r.targetId === current.targetId &&
+                      r.object.id === selectedObject.id,
+                  )
+                    ? previous.filter(
+                        (r) =>
+                          r.targetId !== current.targetId ||
+                          r.object.id !== selectedObject.id,
+                      )
+                    : [
+                        ...previous,
+                        { targetId: current.targetId, object: selectedObject },
+                      ].slice(-30),
+                )
+              }
+            >
+              {favoriteObjects.some(
+                (r) =>
+                  r.targetId === current.targetId &&
+                  r.object.id === selectedObject.id,
+              )
+                ? 'Remove favorite'
+                : 'Favorite selected object'}
+            </Button>
+          )}
+          <Text
+            size="xs"
+            c="dimmed"
+            ml="auto"
+            className="dw-keyboard-shortcuts"
+          >
+            Ctrl/Cmd+S: save · Ctrl/Cmd+Shift+Enter: run script
+          </Text>
+        </Group>
+      )}
+      {topSections.navigation && (
+        <nav
+          className="dw-navigation"
+          aria-label="Database workspace views"
+          role="tablist"
+        >
+          {(mobile
+            ? ([
+                ['objects', 'Objects', IconDatabase],
+                ['query', 'Query', IconTerminal2],
+                ['results', 'Results', IconTable],
+                ['activity', 'Activity', IconActivity],
+              ] as const)
+            : nav
+          ).map(([key, label, Icon]) => (
+            <button
+              key={key}
+              className="dw-nav"
+              role="tab"
+              aria-selected={section === key}
+              onClick={() => setSection(key)}
+            >
+              <Icon size={15} />
+              {label}
+            </button>
+          ))}
+          {mobile && (
+            <Menu>
+              <Menu.Target>
+                <ActionIcon
+                  aria-label="More workspace views"
+                  variant="subtle"
+                  color="gray"
+                  ml="auto"
+                >
+                  <IconChevronDown size={15} />
+                </ActionIcon>
+              </Menu.Target>
+              <Menu.Dropdown>
+                {nav
+                  .filter(([key]) =>
+                    ['saved', 'history', 'sessions', 'admin'].includes(key),
+                  )
+                  .map(([key, label]) => (
+                    <Menu.Item key={key} onClick={() => setSection(key)}>
+                      {label}
+                    </Menu.Item>
+                  ))}
+              </Menu.Dropdown>
+            </Menu>
+          )}
+        </nav>
+      )}
+      <div className="dw-layout-bar">
+        <Group gap={6} wrap="nowrap">
+          <Badge
             color={target?.environment === 'production' ? 'red' : 'gray'}
-            size="sm"
+            size="xs"
           >
             {target?.environment || 'No connection'}
           </Badge>
-          <Select
-            aria-label="Database connection"
-            size="xs"
-            value={current.targetId}
-            data={(capabilities.data?.targets || []).map((t) => ({
-              value: t.id,
-              label: `${t.label} · ${t.database}`,
-            }))}
-            onChange={(id) => {
-              patch({
-                targetId: id || '',
-                mode: 'read',
-                jobId: undefined,
-                objectId: undefined,
-              });
-              setSelectedObject(undefined);
-              setCatalogPage(0);
-            }}
-            allowDeselect={false}
-          />
-        </div>
-        <Badge
-          leftSection={<IconLock size={11} />}
-          variant="light"
-          color={
-            current.objectId
-              ? 'blue'
-              : current.mode === 'write'
-                ? 'orange'
-                : 'teal'
-          }
-        >
-          {current.objectId
-            ? 'Table data'
-            : current.mode === 'write'
-              ? 'Reviewed write'
-              : 'Read only'}
-        </Badge>
-      </header>
-      <Group
-        px="sm"
-        py={4}
-        gap={6}
-        className="dw-recent"
-        style={{ borderBottom: '1px solid var(--dw-border)' }}
-      >
-        <Menu>
-          <Menu.Target>
-            <Button size="compact-xs" variant="subtle">
-              Recent objects
-            </Button>
-          </Menu.Target>
-          <Menu.Dropdown>
-            {recentObjects
-              .filter((r) => r.targetId === current.targetId)
-              .map((r) => (
-                <Menu.Item
-                  key={r.object.id}
-                  onClick={() => openObject(r.object)}
-                >
-                  {r.object.schema}.{r.object.name}
-                </Menu.Item>
-              ))}
-            {!recentObjects.some((r) => r.targetId === current.targetId) && (
-              <Menu.Item disabled>No recent objects</Menu.Item>
-            )}
-          </Menu.Dropdown>
-        </Menu>
-        <Menu>
-          <Menu.Target>
-            <Button size="compact-xs" variant="subtle">
-              Favorite objects
-            </Button>
-          </Menu.Target>
-          <Menu.Dropdown>
-            {favoriteObjects
-              .filter((r) => r.targetId === current.targetId)
-              .map((r) => (
-                <Menu.Item
-                  key={r.object.id}
-                  onClick={() => openObject(r.object)}
-                >
-                  {r.object.schema}.{r.object.name}
-                </Menu.Item>
-              ))}
-            {!favoriteObjects.some((r) => r.targetId === current.targetId) && (
-              <Menu.Item disabled>No favorites</Menu.Item>
-            )}
-          </Menu.Dropdown>
-        </Menu>
-        {selectedObject && (section === 'objects' || current.objectId) && (
-          <Button
-            size="compact-xs"
-            variant="subtle"
-            onClick={() =>
-              setFavoriteObjects((previous) =>
-                previous.some(
-                  (r) =>
-                    r.targetId === current.targetId &&
-                    r.object.id === selectedObject.id,
-                )
-                  ? previous.filter(
-                      (r) =>
-                        r.targetId !== current.targetId ||
-                        r.object.id !== selectedObject.id,
-                    )
-                  : [
-                      ...previous,
-                      { targetId: current.targetId, object: selectedObject },
-                    ].slice(-30),
-              )
-            }
-          >
-            {favoriteObjects.some(
-              (r) =>
-                r.targetId === current.targetId &&
-                r.object.id === selectedObject.id,
-            )
-              ? 'Remove favorite'
-              : 'Favorite selected object'}
-          </Button>
-        )}
-        <Text size="xs" c="dimmed" ml="auto" className="dw-keyboard-shortcuts">
-          Ctrl/Cmd+S: save · Ctrl/Cmd+Shift+Enter: run script
-        </Text>
-      </Group>
-      <nav
-        className="dw-navigation"
-        aria-label="Database workspace views"
-        role="tablist"
-      >
-        {(mobile
-          ? ([
-              ['objects', 'Objects', IconDatabase],
-              ['query', 'Query', IconTerminal2],
-              ['results', 'Results', IconTable],
-              ['activity', 'Activity', IconActivity],
-            ] as const)
-          : nav
-        ).map(([key, label, Icon]) => (
-          <button
-            key={key}
-            className="dw-nav"
-            role="tab"
-            aria-selected={section === key}
-            onClick={() => setSection(key)}
-          >
-            <Icon size={15} />
-            {label}
-          </button>
-        ))}
-        {mobile && (
-          <Menu>
-            <Menu.Target>
-              <ActionIcon
-                aria-label="More workspace views"
-                variant="subtle"
-                color="gray"
-                ml="auto"
-              >
-                <IconChevronDown size={15} />
-              </ActionIcon>
-            </Menu.Target>
-            <Menu.Dropdown>
-              {nav
-                .filter(([key]) =>
-                  ['saved', 'history', 'sessions', 'admin'].includes(key),
-                )
-                .map(([key, label]) => (
-                  <Menu.Item key={key} onClick={() => setSection(key)}>
-                    {label}
-                  </Menu.Item>
-                ))}
-            </Menu.Dropdown>
-          </Menu>
-        )}
-      </nav>
+          <Text size="xs" truncate>
+            {target?.label}
+          </Text>
+          <Badge size="xs" color={current.mode === 'write' ? 'orange' : 'teal'}>
+            {current.mode === 'write' ? 'Reviewed write' : 'Read only'}
+          </Badge>
+        </Group>
+        <WorkspaceLayoutMenu
+          value={visibility}
+          onChange={changeVisibility}
+          views={nav}
+          onView={setSection}
+        />
+      </div>
       {error && (
         <Alert
           color="red"
@@ -1748,6 +1819,11 @@ export default function DatabaseWorkspace() {
                         onChange={(sql) => patch({ sql, dirty: true })}
                         onRun={() => run()}
                         schema={schema}
+                        defaultSchema={
+                          target?.schemas.includes('public')
+                            ? 'public'
+                            : target?.schemas[0]
+                        }
                         wrapping={wrapping}
                         fontSize={fontSize}
                       />
@@ -1758,7 +1834,13 @@ export default function DatabaseWorkspace() {
                         Escape, then Tab: leave editor
                       </span>
                       <span className="dw-hide-mobile">
-                        PostgreSQL {target?.major} · UTF-8
+                        {completions.isLoading
+                          ? 'Loading column suggestions…'
+                          : completions.error
+                            ? 'Column suggestions unavailable'
+                            : completions.data?.complete === false
+                              ? 'Column suggestions capped — adjust Control Panel limit'
+                              : `PostgreSQL ${target?.major} · UTF-8`}
                       </span>
                     </div>
                   </section>

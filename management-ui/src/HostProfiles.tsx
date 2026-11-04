@@ -11,6 +11,7 @@ type Root = {
   path: string;
   writable: boolean;
   managed: boolean;
+  privileged?: boolean;
 };
 type Profile = {
   id: string;
@@ -22,6 +23,7 @@ type Profile = {
   fingerprints: string[];
   enabled: boolean;
   managed: boolean;
+  rootFiles?: boolean;
   identities: Record<string, Identity>;
   roots: Root[];
   services: string[];

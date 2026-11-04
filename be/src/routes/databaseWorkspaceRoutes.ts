@@ -50,6 +50,7 @@ router.post('/executions/:id/cancel', controller.workspaceCancel);
 router.post('/executions/:id/results/:index', controller.workspaceResult);
 router.get('/history', controller.workspaceHistory);
 router.get('/catalog', controller.workspaceCatalog);
+router.get('/completion-schema', controller.workspaceCompletions);
 router.get('/catalog/:oid', controller.workspaceObject);
 router.get('/documents', controller.workspaceDocuments);
 router.post('/documents', controller.workspaceSaveDocument);

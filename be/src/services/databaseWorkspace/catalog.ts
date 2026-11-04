@@ -48,6 +48,28 @@ export async function catalogObjects(
     ],
   );
 }
+// Metadata only, independent of the explorer's filters, selected object and page.
+export async function completionColumns(
+  target: Target,
+  credential: Credential,
+  protectedObjects: string[],
+  maximum: number,
+) {
+  const cap = Math.max(100, Math.min(50000, Math.floor(maximum)));
+  const rows = await catalogQuery(
+    target,
+    credential,
+    `SELECT n.nspname AS schema,c.relname AS table,a.attname AS name,left(format_type(a.atttypid,a.atttypmod),128) AS type
+     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid
+     WHERE n.nspname=ANY($1::text[]) AND c.relkind IN ('r','p','v','m','f')
+       AND a.attnum>0 AND NOT a.attisdropped AND has_schema_privilege(n.oid,'USAGE')
+       AND has_column_privilege(c.oid,a.attnum,'SELECT')
+       AND NOT(c.relname=ANY($2::text[]) OR n.nspname||'.'||c.relname=ANY($2::text[]))
+     ORDER BY n.nspname,c.relname,a.attnum LIMIT $3`,
+    [target.schemas, protectedObjects, cap + 1],
+  );
+  return { columns: rows.slice(0, cap), complete: rows.length <= cap };
+}
 export async function relationDetails(
   target: Target,
   credential: Credential,

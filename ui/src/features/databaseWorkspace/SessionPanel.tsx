@@ -238,7 +238,7 @@ export function SessionPanel({
                   value={sql}
                   onChange={setSql}
                   onRun={() => void submit('sql')}
-                  schema={{}}
+                  schema={[]}
                 />
               </div>
               <TextInput

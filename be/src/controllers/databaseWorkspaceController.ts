@@ -21,6 +21,7 @@ import {
   catalogObjects,
   describeCatalogObject,
   catalogCategory,
+  completionColumns,
 } from '../services/databaseWorkspace/catalog.js';
 import {
   WorkspaceError,
@@ -346,6 +347,23 @@ export const workspaceCatalog = workspaceHandler(async (req, res) => {
       config.protectedObjects,
       typeof req.query.schema === 'string' ? req.query.schema : undefined,
       Number(req.query.offset || 0),
+    ),
+  );
+});
+export const workspaceCompletions = workspaceHandler(async (req, res) => {
+  await workspaceAccess(req, 'read');
+  const config = await workspaceConfiguration();
+  const { target, credential } = targetCredential(
+    config,
+    String(req.query.targetId || ''),
+    'read',
+  );
+  res.json(
+    await completionColumns(
+      target,
+      credential,
+      config.protectedObjects,
+      Number(getConfigValue('DB_WORKSPACE_COMPLETION_COLUMNS') ?? 20000),
     ),
   );
 });

@@ -17,7 +17,7 @@
   flex-direction: column;
   box-shadow: 0 2px 7px #10203b08;
 }
-[data-mantine-color-scheme='dark'] .dw {
+[data-mantine-color-scheme="dark"] .dw {
   --dw-border: #344152;
   --dw-soft: #202b3b;
   --dw-active-line: #33557855;
@@ -33,6 +33,20 @@
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
+}
+.dw-layout-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--dw-border);
+  flex-shrink: 0;
+}
+.dw-layout-bar > .mantine-Group-root {
+  min-width: 0;
+  overflow: hidden;
 }
 .dw-brand {
   display: flex;
@@ -90,7 +104,7 @@
   font-weight: 600;
   cursor: pointer;
 }
-.dw-nav[aria-selected='true'] {
+.dw-nav[aria-selected="true"] {
   color: #1766aa;
   background: #e7f1ff;
 }
@@ -144,7 +158,7 @@
   cursor: pointer;
 }
 .dw-object:hover,
-.dw-object[data-selected='true'] {
+.dw-object[data-selected="true"] {
   background: #e8f1fc;
   color: #1766aa;
 }
@@ -193,7 +207,7 @@
 .dw-query-tab > button {
   flex-shrink: 0;
 }
-.dw-query-tab[aria-selected='true'] {
+.dw-query-tab[aria-selected="true"] {
   background: var(--dw-surface);
   color: var(--dw-text);
   box-shadow: inset 0 2px #228be6;
@@ -410,7 +424,7 @@
   .dw-category {
     display: none;
   }
-  .dw[data-section='objects'] .dw-category {
+  .dw[data-section="objects"] .dw-category {
     display: block;
     order: 4;
     width: 100% !important;
@@ -450,7 +464,7 @@
     width: 100%;
     border: 0;
   }
-  .dw-main[data-mobile-hidden='true'] {
+  .dw-main[data-mobile-hidden="true"] {
     display: none;
   }
   .dw-query-tab {
@@ -582,21 +596,21 @@
     max-width: 280px;
     padding-block: 4px;
   }
-  .dw-main[data-mobile-view='query'] .dw-results {
+  .dw-main[data-mobile-view="query"] .dw-results {
     display: none;
   }
-  .dw-main[data-mobile-view='query'] .dw-editor-section {
+  .dw-main[data-mobile-view="query"] .dw-editor-section {
     flex: 1;
     height: auto;
     max-height: none;
     resize: none;
   }
-  .dw-main[data-mobile-view='results'] > .dw-toolbar,
-  .dw-main[data-mobile-view='results'] > .dw-editor-section,
-  .dw-main[data-mobile-view='results'] > .dw-parameters {
+  .dw-main[data-mobile-view="results"] > .dw-toolbar,
+  .dw-main[data-mobile-view="results"] > .dw-editor-section,
+  .dw-main[data-mobile-view="results"] > .dw-parameters {
     display: none;
   }
-  .dw-main[data-mobile-view='results'] .dw-mobile-result-actions {
+  .dw-main[data-mobile-view="results"] .dw-mobile-result-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -615,38 +629,38 @@
   .dw-table-region .mantine-TableContainer-root {
     max-height: none !important;
   }
-  .dw[data-keyboard='true'] .dw-navigation,
-  .dw[data-keyboard='true'] .dw-query-tabs {
+  .dw[data-keyboard="true"] .dw-navigation,
+  .dw[data-keyboard="true"] .dw-query-tabs {
     display: none;
   }
-  .dw[data-keyboard='true'] .dw-header {
+  .dw[data-keyboard="true"] .dw-header {
     padding: 5px 8px;
   }
-  .dw[data-keyboard='true'] .dw-brand-icon,
-  .dw[data-keyboard='true'] .dw-brand > a {
+  .dw[data-keyboard="true"] .dw-brand-icon,
+  .dw[data-keyboard="true"] .dw-brand > a {
     display: none;
   }
-  .dw[data-keyboard='true'] .dw-brand h1 {
+  .dw[data-keyboard="true"] .dw-brand h1 {
     font-size: 12px;
   }
-  .dw[data-keyboard='true'] .dw-toolbar {
+  .dw[data-keyboard="true"] .dw-toolbar {
     padding: 4px;
   }
-  .dw[data-keyboard='true'] .dw-toolbar button {
+  .dw[data-keyboard="true"] .dw-toolbar button {
     min-height: 44px;
   }
-  .dw[data-keyboard='true'] .dw-recent {
+  .dw[data-keyboard="true"] .dw-recent {
     display: none;
   }
-  .dw[data-keyboard='true'] .dw-toolbar > *:not(.dw-run-control):not(.dw-mode) {
+  .dw[data-keyboard="true"] .dw-toolbar > *:not(.dw-run-control):not(.dw-mode) {
     display: none;
   }
-  .dw[data-keyboard='true'] .dw-target {
+  .dw[data-keyboard="true"] .dw-target {
     width: auto;
     order: 2;
     margin-left: 0;
   }
-  .dw[data-keyboard='true'] .dw-target > .mantine-Select-root {
+  .dw[data-keyboard="true"] .dw-target > .mantine-Select-root {
     display: none;
   }
 }

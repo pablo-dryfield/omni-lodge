@@ -1,0 +1,114 @@
+.cp-tabs {
+  min-width: 0;
+  max-width: 100%;
+}
+.cp-tabs .mantine-Tabs-list {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-bottom: 4px;
+}
+.cp-tabs .mantine-Tabs-tab {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.cp-controls {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.cp-controls > * {
+  flex: 1 1 170px;
+  min-width: 0;
+}
+.cp-controls .cp-search {
+  flex: 3 1 260px;
+}
+.cp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 14px;
+}
+.cp-setting {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.cp-setting .cp-setting-content {
+  flex: 1;
+  min-width: 0;
+}
+.cp-setting-key {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+}
+.cp-value-preview {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 110px;
+  overflow: auto;
+}
+.cp-history-value {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cp-editor-key {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+}
+.cp-json-node {
+  min-width: 0;
+}
+.cp-json-container > summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+.cp-json-child {
+  border-left: 2px solid var(--mantine-color-default-border);
+  padding: 10px 0 10px 14px;
+  min-width: 0;
+}
+.cp-json-child > .cp-json-node {
+  margin-top: 10px;
+}
+.cp-editor-footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--mantine-color-body);
+  padding-top: 12px;
+  border-top: 1px solid var(--mantine-color-default-border);
+  z-index: 2;
+}
+@media (max-width: 48em) {
+  .cp-tabs .mantine-Tabs-tab {
+    min-height: 40px;
+  }
+  .cp-setting button,
+  .cp-editor-footer button {
+    min-height: 40px;
+  }
+  .cp-json-node input {
+    min-height: 36px;
+  }
+  .cp-json-child .mantine-ActionIcon-root {
+    min-height: 36px;
+    min-width: 36px;
+  }
+  .cp-grid {
+    grid-template-columns: 1fr;
+  }
+  .cp-json-child {
+    padding-left: 8px;
+  }
+  .cp-controls > * {
+    flex: 1 1 130px;
+  }
+  .cp-controls .cp-search {
+    flex-basis: 100%;
+  }
+}

@@ -27,10 +27,11 @@ var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 var uuid = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type RootPolicy struct {
-	Path     string `json:"path"`
-	Staging  string `json:"staging"`
-	Writable bool   `json:"writable"`
-	GID      int    `json:"gid"`
+	Path       string `json:"path"`
+	Staging    string `json:"staging"`
+	Writable   bool   `json:"writable"`
+	GID        int    `json:"gid"`
+	Privileged bool   `json:"privileged,omitempty"`
 }
 type Actor struct {
 	Username         string                `json:"username"`
@@ -420,6 +421,10 @@ func watchdog() error {
 	return expireCopies()
 }
 func dispatch(e Envelope, p Policy) (map[string]any, error) {
+	actor := p.Actors[strconv.Itoa(e.ActorID)]
+	if err := rootCapability(e, actor); err != nil {
+		return nil, err
+	}
 	if e.Action == "registerStaging" {
 		return registerStaging(e, p)
 	}
@@ -429,7 +434,6 @@ func dispatch(e Envelope, p Policy) (map[string]any, error) {
 	if e.Action == "publish" || e.Action == "copy" {
 		return queueCopy(e, p)
 	}
-	actor := p.Actors[strconv.Itoa(e.ActorID)]
 	if e.Action == "status" {
 		r, err := loadRecord(str(e.Params, "operationId"))
 		if err != nil {
@@ -619,6 +623,9 @@ func run() error {
 	p, err := loadPolicy()
 	if err != nil {
 		return err
+	}
+	if len(os.Args) == 3 && os.Args[1] == "root-sftp" {
+		return rootSFTP(os.Args[2], p)
 	}
 	if len(os.Args) == 3 && os.Args[1] == "copy-operation" {
 		return completeCopy(os.Args[2], p)

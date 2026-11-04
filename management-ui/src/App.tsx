@@ -336,7 +336,13 @@ function App() {
         setEntries(result.entries);
         setComplete(result.complete);
         setCurrentPath(result.path);
-        setPathInput(result.path);
+        setPathInput(
+          root?.privileged
+            ? result.path === "."
+              ? "/"
+              : "/" + result.path
+            : result.path,
+        );
         setSelected([]);
         setPage(0);
       } catch (e) {
@@ -345,7 +351,7 @@ function App() {
         if (epoch === fileEpoch.current) setBusy(false);
       }
     },
-    [hostId, rootId, currentPath, onError],
+    [hostId, rootId, currentPath, root?.privileged, onError],
   );
   useEffect(() => {
     if (section === "files" && rootId) void loadFiles(".");
@@ -483,6 +489,18 @@ function App() {
       setFileOperation({ id: crypto.randomUUID(), operation, entries: items });
   };
   const openFile = async (entry: Entry) => {
+    if (entry.type === "link" && root?.privileged) {
+      try {
+        const target = await api<Entry>(
+          `/files/resolve-link?${query({ hostId, rootId, path: entry.path })}`,
+        );
+        setNotice(`Opened link target: /${target.path}`);
+        await openFile(target);
+      } catch (e) {
+        onError(e);
+      }
+      return;
+    }
     if (entry.type === "directory") {
       void loadFiles(entry.path);
       return;
@@ -928,7 +946,11 @@ function App() {
         </label>
         <div className="identity-detail">
           <span className="muted">Remote identity</span>
-          <strong>{host?.username || "—"}</strong>
+          <strong>
+            {section === "files" && root?.privileged
+              ? "root · file access"
+              : host?.username || "—"}
+          </strong>
         </div>
         <div className="identity-detail">
           <span className="muted">Host</span>
@@ -1292,7 +1314,9 @@ function App() {
               <div className="root-detail">
                 <p className="muted">
                   {root?.managed
-                    ? "Managed publication and recoverable trash."
+                    ? root?.privileged
+                      ? "Root file access. Changes are reviewed and audited. Deployment files are read-only."
+                      : "Managed publication and recoverable trash."
                     : "Permissions and confinement are enforced by the remote account."}
                 </p>
                 <button
@@ -1319,7 +1343,11 @@ function App() {
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
-                    void loadFiles(pathInput);
+                    void loadFiles(
+                      root?.privileged
+                        ? pathInput.replace(/^\/+/, "") || "."
+                        : pathInput,
+                    );
                   }}
                 >
                   <input
@@ -1586,7 +1614,9 @@ function App() {
                     <p>
                       {busy
                         ? "Loading directory…"
-                        : "No files match this view."}
+                        : entries.length
+                          ? "No files match this view."
+                          : "This folder is empty."}
                     </p>
                   </div>
                 )}

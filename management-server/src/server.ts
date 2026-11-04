@@ -12,6 +12,7 @@ import { Store, publicJobData } from "./store.js";
 import { Terminals } from "./terminals.js";
 import { Files } from "./files.js";
 import { Fault, requireValue, type Action } from "./types.js";
+import { requireRequestMethod } from "./httpPolicy.js";
 
 const production = process.env.NODE_ENV === "production";
 const origin =
@@ -196,38 +197,7 @@ export async function start() {
         "DRAINING",
         "Administration is draining for a release.",
       );
-      const readOnly = new Set([
-        "/management/session",
-        "/management/sessions",
-        "/management/files/list",
-        "/management/files/inventory",
-        "/management/files/content",
-        "/management/download",
-        "/management/jobs",
-        "/management/activity",
-        "/management/overview",
-        "/management/services",
-        "/management/logs",
-        "/management/profiles",
-        "/management/credential-metadata",
-        "/management/job-details",
-        "/management/download-folder",
-        "/management/trash",
-        "/management/recordings",
-        "/management/recording",
-        "/management/recording/download",
-      ]);
-      requireValue(
-        req.method ===
-          (readOnly.has(route)
-            ? "GET"
-            : route.endsWith("/chunks")
-              ? "PUT"
-              : "POST"),
-        405,
-        "METHOD_NOT_ALLOWED",
-        "This operation does not support that HTTP method.",
-      );
+      requireRequestMethod(req.method, route);
       if (route === "/management/session/launch" && req.method === "POST") {
         const form = new URLSearchParams((await body(req, 4096)).toString()),
           result = await authority.rpc<{ token: string }>("redeem", {
@@ -489,6 +459,20 @@ export async function start() {
             input.hostId,
             input.rootId,
             input.path || ".",
+          ),
+        );
+        return;
+      }
+      if (route === "/management/files/resolve-link" && req.method === "GET") {
+        send(
+          res,
+          200,
+          await files.resolveLink(
+            token,
+            ctx,
+            input.hostId,
+            input.rootId,
+            input.path,
           ),
         );
         return;

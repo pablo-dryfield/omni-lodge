@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import ssh2 from "ssh2";
 const { Server, utils } = ssh2;
-import { safeRelative, remotePath } from "../src/files.js";
+import {
+  safeRelative,
+  remotePath,
+  rootMutationPath,
+  managedStaging,
+} from "../src/files.js";
 import { connect, resolveTarget, shell } from "../src/ssh.js";
 import { Store, publicJobData } from "../src/store.js";
 import { Fault, type Connection } from "../src/types.js";
@@ -44,6 +49,37 @@ test("journal payload encryption authenticates ciphertext and keys", async () =>
   bytes[bytes.length - 1] ^= 1;
   assert.throws(() => store.open(bytes.toString("base64")));
   await store.pool.end();
+});
+test("root file mode keeps deployment paths read-only and separates private staging", () => {
+  const root = {
+    id: "server",
+    name: "Server",
+    path: "/",
+    writable: true,
+    managed: true,
+    privileged: true,
+  };
+  for (const name of [
+    ".",
+    "opt",
+    "opt/omnilodge",
+    "opt/omnilodge/releases/a",
+    "usr/local/libexec/omnilodge/system-adapter",
+    "var/lib/omnilodge/deploy/state",
+  ])
+    assert.throws(() => rootMutationPath(root, name), Fault);
+  for (const name of [
+    "etc/example.conf",
+    "var/log/example.log",
+    "srv/backups/example.dump",
+    "tmp/test",
+  ])
+    assert.doesNotThrow(() => rootMutationPath(root, name));
+  assert.equal(managedStaging(root, "id"), "/.omnilodge-root-staging/id");
+  assert.equal(
+    managedStaging({ ...root, privileged: false }, "id"),
+    "/.staging/id",
+  );
 });
 test("connection is pinned to the enrolled IP and key; real PTY carries bidirectional bytes", async () => {
   const { privateKey } = crypto.generateKeyPairSync("rsa", {

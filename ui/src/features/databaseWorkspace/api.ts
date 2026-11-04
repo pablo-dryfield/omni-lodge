@@ -121,6 +121,12 @@ export type CatalogObject = {
   readable: boolean;
   writable: boolean;
 };
+export type CompletionColumn = {
+  schema: string;
+  table: string;
+  name: string;
+  type: string;
+};
 export type ObjectDetails = CatalogObject & {
   qualifiedName: string;
   columns: {
@@ -249,6 +255,13 @@ export const api = {
       await axios.get<CatalogObject[]>(`${base}/catalog`, {
         params: { targetId, search, category, offset },
       })
+    ).data,
+  completionSchema: async (targetId: string, signal?: AbortSignal) =>
+    (
+      await axios.get<{ columns: CompletionColumn[]; complete: boolean }>(
+        `${base}/completion-schema`,
+        { params: { targetId }, signal },
+      )
     ).data,
   object: async (targetId: string, oid: string) =>
     (

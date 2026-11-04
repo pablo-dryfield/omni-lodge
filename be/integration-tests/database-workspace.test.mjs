@@ -86,6 +86,7 @@ import { backupWorkspaceControl } from '../src/services/databaseWorkspace/contro
 import { provisionWorkspaceRoles } from '../src/services/databaseWorkspace/provisioning.ts';
 import { prepareRoleChange } from '../src/services/databaseWorkspace/privileges.ts';
 import { savedQueryValue } from '../src/services/databaseWorkspace/documents.ts';
+import { completionColumns } from '../src/services/databaseWorkspace/catalog.ts';
 import {
   systemdWorkerLaunch,
   linuxProcessStart,
@@ -1285,6 +1286,22 @@ test(
     );
   },
 );
+test('SQL completion metadata includes columns independently and respects column grants and protected objects',integration,async()=>{
+  const setup = new pg.Client({...connectConfig,connectionString:undefined,database:dataName});
+  await setup.connect();
+  try {
+    await setup.query(`CREATE TABLE public.completion_column_fixture(visible text,secret text,removed text); ALTER TABLE public.completion_column_fixture DROP COLUMN removed; GRANT SELECT(visible) ON public.completion_column_fixture TO ${quoteIdentifier(readName)}`);
+    const result = await completionColumns(target,{user:readName,password},[],20000);
+    assert.equal(result.complete,true);
+    assert.deepEqual(result.columns.filter(c=>c.table==='sample').map(c=>c.name),['id','amount','document','note']);
+    assert.deepEqual(result.columns.filter(c=>c.table==='completion_column_fixture').map(c=>c.name),['visible']);
+    const protectedResult = await completionColumns(target,{user:readName,password},['public.sample','completion_column_fixture'],20000);
+    assert(!protectedResult.columns.some(c=>['sample','completion_column_fixture'].includes(c.table)));
+  } finally {
+    await setup.query('DROP TABLE IF EXISTS public.completion_column_fixture');
+    await setup.end();
+  }
+});
 test(
   'schema inspection, same-state comparison and activity snapshots reflect real catalog objects',
   integration,

@@ -28,7 +28,7 @@ func safePath(value string) (string, error) {
 	}
 	return filepath.Clean(value), nil
 }
-func noLinks(root *os.Root, name string, missingLast bool) error {
+func noLinks(root fileRoot, name string, missingLast bool) error {
 	parts := strings.Split(name, string(os.PathSeparator))
 	current := "."
 	for i, part := range parts {
@@ -55,7 +55,7 @@ func noLinks(root *os.Root, name string, missingLast bool) error {
 func fileFingerprint(info os.FileInfo) string {
 	return fmt.Sprintf("%d:%d:%d:%d:%d", info.Size(), info.ModTime().Unix(), modeBits(info), uid(info), gid(info))
 }
-func currentVersion(root *os.Root, name string) (string, error) {
+func currentVersion(root fileRoot, name string) (string, error) {
 	info, err := root.Lstat(name)
 	if err != nil {
 		return "", err
@@ -71,9 +71,13 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 	if e.Action == "statvfs" {
 		return diskInfo(policy.Path)
 	}
-	root, err := os.OpenRoot(policy.Path)
+	base, err := os.OpenRoot(policy.Path)
 	if err != nil {
 		return nil, err
+	}
+	var root fileRoot = base
+	if policy.Privileged {
+		root = privilegedFileRoot(base)
 	}
 	defer root.Close()
 	if e.Action == "trashList" {
@@ -151,6 +155,20 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 	if !allowed[e.Action] {
 		return nil, errors.New("unsupported managed operation")
 	}
+	if e.Action != "copy" {
+		if err = rootMutationPath(policy, name); err != nil {
+			return nil, err
+		}
+	}
+	if e.Action == "copy" || e.Action == "rename" {
+		target, targetErr := safePath(str(e.Params, "target"))
+		if targetErr != nil {
+			return nil, targetErr
+		}
+		if err = rootMutationPath(policy, target); err != nil {
+			return nil, err
+		}
+	}
 	id := str(e.Params, "operationId")
 	return journaled(e, id, func() (map[string]any, error) {
 		pathLock, err := namedLock("root-" + rootID)
@@ -187,7 +205,7 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 			err = root.Mkdir(name, 0750)
 		case "chmod":
 			mode := integer(e.Params, "mode")
-			if mode < 0 || mode > 0777 || mode&0022 != 0 {
+			if mode < 0 || mode > 0777 || (!policy.Privileged && mode&0022 != 0) {
 				return nil, errors.New("managed entries cannot grant group or other write access; publish through staging")
 			}
 			f, openErr := root.Open(name)
@@ -305,7 +323,7 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 		return result, err
 	})
 }
-func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id string) (map[string]any, error) {
+func publish(e Envelope, p Policy, policy RootPolicy, root fileRoot, name, id string) (map[string]any, error) {
 	stagingID := str(e.Params, "stagingId")
 	if !uuid.MatchString(stagingID) {
 		return nil, errors.New("invalid staging identity")
@@ -333,7 +351,11 @@ func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id st
 	if info.Size() != expectedSize || expectedSize < 0 || expectedSize > 10<<30 || len(expectedHash) != 64 {
 		return nil, errors.New("staged size or hash mismatch")
 	}
-	capacity, err := diskInfo(policy.Path)
+	capacityPath := policy.Path
+	if policy.Privileged {
+		capacityPath = filepath.Join(policy.Path, filepath.Dir(name))
+	}
+	capacity, err := diskInfo(capacityPath)
 	if err != nil {
 		return nil, err
 	}
@@ -341,10 +363,17 @@ func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id st
 	if capacity["freeBytes"].(uint64) < uint64(expectedSize)+reserve {
 		return nil, errors.New("destination capacity reserve would be exceeded")
 	}
-	if err = root.MkdirAll(".omnilodge-private", 0700); err != nil {
+	privateDirectory := ".omnilodge-private"
+	if policy.Privileged {
+		privateDirectory = filepath.Join(filepath.Dir(name), ".omnilodge-private")
+	}
+	if err = root.MkdirAll(privateDirectory, 0700); err != nil {
 		return nil, err
 	}
-	temporary := filepath.Join(".omnilodge-private", id+".partial")
+	if err = privateCopyDirectory(root, privateDirectory); err != nil {
+		return nil, err
+	}
+	temporary := filepath.Join(privateDirectory, id+".partial")
 	target, err := root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return nil, err
@@ -361,14 +390,18 @@ func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id st
 	if err == nil {
 		err = target.Sync()
 	}
+	owner, group := 0, policy.GID
 	if err == nil {
 		mode := os.FileMode(0640)
 		if !boolean(e.Params, "createOnly") {
 			if previous, statErr := root.Lstat(name); statErr == nil {
-				if previous.Mode().Perm()&0022 != 0 {
+				if !policy.Privileged && previous.Mode().Perm()&0022 != 0 {
 					err = errors.New("destination has unmanaged writable permissions")
 				}
 				mode = previous.Mode().Perm()
+				if policy.Privileged {
+					owner, group = int(uid(previous)), int(gid(previous))
+				}
 			}
 		}
 		if err == nil {
@@ -376,7 +409,7 @@ func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id st
 		}
 	}
 	if err == nil {
-		err = target.Chown(0, policy.GID)
+		err = target.Chown(owner, group)
 	}
 	closeErr := target.Close()
 	if err == nil {
@@ -435,7 +468,7 @@ func intValue(value any) int {
 }
 
 // The published name is created only after a private, verified, fsynced copy.
-func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reserve int64, reservePercent int, envelope Envelope) error {
+func atomicCopy(root fileRoot, name, target, id string, policy RootPolicy, reserve int64, reservePercent int, envelope Envelope) error {
 	info, err := root.Lstat(name)
 	if err != nil {
 		return err
@@ -456,7 +489,7 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 			return errors.New("copy destination changed")
 		}
 		info, err := root.Lstat(target)
-		if err != nil || !info.Mode().IsRegular() || hardlinks(info) != 1 || info.Mode().Perm()&0022 != 0 {
+		if err != nil || !info.Mode().IsRegular() || hardlinks(info) != 1 || (!policy.Privileged && info.Mode().Perm()&0022 != 0) {
 			return errors.New("copy destination is not exclusively managed")
 		}
 		file, err := root.Open(target)
@@ -474,17 +507,28 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 	if err = validateTarget(); err != nil {
 		return err
 	}
-	capacity, err := diskInfo(policy.Path)
+	capacityPath := policy.Path
+	if policy.Privileged {
+		capacityPath = filepath.Join(policy.Path, filepath.Dir(target))
+	}
+	capacity, err := diskInfo(capacityPath)
 	if err != nil {
 		return err
 	}
 	if info.Size() > 10<<30 || capacity["freeBytes"].(uint64) < uint64(info.Size())+max(uint64(reserve), capacity["totalBytes"].(uint64)*uint64(reservePercent)/100) {
 		return errors.New("copy exceeds destination reserve")
 	}
-	if err = root.MkdirAll(".omnilodge-private", 0700); err != nil {
+	privateDirectory := ".omnilodge-private"
+	if policy.Privileged {
+		privateDirectory = filepath.Join(filepath.Dir(target), ".omnilodge-private")
+	}
+	if err = root.MkdirAll(privateDirectory, 0700); err != nil {
 		return err
 	}
-	temporary := filepath.Join(".omnilodge-private", id+".copy")
+	if err = privateCopyDirectory(root, privateDirectory); err != nil {
+		return err
+	}
+	temporary := filepath.Join(privateDirectory, id+".copy")
 	defer root.Remove(temporary)
 	source, err := root.Open(name)
 	if err != nil {
@@ -503,11 +547,18 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 	if err == nil {
 		err = destination.Sync()
 	}
-	if err == nil {
-		err = destination.Chmod(0640)
+	mode, owner, group := os.FileMode(0640), 0, policy.GID
+	if policy.Privileged {
+		mode, owner, group = info.Mode().Perm(), int(uid(info)), int(gid(info))
+		if existing, statErr := root.Lstat(target); statErr == nil {
+			mode, owner, group = existing.Mode().Perm(), int(uid(existing)), int(gid(existing))
+		}
 	}
 	if err == nil {
-		err = destination.Chown(0, policy.GID)
+		err = destination.Chown(owner, group)
+	}
+	if err == nil {
+		err = destination.Chmod(mode)
 	}
 	closeErr := destination.Close()
 	if err == nil {
@@ -551,7 +602,7 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 
 // Metadata inventory is bounded and link-free. The adapter serializes managed
 // mutations on the root, then rebuilds this digest before recursive changes.
-func treeSnapshot(root *os.Root, name string) (string, int, int64, error) {
+func treeSnapshot(root fileRoot, name string) (string, int, int64, error) {
 	rows := []string{}
 	var bytes int64
 	base, err := root.Lstat(name)
