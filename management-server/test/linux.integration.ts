@@ -176,6 +176,16 @@ test(
         path.join(root, "ops/system-management/bin/adapter"),
         path.join(release, "adapter"),
       );
+      await fs.copyFile(
+        path.join(root, "management-server/dist/server.mjs"),
+        path.join(release, "server.mjs"),
+      );
+      const fixtureUi =
+        "/opt/omnilodge/releases/omnilodge-system-ci/ui/build/system-management";
+      await fs.mkdir(fixtureUi, { recursive: true, mode: 0o755 });
+      await fs.cp(path.join(root, "management-ui/dist"), fixtureUi, {
+        recursive: true,
+      });
       const pgEnv = {
         PGHOST: "127.0.0.1",
         PGPORT: new URL(adminUrl).port || "5432",
@@ -409,7 +419,7 @@ test(
       );
       const envFile = await shared(
         "fixture-broker.env",
-        `NODE_ENV=production\nSYSTEM_MANAGEMENT_CONTROL_URL=${urlFor(controlDatabase, "omnilodge_system_broker", "fixture-broker")}\nSYSTEM_MANAGEMENT_AUTHORITY_SOCKET=/run/omnilodge-system/authority.sock\nSYSTEM_MANAGEMENT_RPC_SECRET_FILE=${rpc}\nSYSTEM_MANAGEMENT_ARTIFACT_KEY_FILE=${artifact}\nSYSTEM_MANAGEMENT_PUBLIC_ORIGIN=https://system.omni-lodge.com\nSYSTEM_MANAGEMENT_UI_PATH=${root}/management-ui/dist\nAPP_VERSION=system-ci\n`,
+        `NODE_ENV=production\nSYSTEM_MANAGEMENT_CONTROL_URL=${urlFor(controlDatabase, "omnilodge_system_broker", "fixture-broker")}\nSYSTEM_MANAGEMENT_AUTHORITY_SOCKET=/run/omnilodge-system/authority.sock\nSYSTEM_MANAGEMENT_RPC_SECRET_FILE=${rpc}\nSYSTEM_MANAGEMENT_ARTIFACT_KEY_FILE=${artifact}\nSYSTEM_MANAGEMENT_PUBLIC_ORIGIN=https://system.omni-lodge.com\nSYSTEM_MANAGEMENT_UI_PATH=/opt/omnilodge/releases/omnilodge-system-ci/ui/build/system-management\nAPP_VERSION=system-ci\n`,
       );
       const startBroker = async () => {
         brokerUnit =
@@ -426,7 +436,7 @@ test(
           "--property=TasksMax=64",
           "--property=EnvironmentFile=" + envFile,
           process.execPath,
-          root + "/management-server/dist/server.mjs",
+          path.join(release, "server.mjs"),
         ]);
         for (let i = 0; i < 50; i++) {
           try {
@@ -437,8 +447,17 @@ test(
           } catch {}
           await delay(200);
         }
+        const diagnostics = await run("/usr/bin/journalctl", [
+          "--no-pager",
+          "--unit=" + brokerUnit,
+          "--lines=30",
+        ]);
         throw new Error(
-          "Fixture broker failed readiness; inspect its protected unit journal.",
+          "Fixture broker failed readiness: " +
+            diagnostics.stdout.replace(
+              /(postgresql:\/\/)[^\s]+/g,
+              "[redacted database URL]",
+            ),
         );
       };
       await startBroker();

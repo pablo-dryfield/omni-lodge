@@ -744,9 +744,17 @@ if (
   process.argv[1] &&
   fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
 )
-  start().catch(() => {
+  start().catch((error) => {
+    const code =
+      error instanceof Fault
+        ? error.code
+        : /^[A-Z0-9_]+$/.test(String(error?.code))
+          ? String(error.code)
+          : error?.name === "TypeError"
+            ? "TYPE_ERROR"
+            : "BOOTSTRAP_FAILED";
     process.stderr.write(
-      "System Management startup failed. Check protected bootstrap configuration and journal readiness.\n",
+      `System Management startup failed (${code}). Check protected bootstrap configuration and journal readiness.\n`,
     );
     process.exitCode = 1;
   });
