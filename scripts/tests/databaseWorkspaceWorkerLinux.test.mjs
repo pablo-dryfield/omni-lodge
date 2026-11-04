@@ -63,12 +63,21 @@ async function launch(mode) {
     artifactDirectory: fixture,
   });
   const args = plan.args
-    .filter((value) => value !== '--collect')
-    .map((value) =>
-      value === '--property=EnvironmentFile=/etc/omnilodge/backend.env'
-        ? `--property=EnvironmentFile=${environment}`
-        : value,
-    );
+    .filter(
+      (value) =>
+        ![
+          '--collect',
+          '--property=StandardOutput=null',
+          '--property=StandardError=null',
+        ].includes(value),
+    )
+    .map((value) => {
+      if (value === '--property=EnvironmentFile=/etc/omnilodge/backend.env')
+        return `--property=EnvironmentFile=${environment}`;
+      // Production suppresses output. The synthetic rehearsal needs its
+      // resource report; explicit null properties otherwise override --pipe.
+      return value;
+    });
   args.splice(1, 0, '--pipe');
   try {
     if (parent) parentTimer = setTimeout(() => parent.kill('SIGKILL'), 2000);
@@ -83,11 +92,11 @@ async function launch(mode) {
       .split('\n')
       .filter((line) => line.startsWith('{'))
       .map((line) => JSON.parse(line));
-    assert.deepEqual(lines[0]?.resources, {
-      memoryBytes: 256 * 1048576,
-      cpuPercent: 25,
-      tasks: 64,
-    });
+    assert.deepEqual(
+      lines[0]?.resources,
+      { memoryBytes: 256 * 1048576, cpuPercent: 25, tasks: 64 },
+      `Synthetic unit result: code=${result.code}, signal=${result.signal}, stderr=${String(result.stderr || '').slice(0, 4000)}`,
+    );
     if (mode === 'memory') {
       const state = await systemctl(
         'show',

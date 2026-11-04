@@ -1133,9 +1133,19 @@ export default function DatabaseWorkspace() {
         <Badge
           leftSection={<IconLock size={11} />}
           variant="light"
-          color={current.mode === 'write' ? 'orange' : 'teal'}
+          color={
+            current.objectId
+              ? 'blue'
+              : current.mode === 'write'
+                ? 'orange'
+                : 'teal'
+          }
         >
-          {current.mode === 'write' ? 'Reviewed write' : 'Read only'}
+          {current.objectId
+            ? 'Table data'
+            : current.mode === 'write'
+              ? 'Reviewed write'
+              : 'Read only'}
         </Badge>
       </header>
       <Group

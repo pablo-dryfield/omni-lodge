@@ -103,6 +103,7 @@ export function TableBrowser({
     canEdit = Boolean(
       capabilities.writesEnabled &&
         capabilities.actions.write &&
+        !capabilities.targets.find((t) => t.id === targetId)?.readOnly &&
         primary.length &&
         ['r', 'p'].includes(details.data?.kind || ''),
     );
@@ -194,11 +195,16 @@ export function TableBrowser({
       setPrevious([]);
       setReload((n) => n + 1);
       setNotice('Changes committed. The table was refreshed.');
-    } else
+    } else {
+      // The consumed review cannot be submitted again. Restore page focus so
+      // conflicts/unknown outcomes are visible, with the staged values retained.
+      setReview(undefined);
+      setReviewOpen(false);
       setError(
         writeJob.error?.message ||
           `Write ${writeJob.status}; transaction ${writeJob.transactionOutcome}.`,
       );
+    }
     setWriteJob(undefined);
   }, [writeJob]);
   const fields = useMemo(() => page.data?.fields || [], [page.data?.fields]);
@@ -799,6 +805,7 @@ export function TableBrowser({
         centered
       >
         <Stack>
+          {error && <Alert color="red">{error}</Alert>}
           <Alert color="orange">
             This changes PostgreSQL directly. Application notifications and
             payment integrations are not invoked. Triggers and foreign-key
