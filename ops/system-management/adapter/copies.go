@@ -89,11 +89,22 @@ func queueCopy(e Envelope, p Policy) (map[string]any, error) {
 	if err = atomicJSON(copyLeasePath(id), lease); err != nil {
 		return nil, err
 	}
-	_, err = boundedCommand("/usr/bin/systemd-run", "--quiet", "--no-block", "--collect", "--unit=omnilodge-copy-"+id, "--property=Type=exec", "--property=RuntimeMaxSec=1200s", "--property=MemoryMax=134217728", "--property=CPUQuota=25%", "--property=TasksMax=32", "--property=Slice=omnilodge-console.slice", "--property=NoNewPrivileges=yes", "--property=PrivateTmp=yes", "--", "/usr/local/libexec/omnilodge/system-adapter", "copy-operation", id)
+	_, err = boundedCommand("/usr/bin/systemd-run", copyWorkerArguments(e, p, id)...)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"queued": true, "operationId": id, "state": "queued"}, nil
+}
+func copyWorkerArguments(e Envelope, p Policy, id string) []string {
+	privateTmp := "yes"
+	actor := p.Actors[strconv.Itoa(e.ActorID)]
+	root := actor.Roots[str(e.Params, "rootId")]
+	// A root filesystem operation must see the same host /tmp and /var/tmp
+	// that were reviewed over SFTP. Ordinary workspaces retain private temp.
+	if root.Privileged && root.Path == "/" && boolean(e.Params, "privilegedRoot") {
+		privateTmp = "no"
+	}
+	return []string{"--quiet", "--no-block", "--collect", "--unit=omnilodge-copy-" + id, "--property=Type=exec", "--property=RuntimeMaxSec=1200s", "--property=MemoryMax=134217728", "--property=CPUQuota=25%", "--property=TasksMax=32", "--property=Slice=omnilodge-console.slice", "--property=NoNewPrivileges=yes", "--property=PrivateTmp=" + privateTmp, "--", "/usr/local/libexec/omnilodge/system-adapter", "copy-operation", id}
 }
 func completeCopy(id string, p Policy) error {
 	record, err := loadRecord(id)

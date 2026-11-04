@@ -1137,6 +1137,12 @@ test(
         "Root filesystem: real / inventory, private root read, transport write denial, reviewed edit/delete, link navigation, deployment protection and revocation passed.",
       );
     } catch (error) {
+      const copyDiagnostics = await run("/bin/journalctl", [
+        "--no-pager",
+        "--unit=omnilodge-copy-*",
+        "--lines=35",
+      ]).catch(() => ({ stdout: "Copy worker diagnostics unavailable" }));
+      console.error(copyDiagnostics.stdout);
       if (brokerUnit) {
         const brokerDiagnostics = await run("/bin/journalctl", [
           "--no-pager",
