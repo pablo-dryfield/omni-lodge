@@ -2,12 +2,11 @@ package main
 
 import (
 	"errors"
-	"os"
 	"path"
 	"strings"
 )
 
-func privateCopyDirectory(root *os.Root, name string) error {
+func privateCopyDirectory(root fileRoot, name string) error {
 	if err := noLinks(root, name, false); err != nil {
 		return err
 	}
@@ -34,7 +33,7 @@ func rootMutationPath(policy RootPolicy, name string) error {
 	return nil
 }
 func rootCapability(e Envelope, actor Actor) error {
-	if root, ok := actor.Roots[str(e.Params, "rootId")]; ok && root.Privileged && !boolean(e.Params, "privilegedRoot") {
+	if root, ok := actor.Roots[str(e.Params, "rootId")]; ok && root.Privileged && (root.Path != "/" || !boolean(e.Params, "privilegedRoot")) {
 		return errors.New("root file capability is not authorized by the current server profile")
 	}
 	return nil

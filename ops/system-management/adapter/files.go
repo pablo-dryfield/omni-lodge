@@ -28,7 +28,7 @@ func safePath(value string) (string, error) {
 	}
 	return filepath.Clean(value), nil
 }
-func noLinks(root *os.Root, name string, missingLast bool) error {
+func noLinks(root fileRoot, name string, missingLast bool) error {
 	parts := strings.Split(name, string(os.PathSeparator))
 	current := "."
 	for i, part := range parts {
@@ -55,7 +55,7 @@ func noLinks(root *os.Root, name string, missingLast bool) error {
 func fileFingerprint(info os.FileInfo) string {
 	return fmt.Sprintf("%d:%d:%d:%d:%d", info.Size(), info.ModTime().Unix(), modeBits(info), uid(info), gid(info))
 }
-func currentVersion(root *os.Root, name string) (string, error) {
+func currentVersion(root fileRoot, name string) (string, error) {
 	info, err := root.Lstat(name)
 	if err != nil {
 		return "", err
@@ -71,9 +71,13 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 	if e.Action == "statvfs" {
 		return diskInfo(policy.Path)
 	}
-	root, err := os.OpenRoot(policy.Path)
+	base, err := os.OpenRoot(policy.Path)
 	if err != nil {
 		return nil, err
+	}
+	var root fileRoot = base
+	if policy.Privileged {
+		root = privilegedFileRoot(base)
 	}
 	defer root.Close()
 	if e.Action == "trashList" {
@@ -319,7 +323,7 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 		return result, err
 	})
 }
-func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id string) (map[string]any, error) {
+func publish(e Envelope, p Policy, policy RootPolicy, root fileRoot, name, id string) (map[string]any, error) {
 	stagingID := str(e.Params, "stagingId")
 	if !uuid.MatchString(stagingID) {
 		return nil, errors.New("invalid staging identity")
@@ -464,7 +468,7 @@ func intValue(value any) int {
 }
 
 // The published name is created only after a private, verified, fsynced copy.
-func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reserve int64, reservePercent int, envelope Envelope) error {
+func atomicCopy(root fileRoot, name, target, id string, policy RootPolicy, reserve int64, reservePercent int, envelope Envelope) error {
 	info, err := root.Lstat(name)
 	if err != nil {
 		return err
@@ -598,7 +602,7 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 
 // Metadata inventory is bounded and link-free. The adapter serializes managed
 // mutations on the root, then rebuilds this digest before recursive changes.
-func treeSnapshot(root *os.Root, name string) (string, int, int64, error) {
+func treeSnapshot(root fileRoot, name string) (string, int, int64, error) {
 	rows := []string{}
 	var bytes int64
 	base, err := root.Lstat(name)
