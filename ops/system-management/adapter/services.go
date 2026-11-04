@@ -121,11 +121,43 @@ func serviceHealth(service Service) (bool, string) {
 		return false, ""
 	}
 	defer response.Body.Close()
+	healthy, release := decodeServiceReadiness(service.HealthKind, response.Body)
+	return response.StatusCode == 200 && healthy, release
+}
+
+func decodeServiceReadiness(kind string, body io.Reader) (bool, string) {
 	var result struct {
-		OK      bool   `json:"ok"`
-		Status  string `json:"status"`
-		Release string `json:"release"`
+		OK      bool            `json:"ok"`
+		Ready   bool            `json:"ready"`
+		Status  string          `json:"status"`
+		Release json.RawMessage `json:"release"`
 	}
-	err = json.NewDecoder(io.LimitReader(response.Body, 16384)).Decode(&result)
-	return err == nil && response.StatusCode == 200 && (result.Status == "ok" || (service.HealthKind == "broker" && result.OK)) && result.Release != "", result.Release
+	if json.NewDecoder(io.LimitReader(body, 16384)).Decode(&result) != nil {
+		return false, ""
+	}
+	var release string
+	if kind == "backend" {
+		var identity struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(result.Release, &identity) != nil {
+			return false, ""
+		}
+		release = identity.ID
+	} else if json.Unmarshal(result.Release, &release) != nil {
+		return false, ""
+	}
+	if strings.TrimSpace(release) == "" {
+		return false, ""
+	}
+	switch kind {
+	case "backend":
+		return result.Status == "ok" && result.Ready, release
+	case "ui":
+		return result.Status == "ok", release
+	case "broker":
+		return result.OK, release
+	default:
+		return false, ""
+	}
 }

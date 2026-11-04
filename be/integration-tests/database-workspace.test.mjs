@@ -816,10 +816,16 @@ test(
         'succeeded',
       );
       assert.equal((await command('commit')).transactionOutcome, 'committed');
-      assert.equal(
-        (await getSession(store, session.id, 1)).record.outcome,
-        'committed',
-      );
+      // Job completion precedes asynchronous session teardown. Wait for the
+      // durable close record instead of racing the control connection.
+      let closed;
+      for (let n = 0; n < 100; n++) {
+        closed = (await getSession(store, session.id, 1)).record;
+        if (closed.state === 'closed') break;
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+      assert.equal(closed.state, 'closed');
+      assert.equal(closed.outcome, 'committed');
       const read = await run('SELECT note FROM sample WHERE id=1');
       assert.equal(
         (await readResult(store, read.id, 0, 1)).rows[0][0],
