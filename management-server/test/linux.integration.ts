@@ -310,7 +310,7 @@ test(
               gid,
             },
           },
-          services: [],
+          services: ["database"],
         };
       }
       await fs.writeFile(
@@ -320,7 +320,13 @@ test(
           hostId: "fixture",
           publicKey,
           actors,
-          services: {},
+          services: {
+            database: {
+              name: "Read-only database status",
+              unit: "postgresql.service",
+              restartable: false,
+            },
+          },
           memoryMiB: 256,
           cpuPercent: 25,
           tasks: 64,
@@ -362,7 +368,7 @@ test(
                 managed: true,
               },
             ],
-            services: [],
+            services: ["database"],
           },
         ],
         SYSTEM_MANAGEMENT_CREDENTIALS: credentials,
@@ -593,6 +599,25 @@ test(
           confirm: "arbitrary-service",
           reason: "Fixture negative test",
         }),
+        { code: "SERVICE_FORBIDDEN" },
+      );
+      await assert.rejects(
+        request("/services/restart", {
+          hostId: "fixture",
+          serviceId: "database",
+          confirm: "database",
+          reason: "Fixture read-only service test",
+        }),
+        { code: "SERVICE_FORBIDDEN" },
+      );
+      assert.equal(
+        (
+          await control!.query(
+            "SELECT count(*)::int AS n FROM system_management.jobs WHERE kind='restart'",
+          )
+        ).rows[0].n,
+        0,
+        "Rejected service requests must not create queued operations.",
       );
       const source = crypto.randomBytes(9000),
         upload = await request("/transfers", {

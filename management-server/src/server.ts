@@ -819,6 +819,20 @@ export async function start() {
       }
       if (route === "/management/services/restart") {
         await requireAction("controlServices");
+        await authority.rpc("authorize", {
+          session: token,
+          hostId: input.hostId,
+          action: "controlServices",
+        });
+        const host = ctx.hosts.find((value) => value.id === input.hostId);
+        requireValue(
+          host?.managed &&
+            typeof input.serviceId === "string" &&
+            host.services.includes(input.serviceId),
+          403,
+          "SERVICE_FORBIDDEN",
+          "This service is not approved for this managed server.",
+        );
         requireValue(
           typeof input.reason === "string" &&
             input.reason.trim().length >= 3 &&
@@ -826,6 +840,23 @@ export async function start() {
           400,
           "REVIEW_REQUIRED",
           "Confirm the service name and record a reason.",
+        );
+        const observed = await files.adapter(
+          token,
+          input.hostId,
+          "services",
+          {},
+          "view",
+        );
+        requireValue(
+          Array.isArray(observed.services) &&
+            observed.services.some(
+              (value: { id?: string; restartable?: boolean }) =>
+                value.id === input.serviceId && value.restartable === true,
+            ),
+          403,
+          "SERVICE_FORBIDDEN",
+          "Restarting this service is disabled by the managed host policy.",
         );
         const job = await store.create(
           ctx.actorId,
