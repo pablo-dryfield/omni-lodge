@@ -53,6 +53,7 @@ import { Dialog } from "./Dialog";
 import { UploadConflict, type ConflictChoice } from "./UploadConflict";
 import { ActiveSessions } from "./ActiveSessions";
 import { Credentials } from "./Credentials";
+import { TerminalBoundary } from "./TerminalBoundary";
 
 type Entry = {
   name: string;
@@ -149,6 +150,7 @@ function App() {
   const [connectionTest, setConnectionTest] = useState<any>(null),
     [jobDetails, setJobDetails] = useState<any>(null);
   const [hostDraft, setHostDraft] = useState("");
+  const logRequest = useRef(0);
   const [uploadProgress, setUploadProgress] = useState<{
       name: string;
       done: number;
@@ -201,6 +203,7 @@ function App() {
     setConnectionTest(null);
     setJobDetails(null);
     setPassword("");
+    logRequest.current++;
     setLogs("");
     setRestartTarget(null);
     setEntries([]);
@@ -404,23 +407,37 @@ function App() {
       };
     }
   }, [section, session?.stepUpUntil, session?.actorId]);
+  const loadServiceLogs = useCallback(
+    async (targetServiceId = serviceId) => {
+      const request = ++logRequest.current;
+      try {
+        const result = await api(
+          `/logs?${query({ hostId, serviceId: targetServiceId })}`,
+        );
+        if (request === logRequest.current) setLogs(result.output || "");
+      } catch (error) {
+        if (request === logRequest.current) onError(error);
+      }
+    },
+    [hostId, serviceId, onError],
+  );
+  useEffect(() => {
+    logRequest.current++;
+    setLogs("");
+    if (section === "services" && session && serviceId && host?.managed)
+      void loadServiceLogs();
+    return () => {
+      logRequest.current++;
+    };
+  }, [hostId, serviceId, section, session?.actorId, loadServiceLogs]);
   useEffect(() => {
     if (!following || !serviceId) return;
-    let active = true;
-    const timer = setInterval(
-      () =>
-        void api(`/logs?${query({ hostId, serviceId })}`)
-          .then((result) => {
-            if (active) setLogs(result.output || "");
-          })
-          .catch(onError),
-      3000,
-    );
+    const timer = setInterval(() => void loadServiceLogs(), 3000);
     return () => {
-      active = false;
+      logRequest.current++;
       clearInterval(timer);
     };
-  }, [following, hostId, serviceId]);
+  }, [following, serviceId, loadServiceLogs]);
   const unlock = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -1242,15 +1259,17 @@ function App() {
                   {tab.title} ·{" "}
                   {session.hosts.find((h) => h.id === tab.hostId)?.username}
                 </div>
-                <Suspense
-                  fallback={
-                    <div role="status" className="notice">
-                      Opening terminal...
-                    </div>
-                  }
-                >
-                  <TerminalPane tab={tab} onError={onError} />
-                </Suspense>
+                <TerminalBoundary>
+                  <Suspense
+                    fallback={
+                      <div role="status" className="notice">
+                        Opening terminal...
+                      </div>
+                    }
+                  >
+                    <TerminalPane tab={tab} onError={onError} />
+                  </Suspense>
+                </TerminalBoundary>
               </div>
             ))}
           </div>
@@ -1741,11 +1760,7 @@ function App() {
                   <button
                     onClick={() => {
                       setServiceId(service.id);
-                      void api(
-                        `/logs?${query({ hostId, serviceId: service.id })}`,
-                      )
-                        .then((result) => setLogs(result.output || ""))
-                        .catch(onError);
+                      if (service.id === serviceId) void loadServiceLogs();
                     }}
                   >
                     View logs
@@ -1778,13 +1793,7 @@ function App() {
                     <option key={id}>{id}</option>
                   ))}
                 </select>
-                <button
-                  onClick={() =>
-                    void api(`/logs?${query({ hostId, serviceId })}`)
-                      .then((result) => setLogs(result.output || ""))
-                      .catch(onError)
-                  }
-                >
+                <button onClick={() => void loadServiceLogs()}>
                   Load logs
                 </button>
                 <button onClick={() => setFollowing(!following)}>

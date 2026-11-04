@@ -126,6 +126,9 @@ export async function connect(connection: Connection): Promise<Client> {
   return new Promise((resolve, reject) => {
     let mismatch = false;
     client.once("ready", () => {
+      // SFTP uses small request/response packets. Leaving Nagle enabled can
+      // serialize each read behind a delayed TCP acknowledgement.
+      client.setNoDelay(true);
       if (connection.host.managed) resolve(client);
       else void verifyNonRoot(client).then(() => resolve(client), reject);
     });

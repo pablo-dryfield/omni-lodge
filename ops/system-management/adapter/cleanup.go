@@ -238,19 +238,44 @@ func cleanupStaging(p Policy, now time.Time) error {
 			guard.Close()
 			continue
 		}
-		for _, location := range []struct{ base, name string }{{policy.Staging, id}, {policy.Path, filepath.Join(".omnilodge-private", id+".partial")}, {policy.Path, filepath.Join(".omnilodge-private", id+".copy")}} {
-			root, openErr := os.OpenRoot(location.base)
-			if openErr != nil {
-				continue
-			}
-			info, statErr := root.Lstat(location.name)
-			if statErr == nil && info.Mode().IsRegular() && noLinks(root, location.name, false) == nil {
-				_ = root.Remove(location.name)
-			}
-			root.Close()
+		// Keep the root-owned record until every owned file is confirmed absent.
+		// A failed removal must remain retryable by the next timer invocation.
+		err = removeStagingFiles(policy, id)
+		if err == nil {
+			err = os.Remove(file)
 		}
-		_ = os.Remove(file)
 		guard.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeStagingFiles(policy RootPolicy, id string) error {
+	for _, location := range []struct{ base, name string }{{policy.Staging, id}, {policy.Path, filepath.Join(".omnilodge-private", id+".partial")}, {policy.Path, filepath.Join(".omnilodge-private", id+".copy")}} {
+		root, err := os.OpenRoot(location.base)
+		if err != nil {
+			return err
+		}
+		info, err := root.Lstat(location.name)
+		if os.IsNotExist(err) {
+			root.Close()
+			continue
+		}
+		if err == nil && !info.Mode().IsRegular() {
+			err = errors.New("owned staging entry is not a regular file")
+		}
+		if err == nil {
+			err = noLinks(root, location.name, false)
+		}
+		if err == nil {
+			err = root.Remove(location.name)
+		}
+		root.Close()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

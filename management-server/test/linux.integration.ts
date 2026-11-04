@@ -23,7 +23,7 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 test(
   "real authority, restricted PostgreSQL roles, OpenSSH/chroot, managed files, PTY isolation and orphan watchdog",
   { skip: !required, timeout: 900000 },
-  async () => {
+  async (testContext) => {
     assert(
       process.platform === "linux" &&
         process.getuid?.() === 0 &&
@@ -611,18 +611,31 @@ test(
         listing.entries.some((v: any) => v.name === "large-stream.bin"),
         "Real directory enumeration must handle OpenSSH EOF and include the source.",
       );
+      const baseline: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        const started = Date.now();
+        await request("/session/touch", {});
+        baseline.push(Date.now() - started);
+      }
       const download = await request("/downloads", {
           hostId: "fixture",
           rootId: "work",
           path: "large-stream.bin",
         }),
         started = Date.now();
-      const probes: number[] = [];
+      const probes: number[] = [],
+        activeProbes = new Set<Promise<void>>();
+      let probeFailures = 0;
       const activity = setInterval(() => {
         const started = Date.now();
-        void request("/session/touch", {})
+        const probe = request("/session/touch", {})
           .then(() => probes.push(Date.now() - started))
-          .catch(() => {});
+          .catch(() => {
+            probeFailures++;
+          })
+          .then(() => {});
+        activeProbes.add(probe);
+        void probe.finally(() => activeProbes.delete(probe));
       }, 30000);
       let received: number;
       try {
@@ -631,6 +644,7 @@ test(
             {
               hostname: "127.0.0.1",
               port: 3011,
+              signal: testContext.signal,
               path: "/management/download?id=" + download.id,
               headers: { Host: "system.omni-lodge.com", Cookie: cookie },
             },
@@ -666,6 +680,12 @@ test(
       } finally {
         clearInterval(activity);
       }
+      await Promise.all(activeProbes);
+      assert.equal(
+        probeFailures,
+        0,
+        "Concurrent session health probes must remain successful.",
+      );
       assert.equal(received, largeBytes);
       const resourceSample = (
         await run("/usr/bin/systemctl", [
@@ -684,6 +704,8 @@ test(
           largeStreamBytes: received,
           milliseconds: Date.now() - started,
           brokerPeakBytes: peak,
+          baselineMilliseconds: baseline,
+          concurrentProbeMilliseconds: probes,
         }),
       );
       await fs.unlink(largePath);

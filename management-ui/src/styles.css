@@ -128,7 +128,8 @@ label {
   gap: 8px;
   align-items: center;
 }
-label:has(> input[type="password"]),
+label:has(> input:not([type="checkbox"]):not([type="radio"])),
+label:has(> select),
 label:has(> textarea) {
   display: flex;
   flex-direction: column;
@@ -1444,6 +1445,7 @@ progress {
 .form-stack label {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 7px;
   font-size: 14px;
   font-weight: 600;

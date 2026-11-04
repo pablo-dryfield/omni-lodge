@@ -76,7 +76,9 @@ export function TerminalPane({
       fontSize: font,
       fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
       scrollback: Math.min(50000, tab.scrollback || 10000),
-      allowProposedApi: false,
+      // Unicode11 uses xterm's proposed unicode API. This option exposes the
+      // local renderer API; it does not permit remote scripts or clipboard OSC.
+      allowProposedApi: true,
       theme: {
         background: "#0c1220",
         foreground: "#dde7f4",
@@ -348,7 +350,7 @@ export function TerminalPane({
       )}
       {tab.recording && (
         <div className="notice">
-          Recording enabled ? terminal output may contain sensitive information.{" "}
+          Recording enabled - terminal output may contain sensitive information.{" "}
           {recordingNotice}
         </div>
       )}

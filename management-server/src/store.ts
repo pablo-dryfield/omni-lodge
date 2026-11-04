@@ -273,7 +273,7 @@ export class Store {
   }
   async recover() {
     await this.pool.query(
-      `UPDATE system_management.jobs SET state='outcome_unknown',updated_at=now() WHERE state IN ('running','publishing','transferring','verifying','connecting','active')`,
+      `UPDATE system_management.jobs SET state='outcome_unknown',updated_at=now() WHERE state IN ('planning','streaming','running','publishing','transferring','verifying','connecting','active')`,
     );
   }
   async reserve(

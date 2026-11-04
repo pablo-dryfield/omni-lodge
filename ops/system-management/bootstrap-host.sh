@@ -6,7 +6,9 @@ database="${1:-}"
 if [[ "$EUID" != 0 || ! "$database" =~ ^[a-zA-Z0-9_]{1,63}$ ]]; then echo 'Use root and the exact application database name.' >&2; exit 1; fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 if [[ ! "$script_dir" =~ ^/opt/omnilodge/releases/omnilodge-[a-z0-9-]+/be/dist/systemManagement$ ]]; then echo 'Use the trusted immutable release artifact.' >&2; exit 1; fi
-mapfile -t actors < <(runuser -u postgres -- psql --no-psqlrc --tuples-only --no-align --dbname "$database" --command 'SELECT u.id FROM users u JOIN "userTypes" r ON r.id=u."userTypeId" WHERE u.status AND u.approved AND r.status AND r.slug IN ('"'admin','administrator'"') AND NOT EXISTS(SELECT 1 FROM user_type_product_types p WHERE p.user_type_id=r.id) ORDER BY u.id')
+actor_rows="$(runuser -u postgres -- psql --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --no-align --dbname "$database" --command 'SELECT u.id FROM users u JOIN "userTypes" r ON r.id=u."userTypeId" WHERE u.status AND u.approved AND r.status AND r.slug IN ('"'admin','administrator'"') AND NOT EXISTS(SELECT 1 FROM user_type_product_types p WHERE p.user_type_id=r.id) ORDER BY u.id')"
+[[ -n "$actor_rows" ]] || { echo 'No eligible global administrator found. No host identities provisioned.' >&2; exit 1; }
+mapfile -t actors <<< "$actor_rows"
 if [[ "$apply" != true ]]; then printf 'Plan: create isolated broker/gateway, %s administrator execution and SFTP identities, chroot mounts, resource slice and watchdog. No changes performed.\n' "${#actors[@]}"; exit 0; fi
 getent group omnilodge-system >/dev/null || groupadd --system omnilodge-system
 id omnilodge-system >/dev/null 2>&1 || useradd --system --gid omnilodge-system --home-dir /var/lib/omnilodge-system/broker --shell /usr/sbin/nologin omnilodge-system

@@ -85,3 +85,33 @@ func TestLockPoolIsBoundedAndSeparatesNestedCategories(t *testing.T) {
 		t.Fatal("unbounded lock name")
 	}
 }
+
+func TestStagingCleanupRetainsFailuresForRetry(t *testing.T) {
+	staging, work := t.TempDir(), t.TempDir()
+	id := "11111111-1111-4111-8111-111111111111"
+	private := filepath.Join(work, ".omnilodge-private")
+	if err := os.Mkdir(private, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, id), []byte("owned"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// An unexpected directory cannot be recursively deleted as a staging file.
+	blocked := filepath.Join(private, id+".partial")
+	if err := os.Mkdir(blocked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	policy := RootPolicy{Path: work, Staging: staging}
+	if err := removeStagingFiles(policy, id); err == nil {
+		t.Fatal("cleanup failure must preserve the registration for retry")
+	}
+	if _, err := os.Stat(blocked); err != nil {
+		t.Fatal("unexpected entry must be preserved")
+	}
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeStagingFiles(policy, id); err != nil {
+		t.Fatal("retry must tolerate an already removed owned file:", err)
+	}
+}

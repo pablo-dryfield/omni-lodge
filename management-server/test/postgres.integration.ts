@@ -149,6 +149,10 @@ test(
         "Only one HTTP stream can claim a download operation.",
       );
       assert.equal(claims.filter((r) => r.status === "rejected").length, 1);
+      await store.update(first, "planning");
+      await store.recover();
+      assert.equal((await store.get(first.id, 901)).state, "outcome_unknown");
+      assert.equal((await store.get(second.id, 902)).state, "outcome_unknown");
       await store.reserve(first, "work", 80, 100, 10);
       await assert.rejects(store.reserve(second, "work", 20, 100, 10));
       await store.reservationProgress(first.id, 0);
