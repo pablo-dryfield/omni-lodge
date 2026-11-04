@@ -309,7 +309,7 @@ func stopRecord(r Record) error {
 	return stopUnlocked(latest)
 }
 func stopUnlocked(r Record) error {
-	_, err := boundedCommand("/usr/bin/systemctl", "stop", unit(r.ID))
+	_, err := boundedCommand("/bin/systemctl", "stop", unit(r.ID))
 	r.State = "closed"
 	r.LeaseUntil = 0
 	if saveErr := atomicJSON(recordPath(r.ID), r); err == nil {
@@ -508,7 +508,7 @@ func dispatch(e Envelope, p Policy) (map[string]any, error) {
 			if service.PM2Name != "" {
 				out, err = boundedCommand("/usr/bin/pm2", "logs", service.PM2Name, "--nostream", "--lines", strconv.Itoa(lines))
 			} else {
-				out, err = boundedCommand("/usr/bin/journalctl", "--no-pager", "--output=short-iso", "--unit="+service.Unit, "--lines="+strconv.Itoa(lines))
+				out, err = boundedCommand("/bin/journalctl", "--no-pager", "--output=short-iso", "--unit="+service.Unit, "--lines="+strconv.Itoa(lines))
 			}
 			return map[string]any{"output": out}, err
 		}
@@ -537,7 +537,7 @@ func serviceCommand(s Service, restart bool) (string, error) {
 		if restart {
 			action = "stop"
 		}
-		return boundedCommand("/usr/bin/systemctl", action, unit)
+		return boundedCommand("/bin/systemctl", action, unit)
 	}
 
 	if s.PM2Name != "" {
@@ -556,7 +556,7 @@ func serviceCommand(s Service, restart bool) (string, error) {
 	if restart {
 		action = "restart"
 	}
-	return boundedCommand("/usr/bin/systemctl", action, s.Unit)
+	return boundedCommand("/bin/systemctl", action, s.Unit)
 }
 func createRecord(record Record) error {
 	guard, err := namedLock("journal-admission")

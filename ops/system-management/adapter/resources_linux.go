@@ -55,7 +55,7 @@ func applyRuntimeBudget(e Envelope, p Policy) (Policy, error) {
 	}
 	bootID := strings.TrimSpace(string(boot))
 	if previous.Budget != budget || previous.BootID != bootID {
-		if _, err = boundedCommand("/usr/bin/systemctl", "set-property", "--runtime", "omnilodge-console.slice", "MemoryMax="+strconv.Itoa(budget.MemoryMiB*1048576), "CPUQuota="+strconv.Itoa(budget.CPUPercent)+"%", "TasksMax="+strconv.Itoa(budget.Tasks)); err != nil {
+		if _, err = boundedCommand("/bin/systemctl", "set-property", "--runtime", "omnilodge-console.slice", "MemoryMax="+strconv.Itoa(budget.MemoryMiB*1048576), "CPUQuota="+strconv.Itoa(budget.CPUPercent)+"%", "TasksMax="+strconv.Itoa(budget.Tasks)); err != nil {
 			return p, err
 		}
 		if err = atomicJSON(file, map[string]any{"budget": budget, "bootId": bootID}); err != nil {
@@ -176,7 +176,7 @@ func managedResourceLimits(p Policy) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	text, err := boundedCommand("/usr/bin/systemctl", "show", "omnilodge-console.slice", "--property=MemoryMax,CPUQuotaPerSecUSec,TasksMax")
+	text, err := boundedCommand("/bin/systemctl", "show", "omnilodge-console.slice", "--property=MemoryMax,CPUQuotaPerSecUSec,TasksMax")
 	if err != nil {
 		return nil, err
 	}

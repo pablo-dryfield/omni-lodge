@@ -208,7 +208,7 @@ func expireCopies() error {
 		}
 		guard.Close()
 		if expired && err == nil {
-			_, _ = boundedCommand("/usr/bin/systemctl", "stop", "omnilodge-copy-"+id+".service")
+			_, _ = boundedCommand("/bin/systemctl", "stop", "omnilodge-copy-"+id+".service")
 		}
 	}
 	return nil

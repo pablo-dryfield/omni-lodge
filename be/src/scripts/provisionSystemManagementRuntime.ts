@@ -310,7 +310,7 @@ try {
         true,
       );
       execFileSync(
-        "/usr/bin/systemctl",
+        "/bin/systemctl",
         [
           "enable",
           "--now",

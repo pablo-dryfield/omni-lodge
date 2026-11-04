@@ -25,7 +25,7 @@ export function startSystemManagementSupervisor(): () => void {
   );
   const stop = () => {
     if (child && unit) {
-      const stopper = spawn("/usr/bin/systemctl", ["stop", unit], {
+      const stopper = spawn("/bin/systemctl", ["stop", unit], {
         stdio: "ignore",
         windowsHide: true,
       });
