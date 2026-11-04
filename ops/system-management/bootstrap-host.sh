@@ -112,6 +112,10 @@ User=root
 Group=root
 NoNewPrivileges=yes
 PrivateTmp=yes
+MemoryMax=67108864
+CPUQuota=10%
+TasksMax=16
+TimeoutStartSec=60s
 UNIT
 cat > /etc/systemd/system/omnilodge-system-watchdog.timer <<'UNIT'
 [Unit]

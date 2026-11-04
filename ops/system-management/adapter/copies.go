@@ -13,11 +13,13 @@ import (
 )
 
 type CopyLease struct {
-	ID       string `json:"id"`
-	ActorID  int    `json:"actorId"`
-	State    string `json:"state"`
-	Until    int64  `json:"until"`
-	Deadline int64  `json:"deadline"`
+	PolicyHash   string `json:"policyHash"`
+	LeaseSeconds int    `json:"leaseSeconds"`
+	ID           string `json:"id"`
+	ActorID      int    `json:"actorId"`
+	State        string `json:"state"`
+	Until        int64  `json:"until"`
+	Deadline     int64  `json:"deadline"`
 }
 
 func copyLeasePath(id string) string { return filepath.Join(statePath, "leases", id+".json") }
@@ -79,11 +81,11 @@ func queueCopy(e Envelope, p Policy) (map[string]any, error) {
 	if total >= 2 || owned >= 1 {
 		return nil, errors.New("managed copy concurrency reached")
 	}
-	record := Record{ID: id, ActorID: e.ActorID, Action: e.Action, PayloadHash: hash, Fence: integer(e.Params, "fence"), State: "queued", Envelope: &e}
+	record := Record{ID: id, ActorID: e.ActorID, Action: e.Action, PayloadHash: hash, Fence: integer(e.Params, "fence"), State: "queued", Envelope: &e, ExpiresAt: int64(integer(e.Params, "metadataExpiresAt"))}
 	if err = atomicJSON(recordPath(id), record); err != nil {
 		return nil, err
 	}
-	lease := CopyLease{ID: id, ActorID: e.ActorID, State: "running", Until: time.Now().Add(60 * time.Second).UnixMilli(), Deadline: time.Now().Add(20 * time.Minute).UnixMilli()}
+	lease := CopyLease{ID: id, ActorID: e.ActorID, State: "running", Until: time.Now().Add(time.Duration(p.LeaseSeconds) * time.Second).UnixMilli(), Deadline: min(p.RuntimeExpires, time.Now().Add(20*time.Minute).UnixMilli()), PolicyHash: e.PolicyHash, LeaseSeconds: p.LeaseSeconds}
 	if err = atomicJSON(copyLeasePath(id), lease); err != nil {
 		return nil, err
 	}
@@ -132,7 +134,7 @@ func renewCopy(e Envelope) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if lease.ActorID != e.ActorID {
+	if lease.ActorID != e.ActorID || lease.PolicyHash != e.PolicyHash {
 		return nil, errors.New("copy belongs to another actor")
 	}
 	if lease.State == "published" {
@@ -141,7 +143,7 @@ func renewCopy(e Envelope) (map[string]any, error) {
 	if err = copyLeaseCurrent(id); err != nil {
 		return nil, err
 	}
-	lease.Until = time.Now().Add(60 * time.Second).UnixMilli()
+	lease.Until = time.Now().Add(time.Duration(lease.LeaseSeconds) * time.Second).UnixMilli()
 	if lease.Until > lease.Deadline {
 		lease.Until = lease.Deadline
 	}

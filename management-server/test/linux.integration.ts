@@ -1,6 +1,7 @@
 // Deliberately separate from ordinary tests. This provisions real OS identities,
 // SSH, chroots and cgroups ONLY on a disposable GitHub-hosted Linux runner.
 import "node:process";
+import http from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -469,34 +470,58 @@ test(
         extra: Record<string, string> = {},
         method?: string,
       ) => {
-        const response = await fetch(
-          "http://127.0.0.1:3011/management" + route,
-          {
-            method: method || (body === undefined ? "GET" : "POST"),
-            headers: {
-              Host: "system.omni-lodge.com",
-              Origin: "https://system.omni-lodge.com",
-              Cookie: cookie,
-              "X-Management-CSRF": csrf,
-              "Content-Type": Buffer.isBuffer(body)
-                ? "application/octet-stream"
-                : "application/json",
-              ...extra,
+        const value = await new Promise<any>((resolve, reject) => {
+          const payload =
+            body === undefined
+              ? undefined
+              : Buffer.isBuffer(body)
+                ? body
+                : Buffer.from(JSON.stringify(body));
+          const req = http.request(
+            {
+              hostname: "127.0.0.1",
+              port: 3011,
+              path: "/management" + route,
+              method: method || (body === undefined ? "GET" : "POST"),
+              headers: {
+                Host: "system.omni-lodge.com",
+                Origin: "https://system.omni-lodge.com",
+                Cookie: cookie,
+                "X-Management-CSRF": csrf,
+                "Content-Type": Buffer.isBuffer(body)
+                  ? "application/octet-stream"
+                  : "application/json",
+                ...(payload ? { "Content-Length": payload.length } : {}),
+                ...extra,
+              },
             },
-            body:
-              body === undefined
-                ? undefined
-                : Buffer.isBuffer(body)
-                  ? body
-                  : JSON.stringify(body),
-          },
-        );
-        const value = await response.json();
-        if (!response.ok)
-          throw Object.assign(
-            new Error(value.message || "Fixture request rejected"),
-            { code: value.code, status: response.status },
+            (res) => {
+              const chunks: Buffer[] = [];
+              res.on("data", (c) => chunks.push(c));
+              res.on("error", reject);
+              res.on("end", () => {
+                try {
+                  const data = JSON.parse(Buffer.concat(chunks).toString());
+                  if ((res.statusCode || 500) >= 400)
+                    reject(
+                      Object.assign(
+                        new Error(data.message || "Fixture request rejected"),
+                        { code: data.code, status: res.statusCode },
+                      ),
+                    );
+                  else resolve(data);
+                } catch (e) {
+                  reject(e);
+                }
+              });
+            },
           );
+          req.on("error", reject);
+          req.setTimeout(30000, () =>
+            req.destroy(new Error("Fixture request timed out")),
+          );
+          req.end(payload);
+        });
         return value;
       };
       csrf = (await request("/session")).csrf;

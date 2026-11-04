@@ -51,6 +51,18 @@ describe("System Management Control Panel validation", () => {
     ).not.toThrow();
     for (const override of [
       { addresses: [] },
+      { addresses: ["999.999.1.1"] },
+      { privateKey: "must use encrypted credentials" },
+      { identities: { "1": { username: "root", credentialId: "operator" } } },
+      {
+        identities: {
+          "1": {
+            username: "gateway",
+            credentialId: "operator",
+            password: "plaintext",
+          },
+        },
+      },
       { fingerprints: [] },
       { port: 0 },
       {

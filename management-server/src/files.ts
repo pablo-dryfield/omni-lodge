@@ -1,4 +1,5 @@
 import path from "node:path";
+import { decodeText } from "./textFiles.js";
 import crypto from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
@@ -380,22 +381,7 @@ export class Files {
           p,
           limit(ctx, "FILE_POLICY", "editBytes", 2097152),
         );
-        let text: string;
-        try {
-          text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        } catch {
-          throw new Fault(
-            415,
-            "BINARY_FILE",
-            "This file is not valid UTF-8. Download it instead.",
-          );
-        }
-        requireValue(
-          !text.includes("\0"),
-          415,
-          "BINARY_FILE",
-          "Binary files cannot be edited.",
-        );
+        const decoded = decodeText(bytes);
         requireValue(
           fingerprint(before) === fingerprint(await stat(s, p)),
           409,
@@ -403,11 +389,9 @@ export class Files {
           "File changed while reading. Refresh and try again.",
         );
         return {
-          text,
+          ...decoded,
           version: fingerprint(before),
           sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
-          bom: bytes.subarray(0, 3).equals(Buffer.from([239, 187, 191])),
-          newline: text.includes("\r\n") ? "CRLF" : "LF",
           path: relative,
           size: String(bytes.length),
         };
@@ -487,7 +471,7 @@ export class Files {
     if (operation === "save")
       requireValue(
         typeof input.text === "string" &&
-          Buffer.byteLength(input.text) <=
+          Buffer.byteLength(input.text) + (input.bom === true ? 3 : 0) <=
             limit(ctx, "FILE_POLICY", "editBytes", 2097152),
         413,
         "TOO_LARGE",

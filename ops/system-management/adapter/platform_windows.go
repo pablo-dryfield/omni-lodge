@@ -16,3 +16,10 @@ func gid(os.FileInfo) uint32                  { return 0 }
 func modeBits(info os.FileInfo) uint32        { return uint32(info.Mode()) }
 func diskInfo(string) (map[string]any, error) { return nil, errors.New("Linux capability unavailable") }
 func metrics(Policy) (map[string]any, error)  { return nil, errors.New("Linux capability unavailable") }
+
+func managedResourceLimits(Policy) (map[string]any, error) {
+	return nil, errors.New("Linux resource controls required")
+}
+func applyRuntimeBudget(_ Envelope, p Policy) (Policy, error) {
+	return p, errors.New("Linux resource controls required")
+}

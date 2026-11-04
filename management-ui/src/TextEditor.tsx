@@ -11,6 +11,10 @@ import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { sql } from "@codemirror/lang-sql";
+import {
+  syntaxHighlighting,
+  defaultHighlightStyle,
+} from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
 import { api } from "./api";
 export type Document = {
@@ -29,6 +33,7 @@ export function TextEditor({
   onClose,
   onSaved,
   onError,
+  editable = false,
 }: {
   document: Document;
   hostId: string;
@@ -36,9 +41,21 @@ export function TextEditor({
   onClose: () => void;
   onSaved: () => void;
   onError: (e: unknown) => void;
+  editable?: boolean;
 }) {
+  const dialog = useRef<HTMLDialogElement>(null),
+    [lineEnding, setLineEnding] = useState(initialDocument.newline);
+  useEffect(() => {
+    dialog.current?.showModal();
+    return () => dialog.current?.close();
+  }, []);
+  const lineEndingRef = useRef(lineEnding);
+  lineEndingRef.current = lineEnding;
   const [document, setDocument] = useState(initialDocument);
-  useEffect(() => setDocument(initialDocument), [initialDocument]);
+  useEffect(() => {
+    setDocument(initialDocument);
+    setLineEnding(initialDocument.newline);
+  }, [initialDocument]);
   const container = useRef<HTMLDivElement>(null),
     view = useRef<EditorView>(),
     [dirty, setDirty] = useState(false),
@@ -58,8 +75,11 @@ export function TextEditor({
     const editor = new EditorView({
       parent: container.current,
       state: EditorState.create({
-        doc: document.text.replace(/\r\n/g, "\n"),
+        doc: document.text.replace(/\r\n|\r/g, "\n"),
         extensions: [
+          EditorView.editable.of(editable),
+          EditorState.readOnly.of(!editable),
+          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           lineNumbers(),
           history(),
           highlightActiveLine(),
@@ -71,7 +91,8 @@ export function TextEditor({
             if (update.docChanged)
               setDirty(
                 update.state.doc.toString() !==
-                  document.text.replace(/\r\n/g, "\n"),
+                  document.text.replace(/\r\n|\r/g, "\n") ||
+                  lineEndingRef.current !== document.newline,
               );
           }),
         ],
@@ -80,7 +101,9 @@ export function TextEditor({
     view.current = editor;
     const unload = (e: BeforeUnloadEvent) => {
       if (
-        editor.state.doc.toString() !== document.text.replace(/\r\n/g, "\n")
+        editor.state.doc.toString() !==
+          document.text.replace(/\r\n|\r/g, "\n") ||
+        lineEndingRef.current !== document.newline
       ) {
         e.preventDefault();
         e.returnValue = "";
@@ -91,13 +114,13 @@ export function TextEditor({
       window.removeEventListener("beforeunload", unload);
       editor.destroy();
     };
-  }, [document]);
+  }, [document, editable]);
   const save = async (saveAs = false) => {
     setBusy(true);
     try {
       const text = (view.current?.state.doc.toString() || "").replace(
           /\r?\n/g,
-          document.newline === "CRLF" ? "\r\n" : "\n",
+          lineEnding === "CRLF" ? "\r\n" : lineEnding === "CR" ? "\r" : "\n",
         ),
         target = saveAs
           ? prompt("Save as relative path", document.path)
@@ -142,65 +165,104 @@ export function TextEditor({
     }
   };
   return (
-    <div className="dialog-backdrop">
-      <section className="editor-dialog">
-        <header>
-          <div>
-            <span className="eyebrow">Remote text editor</span>
-            <h2>
-              {document.path}
-              {dirty ? " •" : ""}
-            </h2>
-            <span className="muted">
-              UTF-8{document.bom ? " BOM" : ""} · {document.newline} ·{" "}
-              {Number(document.size).toLocaleString()} bytes
-            </span>
-          </div>
-          <div className="dialog-actions">
-            <button disabled={busy} onClick={() => void save(true)}>
-              Save as
-            </button>
-            <button
-              disabled={busy || !dirty}
-              className="primary"
-              onClick={() => void save()}
-            >
-              Save
-            </button>
-            <button
-              onClick={() => {
-                if (!dirty || confirm("Discard unsaved changes?")) onClose();
-              }}
-            >
-              Close
-            </button>
-          </div>
-        </header>
-        <div className="code-editor" ref={container} />
-        {conflict && (
-          <section className="conflict">
-            <h3>Remote file changed</h3>
-            <p>
-              Your draft is retained. Compare the current remote version, then
-              save your draft under another name or reload.
-            </p>
-            <pre>{conflict.text}</pre>
-            <button onClick={() => void save(true)}>Save draft as</button>
-            <button
-              onClick={() => {
-                if (confirm("Discard this draft and reload?")) {
-                  setDocument(conflict);
-                  setConflict(null);
-                  setDirty(false);
-                  onSaved();
-                }
-              }}
-            >
-              Reload remote file
-            </button>
-          </section>
-        )}
-      </section>
-    </div>
+    <dialog
+      ref={dialog}
+      className="editor-dialog native-dialog"
+      aria-label={`Text editor - ${hostId} / ${rootId} / ${document.path}`}
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!dirty || confirm("Discard unsaved changes?")) onClose();
+      }}
+    >
+      <header>
+        <div>
+          <span className="eyebrow">Remote text editor</span>
+          <h2>
+            {document.path}
+            {dirty ? " •" : ""}
+          </h2>
+          <span className="muted">
+            UTF-8{document.bom ? " BOM" : ""} · {document.newline} ·{" "}
+            {Number(document.size).toLocaleString()} bytes
+          </span>
+        </div>
+        <div className="dialog-actions">
+          <select
+            aria-label="File line endings"
+            value={lineEnding}
+            disabled={!editable || busy}
+            onChange={(event) => {
+              setLineEnding(event.target.value);
+              setDirty(true);
+            }}
+          >
+            {document.newline === "mixed" && (
+              <option value="mixed" disabled>
+                Mixed - choose before saving
+              </option>
+            )}
+            <option value="LF">LF</option>
+            <option value="CRLF">CRLF</option>
+            <option value="CR">CR</option>
+          </select>
+          <button
+            disabled={busy || !editable || lineEnding === "mixed"}
+            onClick={() => void save(true)}
+          >
+            Save as
+          </button>
+          <button
+            disabled={busy || !dirty || !editable || lineEnding === "mixed"}
+            className="primary"
+            onClick={() => void save()}
+          >
+            Save
+          </button>
+          <button
+            onClick={() => {
+              if (!dirty || confirm("Discard unsaved changes?")) onClose();
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </header>
+      {document.newline === "mixed" && (
+        <p className="notice">
+          This file uses mixed line endings. Choose a format explicitly before
+          saving; all line endings will use that format.
+        </p>
+      )}
+      {!editable && (
+        <p className="notice">
+          Read-only preview for this file root and account.
+        </p>
+      )}
+      <div className="code-editor" ref={container} />
+      {conflict && (
+        <section className="conflict">
+          <h3>Remote file changed</h3>
+          <p>
+            Your draft is retained. Compare the current remote version, then
+            save your draft under another name or reload.
+          </p>
+          <pre>{conflict.text}</pre>
+          <button onClick={() => void save(true)}>Save draft as</button>
+          <button
+            onClick={() => {
+              if (confirm("Discard this draft and reload?")) {
+                setDocument(conflict);
+                setLineEnding(conflict.newline);
+                setConflict(null);
+                setDirty(false);
+                onSaved();
+              }
+            }}
+          >
+            Reload remote file
+          </button>
+        </section>
+      )}
+    </dialog>
   );
 }

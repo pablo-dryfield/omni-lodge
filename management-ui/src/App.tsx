@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  lazy,
+  Suspense,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
   IconTerminal2,
@@ -27,9 +34,21 @@ import {
   type Session,
   type Host,
 } from "./api";
-import { TerminalPane, type TerminalTab } from "./TerminalPane";
-import { TextEditor, type Document } from "./TextEditor";
+import type { TerminalTab } from "./TerminalPane";
+const TerminalPane = lazy(() =>
+  import("./TerminalPane").then((module) => ({ default: module.TerminalPane })),
+);
+import type { Document } from "./TextEditor";
+const TextEditor = lazy(() =>
+  import("./TextEditor").then((module) => ({ default: module.TextEditor })),
+);
+import {
+  FileOperationDialog,
+  type FileOperationSelection,
+} from "./FileOperationDialog";
 import "./styles.css";
+import { HostProfiles } from "./HostProfiles";
+import { Dialog } from "./Dialog";
 
 type Entry = {
   name: string;
@@ -104,7 +123,12 @@ function App() {
     [recordingPreview, setRecordingPreview] = useState<any>(null);
   const [comparison, setComparison] = useState<any>(null),
     [trashEntries, setTrashEntries] = useState<any[] | null>(null);
-  const [document, setDocument] = useState<Document | null>(null),
+  const [fileOperation, setFileOperation] = useState<
+    (FileOperationSelection & { id: string }) | null
+  >(null);
+  const [document, setDocument] = useState<
+      (Document & { hostId: string; rootId: string; editable: boolean }) | null
+    >(null),
     [jobs, setJobs] = useState<Job[]>([]),
     [activity, setActivity] = useState<any[]>([]),
     [overview, setOverview] = useState<any>(null),
@@ -112,6 +136,7 @@ function App() {
     [serviceId, setServiceId] = useState(""),
     [logs, setLogs] = useState(""),
     [following, setFollowing] = useState(false);
+  const [connectionTest, setConnectionTest] = useState<any>(null);
   const [hostDraft, setHostDraft] = useState(""),
     [credentialId, setCredentialId] = useState(""),
     [privateKey, setPrivateKey] = useState(""),
@@ -143,37 +168,51 @@ function App() {
       window.removeEventListener("keydown", touch, true);
     };
   }, [session?.actorId]);
-  const onError = useCallback((value: unknown) => {
-    const e = value as Error;
-    setError(e.message || "Operation failed.");
-    if (value instanceof ApiError && value.code === "STEP_UP_REQUIRED")
-      setStepUp(true);
-    if (
-      value instanceof ApiError &&
-      [
-        "SESSION_EXPIRED",
-        "POLICY_CHANGED",
-        "CSRF_REJECTED",
-        "SIGN_IN_REQUIRED",
-        "AUTHORITY_REVOKED",
-      ].includes(value.code)
-    ) {
-      setDocument(null);
-      setPrivateKey("");
-      setPassphrase("");
-      setPassword("");
-      setLogs("");
-      setEntries([]);
-      setOverview(null);
-      setActivity([]);
-      setComparison(null);
-      setRecordingPreview(null);
-      setJobs([]);
-      setHostDraft("");
-      setTabs([]);
-      setSession(null);
-    }
+  const clearWorkspace = useCallback(() => {
+    abortUpload.current = true;
+    pendingResume.current = null;
+    setDocument(null);
+    setFileOperation(null);
+    setPrivateKey("");
+    setPassphrase("");
+    setPassword("");
+    setLogs("");
+    setEntries([]);
+    setSelected([]);
+    setOverview(null);
+    setServices([]);
+    setActivity([]);
+    setComparison(null);
+    setTrashEntries(null);
+    setRecordingList(null);
+    setRecordingPreview(null);
+    setJobs([]);
+    setHostDraft("");
+    setTabs([]);
+    setSession(null);
+    setStepUp(false);
   }, []);
+  const onError = useCallback(
+    (value: unknown) => {
+      const e = value as Error;
+      setError(e.message || "Operation failed.");
+      if (value instanceof ApiError && value.code === "STEP_UP_REQUIRED")
+        setStepUp(true);
+      if (
+        value instanceof ApiError &&
+        [
+          "SESSION_EXPIRED",
+          "POLICY_CHANGED",
+          "CSRF_REJECTED",
+          "SIGN_IN_REQUIRED",
+          "AUTHORITY_REVOKED",
+        ].includes(value.code)
+      ) {
+        clearWorkspace();
+      }
+    },
+    [clearWorkspace],
+  );
   const refresh = useCallback(async () => {
     const result = await api<Session>("/session");
     setCsrf(result.csrf);
@@ -301,7 +340,7 @@ function App() {
       void api("/activity")
         .then((result) => setActivity(result.events))
         .catch(onError);
-  }, [section, hostId, session?.actorId]);
+  }, [section, hostId, session?.actorId, session?.stepUpUntil]);
   useEffect(() => {
     if (!following || !serviceId) return;
     const timer = setInterval(
@@ -345,47 +384,17 @@ function App() {
       setBusy(false);
     }
   };
-  const fileAction = async (operation: string, entry?: Entry) => {
-    if (!hostId || !rootId) return;
-    const input: Record<string, unknown> = {
-      hostId,
-      rootId,
-      operation,
-      path: entry?.path || currentPath,
-      version: entry?.version,
-    };
-    if (operation === "mkdir") {
-      const name = prompt("New folder name");
-      if (!name) return;
-      input.path = currentPath === "." ? name : `${currentPath}/${name}`;
-    }
-    if (["rename", "copy"].includes(operation)) {
-      const target = prompt("Destination relative path", entry?.path);
-      if (!target) return;
-      input.target = target;
-    }
-    if (operation === "chmod") {
-      const mode = prompt(
-        "Permissions (octal, e.g. 644)",
-        ((entry?.mode || 0) & 0o777).toString(8),
-      );
-      if (!mode) return;
-      input.mode = parseInt(mode, 8);
-    }
-    try {
-      const review = await api("/file-operations/review", input);
-      if (
-        !confirm(
-          `${operation === "delete" ? "Permanently delete" : operation} ${input.path}${input.target ? ` → ${input.target}` : ""}?${review.affectedEntries !== undefined ? `\n${review.affectedEntries} entries were inventoried and will be rechecked.` : ""}${review.warning ? `\n${review.warning}` : ""}`,
-        )
-      )
-        return;
-      await api("/file-operations/execute", { id: review.id });
-      await loadFiles();
-      setNotice("File operation completed.");
-    } catch (e) {
-      onError(e);
-    }
+  const fileAction = (operation: string, entry?: Entry) => {
+    if (hostId && rootId)
+      setFileOperation({
+        id: crypto.randomUUID(),
+        operation,
+        entries: [entry || { path: currentPath }],
+      });
+  };
+  const fileBatchAction = (operation: string, items: Entry[]) => {
+    if (items.length)
+      setFileOperation({ id: crypto.randomUUID(), operation, entries: items });
   };
   const openFile = async (entry: Entry) => {
     if (entry.type === "directory") {
@@ -399,11 +408,16 @@ function App() {
       return;
     }
     try {
-      setDocument(
-        await api(
+      setDocument({
+        ...(await api<Document>(
           `/files/content?${query({ hostId, rootId, path: entry.path })}`,
+        )),
+        hostId,
+        rootId,
+        editable: Boolean(
+          root?.writable && session?.actions.includes("writeFiles"),
         ),
-      );
+      });
     } catch (e) {
       onError(e);
     }
@@ -624,7 +638,7 @@ function App() {
               .then(() => {
                 setTabs([]);
                 setDocument(null);
-                setSession(null);
+                clearWorkspace();
               })
               .catch(onError)
           }
@@ -910,7 +924,15 @@ function App() {
                   {tab.title} ·{" "}
                   {session.hosts.find((h) => h.id === tab.hostId)?.username}
                 </div>
-                <TerminalPane tab={tab} onError={onError} />
+                <Suspense
+                  fallback={
+                    <div role="status" className="notice">
+                      Opening terminal...
+                    </div>
+                  }
+                >
+                  <TerminalPane tab={tab} onError={onError} />
+                </Suspense>
               </div>
             ))}
           </div>
@@ -1098,13 +1120,10 @@ function App() {
                     className="danger"
                     disabled={!root?.writable}
                     onClick={() => {
-                      void (async () => {
-                        for (const entry of selectedEntries)
-                          await fileAction(
-                            root?.managed ? "trash" : "delete",
-                            entry,
-                          );
-                      })();
+                      fileBatchAction(
+                        root?.managed ? "trash" : "delete",
+                        selectedEntries,
+                      );
                     }}
                   >
                     {root?.managed ? "Move to trash" : "Permanently delete"}
@@ -1117,10 +1136,7 @@ function App() {
                         !session?.actions.includes("deleteFiles")
                       }
                       onClick={() => {
-                        void (async () => {
-                          for (const entry of selectedEntries)
-                            await fileAction("delete", entry);
-                        })();
+                        fileBatchAction("delete", selectedEntries);
                       }}
                     >
                       Permanently delete
@@ -1337,7 +1353,8 @@ function App() {
                     </button>
                   )}
                   {job.kind === "upload" &&
-                    ["paused", "outcome_unknown"].includes(job.state) && job.data.phase!=="publication" && (
+                    ["paused", "outcome_unknown"].includes(job.state) &&
+                    job.data.phase !== "publication" && (
                       <button
                         onClick={() => {
                           pendingResume.current = job;
@@ -1559,46 +1576,32 @@ function App() {
               </div>
             </div>
             <div className="settings-grid">
-              <article className="card">
-                <h3>Server profiles</h3>
-                <p>
-                  Use the versioned profile structure from the
-                  architecture/runbook. Each account needs an explicit remote
-                  identity and host action grants.
-                </p>
-                <textarea
-                  className="json-editor"
-                  aria-label="Server profile JSON"
+              {session.actions.includes("manageHosts") && (
+                <HostProfiles
                   value={hostDraft}
-                  onChange={(e) => setHostDraft(e.target.value)}
-                  spellCheck={false}
-                />
-                <button
-                  className="primary"
-                  onClick={() => {
-                    try {
-                      const value = JSON.parse(hostDraft);
-                      void api("/config", {
-                        key: "SYSTEM_MANAGEMENT_HOSTS",
-                        value,
-                        revision: session.policyHash,
-                        reason: "Server profile update",
+                  onChange={setHostDraft}
+                  onTest={(id) =>
+                    void api("/hosts/test", { hostId: id })
+                      .then(setConnectionTest)
+                      .catch(onError)
+                  }
+                  onSave={(profiles, reason) => {
+                    void api("/config", {
+                      key: "SYSTEM_MANAGEMENT_HOSTS",
+                      value: profiles,
+                      revision: session.policyHash,
+                      reason,
+                    })
+                      .then(() => {
+                        clearWorkspace();
+                        setNotice(
+                          "Server profiles saved. Open a fresh administration session to use the new policy.",
+                        );
                       })
-                        .then(() => {
-                          setNotice(
-                            "Profiles saved. Reopen System Management to load the new policy.",
-                          );
-                          setSession(null);
-                        })
-                        .catch(onError);
-                    } catch (e) {
-                      onError(e);
-                    }
+                      .catch(onError);
                   }}
-                >
-                  Save server profiles
-                </button>
-              </article>
+                />
+              )}
               <article className="card">
                 <h3>Replace a credential</h3>
                 <p className="muted">
@@ -1649,7 +1652,7 @@ function App() {
                       .then(() => {
                         setPrivateKey("");
                         setPassphrase("");
-                        setSession(null);
+                        clearWorkspace();
                         setNotice(
                           "Credential replaced. Open a fresh administration session.",
                         );
@@ -1890,19 +1893,79 @@ function App() {
           </section>
         </div>
       )}
-      {document && (
-        <TextEditor
-          document={document}
+      {connectionTest && (
+        <Dialog
+          title="Saved server connection test"
+          onClose={() => setConnectionTest(null)}
+        >
+          <div className="form-stack">
+            <p>
+              {connectionTest.ok
+                ? "The saved connection passed its available capability checks."
+                : "A capability check needs attention."}
+            </p>
+            {connectionTest.stages.map((stage: any, index: number) => (
+              <section className="review-summary" key={index}>
+                <strong>
+                  {stage.ok ? "Passed" : "Failed"} - {stage.name}
+                </strong>
+                {stage.message && <p>{stage.message}</p>}
+                {stage.details && (
+                  <pre className="log-output">
+                    {JSON.stringify(stage.details, null, 2)}
+                  </pre>
+                )}
+              </section>
+            ))}
+            <button onClick={() => setConnectionTest(null)}>Close</button>
+          </div>
+        </Dialog>
+      )}
+      {fileOperation && (
+        <FileOperationDialog
+          selection={fileOperation}
           hostId={hostId}
           rootId={rootId}
-          onClose={() => setDocument(null)}
-          onSaved={() => void loadFiles()}
+          onClose={() =>
+            setFileOperation((current) =>
+              current?.id === fileOperation.id ? null : current,
+            )
+          }
+          onChanged={() => {
+            void loadFiles();
+            void loadJobs();
+          }}
           onError={onError}
         />
       )}
+      {document && (
+        <Suspense
+          fallback={
+            <div role="status" className="notice">
+              Opening text editor...
+            </div>
+          }
+        >
+          <TextEditor
+            document={document}
+            hostId={document.hostId}
+            rootId={document.rootId}
+            editable={document.editable}
+            onClose={() => setDocument(null)}
+            onSaved={() => void loadFiles()}
+            onError={onError}
+          />
+        </Suspense>
+      )}
       {stepUp && (
-        <div className="dialog-backdrop">
-          <form className="dialog auth-dialog" onSubmit={unlock}>
+        <Dialog
+          title="Confirm administrator access"
+          onClose={() => {
+            setPassword("");
+            setStepUp(false);
+          }}
+        >
+          <form className="auth-dialog" onSubmit={unlock}>
             <div className="auth-icon">
               <IconShieldLock size={28} />
             </div>
@@ -1943,7 +2006,7 @@ function App() {
               </button>
             </div>
           </form>
-        </div>
+        </Dialog>
       )}
     </div>
   );

@@ -35,7 +35,7 @@ func startServiceOperation(e Envelope, p Policy, serviceID string) (map[string]a
 		}
 		return map[string]any{"accepted": true, "state": old.State, "operationId": id, "verifiedHealthy": old.State == "completed"}, nil
 	}
-	record := Record{ID: id, ActorID: e.ActorID, Action: "restart", ServiceID: serviceID, PayloadHash: hash, Fence: integer(e.Params, "fence"), State: "running"}
+	record := Record{ID: id, ActorID: e.ActorID, Action: "restart", ServiceID: serviceID, PayloadHash: hash, Fence: integer(e.Params, "fence"), State: "running", ExpiresAt: int64(integer(e.Params, "metadataExpiresAt"))}
 	if err = atomicJSON(recordPath(id), record); err != nil {
 		return nil, err
 	}

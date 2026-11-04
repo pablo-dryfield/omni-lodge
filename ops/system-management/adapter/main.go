@@ -46,15 +46,18 @@ type Service struct {
 	Restartable bool   `json:"restartable"`
 }
 type Policy struct {
-	Version      int                `json:"version"`
-	HostID       string             `json:"hostId"`
-	PublicKey    string             `json:"publicKey"`
-	Actors       map[string]Actor   `json:"actors"`
-	Services     map[string]Service `json:"services"`
-	MemoryMiB    int                `json:"memoryMiB"`
-	CPUPercent   int                `json:"cpuPercent"`
-	Tasks        int                `json:"tasks"`
-	ReserveBytes int64              `json:"reserveBytes"`
+	ReservePercent int                `json:"reservePercent"`
+	Version        int                `json:"version"`
+	HostID         string             `json:"hostId"`
+	PublicKey      string             `json:"publicKey"`
+	Actors         map[string]Actor   `json:"actors"`
+	Services       map[string]Service `json:"services"`
+	MemoryMiB      int                `json:"memoryMiB"`
+	CPUPercent     int                `json:"cpuPercent"`
+	Tasks          int                `json:"tasks"`
+	ReserveBytes   int64              `json:"reserveBytes"`
+	LeaseSeconds   int                `json:"-"`
+	RuntimeExpires int64              `json:"-"`
 }
 type Envelope struct {
 	Version    int                        `json:"version"`
@@ -67,17 +70,21 @@ type Envelope struct {
 	PolicyHash string                     `json:"policyHash"`
 }
 type Record struct {
-	Envelope    *Envelope      `json:"envelope,omitempty"`
-	PayloadHash string         `json:"payloadHash"`
-	ID          string         `json:"id"`
-	ActorID     int            `json:"actorId"`
-	Action      string         `json:"action"`
-	Fence       int            `json:"fence"`
-	State       string         `json:"state"`
-	Result      map[string]any `json:"result,omitempty"`
-	LeaseUntil  int64          `json:"leaseUntil,omitempty"`
-	StopHash    string         `json:"stopHash,omitempty"`
-	ServiceID   string         `json:"serviceId,omitempty"`
+	ExpiresAt    int64          `json:"expiresAt,omitempty"`
+	PolicyHash   string         `json:"policyHash,omitempty"`
+	Deadline     int64          `json:"deadline,omitempty"`
+	LeaseSeconds int            `json:"leaseSeconds,omitempty"`
+	Envelope     *Envelope      `json:"envelope,omitempty"`
+	PayloadHash  string         `json:"payloadHash"`
+	ID           string         `json:"id"`
+	ActorID      int            `json:"actorId"`
+	Action       string         `json:"action"`
+	Fence        int            `json:"fence"`
+	State        string         `json:"state"`
+	Result       map[string]any `json:"result,omitempty"`
+	LeaseUntil   int64          `json:"leaseUntil,omitempty"`
+	StopHash     string         `json:"stopHash,omitempty"`
+	ServiceID    string         `json:"serviceId,omitempty"`
 }
 
 func output(value any) { _ = json.NewEncoder(os.Stdout).Encode(value) }
@@ -114,6 +121,9 @@ func loadPolicy() (Policy, error) {
 	}
 	if p.Version != 1 || !identifier.MatchString(p.HostID) || p.MemoryMiB < 32 || p.MemoryMiB > 256 || p.CPUPercent < 1 || p.CPUPercent > 25 || p.Tasks < 4 || p.Tasks > 64 || p.ReserveBytes < 1<<30 {
 		return p, errors.New("invalid root-owned host policy")
+	}
+	if p.ReservePercent < 15 {
+		p.ReservePercent = 15
 	}
 	return p, nil
 }
@@ -328,12 +338,12 @@ func terminal(e Envelope, p Policy, input io.Reader, unlock func()) error {
 		return errors.New("invalid stop capability")
 	}
 	h := sha256.Sum256([]byte(stop))
-	r := Record{ID: id, ActorID: e.ActorID, Action: "terminal", State: "active", LeaseUntil: time.Now().Add(60 * time.Second).UnixMilli(), StopHash: hex.EncodeToString(h[:])}
+	r := Record{ID: id, ActorID: e.ActorID, Action: "terminal", State: "active", ExpiresAt: int64(integer(e.Params, "metadataExpiresAt")), LeaseUntil: time.Now().Add(time.Duration(p.LeaseSeconds) * time.Second).UnixMilli(), PolicyHash: e.PolicyHash, Deadline: p.RuntimeExpires, LeaseSeconds: p.LeaseSeconds, StopHash: hex.EncodeToString(h[:])}
 	if err := atomicJSON(recordPath(id), r); err != nil {
 		return err
 	}
 	unlock()
-	args := []string{"--unit=" + unit(id), "--collect", "--wait", "--pty", "--uid=" + actor.Username, "--working-directory=" + actor.WorkingDirectory, "--property=Type=exec", "--property=NoNewPrivileges=yes", "--property=KillMode=control-group", "--property=TimeoutStopSec=5s", "--property=RuntimeMaxSec=7200s", "--property=MemoryMax=" + strconv.Itoa(p.MemoryMiB) + "M", "--property=CPUQuota=" + strconv.Itoa(p.CPUPercent) + "%", "--property=TasksMax=" + strconv.Itoa(p.Tasks), "--property=Slice=omnilodge-console.slice", "--property=Delegate=no", "--setenv=TERM=xterm-256color", "--setenv=LANG=C.UTF-8", "--setenv=PATH=/usr/bin:/bin", "--", "/bin/bash", "--noprofile", "--norc", "-i"}
+	args := []string{"--unit=" + unit(id), "--collect", "--wait", "--pty", "--uid=" + actor.Username, "--working-directory=" + actor.WorkingDirectory, "--property=Type=exec", "--property=NoNewPrivileges=yes", "--property=KillMode=control-group", "--property=TimeoutStopSec=5s", "--property=RuntimeMaxSec=" + strconv.Itoa(max(1, min(7200, int((p.RuntimeExpires-time.Now().UnixMilli())/1000)))) + "s", "--property=MemoryMax=" + strconv.Itoa(p.MemoryMiB) + "M", "--property=CPUQuota=" + strconv.Itoa(p.CPUPercent) + "%", "--property=TasksMax=" + strconv.Itoa(p.Tasks), "--property=Slice=omnilodge-console.slice", "--property=Delegate=no", "--setenv=TERM=xterm-256color", "--setenv=LANG=C.UTF-8", "--setenv=PATH=/usr/bin:/bin", "--", "/bin/bash", "--noprofile", "--norc", "-i"}
 	cmd := exec.Command("/usr/bin/systemd-run", args...)
 	cmd.Stdin = input
 	cmd.Stdout = os.Stdout
@@ -404,10 +414,10 @@ func dispatch(e Envelope, p Policy) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if r.ActorID != e.ActorID || r.State != "active" || r.LeaseUntil < time.Now().UnixMilli() {
+		if r.ActorID != e.ActorID || r.State != "active" || r.PolicyHash != e.PolicyHash || r.Deadline < time.Now().UnixMilli() || r.LeaseUntil < time.Now().UnixMilli() {
 			return nil, errors.New("terminal lease expired")
 		}
-		r.LeaseUntil = time.Now().Add(60 * time.Second).UnixMilli()
+		r.LeaseUntil = min(r.Deadline, time.Now().Add(time.Duration(r.LeaseSeconds)*time.Second).UnixMilli())
 		return map[string]any{"ok": true}, atomicJSON(recordPath(r.ID), r)
 	}
 	if e.Action == "metrics" {
@@ -500,7 +510,7 @@ func journaled(e Envelope, id string, fn func() (map[string]any, error)) (map[st
 			return nil, errors.New("prior operation outcome requires reconciliation")
 		}
 	}
-	r := Record{ID: id, ActorID: e.ActorID, Action: e.Action, PayloadHash: payloadHash, Fence: integer(e.Params, "fence"), State: "running"}
+	r := Record{ID: id, ActorID: e.ActorID, Action: e.Action, PayloadHash: payloadHash, Fence: integer(e.Params, "fence"), State: "running", ExpiresAt: int64(integer(e.Params, "metadataExpiresAt"))}
 	if err := atomicJSON(recordPath(id), r); err != nil {
 		return nil, err
 	}
@@ -563,6 +573,13 @@ func run() error {
 		return err
 	}
 	if err = consume(e.Nonce); err != nil {
+		return err
+	}
+	p, err = applyRuntimeBudget(e, p)
+	if err != nil {
+		return err
+	}
+	if _, err = managedResourceLimits(p); err != nil {
 		return err
 	}
 	if e.Action == "terminal" {

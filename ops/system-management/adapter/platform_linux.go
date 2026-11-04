@@ -50,7 +50,11 @@ func diskInfo(name string) (map[string]any, error) {
 	return map[string]any{"freeBytes": s.Bavail * uint64(s.Bsize), "totalBytes": s.Blocks * uint64(s.Bsize), "freeInodes": s.Ffree}, nil
 }
 func metrics(p Policy) (map[string]any, error) {
-	result := map[string]any{"sampledAt": time.Now().UTC().Format(time.RFC3339), "cpuPercent": nil}
+	limits, err := managedResourceLimits(p)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{"sampledAt": time.Now().UTC().Format(time.RFC3339), "cpuPercent": nil, "resources": limits}
 	total, idle, readErr := cpuSample()
 	if readErr == nil {
 		time.Sleep(200 * time.Millisecond)

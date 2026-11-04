@@ -453,9 +453,34 @@ export async function authorityRpc(
     const required = operationActions[String(args.operation)];
     if (!required || action !== required)
       fail(403, "FORBIDDEN", "Operation and permission do not match.");
-    const params = args.params;
-    if (!params || typeof params !== "object" || Array.isArray(params))
+    const inputParams = args.params;
+    if (
+      !inputParams ||
+      typeof inputParams !== "object" ||
+      Array.isArray(inputParams)
+    )
       fail(400, "INVALID_OPERATION", "Invalid adapter parameters.");
+    const params = {
+      ...(inputParams as Record<string, unknown>),
+      runtimeBudget: policy.values.SYSTEM_MANAGEMENT_REMOTE_BUDGET,
+      storagePolicy: policy.values.SYSTEM_MANAGEMENT_STORAGE_POLICY,
+      remoteLeaseSeconds: (
+        policy.values.SYSTEM_MANAGEMENT_SESSION_POLICY as {
+          remoteLeaseSeconds: number;
+        }
+      ).remoteLeaseSeconds,
+      authorizationExpiresAt: row.expires_at.getTime(),
+      metadataExpiresAt:
+        Date.now() +
+        Number(
+          (
+            policy.values.SYSTEM_MANAGEMENT_RETENTION as {
+              transferDays: number;
+            }
+          ).transferDays,
+        ) *
+          86400000,
+    };
     const key = await fs.readFile(
       process.env.SYSTEM_MANAGEMENT_SIGNING_KEY_FILE || "",
     );

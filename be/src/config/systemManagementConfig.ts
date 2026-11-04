@@ -160,6 +160,28 @@ export function validateSystemManagementValue(key: string, raw: string): void {
         throw new Error("Server IDs must be unique alphanumeric identifiers.");
       ids.add(h.id);
       if (
+        Object.keys(h).some(
+          (key) =>
+            ![
+              "id",
+              "name",
+              "environment",
+              "hostname",
+              "port",
+              "addresses",
+              "fingerprints",
+              "enabled",
+              "managed",
+              "identities",
+              "roots",
+              "services",
+            ].includes(key),
+        )
+      )
+        throw new Error(
+          "Server profiles must contain only public connection metadata; use encrypted credentials for secrets.",
+        );
+      if (
         typeof h.name !== "string" ||
         h.name.length < 1 ||
         h.name.length > 100 ||
@@ -201,8 +223,17 @@ export function validateSystemManagementValue(key: string, raw: string): void {
         );
       for (const [actor, identity] of Object.entries(h.identities)) {
         if (
-          !/^\d+$/.test(actor) ||
+          !/^[1-9][0-9]*$/.test(actor) ||
           !record(identity) ||
+          Object.keys(identity).some(
+            (key) =>
+              ![
+                "username",
+                "credentialId",
+                "fileUsername",
+                "fileCredentialId",
+              ].includes(key),
+          ) ||
           typeof identity.username !== "string" ||
           !id.test(identity.username) ||
           ["root", "0"].includes(identity.username) ||
@@ -228,6 +259,10 @@ export function validateSystemManagementValue(key: string, raw: string): void {
         h.roots.some(
           (r) =>
             !record(r) ||
+            Object.keys(r).some(
+              (key) =>
+                !["id", "name", "path", "writable", "managed"].includes(key),
+            ) ||
             typeof r.id !== "string" ||
             !id.test(r.id) ||
             typeof r.name !== "string" ||
@@ -259,6 +294,7 @@ export function validateSystemManagementValue(key: string, raw: string): void {
       if (
         !id.test(key) ||
         !record(v) ||
+        Object.values(v).some((value) => typeof value !== "string") ||
         !["privateKey", "password"].some(
           (k) => typeof v[k] === "string" && (v[k] as string).length > 0,
         ) ||
@@ -276,6 +312,7 @@ export function validateSystemManagementValue(key: string, raw: string): void {
         (v) =>
           !record(v) ||
           !Number.isSafeInteger(v.actorId) ||
+          Number(v.actorId) < 1 ||
           typeof v.hostId !== "string" ||
           !id.test(v.hostId) ||
           !Array.isArray(v.actions) ||
@@ -292,7 +329,7 @@ export function validateSystemManagementValue(key: string, raw: string): void {
     if (
       !defaults ||
       !record(value) ||
-      Object.keys(value).some((k) => !(k in defaults))
+      Object.keys(value).some((k) => !Object.hasOwn(defaults, k))
     )
       throw new Error("Invalid policy fields.");
     for (const [k, expected] of Object.entries(defaults)) {
@@ -336,10 +373,24 @@ export function validateSystemManagementValue(key: string, raw: string): void {
     )
       throw new Error("Transfer batch limits exceed the protocol ceiling.");
     if (
+      suffix === "STORAGE_POLICY" &&
+      (Number(value.reserveBytes) < 1073741824 ||
+        Number(value.reservePercent) < 15 ||
+        Number(value.reservePercent) > 50 ||
+        Number(value.trashBytes) > 268435456)
+    )
+      throw new Error(
+        "Storage reserve must remain at least 1 GiB and 15%, and trash cannot exceed the provisioned 256 MiB ceiling.",
+      );
+    if (suffix === "RETENTION" && Number(value.trashDays) > 30)
+      throw new Error("Trash retention cannot exceed 30 days.");
+    if (
       suffix === "SESSION_POLICY" &&
       (Number(value.authoritySeconds) > 15 ||
         Number(value.absoluteSeconds) > 7200 ||
-        Number(value.remoteLeaseSeconds) > 60)
+        Number(value.remoteLeaseSeconds) > 60 ||
+        Number(value.remoteLeaseSeconds) < 30 ||
+        Number(value.remoteLeaseSeconds) < 2 * Number(value.authoritySeconds))
     )
       throw new Error(
         "Session authority/lifetime exceeds the security ceiling.",

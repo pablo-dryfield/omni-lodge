@@ -173,8 +173,8 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 			err = root.Mkdir(name, 0750)
 		case "chmod":
 			mode := integer(e.Params, "mode")
-			if mode < 0 || mode > 0777 {
-				return nil, errors.New("permission bits denied")
+			if mode < 0 || mode > 0777 || mode&0022 != 0 {
+				return nil, errors.New("managed entries cannot grant group or other write access; publish through staging")
 			}
 			f, openErr := root.Open(name)
 			if openErr != nil {
@@ -211,7 +211,7 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 			if !info.Mode().IsRegular() {
 				return nil, errors.New("copy directories through a reviewed comparison manifest")
 			}
-			err = atomicCopy(root, name, target, id, policy, p.ReserveBytes)
+			err = atomicCopy(root, name, target, id, policy, p.ReserveBytes, p.ReservePercent)
 		case "trash":
 			hash, count, size, scanErr := treeSnapshot(root, name)
 			if scanErr != nil {
@@ -323,7 +323,8 @@ func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id st
 	if err != nil {
 		return nil, err
 	}
-	if capacity["freeBytes"].(uint64) < uint64(expectedSize+p.ReserveBytes) {
+	reserve := max(uint64(p.ReserveBytes), capacity["totalBytes"].(uint64)*uint64(p.ReservePercent)/100)
+	if capacity["freeBytes"].(uint64) < uint64(expectedSize)+reserve {
 		return nil, errors.New("destination capacity reserve would be exceeded")
 	}
 	if err = root.MkdirAll(".omnilodge-private", 0700); err != nil {
@@ -347,7 +348,18 @@ func publish(e Envelope, p Policy, policy RootPolicy, root *os.Root, name, id st
 		err = target.Sync()
 	}
 	if err == nil {
-		err = target.Chmod(0640)
+		mode := os.FileMode(0640)
+		if !boolean(e.Params, "createOnly") {
+			if previous, statErr := root.Lstat(name); statErr == nil {
+				if previous.Mode().Perm()&0022 != 0 {
+					err = errors.New("destination has unmanaged writable permissions")
+				}
+				mode = previous.Mode().Perm()
+			}
+		}
+		if err == nil {
+			err = target.Chmod(mode)
+		}
 	}
 	if err == nil {
 		err = target.Chown(0, policy.GID)
@@ -409,7 +421,7 @@ func intValue(value any) int {
 }
 
 // The published name is created only after a private, verified, fsynced copy.
-func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reserve int64) error {
+func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reserve int64, reservePercent int) error {
 	info, err := root.Lstat(name)
 	if err != nil {
 		return err
@@ -424,7 +436,7 @@ func atomicCopy(root *os.Root, name, target, id string, policy RootPolicy, reser
 	if err != nil {
 		return err
 	}
-	if info.Size() > 10<<30 || capacity["freeBytes"].(uint64) < uint64(info.Size()+reserve) {
+	if info.Size() > 10<<30 || capacity["freeBytes"].(uint64) < uint64(info.Size())+max(uint64(reserve), capacity["totalBytes"].(uint64)*uint64(reservePercent)/100) {
 		return errors.New("copy exceeds destination reserve")
 	}
 	if err = root.MkdirAll(".omnilodge-private", 0700); err != nil {

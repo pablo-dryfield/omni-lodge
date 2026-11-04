@@ -49,7 +49,7 @@ func cleanup(p Policy) error {
 			continue
 		}
 		info, statErr := entry.Info()
-		if statErr != nil || !info.ModTime().Before(now.Add(-30*24*time.Hour)) {
+		if statErr != nil {
 			continue
 		}
 		guard, lockErr := namedLock(id)
@@ -57,7 +57,7 @@ func cleanup(p Policy) error {
 			continue
 		}
 		record, readErr := loadRecord(id)
-		if readErr == nil && (record.State == "completed" || record.State == "stopped") {
+		if readErr == nil && (record.State == "completed" || record.State == "stopped") && ((record.ExpiresAt > 0 && record.ExpiresAt < now.UnixMilli()) || (record.ExpiresAt == 0 && info.ModTime().Before(now.Add(-30*24*time.Hour)))) {
 			_ = os.Remove(recordPath(id))
 		}
 		guard.Close()

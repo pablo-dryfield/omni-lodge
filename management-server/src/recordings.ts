@@ -167,7 +167,7 @@ export class Recordings {
         ).rows[0].bytes,
       );
       requireValue(
-        used + maximum <= limit(ctx, "RECORDING", "totalBytes", 67108864),
+        used + maximum <= Math.min(limit(ctx, "RECORDING", "totalBytes", 67108864),limit(ctx,"STORAGE_POLICY","artifactBytes",134217728)),
         507,
         "RECORDING_QUOTA",
         "Recording storage is full. Free expired recordings before starting a recorded terminal.",

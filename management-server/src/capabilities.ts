@@ -1,7 +1,7 @@
 import { Authority } from "./authority.js";
 import { connect, sftp, execAdapter } from "./ssh.js";
 import { Store } from "./store.js";
-import type { Context } from "./types.js";
+import { Fault, type Context } from "./types.js";
 
 export async function testHost(
   authority: Authority,
@@ -70,7 +70,11 @@ export async function testHost(
         stages.push({
           name: "Managed adapter",
           ok: true,
-          details: { sampledAt: metrics.sampledAt, release: metrics.release },
+          details: {
+            sampledAt: metrics.sampledAt,
+            release: metrics.release,
+            resources: metrics.resources,
+          },
         });
       } finally {
         client.end();
@@ -80,6 +84,26 @@ export async function testHost(
     return { ok: true, stages };
   } catch (error) {
     await store.event(ctx.actorId, hostId, "host.test", "failed");
-    throw error;
+    if (
+      error instanceof Fault &&
+      [
+        "STEP_UP_REQUIRED",
+        "SESSION_EXPIRED",
+        "POLICY_CHANGED",
+        "FORBIDDEN",
+      ].includes(error.code)
+    )
+      throw error;
+    stages.push({
+      name: "Connection or capability check",
+      ok: false,
+      ...{
+        message:
+          error instanceof Fault
+            ? error.message
+            : "The saved server could not complete this check.",
+      },
+    });
+    return { ok: false, stages };
   }
 }
