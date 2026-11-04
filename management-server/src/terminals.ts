@@ -180,7 +180,7 @@ export class Terminals {
       terminalForNotice = terminal;
       this.sessions.set(terminal.id, terminal);
       terminal.detached = setTimeout(
-        () => void this.close(terminal, "closed"),
+        () => void this.close(terminal, "closed").catch(() => {}),
         limit(ctx, "SESSION_POLICY", "detachSeconds", 120) * 1000,
       );
       terminal.timer = setInterval(
@@ -199,8 +199,14 @@ export class Terminals {
         });
         void this.close(terminal, "closed").catch(() => {});
       });
-      channel.on("error", () => void this.close(terminal, "transport_lost"));
-      client.on("close", () => void this.close(terminal, "transport_lost"));
+      channel.on(
+        "error",
+        () => void this.close(terminal, "transport_lost").catch(() => {}),
+      );
+      client.on(
+        "close",
+        () => void this.close(terminal, "transport_lost").catch(() => {}),
+      );
       await this.store.update(job, "active", {
         managed: terminal.managed,
         recording: Boolean(recording),
@@ -295,6 +301,14 @@ export class Terminals {
     const token = crypto.randomBytes(32).toString("base64url");
     for (const [key, value] of this.tickets)
       if (value.expires < Date.now()) this.tickets.delete(key);
+    requireValue(
+      this.tickets.size < 512 &&
+        [...this.tickets.values()].filter((v) => v.actorId === ctx.actorId)
+          .length < 128,
+      429,
+      "CAPACITY_EXCEEDED",
+      "Too many pending terminal attachments. Wait for their short expiry.",
+    );
     this.tickets.set(crypto.createHash("sha256").update(token).digest("hex"), {
       id,
       actorId: ctx.actorId,
@@ -421,7 +435,9 @@ export class Terminals {
           );
           if (m.type === "input") {
             requireValue(
-              typeof m.data === "string" && Buffer.byteLength(m.data) <= 65536,
+              typeof m.data === "string" &&
+                Buffer.byteLength(m.data) <=
+                  limit(fresh, "TERMINAL_LIMITS", "inputBytes", 65536),
               413,
               "TOO_LARGE",
               "Terminal input is too large.",

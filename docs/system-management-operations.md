@@ -1,0 +1,71 @@
+# System Management operations
+
+This runbook accompanies the single System Management release. The implementation ledger records validation and activation evidence. Do not use a planning checklist as evidence of a successful deployment.
+
+## Runtime boundaries
+
+- Main application: ordinary OmniLodge authentication and the Settings launcher. A fresh login session is required; legacy tokens can continue ordinary work but must sign in again to launch this console.
+- Browser origin: `https://system.omni-lodge.com`. The root-owned ingress preload reserves this hostname across every application release and rollback. It never falls back to the application SPA.
+- Broker: nonroot `omnilodge-system`, loopback port 3011, restricted control-database role, minimal environment, private artifacts. It cannot read the application database credentials or forge authority records.
+- Authority: the backend verifies the current global administrator, page, action, host grant, password confirmation, parent login and policy generation. It signs bounded requests over a private Unix socket. Operational settings remain in Settings / Control Panel / System Management.
+- Managed host: a fixed root gateway validates signed requests. Per-actor shell and SFTP identities have no root shell, broad sudo, cron/at, lingering user services or writable deployment/configuration paths. Shell processes run under a bounded systemd slice and expiring root watchdog lease.
+- Initial writable files: each administrator's operations workspace. These are operational files, not live application code, database data, credentials or backups. Add approved roots only with a reviewed OS/root-policy change as well as a matching profile. A browser profile alone does not provision identities, mounts or root permissions.
+
+## First production activation
+
+1. Keep `SYSTEM_MANAGEMENT_ENABLED=false` while installing boundaries. Verify the exact trusted, merged release SHA and its immutable GitHub Actions artifact. Never build UI or backend code on production, install branch code into a live release, or commit generated output.
+2. Update the existing production host control plane through its reviewed bootstrap from that trusted SHA. Verify the runtime launcher loads `system-ingress-guard.mjs` before the UI server and that the reserved hostname returns a console-only 503 while no broker is running. The guard must survive rollback to older application releases.
+3. Run the immutable release's `be/dist/systemManagement/bootstrap-host.sh <exact-application-database>` as root in plan mode. It discovers active, approved, unscoped administrator actors. Review the proposed identity count. With the same verified artifact, run it with `--apply`. Repeated setup must preserve ownership of already-mounted roots and staging directories.
+4. From that immutable backend directory, load `/etc/omnilodge/backend.env` through the existing protected maintenance process and run `node dist/scripts/provisionSystemManagementRuntime.js` in plan mode. Apply only to the confirmed application database with `--apply --confirm-database=<exact-name>`. It creates restricted roles/schema, dedicated SSH keys, root policy and encrypted Control Panel references. Existing or partially provisioned credentials are refused rather than silently replaced.
+5. Preserve the root-owned bootstrap secrets outside the repository in the existing encrypted infrastructure backup. These include the authority signing key, RPC secret, artifact encryption key, protected backend environment/config-encryption key, broker environment and adapter policy. Public SSH authorized-key files are root-owned and readable by the SSH identity; private keys remain encrypted or root-private.
+6. Reload the protected backend environment through the immutable release/deployment control plane. Confirm the application readiness checks and backend migrations before public UI activation. Verify effective cgroup controllers on the actual host, including legacy/hybrid controllers; a configuration file is not proof of enforced limits.
+7. Provision proxied DNS for `system.omni-lodge.com` to the existing origin with the wildcard TLS certificate. Verify TLS, strict console CSP, first-request WSS forwarding and that parent application cookies/authorization are stripped at ingress. Do not add unrelated hostnames as an origin workaround.
+8. Inspect Control Panel profiles, per-host action grants and credential metadata. Confirm host keys independently. Enable admission only when the isolated ingress, OS identities, authority socket, control schema and resource probes pass. Defaults: broker 256 MiB / 25% CPU / 64 tasks; remote aggregate 256 MiB / 25% / 64 tasks; two terminals per actor and four globally; one transfer per actor and two globally.
+9. Verify Settings launch, password confirmation, a nonroot PTY command, managed upload/read-back/download, text save/conflict handling, trash/restore, log reading, parent logout revocation and a controlled service restart with independent readiness. Record exact release SHA, public health and console health. Validate both embedded and standalone launch.
+
+The enabled switch, identity mappings, host/action grants, fingerprints, credentials, limits and retention are live Control Panel values. Policy changes invalidate old sessions and pending reviews. Broker budget changes restart its bounded service. Remote budget changes are applied and checked against root-owned ceilings; reboot invalidates the applied-budget cache. Infrastructure/bootstrap secrets remain outside the database because they are required to establish the authority and control connection.
+
+## Enrollment and credential changes
+
+A generic server needs explicit permitted resolved IP addresses, independently verified SHA256 host-key pins, separate nonroot identities, approved roots and working SFTP. The fixed `id -u` capability probe must establish a nonzero UID on generic servers. Capacity-dependent writes require a verified statvfs capability. Host-key or DNS mismatches fail closed; never accept a new key solely because the connection supplied it.
+
+Use Manage servers for public connection metadata. Use SSH credentials for write-only key/password replacement or revocation, with a recorded reason. Metadata shows the affected host/actor mappings without revealing secrets. Updating credentials does not remove an authorized public key from the remote server: rotate/revoke that key through the remote host's approved maintenance path too. Reopen the console after policy changes.
+
+For an additional managed administrator, provision the OS identities/mounts and authorized public key using the reviewed root maintenance process, then extend the root policy and encrypted Control Panel credential/identity/grant mappings. Removing application access immediately prevents new authority and stops managed execution through the independent lease; retire OS keys/identities separately after active work drains. Do not delete another actor's private operations or uncertain journals during account cleanup.
+
+## Terminal recovery
+
+A disconnected browser can reattach while the broker and authority retain that terminal, within the configured grace and absolute lifetime. Overview lists active terminals. An eligible administrator can end another session with a reason. Explicit takeover fences an old attachment. Input without an acknowledgement is never replayed automatically. A newly rendered screen may have only a retained output suffix; refresh the remote application display when prompted.
+
+Password-confirmation expiry locks input and new mutations. Reauthentication can unlock a still-valid session. Parent logout, password change, disabled user/action/host, policy change or authority failure ends permission. Managed processes are independently stopped when the root lease expires even if the broker disappears. Closing SSH on a generic host cannot promise that detached remote processes stopped.
+
+## Files, transfers and uncertainty
+
+- Text editing is bounded and never renders HTML/Markdown as executable content. UTF-8 BOM and line endings are preserved. Mixed line endings require a normalization choice. A conflict retains the draft and offers original/current comparison, reload, save-as or an explicitly reviewed replacement of the newly observed version.
+- Managed publication verifies a private copy before atomic rename. The SFTP identity cannot publish directly or retain a writable descriptor into the published private copy. Generic SFTP uses exclusive temporary files and supported atomic rename; unrelated external writers can race with an optimistic check.
+- Uploads preflight complete source SHA-256 and destination identity/hash. Existing files offer reviewed replace, rename or skip. Chunks have confirmed offsets/checksums; resume requires the original complete source and rechecks the last confirmed remote chunk. Uncertain trailing bytes are truncated before resuming.
+- Pause preserves staging for an eligible resume. Cancel removes only job-owned temporary data and records pending cleanup when removal cannot be confirmed. Publication cannot be cancelled or replayed as a staging write. Space reservations cover both managed copies and preserve the larger of 1 GiB or 15% free space by default.
+- Supported standalone browsers can stream a selected file or a folder into device writers. Device-folder downloads use a new directory and retain per-file outcomes; keep the page open. Other browsers and embedded contexts use authenticated native attachment downloads or streaming ZIP64 folders. A browser handoff is not proof that a file was saved. Paths and credentials are not placed in download URLs. File ranges require the original source version; generated ZIP archives restart explicitly.
+- Folder comparison previews one-way copy plans and skips existing targets by default. It never performs hidden deletion. Manual copies can explicitly review replacement. Same-filesystem moves use rename; an unsupported cross-filesystem move must be performed as explicit copy, verified outcome, then a separately reviewed deletion.
+- Permanent recursive deletion requires a bounded manifest and typed confirmation. Managed trash is recoverable only until its capacity/expiry limit; restoring never overwrites an existing destination. Trash is not a backup.
+- Use Transfers / Details for child results and Verify outcome for root-journal reconciliation. `outcome_unknown` is not an automatic retry instruction. Inspect the destination and original operation before preparing any new mutation. Retain uncertain root records for maintenance review.
+
+## Services and logs
+
+Only approved service IDs can be inspected or restarted. Production bootstrap includes backend, UI, broker and read-only PostgreSQL status. Restart review captures target, impact, typed service name and reason. Backend/broker restarts disconnect the console; the independent root operation worker records readiness after the command. Reopen from Settings and reconcile the accepted operation ID; do not submit another restart because the HTTP connection closed.
+
+Logs are bounded tails. Follow reloads a bounded tail; Pause stops polling. Search, level/time filters and export operate on retained content. Timestamp filters omit unparseable lines. Arbitrary logs may contain secrets; ordinary activity does not capture terminal content. Optional encrypted output recordings have separate permission, storage and retention controls and are disabled by default.
+
+## Retention, storage and backups
+
+Root-owned timers expire remote leases, consumed nonces, confirmed old outcomes, owned staging/private copies and expired trash. Active/uncertain publication records remain available for reconciliation. Broker/authority cleanup bounds completed history, expired reviews, launch/session records and encrypted recordings. Generic SFTP servers cannot perform root-owned cleanup: pending temporary cleanup requires a fresh authorized connection or the server's separate operator policy. Investigate storage pressure instead of disabling reserve checks.
+
+The existing backup service backs up the independent control database as a separate PostgreSQL custom archive, including both Workspace and System Management schemas. It uses the backup maintenance identity, not broader grants to either interactive runtime. Existing local/Drive verification and retention apply. Application backups alone do not recover root bootstrap keys or artifact encryption keys. Keep those in the encrypted infrastructure backup, separately from data archives.
+
+Recovery order: restore infrastructure secrets and verified role/bootstrap definitions; restore the control database with matching schema/roles; restore application data/configuration; install the trusted runtime and ingress; verify decryptability of a known journal/recording; start fresh authority sessions; reconcile uncertain remote operations before enabling new work. Never put connection strings, private keys, copied production data or decrypted transcripts into Git, PRs or chat.
+
+## Drain, rollback and emergency access
+
+Disable admission in Control Panel, let accepted bounded structured work finish or reconcile, and end terminals. The supervisor stops the broker. The remote watchdog remains independent. Deploy/rollback only through the immutable release workflow. Keep the root ingress reservation, adapter state/journal and encryption keys across rollback. Legacy release artifacts remain valid rollback payloads, but cannot bypass the reserved console origin or revive an old authority generation.
+
+The existing trusted maintenance SSH key remains the break-glass path; the web console does not replace it or change the deploy identity. If the broker is unavailable, inspect the bounded systemd unit and protected logs through that path. If root policy/adapter compatibility changes, drain and review the upgrade rather than overwriting the installed adapter. Re-enable only after effective probes and public application readiness pass.

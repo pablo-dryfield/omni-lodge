@@ -69,3 +69,19 @@ func TestRootCannotEscape(t *testing.T) {
 		t.Fatal("root followed escaping symlink")
 	}
 }
+
+func TestLockPoolIsBoundedAndSeparatesNestedCategories(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	a, _ := lockIdentity(id)
+	b, _ := lockIdentity("lease-" + id)
+	c, _ := lockIdentity("root-work")
+	if a == b || a == c || b == c {
+		t.Fatal("nested locks must have separate categories")
+	}
+	if _, err := lockIdentity("../escape"); err == nil {
+		t.Fatal("invalid lock accepted")
+	}
+	if len(a) > 16 {
+		t.Fatal("unbounded lock name")
+	}
+}

@@ -433,6 +433,18 @@ export class Files {
       "PROTECTED_PATH",
       "Choose an approved writable root.",
     );
+    if (operation === "chmod")
+      requireValue(
+        Number.isInteger(input.mode) &&
+          Number(input.mode) >= 0 &&
+          Number(input.mode) <= 0o777 &&
+          (!approvedRoot.managed || (Number(input.mode) & 0o022) === 0),
+        400,
+        "INVALID_MODE",
+        approvedRoot.managed
+          ? "Managed files must remain unwritable by group and other users. Use ordinary permission bits such as 640 or 750."
+          : "Only ordinary permission bits are supported.",
+      );
     const source =
       operation === "mkdir" ||
       operation === "restore" ||

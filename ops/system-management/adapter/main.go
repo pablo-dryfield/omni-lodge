@@ -190,6 +190,26 @@ func atomicJSON(name string, value any) error {
 	defer dir.Close()
 	return dir.Sync()
 }
+func lockIdentity(name string) (string, error) {
+	category := ""
+	value := name
+	if name == "authority" || name == "copy-admission" {
+		return name, nil
+	}
+	if uuid.MatchString(name) {
+		category = "operation"
+	} else if strings.HasPrefix(name, "lease-") && uuid.MatchString(strings.TrimPrefix(name, "lease-")) {
+		category = "lease"
+		value = strings.TrimPrefix(name, "lease-")
+	} else if strings.HasPrefix(name, "root-") && identifier.MatchString(strings.TrimPrefix(name, "root-")) {
+		category = "root"
+		value = strings.TrimPrefix(name, "root-")
+	} else {
+		return "", errors.New("invalid lock identity")
+	}
+	sum := sha256.Sum256([]byte(value))
+	return category + "-" + hex.EncodeToString(sum[:1]), nil
+}
 func boundedEntries(directory string) ([]os.DirEntry, error) {
 	dir, err := os.Open(directory)
 	if err != nil {

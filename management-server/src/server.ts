@@ -832,7 +832,8 @@ export async function start() {
                 { result },
               ),
             )
-            .catch(() => store.update(job, "outcome_unknown"));
+            .catch(() => store.update(job, "outcome_unknown"))
+            .catch(() => {});
         }
         send(res, 202, job);
         return;
@@ -931,7 +932,10 @@ export async function start() {
   await new Promise<void>((resolve) =>
     server.listen(port, "127.0.0.1", resolve),
   );
+  let stopped = false;
   const stop = async () => {
+    if (stopped) return;
+    stopped = true;
     draining = true;
     clearInterval(recordingCleanup);
     await terminals.drain();
@@ -953,18 +957,18 @@ export async function start() {
             .split(/\s+/)[19];
           if (start !== expected) {
             clearInterval(watcher);
-            void stop();
+            void stop().catch(() => {});
           }
         })
         .catch(() => {
           clearInterval(watcher);
-          void stop();
+          void stop().catch(() => {});
         });
     }, 3000);
     watcher.unref();
   }
-  process.once("SIGTERM", () => void stop());
-  process.once("SIGINT", () => void stop());
+  process.once("SIGTERM", () => void stop().catch(() => {}));
+  process.once("SIGINT", () => void stop().catch(() => {}));
   return { server, store, stop };
 }
 if (

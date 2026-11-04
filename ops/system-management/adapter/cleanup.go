@@ -70,7 +70,7 @@ func cleanup(p Policy) error {
 				continue
 			}
 			seen[policy.Path] = true
-			guard, lockErr := namedLock(rootID)
+			guard, lockErr := namedLock("root-" + rootID)
 			if lockErr != nil {
 				continue
 			}
@@ -222,7 +222,7 @@ func cleanupStaging(p Policy, now time.Time) error {
 		if !ok || !policy.Writable {
 			continue
 		}
-		guard, err := namedLock(record.RootID)
+		guard, err := namedLock("root-" + record.RootID)
 		if err != nil {
 			continue
 		}

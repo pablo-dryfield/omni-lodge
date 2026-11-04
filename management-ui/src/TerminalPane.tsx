@@ -415,31 +415,28 @@ export function TerminalPane({
         </div>
       )}
       {paste !== null && (
-        <div className="dialog-backdrop">
-          <section className="dialog">
-            <h2>Paste into terminal</h2>
-            <p>
-              Multiple lines can run commands immediately. Review the text
-              before sending.
-            </p>
-            <pre>{paste.slice(0, 65536)}</pre>
-            <div className="dialog-actions">
-              <button onClick={() => setPaste(null)}>Cancel</button>
-              <button
-                className="primary"
-                disabled={new TextEncoder().encode(paste).length > 60000}
-                onClick={() => {
-                  terminal.current?.paste(paste);
-                  setPaste(null);
-                }}
-              >
-                {new TextEncoder().encode(paste).length > 60000
-                  ? "Paste exceeds 60 KB"
-                  : "Send text"}
-              </button>
-            </div>
-          </section>
-        </div>
+        <Dialog title="Paste into terminal" onClose={() => setPaste(null)}>
+          <p>
+            Multiple lines can run commands immediately. Review the text before
+            sending.
+          </p>
+          <pre>{paste.slice(0, 65536)}</pre>
+          <div className="dialog-actions">
+            <button onClick={() => setPaste(null)}>Cancel</button>
+            <button
+              className="primary"
+              disabled={new TextEncoder().encode(paste).length > 60000}
+              onClick={() => {
+                terminal.current?.paste(paste);
+                setPaste(null);
+              }}
+            >
+              {new TextEncoder().encode(paste).length > 60000
+                ? "Paste exceeds 60 KB"
+                : "Send text"}
+            </button>
+          </div>
+        </Dialog>
       )}
     </section>
   );

@@ -22,7 +22,7 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test(
   "real authority, restricted PostgreSQL roles, OpenSSH/chroot, managed files, PTY isolation and orphan watchdog",
-  { skip: !required, timeout: 240000 },
+  { skip: !required, timeout: 900000 },
   async () => {
     assert(
       process.platform === "linux" &&
@@ -587,6 +587,76 @@ test(
         digest(await fs.readFile("/srv/omnilodge-operations/u901/fixture.txt")),
         digest(source),
       );
+      // A sparse fixture avoids consuming the runner disk while exercising ten
+      // GiB through real OpenSSH, the immutable broker and bounded HTTP streams.
+      const largePath = "/srv/omnilodge-operations/u901/large-stream.bin",
+        largeBytes = 10 * 1024 ** 3;
+      const largeFile = await fs.open(largePath, "wx", 0o640);
+      await largeFile.truncate(largeBytes);
+      await largeFile.close();
+      await fs.chown(
+        largePath,
+        0,
+        Number(
+          (
+            await run("/usr/bin/id", ["-g", "omnilodge-sftp-901"])
+          ).stdout.trim(),
+        ),
+      );
+      const download = await request("/downloads", {
+          hostId: "fixture",
+          rootId: "work",
+          path: "large-stream.bin",
+        }),
+        started = Date.now();
+      const received = await new Promise<number>((resolve, reject) => {
+        const req = http.get(
+          {
+            hostname: "127.0.0.1",
+            port: 3011,
+            path: "/management/download?id=" + download.id,
+            headers: { Host: "system.omni-lodge.com", Cookie: cookie },
+          },
+          (res) => {
+            if (res.statusCode !== 200) {
+              res.resume();
+              reject(new Error("Large stream returned " + res.statusCode));
+              return;
+            }
+            let count = 0;
+            res.on("data", (part) => {
+              count += part.length;
+            });
+            res.on("error", reject);
+            res.on("end", () => resolve(count));
+          },
+        );
+        req.on("error", reject);
+        req.setTimeout(30000, () =>
+          req.destroy(new Error("Large stream stalled")),
+        );
+      });
+      assert.equal(received, largeBytes);
+      const resourceSample = (
+        await run("/usr/bin/systemctl", [
+          "show",
+          brokerUnit,
+          "--property=MemoryPeak,MemoryCurrent",
+        ])
+      ).stdout;
+      const peak = Number(/MemoryPeak=([0-9]+)/.exec(resourceSample)?.[1]);
+      assert(
+        peak > 0 && peak <= 268435456,
+        "Ten GiB transfer must stay inside the enforced broker memory budget.",
+      );
+      console.log(
+        JSON.stringify({
+          largeStreamBytes: received,
+          milliseconds: Date.now() - started,
+          brokerPeakBytes: peak,
+        }),
+      );
+      await fs.unlink(largePath);
       const review = await request("/file-operations/review", {
         hostId: "fixture",
         rootId: "work",

@@ -10,6 +10,7 @@ import { createRoot } from "react-dom/client";
 import {
   IconTerminal2,
   IconFolder,
+  IconFileText,
   IconArrowsTransferUp,
   IconActivity,
   IconServer,
@@ -991,7 +992,7 @@ function App() {
                       "CPU",
                       overview?.cpuPercent == null
                         ? "Unavailable"
-                        : `${overview.cpuPercent}%`,
+                        : `${Number(overview.cpuPercent).toFixed(1)}%`,
                     ],
                     [
                       "Memory",
@@ -1045,6 +1046,44 @@ function App() {
                       <dt>Connection</dt>
                       <dd>
                         {host.hostname}:{host.port}
+                      </dd>
+                      <dt>Connected identity</dt>
+                      <dd>{host.username}</dd>
+                      <dt>Free inodes</dt>
+                      <dd>
+                        {overview?.freeInodes === undefined
+                          ? "Unavailable"
+                          : Number(overview.freeInodes).toLocaleString()}
+                      </dd>
+                      <dt>Boot identity</dt>
+                      <dd className="mono">
+                        {overview?.bootId || "Unavailable"}
+                      </dd>
+                      <dt>Resource enforcement</dt>
+                      <dd>
+                        {overview?.resources?.enforced
+                          ? `${bytes(Number(overview.resources.aggregateMemoryBytes))} / ${overview.resources.aggregateCpuPercent}% CPU / ${overview.resources.aggregateTasks} tasks`
+                          : "Unavailable"}
+                      </dd>
+                      <dt>Active operations</dt>
+                      <dd>
+                        {
+                          jobs.filter(
+                            (j) =>
+                              j.hostId === hostId &&
+                              ![
+                                "completed",
+                                "closed",
+                                "failed",
+                                "cancelled",
+                                "skipped",
+                                "expired",
+                              ].includes(j.state),
+                          ).length
+                        }
+                        <button onClick={() => setSection("transfers")}>
+                          Open queue
+                        </button>
                       </dd>
                       <dt>Host fingerprint</dt>
                       <dd className="mono">{host.fingerprints.join("\n")}</dd>

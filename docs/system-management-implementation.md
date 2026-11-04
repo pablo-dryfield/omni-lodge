@@ -62,3 +62,15 @@ The root-owned runtime launcher must preload `system-ingress-guard.mjs` before *
 
 
 The next branch push is for Linux CI validation while final UX/recovery work continues. It does not publish an incomplete application release. No PR is opened and no production activation occurs until the full checklist is cleared. The real PostgreSQL test command is `MANAGEMENT_TEST_ADMIN_URL=<local test cluster> node management-server/node_modules/tsx/dist/cli.mjs --test management-server/test/postgres.integration.ts`; no connection secret belongs in this document or CI logs.
+
+## Integrated console checkpoint
+
+- Commits through `08ce59de` add host enrollment forms, write-only key/password rotation/revocation with metadata, active sessions/termination, reviewed file mutations, native editor dialogs, mixed-newline preservation, explicit copy/upload overwrite checks, device folder writers, opaque authenticated download intents/ranges and per-file browser outcomes.
+- Root policies now apply and probe real aggregate/resource limits, including legacy/hybrid cgroups and reboot-aware budget refresh. Owned staging/private-copy/trash expiry is root controlled. Fixed-size categorized lock pools prevent permanent lock-file growth and nested-category collisions.
+- Linux CI run `41788314695` passed the complete real console integration at commit `08ce59de`: independent PostgreSQL grants, repeated provisioning, SSH/SFTP/chroot, upload and broker recovery, checksum publication, trash/restore, PTY nonroot execution, resource limits and watchdog shutdown after parent revocation/broker loss. Earlier failures found an isolated ESM bundle path, a test Host-header issue, unreadable public-key files, repeated bind-mount ownership changes and late SFTP CLOSE errors; each was fixed without weakening the boundary.
+- New packages: broker 11 tests pass, isolated UI 3 tests pass, Go signature/path/lock tests pass and Linux cross-build passes. Whole application CI backend PostgreSQL 16/17, UI, UI-server and release tooling have passed on the preceding checkpoints. The latest additions still require a final full CI run.
+- Desktop and 390 px browser inspection uses synthetic loopback data. The file list and native editor fit without horizontal document overflow; dirty state, syntax highlighting and nested save review are exercised. Physical mobile keyboard/IME/clipboard testing and production activation remain unverified.
+- The next Linux run adds a real 10 GiB sparse-file stream through OpenSSH and the immutable bounded broker, with measured peak memory and byte count. No production disk or real customer file is used for this test.
+- Runbook: `system-management-operations.md`. The existing independent control backup now uses the established backup maintenance identity to include both protected schemas while retaining runtime-role separation.
+
+No real PR, production provisioning, feature activation or deployment has occurred yet. DNS remains pending the previously asked `system` record. All remaining acceptance and operational gates must be reported accurately before release.

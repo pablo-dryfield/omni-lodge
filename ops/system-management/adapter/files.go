@@ -139,7 +139,7 @@ func fileOperation(e Envelope, p Policy, actor Actor) (map[string]any, error) {
 	}
 	id := str(e.Params, "operationId")
 	return journaled(e, id, func() (map[string]any, error) {
-		pathLock, err := namedLock(rootID)
+		pathLock, err := namedLock("root-" + rootID)
 		if err != nil {
 			return nil, err
 		}

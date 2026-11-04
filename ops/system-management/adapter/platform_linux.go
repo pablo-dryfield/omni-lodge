@@ -24,10 +24,11 @@ func protectedFile(name string) error {
 	return nil
 }
 func namedLock(name string) (*os.File, error) {
-	if !identifier.MatchString(name) && !uuid.MatchString(name) {
-		return nil, errors.New("invalid lock identity")
+	filename, err := lockIdentity(name)
+	if err != nil {
+		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(statePath, "locks", name), os.O_CREATE|os.O_RDWR, 0600)
+	f, err := os.OpenFile(filepath.Join(statePath, "locks", filename), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
