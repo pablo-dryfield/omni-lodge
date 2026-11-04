@@ -49,6 +49,8 @@ import {
 import "./styles.css";
 import { HostProfiles } from "./HostProfiles";
 import { Dialog } from "./Dialog";
+import { ActiveSessions } from "./ActiveSessions";
+import { Credentials } from "./Credentials";
 
 type Entry = {
   name: string;
@@ -136,11 +138,9 @@ function App() {
     [serviceId, setServiceId] = useState(""),
     [logs, setLogs] = useState(""),
     [following, setFollowing] = useState(false);
-  const [connectionTest, setConnectionTest] = useState<any>(null);
-  const [hostDraft, setHostDraft] = useState(""),
-    [credentialId, setCredentialId] = useState(""),
-    [privateKey, setPrivateKey] = useState(""),
-    [passphrase, setPassphrase] = useState("");
+  const [connectionTest, setConnectionTest] = useState<any>(null),
+    [jobDetails, setJobDetails] = useState<any>(null);
+  const [hostDraft, setHostDraft] = useState("");
   const [uploadProgress, setUploadProgress] = useState<{
       name: string;
       done: number;
@@ -173,8 +173,8 @@ function App() {
     pendingResume.current = null;
     setDocument(null);
     setFileOperation(null);
-    setPrivateKey("");
-    setPassphrase("");
+    setConnectionTest(null);
+    setJobDetails(null);
     setPassword("");
     setLogs("");
     setEntries([]);
@@ -288,14 +288,20 @@ function App() {
     setServices([]);
     setServiceId(host?.services[0] || "");
   }, [hostId]);
+  const fileEpoch = useRef(0);
+  useEffect(() => {
+    fileEpoch.current++;
+  }, [hostId, rootId, session?.actorId]);
   const loadFiles = useCallback(
     async (path = currentPath) => {
       if (!hostId || !rootId) return;
+      const epoch = ++fileEpoch.current;
       setBusy(true);
       try {
         const result = await api(
           `/files/list?${query({ hostId, rootId, path })}`,
         );
+        if (epoch !== fileEpoch.current) return;
         setEntries(result.entries);
         setComplete(result.complete);
         setCurrentPath(result.path);
@@ -305,7 +311,7 @@ function App() {
       } catch (e) {
         onError(e);
       } finally {
-        setBusy(false);
+        if (epoch === fileEpoch.current) setBusy(false);
       }
     },
     [hostId, rootId, currentPath, onError],
@@ -670,7 +676,9 @@ function App() {
         </div>
         <div className="spacer" />
         <button
-          disabled={!host || busy}
+          disabled={
+            !host || busy || !session.actions.includes("connectTerminal")
+          }
           className="primary"
           onClick={() => void openTerminal()}
         >
@@ -805,6 +813,26 @@ function App() {
                     </article>
                   ))}
                 </div>
+                <ActiveSessions
+                  actorId={session.actorId}
+                  hostId={hostId}
+                  onError={onError}
+                  onAttach={(item) => {
+                    if (!tabs.some((t) => t.id === item.id))
+                      setTabs((t) => [
+                        ...t,
+                        {
+                          id: item.id,
+                          hostId: item.hostId,
+                          title: `${item.hostId} - retained session`,
+                          managed: item.managed,
+                          recording: false,
+                        },
+                      ]);
+                    setActiveTab(item.id);
+                    setSection("terminal");
+                  }}
+                />
                 <div className="overview-grid">
                   <article className="card">
                     <h3>Server identity</h3>
@@ -881,7 +909,10 @@ function App() {
                 </button>
               </div>
             ))}
-            <button onClick={() => void openTerminal()} disabled={!host}>
+            <button
+              onClick={() => void openTerminal()}
+              disabled={!host || !session.actions.includes("connectTerminal")}
+            >
               <IconPlus size={18} />
               Terminal
             </button>
@@ -1313,6 +1344,15 @@ function App() {
                       {job.data.verification || job.data.error || ""}
                     </small>
                   </div>
+                  <button
+                    onClick={() =>
+                      void api(`/job-details?${query({ id: job.id })}`)
+                        .then(setJobDetails)
+                        .catch(onError)
+                    }
+                  >
+                    Details
+                  </button>
                   <span className={`state ${job.state}`}>
                     {job.state.replace(/_/g, " ")}
                   </span>
@@ -1602,66 +1642,20 @@ function App() {
                   }}
                 />
               )}
+              {session.actions.includes("manageCredentials") && (
+                <Credentials
+                  revision={session.policyHash}
+                  onError={onError}
+                  onSaved={() => {
+                    clearWorkspace();
+                    setNotice(
+                      "Credential updated. Open a fresh administration session.",
+                    );
+                  }}
+                />
+              )}
               <article className="card">
-                <h3>Replace a credential</h3>
-                <p className="muted">
-                  Credentials are encrypted and write-only. Use a dedicated
-                  operational key.
-                </p>
-                <label>
-                  Credential ID
-                  <input
-                    value={credentialId}
-                    onChange={(e) => setCredentialId(e.target.value)}
-                    autoComplete="off"
-                  />
-                </label>
-                <label>
-                  Private key
-                  <textarea
-                    aria-label="Private key"
-                    value={privateKey}
-                    onChange={(e) => setPrivateKey(e.target.value)}
-                    spellCheck={false}
-                    autoComplete="off"
-                    rows={8}
-                  />
-                </label>
-                <label>
-                  Passphrase
-                  <input
-                    type="password"
-                    value={passphrase}
-                    onChange={(e) => setPassphrase(e.target.value)}
-                    autoComplete="new-password"
-                  />
-                </label>
-                <button
-                  className="primary"
-                  onClick={() =>
-                    void api("/credentials", {
-                      id: credentialId,
-                      value: {
-                        privateKey,
-                        passphrase,
-                        revision: crypto.randomUUID(),
-                      },
-                      revision: session.policyHash,
-                      reason: "Operational SSH credential rotation",
-                    })
-                      .then(() => {
-                        setPrivateKey("");
-                        setPassphrase("");
-                        clearWorkspace();
-                        setNotice(
-                          "Credential replaced. Open a fresh administration session.",
-                        );
-                      })
-                      .catch(onError)
-                  }
-                >
-                  Save encrypted credential
-                </button>
+                <h3>Administration policy</h3>
                 <hr />
                 <p>
                   Limits, host action grants, retention and feature switches are
@@ -1919,6 +1913,47 @@ function App() {
             ))}
             <button onClick={() => setConnectionTest(null)}>Close</button>
           </div>
+        </Dialog>
+      )}
+      {jobDetails && (
+        <Dialog
+          title="Operation details"
+          wide
+          onClose={() => setJobDetails(null)}
+        >
+          <p className="mono">{jobDetails.id}</p>
+          <p>Status: {jobDetails.state.replace(/_/g, " ")}</p>
+          {jobDetails.error && <p className="alert">{jobDetails.error}</p>}
+          {jobDetails.cleanup && <p>Cleanup: {jobDetails.cleanup}</p>}
+          {jobDetails.results?.length > 0 && (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobDetails.results.map((item: any, index: number) => (
+                    <tr key={index}>
+                      <td>{String(item.path)}</td>
+                      <td>{String(item.state).replace(/_/g, " ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {jobDetails.outcome && (
+            <pre className="operation-output">
+              {JSON.stringify(jobDetails.outcome, null, 2)}
+            </pre>
+          )}
+          <p className="muted">
+            Uncertain operations must be verified before retrying. Completed
+            child items are not automatically replayed.
+          </p>
         </Dialog>
       )}
       {fileOperation && (

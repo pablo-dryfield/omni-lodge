@@ -232,7 +232,11 @@ export async function authorityRpc(
     : "view";
   const ctx = await session(
     args.session,
-    ["config", "profiles"].includes(method) ? "manageHosts" : action,
+    ["config", "profiles"].includes(method)
+      ? "manageHosts"
+      : ["credentials", "credential-metadata"].includes(method)
+        ? "manageCredentials"
+        : action,
     !["check", "touch", "step-up", "logout"].includes(method) &&
       !(method === "envelope" && args.operation === "renewOperation"),
   );
@@ -315,6 +319,25 @@ export async function authorityRpc(
       ),
     };
   if (method === "profiles") return { hosts: policy.hosts };
+  if (method === "credential-metadata")
+    return {
+      credentials: Object.entries(
+        policy.values.SYSTEM_MANAGEMENT_CREDENTIALS as Record<
+          string,
+          Record<string, unknown>
+        >,
+      ).map(([id, value]) => ({
+        id,
+        type: typeof value.privateKey === "string" ? "privateKey" : "password",
+        references: policy.hosts.flatMap((h) =>
+          Object.entries(h.identities).flatMap(([actorId, identity]) =>
+            [identity.credentialId, identity.fileCredentialId].includes(id)
+              ? [{ hostId: h.id, actorId: Number(actorId) }]
+              : [],
+          ),
+        ),
+      })),
+    };
   const host = hosts.find((h) => h.id === args.hostId);
   if (method === "config")
     return withSystemManagementConfigLock(async () => {
@@ -354,12 +377,18 @@ export async function authorityRpc(
       if (
         args.revision !== latest.revision ||
         typeof args.id !== "string" ||
-        !/^[\w-]{1,64}$/.test(args.id)
+        !/^[a-zA-Z0-9][\w-]{0,63}$/.test(args.id)
       )
         fail(
           409,
           "POLICY_CHANGED",
           "Refresh configuration before changing credentials.",
+        );
+      if (typeof args.reason !== "string" || args.reason.trim().length < 3)
+        fail(
+          400,
+          "REASON_REQUIRED",
+          "Record a reason for changing SSH credentials.",
         );
       const credentials = {
         ...(latest.values.SYSTEM_MANAGEMENT_CREDENTIALS as Record<
@@ -408,9 +437,11 @@ export async function authorityRpc(
     const credentialId = file
       ? identity.fileCredentialId || identity.credentialId
       : identity.credentialId;
-    const credential = (
-      policy.values.SYSTEM_MANAGEMENT_CREDENTIALS as Record<string, unknown>
-    )[credentialId];
+    const allCredentials = policy.values
+      .SYSTEM_MANAGEMENT_CREDENTIALS as Record<string, unknown>;
+    const credential = Object.hasOwn(allCredentials, credentialId)
+      ? allCredentials[credentialId]
+      : undefined;
     if (!credential)
       fail(
         503,

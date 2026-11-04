@@ -208,6 +208,8 @@ export async function start() {
         "/management/services",
         "/management/logs",
         "/management/profiles",
+        "/management/credential-metadata",
+        "/management/job-details",
         "/management/download-folder",
         "/management/trash",
         "/management/recordings",
@@ -306,6 +308,14 @@ export async function start() {
         send(res, 200, { ok: true });
         return;
       }
+      if (route === "/management/credential-metadata") {
+        send(
+          res,
+          200,
+          await authority.rpc("credential-metadata", { session: token }),
+        );
+        return;
+      }
       if (route === "/management/profiles") {
         send(res, 200, await authority.rpc("profiles", { session: token }));
         return;
@@ -329,6 +339,25 @@ export async function start() {
       const requireAction = async (action: Action) => {
         await authority.check(token, action);
       };
+      if (route === "/management/job-details") {
+        const job = await store.get(String(input.id), ctx.actorId);
+        await authority.rpc("authorize", {
+          session: token,
+          hostId: job.hostId,
+          action: "view",
+        });
+        send(res, 200, {
+          id: job.id,
+          state: job.state,
+          results: Array.isArray(job.data.results)
+            ? job.data.results.slice(0, 10000)
+            : [],
+          outcome: job.data.outcome,
+          cleanup: job.data.cleanup,
+          error: job.data.error,
+        });
+        return;
+      }
       if (route === "/management/hosts/test") {
         await requireAction("readFiles");
         send(

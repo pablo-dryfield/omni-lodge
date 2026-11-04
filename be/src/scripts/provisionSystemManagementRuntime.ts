@@ -185,7 +185,7 @@ try {
         );
         const privateKey = await fs.readFile(filename, "utf8"),
           publicKey = await fs.readFile(filename + ".pub", "utf8");
-        await fs.writeFile(authorized, publicKey, { mode: 0o600, flag: "wx" });
+        await fs.writeFile(authorized, publicKey, { mode: 0o644, flag: "wx" });
         await fs.unlink(filename);
         await fs.unlink(filename + ".pub");
         return { privateKey, revision: crypto.randomUUID() };

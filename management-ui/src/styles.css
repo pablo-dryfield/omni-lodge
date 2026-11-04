@@ -1551,3 +1551,5 @@ summary {
     padding: 18px;
   }
 }
+
+.credential-list {display:flex;flex-direction:column;gap:12px;margin:20px 0}.credential-list>div,.session-row {display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:14px 0;border-bottom:1px solid var(--border)}.credential-list small,.session-row small{display:block;color:var(--muted);overflow-wrap:anywhere}.session-row>div{flex:1;min-width:180px}.active-sessions{margin-bottom:20px}.operation-output{white-space:pre-wrap;overflow-wrap:anywhere;max-height:50vh;overflow:auto}.table-scroll{overflow:auto;max-height:50vh}.card form{display:flex;flex-direction:column;gap:16px}.card form label{display:flex;flex-direction:column;gap:7px}

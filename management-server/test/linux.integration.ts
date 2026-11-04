@@ -263,7 +263,7 @@ test(
         ]);
         const privateKey = await fs.readFile(file, "utf8");
         await fs.copyFile(file + ".pub", "/etc/ssh/authorized_keys/" + user);
-        await fs.chmod("/etc/ssh/authorized_keys/" + user, 0o600);
+        await fs.chmod("/etc/ssh/authorized_keys/" + user, 0o644);
         return { privateKey, revision: crypto.randomUUID() };
       };
       credentials.gateway = await key("gateway", "omnilodge-sys-gw");
@@ -674,6 +674,19 @@ test(
         ).rows[0].n > 0,
         true,
       );
+    } catch (error) {
+      const diagnostics = await run("/usr/bin/journalctl", [
+        "--no-pager",
+        "--unit=ssh",
+        "--lines=35",
+      ]).catch(() => ({ stdout: "SSH diagnostics unavailable" }));
+      console.error(
+        diagnostics.stdout.replace(
+          /(postgresql:\/\/)[^\s]+/g,
+          "[redacted database URL]",
+        ),
+      );
+      throw error;
     } finally {
       for (const unit of childUnits)
         await run("/usr/bin/systemctl", ["stop", unit]).catch(() => {});
