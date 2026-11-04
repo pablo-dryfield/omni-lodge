@@ -992,10 +992,11 @@ export class Files {
             `bytes ${start}-${end}/${before.size}`,
           );
         }
-        output.setHeader?.(
-          "Content-Length",
-          String(Math.max(0, end - start + 1)),
-        );
+        // Chunked completion follows the trailing source verification. A fixed
+        // length lets a client report success as soon as the last data byte
+        // arrives, even if verification subsequently rejects the stream.
+        // Isolate this long response from later requests and late SFTP cleanup.
+        output.setHeader?.("Connection", "close");
         await this.store.event(
           ctx.actorId,
           hostId,

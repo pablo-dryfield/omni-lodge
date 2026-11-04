@@ -909,6 +909,19 @@ test(
         true,
       );
     } catch (error) {
+      if (brokerUnit) {
+        const brokerDiagnostics = await run("/bin/journalctl", [
+          "--no-pager",
+          "--unit=" + brokerUnit,
+          "--lines=40",
+        ]).catch(() => ({ stdout: "Broker diagnostics unavailable" }));
+        console.error(
+          brokerDiagnostics.stdout.replace(
+            /postgresql:\/\/[^\s]+/g,
+            "[redacted database URL]",
+          ),
+        );
+      }
       const diagnostics = await run("/usr/bin/journalctl", [
         "--no-pager",
         "--unit=ssh",
