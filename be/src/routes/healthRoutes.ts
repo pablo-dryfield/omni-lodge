@@ -14,6 +14,7 @@ type HealthRouterOptions = {
   databaseCacheMs?: number;
   checkDatabase?: () => Promise<void>;
   checkWorkspace?: () => Promise<{ required: boolean; ready: boolean }>;
+  checkSystemManagement?: () => Promise<{required:boolean;ready:boolean}>;
 };
 
 const cleanPublicValue = (
@@ -99,6 +100,7 @@ export const createHealthRouter = (
     (options.env
       ? async () => ({ required: false, ready: true })
       : defaultWorkspaceCheck);
+  const checkSystemManagement=options.checkSystemManagement||(options.env?async()=>({required:false,ready:true}):async()=>{const {systemManagementReadiness}=await import('../services/systemManagement/supervisor.js');return systemManagementReadiness();});
   const databaseTimeoutMs =
     options.databaseTimeoutMs ?? DEFAULT_DATABASE_TIMEOUT_MS;
   const databaseCacheMs = options.databaseCacheMs ?? DEFAULT_DATABASE_CACHE_MS;
@@ -183,8 +185,10 @@ export const createHealthRouter = (
       } catch {
         workspace = { required: true, ready: false };
       }
+    let management={required:false,ready:true};
+    if(configurationOk&&databaseOk)try{management=await withTimeout(checkSystemManagement(),databaseTimeoutMs);}catch{management={required:true,ready:false};}
     const ready =
-      configurationOk && databaseOk && (!workspace.required || workspace.ready);
+      (!management.required||management.ready)&&configurationOk && databaseOk && (!workspace.required || workspace.ready);
     res.status(ready ? 200 : 503).json({
       status: ready ? 'ok' : 'not_ready',
       ready,
@@ -199,6 +203,7 @@ export const createHealthRouter = (
         database: {
           ok: databaseOk,
         },
+        systemManagement:{required:management.required,ok:management.ready},
         databaseWorkspace: {
           required: workspace.required,
           ok: workspace.ready,

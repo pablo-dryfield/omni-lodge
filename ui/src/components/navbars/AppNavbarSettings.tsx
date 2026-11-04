@@ -54,6 +54,7 @@ const settingsNav: SettingsNavSection[] = [
     title: "Control panel",
     links: [
       { label: "Overview", to: "/settings", slug: PAGE_SLUGS.settings, icon: <IconGauge size={20} /> },
+      { label: "System Management", to: "/settings/system-management", slug: PAGE_SLUGS.settingsSystemManagement, icon: <IconTools size={20} /> },
       {
         label: "Maintenance",
         to: "/settings/maintenance",

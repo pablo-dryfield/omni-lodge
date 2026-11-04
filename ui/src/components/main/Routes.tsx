@@ -68,6 +68,7 @@ const SettingsStaffProfiles = lazy(() => import("../../pages/settings/SettingsSt
 const SettingsShiftRoles = lazy(() => import("../../pages/settings/SettingsShiftRoles"));
 const SettingsUserShiftRoles = lazy(() => import("../../pages/settings/SettingsUserShiftRoles"));
 const SettingsShiftTypes = lazy(() => import("../../pages/settings/SettingsShiftTypes"));
+const SettingsSystemManagement = lazy(() => import("../../pages/settings/SettingsSystemManagement"));
 const SettingsSqlHelper = lazy(() => import("../../pages/settings/SettingsSqlHelper"));
 const SettingsDbBackups = lazy(() => import("../../pages/settings/SettingsDbBackups"));
 const SettingsHomeExperience = lazy(() => import("../../pages/settings/SettingsHomeExperience"));
@@ -206,6 +207,7 @@ const Routes = () => {
           <Route path="channel-commissions" element={<SettingsChannelCommissions />} />
           <Route path="actions" element={<SettingsActions />} />
           <Route path="sql-helper" element={<SettingsSqlHelper />} />
+          <Route path="system-management" element={<SettingsSystemManagement />} />
           <Route path="db-backups" element={<SettingsDbBackups />} />
           <Route path="channels" element={<SettingsChannels />} />
           <Route path="staff-profiles" element={<SettingsStaffProfiles />} />

@@ -1,3 +1,4 @@
+import {createLoginSession,revokeLoginSession} from '../services/systemManagement/loginSessions.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { Request, Response } from 'express';
@@ -539,7 +540,8 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+    const loginSessionId = await createLoginSession(user.id);
+    const token = jwt.sign({ id: user.id, jti: loginSessionId }, process.env.JWT_SECRET, {
       expiresIn: '7d',
     });
 
@@ -560,6 +562,14 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 
 export const logoutUser = async (req: Request, res: Response): Promise<void> => {
   try {
+    const token = req.headers.authorization?.replace(/^Bearer /i, '') || req.cookies?.token;
+    if (token) {
+      try { const payload = jwt.verify(token, process.env.JWT_SECRET || '');
+        if (typeof payload !== 'string') await revokeLoginSession(payload.jti);
+      } catch (error) {
+        if (!(error instanceof jwt.JsonWebTokenError)) throw error;
+      }
+    }
     res.cookie('token', '', {
       expires: new Date(0),
       httpOnly: true,

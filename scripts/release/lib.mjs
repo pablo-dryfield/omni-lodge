@@ -72,6 +72,13 @@ const RUNTIME_TREES = [
 
 const RUNTIME_ENTRYPOINT_FILES = [
   'be/dist/app.js',
+  'be/dist/systemManagement/server.mjs',
+  'be/dist/systemManagement/server.mjs.build.json',
+  'be/dist/systemManagement/adapter',
+  'be/dist/systemManagement/control-schema.sql',
+  'be/dist/systemManagement/bootstrap-host.sh',
+  'ui/build/system-management/index.html',
+  'ui/build/system-management/management-release.json',
   'be/dist/scripts/baselineMigrations.js',
   'be/dist/scripts/reportMigrationStatus.js',
   'be/dist/scripts/runMigrations.js',

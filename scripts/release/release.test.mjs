@@ -108,6 +108,7 @@ const makeFixture = () => {
   for (const relativePath of uiServerFiles) {
     write(root, `ui-server/${relativePath}`, `export const fixture = ${JSON.stringify(relativePath)};\n`);
   }
+  for(const required of REQUIRED_PAYLOAD_FILES)if(!existsSync(path.join(root,required)))write(root,required,'fixture\n');
   return root;
 };
 

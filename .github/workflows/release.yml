@@ -81,6 +81,22 @@ jobs:
       - name: Build backend from release source
         run: npm run build:prod
 
+      # actions/setup-go v6, pinned from the upstream tag.
+      - name: Set up pinned management adapter toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Build and test isolated management runtime
+        working-directory: ${{ github.workspace }}
+        run: |
+          npm ci --prefix management-server --include=dev --ignore-scripts
+          npm --prefix management-server run check
+          npm --prefix management-server test
+          go -C ops/system-management/adapter test ./...
+          node scripts/ci/build-system-management.mjs --backend
+
       - name: Preflight backend build before upload
         working-directory: ${{ github.workspace }}
         run: node scripts/release/preflight.mjs --path be/dist
@@ -147,6 +163,14 @@ jobs:
 
       - name: Build UI from release source
         run: npm run build
+
+      - name: Build isolated management console
+        working-directory: ${{ github.workspace }}
+        run: |
+          npm ci --prefix management-ui --include=dev --ignore-scripts
+          npm --prefix management-ui run check
+          npm --prefix management-ui test
+          node scripts/ci/build-system-management.mjs --ui
 
       - name: Stamp and validate UI artifact
         working-directory: ${{ github.workspace }}

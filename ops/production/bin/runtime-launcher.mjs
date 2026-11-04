@@ -286,6 +286,7 @@ const buildUiServer = () => {
   requirePersistentFileLink(componentRoot, 'error.log', '/var/lib/omnilodge/logs/ui-server/error.log');
   requirePersistentFileLink(componentRoot, 'combined.log', '/var/lib/omnilodge/logs/ui-server/combined.log');
   requireReleaseFile(path.join(componentRoot, 'server.js'), componentRoot);
+  assertRootFile('/usr/local/libexec/omnilodge/system-ingress-guard.mjs', { allowedModes: [0o755], nonEmpty: true });
   assertRootFile('/etc/omnilodge/tls/origin.key', { nonEmpty: true });
   assertRootFile('/etc/omnilodge/tls/origin.pem', {
     allowedModes: [0o600, 0o640, 0o644],
@@ -293,7 +294,7 @@ const buildUiServer = () => {
   });
   return {
     cwd: componentRoot,
-    args: [`--env-file=${envFile}`, 'server.js'],
+    args: ['--import', '/usr/local/libexec/omnilodge/system-ingress-guard.mjs', `--env-file=${envFile}`, 'server.js'],
     env: {
       NODE_ENV: 'production',
       APP_VERSION: identity.releaseId,

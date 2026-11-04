@@ -153,3 +153,8 @@ be/inspect_text.cjs
 be/parse_getyourguide.cjs
 be/simulate_context.cjs
 be/test_getyourguide.cjs
+
+# Isolated system console artifacts
+/management-ui/dist/
+/management-server/dist/
+/ops/system-management/bin/

@@ -1,3 +1,6 @@
+import {startSystemManagementSupervisor} from './services/systemManagement/supervisor.js';
+import systemManagementRoutes from './routes/systemManagementRoutes.js';
+import {startSystemManagementAuthority} from './services/systemManagement/authority.js';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -200,6 +203,7 @@ const startApplicationBackgroundJobs = (): void => {
   }
   startDbBackupJob();
   startWorkspaceSupervisor();
+  startSystemManagementSupervisor();
   startBookingEmailIngestionJob();
   if (ENABLE_AM_TASK_PUSH_CRON_JOBS) {
     startAmTaskPushNotificationsJob();
@@ -364,6 +368,7 @@ app.use('/api/promotion-tracking/test', promotionTrackingTestRoutes);
 app.use('/api/promotion-tracking', createPromotionTrackingFeatureGate());
 app.use('/api/sql-helper', sqlHelperRoutes);
 app.use('/api/database-workspace', databaseWorkspaceRoutes);
+app.use('/api/system-management', systemManagementRoutes);
 app.use('/api/db-backups', dbBackupRoutes);
 app.use('/api/pm2', pm2Routes);
 app.use('/api/config', configRoutes);
@@ -482,6 +487,7 @@ async function bootstrap(): Promise<void> {
       logger.info('[runtime] Deployment candidate: startup mutations are disabled.');
     }
 
+    if (runtimePolicy.allowStartupMutations) await startSystemManagementAuthority();
     if (process.env.NODE_ENV === 'production') {
       app.set('trust proxy', resolveProductionTrustProxyHops(process.env.TRUST_PROXY_HOPS));
       app.listen(PORT, '127.0.0.1', () => {

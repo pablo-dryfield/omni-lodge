@@ -1,3 +1,6 @@
+import { validateSystemManagementValue, validateManagementOrigin } from '../config/systemManagementConfig.js';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import type {Transaction} from 'sequelize';
 import ConfigKey from '../models/ConfigKey.js';
 import ConfigValue from '../models/ConfigValue.js';
 import ConfigHistory from '../models/ConfigHistory.js';
@@ -20,6 +23,16 @@ type ConfigCacheEntry = {
 };
 
 const configCache = new Map<string, ConfigCacheEntry>();
+const managementConfigTransaction=new AsyncLocalStorage<Transaction>();
+export async function withSystemManagementConfigLock<T>(run:()=>Promise<T>):Promise<T>{
+  if(managementConfigTransaction.getStore())return run();
+  const database=ConfigValue.sequelize;
+  if(!database)throw new HttpError(503,'Configuration database unavailable.');
+  return database.transaction(async transaction=>{
+    await database.query("SELECT pg_advisory_xact_lock(hashtext('omnilodge.system-management.config'))",{transaction});
+    return managementConfigTransaction.run(transaction,run);
+  });
+}
 let cacheLoaded = false;
 
 const normalizeEnvValue = (value: string | undefined): string | null => {
@@ -190,6 +203,13 @@ const validateWhatsAppQueueKeyEntries = (
 
 const validateValue = (definition: ConfigDefinition, raw: string | null): void => {
   const rules = definition.validation ?? {};
+  if (raw !== null && rules.format === 'system-management-origin') {
+    try { validateManagementOrigin(raw); } catch(error) { throw new HttpError(400,error instanceof Error?error.message:'Invalid management origin.'); }
+  }
+  if (raw !== null && rules.format === 'system-management') {
+    try { validateSystemManagementValue(definition.key, raw); }
+    catch (error) { throw new HttpError(400, error instanceof Error ? error.message : 'Invalid system policy'); }
+  }
   if (rules.required && (!raw || raw.length === 0)) {
     throw new HttpError(400, `${definition.key} is required`);
   }
@@ -463,6 +483,7 @@ export const refreshConfigCacheKeys = async (keys: readonly string[]): Promise<v
 
   const values = await ConfigValue.findAll({
     where: { key: { [Op.in]: uniqueKeys } },
+    ...(managementConfigTransaction.getStore()?{transaction:managementConfigTransaction.getStore()}:{}),
   });
   const valueMap = new Map(values.map((entry) => [entry.key, entry]));
   for (const key of uniqueKeys) {
@@ -635,6 +656,20 @@ export const updateConfigValue = async (params: {
   actorId: number | null;
   reason?: string | null;
 }): Promise<Record<string, unknown>> => {
+  if(params.key.startsWith('SYSTEM_MANAGEMENT_'))return withSystemManagementConfigLock(async()=>{
+    const transaction=managementConfigTransaction.getStore()!,definition=resolveDefinition(params.key);
+    const record=await ConfigKey.findByPk(params.key,{transaction});
+    if(!record?.isEditable)throw new HttpError(403,'This configuration key is not editable.');
+    const rawValue=serializeValue(definition,params.value);validateValue(definition,rawValue);
+    const existing=await ConfigValue.findByPk(params.key,{transaction,lock:transaction.LOCK.UPDATE});
+    const previousRaw=existing?.value??null;
+    const encrypted=definition.isSecret&&rawValue!==null?encryptSecret(rawValue):null;
+    const values={value:definition.isSecret?null:rawValue,encryptedValue:encrypted?.encryptedValue??null,encryptionIv:encrypted?.iv??null,encryptionTag:encrypted?.tag??null,updatedBy:params.actorId};
+    if(existing)await existing.update(values,{transaction});else await ConfigValue.create({key:params.key,...values},{transaction});
+    await ConfigHistory.create({key:params.key,actorId:params.actorId,oldValue:definition.isSecret?null:previousRaw,newValue:definition.isSecret?null:rawValue,isSecret:Boolean(definition.isSecret),reason:params.reason??null},{transaction});
+    transaction.afterCommit(()=>{configCache.set(params.key,{value:rawValue,updatedAt:new Date(),updatedBy:params.actorId});});
+    return {...record.toJSON(),value:definition.isSecret?null:rawValue,isSet:rawValue!==null,isCleared:rawValue===null,maskedValue:definition.isSecret&&rawValue!==null?'********':null,updatedBy:params.actorId};
+  });
   const definition = resolveDefinition(params.key);
   const record = await ConfigKey.findByPk(params.key);
   if (!record) {
