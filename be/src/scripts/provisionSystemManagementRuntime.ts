@@ -51,6 +51,7 @@ const controlDatabase = controlUrl.pathname.slice(1);
 if (!/^[a-zA-Z0-9_]{1,63}$/.test(controlDatabase))
   throw new Error("Provision the independent control database first.");
 const control = new pg.Client({ ...adminOptions, database: controlDatabase });
+let closeConfigurationDatabase: (() => Promise<void>) | undefined;
 await control.connect();
 try {
   const roles = await control.query(
@@ -89,6 +90,15 @@ try {
         throw new Error(
           "Existing or partial provisioning found. Verify it rather than implicitly rotating/adopting credentials.",
         );
+      process.env.OMNILODGE_WORKSPACE_WORKER = "true";
+      const { default: sequelize } = await import("../config/database.js");
+      closeConfigurationDatabase = () => sequelize.close();
+      const { initializeConfigRegistry, updateConfigValue } =
+        await import("../services/configService.js");
+      // Initialize the real models and configuration before creating any
+      // infrastructure credentials, so a configuration failure is fail-fast.
+      await sequelize.authenticate();
+      await initializeConfigRegistry();
       await fs.mkdir(base, { recursive: true, mode: 0o750 });
       const group = Number(
         execFileSync("/usr/bin/getent", ["group", "omnilodge-system"], {
@@ -257,10 +267,6 @@ try {
       )
         .trim()
         .split(/\s+/)[1];
-      process.env.OMNILODGE_WORKSPACE_WORKER = "true";
-      const { initializeConfigRegistry, updateConfigValue } =
-        await import("../services/configService.js");
-      await initializeConfigRegistry();
       const hosts = [
         {
           id: "production",
@@ -333,5 +339,6 @@ try {
     await application.end();
   }
 } finally {
+  await closeConfigurationDatabase?.();
   await control.end();
 }
