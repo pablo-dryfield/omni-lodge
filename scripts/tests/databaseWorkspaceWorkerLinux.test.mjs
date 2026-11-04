@@ -72,6 +72,8 @@ async function launch(mode) {
         ].includes(value),
     )
     .map((value) => {
+      // setup-node lives in the hosted tool cache; production has /usr/bin/node.
+      if (value === '/usr/bin/node') return process.execPath;
       if (value === '--property=EnvironmentFile=/etc/omnilodge/backend.env')
         return `--property=EnvironmentFile=${environment}`;
       // Production suppresses output. The synthetic rehearsal needs its

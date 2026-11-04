@@ -1199,7 +1199,7 @@ export default function DatabaseWorkspace() {
             )}
           </Menu.Dropdown>
         </Menu>
-        {selectedObject && (
+        {selectedObject && (section === 'objects' || current.objectId) && (
           <Button
             size="compact-xs"
             variant="subtle"
@@ -1360,6 +1360,7 @@ export default function DatabaseWorkspace() {
                   <div
                     key={tab.id}
                     className="dw-query-tab"
+                    title={tab.title}
                     role="tab"
                     tabIndex={0}
                     aria-selected={current.id === tab.id}
@@ -1684,7 +1685,7 @@ export default function DatabaseWorkspace() {
                       />
                     </div>
                   </div>
-                  {parametersOpen && (
+                  {parametersOpen && !mobile && (
                     <div className="dw-parameters">
                       <ParameterForm
                         value={parameters}
@@ -1696,6 +1697,27 @@ export default function DatabaseWorkspace() {
                       />
                     </div>
                   )}
+                  <Modal
+                    opened={parametersOpen && Boolean(mobile)}
+                    onClose={() => setParametersOpen(false)}
+                    title="Query parameters"
+                    size="lg"
+                    centered
+                  >
+                    <Stack>
+                      <ParameterForm
+                        value={parameters}
+                        onChange={setParameters}
+                        definitions={current.parameterDefinitions}
+                        onDefinitionsChange={(v) =>
+                          patch({ parameterDefinitions: v, dirty: true })
+                        }
+                      />
+                      <Button h={44} onClick={() => setParametersOpen(false)}>
+                        Done
+                      </Button>
+                    </Stack>
+                  </Modal>
                   <section
                     className="dw-editor-section"
                     aria-label="Query editor"

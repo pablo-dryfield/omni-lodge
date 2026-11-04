@@ -9,6 +9,7 @@
   border: 1px solid var(--dw-border);
   border-radius: 14px;
   overflow: hidden;
+  overflow: clip;
   color: var(--dw-text);
   height: calc(100dvh - 142px);
   min-height: 620px;
@@ -169,6 +170,8 @@
 }
 .dw-query-tab {
   display: flex;
+  flex-shrink: 0;
+  max-width: 300px;
   align-items: center;
   gap: 12px;
   min-width: 140px;
@@ -179,6 +182,16 @@
   color: var(--dw-muted);
   font-size: 12px;
   cursor: pointer;
+}
+.dw-query-tab > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dw-query-tab > svg,
+.dw-query-tab > button {
+  flex-shrink: 0;
 }
 .dw-query-tab[aria-selected='true'] {
   background: var(--dw-surface);
@@ -349,6 +362,9 @@
   min-height: 180px;
 }
 .dw-parameters {
+  max-height: 240px;
+  overflow: auto;
+  flex-shrink: 0;
   padding: 10px 12px;
   border-bottom: 1px solid var(--dw-border);
   background: var(--dw-soft);
@@ -563,7 +579,8 @@
     font-size: 11px;
   }
   .dw-query-tab {
-    max-width: 200px;
+    max-width: 280px;
+    padding-block: 4px;
   }
   .dw-main[data-mobile-view='query'] .dw-results {
     display: none;
