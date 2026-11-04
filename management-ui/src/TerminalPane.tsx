@@ -27,9 +27,11 @@ export function TerminalPane({
     search = useRef<SearchAddon>();
   const [recordingNotice, setRecordingNotice] = useState(""),
     [inputNotice, setInputNotice] = useState(""),
+    [focusMode, setFocusMode] = useState(false),
     [light, setLight] = useState(false),
     [accessible, setAccessible] = useState(false);
   const connected = useRef(false),
+    uncertainInput = useRef(false),
     unacknowledged = useRef(new Set<number>());
   const [state, setState] = useState("Connecting"),
     [incomplete, setIncomplete] = useState(false),
@@ -101,8 +103,10 @@ export function TerminalPane({
     fit.fit();
     let cancelled = false,
       timer: ReturnType<typeof setTimeout> | undefined,
-      fresh = true;
+      fresh = true,
+      connectionAttempt = 0;
     const attach = async (takeover = false) => {
+      const attempt = ++connectionAttempt;
       try {
         connected.current = false;
         setState("Connecting");
@@ -110,18 +114,28 @@ export function TerminalPane({
           `/terminals/${tab.id}/attach-ticket`,
           { takeover },
         );
-        if (cancelled) return;
+        if (cancelled || attempt !== connectionAttempt) return;
         const ws = new WebSocket(
           `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/management/stream`,
         );
+        const previous = socket.current;
+        if (unacknowledged.current.size) {
+          uncertainInput.current = true;
+          setInputNotice(
+            "Some input was not acknowledged. It will not be replayed; inspect the terminal before typing again.",
+          );
+          unacknowledged.current.clear();
+        }
         socket.current = ws;
+        previous?.close(1000, "Replaced by an explicit attachment");
         ws.onopen = () =>
           ws.send(JSON.stringify({ ticket, after: last.current, fresh }));
         ws.onmessage = (e) => {
+          if (socket.current !== ws) return;
           const m = JSON.parse(e.data);
           if (m.type === "attached") {
             connected.current = true;
-            setInputNotice("");
+            if (!uncertainInput.current) setInputNotice("");
             setState("Connected");
             setIncomplete(!m.screenRestored);
             fresh = false;
@@ -178,8 +192,10 @@ export function TerminalPane({
           }
         };
         ws.onclose = (e) => {
+          if (socket.current !== ws) return;
           connected.current = false;
           if (unacknowledged.current.size) {
+            uncertainInput.current = true;
             setInputNotice(
               "Some input was not acknowledged. It will not be replayed; inspect the terminal before typing again.",
             );
@@ -192,8 +208,11 @@ export function TerminalPane({
           if (e.code !== 4001 && e.code !== 1000 && e.code !== 4003)
             timer = setTimeout(() => void attach(), 2500);
         };
-        ws.onerror = () => setState("Connection interrupted");
+        ws.onerror = () => {
+          if (socket.current === ws) setState("Connection interrupted");
+        };
       } catch (error) {
+        if (cancelled || attempt !== connectionAttempt) return;
         setState("Connection needs attention");
         onError(error);
       }
@@ -296,12 +315,18 @@ export function TerminalPane({
     }
   };
   return (
-    <section className="terminal-section">
+    <section className={`terminal-section${focusMode ? " focus-mode" : ""}`}>
       <div className="terminal-toolbar">
+        <button
+          aria-pressed={focusMode}
+          onClick={() => setFocusMode(!focusMode)}
+        >
+          {focusMode ? "Exit focus" : "Focus terminal"}
+        </button>
         <span
           className={`status-dot ${state === "Connected" ? "online" : ""}`}
         />
-        <strong>{state}</strong>
+        <strong>{focusMode ? `${tab.title} - ${state}` : state}</strong>
         <span className="muted">
           {tab.managed
             ? "Managed session"
@@ -346,6 +371,14 @@ export function TerminalPane({
       {inputNotice && (
         <div role="status" className="notice">
           {inputNotice}
+          <button
+            onClick={() => {
+              uncertainInput.current = false;
+              setInputNotice("");
+            }}
+          >
+            Dismiss
+          </button>
         </div>
       )}
       {tab.recording && (
@@ -358,6 +391,7 @@ export function TerminalPane({
         <div className="notice">
           Session reattached. Earlier screen state is unavailable. Use the
           running application's redraw key if needed.
+          <button onClick={() => setIncomplete(false)}>Dismiss</button>
         </div>
       )}
       <div className="terminal-canvas" ref={container} />

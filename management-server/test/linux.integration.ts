@@ -551,6 +551,49 @@ test(
         return value;
       };
       csrf = (await request("/session")).csrf;
+      await assert.rejects(
+        request("/session/touch", {}, { Origin: "https://untrusted.example" }),
+        { code: "ORIGIN_REJECTED" },
+      );
+      await assert.rejects(
+        request("/session/touch", {}, { "X-Management-CSRF": "forged" }),
+        { code: "CSRF_REJECTED" },
+      );
+      await assert.rejects(
+        request("/session", undefined, { Host: "omni-lodge.com" }),
+        { code: "HOST_REJECTED" },
+      );
+      await assert.rejects(request("/session/touch", undefined, {}, "GET"), {
+        code: "METHOD_NOT_ALLOWED",
+      });
+      await assert.rejects(request("/../assets/private.js.map"), {
+        code: "NOT_FOUND",
+      });
+      for (const invalidPath of [
+        "../outside",
+        "/etc/passwd",
+        "folder/../../outside",
+        ".omnilodge-private/hidden",
+      ])
+        await assert.rejects(
+          request(
+            "/files/list?hostId=fixture&rootId=work&path=" +
+              encodeURIComponent(invalidPath),
+          ),
+          { code: "INVALID_PATH" },
+        );
+      await assert.rejects(
+        request("/files/list?hostId=fixture&rootId=not-enrolled&path=."),
+        { code: "PROTECTED_PATH" },
+      );
+      await assert.rejects(
+        request("/services/restart", {
+          hostId: "fixture",
+          serviceId: "arbitrary-service",
+          confirm: "arbitrary-service",
+          reason: "Fixture negative test",
+        }),
+      );
       const source = crypto.randomBytes(9000),
         upload = await request("/transfers", {
           hostId: "fixture",
@@ -637,7 +680,7 @@ test(
         activeProbes.add(probe);
         void probe.finally(() => activeProbes.delete(probe));
       }, 30000);
-      let received: number;
+      let received: number, expiredConfirmation: Promise<unknown> | undefined;
       try {
         received = await new Promise<number>((resolve, reject) => {
           const req = http.get(
@@ -657,6 +700,11 @@ test(
               let count = 0,
                 nextProgress = 1024 ** 3;
               res.on("data", (part) => {
+                // A read already admitted must survive password-confirmation
+                // expiry, while its continuing general authorization stays live.
+                expiredConfirmation ||= control!.query(
+                  "UPDATE system_management.authority_sessions SET step_up_until=now()-interval '1 second' WHERE actor_id=901",
+                );
                 count += part.length;
                 if (count >= nextProgress) {
                   console.log(
@@ -681,6 +729,7 @@ test(
         clearInterval(activity);
       }
       await Promise.all(activeProbes);
+      await expiredConfirmation;
       assert.equal(
         probeFailures,
         0,
@@ -709,6 +758,15 @@ test(
         }),
       );
       await fs.unlink(largePath);
+      await assert.rejects(
+        request("/file-operations/review", {
+          hostId: "fixture",
+          rootId: "work",
+          path: "fixture.txt",
+          operation: "trash",
+        }),
+        { code: "STEP_UP_REQUIRED" },
+      );
       await request("/session/step-up", { password: "fixture-password" }); // New mutations require a fresh confirmation after a long accepted read.
       const review = await request("/file-operations/review", {
         hostId: "fixture",

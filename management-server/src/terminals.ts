@@ -475,7 +475,8 @@ export class Terminals {
           )
             t.channel.setWindow(m.rows, m.cols, 0, 0);
         })
-        .catch((error) =>
+        .catch((error) => {
+          if (t.attachment !== generation || t.socket !== socket) return;
           this.send(t, {
             type: "error",
             code: error instanceof Fault ? error.code : "INVALID_MESSAGE",
@@ -483,8 +484,8 @@ export class Terminals {
               error instanceof Fault
                 ? error.message
                 : "Invalid terminal message.",
-          }),
-        )
+          });
+        })
         .finally(() => {
           pendingMessages--;
           pendingBytes -= size;
