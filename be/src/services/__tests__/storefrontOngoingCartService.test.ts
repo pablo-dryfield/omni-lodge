@@ -218,14 +218,13 @@ describe('storefront ongoing cart service', () => {
     }) }), { transaction });
   });
 
-  it('accepts newly submitted selections from a superseded browser without returning the successor cart', async () => {
+  it('rejects a superseded legacy browser without altering or returning the successor cart', async () => {
     model.findOne.mockResolvedValueOnce({ status: 'dismissed', metadata: { mergeReason: 'customer_identity' } }).mockResolvedValueOnce(null);
     const current = { id: 12, publicId: 'new-independent-id', metadata: {} };
     model.create.mockResolvedValue(current);
-    const result = await upsertOngoingCart({ sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77',
-      publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d', cart: {}, customer: {}, quote });
-    expect(result).toBe(current);
-    expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ orderId: null }), { transaction });
+    await expect(upsertOngoingCart({ sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77',
+      publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d', cart: {}, customer: {}, quote })).rejects.toMatchObject({ status: 409 });
+    expect(model.create).not.toHaveBeenCalled();
   });
 
   it('does not change selections while a matching cart is sending recovery', async () => {

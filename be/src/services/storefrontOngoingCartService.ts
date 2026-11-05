@@ -160,8 +160,7 @@ export const assertOngoingCartVersion = (
   if (typeof expected === 'string' && !/^[a-f0-9]{64}$/.test(expected)) {
     throw new HttpError(400, 'Invalid cart version. Refresh your cart.');
   }
-  if (ongoing.status === 'dismissed' && ongoing.metadata?.mergeReason === 'customer_identity'
-    && (protocol === 1 || expected || ongoing.metadata?.cartVersionProtocol === 1)) {
+  if (ongoing.status === 'dismissed' && ongoing.metadata?.mergeReason === 'customer_identity') {
     throw new HttpError(409, 'This cart changed on another device. Review your selections before continuing.');
   }
   const required = protocol === 1 || ongoing.metadata?.cartVersionProtocol === 1 || Boolean(expected);
@@ -216,8 +215,8 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
           transaction, lock: transaction.LOCK.UPDATE,
         }) : null;
     if (ongoing) {
-      // A prior browser may still quote its superseded ID. Accept only its new
-      // submitted selections; do not reveal the other browser's cart or credentials.
+      // An already-open page can still submit a superseded ID, including legacy
+      // clients. Require review rather than letting it supersede the newer draft again.
       if (ongoing.status === 'dismissed' && ongoing.metadata?.mergeReason === 'customer_identity') {
         assertOngoingCartVersion(ongoing, input.cartVersion, cart, input.cartVersionProtocol);
         ongoing = null;
