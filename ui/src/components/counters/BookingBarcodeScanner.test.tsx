@@ -100,19 +100,16 @@ it('does not accept an unrelated or invalid barcode as a booking ID', async () =
   expect(props.onScan).toHaveBeenCalledWith('41001');
 });
 
-it('opens fullscreen on demand and returns to inline mode, releasing each old stream', async () => {
-  const props = { onScan: jest.fn(), onClose: jest.fn(), result: null };
-  const view = render(<BookingBarcodeScanner {...props} />);
-  await waitFor(() => expect(mockDecode).toHaveBeenCalledTimes(1));
-  fireEvent.click(screen.getByRole('button', { name: 'Open fullscreen scanner' }));
-  expect(screen.getByRole('dialog', { name: 'Scan booking' })).toBeInTheDocument();
-  await waitFor(() => expect(mockDecode).toHaveBeenCalledTimes(2));
-  expect(tracks[0].stop).toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen scanner' }));
-  await waitFor(() => expect(mockDecode).toHaveBeenCalledTimes(3));
-  expect(tracks[1].stop).toHaveBeenCalled();
-  view.unmount();
-  expect(tracks[2].stop).toHaveBeenCalled();
+it('offers only the close control during scanning, even when the camera supports a flash', async () => {
+  const stream = newStream();
+  tracks[0].getCapabilities.mockReturnValue({ torch: true });
+  getUserMedia.mockResolvedValue(stream);
+  const onClose = jest.fn();
+  render(<BookingBarcodeScanner onScan={jest.fn()} onClose={onClose} result={null} />);
+  await waitFor(() => expect(mockDecode).toHaveBeenCalled());
+  expect(screen.getAllByRole('button')).toEqual([screen.getByRole('button', { name: 'Close scanner' })]);
+  fireEvent.click(screen.getByRole('button', { name: 'Close scanner' }));
+  expect(onClose).toHaveBeenCalledTimes(1);
 });
 
 it('releases a camera permission result that arrives after the scanner closes', async () => {
