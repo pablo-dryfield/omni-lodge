@@ -17,8 +17,9 @@ export default function HomeVolunteerProgress({ configuredVisible, audienceReady
   const access = useModuleAccess('volunteer-progress');
   const visible = audienceReady && configuredVisible && staffType === 'volunteer'
     && access.ready && access.canView && pages.has(PAGE_SLUGS.volunteerProgress) && Boolean(loggedUserId);
-  // Always fetch the current user's report, even if their role also has management access.
-  const report = useVolunteerStayProgress(loggedUserId ?? null, null, visible);
+  // /me resolves the signed-in user on the server. Numeric-user routes require
+  // management access, even when the requested ID is the volunteer's own ID.
+  const report = useVolunteerStayProgress(null, null, visible);
   if (!visible) return null;
   return <Box component="section" aria-label="Your volunteer progress">
     <Stack gap="sm">
