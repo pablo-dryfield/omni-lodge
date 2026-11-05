@@ -11,7 +11,7 @@ import Product from '../../models/Product';
 import { getAllowedProductTypeIds } from '../../services/productScopeService';
 import { getBookingEmailAccess } from '../../services/bookingEmailScopeService';
 import { sendMessage } from '../../services/bookings/gmailClient';
-import { createEmailTemplate, updateEmailTemplate, listEmailTemplates, renderBookingEmailPreview, sendBookingEmail } from '../bookingController';
+import { createEmailTemplate, updateEmailTemplate, listEmailTemplates, renderBookingEmailPreview, sendBookingEmail, getBookingEmailTemplateGallery } from '../bookingController';
 const request = (body: object = {}) => ({ body, params: {}, query: {}, authContext: { id: 215, userTypeId: 16 } } as AuthenticatedRequest);
 const response = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() } as unknown as Response);
 beforeEach(() => {
@@ -20,6 +20,25 @@ beforeEach(() => {
   jest.mocked(getBookingEmailAccess).mockResolvedValue({ customerEmail: 'guest@example.com', booking: { id: 12 }, productTypeIds: [3], messageIds: [], threadIds: [] } as any);
 });
 afterEach(() => jest.restoreAllMocks());
+
+it('shows the saved product meeting photo in the storefront confirmation gallery without sending an email', async () => {
+  jest.mocked(EmailTemplate.findAll).mockResolvedValue([]);
+  jest.spyOn(Product, 'findByPk').mockResolvedValue({ id: 28, storefrontConfig: { content: { meetingPoint: {
+    name: 'Configured meeting point', photoUrl: 'https://media.example.com/current-meeting.jpg', photoAlt: 'Statue & umbrella',
+  } } } } as Product);
+  const res = response();
+  await getBookingEmailTemplateGallery(request(), res);
+  expect(res.status).toHaveBeenCalledWith(200);
+  const gallery = (res.json as jest.Mock).mock.calls[0][0];
+  const preview = gallery.previews.find((item: { id: string }) => item.id === 'system-omni-storefront-confirmation');
+  expect(preview.htmlBody).toContain('src="https://media.example.com/current-meeting.jpg"');
+  expect(preview.htmlBody).toContain('alt="Statue &amp; umbrella"');
+  expect(preview.htmlBody).toContain('Configured meeting point');
+  expect(preview.htmlBody).toContain('src="data:image/png;base64,');
+  expect(preview.htmlBody).not.toContain('src="cid:');
+  expect(preview.textBody).toContain('Meeting point photo: https://media.example.com/current-meeting.jpg');
+  expect(sendMessage).not.toHaveBeenCalled();
+});
 it('lists only this product type’s non-executable templates', async () => {
   jest.mocked(EmailTemplate.findAll).mockResolvedValue([]);
   const res = response(); await listEmailTemplates(request(), res);

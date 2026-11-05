@@ -116,6 +116,8 @@ import {
 import {
   buildCustomerStorefrontEmail,
   buildInternalStorefrontEmail,
+  normalizeProductDetails as normalizeStorefrontEmailProductDetails,
+  type StorefrontEmailProductDetails,
 } from '../services/storefrontOrderEmailService.js';
 import { buildStorefrontCartRecoveryEmail } from '../services/storefrontCartRecoveryEmailService.js';
 import {
@@ -3281,6 +3283,7 @@ export const getBookingEmailTemplateGallery = async (
     } as unknown as Booking;
     const storefrontOrder = {
       publicId: 'MOCK-OMNI-ORDER-7D2A9C',
+      attribution: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'krakow_pub_crawl' },
       paymentStatus: 'paid',
       currency: 'PLN',
       subtotal: 270,
@@ -3334,7 +3337,7 @@ export const getBookingEmailTemplateGallery = async (
       ],
     } as unknown as StorefrontOrder;
     const storefrontBookingIdsByItemId = new Map<number, number>([[501, 41002]]);
-    const storefrontProductDetailsByProductId = new Map([
+    const storefrontProductDetailsByProductId = new Map<number, StorefrontEmailProductDetails>([
       [
         28,
         {
@@ -3360,6 +3363,19 @@ export const getBookingEmailTemplateGallery = async (
         },
       ],
     ]);
+    // Keep customer and booking references fictitious, but show the same saved
+    // product content (including its meeting photo) as actual confirmations.
+    const storefrontPreviewItem = storefrontOrder.items?.[0];
+    if (storefrontPreviewItem) {
+      const storefrontPreviewProductId = Number(storefrontPreviewItem.productId);
+      const storefrontPreviewProduct = await Product.findByPk(storefrontPreviewProductId, {
+        attributes: ['id', 'storefrontConfig'],
+      });
+      if (storefrontPreviewProduct) {
+        storefrontProductDetailsByProductId.set(storefrontPreviewProductId,
+          normalizeStorefrontEmailProductDetails(storefrontPreviewProduct.storefrontConfig?.content));
+      }
+    }
     const storefrontOngoingCart = {
       publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d',
       recoveryToken: 'f2ce385d-b2d7-40d4-8156-ec9681753af1',
@@ -3493,10 +3509,11 @@ export const getBookingEmailTemplateGallery = async (
           source: 'system',
           isActive: true,
         },
-        buildCustomerStorefrontEmail(
+        await buildCustomerStorefrontEmail(
           storefrontOrder,
           storefrontBookingIdsByItemId,
           storefrontProductDetailsByProductId,
+          'preview',
         ),
       ),
       toEmailGalleryPreview(

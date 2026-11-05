@@ -778,8 +778,12 @@ test(
         await engine.tick();
         await new Promise((r) => setTimeout(r, 15));
         const live = await store.get(job.id, 1);
-        if (!['queued', 'running', 'cancel_requested'].includes(live.status))
-          return live;
+        if (!['queued', 'running', 'cancel_requested'].includes(live.status)) {
+          // A terminal job is saved before its session is released. Wait for
+          // that durable transition before reading the next command revision.
+          const current = (await getSession(store, session.id, 1)).record;
+          if (current.pendingJobId === null) return live;
+        }
       }
       assert.fail('Session command did not complete');
     };

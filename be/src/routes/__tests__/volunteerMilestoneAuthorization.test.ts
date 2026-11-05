@@ -133,6 +133,17 @@ describe('volunteer milestone route authorization and contract', () => {
     expect(getVolunteerMilestones).not.toHaveBeenCalled();
   });
 
+  it('allows volunteer self-service only through /me, even when a numeric route uses their own ID', async () => {
+    const app = buildApp();
+    const own = await request(app).get('/api/volunteerMilestones/me')
+      .set('x-test-role', 'guide').set('x-test-actions', 'view');
+    const numeric = await request(app).get('/api/volunteerMilestones/91')
+      .set('x-test-role', 'guide').set('x-test-actions', 'view');
+    expect([own.status, numeric.status]).toEqual([204, 403]);
+    expect(getMyVolunteerMilestones).toHaveBeenCalledTimes(1);
+    expect(getVolunteerMilestones).not.toHaveBeenCalled();
+  });
+
   it.each(['admin', 'owner', 'manager', 'assistant_manager'])('allows %s to list volunteer summaries', async (role) => {
     const response = await request(buildApp())
       .get('/api/volunteerMilestones?period=2026-02')

@@ -211,6 +211,39 @@ describe('Gmail threaded replies', () => {
     );
   });
 
+  it('embeds a barcode inside the HTML related part and preserves ordinary attachments', async () => {
+    await sendMessage({
+      to: 'customer@example.com', subject: 'Booking confirmed',
+      textBody: 'Booking reference: 41001',
+      htmlBody: '<img src="cid:booking-41001@omnilodge" alt="Booking 41001">',
+      attachments: [
+        { filename: 'booking-41001.png', content: Buffer.from('barcode-png'), contentType: 'image/png', contentId: 'booking-41001@omnilodge' },
+        { filename: 'receipt.pdf', content: Buffer.from('receipt-pdf'), contentType: 'application/pdf' },
+      ],
+    });
+    const raw = Buffer.from(mockGmailSend.mock.calls[0][0].requestBody.raw, 'base64url').toString('utf-8');
+    expect(raw).toContain('Content-Type: multipart/mixed;');
+    expect(raw).toContain('Content-Type: multipart/alternative;');
+    expect(raw).toContain('Content-Type: multipart/related;');
+    expect(raw).toContain('Content-ID: <booking-41001@omnilodge>');
+    expect(raw).toContain('Content-Disposition: inline; filename="booking-41001.png"');
+    expect(raw).toContain('Content-Disposition: attachment; filename="receipt.pdf"');
+    expect(raw).toContain(Buffer.from('barcode-png').toString('base64'));
+    expect(raw).toContain(Buffer.from('receipt-pdf').toString('base64'));
+    // The image is related to the HTML, not to the plain-text alternative.
+    expect(raw.indexOf('text/plain')).toBeLessThan(raw.indexOf('multipart/related'));
+    expect(raw.indexOf('multipart/related')).toBeLessThan(raw.indexOf('text/html'));
+    expect(raw.indexOf('text/html')).toBeLessThan(raw.indexOf('Content-ID:'));
+  });
+
+  it('rejects header injection in inline image identifiers before sending', async () => {
+    await expect(sendMessage({
+      to: 'customer@example.com', subject: 'Booking confirmed', htmlBody: '<p>Booking</p>',
+      attachments: [{ filename: 'booking.png', content: 'image', contentId: 'bad\r\nBcc: other@example.com' }],
+    })).rejects.toThrow('Invalid inline attachment Content-ID');
+    expect(mockGmailSend).not.toHaveBeenCalled();
+  });
+
   it('RFC 2047-encodes non-ASCII subjects without changing their text', async () => {
     const subject = 'New paid storefront order - Lina Račiūnaitė - PLN\u00a0240.00';
 

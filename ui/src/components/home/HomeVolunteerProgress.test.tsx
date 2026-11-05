@@ -27,19 +27,19 @@ beforeEach(() => {
 });
 it('shows the volunteer own progress and opens the full progress page', () => {
   view();
-  expect(mockQuery).toHaveBeenCalledWith(42, null, true);
+  expect(mockQuery).toHaveBeenCalledWith(null, null, true);
   fireEvent.click(screen.getByText('3/5 stars'));
   expect(mockNavigate).toHaveBeenCalledWith('/volunteer-progress');
 });
 it('does not fetch progress for other staff profiles even when their role is a manager', () => {
   mockState.session.staffType = 'long_term'; mockState.session.roleSlug = 'manager';
   view();
-  expect(mockQuery).toHaveBeenCalledWith(42, null, false);
+  expect(mockQuery).toHaveBeenCalledWith(null, null, false);
   expect(screen.queryByText('3/5 stars')).not.toBeInTheDocument();
 });
 it.each([[false, true], [true, false]])('respects Home Experience visibility %s and loaded audiences %s', (visible, ready) => {
   view(visible, ready);
-  expect(mockQuery).toHaveBeenCalledWith(42, null, false);
+  expect(mockQuery).toHaveBeenCalledWith(null, null, false);
   expect(screen.queryByText('3/5 stars')).not.toBeInTheDocument();
 });
 it.each(['page', 'module', 'loading'])('requires %s access before fetching', condition => {
@@ -47,7 +47,7 @@ it.each(['page', 'module', 'loading'])('requires %s access before fetching', con
   if (condition === 'module') mockAccess.canView = false;
   if (condition === 'loading') mockAccess.ready = false;
   view();
-  expect(mockQuery).toHaveBeenCalledWith(42, null, false);
+  expect(mockQuery).toHaveBeenCalledWith(null, null, false);
 });
 it('shows a recoverable error rather than hiding failed progress', () => {
   const refetch = jest.fn(); mockQuery.mockReturnValue({ error: new Error('offline'), refetch });

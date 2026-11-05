@@ -220,6 +220,36 @@ receive `meetingPoint.photoUrl` and `meetingPoint.photoAlt`; render the image
 conditionally when a URL exists. Plain-text templates can include the URL.
 Existing booking/product authorization and template restrictions still apply.
 
+The Settings / Email Previews storefront confirmation uses the current Pub Crawl
+product content, including its saved meeting-point photo. Customer details and
+booking references remain fictitious, and loading a preview never sends mail.
+
+## Customer confirmation barcodes
+
+Paid storefront customer confirmations include a Code 128 barcode for each
+linked OmniLodge booking. It encodes the internal numeric booking ID accepted by
+manifest search, with the same ID shown alongside as a fallback. Barcodes appear
+in the booking reference section; orders containing multiple experiences show
+each barcode with its product name and booking ID there. No
+barcode is generated for an item without a persisted booking ID.
+
+The backend generates PNG images locally and embeds them as inline MIME parts
+referenced by Content-ID. The preview uses the same PNG bytes as data URLs so
+they render in the browser without sending an email or hosting a public barcode
+endpoint. This identifies the booking; it does not automatically check guests in.
+Bank-transfer payment instructions and
+internal notifications remain separate from paid customer confirmations.
+
+In Counters / Reservation Check, the search-field scanner button opens an inline
+camera in place of the stepper, with optional fullscreen expansion. Scanning
+continuously replaces the search with the exact internal booking ID, within the
+current counter's date, product, and channels. It never changes the selected
+Remaining / Checked In view or records attendance. The same barcode held in view
+is suppressed until it is no longer detected for two seconds; different tickets
+are accepted immediately. Already-checked-in and unmatched bookings require an
+explicit warning acknowledgment before more results can update the search.
+Camera access requires HTTPS (or localhost), and frames are decoded locally.
+
 ## Homepage volunteer progress
 
 The `home-volunteer-progress` section is configured in Settings / Home
