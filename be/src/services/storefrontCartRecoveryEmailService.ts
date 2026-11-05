@@ -1,4 +1,7 @@
 import dayjs from 'dayjs';
+import { latestCartExperiences } from './storefrontCartExperienceService.js';
+import { quoteStorefrontCart } from './storefrontCommerceService.js';
+import { normalizeSavedCartFromQuote } from './storefrontSavedCartService.js';
 import { randomUUID } from 'node:crypto';
 import StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 import HttpError from '../errors/HttpError.js';
@@ -75,7 +78,7 @@ export const buildStorefrontCartRecoveryEmail = (ongoing: StorefrontOngoingCart)
   const quote = ongoing.quoteSnapshot;
   const firstName = ongoing.customer.fullName.split(/\s+/)[0] || 'there';
   const productNames = quote.items.map((item) => item.productName);
-  const subjectProduct = productNames.length === 1 ? productNames[0] : 'your Krakow experiences';
+  const subjectProduct = productNames.length === 1 ? productNames[0] : 'Krakow experiences';
   const recoveryUrl = `${storefrontUrl()}/cart?recover=${encodeURIComponent(ongoing.publicId)}`
     + (ongoing.recoveryToken ? `&rt=${encodeURIComponent(ongoing.recoveryToken)}` : '');
   const subject = `Your ${subjectProduct} booking is still waiting`;
@@ -141,6 +144,32 @@ export const ensureStorefrontCartRecoveryToken = async (
   }
 };
 
+export const refreshDuplicateRecoveryCart = async (ongoing: StorefrontOngoingCart): Promise<void> => {
+  const expectedStatus = ongoing.status;
+  if (!['active', 'checkout_started', 'sending_recovery', 'recovery_sent'].includes(expectedStatus)) {
+    throw new HttpError(409, 'This cart is no longer available for changes.');
+  }
+  // Old unpaid drafts can still contain selections appended by an earlier storefront.
+  // Reprice the latest selection before emailing; completed carts never reach this claimed state.
+  if (latestCartExperiences(ongoing.quoteSnapshot.items).length !== ongoing.quoteSnapshot.items.length) {
+    const quote = await quoteStorefrontCart(ongoing.cart);
+    const [saved] = await StorefrontOngoingCart.update({
+      cart: normalizeSavedCartFromQuote(quote), quoteSnapshot: quote, currency: quote.currency, total: quote.total,
+      metadata: { ...ongoing.metadata, events: [...(Array.isArray(ongoing.metadata?.events) ? ongoing.metadata.events : []), {
+        id: randomUUID(), occurredAt: new Date().toISOString(), type: 'cart_item_updated', severity: 'info',
+        message: 'Duplicate unpaid experience selections replaced by the latest selection before recovery email.',
+        details: { previousItemCount: ongoing.quoteSnapshot.items.length, itemCount: quote.items.length,
+          previousTotal: Number(ongoing.total), total: quote.total, currency: quote.currency,
+          previousSelections: ongoing.quoteSnapshot.items.map(({ productId, quantity, experienceDate, experienceTime, addons }) =>
+            ({ productId, quantity, experienceDate, experienceTime, addons })) },
+      }] },
+    }, { where: { id: ongoing.id, status: expectedStatus, updatedAt: ongoing.updatedAt } });
+    if (!saved) throw new HttpError(409, 'This cart changed before the recovery email could be sent.');
+    await ongoing.reload();
+    if (ongoing.status !== expectedStatus) throw new HttpError(409, 'This cart changed before the recovery email could be sent.');
+  }
+};
+
 export const sendAndRecordStorefrontCartRecoveryEmail = async (
   ongoing: StorefrontOngoingCart,
 ): Promise<StorefrontOngoingCart> => {
@@ -155,6 +184,7 @@ export const sendAndRecordStorefrontCartRecoveryEmail = async (
   if (ongoing.status !== 'sending_recovery') {
     throw new HttpError(409, 'This cart changed before the recovery email could be sent.');
   }
+  await refreshDuplicateRecoveryCart(ongoing);
   await ensureStorefrontCartRecoveryToken(ongoing);
 
   const result = await deliverStorefrontCartRecoveryEmail(ongoing);

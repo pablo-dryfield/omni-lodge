@@ -66,6 +66,7 @@ const serialize = (savedCart: StorefrontSavedCart, orderPublicId: string | null 
 const quoteInput = async (value: unknown) => {
   const quote = await quoteStorefrontCart(value as StorefrontCartInput, undefined, {
     allowMissingCustomerDetails: true,
+    preserveExperienceLines: true,
   });
   return { quote, cart: normalizeSavedCartFromQuote(quote) };
 };
@@ -160,7 +161,7 @@ export const getPublicSavedCart = async (
 ): Promise<void> => {
   try {
     const savedCart = await getUsableSavedCart(publicId(request.params.publicId));
-    const quote = await quoteStorefrontCart(savedCart.cart, undefined, { allowMissingCustomerDetails: true });
+    const quote = await quoteStorefrontCart(savedCart.cart, undefined, { allowMissingCustomerDetails: true, preserveExperienceLines: true });
     await savedCart.update({
       openedAt: savedCart.openedAt || new Date(),
       quoteSnapshot: quote,

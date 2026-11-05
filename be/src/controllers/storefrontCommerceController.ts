@@ -4,6 +4,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Op } from 'sequelize';
 import sequelize from '../config/database.js';
 import HttpError from '../errors/HttpError.js';
+import { checkoutSelectionFingerprint, protectStorefrontPaymentSelection } from '../services/storefrontCheckoutProtectionService.js';
 import {
   getStorefrontStripePublishableKey,
   getStorefrontStripeClient,
@@ -33,10 +34,13 @@ import {
 import { maybeSendTshirtSizeSelectionEmail } from '../services/bookings/tshirtSizeEmailAutomationService.js';
 import { getStorefrontPublicConfig } from '../services/storefrontPublicConfigService.js';
 import {
+  normalizeSavedCartFromQuote,
   addCustomerToSavedCart,
   getUsableSavedCart,
 } from '../services/storefrontSavedCartService.js';
 import {
+  assertOngoingCartVersion,
+  ongoingCartFingerprint,
   getUsableOngoingCart,
   markOngoingCartConverted,
   recordOngoingCartEvent,
@@ -389,7 +393,7 @@ export const quoteCart = async (request: Request, response: Response, next: Next
     const quote = await quoteStorefrontCart(
       cart,
       undefined,
-      sharedCartPublicId ? { allowMissingCustomerDetails: true } : {},
+      sharedCartPublicId ? { allowMissingCustomerDetails: true, preserveExperienceLines: true } : {},
     );
     const cartSessionId = text(request.body?.cartSessionId, 36);
     const ongoing = !sharedCartPublicId && cartSessionId
@@ -400,6 +404,8 @@ export const quoteCart = async (request: Request, response: Response, next: Next
           customer: request.body?.customer,
           attribution: request.body?.attribution,
           clientContext: request.body?.clientContext,
+          cartVersion: request.body?.cartVersion,
+          cartVersionProtocol: request.body?.cartVersionProtocol,
           quote,
         })
       : null;
@@ -443,6 +449,7 @@ export const quoteCart = async (request: Request, response: Response, next: Next
         publicId: ongoing.publicId,
         sessionId: ongoing.sessionId,
         status: ongoing.status,
+        cartVersion: ongoingCartFingerprint(ongoing.cart),
         recoveryDueAt: ongoing.recoveryDueAt,
       } : null,
       journey,
@@ -484,16 +491,23 @@ export const createCheckout = async (request: Request, response: Response, next:
     const cart = savedCart
       ? addCustomerToSavedCart(savedCart.cart, customer)
       : request.body?.cart as StorefrontCartInput;
-    const quote = await quoteStorefrontCart(cart);
+    const quote = await quoteStorefrontCart(cart, undefined, { preserveExperienceLines: Boolean(savedCart) });
+    // Reject a stale device before it can cancel another device's valid payment form.
+    if (ongoingCart) {
+      assertOngoingCartVersion(ongoingCart, request.body?.cartVersion,
+        normalizeSavedCartFromQuote(quote), request.body?.cartVersionProtocol);
+    }
     const publishableKey = getStorefrontStripePublishableKey();
     const amount = Math.round(quote.total * 100);
     const currency = quote.currency.toLowerCase();
     const confirmation = createConfirmationToken();
+    const selectionFingerprint = checkoutSelectionFingerprint(quote, customer);
 
     const existingOrderId = savedCart?.orderId ?? ongoingCart?.orderId;
     let existingOrder = existingOrderId
       ? await StorefrontOrder.findByPk(existingOrderId)
       : null;
+    let replaceExistingOrder = Boolean(existingOrder && existingOrder.metadata?.checkoutSelectionFingerprint !== selectionFingerprint);
     if (existingOrder?.paymentStatus === 'paid') {
       await savedCart?.update({ status: 'paid', paidAt: existingOrder.paidAt || new Date() });
       if (ongoingCart) {
@@ -524,10 +538,8 @@ export const createCheckout = async (request: Request, response: Response, next:
         throw new HttpError(409, 'Payment has already been submitted and is being confirmed.');
       }
       if (existingSession.status === 'open') {
-        await getStorefrontStripeClient().checkout.sessions.update(existingSession.id, {
-          metadata: { ...existingSession.metadata, ktkReplaced: 'true' },
-        });
         await getStorefrontStripeClient().checkout.sessions.expire(existingSession.id);
+        replaceExistingOrder = true;
       }
     }
 
@@ -560,33 +572,37 @@ export const createCheckout = async (request: Request, response: Response, next:
         throw new HttpError(409, 'Payment has already been submitted and is being confirmed.');
       }
 
-      const currencyMatches = existingPaymentIntent.currency === currency;
-      if ((!currencyMatches || amount === 0) && existingPaymentIntent.status !== 'canceled') {
-        await stripe.paymentIntents.update(existingPaymentIntent.id, {
-          metadata: { ...existingPaymentIntent.metadata, ktkReplaced: 'true' },
-        });
-        await stripe.paymentIntents.cancel(existingPaymentIntent.id, {
-          cancellation_reason: 'abandoned',
-        });
-      } else if (existingPaymentIntent.status !== 'canceled') {
-        reusablePaymentIntent = existingPaymentIntent;
-      }
+      const action = await protectStorefrontPaymentSelection(stripe, existingPaymentIntent,
+        !replaceExistingOrder, amount, currency);
+      if (action === 'reuse') reusablePaymentIntent = existingPaymentIntent;
+      else replaceExistingOrder = true;
     }
 
     const order = await sequelize.transaction(async (transaction) => {
+      // Match fulfillment's lock order and recheck after waiting for an in-flight webhook.
+      const lockedExistingOrder = existingOrder
+        ? await StorefrontOrder.findByPk(existingOrder.id, { transaction, lock: transaction.LOCK.UPDATE }) : null;
+      if (existingOrder && !lockedExistingOrder) throw new HttpError(409, 'Checkout changed. Please try again.');
+      if (lockedExistingOrder?.paymentStatus === 'paid' || lockedExistingOrder?.status === 'confirmed') {
+        throw new HttpError(409, 'This cart has already been paid.');
+      }
       const lockedSavedCart = savedCart
         ? await getUsableSavedCart(savedCart.publicId, transaction, true)
         : null;
       const lockedOngoingCart = ongoingCart
         ? await getUsableOngoingCart(ongoingCart.publicId, transaction, true)
         : null;
-      if (lockedSavedCart?.orderId && lockedSavedCart.orderId !== existingOrder?.id) {
+      if (lockedSavedCart && (lockedSavedCart.orderId ?? null) !== (existingOrder?.id ?? null)) {
         throw new HttpError(409, 'Checkout is already being prepared. Please try the link again.');
       }
-      if (lockedOngoingCart?.orderId && lockedOngoingCart.orderId !== existingOrder?.id) {
+      if (lockedOngoingCart && (lockedOngoingCart.orderId ?? null) !== (existingOrder?.id ?? null)) {
         throw new HttpError(409, 'Checkout is already being prepared. Please try again.');
       }
 
+      if (lockedOngoingCart) {
+        assertOngoingCartVersion(lockedOngoingCart, request.body?.cartVersion,
+          normalizeSavedCartFromQuote(quote), request.body?.cartVersionProtocol);
+      }
       const orderValues = {
         status: 'pending_payment',
         paymentStatus: 'unpaid',
@@ -607,6 +623,7 @@ export const createCheckout = async (request: Request, response: Response, next:
         discountCode: quote.discountCode,
         attribution,
         metadata: {
+          checkoutSelectionFingerprint: selectionFingerprint,
           promotionId: quote.promotionId,
           promotionIds: quote.discounts.map((discount) => discount.promotionId),
           discountCodes: quote.discountCodes,
@@ -617,7 +634,12 @@ export const createCheckout = async (request: Request, response: Response, next:
         },
       };
 
-      let pendingOrder = existingOrder;
+      if (replaceExistingOrder && lockedExistingOrder) {
+        await lockedExistingOrder.update({ status: 'cancelled', metadata: {
+          ...lockedExistingOrder.metadata, replacedByCheckoutSelection: selectionFingerprint,
+        } }, { transaction });
+      }
+      let pendingOrder = replaceExistingOrder ? null : lockedExistingOrder;
       if (pendingOrder) {
         await pendingOrder.update(orderValues, { transaction });
         await StorefrontOrderItem.destroy({ where: { orderId: pendingOrder.id }, transaction });
@@ -696,13 +718,7 @@ export const createCheckout = async (request: Request, response: Response, next:
       ...(ongoingCart ? { ongoingCartPublicId: ongoingCart.publicId } : {}),
     };
     let paymentIntent: Stripe.PaymentIntent | null = null;
-    if (reusablePaymentIntent) {
-      paymentIntent = await stripe.paymentIntents.update(reusablePaymentIntent.id, {
-        amount,
-        receipt_email: customer.email,
-        metadata: stripeMetadata,
-      });
-    }
+    if (reusablePaymentIntent) paymentIntent = reusablePaymentIntent;
 
     paymentIntent ??= await stripe.paymentIntents.create({
       amount,
@@ -711,7 +727,7 @@ export const createCheckout = async (request: Request, response: Response, next:
       receipt_email: customer.email,
       description: `Krawl Through Krakow booking ${order.publicId}`,
       metadata: stripeMetadata,
-    });
+    }, { idempotencyKey: `storefront-checkout-${order.publicId}-${selectionFingerprint}` });
     if (!paymentIntent.client_secret) {
       throw new HttpError(502, 'Stripe did not return a payment client secret.');
     }

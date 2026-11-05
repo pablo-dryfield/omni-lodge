@@ -13,6 +13,7 @@ import { quoteStorefrontCart } from '../services/storefrontCommerceService.js';
 import {
   buildStorefrontCartRecoveryEmail,
   ensureStorefrontCartRecoveryToken,
+  refreshDuplicateRecoveryCart,
   sendAndRecordStorefrontCartRecoveryEmail,
 } from '../services/storefrontCartRecoveryEmailService.js';
 import HttpError from '../errors/HttpError.js';
@@ -54,11 +55,10 @@ export const recoverOngoingCart = async (request: Request, response: Response, n
     await ongoing.update({
       openedAt: ongoing.openedAt || new Date(),
       ...(trackedRecoveryOpen && !ongoing.recoveryOpenedAt ? { recoveryOpenedAt: new Date() } : {}),
-      quoteSnapshot: quote,
-      currency: quote.currency,
-      total: quote.total,
     });
-    response.json({ ongoingCart: serializeOngoingCart(ongoing) });
+    // Opening a recovery link must not overwrite a concurrent save from another device.
+    // Persist the normalized selection only through the version-checked quote/save path.
+    response.json({ ongoingCart: { ...serializeOngoingCart(ongoing), quote, currency: quote.currency, total: quote.total } });
   } catch (error) {
     next(error);
   }
@@ -201,6 +201,7 @@ export const previewOngoingCartRecoveryEmail = async (
 ): Promise<void> => {
   try {
     const ongoing = await getUsableOngoingCart(request.params.publicId);
+    await refreshDuplicateRecoveryCart(ongoing);
     await ensureStorefrontCartRecoveryToken(ongoing);
     const preview = buildStorefrontCartRecoveryEmail(ongoing);
     response.json({

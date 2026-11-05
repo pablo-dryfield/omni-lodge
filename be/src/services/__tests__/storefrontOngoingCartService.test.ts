@@ -6,6 +6,8 @@ import { normalizeSavedCartCustomer, normalizeSavedCartFromQuote } from '../stor
 import { recordServerJourneyEvent } from '../storefrontJourneyService';
 import {
   markOngoingCartConverted,
+  assertOngoingCartVersion,
+  ongoingCartFingerprint,
   recordOngoingCartEvent,
   recordOngoingCartEventByIdentity,
   upsertOngoingCart,
@@ -13,6 +15,7 @@ import {
 
 jest.mock('../../config/database.js', () => ({ __esModule: true, default: { transaction: jest.fn(), query: jest.fn() } }));
 jest.mock('../storefrontCartBookingMatchService.js', () => ({ dismissCartWithPaidMatch: jest.fn() }));
+jest.mock('../storefrontCartPaymentGuardService.js', () => ({ assertCartPaymentsEditable: jest.fn() }));
 
 jest.mock('../../models/StorefrontOngoingCart.js', () => ({
   __esModule: true,
@@ -215,14 +218,13 @@ describe('storefront ongoing cart service', () => {
     }) }), { transaction });
   });
 
-  it('accepts newly submitted selections from a superseded browser without returning the successor cart', async () => {
+  it('rejects a superseded legacy browser without altering or returning the successor cart', async () => {
     model.findOne.mockResolvedValueOnce({ status: 'dismissed', metadata: { mergeReason: 'customer_identity' } }).mockResolvedValueOnce(null);
     const current = { id: 12, publicId: 'new-independent-id', metadata: {} };
     model.create.mockResolvedValue(current);
-    const result = await upsertOngoingCart({ sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77',
-      publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d', cart: {}, customer: {}, quote });
-    expect(result).toBe(current);
-    expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ orderId: null }), { transaction });
+    await expect(upsertOngoingCart({ sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77',
+      publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d', cart: {}, customer: {}, quote })).rejects.toMatchObject({ status: 409 });
+    expect(model.create).not.toHaveBeenCalled();
   });
 
   it('does not change selections while a matching cart is sending recovery', async () => {
@@ -403,5 +405,26 @@ describe('storefront ongoing cart service', () => {
       expect.objectContaining({ update }),
       expect.objectContaining({ type: 'payment_failed' }),
     );
+  });
+});
+
+
+describe('cart revision protection', () => {
+  const selection = { items: [experience] };
+  const current = () => ({ status: 'active', metadata: { cartVersionProtocol: 1 }, cart: selection } as unknown as StorefrontOngoingCart);
+  it('rejects an older device changing a newer selection', () => {
+    expect(() => assertOngoingCartVersion(current(), 'a'.repeat(64), { items: [{ ...experience, quantity: 3 }] }, 1)).toThrow('changed on another device');
+  });
+  it('accepts a known current version and idempotent retries', () => {
+    expect(() => assertOngoingCartVersion(current(), ongoingCartFingerprint(selection), { items: [{ ...experience, quantity: 3 }] }, 1)).not.toThrow();
+    expect(() => assertOngoingCartVersion(current(), 'a'.repeat(64), selection, 1)).not.toThrow();
+  });
+  it('rejects superseded device IDs without revealing another cart', () => {
+    const cart = { ...current(), status: 'dismissed', metadata: { mergeReason: 'customer_identity', cartVersionProtocol: 1 } } as unknown as StorefrontOngoingCart;
+    expect(() => assertOngoingCartVersion(cart, ongoingCartFingerprint(selection), selection, 1)).toThrow('changed on another device');
+  });
+  it('does not require a version for an existing legacy client until a versioned client saves it', () => {
+    expect(() => assertOngoingCartVersion({ ...current(), metadata: {} } as unknown as StorefrontOngoingCart, undefined, { items: [] })).not.toThrow();
+    expect(() => assertOngoingCartVersion(current(), undefined, { items: [] })).toThrow('changed on another device');
   });
 });

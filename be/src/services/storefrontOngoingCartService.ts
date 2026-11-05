@@ -15,6 +15,7 @@ import { recordServerJourneyEvent } from './storefrontJourneyService.js';
 import { normalizedCartEmail, normalizedCartName, normalizedCartPhone, resolveCartIdentity, sameCartExperiences } from './storefrontCartIdentity.js';
 import { findCartIdentityCandidates } from './storefrontCartIdentityRepository.js';
 import { dismissCartWithPaidMatch } from './storefrontCartBookingMatchService.js';
+import { assertCartPaymentsEditable } from './storefrontCartPaymentGuardService.js';
 
 export const ONGOING_CART_STATUSES = [
   'active',
@@ -69,6 +70,8 @@ type OngoingCartInput = {
   attribution?: unknown;
   quote?: StorefrontQuote;
   clientContext?: unknown;
+  cartVersion?: unknown;
+  cartVersionProtocol?: unknown;
 };
 
 const activeWhere = (sessionId: string) => ({
@@ -151,6 +154,24 @@ const terminalCartError = (ongoing: StorefrontOngoingCart): HttpError | null => 
     : new HttpError(409, 'This cart is not available for checkout.');
 };
 
+export const assertOngoingCartVersion = (
+  ongoing: StorefrontOngoingCart, expected: unknown, requested: StorefrontCartInput, protocol?: unknown,
+): void => {
+  if (typeof expected === 'string' && !/^[a-f0-9]{64}$/.test(expected)) {
+    throw new HttpError(400, 'Invalid cart version. Refresh your cart.');
+  }
+  if (ongoing.status === 'dismissed' && ongoing.metadata?.mergeReason === 'customer_identity') {
+    throw new HttpError(409, 'This cart changed on another device. Review your selections before continuing.');
+  }
+  const required = protocol === 1 || ongoing.metadata?.cartVersionProtocol === 1 || Boolean(expected);
+  if (!required) return;
+  const currentVersion = ongoingCartFingerprint(ongoing.cart);
+  // A retry of the exact selection already saved is safe even if its acknowledgment was lost.
+  if (expected !== currentVersion && ongoingCartFingerprint(requested) !== currentVersion) {
+    throw new HttpError(409, 'This cart changed on another device. Review your selections before continuing.');
+  }
+};
+
 export const upsertOngoingCart = async (input: OngoingCartInput): Promise<StorefrontOngoingCart> => {
   const sessionId = parseStorefrontUuid(input.sessionId, 'Cart session ID');
   const customer = normalizeCustomer(input.customer);
@@ -194,9 +215,12 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
           transaction, lock: transaction.LOCK.UPDATE,
         }) : null;
     if (ongoing) {
-      // A prior browser may still quote its superseded ID. Accept only its new
-      // submitted selections; do not reveal the other browser's cart or credentials.
-      if (ongoing.status === 'dismissed' && ongoing.metadata?.mergeReason === 'customer_identity') ongoing = null;
+      // An already-open page can still submit a superseded ID, including legacy
+      // clients. Require review rather than letting it supersede the newer draft again.
+      if (ongoing.status === 'dismissed' && ongoing.metadata?.mergeReason === 'customer_identity') {
+        assertOngoingCartVersion(ongoing, input.cartVersion, cart, input.cartVersionProtocol);
+        ongoing = null;
+      }
       else {
         const terminalError = terminalCartError(ongoing);
         if (terminalError) throw terminalError;
@@ -205,6 +229,7 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
     ongoing ??= await StorefrontOngoingCart.findOne({
       where: activeWhere(sessionId), transaction, lock: transaction.LOCK.UPDATE,
     });
+    if (ongoing) assertOngoingCartVersion(ongoing, input.cartVersion, cart, input.cartVersionProtocol);
     if (!ongoing) {
       const recentSessionCarts = await StorefrontOngoingCart.findAll({
         where: { sessionId, status: 'converted', convertedAt: { [Op.gte]: dedupeCutoff(now) } },
@@ -218,6 +243,7 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
     const match = resolveCartIdentity(customer, candidates.filter(candidate => Number(candidate.id) !== Number(ongoing?.id)));
     const duplicates = match.kind === 'matched'
       ? match.carts.filter(candidate => Number(candidate.id) !== Number(ongoing?.id)) : [];
+    await assertCartPaymentsEditable([...(ongoing ? [ongoing] : []), ...duplicates], transaction);
     if (ongoing?.status === 'sending_recovery' || duplicates.some(candidate => candidate.status === 'sending_recovery')) {
       throw new HttpError(409, 'Your cart is being updated. Please try again in a moment.');
     }
@@ -225,7 +251,8 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
       await ongoing.update({
         ...values,
         status: ongoing.status === 'checkout_started' ? 'checkout_started' : values.status,
-        metadata: { ...cartMetadata(ongoing.metadata, fingerprint, sessionId, clientContext), identityReview: null },
+        metadata: { ...cartMetadata(ongoing.metadata, fingerprint, sessionId, clientContext), identityReview: null,
+          ...(input.cartVersionProtocol === 1 ? { cartVersionProtocol: 1 } : {}), },
       }, { transaction });
     } else {
       // New browsers get their own opaque access identity and payment context. Never return
@@ -234,7 +261,8 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
         sessionId, ...values, openedAt: null, firstRecoverySentAt: null,
         lastRecoverySentAt: null, recoveryOpenedAt: null, recoveredAt: null, recoveryCount: 0,
         checkoutStartedAt: null, convertedAt: null, orderId: null,
-        metadata: cartMetadata(null, fingerprint, sessionId, clientContext),
+        metadata: { ...cartMetadata(null, fingerprint, sessionId, clientContext),
+          ...(input.cartVersionProtocol === 1 ? { cartVersionProtocol: 1 } : {}), },
       }, { transaction });
     }
     for (const duplicate of duplicates) {
@@ -451,6 +479,7 @@ export const serializeOngoingCart = (
   sessionId: ongoing.sessionId,
   status: ongoing.status,
   cart: ongoing.cart,
+  cartVersion: ongoingCartFingerprint(ongoing.cart),
   customer: ongoing.customer,
   quote: ongoing.quoteSnapshot,
   attribution: ongoing.attribution,
