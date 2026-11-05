@@ -1,0 +1,324 @@
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Box, Button, CircularProgress, Dialog, IconButton, Stack, Tooltip, Typography } from '@mui/material';
+import { CheckCircleOutline, Close, FlashlightOff, FlashlightOn, Fullscreen, FullscreenExit, Keyboard, QrCodeScanner, Refresh, WarningAmber } from '@mui/icons-material';
+import type { IScannerControls } from '@zxing/browser';
+
+export type BookingScanResult = {
+  bookingId: string;
+  kind: 'found' | 'checked_in' | 'not_found';
+};
+
+type Props = {
+  onScan: (bookingId: string) => void;
+  onClose: () => void;
+  result: BookingScanResult | null;
+  disabled?: boolean;
+};
+
+const cameraErrorMessage = (error: unknown): string => {
+  const name = error instanceof Error ? error.name : '';
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+    return 'Camera access was blocked. Allow camera access for OmniLodge in your browser settings, then try again.';
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No camera was found on this device. You can enter the booking number in the search bar.';
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return 'The camera is busy or unavailable. Close any other app using it, then try again.';
+  }
+  return 'The camera could not start. Try again, or enter the booking number in the search bar.';
+};
+
+/** Inline, continuous scanning. Keep the camera live while staff use the results. */
+const BookingBarcodeScanner = ({ onScan, onClose, result, disabled = false }: Props) => {
+  const [fullScreen, setFullScreen] = useState(false);
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  const [status, setStatus] = useState<'starting' | 'scanning' | 'error'>('starting');
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [torchAvailable, setTorchAvailable] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const [torchBusy, setTorchBusy] = useState(false);
+  const streamRef = useRef<MediaStream | null>(null);
+  const onScanRef = useRef(onScan);
+  onScanRef.current = onScan;
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  const lastBarcodeRef = useRef<{ code: string; lastSeenAt: number } | null>(null);
+
+  useEffect(() => {
+    const pauseWhenHidden = () => {
+      if (document.hidden) setPaused(true);
+    };
+    document.addEventListener('visibilitychange', pauseWhenHidden);
+    return () => document.removeEventListener('visibilitychange', pauseWhenHidden);
+  }, []);
+
+  useEffect(() => {
+    if (!videoElement || paused) return;
+    let cancelled = false;
+    let failed = false;
+    let controls: IScannerControls | undefined;
+    let stream: MediaStream | undefined;
+    let endedTrack: MediaStreamTrack | undefined;
+    const stop = () => {
+      controls?.stop();
+      controls = undefined;
+      if (endedTrack) endedTrack.removeEventListener('ended', onCameraEnded);
+      stream?.getTracks().forEach((track) => track.stop());
+      if (streamRef.current === stream) streamRef.current = null;
+      if (videoElement.srcObject === stream) videoElement.srcObject = null;
+    };
+    const onCameraEnded = () => {
+      if (cancelled || failed) return;
+      failed = true;
+      stop();
+      setError('The camera disconnected. Reconnect it or try again.');
+      setStatus('error');
+    };
+    const start = async () => {
+      setStatus('starting');
+      setError(null);
+      setTorchAvailable(false);
+      setTorchOn(false);
+      setTorchBusy(false);
+      setHint(null);
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        setError('Camera scanning needs HTTPS or localhost. Open OmniLodge over a secure connection, or use the search bar.');
+        setStatus('error');
+        return;
+      }
+      try {
+        // Load decoding code only when the user opens the scanner. Frames stay
+        // in the browser; no image upload or external camera app is involved.
+        const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType, NotFoundException, ChecksumException, FormatException }] = await Promise.all([
+          import('@zxing/browser'),
+          import('@zxing/library'),
+        ]);
+        if (cancelled) return;
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        streamRef.current = stream;
+        endedTrack = stream.getVideoTracks()[0];
+        endedTrack?.addEventListener('ended', onCameraEnded);
+        // Torch capability reporting is optional and can fail on some mobile
+        // browsers; it must not prevent the camera itself from starting.
+        try {
+          const capabilities = endedTrack?.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean }) | undefined;
+          setTorchAvailable(Boolean(capabilities?.torch));
+        } catch {
+          setTorchAvailable(false);
+        }
+        videoElement.srcObject = stream;
+
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+        const reader = new BrowserMultiFormatReader(hints, {
+          delayBetweenScanAttempts: 200,
+          delayBetweenScanSuccess: 500,
+          tryPlayVideoTimeout: 8000,
+        });
+        const nextControls = await reader.decodeFromVideoElement(videoElement, (result, decodeError, scanControls) => {
+          if (cancelled || failed) {
+            scanControls.stop();
+            return;
+          }
+          if (result) {
+            const code = result.getText().trim();
+            const bookingId = Number(code);
+            if (!/^\d+$/.test(code) || !Number.isSafeInteger(bookingId) || bookingId <= 0) {
+              setHint('Use the booking barcode from the OmniLodge confirmation email.');
+              return;
+            }
+            const normalizedCode = String(bookingId);
+            const now = performance.now();
+            const previous = lastBarcodeRef.current;
+            // A ticket held in view should update search once, not repeatedly
+            // overwrite staff input or trigger an alert after they check it in.
+            // Re-arm the same ticket after it has left detection for 2 seconds;
+            // a different ticket is accepted immediately.
+            const repeated = previous?.code === normalizedCode && now - previous.lastSeenAt < 2000;
+            if (previous?.code === normalizedCode) previous.lastSeenAt = now;
+            if (disabledRef.current || repeated) return;
+            lastBarcodeRef.current = { code: normalizedCode, lastSeenAt: now };
+            setHint(null);
+            onScanRef.current(normalizedCode);
+          } else if (decodeError && !(decodeError instanceof NotFoundException)
+            && !(decodeError instanceof ChecksumException) && !(decodeError instanceof FormatException)) {
+            failed = true;
+            scanControls.stop();
+            stop();
+            setError('The camera preview was interrupted. Try scanning again.');
+            setStatus('error');
+          }
+        });
+        controls = nextControls;
+        if (cancelled || failed) {
+          stop();
+          return;
+        }
+        setStatus('scanning');
+      } catch (cause) {
+        stop();
+        if (!cancelled && !failed) {
+          setError(cameraErrorMessage(cause));
+          setStatus('error');
+        }
+      }
+    };
+    void start();
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [videoElement, attempt, paused]);
+
+  const retry = () => {
+    setPaused(false);
+    setAttempt((value) => value + 1);
+  };
+  const toggleTorch = async () => {
+    const stream = streamRef.current;
+    const track = stream?.getVideoTracks()[0];
+    if (!track || torchBusy) return;
+    setTorchBusy(true);
+    try {
+      await track.applyConstraints({ advanced: [{ torch: !torchOn } as MediaTrackConstraintSet] });
+      if (streamRef.current === stream) setTorchOn(!torchOn);
+    } catch {
+      if (streamRef.current === stream) setHint('Flashlight unavailable. Try a brighter area or increase the brightness of the customer’s screen.');
+    } finally {
+      if (streamRef.current === stream) setTorchBusy(false);
+    }
+  };
+
+  const previewLive = status === 'scanning' && !paused;
+  const resultLabel = result
+    ? `Last scan: #${result.bookingId}${result.kind === 'checked_in' ? ' already checked in' : result.kind === 'not_found' ? ' not found' : ' selected'}`
+    : null;
+  const overlayControlSx = {
+    color: '#fff', width: 44, height: 44, bgcolor: 'rgba(8,13,22,.8)',
+    '&:hover': { bgcolor: 'rgba(8,13,22,.95)' },
+    '&.Mui-disabled': { color: '#94a3b8', bgcolor: 'rgba(8,13,22,.8)' },
+    '&.Mui-focusVisible': { outline: '2px solid #74c0fc', outlineOffset: 2 },
+  };
+  const content = (
+      <Stack sx={{ height: '100%', minHeight: 0 }}>
+        {fullScreen && <Stack direction="row" alignItems="center" spacing={1.5}
+          sx={{ px: 2, pt: 'max(12px, env(safe-area-inset-top))',
+            pb: 1.5, borderBottom: '1px solid #263141', flexShrink: 0 }}>
+          <QrCodeScanner sx={{ color: '#74c0fc', mx: 0.5 }} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography id="booking-scanner-title" component="h2" variant="h6" fontWeight={800}>
+              Scan booking
+            </Typography>
+          </Box>
+          <Tooltip title="Return to Reservation Check">
+            <IconButton aria-label="Exit fullscreen scanner"
+              onClick={() => setFullScreen(false)} sx={{ color: 'white', width: 44, height: 44 }}>
+              <FullscreenExit />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Close scanner">
+            <IconButton aria-label="Close scanner" onClick={onClose} sx={{ color: 'white', width: 44, height: 44 }}><Close /></IconButton>
+          </Tooltip>
+        </Stack>}
+
+        <Box sx={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <Box component="video" ref={setVideoElement} autoPlay playsInline muted
+            aria-label="Live camera preview"
+            sx={{ width: '100%', height: '100%', objectFit: 'cover', opacity: previewLive ? 1 : 0 }} />
+          {!fullScreen && <>
+            <Stack direction="row" spacing={0.5} sx={{ position: 'absolute', top: 8, right: 8, zIndex: 2 }}>
+              <Tooltip title="Open fullscreen scanner">
+                <IconButton aria-label="Open fullscreen scanner" onClick={() => setFullScreen(true)} sx={overlayControlSx}>
+                  <Fullscreen />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Close scanner">
+                <IconButton aria-label="Close scanner" onClick={onClose} sx={overlayControlSx}><Close /></IconButton>
+              </Tooltip>
+            </Stack>
+            {previewLive && torchAvailable && <Stack direction="row" spacing={0.5} sx={{ position: 'absolute', top: 8, left: 8, zIndex: 2 }}>
+              <Tooltip title={torchOn ? 'Light off' : 'Light on'}>
+                <IconButton aria-label={torchOn ? 'Light off' : 'Light on'} aria-pressed={torchOn} disabled={torchBusy}
+                  onClick={() => { void toggleTorch(); }} sx={overlayControlSx}>
+                  {torchOn ? <FlashlightOff /> : <FlashlightOn />}
+                </IconButton>
+              </Tooltip>
+            </Stack>}
+          </>}
+          {previewLive && (
+            <Box aria-hidden="true" sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+              <Box sx={{ width: 'min(82%, 500px)', height: fullScreen ? 'min(36%, 200px)' : '40%', minHeight: 60,
+                border: '3px solid #74c0fc', borderRadius: 3, boxShadow: '0 0 0 9999px rgba(0,0,0,.4)' }} />
+            </Box>
+          )}
+          {previewLive && (result || (!fullScreen && (hint || disabled))) && <Stack direction="row" spacing={1} alignItems="center"
+            sx={{ position: 'absolute', bottom: 8, left: 12, right: 12, width: 'fit-content', maxWidth: 'calc(100% - 24px)',
+              mx: 'auto', px: 1.5, py: 0.75, borderRadius: 2, bgcolor: 'rgba(8,13,22,.9)', pointerEvents: 'none' }}>
+            {result && !disabled && (result.kind === 'found'
+              ? <CheckCircleOutline sx={{ color: '#69db7c', fontSize: 20 }} />
+              : <WarningAmber sx={{ color: '#ffd43b', fontSize: 20 }} />)}
+            <Typography variant={fullScreen ? 'body2' : 'caption'} fontWeight={result ? 700 : 400} role="status">
+              {disabled ? 'Scanning paused' : resultLabel ?? hint}
+            </Typography>
+          </Stack>}
+          {!previewLive && (
+            <Box sx={{ position: 'absolute', inset: 0, overflowY: 'auto', p: fullScreen ? 3 : 1.5, pt: fullScreen ? 3 : 7 }}>
+            <Stack spacing={fullScreen ? 2 : 1} alignItems="center" justifyContent="center" sx={{ minHeight: '100%', textAlign: 'center' }}>
+              {paused ? <>
+                <Typography variant="h6">Camera paused</Typography>
+                <Button variant="contained" onClick={retry} startIcon={<Refresh />}>Resume camera</Button>
+              </> : status === 'starting' ? <>
+                <CircularProgress size={fullScreen ? 40 : 24} sx={{ color: '#74c0fc' }} />
+                <Typography role="status">Starting camera… Allow access when your browser asks.</Typography>
+              </> : <>
+                <Alert severity="warning" sx={{ maxWidth: 480, textAlign: 'left' }}>{error}</Alert>
+                <Button variant="contained" onClick={retry} startIcon={<Refresh />}>Try again</Button>
+              </>}
+            </Stack>
+            </Box>
+          )}
+        </Box>
+
+        {fullScreen && <Stack spacing={1.5} alignItems="center" sx={{ px: 2, pt: 2, pb: 'max(16px, env(safe-area-inset-bottom))', borderTop: '1px solid #263141', flexShrink: 0 }}>
+          {(disabled || !previewLive || hint) && <Typography role="status" variant="body2" textAlign="center" sx={{ color: '#d9e5f4' }}>
+            {disabled ? 'Scanning paused while the reservation is being handled.' : previewLive ? hint : 'You can also enter the booking number manually.'}
+          </Typography>}
+          <Stack direction="row" spacing={1} justifyContent="center" flexWrap="wrap" useFlexGap>
+            {torchAvailable && previewLive && <Button variant="outlined" startIcon={torchOn ? <FlashlightOff /> : <FlashlightOn />}
+              aria-pressed={torchOn} disabled={torchBusy} onClick={() => { void toggleTorch(); }}
+              sx={{ color: '#d9e5f4', borderColor: '#586d86', minHeight: 44 }}>{torchOn ? 'Light off' : 'Light on'}</Button>}
+            <Button startIcon={<Keyboard />} onClick={onClose} sx={{ color: '#74c0fc', minHeight: 44 }}>Use search</Button>
+          </Stack>
+        </Stack>}
+      </Stack>
+  );
+
+  return (
+    <Box component="section" aria-label="Booking scanner" sx={{
+      height: { xs: 180, sm: 200 }, bgcolor: '#080d16', color: '#fff', borderRadius: 3, overflow: 'hidden',
+    }}>
+      {fullScreen ? <Dialog open fullScreen onClose={() => setFullScreen(false)} aria-labelledby="booking-scanner-title"
+        PaperProps={{ sx: { bgcolor: '#080d16', color: '#fff', height: '100dvh', overflow: 'hidden' } }}>
+        {content}
+      </Dialog> : content}
+    </Box>
+  );
+};
+
+export default BookingBarcodeScanner;

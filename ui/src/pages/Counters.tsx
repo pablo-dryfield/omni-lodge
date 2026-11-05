@@ -47,10 +47,13 @@ import {
   Delete,
   Download,
   Edit,
+  ErrorOutline,
   LocalBar,
   PhotoCamera,
+  QrCodeScanner,
   Refresh,
   Visibility,
+  WarningAmber,
   Map as MapIcon,
   KeyboardArrowRight,
   Remove,
@@ -105,6 +108,7 @@ import { DID_NOT_OPERATE_NOTE } from '../constants/nightReports';
 import type { Counter } from '../types/counters/Counter';
 import axiosInstance from '../utils/axiosInstance';
 import CounterAddonRefundVerificationPanel from '../components/counters/CounterAddonRefundVerification';
+import BookingBarcodeScanner, { type BookingScanResult } from '../components/counters/BookingBarcodeScanner';
 import { counterAddonRefund, type CounterAddonRefundResult, type CounterAddonRefundVerification } from '../api/counterAddonRefunds';
 import type { ServerResponse } from '../types/general/ServerResponse';
 import type { NightReport, NightReportSummary } from '../types/nightReports/NightReport';
@@ -2389,6 +2393,15 @@ const Counters = (props: GenericPageProps) => {
   const [onlineReservationsError, setOnlineReservationsError] = useState<string | null>(null);
   const [onlineReservationsNotice, setOnlineReservationsNotice] = useState<string | null>(null);
   const [onlineReservationsSearch, setOnlineReservationsSearch] = useState('');
+  const [bookingScannerOpen, setBookingScannerOpen] = useState(false);
+  const [bookingScannerResult, setBookingScannerResult] = useState<BookingScanResult | null>(null);
+  const bookingScannerContainerRef = useRef<HTMLDivElement | null>(null);
+  const [scannedBookingId, setScannedBookingId] = useState<number | null>(null);
+  const [bookingScanNotice, setBookingScanNotice] = useState<{
+    kind: 'checked_in' | 'not_found';
+    bookingId: string;
+  } | null>(null);
+  const onlineReservationsSearchRef = useRef<HTMLInputElement | null>(null);
   const [onlineReservationsView, setOnlineReservationsView] = useState<'remaining' | 'checked_in'>('remaining');
   const [onlineReservationsRefreshToken, setOnlineReservationsRefreshToken] = useState(0);
   const [onlineReservationsSyncing, setOnlineReservationsSyncing] = useState(false);
@@ -3157,6 +3170,7 @@ const Counters = (props: GenericPageProps) => {
     setOnlineReservationsError(null);
     setOnlineReservationsNotice(null);
     setOnlineReservationsSearch('');
+    setScannedBookingId(null);
     setOnlineReservationsView('remaining');
     setOnlineReservationsSyncing(false);
     setSyncingPendingAttendance(false);
@@ -3164,6 +3178,14 @@ const Counters = (props: GenericPageProps) => {
     setPartialCheckInEditorDraft(null);
     setPendingBookingAttendanceById({});
   }, [isModalOpen]);
+
+  useEffect(() => {
+    if (!isModalOpen || activeRegistryStep !== 'reservations') {
+      setBookingScannerOpen(false);
+      setBookingScannerResult(null);
+      setBookingScanNotice(null);
+    }
+  }, [isModalOpen, activeRegistryStep]);
 
   useEffect(() => {
     if (!isModalOpen || activeRegistryStep !== 'reservations') {
@@ -6267,10 +6289,39 @@ useEffect(() => {
     return onlineReservationsScoped.filter((order) => hasOrderRemainingCheckIn(order));
   }, [onlineReservationsScoped, onlineReservationsView]);
 
+  const handleOpenBookingScanner = useCallback(() => {
+    setBookingScannerResult(null);
+    setBookingScannerOpen(true);
+    window.requestAnimationFrame(() => bookingScannerContainerRef.current?.scrollIntoView({ block: 'nearest' }));
+  }, []);
+
+  const handleScannedBooking = useCallback((code: string) => {
+    const bookingId = Number(code);
+    setOnlineReservationsSearch(code);
+    setScannedBookingId(bookingId);
+    const match = onlineReservationsScoped.find((order) => getOrderBookingId(order) === bookingId);
+    if (!match || (!hasOrderRemainingCheckIn(match) && !hasOrderAnyAttendance(match))) {
+      setBookingScannerResult({ kind: 'not_found', bookingId: code });
+      setBookingScanNotice({ kind: 'not_found', bookingId: code });
+      return;
+    }
+    if (!hasOrderRemainingCheckIn(match)) {
+      setBookingScannerResult({ kind: 'checked_in', bookingId: code });
+      setBookingScanNotice({ kind: 'checked_in', bookingId: code });
+      return;
+    }
+    setBookingScannerResult({ kind: 'found', bookingId: code });
+    setBookingScanNotice(null);
+    // Keep the camera and current scroll position steady for continuous scanning.
+  }, [onlineReservationsScoped]);
+
   const onlineReservationsFiltered = useMemo(() => {
     const searchNeedle = onlineReservationsSearch.trim().toLowerCase();
     if (!searchNeedle) {
       return onlineReservationsByAttendanceView;
+    }
+    if (scannedBookingId !== null) {
+      return onlineReservationsByAttendanceView.filter((order) => getOrderBookingId(order) === scannedBookingId);
     }
     return onlineReservationsByAttendanceView.filter((order) => {
       const bookingId = getOrderBookingId(order);
@@ -6290,7 +6341,7 @@ useEffect(() => {
         .join(' ');
       return haystack.includes(searchNeedle);
     });
-  }, [onlineReservationsByAttendanceView, onlineReservationsSearch]);
+  }, [onlineReservationsByAttendanceView, onlineReservationsSearch, scannedBookingId]);
 
   const handleBookingFullCheckIn = useCallback(
     (order: UnifiedOrder) => {
@@ -9656,11 +9707,38 @@ useEffect(() => {
                 >
                   <TextField
                     size="small"
+                    inputRef={onlineReservationsSearchRef}
                     value={onlineReservationsSearch}
-                    onChange={(event) => setOnlineReservationsSearch(event.target.value)}
+                    onChange={(event) => {
+                      setOnlineReservationsSearch(event.target.value);
+                      setScannedBookingId(null);
+                    }}
                     placeholder="Search booking ID, reference, customer, phone..."
                     fullWidth
                     disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
+                    inputProps={{ 'aria-label': 'Search reservations' }}
+                    InputProps={{
+                      endAdornment: (
+                        <InputAdornment position="end">
+                          {onlineReservationsSearch && (
+                            <IconButton aria-label="Clear reservation search" size="small"
+                              disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
+                              onClick={() => { setOnlineReservationsSearch(''); setScannedBookingId(null); }}>
+                              <Close fontSize="small" />
+                            </IconButton>
+                          )}
+                          <Tooltip title="Scan booking barcode">
+                            <span>
+                              <IconButton color="primary" aria-label="Scan booking barcode"
+                                disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
+                                onClick={handleOpenBookingScanner} sx={{ width: 44, height: 44 }}>
+                                <QrCodeScanner />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        </InputAdornment>
+                      ),
+                    }}
                   />
                 </Stack>
                 <Box
@@ -9711,9 +9789,11 @@ useEffect(() => {
                     <CircularProgress size={18} />
                     <Typography variant="body2">Loading online reservations...</Typography>
                   </Stack>
-                ) : onlineReservationsByAttendanceView.length === 0 ? (
+                ) : onlineReservationsFiltered.length === 0 ? (
                   <Alert severity="info">
-                    {onlineReservationsScoped.length === 0
+                    {onlineReservationsSearch.trim()
+                      ? 'No matching reservations in this view.'
+                      : onlineReservationsScoped.length === 0
                       ? 'No online reservations found for the selected date/product and selected channels.'
                       : onlineReservationsView === 'remaining'
                         ? 'No remaining reservations for the selected channels.'
@@ -11274,7 +11354,16 @@ type SummaryRowOptions = {
           {isSaving && <LinearProgress />}
           {registry.error && <Alert severity="error">{registry.error}</Alert>}
           {saveAndExitError && <Alert severity="error">{saveAndExitError}</Alert>}
-          <Stack spacing={1}>
+          {bookingScannerOpen && activeRegistryStep === 'reservations' ? (
+            <Box ref={bookingScannerContainerRef}>
+              <BookingBarcodeScanner
+                onScan={handleScannedBooking}
+                onClose={() => setBookingScannerOpen(false)}
+                result={bookingScannerResult}
+                disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance || Boolean(bookingScanNotice)}
+              />
+            </Box>
+          ) : <Stack spacing={1}>
             <Stepper nonLinear activeStep={Math.max(stepIndex, 0)} alternativeLabel>
               {STEP_CONFIGS.map((step) => (
                 <Step key={step.key} completed={isStepCompleted(step.key)}>
@@ -11304,7 +11393,7 @@ type SummaryRowOptions = {
                 {activeStepConfig.description}
               </Typography>
             ) : null}
-          </Stack>
+          </Stack>}
 
           {renderStepContent()}
         </Stack>
@@ -11709,6 +11798,68 @@ type SummaryRowOptions = {
         >
           {renderCounterEditor()}
         </DialogContent>
+      </Dialog>
+      {/* Require explicit acknowledgement: backdrop clicks and Escape must not
+          dismiss a ticket warning or silently resume scanning. */}
+      <Dialog open={Boolean(bookingScanNotice)} role="alertdialog" disableEscapeKeyDown fullWidth maxWidth="sm"
+        aria-labelledby="booking-scan-notice-title" aria-describedby="booking-scan-notice-description"
+        PaperProps={{
+          sx: {
+            m: 2,
+            width: 'calc(100% - 32px)',
+            borderRadius: 3,
+            borderTop: '8px solid',
+            borderColor: bookingScanNotice?.kind === 'checked_in' ? 'error.main' : 'warning.main',
+          },
+        }}>
+        <DialogTitle component="div" sx={{ px: { xs: 2, sm: 3 }, pt: 2.5, pb: 2 }}>
+          <Stack direction="row" spacing={2} alignItems="center">
+            <Box sx={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 64, height: 64, borderRadius: '50%', flexShrink: 0,
+              bgcolor: bookingScanNotice?.kind === 'checked_in' ? '#fef2f2' : '#fff7ed',
+              color: bookingScanNotice?.kind === 'checked_in' ? 'error.main' : 'warning.dark',
+            }}>
+              {bookingScanNotice?.kind === 'checked_in'
+                ? <ErrorOutline sx={{ fontSize: 38 }} />
+                : <WarningAmber sx={{ fontSize: 38 }} />}
+            </Box>
+            <Box>
+              <Typography variant="overline" sx={{
+                fontWeight: 800, lineHeight: 1.5,
+                color: bookingScanNotice?.kind === 'checked_in' ? 'error.main' : 'warning.dark',
+              }}>Scan paused</Typography>
+              <Typography id="booking-scan-notice-title" component="h2" variant="h5" fontWeight={800}>
+                {bookingScanNotice?.kind === 'checked_in' ? 'Already checked in' : 'No booking found'}
+              </Typography>
+            </Box>
+          </Stack>
+        </DialogTitle>
+        <DialogContent sx={{ px: { xs: 2, sm: 3 } }}>
+          <Box id="booking-scan-notice-description">
+            <Typography sx={{ p: 2, mb: 2, bgcolor: 'action.hover', borderRadius: 2, fontWeight: 800, overflowWrap: 'anywhere' }}>
+              Booking #{bookingScanNotice?.bookingId}
+            </Typography>
+            <Typography fontWeight={700} sx={{ mb: 1 }}>
+              {bookingScanNotice?.kind === 'checked_in'
+                ? 'This booking has already been checked in. Verify it with the team before admitting anyone again.'
+                : 'This booking could not be found in the current counter. Verify the ticket before admitting the customer.'}
+            </Typography>
+            <Typography color="text.secondary">
+              {bookingScanNotice?.kind === 'checked_in'
+                ? 'You can manually open Checked In to review the booking and confirm who has already entered.'
+                : 'Check the booking reference, experience date, product, and selected channels.'}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              No check-in was recorded by this scan. The selected reservation view has not changed.
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: { xs: 2, sm: 3 }, pb: 3, gap: 1, flexDirection: { xs: 'column', sm: 'row' },
+          '& > :not(style) ~ :not(style)': { ml: 0 }, '& .MuiButton-root': { minHeight: 48, width: { xs: '100%', sm: 'auto' } } }}>
+          <Button autoFocus variant="contained" color={bookingScanNotice?.kind === 'checked_in' ? 'error' : 'warning'}
+            onClick={() => setBookingScanNotice(null)}>Acknowledge</Button>
+        </DialogActions>
       </Dialog>
       <Dialog
         open={Boolean(bookingCashConfirmation)}
