@@ -266,6 +266,7 @@ describe('bank-transfer order listing and serialization', () => {
 
     expect(quoteStorefrontCartMock).toHaveBeenCalledWith(cart, undefined, {
       allowMissingCustomerDetails: true,
+      preserveExperienceLines: true,
       allowPastExperienceDates: true,
       currencyCode: 'PLN',
     });
@@ -329,6 +330,7 @@ describe('bank-transfer order listing and serialization', () => {
 
     expect(quoteStorefrontCartMock).toHaveBeenCalledWith(cart, undefined, {
       allowMissingCustomerDetails: true,
+      preserveExperienceLines: true,
       allowPastExperienceDates: false,
       currencyCode: 'EUR',
       amountBeforeDiscountOverride: 28,

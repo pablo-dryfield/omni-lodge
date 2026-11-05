@@ -516,6 +516,7 @@ const createOrderTransaction = async (
   if (concurrent) return { order: concurrent, created: false };
   const quote = await quoteStorefrontCart(cart, transaction, {
     allowPastExperienceDates,
+    preserveExperienceLines: true,
     currencyCode,
     ...(amountBeforeDiscountOverride !== null ? { amountBeforeDiscountOverride } : {}),
   });
@@ -847,6 +848,7 @@ export const previewBankTransferOrder = async (input: PreviewBankTransferOrderIn
   const amountBeforeDiscountOverride = parseAmountBeforeDiscountOverride(input.amountBeforeDiscountOverride);
   const quote = await quoteStorefrontCart(cart, undefined, {
     allowMissingCustomerDetails: true,
+    preserveExperienceLines: true,
     allowPastExperienceDates: parseAllowPastExperienceDates(input.allowPastExperienceDates),
     currencyCode,
     ...(amountBeforeDiscountOverride !== null ? { amountBeforeDiscountOverride } : {}),

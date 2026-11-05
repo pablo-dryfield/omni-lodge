@@ -384,7 +384,7 @@ describe('storefront discount rules', () => {
     const products = await productFindAll();
     productFindAll.mockResolvedValue([...products, { id: 32, name: 'NYE', price: 250, storefrontConfig: {}, productAddons: [] }]);
     promotionFindAll.mockResolvedValue([promotion({ metadata: { applicationBasis: 'person', discountScope: 'tour', productIds: [28] } })]);
-    expect(await quoteStorefrontCart({ items: [...items, { productId: 28, quantity: 1 }, { productId: 32, quantity: 3 }], discountCode: 'SAVE' }))
+    expect(await quoteStorefrontCart({ items: [...items, { productId: 28, quantity: 1, experienceDate: '2030-12-14' }, { productId: 32, quantity: 3 }], discountCode: 'SAVE' }))
       .toMatchObject({ discountTotal: 30, total: 1140, discounts: [expect.objectContaining({ participantCount: 3 })] });
   });
 
@@ -408,5 +408,48 @@ describe('storefront discount rules', () => {
       promotionFindAll.mockResolvedValue([promotion(override)]);
       await expect(quoteStorefrontCart({ items, discountCode: 'SAVE' })).rejects.toThrow(message);
     }
+  });
+});
+
+
+describe('one unpaid selection per experience', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-01T12:00:00Z'));
+    productFindAll.mockResolvedValue([{
+      id: 28, name: 'Pub Crawl', price: 120, storefrontConfig: { timeMode: 'fixed', defaultStartTime: '21:00' },
+      productAddons: [{ addonId: 2, priceOverride: 44, storefrontConfig: { selectionMode: 'quantity' },
+        addon: { id: 2, name: 'T-Shirts', basePrice: 44, isActive: true } }],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+    promotionFindAll.mockResolvedValue([]);
+  });
+  afterEach(() => jest.useRealTimers());
+  const ticket = { productId: 28, quantity: 1, experienceDate: '2026-12-14', experienceTime: '21:00' };
+
+  it('replaces the older ticket with the latest guests and extras, including product-default times', async () => {
+    const quote = await quoteStorefrontCart({ items: [ticket, { ...ticket, experienceTime: undefined, addons: [{ addonId: 2, quantity: 1 }] }] });
+    expect(quote).toMatchObject({ total: 164, subtotal: 120, addonTotal: 44 });
+    expect(quote.items).toHaveLength(1);
+    expect(quote.items[0]).toMatchObject({ quantity: 1, experienceTime: '21:00', addons: [{ addonId: 2, quantity: 1 }] });
+  });
+  it('replaces quantities rather than adding them and permits removing previous extras', async () => {
+    const quote = await quoteStorefrontCart({ items: [{ ...ticket, quantity: 5, addons: [{ addonId: 2, quantity: 5 }] }, { ...ticket, quantity: 2 }] });
+    expect(quote).toMatchObject({ total: 240, addonTotal: 0 });
+    expect(quote.items).toHaveLength(1);
+    expect(quote.items[0]).toMatchObject({ quantity: 2, addons: [] });
+  });
+  it('preserves intentionally authored staff payment-link lines', async () => {
+    const quote = await quoteStorefrontCart({ items: [ticket, { ...ticket, addons: [{ addonId: 2, quantity: 1 }] }] }, undefined, { preserveExperienceLines: true });
+    expect(quote.items).toHaveLength(2);
+    expect(quote.total).toBe(284);
+  });
+  it('keeps different dates and different start times as separate experiences', async () => {
+    const products = await productFindAll();
+    products[0].storefrontConfig = { timeMode: 'manual' };
+    productFindAll.mockResolvedValue(products);
+    const quote = await quoteStorefrontCart({ items: [ticket, { ...ticket, experienceDate: '2026-12-15' }, { ...ticket, experienceTime: '19:30' }] });
+    expect(quote.items).toHaveLength(3);
+    expect(quote.total).toBe(360);
   });
 });

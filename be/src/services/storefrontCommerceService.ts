@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { latestCartExperiences } from './storefrontCartExperienceService.js';
 import { Op, type Includeable, type Transaction } from 'sequelize';
 import HttpError from '../errors/HttpError.js';
 import Addon from '../models/Addon.js';
@@ -109,6 +110,8 @@ export type StorefrontQuote = {
 
 export type StorefrontQuoteOptions = {
   allowMissingCustomerDetails?: boolean;
+  /** Staff-prepared links retain their explicitly authored line items. */
+  preserveExperienceLines?: boolean;
   allowPastExperienceDates?: boolean;
   currencyCode?: unknown;
   amountBeforeDiscountOverride?: number | null;
@@ -687,7 +690,20 @@ export const quoteStorefrontCart = async (
     getAddonInventoryAvailability(availableAddonIds, transaction),
   ]);
 
-  const quoteItems: StorefrontQuoteItem[] = normalizedItems.map((item) => {
+  // Resolve product defaults first: omitted and explicit default slots are the same experience.
+  const resolvedItems = normalizedItems.map(item => {
+    const product = productsById.get(item.productId)!;
+    const config = product.storefrontConfig ?? {};
+    return {
+      ...item,
+      experienceDate: resolveExperienceDate(item.experienceDate, config, product.name, {
+        allowPastExperienceDates: options.allowPastExperienceDates,
+      }),
+      experienceTime: normalizeExperienceTime(item.experienceTime, config),
+    };
+  });
+  const selectedItems = options.preserveExperienceLines ? resolvedItems : latestCartExperiences(resolvedItems);
+  const quoteItems: StorefrontQuoteItem[] = selectedItems.map((item) => {
     const product = productsById.get(item.productId);
     if (!product) throw new HttpError(400, 'Product is unavailable.');
     const unitPrice = prices.get(product.id);

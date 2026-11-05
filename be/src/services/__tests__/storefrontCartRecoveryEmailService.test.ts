@@ -1,9 +1,11 @@
+import { quoteStorefrontCart } from '../storefrontCommerceService';
 import StorefrontOngoingCart from '../../models/StorefrontOngoingCart';
 import { sendMessage } from '../bookings/gmailClient';
 import { getConfigValue } from '../configService';
 import { dismissCartWithPaidMatch } from '../storefrontCartBookingMatchService';
 import {
   buildStorefrontCartRecoveryEmail,
+  refreshDuplicateRecoveryCart,
   sendAndRecordStorefrontCartRecoveryEmail,
 } from '../storefrontCartRecoveryEmailService';
 
@@ -11,6 +13,8 @@ jest.mock('../../models/StorefrontOngoingCart.js', () => ({
   __esModule: true,
   default: { update: jest.fn() },
 }));
+jest.mock('../storefrontCommerceService.js', () => ({ quoteStorefrontCart: jest.fn() }));
+jest.mock('../storefrontSavedCartService.js', () => ({ normalizeSavedCartFromQuote: (quote: { items: unknown[] }) => ({ items: quote.items }) }));
 jest.mock('../bookings/gmailClient.js', () => ({ sendMessage: jest.fn() }));
 jest.mock('../configService.js', () => ({ getConfigValue: jest.fn() }));
 jest.mock('../storefrontCartBookingMatchService.js', () => ({ dismissCartWithPaidMatch: jest.fn() }));
@@ -130,5 +134,54 @@ describe('storefront abandoned cart recovery email', () => {
       'https://example.com/store2/cart?recover=25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d&rt=f2ce385d-b2d7-40d4-8156-ec9681753af1',
     );
     expect(email.htmlBody).toContain(email.recoveryUrl.replace('&', '&amp;'));
+  });
+});
+
+
+describe('legacy duplicate recovery drafts', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (dismissCartWithPaidMatch as jest.Mock).mockResolvedValue(false);
+    mockedGetConfigValue.mockReturnValue(null as never);
+  });
+  const duplicateDraft = () => {
+    const latest = { ...ongoing.quoteSnapshot.items[0], quantity: 1, total: 164 };
+    return { ...ongoing, id: 99, status: 'sending_recovery', total: 284, updatedAt: new Date(),
+      metadata: {}, cart: { items: [{ ...latest, addons: [] }, latest] },
+      quoteSnapshot: { ...ongoing.quoteSnapshot, total: 284, items: [{ ...latest, total: 120, addons: [] }, latest] },
+      reload: jest.fn(),
+    };
+  };
+  it('reprices and audits a duplicate draft before emailing only its latest selection', async () => {
+    const cart = duplicateDraft();
+    const quote = { ...ongoing.quoteSnapshot, total: 164, items: [cart.quoteSnapshot.items[1]] };
+    (quoteStorefrontCart as jest.Mock).mockResolvedValue(quote);
+    model.update.mockImplementation(async patch => {
+      Object.assign(cart, patch);
+      return [1];
+    });
+    mockedSendMessage.mockResolvedValue({ id: 'one-selection' } as never);
+    await sendAndRecordStorefrontCartRecoveryEmail(cart as unknown as StorefrontOngoingCart);
+    expect(model.update).toHaveBeenCalledWith(expect.objectContaining({ total: 164,
+      metadata: expect.objectContaining({ events: [expect.objectContaining({ type: 'cart_item_updated' })] }),
+    }), { where: { id: 99, status: 'sending_recovery', updatedAt: expect.any(Date) } });
+    expect(mockedSendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'Your Pub Crawl booking is still waiting',
+      textBody: expect.stringContaining('164.00'),
+    }));
+    expect(mockedSendMessage.mock.calls[0][0].textBody?.match(/Pub Crawl -/g)).toHaveLength(1);
+  });
+  it('never normalizes a completed paid cart', async () => {
+    const cart = { ...duplicateDraft(), status: 'converted' };
+    await expect(refreshDuplicateRecoveryCart(cart as unknown as StorefrontOngoingCart)).rejects.toMatchObject({ status: 409 });
+    expect(quoteStorefrontCart).not.toHaveBeenCalled();
+    expect(model.update).not.toHaveBeenCalled();
+  });
+  it('does not send if another checkout changes the cart during duplicate cleanup', async () => {
+    const cart = duplicateDraft();
+    (quoteStorefrontCart as jest.Mock).mockResolvedValue({ ...ongoing.quoteSnapshot, items: [cart.quoteSnapshot.items[1]] });
+    model.update.mockResolvedValue([0]);
+    await expect(sendAndRecordStorefrontCartRecoveryEmail(cart as unknown as StorefrontOngoingCart)).rejects.toMatchObject({ status: 409 });
+    expect(mockedSendMessage).not.toHaveBeenCalled();
   });
 });

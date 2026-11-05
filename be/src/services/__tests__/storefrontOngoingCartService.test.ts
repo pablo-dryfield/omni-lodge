@@ -6,6 +6,8 @@ import { normalizeSavedCartCustomer, normalizeSavedCartFromQuote } from '../stor
 import { recordServerJourneyEvent } from '../storefrontJourneyService';
 import {
   markOngoingCartConverted,
+  assertOngoingCartVersion,
+  ongoingCartFingerprint,
   recordOngoingCartEvent,
   recordOngoingCartEventByIdentity,
   upsertOngoingCart,
@@ -13,6 +15,7 @@ import {
 
 jest.mock('../../config/database.js', () => ({ __esModule: true, default: { transaction: jest.fn(), query: jest.fn() } }));
 jest.mock('../storefrontCartBookingMatchService.js', () => ({ dismissCartWithPaidMatch: jest.fn() }));
+jest.mock('../storefrontCartPaymentGuardService.js', () => ({ assertCartPaymentsEditable: jest.fn() }));
 
 jest.mock('../../models/StorefrontOngoingCart.js', () => ({
   __esModule: true,
@@ -403,5 +406,26 @@ describe('storefront ongoing cart service', () => {
       expect.objectContaining({ update }),
       expect.objectContaining({ type: 'payment_failed' }),
     );
+  });
+});
+
+
+describe('cart revision protection', () => {
+  const selection = { items: [experience] };
+  const current = () => ({ status: 'active', metadata: { cartVersionProtocol: 1 }, cart: selection } as unknown as StorefrontOngoingCart);
+  it('rejects an older device changing a newer selection', () => {
+    expect(() => assertOngoingCartVersion(current(), 'a'.repeat(64), { items: [{ ...experience, quantity: 3 }] }, 1)).toThrow('changed on another device');
+  });
+  it('accepts a known current version and idempotent retries', () => {
+    expect(() => assertOngoingCartVersion(current(), ongoingCartFingerprint(selection), { items: [{ ...experience, quantity: 3 }] }, 1)).not.toThrow();
+    expect(() => assertOngoingCartVersion(current(), 'a'.repeat(64), selection, 1)).not.toThrow();
+  });
+  it('rejects superseded device IDs without revealing another cart', () => {
+    const cart = { ...current(), status: 'dismissed', metadata: { mergeReason: 'customer_identity', cartVersionProtocol: 1 } } as unknown as StorefrontOngoingCart;
+    expect(() => assertOngoingCartVersion(cart, ongoingCartFingerprint(selection), selection, 1)).toThrow('changed on another device');
+  });
+  it('does not require a version for an existing legacy client until a versioned client saves it', () => {
+    expect(() => assertOngoingCartVersion({ ...current(), metadata: {} } as unknown as StorefrontOngoingCart, undefined, { items: [] })).not.toThrow();
+    expect(() => assertOngoingCartVersion(current(), undefined, { items: [] })).toThrow('changed on another device');
   });
 });
