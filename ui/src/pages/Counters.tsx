@@ -1,6 +1,11 @@
+import { buildWalkInSummary, formatWalkInSummaryNotes, staffRowsFromNotes } from '../utils/walkInSummary';
+import WalkInSummaryDetails from '../components/counters/WalkInSummaryDetails';
+import { emptyStaffFreeDraft, hasStaffFreeDraft, restoreStaffFreeDraft, staffFreeDraftChanges, staffFreeDraftCount, type StaffFreeDraft } from '../utils/staffFreeDraft';
 import type { ChangeEvent, KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import dayjs, { Dayjs } from 'dayjs';
+import WalkInsPanel, { type WalkInChannelState, type WalkInTicketEntry, type WalkInCurrencyEntry } from '../components/counters/WalkInsPanel';
+import { readWalkInPaymentMetadata, readWalkInPriceMetadata, isReceivedWalkInCash, getWalkInValidationError } from '../utils/walkInMetadata';
 import Autocomplete from '@mui/material/Autocomplete';
 import Grid from '@mui/material/Grid';
 import ToggleButton from '@mui/material/ToggleButton';
@@ -119,7 +124,7 @@ import type {
   OrderExtras,
   UnifiedOrder,
 } from '../store/bookingPlatformsTypes';
-import { WALK_IN_TICKET_LABEL_TO_KEY, WALK_IN_TICKET_TYPE_LABELS } from '../constants/walkInTicketTypes';
+import { WALK_IN_TICKET_LABEL_TO_KEY, WALK_IN_TICKET_TYPE_LABELS, WALK_IN_TICKET_TYPE_VALUES } from '../constants/walkInTicketTypes';
 import { getNewCounterPwaInstallUrl } from '../utils/newCounterPwa';
 import {
   parseCounterUrlMode,
@@ -133,7 +138,7 @@ const WALK_IN_CHANNEL_SLUG = 'walk-in';
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
 const REACT_EMAIL_SOURCE_MARKER = '/* @react-email-template-source */';
 const bucketLabels: Record<string, string> = {
-  attended: 'Cash Payments',
+  attended: 'Walk-Ins',
   before_cutoff: 'Booked BEFORE cut-off',
   after_cutoff: 'Booked AFTER cut-off',
 };
@@ -905,7 +910,7 @@ const WALK_IN_DISCOUNT_NOTE_PREFIX = 'Walk-In Tickets:';
 const WALK_IN_CASH_NOTE_PREFIX = 'Cash Collected:';
 const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
 const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
-const CASH_SNAPSHOT_VERSION = 2;
+const CASH_SNAPSHOT_VERSION = 3;
 const FREE_SNAPSHOT_START = '-- FREE-SNAPSHOT START --';
 const FREE_SNAPSHOT_END = '-- FREE-SNAPSHOT END --';
 const FREE_SNAPSHOT_VERSION = 1;
@@ -931,21 +936,6 @@ const WALK_IN_TICKET_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, nu
   Students: { PLN: 80, EUR: 19 },
   Group: { PLN: 85, EUR: 20 },
 };
-const formatListWithAmpersand = (items: string[]): string => {
-  if (items.length === 0) {
-    return '';
-  }
-  if (items.length === 1) {
-    return items[0];
-  }
-  if (items.length === 2) {
-    return `${items[0]} & ${items[1]}`;
-  }
-
-  const head = items.slice(0, -1).join(', ');
-  const tail = items[items.length - 1];
-  return `${head} & ${tail}`;
-};
 const WALK_IN_ADDON_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, number>>> = {
   cocktails: { EUR: 7 },
   tshirts: { EUR: 10 },
@@ -956,16 +946,24 @@ type WalkInSnapshotCurrency = {
   people: number;
   cash: number;
   addons: Record<string, number>;
+  unitPrice?: number;
+  addonUnitPrices?: Record<number, number>;
 };
 
 type WalkInSnapshotTicket = {
+  staffGuests?: Array<{ userId: number; name: string }>;
   key?: string;
   name: string;
   transfer?: boolean;
+  ticketType?: string;
+  paymentMethodId?: number;
+  paymentMethodName?: string;
+  paymentStatus?: 'received' | 'awaiting';
   currencies: WalkInSnapshotCurrency[];
 };
 
 type CashSnapshotEntry = {
+  channelName?: string;
   currency: CashCurrency;
   amount: number;
   qty: number;
@@ -983,6 +981,7 @@ type FreeSnapshotPeopleEntry = {
 };
 
 type FreeSnapshotChannelEntry = {
+  channelName?: string;
   people?: FreeSnapshotPeopleEntry;
   addons?: Record<string, FreeSnapshotAddonEntry>;
 };
@@ -992,42 +991,13 @@ type FreeSnapshotPayload = {
   channels: Record<string, FreeSnapshotChannelEntry>;
 };
 
-type CounterSnapshotFreeEntry = {
-  label: string;
-  quantity: number | null;
-  reason: string | null;
-};
-
-type CounterSnapshotFreeSection = {
-  channelLabel: string | null;
-  entries: CounterSnapshotFreeEntry[];
-};
-
-type CounterSnapshotDetails = {
-  freeSections: CounterSnapshotFreeSection[];
-  manualNote: string;
-};
-
-type WalkInCurrencyEntryState = {
-  people: number;
-  cash: string;
-  addons: Record<number, number>;
-};
-
-type WalkInTicketEntryState = {
-  name: string;
-  transfer?: boolean;
-  currencyOrder: CashCurrency[];
-  currencies: Partial<Record<CashCurrency, WalkInCurrencyEntryState>>;
-};
-
-type WalkInChannelTicketState = {
-  ticketOrder: string[];
-  tickets: Record<string, WalkInTicketEntryState>;
-};
+type WalkInCurrencyEntryState = WalkInCurrencyEntry;
+type WalkInTicketEntryState = WalkInTicketEntry;
+type WalkInChannelTicketState = WalkInChannelState;
 
 type CounterReservationDraft = {
   version: 1;
+  staffFreeDraft?: StaffFreeDraft;
   counterId: number;
   userId: number;
   updatedAt: string;
@@ -1476,12 +1446,15 @@ const extractCashSnapshotMap = (
             people: normalizedPeople,
             cash: normalizedCash,
             addons,
+            unitPrice: readWalkInPriceMetadata(currencyCandidate).unitPrice,
+            addonUnitPrices: readWalkInPriceMetadata(currencyCandidate).addonUnitPrices,
           });
         });
         if (currencies.length === 0) {
           return;
         }
         tickets.push({
+          ...readWalkInPaymentMetadata(ticketCandidate),
           ...(ticketKey ? { key: ticketKey } : {}),
           name: ticketNameRaw,
           ...(ticketTransfer ? { transfer: true } : {}),
@@ -1490,6 +1463,7 @@ const extractCashSnapshotMap = (
       });
 
       entries.set(numericChannelId, {
+        channelName: typeof (value as CashSnapshotEntry).channelName === 'string' ? (value as CashSnapshotEntry).channelName : undefined,
         currency,
         amount: normalizedAmount,
         qty: normalizedQty,
@@ -1542,7 +1516,7 @@ const extractFreeSnapshotMap = (
       }
       const peopleRaw = (value as FreeSnapshotChannelEntry).people;
       const addonsRaw = (value as FreeSnapshotChannelEntry).addons;
-      const entry: FreeSnapshotChannelEntry = {};
+      const entry: FreeSnapshotChannelEntry = { channelName: typeof (value as FreeSnapshotChannelEntry).channelName === 'string' ? (value as FreeSnapshotChannelEntry).channelName : undefined };
       if (peopleRaw && typeof peopleRaw === 'object') {
         const qty = Math.max(0, Math.round(Number(peopleRaw.qty) || 0));
         const noteValue =
@@ -1608,207 +1582,22 @@ const stripSnapshotFromNote = (note: string): string => {
   };
   let sanitized = stripBlock(note, escapedStart, escapedEnd);
   sanitized = stripBlock(sanitized, escapedFreeStart, escapedFreeEnd);
-  return sanitized.trim();
+  return sanitized.replace(/-- STAFF-ENTRIES START --[\s\S]*?-- STAFF-ENTRIES END --/g, '').trim();
 };
 
 const aggregateCashTotals = (entry: CashSnapshotEntry): Map<string, number> => {
   const totals = new Map<string, number>();
-  if (entry.tickets && entry.tickets.length > 0) {
-    entry.tickets.forEach((ticket) => {
-      ticket.currencies.forEach((currency) => {
-        const amount = Number(currency.cash);
-        if (Number.isFinite(amount) && amount > 0) {
-          totals.set(currency.currency, (totals.get(currency.currency) ?? 0) + amount);
-        }
-      });
-    });
-  }
-  const amount = Number(entry.amount);
-  if ((!entry.tickets || entry.tickets.length === 0) && entry.currency && Number.isFinite(amount) && amount > 0) {
-    totals.set(entry.currency, (totals.get(entry.currency) ?? 0) + amount);
-  }
+  const add = (currency: string, amount: number) => { if (Number.isFinite(amount) && amount > 0) totals.set(currency, (totals.get(currency) ?? 0) + amount); };
+  if (entry.tickets?.length) entry.tickets.forEach(ticket => ticket.currencies.forEach(row => add(row.currency, Number(row.cash))));
+  else add(entry.currency, Number(entry.amount));
   return totals;
 };
 
-const formatWalkInSnapshotSummary = (
-  note: string,
-  channels: ChannelConfig[],
-  _addons: AddonConfig[],
-): string => {
-  if (!note) {
-    return '';
-  }
-  const cashMap = extractCashSnapshotMap(note);
-  const freeMap = extractFreeSnapshotMap(note);
-
-  const walkInChannel = channels.find((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG);
-  let targetChannelId: number | null = walkInChannel?.id ?? null;
-
-  if (targetChannelId == null) {
-    for (const [channelId, entry] of cashMap.entries()) {
-      if (entry.tickets && entry.tickets.length > 0) {
-        targetChannelId = channelId;
-        break;
-      }
-    }
-  }
-
-  if (targetChannelId == null && cashMap.size === 1) {
-    const first = cashMap.keys().next();
-    if (!first.done) {
-      targetChannelId = first.value;
-    }
-  }
-
-  if (targetChannelId == null && freeMap.size === 1) {
-    const first = freeMap.keys().next();
-    if (!first.done) {
-      targetChannelId = first.value;
-    }
-  }
-
-  const cashEntry = targetChannelId != null ? cashMap.get(targetChannelId) : undefined;
-
-  const ticketNames = new Set<string>();
-
-  if (cashEntry?.tickets && cashEntry.tickets.length > 0) {
-    cashEntry.tickets.forEach((ticket) => {
-      const ticketName = (ticket.name ?? '').toString().trim();
-      if (ticketName.length > 0) {
-        ticketNames.add(ticket.transfer ? `${ticketName} (Transfer)` : ticketName);
-      }
-    });
-  }
-
-  const currencyTotals = new Map<string, number>();
-  cashMap.forEach((entry) => {
-    const totals = aggregateCashTotals(entry);
-    totals.forEach((amount, currency) => {
-      currencyTotals.set(currency, (currencyTotals.get(currency) ?? 0) + amount);
-    });
-  });
-
-  let hasFreeSnapshot = false;
-  freeMap.forEach((entry) => {
-    if (entry.people) {
-      const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
-      const noteText = (entry.people.note ?? '').toString().trim();
-      if (qty > 0 || noteText.length > 0) {
-        hasFreeSnapshot = true;
-      }
-    }
-    if (entry.addons) {
-      Object.entries(entry.addons).forEach(([addonIdKey, info]) => {
-        const addonId = Number(addonIdKey);
-        if (!Number.isFinite(addonId)) {
-          return;
-        }
-        const qty = Math.max(0, Math.round(Number(info.qty) || 0));
-        const noteText = (info.note ?? '').toString().trim();
-        if (qty <= 0 && noteText.length === 0) {
-          return;
-        }
-        hasFreeSnapshot = true;
-      });
-    }
-  });
-
-  if (hasFreeSnapshot) {
-    ticketNames.add('Free');
-  }
-
-  if (ticketNames.size === 0 && currencyTotals.size === 0) {
-    return '';
-  }
-
-  const segments: string[] = [];
-  const formattedTicketNames = formatListWithAmpersand(
-    Array.from(ticketNames)
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0),
-  );
-  segments.push(`Walk-In Tickets: ${formattedTicketNames || '-'}`);
-
-  if (currencyTotals.size > 0) {
-    const cashSummary = Array.from(currencyTotals.entries())
-      .map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`)
-      .join(', ');
-    segments.push(`Cash Collected: ${cashSummary}`);
-  } else {
-    segments.push('Cash Collected: -');
-  }
-
-  return segments.join(' || ');
-};
-
-const formatCounterSnapshotDetails = (
-  note: string,
-  channels: ChannelConfig[],
-  addons: AddonConfig[],
-): CounterSnapshotDetails => {
-  if (!note) {
-    return { freeSections: [], manualNote: '' };
-  }
-
-  const freeMap = extractFreeSnapshotMap(note);
-  const addonNameById = new Map<number, string>();
-  addons.forEach((addon) => addonNameById.set(addon.addonId, addon.name));
-  const channelNameById = new Map<number, string>();
-  channels.forEach((channel) => channelNameById.set(channel.id, channel.name ?? `Channel ${channel.id}`));
-
-  const freeSections: CounterSnapshotFreeSection[] = [];
-
-  freeMap.forEach((entry, channelId) => {
-    const channelName = channelNameById.get(channelId) ?? `Channel ${channelId}`;
-    const sectionEntries: CounterSnapshotFreeEntry[] = [];
-
-    if (entry.people) {
-      const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
-      const noteText = (entry.people.note ?? '').toString().trim();
-      if (qty > 0 || noteText.length > 0) {
-        sectionEntries.push({
-          label: 'People',
-          quantity: qty > 0 ? qty : null,
-          reason: noteText.length > 0 ? noteText : null,
-        });
-      }
-    }
-
-    if (entry.addons) {
-      Object.entries(entry.addons).forEach(([addonIdKey, info]) => {
-        const addonId = Number(addonIdKey);
-        if (!Number.isFinite(addonId)) {
-          return;
-        }
-        const qty = Math.max(0, Math.round(Number(info.qty) || 0));
-        const noteText = (info.note ?? '').toString().trim();
-        if (qty <= 0 && noteText.length === 0) {
-          return;
-        }
-        const addonName = addonNameById.get(addonId) ?? `Addon ${addonId}`;
-        sectionEntries.push({
-          label: addonName,
-          quantity: qty > 0 ? qty : null,
-          reason: noteText.length > 0 ? noteText : null,
-        });
-      });
-    }
-
-    if (sectionEntries.length > 0) {
-      freeSections.push({
-        channelLabel: channelName,
-        entries: sectionEntries,
-      });
-    }
-  });
-
-  const manual = stripSnapshotFromNote(note);
-
-  return {
-    freeSections,
-    manualNote: manual,
-  };
-};
+const formatWalkInSnapshotSummary = (note: string, channels: ChannelConfig[], addons: AddonConfig[]): string =>
+  formatWalkInSummaryNotes([
+    ...buildWalkInSummary(extractCashSnapshotMap(note), extractFreeSnapshotMap(note), channels, addons),
+    ...staffRowsFromNotes(note, channels),
+  ]);
 
 const formatCounterNotePreview = (
   note: string,
@@ -2438,6 +2227,8 @@ const Counters = (props: GenericPageProps) => {
   >({});
   const [bookingCashConfirmation, setBookingCashConfirmation] =
     useState<BookingCashConfirmationState | null>(null);
+  const [staffFreeDraft, setStaffFreeDraft] = useState<StaffFreeDraft>(emptyStaffFreeDraft);
+  const [staffFreeValidationError, setStaffFreeValidationError] = useState<string | null>(null);
   const hydratedReservationDraftKeyRef = useRef<string | null>(null);
   const skipReservationDraftPersistRef = useRef(false);
   const pendingBookingAttendanceRef = useRef<Record<number, StagedBookingAttendance>>({});
@@ -2731,6 +2522,7 @@ const Counters = (props: GenericPageProps) => {
   );
 
   const counterId = registry.counter?.counter.id ?? null;
+  const effectiveStaffFreeCount = staffFreeDraftCount(registry.counter?.staffFreeEntries ?? [], staffFreeDraft);
   const counterStatus = (registry.counter?.counter.status as CounterStatus | undefined) ?? 'draft';
   const counterProductId = registry.counter?.counter.productId ?? null;
   const counterNotes = registry.counter?.counter.notes ?? '';
@@ -2756,6 +2548,7 @@ const Counters = (props: GenericPageProps) => {
   const clearReservationDraft = useCallback(() => {
     removeCounterReservationDraft(reservationDraftStorageKey);
   }, [reservationDraftStorageKey]);
+  useEffect(() => { setStaffFreeDraft(emptyStaffFreeDraft()); setStaffFreeValidationError(null); }, [counterId, loggedUserId]);
   const nightReportSummaries = useMemo(
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
@@ -3177,6 +2970,8 @@ const Counters = (props: GenericPageProps) => {
     setPartialCheckInEditorOrder(null);
     setPartialCheckInEditorDraft(null);
     setPendingBookingAttendanceById({});
+    setStaffFreeDraft(emptyStaffFreeDraft());
+    setStaffFreeValidationError(null);
   }, [isModalOpen]);
 
   useEffect(() => {
@@ -3266,7 +3061,7 @@ const loadCounterById = useCallback(
   const walkInChannelIds = useMemo(
     () =>
       registry.channels
-        .filter((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG)
+        .filter((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG || isCashPaymentChannel(channel))
         .map((channel) => channel.id),
     [registry.channels],
   );
@@ -3665,14 +3460,8 @@ const loadCounterById = useCallback(
         if (!rawTicketKey) {
           return;
         }
-        const ticketKey = configuredTicketOptionSet.has(rawTicketKey)
-          ? rawTicketKey
-          : configuredTicketOptionSet.has(CUSTOM_TICKET_LABEL)
-            ? CUSTOM_TICKET_LABEL
-            : rawTicketKey;
-        if (!configuredTicketOptionSet.has(ticketKey)) {
-          return;
-        }
+        // Keep original keys, including disabled types and separate entries of the same type.
+        const ticketKey = rawTicketKey;
         if (!ticketOrder.includes(ticketKey)) {
           ticketOrder.push(ticketKey);
         }
@@ -3702,11 +3491,18 @@ const loadCounterById = useCallback(
             people: Number.isFinite(people) ? Math.max(0, Math.round(people)) : 0,
             cash: Number.isFinite(cash) ? String(Math.max(0, Math.round(cash * 100) / 100)) : '',
             addons: parsedAddons,
+            unitPrice: currencySnapshot.unitPrice,
+            addonUnitPrices: currencySnapshot.addonUnitPrices,
           };
         });
         ticketEntries[ticketKey] = {
-          name: ticketKey === CUSTOM_TICKET_LABEL && ticketDisplayName ? ticketDisplayName : ticketKey,
-          ...(ticketKey === CUSTOM_TICKET_LABEL && ticketSnapshot.transfer ? { transfer: true } : {}),
+          name: ticketDisplayName || ticketKey,
+          ticketType: ticketSnapshot.ticketType,
+          staffGuests: ticketSnapshot.staffGuests,
+          paymentMethodId: ticketSnapshot.paymentMethodId,
+          paymentMethodName: ticketSnapshot.paymentMethodName,
+          paymentStatus: ticketSnapshot.paymentStatus,
+          ...(ticketSnapshot.transfer ? { transfer: true } : {}),
           currencyOrder,
           currencies,
         };
@@ -3791,23 +3587,24 @@ const loadCounterById = useCallback(
             addonMap[addonId] = qty;
           }
         });
-        if (restoredPeople > 0 || Object.keys(addonMap).length > 0) {
-          const defaultTicketLabel = configuredTicketOptions[0] ?? null;
+        if (restoredPeople > 0 || Object.keys(addonMap).length > 0 || Number(snapshotEntry?.amount ?? nextWalkInCash[channelId]) > 0) {
+          const defaultTicketLabel = CUSTOM_TICKET_LABEL;
           if (defaultTicketLabel) {
-            const existingCashValue = Number(nextWalkInCash[channelId] ?? 0);
+            const existingCashValue = Number(snapshotEntry?.amount ?? nextWalkInCash[channelId] ?? 0);
             const normalizedCashValue =
               Number.isFinite(existingCashValue) && existingCashValue > 0
-                ? String(Math.max(0, Math.round(existingCashValue)))
+                ? String(Math.max(0, Math.round(existingCashValue * 100) / 100))
                 : '';
             finalTicketOrder = [defaultTicketLabel];
             finalTicketEntries = {
               ...finalTicketEntries,
               [defaultTicketLabel]: {
-                name: defaultTicketLabel,
-                currencyOrder: ['PLN'],
+                name: 'Previously recorded walk-ins',
+                ticketType: 'custom',
+                currencyOrder: [snapshotEntry?.currency ?? 'PLN'],
                 currencies: {
-                  PLN: {
-                    people: restoredPeople,
+                  [snapshotEntry?.currency ?? 'PLN']: {
+                    people: restoredPeople + registry.addons.filter(isCocktailAddonConfig).reduce((sum, addon) => sum + (addonMap[addon.addonId] ?? 0), 0),
                     cash: normalizedCashValue,
                     addons: addonMap,
                   },
@@ -3892,7 +3689,8 @@ const loadCounterById = useCallback(
     setFreeAddonsByChannel(nextFreeAddons);
     setWalkInCashByChannel(nextWalkInCash);
     setWalkInDiscountsByChannel(nextWalkInDiscounts);
-    setWalkInTicketDataByChannel(recalcWalkInTicketDataMap(nextWalkInTickets));
+    // Loading historical counters must never reprice saved entries.
+    setWalkInTicketDataByChannel(nextWalkInTickets);
     setCashOverridesByChannel(nextOverrides);
     setCashCurrencyByChannel({});
     setCashEditingChannelId(null);
@@ -3922,6 +3720,7 @@ const loadCounterById = useCallback(
 
   const channelHasRecordedData = useCallback(
     (channelId: number) => {
+      if (effectiveStaffFreeCount > 0 && registry.channels.some(channel => channel.id === channelId && channel.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'walkin')) return true;
       const hasMetricQty = mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0);
       if (hasMetricQty) {
         return true;
@@ -3982,6 +3781,8 @@ const loadCounterById = useCallback(
       cashOverridesByChannel,
       freeAddonsByChannel,
       freePeopleByChannel,
+      effectiveStaffFreeCount,
+      registry.channels,
       mergedMetrics,
       walkInCashByChannel,
       walkInTicketDataByChannel,
@@ -4374,7 +4175,7 @@ const loadCounterById = useCallback(
           normalizedPeriod === null &&
           channel &&
           isCashPaymentChannel(channel) &&
-          channel.name?.toLowerCase() !== WALK_IN_CHANNEL_SLUG
+          !walkInChannelIds.includes(channelId)
         ) {
           const overrideRaw = cashOverridesByChannel[channelId];
           const overrideAmount = overrideRaw != null ? parseCashInput(overrideRaw) : null;
@@ -4441,6 +4242,7 @@ const loadCounterById = useCallback(
       registry.channels,
       resolveCashCurrencyForChannel,
       syncAfterCutoffAttendance,
+      walkInChannelIds,
     ],
   );
 
@@ -4528,7 +4330,7 @@ const loadCounterById = useCallback(
       if (ticketState) {
         ticketState.ticketOrder.forEach((ticketLabel) => {
           const ticketEntry = ticketState.tickets[ticketLabel];
-          if (!ticketEntry) {
+          if (!ticketEntry || !isReceivedWalkInCash(ticketEntry)) {
             return;
           }
           ticketEntry.currencyOrder.forEach((currency) => {
@@ -4549,7 +4351,7 @@ const loadCounterById = useCallback(
         });
       }
 
-      if (currencyTotals.size > 0) {
+      if (ticketState?.ticketOrder.length) {
         currencyTotals.forEach((amount, currency) => {
           registerAmount(channelId, amount, currency);
         });
@@ -5023,7 +4825,7 @@ const loadCounterById = useCallback(
             }
             totalPeople += Math.max(0, currencyEntry.people);
             const numericCash = Number(currencyEntry.cash);
-            if (Number.isFinite(numericCash) && numericCash > 0) {
+            if (isReceivedWalkInCash(ticketEntry) && Number.isFinite(numericCash) && numericCash > 0) {
               totalCash += Math.max(0, Math.round(numericCash * 100) / 100);
             }
             Object.entries(currencyEntry.addons).forEach(([addonId, qty]) => {
@@ -5895,6 +5697,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (
+      !isModalOpen ||
       activeRegistryStep !== 'reservations' ||
       counterId == null ||
       loggedUserId == null ||
@@ -5924,8 +5727,15 @@ useEffect(() => {
       (!Number.isFinite(serverUpdatedAtMs) || draftUpdatedAtMs > serverUpdatedAtMs)
         ? storedDraft
         : null;
-    if (storedDraft && !draft) {
+    // Staff selections are explicit additions/removals, so retain them even when another
+    // device updated the counter. The server revalidates and deduplicates them on save.
+    const recoveredStaffFreeDraft = restoreStaffFreeDraft(storedDraft?.staffFreeDraft);
+    setStaffFreeDraft(recoveredStaffFreeDraft);
+    if (storedDraft && !draft && !hasStaffFreeDraft(recoveredStaffFreeDraft)) {
       removeCounterReservationDraft(reservationDraftStorageKey);
+    }
+    if (!draft && hasStaffFreeDraft(recoveredStaffFreeDraft)) {
+      setOnlineReservationsNotice('Recovered unsaved Reservation Check changes from this browser.');
     }
     if (draft) {
       const restoredMetrics = Array.isArray(draft.dirtyMetrics)
@@ -6036,6 +5846,7 @@ useEffect(() => {
     }
   }, [
     activeRegistryStep,
+    isModalOpen,
     counterId,
     dispatch,
     loggedUserId,
@@ -6045,6 +5856,7 @@ useEffect(() => {
   ]);
 
   const hasRecoverableReservationChanges =
+    hasStaffFreeDraft(staffFreeDraft) ||
     registry.dirtyMetricKeys.length > 0 ||
     walkInNoteDirty ||
     Object.keys(pendingBookingAttendanceById).length > 0 ||
@@ -6054,6 +5866,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (
+      !isModalOpen ||
       activeRegistryStep !== 'reservations' ||
       counterId == null ||
       loggedUserId == null ||
@@ -6079,6 +5892,7 @@ useEffect(() => {
       .filter((metric): metric is MetricCell => Boolean(metric));
     const draft: CounterReservationDraft = {
       version: COUNTER_RESERVATION_DRAFT_VERSION,
+      staffFreeDraft,
       counterId,
       userId: loggedUserId,
       updatedAt: new Date().toISOString(),
@@ -6107,6 +5921,7 @@ useEffect(() => {
     }
   }, [
     activeRegistryStep,
+    isModalOpen,
     cashCurrencyByChannel,
     cashEditingChannelId,
     cashEditingValue,
@@ -6116,6 +5931,7 @@ useEffect(() => {
     freeAddonsByChannel,
     freePeopleByChannel,
     hasRecoverableReservationChanges,
+    staffFreeDraft,
     loggedUserId,
     pendingBookingAttendanceById,
     pendingBookingCashCollectionById,
@@ -6142,7 +5958,7 @@ useEffect(() => {
     if (advancingToSummary) {
       return;
     }
-    if (!currentProductId || onlineScopedChannelIdSet.size === 0) {
+    if (!currentProductId) {
       setOnlineReservationOrders([]);
       setOnlineReservationsError(null);
       setOnlineReservationsLoading(false);
@@ -7384,7 +7200,7 @@ useEffect(() => {
         return;
       }
       const normalizedName = channel.name?.toLowerCase() ?? '';
-      const isWalkIn = normalizedName === WALK_IN_CHANNEL_SLUG;
+      const isWalkIn = walkInChannelIds.includes(channel.id);
       const peopleQty = attendedPeopleByChannel.get(channel.id) ?? 0;
       const normalizedQty = Math.max(0, Math.round(peopleQty));
       if (isWalkIn) {
@@ -7422,6 +7238,8 @@ useEffect(() => {
                 people: peopleTotal,
                 cash: normalizedCash,
                 addons: addonsSnapshot,
+                unitPrice: currencyEntry.unitPrice,
+                addonUnitPrices: currencyEntry.addonUnitPrices,
               });
               totalPeople += peopleTotal;
               totalAmount += normalizedCash;
@@ -7432,7 +7250,12 @@ useEffect(() => {
               ticketSnapshots.push({
                 key: ticketLabel,
                 name: ticketDisplayName,
-                ...(ticketLabel === CUSTOM_TICKET_LABEL && ticketEntry.transfer ? { transfer: true } : {}),
+                ticketType: ticketEntry.ticketType,
+                staffGuests: ticketEntry.staffGuests,
+                paymentMethodId: ticketEntry.paymentMethodId,
+                paymentMethodName: ticketEntry.paymentMethodName,
+                paymentStatus: ticketEntry.paymentStatus,
+                ...(ticketEntry.transfer ? { transfer: true } : {}),
                 currencies: currencySnapshots,
               });
             }
@@ -7440,6 +7263,7 @@ useEffect(() => {
         }
         if (ticketSnapshots.length > 0) {
           snapshotChannels[channel.id.toString()] = {
+          channelName: channel.name,
             currency: 'PLN',
             amount: totalAmount,
             qty: totalPeople,
@@ -7455,6 +7279,7 @@ useEffect(() => {
           return;
         }
         snapshotChannels[channel.id.toString()] = {
+          channelName: channel.name,
           currency: 'PLN',
           amount: normalizedAmount,
           qty: normalizedQty,
@@ -7496,6 +7321,7 @@ useEffect(() => {
         return;
       }
       snapshotChannels[channel.id.toString()] = {
+          channelName: channel.name,
         currency,
         amount: normalizedAmount,
         qty: snapshotQty,
@@ -7516,7 +7342,7 @@ useEffect(() => {
       }
       const key = channelId.toString();
       if (!freeChannels[key]) {
-        freeChannels[key] = {};
+        freeChannels[key] = { channelName: registry.channels.find(channel => channel.id === Number(key))?.name };
       }
       freeChannels[key].people = { qty, note };
     });
@@ -7542,7 +7368,7 @@ useEffect(() => {
       }
       const key = channelId.toString();
       if (!freeChannels[key]) {
-        freeChannels[key] = {};
+        freeChannels[key] = { channelName: registry.channels.find(channel => channel.id === Number(key))?.name };
       }
       freeChannels[key].addons = {
         ...(freeChannels[key].addons ?? {}),
@@ -7598,11 +7424,14 @@ useEffect(() => {
         map.set(channelId, qty);
       }
     });
+    const walkIn = registry.channels.find(channel => channel.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'walkin');
+    const staffCount = effectiveStaffFreeCount;
+    if (walkIn && staffCount) map.set(walkIn.id, (map.get(walkIn.id) ?? 0) + staffCount);
     return map;
-  }, [freePeopleByChannel]);
+  }, [freePeopleByChannel, registry.channels, effectiveStaffFreeCount]);
 
   const totalFreePeople = useMemo(() => {
-    let total = 0;
+    let total = effectiveStaffFreeCount;
     Object.values(freePeopleByChannel).forEach((entry) => {
       if (!entry) {
         return;
@@ -7610,7 +7439,7 @@ useEffect(() => {
       total += Math.max(0, Math.round(entry.qty ?? 0));
     });
     return total;
-  }, [freePeopleByChannel]);
+  }, [freePeopleByChannel, effectiveStaffFreeCount]);
 
   const freeAddonsTotalsByChannel = useMemo(() => {
     const channelMap = new Map<number, Map<number, number>>();
@@ -7721,6 +7550,8 @@ useEffect(() => {
     );
   }, [freeAddonsByChannel, freePeopleByChannel]);
 
+  const walkInValidationError = useMemo(() => getWalkInValidationError(walkInTicketDataByChannel), [walkInTicketDataByChannel]);
+
   const flushMetrics = useCallback(
     async (
       options: {
@@ -7738,6 +7569,8 @@ useEffect(() => {
         }>;
       } = {},
     ): Promise<boolean> => {
+      if (walkInValidationError || hasFreeNoteValidationError || (hasStaffFreeDraft(staffFreeDraft) && staffFreeValidationError)) return false;
+      const staffFreeChanges = hasStaffFreeDraft(staffFreeDraft) ? staffFreeDraftChanges(staffFreeDraft) : undefined;
       const activeCounterId = counterId;
       const noteUpdateNeeded = noteNeedsUpdate || walkInNoteDirty;
       if (!activeCounterId) {
@@ -7755,7 +7588,7 @@ useEffect(() => {
       const statusToCommit =
         statusCandidate && statusCandidate !== counterStatus ? statusCandidate : undefined;
       const attendanceUpdates =
-        options.attendanceUpdates?.filter(
+        (options.attendanceUpdates ?? (staffFreeChanges ? Object.entries(pendingBookingAttendanceById).map(([id, staged]) => ({ bookingId: Number(id), ...staged })) : []))?.filter(
           (row) => Number.isFinite(row.bookingId) && row.bookingId > 0,
         ) ?? [];
 
@@ -7795,7 +7628,7 @@ useEffect(() => {
         shouldRefreshSourceMetrics ||
         shouldSendNotes ||
         Boolean(statusToCommit) ||
-        attendanceUpdates.length > 0;
+        attendanceUpdates.length > 0 || Boolean(staffFreeChanges);
       if (!shouldCommit) {
         if (noteUpdateNeeded) {
           setWalkInNoteDirty(false);
@@ -7817,7 +7650,7 @@ useEffect(() => {
             return parts.length > 1 && parts[1] === 'cash_payment';
           });
 
-        if (attendanceUpdates.length > 0) {
+        if (attendanceUpdates.length > 0 || staffFreeChanges) {
           await dispatch(
             finalizeCounterReservations({
               counterId: activeCounterId,
@@ -7834,6 +7667,7 @@ useEffect(() => {
               })),
               metrics: metricsPayload,
               status: statusToCommit,
+              staffFreeChanges,
               notes: shouldSendNotes ? computedCounterNotes : undefined,
             }),
           ).unwrap();
@@ -7849,6 +7683,7 @@ useEffect(() => {
               counterId: activeCounterId,
               metrics: metricsPayload,
               status: statusToCommit,
+              staffFreeChanges,
               notes: shouldSendNotes ? computedCounterNotes : undefined,
             }),
           ).unwrap();
@@ -7862,6 +7697,8 @@ useEffect(() => {
           setShouldRefreshCounterList(true);
         }
 
+        setStaffFreeDraft(emptyStaffFreeDraft());
+        setStaffFreeValidationError(null);
         clearReservationDraft();
         return true;
       } catch (_error) {
@@ -7887,6 +7724,11 @@ useEffect(() => {
       registry.metricsByKey,
       registry.persistedMetricsByKey,
       walkInNoteDirty,
+      walkInValidationError,
+      hasFreeNoteValidationError,
+      staffFreeDraft,
+      staffFreeValidationError,
+      pendingBookingAttendanceById,
     ],
   );
 
@@ -10088,60 +9930,36 @@ useEffect(() => {
             </Card>
           </Box>
         )}
-        {RESERVATION_BUCKETS.map((bucket) => (
-          <Box key={bucket.label} sx={{ width: '100%' }}>
-            <Typography variant="h6" gutterBottom sx={{ textAlign: 'center' }}>
-              {bucket.label}
-            </Typography>
-            {availableManualChannels.length > 0 ? (
-              <Stack spacing={1.5}>
-                <ToggleButtonGroup
-                  value={displayedManualChannelIds}
-                  onChange={handleCashReservationChannelSelection}
-                  size="small"
-                  aria-label="Cash payment channels"
-                  sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
-                >
-                  {availableManualChannels.map((channel) => (
-                    <ToggleButton
-                      key={channel.id}
-                      value={channel.id}
-                      sx={{ flex: '0 0 auto' }}
-                      disabled={registry.savingMetrics || confirmingMetrics}
-                    >
-                      {channel.name}
-                    </ToggleButton>
-                  ))}
-                </ToggleButtonGroup>
-                {displayedManualChannelIds.length > 0 ? (
-                  <Box
-                    sx={{
-                      display: 'grid',
-                      gap: 2,
-                      gridTemplateColumns: {
-                        xs: '1fr',
-                        md: 'repeat(2, minmax(0, 1fr))',
-                        lg: 'repeat(3, minmax(0, 1fr))',
-                      },
-                    }}
-                  >
-                    {displayedManualChannelIds.map((channelId: number) => {
-                      const channel = registry.channels.find((item) => item.id === channelId);
-                      if (!channel) {
-                        return null;
-                      }
-                      return (
-                        <Box key={`${channel.id}-${bucket.label}`} sx={{ height: '100%' }}>
-                          {renderChannelCard(channel, bucket, registry.addons)}
-                        </Box>
-                      );
-                    })}
-                  </Box>
-                ) : null}
-              </Stack>
-            ) : null}
-          </Box>
-        ))}
+        {walkInValidationError && <Alert severity="warning">{walkInValidationError}</Alert>}
+        {staffFreeValidationError && <Alert severity="warning">{staffFreeValidationError}</Alert>}
+        <WalkInsPanel
+          key={counterId}
+          staffFreeCount={effectiveStaffFreeCount}
+          staffFreeEntry={counterId ? {
+            counterId, revision: registry.counter?.counter.updatedAt,
+            reservationOrders: onlineReservationsLoading || onlineReservationsError ? null : onlineReservationOrders,
+            draft: staffFreeDraft, onDraftChange: setStaffFreeDraft, onValidationChange: setStaffFreeValidationError,
+          } : undefined}
+          channels={availableManualChannels}
+          addons={registry.addons}
+          types={registry.counter?.walkInTicketTypes ?? WALK_IN_TICKET_TYPE_VALUES.map((id) => ({ id, name: WALK_IN_TICKET_TYPE_LABELS[id], enabled: true }))}
+          paymentMethods={registry.counter?.paymentMethods ?? []}
+          value={walkInTicketDataByChannel}
+          freePeople={freePeopleByChannel}
+          freeAddons={freeAddonsByChannel}
+          disabled={registry.savingMetrics || confirmingMetrics}
+          getAddonPrice={(channel, addon, currency) => getWalkInAddonUnitPrice(channel, addon, currency, catalog.addons.find((item) => item.addonId === addon.addonId))}
+          onChange={(channelId, next) => {
+            setWalkInTicketDataByChannel((prev) => ({ ...prev, [channelId]: next }));
+            setWalkInDiscountsByChannel((prev) => ({ ...prev, [channelId]: next.ticketOrder }));
+            setWalkInNoteDirty(true);
+          }}
+          onFreeChange={(channelId, people, addons) => {
+            setFreePeopleByChannel((prev) => { const next = { ...prev }; if (people) next[channelId] = people; else delete next[channelId]; return next; });
+            setFreeAddonsByChannel((prev) => ({ ...prev, [channelId]: addons }));
+            setWalkInNoteDirty(true);
+          }}
+        />
       </Stack>
     );
   };
@@ -10238,7 +10056,7 @@ useEffect(() => {
         </Button>
       );
 
-      const saveDisabled = disableNav || saveAndExitSubmitting || hasFreeNoteValidationError;
+      const saveDisabled = disableNav || saveAndExitSubmitting || hasFreeNoteValidationError || Boolean(walkInValidationError) || Boolean(staffFreeValidationError);
       const saveButton = (
         <Button
           variant="contained"
@@ -10260,6 +10078,8 @@ useEffect(() => {
       const saveControl = (
         <Stack spacing={0.5} alignItems="flex-start">
           {saveButton}
+          {walkInValidationError && <Typography variant="caption" color="error">{walkInValidationError}</Typography>}
+          {staffFreeValidationError && <Typography variant="caption" color="error">{staffFreeValidationError}</Typography>}
           {hasFreeNoteValidationError && (
             <Typography variant="caption" color="error">
               Add a reason for each free entry before saving.
@@ -10544,127 +10364,16 @@ type SummaryRowOptions = {
     ],
   );
 
-  const cashPaymentsTicketSummary = useMemo(() => {
-    type CashTicketSummaryRow = {
-      channelId: number;
-      channelName: string;
-      ticketLabel: string;
-      currency: CashCurrency;
-      qty: number;
-    };
-
-    const rows: CashTicketSummaryRow[] = [];
-    const channelNameById = new Map<number, string>();
-    registry.channels.forEach((channel) => {
-      channelNameById.set(channel.id, channel.name ?? `Channel ${channel.id}`);
-    });
-
-    walkInChannelIds.forEach((channelId) => {
-      const channelName = channelNameById.get(channelId) ?? 'Walk-In';
-      const ticketState = walkInTicketDataByChannel[channelId];
-      let hasTicketBreakdown = false;
-      if (ticketState) {
-        ticketState.ticketOrder.forEach((ticketKey) => {
-          const ticketEntry = ticketState.tickets[ticketKey];
-          if (!ticketEntry) {
-            return;
-          }
-          const ticketLabel =
-            ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name.trim() : ticketKey;
-          const displayTicketLabel = ticketEntry.transfer ? `${ticketLabel} (Transfer)` : ticketLabel;
-          ticketEntry.currencyOrder.forEach((currency) => {
-            const currencyEntry = ticketEntry.currencies[currency];
-            if (!currencyEntry) {
-              return;
-            }
-            const qty = Math.max(0, Math.round(Number(currencyEntry.people) || 0));
-            if (qty <= 0) {
-              return;
-            }
-            hasTicketBreakdown = true;
-            rows.push({
-              channelId,
-              channelName,
-              ticketLabel: displayTicketLabel,
-              currency,
-              qty,
-            });
-          });
-        });
-      }
-
-      if (hasTicketBreakdown) {
-        return;
-      }
-
-      const peopleQty = Math.max(0, Math.round(Number(getMetric(channelId, 'attended', null, 'people', null)?.qty ?? 0)));
-      if (peopleQty <= 0) {
-        return;
-      }
-      rows.push({
-        channelId,
-        channelName,
-        ticketLabel: 'People',
-        currency: resolveCashCurrencyForChannel(channelId),
-        qty: peopleQty,
-      });
-    });
-
-    registry.channels.forEach((channel) => {
-      if (!isCashPaymentChannel(channel) || walkInChannelIds.includes(channel.id)) {
-        return;
-      }
-      const peopleQty = Math.max(0, Math.round(Number(getMetric(channel.id, 'attended', null, 'people', null)?.qty ?? 0)));
-      if (peopleQty <= 0) {
-        return;
-      }
-      rows.push({
-        channelId: channel.id,
-        channelName: channel.name,
-        ticketLabel: 'People',
-        currency: resolveCashCurrencyForChannel(channel.id),
-        qty: peopleQty,
-      });
-    });
-
-    Object.values(pendingBookingCashCollectionById).forEach((cash) => {
-      if (!cash || cash.amount <= 0 || cash.attendedTotal <= 0) {
-        return;
-      }
-      rows.push({
-        channelId: cash.channelId,
-        channelName: channelNameById.get(cash.channelId) ?? `Channel ${cash.channelId}`,
-        ticketLabel: cash.platformBookingId || `Booking ${cash.bookingId}`,
-        currency: cash.currency,
-        qty: cash.attendedTotal,
-      });
-    });
-
-    const aggregate = new Map<string, CashTicketSummaryRow>();
-    rows.forEach((row) => {
-      const key = `${row.channelId}|${row.ticketLabel}|${row.currency}`;
-      const existing = aggregate.get(key);
-      if (existing) {
-        existing.qty += row.qty;
-        return;
-      }
-      aggregate.set(key, { ...row });
-    });
-
-    return Array.from(aggregate.values()).sort(
-      (left, right) =>
-        left.channelName.localeCompare(right.channelName) ||
-        left.currency.localeCompare(right.currency) ||
-        left.ticketLabel.localeCompare(right.ticketLabel),
-    );
-  }, [
-    getMetric,
-    pendingBookingCashCollectionById,
-    registry.channels,
-    resolveCashCurrencyForChannel,
-    walkInChannelIds,
-    walkInTicketDataByChannel,
-  ]);
+  const walkInTicketSummary = useMemo(() => [
+    ...buildWalkInSummary(extractCashSnapshotMap(computedCounterNotes), extractFreeSnapshotMap(computedCounterNotes), registry.channels, combinedAddonList),
+    ...(() => {
+      const saved = (registry.counter?.staffFreeEntries ?? []).filter(entry => !staffFreeDraft.removals.some(row => row.entryId === entry.id));
+      const pending = staffFreeDraft.additions.filter(entry => !saved.some(row => row.userId === entry.userId));
+      const staff = [...saved.map(entry => ({ name: entry.name, label: entry.label, reason: entry.overrideReason })), ...pending.map(entry => ({ name: entry.name, label: 'Free entry', reason: entry.override ? entry.overrideReason : null }))];
+      const channel = registry.channels.find(item => item.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'walkin');
+      return staff.length ? [{ key: 'staff-free', channelId: channel?.id ?? -1, channelName: channel?.name ?? 'Walk-In', ticket: 'Staff Free', guests: staff.length, amount: 0, addons: [], staff }] : [];
+    })(),
+  ], [computedCounterNotes, registry.channels, registry.counter?.staffFreeEntries, staffFreeDraft, combinedAddonList]);
 
   const onlineNoShowPeopleByChannel = useMemo(() => {
     const map = new Map<number, number>();
@@ -10917,13 +10626,8 @@ type SummaryRowOptions = {
     const { byChannel: summaryChannels, totals: summaryTotals } = summaryData;
     const hasSummaryActivity = (bucket: CounterSummaryBucket | CounterSummaryAddonBucket): boolean =>
       bucket.bookedBefore > 0 || bucket.bookedAfter > 0 || bucket.attended > 0 || bucket.nonShow > 0;
-    const snapshotDetails = formatCounterSnapshotDetails(counterNotes, registry.channels, combinedAddonList);
-    const hasFreeTicketNotes = snapshotDetails.freeSections.length > 0;
-    const multipleFreeTicketChannels = snapshotDetails.freeSections.length > 1;
-    const hasManualNotes = snapshotDetails.manualNote.length > 0;
-    const hasNotes = hasFreeTicketNotes || hasManualNotes;
 
-    if (summaryChannels.length === 0) {
+    if (summaryChannels.length === 0 && walkInTicketSummary.length === 0) {
       return (
         <Stack spacing={3} sx={{ mt: 4 }}>
           <Alert severity="info">Select channels in Reservations to review the summary.</Alert>
@@ -10942,8 +10646,8 @@ type SummaryRowOptions = {
         return hasSummaryActivity(addon) || freeAddonQty > 0;
       });
       const hasCashCollection = (cashCollectionSummary.perChannel.get(item.channelId)?.length ?? 0) > 0;
-      const hasCashTicketSummary = cashPaymentsTicketSummary.some(
-        (entry) => entry.channelId === item.channelId && entry.qty > 0,
+      const hasCashTicketSummary = walkInTicketSummary.some(
+        (entry) => entry.channelId === item.channelId && entry.guests > 0,
       );
       return hasPeopleActivity || hasAddonActivity || hasCashCollection || hasCashTicketSummary;
     });
@@ -11185,79 +10889,10 @@ type SummaryRowOptions = {
             })}
           </Grid>
         </Box>
-        {hasNotes && (
-          <Box>
-            <Divider sx={{ mb: 1.5 }} />
-            <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-              Notes
-            </Typography>
-            <Stack spacing={1.25}>
-              {hasFreeTicketNotes && (
-                <Stack spacing={0.75}>
-                  <Typography variant="body2" color="text.secondary">
-                    <Box component="span" sx={{ fontWeight: 600, textDecoration: 'underline' }}>
-                      Free Tickets:
-                    </Box>
-                  </Typography>
-                  {snapshotDetails.freeSections.map((section, sectionIndex) => {
-                    return (
-                      <Stack
-                        key={`${section.channelLabel ?? 'channel'}-${sectionIndex}`}
-                        spacing={0.25}
-                        sx={{ pl: multipleFreeTicketChannels ? 1.5 : 0 }}
-                      >
-                        {multipleFreeTicketChannels && (
-                          <Typography
-                            variant="body2"
-                            color="text.secondary"
-                            sx={{ fontWeight: 600 }}
-                          >
-                            {section.channelLabel ?? 'Channel'}
-                          </Typography>
-                        )}
-                        {section.entries.map((entry, entryIndex) => (
-                          <Typography
-                            key={`${entry.label}-${entryIndex}`}
-                            variant="body2"
-                            color="text.secondary"
-                          >
-                            <Box component="span" sx={{ fontWeight: 600 }}>
-                              {entry.label}:
-                            </Box>
-                            {entry.quantity != null && (
-                              <>
-                                {' '}
-                                {entry.quantity}
-                              </>
-                            )}
-                            {entry.reason && (
-                              <>
-                                {entry.quantity != null ? ' - ' : ' '}
-                                <Box component="span" sx={{ fontWeight: 600, textDecoration: 'underline' }}>
-                                  Reason:
-                                </Box>{' '}
-                                {entry.reason}
-                              </>
-                            )}
-                          </Typography>
-                        ))}
-                      </Stack>
-                    );
-                  })}
-                </Stack>
-              )}
-              {hasManualNotes && (
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                >
-                  {snapshotDetails.manualNote}
-                </Typography>
-              )}
-            </Stack>
-          </Box>
-        )}
+        {walkInTicketSummary.length > 0 && <Box>
+          <Typography variant="subtitle1" fontWeight={700} textAlign="center" sx={{ mb: 1 }}>Walk-Ins</Typography>
+          <WalkInSummaryDetails rows={walkInTicketSummary} />
+        </Box>}
         <Box>
           <Card variant="outlined">
             <CardContent>
@@ -11415,6 +11050,8 @@ type SummaryRowOptions = {
     setPartialCheckInEditorOrder(null);
     setPartialCheckInEditorDraft(null);
     setPendingBookingAttendanceById({});
+    setStaffFreeDraft(emptyStaffFreeDraft());
+    setStaffFreeValidationError(null);
     fetchCounterRequestRef.current = null;
     dispatch(clearDirtyMetrics());
   };
@@ -11448,6 +11085,8 @@ type SummaryRowOptions = {
       setPartialCheckInEditorOrder(null);
       setPartialCheckInEditorDraft(null);
       setPendingBookingAttendanceById({});
+      setStaffFreeDraft(emptyStaffFreeDraft());
+      setStaffFreeValidationError(null);
     },
     [setPendingProductId],
   );
@@ -12474,22 +12113,9 @@ type SummaryRowOptions = {
             <Divider />
             <Stack spacing={0.75}>
               <Typography variant="subtitle2" fontWeight={700}>
-                Cash Payments Summary
+                Walk-Ins Summary
               </Typography>
-              {cashPaymentsTicketSummary.length === 0 ? (
-                <Alert severity="info">No cash payment tickets recorded.</Alert>
-              ) : (
-                <Stack direction="row" spacing={0.6} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                  {cashPaymentsTicketSummary.map((entry) => (
-                    <Chip
-                      key={`attended-cash-${entry.channelId}-${entry.ticketLabel}-${entry.currency}`}
-                      size="small"
-                      variant="outlined"
-                      label={`${entry.channelName} | ${entry.ticketLabel} | ${entry.currency}: ${entry.qty}`}
-                    />
-                  ))}
-                </Stack>
-              )}
+              {walkInTicketSummary.length === 0 ? <Alert severity="info">No Walk-Ins tickets recorded.</Alert> : <WalkInSummaryDetails rows={walkInTicketSummary} />}
             </Stack>
           </Stack>
         </DialogContent>

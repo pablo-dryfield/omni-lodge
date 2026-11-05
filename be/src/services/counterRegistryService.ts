@@ -49,6 +49,10 @@ import {
   toAddonConfig,
 } from './counterMetricUtils.js';
 import { normalizeBookingExtrasSnapshot } from '../utils/bookingExtras.js';
+import { getWalkInTicketTypes } from './walkInTicketService.js';
+import { validateCounterWalkInNotes } from './walkInPaymentService.js';
+import { reconcileStaffFreeAllowances, staffFreeCounterEntries } from './staffFreeEntryService.js';
+import StaffFreeEntry from '../models/StaffFreeEntry.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -108,6 +112,9 @@ type CounterContext = {
 };
 
 export type CounterRegistryPayload = {
+  staffFreeEntries?: Awaited<ReturnType<typeof staffFreeCounterEntries>>;
+  walkInTicketTypes?: Array<{ id: string; name: string; enabled: boolean }>;
+  paymentMethods?: Array<{ id: number; name: string }>;
   counter: {
     id: number;
     date: string;
@@ -692,10 +699,13 @@ export default class CounterRegistryService {
     }
 
     if (updates.notes !== undefined) {
-      delta.notes = updates.notes ?? null;
+      delta.notes = await validateCounterWalkInNotes(updates.notes ?? null);
     }
 
     if (updates.userId !== undefined) {
+      if (await StaffFreeEntry.count({ where: { counterId, userId: updates.userId, cancelledAt: null } })) {
+        throw new HttpError(409, 'Cancel this person\'s off-duty staff entry before assigning them as the counter manager.');
+      }
       if (!Number.isInteger(updates.userId) || (updates.userId ?? 0) <= 0) {
         throw new HttpError(400, 'Invalid manager id');
       }
@@ -714,6 +724,9 @@ export default class CounterRegistryService {
     }
 
     if (updates.productId !== undefined) {
+      if (counter.productId !== updates.productId && await StaffFreeEntry.count({ where: { counterId } })) {
+        throw new HttpError(409, 'This counter has staff free-entry history. Preserve its product and create another counter for a different product.');
+      }
       const resolvedProductId =
         updates.productId == null ? null : await this.resolveProductId(Number(updates.productId));
       if (counter.productId !== resolvedProductId) {
@@ -767,6 +780,8 @@ export default class CounterRegistryService {
       throw new HttpError(404, 'Counter not found after update');
     }
 
+    await reconcileStaffFreeAllowances(counterId, actorUserId);
+
     const context = await this.buildContext(refreshed);
     return this.buildPayload(context);
   }
@@ -816,6 +831,9 @@ export default class CounterRegistryService {
     }
 
     const uniqueUserIds = Array.from(new Set(userIds));
+    if (uniqueUserIds.length && await StaffFreeEntry.count({ where: { counterId, userId: { [Op.in]: uniqueUserIds }, cancelledAt: null } })) {
+      throw new HttpError(409, 'Cancel off-duty staff free entries before assigning those people to work on this counter.');
+    }
     const users = (await User.findAll({
       where: { id: { [Op.in]: uniqueUserIds } },
       include: [{ model: UserType, as: 'role' }],
@@ -1538,11 +1556,7 @@ export default class CounterRegistryService {
       });
 
       const counterDate = dayjs(counter.date);
-      const walkInChannelIds = new Set(
-        channels
-          .filter((channel) => normalizeChannelSlug(channel.name) === 'walkin')
-          .map((channel) => channel.id),
-      );
+      const ticketTypes = await getWalkInTicketTypes();
       const walkInPriceMapByChannel = new Map<number, Map<string, WalkInTicketPriceConfig>>();
 
       for (const record of priceRecords) {
@@ -1566,9 +1580,6 @@ export default class CounterRegistryService {
           priceByChannel.set(record.channelId, numericPrice);
         }
 
-        if (!walkInChannelIds.has(record.channelId)) {
-          continue;
-        }
         const byKey = walkInPriceMapByChannel.get(record.channelId) ?? new Map<string, WalkInTicketPriceConfig>();
         const key = `${ticketType}|${currencyCode}`;
         if (byKey.has(key)) {
@@ -1576,6 +1587,8 @@ export default class CounterRegistryService {
         }
         byKey.set(key, {
           ticketType,
+          ticketTypeLabel: ticketTypes.find((type) => type.id === ticketType)?.name ?? ticketType,
+          enabled: ticketTypes.some((type) => type.id === ticketType && type.enabled),
           currencyCode,
           price: numericPrice,
         });
@@ -1703,6 +1716,10 @@ export default class CounterRegistryService {
       : null;
 
     const payload: CounterRegistryPayload = {
+      staffFreeEntries: await staffFreeCounterEntries(counter.id),
+      walkInTicketTypes: await getWalkInTicketTypes(),
+      paymentMethods: (await PaymentMethod.findAll({ attributes: ['id', 'name'], order: [['name', 'ASC']] }))
+        .map((method) => ({ id: method.id, name: method.name })),
       counter: {
         id: counter.id,
         date: counter.date,
@@ -2087,7 +2104,7 @@ export default class CounterRegistryService {
     let normalizedNotes = (counter.notes ?? '').trim().toLowerCase();
     let didNotOperate = normalizedNotes === DID_NOT_OPERATE_NOTE.toLowerCase();
 
-    if (!didNotOperate && zeroAttendance) {
+    if (!didNotOperate && zeroAttendance && !(await StaffFreeEntry.count({ where: { counterId: counter.id, cancelledAt: null } }))) {
       await Counter.update(
         {
           notes: DID_NOT_OPERATE_NOTE,

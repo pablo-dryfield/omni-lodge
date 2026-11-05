@@ -17,7 +17,7 @@ import { fetchProducts } from "../../actions/productActions";
 import { EditSelectOption } from "../../utils/CustomEditSelect";
 import { removeEmptyKeys } from "../../utils/removeEmptyKeys";
 import { getChangedValues } from "../../utils/getChangedValues";
-import { WALK_IN_TICKET_TYPE_VALUES } from "../../constants/walkInTicketTypes";
+import { useWalkInTicketTypes } from '../../api/walkInTickets';
 
 const MODULE_SLUG = "channel-product-price-management";
 
@@ -27,7 +27,6 @@ type ChannelProductPriceListProps = {
 
 const normalizeChannelProductPricePayload = (payload: Partial<ChannelProductPrice>) => {
   const next: Partial<ChannelProductPrice> = {};
-  const allowedTicketTypes = new Set<string>(WALK_IN_TICKET_TYPE_VALUES);
   const hasValue = (value: unknown): boolean =>
     value !== undefined && value !== null && String(value).trim() !== "";
 
@@ -45,7 +44,7 @@ const normalizeChannelProductPricePayload = (payload: Partial<ChannelProductPric
 
   if (hasValue(payload.ticketType)) {
     const normalizedTicketType = String(payload.ticketType).trim().toLowerCase();
-    if (allowedTicketTypes.has(normalizedTicketType)) {
+    if (/^[a-z][a-z0-9_]{0,63}$/.test(normalizedTicketType)) {
       next.ticketType = normalizedTicketType;
     }
   }
@@ -69,6 +68,8 @@ const normalizeChannelProductPricePayload = (payload: Partial<ChannelProductPric
 };
 
 const ChannelProductPriceList = ({ pageTitle }: ChannelProductPriceListProps) => {
+  const ticketTypes = useWalkInTicketTypes();
+  const ticketOptions = useMemo(() => (ticketTypes.data ?? []).filter((type) => type.enabled).map((type) => ({ value: type.id, label: type.name })), [ticketTypes.data]);
   const dispatch = useAppDispatch();
   const channelProductPricesState = useAppSelector((state) => state.channelProductPrices)[0];
   const channelsState = useAppSelector((state) => state.channels)[0];
@@ -206,9 +207,10 @@ const ChannelProductPriceList = ({ pageTitle }: ChannelProductPriceListProps) =>
         channelProductPriceColumnDef({
           channelOptions,
           productOptions,
+          ticketOptions,
         }),
       ),
-    [channelProductPricesState.data, channelOptions, productOptions],
+    [channelProductPricesState.data, channelOptions, productOptions, ticketOptions],
   );
 
   const headingTitle = pageTitle ?? currentPage;

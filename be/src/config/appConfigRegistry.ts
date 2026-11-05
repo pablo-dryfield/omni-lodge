@@ -1,4 +1,5 @@
 import { SYSTEM_MANAGEMENT_CONFIG } from './systemManagementConfig.js';
+import { DEFAULT_WALK_IN_TICKET_TYPES, WALK_IN_TICKET_CONFIG_KEY } from './walkInTicketConfig.js';
 import {
   DEFAULT_GOOGLE_ADS_API_VERSION,
   GOOGLE_ADS_API_VERSION_PATTERN,
@@ -24,6 +25,39 @@ export type ConfigDefinition = {
 };
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
+  {
+    key: 'COUNTER_STAFF_PAID_TICKET_PLN', label: 'Staff Ticket price (PLN)', category: 'Counters',
+    description: 'Open-bar-cost ticket for active off-duty volunteers and long-term staff who have exhausted their lifetime free allowance. Applies to new Staff Tickets when the counter is loaded; saved payments keep their original price. Free attendance exemptions and management entry remain available.',
+    valueType: 'number', defaultValue: 30, validation: { required: true, min: 0.01, max: 10000 }, impact: 'medium',
+  },
+  {
+    key: 'COUNTER_STAFF_FREE_ALLOWANCE', label: 'Staff lifetime free pub crawls', category: 'Counters',
+    description: 'Lifetime allowance for off-duty volunteers and long-term staff. Never resets. Changes apply to the next admission; recorded visits remain unchanged. Assistant Managers are unlimited.',
+    valueType: 'number', defaultValue: 2, validation: { required: true, integer: true, min: 0, max: 1000 }, impact: 'medium',
+  },
+  {
+    key: 'COUNTER_STAFF_FREE_BUSY_THRESHOLD', label: 'Staff free-entry attendance exemption', category: 'Counters',
+    description: 'Minimum checked-in customers whose base ticket meets the configured minimum price. Excludes complimentary customers, underpriced tickets, staff free entries and on-duty staff. If saved attendance reaches this number later, allowances used that night are returned automatically. Recorded exemptions are retained if attendance is subsequently corrected downwards.',
+    valueType: 'number', defaultValue: 20, validation: { required: true, integer: true, min: 1, max: 10000 }, impact: 'medium',
+  },
+  {
+    key: 'COUNTER_STAFF_FREE_MINIMUM_PRICE_PERCENT', label: 'Minimum ticket price for staff free-entry threshold', category: 'Counters',
+    description: 'Percentage of the Walk-In Normal ticket price (same product, experience date and currency) required for a checked-in customer to count. Exactly this price qualifies. Free tickets never qualify. Add-ons are excluded; group bookings use their average base ticket price. Missing prices are flagged and excluded until corrected.',
+    valueType: 'number', defaultValue: 50, validation: { required: true, integer: true, min: 0, max: 100 }, impact: 'medium',
+  },
+  {
+    key: 'COUNTER_STAFF_FREE_PRODUCT_TYPES', label: 'Staff free-entry product types', category: 'Counters',
+    description: 'Comma-separated product type names eligible for off-duty staff free pub crawls. Pub-crawl products currently belong to Main Product. Applies to all products in the selected types. Changes apply to the next admission.',
+    valueType: 'string', defaultValue: 'Main Product', validation: { required: true, maxLength: 500 }, impact: 'medium',
+  },
+  {
+    key: WALK_IN_TICKET_CONFIG_KEY,
+    label: 'Walk-Ins ticket types',
+    description: 'Ticket names and display order for Counter Walk-Ins. Prices remain in Channel Product Prices, by channel, product, currency and experience date. Disable old types instead of reusing their IDs. Custom and Free are always available. Staff Free is built in under Walk-In for eligible products and follows the staff allowance policy. Changes apply when a counter is next loaded.',
+    category: 'Counters', valueType: 'json',
+    defaultValue: JSON.stringify(DEFAULT_WALK_IN_TICKET_TYPES),
+    validation: { required: true, format: 'walk-in-ticket-types' }, impact: 'medium',
+  },
   ...DATABASE_WORKSPACE_CONFIG,
   ...SYSTEM_MANAGEMENT_CONFIG,
   {
@@ -1017,13 +1051,22 @@ Best,
   },
   {
     key: 'STOREFRONT_ONGOING_CART_DEDUPE_WINDOW_MINUTES',
-    label: 'Ongoing cart duplicate window',
+    label: 'Paid cart retry protection window',
     description:
-      'Minutes during which identical carts from the same customer are treated as one ongoing cart.',
+      'Minutes during which a stale browser request cannot recreate its identical paid cart. Unpaid carts are consolidated by email, then phone, without this time limit; exact names require contact disambiguation.',
     category: 'Storefront',
     valueType: 'number',
     defaultValue: 30,
     validation: { min: 5, max: 1440 },
+  },
+  {
+    key: 'STOREFRONT_CART_RECONCILIATION_BATCH_SIZE',
+    label: 'Ongoing cart reconciliation batch size',
+    description: 'Maximum ongoing carts checked per five-minute maintenance pass for duplicates and matching paid bookings, including carts already sent a recovery email. Older audit records are retained. Saved changes apply on the next pass.',
+    category: 'Storefront',
+    valueType: 'number',
+    defaultValue: 100,
+    validation: { min: 1, max: 500 },
   },
   {
     key: 'STOREFRONT_CLARITY_REPLAY_ENABLED',

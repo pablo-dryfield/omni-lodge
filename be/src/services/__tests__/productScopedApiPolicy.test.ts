@@ -1,5 +1,13 @@
 import { isExclusiveProductScope, productScopedApiRoute } from '../productScopedApiPolicy';
 
+it('permits only the read-only self-service staff free history route for scoped accounts', () => {
+  expect(productScopedApiRoute('GET', '/api/session/staff-free-entries')).toEqual({ resource: 'personal', passthrough: true });
+  expect(productScopedApiRoute('GET', '/api/session/staff-free-entries/99')).toBeNull();
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    expect(productScopedApiRoute(method, '/api/session/staff-free-entries')).toBeNull();
+  }
+});
+
 it.each([['GET', 'preview'], ['POST', 'amend'], ['POST', 'cancel']])(
   'requires booking update access for reviewed local action %s %s', (method, operation) => {
     expect(productScopedApiRoute(method, `/api/bookings/42/local-actions/${operation}`)).toEqual({

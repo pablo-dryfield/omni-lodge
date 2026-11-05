@@ -64,7 +64,7 @@ export function productScopedApiRoute(method: string, path: string): ScopedApiRo
     return Number.isSafeInteger(id) ? { resource: 'profile-requirement', id, passthrough: true } : null;
   }
   if (read && path === '/api/reports/home-preferences') return { resource: 'home' };
-  if (read && ['/api/session', '/api/session/profile-photo', '/api/accessControl/me',
+  if (read && ['/api/session', '/api/session/profile-photo', '/api/session/staff-free-entries', '/api/accessControl/me',
     '/api/required-actions/me', '/api/notifications', '/api/currencies/options'].includes(path)) {
     return { resource: 'personal', passthrough: true };
   }

@@ -1,3 +1,4 @@
+import type { StaffFreeChanges } from '../api/staffFreeEntries';
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { isAxiosError } from 'axios';
 
@@ -79,6 +80,7 @@ type CommitCounterRegistryArgs = {
   metrics?: CommitMetricInput[];
   status?: CounterStatus;
   notes?: string | null;
+  staffFreeChanges?: StaffFreeChanges;
 };
 
 type AttendanceUpdateInput = {
@@ -106,6 +108,7 @@ type FinalizeCounterReservationsArgs = {
   metrics?: CommitMetricInput[];
   status?: CounterStatus;
   notes?: string | null;
+  staffFreeChanges?: StaffFreeChanges;
 };
 
 type SubmitCounterSetupArgs = {
@@ -352,7 +355,7 @@ export const commitCounterRegistry = createAsyncThunk<
   CounterRegistryPayload,
   CommitCounterRegistryArgs,
   { rejectValue: CounterRegistryError }
->('counterRegistry/commit', async ({ counterId, metrics, status, notes }, { rejectWithValue }) => {
+>('counterRegistry/commit', async ({ counterId, metrics, status, notes, staffFreeChanges }, { rejectWithValue }) => {
   try {
     const response = await axiosInstance.post<CounterRegistryPayload>(
       `/counters/${counterId}/commit?format=registry`,
@@ -360,6 +363,7 @@ export const commitCounterRegistry = createAsyncThunk<
         ...(metrics ? { metrics } : {}),
         ...(status ? { status } : {}),
         ...(notes !== undefined ? { notes } : {}),
+        ...(staffFreeChanges ? { staffFreeChanges } : {}),
       },
       withCredentialsConfig,
     );
@@ -375,7 +379,7 @@ export const finalizeCounterReservations = createAsyncThunk<
   { rejectValue: CounterRegistryError }
 >(
   'counterRegistry/finalizeReservations',
-  async ({ counterId, attendanceUpdates, metrics, status, notes }, { rejectWithValue }) => {
+  async ({ counterId, attendanceUpdates, metrics, status, notes, staffFreeChanges }, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.post<CounterRegistryPayload>(
         `/counters/${counterId}/finalize-reservations?format=registry`,
@@ -384,6 +388,7 @@ export const finalizeCounterReservations = createAsyncThunk<
           ...(metrics ? { metrics } : {}),
           ...(status ? { status } : {}),
           ...(notes !== undefined ? { notes } : {}),
+        ...(staffFreeChanges ? { staffFreeChanges } : {}),
         },
         withCredentialsConfig,
       );

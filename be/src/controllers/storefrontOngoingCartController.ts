@@ -16,6 +16,7 @@ import {
   sendAndRecordStorefrontCartRecoveryEmail,
 } from '../services/storefrontCartRecoveryEmailService.js';
 import HttpError from '../errors/HttpError.js';
+import { listOngoingCartPage } from '../services/storefrontOngoingCartListService.js';
 import {
   getOngoingCartJourney,
   ingestClientJourneyEvents,
@@ -94,17 +95,21 @@ const serializeRowsWithOrders = async (rows: StorefrontOngoingCart[]) => {
 };
 
 export const listOngoingCarts = async (
-  _request: AuthenticatedRequest,
+  request: AuthenticatedRequest,
   response: Response,
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const rows = await StorefrontOngoingCart.findAll({
-      where: { status: { [Op.in]: [...ONGOING_CART_STATUSES] } },
-      order: [['lastActivityAt', 'DESC']],
-      limit: 250,
-    });
-    response.json({ data: await serializeRowsWithOrders(rows) });
+    const { rows, ...page } = await listOngoingCartPage(request.query);
+    const data = (await serializeRowsWithOrders(rows)).map(cart => ({
+      publicId: cart.publicId, status: cart.status, customer: cart.customer, quote: { items: cart.quote.items },
+      total: cart.total, currency: cart.currency, lastActivityAt: cart.lastActivityAt, recoveryDueAt: cart.recoveryDueAt,
+      recoverySentAt: cart.recoverySentAt, firstRecoverySentAt: cart.firstRecoverySentAt, lastRecoverySentAt: cart.lastRecoverySentAt,
+      recoveryOpenedAt: cart.recoveryOpenedAt, recoveredAt: cart.recoveredAt, recoveryCount: cart.recoveryCount,
+      createdAt: cart.createdAt, orderPublicId: cart.orderPublicId, events: cart.events.slice(0, 1),
+      identityReview: cart.identityReview,
+    }));
+    response.json({ data, ...page });
   } catch (error) {
     next(error);
   }
@@ -136,11 +141,16 @@ export const getOngoingCartActivity = async (
     const publicId = parseStorefrontUuid(request.params.publicId, 'Ongoing cart ID');
     const ongoing = await StorefrontOngoingCart.findOne({ where: { publicId } });
     if (!ongoing) throw new HttpError(404, 'Ongoing cart not found.');
+    const mergedIds = Array.isArray(ongoing.metadata?.mergedCartIds)
+      ? ongoing.metadata.mergedCartIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0 && id !== Number(ongoing.id)) : [];
+    const merged = mergedIds.length ? await StorefrontOngoingCart.findAll({ where: { id: { [Op.in]: mergedIds } } }) : [];
+    const records = [ongoing, ...merged];
+    const visits = (await Promise.all(records.map(cart => getOngoingCartJourney(cart.id)))).flat();
     response.json({
       data: {
         publicId: ongoing.publicId,
-        visits: await getOngoingCartJourney(ongoing.id),
-        legacyEvents: serializeOngoingCart(ongoing).events,
+        visits: visits.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()),
+        legacyEvents: records.flatMap(cart => serializeOngoingCart(cart).events).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)),
       },
     });
   } catch (error) {

@@ -13,8 +13,16 @@ import {
   upsertCounterMetrics,
 } from '../controllers/counterController.js';
 import { requireCounterProductScope } from '../services/productScopeService.js';
+import { requireRoles } from '../middleware/authorizationMiddleware.js';
+import { addStaffFreeEntry, listStaffFreeEntries, removeStaffFreeEntry, staffFreeHistory } from '../controllers/staffFreeEntryController.js';
 
 const router: Router = express.Router();
+const staffFreeRoles = requireRoles(['admin', 'administrator', 'owner', 'manager', 'assistant-manager']);
+
+router.get('/:id/staff-free-entries', authMiddleware, requireCounterProductScope, staffFreeRoles, listStaffFreeEntries);
+router.get('/:id/staff-free-entries/history/:userId', authMiddleware, requireCounterProductScope, staffFreeRoles, staffFreeHistory);
+router.post('/:id/staff-free-entries', authMiddleware, requireCounterProductScope, staffFreeRoles, addStaffFreeEntry);
+router.post('/:id/staff-free-entries/:entryId/cancel', authMiddleware, requireCounterProductScope, staffFreeRoles, removeStaffFreeEntry);
 
 router.post('/', authMiddleware, createOrLoadCounter);
 router.post('/setup', authMiddleware, upsertCounterSetup);

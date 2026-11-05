@@ -15,6 +15,7 @@ import Channel from '../models/Channel.js';
 import ChannelCommission from '../models/ChannelCommission.js';
 import Counter from '../models/Counter.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
+import StaffFreeEntry from '../models/StaffFreeEntry.js';
 import Guest from '../models/Guest.js';
 import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
@@ -1990,6 +1991,7 @@ const bookingToUnifiedOrder = (
       paymentMethod: booking.paymentMethod ?? null,
       baseAmount: booking.baseAmount,
       addonsAmount: booking.addonsAmount,
+      addonsSnapshot: booking.addonsSnapshot,
       discountAmount: booking.discountAmount,
       discountCode: booking.discountCode,
       tipAmount: booking.tipAmount,
@@ -2648,10 +2650,15 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
       }
     }
 
+    const staffFreeByCounter = new Map<number, number>();
+    if (counters.length) {
+      const staffFreeEntries = await StaffFreeEntry.findAll({ where: { counterId: { [Op.in]: counters.map(counter => Number(counter.id)) }, cancelledAt: null }, attributes: ['counterId'] });
+      staffFreeEntries.forEach(entry => staffFreeByCounter.set(entry.counterId, (staffFreeByCounter.get(entry.counterId) ?? 0) + 1));
+    }
     counters.forEach((counter) => {
       const counterDate = String(counter.date);
       const note = typeof counter.notes === 'string' ? counter.notes.trim() : '';
-      const freeTickets = extractFreeTicketsFromNote(note);
+      const freeTickets = extractFreeTicketsFromNote(note) + (staffFreeByCounter.get(Number(counter.id)) ?? 0);
       if (freeTickets > 0) {
         freeTicketsTotal += freeTickets;
         freeTicketEntries.push({

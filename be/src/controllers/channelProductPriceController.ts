@@ -5,6 +5,7 @@ import Channel from '../models/Channel.js';
 import Product from '../models/Product.js';
 import User from '../models/User.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
+import { getWalkInTicketTypes } from '../services/walkInTicketService.js';
 import {
   normalizeCurrencyCode,
   normalizeWalkInTicketType,
@@ -27,14 +28,14 @@ const buildColumns = () => {
   ]);
 };
 
-const toResponseRecord = (record: ChannelProductPrice): Record<string, unknown> => {
+const toResponseRecord = (record: ChannelProductPrice, labels: Record<string, string> = WALK_IN_TICKET_TYPE_LABELS): Record<string, unknown> => {
   const plain = record.get({ plain: true }) as Record<string, unknown>;
   const ticketType = normalizeWalkInTicketType(record.ticketType);
   const currencyCode = normalizeCurrencyCode(record.currencyCode);
   return {
     ...plain,
     ticketType,
-    ticketTypeLabel: WALK_IN_TICKET_TYPE_LABELS[ticketType],
+    ticketTypeLabel: labels[ticketType] ?? WALK_IN_TICKET_TYPE_LABELS[ticketType] ?? ticketType,
     currencyCode,
     channelName: record.channel?.name ?? null,
     productName: record.product?.name ?? null,
@@ -119,7 +120,8 @@ export const listChannelProductPrices = async (req: Request, res: Response): Pro
       ],
     });
 
-    const data = records.map((record) => toResponseRecord(record));
+    const labels = Object.fromEntries((await getWalkInTicketTypes()).map((type) => [type.id, type.name]));
+    const data = records.map((record) => toResponseRecord(record, labels));
 
     res.status(200).json([{ data, columns: buildColumns() }]);
   } catch (error) {
@@ -146,7 +148,8 @@ export const createChannelProductPrice = async (req: Request, res: Response): Pr
       return;
     }
 
-    res.status(201).json([toResponseRecord(record)]);
+    const labels = Object.fromEntries((await getWalkInTicketTypes()).map((type) => [type.id, type.name]));
+    res.status(201).json([toResponseRecord(record, labels)]);
   } catch (error) {
     const message = (error as ErrorWithMessage).message;
     res.status(500).json([{ message }]);
@@ -175,7 +178,8 @@ export const updateChannelProductPrice = async (req: Request, res: Response): Pr
       res.status(404).json([{ message: 'Channel product price not found after update' }]);
       return;
     }
-    res.status(200).json([toResponseRecord(record)]);
+    const labels = Object.fromEntries((await getWalkInTicketTypes()).map((type) => [type.id, type.name]));
+    res.status(200).json([toResponseRecord(record, labels)]);
   } catch (error) {
     const message = (error as ErrorWithMessage).message;
     res.status(500).json([{ message }]);

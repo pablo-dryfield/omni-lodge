@@ -1,6 +1,8 @@
 import dayjs from 'dayjs';
 import { randomUUID } from 'node:crypto';
 import StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
+import HttpError from '../errors/HttpError.js';
+import { dismissCartWithPaidMatch } from './storefrontCartBookingMatchService.js';
 import { sendMessage } from './bookings/gmailClient.js';
 import { getConfigValue } from './configService.js';
 
@@ -142,6 +144,17 @@ export const ensureStorefrontCartRecoveryToken = async (
 export const sendAndRecordStorefrontCartRecoveryEmail = async (
   ongoing: StorefrontOngoingCart,
 ): Promise<StorefrontOngoingCart> => {
+  await ongoing.reload();
+  if (ongoing.status !== 'sending_recovery') {
+    throw new HttpError(409, 'This cart changed before the recovery email could be sent.');
+  }
+  if (await dismissCartWithPaidMatch(ongoing)) {
+    throw new HttpError(409, 'This customer already has a matching paid booking. The cart has been removed from ongoing carts.');
+  }
+  await ongoing.reload();
+  if (ongoing.status !== 'sending_recovery') {
+    throw new HttpError(409, 'This cart changed before the recovery email could be sent.');
+  }
   await ensureStorefrontCartRecoveryToken(ongoing);
 
   const result = await deliverStorefrontCartRecoveryEmail(ongoing);

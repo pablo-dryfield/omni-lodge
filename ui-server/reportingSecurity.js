@@ -3,7 +3,8 @@ const DEFAULT_PUBLIC_ORIGIN = 'https://omni-lodge.com';
 const DEFAULT_DEVELOPMENT_ORIGIN = 'http://localhost:3005';
 
 export const UI_CONTENT_SECURITY_POLICY = [
-  "script-src 'self' https://connect.facebook.net https://static.cloudflareinsights.com/beacon.min.js https://static.cloudflareinsights.com/beacon.min.js/",
+  "script-src 'self' 'wasm-unsafe-eval' https://connect.facebook.net https://static.cloudflareinsights.com/beacon.min.js https://static.cloudflareinsights.com/beacon.min.js/",
+  "worker-src 'self'",
   "connect-src 'self' https://omni-lodge.com https://connect.facebook.net https://graph.facebook.com https://www.facebook.com https://web.facebook.com https://www.googleapis.com https://content.googleapis.com",
   "frame-src 'self' https://system.omni-lodge.com blob: data: https://www.facebook.com https://web.facebook.com",
   'report-uri /api/client-errors/browser-reports',

@@ -1,0 +1,7 @@
+.toolbar { display: grid; grid-template-columns: minmax(220px, 1.5fr) minmax(150px, .8fr) minmax(220px, 1fr) auto; gap: 12px; align-items: end; }
+.table :where(th, td) { text-align: center; vertical-align: middle; }
+.table td { overflow-wrap: anywhere; }
+.sortHeader { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 36px; font-weight: 600; }
+.sortHeader:focus-visible { outline: 2px solid var(--mantine-color-blue-6); outline-offset: 2px; border-radius: 4px; }
+@media (max-width: 85em) { .toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+@media (max-width: 36em) { .toolbar { grid-template-columns: minmax(0, 1fr); } .toolbar > :last-child { justify-content: center; } }

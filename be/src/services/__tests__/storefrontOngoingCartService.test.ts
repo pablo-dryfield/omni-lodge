@@ -1,4 +1,5 @@
 import StorefrontOngoingCart from '../../models/StorefrontOngoingCart';
+import sequelize from '../../config/database';
 import { getConfigValue } from '../configService';
 import { quoteStorefrontCart, type StorefrontQuote } from '../storefrontCommerceService';
 import { normalizeSavedCartCustomer, normalizeSavedCartFromQuote } from '../storefrontSavedCartService';
@@ -9,6 +10,9 @@ import {
   recordOngoingCartEventByIdentity,
   upsertOngoingCart,
 } from '../storefrontOngoingCartService';
+
+jest.mock('../../config/database.js', () => ({ __esModule: true, default: { transaction: jest.fn(), query: jest.fn() } }));
+jest.mock('../storefrontCartBookingMatchService.js', () => ({ dismissCartWithPaidMatch: jest.fn() }));
 
 jest.mock('../../models/StorefrontOngoingCart.js', () => ({
   __esModule: true,
@@ -35,6 +39,8 @@ const mockedCart = normalizeSavedCartFromQuote as jest.MockedFunction<typeof nor
 const mockedRecordJourneyEvent = recordServerJourneyEvent as jest.MockedFunction<
   typeof recordServerJourneyEvent
 >;
+const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+const experience = { productId: 28, quantity: 2, experienceDate: '2026-08-29', experienceTime: '21:00' };
 
 const quote = {
   currency: 'PLN',
@@ -51,7 +57,10 @@ const quote = {
 
 describe('storefront ongoing cart service', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
+    (sequelize.transaction as jest.Mock).mockImplementation(callback => callback(transaction));
+    (sequelize.query as jest.Mock).mockResolvedValue([]);
+    model.findAll.mockResolvedValue([]);
     mockedGetConfigValue.mockReturnValue(30);
     mockedCustomer.mockReturnValue({
       fullName: 'Alex Smith',
@@ -94,7 +103,7 @@ describe('storefront ongoing cart service', () => {
         browserIds: ['7a2913c3-3a11-4b3b-8e62-af1d1ced7420'],
         pageIds: ['71f3385a-e2f0-414e-ab9f-e66f71ef3aa4'],
       }),
-    }));
+    }), { transaction });
     const values = update.mock.calls[0][0];
     expect(values.recoveryDueAt.getTime()).toBeGreaterThanOrEqual(before + 30 * 60_000);
   });
@@ -118,6 +127,7 @@ describe('storefront ongoing cart service', () => {
       where: {
         publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d',
       },
+      transaction, lock: 'UPDATE',
     });
     expect(update).toHaveBeenCalledTimes(1);
   });
@@ -136,15 +146,18 @@ describe('storefront ongoing cart service', () => {
     expect(model.create).not.toHaveBeenCalled();
   });
 
-  it('reuses an identical recent cart for the same normalized email and phone', async () => {
+  it('keeps a new browser selection and archives the old matching cart without returning its payment context', async () => {
     const update = jest.fn().mockResolvedValue(undefined);
     const duplicate = {
+      id: 10, publicId: 'old-public-id', orderId: 70,
       status: 'active',
       customer: mockedCustomer(),
       cart: { items: [] },
       metadata: {},
       update,
     };
+    const current = { id: 11, publicId: 'new-public-id', metadata: {}, update: jest.fn().mockResolvedValue(undefined) };
+    model.create.mockResolvedValue(current);
     model.findOne.mockResolvedValue(null);
     model.findAll
       .mockResolvedValueOnce([])
@@ -157,13 +170,17 @@ describe('storefront ongoing cart service', () => {
       quote,
     });
 
-    expect(result).toBe(duplicate);
-    expect(model.create).not.toHaveBeenCalled();
+    expect(result).toBe(current);
+    expect(model.create).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77', cart: { items: [] }, orderId: null,
+    }), { transaction });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'dismissed',
       metadata: expect.objectContaining({
-        sessionIds: ['d4087928-d6ac-4de3-8c27-532960f4df77'],
+        mergedIntoCartPublicId: 'new-public-id', mergeReason: 'customer_identity',
       }),
-    }));
+    }), { transaction });
+    expect(current.update).toHaveBeenCalledWith({ metadata: { mergedCartIds: [10], identityReview: null } }, { transaction });
   });
 
   it('blocks a stale quote from recreating a recently converted session cart', async () => {
@@ -185,6 +202,37 @@ describe('storefront ongoing cart service', () => {
     expect(model.create).not.toHaveBeenCalled();
   });
 
+  it('keeps exact-name matches separate and marks them for contact review', async () => {
+    const duplicate = { id: 10, customer: { ...mockedCustomer(), email: 'other@example.com', phone: '600100200' }, update: jest.fn() };
+    const current = { id: 11, metadata: {}, update: jest.fn() };
+    model.findOne.mockResolvedValue(null);
+    model.findAll.mockResolvedValueOnce([]).mockResolvedValueOnce([duplicate]);
+    model.create.mockResolvedValue(current);
+    await upsertOngoingCart({ sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77', cart: {}, customer: {}, quote });
+    expect(duplicate.update).not.toHaveBeenCalled();
+    expect(current.update).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({
+      identityReview: { reason: 'Name matches; email and phone do not.', candidateCartIds: [10] },
+    }) }), { transaction });
+  });
+
+  it('accepts newly submitted selections from a superseded browser without returning the successor cart', async () => {
+    model.findOne.mockResolvedValueOnce({ status: 'dismissed', metadata: { mergeReason: 'customer_identity' } }).mockResolvedValueOnce(null);
+    const current = { id: 12, publicId: 'new-independent-id', metadata: {} };
+    model.create.mockResolvedValue(current);
+    const result = await upsertOngoingCart({ sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77',
+      publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d', cart: {}, customer: {}, quote });
+    expect(result).toBe(current);
+    expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ orderId: null }), { transaction });
+  });
+
+  it('does not change selections while a matching cart is sending recovery', async () => {
+    const update = jest.fn();
+    model.findOne.mockResolvedValue({ id: 12, status: 'sending_recovery', update });
+    await expect(upsertOngoingCart({ sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77',
+      cart: {}, customer: {}, quote })).rejects.toMatchObject({ status: 409 });
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('preserves the checkout-started milestone when the cart is quoted again', async () => {
     const update = jest.fn().mockResolvedValue(undefined);
     model.findOne.mockResolvedValue({ status: 'checkout_started', update });
@@ -196,7 +244,7 @@ describe('storefront ongoing cart service', () => {
       quote,
     });
 
-    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: 'checkout_started' }));
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: 'checkout_started' }), { transaction });
   });
 
   it('removes a paid order from the ongoing lifecycle without deleting its audit record', async () => {
@@ -247,7 +295,7 @@ describe('storefront ongoing cart service', () => {
     );
   });
 
-  it('dismisses active duplicates from the same cart session after payment', async () => {
+  it('dismisses an older matching experience after payment despite changed guest count and discount', async () => {
     const paidUpdate = jest.fn().mockResolvedValue(undefined);
     const duplicateUpdate = jest.fn().mockResolvedValue(undefined);
     const customer = mockedCustomer();
@@ -256,7 +304,7 @@ describe('storefront ongoing cart service', () => {
       publicId: '25ae7a5a-1dc8-4ef0-a404-5b0e1bf6af8d',
       sessionId: 'd4087928-d6ac-4de3-8c27-532960f4df77',
       customer,
-      cart: { items: [] },
+      cart: { items: [experience], discountCode: 'STUDENT' },
       metadata: {},
       recoveryOpenedAt: null,
       recoveredAt: null,
@@ -266,7 +314,7 @@ describe('storefront ongoing cart service', () => {
       id: 2,
       sessionId: paid.sessionId,
       customer,
-      cart: { items: [] },
+      cart: { items: [{ ...experience, quantity: 3 }] },
       metadata: {},
       update: duplicateUpdate,
     };
@@ -284,6 +332,27 @@ describe('storefront ongoing cart service', () => {
         events: [expect.objectContaining({ type: 'post_payment_duplicate_dismissed' })],
       }),
     }), { transaction: undefined });
+  });
+
+  it.each([
+    { cart: { items: [{ ...experience, experienceDate: '2026-08-30' }] } },
+    { cart: { items: [{ ...experience, experienceTime: '19:30' }] } },
+    { cart: { items: [{ ...experience, productId: 99 }] } },
+    { createdAt: new Date('2026-08-27T12:00:00Z') },
+  ])('keeps a different trip or a cart created after payment active: %j', async difference => {
+    const duplicate = { id: 2, customer: mockedCustomer(), cart: { items: [experience] }, update: jest.fn(), ...difference };
+    model.findAll.mockResolvedValueOnce([]).mockResolvedValueOnce([duplicate]);
+    await markOngoingCartConverted(41001, new Date('2026-08-26T12:00:00Z'), undefined, {
+      customer: mockedCustomer()!, cart: { items: [experience] },
+    });
+    expect(duplicate.update).not.toHaveBeenCalled();
+  });
+
+  it('detaches an earlier paid order when its cart now contains a different date', async () => {
+    const current = { id: 1, customer: mockedCustomer(), cart: { items: [{ ...experience, experienceDate: '2026-08-30' }] }, metadata: {}, update: jest.fn() };
+    model.findAll.mockResolvedValueOnce([current]).mockResolvedValueOnce([]);
+    await markOngoingCartConverted(41001, new Date(), undefined, { customer: mockedCustomer()!, cart: { items: [experience] } });
+    expect(current.update).toHaveBeenCalledWith({ orderId: null, metadata: { previousPaidOrderId: 41001 } }, { transaction: undefined });
   });
 
   it('stores a customer-facing cart event in the journey timeline', async () => {

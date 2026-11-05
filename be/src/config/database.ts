@@ -137,6 +137,7 @@ import AssistantManagerTaskPushSubscription from "../models/AssistantManagerTask
 import VolunteerMilestoneFeedback from "../models/VolunteerMilestoneFeedback.js";
 import VolunteerShiftAttendance from "../models/VolunteerShiftAttendance.js";
 import VolunteerStay from "../models/VolunteerStay.js";
+import StaffFreeEntry from "../models/StaffFreeEntry.js";
 import VolunteerStayRevision from "../models/VolunteerStayRevision.js";
 import CleaningSubmission from "../models/CleaningSubmission.js";
 import CleaningPhotoVersion from "../models/CleaningPhotoVersion.js";
@@ -278,6 +279,7 @@ const sequelize = new Sequelize({
     VolunteerMilestoneFeedback,
     VolunteerShiftAttendance,
     VolunteerStay,
+    StaffFreeEntry,
     VolunteerStayRevision,
     CleaningSubmission,
     CleaningPhotoVersion,

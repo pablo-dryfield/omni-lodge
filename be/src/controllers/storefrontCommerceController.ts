@@ -240,7 +240,16 @@ const persistPaidOrder = async (
       { status: 'paid', paidAt },
       { where: { orderId: order.id }, transaction },
     );
-    await markOngoingCartConverted(order.id, paidAt, transaction);
+    await markOngoingCartConverted(order.id, paidAt, transaction, {
+      customer: {
+        fullName: `${order.customerFirstName} ${order.customerLastName}`.trim(),
+        email: order.customerEmail, phone: order.customerPhone || '', phoneCountry: order.customerCountryCode || '',
+      },
+      cart: { items: (order.items ?? []).map(item => ({
+        productId: item.productId, quantity: item.quantity,
+        experienceDate: item.experienceDate, experienceTime: item.experienceTime,
+      })) },
+    });
 
     const projection = await projectStorefrontOrderBookings(
       order,

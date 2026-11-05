@@ -45,6 +45,7 @@ import { EMAIL_REGEX, normalizePhoneNumber, isPhoneNumberValid } from "../utils/
 import { DEFAULT_PHONE_CODE } from "../constants/phoneCodes";
 import { buildPhoneFromParts, splitPhoneNumber } from "../utils/phone";
 import { StaffBadgeFrontPreview } from "../components/badges/StaffBadgeFrontPreview";
+import StaffFreeAccountCard from "../components/account/StaffFreeAccountCard";
 
 type FeedbackState = { type: "success" | "error"; message: string } | null;
 
@@ -1308,6 +1309,8 @@ const MyAccount = () => {
             </Stack>
           </Group>
         </Card>
+
+        <StaffFreeAccountCard key={loggedUserId} />
 
         <Stack gap="xl">
           <Card withBorder radius="lg" shadow="sm">

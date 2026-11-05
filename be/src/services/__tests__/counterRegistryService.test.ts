@@ -2,6 +2,10 @@ jest.mock('../../config/database.js', () => ({
   __esModule: true,
   default: { transaction: jest.fn() },
 }));
+jest.mock('../walkInTicketService.js', () => ({ getWalkInTicketTypes: jest.fn().mockResolvedValue([]) }));
+jest.mock('../staffFreeEntryService.js', () => ({ reconcileStaffFreeAllowances: jest.fn(), staffFreeCounterEntries: jest.fn().mockResolvedValue([]) }));
+jest.mock('../../models/StaffFreeEntry.js', () => ({ __esModule: true, default: { count: jest.fn().mockResolvedValue(0) } }));
+jest.mock('../walkInPaymentService.js', () => ({ validateCounterWalkInNotes: jest.fn(async (notes: unknown) => notes) }));
 jest.mock('../../models/Counter.js', () => ({
   __esModule: true,
   default: { findByPk: jest.fn() },
