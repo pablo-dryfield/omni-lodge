@@ -42,6 +42,8 @@ export type ChannelConfig = {
   cashPaymentEligible: boolean;
   walkInTicketPrices: {
     ticketType: string;
+    ticketTypeLabel?: string;
+    enabled?: boolean;
     currencyCode: string;
     price: number;
   }[];
@@ -107,6 +109,9 @@ export type CounterRegistryProductSummary = {
 };
 
 export type CounterRegistryPayload = {
+  staffFreeEntries?: import('../../api/staffFreeEntries').StaffFreeCounterEntry[];
+  walkInTicketTypes?: Array<{ id: string; name: string; enabled: boolean }>;
+  paymentMethods?: Array<{ id: number; name: string }>;
   counter: {
     id: number;
     date: string;

@@ -1,5 +1,6 @@
-import { Op, UniqueConstraintError, type Transaction } from 'sequelize';
+import { Op, type Transaction } from 'sequelize';
 import { createHash, randomUUID } from 'node:crypto';
+import sequelize from '../config/database.js';
 import HttpError from '../errors/HttpError.js';
 import StorefrontOngoingCart, {
   type StorefrontOngoingCartCustomer,
@@ -11,6 +12,9 @@ import {
   normalizeSavedCartFromQuote,
 } from './storefrontSavedCartService.js';
 import { recordServerJourneyEvent } from './storefrontJourneyService.js';
+import { normalizedCartEmail, normalizedCartName, normalizedCartPhone, resolveCartIdentity, sameCartExperiences } from './storefrontCartIdentity.js';
+import { findCartIdentityCandidates } from './storefrontCartIdentityRepository.js';
+import { dismissCartWithPaidMatch } from './storefrontCartBookingMatchService.js';
 
 export const ONGOING_CART_STATUSES = [
   'active',
@@ -111,14 +115,6 @@ const dedupeWindowMinutes = (): number => {
 const dedupeCutoff = (now = new Date()): Date =>
   new Date(now.getTime() - dedupeWindowMinutes() * 60_000);
 
-const normalizedPhone = (customer: StorefrontOngoingCartCustomer): string =>
-  `${customer.phoneCountry}:${customer.phone.replace(/\D/g, '')}`;
-
-const sameCustomer = (
-  left: StorefrontOngoingCartCustomer,
-  right: StorefrontOngoingCartCustomer,
-): boolean => left.email === right.email && normalizedPhone(left) === normalizedPhone(right);
-
 const fingerprintFor = (ongoing: StorefrontOngoingCart): string => {
   const stored = ongoing.metadata?.cartFingerprint;
   return typeof stored === 'string' && stored ? stored : ongoingCartFingerprint(ongoing.cart);
@@ -146,25 +142,6 @@ const cartMetadata = (
   lastBrowserId: context.browserId ?? existing?.lastBrowserId ?? null,
   lastPageId: context.pageId ?? existing?.lastPageId ?? null,
 });
-
-const findRecentCustomerDuplicate = async (
-  customer: StorefrontOngoingCartCustomer,
-  fingerprint: string,
-  now: Date,
-): Promise<StorefrontOngoingCart | null> => {
-  const candidates = await StorefrontOngoingCart.findAll({
-    where: {
-      status: { [Op.in]: [...ONGOING_CART_STATUSES] },
-      lastActivityAt: { [Op.gte]: dedupeCutoff(now) },
-      customer: { [Op.contains]: { email: customer.email } } as never,
-    },
-    order: [['lastActivityAt', 'DESC']],
-    limit: 25,
-  });
-  return candidates.find((candidate) => (
-    sameCustomer(candidate.customer, customer) && fingerprintFor(candidate) === fingerprint
-  )) ?? null;
-};
 
 const terminalCartError = (ongoing: StorefrontOngoingCart): HttpError | null => {
   if (ongoing.status === 'converted') return new HttpError(409, 'This cart has already been paid.');
@@ -199,67 +176,122 @@ export const upsertOngoingCart = async (input: OngoingCartInput): Promise<Storef
     dismissedAt: null,
   };
 
-  const requestedPublicId = String(input.publicId ?? '').trim();
-  let ongoing = requestedPublicId
-    ? await StorefrontOngoingCart.findOne({
-        where: { publicId: parseStorefrontUuid(requestedPublicId, 'Ongoing cart ID') },
-      })
-    : null;
-  if (ongoing) {
-    const terminalError = terminalCartError(ongoing);
-    if (terminalError) throw terminalError;
-  }
-  ongoing ??= await StorefrontOngoingCart.findOne({ where: activeWhere(sessionId) });
-  if (!ongoing) {
-    const recentSessionCarts = await StorefrontOngoingCart.findAll({
-      where: {
-        sessionId,
-        status: 'converted',
-        convertedAt: { [Op.gte]: dedupeCutoff(now) },
-      },
-      order: [['convertedAt', 'DESC']],
-      limit: 5,
+  return sequelize.transaction(async transaction => {
+    // Serialize matching identities and browser sessions across processes, not just this server.
+    const keys = [
+      `session:${sessionId}`, `email:${normalizedCartEmail(customer.email)}`,
+      `phone:${normalizedCartPhone(customer)}`, `name:${normalizedCartName(customer.fullName)}`,
+    ].filter(key => !key.endsWith(':')).sort();
+    for (const key of keys) {
+      await sequelize.query('SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))', {
+        replacements: { key: `storefront-cart:${key}` }, transaction,
+      });
+    }
+    const requestedPublicId = String(input.publicId ?? '').trim();
+    let ongoing = requestedPublicId
+      ? await StorefrontOngoingCart.findOne({
+          where: { publicId: parseStorefrontUuid(requestedPublicId, 'Ongoing cart ID') },
+          transaction, lock: transaction.LOCK.UPDATE,
+        }) : null;
+    if (ongoing) {
+      // A prior browser may still quote its superseded ID. Accept only its new
+      // submitted selections; do not reveal the other browser's cart or credentials.
+      if (ongoing.status === 'dismissed' && ongoing.metadata?.mergeReason === 'customer_identity') ongoing = null;
+      else {
+        const terminalError = terminalCartError(ongoing);
+        if (terminalError) throw terminalError;
+      }
+    }
+    ongoing ??= await StorefrontOngoingCart.findOne({
+      where: activeWhere(sessionId), transaction, lock: transaction.LOCK.UPDATE,
     });
-    const recentConverted = recentSessionCarts.find((candidate) => (
-      fingerprintFor(candidate) === fingerprint
-    ));
-    if (recentConverted) throw new HttpError(409, 'This cart has already been paid.');
-    ongoing = await findRecentCustomerDuplicate(customer, fingerprint, now);
-  }
-  if (ongoing) {
-    await ongoing.update({
-      ...values,
-      status: ongoing.status === 'checkout_started' ? 'checkout_started' : values.status,
-      metadata: cartMetadata(ongoing.metadata, fingerprint, sessionId, clientContext),
-    });
+    if (!ongoing) {
+      const recentSessionCarts = await StorefrontOngoingCart.findAll({
+        where: { sessionId, status: 'converted', convertedAt: { [Op.gte]: dedupeCutoff(now) } },
+        order: [['convertedAt', 'DESC']], transaction, limit: 5,
+      });
+      if (recentSessionCarts.some(candidate => fingerprintFor(candidate) === fingerprint)) {
+        throw new HttpError(409, 'This cart has already been paid.');
+      }
+    }
+    const candidates = await findCartIdentityCandidates(customer, transaction);
+    const match = resolveCartIdentity(customer, candidates.filter(candidate => Number(candidate.id) !== Number(ongoing?.id)));
+    const duplicates = match.kind === 'matched'
+      ? match.carts.filter(candidate => Number(candidate.id) !== Number(ongoing?.id)) : [];
+    if (ongoing?.status === 'sending_recovery' || duplicates.some(candidate => candidate.status === 'sending_recovery')) {
+      throw new HttpError(409, 'Your cart is being updated. Please try again in a moment.');
+    }
+    if (ongoing) {
+      await ongoing.update({
+        ...values,
+        status: ongoing.status === 'checkout_started' ? 'checkout_started' : values.status,
+        metadata: { ...cartMetadata(ongoing.metadata, fingerprint, sessionId, clientContext), identityReview: null },
+      }, { transaction });
+    } else {
+      // New browsers get their own opaque access identity and payment context. Never return
+      // somebody else's saved contact details, order or Stripe payment intent from a lookup.
+      ongoing = await StorefrontOngoingCart.create({
+        sessionId, ...values, openedAt: null, firstRecoverySentAt: null,
+        lastRecoverySentAt: null, recoveryOpenedAt: null, recoveredAt: null, recoveryCount: 0,
+        checkoutStartedAt: null, convertedAt: null, orderId: null,
+        metadata: cartMetadata(null, fingerprint, sessionId, clientContext),
+      }, { transaction });
+    }
+    for (const duplicate of duplicates) {
+      await mergeOngoingCartHistory(ongoing, duplicate, match.matchedBy, now, transaction);
+    }
+    // An exact name is a review hint, never proof that a public visitor owns another cart.
+    if (match.kind === 'name_only') {
+      const ids = match.carts.filter(candidate => Number(candidate.id) !== Number(ongoing!.id)).map(candidate => candidate.id);
+      if (ids.length) await ongoing.update({ metadata: {
+        ...ongoing.metadata, identityReview: { reason: 'Name matches; email and phone do not.', candidateCartIds: ids },
+      } }, { transaction });
+    }
     return ongoing;
-  }
+  });
+};
 
-  try {
-    return await StorefrontOngoingCart.create({
-      sessionId,
-      ...values,
-      openedAt: null,
-      firstRecoverySentAt: null,
-      lastRecoverySentAt: null,
-      recoveryOpenedAt: null,
-      recoveredAt: null,
-      recoveryCount: 0,
-      checkoutStartedAt: null,
-      convertedAt: null,
-      orderId: null,
-      metadata: cartMetadata(null, fingerprint, sessionId, clientContext),
-    });
-  } catch (error) {
-    if (!(error instanceof UniqueConstraintError)) throw error;
-    ongoing = await StorefrontOngoingCart.findOne({ where: activeWhere(sessionId) });
-    if (!ongoing) throw error;
-    await ongoing.update({
-      ...values,
-      metadata: cartMetadata(ongoing.metadata, fingerprint, sessionId, clientContext),
-    });
-    return ongoing;
-  }
+export const mergeOngoingCartHistory = async (
+  current: StorefrontOngoingCart, previous: StorefrontOngoingCart, matchedBy: string,
+  now = new Date(), transaction?: Transaction,
+): Promise<void> => {
+  const previousIds = Array.isArray(previous.metadata?.mergedCartIds) ? previous.metadata.mergedCartIds : [];
+  const currentIds = Array.isArray(current.metadata?.mergedCartIds) ? current.metadata.mergedCartIds : [];
+  const mergedCartIds = [...new Set([...currentIds, previous.id, ...previousIds].map(Number))].filter(id => Number.isSafeInteger(id) && id > 0 && id !== Number(current.id));
+  await previous.update({ status: 'dismissed', dismissedAt: now, metadata: {
+    ...previous.metadata, mergedIntoCartPublicId: current.publicId, mergeReason: 'customer_identity',
+    events: [...(Array.isArray(previous.metadata?.events) ? previous.metadata.events : []), {
+      id: randomUUID(), type: 'cart_merged', severity: 'info',
+      message: 'Superseded by the latest cart. Original selections and payment history are retained.',
+      details: { matchedBy, activeCartPublicId: current.publicId }, occurredAt: now.toISOString(),
+    }].slice(-50),
+  } }, { transaction });
+  await current.update({ metadata: { ...current.metadata, mergedCartIds, identityReview: null } }, { transaction });
+};
+
+export const reconcileOngoingCart = async (snapshot: StorefrontOngoingCart): Promise<void> => {
+  await sequelize.transaction(async transaction => {
+    const customer = snapshot.customer;
+    for (const key of [
+      `email:${normalizedCartEmail(customer.email)}`, `phone:${normalizedCartPhone(customer)}`,
+      `name:${normalizedCartName(customer.fullName)}`, `session:${snapshot.sessionId}`,
+    ].filter(value => !value.endsWith(':')).sort()) {
+      await sequelize.query('SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))', {
+        replacements: { key: `storefront-cart:${key}` }, transaction,
+      });
+    }
+    const current = await StorefrontOngoingCart.findByPk(snapshot.id, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!current || !['active', 'checkout_started', 'recovery_sent'].includes(current.status)) return;
+    if (JSON.stringify(current.customer) !== JSON.stringify(customer)) return;
+    if (await dismissCartWithPaidMatch(current, transaction)) return;
+    const others = (await findCartIdentityCandidates(customer, transaction)).filter(candidate => Number(candidate.id) !== Number(current.id));
+    const match = resolveCartIdentity(customer, others);
+    if (match.kind !== 'matched' || !match.carts.length) return;
+    const group = [current, ...match.carts];
+    if (group.some(cart => cart.status === 'sending_recovery')) return;
+    group.sort((a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime() || Number(b.id) - Number(a.id));
+    for (const older of group.slice(1)) await mergeOngoingCartHistory(group[0], older, match.matchedBy, new Date(), transaction);
+  });
 };
 
 export const getUsableOngoingCart = async (
@@ -304,59 +336,49 @@ export const markOngoingCartConverted = async (
   orderId: number,
   convertedAt = new Date(),
   transaction?: Transaction,
+  paid?: { cart: StorefrontCartInput; customer: StorefrontOngoingCartCustomer },
 ): Promise<void> => {
   const ongoingCarts = await StorefrontOngoingCart.findAll({
-    where: { orderId },
-    transaction,
+    where: { orderId }, transaction,
     ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}),
   });
   for (const ongoing of ongoingCarts) {
+    if (paid && !sameCartExperiences(ongoing.cart, paid.cart)) {
+      // A delayed payment for an earlier selection must not complete a newly edited trip.
+      await ongoing.update({ orderId: null, metadata: {
+        ...ongoing.metadata, previousPaidOrderId: orderId,
+      } }, { transaction });
+      continue;
+    }
     await ongoing.update({
-      status: 'converted',
-      convertedAt,
+      status: 'converted', convertedAt,
       ...(ongoing.recoveryOpenedAt && !ongoing.recoveredAt ? { recoveredAt: convertedAt } : {}),
     }, { transaction });
-
-    const fingerprint = fingerprintFor(ongoing);
-    const candidates = await StorefrontOngoingCart.findAll({
-      where: {
-        status: { [Op.in]: [...ONGOING_CART_STATUSES] },
-        lastActivityAt: { [Op.gte]: dedupeCutoff(convertedAt) },
-        [Op.or]: [
-          { sessionId: ongoing.sessionId },
-          { customer: { [Op.contains]: { email: ongoing.customer.email } } as never },
-        ],
+  }
+  const customer = paid?.customer ?? ongoingCarts[0]?.customer;
+  const paidCart = paid?.cart ?? ongoingCarts[0]?.cart;
+  if (!customer || !paidCart) return;
+  const candidates = await findCartIdentityCandidates(customer, transaction);
+  const match = resolveCartIdentity(customer, candidates);
+  if (match.kind !== 'matched') return;
+  for (const duplicate of match.carts) {
+    if (ongoingCarts.some(cart => Number(cart.id) === Number(duplicate.id))) continue;
+    if (duplicate.createdAt && new Date(duplicate.createdAt).getTime() > convertedAt.getTime()) continue;
+    if (!sameCartExperiences(duplicate.cart, paidCart)) continue;
+    const metadata = duplicate.metadata ?? {};
+    const events = Array.isArray(metadata.events) ? metadata.events : [];
+    await duplicate.update({
+      status: 'dismissed', dismissedAt: convertedAt,
+      metadata: {
+        ...metadata, alreadyBooked: { kind: 'order', id: orderId },
+        events: [...events, {
+          id: randomUUID(), type: 'post_payment_duplicate_dismissed', severity: 'info',
+          message: 'Duplicate ongoing cart dismissed after payment completed.',
+          details: { convertedCartPublicId: ongoingCarts[0]?.publicId ?? null, orderId, matchedBy: match.matchedBy },
+          occurredAt: convertedAt.toISOString(),
+        }].slice(-50),
       },
-      transaction,
-      ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}),
-      limit: 200,
-    });
-    for (const duplicate of candidates) {
-      if (Number(duplicate.id) === Number(ongoing.id)) continue;
-      const matchesSession = duplicate.sessionId === ongoing.sessionId;
-      const matchesCustomerCart = sameCustomer(duplicate.customer, ongoing.customer)
-        && fingerprintFor(duplicate) === fingerprint;
-      if (!matchesSession && !matchesCustomerCart) continue;
-      const metadata = duplicate.metadata && typeof duplicate.metadata === 'object'
-        ? duplicate.metadata
-        : {};
-      const events = Array.isArray(metadata.events) ? metadata.events : [];
-      await duplicate.update({
-        status: 'dismissed',
-        dismissedAt: convertedAt,
-        metadata: {
-          ...metadata,
-          events: [...events, {
-            id: randomUUID(),
-            type: 'post_payment_duplicate_dismissed',
-            severity: 'info',
-            message: 'Duplicate ongoing cart dismissed after payment completed.',
-            details: { convertedCartPublicId: ongoing.publicId, orderId },
-            occurredAt: convertedAt.toISOString(),
-          }].slice(-50),
-        },
-      }, { transaction });
-    }
+    }, { transaction });
   }
 };
 
@@ -442,6 +464,7 @@ export const serializeOngoingCart = (
   recoveryOpenedAt: ongoing.recoveryOpenedAt,
   recoveredAt: ongoing.recoveredAt,
   recoveryCount: ongoing.recoveryCount,
+  identityReview: ongoing.metadata?.identityReview ? 'Name match needs email or phone confirmation.' : null,
   events: [...storedEvents(ongoing)].reverse(),
   diagnostics: {
     cartFingerprint: typeof ongoing.metadata?.cartFingerprint === 'string'

@@ -7,7 +7,7 @@ export const WALK_IN_TICKET_TYPE_VALUES = [
   "group",
 ] as const;
 
-export type WalkInTicketType = (typeof WALK_IN_TICKET_TYPE_VALUES)[number];
+export type WalkInTicketType = string;
 
 export const WALK_IN_TICKET_TYPE_LABELS: Record<WalkInTicketType, string> = {
   normal: "Normal",

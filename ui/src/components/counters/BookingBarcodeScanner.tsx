@@ -1,7 +1,8 @@
+import { scanBookingBarcodeVideo, type BookingScannerControls } from '../../utils/bookingBarcodeCapture';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, Dialog, IconButton, Stack, Tooltip, Typography } from '@mui/material';
 import { CheckCircleOutline, Close, FlashlightOff, FlashlightOn, Fullscreen, FullscreenExit, Keyboard, QrCodeScanner, Refresh, WarningAmber } from '@mui/icons-material';
-import type { IScannerControls } from '@zxing/browser';
+import type { BookingBarcodeReader } from '../../utils/bookingBarcodeProtocol';
 
 export type BookingScanResult = {
   bookingId: string;
@@ -26,7 +27,7 @@ const cameraErrorMessage = (error: unknown): string => {
   if (name === 'NotReadableError' || name === 'TrackStartError') {
     return 'The camera is busy or unavailable. Close any other app using it, then try again.';
   }
-  return 'The camera could not start. Try again, or enter the booking number in the search bar.';
+  return 'The scanner could not start. Try again, or enter the booking number in the search bar.';
 };
 
 /** Inline, continuous scanning. Keep the camera live while staff use the results. */
@@ -60,11 +61,15 @@ const BookingBarcodeScanner = ({ onScan, onClose, result, disabled = false }: Pr
     if (!videoElement || paused) return;
     let cancelled = false;
     let failed = false;
-    let controls: IScannerControls | undefined;
+    let controls: BookingScannerControls | undefined;
+    let reader: BookingBarcodeReader | undefined;
     let stream: MediaStream | undefined;
     let endedTrack: MediaStreamTrack | undefined;
+    let playTimeout: ReturnType<typeof setTimeout> | undefined;
     const stop = () => {
+      clearTimeout(playTimeout);
       controls?.stop();
+      reader?.close();
       controls = undefined;
       if (endedTrack) endedTrack.removeEventListener('ended', onCameraEnded);
       stream?.getTracks().forEach((track) => track.stop());
@@ -93,21 +98,21 @@ const BookingBarcodeScanner = ({ onScan, onClose, result, disabled = false }: Pr
       try {
         // Load decoding code only when the user opens the scanner. Frames stay
         // in the browser; no image upload or external camera app is involved.
-        const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType, NotFoundException, ChecksumException, FormatException }] = await Promise.all([
-          import('@zxing/browser'),
-          import('@zxing/library'),
-        ]);
+        const { createBookingBarcodeReader } = await import('../../utils/createBookingBarcodeReader');
         if (cancelled) return;
+        reader = createBookingBarcodeReader();
+        await reader.ready;
+        if (cancelled) { stop(); return; }
         stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
           },
         });
         if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
+          stop();
           return;
         }
         streamRef.current = stream;
@@ -116,22 +121,25 @@ const BookingBarcodeScanner = ({ onScan, onClose, result, disabled = false }: Pr
         // Torch capability reporting is optional and can fail on some mobile
         // browsers; it must not prevent the camera itself from starting.
         try {
-          const capabilities = endedTrack?.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean }) | undefined;
+          const capabilities = endedTrack?.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean; focusMode?: string[] }) | undefined;
           setTorchAvailable(Boolean(capabilities?.torch));
+          if (capabilities?.focusMode?.includes('continuous')) {
+            try { await endedTrack?.applyConstraints({ advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet] }); }
+            catch { /* Unsupported focus controls must not stop scanning. */ }
+          }
         } catch {
           setTorchAvailable(false);
         }
+        if (cancelled) { stop(); return; }
         videoElement.srcObject = stream;
+        await Promise.race([
+          videoElement.play(),
+          new Promise<never>((_, reject) => { playTimeout = setTimeout(() => reject(new Error('Camera playback timed out')), 8000); }),
+        ]);
+        clearTimeout(playTimeout);
+        if (cancelled) { stop(); return; }
 
-        const hints = new Map();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]);
-        hints.set(DecodeHintType.TRY_HARDER, true);
-        const reader = new BrowserMultiFormatReader(hints, {
-          delayBetweenScanAttempts: 200,
-          delayBetweenScanSuccess: 500,
-          tryPlayVideoTimeout: 8000,
-        });
-        const nextControls = await reader.decodeFromVideoElement(videoElement, (result, decodeError, scanControls) => {
+        const nextControls = scanBookingBarcodeVideo(videoElement, reader, (result, decodeError, scanControls) => {
           if (cancelled || failed) {
             scanControls.stop();
             return;
@@ -156,8 +164,7 @@ const BookingBarcodeScanner = ({ onScan, onClose, result, disabled = false }: Pr
             lastBarcodeRef.current = { code: normalizedCode, lastSeenAt: now };
             setHint(null);
             onScanRef.current(normalizedCode);
-          } else if (decodeError && !(decodeError instanceof NotFoundException)
-            && !(decodeError instanceof ChecksumException) && !(decodeError instanceof FormatException)) {
+          } else if (decodeError) {
             failed = true;
             scanControls.stop();
             stop();

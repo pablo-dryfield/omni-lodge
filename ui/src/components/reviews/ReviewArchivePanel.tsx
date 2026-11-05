@@ -35,7 +35,7 @@ import {
   REVIEW_CREDIT_TIMEZONE,
   reviewMonthInWarsaw,
 } from '../../utils/reviewCreditMonth';
-import { parseGetYourGuideReviewHtml } from '../../utils/getYourGuideReviewHtml';
+import { inspectGetYourGuideReviewHtml } from '../../utils/getYourGuideReviewHtml';
 
 type Platform = 'google' | 'tripadvisor' | 'airbnb' | 'getyourguide';
 type User = { id: number; firstName: string; lastName: string; username: string };
@@ -106,6 +106,7 @@ export default function ReviewArchivePanel({
   const [sourceStats, setSourceStats] = useState<{ totalCount?: number; averageRating?: number }>({});
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState('');
+  const resetImportFile = useRef<() => void>(null);
   const fastSyncedPlatform = useRef<string | null>(null);
 
   const load = useCallback(async () => {
@@ -267,29 +268,34 @@ export default function ReviewArchivePanel({
     setImporting(true);
     setError('');
     setImportMessage('');
+    let runId: number | null = null;
     try {
-      const importedReviews = parseGetYourGuideReviewHtml(await file.text());
+      const { reviews: importedReviews, skippedCards } = inspectGetYourGuideReviewHtml(await file.text());
       if (!importedReviews.length) {
-        throw new Error('No GetYourGuide review cards were found in this HTML file.');
+        throw new Error('No complete GetYourGuide reviews could be read. Open GetYourGuide in English, load the reviews, then copy the reviews container using Copy outerHTML and save it as an .html file. Include each card’s name, date, stars and review text.');
       }
       const started = await axiosInstance.post('/reviews/archive/sync/fast/start', { platform });
-      const runId = started.data.run.id;
+      runId = started.data.run.id;
       for (let index = 0; index < importedReviews.length; index += 25) {
         await axiosInstance.post(`/reviews/archive/sync/fast/${runId}/page`, {
           reviews: importedReviews.slice(index, index + 25),
         });
       }
-      await axiosInstance.post(`/reviews/archive/sync/fast/${runId}/complete`, {
-        sourceTotalCount: importedReviews.length,
-      });
-      setSourceStats((current) => ({ ...current, totalCount: importedReviews.length }));
+      // A saved block contains only loaded reviews, not the source's total.
+      // Fast sync updates these IDs without marking other reviews deleted.
+      await axiosInstance.post(`/reviews/archive/sync/fast/${runId}/complete`, {});
+      runId = null;
       setPage(1);
       await load();
-      setImportMessage(`Imported ${importedReviews.length} GetYourGuide reviews. Existing review IDs were updated, not duplicated.`);
+      setImportMessage(`Imported ${importedReviews.length} GetYourGuide reviews. Existing review IDs were updated, not duplicated. Reviews outside this file were kept.${skippedCards ? ` Skipped ${skippedCards} incomplete or unsupported cards; copy their complete HTML in English and import again.` : ''}`);
     } catch (caught: any) {
+      if (runId !== null) {
+        try { await axiosInstance.post(`/reviews/archive/sync/fast/${runId}/fail`); } catch { /* Preserve original error. */ }
+      }
       setError(caught.response?.data?.[0]?.message ?? caught.message ?? 'Unable to import the saved HTML file.');
     } finally {
       setImporting(false);
+      resetImportFile.current?.();
     }
   };
 
@@ -316,6 +322,7 @@ export default function ReviewArchivePanel({
               <Button
                 leftSection={<IconRefresh size={17} />}
                 loading={loading}
+                disabled={importing}
                 onClick={() => void sync(true)}
                 fullWidth={isMobile}
                 maw={220}
@@ -323,13 +330,14 @@ export default function ReviewArchivePanel({
                 Full sync
               </Button>
               {platform === 'getyourguide' && (
-                <FileButton onChange={(file) => void importSavedHtml(file)} accept="text/html,.html,.htm">
+                <FileButton resetRef={resetImportFile} disabled={loading || importing} onChange={(file) => void importSavedHtml(file)} accept="text/html,.html,.htm" inputProps={{ 'aria-label': 'Saved GetYourGuide review HTML' }}>
                   {(props) => (
                     <Button
                       {...props}
                       variant="light"
                       leftSection={<IconUpload size={17} />}
                       loading={importing}
+                      disabled={loading}
                       fullWidth={isMobile}
                       maw={220}
                     >
@@ -339,6 +347,12 @@ export default function ReviewArchivePanel({
                 </FileButton>
               )}
             </Group>
+          )}
+          {canManage && platform === 'getyourguide' && (
+            <Text size="sm" c="dimmed" ta="center" maw={650}>
+              Import a saved page or the reviews container copied with Copy outerHTML from GetYourGuide in English.
+              Load the reviews you want first: only reviews present in the file are imported. Other archived reviews are kept.
+            </Text>
           )}
         </Stack>
 

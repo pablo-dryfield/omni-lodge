@@ -32,6 +32,9 @@ export const loginUser = createAsyncThunk(
           withCredentials: true,
         },
       );
+      // A legacy bearer token takes precedence over the fresh HTTP-only cookie.
+      // Clear it after successful login/logout so it cannot mask the new session.
+      localStorage.removeItem('authToken');
       return response.data;
     } catch (error) {
       return rejectWithValue(extractErrorMessage(error));
@@ -50,6 +53,9 @@ export const logoutUser = createAsyncThunk(
           withCredentials: true,
         },
       );
+      // A legacy bearer token takes precedence over the fresh HTTP-only cookie.
+      // Clear it after successful login/logout so it cannot mask the new session.
+      localStorage.removeItem('authToken');
       return response.data;
     } catch (error) {
       return rejectWithValue(extractErrorMessage(error));

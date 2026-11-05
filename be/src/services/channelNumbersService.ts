@@ -37,6 +37,8 @@ const CHANNEL_ORDER = [
   'TopDeck',
 ];
 
+import { isReceivedWalkInCash, receivedCashByCurrency, type WalkInPaymentMetadata } from './walkInPaymentUtils.js';
+
 const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
 const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
 const FREE_SNAPSHOT_START = '-- FREE-SNAPSHOT START --';
@@ -72,7 +74,7 @@ type CashSnapshotTicketCurrency = {
   addons: Record<string, number>;
 };
 
-type CashSnapshotTicket = {
+type CashSnapshotTicket = WalkInPaymentMetadata & {
   name: string;
   currencies: CashSnapshotTicketCurrency[];
 };
@@ -461,6 +463,9 @@ const extractCashSnapshotMap = (note: string | null | undefined): Map<number, Ca
         }
         tickets.push({
           name: ticketNameRaw.trim(),
+          paymentMethodName: typeof (ticketCandidate as WalkInPaymentMetadata).paymentMethodName === 'string' ? (ticketCandidate as WalkInPaymentMetadata).paymentMethodName : undefined,
+          paymentStatus: (ticketCandidate as WalkInPaymentMetadata).paymentStatus,
+          transfer: (ticketCandidate as WalkInPaymentMetadata).transfer === true,
           currencies,
         });
       });
@@ -519,26 +524,7 @@ const stripSnapshotFromNote = (note: string | null | undefined): string => {
   return sanitized.trim();
 };
 
-const aggregateCashTotals = (entry: CashSnapshotEntry): Map<string, number> => {
-  const totals = new Map<string, number>();
-  if (entry.tickets && entry.tickets.length > 0) {
-    entry.tickets.forEach((ticket) => {
-      ticket.currencies.forEach((currencyEntry) => {
-        const amount = Number(currencyEntry.cash);
-        if (!Number.isFinite(amount) || amount <= 0) {
-          return;
-        }
-        const currency = sanitizeCurrency(currencyEntry.currency);
-        totals.set(currency, (totals.get(currency) ?? 0) + amount);
-      });
-    });
-  }
-  if ((!entry.tickets || entry.tickets.length === 0) && entry.amount > 0) {
-    const currency = sanitizeCurrency(entry.currency);
-    totals.set(currency, (totals.get(currency) ?? 0) + entry.amount);
-  }
-  return totals;
-};
+const aggregateCashTotals = receivedCashByCurrency;
 
 const hasPositiveCashSnapshot = (entry: CashSnapshotEntry | undefined): boolean => {
   if (!entry) {
@@ -558,6 +544,7 @@ const buildTicketSummary = (entry: CashSnapshotEntry, channelName: string): stri
     return null;
   }
   const parts = entry.tickets
+    .filter(isReceivedWalkInCash)
     .map((ticket) => {
       const name = ticket.name?.trim() || channelName;
       const currencyParts = ticket.currencies
@@ -636,6 +623,8 @@ async function buildChannelCashSummary(params: {
         return;
       }
       const amountsMap = aggregateCashTotals(snapshotEntry);
+      // An explicit ticket breakdown is authoritative even when all payments are non-cash or outstanding.
+      if (snapshotEntry.tickets?.length) processedPairs.add(`${counter.id}|${channelId}`);
       const amounts: ChannelCashAmount[] = [];
       amountsMap.forEach((amount, currency) => {
         if (!Number.isFinite(amount) || amount <= 0) {
@@ -648,6 +637,7 @@ async function buildChannelCashSummary(params: {
       });
 
       if (amounts.length === 0) {
+        if (snapshotEntry.tickets?.length) return;
         const metricKey = `${counter.id}|${channelId}`;
         const fallback = cashMetricsByCounterChannel.get(metricKey);
         if (fallback && fallback > 0) {

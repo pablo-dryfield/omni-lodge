@@ -1,3 +1,8 @@
+jest.mock('../../services/staffPaidTicketService.js', () => ({ saveStaffPaidTickets: jest.fn().mockResolvedValue(false) }));
+import { saveStaffFreeChanges } from '../../services/staffFreeEntryService';
+jest.mock('../../services/walkInPaymentService.js', () => ({ validateCounterWalkInNotes: jest.fn(async (notes: unknown) => notes) }));
+jest.mock('../../services/staffFreeEntryService.js', () => ({ reconcileStaffFreeAllowances: jest.fn(), saveStaffFreeChanges: jest.fn() }));
+jest.mock('../../models/StaffFreeEntry.js', () => ({ __esModule: true, default: { count: jest.fn().mockResolvedValue(0) } }));
 jest.mock('../../services/counterRegistryService.js', () => ({
   __esModule: true,
   default: {
@@ -43,12 +48,22 @@ jest.mock('../../utils/logger.js', () => ({
 import Booking from '../../models/Booking';
 import Counter from '../../models/Counter';
 import CounterRegistryService from '../../services/counterRegistryService';
-import { finalizeCounterReservations } from '../counterController';
+import { commitCounterRegistry, finalizeCounterReservations } from '../counterController';
+import { validateCounterWalkInNotes } from '../../services/walkInPaymentService';
 
 const mockBookingFindAll = Booking.findAll as jest.Mock;
 const mockCounterFindByPk = Counter.findByPk as jest.Mock;
 const mockGetCounterById = CounterRegistryService.getCounterById as jest.Mock;
 const mockUpsertMetrics = CounterRegistryService.upsertMetrics as jest.Mock;
+
+it('rejects invalid Walk-Ins payment details before changing metrics', async () => {
+  mockUpsertMetrics.mockClear();
+  (validateCounterWalkInNotes as jest.Mock).mockRejectedValueOnce(new Error('Invalid payment method'));
+  const response = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  await commitCounterRegistry({ params: { id: '920' }, query: { format: 'registry' }, authContext: { id: 1 }, body: { notes: 'invalid', metrics: [] } } as never, response as never);
+  expect(mockUpsertMetrics).not.toHaveBeenCalled();
+  expect(response.json).toHaveBeenCalled();
+});
 
 describe('finalizeCounterReservations', () => {
   beforeEach(() => {
@@ -116,5 +131,40 @@ describe('finalizeCounterReservations', () => {
     expect(booking.attendanceStatus).toBe('checked_in_full');
     expect(mockUpsertMetrics).toHaveBeenCalledWith(920, [], 191);
     expect(response.status).toHaveBeenCalledWith(200);
+  });
+});
+
+
+describe.each([commitCounterRegistry, finalizeCounterReservations])('counter save with Staff Free drafts', save => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCounterById.mockResolvedValue({ counter: { id: 920 } });
+  });
+  const request = (roleSlug = 'manager') => ({ params: { id: '920' }, query: { format: 'registry' }, authContext: { id: 99, roleSlug }, body: {
+    metrics: [], notes: 'Current Walk-In prices', status: 'final', staffFreeChanges: { additions: [{ userId: 7 }], removals: [] },
+  } });
+  const response = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() });
+  it('persists current prices first, staff second, and final status last', async () => {
+    const calls: string[] = [];
+    (CounterRegistryService.updateCounterMetadata as jest.Mock).mockImplementation(async (_id, value) => { calls.push(value.status ? 'final' : 'notes'); return { counter: { id: 920 } }; });
+    (saveStaffFreeChanges as jest.Mock).mockImplementation(async () => { calls.push('staff'); });
+    await save(request() as never, response() as never);
+    expect(calls).toEqual(['notes', 'staff', 'final']);
+    expect(saveStaffFreeChanges).toHaveBeenCalledWith(920, { additions: [{ userId: 7, overrideReason: undefined }], removals: [] }, 99);
+  });
+  it('rejects unauthorized staff changes before modifying counter data', async () => {
+    const res = response();
+    await save(request('guide') as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(mockUpsertMetrics).not.toHaveBeenCalled();
+    expect(CounterRegistryService.updateCounterMetadata).not.toHaveBeenCalled();
+    expect(saveStaffFreeChanges).not.toHaveBeenCalled();
+  });
+  it('does not finalize when staff validation fails', async () => {
+    (saveStaffFreeChanges as jest.Mock).mockRejectedValueOnce(new Error('Allowance exhausted'));
+    const res = response();
+    await save(request() as never, res as never);
+    expect(CounterRegistryService.updateCounterMetadata).not.toHaveBeenCalledWith(920, expect.objectContaining({ status: 'final' }), 99);
+    expect(res.status).not.toHaveBeenCalledWith(200);
   });
 });

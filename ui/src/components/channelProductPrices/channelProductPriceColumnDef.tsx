@@ -7,11 +7,13 @@ import { WALK_IN_TICKET_TYPE_LABELS, WALK_IN_TICKET_TYPE_OPTIONS } from "../../c
 export type ChannelProductPriceColumnParams = {
   channelOptions: EditSelectOption[];
   productOptions: EditSelectOption[];
+  ticketOptions?: EditSelectOption[];
 };
 
 export const channelProductPriceColumnDef = ({
   channelOptions,
   productOptions,
+  ticketOptions = WALK_IN_TICKET_TYPE_OPTIONS,
 }: ChannelProductPriceColumnParams): ResponseModifications<Partial<ChannelProductPrice>>[] => [
   {
     accessorKey: "id",
@@ -78,14 +80,14 @@ export const channelProductPriceColumnDef = ({
         const key = String(row.original.ticketType ?? "").toLowerCase();
         const normalizedLabel =
           WALK_IN_TICKET_TYPE_LABELS[key as keyof typeof WALK_IN_TICKET_TYPE_LABELS];
-        return row.original.ticketTypeLabel ?? normalizedLabel ?? key;
+        return ticketOptions.find((option) => option.value === key)?.label ?? row.original.ticketTypeLabel ?? normalizedLabel ?? key;
       },
       Edit: ({ cell, row, table }) => (
         <CustomEditSelect
           cell={cell}
           row={row}
           table={table}
-          options={WALK_IN_TICKET_TYPE_OPTIONS}
+          options={ticketOptions}
           placeholder="Select ticket type"
         />
       ),

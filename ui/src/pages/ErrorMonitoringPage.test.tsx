@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { configure, getConfig, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import ErrorMonitoringPage from "./ErrorMonitoringPage";
 import {
@@ -154,6 +154,12 @@ const renderPage = (entry = "/error-monitoring") => {
     </MemoryRouter>,
   );
 };
+
+// React Query notifications and the responsive table render asynchronously. Keep
+// assertions on real UI state while allowing slower CI/Windows renderers to settle.
+const previousAsyncTimeout = getConfig().asyncUtilTimeout;
+beforeAll(() => configure({ asyncUtilTimeout: 5000 }));
+afterAll(() => configure({ asyncUtilTimeout: previousAsyncTimeout }));
 
 describe("ErrorMonitoringPage", () => {
   beforeEach(() => {

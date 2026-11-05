@@ -8,7 +8,7 @@ import {
   updateChannelProductPrice,
   deleteChannelProductPrice,
 } from '../controllers/channelProductPriceController.js';
-import { WALK_IN_TICKET_TYPE_VALUES } from '../constants/walkInTicketTypes.js';
+import { getWalkInTicketTypes, validateWalkInTicketType } from '../services/walkInTicketService.js';
 
 const router: Router = express.Router();
 
@@ -19,8 +19,7 @@ const validateCreateBody = [
   check('productId').isInt({ gt: 0 }).withMessage('productId must be a positive integer'),
   check('price').isFloat({ gt: 0 }).withMessage('price must be a positive number'),
   check('ticketType')
-    .isIn([...WALK_IN_TICKET_TYPE_VALUES])
-    .withMessage(`ticketType must be one of: ${WALK_IN_TICKET_TYPE_VALUES.join(', ')}`),
+    .custom(validateWalkInTicketType),
   check('currencyCode')
     .isString()
     .isLength({ min: 3, max: 3 })
@@ -35,8 +34,7 @@ const validateUpdateBody = [
   check('price').optional().isFloat({ gt: 0 }).withMessage('price must be a positive number'),
   check('ticketType')
     .optional()
-    .isIn([...WALK_IN_TICKET_TYPE_VALUES])
-    .withMessage(`ticketType must be one of: ${WALK_IN_TICKET_TYPE_VALUES.join(', ')}`),
+    .custom(validateWalkInTicketType),
   check('currencyCode')
     .optional()
     .isString()
@@ -65,6 +63,10 @@ const validate = (req: Request, res: Response, next: NextFunction): void => {
 };
 
 router.get('/', authMiddleware, requireRoles(['admin']), listChannelProductPrices);
+router.get('/ticket-types', authMiddleware, requireRoles(['admin']), async (_req, res, next) => {
+  try { res.json({ ticketTypes: await getWalkInTicketTypes() }); }
+  catch (error) { next(error); }
+});
 router.post('/', authMiddleware, requireRoles(['admin']), validateCreateBody, validate, createChannelProductPrice);
 router.put(
   '/:id',

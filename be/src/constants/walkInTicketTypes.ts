@@ -7,7 +7,7 @@ export const WALK_IN_TICKET_TYPE_VALUES = [
   'group',
 ] as const;
 
-export type WalkInTicketType = (typeof WALK_IN_TICKET_TYPE_VALUES)[number];
+export type WalkInTicketType = string;
 
 export const WALK_IN_TICKET_TYPE_LABELS: Record<WalkInTicketType, string> = {
   normal: 'Normal',
@@ -18,15 +18,11 @@ export const WALK_IN_TICKET_TYPE_LABELS: Record<WalkInTicketType, string> = {
   group: 'Group',
 };
 
-const WALK_IN_TICKET_TYPE_SET = new Set<string>(WALK_IN_TICKET_TYPE_VALUES);
-
 export const normalizeWalkInTicketType = (
   value: string | null | undefined,
 ): WalkInTicketType => {
   const normalized = (value ?? 'normal').trim().toLowerCase();
-  return WALK_IN_TICKET_TYPE_SET.has(normalized)
-    ? (normalized as WalkInTicketType)
-    : 'normal';
+  return normalized || 'normal';
 };
 
 export const normalizeCurrencyCode = (value: string | null | undefined): string =>

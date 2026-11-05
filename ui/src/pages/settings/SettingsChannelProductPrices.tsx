@@ -1,5 +1,6 @@
 import { Stack, Title, Text } from "@mantine/core";
 import ChannelProductPriceList from "../../components/channelProductPrices/ChannelProductPriceList";
+import WalkInTicketSettings from '../../components/channelProductPrices/WalkInTicketSettings';
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 
@@ -15,6 +16,7 @@ const SettingsChannelProductPrices = () => {
             Override product pricing for specific sales channels and keep historical records.
           </Text>
         </div>
+        <WalkInTicketSettings />
         <ChannelProductPriceList pageTitle="Channel Product Prices" />
       </Stack>
     </PageAccessGuard>

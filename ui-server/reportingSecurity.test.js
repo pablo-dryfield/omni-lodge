@@ -17,11 +17,14 @@ test('allows both base and versioned automatic Cloudflare Web Analytics scripts'
 
   assert.deepEqual(directives.get('script-src'), [
     "'self'",
+    "'wasm-unsafe-eval'",
     'https://connect.facebook.net',
     'https://static.cloudflareinsights.com/beacon.min.js',
     'https://static.cloudflareinsights.com/beacon.min.js/',
   ]);
   assert.ok(!directives.get('script-src').includes('https://static.cloudflareinsights.com'));
+  assert.ok(!directives.get('script-src').includes("'unsafe-eval'"));
+  assert.deepEqual(directives.get('worker-src'), ["'self'"]);
   assert.ok(directives.get('connect-src').includes("'self'"));
   assert.ok(!directives.get('connect-src').includes('https://cloudflareinsights.com'));
 });

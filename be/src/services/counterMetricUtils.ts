@@ -17,6 +17,8 @@ export type MetricCell = {
 
 export type WalkInTicketPriceConfig = {
   ticketType: string;
+  ticketTypeLabel?: string;
+  enabled?: boolean;
   currencyCode: string;
   price: number;
 };

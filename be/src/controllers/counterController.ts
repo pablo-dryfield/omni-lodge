@@ -1,3 +1,4 @@
+import { saveStaffPaidTickets } from '../services/staffPaidTicketService.js';
 import { Response } from 'express';
 import { Op } from 'sequelize';
 import { DataType } from 'sequelize-typescript';
@@ -29,6 +30,10 @@ import {
 } from '../constants/bookings.js';
 import { reconcileCounterInventory } from '../services/inventoryService.js';
 import { normalizeBookingExtrasSnapshot as normalizeBookingExtras } from '../utils/bookingExtras.js';
+import { validateCounterWalkInNotes } from '../services/walkInPaymentService.js';
+import StaffFreeEntry from '../models/StaffFreeEntry.js';
+import { reconcileStaffFreeAllowances, saveStaffFreeChanges } from '../services/staffFreeEntryService.js';
+import { parseStaffFreeChanges } from '../services/staffFreeEntryDraft.js';
 
 const REGISTRY_FORMAT = 'registry';
 const DEFAULT_ATTENDANCE_STATUS: BookingAttendanceStatus = 'pending';
@@ -808,6 +813,10 @@ export const deleteCounter = async (req: AuthenticatedRequest, res: Response): P
 
     const actorId = req.authContext?.id ?? null;
 
+    if (await StaffFreeEntry.count({ where: { counterId } })) {
+      throw new HttpError(409, 'This counter has staff free-entry history and cannot be deleted. Correct an entry through Staff free entry to preserve the audit trail.');
+    }
+
     const counter = await Counter.findByPk(counterId, {
       attributes: ['id', 'date', 'productId'],
     });
@@ -986,11 +995,24 @@ export const commitCounterRegistry = async (req: AuthenticatedRequest, res: Resp
       metrics?: unknown;
       status?: string;
       notes?: string | null;
+      staffFreeChanges?: unknown;
     };
+
+    const staffFreeChanges = parseStaffFreeChanges(body.staffFreeChanges, req.authContext?.roleSlug);
+    body.notes = await validateCounterWalkInNotes(body.notes);
 
     if (body.metrics !== undefined) {
       const rows = parseBodyAsArray(body.metrics);
       await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
+    }
+
+    // Save current Walk-In prices before applying the staff allowance rules, but defer
+    // final status until every staff addition/removal has been accepted.
+    if (await saveStaffPaidTickets(counterId, body.notes, actorId, req.authContext?.roleSlug)) body.notes = undefined;
+    if (staffFreeChanges) {
+      if (body.notes !== undefined) await CounterRegistryService.updateCounterMetadata(counterId, { notes: body.notes }, actorId);
+      await saveStaffFreeChanges(counterId, staffFreeChanges, actorId);
+      body.notes = undefined;
     }
 
     const metadataUpdates: { status?: string; notes?: string | null } = {};
@@ -1008,6 +1030,8 @@ export const commitCounterRegistry = async (req: AuthenticatedRequest, res: Resp
       payload = await CounterRegistryService.getCounterById(counterId);
     }
 
+    await reconcileStaffFreeAllowances(counterId, actorId);
+    payload = await CounterRegistryService.getCounterById(counterId);
     res.status(200).json(payload);
   } catch (error) {
     handleError(res, error);
@@ -1031,7 +1055,11 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
       metrics?: unknown;
       status?: string;
       notes?: string | null;
+      staffFreeChanges?: unknown;
     };
+
+    const staffFreeChanges = parseStaffFreeChanges(body.staffFreeChanges, req.authContext?.roleSlug);
+    body.notes = await validateCounterWalkInNotes(body.notes);
 
     const attendanceUpdates = parseAttendanceUpdates(body.attendanceUpdates);
     const shouldSyncEcwidDelivered = String(body.status ?? '').trim().toLowerCase() === 'final';
@@ -1068,6 +1096,15 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
       await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
     }
 
+    // Save current Walk-In prices before applying the staff allowance rules, but defer
+    // final status until every staff addition/removal has been accepted.
+    if (await saveStaffPaidTickets(counterId, body.notes, actorId, req.authContext?.roleSlug)) body.notes = undefined;
+    if (staffFreeChanges) {
+      if (body.notes !== undefined) await CounterRegistryService.updateCounterMetadata(counterId, { notes: body.notes }, actorId);
+      await saveStaffFreeChanges(counterId, staffFreeChanges, actorId);
+      body.notes = undefined;
+    }
+
     const metadataUpdates: { status?: string; notes?: string | null } = {};
     if (body.status) {
       metadataUpdates.status = body.status;
@@ -1090,7 +1127,8 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
     if (shouldSyncEcwidDelivered) {
       scheduleEcwidDeliveredSync(Array.from(ecwidOrdersToDeliver));
     }
-    res.status(200).json(payload);
+    await reconcileStaffFreeAllowances(counterId, actorId);
+    res.status(200).json(await CounterRegistryService.getCounterById(counterId));
   } catch (error) {
     handleError(res, error);
   }
@@ -1110,6 +1148,7 @@ export const upsertCounterMetrics = async (req: AuthenticatedRequest, res: Respo
 
     const rows = parseBodyAsArray(req.body);
     const result = await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
+    await reconcileStaffFreeAllowances(counterId, actorId);
     res.status(200).json(result);
   } catch (error) {
     handleError(res, error);

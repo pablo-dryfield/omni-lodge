@@ -143,7 +143,11 @@ describe("PaymentLinksPage bank transfer bookings", () => {
         return Promise.resolve({ data: { products: [], bankTransferAccounts: [bankTransferAccount] } });
       }
       if (url === "/storefront-saved-carts") return Promise.resolve({ data: { data: [] } });
-      if (url === "/storefront-ongoing-carts") return Promise.resolve({ data: { data: [] } });
+      if (url === "/storefront-ongoing-carts") return Promise.resolve({ data: {
+        data: [], pagination: { page: 1, pageSize: 25, total: 0, totalPages: 1 },
+        summary: { total: 0, checkoutStarted: 0, recoverySent: 0, recoveryOpened: 0 },
+        filters: { products: [], countries: [], currencies: [] },
+      } });
       if (url === "/storefront-ongoing-carts/recovered") return Promise.resolve({ data: { data: [] } });
       if (url === "/storefront-bank-transfer-orders") {
         return Promise.resolve({ data: { data: listedBankTransferOrders } });
@@ -163,6 +167,13 @@ describe("PaymentLinksPage bank transfer bookings", () => {
         dispatchEvent: jest.fn(),
       })),
     });
+  });
+
+  it("loads only the requested ongoing page without fetching unrelated tabs and catalogs", async () => {
+    renderPage("/bookings/payment-links?tab=ongoing");
+    expect(await screen.findByText("No ongoing carts")).toBeInTheDocument();
+    expect(mockGet).toHaveBeenCalledWith("/storefront-ongoing-carts", expect.objectContaining({ params: expect.objectContaining({ page: 1, pageSize: "25" }) }));
+    expect(mockGet.mock.calls.map(call => call[0])).toEqual(["/storefront-ongoing-carts"]);
   });
 
   it("opens the bank transfer creator from its URL action and consumes the action", async () => {

@@ -1,17 +1,19 @@
-import type { ChangeEvent, KeyboardEvent, MouseEvent, SyntheticEvent } from 'react';
+import { buildWalkInSummary, formatWalkInSummaryNotes, staffRowsFromNotes } from '../utils/walkInSummary';
+import WalkInSummaryDetails from '../components/counters/WalkInSummaryDetails';
+import { emptyStaffFreeDraft, hasStaffFreeDraft, restoreStaffFreeDraft, staffFreeDraftChanges, staffFreeDraftCount, type StaffFreeDraft } from '../utils/staffFreeDraft';
+import type { MouseEvent, SyntheticEvent } from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import dayjs, { Dayjs } from 'dayjs';
+import WalkInsPanel, { type WalkInChannelState, type WalkInTicketEntry, type WalkInCurrencyEntry } from '../components/counters/WalkInsPanel';
+import { readWalkInPaymentMetadata, readWalkInPriceMetadata, isReceivedWalkInCash, getWalkInValidationError } from '../utils/walkInMetadata';
 import Autocomplete from '@mui/material/Autocomplete';
 import Grid from '@mui/material/Grid';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import {
   Alert,
   Box,
   Button,
   Card,
   CardContent,
-  Checkbox,
   Chip,
   CircularProgress,
   Collapse,
@@ -20,7 +22,6 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
-  FormControlLabel,
   IconButton,
   InputAdornment,
   LinearProgress,
@@ -41,7 +42,6 @@ import {
 } from '@mui/material';
 import {
   Add,
-  Check,
   Checkroom,
   Close,
   Delete,
@@ -119,7 +119,7 @@ import type {
   OrderExtras,
   UnifiedOrder,
 } from '../store/bookingPlatformsTypes';
-import { WALK_IN_TICKET_LABEL_TO_KEY, WALK_IN_TICKET_TYPE_LABELS } from '../constants/walkInTicketTypes';
+import { WALK_IN_TICKET_LABEL_TO_KEY, WALK_IN_TICKET_TYPE_LABELS, WALK_IN_TICKET_TYPE_VALUES } from '../constants/walkInTicketTypes';
 import { getNewCounterPwaInstallUrl } from '../utils/newCounterPwa';
 import {
   parseCounterUrlMode,
@@ -132,17 +132,7 @@ const COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE = '2026-02-26';
 const WALK_IN_CHANNEL_SLUG = 'walk-in';
 const DEFAULT_PRODUCT_NAME = 'Pub Crawl';
 const REACT_EMAIL_SOURCE_MARKER = '/* @react-email-template-source */';
-const bucketLabels: Record<string, string> = {
-  attended: 'Cash Payments',
-  before_cutoff: 'Booked BEFORE cut-off',
-  after_cutoff: 'Booked AFTER cut-off',
-};
 
-type BucketDescriptor = {
-  tallyType: MetricTallyType;
-  period: MetricPeriod;
-  label: string;
-};
 type CashCurrency = 'PLN' | 'EUR';
 type CounterBookingPaymentStatus = 'unknown' | 'unpaid' | 'deposit' | 'partial' | 'paid' | 'refunded';
 const parseCounterIdParam = (value: string | null): number | null => {
@@ -152,12 +142,6 @@ const parseCounterIdParam = (value: string | null): number | null => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
-
-const BUCKETS: BucketDescriptor[] = [
-  { tallyType: 'attended', period: null, label: bucketLabels.attended },
-  { tallyType: 'booked', period: 'before_cutoff', label: bucketLabels.before_cutoff },
-  { tallyType: 'booked', period: 'after_cutoff', label: bucketLabels.after_cutoff },
-];
 
 type ManifestResponse = {
   date: string;
@@ -905,7 +889,7 @@ const WALK_IN_DISCOUNT_NOTE_PREFIX = 'Walk-In Tickets:';
 const WALK_IN_CASH_NOTE_PREFIX = 'Cash Collected:';
 const CASH_SNAPSHOT_START = '-- CASH-SNAPSHOT START --';
 const CASH_SNAPSHOT_END = '-- CASH-SNAPSHOT END --';
-const CASH_SNAPSHOT_VERSION = 2;
+const CASH_SNAPSHOT_VERSION = 3;
 const FREE_SNAPSHOT_START = '-- FREE-SNAPSHOT START --';
 const FREE_SNAPSHOT_END = '-- FREE-SNAPSHOT END --';
 const FREE_SNAPSHOT_VERSION = 1;
@@ -931,21 +915,6 @@ const WALK_IN_TICKET_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, nu
   Students: { PLN: 80, EUR: 19 },
   Group: { PLN: 85, EUR: 20 },
 };
-const formatListWithAmpersand = (items: string[]): string => {
-  if (items.length === 0) {
-    return '';
-  }
-  if (items.length === 1) {
-    return items[0];
-  }
-  if (items.length === 2) {
-    return `${items[0]} & ${items[1]}`;
-  }
-
-  const head = items.slice(0, -1).join(', ');
-  const tail = items[items.length - 1];
-  return `${head} & ${tail}`;
-};
 const WALK_IN_ADDON_UNIT_PRICES: Record<string, Partial<Record<CashCurrency, number>>> = {
   cocktails: { EUR: 7 },
   tshirts: { EUR: 10 },
@@ -956,16 +925,24 @@ type WalkInSnapshotCurrency = {
   people: number;
   cash: number;
   addons: Record<string, number>;
+  unitPrice?: number;
+  addonUnitPrices?: Record<number, number>;
 };
 
 type WalkInSnapshotTicket = {
+  staffGuests?: Array<{ userId: number; name: string }>;
   key?: string;
   name: string;
   transfer?: boolean;
+  ticketType?: string;
+  paymentMethodId?: number;
+  paymentMethodName?: string;
+  paymentStatus?: 'received' | 'awaiting';
   currencies: WalkInSnapshotCurrency[];
 };
 
 type CashSnapshotEntry = {
+  channelName?: string;
   currency: CashCurrency;
   amount: number;
   qty: number;
@@ -983,6 +960,7 @@ type FreeSnapshotPeopleEntry = {
 };
 
 type FreeSnapshotChannelEntry = {
+  channelName?: string;
   people?: FreeSnapshotPeopleEntry;
   addons?: Record<string, FreeSnapshotAddonEntry>;
 };
@@ -992,42 +970,13 @@ type FreeSnapshotPayload = {
   channels: Record<string, FreeSnapshotChannelEntry>;
 };
 
-type CounterSnapshotFreeEntry = {
-  label: string;
-  quantity: number | null;
-  reason: string | null;
-};
-
-type CounterSnapshotFreeSection = {
-  channelLabel: string | null;
-  entries: CounterSnapshotFreeEntry[];
-};
-
-type CounterSnapshotDetails = {
-  freeSections: CounterSnapshotFreeSection[];
-  manualNote: string;
-};
-
-type WalkInCurrencyEntryState = {
-  people: number;
-  cash: string;
-  addons: Record<number, number>;
-};
-
-type WalkInTicketEntryState = {
-  name: string;
-  transfer?: boolean;
-  currencyOrder: CashCurrency[];
-  currencies: Partial<Record<CashCurrency, WalkInCurrencyEntryState>>;
-};
-
-type WalkInChannelTicketState = {
-  ticketOrder: string[];
-  tickets: Record<string, WalkInTicketEntryState>;
-};
+type WalkInCurrencyEntryState = WalkInCurrencyEntry;
+type WalkInTicketEntryState = WalkInTicketEntry;
+type WalkInChannelTicketState = WalkInChannelState;
 
 type CounterReservationDraft = {
   version: 1;
+  staffFreeDraft?: StaffFreeDraft;
   counterId: number;
   userId: number;
   updatedAt: string;
@@ -1476,12 +1425,15 @@ const extractCashSnapshotMap = (
             people: normalizedPeople,
             cash: normalizedCash,
             addons,
+            unitPrice: readWalkInPriceMetadata(currencyCandidate).unitPrice,
+            addonUnitPrices: readWalkInPriceMetadata(currencyCandidate).addonUnitPrices,
           });
         });
         if (currencies.length === 0) {
           return;
         }
         tickets.push({
+          ...readWalkInPaymentMetadata(ticketCandidate),
           ...(ticketKey ? { key: ticketKey } : {}),
           name: ticketNameRaw,
           ...(ticketTransfer ? { transfer: true } : {}),
@@ -1490,6 +1442,7 @@ const extractCashSnapshotMap = (
       });
 
       entries.set(numericChannelId, {
+        channelName: typeof (value as CashSnapshotEntry).channelName === 'string' ? (value as CashSnapshotEntry).channelName : undefined,
         currency,
         amount: normalizedAmount,
         qty: normalizedQty,
@@ -1542,7 +1495,7 @@ const extractFreeSnapshotMap = (
       }
       const peopleRaw = (value as FreeSnapshotChannelEntry).people;
       const addonsRaw = (value as FreeSnapshotChannelEntry).addons;
-      const entry: FreeSnapshotChannelEntry = {};
+      const entry: FreeSnapshotChannelEntry = { channelName: typeof (value as FreeSnapshotChannelEntry).channelName === 'string' ? (value as FreeSnapshotChannelEntry).channelName : undefined };
       if (peopleRaw && typeof peopleRaw === 'object') {
         const qty = Math.max(0, Math.round(Number(peopleRaw.qty) || 0));
         const noteValue =
@@ -1608,207 +1561,22 @@ const stripSnapshotFromNote = (note: string): string => {
   };
   let sanitized = stripBlock(note, escapedStart, escapedEnd);
   sanitized = stripBlock(sanitized, escapedFreeStart, escapedFreeEnd);
-  return sanitized.trim();
+  return sanitized.replace(/-- STAFF-ENTRIES START --[\s\S]*?-- STAFF-ENTRIES END --/g, '').trim();
 };
 
 const aggregateCashTotals = (entry: CashSnapshotEntry): Map<string, number> => {
   const totals = new Map<string, number>();
-  if (entry.tickets && entry.tickets.length > 0) {
-    entry.tickets.forEach((ticket) => {
-      ticket.currencies.forEach((currency) => {
-        const amount = Number(currency.cash);
-        if (Number.isFinite(amount) && amount > 0) {
-          totals.set(currency.currency, (totals.get(currency.currency) ?? 0) + amount);
-        }
-      });
-    });
-  }
-  const amount = Number(entry.amount);
-  if ((!entry.tickets || entry.tickets.length === 0) && entry.currency && Number.isFinite(amount) && amount > 0) {
-    totals.set(entry.currency, (totals.get(entry.currency) ?? 0) + amount);
-  }
+  const add = (currency: string, amount: number) => { if (Number.isFinite(amount) && amount > 0) totals.set(currency, (totals.get(currency) ?? 0) + amount); };
+  if (entry.tickets?.length) entry.tickets.forEach(ticket => ticket.currencies.forEach(row => add(row.currency, Number(row.cash))));
+  else add(entry.currency, Number(entry.amount));
   return totals;
 };
 
-const formatWalkInSnapshotSummary = (
-  note: string,
-  channels: ChannelConfig[],
-  _addons: AddonConfig[],
-): string => {
-  if (!note) {
-    return '';
-  }
-  const cashMap = extractCashSnapshotMap(note);
-  const freeMap = extractFreeSnapshotMap(note);
-
-  const walkInChannel = channels.find((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG);
-  let targetChannelId: number | null = walkInChannel?.id ?? null;
-
-  if (targetChannelId == null) {
-    for (const [channelId, entry] of cashMap.entries()) {
-      if (entry.tickets && entry.tickets.length > 0) {
-        targetChannelId = channelId;
-        break;
-      }
-    }
-  }
-
-  if (targetChannelId == null && cashMap.size === 1) {
-    const first = cashMap.keys().next();
-    if (!first.done) {
-      targetChannelId = first.value;
-    }
-  }
-
-  if (targetChannelId == null && freeMap.size === 1) {
-    const first = freeMap.keys().next();
-    if (!first.done) {
-      targetChannelId = first.value;
-    }
-  }
-
-  const cashEntry = targetChannelId != null ? cashMap.get(targetChannelId) : undefined;
-
-  const ticketNames = new Set<string>();
-
-  if (cashEntry?.tickets && cashEntry.tickets.length > 0) {
-    cashEntry.tickets.forEach((ticket) => {
-      const ticketName = (ticket.name ?? '').toString().trim();
-      if (ticketName.length > 0) {
-        ticketNames.add(ticket.transfer ? `${ticketName} (Transfer)` : ticketName);
-      }
-    });
-  }
-
-  const currencyTotals = new Map<string, number>();
-  cashMap.forEach((entry) => {
-    const totals = aggregateCashTotals(entry);
-    totals.forEach((amount, currency) => {
-      currencyTotals.set(currency, (currencyTotals.get(currency) ?? 0) + amount);
-    });
-  });
-
-  let hasFreeSnapshot = false;
-  freeMap.forEach((entry) => {
-    if (entry.people) {
-      const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
-      const noteText = (entry.people.note ?? '').toString().trim();
-      if (qty > 0 || noteText.length > 0) {
-        hasFreeSnapshot = true;
-      }
-    }
-    if (entry.addons) {
-      Object.entries(entry.addons).forEach(([addonIdKey, info]) => {
-        const addonId = Number(addonIdKey);
-        if (!Number.isFinite(addonId)) {
-          return;
-        }
-        const qty = Math.max(0, Math.round(Number(info.qty) || 0));
-        const noteText = (info.note ?? '').toString().trim();
-        if (qty <= 0 && noteText.length === 0) {
-          return;
-        }
-        hasFreeSnapshot = true;
-      });
-    }
-  });
-
-  if (hasFreeSnapshot) {
-    ticketNames.add('Free');
-  }
-
-  if (ticketNames.size === 0 && currencyTotals.size === 0) {
-    return '';
-  }
-
-  const segments: string[] = [];
-  const formattedTicketNames = formatListWithAmpersand(
-    Array.from(ticketNames)
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0),
-  );
-  segments.push(`Walk-In Tickets: ${formattedTicketNames || '-'}`);
-
-  if (currencyTotals.size > 0) {
-    const cashSummary = Array.from(currencyTotals.entries())
-      .map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`)
-      .join(', ');
-    segments.push(`Cash Collected: ${cashSummary}`);
-  } else {
-    segments.push('Cash Collected: -');
-  }
-
-  return segments.join(' || ');
-};
-
-const formatCounterSnapshotDetails = (
-  note: string,
-  channels: ChannelConfig[],
-  addons: AddonConfig[],
-): CounterSnapshotDetails => {
-  if (!note) {
-    return { freeSections: [], manualNote: '' };
-  }
-
-  const freeMap = extractFreeSnapshotMap(note);
-  const addonNameById = new Map<number, string>();
-  addons.forEach((addon) => addonNameById.set(addon.addonId, addon.name));
-  const channelNameById = new Map<number, string>();
-  channels.forEach((channel) => channelNameById.set(channel.id, channel.name ?? `Channel ${channel.id}`));
-
-  const freeSections: CounterSnapshotFreeSection[] = [];
-
-  freeMap.forEach((entry, channelId) => {
-    const channelName = channelNameById.get(channelId) ?? `Channel ${channelId}`;
-    const sectionEntries: CounterSnapshotFreeEntry[] = [];
-
-    if (entry.people) {
-      const qty = Math.max(0, Math.round(Number(entry.people.qty) || 0));
-      const noteText = (entry.people.note ?? '').toString().trim();
-      if (qty > 0 || noteText.length > 0) {
-        sectionEntries.push({
-          label: 'People',
-          quantity: qty > 0 ? qty : null,
-          reason: noteText.length > 0 ? noteText : null,
-        });
-      }
-    }
-
-    if (entry.addons) {
-      Object.entries(entry.addons).forEach(([addonIdKey, info]) => {
-        const addonId = Number(addonIdKey);
-        if (!Number.isFinite(addonId)) {
-          return;
-        }
-        const qty = Math.max(0, Math.round(Number(info.qty) || 0));
-        const noteText = (info.note ?? '').toString().trim();
-        if (qty <= 0 && noteText.length === 0) {
-          return;
-        }
-        const addonName = addonNameById.get(addonId) ?? `Addon ${addonId}`;
-        sectionEntries.push({
-          label: addonName,
-          quantity: qty > 0 ? qty : null,
-          reason: noteText.length > 0 ? noteText : null,
-        });
-      });
-    }
-
-    if (sectionEntries.length > 0) {
-      freeSections.push({
-        channelLabel: channelName,
-        entries: sectionEntries,
-      });
-    }
-  });
-
-  const manual = stripSnapshotFromNote(note);
-
-  return {
-    freeSections,
-    manualNote: manual,
-  };
-};
+const formatWalkInSnapshotSummary = (note: string, channels: ChannelConfig[], addons: AddonConfig[]): string =>
+  formatWalkInSummaryNotes([
+    ...buildWalkInSummary(extractCashSnapshotMap(note), extractFreeSnapshotMap(note), channels, addons),
+    ...staffRowsFromNotes(note, channels),
+  ]);
 
 const formatCounterNotePreview = (
   note: string,
@@ -1862,8 +1630,6 @@ const STEP_CONFIGS: Array<{ key: RegistryStep; label: string; description: strin
   },
 ];
 
-const RESERVATION_BUCKETS = BUCKETS.filter((bucket) => bucket.tallyType === 'attended');
-
 const normalizeMetric = (metric: MetricCell): MetricCell => {
   const numericQty = Number(metric.qty);
   const qty = Number.isFinite(numericQty) ? numericQty : 0;
@@ -1875,7 +1641,6 @@ const normalizeMetric = (metric: MetricCell): MetricCell => {
   }
   return { ...metric, qty };
 };
-
 
 const buildDisplayName = (option: StaffOption) => {
   if (option.fullName && option.fullName.trim().length > 0) {
@@ -2438,6 +2203,8 @@ const Counters = (props: GenericPageProps) => {
   >({});
   const [bookingCashConfirmation, setBookingCashConfirmation] =
     useState<BookingCashConfirmationState | null>(null);
+  const [staffFreeDraft, setStaffFreeDraft] = useState<StaffFreeDraft>(emptyStaffFreeDraft);
+  const [staffFreeValidationError, setStaffFreeValidationError] = useState<string | null>(null);
   const hydratedReservationDraftKeyRef = useRef<string | null>(null);
   const skipReservationDraftPersistRef = useRef(false);
   const pendingBookingAttendanceRef = useRef<Record<number, StagedBookingAttendance>>({});
@@ -2715,22 +2482,8 @@ const Counters = (props: GenericPageProps) => {
     [recalcWalkInChannelAutoCash],
   );
 
-  const applyAutoCashToChannelMap = useCallback(
-    (map: Record<number, WalkInChannelTicketState>, channelId: number) => {
-      const channelState = map[channelId];
-      if (!channelState) {
-        return map;
-      }
-      const recalculated = recalcWalkInChannelAutoCash(channelId, channelState);
-      if (recalculated === channelState) {
-        return map;
-      }
-      return { ...map, [channelId]: recalculated };
-    },
-    [recalcWalkInChannelAutoCash],
-  );
-
   const counterId = registry.counter?.counter.id ?? null;
+  const effectiveStaffFreeCount = staffFreeDraftCount(registry.counter?.staffFreeEntries ?? [], staffFreeDraft);
   const counterStatus = (registry.counter?.counter.status as CounterStatus | undefined) ?? 'draft';
   const counterProductId = registry.counter?.counter.productId ?? null;
   const counterNotes = registry.counter?.counter.notes ?? '';
@@ -2756,6 +2509,7 @@ const Counters = (props: GenericPageProps) => {
   const clearReservationDraft = useCallback(() => {
     removeCounterReservationDraft(reservationDraftStorageKey);
   }, [reservationDraftStorageKey]);
+  useEffect(() => { setStaffFreeDraft(emptyStaffFreeDraft()); setStaffFreeValidationError(null); }, [counterId, loggedUserId]);
   const nightReportSummaries = useMemo(
     () => (nightReportListState.data[0]?.data as NightReportSummary[] | undefined) ?? [],
     [nightReportListState.data],
@@ -3177,6 +2931,8 @@ const Counters = (props: GenericPageProps) => {
     setPartialCheckInEditorOrder(null);
     setPartialCheckInEditorDraft(null);
     setPendingBookingAttendanceById({});
+    setStaffFreeDraft(emptyStaffFreeDraft());
+    setStaffFreeValidationError(null);
   }, [isModalOpen]);
 
   useEffect(() => {
@@ -3266,7 +3022,7 @@ const loadCounterById = useCallback(
   const walkInChannelIds = useMemo(
     () =>
       registry.channels
-        .filter((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG)
+        .filter((channel) => channel.name?.toLowerCase() === WALK_IN_CHANNEL_SLUG || isCashPaymentChannel(channel))
         .map((channel) => channel.id),
     [registry.channels],
   );
@@ -3327,23 +3083,7 @@ const loadCounterById = useCallback(
       setEditingCustomTicket(null);
     }
   }, [editingCustomTicket, walkInDiscountsByChannel]);
-  const handleCashCurrencyChange = useCallback(
-    (channelId: number, currency: CashCurrency) => {
-      let didChange = false;
-      setCashCurrencyByChannel((prev) => {
-        const current = prev[channelId] ?? null;
-        if (current === currency) {
-          return prev;
-        }
-        didChange = true;
-        return { ...prev, [channelId]: currency };
-      });
-      if (didChange) {
-        setWalkInNoteDirty(true);
-      }
-    },
-    [setWalkInNoteDirty],
-  );
+
   const resolveCashCurrencyForChannel = useCallback(
     (channelId: number): CashCurrency => {
       const selected = cashCurrencyByChannel[channelId];
@@ -3357,179 +3097,6 @@ const loadCounterById = useCallback(
       return 'PLN';
     },
     [cashCurrencyByChannel, cashSnapshotEntries],
-  );
-
-  const setFreePeopleQty = useCallback(
-    (channelId: number, qty: number) => {
-      const normalizedQty = Math.max(0, Math.round(qty));
-      let mutated = false;
-      setFreePeopleByChannel((prev) => {
-        const existing = prev[channelId];
-        const existingNote = existing?.note ?? '';
-        if (existing && existing.qty === normalizedQty) {
-          return prev;
-        }
-        if (normalizedQty === 0 && existingNote.trim().length === 0) {
-          if (!existing) {
-            return prev;
-          }
-          const { [channelId]: _removed, ...rest } = prev;
-          mutated = true;
-          return rest;
-        }
-        mutated = true;
-        return { ...prev, [channelId]: { qty: normalizedQty, note: existingNote } };
-      });
-      if (mutated) {
-        setWalkInNoteDirty(true);
-      }
-    },
-    [setWalkInNoteDirty],
-  );
-
-  const setFreePeopleNote = useCallback(
-    (channelId: number, note: string) => {
-      const sanitizedNote = note;
-      let mutated = false;
-      setFreePeopleByChannel((prev) => {
-        const existing = prev[channelId];
-        const currentQty = existing?.qty ?? 0;
-        if (existing && existing.note === sanitizedNote) {
-          return prev;
-        }
-        if (currentQty === 0 && sanitizedNote.length === 0) {
-          if (!existing) {
-            return prev;
-          }
-          const { [channelId]: _removed, ...rest } = prev;
-          mutated = true;
-          return rest;
-        }
-        mutated = true;
-        return { ...prev, [channelId]: { qty: currentQty, note: sanitizedNote } };
-      });
-      if (mutated) {
-        setWalkInNoteDirty(true);
-      }
-    },
-    [setWalkInNoteDirty],
-  );
-
-  const ensureFreePeopleEntry = useCallback(
-    (channelId: number) => {
-      let mutated = false;
-      setFreePeopleByChannel((prev) => {
-        if (prev[channelId]) {
-          return prev;
-        }
-        mutated = true;
-        return { ...prev, [channelId]: { qty: 0, note: '' } };
-      });
-      if (mutated) {
-        setWalkInNoteDirty(true);
-      }
-    },
-    [setWalkInNoteDirty],
-  );
-
-  const setFreeAddonQty = useCallback(
-    (channelId: number, addonId: number, qty: number) => {
-      const normalizedQty = Math.max(0, Math.round(qty));
-      let mutated = false;
-      setFreeAddonsByChannel((prev) => {
-        const currentForChannel = prev[channelId] ?? {};
-        const existing = currentForChannel[addonId];
-        const existingNote = existing?.note ?? '';
-        if (existing && existing.qty === normalizedQty) {
-          return prev;
-        }
-        const nextChannelEntries = { ...currentForChannel };
-        if (normalizedQty === 0 && existingNote.trim().length === 0) {
-          if (!existing) {
-            return prev;
-          }
-          delete nextChannelEntries[addonId];
-          mutated = true;
-        } else {
-          nextChannelEntries[addonId] = { qty: normalizedQty, note: existingNote };
-          mutated = true;
-        }
-        if (Object.keys(nextChannelEntries).length === 0) {
-          if (!(channelId in prev)) {
-            return prev;
-          }
-          const { [channelId]: _removed, ...rest } = prev;
-          return mutated ? rest : prev;
-        }
-        return { ...prev, [channelId]: nextChannelEntries };
-      });
-      if (mutated) {
-        setWalkInNoteDirty(true);
-      }
-    },
-    [setWalkInNoteDirty],
-  );
-
-  const ensureFreeAddonEntry = useCallback(
-    (channelId: number, addonId: number) => {
-      let mutated = false;
-      setFreeAddonsByChannel((prev) => {
-        const currentForChannel = prev[channelId] ?? {};
-        if (currentForChannel[addonId]) {
-          return prev;
-        }
-        mutated = true;
-        return {
-          ...prev,
-          [channelId]: {
-            ...currentForChannel,
-            [addonId]: { qty: 0, note: '' },
-          },
-        };
-      });
-      if (mutated) {
-        setWalkInNoteDirty(true);
-      }
-    },
-    [setWalkInNoteDirty],
-  );
-
-  const setFreeAddonNote = useCallback(
-    (channelId: number, addonId: number, note: string) => {
-      const sanitizedNote = note;
-      let mutated = false;
-      setFreeAddonsByChannel((prev) => {
-        const currentForChannel = prev[channelId] ?? {};
-        const existing = currentForChannel[addonId];
-        const currentQty = existing?.qty ?? 0;
-        if (existing && existing.note === sanitizedNote) {
-          return prev;
-        }
-        const nextChannelEntries = { ...currentForChannel };
-        if (currentQty === 0 && sanitizedNote.length === 0) {
-          if (!existing) {
-            return prev;
-          }
-          delete nextChannelEntries[addonId];
-          mutated = true;
-        } else {
-          nextChannelEntries[addonId] = { qty: currentQty, note: sanitizedNote };
-          mutated = true;
-        }
-        if (Object.keys(nextChannelEntries).length === 0) {
-          if (!(channelId in prev)) {
-            return prev;
-          }
-          const { [channelId]: _removed, ...rest } = prev;
-          return mutated ? rest : prev;
-        }
-        return { ...prev, [channelId]: nextChannelEntries };
-      });
-      if (mutated) {
-        setWalkInNoteDirty(true);
-      }
-    },
-    [setWalkInNoteDirty],
   );
 
   useEffect(() => {
@@ -3665,14 +3232,8 @@ const loadCounterById = useCallback(
         if (!rawTicketKey) {
           return;
         }
-        const ticketKey = configuredTicketOptionSet.has(rawTicketKey)
-          ? rawTicketKey
-          : configuredTicketOptionSet.has(CUSTOM_TICKET_LABEL)
-            ? CUSTOM_TICKET_LABEL
-            : rawTicketKey;
-        if (!configuredTicketOptionSet.has(ticketKey)) {
-          return;
-        }
+        // Keep original keys, including disabled types and separate entries of the same type.
+        const ticketKey = rawTicketKey;
         if (!ticketOrder.includes(ticketKey)) {
           ticketOrder.push(ticketKey);
         }
@@ -3702,11 +3263,18 @@ const loadCounterById = useCallback(
             people: Number.isFinite(people) ? Math.max(0, Math.round(people)) : 0,
             cash: Number.isFinite(cash) ? String(Math.max(0, Math.round(cash * 100) / 100)) : '',
             addons: parsedAddons,
+            unitPrice: currencySnapshot.unitPrice,
+            addonUnitPrices: currencySnapshot.addonUnitPrices,
           };
         });
         ticketEntries[ticketKey] = {
-          name: ticketKey === CUSTOM_TICKET_LABEL && ticketDisplayName ? ticketDisplayName : ticketKey,
-          ...(ticketKey === CUSTOM_TICKET_LABEL && ticketSnapshot.transfer ? { transfer: true } : {}),
+          name: ticketDisplayName || ticketKey,
+          ticketType: ticketSnapshot.ticketType,
+          staffGuests: ticketSnapshot.staffGuests,
+          paymentMethodId: ticketSnapshot.paymentMethodId,
+          paymentMethodName: ticketSnapshot.paymentMethodName,
+          paymentStatus: ticketSnapshot.paymentStatus,
+          ...(ticketSnapshot.transfer ? { transfer: true } : {}),
           currencyOrder,
           currencies,
         };
@@ -3791,23 +3359,24 @@ const loadCounterById = useCallback(
             addonMap[addonId] = qty;
           }
         });
-        if (restoredPeople > 0 || Object.keys(addonMap).length > 0) {
-          const defaultTicketLabel = configuredTicketOptions[0] ?? null;
+        if (restoredPeople > 0 || Object.keys(addonMap).length > 0 || Number(snapshotEntry?.amount ?? nextWalkInCash[channelId]) > 0) {
+          const defaultTicketLabel = CUSTOM_TICKET_LABEL;
           if (defaultTicketLabel) {
-            const existingCashValue = Number(nextWalkInCash[channelId] ?? 0);
+            const existingCashValue = Number(snapshotEntry?.amount ?? nextWalkInCash[channelId] ?? 0);
             const normalizedCashValue =
               Number.isFinite(existingCashValue) && existingCashValue > 0
-                ? String(Math.max(0, Math.round(existingCashValue)))
+                ? String(Math.max(0, Math.round(existingCashValue * 100) / 100))
                 : '';
             finalTicketOrder = [defaultTicketLabel];
             finalTicketEntries = {
               ...finalTicketEntries,
               [defaultTicketLabel]: {
-                name: defaultTicketLabel,
-                currencyOrder: ['PLN'],
+                name: 'Previously recorded walk-ins',
+                ticketType: 'custom',
+                currencyOrder: [snapshotEntry?.currency ?? 'PLN'],
                 currencies: {
-                  PLN: {
-                    people: restoredPeople,
+                  [snapshotEntry?.currency ?? 'PLN']: {
+                    people: restoredPeople + registry.addons.filter(isCocktailAddonConfig).reduce((sum, addon) => sum + (addonMap[addon.addonId] ?? 0), 0),
                     cash: normalizedCashValue,
                     addons: addonMap,
                   },
@@ -3892,7 +3461,8 @@ const loadCounterById = useCallback(
     setFreeAddonsByChannel(nextFreeAddons);
     setWalkInCashByChannel(nextWalkInCash);
     setWalkInDiscountsByChannel(nextWalkInDiscounts);
-    setWalkInTicketDataByChannel(recalcWalkInTicketDataMap(nextWalkInTickets));
+    // Loading historical counters must never reprice saved entries.
+    setWalkInTicketDataByChannel(nextWalkInTickets);
     setCashOverridesByChannel(nextOverrides);
     setCashCurrencyByChannel({});
     setCashEditingChannelId(null);
@@ -3903,6 +3473,7 @@ const loadCounterById = useCallback(
     cashSnapshotEntries,
     freeSnapshotEntries,
     recalcWalkInTicketDataMap,
+    registry.addons,
     registry.channels,
     registry.counter,
     walkInChannelIds,
@@ -3922,6 +3493,7 @@ const loadCounterById = useCallback(
 
   const channelHasRecordedData = useCallback(
     (channelId: number) => {
+      if (effectiveStaffFreeCount > 0 && registry.channels.some(channel => channel.id === channelId && channel.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'walkin')) return true;
       const hasMetricQty = mergedMetrics.some((metric) => metric.channelId === channelId && metric.qty > 0);
       if (hasMetricQty) {
         return true;
@@ -3982,6 +3554,8 @@ const loadCounterById = useCallback(
       cashOverridesByChannel,
       freeAddonsByChannel,
       freePeopleByChannel,
+      effectiveStaffFreeCount,
+      registry.channels,
       mergedMetrics,
       walkInCashByChannel,
       walkInTicketDataByChannel,
@@ -4015,28 +3589,6 @@ const loadCounterById = useCallback(
 
   const [editingChannelIds, setEditingChannelIds] = useState<Set<number>>(() => new Set());
 
-  const markChannelEditing = useCallback((channelId: number) => {
-    setEditingChannelIds((prev) => {
-      if (prev.has(channelId)) {
-        return prev;
-      }
-      const next = new Set(prev);
-      next.add(channelId);
-      return next;
-    });
-  }, []);
-
-  const unmarkChannelEditing = useCallback((channelId: number) => {
-    setEditingChannelIds((prev) => {
-      if (!prev.has(channelId)) {
-        return prev;
-      }
-      const next = new Set(prev);
-      next.delete(channelId);
-      return next;
-    });
-  }, []);
-
   useEffect(() => {
     if (!isModalOpen) {
       setEditingChannelIds((prev) => {
@@ -4062,7 +3614,6 @@ const loadCounterById = useCallback(
     }
     setRevealedCustomerPhoneKeys((prev) => (prev.size > 0 ? new Set() : prev));
   }, [summaryAddonDialogState, summaryAttendedDialogOpen, summaryNoShowDialogOpen]);
-
 
   const allowedAfterCutoffChannelIds = useMemo(
     () =>
@@ -4374,7 +3925,7 @@ const loadCounterById = useCallback(
           normalizedPeriod === null &&
           channel &&
           isCashPaymentChannel(channel) &&
-          channel.name?.toLowerCase() !== WALK_IN_CHANNEL_SLUG
+          !walkInChannelIds.includes(channelId)
         ) {
           const overrideRaw = cashOverridesByChannel[channelId];
           const overrideAmount = overrideRaw != null ? parseCashInput(overrideRaw) : null;
@@ -4441,6 +3992,7 @@ const loadCounterById = useCallback(
       registry.channels,
       resolveCashCurrencyForChannel,
       syncAfterCutoffAttendance,
+      walkInChannelIds,
     ],
   );
 
@@ -4528,7 +4080,7 @@ const loadCounterById = useCallback(
       if (ticketState) {
         ticketState.ticketOrder.forEach((ticketLabel) => {
           const ticketEntry = ticketState.tickets[ticketLabel];
-          if (!ticketEntry) {
+          if (!ticketEntry || !isReceivedWalkInCash(ticketEntry)) {
             return;
           }
           ticketEntry.currencyOrder.forEach((currency) => {
@@ -4549,7 +4101,7 @@ const loadCounterById = useCallback(
         });
       }
 
-      if (currencyTotals.size > 0) {
+      if (ticketState?.ticketOrder.length) {
         currencyTotals.forEach((amount, currency) => {
           registerAmount(channelId, amount, currency);
         });
@@ -4604,397 +4156,6 @@ const loadCounterById = useCallback(
     walkInTicketDataByChannel,
   ]);
 
-  const handleCustomTicketEditStart = useCallback(
-    (channelId: number, ticketLabel: string, currentName: string) => {
-      setEditingCustomTicket({
-        channelId,
-        ticketLabel,
-        value: currentName,
-      });
-    },
-    [],
-  );
-
-  const handleCustomTicketEditChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    const nextValue = event.target.value;
-    setEditingCustomTicket((prev) => (prev ? { ...prev, value: nextValue } : prev));
-  }, []);
-
-  const handleCustomTicketEditCancel = useCallback(() => {
-    setEditingCustomTicket(null);
-  }, []);
-
-  const handleCustomTicketEditSave = useCallback(() => {
-    if (!editingCustomTicket) {
-      return;
-    }
-    const { channelId, ticketLabel, value } = editingCustomTicket;
-    const trimmed = value.trim();
-    const nextName = trimmed.length > 0 ? trimmed : CUSTOM_TICKET_LABEL;
-
-    setWalkInTicketDataByChannel((prev) => {
-      const channelState = prev[channelId];
-      if (!channelState) {
-        return prev;
-      }
-      const ticketEntry = channelState.tickets[ticketLabel];
-      if (!ticketEntry) {
-        return prev;
-      }
-      const currentName =
-        ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name.trim() : ticketLabel;
-      if (currentName === nextName) {
-        return prev;
-      }
-      const nextTickets = {
-        ...channelState.tickets,
-        [ticketLabel]: {
-          ...ticketEntry,
-          name: nextName,
-        },
-      };
-      return {
-        ...prev,
-        [channelId]: {
-          ...channelState,
-          tickets: nextTickets,
-        },
-      };
-    });
-    setWalkInNoteDirty(true);
-    setEditingCustomTicket(null);
-  }, [editingCustomTicket, setWalkInNoteDirty, setWalkInTicketDataByChannel]);
-
-  const handleWalkInDiscountToggle = useCallback(
-    (channelId: number, option: string) => {
-      let nextSelection: string[] | null = null;
-      setWalkInDiscountsByChannel((prev) => {
-        const current = prev[channelId] ?? [];
-        const alreadySelected = current.includes(option);
-        const updated = alreadySelected
-          ? current.filter((item) => item !== option)
-          : normalizeDiscountSelection([...current, option]);
-        if (current.length === updated.length && current.every((item, index) => item === updated[index])) {
-          return prev;
-        }
-        nextSelection = updated;
-        return { ...prev, [channelId]: updated };
-      });
-
-      if (nextSelection === null) {
-        return;
-      }
-
-      setWalkInTicketDataByChannel((prev) => {
-        const current = prev[channelId] ?? { ticketOrder: [], tickets: {} };
-        const nextTickets: Record<string, WalkInTicketEntryState> = {};
-        const nextOrder: string[] = [];
-
-        nextSelection!.forEach((ticketLabel) => {
-          if (!nextOrder.includes(ticketLabel)) {
-            nextOrder.push(ticketLabel);
-          }
-          const existing = current.tickets[ticketLabel];
-          nextTickets[ticketLabel] = existing ?? {
-            name: ticketLabel,
-            currencyOrder: [],
-            currencies: {},
-          };
-        });
-
-        const nextState: WalkInChannelTicketState = {
-          ticketOrder: nextOrder,
-          tickets: nextTickets,
-        };
-
-        if (nextSelection!.length === 0) {
-          const mapWithout = { ...prev };
-          delete mapWithout[channelId];
-          return mapWithout;
-        }
-
-        const nextMap = { ...prev, [channelId]: nextState };
-        return applyAutoCashToChannelMap(nextMap, channelId);
-      });
-
-      setWalkInNoteDirty(true);
-    },
-    [applyAutoCashToChannelMap],
-  );
-  const handleWalkInTicketCurrencyToggle = useCallback(
-    (channelId: number, ticketLabel: string, currency: CashCurrency) => {
-      setWalkInTicketDataByChannel((prev) => {
-        const currentChannel = prev[channelId] ?? { ticketOrder: [], tickets: {} };
-        const ticketEntry =
-          currentChannel.tickets[ticketLabel] ?? {
-            name: ticketLabel,
-            currencyOrder: [],
-            currencies: {},
-          };
-        const isSelected = ticketEntry.currencyOrder.includes(currency);
-        const nextCurrencyOrder = isSelected
-          ? ticketEntry.currencyOrder.filter((item) => item !== currency)
-          : [...ticketEntry.currencyOrder, currency];
-        const nextCurrencies = { ...ticketEntry.currencies };
-        if (isSelected) {
-          delete nextCurrencies[currency];
-        } else {
-          const allowManualCash = ticketLabel === CUSTOM_TICKET_LABEL;
-          nextCurrencies[currency] = nextCurrencies[currency] ?? {
-            people: 0,
-            cash: allowManualCash ? '' : '0',
-            addons: {},
-          };
-        }
-        const nextTicket: WalkInTicketEntryState = {
-          ...ticketEntry,
-          currencyOrder: nextCurrencyOrder,
-          currencies: nextCurrencies,
-        };
-        const nextTickets = {
-          ...currentChannel.tickets,
-          [ticketLabel]: nextTicket,
-        };
-        const nextOrder = currentChannel.ticketOrder.includes(ticketLabel)
-          ? currentChannel.ticketOrder
-          : [...currentChannel.ticketOrder, ticketLabel];
-        const nextChannelState: WalkInChannelTicketState = {
-          ticketOrder: nextOrder,
-          tickets: nextTickets,
-        };
-        const nextMap = { ...prev, [channelId]: nextChannelState };
-        return applyAutoCashToChannelMap(nextMap, channelId);
-      });
-      setWalkInNoteDirty(true);
-    },
-    [applyAutoCashToChannelMap],
-  );
-
-  const handleWalkInTicketPeopleChange = useCallback(
-    (channelId: number, ticketLabel: string, currency: CashCurrency, nextValue: number) => {
-      setWalkInTicketDataByChannel((prev) => {
-        const currentChannel = prev[channelId] ?? { ticketOrder: [], tickets: {} };
-        const ticketEntry =
-          currentChannel.tickets[ticketLabel] ?? {
-            name: ticketLabel,
-            currencyOrder: [],
-            currencies: {},
-          };
-        const existingCurrency = ticketEntry.currencies[currency] ?? {
-          people: 0,
-          cash: '',
-          addons: {},
-        };
-        const normalized = Math.max(0, Math.round(nextValue));
-        if (
-          existingCurrency.people === normalized &&
-          ticketEntry.currencyOrder.includes(currency)
-        ) {
-          return prev;
-        }
-        const nextCurrencyEntry: WalkInCurrencyEntryState = {
-          ...existingCurrency,
-          people: normalized,
-        };
-        const nextCurrencies = {
-          ...ticketEntry.currencies,
-          [currency]: nextCurrencyEntry,
-        };
-        const nextCurrencyOrder = ticketEntry.currencyOrder.includes(currency)
-          ? ticketEntry.currencyOrder
-          : [...ticketEntry.currencyOrder, currency];
-        const nextTicket: WalkInTicketEntryState = {
-          ...ticketEntry,
-          currencyOrder: nextCurrencyOrder,
-          currencies: nextCurrencies,
-        };
-        const nextTickets = {
-          ...currentChannel.tickets,
-          [ticketLabel]: nextTicket,
-        };
-        const nextOrder = currentChannel.ticketOrder.includes(ticketLabel)
-          ? currentChannel.ticketOrder
-          : [...currentChannel.ticketOrder, ticketLabel];
-        const nextChannelState: WalkInChannelTicketState = {
-          ticketOrder: nextOrder,
-          tickets: nextTickets,
-        };
-        const nextMap = { ...prev, [channelId]: nextChannelState };
-        return applyAutoCashToChannelMap(nextMap, channelId);
-      });
-      setWalkInNoteDirty(true);
-    },
-    [applyAutoCashToChannelMap],
-  );
-
-  const handleWalkInTicketAddonChange = useCallback(
-    (
-      channelId: number,
-      ticketLabel: string,
-      currency: CashCurrency,
-      addonId: number,
-      nextValue: number,
-    ) => {
-      setWalkInTicketDataByChannel((prev) => {
-        const currentChannel = prev[channelId] ?? { ticketOrder: [], tickets: {} };
-        const ticketEntry =
-          currentChannel.tickets[ticketLabel] ?? {
-            name: ticketLabel,
-            currencyOrder: [],
-            currencies: {},
-          };
-        const existingCurrency = ticketEntry.currencies[currency] ?? {
-          people: 0,
-          cash: '',
-          addons: {},
-        };
-        const normalized = Math.max(0, Math.round(nextValue));
-        const nextAddons = { ...existingCurrency.addons };
-        if (normalized > 0) {
-          nextAddons[addonId] = normalized;
-        } else {
-          delete nextAddons[addonId];
-        }
-        const nextCurrencyEntry: WalkInCurrencyEntryState = {
-          ...existingCurrency,
-          addons: nextAddons,
-        };
-        const nextCurrencies = {
-          ...ticketEntry.currencies,
-          [currency]: nextCurrencyEntry,
-        };
-        const nextCurrencyOrder = ticketEntry.currencyOrder.includes(currency)
-          ? ticketEntry.currencyOrder
-          : [...ticketEntry.currencyOrder, currency];
-        const nextTicket: WalkInTicketEntryState = {
-          ...ticketEntry,
-          currencyOrder: nextCurrencyOrder,
-          currencies: nextCurrencies,
-        };
-        const nextTickets = {
-          ...currentChannel.tickets,
-          [ticketLabel]: nextTicket,
-        };
-        const nextOrder = currentChannel.ticketOrder.includes(ticketLabel)
-          ? currentChannel.ticketOrder
-          : [...currentChannel.ticketOrder, ticketLabel];
-        const nextChannelState: WalkInChannelTicketState = {
-          ticketOrder: nextOrder,
-          tickets: nextTickets,
-        };
-        const nextMap = { ...prev, [channelId]: nextChannelState };
-        return applyAutoCashToChannelMap(nextMap, channelId);
-      });
-      setWalkInNoteDirty(true);
-    },
-    [applyAutoCashToChannelMap],
-  );
-
-  const handleWalkInTicketCashChange = useCallback(
-    (channelId: number, ticketLabel: string, currency: CashCurrency, rawValue: string) => {
-      if (ticketLabel !== CUSTOM_TICKET_LABEL) {
-        return;
-      }
-
-      const sanitized = rawValue.replace(/[^0-9.]/g, '');
-      const firstDotIndex = sanitized.indexOf('.');
-      let cleaned = sanitized;
-      if (firstDotIndex !== -1) {
-        const before = sanitized.slice(0, firstDotIndex + 1);
-        const after = sanitized.slice(firstDotIndex + 1).replace(/\./g, '');
-        cleaned = before + after;
-      }
-      const displayValue = cleaned === '' || cleaned === '.' ? '' : cleaned;
-      setWalkInTicketDataByChannel((prev) => {
-        const currentChannel = prev[channelId] ?? { ticketOrder: [], tickets: {} };
-        const ticketEntry =
-          currentChannel.tickets[ticketLabel] ?? {
-            name: ticketLabel,
-            currencyOrder: [],
-            currencies: {},
-          };
-        const existingCurrency = ticketEntry.currencies[currency] ?? {
-          people: 0,
-          cash: '',
-          addons: {},
-        };
-        if (existingCurrency.cash === displayValue && ticketEntry.currencyOrder.includes(currency)) {
-          return prev;
-        }
-        const nextCurrencyEntry: WalkInCurrencyEntryState = {
-          ...existingCurrency,
-          cash: displayValue,
-        };
-        const nextCurrencies = {
-          ...ticketEntry.currencies,
-          [currency]: nextCurrencyEntry,
-        };
-        const nextCurrencyOrder = ticketEntry.currencyOrder.includes(currency)
-          ? ticketEntry.currencyOrder
-          : [...ticketEntry.currencyOrder, currency];
-        const nextTicket: WalkInTicketEntryState = {
-          ...ticketEntry,
-          currencyOrder: nextCurrencyOrder,
-          currencies: nextCurrencies,
-        };
-        const nextTickets = {
-          ...currentChannel.tickets,
-          [ticketLabel]: nextTicket,
-        };
-        const nextOrder = currentChannel.ticketOrder.includes(ticketLabel)
-          ? currentChannel.ticketOrder
-          : [...currentChannel.ticketOrder, ticketLabel];
-        const nextChannelState: WalkInChannelTicketState = {
-          ticketOrder: nextOrder,
-          tickets: nextTickets,
-        };
-        const nextMap = { ...prev, [channelId]: nextChannelState };
-        return nextMap;
-      });
-      setWalkInNoteDirty(true);
-    },
-    [setWalkInNoteDirty],
-  );
-  const handleCustomTicketTransferChange = useCallback(
-    (channelId: number, ticketLabel: string, checked: boolean) => {
-      if (ticketLabel !== CUSTOM_TICKET_LABEL) {
-        return;
-      }
-      setWalkInTicketDataByChannel((prev) => {
-        const currentChannel = prev[channelId] ?? { ticketOrder: [], tickets: {} };
-        const ticketEntry =
-          currentChannel.tickets[ticketLabel] ?? {
-            name: ticketLabel,
-            currencyOrder: [],
-            currencies: {},
-          };
-        if (Boolean(ticketEntry.transfer) === checked) {
-          return prev;
-        }
-        const nextTicket: WalkInTicketEntryState = {
-          ...ticketEntry,
-          transfer: checked,
-        };
-        const nextTickets = {
-          ...currentChannel.tickets,
-          [ticketLabel]: nextTicket,
-        };
-        const nextOrder = currentChannel.ticketOrder.includes(ticketLabel)
-          ? currentChannel.ticketOrder
-          : [...currentChannel.ticketOrder, ticketLabel];
-        return {
-          ...prev,
-          [channelId]: {
-            ticketOrder: nextOrder,
-            tickets: nextTickets,
-          },
-        };
-      });
-      setWalkInNoteDirty(true);
-    },
-    [setWalkInNoteDirty],
-  );
-
   useEffect(() => {
     if (!walkInNoteDirty) {
       return;
@@ -5023,7 +4184,7 @@ const loadCounterById = useCallback(
             }
             totalPeople += Math.max(0, currencyEntry.people);
             const numericCash = Number(currencyEntry.cash);
-            if (Number.isFinite(numericCash) && numericCash > 0) {
+            if (isReceivedWalkInCash(ticketEntry) && Number.isFinite(numericCash) && numericCash > 0) {
               totalCash += Math.max(0, Math.round(numericCash * 100) / 100);
             }
             Object.entries(currencyEntry.addons).forEach(([addonId, qty]) => {
@@ -5104,120 +4265,6 @@ const loadCounterById = useCallback(
     walkInNoteDirty,
     walkInChannelIds,
     walkInTicketDataByChannel,
-  ]);
-
-  const handleWalkInCashChange = useCallback(
-    (channelId: number, rawValue: string) => {
-      const digitsOnly = rawValue.replace(/[^\d]/g, '');
-      const displayValue = digitsOnly === '' ? '' : String(Math.max(0, Number(digitsOnly)));
-      let didChange = false;
-      setWalkInCashByChannel((prev) => {
-        if (prev[channelId] === displayValue) {
-          return prev;
-        }
-        didChange = true;
-        return { ...prev, [channelId]: displayValue };
-      });
-      if (didChange) {
-        setWalkInNoteDirty(true);
-      }
-
-      const numericQty = displayValue === '' ? 0 : Math.max(0, Number(displayValue));
-      const metric = getMetric(channelId, 'attended', null, 'cash_payment', null);
-      if (!metric) {
-        if (numericQty > 0) {
-          handleMetricChange(channelId, 'attended', null, 'cash_payment', null, numericQty);
-        }
-        return;
-      }
-      if (metric.qty !== numericQty) {
-        handleMetricChange(channelId, 'attended', null, 'cash_payment', null, numericQty);
-      }
-    },
-    [getMetric, handleMetricChange],
-  );
-
-  const handleCashOverrideEdit = useCallback(
-    (channelId: number) => {
-      const details = cashDetailsByChannel.get(channelId);
-      const currentOverride = cashOverridesByChannel[channelId] ?? '';
-      let initialValue = currentOverride;
-      if (!initialValue) {
-        const defaultAmount = details?.defaultAmount ?? null;
-        if (defaultAmount != null && Number.isFinite(defaultAmount)) {
-          initialValue = normalizeCashValue(defaultAmount);
-        }
-      }
-      setCashEditingChannelId(channelId);
-      setCashEditingValue(initialValue);
-    },
-    [cashDetailsByChannel, cashOverridesByChannel],
-  );
-
-  const handleCashOverrideChange = useCallback((value: string) => {
-    setCashEditingValue(value);
-  }, []);
-
-  const handleCashOverrideCancel = useCallback(() => {
-    setCashEditingChannelId(null);
-    setCashEditingValue('');
-  }, []);
-
-  const handleCashOverrideSave = useCallback(() => {
-    if (cashEditingChannelId == null) {
-      return;
-    }
-    const channelId = cashEditingChannelId;
-    const details = cashDetailsByChannel.get(channelId);
-    const parsedValue = parseCashInput(cashEditingValue);
-    const overrideAmount =
-      parsedValue != null && Number.isFinite(parsedValue) ? Math.max(0, parsedValue) : null;
-    const defaultAmount = details?.defaultAmount ?? null;
-    const baseMetric = getMetric(channelId, 'attended', null, 'cash_payment', null);
-
-    const hasOverride =
-      overrideAmount != null &&
-      (defaultAmount == null ? overrideAmount > 0 : !valuesAreClose(overrideAmount, defaultAmount));
-
-    let overridesChanged = false;
-    setCashOverridesByChannel((prev) => {
-      const next = { ...prev };
-      if (hasOverride && overrideAmount != null) {
-        const normalizedOverride = normalizeCashValue(overrideAmount);
-        if (prev[channelId] === normalizedOverride) {
-          return prev;
-        }
-        overridesChanged = true;
-        next[channelId] = normalizedOverride;
-        return next;
-      }
-      if (prev[channelId] != null) {
-        overridesChanged = true;
-        delete next[channelId];
-        return next;
-      }
-      return prev;
-    });
-
-    if (overridesChanged) {
-      setWalkInNoteDirty(true);
-    }
-
-    const nextQty = hasOverride && overrideAmount != null ? overrideAmount : 0;
-    const currentQty = baseMetric?.qty ?? 0;
-    if (currentQty !== nextQty) {
-      handleMetricChange(channelId, 'attended', null, 'cash_payment', null, nextQty);
-    }
-
-    setCashEditingChannelId(null);
-    setCashEditingValue('');
-  }, [
-    cashDetailsByChannel,
-    cashEditingChannelId,
-    cashEditingValue,
-    getMetric,
-    handleMetricChange,
-    setWalkInNoteDirty,
   ]);
 
   const handleStaffChange = useCallback(
@@ -5866,35 +4913,9 @@ useEffect(() => {
     });
   }, [availableCashReservationChannelIds, channelHasRecordedData]);
 
-  const handleCashReservationChannelSelection = useCallback(
-    (_event: MouseEvent<HTMLElement>, values: number[]) => {
-      const next = Array.isArray(values)
-        ? values
-            .map((value) => Number(value))
-            .filter((value) => Number.isFinite(value) && availableCashReservationChannelIds.includes(value))
-        : [];
-      const deduped = Array.from(new Set(next));
-      const newlySelected = deduped.filter((id) => !selectedCashReservationChannelIds.includes(id));
-      if (newlySelected.length > 0) {
-        setCashCurrencyByChannel((prev) => {
-          let changed = false;
-          const nextMap = { ...prev };
-          newlySelected.forEach((channelId) => {
-            if (channelId in nextMap) {
-              delete nextMap[channelId];
-              changed = true;
-            }
-          });
-          return changed ? nextMap : prev;
-        });
-      }
-      setSelectedCashReservationChannelIds(deduped);
-    },
-    [availableCashReservationChannelIds, selectedCashReservationChannelIds],
-  );
-
   useEffect(() => {
     if (
+      !isModalOpen ||
       activeRegistryStep !== 'reservations' ||
       counterId == null ||
       loggedUserId == null ||
@@ -5924,8 +4945,15 @@ useEffect(() => {
       (!Number.isFinite(serverUpdatedAtMs) || draftUpdatedAtMs > serverUpdatedAtMs)
         ? storedDraft
         : null;
-    if (storedDraft && !draft) {
+    // Staff selections are explicit additions/removals, so retain them even when another
+    // device updated the counter. The server revalidates and deduplicates them on save.
+    const recoveredStaffFreeDraft = restoreStaffFreeDraft(storedDraft?.staffFreeDraft);
+    setStaffFreeDraft(recoveredStaffFreeDraft);
+    if (storedDraft && !draft && !hasStaffFreeDraft(recoveredStaffFreeDraft)) {
       removeCounterReservationDraft(reservationDraftStorageKey);
+    }
+    if (!draft && hasStaffFreeDraft(recoveredStaffFreeDraft)) {
+      setOnlineReservationsNotice('Recovered unsaved Reservation Check changes from this browser.');
     }
     if (draft) {
       const restoredMetrics = Array.isArray(draft.dirtyMetrics)
@@ -6036,6 +5064,7 @@ useEffect(() => {
     }
   }, [
     activeRegistryStep,
+    isModalOpen,
     counterId,
     dispatch,
     loggedUserId,
@@ -6045,6 +5074,7 @@ useEffect(() => {
   ]);
 
   const hasRecoverableReservationChanges =
+    hasStaffFreeDraft(staffFreeDraft) ||
     registry.dirtyMetricKeys.length > 0 ||
     walkInNoteDirty ||
     Object.keys(pendingBookingAttendanceById).length > 0 ||
@@ -6054,6 +5084,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (
+      !isModalOpen ||
       activeRegistryStep !== 'reservations' ||
       counterId == null ||
       loggedUserId == null ||
@@ -6079,6 +5110,7 @@ useEffect(() => {
       .filter((metric): metric is MetricCell => Boolean(metric));
     const draft: CounterReservationDraft = {
       version: COUNTER_RESERVATION_DRAFT_VERSION,
+      staffFreeDraft,
       counterId,
       userId: loggedUserId,
       updatedAt: new Date().toISOString(),
@@ -6107,6 +5139,7 @@ useEffect(() => {
     }
   }, [
     activeRegistryStep,
+    isModalOpen,
     cashCurrencyByChannel,
     cashEditingChannelId,
     cashEditingValue,
@@ -6116,6 +5149,7 @@ useEffect(() => {
     freeAddonsByChannel,
     freePeopleByChannel,
     hasRecoverableReservationChanges,
+    staffFreeDraft,
     loggedUserId,
     pendingBookingAttendanceById,
     pendingBookingCashCollectionById,
@@ -6142,7 +5176,7 @@ useEffect(() => {
     if (advancingToSummary) {
       return;
     }
-    if (!currentProductId || onlineScopedChannelIdSet.size === 0) {
+    if (!currentProductId) {
       setOnlineReservationOrders([]);
       setOnlineReservationsError(null);
       setOnlineReservationsLoading(false);
@@ -7383,8 +6417,8 @@ useEffect(() => {
       ) {
         return;
       }
-      const normalizedName = channel.name?.toLowerCase() ?? '';
-      const isWalkIn = normalizedName === WALK_IN_CHANNEL_SLUG;
+
+      const isWalkIn = walkInChannelIds.includes(channel.id);
       const peopleQty = attendedPeopleByChannel.get(channel.id) ?? 0;
       const normalizedQty = Math.max(0, Math.round(peopleQty));
       if (isWalkIn) {
@@ -7422,6 +6456,8 @@ useEffect(() => {
                 people: peopleTotal,
                 cash: normalizedCash,
                 addons: addonsSnapshot,
+                unitPrice: currencyEntry.unitPrice,
+                addonUnitPrices: currencyEntry.addonUnitPrices,
               });
               totalPeople += peopleTotal;
               totalAmount += normalizedCash;
@@ -7432,7 +6468,12 @@ useEffect(() => {
               ticketSnapshots.push({
                 key: ticketLabel,
                 name: ticketDisplayName,
-                ...(ticketLabel === CUSTOM_TICKET_LABEL && ticketEntry.transfer ? { transfer: true } : {}),
+                ticketType: ticketEntry.ticketType,
+                staffGuests: ticketEntry.staffGuests,
+                paymentMethodId: ticketEntry.paymentMethodId,
+                paymentMethodName: ticketEntry.paymentMethodName,
+                paymentStatus: ticketEntry.paymentStatus,
+                ...(ticketEntry.transfer ? { transfer: true } : {}),
                 currencies: currencySnapshots,
               });
             }
@@ -7440,6 +6481,7 @@ useEffect(() => {
         }
         if (ticketSnapshots.length > 0) {
           snapshotChannels[channel.id.toString()] = {
+          channelName: channel.name,
             currency: 'PLN',
             amount: totalAmount,
             qty: totalPeople,
@@ -7455,6 +6497,7 @@ useEffect(() => {
           return;
         }
         snapshotChannels[channel.id.toString()] = {
+          channelName: channel.name,
           currency: 'PLN',
           amount: normalizedAmount,
           qty: normalizedQty,
@@ -7496,6 +6539,7 @@ useEffect(() => {
         return;
       }
       snapshotChannels[channel.id.toString()] = {
+          channelName: channel.name,
         currency,
         amount: normalizedAmount,
         qty: snapshotQty,
@@ -7516,7 +6560,7 @@ useEffect(() => {
       }
       const key = channelId.toString();
       if (!freeChannels[key]) {
-        freeChannels[key] = {};
+        freeChannels[key] = { channelName: registry.channels.find(channel => channel.id === Number(key))?.name };
       }
       freeChannels[key].people = { qty, note };
     });
@@ -7542,7 +6586,7 @@ useEffect(() => {
       }
       const key = channelId.toString();
       if (!freeChannels[key]) {
-        freeChannels[key] = {};
+        freeChannels[key] = { channelName: registry.channels.find(channel => channel.id === Number(key))?.name };
       }
       freeChannels[key].addons = {
         ...(freeChannels[key].addons ?? {}),
@@ -7598,11 +6642,14 @@ useEffect(() => {
         map.set(channelId, qty);
       }
     });
+    const walkIn = registry.channels.find(channel => channel.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'walkin');
+    const staffCount = effectiveStaffFreeCount;
+    if (walkIn && staffCount) map.set(walkIn.id, (map.get(walkIn.id) ?? 0) + staffCount);
     return map;
-  }, [freePeopleByChannel]);
+  }, [freePeopleByChannel, registry.channels, effectiveStaffFreeCount]);
 
   const totalFreePeople = useMemo(() => {
-    let total = 0;
+    let total = effectiveStaffFreeCount;
     Object.values(freePeopleByChannel).forEach((entry) => {
       if (!entry) {
         return;
@@ -7610,7 +6657,7 @@ useEffect(() => {
       total += Math.max(0, Math.round(entry.qty ?? 0));
     });
     return total;
-  }, [freePeopleByChannel]);
+  }, [freePeopleByChannel, effectiveStaffFreeCount]);
 
   const freeAddonsTotalsByChannel = useMemo(() => {
     const channelMap = new Map<number, Map<number, number>>();
@@ -7721,6 +6768,8 @@ useEffect(() => {
     );
   }, [freeAddonsByChannel, freePeopleByChannel]);
 
+  const walkInValidationError = useMemo(() => getWalkInValidationError(walkInTicketDataByChannel), [walkInTicketDataByChannel]);
+
   const flushMetrics = useCallback(
     async (
       options: {
@@ -7738,6 +6787,8 @@ useEffect(() => {
         }>;
       } = {},
     ): Promise<boolean> => {
+      if (walkInValidationError || hasFreeNoteValidationError || (hasStaffFreeDraft(staffFreeDraft) && staffFreeValidationError)) return false;
+      const staffFreeChanges = hasStaffFreeDraft(staffFreeDraft) ? staffFreeDraftChanges(staffFreeDraft) : undefined;
       const activeCounterId = counterId;
       const noteUpdateNeeded = noteNeedsUpdate || walkInNoteDirty;
       if (!activeCounterId) {
@@ -7755,7 +6806,7 @@ useEffect(() => {
       const statusToCommit =
         statusCandidate && statusCandidate !== counterStatus ? statusCandidate : undefined;
       const attendanceUpdates =
-        options.attendanceUpdates?.filter(
+        (options.attendanceUpdates ?? (staffFreeChanges ? Object.entries(pendingBookingAttendanceById).map(([id, staged]) => ({ bookingId: Number(id), ...staged })) : []))?.filter(
           (row) => Number.isFinite(row.bookingId) && row.bookingId > 0,
         ) ?? [];
 
@@ -7795,7 +6846,7 @@ useEffect(() => {
         shouldRefreshSourceMetrics ||
         shouldSendNotes ||
         Boolean(statusToCommit) ||
-        attendanceUpdates.length > 0;
+        attendanceUpdates.length > 0 || Boolean(staffFreeChanges);
       if (!shouldCommit) {
         if (noteUpdateNeeded) {
           setWalkInNoteDirty(false);
@@ -7817,7 +6868,7 @@ useEffect(() => {
             return parts.length > 1 && parts[1] === 'cash_payment';
           });
 
-        if (attendanceUpdates.length > 0) {
+        if (attendanceUpdates.length > 0 || staffFreeChanges) {
           await dispatch(
             finalizeCounterReservations({
               counterId: activeCounterId,
@@ -7834,6 +6885,7 @@ useEffect(() => {
               })),
               metrics: metricsPayload,
               status: statusToCommit,
+              staffFreeChanges,
               notes: shouldSendNotes ? computedCounterNotes : undefined,
             }),
           ).unwrap();
@@ -7849,6 +6901,7 @@ useEffect(() => {
               counterId: activeCounterId,
               metrics: metricsPayload,
               status: statusToCommit,
+              staffFreeChanges,
               notes: shouldSendNotes ? computedCounterNotes : undefined,
             }),
           ).unwrap();
@@ -7862,6 +6915,8 @@ useEffect(() => {
           setShouldRefreshCounterList(true);
         }
 
+        setStaffFreeDraft(emptyStaffFreeDraft());
+        setStaffFreeValidationError(null);
         clearReservationDraft();
         return true;
       } catch (_error) {
@@ -7887,6 +6942,11 @@ useEffect(() => {
       registry.metricsByKey,
       registry.persistedMetricsByKey,
       walkInNoteDirty,
+      walkInValidationError,
+      hasFreeNoteValidationError,
+      staffFreeDraft,
+      staffFreeValidationError,
+      pendingBookingAttendanceById,
     ],
   );
 
@@ -8108,147 +7168,7 @@ useEffect(() => {
     syncVenueNumbers: ensureNightReportFromSummary,
     close: handleCloseModal,
   });
-  const renderStepper = (
-    label: string,
-    metric: MetricCell | null,
-    disabled: boolean,
-    min = 0,
-    max?: number,
-    step = 1,
-    options: { hideLabel?: boolean } = {},
-  ) => {
-    const qty = metric?.qty ?? 0;
-    const decreaseDisabled = disabled || qty <= min;
-    const increaseDisabled = disabled || (typeof max === 'number' && qty >= max);
 
-    const adjust = (delta: number) => {
-      const next = Math.max(min, Math.floor(qty + delta));
-      const finalValue = typeof max === 'number' ? Math.min(next, max) : next;
-      if (!metric || finalValue === qty) {
-        return;
-      }
-      handleMetricChange(metric.channelId, metric.tallyType, metric.period, metric.kind, metric.addonId, finalValue);
-    };
-
-    const handleInputChange = (value: string) => {
-      if (!metric) {
-        return;
-      }
-      const parsed = Number(value);
-      if (Number.isNaN(parsed)) {
-        return;
-      }
-      const clamped = Math.max(min, typeof max === 'number' ? Math.min(parsed, max) : parsed);
-      handleMetricChange(metric.channelId, metric.tallyType, metric.period, metric.kind, metric.addonId, clamped);
-    };
-
-    const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === '+' || event.key === '=') {
-        event.preventDefault();
-        adjust(step);
-      }
-      if (event.key === '-') {
-        event.preventDefault();
-        adjust(-step);
-      }
-      if (event.key === '0') {
-        event.preventDefault();
-        if (metric) {
-          handleMetricChange(metric.channelId, metric.tallyType, metric.period, metric.kind, metric.addonId, 0);
-        }
-      }
-    };
-
-    const handleFocus = () => {
-      if (metric) {
-        markChannelEditing(metric.channelId);
-      }
-    };
-
-    const handleBlur = () => {
-      if (metric) {
-        unmarkChannelEditing(metric.channelId);
-      }
-    };
-
-    const displayLabel = label ?? '';
-    const hideLabel = Boolean(options.hideLabel);
-    const ariaLabel = displayLabel.trim().length > 0 ? displayLabel : 'value';
-    const stackKey =
-      metric
-        ? `${metric.channelId}-${metric.kind}-${metric.addonId ?? 'people'}-${metric.tallyType}-${metric.period ?? 'none'}`
-        : displayLabel;
-
-    return (
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%' }} key={stackKey}>
-        {!hideLabel && (
-          <Typography sx={{ flexGrow: 1 }}>{displayLabel}</Typography>
-        )}
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            width: '100%',
-            maxWidth: 220,
-          }}
-        >
-          <IconButton
-            aria-label={`Decrease ${ariaLabel}`}
-            size="small"
-            onClick={() => adjust(-step)}
-            disabled={decreaseDisabled}
-            sx={{
-              border: '1px solid',
-              borderColor: decreaseDisabled ? 'divider' : 'primary.main',
-              borderRadius: 1.5,
-              width: 36,
-              height: 36,
-              backgroundColor: decreaseDisabled ? 'transparent' : 'primary.main',
-              color: decreaseDisabled ? 'text.disabled' : 'common.white',
-              transition: 'background-color 0.2s ease',
-            }}
-          >
-            <Remove sx={{ fontSize: 18 }} />
-          </IconButton>
-          <TextField
-            value={qty}
-            type="number"
-            size="small"
-            disabled={disabled}
-            onChange={(event) => handleInputChange(event.target.value)}
-            onKeyDown={onKeyDown}
-            onFocus={handleFocus}
-            onBlur={handleBlur}
-            inputProps={{
-              min,
-              max,
-              style: { textAlign: 'center' as const },
-            }}
-            sx={{ flexGrow: 1, minWidth: 0 }}
-          />
-          <IconButton
-            aria-label={`Increase ${ariaLabel}`}
-            size="small"
-            onClick={() => adjust(step)}
-            disabled={increaseDisabled}
-            sx={{
-              border: '1px solid',
-              borderColor: increaseDisabled ? 'divider' : 'primary.main',
-              borderRadius: 1.5,
-              width: 36,
-              height: 36,
-              backgroundColor: increaseDisabled ? 'transparent' : 'primary.main',
-              color: increaseDisabled ? 'text.disabled' : 'common.white',
-              transition: 'background-color 0.2s ease',
-            }}
-          >
-            <Add sx={{ fontSize: 18 }} />
-          </IconButton>
-        </Box>
-      </Stack>
-    );
-  };
   const stepIndex = useMemo(
     () => STEP_CONFIGS.findIndex((step) => step.key === activeRegistryStep),
     [activeRegistryStep],
@@ -8619,949 +7539,7 @@ useEffect(() => {
     () => productOptions.find((product) => product.id === currentProductId) ?? null,
     [currentProductId, productOptions],
   );
-  const afterCutoffWarnings = useMemo(() => {
-    const warnings = new Set<number>();
-    const channelsById = new Map<number, ChannelConfig>();
-    registry.channels.forEach((channel) => {
-      channelsById.set(channel.id, channel);
-    });
-    Object.values(metricsMap).forEach((metric) => {
-      if (
-        metric.kind !== 'people' ||
-        metric.tallyType !== 'booked' ||
-        metric.period !== 'after_cutoff' ||
-        metric.qty <= 0
-      ) {
-        return;
-      }
-      const channel = channelsById.get(metric.channelId);
-      if (!channel) {
-        return;
-      }
-      if (!isAfterCutoffEligibleChannel(channel)) {
-        warnings.add(metric.channelId);
-      }
-    });
-    return warnings;
-  }, [metricsMap, registry.channels]);
-  const renderChannelCard = (
-    channel: ChannelConfig,
-    bucket: BucketDescriptor,
-    addons: AddonConfig[],
-  ) => {
-    const metricPeriodForBucket: MetricPeriod =
-      bucket.tallyType === 'booked' ? bucket.period ?? 'before_cutoff' : null;
-    const ensureEditableMetric = (
-      kind: MetricKind,
-      addonId: number | null,
-      metric: MetricCell | null,
-    ): MetricCell | null => {
-      if (metric) {
-        return metric;
-      }
-      if (!counterId) {
-        return null;
-      }
-      return {
-        counterId,
-        channelId: channel.id,
-        kind,
-        addonId,
-        tallyType: bucket.tallyType,
-        period: metricPeriodForBucket,
-        qty: 0,
-      };
-    };
-    const peopleMetric = ensureEditableMetric(
-      'people',
-      null,
-      getMetric(channel.id, bucket.tallyType, bucket.period, 'people', null),
-    );
-    const attendedPeople = getMetric(channel.id, 'attended', null, 'people', null)?.qty ?? 0;
-    const disableInputs = registry.savingMetrics || confirmingMetrics;
-    const warningActive = bucket.period === 'after_cutoff' && afterCutoffWarnings.has(channel.id);
-    const normalizedChannelName = channel.name?.toLowerCase() ?? '';
-    const isWalkInChannel = normalizedChannelName === WALK_IN_CHANNEL_SLUG;
-    const isWalkInAttended = isWalkInChannel && bucket.tallyType === 'attended' && bucket.period === null;
-    const walkInConfiguredTicketOptions = walkInConfiguredTicketOptionsByChannel[channel.id] ?? [];
-    const walkInDiscountSelection = (walkInDiscountsByChannel[channel.id] ?? []).filter((ticketLabel) =>
-      walkInConfiguredTicketOptions.includes(ticketLabel),
-    );
-    const walkInTicketState =
-      walkInTicketDataByChannel[channel.id] ?? ({ ticketOrder: [], tickets: {} } as WalkInChannelTicketState);
-    const walkInCashValue = walkInCashByChannel[channel.id] ?? '';
-    const freePeopleEntry = freePeopleByChannel[channel.id];
-    const freePeopleActive = freePeopleEntry != null;
-    const freePeopleQty = Math.max(0, Math.round(freePeopleEntry?.qty ?? 0));
-    const freePeopleNote = freePeopleEntry?.note ?? '';
-    const freePeopleNoteError =
-      freePeopleActive && freePeopleQty > 0 && freePeopleNote.trim().length === 0;
-    const freeAddonEntries = freeAddonsByChannel[channel.id] ?? {};
-    const isCashChannel = isCashPaymentChannel(channel);
-    const cashDetails = cashDetailsByChannel.get(channel.id);
-    const hasCashOverride = cashDetails?.hasManualOverride ?? false;
-    const cashDisplayText = cashDetails?.formattedDisplay ?? null;
-    const showCashSummary =
-      isCashChannel && !isWalkInChannel && bucket.tallyType === 'attended' && bucket.period === null;
-    const defaultCashText =
-      cashDetails?.defaultAmount != null && Number.isFinite(cashDetails.defaultAmount)
-        ? formatCashAmount(cashDetails.defaultAmount)
-        : null;
-    const defaultCashPriceText =
-      cashDetails?.price != null && Number.isFinite(cashDetails.price)
-        ? formatCashAmount(cashDetails.price)
-        : null;
-    const hasRecordedData = channelHasRecordedData(channel.id);
-    const selectedCashCurrencyRaw = cashCurrencyByChannel[channel.id];
-    const selectedCashCurrency = isCashCurrency(selectedCashCurrencyRaw)
-      ? selectedCashCurrencyRaw
-      : undefined;
-    const showCurrencyToggle =
-      isCashChannel && !isWalkInChannel && bucket.tallyType === 'attended' && bucket.period === null;
-    const activeCashCurrency: CashCurrency | undefined = showCurrencyToggle
-      ? selectedCashCurrency ?? (hasRecordedData ? resolveCashCurrencyForChannel(channel.id) : undefined)
-      : undefined;
-    const cashCurrency = (activeCashCurrency ?? 'PLN') as CashCurrency;
-    const requiresCurrencySelection = showCurrencyToggle && !hasRecordedData;
-    const canRenderCashCounters = !requiresCurrencySelection || Boolean(activeCashCurrency);
-    const canRenderWalkInAttendedCounters =
-      !isWalkInAttended || walkInDiscountSelection.length > 0 || freePeopleActive;
-    const handleCurrencySelect = (_event: MouseEvent<HTMLElement>, value: CashCurrency | null) => {
-      if (!value) {
-        return;
-      }
-      handleCashCurrencyChange(channel.id, value);
-    };
-    const availableCurrencies: CashCurrency[] = ['PLN', 'EUR'];
 
-    const renderTicketChips = (extra?: JSX.Element | JSX.Element[]) => (
-      <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-        {walkInConfiguredTicketOptions.map((option) => {
-          const selected = walkInDiscountSelection.includes(option);
-          return (
-            <Chip
-              key={option}
-              label={option}
-              size="small"
-              variant={selected ? 'filled' : 'outlined'}
-              color={selected ? 'primary' : 'default'}
-              onClick={() => handleWalkInDiscountToggle(channel.id, option)}
-              disabled={disableInputs}
-            />
-          );
-        })}
-        {extra}
-      </Stack>
-    );
-
-    const renderLocalStepper = (
-      key: string,
-      label: string,
-      value: number,
-      onChange: (nextValue: number) => void,
-      disabled: boolean,
-      min = 0,
-      max?: number,
-    ) => {
-      const step = 1;
-      const decreaseDisabled = disabled || value <= min;
-      const increaseDisabled = disabled || (typeof max === 'number' && value >= max);
-
-      const adjust = (delta: number) => {
-        const next = Math.max(min, value + delta);
-        const finalValue = typeof max === 'number' ? Math.min(next, max) : next;
-        if (finalValue === value) {
-          return;
-        }
-        onChange(finalValue);
-      };
-
-      const handleInputChange = (raw: string) => {
-        const parsed = Number(raw);
-        if (Number.isNaN(parsed)) {
-          return;
-        }
-        const clamped = Math.max(min, typeof max === 'number' ? Math.min(parsed, max) : parsed);
-        if (clamped === value) {
-          return;
-        }
-        onChange(clamped);
-      };
-
-      return (
-        <Stack key={key} direction="row" spacing={1} alignItems="center" sx={{ width: '100%' }}>
-          <Typography sx={{ flexGrow: 1 }}>{label}</Typography>
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              width: '100%',
-              maxWidth: 200,
-            }}
-          >
-            <IconButton
-              aria-label={`Decrease ${label}`}
-              size="small"
-              onClick={() => adjust(-step)}
-              disabled={decreaseDisabled}
-              sx={{
-                border: '1px solid',
-                borderColor: decreaseDisabled ? 'divider' : 'primary.main',
-                borderRadius: 1.5,
-                width: 36,
-                height: 36,
-                backgroundColor: decreaseDisabled ? 'transparent' : 'primary.main',
-                color: decreaseDisabled ? 'text.disabled' : 'common.white',
-                transition: 'background-color 0.2s ease',
-              }}
-            >
-              <Remove sx={{ fontSize: 18 }} />
-            </IconButton>
-            <TextField
-              value={value}
-              type="number"
-              size="small"
-              disabled={disabled}
-              onChange={(event) => handleInputChange(event.target.value)}
-              inputProps={{
-                min,
-                max,
-                style: { textAlign: 'center' as const },
-              }}
-              sx={{ flexGrow: 1, minWidth: 0 }}
-            />
-            <IconButton
-              aria-label={`Increase ${label}`}
-              size="small"
-              onClick={() => adjust(step)}
-              disabled={increaseDisabled}
-              sx={{
-                border: '1px solid',
-                borderColor: increaseDisabled ? 'divider' : 'primary.main',
-                borderRadius: 1.5,
-                width: 36,
-                height: 36,
-                backgroundColor: increaseDisabled ? 'transparent' : 'primary.main',
-                color: increaseDisabled ? 'text.disabled' : 'common.white',
-                transition: 'background-color 0.2s ease',
-              }}
-            >
-              <Add sx={{ fontSize: 18 }} />
-            </IconButton>
-          </Box>
-        </Stack>
-      );
-    };
-
-    const handleFreePeopleToggle = () => {
-      if (disableInputs) {
-        return;
-      }
-      if (freePeopleActive) {
-        setFreePeopleByChannel((prev) => {
-          if (!(channel.id in prev)) {
-            return prev;
-          }
-          const { [channel.id]: _removed, ...rest } = prev;
-          return rest;
-        });
-        setFreeAddonsByChannel((prev) => {
-          if (!(channel.id in prev)) {
-            return prev;
-          }
-          const { [channel.id]: _removed, ...rest } = prev;
-          return rest;
-        });
-        setWalkInNoteDirty(true);
-      } else {
-        ensureFreePeopleEntry(channel.id);
-      }
-    };
-
-  const freePeopleChip = (
-    <Chip
-      key="free-walk-in"
-      label="Free"
-      size="small"
-      variant={freePeopleActive ? 'filled' : 'outlined'}
-      color={freePeopleActive ? 'info' : 'default'}
-      onClick={handleFreePeopleToggle}
-      disabled={disableInputs}
-      />
-    );
-
-    return (
-      <Card
-        variant="outlined"
-        sx={{
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          <Stack spacing={1.5}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" rowGap={1}>
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" rowGap={1}>
-                <Typography variant="subtitle1" fontWeight={600}>
-                  {channel.name}
-                </Typography>
-                {showCurrencyToggle && (
-                  <ToggleButtonGroup
-                    size="small"
-                    exclusive
-                    value={activeCashCurrency ?? null}
-                    onChange={handleCurrencySelect}
-                    aria-label={`${channel.name} cash currency`}
-                    disabled={disableInputs}
-                  >
-                    <ToggleButton value="PLN">PLN</ToggleButton>
-                    <ToggleButton value="EUR">EUR</ToggleButton>
-                  </ToggleButtonGroup>
-                )}
-              </Stack>
-              {warningActive && <Chip label="After cut-off" color="warning" size="small" />}
-            </Stack>
-            {isWalkInAttended ? (
-              <Stack spacing={1.5}>
-                <Stack spacing={0.75}>
-                  <Typography variant="subtitle2">Tickets Type</Typography>
-                  {renderTicketChips(freePeopleChip)}
-                  {walkInConfiguredTicketOptions.length === 0 ? (
-                    <Typography variant="caption" color="text.secondary">
-                      No walk-in ticket types configured in Channel Product Prices.
-                    </Typography>
-                  ) : walkInDiscountSelection.length === 0 && !freePeopleActive && (
-                    <Typography variant="caption" color="text.secondary">
-                      Select a ticket type to start recording.
-                    </Typography>
-                  )}
-                </Stack>
-                {(walkInDiscountSelection.length > 0 || freePeopleActive) && (
-                  <Box
-                    sx={{
-                      display: 'grid',
-                      gap: 1.5,
-                      gridTemplateColumns: {
-                        xs: '1fr',
-                        sm: 'repeat(auto-fit, minmax(240px, 1fr))',
-                        lg: 'repeat(auto-fit, minmax(280px, 1fr))',
-                      },
-                      alignItems: 'stretch',
-                      justifyItems: 'stretch',
-                    }}
-                  >
-                    {walkInDiscountSelection.map((ticketLabel) => {
-                      const ticketEntry =
-                        walkInTicketState.tickets[ticketLabel] ?? {
-                          name: ticketLabel,
-                          currencyOrder: [],
-                          currencies: {},
-                        };
-                      const isCustomTicket = ticketLabel === CUSTOM_TICKET_LABEL;
-                      const displayName =
-                        ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name : ticketLabel;
-                      const isEditingThisCustom =
-                        editingCustomTicket?.channelId === channel.id &&
-                        editingCustomTicket.ticketLabel === ticketLabel;
-                      return (
-                        <Box
-                          key={`${channel.id}-${ticketLabel}`}
-                          sx={{
-                            border: '1px solid',
-                            borderColor: 'divider',
-                            borderRadius: 1,
-                            p: 1.25,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 1,
-                            minWidth: 0,
-                          }}
-                        >
-                          <Stack spacing={1}>
-                            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.75 }}>
-                              {isEditingThisCustom ? (
-                                <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-                                  <TextField
-                                    size="small"
-                                    value={editingCustomTicket?.value ?? ''}
-                                    onChange={handleCustomTicketEditChange}
-                                    autoFocus
-                                    placeholder="Custom ticket name"
-                                    onKeyDown={(event) => {
-                                      if (event.key === 'Enter') {
-                                        event.preventDefault();
-                                        handleCustomTicketEditSave();
-                                      }
-                                      if (event.key === 'Escape') {
-                                        event.preventDefault();
-                                        handleCustomTicketEditCancel();
-                                      }
-                                    }}
-                                  />
-                                  <IconButton
-                                    size="small"
-                                    color="success"
-                                    aria-label="Save ticket name"
-                                    onClick={handleCustomTicketEditSave}
-                                  >
-                                    <Check fontSize="small" />
-                                  </IconButton>
-                                  <IconButton
-                                    size="small"
-                                    aria-label="Cancel ticket name edit"
-                                    onClick={handleCustomTicketEditCancel}
-                                  >
-                                    <Close fontSize="small" />
-                                  </IconButton>
-                                </Stack>
-                              ) : (
-                                <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-                                  <Typography variant="subtitle2" fontWeight={600}>
-                                    {displayName}
-                                  </Typography>
-                                  {isCustomTicket && (
-                                    <Tooltip title="Rename ticket type">
-                                      <span>
-                                        <IconButton
-                                          size="small"
-                                          aria-label="Rename ticket type"
-                                          onClick={() => handleCustomTicketEditStart(channel.id, ticketLabel, displayName)}
-                                          disabled={disableInputs}
-                                        >
-                                          <Edit fontSize="small" />
-                                        </IconButton>
-                                      </span>
-                                    </Tooltip>
-                                  )}
-                                </Stack>
-                              )}
-                            </Stack>
-                            {isCustomTicket && (
-                              <FormControlLabel
-                                control={
-                                  <Checkbox
-                                    size="small"
-                                    checked={Boolean(ticketEntry.transfer)}
-                                    onChange={(event) =>
-                                      handleCustomTicketTransferChange(
-                                        channel.id,
-                                        ticketLabel,
-                                        event.target.checked,
-                                      )
-                                    }
-                                    disabled={disableInputs}
-                                  />
-                                }
-                                label="Transfer"
-                                sx={{
-                                  alignSelf: 'flex-start',
-                                  m: 0,
-                                  '& .MuiFormControlLabel-label': {
-                                    fontSize: '0.875rem',
-                                    fontWeight: 600,
-                                  },
-                                }}
-                              />
-                            )}
-                            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-                              {availableCurrencies.map((currencyOption) => {
-                                const selected = ticketEntry.currencyOrder.includes(currencyOption);
-                                const buttonLabel = currencyOption === 'PLN' ? 'Add PLN' : 'Add EUR';
-                                return (
-                                  <Button
-                                    key={`${ticketLabel}-${currencyOption}`}
-                                    type="button"
-                                    variant={selected ? 'contained' : 'outlined'}
-                                    color="primary"
-                                    size="small"
-                                    onClick={() =>
-                                      handleWalkInTicketCurrencyToggle(channel.id, ticketLabel, currencyOption)
-                                    }
-                                    disabled={disableInputs}
-                                  >
-                                    {buttonLabel}
-                                  </Button>
-                                );
-                              })}
-                            </Stack>
-                            {ticketEntry.currencyOrder.length === 0 ? (
-                              <Typography variant="caption" color="text.secondary">
-                                Select a currency to enable counters.
-                              </Typography>
-                            ) : (
-                              <Box
-                                sx={{
-                                  display: 'grid',
-                                  gap: 1.25,
-                                  gridTemplateColumns: {
-                                    xs: '1fr',
-                                    sm: 'repeat(auto-fit, minmax(180px, 1fr))',
-                                    md: 'repeat(auto-fit, minmax(200px, 1fr))',
-                                  },
-                                  alignItems: 'stretch',
-                                  justifyItems: 'stretch',
-                                }}
-                              >
-                                {ticketEntry.currencyOrder.map((currencyOption) => {
-                                  const currencyEntry =
-                                    ticketEntry.currencies[currencyOption] ?? {
-                                      people: 0,
-                                      cash: '',
-                                      addons: {},
-                                    };
-                                  const currencyKey = `${channel.id}-${ticketLabel}-${currencyOption}`;
-                                  return (
-                                    <Box
-                                      key={currencyKey}
-                                      sx={{
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        gap: 1,
-                                        border: '1px solid',
-                                        borderColor: 'divider',
-                                        borderRadius: 1,
-                                        p: 1.25,
-                                        minWidth: 0,
-                                      }}
-                                    >
-                                      <Typography variant="subtitle2" fontWeight={500}>
-                                        {currencyOption}
-                                      </Typography>
-                                      {renderLocalStepper(
-                                        `${currencyKey}-people`,
-                                        'People',
-                                        currencyEntry.people,
-                                        (next) =>
-                                          handleWalkInTicketPeopleChange(
-                                            channel.id,
-                                            ticketLabel,
-                                            currencyOption,
-                                            next,
-                                          ),
-                                        disableInputs,
-                                      )}
-                                      {addons.map((addon) => {
-                                        const numericAddonId =
-                                          typeof addon.addonId === 'number'
-                                            ? addon.addonId
-                                            : Number(addon.addonId);
-                                        if (!Number.isFinite(numericAddonId)) {
-                                          return null;
-                                        }
-                                        const normalizedAddonId = numericAddonId;
-                                        const isCocktail =
-                                          addon.key?.toLowerCase() === 'cocktails' ||
-                                          addon.name?.toLowerCase() === 'cocktails';
-                                        const availableForAddons = currencyEntry.people;
-                                        const calculatedMax =
-                                          addon.maxPerAttendee != null && availableForAddons > 0
-                                            ? addon.maxPerAttendee * availableForAddons
-                                            : undefined;
-                                        const stepperMax = isCocktail ? undefined : calculatedMax;
-                                        return (
-                                          <Stack
-                                            key={`${currencyKey}-addon-${normalizedAddonId}`}
-                                            spacing={0.5}
-                                          >
-                                            {renderLocalStepper(
-                                              `${currencyKey}-addon-${normalizedAddonId}`,
-                                              addon.name,
-                                              currencyEntry.addons[normalizedAddonId] ?? 0,
-                                              (next) =>
-                                                handleWalkInTicketAddonChange(
-                                                  channel.id,
-                                                  ticketLabel,
-                                                  currencyOption,
-                                                  normalizedAddonId,
-                                                  next,
-                                                ),
-                                              disableInputs,
-                                              0,
-                                              stepperMax,
-                                            )}
-                                            {addon.maxPerAttendee != null && !isCocktail && (
-                                              <Typography variant="caption" color="text.secondary">
-                                                Max {addon.maxPerAttendee} per attendee (cap {calculatedMax ?? 0})
-                                              </Typography>
-                                            )}
-                                          </Stack>
-                                        );
-                                      })}
-                                      <Stack spacing={0.5}>
-                                        <Typography variant="subtitle2">Total Collected</Typography>
-                                        <TextField
-                                          value={currencyEntry.cash}
-                                          onChange={
-                                            isCustomTicket
-                                              ? (event) =>
-                                                  handleWalkInTicketCashChange(
-                                                    channel.id,
-                                                    ticketLabel,
-                                                    currencyOption,
-                                                    event.target.value,
-                                                  )
-                                              : undefined
-                                          }
-                                          size="small"
-                                          disabled={disableInputs}
-                                          type="number"
-                                          placeholder="0"
-                                          InputProps={{
-                                            readOnly: !isCustomTicket,
-                                            startAdornment: (
-                                              <InputAdornment position="start">
-                                                {currencyOption}
-                                              </InputAdornment>
-                                            ),
-                                          }}
-                                          inputProps={{ inputMode: 'decimal', min: 0 }}
-                                        />
-                                      </Stack>
-                                    </Box>
-                                  );
-                                })}
-                              </Box>
-                            )}
-                          </Stack>
-                        </Box>
-                      );
-                    })}
-                    {freePeopleActive && (
-                      <Box
-                        key={`${channel.id}-after-cutoff-free-section`}
-                        sx={{
-                          border: '1px solid',
-                          borderColor: 'divider',
-                          borderRadius: 1,
-                          p: 1.25,
-                          display: 'flex',
-                          flexDirection: 'column',
-                          minWidth: 0,
-                        }}
-                      >
-                        <Stack spacing={2}>
-                          <Typography variant="subtitle2" fontWeight={600}>
-                            Free Guests
-                          </Typography>
-                          {renderLocalStepper(
-                            `${channel.id}-after-cutoff-free`,
-                            'People',
-                            freePeopleQty,
-                            (nextValue) => setFreePeopleQty(channel.id, nextValue),
-                            disableInputs,
-                            0,
-                          )}
-                          <TextField
-                            value={freePeopleNote}
-                            onChange={(event) => setFreePeopleNote(channel.id, event.target.value)}
-                            size="small"
-                            disabled={disableInputs}
-                            required={freePeopleQty > 0}
-                            error={freePeopleNoteError}
-                            helperText={freePeopleNoteError ? 'Add a short reason for the free entry' : ' '}
-                            label="Free ticket reason"
-                            placeholder="e.g., Birthday"
-                            multiline
-                            minRows={1}
-                          />
-                        </Stack>
-                        {addons.length > 0 && (
-                          <Stack>
-                            {addons.map((addon) => {
-                              const numericAddonId =
-                                typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
-                              if (!Number.isFinite(numericAddonId)) {
-                                return null;
-                              }
-                              const normalizedAddonId = numericAddonId;
-                              const freeAddonEntry = freeAddonEntries[normalizedAddonId] ?? { qty: 0, note: '' };
-                              const freeAddonQty = Math.max(0, Math.round(freeAddonEntry.qty ?? 0));
-                              const freeAddonNote = freeAddonEntry.note ?? '';
-                              const freeAddonNoteError =
-                                freeAddonQty > 0 && freeAddonNote.trim().length === 0;
-                              return (
-                                <Stack
-                                  key={`${channel.id}-after-free-addon-${normalizedAddonId}`}
-                                  spacing={2}
-                                >
-                                  {renderLocalStepper(
-                                    `${channel.id}-after-free-addon-${normalizedAddonId}`,
-                                    `${addon.name}`,
-                                    freeAddonQty,
-                                    (nextValue) => setFreeAddonQty(channel.id, normalizedAddonId, nextValue),
-                                    disableInputs,
-                                    0,
-                                  )}
-                                  <TextField
-                                    value={freeAddonNote}
-                                    onChange={(event) =>
-                                      setFreeAddonNote(channel.id, normalizedAddonId, event.target.value)
-                                    }
-                                    size="small"
-                                    disabled={disableInputs}
-                                    required={freeAddonQty > 0}
-                                    error={freeAddonNoteError}
-                                    helperText={
-                                      freeAddonNoteError
-                                        ? `Add a reason for the free ${addon.name.toLowerCase()}`
-                                        : ' '
-                                    }
-                                    label={`Free ${addon.name} reason`}
-                                    placeholder="e.g., Staff friend"
-                                    multiline
-                                    minRows={1}
-                                  />
-                                </Stack>
-                              );
-                            })}
-                          </Stack>
-                        )}
-                      </Box>
-                    )}
-                  </Box>
-                )}
-              </Stack>
-            ) : (
-              <>
-                {canRenderCashCounters ? (
-                  <>
-                    {isWalkInAttended && (
-                      <Stack spacing={0.75}>
-                        <Typography variant="subtitle2">Tickets Type</Typography>
-                        {renderTicketChips(freePeopleChip)}
-                        {walkInConfiguredTicketOptions.length === 0 ? (
-                          <Typography variant="caption" color="text.secondary">
-                            No walk-in ticket types configured in Channel Product Prices.
-                          </Typography>
-                        ) : walkInDiscountSelection.length === 0 && !freePeopleActive ? (
-                          <Typography variant="caption" color="text.secondary">
-                            Select a ticket type to enable counters.
-                          </Typography>
-                        ) : null}
-                      </Stack>
-                    )}
-                    {canRenderWalkInAttendedCounters ? (
-                      <>
-                        {renderStepper('People', peopleMetric, disableInputs)}
-                        {isWalkInAttended && freePeopleActive && (
-                          <Stack spacing={0.75}>
-                            <Typography variant="subtitle2">Free Guests</Typography>
-                            {renderLocalStepper(
-                              `${channel.id}-free-people`,
-                              'Free guests',
-                              freePeopleQty,
-                              (nextValue) => setFreePeopleQty(channel.id, nextValue),
-                              disableInputs,
-                              0,
-                            )}
-                            <TextField
-                              value={freePeopleNote}
-                              onChange={(event) => setFreePeopleNote(channel.id, event.target.value)}
-                              size="small"
-                              disabled={disableInputs}
-                              required={freePeopleQty > 0}
-                              error={freePeopleNoteError}
-                              helperText={freePeopleNoteError ? 'Add a short reason for the free entry' : ' '}
-                              label="Free guest reason"
-                              placeholder="e.g., Birthday guest"
-                              multiline
-                              minRows={1}
-                            />
-                          </Stack>
-                        )}
-                        {isWalkInAttended && (
-                          <Stack spacing={0.5}>
-                            <Typography variant="subtitle2">Total Collected</Typography>
-                            <TextField
-                              value={walkInCashValue}
-                              onChange={(event) => handleWalkInCashChange(channel.id, event.target.value)}
-                              size="small"
-                              disabled={disableInputs}
-                              type="number"
-                              placeholder="0"
-                              InputProps={{
-                                startAdornment: <InputAdornment position="start">PLN</InputAdornment>,
-                              }}
-                              inputProps={{ inputMode: 'numeric', min: 0 }}
-                            />
-                          </Stack>
-                        )}
-                        {showCashSummary && (
-                          <Stack spacing={0.75}>
-                            <Typography variant="subtitle2">Cash To Be Collected</Typography>
-                            {cashEditingChannelId === channel.id ? (
-                              <Stack direction="row" spacing={1} alignItems="center">
-                                <TextField
-                                  value={cashEditingValue}
-                                  onChange={(event) => handleCashOverrideChange(event.target.value)}
-                                  size="small"
-                                  disabled={disableInputs}
-                                  placeholder={defaultCashText ?? '0.00'}
-                                  InputProps={{
-                                    startAdornment: <InputAdornment position="start">{cashCurrency}</InputAdornment>,
-                                    inputMode: 'decimal',
-                                  }}
-                                  onKeyDown={(event) => {
-                                    if (event.key === 'Enter') {
-                                      event.preventDefault();
-                                      if (!disableInputs) {
-                                        handleCashOverrideSave();
-                                      }
-                                    }
-                                    if (event.key === 'Escape') {
-                                      event.preventDefault();
-                                      handleCashOverrideCancel();
-                                    }
-                                  }}
-                                />
-                                <IconButton
-                                  size="small"
-                                  color="success"
-                                  aria-label="Save cash override"
-                                  onClick={handleCashOverrideSave}
-                                  disabled={disableInputs}
-                                >
-                                  <Check fontSize="small" />
-                                </IconButton>
-                                <IconButton
-                                  size="small"
-                                  aria-label="Cancel cash override"
-                                  onClick={handleCashOverrideCancel}
-                                  disabled={disableInputs}
-                                >
-                                  <Close fontSize="small" />
-                                </IconButton>
-                              </Stack>
-                            ) : (
-                              <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                  {cashDisplayText ? `${cashCurrency} ${cashDisplayText}` : 'No price configured'}
-                                </Typography>
-                                <IconButton
-                                  size="small"
-                                  aria-label="Adjust cash collected"
-                                  onClick={() => handleCashOverrideEdit(channel.id)}
-                                  disabled={disableInputs}
-                                >
-                                  <Edit fontSize="small" />
-                                </IconButton>
-                                {hasCashOverride && <Chip label="Override" size="small" color="info" variant="outlined" />}
-                                {!hasCashOverride && defaultCashPriceText && (
-                                  <Typography variant="caption" color="text.secondary">{`Default: ${cashCurrency} ${defaultCashPriceText}`}</Typography>
-                                )}
-                              </Stack>
-                            )}
-                          </Stack>
-                        )}
-                        <Divider flexItem sx={{ mt: 1 }} />
-                        <Stack spacing={1}>
-                          {addons.map((addon) => {
-                            const numericAddonId =
-                              typeof addon.addonId === 'number' ? addon.addonId : Number(addon.addonId);
-                            if (!Number.isFinite(numericAddonId)) {
-                              return null;
-                            }
-                            const normalizedAddonId = numericAddonId;
-                            const metric = ensureEditableMetric(
-                              'addon',
-                              normalizedAddonId,
-                              getMetric(channel.id, bucket.tallyType, bucket.period, 'addon', normalizedAddonId),
-                            );
-                            const isCocktail =
-                              addon.key?.toLowerCase() === 'cocktails' || addon.name?.toLowerCase() === 'cocktails';
-                            const availableForAddons =
-                              bucket.tallyType === 'booked' ? (peopleMetric?.qty ?? attendedPeople) : attendedPeople;
-                            const calculatedMax =
-                              addon.maxPerAttendee != null && availableForAddons > 0
-                                ? addon.maxPerAttendee * availableForAddons
-                                : undefined;
-                            const stepperMax = isCocktail ? undefined : calculatedMax;
-                            const addonKey = `${channel.id}-${bucket.label}-addon-${normalizedAddonId}`;
-                            const freeAddonEntry = freeAddonEntries[normalizedAddonId] ?? { qty: 0, note: '' };
-                            const freeAddonQty = Math.max(0, Math.round(freeAddonEntry.qty ?? 0));
-                            const freeAddonNote = freeAddonEntry.note ?? '';
-                            const freeAddonActive = freeAddonQty > 0 || freeAddonNote.length > 0;
-                            const freeAddonNoteError = freeAddonQty > 0 && freeAddonNote.trim().length === 0;
-                            const handleFreeAddonToggle = () => {
-                              if (disableInputs) {
-                                return;
-                              }
-                              if (freeAddonActive) {
-                                setFreeAddonQty(channel.id, normalizedAddonId, 0);
-                                setFreeAddonNote(channel.id, normalizedAddonId, '');
-                              } else {
-                                ensureFreeAddonEntry(channel.id, normalizedAddonId);
-                              }
-                            };
-                            return (
-                              <Stack key={addonKey} spacing={0.75}>
-                                <Stack direction="row" spacing={0.75} alignItems="flex-start">
-                                  <Box sx={{ flexGrow: 1 }}>
-                                    {renderStepper(addon.name, metric, disableInputs, 0, stepperMax, 1)}
-                                  </Box>
-                                  {isWalkInAttended && (
-                                    <Chip
-                                      label="Free"
-                                      size="small"
-                                      color={freeAddonActive ? 'info' : 'default'}
-                                      variant={freeAddonActive ? 'filled' : 'outlined'}
-                                      onClick={handleFreeAddonToggle}
-                                      disabled={disableInputs}
-                                    />
-                                  )}
-                                </Stack>
-                                {addon.maxPerAttendee != null && !isCocktail && (
-                                  <Typography variant="caption" color="text.secondary">
-                                    Max {addon.maxPerAttendee} per attendee (cap {calculatedMax ?? 0})
-                                  </Typography>
-                                )}
-                                {isWalkInAttended && freeAddonActive && (
-                                  <Stack spacing={0.5}>
-                                    {renderLocalStepper(
-                                      `${channel.id}-${normalizedAddonId}-free`,
-                                      `Free ${addon.name}`,
-                                      freeAddonQty,
-                                      (nextValue) => setFreeAddonQty(channel.id, normalizedAddonId, nextValue),
-                                      disableInputs,
-                                      0,
-                                    )}
-                                    <TextField
-                                      value={freeAddonNote}
-                                      onChange={(event) =>
-                                        setFreeAddonNote(channel.id, normalizedAddonId, event.target.value)
-                                      }
-                                      size="small"
-                                      disabled={disableInputs}
-                                      required={freeAddonQty > 0}
-                                      error={freeAddonNoteError}
-                                      helperText={
-                                        freeAddonNoteError
-                                          ? `Add a reason for the free ${addon.name.toLowerCase()}`
-                                          : ' '
-                                      }
-                                      label={`Free ${addon.name} reason`}
-                                      placeholder="e.g., Staff friend"
-                                      multiline
-                                      minRows={1}
-                                    />
-                                  </Stack>
-                                )}
-                              </Stack>
-                            );
-                          })}
-                        </Stack>
-                      </>
-                    ) : null}
-                  </>
-                ) : null}
-              </>
-            )}
-          </Stack>
-        </CardContent>
-      </Card>
-    );
-  };
   const renderDetailsStep = () => (
     <Stack spacing={3}>
       <Grid container spacing={2}>
@@ -9652,10 +7630,7 @@ useEffect(() => {
     const availableManualChannels = availableCashReservationChannelIds
       .map((channelId) => registry.channels.find((channel) => channel.id === channelId))
       .filter((channel): channel is ChannelConfig => Boolean(channel));
-    const displayedManualChannelIds = availableCashReservationChannelIds.filter(
-      (channelId) =>
-        selectedCashReservationChannelIds.includes(channelId) || channelHasRecordedData(channelId),
-    );
+
     const selectedOnlineChannels = onlineSelectedChannelIds
       .map((channelId) => registry.channels.find((channel) => channel.id === channelId))
       .filter((channel): channel is ChannelConfig => Boolean(channel));
@@ -10088,60 +8063,36 @@ useEffect(() => {
             </Card>
           </Box>
         )}
-        {RESERVATION_BUCKETS.map((bucket) => (
-          <Box key={bucket.label} sx={{ width: '100%' }}>
-            <Typography variant="h6" gutterBottom sx={{ textAlign: 'center' }}>
-              {bucket.label}
-            </Typography>
-            {availableManualChannels.length > 0 ? (
-              <Stack spacing={1.5}>
-                <ToggleButtonGroup
-                  value={displayedManualChannelIds}
-                  onChange={handleCashReservationChannelSelection}
-                  size="small"
-                  aria-label="Cash payment channels"
-                  sx={{ display: 'flex', flexWrap: 'wrap', columnGap: 1, rowGap: 1 }}
-                >
-                  {availableManualChannels.map((channel) => (
-                    <ToggleButton
-                      key={channel.id}
-                      value={channel.id}
-                      sx={{ flex: '0 0 auto' }}
-                      disabled={registry.savingMetrics || confirmingMetrics}
-                    >
-                      {channel.name}
-                    </ToggleButton>
-                  ))}
-                </ToggleButtonGroup>
-                {displayedManualChannelIds.length > 0 ? (
-                  <Box
-                    sx={{
-                      display: 'grid',
-                      gap: 2,
-                      gridTemplateColumns: {
-                        xs: '1fr',
-                        md: 'repeat(2, minmax(0, 1fr))',
-                        lg: 'repeat(3, minmax(0, 1fr))',
-                      },
-                    }}
-                  >
-                    {displayedManualChannelIds.map((channelId: number) => {
-                      const channel = registry.channels.find((item) => item.id === channelId);
-                      if (!channel) {
-                        return null;
-                      }
-                      return (
-                        <Box key={`${channel.id}-${bucket.label}`} sx={{ height: '100%' }}>
-                          {renderChannelCard(channel, bucket, registry.addons)}
-                        </Box>
-                      );
-                    })}
-                  </Box>
-                ) : null}
-              </Stack>
-            ) : null}
-          </Box>
-        ))}
+        {walkInValidationError && <Alert severity="warning">{walkInValidationError}</Alert>}
+        {staffFreeValidationError && <Alert severity="warning">{staffFreeValidationError}</Alert>}
+        <WalkInsPanel
+          key={counterId}
+          staffFreeCount={effectiveStaffFreeCount}
+          staffFreeEntry={counterId ? {
+            counterId, revision: registry.counter?.counter.updatedAt,
+            reservationOrders: onlineReservationsLoading || onlineReservationsError ? null : onlineReservationOrders,
+            draft: staffFreeDraft, onDraftChange: setStaffFreeDraft, onValidationChange: setStaffFreeValidationError,
+          } : undefined}
+          channels={availableManualChannels}
+          addons={registry.addons}
+          types={registry.counter?.walkInTicketTypes ?? WALK_IN_TICKET_TYPE_VALUES.map((id) => ({ id, name: WALK_IN_TICKET_TYPE_LABELS[id], enabled: true }))}
+          paymentMethods={registry.counter?.paymentMethods ?? []}
+          value={walkInTicketDataByChannel}
+          freePeople={freePeopleByChannel}
+          freeAddons={freeAddonsByChannel}
+          disabled={registry.savingMetrics || confirmingMetrics}
+          getAddonPrice={(channel, addon, currency) => getWalkInAddonUnitPrice(channel, addon, currency, catalog.addons.find((item) => item.addonId === addon.addonId))}
+          onChange={(channelId, next) => {
+            setWalkInTicketDataByChannel((prev) => ({ ...prev, [channelId]: next }));
+            setWalkInDiscountsByChannel((prev) => ({ ...prev, [channelId]: next.ticketOrder }));
+            setWalkInNoteDirty(true);
+          }}
+          onFreeChange={(channelId, people, addons) => {
+            setFreePeopleByChannel((prev) => { const next = { ...prev }; if (people) next[channelId] = people; else delete next[channelId]; return next; });
+            setFreeAddonsByChannel((prev) => ({ ...prev, [channelId]: addons }));
+            setWalkInNoteDirty(true);
+          }}
+        />
       </Stack>
     );
   };
@@ -10238,7 +8189,7 @@ useEffect(() => {
         </Button>
       );
 
-      const saveDisabled = disableNav || saveAndExitSubmitting || hasFreeNoteValidationError;
+      const saveDisabled = disableNav || saveAndExitSubmitting || hasFreeNoteValidationError || Boolean(walkInValidationError) || Boolean(staffFreeValidationError);
       const saveButton = (
         <Button
           variant="contained"
@@ -10260,6 +8211,8 @@ useEffect(() => {
       const saveControl = (
         <Stack spacing={0.5} alignItems="flex-start">
           {saveButton}
+          {walkInValidationError && <Typography variant="caption" color="error">{walkInValidationError}</Typography>}
+          {staffFreeValidationError && <Typography variant="caption" color="error">{staffFreeValidationError}</Typography>}
           {hasFreeNoteValidationError && (
             <Typography variant="caption" color="error">
               Add a reason for each free entry before saving.
@@ -10312,7 +8265,6 @@ useEffect(() => {
     }
     return renderSummaryStep();
   };
-
 
 type SummaryRowOptions = {
   showBefore?: boolean;
@@ -10544,127 +8496,16 @@ type SummaryRowOptions = {
     ],
   );
 
-  const cashPaymentsTicketSummary = useMemo(() => {
-    type CashTicketSummaryRow = {
-      channelId: number;
-      channelName: string;
-      ticketLabel: string;
-      currency: CashCurrency;
-      qty: number;
-    };
-
-    const rows: CashTicketSummaryRow[] = [];
-    const channelNameById = new Map<number, string>();
-    registry.channels.forEach((channel) => {
-      channelNameById.set(channel.id, channel.name ?? `Channel ${channel.id}`);
-    });
-
-    walkInChannelIds.forEach((channelId) => {
-      const channelName = channelNameById.get(channelId) ?? 'Walk-In';
-      const ticketState = walkInTicketDataByChannel[channelId];
-      let hasTicketBreakdown = false;
-      if (ticketState) {
-        ticketState.ticketOrder.forEach((ticketKey) => {
-          const ticketEntry = ticketState.tickets[ticketKey];
-          if (!ticketEntry) {
-            return;
-          }
-          const ticketLabel =
-            ticketEntry.name && ticketEntry.name.trim().length > 0 ? ticketEntry.name.trim() : ticketKey;
-          const displayTicketLabel = ticketEntry.transfer ? `${ticketLabel} (Transfer)` : ticketLabel;
-          ticketEntry.currencyOrder.forEach((currency) => {
-            const currencyEntry = ticketEntry.currencies[currency];
-            if (!currencyEntry) {
-              return;
-            }
-            const qty = Math.max(0, Math.round(Number(currencyEntry.people) || 0));
-            if (qty <= 0) {
-              return;
-            }
-            hasTicketBreakdown = true;
-            rows.push({
-              channelId,
-              channelName,
-              ticketLabel: displayTicketLabel,
-              currency,
-              qty,
-            });
-          });
-        });
-      }
-
-      if (hasTicketBreakdown) {
-        return;
-      }
-
-      const peopleQty = Math.max(0, Math.round(Number(getMetric(channelId, 'attended', null, 'people', null)?.qty ?? 0)));
-      if (peopleQty <= 0) {
-        return;
-      }
-      rows.push({
-        channelId,
-        channelName,
-        ticketLabel: 'People',
-        currency: resolveCashCurrencyForChannel(channelId),
-        qty: peopleQty,
-      });
-    });
-
-    registry.channels.forEach((channel) => {
-      if (!isCashPaymentChannel(channel) || walkInChannelIds.includes(channel.id)) {
-        return;
-      }
-      const peopleQty = Math.max(0, Math.round(Number(getMetric(channel.id, 'attended', null, 'people', null)?.qty ?? 0)));
-      if (peopleQty <= 0) {
-        return;
-      }
-      rows.push({
-        channelId: channel.id,
-        channelName: channel.name,
-        ticketLabel: 'People',
-        currency: resolveCashCurrencyForChannel(channel.id),
-        qty: peopleQty,
-      });
-    });
-
-    Object.values(pendingBookingCashCollectionById).forEach((cash) => {
-      if (!cash || cash.amount <= 0 || cash.attendedTotal <= 0) {
-        return;
-      }
-      rows.push({
-        channelId: cash.channelId,
-        channelName: channelNameById.get(cash.channelId) ?? `Channel ${cash.channelId}`,
-        ticketLabel: cash.platformBookingId || `Booking ${cash.bookingId}`,
-        currency: cash.currency,
-        qty: cash.attendedTotal,
-      });
-    });
-
-    const aggregate = new Map<string, CashTicketSummaryRow>();
-    rows.forEach((row) => {
-      const key = `${row.channelId}|${row.ticketLabel}|${row.currency}`;
-      const existing = aggregate.get(key);
-      if (existing) {
-        existing.qty += row.qty;
-        return;
-      }
-      aggregate.set(key, { ...row });
-    });
-
-    return Array.from(aggregate.values()).sort(
-      (left, right) =>
-        left.channelName.localeCompare(right.channelName) ||
-        left.currency.localeCompare(right.currency) ||
-        left.ticketLabel.localeCompare(right.ticketLabel),
-    );
-  }, [
-    getMetric,
-    pendingBookingCashCollectionById,
-    registry.channels,
-    resolveCashCurrencyForChannel,
-    walkInChannelIds,
-    walkInTicketDataByChannel,
-  ]);
+  const walkInTicketSummary = useMemo(() => [
+    ...buildWalkInSummary(extractCashSnapshotMap(computedCounterNotes), extractFreeSnapshotMap(computedCounterNotes), registry.channels, combinedAddonList),
+    ...(() => {
+      const saved = (registry.counter?.staffFreeEntries ?? []).filter(entry => !staffFreeDraft.removals.some(row => row.entryId === entry.id));
+      const pending = staffFreeDraft.additions.filter(entry => !saved.some(row => row.userId === entry.userId));
+      const staff = [...saved.map(entry => ({ name: entry.name, label: entry.label, reason: entry.overrideReason })), ...pending.map(entry => ({ name: entry.name, label: 'Free entry', reason: entry.override ? entry.overrideReason : null }))];
+      const channel = registry.channels.find(item => item.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'walkin');
+      return staff.length ? [{ key: 'staff-free', channelId: channel?.id ?? -1, channelName: channel?.name ?? 'Walk-In', ticket: 'Staff Free', guests: staff.length, amount: 0, addons: [], staff }] : [];
+    })(),
+  ], [computedCounterNotes, registry.channels, registry.counter?.staffFreeEntries, staffFreeDraft, combinedAddonList]);
 
   const onlineNoShowPeopleByChannel = useMemo(() => {
     const map = new Map<number, number>();
@@ -10917,13 +8758,8 @@ type SummaryRowOptions = {
     const { byChannel: summaryChannels, totals: summaryTotals } = summaryData;
     const hasSummaryActivity = (bucket: CounterSummaryBucket | CounterSummaryAddonBucket): boolean =>
       bucket.bookedBefore > 0 || bucket.bookedAfter > 0 || bucket.attended > 0 || bucket.nonShow > 0;
-    const snapshotDetails = formatCounterSnapshotDetails(counterNotes, registry.channels, combinedAddonList);
-    const hasFreeTicketNotes = snapshotDetails.freeSections.length > 0;
-    const multipleFreeTicketChannels = snapshotDetails.freeSections.length > 1;
-    const hasManualNotes = snapshotDetails.manualNote.length > 0;
-    const hasNotes = hasFreeTicketNotes || hasManualNotes;
 
-    if (summaryChannels.length === 0) {
+    if (summaryChannels.length === 0 && walkInTicketSummary.length === 0) {
       return (
         <Stack spacing={3} sx={{ mt: 4 }}>
           <Alert severity="info">Select channels in Reservations to review the summary.</Alert>
@@ -10942,8 +8778,8 @@ type SummaryRowOptions = {
         return hasSummaryActivity(addon) || freeAddonQty > 0;
       });
       const hasCashCollection = (cashCollectionSummary.perChannel.get(item.channelId)?.length ?? 0) > 0;
-      const hasCashTicketSummary = cashPaymentsTicketSummary.some(
-        (entry) => entry.channelId === item.channelId && entry.qty > 0,
+      const hasCashTicketSummary = walkInTicketSummary.some(
+        (entry) => entry.channelId === item.channelId && entry.guests > 0,
       );
       return hasPeopleActivity || hasAddonActivity || hasCashCollection || hasCashTicketSummary;
     });
@@ -11185,79 +9021,10 @@ type SummaryRowOptions = {
             })}
           </Grid>
         </Box>
-        {hasNotes && (
-          <Box>
-            <Divider sx={{ mb: 1.5 }} />
-            <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-              Notes
-            </Typography>
-            <Stack spacing={1.25}>
-              {hasFreeTicketNotes && (
-                <Stack spacing={0.75}>
-                  <Typography variant="body2" color="text.secondary">
-                    <Box component="span" sx={{ fontWeight: 600, textDecoration: 'underline' }}>
-                      Free Tickets:
-                    </Box>
-                  </Typography>
-                  {snapshotDetails.freeSections.map((section, sectionIndex) => {
-                    return (
-                      <Stack
-                        key={`${section.channelLabel ?? 'channel'}-${sectionIndex}`}
-                        spacing={0.25}
-                        sx={{ pl: multipleFreeTicketChannels ? 1.5 : 0 }}
-                      >
-                        {multipleFreeTicketChannels && (
-                          <Typography
-                            variant="body2"
-                            color="text.secondary"
-                            sx={{ fontWeight: 600 }}
-                          >
-                            {section.channelLabel ?? 'Channel'}
-                          </Typography>
-                        )}
-                        {section.entries.map((entry, entryIndex) => (
-                          <Typography
-                            key={`${entry.label}-${entryIndex}`}
-                            variant="body2"
-                            color="text.secondary"
-                          >
-                            <Box component="span" sx={{ fontWeight: 600 }}>
-                              {entry.label}:
-                            </Box>
-                            {entry.quantity != null && (
-                              <>
-                                {' '}
-                                {entry.quantity}
-                              </>
-                            )}
-                            {entry.reason && (
-                              <>
-                                {entry.quantity != null ? ' - ' : ' '}
-                                <Box component="span" sx={{ fontWeight: 600, textDecoration: 'underline' }}>
-                                  Reason:
-                                </Box>{' '}
-                                {entry.reason}
-                              </>
-                            )}
-                          </Typography>
-                        ))}
-                      </Stack>
-                    );
-                  })}
-                </Stack>
-              )}
-              {hasManualNotes && (
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                >
-                  {snapshotDetails.manualNote}
-                </Typography>
-              )}
-            </Stack>
-          </Box>
-        )}
+        {walkInTicketSummary.length > 0 && <Box>
+          <Typography variant="subtitle1" fontWeight={700} textAlign="center" sx={{ mb: 1 }}>Walk-Ins</Typography>
+          <WalkInSummaryDetails rows={walkInTicketSummary} />
+        </Box>}
         <Box>
           <Card variant="outlined">
             <CardContent>
@@ -11415,6 +9182,8 @@ type SummaryRowOptions = {
     setPartialCheckInEditorOrder(null);
     setPartialCheckInEditorDraft(null);
     setPendingBookingAttendanceById({});
+    setStaffFreeDraft(emptyStaffFreeDraft());
+    setStaffFreeValidationError(null);
     fetchCounterRequestRef.current = null;
     dispatch(clearDirtyMetrics());
   };
@@ -11448,6 +9217,8 @@ type SummaryRowOptions = {
       setPartialCheckInEditorOrder(null);
       setPartialCheckInEditorDraft(null);
       setPendingBookingAttendanceById({});
+      setStaffFreeDraft(emptyStaffFreeDraft());
+      setStaffFreeValidationError(null);
     },
     [setPendingProductId],
   );
@@ -12474,22 +10245,9 @@ type SummaryRowOptions = {
             <Divider />
             <Stack spacing={0.75}>
               <Typography variant="subtitle2" fontWeight={700}>
-                Cash Payments Summary
+                Walk-Ins Summary
               </Typography>
-              {cashPaymentsTicketSummary.length === 0 ? (
-                <Alert severity="info">No cash payment tickets recorded.</Alert>
-              ) : (
-                <Stack direction="row" spacing={0.6} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                  {cashPaymentsTicketSummary.map((entry) => (
-                    <Chip
-                      key={`attended-cash-${entry.channelId}-${entry.ticketLabel}-${entry.currency}`}
-                      size="small"
-                      variant="outlined"
-                      label={`${entry.channelName} | ${entry.ticketLabel} | ${entry.currency}: ${entry.qty}`}
-                    />
-                  ))}
-                </Stack>
-              )}
+              {walkInTicketSummary.length === 0 ? <Alert severity="info">No Walk-Ins tickets recorded.</Alert> : <WalkInSummaryDetails rows={walkInTicketSummary} />}
             </Stack>
           </Stack>
         </DialogContent>

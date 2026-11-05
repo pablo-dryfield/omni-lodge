@@ -2,12 +2,36 @@ import cron, { type ScheduledTask } from 'node-cron';
 import { Op } from 'sequelize';
 import StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 import { sendAndRecordStorefrontCartRecoveryEmail } from '../services/storefrontCartRecoveryEmailService.js';
-import { getConfigValue } from '../services/configService.js';
+import { getConfigValue, refreshConfigCacheKeys } from '../services/configService.js';
+import { reconcileOngoingCart } from '../services/storefrontOngoingCartService.js';
 import { purgeExpiredStorefrontJourneyDetails } from '../services/storefrontJourneyService.js';
 import logger from '../utils/logger.js';
 
 let task: ScheduledTask | null = null;
 let lastJourneyCleanupAt = 0;
+let reconciliationCursor = 0;
+let running = false;
+
+export const reconcileOngoingCartBatch = async (): Promise<void> => {
+  await refreshConfigCacheKeys(['STOREFRONT_CART_RECONCILIATION_BATCH_SIZE']);
+  const configured = Number(getConfigValue('STOREFRONT_CART_RECONCILIATION_BATCH_SIZE')) || 100;
+  const limit = Math.max(1, Math.min(500, Math.floor(configured)));
+  const rows = await StorefrontOngoingCart.findAll({
+    where: { status: { [Op.in]: ['active', 'checkout_started', 'recovery_sent'] }, id: { [Op.gt]: reconciliationCursor } },
+    order: [['id', 'ASC']], limit,
+  });
+  for (const row of rows) {
+    try {
+      await reconcileOngoingCart(row);
+    } catch (error) {
+      // One malformed legacy cart must not block all later carts. The next
+      // cursor cycle retries it; each email still has its own paid-booking check.
+      logger.error(`[storefront-abandoned-cart] Reconciliation failed for cart ${row.publicId}`, error);
+    }
+    reconciliationCursor = Number(row.id);
+  }
+  if (rows.length < limit) reconciliationCursor = 0;
+};
 
 const runJourneyRetentionIfDue = async (): Promise<void> => {
   const now = Date.now();
@@ -20,6 +44,7 @@ const runJourneyRetentionIfDue = async (): Promise<void> => {
 
 export const runStorefrontAbandonedCartRecovery = async (): Promise<number> => {
   await runJourneyRetentionIfDue();
+  await reconcileOngoingCartBatch();
   if (getConfigValue('STOREFRONT_ABANDONED_CART_EMAIL_ENABLED') !== true) return 0;
 
   const rows = await StorefrontOngoingCart.findAll({
@@ -70,8 +95,10 @@ export const runStorefrontAbandonedCartRecovery = async (): Promise<number> => {
 export const startStorefrontAbandonedCartJob = (): void => {
   if (task) return;
   task = cron.schedule('*/5 * * * *', () => {
+    if (running) return;
+    running = true;
     void runStorefrontAbandonedCartRecovery().catch((error) => {
       logger.error('[storefront-abandoned-cart] Recovery job failed', error);
-    });
+    }).finally(() => { running = false; });
   }, { timezone: 'Europe/Warsaw' });
 };

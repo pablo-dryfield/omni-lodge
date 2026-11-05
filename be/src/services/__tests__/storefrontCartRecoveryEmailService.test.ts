@@ -1,6 +1,7 @@
 import StorefrontOngoingCart from '../../models/StorefrontOngoingCart';
 import { sendMessage } from '../bookings/gmailClient';
 import { getConfigValue } from '../configService';
+import { dismissCartWithPaidMatch } from '../storefrontCartBookingMatchService';
 import {
   buildStorefrontCartRecoveryEmail,
   sendAndRecordStorefrontCartRecoveryEmail,
@@ -12,6 +13,7 @@ jest.mock('../../models/StorefrontOngoingCart.js', () => ({
 }));
 jest.mock('../bookings/gmailClient.js', () => ({ sendMessage: jest.fn() }));
 jest.mock('../configService.js', () => ({ getConfigValue: jest.fn() }));
+jest.mock('../storefrontCartBookingMatchService.js', () => ({ dismissCartWithPaidMatch: jest.fn() }));
 
 const mockedGetConfigValue = getConfigValue as jest.MockedFunction<typeof getConfigValue>;
 const mockedSendMessage = sendMessage as jest.MockedFunction<typeof sendMessage>;
@@ -64,6 +66,7 @@ const ongoing = {
 describe('storefront abandoned cart recovery email', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (dismissCartWithPaidMatch as jest.Mock).mockResolvedValue(false);
     mockedGetConfigValue.mockImplementation((key) => (
       key === 'STOREFRONT_PUBLIC_URL' ? 'https://example.com/store2/' : null
     ));
@@ -95,7 +98,22 @@ describe('storefront abandoned cart recovery email', () => {
       }),
       { where: { id: 12, status: 'sending_recovery' } },
     );
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not send a recovery email when the same experience is already booked and paid', async () => {
+    (dismissCartWithPaidMatch as jest.Mock).mockResolvedValue(true);
+    const cart = { ...ongoing, status: 'sending_recovery', reload: jest.fn() } as unknown as StorefrontOngoingCart;
+    await expect(sendAndRecordStorefrontCartRecoveryEmail(cart)).rejects.toMatchObject({ status: 409 });
+    expect(mockedSendMessage).not.toHaveBeenCalled();
+    expect(model.update).not.toHaveBeenCalled();
+  });
+
+  it('does not send after a concurrent payment converts the claimed cart', async () => {
+    const cart = { ...ongoing, status: 'sending_recovery', reload: jest.fn() };
+    cart.reload.mockImplementationOnce(() => undefined).mockImplementationOnce(() => { cart.status = 'converted'; });
+    await expect(sendAndRecordStorefrontCartRecoveryEmail(cart as unknown as StorefrontOngoingCart)).rejects.toMatchObject({ status: 409 });
+    expect(mockedSendMessage).not.toHaveBeenCalled();
   });
 
   it('includes the personalized cart, selections, total, and secure recovery link', () => {

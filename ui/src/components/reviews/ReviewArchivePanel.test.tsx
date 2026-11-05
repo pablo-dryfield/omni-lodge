@@ -66,3 +66,40 @@ test('the browser reports a page-cap failure instead of completing a partial ful
   expect(post.mock.calls.filter(([url]) => url === '/reviews/archive/sync/2/page')).toHaveLength(1000);
   expect(post.mock.calls.some(([url]) => url === '/reviews/archive/sync/2/complete')).toBe(false);
 });
+
+
+const savedHtml = `<div id="reloadable-review-card-9001"><div data-test-id="activity-review-card">
+<span class="review-card__author-details-name">Alex</span><span data-test-id="activity-review-card-date">November 1, 2026</span>
+<span class="rating-star__icon--full"></span><div data-test-id="toggle-content">Nice tour</div></div></div>`;
+const uploadReviewHtml = async (onUpload?: () => void) => {
+  get.mockImplementation((url: string) => Promise.resolve({ data: url === '/reviews/getyourguideReviews'
+    ? [{ data: [], columns: [{ totalCount: 300, hasMore: false }] }]
+    : { reviews: [], users: [], pagination: { total: 0, totalPages: 1 } } }));
+  render(<MantineProvider><ReviewArchivePanel platform="getyourguide" canManage /></MantineProvider>);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Import saved HTML' })).toBeEnabled());
+  onUpload?.();
+  const file = new File([savedHtml], 'reviews.html', { type: 'text/html' });
+  Object.defineProperty(file, 'text', { value: () => Promise.resolve(savedHtml) });
+  fireEvent.change(screen.getByLabelText('Saved GetYourGuide review HTML'), { target: { files: [file] } });
+};
+
+test('saved HTML uses partial sync, keeps the source total separate, and reports retained reviews', async () => {
+  await uploadReviewHtml();
+  expect(await screen.findByText(/Imported 1 GetYourGuide reviews/)).toHaveTextContent('Reviews outside this file were kept');
+  expect(post).toHaveBeenCalledWith('/reviews/archive/sync/fast/2/page', { reviews: [expect.objectContaining({ reviewId: '9001' })] });
+  expect(post).toHaveBeenCalledWith('/reviews/archive/sync/fast/2/complete', {});
+  expect(post.mock.calls.some(([url]) => /^\/reviews\/archive\/sync\/2\//.test(url))).toBe(false);
+  expect(screen.getByText('300')).toBeInTheDocument();
+});
+
+test('a failed HTML import closes its sync run and allows a retry', async () => {
+  await uploadReviewHtml(() => {
+    post.mockImplementation((url: string) => url.endsWith('/page')
+      ? Promise.reject(new Error('Import interrupted'))
+      : Promise.resolve({ data: url.endsWith('/start') ? { run: { id: 2 } } : {} }));
+  });
+  expect(await screen.findByText('Import interrupted')).toBeInTheDocument();
+  expect(post).toHaveBeenCalledWith('/reviews/archive/sync/fast/2/fail');
+  expect(post).not.toHaveBeenCalledWith('/reviews/archive/sync/fast/2/complete', expect.anything());
+  expect(screen.getByRole('button', { name: 'Import saved HTML' })).toBeEnabled();
+});
