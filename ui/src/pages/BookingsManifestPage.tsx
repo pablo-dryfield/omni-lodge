@@ -130,6 +130,8 @@ const BASE_MAIL_VARIABLES: MailVariableDefinition[] = [
   { key: "customerEmail", scope: "base", description: "Customer email address" },
   { key: "customerPhone", scope: "base", description: "Customer phone number" },
   { key: "productName", scope: "base", description: "Product/experience name" },
+  { key: "meetingPointPhotoUrl", scope: "base", description: "Public meeting point photo URL from the booking's product" },
+  { key: "meetingPointPhotoAlt", scope: "base", description: "Meeting point photo description" },
   { key: "previousProductName", scope: "base", description: "Product before the booking amendment" },
   { key: "newProductName", scope: "base", description: "Product after the booking amendment" },
   { key: "bookingDate", scope: "base", description: "Raw booking date (YYYY-MM-DD)" },

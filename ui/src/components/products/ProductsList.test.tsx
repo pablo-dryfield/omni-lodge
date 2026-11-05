@@ -2,7 +2,8 @@ import { MantineProvider } from "@mantine/core";
 import { act, cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ProductsList from "./ProductsList";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
-import { createProduct, updateProduct } from "../../actions/productActions";
+import { createProduct, updateProduct, removeProductImageFile } from "../../actions/productActions";
+import type { ReactNode } from "react";
 import type { StorefrontProductConfig } from "../../types/products/Product";
 
 jest.mock("../../store/hooks", () => ({ useAppDispatch: jest.fn(), useAppSelector: jest.fn() }));
@@ -15,10 +16,17 @@ jest.mock("../../actions/productActions", () => ({
 }));
 jest.mock("../../actions/productTypeActions", () => ({ fetchProductTypes: () => ({ type: "fetchTypes" }) }));
 jest.mock("./ProductMediaEditor", () => () => <div>Product media</div>);
+jest.mock("./MeetingPointPhotoEditor", () => ({ onChange, onUploaded }: {
+  onChange: (patch: { photoUrl: string }) => void; onUploaded: (url: string) => void;
+}) => <button onClick={() => {
+  const url = 'https://media.example.com/new-meeting.jpg';
+  onUploaded(url); onChange({ photoUrl: url });
+}}>Upload test meeting photo</button>);
 jest.mock("../storefront/StorefrontRulesEditors", () => ({
   cleanProductStorefrontConfig: (config: StorefrontProductConfig) => config,
-  ProductStorefrontRulesEditor: ({ value, onChange }: { value: StorefrontProductConfig; onChange: (config: StorefrontProductConfig) => void }) => (
+  ProductStorefrontRulesEditor: ({ value, onChange, meetingPointPhoto }: { value: StorefrontProductConfig; onChange: (config: StorefrontProductConfig) => void; meetingPointPhoto?: ReactNode }) => (
     <>
+      {meetingPointPhoto}
       <button onClick={() => onChange({ ...value, defaultStartTime: "20:00" })}>Set normal start time</button>
       <button onClick={() => onChange({ ...value, content: { ...value.content, description: "Updated long description" } })}>Update normal description</button>
     </>
@@ -42,6 +50,31 @@ let storedConfig: StorefrontProductConfig = originalConfig;
 jest.setTimeout(20_000);
 beforeAll(() => configure({ asyncUtilTimeout: 5000 }));
 afterAll(() => configure({ asyncUtilTimeout: 1000 }));
+
+it('keeps a saved meeting photo if refreshing the product list fails', async () => {
+  await openEdit();
+  fireEvent.click(screen.getByRole('button', { name: 'Upload test meeting photo' }));
+  dispatchMock.mockReturnValueOnce({ unwrap: () => Promise.resolve({}) })
+    .mockReturnValueOnce({ unwrap: () => Promise.reject(new Error('List refresh failed')) });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  await finishMockedRequests();
+  await screen.findByText('List refresh failed');
+  expect(updateProduct).toHaveBeenCalledWith(expect.objectContaining({ productData: expect.objectContaining({
+    storefrontConfig: expect.objectContaining({ content: expect.objectContaining({ meetingPoint: {
+      photoUrl: 'https://media.example.com/new-meeting.jpg',
+    } }) }),
+  }) }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(removeProductImageFile).not.toHaveBeenCalled();
+});
+
+it('cleans up an unsaved meeting photo when the editor is cancelled', async () => {
+  await openEdit();
+  fireEvent.click(screen.getByRole('button', { name: 'Upload test meeting photo' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(removeProductImageFile).toHaveBeenCalledWith(48, 'https://media.example.com/new-meeting.jpg');
+  expect(updateProduct).not.toHaveBeenCalled();
+});
 
 // The action creators are mocked, so explicitly flush their resolved promises.
 const finishMockedRequests = async () => { await act(async () => { await Promise.resolve(); }); };

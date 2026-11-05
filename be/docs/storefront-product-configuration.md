@@ -166,6 +166,69 @@ Replace the zero placeholders with approved total bundle prices in OmniLodge.
 - Test valid, invalid, stacked, scoped, and removed discount codes.
 - Verify availability and capacity enforcement before enabling production checkout.
 
+## Add-on experience-date availability
+
+Settings / Product Add-ons provides everyday, selected-weekday, and unavailable
+options. These use the **booked experience date**, never the purchase date.
+The existing public catalog exposes the configuration as `addon.config` for
+both KTK and Food Tour:
+
+```json
+{
+  "availability": {
+    "enabled": true,
+    "daysOfWeek": [5, 6],
+    "unavailableMessage": "Cocktails are only available on Friday and Saturday tours."
+  }
+}
+```
+
+Weekdays use ISO numbers: Monday `1` through Sunday `7`. Omit `daysOfWeek`
+for every day; set `enabled: false` to make the add-on unavailable. An empty
+weekday array is rejected. Missing availability retains existing behavior.
+These settings are per product/add-on combination, not global to the add-on.
+
+Storefront consumers should disable unavailable choices and show the configured
+message, recalculating when the experience date changes. Restricted add-ons need
+an experience date before availability can be determined. OmniLodge quote and
+checkout validation enforces the rules even if a client submits a stale cart.
+Changing the rules does not remove add-ons from previously paid bookings.
+
+The advanced JSON editor preserves extra nested objects, arrays, and values
+directly in `addon.config`. It does not wrap them in `extra`. Availability,
+selection styles, quantities, and prices remain controlled by the form.
+Custom keys are public data for storefront consumers; they do not define
+executable server rules and must never contain secrets.
+
+## Meeting-point photos
+
+Settings / Products / Meeting point accepts a photo and accessible description.
+The existing product-media upload service stores the image, compressed as JPEG
+for storefront and email compatibility. Save the product to publish a new photo;
+cancelled uploads are cleaned up. Previously saved meeting-point photos remain
+available so replacing a photo does not break emails already sent.
+
+Both catalog APIs expose `product.config.content.meetingPoint.photoUrl` and
+`photoAlt`. Storefront consumers can render these alongside the existing name,
+address, instructions, and map link. This backend release does not change the
+separately deployed storefront clients.
+
+Storefront order emails include the photo automatically. Booking-linked email
+template previews and sends resolve `{{meetingPointPhotoUrl}}` and
+`{{meetingPointPhotoAlt}}` from the saved booking's product. React templates also
+receive `meetingPoint.photoUrl` and `meetingPoint.photoAlt`; render the image
+conditionally when a URL exists. Plain-text templates can include the URL.
+Existing booking/product authorization and template restrictions still apply.
+
+## Homepage volunteer progress
+
+The `home-volunteer-progress` section is configured in Settings / Home
+Experience alongside Planned payments. It appears before Modules for staff
+whose profile is `volunteer`, subject to the saved audience and existing
+Volunteer Progress access. It always fetches the signed-in user's own stay,
+including when their role also has management access. No new database migration
+or environment variable is required for these features.
+
 ## Live add-on inventory
 
 Storefront catalog responses (`GET /storefront/products` and

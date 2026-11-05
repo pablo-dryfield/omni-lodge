@@ -7,6 +7,12 @@ export type StorefrontAddonOption = {
 };
 
 export type StorefrontAddonConfig = {
+  availability?: {
+    enabled?: boolean;
+    /** Experience weekdays: 1 = Monday, 7 = Sunday. Omit for every day. */
+    daysOfWeek?: number[];
+    unavailableMessage?: string;
+  };
   selectionMode?: StorefrontAddonSelectionMode;
   allowedQuantities?: number[];
   minQuantity?: number;

@@ -17,8 +17,16 @@ export type HomeExperienceConfigurableItem = {
  * showing planned payments until an administrator saves a different rule.
  */
 export const HOME_PLANNED_PAYMENTS_VISIBILITY_KEY = "home-planned-payments";
+export const HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY = "home-volunteer-progress";
 
 export const HOME_CONFIGURABLE_SECTIONS: HomeExperienceConfigurableItem[] = [
+  {
+    id: HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY,
+    label: "Volunteer progress",
+    description: "Show volunteers their own stay and five-star progress before Modules. Requires a Volunteer staff profile and Volunteer Progress access.",
+    group: "Homepage section",
+    kind: "section",
+  },
   {
     id: HOME_PLANNED_PAYMENTS_VISIBILITY_KEY,
     label: "Planned payments",

@@ -46,6 +46,8 @@ import type {
 } from "../../types/productAddons/ProductAddon";
 import { useModuleAccess } from "../../hooks/useModuleAccess";
 import { AddonStorefrontRulesEditor } from "../storefront/StorefrontRulesEditors";
+import AdvancedStorefrontJsonEditor from "../storefront/AdvancedStorefrontJsonEditor";
+import { getAdvancedAddonConfig, mergeAdvancedAddonConfig, parseAdvancedAddonJson } from "../storefront/advancedStorefrontConfig";
 
 const MODULE_SLUG = "product-addon-management";
 
@@ -60,6 +62,7 @@ type ProductAddonForm = {
   priceOverride: number | string;
   sortOrder: number | string;
   storefrontConfig: StorefrontAddonConfig;
+  advancedJson: string;
 };
 
 const EMPTY_FORM: ProductAddonForm = {
@@ -69,6 +72,7 @@ const EMPTY_FORM: ProductAddonForm = {
   priceOverride: "",
   sortOrder: 0,
   storefrontConfig: { selectionMode: "boolean" },
+  advancedJson: "{}",
 };
 
 const formatPrice = (price: number) =>
@@ -99,6 +103,10 @@ const ProductAddonsList = (_props: ProductAddonsListProps) => {
   const [operationError, setOperationError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const advancedError = useMemo(() => {
+    try { parseAdvancedAddonJson(form.advancedJson); return null; }
+    catch (error) { return getErrorMessage(error, "Invalid JSON."); }
+  }, [form.advancedJson]);
 
   useEffect(() => {
     dispatch(fetchProductAddons());
@@ -212,12 +220,17 @@ const ProductAddonsList = (_props: ProductAddonsListProps) => {
       priceOverride: record.priceOverride ?? "",
       sortOrder: record.sortOrder ?? 0,
       storefrontConfig: record.storefrontConfig ?? { selectionMode: "boolean" },
+      advancedJson: JSON.stringify(getAdvancedAddonConfig(record.storefrontConfig ?? {}), null, 2),
     });
     setFormError(null);
     setFormOpen(true);
   };
 
   const validateStorefrontRules = () => {
+    if (advancedError) return advancedError;
+    if (form.storefrontConfig.availability?.daysOfWeek?.length === 0) {
+      return "Choose at least one experience weekday, or select Unavailable.";
+    }
     const { selectionMode, allowedQuantities = [], options = [] } = form.storefrontConfig;
     if (selectionMode === "quantity" && allowedQuantities.length === 0) {
       return "Add at least one allowed quantity.";
@@ -272,7 +285,7 @@ const ProductAddonsList = (_props: ProductAddonsListProps) => {
       maxPerAttendee,
       priceOverride,
       sortOrder,
-      storefrontConfig: form.storefrontConfig,
+      storefrontConfig: mergeAdvancedAddonConfig(form.storefrontConfig, form.advancedJson),
     };
 
     setSubmitting(true);
@@ -491,6 +504,12 @@ const ProductAddonsList = (_props: ProductAddonsListProps) => {
                       )}
                     </Group>
                     <Group gap="xs">
+                      <Badge variant="light" color={record.storefrontConfig?.availability?.enabled === false ? "red" : "teal"}>
+                        {record.storefrontConfig?.availability?.enabled === false ? "Unavailable"
+                          : record.storefrontConfig?.availability?.daysOfWeek
+                            ? record.storefrontConfig.availability.daysOfWeek.map((day) => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][day - 1]).join(", ")
+                            : "Every day"}
+                      </Badge>
                       <Badge variant="light">
                         {selectionMode === "boolean"
                           ? "Yes / no"
@@ -594,9 +613,11 @@ const ProductAddonsList = (_props: ProductAddonsListProps) => {
             }
           />
           {formError && <Alert color="red" title="Unable to save">{formError}</Alert>}
+          <AdvancedStorefrontJsonEditor kind="addon" value={form.advancedJson} error={advancedError}
+            onChange={(advancedJson) => setForm((current) => ({ ...current, advancedJson }))} />
           <Group justify="flex-end">
             <Button variant="default" onClick={closeForm} disabled={submitting}>Cancel</Button>
-            <Button loading={submitting} onClick={handleSubmit}>
+            <Button loading={submitting} disabled={Boolean(advancedError)} onClick={handleSubmit}>
               {editingRecord ? "Save changes" : "Link add-on"}
             </Button>
           </Group>

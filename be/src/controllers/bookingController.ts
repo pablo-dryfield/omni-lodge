@@ -18,6 +18,7 @@ import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import Guest from '../models/Guest.js';
 import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
+import { meetingPointTemplateContext } from '../services/productMeetingPointService.js';
 import ProductAlias from '../models/ProductAlias.js';
 import ProductAddon from '../models/ProductAddon.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
@@ -1062,8 +1063,14 @@ const resolveRenderedEmailFromPayload = async (payload: SendBookingEmailBody, re
   const htmlBodyOverrideInput = normalizeOptionalString(payload?.htmlBodyOverride);
   const textBodyOverrideInput = normalizeOptionalString(payload?.textBodyOverride);
   const templateId = parseOptionalInteger(payload?.templateId);
+  // The request's booking context has already passed the scoped-email guard.
+  // Resolve product content from the saved booking, not client-supplied template values.
+  const emailBookingId = parseOptionalInteger(req?.query?.bookingId ?? req?.body?.bookingId);
+  const emailBooking = emailBookingId ? await Booking.findByPk(emailBookingId) : null;
+  const emailProduct = emailBooking?.productId ? await Product.findByPk(emailBooking.productId) : null;
   const normalizedContext = {
     ...enrichTemplateContextAliases(normalizeTemplateContext(payload?.templateContext)),
+    ...meetingPointTemplateContext(emailProduct?.storefrontConfig?.content?.meetingPoint),
     ...(scope ? {} : await buildTshirtAvailabilityTemplateContext()),
   };
   const reactTemplateSourceRaw = normalizedContext.reactTemplateSource;

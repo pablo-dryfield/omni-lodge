@@ -36,6 +36,26 @@ const productPriceFindAll = ProductPrice.findAll as jest.Mock;
 const promotionFindAll = StorefrontPromotion.findAll as jest.Mock;
 
 describe('quoteStorefrontCart validation', () => {
+  it.each([
+    [{ enabled: false, unavailableMessage: 'Temporarily closed' }, '2026-11-06', false],
+    [{ daysOfWeek: [5], unavailableMessage: 'Friday tours only' }, '2026-11-07', false],
+    [{ daysOfWeek: [5] }, '2026-11-06', true],
+  ])('enforces add-on availability in server-side quotes (%j, %s)', async (availability, experienceDate, allowed) => {
+    productFindAll.mockResolvedValue([{
+      id: 1, name: 'Food Tour', price: 100, storefrontConfig: {}, productAddons: [{
+        addonId: 7, priceOverride: null, storefrontConfig: { selectionMode: 'boolean', availability },
+        addon: { id: 7, name: 'Drinks', basePrice: 20, isActive: true },
+      }],
+    }]);
+    productPriceFindAll.mockResolvedValue([]);
+    promotionFindAll.mockResolvedValue([]);
+    const request = { items: [{ productId: 1, quantity: 1, experienceDate: String(experienceDate), addons: [{ addonId: 7, quantity: 1 }] }] };
+    if (allowed) await expect(quoteStorefrontCart(request)).resolves.toMatchObject({ total: 120 });
+    else await expect(quoteStorefrontCart(request)).rejects.toMatchObject({ status: 400 });
+    // The tour itself can still be bought without the unavailable extra.
+    request.items[0].addons = [];
+    await expect(quoteStorefrontCart(request)).resolves.toMatchObject({ total: 100 });
+  });
   beforeEach(() => {
     jest.clearAllMocks();
     // Exercise availability rules before the fixture experiences take place.

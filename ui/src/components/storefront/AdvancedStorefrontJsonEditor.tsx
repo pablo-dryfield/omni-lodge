@@ -1,14 +1,15 @@
 import { Accordion, Alert, Badge, Button, Group, Stack, Text, Textarea } from "@mantine/core";
 import { IconCode, IconWorld } from "@tabler/icons-react";
-import { parseAdvancedStorefrontJson } from "./advancedStorefrontConfig";
+import { parseAdvancedStorefrontJson, parseAdvancedAddonJson } from "./advancedStorefrontConfig";
 
 type Props = {
   value: string;
   onChange: (value: string) => void;
   error: string | null;
+  kind?: "product" | "addon";
 };
 
-const AdvancedStorefrontJsonEditor = ({ value, onChange, error }: Props) => (
+const AdvancedStorefrontJsonEditor = ({ value, onChange, error, kind = "product" }: Props) => (
   <Accordion variant="separated" radius="md">
     <Accordion.Item value="advanced-storefront-json">
       <Accordion.Control icon={<IconCode size={20} />}>
@@ -26,10 +27,10 @@ const AdvancedStorefrontJsonEditor = ({ value, onChange, error }: Props) => (
             Never enter passwords, API keys, or private customer information.
           </Alert>
           <Text size="sm" c="dimmed">
-            Add custom fields such as durationMinutes, inclusions, or faqs, and nested content
+            {kind === "addon" ? "Add extra storefront fields such as badge, details, or nested display settings. Availability, prices, and selection rules are controlled by the form above. Custom fields are shared with storefronts but only take effect when a storefront supports them." : <>Add custom fields such as durationMinutes, inclusions, or faqs, and nested content
             such as content.card. They are saved directly in storefrontConfig, without an extra
             wrapper. Standard booking rules and product information stay controlled by the form
-            above. Your storefront must support a field to display it.
+            above. Your storefront must support a field to display it.</>}
           </Text>
           <Textarea
             label="Additional storefront fields (JSON)"
@@ -46,13 +47,13 @@ const AdvancedStorefrontJsonEditor = ({ value, onChange, error }: Props) => (
             styles={{ input: { fontFamily: "monospace", fontSize: 13 } }}
           />
           <Group justify="space-between" gap="xs">
-            <Text size="xs" c="dimmed">Storefront access: product.config.yourField</Text>
+            <Text size="xs" c="dimmed">Storefront access: {kind}.config.yourField</Text>
             <Button
               variant="default"
               size="xs"
               leftSection={<IconCode size={14} />}
               disabled={Boolean(error)}
-              onClick={() => onChange(JSON.stringify(parseAdvancedStorefrontJson(value), null, 2))}
+              onClick={() => onChange(JSON.stringify((kind === "addon" ? parseAdvancedAddonJson : parseAdvancedStorefrontJson)(value), null, 2))}
             >
               Format JSON
             </Button>

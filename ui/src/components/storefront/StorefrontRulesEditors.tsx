@@ -5,6 +5,7 @@ import {
   Button,
   Divider,
   Group,
+  MultiSelect,
   NumberInput,
   Paper,
   Select,
@@ -19,7 +20,7 @@ import {
 } from "@mantine/core";
 import { DatePicker, type DatesRangeValue } from "@mantine/dates";
 import { IconArrowDown, IconArrowUp, IconPlus, IconTrash } from "@tabler/icons-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type {
   StorefrontBookingSection,
   StorefrontDateMode,
@@ -39,6 +40,7 @@ type ProductRulesProps = {
   value: StorefrontProductConfig;
   onChange: (value: StorefrontProductConfig) => void;
   productOptions?: Array<{ value: string; label: string }>;
+  meetingPointPhoto?: ReactNode;
 };
 
 type AvailabilityCalendarMode = "blocked" | "available" | "allowed";
@@ -218,6 +220,7 @@ export const ProductStorefrontRulesEditor = ({
   value,
   onChange,
   productOptions = [],
+  meetingPointPhoto,
 }: ProductRulesProps) => {
   const update = <K extends keyof StorefrontProductConfig>(
     key: K,
@@ -1146,6 +1149,7 @@ export const ProductStorefrontRulesEditor = ({
           value={meetingPoint.mapUrl ?? ""}
           onChange={(event) => updateMeetingPoint("mapUrl", event.currentTarget.value)}
         />
+        {meetingPointPhoto}
       </Stack>
     </Paper>
   );
@@ -1159,6 +1163,9 @@ type AddonRulesProps = {
 const emptyOption = (): StorefrontAddonOption => ({ value: "", label: "" });
 
 export const AddonStorefrontRulesEditor = ({ value, onChange }: AddonRulesProps) => {
+  const availability = value.availability ?? {};
+  const availabilityMode = availability.enabled === false ? "unavailable"
+    : availability.daysOfWeek !== undefined ? "selected_days" : "every_day";
   const mode = value.selectionMode ?? "boolean";
   const quantities = value.allowedQuantities ?? [];
   const prices = value.quantityPrices ?? {};
@@ -1182,6 +1189,35 @@ export const AddonStorefrontRulesEditor = ({ value, onChange }: AddonRulesProps)
             Choose how guests add this extra during checkout.
           </Text>
         </div>
+        <Select
+          label="Availability"
+          description="Based on the booked experience date, not the day the customer purchases."
+          allowDeselect={false}
+          data={[{ value: "every_day", label: "Available every day" },
+            { value: "selected_days", label: "Available on selected weekdays" },
+            { value: "unavailable", label: "Unavailable" }]}
+          value={availabilityMode}
+          onChange={(mode) => onChange({ ...value, availability: {
+            ...availability, enabled: mode !== "unavailable",
+            daysOfWeek: mode === "every_day" ? undefined
+              : mode === "selected_days" ? availability.daysOfWeek ?? [1, 2, 3, 4, 5, 6, 7]
+              : availability.daysOfWeek?.length ? availability.daysOfWeek : undefined,
+          } })}
+        />
+        {availabilityMode === "selected_days" && <MultiSelect
+          label="Available experience weekdays" required
+          data={["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            .map((label, index) => ({ value: String(index + 1), label }))}
+          value={(availability.daysOfWeek ?? []).map(String)}
+          error={availability.daysOfWeek?.length === 0 ? "Choose at least one day, or select Unavailable." : undefined}
+          onChange={(days) => onChange({ ...value, availability: { ...availability, daysOfWeek: days.map(Number) } })}
+        />}
+        <Textarea label="Unavailable message"
+          description="Shown to customers when this add-on cannot be purchased for their experience date."
+          placeholder="For example: Cocktails are only available on Friday and Saturday tours."
+          maxLength={500} autosize minRows={2} value={availability.unavailableMessage ?? ""}
+          onChange={(event) => onChange({ ...value, availability: { ...availability, unavailableMessage: event.currentTarget.value } })}
+        />
         <Divider />
         <Select
           label="Selection style"
