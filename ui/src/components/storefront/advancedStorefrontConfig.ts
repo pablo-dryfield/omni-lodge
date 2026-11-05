@@ -1,4 +1,26 @@
 import type { StorefrontProductConfig } from "../../types/products/Product";
+import type { StorefrontAddonConfig } from "../../types/productAddons/ProductAddon";
+
+const managedAddonKeys = new Set(["selectionMode", "allowedQuantities", "minQuantity", "maxQuantity", "quantityPrices", "options", "availability"]);
+
+export const getAdvancedAddonConfig = (config: StorefrontAddonConfig): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(config).filter(([key]) => !managedAddonKeys.has(key)));
+
+export const parseAdvancedAddonJson = (text: string): Record<string, unknown> => {
+  const parsed: unknown = JSON.parse(text.trim() || "{}", (_key, value: unknown) => {
+    if (typeof value === "number" && !Number.isFinite(value)) throw new Error("Numbers must be finite.");
+    return value;
+  });
+  if (!isObject(parsed)) throw new Error("Enter a JSON object, for example {\"badge\": \"Popular\"}.");
+  const reserved = Object.keys(parsed).filter((key) => managedAddonKeys.has(key));
+  if (reserved.length) throw new Error(`Use the add-on form above to change: ${reserved.join(", ")}.`);
+  return parsed;
+};
+
+export const mergeAdvancedAddonConfig = (config: StorefrontAddonConfig, json: string): StorefrontAddonConfig => ({
+  ...Object.fromEntries(Object.entries(config).filter(([key]) => managedAddonKeys.has(key))),
+  ...parseAdvancedAddonJson(json),
+});
 
 // These fields belong to the normal product form. Custom fields may also live
 // under content, without being able to replace the standard content fields.

@@ -6,6 +6,8 @@ jest.mock('../../services/bookings/gmailClient.js', () => ({ sendMessage: jest.f
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest';
 import EmailTemplate from '../../models/EmailTemplate';
+import Booking from '../../models/Booking';
+import Product from '../../models/Product';
 import { getAllowedProductTypeIds } from '../../services/productScopeService';
 import { getBookingEmailAccess } from '../../services/bookingEmailScopeService';
 import { sendMessage } from '../../services/bookings/gmailClient';
@@ -17,6 +19,7 @@ beforeEach(() => {
   jest.mocked(getAllowedProductTypeIds).mockResolvedValue([3]);
   jest.mocked(getBookingEmailAccess).mockResolvedValue({ customerEmail: 'guest@example.com', booking: { id: 12 }, productTypeIds: [3], messageIds: [], threadIds: [] } as any);
 });
+afterEach(() => jest.restoreAllMocks());
 it('lists only this product type’s non-executable templates', async () => {
   jest.mocked(EmailTemplate.findAll).mockResolvedValue([]);
   const res = response(); await listEmailTemplates(request(), res);
@@ -66,4 +69,24 @@ it('renders booking placeholders in an own plain-text template', async () => {
 it('rejects an arbitrary recipient before sending anything', async () => {
   const res = response(); await sendBookingEmail(request({ to: 'other@example.com', subject: 'Test', body: 'Test' }), res);
   expect(res.status).toHaveBeenCalledWith(403); expect(sendMessage).not.toHaveBeenCalled();
+});
+it('resolves meeting-point photo placeholders from the authorized booking product', async () => {
+  jest.spyOn(Booking, 'findByPk').mockResolvedValue({ id: 12, productId: 9 } as Booking);
+  jest.spyOn(Product, 'findByPk').mockResolvedValue({ storefrontConfig: { content: { meetingPoint: {
+    name: 'Main square', photoUrl: 'https://media.example.com/meeting.jpg', photoAlt: 'Guide beside the statue',
+  } } } } as Product);
+  jest.mocked(EmailTemplate.findByPk).mockResolvedValue({ productTypeId: 3, templateType: 'plain_text', isActive: true,
+    subjectTemplate: 'Meeting point', bodyTemplate: '{{meetingPointPhotoAlt}}: {{meetingPointPhotoUrl}}',
+  } as EmailTemplate);
+  const req = request({ to: 'guest@example.com', templateId: 1,
+    templateContext: { meetingPointPhotoUrl: 'https://wrong.example.com/photo.jpg' } });
+  req.query.bookingId = '12';
+  const res = response();
+  await renderBookingEmailPreview(req, res);
+  expect(res.status).toHaveBeenCalledWith(200);
+  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+    textBody: 'Guide beside the statue: https://media.example.com/meeting.jpg',
+  }));
+  expect(Product.findByPk).toHaveBeenCalledWith(9);
+  expect(sendMessage).not.toHaveBeenCalled();
 });

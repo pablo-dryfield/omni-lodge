@@ -119,6 +119,7 @@ describe('public storefront custom JSON', () => {
       ...custom,
       defaultStartTime: '21:00', content: {
         summary: 'Existing content', description: 'Full product description',
+        meetingPoint: { photoUrl: 'https://media.example.test/meeting.jpg', photoAlt: 'Meet here' },
         card: {
           subtitle: 'Local food & drinks', description: 'Short card description',
           stats: [{ icon: 'plate', count: 10, label: 'Food tastings' }],
@@ -126,9 +127,13 @@ describe('public storefront custom JSON', () => {
       },
       availability: { blockedDates: [{ date: '2026-12-31', reason: 'Closed' }] },
     };
+    const addonConfig = { selectionMode: 'quantity', availability: { enabled: true, daysOfWeek: [5, 6],
+      unavailableMessage: 'Friday and Saturday tours only.' }, content: { badge: 'Popular' } };
     const product = {
       id, name, productTypeId: typeId, price: 120,
-      imageUrl: null, images: [], storefrontConfig, productAddons: [],
+      imageUrl: null, images: [], storefrontConfig, productAddons: [{ addonId: 4,
+        storefrontConfig: addonConfig, priceOverride: null, maxPerAttendee: 1,
+        addon: { id: 4, name: 'Drinks', isActive: true, basePrice: 20 } }],
       get: jest.fn(() => ({ id: typeId, name: typeId === 3 ? 'Food Tour' : 'Pub Crawl' })),
     };
     productFindAll.mockResolvedValue([product]);
@@ -143,6 +148,7 @@ describe('public storefront custom JSON', () => {
     const detailProduct = productRes.json.mock.calls[0][0].product;
     for (const item of [catalogProduct, detailProduct]) {
       expect(item.config).toMatchObject(storefrontConfig);
+      expect(item.addons[0].config).toEqual(addonConfig);
       expect(item.config).not.toHaveProperty('extra');
       expect(item.config.durationMinutes).toBe(180);
       expect(item.config.content.card).toEqual(storefrontConfig.content.card);

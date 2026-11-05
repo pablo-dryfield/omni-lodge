@@ -7,6 +7,7 @@ import ChannelProductPrice from '../models/ChannelProductPrice.js';
 import Currency from '../models/Currency.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
+import { evaluateAddonAvailability } from './storefrontAddonAvailabilityService.js';
 import ProductPrice from '../models/ProductPrice.js';
 import StorefrontPromotion from '../models/StorefrontPromotion.js';
 import { promotionRules } from './storefrontPromotionRules.js';
@@ -736,6 +737,10 @@ export const quoteStorefrontCart = async (
         throw new HttpError(400, `An add-on selected for ${product.name} is unavailable.`);
       }
       const addonConfig: StorefrontAddonConfig = productAddon.storefrontConfig ?? {};
+      const addonAvailability = evaluateAddonAvailability(addonConfig, experienceDate);
+      if (!addonAvailability.available) {
+        throw new HttpError(400, `${addon.name}: ${addonAvailability.message}`);
+      }
       const selectionMode = String(addonConfig.selectionMode ?? 'quantity').toLowerCase();
       const maxQuantity = resolveStorefrontAddonMaxQuantity(
         quantity,

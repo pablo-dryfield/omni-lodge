@@ -8,6 +8,8 @@ export type StorefrontMeetingPoint = {
   address?: string;
   instructions?: string;
   mapUrl?: string;
+  photoUrl?: string;
+  photoAlt?: string;
 };
 
 export type StorefrontProductContent = {
@@ -84,6 +86,12 @@ export type StorefrontAddonOption = {
 };
 
 export type StorefrontAddonConfig = {
+  availability?: {
+    enabled?: boolean;
+    /** Experience weekdays, ISO 1 (Monday) through 7 (Sunday). Omit for every day. */
+    daysOfWeek?: number[];
+    unavailableMessage?: string;
+  };
   selectionMode?: StorefrontAddonSelectionMode;
   allowedQuantities?: number[];
   minQuantity?: number;

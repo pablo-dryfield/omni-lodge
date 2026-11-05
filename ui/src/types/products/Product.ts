@@ -8,6 +8,8 @@ export type StorefrontMeetingPoint = {
     address?: string;
     instructions?: string;
     mapUrl?: string;
+    photoUrl?: string;
+    photoAlt?: string;
 };
 
 export type StorefrontProductContent = {

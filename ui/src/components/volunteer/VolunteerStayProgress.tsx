@@ -84,12 +84,14 @@ const stayRangeLabel = (report: StayReport) => {
 const compareVolunteerNames = (left: StayReport, right: StayReport) =>
   getFullName(left).localeCompare(getFullName(right), undefined, { sensitivity: "base" });
 
-const VolunteerOverviewCard = ({
+export const VolunteerOverviewCard = ({
   report,
   onOpen,
+  selfView = false,
 }: {
   report: StayReport;
   onOpen: () => void;
+  selfView?: boolean;
 }) => {
   const status = getStayStatus(report);
   const statusMeta = stayStatusMeta[status];
@@ -189,7 +191,7 @@ const VolunteerOverviewCard = ({
           </Group>
           <Group justify="space-between" mt="md" pt="sm" style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}>
             <Text size="sm" fw={700} c="blue.7">
-              {status === "setup" ? "Set up stay" : "View full progress"}
+              {status === "setup" ? selfView ? "View stay details" : "Set up stay" : "View full progress"}
             </Text>
             <IconArrowRight size={18} color="var(--mantine-color-blue-7)" aria-hidden="true" />
           </Group>

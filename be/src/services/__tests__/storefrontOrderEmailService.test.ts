@@ -76,6 +76,8 @@ const productDetails = new Map([
         address: 'Rynek Glowny, 31-042 Krakow',
         instructions: 'Search for the pink umbrella!',
         mapUrl: 'https://maps.example.com/meeting-point',
+        photoUrl: 'https://media.example.com/meeting-point.jpg',
+        photoAlt: 'Statue & pink umbrella',
       },
     },
   ],
@@ -94,6 +96,9 @@ describe('storefront paid-order emails', () => {
     const email = buildCustomerStorefrontEmail(order, bookingIds, productDetails);
 
     expect(email.subject).toContain('Booking confirmed');
+    expect(email.htmlBody).toContain('src="https://media.example.com/meeting-point.jpg"');
+    expect(email.htmlBody).toContain('alt="Statue &amp; pink umbrella"');
+    expect(email.textBody).toContain('Meeting point photo: https://media.example.com/meeting-point.jpg');
     expect(email.htmlBody).toContain('Krawl Through Krakow Pub Crawl');
     expect(email.htmlBody).toContain('Saturday, 15 August 2026');
     expect(email.htmlBody).toContain('Booking reference');

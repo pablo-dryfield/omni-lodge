@@ -33,8 +33,9 @@ import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import HomeQuickActions from "../components/home/HomeQuickActions";
 import HomeModuleLauncher from "../components/home/HomeModuleLauncher";
 import HomePlannedExpenses from "../components/home/HomePlannedExpenses";
+import HomeVolunteerProgress from "../components/home/HomeVolunteerProgress";
 import HomeCleaningTasks from "../components/volunteerCleaning/HomeCleaningTasks";
-import { HOME_PLANNED_PAYMENTS_VISIBILITY_KEY } from "../components/home/homeExperienceConfigRegistry";
+import { HOME_PLANNED_PAYMENTS_VISIBILITY_KEY, HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY } from "../components/home/homeExperienceConfigRegistry";
 import { resolveHomeNativeDashboard } from "../components/home/homeNativeDashboard";
 import { isHomeQuickActionVisibilityMap } from "../components/home/homeQuickActionRegistry";
 import { isHomeManagementRole } from "../components/home/homeModuleRegistry";
@@ -1605,6 +1606,7 @@ const Home = (props: GenericPageProps) => {
     && resolvedQuickActionVisibility !== null;
   const plannedPaymentsVisible =
     quickActionVisibility[HOME_PLANNED_PAYMENTS_VISIBILITY_KEY] !== false;
+  const volunteerProgressVisible = quickActionVisibility[HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY] !== false;
   const normalizedSavedIds = preference.savedDashboardIds.filter((id) => typeof id === "string" && id.length > 0);
   const activeDashboardId = useMemo(() => {
     if (preference.activeDashboardId && normalizedSavedIds.includes(preference.activeDashboardId)) {
@@ -3465,6 +3467,7 @@ const Home = (props: GenericPageProps) => {
       quickActions={(
         <Stack spacing={{ xs: 2.5, md: 3.5 }}>
           {!productScoped && <HomeCleaningTasks />}
+          <HomeVolunteerProgress configuredVisible={volunteerProgressVisible} audienceReady={homeExperienceAudienceReady} />
           <HomeQuickActions
             quickActionVisibility={quickActionVisibility}
             audienceReady={homeExperienceAudienceReady}
@@ -3646,6 +3649,7 @@ const Home = (props: GenericPageProps) => {
             {effectiveViewMode === "dashboard" ? (
               <Stack gap={1.5}>
                 {!productScoped && <HomeCleaningTasks />}
+                <HomeVolunteerProgress configuredVisible={volunteerProgressVisible} audienceReady={homeExperienceAudienceReady} />
                 <HomeQuickActions
                   compact
                   quickActionVisibility={quickActionVisibility}

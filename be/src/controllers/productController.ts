@@ -12,6 +12,8 @@ import HttpError from '../errors/HttpError.js';
 import { getAllowedProductTypeIds, requireProductAccess, requireProductTypeAccess, scopeProductWhere } from '../services/productScopeService.js';
 import { deleteProductMedia, uploadProductMedia } from '../services/storefrontMediaService.js';
 import type { StorefrontBookingSection } from '../types/storefront.js';
+import type { StorefrontProductConfig } from '../types/storefront.js';
+import { validateMeetingPointPhoto } from '../services/productMeetingPointService.js';
 
 const DEFAULT_STOREFRONT_SECTION_ORDER: StorefrontBookingSection[] = [
   'date_time',
@@ -71,6 +73,7 @@ function normalizeProductPayload(
       return value;
     });
     const storefrontConfig = { ...(config as Record<string, unknown>) };
+    validateMeetingPointPhoto((storefrontConfig as StorefrontProductConfig).content?.meetingPoint);
     if ('sectionOrder' in storefrontConfig) {
       const sectionOrder = normalizeStorefrontSectionOrder(storefrontConfig.sectionOrder);
       if (isDefaultStorefrontSectionOrder(sectionOrder)) delete storefrontConfig.sectionOrder;

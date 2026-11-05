@@ -4,6 +4,8 @@ import { DataType } from 'sequelize-typescript';
 import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
 import ProductAddon from '../models/ProductAddon.js';
+import HttpError from '../errors/HttpError.js';
+import { validateAddonAvailability } from '../services/storefrontAddonAvailabilityService.js';
 import { ErrorWithMessage } from '../types/ErrorWithMessage.js';
 
 type ProductAddonWithAssociations = ProductAddon & {
@@ -56,7 +58,7 @@ export const getAllProductAddons = async (req: Request, res: Response): Promise<
     res.status(200).json([{ data, columns: buildProductAddonColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
@@ -78,7 +80,7 @@ export const getProductAddonById = async (req: Request, res: Response): Promise<
     res.status(200).json([{ data: decorateRecord(record as ProductAddonWithAssociations), columns: buildProductAddonColumns() }]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
@@ -108,8 +110,13 @@ const normalizePayload = (payload: Partial<ProductAddon>, { forCreate = false } 
       Array.isArray(payload.storefrontConfig) ||
       typeof payload.storefrontConfig !== 'object'
     ) {
-      throw new Error('storefrontConfig must be a JSON object');
+      throw new HttpError(400, 'storefrontConfig must be a JSON object');
     }
+    validateAddonAvailability(payload.storefrontConfig.availability);
+    JSON.stringify(payload.storefrontConfig, (_key, value: unknown) => {
+      if (typeof value === 'number' && !Number.isFinite(value)) throw new HttpError(400, 'storefrontConfig numbers must be finite');
+      return value;
+    });
     next.storefrontConfig = payload.storefrontConfig;
   } else if (forCreate) {
     next.storefrontConfig = {};
@@ -130,7 +137,7 @@ export const createProductAddon = async (req: Request, res: Response): Promise<v
     res.status(201).json([decorateRecord(created as ProductAddonWithAssociations)]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
@@ -157,7 +164,7 @@ export const updateProductAddon = async (req: Request, res: Response): Promise<v
     res.status(200).json([decorateRecord(record as ProductAddonWithAssociations)]);
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };
 
@@ -174,6 +181,6 @@ export const deleteProductAddon = async (req: Request, res: Response): Promise<v
     res.status(204).send();
   } catch (error) {
     const errorMessage = (error as ErrorWithMessage).message;
-    res.status(500).json([{ message: errorMessage }]);
+    res.status(error instanceof HttpError ? error.status : 500).json([{ message: errorMessage }]);
   }
 };

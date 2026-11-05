@@ -4,9 +4,24 @@ import {
   getAdvancedStorefrontConfig,
   mergeAdvancedStorefrontConfig,
   parseAdvancedStorefrontJson,
+  parseAdvancedAddonJson, mergeAdvancedAddonConfig, getAdvancedAddonConfig,
 } from "./advancedStorefrontConfig";
 import { cleanProductStorefrontConfig } from "./StorefrontRulesEditors";
 import type { StorefrontProductConfig } from "../../types/products/Product";
+
+describe('additional add-on JSON', () => {
+  it('merges custom objects with form rules and can remove previous custom fields', () => {
+    const availability = { enabled: true, daysOfWeek: [5, 6], unavailableMessage: 'Weekends only' };
+    const config = { selectionMode: 'boolean' as const, availability, badge: 'Old', details: { x: 1 } };
+    expect(getAdvancedAddonConfig(config)).toEqual({ badge: 'Old', details: { x: 1 } });
+    expect(mergeAdvancedAddonConfig(config, '{"badge":"Popular","list":[1,true,null]}'))
+      .toEqual({ selectionMode: 'boolean', availability, badge: 'Popular', list: [1, true, null] });
+    expect(mergeAdvancedAddonConfig(config, '{}')).toEqual({ selectionMode: 'boolean', availability });
+  });
+  it.each(['[]', 'null', '{', '{"availability":{}}', '{"quantityPrices":{}}', '{"amount":1e400}'])(
+    'rejects invalid or form-owned fields %s', json => expect(() => parseAdvancedAddonJson(json)).toThrow(),
+  );
+});
 
 const custom = {
   duration: "3 hours",

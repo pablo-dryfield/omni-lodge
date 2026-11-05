@@ -137,6 +137,8 @@ const normalizeProductDetails = (content: StorefrontProductContent | undefined):
         address: String(meetingPoint.address ?? '').trim(),
         instructions: String(meetingPoint.instructions ?? '').trim(),
         mapUrl: String(meetingPoint.mapUrl ?? '').trim(),
+        photoUrl: String(meetingPoint.photoUrl ?? '').trim(),
+        photoAlt: String(meetingPoint.photoAlt ?? '').trim(),
       }
     : null;
   const hasMeetingPoint = normalizedMeetingPoint && Object.values(normalizedMeetingPoint).some(Boolean);
@@ -207,12 +209,14 @@ const bulletListHtml = (title: string, items: string[], color: string): string =
 const meetingPointHtml = (meetingPoint: StorefrontMeetingPoint | null): string => {
   if (!meetingPoint) return '';
   const mapUrl = safeHttpUrl(meetingPoint.mapUrl);
+  const photoUrl = safeHttpUrl(meetingPoint.photoUrl);
   return `
     <div style="margin-top:18px;padding:18px;background:#0c0a0b;border-left:4px solid #ff168f;text-align:center">
       <div style="color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:1.6px;text-transform:uppercase">Meeting point</div>
       ${meetingPoint.name ? `<div style="margin-top:8px;color:#fff8f2;font-family:Arial,sans-serif;font-size:18px;font-weight:800;line-height:1.35">${escapeHtml(meetingPoint.name)}</div>` : ''}
       ${meetingPoint.address ? `<div style="margin-top:5px;color:#c9bdc2;font-family:Arial,sans-serif;font-size:14px;line-height:1.55">${escapeHtml(meetingPoint.address)}</div>` : ''}
       ${meetingPoint.instructions ? `<div style="margin-top:11px;color:#ffd438;font-family:Arial,sans-serif;font-size:14px;font-weight:700;line-height:1.55">${escapeHtml(meetingPoint.instructions)}</div>` : ''}
+      ${photoUrl ? `<img src="${escapeHtml(photoUrl)}" alt="${escapeHtml(meetingPoint.photoAlt || meetingPoint.name || 'Meeting point')}" width="480" style="display:block;width:100%;max-width:480px;height:auto;margin:16px auto 0;border-radius:8px" />` : ''}
       ${mapUrl ? `<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:15px auto 0"><tr><td bgcolor="#ffd438"><a href="${escapeHtml(mapUrl)}" style="display:inline-block;padding:11px 17px;color:#080708;font-family:Arial,sans-serif;font-size:12px;font-weight:900;text-decoration:none">OPEN IN GOOGLE MAPS</a></td></tr></table>` : ''}
     </div>`;
 };
@@ -441,6 +445,7 @@ const itemText = (
           ...(productDetails.meetingPoint.address ? [`Address: ${productDetails.meetingPoint.address}`] : []),
           ...(productDetails.meetingPoint.instructions ? [`Instructions: ${productDetails.meetingPoint.instructions}`] : []),
           ...(safeHttpUrl(productDetails.meetingPoint.mapUrl) ? [`Map: ${safeHttpUrl(productDetails.meetingPoint.mapUrl)}`] : []),
+          ...(safeHttpUrl(productDetails.meetingPoint.photoUrl) ? [`Meeting point photo: ${safeHttpUrl(productDetails.meetingPoint.photoUrl)}`] : []),
         ]
       : []),
     '',

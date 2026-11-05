@@ -51,6 +51,7 @@ import {
   cleanProductStorefrontConfig,
 } from "../storefront/StorefrontRulesEditors";
 import ProductMediaEditor from "./ProductMediaEditor";
+import MeetingPointPhotoEditor from "./MeetingPointPhotoEditor";
 import AdvancedStorefrontJsonEditor from "../storefront/AdvancedStorefrontJsonEditor";
 import {
   getAdvancedStorefrontConfig,
@@ -131,7 +132,9 @@ const ProductList = ({
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [initialImageUrls, setInitialImageUrls] = useState<string[]>([]);
   const [sessionUploadedUrls, setSessionUploadedUrls] = useState<string[]>([]);
-  const [mediaUploading, setMediaUploading] = useState(false);
+  const [galleryUploading, setGalleryUploading] = useState(false);
+  const [meetingPointUploading, setMeetingPointUploading] = useState(false);
+  const mediaUploading = galleryUploading || meetingPointUploading;
   const advancedStorefrontError = useMemo(() => {
     try {
       parseAdvancedStorefrontJson(form.advancedStorefrontJson);
@@ -205,7 +208,8 @@ const ProductList = ({
     setFormError(null);
     setInitialImageUrls([]);
     setSessionUploadedUrls([]);
-    setMediaUploading(false);
+    setGalleryUploading(false);
+    setMeetingPointUploading(false);
   };
 
   const cleanupImageFiles = async (productId: number, urls: string[]) => {
@@ -297,9 +301,14 @@ const ProductList = ({
         const keptUrls = new Set([
           ...form.images.map((image) => image.url),
           ...(form.imageUrl ? [form.imageUrl] : []),
+          ...(form.storefrontConfig.content?.meetingPoint?.photoUrl ? [form.storefrontConfig.content.meetingPoint.photoUrl] : []),
         ]);
         const removedUrls = [...new Set([...initialImageUrls, ...sessionUploadedUrls])]
           .filter((url) => !keptUrls.has(url));
+        // Saved uploads are now referenced by the product. A failed list refresh
+        // must not make Cancel delete them as though they were still temporary.
+        setSessionUploadedUrls([]);
+        setInitialImageUrls(form.images.map((image) => image.url));
         await cleanupImageFiles(editingProduct.id, removedUrls);
       } else {
         await dispatch(createProduct({ ...payload, createdBy: loggedUserId })).unwrap();
@@ -612,6 +621,16 @@ const ProductList = ({
           </Paper>
           <ProductStorefrontRulesEditor
             value={form.storefrontConfig}
+            meetingPointPhoto={<MeetingPointPhotoEditor
+              productId={editingProduct?.id}
+              value={form.storefrontConfig.content?.meetingPoint ?? {}}
+              onChange={(patch) => setForm((current) => ({ ...current, storefrontConfig: {
+                ...current.storefrontConfig, content: { ...current.storefrontConfig.content,
+                  meetingPoint: { ...current.storefrontConfig.content?.meetingPoint, ...patch } },
+              } }))}
+              onUploaded={(url) => setSessionUploadedUrls((current) => [...current, url])}
+              onUploadingChange={setMeetingPointUploading}
+            />}
             productOptions={productOptions.filter((option) => option.value !== String(editingProduct?.id ?? ""))}
             onChange={(storefrontConfig) =>
               setForm((current) => ({ ...current, storefrontConfig }))
@@ -635,7 +654,7 @@ const ProductList = ({
             onUploaded={(url) =>
               setSessionUploadedUrls((current) => [...current, url])
             }
-            onUploadingChange={setMediaUploading}
+            onUploadingChange={setGalleryUploading}
           />
           {formError && (
             <Alert color="red" title="Unable to save">{formError}</Alert>
