@@ -3,19 +3,26 @@ import {
   buildCustomerBankTransferInstructionsEmail,
   buildCustomerStorefrontEmail,
   buildInternalStorefrontEmail,
+  deliverStorefrontOrderEmails,
   isStorefrontOrderConfirmationEmailComplete,
 } from '../storefrontOrderEmailService';
 import { getConfigValue } from '../configService';
 import type StorefrontOrder from '../../models/StorefrontOrder';
 import type StorefrontOrderItem from '../../models/StorefrontOrderItem';
+import sequelize from '../../config/database';
+import Booking from '../../models/Booking';
+import Product from '../../models/Product';
+import { findLockedStorefrontOrderWithItems } from '../storefrontOrderPersistenceService';
+import { sendMessage } from '../bookings/gmailClient';
 
-jest.mock('../../config/database.js', () => ({ __esModule: true, default: {} }));
-jest.mock('../../models/Booking.js', () => ({ __esModule: true, default: {} }));
-jest.mock('../../models/Product.js', () => ({ __esModule: true, default: {} }));
+jest.mock('../../config/database.js', () => ({ __esModule: true, default: { transaction: jest.fn() } }));
+jest.mock('../../models/Booking.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
+jest.mock('../../models/Product.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
 jest.mock('../../models/StorefrontOrder.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/StorefrontOrderItem.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../bookings/gmailClient.js', () => ({ sendMessage: jest.fn() }));
 jest.mock('../configService.js', () => ({ getConfigValue: jest.fn() }));
+jest.mock('../storefrontOrderPersistenceService.js', () => ({ findLockedStorefrontOrderWithItems: jest.fn() }));
 
 const mockedGetConfigValue = getConfigValue as jest.MockedFunction<typeof getConfigValue>;
 
@@ -85,6 +92,7 @@ const productDetails = new Map([
 
 describe('storefront paid-order emails', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     mockedGetConfigValue.mockReturnValue({
       title: 'Cancellation policy',
       summary: 'Custom cancellation terms.',
@@ -92,10 +100,38 @@ describe('storefront paid-order emails', () => {
     });
   });
 
-  it('builds a useful customer confirmation in HTML and plain text', () => {
-    const email = buildCustomerStorefrontEmail(order, bookingIds, productDetails);
+  it('delivers the generated inline barcode through the actual customer notification path', async () => {
+    mockedGetConfigValue.mockReturnValue(null);
+    const transaction = {};
+    (sequelize.transaction as jest.Mock).mockImplementation((callback) => callback(transaction));
+    const storedOrder = { ...order, update: jest.fn(), customerEmailSentAt: null } as unknown as StorefrontOrder;
+    jest.mocked(findLockedStorefrontOrderWithItems).mockResolvedValue(storedOrder);
+    jest.mocked(Booking.findAll).mockResolvedValue([
+      { id: 41001, platformBookingId: `${order.publicId}-501` } as Booking,
+    ]);
+    jest.mocked(Product.findAll).mockResolvedValue([]);
+
+    await deliverStorefrontOrderEmails(order.publicId);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      to: order.customerEmail,
+      htmlBody: expect.stringContaining('src="cid:booking-41001@omnilodge"'),
+      attachments: [expect.objectContaining({
+        contentId: 'booking-41001@omnilodge', contentType: 'image/png', content: expect.any(Buffer),
+      })],
+    }));
+    expect(storedOrder.update).toHaveBeenCalledWith({ customerEmailSentAt: expect.any(Date) }, { transaction });
+  });
+
+  it('builds a useful customer confirmation in HTML and plain text', async () => {
+    const email = await buildCustomerStorefrontEmail(order, bookingIds, productDetails);
 
     expect(email.subject).toContain('Booking confirmed');
+    expect(email.htmlBody).toContain('src="cid:booking-41001@omnilodge"');
+    expect(email.attachments).toHaveLength(1);
+    expect(email.attachments[0].contentId).toBe('booking-41001@omnilodge');
+    expect(email.attachments[0].content.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
     expect(email.htmlBody).toContain('src="https://media.example.com/meeting-point.jpg"');
     expect(email.htmlBody).toContain('alt="Statue &amp; pink umbrella"');
     expect(email.textBody).toContain('Meeting point photo: https://media.example.com/meeting-point.jpg');
@@ -132,10 +168,12 @@ describe('storefront paid-order emails', () => {
     expect(`${email.subject}${email.htmlBody}${email.textBody}`).not.toMatch(/Ã|Â|â|Ä|Ĺ/);
   });
 
-  it('omits the cancellation policy when none is configured', () => {
+  it('omits the cancellation policy when none is configured', async () => {
     mockedGetConfigValue.mockReturnValue(null);
 
-    const email = buildCustomerStorefrontEmail(order);
+    const email = await buildCustomerStorefrontEmail(order);
+    expect(email.attachments).toEqual([]);
+    expect(email.htmlBody).not.toContain('Booking barcode');
 
     expect(email.htmlBody).not.toContain('Cancellation policy');
     expect(email.textBody).not.toContain('CANCELLATION POLICY');
@@ -144,7 +182,7 @@ describe('storefront paid-order emails', () => {
   it('builds an operator notification with contact and payment details', () => {
     const email = buildInternalStorefrontEmail(order, bookingIds, productDetails);
 
-    expect(email.subject).toContain('New paid storefront order');
+    expect(email.subject).toBe('New Order - Saturday, 15 August 2026 | 1 Man · 1 Woman | PLN\u00a0210.00');
     expect(email.htmlBody).toContain('alex@example.com');
     expect(email.htmlBody).toContain('41001');
     expect(email.htmlBody).toContain('1 man · 1 woman');
@@ -156,7 +194,50 @@ describe('storefront paid-order emails', () => {
     expect(email.textBody).toContain('KRAKOW10');
   });
 
-  it('uses the order reference and shows each OmniLodge ID for multiple experiences', () => {
+  it.each([
+    [1, 1, 0, '1 Man'], [2, 2, 0, '2 Men'], [1, 0, 1, '1 Woman'], [2, 0, 2, '2 Women'],
+    [3, 2, 1, '2 Men · 1 Woman'], [3, 1, 2, '1 Man · 2 Women'],
+    [1, 0, 0, '1 Guest'], [3, 0, 0, '3 Guests'], [3, 1, 0, '1 Man · 2 Unspecified'],
+    [2, 4, 0, '2 Guests'],
+  ])('formats the operator subject for %s guests (%s men, %s women)', (quantity, men, women, expected) => {
+    const subjectOrder = { ...order, items: [{ ...order.items![0], quantity, options: { participants: { men, women } } }] } as StorefrontOrder;
+    expect(buildInternalStorefrontEmail(subjectOrder).subject).toBe(
+      `New Order - Saturday, 15 August 2026 | ${expected} | PLN\u00a0210.00`,
+    );
+  });
+
+  it('shows only populated marketing fields directly under the payment introduction and escapes HTML', () => {
+    const email = buildInternalStorefrontEmail({
+      ...order, attribution: { utm_source: 'google', utm_medium: ' cpc ', utm_campaign: '<summer & friends>', utm_term: 'not displayed' },
+    } as StorefrontOrder);
+    expect(email.textBody).toContain('Alex Smith completed payment.\nSource: google\nMedium: cpc\nCampaign: <summer & friends>\nDiscount Code: KRAKOW10');
+    expect(email.htmlBody).toContain('&lt;summer &amp; friends&gt;');
+    expect(email.htmlBody).not.toContain('<summer & friends>');
+    expect(email.htmlBody).not.toContain('not displayed');
+    expect(email.htmlBody).not.toContain('utm_source');
+    expect(email.htmlBody).not.toContain('The confirmed experiences and customer details are below.');
+    expect(email.textBody.match(/Discount Code:/g)).toHaveLength(1);
+  });
+
+  it('omits the marketing section when no UTM or discount values exist', () => {
+    const email = buildInternalStorefrontEmail({
+      ...order, discountCode: ' ', attribution: { utm_source: '', utm_medium: ' ', utm_campaign: null },
+    } as unknown as StorefrontOrder);
+    expect(email.textBody).not.toMatch(/Source:|Medium:|Campaign:|Discount Code:/);
+    expect(email.htmlBody).not.toContain('table-layout:fixed');
+  });
+
+  it('keeps the customer introduction after the booking-reference barcode', async () => {
+    const email = await buildCustomerStorefrontEmail(order, bookingIds, productDetails);
+    const barcodeAt = email.htmlBody.indexOf('src="cid:booking-41001@omnilodge"');
+    const introAt = email.htmlBody.indexOf('Your payment was successful.');
+    expect(barcodeAt).toBeGreaterThan(-1);
+    expect(introAt).toBeGreaterThan(barcodeAt);
+    expect(email.htmlBody.indexOf('Experience details')).toBeGreaterThan(introAt);
+    expect(email.htmlBody).not.toContain('Show this to the team at check-in.');
+  });
+
+  it('uses the order reference and shows each OmniLodge ID for multiple experiences', async () => {
     const firstItem = order.items![0];
     const secondItem = {
       ...firstItem,
@@ -167,7 +248,12 @@ describe('storefront paid-order emails', () => {
       ...order,
       items: [firstItem, secondItem],
     } as StorefrontOrder;
-    const email = buildCustomerStorefrontEmail(multiOrder, new Map([[501, 41001], [502, 41002]]));
+    const email = await buildCustomerStorefrontEmail(multiOrder, new Map([[501, 41001], [502, 41002]]));
+    expect(email.attachments.map((attachment) => attachment.contentId)).toEqual([
+      'booking-41001@omnilodge', 'booking-41002@omnilodge',
+    ]);
+    expect(email.htmlBody).toContain('src="cid:booking-41001@omnilodge"');
+    expect(email.htmlBody).toContain('src="cid:booking-41002@omnilodge"');
 
     expect(email.htmlBody).toContain('Order reference');
     expect(email.htmlBody).toContain(order.publicId);
@@ -176,13 +262,13 @@ describe('storefront paid-order emails', () => {
     expect(email.htmlBody).toContain('41002');
   });
 
-  it('escapes customer-controlled values in HTML', () => {
+  it('escapes customer-controlled values in HTML', async () => {
     const unsafe = {
       ...order,
       customerFirstName: '<img src=x onerror=alert(1)>',
     } as unknown as StorefrontOrder;
 
-    const email = buildCustomerStorefrontEmail(unsafe, bookingIds);
+    const email = await buildCustomerStorefrontEmail(unsafe, bookingIds);
     expect(email.htmlBody).not.toContain('<img src=x');
     expect(email.htmlBody).toContain('&lt;img src=x');
   });

@@ -9,6 +9,7 @@ import Product from '../models/Product.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
 import StorefrontOrderItem from '../models/StorefrontOrderItem.js';
 import { sendMessage } from './bookings/gmailClient.js';
+import { createBookingBarcodes, type BookingBarcodeImageMode } from './bookingBarcodeService.js';
 import { getConfigValue } from './configService.js';
 import { findLockedStorefrontOrderWithItems } from './storefrontOrderPersistenceService.js';
 import { getStorefrontCancellationPolicy } from './storefrontPublicConfigService.js';
@@ -129,7 +130,7 @@ const normalizeTextList = (value: unknown): string[] => (
     : []
 );
 
-const normalizeProductDetails = (content: StorefrontProductContent | undefined): StorefrontEmailProductDetails => {
+export const normalizeProductDetails = (content: StorefrontProductContent | undefined): StorefrontEmailProductDetails => {
   const meetingPoint = content?.meetingPoint;
   const normalizedMeetingPoint = meetingPoint && typeof meetingPoint === 'object'
     ? {
@@ -173,6 +174,35 @@ const guestLabel = (item: StorefrontOrderItem): string => {
   const men = Number(participants.men) || 0;
   const women = Number(participants.women) || 0;
   return `${men} ${men === 1 ? 'man' : 'men'} · ${women} ${women === 1 ? 'woman' : 'women'}`;
+};
+
+const orderGuestSubjectLabel = (items: StorefrontOrderItem[]): string => {
+  const count = (value: unknown): number => {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+  };
+  const totals = items.reduce((result, item) => {
+    const quantity = count(item.quantity);
+    const participants = recordValue(item.options?.participants);
+    const men = count(participants?.men);
+    const women = count(participants?.women);
+    if (men + women > quantity) {
+      result.unspecified += quantity;
+    } else {
+      result.men += men;
+      result.women += women;
+      result.unspecified += quantity - men - women;
+    }
+    return result;
+  }, { men: 0, women: 0, unspecified: 0 });
+  if (!totals.men && !totals.women) {
+    return `${totals.unspecified} ${totals.unspecified === 1 ? 'Guest' : 'Guests'}`;
+  }
+  return [
+    ...(totals.men ? [`${totals.men} ${totals.men === 1 ? 'Man' : 'Men'}`] : []),
+    ...(totals.women ? [`${totals.women} ${totals.women === 1 ? 'Woman' : 'Women'}`] : []),
+    ...(totals.unspecified ? [`${totals.unspecified} Unspecified`] : []),
+  ].join(' · ');
 };
 
 const detailRow = (label: string, value: unknown): string => `
@@ -346,13 +376,28 @@ const referenceDetails = (
 const referenceHtml = (
   order: StorefrontOrder,
   bookingIdsByItemId: BookingIdByItemId,
+  barcodeImages: ReadonlyMap<number, string> = new Map(),
 ): string => {
   const reference = referenceDetails(order, bookingIdsByItemId);
+  const items = order.items || [];
+  const barcodeContent = items.map((item) => {
+    const bookingId = bookingIdForItem(item, bookingIdsByItemId);
+    const imageSource = bookingId ? barcodeImages.get(bookingId) : null;
+    if (!imageSource || !bookingId) return '';
+    return `
+        ${items.length > 1 ? `<div style="margin-top:20px;color:#fff8f2;font-size:14px;font-weight:800;line-height:1.5">${escapeHtml(item.productName)}<br><span style="color:#ffd438">Booking reference: ${bookingId}</span></div>` : ''}
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:320px;margin:16px auto 0">
+          <tr><td align="center" style="padding:0">
+            <img src="${escapeHtml(imageSource)}" alt="Barcode for booking ${bookingId}" width="320" style="display:block;width:100%;max-width:320px;height:auto;border:0;background:#ffffff">
+          </td></tr>
+        </table>`;
+  }).join('');
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:22px;background:#1b1016;border:1px solid #49353f">
       <tr><td align="center" style="padding:23px;color:#ffffff;font-family:Arial,sans-serif">
         <div style="color:#ff168f;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase">${escapeHtml(reference.label)}</div>
         <div style="margin-top:8px;color:#ffd438;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:34px;font-weight:900;line-height:1.2;word-break:break-all">${escapeHtml(reference.value)}</div>
+        ${barcodeContent}
       </td></tr>
     </table>`;
 };
@@ -384,10 +429,13 @@ const bookingDetailsHtml = (
   order: StorefrontOrder,
   bookingIdsByItemId: BookingIdByItemId,
   productDetailsByProductId: ProductDetailsByProductId,
+  barcodeImages: ReadonlyMap<number, string> = new Map(),
+  introduction = '',
 ): string => {
   const items = order.items || [];
   return `
-    ${referenceHtml(order, bookingIdsByItemId)}
+    ${referenceHtml(order, bookingIdsByItemId, barcodeImages)}
+    ${introduction ? `<p style="margin:0 auto 25px;max-width:500px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:16px;line-height:1.65">${escapeHtml(introduction)}</p>` : ''}
     <div style="margin:0 0 8px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase">Your booking</div>
     <div style="margin-bottom:17px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:32px;font-weight:900;text-transform:uppercase">Experience details</div>
     ${items.map((item) => itemCard(
@@ -403,8 +451,10 @@ const coreHtml = (
   order: StorefrontOrder,
   bookingIdsByItemId: BookingIdByItemId,
   productDetailsByProductId: ProductDetailsByProductId,
+  barcodeImages: ReadonlyMap<number, string> = new Map(),
+  introduction = '',
 ): string => `
-    ${bookingDetailsHtml(order, bookingIdsByItemId, productDetailsByProductId)}
+    ${bookingDetailsHtml(order, bookingIdsByItemId, productDetailsByProductId, barcodeImages, introduction)}
     ${paymentHtml(order)}
     ${customerHtml(order)}`;
 
@@ -616,13 +666,18 @@ export const buildCustomerBankTransferCancellationEmail = (
   };
 };
 
-export const buildCustomerStorefrontEmail = (
+export const buildCustomerStorefrontEmail = async (
   order: StorefrontOrder,
   bookingIdsByItemId: BookingIdByItemId = new Map(),
   productDetailsByProductId: ProductDetailsByProductId = new Map(),
+  imageMode: BookingBarcodeImageMode = 'cid',
 ) => {
   const firstName = order.customerFirstName || 'there';
   const items = order.items || [];
+  const barcodes = await createBookingBarcodes(
+    items.map((item) => bookingIdForItem(item, bookingIdsByItemId) ?? 0),
+    imageMode,
+  );
   const cancellationPolicy = getStorefrontCancellationPolicy();
   const firstItem = items[0];
   const preheader = `Payment received. Your ${firstItem?.productName ?? 'Krakow experience'} is confirmed.`;
@@ -630,8 +685,8 @@ export const buildCustomerStorefrontEmail = (
     <div style="text-align:center;color:#ffd438;font-family:Arial,sans-serif;font-size:12px;font-weight:800;letter-spacing:1.7px;text-transform:uppercase">Krawl Through Krakow</div>
     <div style="margin-top:13px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2.2px;text-transform:uppercase">Payment confirmed</div>
     <h1 style="margin:10px 0 11px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:43px;font-weight:900;line-height:1.05;text-transform:uppercase">You're booked, ${escapeHtml(firstName)}!</h1>
-    <p style="margin:0 auto 25px;max-width:500px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:16px;line-height:1.65">Your payment was successful. Your plans, meeting details, and everything you need for the experience are below.</p>
-    ${coreHtml(order, bookingIdsByItemId, productDetailsByProductId)}
+    ${coreHtml(order, bookingIdsByItemId, productDetailsByProductId, barcodes.imageSources,
+      'Your payment was successful. Your plans, meeting details, and everything you need for the experience are below.')}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;background:#ffd438">
       <tr><td style="padding:20px;color:#080708;font-family:Arial,sans-serif;font-size:14px;line-height:1.65;text-align:center">
         <div style="font-size:17px;font-weight:900">Keep this email handy</div>
@@ -668,6 +723,7 @@ export const buildCustomerStorefrontEmail = (
     subject: `Booking confirmed - ${subjectExperience}${subjectDate}`,
     htmlBody: shell(preheader, content),
     textBody: text,
+    attachments: barcodes.attachments,
   };
 };
 
@@ -677,25 +733,53 @@ export const buildInternalStorefrontEmail = (
   productDetailsByProductId: ProductDetailsByProductId = new Map(),
 ) => {
   const guest = `${order.customerFirstName} ${order.customerLastName}`.trim();
+  const items = order.items || [];
+  const experienceDates = [...new Set(items.map((item) => dateLabel(item.experienceDate)))];
+  const subjectDate = experienceDates.join(' / ') || 'To be confirmed';
+  // Order attribution is also copied onto the projected bookings.
+  const attribution = recordValue(order.attribution) ?? {};
+  const utmTags = [
+    ['utm_source', 'Source'],
+    ['utm_medium', 'Medium'],
+    ['utm_campaign', 'Campaign'],
+  ].flatMap(([key, label]) => {
+    const value = attribution[key];
+    return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))
+      ? [[label, String(value).trim()] as const]
+      : [];
+  })
+    .filter(([, value]) => value.length > 0);
+  const discountCode = order.discountCode?.trim();
+  const trackingDetails = [
+    ...utmTags,
+    ...(discountCode ? [['Discount Code', discountCode] as const] : []),
+  ];
   const preheader = `${guest} completed a paid storefront checkout.`;
   const content = `
     <div style="text-align:center;color:#ffd438;font-family:Arial,sans-serif;font-size:12px;font-weight:800;letter-spacing:1.7px;text-transform:uppercase">Krawl Through Krakow</div>
     <div style="margin-top:13px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2.2px;text-transform:uppercase">New storefront booking</div>
     <h1 style="margin:10px 0 12px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:41px;font-weight:900;line-height:1.05;text-transform:uppercase">Payment received</h1>
-    <p style="margin:0 auto 25px;max-width:500px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:16px;line-height:1.65">${escapeHtml(guest)} completed payment. The confirmed experiences and customer details are below.</p>
+    <p style="margin:0 auto ${trackingDetails.length ? 12 : 25}px;max-width:500px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:16px;line-height:1.65">${escapeHtml(guest)} completed payment.</p>
+    ${trackingDetails.length ? `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 25px;table-layout:fixed;background:#171315;border:1px solid #49353f">
+      <tr><td style="padding:12px 16px;text-align:center;font-family:Arial,sans-serif;font-size:13px;line-height:1.7;word-break:break-word;overflow-wrap:anywhere">
+        ${trackingDetails.map(([label, value]) => `<div style="margin:3px 0;color:#fff8f2"><strong style="color:#ff168f">${escapeHtml(label)}</strong>: ${escapeHtml(value)}</div>`).join('')}
+      </td></tr>
+    </table>` : ''}
     ${coreHtml(order, bookingIdsByItemId, productDetailsByProductId)}
-    ${order.discountCode ? `<div style="margin-top:18px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:14px">Discount code: <strong style="color:#ffd438">${escapeHtml(order.discountCode)}</strong></div>` : ''}
     <p style="margin:24px 0 0;text-align:center;color:#8f8288;font-family:Arial,sans-serif;font-size:13px;line-height:1.6">Automatic OmniLodge notification</p>`;
 
   return {
-    subject: `New paid storefront order - ${guest} - ${money(order.total, order.currency)}`,
+    subject: header(`New Order - ${subjectDate} | ${orderGuestSubjectLabel(items)} | ${money(order.total, order.currency)}`),
     htmlBody: shell(preheader, content),
     textBody: [
       'NEW PAID STOREFRONT ORDER',
       '',
+      `${guest} completed payment.`,
+      ...trackingDetails.map(([label, value]) => `${label}: ${value}`),
+      '',
       ...coreText(order, bookingIdsByItemId, productDetailsByProductId),
       '',
-      order.discountCode ? `Discount code: ${order.discountCode}` : '',
     ].join('\n'),
   };
 };
@@ -736,7 +820,7 @@ export const deliverStorefrontOrderEmails = async (publicId: string): Promise<vo
 
     const from = fromAddress();
     if (notificationPreferences.customerConfirmation && !order.customerEmailSentAt) {
-      const email = buildCustomerStorefrontEmail(order, bookingIdsByItemId, productDetailsByProductId);
+      const email = await buildCustomerStorefrontEmail(order, bookingIdsByItemId, productDetailsByProductId);
       await sendMessage({ to: order.customerEmail, from, ...email });
       await order.update({ customerEmailSentAt: new Date() }, { transaction });
     }

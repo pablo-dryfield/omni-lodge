@@ -124,6 +124,7 @@ const SettingsEmailPreviews = () => {
 
         <Alert color="blue" title="Preview only">
           These previews use Alex Morgan and mock booking references. Opening or refreshing this page never sends an email.
+          {" "}Storefront confirmation previews use the current Pub Crawl product content, including its saved meeting-point photo.
         </Alert>
 
         {error ? (
