@@ -23,7 +23,6 @@ import {
   DialogTitle,
   Divider,
   IconButton,
-  InputAdornment,
   LinearProgress,
   List,
   ListItem,
@@ -50,7 +49,6 @@ import {
   ErrorOutline,
   LocalBar,
   PhotoCamera,
-  QrCodeScanner,
   Refresh,
   Visibility,
   WarningAmber,
@@ -109,6 +107,7 @@ import type { Counter } from '../types/counters/Counter';
 import axiosInstance from '../utils/axiosInstance';
 import CounterAddonRefundVerificationPanel from '../components/counters/CounterAddonRefundVerification';
 import BookingBarcodeScanner, { type BookingScanResult } from '../components/counters/BookingBarcodeScanner';
+import ReservationSearch from '../components/counters/ReservationSearch';
 import { counterAddonRefund, type CounterAddonRefundResult, type CounterAddonRefundVerification } from '../api/counterAddonRefunds';
 import type { ServerResponse } from '../types/general/ServerResponse';
 import type { NightReport, NightReportSummary } from '../types/nightReports/NightReport';
@@ -2166,7 +2165,6 @@ const Counters = (props: GenericPageProps) => {
     kind: 'checked_in' | 'not_found';
     bookingId: string;
   } | null>(null);
-  const onlineReservationsSearchRef = useRef<HTMLInputElement | null>(null);
   const [onlineReservationsView, setOnlineReservationsView] = useState<'remaining' | 'checked_in'>('remaining');
   const [onlineReservationsRefreshToken, setOnlineReservationsRefreshToken] = useState(0);
   const [onlineReservationsSyncing, setOnlineReservationsSyncing] = useState(false);
@@ -7631,9 +7629,6 @@ useEffect(() => {
       .map((channelId) => registry.channels.find((channel) => channel.id === channelId))
       .filter((channel): channel is ChannelConfig => Boolean(channel));
 
-    const selectedOnlineChannels = onlineSelectedChannelIds
-      .map((channelId) => registry.channels.find((channel) => channel.id === channelId))
-      .filter((channel): channel is ChannelConfig => Boolean(channel));
     const onlineTotalAttended = onlineReservationsScoped.reduce(
       (sum, order) => sum + getOrderAttendedTotal(order),
       0,
@@ -7646,7 +7641,6 @@ useEffect(() => {
 
     return (
       <Stack spacing={3}>
-        {selectedOnlineChannels.length > 0 && (
           <Box sx={{ width: '100%' }}>
             <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="center" sx={{ mb: 1 }}>
               <Typography variant="h6">Online Reservations</Typography>
@@ -7680,40 +7674,15 @@ useEffect(() => {
                   spacing={1}
                   alignItems={{ xs: 'stretch', md: 'center' }}
                 >
-                  <TextField
-                    size="small"
-                    inputRef={onlineReservationsSearchRef}
+                  <ReservationSearch
                     value={onlineReservationsSearch}
-                    onChange={(event) => {
-                      setOnlineReservationsSearch(event.target.value);
+                    onChange={(value) => {
+                      setOnlineReservationsSearch(value);
                       setScannedBookingId(null);
+                      if (!value) setBookingScannerResult(null);
                     }}
-                    placeholder="Search booking ID, reference, customer, phone..."
-                    fullWidth
+                    onScan={handleOpenBookingScanner}
                     disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
-                    inputProps={{ 'aria-label': 'Search reservations' }}
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">
-                          {onlineReservationsSearch && (
-                            <IconButton aria-label="Clear reservation search" size="small"
-                              disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
-                              onClick={() => { setOnlineReservationsSearch(''); setScannedBookingId(null); }}>
-                              <Close fontSize="small" />
-                            </IconButton>
-                          )}
-                          <Tooltip title="Scan booking barcode">
-                            <span>
-                              <IconButton color="primary" aria-label="Scan booking barcode"
-                                disabled={onlineReservationsLoading || onlineReservationsSyncing || syncingPendingAttendance}
-                                onClick={handleOpenBookingScanner} sx={{ width: 44, height: 44 }}>
-                                <QrCodeScanner />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                        </InputAdornment>
-                      ),
-                    }}
                   />
                 </Stack>
                 <Box
@@ -7765,15 +7734,15 @@ useEffect(() => {
                     <Typography variant="body2">Loading online reservations...</Typography>
                   </Stack>
                 ) : onlineReservationsFiltered.length === 0 ? (
-                  <Alert severity="info">
-                    {onlineReservationsSearch.trim()
-                      ? 'No matching reservations in this view.'
-                      : onlineReservationsScoped.length === 0
-                      ? 'No online reservations found for the selected date/product and selected channels.'
-                      : onlineReservationsView === 'remaining'
-                        ? 'No remaining reservations for the selected channels.'
-                        : 'No checked-in reservations yet for the selected channels.'}
-                  </Alert>
+                  (onlineReservationsSearch.trim() || onlineReservationsScoped.length > 0) ? (
+                    <Alert severity="info">
+                      {onlineReservationsSearch.trim()
+                        ? 'No matching reservations in this view.'
+                        : onlineReservationsView === 'remaining'
+                          ? 'No remaining reservations for the selected channels.'
+                          : 'No checked-in reservations yet for the selected channels.'}
+                    </Alert>
+                  ) : null
                 ) : (
                   <Box
                     sx={{
@@ -8062,7 +8031,6 @@ useEffect(() => {
               </CardContent>
             </Card>
           </Box>
-        )}
         {walkInValidationError && <Alert severity="warning">{walkInValidationError}</Alert>}
         {staffFreeValidationError && <Alert severity="warning">{staffFreeValidationError}</Alert>}
         <WalkInsPanel
