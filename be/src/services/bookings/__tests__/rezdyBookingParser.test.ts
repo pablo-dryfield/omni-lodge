@@ -1,6 +1,8 @@
-jest.mock('../../configService.js', () => ({ getConfigValue: jest.fn(() => null) }));
+jest.mock('../../configService.js', () => ({ getConfigValue: jest.fn(() => null), refreshConfigCacheKeys: jest.fn(async () => undefined) }));
 
 import { RezdyBookingParser } from '../parsers/rezdyBookingParser.js';
+import { getConfigValue, refreshConfigCacheKeys } from '../../configService.js';
+import { REZDY_DEFAULT_START_TIMES_KEY } from '../../../config/rezdyParserConfig.js';
 import type { BookingParserContext } from '../types.js';
 
 const parser = new RezdyBookingParser();
@@ -21,6 +23,19 @@ const context = (overrides: Partial<BookingParserContext> = {}): BookingParserCo
     <h3>Item Summary</h3><table><tr><td>3</td><td>Participants</td><td>PLN100.00</td><td>PLN300.00</td></tr></table>`,
   ...overrides,
 });
+
+beforeEach(() => {
+  jest.mocked(getConfigValue).mockReset().mockReturnValue(null);
+  jest.mocked(refreshConfigCacheKeys).mockReset().mockResolvedValue(undefined);
+});
+
+const useDefaultTime = (time = '14:00') => jest.mocked(getConfigValue).mockImplementation((key) =>
+  key === REZDY_DEFAULT_START_TIMES_KEY ? { PTEST01: time } : null);
+const dateOnlyContext = (date = 'Saturday, October 31, 2026') => {
+  const c = context();
+  c.htmlBody = c.htmlBody!.replace('Saturday, October 31, 2026 2:00 PM', date);
+  return c;
+};
 
 describe('Rezdy operational email parsing', () => {
   it('uses HTML-only product, commission and explicit Viator reference without guessing', async () => {
@@ -131,9 +146,87 @@ describe('Rezdy operational email parsing', () => {
   });
 
   it('does not create a guessed departure for an undated voucher', async () => {
+    useDefaultTime();
     const c = context();
     c.htmlBody = c.htmlBody!.replace('Saturday, October 31, 2026 2:00 PM', 'Gift Card ABC123');
     expect((await parser.parse(c))?.rawPayload?.rezdy).toHaveProperty('validationError');
+    expect(refreshConfigCacheKeys).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Saturday, January 10, 2026', '2026-01-10T13:00:00Z'],
+    ['Saturday, June 20, 2026', '2026-06-20T12:00:00Z'],
+  ])('uses the configured product default for a date-only order: %s', async (date, expected) => {
+    useDefaultTime();
+    const event = await parser.parse(dateOnlyContext(date));
+    expect(refreshConfigCacheKeys).toHaveBeenCalledWith([REZDY_DEFAULT_START_TIMES_KEY, 'REZDY_TIMEZONE', 'BOOKING_PARSER_TIMEZONE']);
+    expect(event?.bookingFields?.experienceStartAt).toEqual(new Date(expected));
+    expect(event?.rawPayload?.rezdy).toMatchObject({ startTimeFallback: {
+      configKey: REZDY_DEFAULT_START_TIMES_KEY, productCode: 'PTEST01', time: '14:00',
+    } });
+    expect(event?.rawPayload?.rezdy).not.toHaveProperty('validationError');
+    expect(event?.notes).toContain('14:00 from configured Rezdy product default');
+  });
+
+  it('preserves an explicit departure even when the configured default differs', async () => {
+    useDefaultTime('17:00');
+    const event = await parser.parse(context());
+    expect(event?.bookingFields?.experienceStartAt).toEqual(new Date('2026-10-31T13:00:00Z'));
+    expect(event?.rawPayload?.rezdy).not.toHaveProperty('startTimeFallback');
+    expect(refreshConfigCacheKeys).not.toHaveBeenCalled();
+  });
+
+  it('leaves date-only orders without a matching configured product for review', async () => {
+    useDefaultTime();
+    const c = dateOnlyContext();
+    c.htmlBody = c.htmlBody!.replace('PTEST01', 'POTHER01');
+    const event = await parser.parse(c);
+    expect(event?.bookingFields?.experienceStartAt).toBeUndefined();
+    expect(event?.rawPayload?.rezdy).toHaveProperty('validationError');
+  });
+
+  it('keeps defaults disabled until a product is configured', async () => {
+    const event = await parser.parse(dateOnlyContext());
+    expect(event?.bookingFields?.experienceStartAt).toBeUndefined();
+    expect(event?.rawPayload?.rezdy).toHaveProperty('validationError');
+  });
+
+  it.each(['Order RTEST01 updated', 'Order RTEST01 has been cancelled'])('does not replace an existing departure with a default for %s', async (subject) => {
+    useDefaultTime();
+    const event = await parser.parse({ ...dateOnlyContext(), subject });
+    expect(event?.bookingFields?.experienceStartAt).toBeUndefined();
+    expect(event?.rawPayload?.rezdy).not.toHaveProperty('startTimeFallback');
+    expect(refreshConfigCacheKeys).not.toHaveBeenCalled();
+  });
+
+  it.each(['Saturday, February 30, 2026', 'Saturday, October 31, 2026 25:00', 'Sunday, March 29, 2026'])('fails safely on an invalid departure or timezone gap: %s', async (date) => {
+    useDefaultTime('02:30');
+    const event = await parser.parse(dateOnlyContext(date));
+    expect(event?.bookingFields?.experienceStartAt).toBeUndefined();
+    expect(event?.rawPayload?.rezdy).toHaveProperty('validationError');
+  });
+
+  it('loads a newly saved time on the next date-only import', async () => {
+    useDefaultTime();
+    expect((await parser.parse(dateOnlyContext()))?.bookingFields?.experienceStartAt).toEqual(new Date('2026-10-31T13:00:00Z'));
+    useDefaultTime('15:30');
+    expect((await parser.parse(dateOnlyContext()))?.bookingFields?.experienceStartAt).toEqual(new Date('2026-10-31T14:30:00Z'));
+  });
+
+  it('refreshes the relevant timezone together with the default before resolving the departure', async () => {
+    let timezone = 'UTC';
+    jest.mocked(getConfigValue).mockImplementation((key) => key === REZDY_DEFAULT_START_TIMES_KEY
+      ? { PTEST01: '14:00' } : key === 'REZDY_TIMEZONE' ? timezone : null);
+    jest.mocked(refreshConfigCacheKeys).mockImplementation(async () => { timezone = 'Europe/Warsaw'; });
+    expect((await parser.parse(dateOnlyContext()))?.bookingFields?.experienceStartAt).toEqual(new Date('2026-10-31T13:00:00Z'));
+  });
+
+  it('supports a labelled date-only plain-text order', async () => {
+    useDefaultTime();
+    const event = await parser.parse(context({ htmlBody: null, textBody:
+      'Order Total PLN300.00 Total Paid PLN300.00 Product: Krakow Food Tour Product Code: PTEST01 Starts October 31, 2026 Participants: 3' }));
+    expect(event?.bookingFields?.experienceStartAt).toEqual(new Date('2026-10-31T13:00:00Z'));
+    expect(event?.rawPayload?.rezdy).not.toHaveProperty('validationError');
   });
 
   it('does not read refund instructions in customer notes as completed refunds', async () => {
