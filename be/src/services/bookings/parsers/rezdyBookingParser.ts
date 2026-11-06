@@ -2,7 +2,8 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import { getConfigValue } from '../../configService.js';
+import { getConfigValue, refreshConfigCacheKeys } from '../../configService.js';
+import { parseRezdyDefaultStartTimes, REZDY_DEFAULT_START_TIMES_KEY } from '../../../config/rezdyParserConfig.js';
 import type { BookingStatus } from '../../../constants/bookings.js';
 import type { BookingEmailParser, BookingFieldPatch, BookingParserContext, ParsedBookingEvent } from '../types.js';
 
@@ -25,6 +26,7 @@ export type RezdySource = {
   refundCurrency?: string;
   financialBasis?: string;
   reportedCommissionMismatch?: boolean;
+  startTimeFallback?: { configKey: string; productCode: string; time: string };
   validationError?: string;
 };
 
@@ -140,16 +142,33 @@ export class RezdyBookingParser implements BookingEmailParser {
     const dateMatch = text.match(/New (?:Experience )?Date\s*:?\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i)
       ?? text.match(/\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i)
       ?? text.match(/(?:New (?:Experience )?Date|Experience Date|Starts)\s*:?\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
-    if (dateMatch) {
+    let fallbackDate: string | undefined;
+    let fallbackTime: string | undefined;
+    if (!dateMatch && /^(?:confirmed|pending)$/.test(details.status) && !details.refund && source.productCode) {
+      // Read the product's departure heading, never payment dates or customer notes.
+      const nextHeading = product ? headings[headings.indexOf(product[0]) + 1] : undefined;
+      fallbackDate = html
+        ? nextHeading?.match(/^(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+)?([A-Za-z]+\s+\d{1,2},\s+\d{4})$/i)?.[1]
+        : text.match(/(?:Experience Date|Starts)\s*:?\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})(?=\s+(?:Participants|Number of Participants|Item Summary)\b|$)/i)?.[1];
+      if (fallbackDate) {
+        await refreshConfigCacheKeys([REZDY_DEFAULT_START_TIMES_KEY, 'REZDY_TIMEZONE', 'BOOKING_PARSER_TIMEZONE']);
+        fallbackTime = parseRezdyDefaultStartTimes(getConfigValue(REZDY_DEFAULT_START_TIMES_KEY) ?? {})[source.productCode];
+      }
+    }
+    if (dateMatch || (fallbackDate && fallbackTime)) {
       const zone = (getConfigValue('REZDY_TIMEZONE') as string | null)
         ?? (getConfigValue('BOOKING_PARSER_TIMEZONE') as string | null) ?? 'Europe/Warsaw';
-      const wallClock = `${dateMatch[1]} ${dateMatch[2].toUpperCase()}`;
-      const parsed = dayjs(wallClock, 'MMMM D, YYYY h:mm A', true);
+      const format = dateMatch ? 'MMMM D, YYYY h:mm A' : 'MMMM D, YYYY HH:mm';
+      const wallClock = dateMatch ? `${dateMatch[1]} ${dateMatch[2].toUpperCase()}` : `${fallbackDate} ${fallbackTime}`;
+      const parsed = dayjs(wallClock, format, true);
       if (parsed.isValid()) {
-        const scheduled = dayjs.tz(wallClock, 'MMMM D, YYYY h:mm A', zone);
-        if (scheduled.format('MMMM D, YYYY h:mm A') === parsed.format('MMMM D, YYYY h:mm A')) {
+        const scheduled = dayjs.tz(wallClock, format, zone);
+        if (scheduled.format(format) === parsed.format(format)) {
           fields.experienceDate = scheduled.format('YYYY-MM-DD');
           fields.experienceStartAt = scheduled.toDate();
+          if (!dateMatch && fallbackTime) source.startTimeFallback = {
+            configKey: REZDY_DEFAULT_START_TIMES_KEY, productCode: source.productCode!, time: fallbackTime,
+          };
         } else source.validationError = 'Departure falls in a timezone clock-change gap; manual review required';
       }
       else source.validationError = 'Invalid Rezdy departure date/time; manual review required';
@@ -231,7 +250,8 @@ export class RezdyBookingParser implements BookingEmailParser {
       occurredAt: context.receivedAt ?? context.internalDate ?? null,
       sourceReceivedAt: context.receivedAt ?? context.internalDate ?? null,
       rawPayload: { rezdy: source },
-      notes: `Parsed from Rezdy order ${details.id}${source.agent ? `; reseller: ${source.agent}` : ''}.`,
+      notes: `Parsed from Rezdy order ${details.id}${source.agent ? `; reseller: ${source.agent}` : ''}${source.startTimeFallback
+        ? `; start time ${source.startTimeFallback.time} from configured Rezdy product default` : ''}.`,
     };
   }
 }

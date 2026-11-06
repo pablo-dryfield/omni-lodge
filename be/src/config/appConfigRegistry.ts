@@ -5,6 +5,7 @@ import {
   GOOGLE_ADS_API_VERSION_PATTERN,
 } from './googleAdsConfig.js';
 import { DATABASE_WORKSPACE_CONFIG } from './databaseWorkspaceConfig.js';
+import { REZDY_DEFAULT_START_TIMES_KEY } from './rezdyParserConfig.js';
 
 export type ConfigValueType = 'string' | 'number' | 'boolean' | 'enum' | 'json';
 
@@ -407,6 +408,17 @@ Best,
     valueType: 'string',
     defaultValue: null,
     validation: { format: 'timezone' },
+  },
+  {
+    key: REZDY_DEFAULT_START_TIMES_KEY,
+    label: 'Rezdy default start times by product',
+    description:
+      'JSON object mapping Rezdy product codes to 24-hour start times, for example {"PABC123":"14:00"}. Used only for new-order emails with an explicit experience date but no time. Explicit email times always win. Uses the Rezdy parser timezone. Empty {} disables defaults; undated gift cards remain for review. Saved changes apply to the next import or reprocess without a restart. Existing bookings are not automatically changed.',
+    category: 'Booking Parsers',
+    valueType: 'json',
+    defaultValue: '{}',
+    validation: { required: true, maxLength: 10000, format: 'rezdy-default-start-times' },
+    impact: 'medium',
   },
   {
     key: 'AIRBNB_TIMEZONE',

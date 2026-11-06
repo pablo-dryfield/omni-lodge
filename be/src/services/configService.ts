@@ -1,5 +1,6 @@
 import { validateSystemManagementValue, validateManagementOrigin } from '../config/systemManagementConfig.js';
 import { parseWalkInTicketTypes } from '../config/walkInTicketConfig.js';
+import { parseRezdyDefaultStartTimes } from '../config/rezdyParserConfig.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import type {Transaction} from 'sequelize';
 import ConfigKey from '../models/ConfigKey.js';
@@ -207,6 +208,10 @@ const validateValue = (definition: ConfigDefinition, raw: string | null): void =
   if (raw !== null && rules.format === 'walk-in-ticket-types') {
     try { parseWalkInTicketTypes(raw); }
     catch (error) { throw new HttpError(400, error instanceof Error ? error.message : 'Invalid ticket types.'); }
+  }
+  if (raw !== null && rules.format === 'rezdy-default-start-times') {
+    try { parseRezdyDefaultStartTimes(raw); }
+    catch (error) { throw new HttpError(400, error instanceof Error ? error.message : 'Invalid Rezdy default start times.'); }
   }
   if (raw !== null && rules.format === 'system-management-origin') {
     try { validateManagementOrigin(raw); } catch(error) { throw new HttpError(400,error instanceof Error?error.message:'Invalid management origin.'); }
