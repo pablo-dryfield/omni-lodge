@@ -175,6 +175,25 @@ describe('Rezdy/Viator identity safety', () => {
     await expect(resolveRezdyBookingIdentity(event({ agent: 'viator' }), transaction)).rejects.toThrow('Possible Rezdy/Viator duplicate');
   });
 
+  it.each(['confirmed', 'cancelled'] as const)('keeps distinct explicit BR/R orders separate when the other order is %s', async (status) => {
+    const other = booking({ platform: 'viator', platformBookingId: 'BR-1111111111', platformOrderId: 'RSECOND1',
+      productName: 'Food Tour Krakow', status });
+    jest.mocked(Booking.findAll).mockResolvedValueOnce([]).mockResolvedValueOnce([other]);
+    const e = event({ agent: 'viator', viatorReference: 'BR-2222222222' });
+    await expect(resolveRezdyBookingIdentity(e, transaction)).resolves.toBeNull();
+    expect(e.platformBookingId).toBe('BR-2222222222');
+    expect(e.platformOrderId).toBe('RTEST01');
+    expect(e.platform).toBe('viator');
+  });
+
+  it.each([null, 'BR-1111111111'])('still requires review when the similar booking has no verified Rezdy order: %s', async (platformOrderId) => {
+    jest.mocked(Booking.findAll).mockResolvedValueOnce([]).mockResolvedValueOnce([
+      booking({ platform: 'viator', platformBookingId: 'BR-1111111111', platformOrderId, productName: 'Food Tour Krakow' }),
+    ]);
+    await expect(resolveRezdyBookingIdentity(event({ agent: 'viator', viatorReference: 'BR-2222222222' }), transaction))
+      .rejects.toThrow('Possible Rezdy/Viator duplicate');
+  });
+
   it('blocks a matching direct Viator email without an explicit link to an already imported agent order', async () => {
     jest.mocked(Booking.findAll).mockResolvedValueOnce([booking({ productName: 'Food Tour Krakow' })]);
     jest.mocked(BookingEvent.findOne).mockResolvedValueOnce({} as BookingEvent);

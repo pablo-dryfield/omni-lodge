@@ -59,6 +59,14 @@ const rejectPossibleResellerDuplicate = async (event: ParsedBookingEvent, transa
   });
   for (const candidate of candidates) {
     if (productKey(candidate.productName) !== productKey(fields.productName)) continue;
+    // A customer can cancel and rebook the same departure. Two explicit, distinct
+    // Viator references AND Rezdy order IDs identify separate sales, not a
+    // name-based identity match. Preserve both timelines independently.
+    if (source?.viatorReference && /^BR-\d+$/.test(source.viatorReference)
+      && candidate.platform === 'viator' && /^BR-\d+$/.test(candidate.platformBookingId)
+      && candidate.platformBookingId !== source.viatorReference
+      && /^R[A-Z0-9]{6,20}$/.test(candidate.platformOrderId ?? '')
+      && candidate.platformOrderId !== source.orderId) continue;
     if (!source) {
       const agentEvent: BookingEvent | null = await BookingEvent.findOne({
         where: { bookingId: candidate.id, 'eventPayload.rezdy.agent': 'viator' },
