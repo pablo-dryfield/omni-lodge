@@ -3,6 +3,10 @@ import axiosInstance from '../utils/axiosInstance';
 export type StaffFreeBenefit = 'allowance' | 'busy_night' | 'assistant_manager' | 'management' | 'override' | 'paid';
 export type StaffFreeChanges = { additions: Array<{ userId: number; overrideReason?: string }>; removals: Array<{ entryId: number; reason: string }> };
 export type StaffFreeCounterEntry = { id: number; userId: number; name: string; benefit: StaffFreeBenefit; label: string; checkedInBefore: number; overrideReason: string | null; createdAt: string };
+export type StaffFreeCounterMetrics = {
+  qualifyingCustomers: number; busyThreshold: number; minimumPricePercent: number;
+  normalPrices: Record<string, number>; includedCount: number; excludedCount: number;
+};
 export type StaffFreePerson = {
   id: number; name: string; staffType: string; unlimited: boolean; used: number; remaining: number | null;
   totalVisits: number; alreadyCheckedIn: boolean; onShift: boolean;
