@@ -110,6 +110,7 @@ export type CounterRegistryProductSummary = {
 
 export type CounterRegistryPayload = {
   staffFreeEntries?: import('../../api/staffFreeEntries').StaffFreeCounterEntry[];
+  staffFreeMetrics?: import('../../api/staffFreeEntries').StaffFreeCounterMetrics;
   walkInTicketTypes?: Array<{ id: string; name: string; enabled: boolean }>;
   paymentMethods?: Array<{ id: number; name: string }>;
   counter: {

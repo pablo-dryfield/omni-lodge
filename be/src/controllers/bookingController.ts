@@ -16,6 +16,8 @@ import ChannelCommission from '../models/ChannelCommission.js';
 import Counter from '../models/Counter.js';
 import CounterChannelMetric from '../models/CounterChannelMetric.js';
 import StaffFreeEntry from '../models/StaffFreeEntry.js';
+import { getStaffFreeCounterMetrics } from '../services/staffFreeCounterMetricsService.js';
+import { getStaffFreePolicy } from '../services/staffFreeEntryService.js';
 import Guest from '../models/Guest.js';
 import Addon from '../models/Addon.js';
 import Product from '../models/Product.js';
@@ -2576,7 +2578,7 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
       start || end
         ? await Counter.findAll({
             where: resolveCounterDateWhere(start, end),
-            attributes: ['id', 'date', 'notes'],
+            attributes: ['id', 'date', 'notes', 'productId'],
             include: [
               {
                 model: CounterChannelMetric,
@@ -2652,8 +2654,15 @@ export const listBookings = async (req: AuthenticatedRequest, res: Response): Pr
 
     const staffFreeByCounter = new Map<number, number>();
     if (counters.length) {
-      const staffFreeEntries = await StaffFreeEntry.findAll({ where: { counterId: { [Op.in]: counters.map(counter => Number(counter.id)) }, cancelledAt: null }, attributes: ['counterId'] });
+      const staffFreeEntries = await StaffFreeEntry.findAll({ where: { counterId: { [Op.in]: counters.map(counter => Number(counter.id)) }, cancelledAt: null, benefit: { [Op.ne]: 'paid' } }, attributes: ['counterId'] });
       staffFreeEntries.forEach(entry => staffFreeByCounter.set(entry.counterId, (staffFreeByCounter.get(entry.counterId) ?? 0) + 1));
+      if (staffFreeByCounter.size) {
+        const policy = await getStaffFreePolicy();
+        for (const counter of counters) {
+          const count = staffFreeByCounter.get(Number(counter.id)) ?? 0;
+          if (count) staffFreeByCounter.set(Number(counter.id), (await getStaffFreeCounterMetrics(counter, count, policy)).includedCount);
+        }
+      }
     }
     counters.forEach((counter) => {
       const counterDate = String(counter.date);

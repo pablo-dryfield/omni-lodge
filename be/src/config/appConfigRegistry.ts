@@ -38,7 +38,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   },
   {
     key: 'COUNTER_STAFF_FREE_BUSY_THRESHOLD', label: 'Staff free-entry attendance exemption', category: 'Counters',
-    description: 'Minimum checked-in customers whose base ticket meets the configured minimum price. Excludes complimentary customers, underpriced tickets, staff free entries and on-duty staff. If saved attendance reaches this number later, allowances used that night are returned automatically. Recorded exemptions are retained if attendance is subsequently corrected downwards.',
+    description: 'Minimum checked-in customers whose base ticket meets the configured minimum price. Excludes complimentary customers, underpriced tickets, staff free entries and on-duty staff. At or above this threshold, all Staff Free visits are excluded from Counter and Venue Numbers totals but remain in visit history. Below it, Staff Free visits count in those totals. Saved attendance reaching the threshold later also returns allowances used that night. Recorded allowance exemptions remain if attendance is corrected downwards; metric inclusion follows the current qualifying customer count. Changes apply on counter reload.',
     valueType: 'number', defaultValue: 20, validation: { required: true, integer: true, min: 1, max: 10000 }, impact: 'medium',
   },
   {

@@ -52,6 +52,7 @@ import { normalizeBookingExtrasSnapshot } from '../utils/bookingExtras.js';
 import { getWalkInTicketTypes } from './walkInTicketService.js';
 import { validateCounterWalkInNotes } from './walkInPaymentService.js';
 import { reconcileStaffFreeAllowances, staffFreeCounterEntries } from './staffFreeEntryService.js';
+import { getStaffFreeCounterMetrics } from './staffFreeCounterMetricsService.js';
 import StaffFreeEntry from '../models/StaffFreeEntry.js';
 
 dayjs.extend(utc);
@@ -113,6 +114,7 @@ type CounterContext = {
 
 export type CounterRegistryPayload = {
   staffFreeEntries?: Awaited<ReturnType<typeof staffFreeCounterEntries>>;
+  staffFreeMetrics?: Awaited<ReturnType<typeof getStaffFreeCounterMetrics>>;
   walkInTicketTypes?: Array<{ id: string; name: string; enabled: boolean }>;
   paymentMethods?: Array<{ id: number; name: string }>;
   counter: {
@@ -1715,8 +1717,10 @@ export default class CounterRegistryService {
       ? { id: counter.product.id, name: counter.product.name }
       : null;
 
+    const staffFreeEntries = await staffFreeCounterEntries(counter.id);
     const payload: CounterRegistryPayload = {
-      staffFreeEntries: await staffFreeCounterEntries(counter.id),
+      staffFreeEntries,
+      staffFreeMetrics: await getStaffFreeCounterMetrics(counter, staffFreeEntries.length),
       walkInTicketTypes: await getWalkInTicketTypes(),
       paymentMethods: (await PaymentMethod.findAll({ attributes: ['id', 'name'], order: [['name', 'ASC']] }))
         .map((method) => ({ id: method.id, name: method.name })),

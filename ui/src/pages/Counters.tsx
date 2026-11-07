@@ -1,6 +1,7 @@
 import { buildWalkInSummary, formatWalkInSummaryNotes, staffRowsFromNotes } from '../utils/walkInSummary';
 import WalkInSummaryDetails from '../components/counters/WalkInSummaryDetails';
 import { emptyStaffFreeDraft, hasStaffFreeDraft, restoreStaffFreeDraft, staffFreeDraftChanges, staffFreeDraftCount, type StaffFreeDraft } from '../utils/staffFreeDraft';
+import { getLiveStaffFreeMetricCount } from '../utils/staffFreeCounterMetrics';
 import type { MouseEvent, SyntheticEvent } from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import dayjs, { Dayjs } from 'dayjs';
@@ -6628,6 +6629,16 @@ useEffect(() => {
   const currentCounterNotes = counterNotes;
   const noteNeedsUpdate = registry.counter ? computedCounterNotes !== currentCounterNotes : false;
 
+  const includedStaffFreeCount = useMemo(() => getLiveStaffFreeMetricCount(
+    effectiveStaffFreeCount,
+    registry.counter?.staffFreeMetrics,
+    {
+      reservationOrders: onlineReservationsLoading || onlineReservationsError ? null : onlineReservationOrders,
+      walkIns: walkInTicketDataByChannel,
+      freePeople: freePeopleByChannel,
+    },
+  ), [effectiveStaffFreeCount, registry.counter?.staffFreeMetrics, onlineReservationsLoading, onlineReservationsError, onlineReservationOrders, walkInTicketDataByChannel, freePeopleByChannel]);
+
   const freePeopleTotalsByChannel = useMemo(() => {
     const map = new Map<number, number>();
     Object.entries(freePeopleByChannel).forEach(([channelIdKey, entry]) => {
@@ -6641,13 +6652,13 @@ useEffect(() => {
       }
     });
     const walkIn = registry.channels.find(channel => channel.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'walkin');
-    const staffCount = effectiveStaffFreeCount;
+    const staffCount = includedStaffFreeCount;
     if (walkIn && staffCount) map.set(walkIn.id, (map.get(walkIn.id) ?? 0) + staffCount);
     return map;
-  }, [freePeopleByChannel, registry.channels, effectiveStaffFreeCount]);
+  }, [freePeopleByChannel, registry.channels, includedStaffFreeCount]);
 
   const totalFreePeople = useMemo(() => {
-    let total = effectiveStaffFreeCount;
+    let total = includedStaffFreeCount;
     Object.values(freePeopleByChannel).forEach((entry) => {
       if (!entry) {
         return;
@@ -6655,7 +6666,7 @@ useEffect(() => {
       total += Math.max(0, Math.round(entry.qty ?? 0));
     });
     return total;
-  }, [freePeopleByChannel, effectiveStaffFreeCount]);
+  }, [freePeopleByChannel, includedStaffFreeCount]);
 
   const freeAddonsTotalsByChannel = useMemo(() => {
     const channelMap = new Map<number, Map<number, number>>();
@@ -7066,7 +7077,11 @@ useEffect(() => {
       peopleAttended,
       cocktailsAttended,
       brunchAttended: hasBrunchData ? brunchAttended : 0,
-      freePeople: totalFreePeople,
+      // Use the committed qualification, not a pre-save attendance closure.
+      freePeople: Array.from(extractFreeSnapshotMap(counterRecord.notes).values()).reduce(
+        (total, entry) => total + Math.max(0, Math.round(entry.people?.qty ?? 0)),
+        0,
+      ) + (savedRegistry.counter?.staffFreeMetrics?.includedCount ?? includedStaffFreeCount),
       freeCocktails: freeCocktailTotal,
       freeBrunch: freeBrunchTotal,
     });
@@ -7155,7 +7170,7 @@ useEffect(() => {
     nightReportSummaries,
     counterId,
     reduxStore,
-    totalFreePeople,
+    includedStaffFreeCount,
     counterNotes,
     setShouldRefreshCounterList,
   ]);
@@ -8471,9 +8486,9 @@ type SummaryRowOptions = {
       const pending = staffFreeDraft.additions.filter(entry => !saved.some(row => row.userId === entry.userId));
       const staff = [...saved.map(entry => ({ name: entry.name, label: entry.label, reason: entry.overrideReason })), ...pending.map(entry => ({ name: entry.name, label: 'Free entry', reason: entry.override ? entry.overrideReason : null }))];
       const channel = registry.channels.find(item => item.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'walkin');
-      return staff.length ? [{ key: 'staff-free', channelId: channel?.id ?? -1, channelName: channel?.name ?? 'Walk-In', ticket: 'Staff Free', guests: staff.length, amount: 0, addons: [], staff }] : [];
+      return staff.length ? [{ key: 'staff-free', channelId: channel?.id ?? -1, channelName: channel?.name ?? 'Walk-In', ticket: 'Staff Free', guests: staff.length, metricsGuests: includedStaffFreeCount, amount: 0, addons: [], staff }] : [];
     })(),
-  ], [computedCounterNotes, registry.channels, registry.counter?.staffFreeEntries, staffFreeDraft, combinedAddonList]);
+  ], [computedCounterNotes, registry.channels, registry.counter?.staffFreeEntries, staffFreeDraft, combinedAddonList, includedStaffFreeCount]);
 
   const onlineNoShowPeopleByChannel = useMemo(() => {
     const map = new Map<number, number>();

@@ -1,6 +1,7 @@
 export type WalkInSummaryRow = {
   key: string; channelId: number; channelName: string; ticket: string; guests: number;
   currency?: string; amount?: number; payment?: string; reason?: string;
+  metricsGuests?: number;
   addons: Array<{ name: string; quantity: number; reason?: string }>;
   staff?: Array<{ name: string; label: string; reason?: string | null }>;
 };

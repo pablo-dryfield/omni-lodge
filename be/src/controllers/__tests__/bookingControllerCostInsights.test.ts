@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import { Op } from 'sequelize';
 jest.mock('../../config/database.js', () => ({ __esModule: true, default: { transaction: jest.fn() } }));
 
 jest.mock('../../models/Booking.js', () => ({
@@ -101,6 +102,9 @@ jest.mock('../../models/CounterChannelMetric.js', () => ({
   __esModule: true,
   default: { findAll: jest.fn() },
 }));
+jest.mock('../../models/StaffFreeEntry.js', () => ({ __esModule: true, default: { findAll: jest.fn() } }));
+jest.mock('../../services/staffFreeCounterMetricsService.js', () => ({ getStaffFreeCounterMetrics: jest.fn() }));
+jest.mock('../../services/staffFreeEntryService.js', () => ({ getStaffFreePolicy: jest.fn() }));
 jest.mock('../../services/productScopeService.js', () => ({
   getAllowedProductTypeIds: jest.fn(),
 }));
@@ -121,6 +125,10 @@ jest.mock('../../utils/logger.js', () => ({
 import Booking from '../../models/Booking.js';
 import Addon from '../../models/Addon.js';
 import Counter from '../../models/Counter.js';
+import CounterChannelMetric from '../../models/CounterChannelMetric.js';
+import StaffFreeEntry from '../../models/StaffFreeEntry.js';
+import { getStaffFreeCounterMetrics } from '../../services/staffFreeCounterMetricsService.js';
+import { getStaffFreePolicy } from '../../services/staffFreeEntryService.js';
 import { getAllowedProductTypeIds } from '../../services/productScopeService.js';
 import { hasModuleActionPermission } from '../../middleware/authorizationMiddleware.js';
 import { getBookingSummaryCostInsights } from '../../finance/services/bookingSummaryExpenseService.js';
@@ -162,6 +170,8 @@ describe('listBookings costInsights', () => {
     bookingFindAll.mockResolvedValue([]);
     addonFindAll.mockResolvedValue([]);
     counterFindAll.mockResolvedValue([]);
+    (CounterChannelMetric.findAll as jest.Mock).mockResolvedValue([]);
+    (StaffFreeEntry.findAll as jest.Mock).mockResolvedValue([]);
     allowedProductTypes.mockResolvedValue(null);
     hasPermission.mockResolvedValue(true);
     getCostInsights.mockResolvedValue({
@@ -270,5 +280,21 @@ describe('listBookings costInsights', () => {
       products: [],
       orders: [],
     });
+  });
+
+  it.each([[19, 3], [20, 0], [21, 0]])('counts eligible Staff Free visits at %i qualifying customers while preserving customer freebies', async (qualifyingCustomers, includedCount) => {
+    const policy = { allowance: 2, busyThreshold: 20, minimumPricePercent: 50, productTypeNames: ['Main Product'] };
+    const counter = { id: 986, productId: 28, date: '2026-11-07', notes: '-- FREE-SNAPSHOT START --\n{"version":1,"channels":{"5":{"people":{"qty":1,"note":"Complimentary customer"}}}}\n-- FREE-SNAPSHOT END --', metrics: [] };
+    counterFindAll.mockResolvedValue([counter]);
+    (StaffFreeEntry.findAll as jest.Mock).mockResolvedValue([{ counterId: 986 }, { counterId: 986 }, { counterId: 986 }]);
+    (getStaffFreePolicy as jest.Mock).mockResolvedValue(policy);
+    (getStaffFreeCounterMetrics as jest.Mock).mockResolvedValue({ qualifyingCustomers, includedCount });
+    const res = makeResponse();
+    await listBookings(makeRequest({ pickupFrom: '2026-11-07', pickupTo: '2026-11-07' }), res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(getStaffFreeCounterMetrics).toHaveBeenCalledWith(counter, 3, policy);
+    expect(counterFindAll).toHaveBeenCalledWith(expect.objectContaining({ attributes: expect.arrayContaining(['productId']) }));
+    expect(StaffFreeEntry.findAll).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ cancelledAt: null, benefit: { [Op.ne]: 'paid' } }) }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ counterInsights: expect.objectContaining({ freeTicketsTotal: includedCount + 1 }) }));
   });
 });
