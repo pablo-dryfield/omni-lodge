@@ -71,6 +71,7 @@ export type AffiliateTagRow = {
 };
 
 export type AffiliateOverviewResponse = {
+  commissionRules: string[];
   startDate: string;
   endDate: string;
   selectedAffiliateUserId: number | null;

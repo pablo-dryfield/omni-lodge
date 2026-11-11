@@ -142,3 +142,10 @@ it('retains amendment behavior without inserting another booking or resending co
   expect(committed[0]).toMatchObject({ partySizeTotal: 3, baseAmount: '900.00', experienceDate: '2027-01-11' });
   expect(sendMessage).toHaveBeenCalledTimes(1);
 });
+
+it('does not erase a synchronized fee when a later integration payload omits it', async () => {
+  await ingest({ processingFee: 17.45, processingFeeCurrency: 'PLN' });
+  await ingest({ partySizeTotal: 3 });
+  expect(committed).toHaveLength(1);
+  expect(committed[0]).toMatchObject({ processingFee: '17.45', processingFeeCurrency: 'PLN', partySizeTotal: 3 });
+});

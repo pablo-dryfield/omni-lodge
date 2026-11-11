@@ -89,6 +89,17 @@ const loadOverview = () =>
   });
 
 describe('getAffiliateCommissionEligibility', () => {
+  it('excludes an applied discount and retains its code in the reason', () => {
+    expect(getAffiliateCommissionEligibility('2026-11-11T18:35:22.459Z', '2026-11-11', false, false, 20, 'NOMADTABLE'))
+      .toEqual({ eligible: false, reason: 'Discount applied: NOMADTABLE' });
+    expect(getAffiliateCommissionEligibility(null, null, false, false, 10, null))
+      .toEqual({ eligible: false, reason: 'Discount applied' });
+  });
+
+  it('does not treat an unused code as a discount or reverse already paid commission', () => {
+    expect(getAffiliateCommissionEligibility(null, null, false, false, 0, 'UNUSED').eligible).toBe(true);
+    expect(getAffiliateCommissionEligibility(null, null, true, false, 20, 'NOMADTABLE').eligible).toBe(true);
+  });
   it('applies 20:45 in Europe/Warsaw during both summer and winter time regardless of server timezone', () => {
     const originalTimezone = process.env.TZ;
     process.env.TZ = 'America/New_York';
@@ -196,6 +207,31 @@ describe('getAffiliateOverview affiliate payout history', () => {
     bookingFindAll.mockResolvedValue(buildCristianBookings());
     previousPubCrawlBookings.mockResolvedValue(new Set());
     utmCatalog.mockResolvedValue({ utmSource: [], utmMedium: [], utmCampaign: [] });
+  });
+
+  it('excludes discounted bookings from every unpaid commission total but keeps attribution and revenue', async () => {
+    payoutLogFindAll.mockResolvedValue([]);
+    bookingFindAll.mockResolvedValue(buildCristianBookings().map(booking => ({
+      ...booking, discountAmount: '20.00', discountCode: 'NOMADTABLE',
+    })));
+    const overview = await loadOverview();
+    expect(overview.bookings).toHaveLength(3);
+    expect(overview.bookings[0]).toMatchObject({ affiliateUserId: 24, discountCode: 'NOMADTABLE',
+      affiliateCommissionAmount: 0, affiliateCommissionEligible: false, affiliateCommissionIneligibleReason: 'Discount applied: NOMADTABLE' });
+    expect(overview.summary).toMatchObject({ commissionTotal: 0, commissionOutstandingTotal: 0, revenueTotal: 1410 });
+    expect(overview.affiliateBreakdown[0].outstandingCommission).toBe(0);
+    expect(overview.dailySeries.every(point => point.commission === 0)).toBe(true);
+    expect(overview.commissionRules.join(' ')).toContain('20:45 (Europe/Warsaw)');
+    expect(bookingFindAll.mock.calls[0][0].attributes).toEqual(expect.arrayContaining(['discountAmount', 'discountCode']));
+  });
+
+  it('preserves recorded payout amounts on discounted historical bookings', async () => {
+    payoutLogFindAll.mockResolvedValue([buildCristianPayoutLog()]);
+    bookingFindAll.mockResolvedValue(buildCristianBookings().map(booking => ({ ...booking, discountAmount: 20, discountCode: 'OLD' })));
+    const overview = await loadOverview();
+    expect(overview.summary.commissionPaidTotal).toBe(80);
+    expect(overview.summary.commissionOutstandingTotal).toBe(0);
+    expect(overview.bookings.every(booking => booking.affiliateCommissionEligible)).toBe(true);
   });
 
   it('excludes an unpaid same-day booking received after the Warsaw cutoff', async () => {

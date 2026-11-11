@@ -112,6 +112,7 @@ import { startAmTaskPushNotificationsJob } from './jobs/amTaskPushNotifications.
 import { startDailyMidnightClosureJob } from './jobs/dailyMidnightClosure.cron.js';
 import { startReviewFullSyncJob } from './jobs/reviewFullSync.cron.js';
 import { startStorefrontAbandonedCartJob } from './jobs/storefrontAbandonedCart.cron.js';
+import { startBookingStripeFeeSyncJob } from './jobs/bookingStripeFeeSync.cron.js';
 import { startWhatsAppRetentionJob } from './jobs/whatsappRetention.cron.js';
 import { startWhatsAppWebhookQueueJob } from './jobs/whatsappWebhookQueue.cron.js';
 import { startErrorMonitoringRetentionJob } from './jobs/errorMonitoringRetention.cron.js';
@@ -211,6 +212,7 @@ const startApplicationBackgroundJobs = (): void => {
   startDailyMidnightClosureJob();
   startReviewFullSyncJob();
   startStorefrontAbandonedCartJob();
+  startBookingStripeFeeSyncJob();
   startWhatsAppRetentionJob();
   startWhatsAppWebhookQueueJob();
   startErrorMonitoringRetentionJob();

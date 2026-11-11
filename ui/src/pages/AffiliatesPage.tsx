@@ -38,6 +38,7 @@ import dayjs from "dayjs";
 import { navigateToPage } from "../actions/navigationActions";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import AffiliateChartSection from "../components/affiliates/AffiliateChartSection";
+import { AffiliateCommissionRules } from "../components/affiliates/AffiliateCommissionRules";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { createUser, updateUser } from "../actions/userActions";
 import { useAppDispatch } from "../store/hooks";
@@ -1026,7 +1027,8 @@ const AffiliatesPage = ({ title }: GenericPageProps) => {
               )}
             />
 
-            <SectionCard title="Bookings" icon={<IconUsers size={18} />}>
+            <SectionCard title="Bookings" icon={<IconUsers size={18} />}
+              right={<AffiliateCommissionRules rules={data.commissionRules ?? []} />}>
               <ScrollArea h={520}>
                 <Table stickyHeader withColumnBorders highlightOnHover styles={centeredTableStyles}>
                   <Table.Thead>
