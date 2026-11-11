@@ -11,6 +11,7 @@ import { getBookingStripeFeeSnapshot, paymentReadError, type BookingStripeFeeSna
 import { allocateBookingStripeFee, normalizeStripeFeeForBooking } from './stripeProcessingFee.js';
 export { allocateBookingStripeFee } from './stripeProcessingFee.js';
 
+// Legacy Ecwid "Free order" records can be marked paid without any Stripe charge.
 const missingFeeWhere = (): WhereOptions => ({
   platform: { [Op.in]: ['omnilodge', 'direct', 'ecwid'] },
   paymentStatus: { [Op.in]: ['paid', 'partial', 'deposit', 'refunded'] },

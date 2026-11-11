@@ -42,6 +42,8 @@ Service calls default to dry-run mode. The authorized scheduled worker explicitl
 
 Use the normal same-repository PR, complete CI, immutable Release artifact and managed production deployment. Never build on the production host. The owner authorized deployment and the audited historical fee backfill for this change; it does not authorize customer charges, refunds or staff payouts.
 
+PR250 passed required CI, but its first Release attempt stalled at UI artifact upload. GitHub's job-log endpoint returned HTTP502; cancellation was accepted while force-cancel returned HTTP409/not-in-progress and a full retry was refused as still running. A comment-only recovery PR starts a fresh source-bound Release through the unchanged checks. Do not mix artifact attempts, bypass validation or treat a skipped deployment workflow as delivery proof. Keep the stalled-run evidence.
+
 Pause the fee setting first if investigation is needed. Preserve audit evidence and independently verify accounting before any scoped fee rollback; never restore the whole database or rewrite unrelated bookings. Reverting application code does not undo a backfilled reporting value.
 
 The separate cleaning-photo payroll safeguard is unchanged. The owner removed incorrectly dated payout records; a production read-only recheck found no remaining settlement blocker for the reported pending task. Approval itself remains the assigned reviewer's action.
