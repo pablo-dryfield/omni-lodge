@@ -18,6 +18,8 @@ The backend accepts only bounded alphanumeric identifiers and the production env
 
 Native references produce `https://clarity.microsoft.com/player/{projectId}/{userId}/{sessionId}` links. Multiple native sessions remain distinct; repeated page references are deduplicated. Opening requires appropriate Clarity account/project access; this is not a public share link. Client playback metadata establishes a reference, not successful server upload, retention or availability. Controls therefore do not say Replay available. Processing, blocking, consent, expiry and sampling can still leave no usable recording.
 
+Each unique native project/user pair also has a compact **Find visitor in Clarity** search control. It opens Clarity's recordings list with the native User ID filter and the last 30 days selected, so staff can look for other retained sessions when a direct player is empty. The search and player links share the same strict client-event, production-environment and identifier validation; no event-supplied URL is trusted. Neither control verifies that a recording was uploaded or retained, and search can legitimately return no sessions. The custom-session copy fallback remains for older histories without native metadata.
+
 No attempt is made to reconstruct historical recordings that were never captured. The existing custom visit ID and `ongoing_cart_id` tag may help a staff member locate retained older sessions using Clarity's custom filters. A copied lookup ID always comes from the actual visit rather than a possibly stale request context that was applied across queued visits.
 
 ## Release order and rollback
