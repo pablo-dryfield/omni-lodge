@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 const workflowPath = new URL('../../.github/workflows/release.yml', import.meta.url);
@@ -14,6 +15,70 @@ const deployWorkflow = fs.readFileSync(
 const submitJobStart = deployWorkflow.indexOf('\n  submit_request:');
 const prepareJob = deployWorkflow.slice(0, submitJobStart);
 const submitJob = deployWorkflow.slice(submitJobStart);
+
+const systemWorkflow = fs.readFileSync(
+  new URL('../../.github/workflows/system-management-validation.yml', import.meta.url),
+  'utf8',
+).replace(/\r\n/g, '\n');
+const dependencyStep = systemWorkflow.match(/- name: Ensure isolated runtime OS dependencies\n        run: \|\n([\s\S]+?)      - name:/)?.[1]
+  .split('\n').map((line) => line.replace(/^          /, '')).join('\n');
+
+function runDependencyStep({ ssh = true, psql = true, installFails = false, installsTools = true } = {}) {
+  assert.ok(dependencyStep, 'OS dependency setup must remain a distinct, required step');
+  const mock = `
+    ssh_ready=${ssh ? 1 : 0}
+    psql_ready=${psql ? 1 : 0}
+    test() {
+      if [[ "$1" == -x && ( "$2" == /usr/sbin/sshd || "$2" == /usr/lib/openssh/sftp-server ) ]]; then
+        [[ "$ssh_ready" == 1 ]]
+      else
+        builtin test "$@"
+      fi
+    }
+    psql() { [[ "$psql_ready" == 1 ]]; }
+    sudo() {
+      printf '%s\\n' "$*"
+      if [[ "$1" == apt-get && " $* " == *" install "* ]]; then
+        ${installFails ? 'return 17' : installsTools ? 'ssh_ready=1; psql_ready=1' : ':'}
+      fi
+    }
+  `;
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+  const result = spawnSync(bash, ['--noprofile', '--norc', '-c', `${mock}\n${dependencyStep}`], { encoding: 'utf8' });
+  assert.ifError(result.error);
+  return result;
+}
+
+test('isolated runtime uses installed tools without a redundant apt dependency', () => {
+  const result = runDependencyStep();
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /apt-get/);
+  assert.match(result.stdout, /systemctl start ssh/);
+});
+
+test('isolated runtime installs only missing OS tools and verifies them', () => {
+  for (const missing of [ { ssh: false }, { psql: false }, { ssh: false, psql: false } ]) {
+    const result = runDependencyStep(missing);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /apt-get -o Acquire::Retries=3 update -qq/);
+    assert.match(result.stdout, /apt-get -o Acquire::Retries=3 install --yes --no-install-recommends/);
+    assert.equal(result.stdout.includes('openssh-server'), missing.ssh === false);
+    assert.equal(result.stdout.includes('postgresql-client-16'), missing.psql === false);
+    assert.match(result.stdout, /systemctl start ssh/);
+  }
+});
+
+test('missing tools and failed package installation stop the required runtime gate', () => {
+  for (const failure of [ { installFails: true }, { installsTools: false } ]) {
+    const result = runDependencyStep({ ssh: false, psql: false, ...failure });
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout, /systemctl start ssh/);
+  }
+  assert.match(systemWorkflow, /SYSTEM_MANAGEMENT_LINUX_TEST_REQUIRED=true/);
+  assert.match(systemWorkflow, /--test management-server\/test\/postgres\.integration\.ts/);
+  assert.match(systemWorkflow, /--test management-server\/test\/linux\.integration\.ts/);
+  assert.doesNotMatch(systemWorkflow, /continue-on-error|\|\| true/);
+});
 
 test('production-mode migration builds retain TypeScript build dependencies', () => {
   for (const name of ['release.yml', 'ci.yml']) {
