@@ -4,6 +4,10 @@ import { MantineProvider } from "@mantine/core";
 import type { UnifiedOrder } from "../../store/bookingPlatformsTypes";
 import axiosInstance from "../../utils/axiosInstance";
 import BookingDetailsModal, { getBookingIdFromOrder } from "./BookingDetailsModal";
+import { getBookingPaymentDetails, getBookingPaymentEvents } from "../../api/bookingPayments";
+import { paymentFixture, eventsFixture } from "./__fixtures__/bookingPayments";
+
+jest.mock("../../api/bookingPayments", () => ({ getBookingPaymentDetails: jest.fn(), getBookingPaymentEvents: jest.fn() }));
 
 jest.mock("../../utils/axiosInstance", () => ({
   __esModule: true,
@@ -18,6 +22,8 @@ const mockedGet = axiosInstance.get as jest.Mock;
 describe("BookingDetailsModal", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (getBookingPaymentDetails as jest.Mock).mockResolvedValue({ ...paymentFixture, scope: 'booking', payment: { ...paymentFixture.payment, amount: 12525 } });
+    (getBookingPaymentEvents as jest.Mock).mockResolvedValue(eventsFixture);
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: jest.fn().mockImplementation((query: string) => ({
@@ -100,7 +106,7 @@ describe("BookingDetailsModal", () => {
     );
 
     const dialog = await screen.findByRole("dialog", { name: /booking details/i });
-    expect(mockedGet).toHaveBeenCalledWith("/bookings/82518/details");
+    expect(mockedGet).toHaveBeenCalledWith("/bookings/82518/details", { params: { includeStripe: false } });
     expect(within(dialog).getByText("Reservation overview and history")).toBeInTheDocument();
     expect(await within(dialog).findByText("Pub Crawl")).toBeInTheDocument();
     expect(within(dialog).getByText("Julia Fitzgerald")).toBeInTheDocument();
@@ -111,7 +117,7 @@ describe("BookingDetailsModal", () => {
     expect(within(dialog).getByText("booking created")).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole("tab", { name: "Payment" }));
-    expect(within(dialog).getByText("125.25 PLN")).toBeInTheDocument();
+    expect(await within(dialog).findByText("125.25 PLN")).toBeInTheDocument();
   });
 
   it("resolves the internal booking ID from raw data and the normalized order ID fallback", () => {

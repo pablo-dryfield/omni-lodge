@@ -27,6 +27,21 @@ export type ConfigDefinition = {
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
+    key: 'BOOKING_PAYMENTS_REQUEST_TIMEOUT_MS', label: 'Booking payment API timeout (ms)', category: 'Payments',
+    description: 'Timeout for each read-only Stripe request in Booking Details / Payment. An unavailable history section does not hide a successfully retrieved payment. Changes apply on the next Payment refresh.',
+    valueType: 'number', defaultValue: 12000, validation: { required: true, integer: true, min: 1000, max: 30000 }, impact: 'medium',
+  },
+  {
+    key: 'BOOKING_PAYMENTS_PAGE_SIZE', label: 'Booking payment history page size', category: 'Payments',
+    description: 'Maximum charges, refunds, disputes and local activity rows loaded per Payment view, and Stripe events scanned per API page (10–100). Truncated lists are explicitly labelled with access to the complete Stripe record. Changes apply on the next refresh.',
+    valueType: 'number', defaultValue: 50, validation: { required: true, integer: true, min: 10, max: 100 }, impact: 'medium',
+  },
+  {
+    key: 'BOOKING_PAYMENTS_EVENT_SCAN_PAGES', label: 'Stripe event pages searched per request', category: 'Payments',
+    description: 'Stripe cannot filter its Events API by a payment ID. Search this many account event pages per request, return only events belonging to the booking payment, and provide a continuation button when more pages remain. Stripe retains these API events for 30 days. Changes apply on the next event search.',
+    valueType: 'number', defaultValue: 3, validation: { required: true, integer: true, min: 1, max: 10 }, impact: 'medium',
+  },
+  {
     key: 'COUNTER_STAFF_PAID_TICKET_PLN', label: 'Staff Ticket price (PLN)', category: 'Counters',
     description: 'Open-bar-cost ticket for active off-duty volunteers and long-term staff who have exhausted their lifetime free allowance. Applies to new Staff Tickets when the counter is loaded; saved payments keep their original price. Free attendance exemptions and management entry remain available.',
     valueType: 'number', defaultValue: 30, validation: { required: true, min: 0.01, max: 10000 }, impact: 'medium',

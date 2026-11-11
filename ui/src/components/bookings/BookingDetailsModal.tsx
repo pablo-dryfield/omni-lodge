@@ -32,6 +32,7 @@ import dayjs from "dayjs";
 
 import type { UnifiedOrder } from "../../store/bookingPlatformsTypes";
 import axiosInstance from "../../utils/axiosInstance";
+import BookingPaymentPanel from './BookingPaymentPanel';
 import {
   formatStorefrontSaleDuration,
   getStorefrontSaleTiming,
@@ -289,20 +290,6 @@ const formatStorefrontMoney = (amount: number, currency: string): string => {
   }
 };
 
-const getStripeStatusColor = (status?: string | null): string => {
-  switch (status) {
-    case "succeeded": return "green";
-    case "pending": return "yellow";
-    case "failed": return "red";
-    case "canceled": return "gray";
-    default: return "blue";
-  }
-};
-
-const formatStripeAmount = (amount: number, currency: string): string => (
-  `${(amount / 100).toFixed(2)} ${currency.toUpperCase()}`
-);
-
 const extractErrorMessage = (error: unknown): string => {
   if (!error) return "Something went wrong";
   if (typeof error === "string") return error;
@@ -362,7 +349,7 @@ const BookingDetailsModal = ({
 
     setDetailsState({ ...createDefaultDetailsState(), loading: true });
     void axiosInstance
-      .get<BookingDetailsResponse>(`/bookings/${bookingId}/details`)
+      .get<BookingDetailsResponse>(`/bookings/${bookingId}/details`, { params: { includeStripe: false } })
       .then((response) => {
         if (!active) return;
         setDetailsState((current) => ({
@@ -851,47 +838,7 @@ const BookingDetailsModal = ({
                 </Tabs.Panel>
 
                 <Tabs.Panel value="stripe" p={{ base: "md", sm: "xl" }}>
-                  {detailsState.data.stripe ? (
-                    <Stack gap="lg">
-                      <Group justify="space-between" align="flex-start" wrap="wrap" gap="md">
-                        <Box>
-                          <Text size="xs" c="dimmed" fw={700}>TRANSACTION AMOUNT</Text>
-                          <Text fz={28} fw={800} mt={2}>
-                            {formatStripeAmount(detailsState.data.stripe.amount, detailsState.data.stripe.currency)}
-                          </Text>
-                        </Box>
-                        <Badge size="lg" variant="light" color={getStripeStatusColor(detailsState.data.stripe.status)}>
-                          {detailsState.data.stripe.status ?? "Unknown"}
-                        </Badge>
-                      </Group>
-                      <Divider />
-                      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="lg">
-                        {[
-                          ["Transaction", detailsState.data.stripe.id],
-                          ["Type", detailsState.data.stripe.type],
-                          ["Refunded", formatStripeAmount(detailsState.data.stripe.amountRefunded, detailsState.data.stripe.currency)],
-                          ["Receipt email", detailsState.data.stripe.receiptEmail ?? "-"],
-                          ["Created", detailsState.data.stripe.created ? formatDateTime(new Date(detailsState.data.stripe.created * 1000).toISOString()) : "-"],
-                          ["Refund status", detailsState.data.stripe.fullyRefunded ? "Fully refunded" : "Not fully refunded"],
-                        ].map(([label, value]) => (
-                          <Box key={label}>
-                            <Text size="xs" c="dimmed" fw={700}>{label.toUpperCase()}</Text>
-                            <Text size="sm" fw={600} mt={4} style={{ wordBreak: "break-word" }}>{value}</Text>
-                          </Box>
-                        ))}
-                      </SimpleGrid>
-                    </Stack>
-                  ) : (
-                    <Box py={48} ta="center">
-                      <ThemeIcon size={44} radius="sm" variant="light" color="gray" mx="auto">
-                        <IconCreditCard size={24} />
-                      </ThemeIcon>
-                      <Text fw={700} mt="md">No payment data</Text>
-                      <Text size="sm" c="dimmed" maw={420} mx="auto" mt={4}>
-                        {detailsState.data.stripeError ?? "No Stripe transaction was found for this booking."}
-                      </Text>
-                    </Box>
-                  )}
+                  <BookingPaymentPanel key={detailsState.data.booking.id} bookingId={detailsState.data.booking.id} active={detailsState.activeTab === 'stripe'} />
                 </Tabs.Panel>
 
                 {detailsState.data.storeActivity && (

@@ -6,6 +6,7 @@ import type { AuthenticatedRequest } from '../../types/AuthenticatedRequest.js';
 jest.mock('../../controllers/localBookingActionController.js', () => new Proxy({ __esModule: true }, {
   get: (_target, key) => key === '__esModule' ? true : (_req: unknown, res: Response) => res.sendStatus(204),
 }));
+jest.mock('../../controllers/bookingPaymentController.js', () => ({ bookingPaymentDetails: jest.fn(), bookingPaymentEvents: jest.fn() }));
 
 jest.mock('../../middleware/authMiddleware.js', () => ({
   __esModule: true,
