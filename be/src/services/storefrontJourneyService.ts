@@ -21,6 +21,7 @@ const PERMANENT_CLIENT_EVENT_TYPES = [
 ];
 
 const CLIENT_EVENT_TYPES = new Set([
+  'clarity_recording_linked',
   'homepage_viewed',
   'homepage_button_clicked',
   'product_viewed',
@@ -138,6 +139,19 @@ const sanitizeDetails = (value: unknown): Record<string, unknown> | null => {
     : null;
 };
 
+const sanitizeRecordingDetails = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (input.environment !== 'production') return null;
+  const details: Record<string, unknown> = { environment: 'production' };
+  for (const key of ['projectId', 'userId', 'sessionId']) {
+    const id = input[key];
+    if (typeof id !== 'string' || !/^[a-z0-9]{1,64}$/i.test(id)) return null;
+    details[key] = id;
+  }
+  return details;
+};
+
 const sanitizeHomepageDetails = (value: unknown): Record<string, unknown> | null => {
   const input = sanitizeDetails(value);
   if (!input) return null;
@@ -197,6 +211,8 @@ export const normalizeClientJourneyEvents = (
     const visitId = uuid(input.visitId);
     const type = text(input.type, 64);
     if (!eventId || !visitId || !CLIENT_EVENT_TYPES.has(type)) return [];
+    const recording = type === 'clarity_recording_linked' ? sanitizeRecordingDetails(input.details) : null;
+    if (type === 'clarity_recording_linked' && !recording) return [];
     const sequenceValue = Number(input.sequence);
     return [{
       eventId,
@@ -205,7 +221,7 @@ export const normalizeClientJourneyEvents = (
       type,
       occurredAt: eventDate(input.occurredAt, now),
       sequence: Number.isInteger(sequenceValue) && sequenceValue >= 0 ? sequenceValue : null,
-      details: type.startsWith('homepage_') ? sanitizeHomepageDetails(input.details) : sanitizeDetails(input.details),
+      details: recording ?? (type.startsWith('homepage_') ? sanitizeHomepageDetails(input.details) : sanitizeDetails(input.details)),
     }];
   });
 };

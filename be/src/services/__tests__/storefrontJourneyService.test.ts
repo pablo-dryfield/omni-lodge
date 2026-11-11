@@ -28,6 +28,30 @@ const context = {
 describe('storefront journey service', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it('accepts native recording references and drops arbitrary URLs and contact data', () => {
+    const result = normalizeClientJourneyEvents([{
+      eventId: '319a56f6-57ab-4d40-8cdd-2d9949f30ab2', visitId: 'c3c7d60f-b420-4925-892f-00484ce786cd',
+      type: 'clarity_recording_linked', details: {
+        projectId: 'z9d5iuilvn', userId: 'abc123', sessionId: 'def456', environment: 'production',
+        url: 'https://evil.example/', email: 'private@example.com', pageNum: 1,
+      },
+    }], context);
+    expect(result).toHaveLength(1);
+    expect(result[0].details).toEqual({ projectId: 'z9d5iuilvn', userId: 'abc123', sessionId: 'def456', environment: 'production' });
+  });
+
+  it.each([
+    { environment: 'staging' }, { sessionId: '../escape' }, { userId: 'private@example.com' },
+    { projectId: '' }, { sessionId: ['array'] }, { userId: 'a'.repeat(65) },
+  ])('rejects unsafe or nonproduction recording metadata: %j', (invalid) => {
+    expect(normalizeClientJourneyEvents([{
+      eventId: '319a56f6-57ab-4d40-8cdd-2d9949f30ab2', visitId: 'c3c7d60f-b420-4925-892f-00484ce786cd',
+      type: 'clarity_recording_linked', details: {
+        projectId: 'z9d5iuilvn', userId: 'abc123', sessionId: 'def456', environment: 'production', ...invalid,
+      },
+    }], context)).toEqual([]);
+  });
+
   it('accepts homepage activity in the existing visit and strips URL parameters and unapproved details', () => {
     const result = normalizeClientJourneyEvents(['homepage_viewed', 'homepage_button_clicked'].map((type, index) => ({
       eventId: index ? '319a56f6-57ab-4d40-8cdd-2d9949f30ab2' : '85cf256c-3147-4f6e-a276-b364c7b9bdb4',
