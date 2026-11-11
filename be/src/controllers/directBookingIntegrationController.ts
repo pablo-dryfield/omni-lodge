@@ -535,6 +535,8 @@ const assignBookingPatch = (booking: Booking, patch: BookingPatch, userId: numbe
   let changed = false;
 
   for (const [key, value] of Object.entries(nextState)) {
+    // Optional legacy payload fields must not erase a fee already read from Stripe.
+    if ((key === 'processingFee' || key === 'processingFeeCurrency') && value == null && booking.get(key) != null) continue;
     const typedKey = key as keyof typeof nextState;
     const currentValue = booking.get(typedKey as keyof Booking);
     const currentSerialized = currentValue instanceof Date ? currentValue.toISOString() : JSON.stringify(currentValue);

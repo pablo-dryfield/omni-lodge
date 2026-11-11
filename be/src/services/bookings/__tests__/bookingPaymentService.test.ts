@@ -14,7 +14,7 @@ import User from '../../../models/User';
 import { getDirectStripeClient, getStripeClient } from '../../../finance/services/stripeClient';
 import { getEcwidOrder } from '../../ecwidService';
 import { getConfigValue, refreshConfigCacheKeys } from '../../configService';
-import { getBookingPaymentDetails, getBookingPaymentEvents, paymentReadError } from '../bookingPaymentService';
+import { getBookingPaymentDetails, getBookingPaymentEvents, getBookingStripeFeeSnapshot, paymentReadError } from '../bookingPaymentService';
 
 const now = Math.floor(new Date('2026-11-11T12:00:00Z').getTime() / 1000);
 const response = <T extends object>(row: T) => ({ ...row, lastResponse: { requestId: 'req_Read123', statusCode: 200 } });
@@ -22,11 +22,11 @@ const list = (data: unknown[] = [], more = false) => response({ data, has_more: 
 const charge = (extra = {}) => ({ id: 'ch_One', payment_intent: 'pi_One', amount: 24000, amount_captured: 24000, amount_refunded: 3000, currency: 'pln', status: 'succeeded', paid: true, captured: true, created: now - 100, livemode: true,
   payment_method_details: { type: 'card', card: { brand: 'mastercard', last4: '0858', exp_month: 3, exp_year: 2029, country: 'PL', funding: 'credit', wallet: { type: 'apple_pay' }, three_d_secure: { result: 'authenticated', version: '2.2.0', authentication_flow: 'frictionless' }, fingerprint: 'PRIVATE-FINGERPRINT' } },
   billing_details: { name: 'Alex Morgan', email: 'alex@example.com', address: { line1: 'PRIVATE-ADDRESS' } }, receipt_url: 'https://pay.stripe.com/receipts/test',
-  balance_transaction: { amount: 24000, fee: 400, net: 23600, currency: 'pln' }, ...extra });
+  balance_transaction: { id: 'txn_One', amount: 24000, fee: 400, net: 23600, currency: 'pln' }, ...extra });
 const intent = (extra = {}) => response({ id: 'pi_One', amount: 24000, amount_received: 24000, amount_capturable: 0, currency: 'pln', status: 'succeeded', created: now - 200, livemode: true, latest_charge: charge(), payment_method: null, client_secret: 'PRIVATE-CLIENT-SECRET', ...extra });
 const client = {
   paymentIntents: { retrieve: jest.fn() }, charges: { retrieve: jest.fn(), list: jest.fn() }, refunds: { list: jest.fn() }, disputes: { list: jest.fn() },
-  accounts: { retrieve: jest.fn() }, events: { list: jest.fn() },
+  accounts: { retrieve: jest.fn() }, events: { list: jest.fn() }, balanceTransactions: { retrieve: jest.fn() },
 };
 const booking = (extra = {}) => ({ id: 42, platform: 'direct', notes: 'Stripe payment: pi_One\nStripe livemode: true', paymentMethod: 'card', paymentStatus: 'paid', priceGross: '120.00', currency: 'PLN', refundedAmount: '0', ...extra });
 const event = (id: string, data: object, type = 'payment_intent.succeeded') => ({ id, type, created: now - 20, data: { object: data }, request: { id: 'req_Original', idempotency_key: 'PRIVATE-IDEMPOTENCY' } });
@@ -43,6 +43,39 @@ beforeEach(() => {
   client.disputes.list.mockResolvedValue(list()); client.events.list.mockResolvedValue(list());
 });
 afterEach(() => jest.useRealTimers());
+
+it('reads a fee without loading unrelated payment history or mutating a booking', async () => {
+  const result = await getBookingStripeFeeSnapshot(booking({ stripeMerchant: 'food-tour' }) as never, { timeout: 5000 });
+  expect(result).toMatchObject({ feeMinor: 400, currency: 'PLN', balanceTransactionId: 'txn_One', chargeId: 'ch_One', paymentIntentId: 'pi_One', mode: 'live', merchant: 'food-tour' });
+  expect(getDirectStripeClient).toHaveBeenCalledWith('food-tour', 'live');
+  expect(client.refunds.list).not.toHaveBeenCalled();
+  expect(client.accounts.retrieve).not.toHaveBeenCalled();
+  expect(JSON.stringify(result)).not.toContain('PRIVATE');
+});
+
+it.each([null, { id: 'txn_One', fee: 0, currency: 'pln' }])('keeps unavailable fees distinct from a verified zero fee: %j', async balance => {
+  client.paymentIntents.retrieve.mockResolvedValue(intent({ latest_charge: charge({ balance_transaction: balance }) }));
+  const result = await getBookingStripeFeeSnapshot(booking() as never, {});
+  if (balance === null) expect(result).toBeNull();
+  else expect(result).toMatchObject({ feeMinor: 0, balanceTransactionId: 'txn_One' });
+});
+
+it('fetches a non-expanded balance transaction and retains its settlement currency', async () => {
+  client.paymentIntents.retrieve.mockResolvedValue(intent({ latest_charge: charge({ balance_transaction: 'txn_One' }) }));
+  client.balanceTransactions.retrieve.mockResolvedValue({ id: 'txn_One', fee: 151, currency: 'eur' });
+  expect(await getBookingStripeFeeSnapshot(booking() as never, { timeout: 3000 })).toMatchObject({ currency: 'EUR', feeMinor: 151 });
+  expect(client.balanceTransactions.retrieve).toHaveBeenCalledWith('txn_One', {}, { timeout: 3000 });
+});
+
+it.each([{ captured: false }, { paid: false }])('does not record a fee before capture: %j', async state => {
+  client.paymentIntents.retrieve.mockResolvedValue(intent({ latest_charge: charge(state) }));
+  expect(await getBookingStripeFeeSnapshot(booking() as never, {})).toBeNull();
+});
+
+it.each([undefined, -1, 1.5, NaN])('never substitutes zero for an invalid or missing provider fee: %s', async fee => {
+  client.paymentIntents.retrieve.mockResolvedValue(intent({ latest_charge: charge({ balance_transaction: { id: 'txn_One', fee, currency: 'pln' } }) }));
+  await expect(getBookingStripeFeeSnapshot(booking() as never, {})).rejects.toThrow('valid processing-fee');
+});
 
 it('reads stored direct payment references and exposes only a safe payment-method summary', async () => {
   const result = await getBookingPaymentDetails(42);

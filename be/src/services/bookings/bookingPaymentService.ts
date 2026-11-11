@@ -10,6 +10,7 @@ import { getEcwidOrder } from '../ecwidService.js';
 import { getConfigValue, refreshConfigCacheKeys } from '../configService.js';
 import { extractDirectStripeMode, extractDirectStripeTransactionId, isStorefrontBooking } from './bookingStripeReference.js';
 import type { BookingPaymentDetails, BookingPaymentEvents, PaymentActivity, PaymentHistoryEvent, PaymentItem, PaymentMethodDetails, PaymentRequestReference } from './bookingPaymentTypes.js';
+import type { StripeSettlementFee } from './stripeProcessingFee.js';
 
 const CONFIG_KEYS = ['BOOKING_PAYMENTS_REQUEST_TIMEOUT_MS', 'BOOKING_PAYMENTS_PAGE_SIZE', 'BOOKING_PAYMENTS_EVENT_SCAN_PAGES'] as const;
 // Provider-defined retention and API limits, rather than editable business rules.
@@ -131,6 +132,43 @@ async function resolve(booking: Booking, settings: Policy, read: Read, requests:
 function dashboard(context: Context, account: string | null, section: string, reference?: string): string {
   const accountPath = account && /^acct_[A-Za-z0-9]+$/.test(account) ? `${account}/` : '';
   return `https://dashboard.stripe.com/${accountPath}${context.mode === 'test' ? 'test/' : ''}${section}${reference ? '/' + encodeURIComponent(reference) : ''}`;
+}
+
+export type BookingStripeFeeSnapshot = StripeSettlementFee & {
+  balanceTransactionId: string;
+  chargeId: string;
+  paymentIntentId: string | null;
+  mode: StripeMode;
+  merchant: string | null;
+};
+
+/** Uses the same persisted payment/account selection as the read-only payment panel. */
+export async function getBookingStripeFeeSnapshot(
+  booking: Booking,
+  options: Stripe.RequestOptions,
+): Promise<BookingStripeFeeSnapshot | null> {
+  const requests: PaymentRequestReference[] = [];
+  const context = await resolve(booking, { pageSize: 10, scanPages: 1, options }, reader(requests), requests);
+  const charge = context.charge;
+  if (!charge?.paid || !charge.captured || !charge.balance_transaction) return null;
+  const balance = typeof charge.balance_transaction === 'string'
+    ? await context.client.balanceTransactions.retrieve(charge.balance_transaction, {}, options)
+    : charge.balance_transaction;
+  if (!Number.isSafeInteger(balance.fee) || balance.fee < 0 || !/^[a-z]{3}$/i.test(balance.currency)
+    || !/^txn_[A-Za-z0-9]+$/.test(balance.id)) {
+    throw new HttpError(502, 'Stripe did not return a valid processing-fee settlement.');
+  }
+  return {
+    feeMinor: balance.fee,
+    currency: balance.currency.toUpperCase(),
+    chargeCurrency: charge.currency.toUpperCase(),
+    exchangeRate: balance.exchange_rate ?? null,
+    balanceTransactionId: balance.id,
+    chargeId: charge.id,
+    paymentIntentId: context.intent?.id ?? id(charge.payment_intent),
+    mode: context.mode,
+    merchant: booking.platform === 'ecwid' ? null : normalizeDirectStripeMerchant(booking.stripeMerchant),
+  };
 }
 
 function methodDetails(charge: Stripe.Charge | null, intent: Stripe.PaymentIntent | null): PaymentMethodDetails | null {

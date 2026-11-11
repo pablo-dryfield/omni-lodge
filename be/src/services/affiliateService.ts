@@ -12,6 +12,8 @@ import { getConfigValue, updateConfigValue } from './configService.js';
 import { fetchBookingUtmCatalog } from './bookings/bookingUtmCatalogService.js';
 import { fetchAffiliateBookingsWithPriorPubCrawl } from './affiliateBookingHistoryService.js';
 import { isBookingRevenueRecognized } from './bookings/bookingRevenuePolicy.js';
+import { AFFILIATE_COMMISSION_RULES, AFFILIATE_COMMISSION_TIMEZONE, getAffiliateCommissionEligibility } from './affiliateCommissionPolicy.js';
+export { getAffiliateCommissionEligibility } from './affiliateCommissionPolicy.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -53,6 +55,8 @@ export type AffiliateBookingRow = {
   sourceReceivedAt: string | null;
   partySizeTotal: number;
   baseAmount: number;
+  discountAmount: number;
+  discountCode: string | null;
   paymentStatus: string | null;
   currency: string | null;
   utmSource: string | null;
@@ -92,6 +96,7 @@ export type AffiliateTagRow = {
 };
 
 export type AffiliateOverviewResponse = {
+  commissionRules: string[];
   startDate: string;
   endDate: string;
   selectedAffiliateUserId: number | null;
@@ -184,40 +189,6 @@ const normalizeAffiliateCommissionPerPerson = (value: unknown, fallback = 20): n
     return fallback;
   }
   return Math.round((numeric + Number.EPSILON) * 100) / 100;
-};
-
-const AFFILIATE_COMMISSION_CUTOFF_MINUTES = 20 * 60 + 45;
-const AFFILIATE_COMMISSION_TIMEZONE = 'Europe/Warsaw';
-
-export const getAffiliateCommissionEligibility = (
-  sourceReceivedAt: string | null,
-  experienceDate: string | null,
-  isCommissionPaid = false,
-  hasPriorPubCrawlBooking = false,
-): { eligible: boolean; reason: string | null } => {
-  // A recorded payout is an accounting fact. Later eligibility-rule changes must
-  // not remove previously earned commission from historical payout reports.
-  if (isCommissionPaid) {
-    return { eligible: true, reason: null };
-  }
-  if (hasPriorPubCrawlBooking) {
-    return { eligible: false, reason: 'Previous Pub Crawl booking (matching email or phone)' };
-  }
-  if (!sourceReceivedAt || !experienceDate) {
-    return { eligible: true, reason: null };
-  }
-  const parsed = dayjs(sourceReceivedAt).tz(AFFILIATE_COMMISSION_TIMEZONE);
-  if (!parsed.isValid()) {
-    return { eligible: true, reason: null };
-  }
-  const minutes = parsed.hour() * 60 + parsed.minute();
-  if (
-    parsed.format('YYYY-MM-DD') === experienceDate &&
-    minutes >= AFFILIATE_COMMISSION_CUTOFF_MINUTES
-  ) {
-    return { eligible: false, reason: 'Same-day booking at or after 20:45' };
-  }
-  return { eligible: true, reason: null };
 };
 
 const resolvePartySizeTotal = (booking: {
@@ -685,6 +656,8 @@ const fetchAffiliateBookings = async (
       'partySizeAdults',
       'partySizeChildren',
       'baseAmount',
+      'discountAmount',
+      'discountCode',
       'currency',
       'paymentStatus',
       'utmSource',
@@ -709,6 +682,8 @@ const fetchAffiliateBookings = async (
     sourceReceivedAt: row.sourceReceivedAt ? dayjs(row.sourceReceivedAt).toISOString() : null,
     partySizeTotal: resolvePartySizeTotal(row),
     baseAmount: isBookingRevenueRecognized(row) ? normalizeMoney(row.baseAmount) : 0,
+    discountAmount: normalizeMoney(row.discountAmount),
+    discountCode: normalizeText(row.discountCode),
     paymentStatus: row.paymentStatus ?? null,
     currency: row.currency ?? null,
     utmSource: normalizeText(row.utmSource),
@@ -867,6 +842,8 @@ export const getAffiliateOverview = async (params: {
           booking.experienceDate,
           isCommissionPaid,
           bookingsWithPriorPubCrawl.has(Number(booking.id)),
+          booking.discountAmount,
+          booking.discountCode,
         )
       : { eligible: false, reason: 'Booking is unpaid' };
     const calculatedCommissionAmount =
@@ -935,6 +912,7 @@ export const getAffiliateOverview = async (params: {
   const utmCatalog = await fetchBookingUtmCatalog();
 
   const response: AffiliateOverviewResponse = {
+    commissionRules: [...AFFILIATE_COMMISSION_RULES],
     startDate,
     endDate,
     selectedAffiliateUserId: normalizedSelectedAffiliateUserId,

@@ -27,6 +27,26 @@ export type ConfigDefinition = {
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
+    key: 'BOOKING_STRIPE_FEE_SYNC_ENABLED', label: 'Record missing Stripe booking fees', category: 'Payments',
+    description: 'Read actual Stripe settlement fees for paid/deposit/partial/refunded storefront, direct and Ecwid bookings, including all historical missing fees. Allocates a payment fee once across its booking lines and records audit evidence. Never charges customers or sends payouts. Unavailable settlements stay missing for retry, not estimated as zero. Changes apply on the next one-minute scheduler tick.',
+    valueType: 'boolean', defaultValue: true, impact: 'high',
+  },
+  {
+    key: 'BOOKING_STRIPE_FEE_SYNC_BATCH_SIZE', label: 'Stripe fee backfill batch size', category: 'Payments',
+    description: 'Maximum booking candidates inspected per background run. Historical rows are scanned in ID order and unresolved rows are retried on later sweeps. A 45-second run budget also bounds each batch. Changes apply on the next scheduler tick.',
+    valueType: 'number', defaultValue: 100, validation: { required: true, integer: true, min: 1, max: 500 }, impact: 'medium',
+  },
+  {
+    key: 'BOOKING_STRIPE_FEE_SYNC_INTERVAL_MINUTES', label: 'Stripe fee synchronization interval (minutes)', category: 'Payments',
+    description: 'Minimum interval between fee reconciliation runs. Includes new payments and the historical backlog, without blocking checkout. Changes apply on the next scheduler tick; no restart required.',
+    valueType: 'number', defaultValue: 1, validation: { required: true, integer: true, min: 1, max: 1440 }, impact: 'medium',
+  },
+  {
+    key: 'BOOKING_STRIPE_FEE_SYNC_TIMEOUT_MS', label: 'Stripe fee lookup timeout (ms)', category: 'Payments',
+    description: 'Timeout per read-only Stripe fee lookup. Failed lookups retain existing data and are retried in later sweeps. Applies only to fee synchronization, not checkout or the payment viewer. Changes apply on the next scheduler tick.',
+    valueType: 'number', defaultValue: 12000, validation: { required: true, integer: true, min: 1000, max: 30000 }, impact: 'medium',
+  },
+  {
     key: 'BOOKING_PAYMENTS_REQUEST_TIMEOUT_MS', label: 'Booking payment API timeout (ms)', category: 'Payments',
     description: 'Timeout for each read-only Stripe request in Booking Details / Payment. An unavailable history section does not hide a successfully retrieved payment. Changes apply on the next Payment refresh.',
     valueType: 'number', defaultValue: 12000, validation: { required: true, integer: true, min: 1000, max: 30000 }, impact: 'medium',
