@@ -56,11 +56,27 @@ jobs:
           npm --prefix be ci --include=dev
           npm --prefix be run build:prod
           node --test ops/production/system-ingress-guard.test.mjs
+      - name: Ensure isolated runtime OS dependencies
+        run: |
+          set -euo pipefail
+          # Hosted runners already provide these tools; avoid fetching a redundant metapackage.
+          missing_packages=()
+          if ! test -x /usr/sbin/sshd || ! test -x /usr/lib/openssh/sftp-server; then
+            missing_packages+=(openssh-server)
+          fi
+          if ! psql --version >/dev/null 2>&1; then
+            missing_packages+=(postgresql-client-16)
+          fi
+          if (( ${#missing_packages[@]} )); then
+            sudo apt-get -o Acquire::Retries=3 update -qq
+            sudo apt-get -o Acquire::Retries=3 install --yes --no-install-recommends "${missing_packages[@]}"
+          fi
+          test -x /usr/sbin/sshd
+          test -x /usr/lib/openssh/sftp-server
+          psql --version
+          sudo systemctl start ssh
       - name: Verify actual Linux/OpenSSH/PostgreSQL boundaries and orphan recovery
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install --yes openssh-server postgresql-client
-          sudo systemctl start ssh
           MANAGEMENT_TEST_ADMIN_URL=postgresql://postgres:system-ci-only@127.0.0.1:5432/postgres \
             node management-server/node_modules/tsx/dist/cli.mjs --test management-server/test/postgres.integration.ts
           sudo env PATH="$PATH" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
