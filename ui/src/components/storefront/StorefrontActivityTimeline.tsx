@@ -1,6 +1,7 @@
 import { Badge, Box, Group, Paper, Stack, Text, ThemeIcon } from "@mantine/core";
 import { IconBrowser, IconClock, IconDeviceDesktopAnalytics } from "@tabler/icons-react";
 import dayjs from "dayjs";
+import { StorefrontReplayLinks } from "./StorefrontReplayLinks";
 
 export type StorefrontJourneyEvent = {
   id: string;
@@ -146,6 +147,7 @@ export const storefrontJourneyEventDescription = (event: StorefrontJourneyEvent)
   const number = itemNumber(details);
   const numberedProduct = number ? `item ${number}: ${product}` : product;
   const descriptions: Record<string, string> = {
+    clarity_recording_linked: "Clarity recording reference captured",
     homepage_viewed: "Viewed homepage",
     homepage_button_clicked: `Clicked ${eventValue(details.buttonLabel) || "a homepage button"}`,
     product_viewed: `Viewed ${product}`,
@@ -237,7 +239,7 @@ export const StorefrontActivityTimeline = ({
                 </Box>
               </Group>
               <Group gap="xs">
-                {visit.claritySampled && <Badge size="sm" variant="light" color="teal">Replay available</Badge>}
+                <StorefrontReplayLinks visit={visit} />
                 <Badge size="sm" variant="outline" color="gray" leftSection={<IconClock size={12} />}>
                   {dayjs(visit.startedAt).format("D MMM YYYY, HH:mm:ss")}
                 </Badge>

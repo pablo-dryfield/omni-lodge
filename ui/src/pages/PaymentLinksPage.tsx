@@ -44,10 +44,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import axiosInstance from "../utils/axiosInstance";
 import { isAxiosError } from "axios";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
-import {
-  storefrontJourneyEventDescription,
-  storefrontJourneyEventSummary,
-} from "../components/storefront/StorefrontActivityTimeline";
+import { StorefrontActivityTimeline } from "../components/storefront/StorefrontActivityTimeline";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 import OngoingCartsPanel from "../components/storefront/OngoingCartsPanel";
@@ -1993,51 +1990,9 @@ const PaymentLinksPage = () => {
             </Box>
             <Divider />
             {activityLoading && <Group justify="center" py="xl"><Loader size="sm" /><Text c="dimmed">Loading customer journey</Text></Group>}
-            {!activityLoading && activity?.visits.map((visit, visitIndex) => (
-              <Paper key={visit.id} withBorder p="md" radius="sm">
-                <Group justify="space-between" align="flex-start" mb="md">
-                  <Box>
-                    <Text fw={700}>Visit {visitIndex + 1}</Text>
-                    <Text size="xs" c="dimmed">
-                      {visitIndex > 0 && visit.browserInstanceId === activity.visits[visitIndex - 1]?.browserInstanceId
-                        ? "Returned from the same browser"
-                        : "Storefront visit"}
-                    </Text>
-                  </Box>
-                  <Stack gap={2} align="flex-end">
-                    <Text size="xs" c="dimmed">{dayjs(visit.startedAt).format("D MMM YYYY, HH:mm:ss")}</Text>
-                    {visit.claritySampled && <Badge size="xs" variant="light">Replay sampled</Badge>}
-                  </Stack>
-                </Group>
-                <Stack gap={0}>
-                  {visit.events.map((event, eventIndex) => (
-                    <Box
-                      key={event.id}
-                      py="sm"
-                      style={eventIndex < visit.events.length - 1 ? { borderBottom: "1px solid var(--mantine-color-gray-3)" } : undefined}
-                    >
-                      <Group justify="space-between" align="flex-start" wrap="nowrap">
-                        <Box>
-                          <Text size="sm" fw={600}>{storefrontJourneyEventDescription(event)}</Text>
-                          {storefrontJourneyEventSummary(event) && (
-                            <Text size="xs" c="dimmed" mt={3}>
-                              {storefrontJourneyEventSummary(event)}
-                            </Text>
-                          )}
-                          <Group gap="xs" mt={4}>
-                            <Badge size="xs" color={event.severity === "error" ? "red" : event.severity === "warning" ? "yellow" : "blue"} variant="light">
-                              {event.source}
-                            </Badge>
-                            <Text size="xs" c="dimmed">{event.type.replaceAll("_", " ")}</Text>
-                          </Group>
-                        </Box>
-                        <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>{dayjs(event.occurredAt).format("HH:mm:ss")}</Text>
-                      </Group>
-                    </Box>
-                  ))}
-                </Stack>
-              </Paper>
-            ))}
+            {!activityLoading && activity && activity.visits.length > 0 && (
+              <StorefrontActivityTimeline visits={activity.visits} />
+            )}
             {!activityLoading && activity && activity.visits.length === 0 && activity.legacyEvents.length === 0 && (
               <Text c="dimmed">No customer journey has been recorded for this cart yet.</Text>
             )}
