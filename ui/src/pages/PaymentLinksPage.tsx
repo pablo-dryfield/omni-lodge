@@ -44,11 +44,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import axiosInstance from "../utils/axiosInstance";
 import { isAxiosError } from "axios";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
-import {
-  StorefrontActivityTimeline,
-  storefrontJourneyEventDescription,
-  storefrontJourneyEventSummary,
-} from "../components/storefront/StorefrontActivityTimeline";
+import { StorefrontActivityTimeline } from "../components/storefront/StorefrontActivityTimeline";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 import OngoingCartsPanel from "../components/storefront/OngoingCartsPanel";
