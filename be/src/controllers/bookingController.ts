@@ -41,6 +41,7 @@ import { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { getAllowedProductTypeIds } from '../services/productScopeService.js';
 import { amendmentProductSnapshot, resolveBookingAmendmentProduct } from '../services/bookings/bookingAmendmentProductService.js';
 import { assertBookingManagementAccess } from '../services/localBookingActionPolicy.js';
+import { extractDirectStripeMode, extractDirectStripeTransactionId, isStorefrontBooking } from '../services/bookings/bookingStripeReference.js';
 import { createProductSlug } from '../utils/storefrontProductSlug.js';
 import { getBookingEmailAccess, assertEmailMessageAccess, canAccessEmailMessage, assertEmailRecipient, assertTemplateAccess } from '../services/bookingEmailScopeService.js';
 import {
@@ -4988,7 +4989,7 @@ export const getBookingDetails = async (req: AuthenticatedRequest, res: Response
     let stripeError: string | null = null;
     let ecwidOrderId: string | null = null;
 
-    if (booking.platform === 'ecwid') {
+    if (booking.platform === 'ecwid' && req.query.includeStripe !== 'false') {
       const platformBookingId = booking.platformBookingId?.trim() ?? '';
       const platformOrderId = booking.platformOrderId?.trim() ?? '';
       const rawOrderId = platformOrderId || platformBookingId;
@@ -5423,10 +5424,6 @@ const isDirectFoodTourBooking = (booking: Booking): boolean => {
   return platform === 'direct' && productName.includes('food tour');
 };
 
-const isStorefrontBooking = (booking: Booking): boolean =>
-  String(booking.platform ?? '').trim().toLowerCase() === 'omnilodge' &&
-  Boolean(String(booking.platformOrderId ?? '').trim());
-
 const remainingBookingRefundMinor = (booking: Booking, stripe: StripeTransactionSummary): number => {
   const stripeRemaining = Math.max(stripe.amount - stripe.amountRefunded, 0);
   if (!isStorefrontBooking(booking)) return stripeRemaining;
@@ -5550,49 +5547,12 @@ const syncStorefrontBookingSchedule = async (
   await refreshStorefrontOrderInventoryReservationExpiries(order, transaction);
 };
 
-const extractDirectStripeTransactionId = (booking: Booking): string | null => {
-  const candidates = [
-    booking.notes,
-    booking.platformOrderId,
-    booking.platformBookingId,
-    booking.rawPayloadLocation,
-  ];
-
-  for (const candidate of candidates) {
-    const match = String(candidate ?? '').match(/\b(?:pi|ch)_[A-Za-z0-9]+\b/);
-    if (match?.[0]) {
-      return match[0];
-    }
-  }
-
-  return null;
-};
-
 type DirectStripeMode = 'test' | 'live';
 
 const getDirectStripeClientForMode = (
   mode: DirectStripeMode,
   merchant: DirectStripeMerchant | null,
 ): Stripe => getDirectStripeClient(merchant, mode);
-
-const extractDirectStripeMode = (booking: Booking): DirectStripeMode | null => {
-  const candidates = [booking.notes, booking.rawPayloadLocation];
-
-  for (const candidate of candidates) {
-    const value = String(candidate ?? '');
-    const livemodeMatch = value.match(/\bstripe\s+livemode\s*:\s*(true|false|1|0|yes|no)\b/i);
-    if (livemodeMatch?.[1]) {
-      return ['true', '1', 'yes'].includes(livemodeMatch[1].toLowerCase()) ? 'live' : 'test';
-    }
-
-    const modeMatch = value.match(/\bstripe\s+mode\s*:\s*(live|test)\b/i);
-    if (modeMatch?.[1]) {
-      return modeMatch[1].toLowerCase() === 'live' ? 'live' : 'test';
-    }
-  }
-
-  return null;
-};
 
 const isStripeTransactionNotFound = (error: unknown): boolean =>
   isStripeResourceMissing(error) ||

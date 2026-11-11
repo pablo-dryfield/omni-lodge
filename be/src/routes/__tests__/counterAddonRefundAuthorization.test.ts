@@ -1,6 +1,7 @@
 jest.mock('../../controllers/localBookingActionController.js', () => new Proxy({ __esModule: true }, {
   get: (_target, key) => key === '__esModule' ? true : (_req: any, res: any) => res.sendStatus(200),
 }));
+jest.mock('../../controllers/bookingPaymentController.js', () => ({ bookingPaymentDetails: jest.fn(), bookingPaymentEvents: jest.fn() }));
 jest.mock('../../middleware/authMiddleware.js', () => ({
   __esModule: true,
   default: (req: any, _res: any, next: () => void) => {

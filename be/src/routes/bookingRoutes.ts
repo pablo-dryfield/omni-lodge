@@ -50,6 +50,7 @@ import {
   counterBookingAddonRefund,
 } from '../controllers/bookingController.js';
 import { listBookingsWithSummary } from '../controllers/bookingSummaryController.js';
+import { bookingPaymentDetails, bookingPaymentEvents } from '../controllers/bookingPaymentController.js';
 import { previewLocalBookingAction, amendLocalBooking, cancelLocalBooking, getBookingAmendProducts } from '../controllers/localBookingActionController.js';
 
 const router = Router();
@@ -85,6 +86,8 @@ router.post('/:bookingId/counter-addon-refunds/:operation', authMiddleware, requ
 router.patch('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, completeBookingAddonRefundAction);
 router.delete('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, deleteBookingAddonRefundAction);
 router.get('/:bookingId/details', authMiddleware, requireBookingProductScope, getBookingDetails);
+router.get('/:bookingId/payments', authMiddleware, requireBookingProductScope, bookingPaymentDetails);
+router.get('/:bookingId/payments/events', authMiddleware, requireBookingProductScope, bookingPaymentEvents);
 router.get('/:bookingId/amend-products', authMiddleware, requireBookingProductScope, getBookingAmendProducts);
 router.get('/:bookingId/local-actions/preview', authMiddleware, requireBookingProductScope, previewLocalBookingAction);
 router.post('/:bookingId/local-actions/amend', authMiddleware, requireBookingProductScope, amendLocalBooking);
