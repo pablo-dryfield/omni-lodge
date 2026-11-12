@@ -3,6 +3,26 @@
 M01 corrects reporting only. It does not alter website content/indexing, tracking,
 bookings, payment records, or Google account settings.
 
+## Verified Delivery
+
+PR252 merged as `c4007f7d84a93976b5564478427a2172d07b3312` after all
+required CI43313743742 passed. Immutable Release43315813139 attempt1 and actual
+managed deployment43317776455 succeeded; host terminal success2026-11-12T22:22:37Z.
+Public healthy-primary backend and UI metadata match
+`omnilodge-r43315813139-a1-c4007f7d84a9`. The reporting bundle's actual SHA256
+matches the trusted release artifact, not merely a stale HTML asset reference.
+
+Authenticated, provider-backed checks passed: independent28-day totals,1000 to2000
+unique query rows, matching exact-query filters in both periods, and matching
+homepage-only summary/direct-page metrics. The original top100-derived figures
+were incomplete; the higher corrected totals are not new traffic caused by this
+release. Native Google Search Console UI comparison remains separate.
+
+No paid SERP sample, action save, account/consent change, booking or payment
+mutation was performed. The report was restored to its unfiltered view. Full
+delivery details and preserved initial old-release check are in the adjacent
+website project's `docs/seo/omnilodge-reporting-2026-11-12/README.md`.
+
 ## Metrics And Coverage
 
 - Overview and comparison metrics come from separate ungrouped Google requests,
