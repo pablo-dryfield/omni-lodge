@@ -54,6 +54,13 @@ website project's `docs/seo/omnilodge-reporting-2026-11-12/README.md`.
 
 ## Operations
 
+Browser date presets derive today's calendar day in America/Los_Angeles, then
+subtract two calendar days for the existing finalized-data buffer. Mantine's
+DateInput receives local calendar values for those Pacific dates, not Pacific
+midnight instants that might display as a different day in another browser zone.
+Custom user-selected calendar dates are not reinterpreted or silently clipped.
+This fixes the interval after European/UTC midnight but before Pacific midnight.
+
 `SEARCH_CONSOLE_PAGE_SIZE` is a non-secret Google API Control Panel setting,
 default1000, validated100..24999. It is refreshed on every report request; no
 restart/cache flush is required. The provider's25000-row per-call maximum leaves
