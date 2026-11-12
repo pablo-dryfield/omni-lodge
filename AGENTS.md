@@ -1,5 +1,12 @@
 # OmniLodge Project Instructions
 
+## Active Search Console Reporting Work (2026-11-12)
+
+- Owner explicitly authorized M01 implementation and production deployment: independent Google totals, pagination, coverage labels and matching report filters only. No website production release, Google account/GTM/consent change, booking/payment/price mutation is authorized. Branch `codex/search-console-reporting` started clean from current master23743f4.
+- New `searchConsoleReport.ts` validates native date/filter/dimension/pagination requests. Service uses separate ungrouped summary, detail lookahead/next offset, direct page/query aggregation and explicit native aggregation/coverage. New non-secret Control Panel `SEARCH_CONSOLE_PAGE_SIZE` default1000 is refreshed per request. UI uses infinite query pagination, consistent filters/comparison, exact-query/direct-page metrics, drill-downs and honest heuristic/no-data labels. No schema migration or finance code change.
+- Focused backend27 and UI7 pass. Backend full350 suites/3570 tests pass with one existing skip. UI first concurrent run had seven failures in five untouched suites; preserve `search-console-ui-full.log`, require serial repeat/current CI. Actual-page synthetic browser21/21 at320/390/768/1440 passes, with no errors/mutations; screenshot inspected. This is not authenticated native-GSC comparison evidence. Fixture/log artifacts are private/ignored in the adjacent website project. Initial missing matchMedia fixture failure is preserved.
+- Application source is not yet committed/PR/deployed. Finish current full UI/checks, updated coverage-label fixture repeat, source/secret review, required PR CI, immutable Release, actual managed deploy and matching public backend/UI identity. Runbook `docs/search-console-reporting.md`. Do not call a skipped deploy job delivery or claim Google-detail completeness.
+
 ## Runtime configuration and Control Panel
 
 - Operational values that administrators may need to change (for example, third-party API versions, integration identifiers, limits, thresholds, and feature switches) belong in the existing Settings / Control Panel configuration system, not only in hardcoded constants or environment variables. Reuse `be/src/config/appConfigRegistry.ts` and `configService`; do not introduce a parallel settings store.

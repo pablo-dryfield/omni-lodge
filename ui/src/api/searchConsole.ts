@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axiosInstance from "../utils/axiosInstance";
 
 export type SearchConsoleSite = {
@@ -19,6 +19,22 @@ export type SearchConsolePerformanceResult = {
   startDate: string;
   endDate: string;
   dimensions: string[];
+  summary: Omit<SearchConsolePerformanceRow, "keys"> | null;
+  summaryAggregation: string;
+  detailAggregation: string;
+  searchType: string;
+  timeZone: string;
+  coverage: { startRow: number; rowLimit: number; returnedRows: number; hasMore: boolean; nextStartRow: number | null; limitedByProvider: true };
+};
+
+export type SearchConsoleFilters = {
+  type?: string;
+  country?: string;
+  device?: string;
+  query?: string;
+  queryMatch?: string;
+  page?: string;
+  pageMatch?: string;
 };
 
 export type SearchConsoleUrlInspectionResult = {
@@ -105,23 +121,32 @@ export const useSearchConsolePerformance = (params: {
   startDate: string;
   endDate: string;
   dimensions: string[];
-}) =>
-  useQuery<SearchConsolePerformanceResult, unknown>({
+  filters?: SearchConsoleFilters;
+}) => {
+  const result = useInfiniteQuery({
     queryKey: ["search-console", "performance", params],
-    queryFn: async () => {
+    initialPageParam: 0,
+    queryFn: async ({ pageParam, signal }) => {
       const response = await axiosInstance.get("/search-console/performance", {
+        signal,
         params: {
           siteUrl: params.siteUrl,
           startDate: params.startDate,
           endDate: params.endDate,
           dimensions: params.dimensions.join(","),
-          rowLimit: 100,
+          ...params.filters,
+          startRow: pageParam,
         },
       });
       return response.data as SearchConsolePerformanceResult;
     },
+    getNextPageParam: (last: SearchConsolePerformanceResult) => last.coverage.nextStartRow ?? undefined,
     enabled: Boolean(params.siteUrl),
   });
+  const first = result.data?.pages[0];
+  const last = result.data?.pages.at(-1);
+  return { ...result, data: first && last ? { ...first, rows: result.data!.pages.flatMap(page => page.rows), coverage: last.coverage } : undefined };
+};
 
 export const useInspectSearchConsoleUrl = () =>
   useMutation<SearchConsoleUrlInspectionResult, unknown, { siteUrl: string; inspectionUrl: string }>({
