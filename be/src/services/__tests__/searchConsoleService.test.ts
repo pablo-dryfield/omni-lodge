@@ -46,4 +46,11 @@ describe('Search Console independent totals and pagination', () => {
     await getSearchConsolePerformance({siteUrl: 'https://example.com/'});
     expect(refreshConfigCacheKeys).toHaveBeenCalledWith(['SEARCH_CONSOLE_PAGE_SIZE']);
   });
+  it('returns history coverage separately without rewriting requested provider dates', async () => {
+    query.mockResolvedValue({data:{rows:[]}});
+    const result=await getSearchConsolePerformance({siteUrl:'https://example.com/',startDate:'2000-01-01',endDate:'2000-12-31'});
+    expect(result.dateCoverage.startsBeforeHistoryBoundary).toBe(true);
+    expect(result.startDate).toBe('2000-01-01');
+    expect(query.mock.calls.every(([request])=>request.requestBody.startDate==='2000-01-01'&&request.requestBody.endDate==='2000-12-31')).toBe(true);
+  });
 });

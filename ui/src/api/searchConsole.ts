@@ -24,6 +24,7 @@ export type SearchConsolePerformanceResult = {
   detailAggregation: string;
   searchType: string;
   timeZone: string;
+  dateCoverage?: { historyBoundaryDate: string; startsBeforeHistoryBoundary: boolean; endsInFuture: boolean };
   coverage: { startRow: number; rowLimit: number; returnedRows: number; hasMore: boolean; nextStartRow: number | null; limitedByProvider: true };
 };
 
