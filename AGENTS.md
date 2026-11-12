@@ -1,5 +1,12 @@
 # OmniLodge Project Instructions
 
+## Search Console Date-Coverage Follow-up (2026-11-12)
+
+- During the authorized M01 live28/90/180/365-day review, the12-month previous period reached beyond Google's16-month retained history yet displayed a full delta. Branch `codex/search-console-date-coverage` adds explicit conservative date-coverage warnings, suppresses comparisons if either period is limited/future or errored, and fixes default report dates at the Pacific/UTC midnight boundary. Requested dates/data are not silently clipped or invented. No bookings, money, account or consent changes.
+- Fresh tracked-source checkpoint outside this repo: website `deploy-backups/omni-search-date-before-20261112.zip`, SHA256 `7401520d7fd6fe28528692ffc845ebbe6e63ff29a6fa18f6d8734838aac075cf`. Date coverage is a provider-contract limit, not an operator-configurable setting. Focused source checks in progress; follow full required CI, immutable Release and actual managed deploy before calling this follow-up delivered.
+- A direct UI Jest invocation bypassed CRACO/CRA's TypeScript transforms and failed before running any tests. Do not alter valid import-type syntax to hide it; correct CRACO runner passed the initial8 focused tests. Retain original test history, then rerun final expanded tests. Earlier M01 delivery below remains genuine and independently verified; this is an additional edge-case correction, not permission to reuse its release identity.
+- Final focused UI10/10 and full backend350 suites/3573 tests/one existing skip pass; backend typecheck and UI typecheck/lint pass. Actual-page synthetic browser33/33 at320/390/768/1440 includes history warnings/no false delta, filters/pagination/empty data, zero errors/mutations;390px warning screenshot inspected. Full serial UI is still running in `search-console-date-ui-full.log`. Preserve failures if any; required PR CI/release/actual deployment and authenticated long-range repeat remain.
+
 ## Search Console Reporting Delivery (2026-11-12)
 
 - Owner explicitly authorized M01 implementation and production deployment: independent Google totals, pagination, coverage labels and matching report filters only. No website production release, Google account/GTM/consent change, booking/payment/price mutation is authorized. Branch `codex/search-console-reporting` started clean from current master23743f4.

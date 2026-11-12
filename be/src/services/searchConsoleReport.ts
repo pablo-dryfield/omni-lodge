@@ -16,6 +16,25 @@ export type PerformanceOptions = {
   page?: unknown;
   pageMatch?: unknown;
 };
+export type SearchConsoleDateCoverage = {
+  historyBoundaryDate: string;
+  startsBeforeHistoryBoundary: boolean;
+  endsInFuture: boolean;
+};
+const pacificDayParts = (now: Date) => {
+  const parts = new Intl.DateTimeFormat('en-US', {timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit'}).formatToParts(now);
+  const part = (name: string) => Number(parts.find(item => item.type === name)?.value);
+  return {year: part('year'), month: part('month') - 1, day: part('day')};
+};
+
+export const searchConsoleDateCoverage = (startDate: string, endDate: string, now = new Date()): SearchConsoleDateCoverage => {
+  const {year, month, day} = pacificDayParts(now);
+  // Google's rolling 16-month retention is a provider contract, not an operator setting.
+  const lastDay = new Date(Date.UTC(year, month - 16 + 1, 0)).getUTCDate();
+  const historyBoundaryDate = new Date(Date.UTC(year, month - 16, Math.min(day, lastDay))).toISOString().slice(0, 10);
+  const today = new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
+  return {historyBoundaryDate, startsBeforeHistoryBoundary: startDate < historyBoundaryDate, endsInFuture: endDate > today};
+};
 const invalid = (message: string): never => { throw new HttpError(400, message); };
 const date = (value: unknown, fallback: string): string => {
   if (value === undefined) return fallback;
@@ -39,7 +58,8 @@ const integer = (value: unknown, fallback: number, max: number): number => {
 export const buildPerformanceRequest = (params: PerformanceOptions, pageSize: number, now = new Date()) => {
   const siteUrl = text(params.siteUrl, 2048);
   if (!siteUrl) return invalid('siteUrl is required.');
-  const day = (offset: number) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - offset)).toISOString().slice(0, 10);
+  const pacific = pacificDayParts(now);
+  const day = (offset: number) => new Date(Date.UTC(pacific.year, pacific.month, pacific.day - offset)).toISOString().slice(0, 10);
   const startDate = date(params.startDate, day(30));
   const endDate = date(params.endDate, day(2));
   if (startDate > endDate) return invalid('Start date must not follow end date.');
@@ -72,6 +92,7 @@ export const buildPerformanceRequest = (params: PerformanceOptions, pageSize: nu
   // Keep summary filters identical, but never derive totals from detail rows.
   const summaryAggregation = filters.some(filter => filter.dimension === 'page') || ['discover', 'googleNews'].includes(type) ? 'auto' : 'byProperty';
   return {siteUrl, startDate, endDate, dimensions: dimensions as string[], rowLimit, startRow, type,
+    dateCoverage: searchConsoleDateCoverage(startDate, endDate, now),
     detail: {...common, dimensions, aggregationType: 'auto', rowLimit: rowLimit + 1, startRow},
     summary: {...common, aggregationType: summaryAggregation, rowLimit: 1}, filters};
 };

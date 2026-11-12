@@ -30,7 +30,7 @@ import { useAppDispatch } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
-import { ReportCoverage } from "../components/search-console/ReportCoverage";
+import { ReportCoverage, ReportDateCoverage } from "../components/search-console/ReportCoverage";
 import {
   useSearchConsolePerformance,
   useSearchConsoleSites,
@@ -687,6 +687,8 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
   const landingRows = landingQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
   const totals = performanceQuery.data?.summary ?? {clicks: 0, impressions: 0, ctr: 0, position: 0};
   const previousTotals = previousPerformanceQuery.data?.summary ?? {clicks: 0, impressions: 0, ctr: 0, position: 0};
+  const datesMayBeIncomplete = [performanceQuery.data, previousPerformanceQuery.data].some(report => report?.dateCoverage?.startsBeforeHistoryBoundary || report?.dateCoverage?.endsInFuture);
+  const canComparePeriods = Boolean(performanceQuery.data?.summary && previousPerformanceQuery.data?.summary) && !datesMayBeIncomplete && !performanceQuery.isError && !previousPerformanceQuery.isError;
   const recommendationOpportunities = useMemo(() => buildSeoOpportunities(recommendationRows), [recommendationRows]);
   const recommendationQueryRows = recommendationQueriesQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
   const recommendationKeywordRows = useMemo(() => buildTargetKeywordRows(recommendationQueryRows), [recommendationQueryRows]);
@@ -859,6 +861,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
             </Group>
             <DateRangeControls range={overviewRange} onChange={setOverviewRange} label="Range" />
             <Text size="xs" c="dimmed">Summary totals are returned independently by Google, not summed from detail rows. Aggregation: {performanceQuery.data?.summaryAggregation ?? "pending"}.</Text>
+            <ReportDateCoverage coverage={performanceQuery.data?.dateCoverage} />
             {performanceQuery.isSuccess && !performanceQuery.data?.summary ? <Text size="sm">No summary data returned for these filters and dates.</Text> : null}
           </Stack>
         </Card>
@@ -891,6 +894,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
               </Badge>
             </Group>
             {previousPerformanceQuery.isError ? <Alert color="red">Previous-period data unavailable; comparison is not available.</Alert> : null}
+            <ReportDateCoverage coverage={previousPerformanceQuery.data?.dateCoverage} />
             <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
               {[
                 { label: "Clicks", current: totals.clicks, previous: previousTotals.clicks },
@@ -916,7 +920,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
                             ? metric.current > 0 ? metric.current.toFixed(2) : "-"
                             : <NumberFormatter value={metric.current} thousandSeparator />}
                       </Text>
-                      <Badge color={delta.color} variant="light">{performanceQuery.data?.summary && previousPerformanceQuery.data?.summary ? delta.label : "No comparison"}</Badge>
+                      <Badge color={canComparePeriods ? delta.color : "gray"} variant="light">{canComparePeriods ? delta.label : "No comparison"}</Badge>
                     </Group>
                   </div>
                 );

@@ -1,4 +1,4 @@
-import { buildPerformanceRequest } from '../searchConsoleReport';
+import { buildPerformanceRequest, searchConsoleDateCoverage } from '../searchConsoleReport';
 
 const base = {siteUrl: 'https://example.com/', startDate: '2026-10-01', endDate: '2026-10-31'};
 describe('Search Console reporting contracts', () => {
@@ -6,6 +6,19 @@ describe('Search Console reporting contracts', () => {
     const request = buildPerformanceRequest({...base, dimensions: ['query', 'page']}, 1000);
     expect(request.detail).toMatchObject({rowLimit: 1001, startRow: 0, aggregationType: 'auto', dimensions: ['query', 'page'], dataState: 'final', type: 'web'});
     expect(request.summary).toEqual({startDate: base.startDate, endDate: base.endDate, dataState: 'final', type: 'web', aggregationType: 'byProperty', rowLimit: 1});
+  });
+  it('flags historical comparison truncation without silently changing the requested dates', () => {
+    const request = buildPerformanceRequest({...base, startDate: '2024-11-11', endDate: '2025-11-10'}, 1000, new Date('2026-11-13T00:30:00Z'));
+    expect(request.dateCoverage).toEqual({historyBoundaryDate: '2025-07-12', startsBeforeHistoryBoundary: true, endsInFuture: false});
+    expect(request.summary.startDate).toBe('2024-11-11');
+    expect(buildPerformanceRequest(base, 1000, new Date('2026-11-13T00:30:00Z')).dateCoverage.startsBeforeHistoryBoundary).toBe(false);
+  });
+  it('uses Pacific dates at midnight and clamps calendar-month boundaries', () => {
+    const request = buildPerformanceRequest({siteUrl: base.siteUrl}, 1000, new Date('2026-11-13T00:30:00Z'));
+    expect(request.endDate).toBe('2026-11-10');
+    expect(request.startDate).toBe('2026-10-13');
+    expect(searchConsoleDateCoverage('2025-01-01','2026-08-01',new Date('2026-07-31T20:00:00Z'))).toEqual({historyBoundaryDate:'2025-03-31',startsBeforeHistoryBoundary:true,endsInFuture:true});
+    expect(searchConsoleDateCoverage('2025-01-01','2026-07-01',new Date('2026-08-31T20:00:00Z')).historyBoundaryDate).toBe('2025-04-30');
   });
   it('preserves all native filters across summaries and paginated details', () => {
     const request = buildPerformanceRequest({...base, country: 'POL', device: 'mobile', query: 'pub crawl', queryMatch: 'equals', page: '/store2/', pageMatch: 'contains', type: 'image', startRow: '1000'}, 1000);

@@ -25,6 +25,15 @@ website project's `docs/seo/omnilodge-reporting-2026-11-12/README.md`.
 
 ## Metrics And Coverage
 
+- Date coverage is separate from row coverage. Google retains approximately16
+  months; a12-month comparison can reach beyond that history even when current
+  metrics are available. The API exposes its Pacific-date history-boundary
+  estimate and future-date flags without silently clipping the requested range.
+  The UI warns and suppresses deltas when either period is date-limited. This is
+  not a guarantee that every day inside the boundary has observations. Use saved
+  historical exports for older comparisons. The16-month value is Google's provider
+  retention contract, not an administrator-tunable reporting threshold.
+
 - Overview and comparison metrics come from separate ungrouped Google requests,
   never the sum of a limited query/page table. The native summary aggregation is
   shown. With a page filter, Google cannot aggregate by property; the API chooses

@@ -1,7 +1,7 @@
 import { google, searchconsole_v1 } from 'googleapis';
 import SeoActionLog from '../models/SeoActionLog.js';
 import { getConfigValue, refreshConfigCacheKeys } from './configService.js';
-import { buildPerformanceRequest, type PerformanceOptions } from './searchConsoleReport.js';
+import { buildPerformanceRequest, type PerformanceOptions, type SearchConsoleDateCoverage } from './searchConsoleReport.js';
 
 type SearchConsoleCredentials = {
   clientId: string;
@@ -32,6 +32,7 @@ export type SearchConsolePerformanceResult = {
   detailAggregation: string;
   searchType: string;
   timeZone: 'America/Los_Angeles';
+  dateCoverage: SearchConsoleDateCoverage;
   coverage: { startRow: number; rowLimit: number; returnedRows: number; hasMore: boolean; nextStartRow: number | null; limitedByProvider: true };
 };
 
@@ -126,6 +127,7 @@ export const getSearchConsolePerformance = async (params: PerformanceOptions): P
     summaryAggregation: summaryResponse.data.responseAggregationType ?? 'unknown',
     detailAggregation: response.data.responseAggregationType ?? 'unknown',
     searchType: request.type, timeZone: 'America/Los_Angeles',
+    dateCoverage: request.dateCoverage,
     coverage: {startRow: request.startRow, rowLimit: request.rowLimit, returnedRows: rows.length, hasMore,
       nextStartRow: hasMore ? request.startRow + rows.length : null, limitedByProvider: true},
   };

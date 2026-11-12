@@ -47,3 +47,17 @@ it("makes pagination and provider coverage visible", () => {
   show(); expect(screen.getAllByRole("button", {name: "Load more rows"}).length).toBe(7);
   expect(screen.getAllByText(/Google omits anonymized queries/).length).toBe(5);
 });
+it.each(["current", "previous", "future"])("does not show a misleading delta for incomplete %s dates", affected => {
+  const original=performance.getMockImplementation()!;
+  let currentEnd: string | undefined;
+  performance.mockImplementation(params => {
+    currentEnd ??= params.endDate;
+    const report=original(params);
+    const limited=affected==="current"?params.endDate===currentEnd:params.endDate!==currentEnd;
+    return {...report,data:{...report.data,dateCoverage:{historyBoundaryDate:"2025-07-12",startsBeforeHistoryBoundary:affected!=="future"&&limited,endsInFuture:affected==="future"}}};
+  });
+  show();
+  expect(screen.getAllByText("Date range may be incomplete").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("No comparison")).toHaveLength(4);
+  expect(screen.queryByText("+0.00")).not.toBeInTheDocument();
+});
