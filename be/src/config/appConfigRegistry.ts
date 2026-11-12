@@ -27,6 +27,11 @@ export type ConfigDefinition = {
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
+    key: 'SEARCH_CONSOLE_PAGE_SIZE', label: 'Search Console detail page size', category: 'Google API',
+    description: 'Maximum detail rows fetched per Search Console page. Additional rows are loaded explicitly. Summary totals use a separate ungrouped Google request and are never summed from these rows. Applies on the next report request without restart.',
+    valueType: 'number', defaultValue: 1000, validation: { required: true, integer: true, min: 100, max: 24999 }, impact: 'low',
+  },
+  {
     key: 'BOOKING_STRIPE_FEE_SYNC_ENABLED', label: 'Record missing Stripe booking fees', category: 'Payments',
     description: 'Read actual Stripe settlement fees for paid/deposit/partial/refunded storefront, direct and Ecwid bookings, including all historical missing fees. Allocates a payment fee once across its booking lines and records audit evidence. Never charges customers or sends payouts. Unavailable settlements stay missing for retry, not estimated as zero. Changes apply on the next one-minute scheduler tick.',
     valueType: 'boolean', defaultValue: true, impact: 'high',

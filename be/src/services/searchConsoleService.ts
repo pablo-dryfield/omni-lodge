@@ -1,6 +1,7 @@
 import { google, searchconsole_v1 } from 'googleapis';
 import SeoActionLog from '../models/SeoActionLog.js';
-import { getConfigValue } from './configService.js';
+import { getConfigValue, refreshConfigCacheKeys } from './configService.js';
+import { buildPerformanceRequest, type PerformanceOptions } from './searchConsoleReport.js';
 
 type SearchConsoleCredentials = {
   clientId: string;
@@ -26,6 +27,12 @@ export type SearchConsolePerformanceResult = {
   startDate: string;
   endDate: string;
   dimensions: string[];
+  summary: Omit<SearchConsolePerformanceRow, 'keys'> | null;
+  summaryAggregation: string;
+  detailAggregation: string;
+  searchType: string;
+  timeZone: 'America/Los_Angeles';
+  coverage: { startRow: number; rowLimit: number; returnedRows: number; hasMore: boolean; nextStartRow: number | null; limitedByProvider: true };
 };
 
 export type SearchConsoleUrlInspectionResult = {
@@ -80,28 +87,6 @@ const getSearchConsoleClient = (): searchconsole_v1.Searchconsole => {
   return google.searchconsole({ version: 'v1', auth });
 };
 
-const normalizeDate = (value: unknown, fallback: string): string => {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return fallback;
-  }
-  const parsed = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
-    return fallback;
-  }
-  return value;
-};
-
-const normalizeDimensions = (value: unknown): string[] => {
-  const allowed = new Set(['query', 'page', 'country', 'device', 'date', 'searchAppearance']);
-  if (!Array.isArray(value)) {
-    return ['query'];
-  }
-  const dimensions = value
-    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-    .filter((entry) => allowed.has(entry));
-  return dimensions.length > 0 ? Array.from(new Set(dimensions)) : ['query'];
-};
-
 export const listSearchConsoleSites = async (): Promise<SearchConsoleSite[]> => {
   const searchConsole = getSearchConsoleClient();
   const response = await searchConsole.sites.list();
@@ -114,58 +99,35 @@ export const listSearchConsoleSites = async (): Promise<SearchConsoleSite[]> => 
     .sort((left, right) => left.siteUrl.localeCompare(right.siteUrl));
 };
 
-export const getSearchConsolePerformance = async (params: {
-  siteUrl: string;
-  startDate?: unknown;
-  endDate?: unknown;
-  dimensions?: unknown;
-  rowLimit?: unknown;
-}): Promise<SearchConsolePerformanceResult> => {
-  const siteUrl = params.siteUrl.trim();
-  if (!siteUrl) {
-    throw new Error('siteUrl is required');
-  }
-
-  const now = new Date();
-  const defaultEndDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 2))
-    .toISOString()
-    .slice(0, 10);
-  const defaultStartDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 30))
-    .toISOString()
-    .slice(0, 10);
-  const startDate = normalizeDate(params.startDate, defaultStartDate);
-  const endDate = normalizeDate(params.endDate, defaultEndDate);
-  const dimensions = normalizeDimensions(params.dimensions);
-  const parsedLimit =
-    typeof params.rowLimit === 'number' || typeof params.rowLimit === 'string'
-      ? Number(params.rowLimit)
-      : 100;
-  const rowLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(Math.floor(parsedLimit), 1), 25000) : 100;
-
+export const getSearchConsolePerformance = async (params: PerformanceOptions): Promise<SearchConsolePerformanceResult> => {
+  await refreshConfigCacheKeys(['SEARCH_CONSOLE_PAGE_SIZE']);
+  const configured = Number(getConfigValue('SEARCH_CONSOLE_PAGE_SIZE'));
+  const pageSize = Number.isInteger(configured) && configured >= 100 && configured <= 24999 ? configured : 1000;
+  const request = buildPerformanceRequest(params, pageSize);
   const searchConsole = getSearchConsoleClient();
-  const response = await searchConsole.searchanalytics.query({
-    siteUrl,
-    requestBody: {
-      startDate,
-      endDate,
-      dimensions,
-      rowLimit,
-    },
-  });
-
-  const rows = (response.data.rows ?? []).map((row) => ({
+  const response = await searchConsole.searchanalytics.query({siteUrl: request.siteUrl, requestBody: request.detail});
+  const summaryResponse = await searchConsole.searchanalytics.query({siteUrl: request.siteUrl, requestBody: request.summary});
+  const mapRow = (row: searchconsole_v1.Schema$ApiDataRow): SearchConsolePerformanceRow => ({
     keys: row.keys ?? [],
     clicks: row.clicks ?? 0,
     impressions: row.impressions ?? 0,
     ctr: row.ctr ?? 0,
     position: row.position ?? 0,
-  }));
-
+  });
+  const detailRows = response.data.rows ?? [];
+  const rows = detailRows.slice(0, request.rowLimit).map(mapRow);
+  const summaryRow = summaryResponse.data.rows?.[0];
+  const summary = summaryRow ? mapRow(summaryRow) : null;
+  const hasMore = detailRows.length > request.rowLimit;
   return {
     rows,
-    startDate,
-    endDate,
-    dimensions,
+    startDate: request.startDate, endDate: request.endDate, dimensions: request.dimensions,
+    summary: summary ? {clicks: summary.clicks, impressions: summary.impressions, ctr: summary.ctr, position: summary.position} : null,
+    summaryAggregation: summaryResponse.data.responseAggregationType ?? 'unknown',
+    detailAggregation: response.data.responseAggregationType ?? 'unknown',
+    searchType: request.type, timeZone: 'America/Los_Angeles',
+    coverage: {startRow: request.startRow, rowLimit: request.rowLimit, returnedRows: rows.length, hasMore,
+      nextStartRow: hasMore ? request.startRow + rows.length : null, limitedByProvider: true},
   };
 };
 

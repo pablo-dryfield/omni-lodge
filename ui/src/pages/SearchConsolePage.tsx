@@ -23,12 +23,14 @@ import {
   IconChecklist,
   IconRefresh,
   IconSearch,
+  IconFilterOff,
 } from "@tabler/icons-react";
 import dayjs from "dayjs";
 import { useAppDispatch } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../constants/pageSlugs";
+import { ReportCoverage } from "../components/search-console/ReportCoverage";
 import {
   useSearchConsolePerformance,
   useSearchConsoleSites,
@@ -38,6 +40,7 @@ import {
   useSeoActionLogs,
   type SerpResultItem,
   type SearchConsolePerformanceRow,
+  type SearchConsoleFilters,
 } from "../api/searchConsole";
 
 const TARGET_DOMAIN = "krawlthroughkrakow.com";
@@ -332,8 +335,8 @@ const buildSeoOpportunities = (rows: SearchConsolePerformanceRow[]): SeoOpportun
         type: "cannibalization",
         priority: "Medium",
         title: "Multiple pages ranking for one query",
-        detail: `"${sorted[0].query}" is split across ${new Set(group.map((row) => row.page).filter(Boolean)).size} URLs.`,
-        action: "Pick the best landing page, strengthen internal links to it, and reduce duplicate/misaligned content.",
+        detail: `"${sorted[0].query}" appears across ${new Set(group.map((row) => row.page).filter(Boolean)).size} loaded URLs. This can be normal for distinct useful pages.`,
+        action: "Review the pages and their intent before proposing consolidation, canonical changes or internal-link adjustments.",
         query: sorted[0].query,
         page: sorted[0].page,
         metric: `${impressions} combined impressions`,
@@ -343,14 +346,14 @@ const buildSeoOpportunities = (rows: SearchConsolePerformanceRow[]): SeoOpportun
   const observedQueries = new Set(queryPageRows.map((row) => normalizeSearchText(row.query)));
   TARGET_KEYWORDS.filter((keyword) => {
     const normalized = normalizeSearchText(keyword);
-    return !Array.from(observedQueries).some((query) => query.includes(normalized) || normalized.includes(query));
+    return !observedQueries.has(normalized);
   }).forEach((keyword) => {
     opportunities.push({
       type: "missing_target",
-      priority: "High",
-      title: "Target keyword not visible",
-      detail: `"${keyword}" did not appear in the top Search Console rows for this period.`,
-      action: "Verify the site has a dedicated page/section for this intent and that it is indexable and internally linked.",
+      priority: "Low",
+      title: "Target query not observed in loaded rows",
+      detail: `"${keyword}" is absent from this partial detail sample; Google may omit or withhold it.`,
+      action: "Apply an exact query filter or inspect the intended URL before deciding whether any content change is needed.",
       query: keyword,
     });
   });
@@ -364,7 +367,7 @@ const buildSeoOpportunities = (rows: SearchConsolePerformanceRow[]): SeoOpportun
 const buildTargetKeywordRows = (rows: SearchConsolePerformanceRow[]): TargetKeywordTrackerRow[] =>
   TARGET_KEYWORDS.map((keyword) => {
     const normalizedKeyword = normalizeSearchText(keyword);
-    const matches = rows.filter((row) => normalizeSearchText(row.keys[0] ?? "").includes(normalizedKeyword));
+    const matches = rows.filter((row) => normalizeSearchText(row.keys[0] ?? "") === normalizedKeyword);
     const totals = getMetricTotals(matches);
     const topMatch = [...matches].sort((left, right) => left.position - right.position || right.impressions - left.impressions)[0] ?? null;
     return {
@@ -378,10 +381,10 @@ const buildTargetKeywordRows = (rows: SearchConsolePerformanceRow[]): TargetKeyw
     };
   });
 
-const buildLandingPageRows = (rows: SearchConsolePerformanceRow[]): LandingPageDiagnosisRow[] => {
+const buildLandingPageRows = (rows: SearchConsolePerformanceRow[], queryRows: SearchConsolePerformanceRow[] = []): LandingPageDiagnosisRow[] => {
   const byPage = new Map<string, SearchConsolePerformanceRow[]>();
   rows.forEach((row) => {
-    const page = row.keys[1] ?? row.keys[0] ?? "";
+    const page = row.keys[0] ?? "";
     if (!page || !page.startsWith("http")) {
       return;
     }
@@ -390,7 +393,7 @@ const buildLandingPageRows = (rows: SearchConsolePerformanceRow[]): LandingPageD
   return Array.from(byPage.entries())
     .map(([page, pageRows]) => {
       const totals = getMetricTotals(pageRows);
-      const topQueries = [...pageRows]
+      const topQueries = queryRows.filter(row => row.keys[1] === page)
         .sort((left, right) => right.impressions - left.impressions)
         .slice(0, 4)
         .map((row) => row.keys[0] ?? "")
@@ -459,14 +462,14 @@ const buildRecommendedSeoActions = (
     .forEach((row) => {
       actions.push({
         id: `create-page-${row.keyword}`,
-        priority: row.keyword.includes("night") || row.keyword.includes("party") ? "High" : "Medium",
+        priority: "Low",
         actionType: "content_update",
-        title: `Create visibility for "${row.keyword}"`,
-        why: "This target keyword has no visible page in the returned Search Console rows.",
-        nextStep: "Create or expand a landing page that matches this exact search intent and add internal links to it.",
+        title: `Investigate query coverage for "${row.keyword}"`,
+        why: "The exact query is not present in the loaded detail rows. This does not establish missing content or zero visibility.",
+        nextStep: "Use the exact query filter and URL Inspection. Review the existing page before proposing new content.",
         targetQuery: row.keyword,
         targetPage: null,
-        details: `Target keyword is currently missing from Search Console visibility for this period. Create dedicated content, ensure it is indexable, and add internal links from the homepage/navigation where relevant.`,
+        details: "Partial/anonymized detail data cannot prove that a page or query is absent. Verify this observation before acting.",
       });
     });
 
@@ -478,9 +481,9 @@ const buildRecommendedSeoActions = (
         id: `canonical-focus-${opportunity.query ?? opportunity.page ?? "cannibalization"}`,
         priority: "Medium",
         actionType: "internal_links",
-        title: `Choose one ranking page for "${opportunity.query ?? "split query"}"`,
+        title: `Review multi-page visibility for "${opportunity.query ?? "split query"}"`,
         why: opportunity.detail,
-        nextStep: "Pick the strongest page, point internal links to it, and reduce duplicate or competing copy on weaker pages.",
+        nextStep: "Check whether the pages serve different intents. Multiple ranking URLs alone are not proof of cannibalization; retain useful distinct pages.",
         targetQuery: opportunity.query ?? null,
         targetPage: opportunity.page ?? null,
         details: `${opportunity.detail} ${opportunity.metric ?? ""}`.trim(),
@@ -582,6 +585,8 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
   const [keywordRange, setKeywordRange] = useState<DateRangeState>(() => createDateRange("last_90"));
   const [landingRange, setLandingRange] = useState<DateRangeState>(() => createDateRange("last_28"));
   const [dimensionMode, setDimensionMode] = useState<"query" | "page" | "query,page">("query");
+  const [filterDraft, setFilterDraft] = useState<SearchConsoleFilters>({type: "web"});
+  const [filters, setFilters] = useState<SearchConsoleFilters>({type: "web"});
   const [inspectionUrl, setInspectionUrl] = useState(`https://${TARGET_DOMAIN}/`);
   const [actionType, setActionType] = useState("content_update");
   const [actionTitle, setActionTitle] = useState("");
@@ -627,6 +632,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
   const landingDateRange = formatDateRange(landingRange);
   const performanceQuery = useSearchConsolePerformance({
     siteUrl,
+    filters,
     startDate: overviewDateRange.startDate,
     endDate: overviewDateRange.endDate,
     dimensions,
@@ -634,56 +640,65 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
   const previousPeriod = getPreviousPeriod(overviewRange.startDate, overviewRange.endDate);
   const previousPerformanceQuery = useSearchConsolePerformance({
     siteUrl,
+    filters,
     startDate: previousPeriod.startDate,
     endDate: previousPeriod.endDate,
     dimensions,
   });
   const recommendationQuery = useSearchConsolePerformance({
     siteUrl,
+    filters,
     startDate: recommendationDateRange.startDate,
     endDate: recommendationDateRange.endDate,
     dimensions: ["query", "page"],
   });
   const opportunityQuery = useSearchConsolePerformance({
     siteUrl,
+    filters,
     startDate: opportunityDateRange.startDate,
     endDate: opportunityDateRange.endDate,
     dimensions: ["query", "page"],
   });
   const keywordQuery = useSearchConsolePerformance({
     siteUrl,
+    filters,
     startDate: keywordDateRange.startDate,
     endDate: keywordDateRange.endDate,
-    dimensions: ["query", "page"],
+    dimensions: ["query"],
   });
   const landingQuery = useSearchConsolePerformance({
     siteUrl,
+    filters,
     startDate: landingDateRange.startDate,
     endDate: landingDateRange.endDate,
-    dimensions: ["query", "page"],
+    dimensions: ["page"],
   });
+  const recommendationPagesQuery = useSearchConsolePerformance({siteUrl, filters, ...recommendationDateRange, dimensions: ["page"]});
+  const recommendationQueriesQuery = useSearchConsolePerformance({siteUrl, filters, ...recommendationDateRange, dimensions: ["query"]});
   const inspectUrlMutation = useInspectSearchConsoleUrl();
   const serpAnalysisMutation = useAnalyzeGoogleSerp();
   const actionLogsQuery = useSeoActionLogs(siteUrl);
   const createActionLog = useCreateSeoActionLog();
 
   const rows = performanceQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
-  const previousRows = previousPerformanceQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
   const recommendationRows = recommendationQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
   const opportunityRows = opportunityQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
   const keywordRows = keywordQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
   const landingRows = landingQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
-  const totals = useMemo(() => getMetricTotals(rows), [rows]);
-  const previousTotals = useMemo(() => getMetricTotals(previousRows), [previousRows]);
+  const totals = performanceQuery.data?.summary ?? {clicks: 0, impressions: 0, ctr: 0, position: 0};
+  const previousTotals = previousPerformanceQuery.data?.summary ?? {clicks: 0, impressions: 0, ctr: 0, position: 0};
   const recommendationOpportunities = useMemo(() => buildSeoOpportunities(recommendationRows), [recommendationRows]);
-  const recommendationKeywordRows = useMemo(() => buildTargetKeywordRows(recommendationRows), [recommendationRows]);
-  const recommendationLandingPageRows = useMemo(() => buildLandingPageRows(recommendationRows), [recommendationRows]);
+  const recommendationQueryRows = recommendationQueriesQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
+  const recommendationKeywordRows = useMemo(() => buildTargetKeywordRows(recommendationQueryRows), [recommendationQueryRows]);
+  const recommendationPageRows = recommendationPagesQuery.data?.rows ?? EMPTY_PERFORMANCE_ROWS;
+  const recommendationLandingPageRows = useMemo(() => buildLandingPageRows(recommendationPageRows, recommendationRows), [recommendationPageRows, recommendationRows]);
   const seoOpportunities = useMemo(() => buildSeoOpportunities(opportunityRows), [opportunityRows]);
   const targetKeywordRows = useMemo(() => buildTargetKeywordRows(keywordRows), [keywordRows]);
   const landingPageRows = useMemo(() => buildLandingPageRows(landingRows), [landingRows]);
   const recommendedSeoActions = useMemo(
-    () => buildRecommendedSeoActions(recommendationKeywordRows, recommendationOpportunities, recommendationLandingPageRows),
-    [recommendationKeywordRows, recommendationLandingPageRows, recommendationOpportunities],
+    () => recommendationQuery.isSuccess && recommendationPagesQuery.isSuccess && recommendationQueriesQuery.isSuccess && recommendationQueryRows.length > 0
+      ? buildRecommendedSeoActions(recommendationKeywordRows, recommendationOpportunities, recommendationLandingPageRows) : [],
+    [recommendationKeywordRows, recommendationLandingPageRows, recommendationOpportunities, recommendationQuery.isSuccess, recommendationPagesQuery.isSuccess, recommendationQueriesQuery.isSuccess, recommendationQueryRows.length],
   );
 
   const handleInspectUrl = () => {
@@ -733,6 +748,12 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
     setActionPage(action.targetPage ?? "");
   };
 
+  const inspectPerformanceRows = (mode: "page" | "query", value: string, range: DateRangeState) => {
+    const next = {...filters, query: mode === "page" ? value : "", page: mode === "query" ? value : "", queryMatch: "equals", pageMatch: "equals"};
+    setFilters(next); setFilterDraft(next); setDimensionMode(mode); setOverviewRange(range);
+    requestAnimationFrame(() => document.getElementById("search-console-performance-rows")?.scrollIntoView({behavior: "smooth"}));
+  };
+
   return (
     <PageAccessGuard pageSlug={PAGE_SLUGS.searchConsole}>
       <Stack gap="lg">
@@ -757,6 +778,8 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
               opportunityQuery.refetch();
               keywordQuery.refetch();
               landingQuery.refetch();
+              recommendationPagesQuery.refetch();
+              recommendationQueriesQuery.refetch();
               actionLogsQuery.refetch();
             }}
             loading={
@@ -811,6 +834,23 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
           </Group>
         </Card>
 
+        <Stack gap="xs">
+          <Group align="flex-end" wrap="wrap">
+            <Select label="Search type" data={["web", "image", "video", "news", "discover", "googleNews"]} value={filterDraft.type ?? "web"} onChange={value => setFilterDraft({...filterDraft, type: value ?? "web"})} />
+            <TextInput label="Country (3-letter code)" placeholder="All countries" maxLength={3} value={filterDraft.country ?? ""} onChange={event => setFilterDraft({...filterDraft, country: event.currentTarget.value})} />
+            <Select label="Device" clearable data={["DESKTOP", "MOBILE", "TABLET"]} placeholder="All devices" value={filterDraft.device ?? null} onChange={value => setFilterDraft({...filterDraft, device: value ?? ""})} />
+          </Group>
+          <Group align="flex-end" wrap="wrap">
+            <TextInput label="Query" value={filterDraft.query ?? ""} onChange={event => setFilterDraft({...filterDraft, query: event.currentTarget.value})} style={{flex: "1 1 240px"}} />
+            <Select label="Query match" data={[{value: "equals", label: "Exact"}, {value: "contains", label: "Contains"}]} value={filterDraft.queryMatch ?? "equals"} onChange={value => setFilterDraft({...filterDraft, queryMatch: value ?? "equals"})} />
+            <TextInput label="Page URL" value={filterDraft.page ?? ""} onChange={event => setFilterDraft({...filterDraft, page: event.currentTarget.value})} style={{flex: "1 1 300px"}} />
+            <Select label="Page match" data={[{value: "equals", label: "Exact"}, {value: "contains", label: "Contains"}]} value={filterDraft.pageMatch ?? "equals"} onChange={value => setFilterDraft({...filterDraft, pageMatch: value ?? "equals"})} />
+            <Button leftSection={<IconSearch size={16} />} onClick={() => setFilters({...filterDraft})}>Apply filters</Button>
+            <Button variant="subtle" leftSection={<IconFilterOff size={16} />} onClick={() => {setFilters({type: "web"}); setFilterDraft({type: "web"});}}>Reset filters</Button>
+          </Group>
+          <Text size="xs" c="dimmed">These filters apply to every report and both comparison periods. Date ranges use Google Search Console Pacific dates and finalized data.</Text>
+        </Stack>
+
         <Card withBorder radius="md" padding="lg">
           <Stack gap="md">
             <Group justify="space-between" wrap="wrap">
@@ -818,21 +858,23 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
               <Badge variant="light">{overviewDateRange.startDate} to {overviewDateRange.endDate}</Badge>
             </Group>
             <DateRangeControls range={overviewRange} onChange={setOverviewRange} label="Range" />
+            <Text size="xs" c="dimmed">Summary totals are returned independently by Google, not summed from detail rows. Aggregation: {performanceQuery.data?.summaryAggregation ?? "pending"}.</Text>
+            {performanceQuery.isSuccess && !performanceQuery.data?.summary ? <Text size="sm">No summary data returned for these filters and dates.</Text> : null}
           </Stack>
         </Card>
 
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
           <Card withBorder radius="md" padding="lg">
             <Text size="sm" c="dimmed">Clicks</Text>
-            <Title order={3}><NumberFormatter value={totals.clicks} thousandSeparator /></Title>
+            <Title order={3}>{performanceQuery.data?.summary ? <NumberFormatter value={totals.clicks} thousandSeparator /> : "-"}</Title>
           </Card>
           <Card withBorder radius="md" padding="lg">
             <Text size="sm" c="dimmed">Impressions</Text>
-            <Title order={3}><NumberFormatter value={totals.impressions} thousandSeparator /></Title>
+            <Title order={3}>{performanceQuery.data?.summary ? <NumberFormatter value={totals.impressions} thousandSeparator /> : "-"}</Title>
           </Card>
           <Card withBorder radius="md" padding="lg">
             <Text size="sm" c="dimmed">CTR</Text>
-            <Title order={3}>{formatPercent(totals.ctr)}</Title>
+            <Title order={3}>{performanceQuery.data?.summary ? formatPercent(totals.ctr) : "-"}</Title>
           </Card>
           <Card withBorder radius="md" padding="lg">
             <Text size="sm" c="dimmed">Average position</Text>
@@ -848,6 +890,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
                 {previousPeriod.startDate} to {previousPeriod.endDate}
               </Badge>
             </Group>
+            {previousPerformanceQuery.isError ? <Alert color="red">Previous-period data unavailable; comparison is not available.</Alert> : null}
             <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
               {[
                 { label: "Clicks", current: totals.clicks, previous: previousTotals.clicks },
@@ -867,13 +910,13 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
                     <Text size="sm" c="dimmed">{metric.label}</Text>
                     <Group justify="space-between" align="flex-end">
                       <Text fw={700}>
-                        {metric.percent
+                        {!performanceQuery.data?.summary ? "-" : metric.percent
                           ? formatPercent(metric.current)
                           : metric.label === "Position"
                             ? metric.current > 0 ? metric.current.toFixed(2) : "-"
                             : <NumberFormatter value={metric.current} thousandSeparator />}
                       </Text>
-                      <Badge color={delta.color} variant="light">{delta.label}</Badge>
+                      <Badge color={delta.color} variant="light">{performanceQuery.data?.summary && previousPerformanceQuery.data?.summary ? delta.label : "No comparison"}</Badge>
                     </Group>
                   </div>
                 );
@@ -1004,6 +1047,9 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
               <Badge variant="light">{recommendedSeoActions.length} actions</Badge>
             </Group>
             <DateRangeControls range={recommendationRange} onChange={setRecommendationRange} label="Recommendation range" />
+            <ReportCoverage report={recommendationQuery} heuristic />
+            <ReportCoverage report={recommendationQueriesQuery} note={false} />
+            <ReportCoverage report={recommendationPagesQuery} note={false} />
 
             {recommendationQuery.isLoading ? (
               <Text size="sm" c="dimmed">Building recommendations from Search Console data...</Text>
@@ -1073,6 +1119,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
               <Badge variant="light">{seoOpportunities.length} flags</Badge>
             </Group>
             <DateRangeControls range={opportunityRange} onChange={setOpportunityRange} label="Opportunity range" />
+            <ReportCoverage report={opportunityQuery} heuristic />
 
             {opportunityQuery.isLoading ? (
               <Text size="sm" c="dimmed">Analyzing query and page performance...</Text>
@@ -1138,6 +1185,8 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
               <Badge variant="light">{targetKeywordRows.filter((row) => row.found).length}/{targetKeywordRows.length} visible</Badge>
             </Group>
             <DateRangeControls range={keywordRange} onChange={setKeywordRange} label="Keyword range" />
+            <ReportCoverage report={keywordQuery} heuristic />
+            <Text size="xs" c="dimmed">Exact-query metrics, aggregated by property. Missing observations are not zero totals or proof of a missing page.</Text>
             {keywordQuery.isLoading ? (
               <Text size="sm" c="dimmed">Loading target keyword visibility...</Text>
             ) : (
@@ -1146,7 +1195,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th>Keyword</Table.Th>
-                    <Table.Th>Best page</Table.Th>
+                    <Table.Th>Pages</Table.Th>
                     <Table.Th ta="right">Clicks</Table.Th>
                     <Table.Th ta="right">Impressions</Table.Th>
                     <Table.Th ta="right">CTR</Table.Th>
@@ -1158,14 +1207,14 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
                   {targetKeywordRows.map((row) => (
                     <Table.Tr key={row.keyword}>
                       <Table.Td><Text fw={600} size="sm">{row.keyword}</Text></Table.Td>
-                      <Table.Td><Text size="xs" c="dimmed">{row.topPage ?? "No page visible"}</Text></Table.Td>
-                      <Table.Td ta="right"><NumberFormatter value={row.clicks} thousandSeparator /></Table.Td>
-                      <Table.Td ta="right"><NumberFormatter value={row.impressions} thousandSeparator /></Table.Td>
-                      <Table.Td ta="right">{formatPercent(row.ctr)}</Table.Td>
+                      <Table.Td><Button size="xs" variant="subtle" leftSection={<IconSearch size={14} />} onClick={() => inspectPerformanceRows("page", row.keyword, keywordRange)}>Pages</Button></Table.Td>
+                      <Table.Td ta="right">{row.found ? <NumberFormatter value={row.clicks} thousandSeparator /> : "-"}</Table.Td>
+                      <Table.Td ta="right">{row.found ? <NumberFormatter value={row.impressions} thousandSeparator /> : "-"}</Table.Td>
+                      <Table.Td ta="right">{row.found ? formatPercent(row.ctr) : "-"}</Table.Td>
                       <Table.Td ta="right">{row.position > 0 ? row.position.toFixed(2) : "-"}</Table.Td>
                       <Table.Td>
-                        <Badge color={!row.found ? "red" : row.position <= 3 ? "green" : row.position <= 15 ? "yellow" : "gray"} variant="light">
-                          {!row.found ? "Missing" : row.position <= 3 ? "Strong" : row.position <= 15 ? "Opportunity" : "Weak"}
+                        <Badge color={!row.found ? "gray" : row.position <= 3 ? "green" : row.position <= 15 ? "yellow" : "gray"} variant="light">
+                          {!row.found ? "Not observed" : row.position <= 3 ? "Strong" : row.position <= 15 ? "Opportunity" : "Weak"}
                         </Badge>
                       </Table.Td>
                     </Table.Tr>
@@ -1184,6 +1233,8 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
               <Badge variant="light">{landingPageRows.length} pages</Badge>
             </Group>
             <DateRangeControls range={landingRange} onChange={setLandingRange} label="Landing range" />
+            <ReportCoverage report={landingQuery} heuristic />
+            <Text size="xs" c="dimmed">Page metrics are queried directly by page, not reconstructed from query rows. Snippet and intent labels are review prompts, not proven causes.</Text>
             {landingQuery.isLoading ? (
               <Text size="sm" c="dimmed">Analyzing landing pages...</Text>
             ) : landingPageRows.length > 0 ? (
@@ -1192,7 +1243,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
                   <Table.Thead>
                     <Table.Tr>
                       <Table.Th>Page</Table.Th>
-                      <Table.Th>Top queries</Table.Th>
+                      <Table.Th>Queries</Table.Th>
                       <Table.Th ta="right">Impressions</Table.Th>
                       <Table.Th ta="right">CTR</Table.Th>
                       <Table.Th ta="right">Position</Table.Th>
@@ -1203,7 +1254,7 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
                     {landingPageRows.map((row) => (
                       <Table.Tr key={row.page}>
                         <Table.Td><Text size="xs" fw={600}>{row.page}</Text></Table.Td>
-                        <Table.Td><Text size="xs">{row.topQueries.join(", ") || "No query detail"}</Text></Table.Td>
+                        <Table.Td><Button size="xs" variant="subtle" leftSection={<IconSearch size={14} />} onClick={() => inspectPerformanceRows("query", row.page, landingRange)}>Queries</Button></Table.Td>
                         <Table.Td ta="right"><NumberFormatter value={row.impressions} thousandSeparator /></Table.Td>
                         <Table.Td ta="right">{formatPercent(row.ctr)}</Table.Td>
                         <Table.Td ta="right">{row.position > 0 ? row.position.toFixed(2) : "-"}</Table.Td>
@@ -1330,14 +1381,14 @@ const SearchConsolePage = ({ title = "Search Console" }: Props) => {
             <Group justify="space-between" wrap="wrap">
               <Group gap="xs">
                 <IconSearch size={20} />
-                <Text fw={600}>Performance rows</Text>
+                <Text id="search-console-performance-rows" fw={600}>Performance rows</Text>
               </Group>
               <Group gap="xs">
                 <Badge variant="light">{overviewDateRange.startDate} to {overviewDateRange.endDate}</Badge>
                 <Badge variant="light">{rows.length} rows</Badge>
               </Group>
             </Group>
-
+            <ReportCoverage report={performanceQuery} />
             {performanceQuery.isLoading ? (
               <Text size="sm" c="dimmed">Loading Search Console performance...</Text>
             ) : rows.length > 0 ? (

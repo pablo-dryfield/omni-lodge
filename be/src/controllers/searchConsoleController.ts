@@ -53,6 +53,14 @@ export const getSearchConsolePerformanceRows = async (req: AuthenticatedRequest,
       endDate: req.query.endDate,
       dimensions,
       rowLimit: req.query.rowLimit,
+      startRow: req.query.startRow,
+      type: req.query.type,
+      country: req.query.country,
+      device: req.query.device,
+      query: req.query.query,
+      queryMatch: req.query.queryMatch,
+      page: req.query.page,
+      pageMatch: req.query.pageMatch,
     });
     res.json(result);
   } catch (error) {
