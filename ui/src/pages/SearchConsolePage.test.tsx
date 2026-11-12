@@ -27,6 +27,18 @@ it("shows independent Google totals, not the sum of the sample", () => {
   show(); expect(screen.getAllByText("9,000").length).toBeGreaterThan(0);
   expect(screen.getByText(/Summary totals are returned independently/)).toBeInTheDocument();
 });
+it("uses Pacific dates for browser presets and the matching previous period near local midnight", () => {
+  jest.useFakeTimers().setSystemTime(new Date("2026-11-12T23:30:00Z"));
+  try {
+    show();
+    const requests = performance.mock.calls.map(([params]) => params);
+    expect(requests[0]).toMatchObject({startDate: "2026-10-14", endDate: "2026-11-10"});
+    expect(requests[1]).toMatchObject({startDate: "2026-09-16", endDate: "2026-10-13"});
+    expect(requests.filter(params => params.endDate !== "2026-10-13").every(params => params.endDate === "2026-11-10")).toBe(true);
+  } finally {
+    jest.useRealTimers();
+  }
+});
 it("applies the same explicit filters to every report, including comparison", () => {
   show();
   fireEvent.change(screen.getByLabelText("Query", {exact: true}), {target: {value: "krakow pub crawl"}});

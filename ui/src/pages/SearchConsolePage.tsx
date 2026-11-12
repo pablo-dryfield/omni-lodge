@@ -26,6 +26,7 @@ import {
   IconFilterOff,
 } from "@tabler/icons-react";
 import dayjs from "dayjs";
+import {getSearchConsolePresetDates, type SearchConsoleDatePreset} from "../utils/searchConsoleDate";
 import { useAppDispatch } from "../store/hooks";
 import { navigateToPage } from "../actions/navigationActions";
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
@@ -99,7 +100,7 @@ type RecommendedSeoAction = {
   details: string;
 };
 
-type DateRangePresetKey = "last_7" | "last_28" | "last_90" | "last_180" | "last_365" | "custom";
+type DateRangePresetKey = SearchConsoleDatePreset;
 
 type DateRangeState = {
   preset: DateRangePresetKey;
@@ -120,21 +121,7 @@ const DATE_RANGE_PRESETS: Array<{ value: DateRangePresetKey; label: string }> = 
   { value: "custom", label: "Custom" },
 ];
 
-const getPresetDateRange = (preset: DateRangePresetKey): Pick<DateRangeState, "startDate" | "endDate"> => {
-  const endDate = dayjs().subtract(2, "day").toDate();
-  const daysByPreset: Record<Exclude<DateRangePresetKey, "custom">, number> = {
-    last_7: 7,
-    last_28: 28,
-    last_90: 90,
-    last_180: 180,
-    last_365: 365,
-  };
-  const days = preset === "custom" ? 28 : daysByPreset[preset];
-  return {
-    startDate: dayjs(endDate).subtract(days - 1, "day").toDate(),
-    endDate,
-  };
-};
+const getPresetDateRange = getSearchConsolePresetDates;
 
 const createDateRange = (preset: DateRangePresetKey): DateRangeState => ({
   preset,

@@ -1,5 +1,13 @@
 # OmniLodge Project Instructions
 
+## Search Console Pacific Presets (2026-11-13)
+
+- Date-coverage PR254 is genuinely delivered: immutable Release43325692291 and actual managed deploy43327415186 succeeded; host terminal23:24:43UTC, exact public backend/UI/reporting bundle3/3 verified. Live authenticated12-month review shows the16-month history warning and four No comparison labels. No commerce/account changes.
+- A live check just after midnight in Europe/Warsaw exposed a separate UI preset bug: browser-local day generated2026-11-11 as the end, whereas Pacific reporting day still requires2026-11-10. Backend fallback was corrected earlier, but the UI always sends explicit dates. Do not claim all browser presets were already Pacific-correct.
+- Follow-up branch `codex/search-console-pacific-presets` starts at exact merged951ec322. Pre-edit tracked-source archive in adjacent website `deploy-backups/omni-search-pacific-before-20261113.zip`,2737 entries, SHA256 `fe7ca6b52a0f1e92e8a1bd61222c478bf9d80e7173d6a61da166441c31d7aac8`. UI-only helper builds calendar values for Mantine from Pacific date parts, preserving custom calendar picks and inclusive preset lengths. Tests/release are in progress; no third deployment claimed yet. This remains within authorized reporting scope.
+- Windows has two npm.cmd application matches; the generic native helper joined both paths and failed before tests. Preserve `search-console-pacific-focused.log`; use observed absolute `C:/Program Files/nodejs/npm.cmd` for this task instead of changing unrelated runner behavior.
+- Focused configured CRACO tests24/24 and UI typecheck/lint pass. Actual-page browser49/49 includes four responsive widths and four browser timezones before/after Pacific midnight, exact year/current/previous periods, zero errors/mutations. The initial browser run stopped at33 checks on an ambiguous input/listbox label; preserve it, then use the textbox role, not weaker assertions. Whole serial UI runs in `search-console-pacific-ui-full.log`; exact current CI/release/deployment remain required.
+
 ## Search Console Date-Coverage Follow-up (2026-11-12)
 
 - During the authorized M01 live28/90/180/365-day review, the12-month previous period reached beyond Google's16-month retained history yet displayed a full delta. Branch `codex/search-console-date-coverage` adds explicit conservative date-coverage warnings, suppresses comparisons if either period is limited/future or errored, and fixes default report dates at the Pacific/UTC midnight boundary. Requested dates/data are not silently clipped or invented. No bookings, money, account or consent changes.
