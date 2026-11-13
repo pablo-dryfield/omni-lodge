@@ -1,5 +1,16 @@
 # Cart recovery emails and coupon offers
 
+## Meeting-point section
+
+In **Settings / Control Panel**, use **Recovery email: show meeting-point section**
+(`STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT`). It is a boolean, **off by default**.
+Off hides the entire "Prefer to meet the group first?" section, including its cash
+invitation, meeting names/addresses/instructions, photos and map links, in both
+HTML and plain text. Experience dates, starting times and booking links remain.
+On includes the section when a product has meeting details. Saving takes effect
+on the next gallery preview, cart preview or manual/scheduled recovery send.
+Changing it invalidates an older cart-email preview so staff review the new layout.
+
 ## Configure automatic offers
 
 In **Settings / Control Panel**, search for **Cart recovery discount rules**.

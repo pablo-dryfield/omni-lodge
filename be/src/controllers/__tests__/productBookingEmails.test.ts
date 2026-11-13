@@ -11,11 +11,13 @@ import Product from '../../models/Product';
 import { getAllowedProductTypeIds } from '../../services/productScopeService';
 import { getBookingEmailAccess } from '../../services/bookingEmailScopeService';
 import { sendMessage } from '../../services/bookings/gmailClient';
+import * as configService from '../../services/configService';
 import { createEmailTemplate, updateEmailTemplate, listEmailTemplates, renderBookingEmailPreview, sendBookingEmail, getBookingEmailTemplateGallery } from '../bookingController';
 const request = (body: object = {}) => ({ body, params: {}, query: {}, authContext: { id: 215, userTypeId: 16 } } as AuthenticatedRequest);
 const response = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() } as unknown as Response);
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.spyOn(configService, 'refreshConfigCacheKeys').mockResolvedValue(undefined);
   jest.mocked(getAllowedProductTypeIds).mockResolvedValue([3]);
   jest.mocked(getBookingEmailAccess).mockResolvedValue({ customerEmail: 'guest@example.com', booking: { id: 12 }, productTypeIds: [3], messageIds: [], threadIds: [] } as any);
 });
@@ -26,6 +28,11 @@ it('shows the saved product meeting photo in the storefront confirmation gallery
   jest.spyOn(Product, 'findByPk').mockResolvedValue({ id: 28, storefrontConfig: { content: { meetingPoint: {
     name: 'Configured meeting point', photoUrl: 'https://media.example.com/current-meeting.jpg', photoAlt: 'Statue & umbrella',
   } } } } as Product);
+  jest.spyOn(Product, 'findAll').mockResolvedValue([{ id: 28, name: 'Pub Crawl', images: [], storefrontConfig: { content: { meetingPoint: {
+    name: 'Recovery meeting location', photoUrl: 'https://media.example.com/recovery-meeting.jpg',
+  } } } } as unknown as Product]);
+  const originalGetConfigValue = configService.getConfigValue;
+  jest.spyOn(configService, 'getConfigValue').mockImplementation(key => key === 'STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT' ? false : originalGetConfigValue(key));
   const res = response();
   await getBookingEmailTemplateGallery(request(), res);
   expect(res.status).toHaveBeenCalledWith(200);
@@ -37,6 +44,11 @@ it('shows the saved product meeting photo in the storefront confirmation gallery
   expect(preview.htmlBody).toContain('src="data:image/png;base64,');
   expect(preview.htmlBody).not.toContain('src="cid:');
   expect(preview.textBody).toContain('Meeting point photo: https://media.example.com/current-meeting.jpg');
+  expect(configService.refreshConfigCacheKeys).toHaveBeenCalledWith(['STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT']);
+  const recovery = gallery.previews.find((item: { id: string }) => item.id === 'system-omni-storefront-cart-recovery');
+  expect(recovery.htmlBody).not.toContain('Prefer to meet the group first?');
+  expect(recovery.htmlBody).not.toContain('Recovery meeting location');
+  expect(recovery.textBody).not.toContain('https://media.example.com/recovery-meeting.jpg');
   expect(sendMessage).not.toHaveBeenCalled();
 });
 it('lists only this product type’s non-executable templates', async () => {

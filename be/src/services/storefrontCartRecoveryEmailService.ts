@@ -9,6 +9,7 @@ import HttpError from '../errors/HttpError.js';
 import { dismissCartWithPaidMatch } from './storefrontCartBookingMatchService.js';
 import { sendMessage } from './bookings/gmailClient.js';
 import { getConfigValue } from './configService.js';
+import { RECOVERY_MEETING_POINT_CONFIG_KEY } from '../config/storefrontRecoveryOfferConfig.js';
 import logger from '../utils/logger.js';
 import type { StorefrontMeetingPoint } from '../types/storefront.js';
 import { evaluateRecoveryOffer, type RecoveryOffer } from './storefrontRecoveryOfferService.js';
@@ -196,7 +197,8 @@ export const buildStorefrontCartRecoveryEmail = (
   const quote = ongoing.quoteSnapshot;
   const showExperienceTotal = (item: typeof quote.items[number]): boolean =>
     quote.items.length > 1 || money(item.total, quote.currency) !== money(quote.total, quote.currency);
-  const meetingItems = quote.items.filter((item) => products.get(item.productId)?.meetingPoint);
+  const meetingItems = getConfigValue(RECOVERY_MEETING_POINT_CONFIG_KEY) === true
+    ? quote.items.filter((item) => products.get(item.productId)?.meetingPoint) : [];
   const firstName = ongoing.customer.fullName.trim().split(/\s+/)[0] || 'there';
   const productNames = quote.items.map((item) => item.productName);
   const subjectProduct = productNames.length === 1 ? productNames[0] : 'Krakow experiences';

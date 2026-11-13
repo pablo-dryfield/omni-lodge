@@ -6,7 +6,7 @@ import {
 } from './googleAdsConfig.js';
 import { DATABASE_WORKSPACE_CONFIG } from './databaseWorkspaceConfig.js';
 import { REZDY_DEFAULT_START_TIMES_KEY } from './rezdyParserConfig.js';
-import { DEFAULT_RECOVERY_OFFER_RULES, RECOVERY_OFFER_CONFIG_KEY } from './storefrontRecoveryOfferConfig.js';
+import { DEFAULT_RECOVERY_OFFER_RULES, RECOVERY_OFFER_CONFIG_KEY, RECOVERY_MEETING_POINT_CONFIG_KEY } from './storefrontRecoveryOfferConfig.js';
 
 export type ConfigValueType = 'string' | 'number' | 'boolean' | 'enum' | 'json';
 
@@ -1108,6 +1108,12 @@ Best,
     description: 'Offer an existing storefront coupon to eligible abandoned carts. Rules run from top to bottom; the first eligible coupon that improves the current total wins. Minimum 9 guests means more than 8. Per-cart coupon or no-offer overrides take precedence. Existing better discounts are preserved. Changes apply to the next preview or send without restarting. No rules means no automatic offers.',
     category: 'Storefront', valueType: 'json', defaultValue: JSON.stringify(DEFAULT_RECOVERY_OFFER_RULES),
     impact: 'high', validation: { required: true, format: 'storefront-recovery-offers', maxLength: 20000 },
+  },
+  {
+    key: RECOVERY_MEETING_POINT_CONFIG_KEY,
+    label: 'Recovery email: show meeting-point section',
+    description: 'Include the entire "Prefer to meet the group first?" section in recovery emails: cash-payment invitation, meeting details, photos and map links. Off by default. Changes apply to the next email preview or manual/scheduled send without restarting.',
+    category: 'Storefront', valueType: 'boolean', defaultValue: false, impact: 'medium',
   },
   {
     key: 'STOREFRONT_ONGOING_CART_DEDUPE_WINDOW_MINUTES',

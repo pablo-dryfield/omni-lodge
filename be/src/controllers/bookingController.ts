@@ -91,7 +91,8 @@ import {
   type BookingStatus,
 } from '../constants/bookings.js';
 import { getEcwidOrder, updateEcwidOrder, type EcwidExtraField, type EcwidOrder } from '../services/ecwidService.js';
-import { getConfigValue } from '../services/configService.js';
+import { getConfigValue, refreshConfigCacheKeys } from '../services/configService.js';
+import { RECOVERY_MEETING_POINT_CONFIG_KEY } from '../config/storefrontRecoveryOfferConfig.js';
 import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
 import { assertDirectBookingCancellationAccess, assertScopedBookingRefundAccess, isDirectBooking } from '../services/directBookingCancellationPolicy.js';
 import { FINANCE_ALLOWED_ROLES } from '../finance/middleware/financeAccessMiddleware.js';
@@ -3267,6 +3268,7 @@ export const getBookingEmailTemplateGallery = async (
   res: Response,
 ): Promise<void> => {
   try {
+    await refreshConfigCacheKeys([RECOVERY_MEETING_POINT_CONFIG_KEY]);
     const directBooking = {
       id: 41001,
       platform: 'direct',
