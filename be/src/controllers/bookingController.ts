@@ -123,7 +123,10 @@ import {
   normalizeProductDetails as normalizeStorefrontEmailProductDetails,
   type StorefrontEmailProductDetails,
 } from '../services/storefrontOrderEmailService.js';
-import { buildStorefrontCartRecoveryEmail } from '../services/storefrontCartRecoveryEmailService.js';
+import {
+  buildStorefrontCartRecoveryEmail,
+  loadStorefrontCartRecoveryProducts,
+} from '../services/storefrontCartRecoveryEmailService.js';
 import {
   buildDirectBookingConfirmationEmail,
   buildInternalDirectBookingNotificationEmail,
@@ -3543,7 +3546,10 @@ export const getBookingEmailTemplateGallery = async (
           source: 'system',
           isActive: true,
         },
-        buildStorefrontCartRecoveryEmail(storefrontOngoingCart),
+        buildStorefrontCartRecoveryEmail(
+          storefrontOngoingCart,
+          await loadStorefrontCartRecoveryProducts(storefrontOngoingCart),
+        ),
       ),
       toEmailGalleryPreview(
         {

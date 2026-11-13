@@ -48,6 +48,7 @@ import axiosInstance from "../../utils/axiosInstance";
 import { fetchSession } from "../../actions/sessionActions";
 import { useAppDispatch } from "../../store/hooks";
 import { StructuredJsonEditor } from "../../features/controlPanel/StructuredJsonEditor";
+import { RecoveryOfferRulesEditor } from "../../features/controlPanel/RecoveryOfferRulesEditor";
 import { ConfigHistoryPanel } from "../../features/controlPanel/ConfigHistoryPanel";
 import { ConfigValuePreview } from "../../features/controlPanel/ConfigValuePreview";
 import "./SettingsControlPanel.css";
@@ -517,6 +518,11 @@ const SettingsControlPanel = () => {
           clearable
         />
       );
+    }
+
+    if (activeEntry.key === "STOREFRONT_RECOVERY_OFFER_RULES") {
+      return <RecoveryOfferRulesEditor key={activeEntry.key} value={typeof editValue === "string" ? editValue : ""}
+        onChange={value => { setEditValue(value); setClearRequested(false); }} onError={setJsonError} />;
     }
 
     if (activeEntry.valueType === "json") {

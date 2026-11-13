@@ -2,6 +2,9 @@ import type { NextFunction, Request, Response } from 'express';
 import { Op } from 'sequelize';
 import StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
+import StorefrontPromotion from '../models/StorefrontPromotion.js';
+import sequelize from '../config/database.js';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import {
   ONGOING_CART_STATUSES,
@@ -11,12 +14,13 @@ import {
 } from '../services/storefrontOngoingCartService.js';
 import { quoteStorefrontCart } from '../services/storefrontCommerceService.js';
 import {
-  buildStorefrontCartRecoveryEmail,
+  prepareStorefrontCartRecoveryEmail,
   ensureStorefrontCartRecoveryToken,
   refreshDuplicateRecoveryCart,
   sendAndRecordStorefrontCartRecoveryEmail,
 } from '../services/storefrontCartRecoveryEmailService.js';
 import HttpError from '../errors/HttpError.js';
+import { getRecoveryCouponOptions, parseRecoveryOfferOverride, recoveredCartWithOffer } from '../services/storefrontRecoveryOfferService.js';
 import { listOngoingCartPage } from '../services/storefrontOngoingCartListService.js';
 import {
   getOngoingCartJourney,
@@ -44,13 +48,14 @@ export const dismissOngoingCartBySession = async (
 export const recoverOngoingCart = async (request: Request, response: Response, next: NextFunction): Promise<void> => {
   try {
     const ongoing = await getUsableOngoingCart(request.params.publicId);
-    const quote = await quoteStorefrontCart(ongoing.cart);
+    const baseline = await quoteStorefrontCart(ongoing.cart);
     const recoveryToken = String(request.query.rt ?? '').trim();
+    const recovered = await recoveredCartWithOffer(ongoing, recoveryToken, baseline);
     const trackedRecoveryOpen = Boolean(
       recoveryToken
       && ongoing.recoveryToken
       && ongoing.firstRecoverySentAt
-      && recoveryToken === ongoing.recoveryToken,
+      && recoveryToken.split('.')[0] === ongoing.recoveryToken,
     );
     await ongoing.update({
       openedAt: ongoing.openedAt || new Date(),
@@ -58,7 +63,8 @@ export const recoverOngoingCart = async (request: Request, response: Response, n
     });
     // Opening a recovery link must not overwrite a concurrent save from another device.
     // Persist the normalized selection only through the version-checked quote/save path.
-    response.json({ ongoingCart: { ...serializeOngoingCart(ongoing), quote, currency: quote.currency, total: quote.total } });
+    response.json({ ongoingCart: { ...serializeOngoingCart(ongoing, null, { includeRecoveryOfferAudit: false }), cart: recovered.cart,
+      quote: recovered.quote, currency: recovered.quote.currency, total: recovered.quote.total } });
   } catch (error) {
     next(error);
   }
@@ -178,7 +184,9 @@ export const sendOngoingCartRecoveryEmail = async (
     if (!claimed) throw new HttpError(409, 'A recovery email is already being sent for this cart.');
 
     try {
-      await sendAndRecordStorefrontCartRecoveryEmail(ongoing);
+      const version = request.body?.previewVersion;
+      if (version !== undefined && (typeof version !== 'string' || !/^[a-f0-9]{64}$/.test(version))) throw new HttpError(400, 'Invalid recovery preview version.');
+      await sendAndRecordStorefrontCartRecoveryEmail(ongoing, version);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await StorefrontOngoingCart.update(
@@ -203,18 +211,61 @@ export const previewOngoingCartRecoveryEmail = async (
     const ongoing = await getUsableOngoingCart(request.params.publicId);
     await refreshDuplicateRecoveryCart(ongoing);
     await ensureStorefrontCartRecoveryToken(ongoing);
-    const preview = buildStorefrontCartRecoveryEmail(ongoing);
+    const prepared = await prepareStorefrontCartRecoveryEmail(ongoing);
+    const preview = prepared.email;
+    const canEditOffer = ['admin', 'owner', 'manager'].includes(request.authContext?.roleSlug ?? '');
     response.json({
       data: {
         to: ongoing.customer.email,
         subject: preview.subject,
         htmlBody: preview.htmlBody,
         textBody: preview.textBody,
+        previewVersion: prepared.previewVersion,
+        recoveryOffer: {
+          override: prepared.override, groupSize: prepared.groupSize, guestCountMode: prepared.guestCountMode,
+          offer: prepared.offer, warnings: prepared.warnings, canEdit: canEditOffer,
+          error: prepared.error,
+          couponOptions: canEditOffer ? await getRecoveryCouponOptions() : [],
+        },
       },
     });
   } catch (error) {
     next(error);
   }
+};
+
+export const listRecoveryCoupons = async (_request: AuthenticatedRequest, response: Response, next: NextFunction): Promise<void> => {
+  try { response.json({ data: await getRecoveryCouponOptions() }); } catch (error) { next(error); }
+};
+
+export const updateCartRecoveryOffer = async (request: AuthenticatedRequest, response: Response, next: NextFunction): Promise<void> => {
+  try {
+    const publicId = parseStorefrontUuid(request.params.publicId, 'Ongoing cart ID');
+    const override = parseRecoveryOfferOverride(request.body);
+    const actorId = request.authContext?.id;
+    if (!actorId) throw new HttpError(403, 'An authenticated manager is required.');
+    if (override.mode === 'coupon') {
+      const promotion = await StorefrontPromotion.findByPk(override.promotionId!);
+      if (!promotion || !promotion.isActive) throw new HttpError(400, 'Choose an existing active coupon.');
+    }
+    const reason = typeof request.body?.reason === 'string' ? request.body.reason.trim().slice(0, 500) : null;
+    await sequelize.transaction(async transaction => {
+      const row = await StorefrontOngoingCart.findOne({ where: { publicId }, transaction, lock: transaction.LOCK.UPDATE });
+      if (!row) throw new HttpError(404, 'Ongoing cart not found.');
+      if (!['active', 'checkout_started', 'recovery_sent'].includes(row.status)) throw new HttpError(409, 'This cart cannot be edited while sending or after payment.');
+      const metadata = row.metadata ?? {};
+      const recorded = { ...override, actorId, reason, updatedAt: new Date().toISOString() };
+      await row.update({ metadata: {
+        ...metadata, recoveryOfferOverride: recorded,
+        events: [...(Array.isArray(metadata.events) ? metadata.events : []), {
+          id: randomUUID(), occurredAt: recorded.updatedAt, type: 'recovery_offer_updated', severity: 'info',
+          message: 'Recovery email offer settings updated by a manager.',
+          details: { actorId, reason, previous: metadata.recoveryOfferOverride ?? null, current: recorded },
+        }],
+      } }, { transaction });
+    });
+    response.json({ data: { override } });
+  } catch (error) { next(error); }
 };
 
 export const dismissOngoingCart = async (

@@ -190,6 +190,9 @@ const __filename = fileURLToPath(import.meta.url);
 const environment = (process.env.NODE_ENV || 'development').trim();
 const envFile = environment === 'production' ? '.env.prod' : '.env.dev';
 dotenv.config({ path: envFile });
+if (process.env.DISABLE_OUTBOUND_EMAIL?.trim().toLowerCase() === 'true') {
+  logger.warn('[runtime] Outbound email is DISABLED for this process (Gmail and SMTP). Previews remain available.');
+}
 externalRequestDiagnosticsService.install();
 
 // Temporarily disable scheduling cron automation without removing job code.

@@ -4,6 +4,7 @@ import { google, gmail_v1 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import logger from '../../utils/logger.js';
 import { getConfigValue } from '../configService.js';
+import { assertOutboundEmailAllowed } from '../../config/outboundEmailPolicy.js';
 
 setDefaultResultOrder('ipv4first');
 
@@ -989,6 +990,7 @@ const sendMessageWithAccount = async (
 };
 
 export const sendMessage = async (params: SendMessageParams): Promise<SendMessageResult> => {
+  assertOutboundEmailAllowed();
   const resolvedParams: SendMessageParams = params.from
     ? params
     : { ...params, from: resolveDefaultFrom() };

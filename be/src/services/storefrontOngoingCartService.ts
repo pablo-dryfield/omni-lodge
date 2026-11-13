@@ -473,6 +473,7 @@ export const recordOngoingCartEventByIdentity = async (
 export const serializeOngoingCart = (
   ongoing: StorefrontOngoingCart,
   orderPublicId: string | null = null,
+  options: { includeRecoveryOfferAudit?: boolean } = {},
 ) => ({
   id: ongoing.id,
   publicId: ongoing.publicId,
@@ -494,7 +495,10 @@ export const serializeOngoingCart = (
   recoveredAt: ongoing.recoveredAt,
   recoveryCount: ongoing.recoveryCount,
   identityReview: ongoing.metadata?.identityReview ? 'Name match needs email or phone confirmation.' : null,
-  events: [...storedEvents(ongoing)].reverse(),
+  events: [...storedEvents(ongoing)]
+    .filter(event => options.includeRecoveryOfferAudit !== false
+      || !['recovery_offer_updated', 'recovery_email_sent'].includes(event.type))
+    .reverse(),
   diagnostics: {
     cartFingerprint: typeof ongoing.metadata?.cartFingerprint === 'string'
       ? ongoing.metadata.cartFingerprint

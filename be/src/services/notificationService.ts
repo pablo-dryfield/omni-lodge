@@ -6,6 +6,7 @@ import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
 import { getConfigValue } from './configService.js';
+import { assertOutboundEmailAllowed, isOutboundEmailDisabled } from '../config/outboundEmailPolicy.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -173,6 +174,7 @@ let transporter: Transporter | null = null;
 let transporterSignature: string | null = null;
 
 function ensureTransporter(): Transporter | null {
+  assertOutboundEmailAllowed();
   const host = getConfigValue('SMTP_HOST') as string | null;
   const port = getConfigValue('SMTP_PORT') as number | null;
   const user = getConfigValue('SMTP_USER') as string | null;
@@ -205,6 +207,7 @@ function ensureTransporter(): Transporter | null {
 }
 
 async function sendEmail(template: TemplateConfig, user: User, payload: Record<string, unknown>): Promise<void> {
+  assertOutboundEmailAllowed();
   const email = user.email;
   if (!email) {
     logger.warn(`Skipping email notification for user ${user.id}: missing email`);
@@ -237,6 +240,7 @@ export async function sendDirectEmail(options: {
   text?: string;
   attachments?: EmailAttachment[];
 }): Promise<void> {
+  assertOutboundEmailAllowed();
   const activeTransporter = ensureTransporter();
   if (!activeTransporter) {
     return;
@@ -293,7 +297,7 @@ export async function sendSchedulingNotification(options: {
     operations.push(persistNotification(user.id, templateKey, normalizedPayload, 'in_app'));
   }
 
-  if (template.channels.includes('email')) {
+  if (template.channels.includes('email') && !isOutboundEmailDisabled()) {
     operations.push((async () => {
       await persistNotification(user.id, templateKey, normalizedPayload, 'email');
       await sendEmail(template, user, normalizedPayload);
