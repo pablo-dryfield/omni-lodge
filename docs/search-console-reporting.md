@@ -75,6 +75,18 @@ errors; a failed summary is never replaced with partial detail totals.
 
 ## Verification And Release
 
+Production reporting and both date follow-ups are delivered. Latest exact identity
+`omnilodge-r43331452337-a1-20f0366712b4`: Release43331452337, managed deployment
+43333310604, host terminal13 November2026 00:06:25.519UTC. Trusted artifact13995757715
+was independently extracted/verified (2804 files), and public backend/UI/reporting
+bundle matched3/3. Real signed-in Europe/Warsaw presets now match Pacific dates:
+28 days14Oct..10Nov958 clicks/45,215 impressions;365 days11Nov2025..10Nov2026 with
+the previous period correctly warning and no comparison deltas. Native Google
+28-day totals/leading query rows agree. Changes correct reporting, not traffic.
+Latest full local UI183 suites/1279 tests, focus24, browser49 and all required
+prospective-merge CI passed. Earlier failures remain in dated private evidence in
+the adjacent KTK website repository; no account/consent/commerce changes occurred.
+
 Focused backend27 and UI7 tests passed. The first whole UI run had seven failures
 in five unchanged suites under concurrent load; preserve that log and require the
 serial repeat/full CI before release. The initial page fixture lacked JSDOM
