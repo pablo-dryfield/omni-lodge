@@ -39,7 +39,7 @@ it('offers the coupon for 9 guests, not 8, and refreshes live configuration', as
   (quoteStorefrontCart as jest.Mock).mockResolvedValueOnce(baseline(big)).mockResolvedValueOnce(discounted(big));
   const result = await evaluateRecoveryOffer(big);
   expect(result.offer).toMatchObject({ code: 'GROUP1', amount: 90, source: 'rule', total: 810 });
-  expect(refreshConfigCacheKeys).toHaveBeenCalledWith(['STOREFRONT_RECOVERY_OFFER_RULES']);
+  expect(refreshConfigCacheKeys).toHaveBeenCalledWith(['STOREFRONT_RECOVERY_OFFER_RULES', 'STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT']);
 });
 
 it('does not count the same five-person group twice unless total-guests mode is selected', async () => {
@@ -82,6 +82,16 @@ it('changes the preview version when an offer changes', async () => {
   (quoteStorefrontCart as jest.Mock).mockResolvedValueOnce(baseline(input)).mockResolvedValueOnce(discounted(input, 1, 100));
   const second = await evaluateRecoveryOffer(input);
   expect(first.previewVersion).not.toBe(second.previewVersion);
+});
+
+it('invalidates a preview when the meeting-section switch changes', async () => {
+  const input = cart([1]);
+  (getConfigValue as jest.Mock).mockImplementation(key => key === 'STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT' ? false : rules);
+  const hidden = await evaluateRecoveryOffer(input);
+  (getConfigValue as jest.Mock).mockImplementation(key => key === 'STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT' ? true : rules);
+  const visible = await evaluateRecoveryOffer(input);
+  expect(hidden.offer).toBeNull(); expect(visible.offer).toBeNull();
+  expect(hidden.previewVersion).not.toBe(visible.previewVersion);
 });
 
 it('applies only the exact sent offer through a matching email link without saving the cart', async () => {

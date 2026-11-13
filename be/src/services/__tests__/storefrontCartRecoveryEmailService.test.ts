@@ -237,6 +237,7 @@ describe('storefront abandoned cart recovery email', () => {
   });
 
   it('uses each experience selected time and configured meeting point in HTML and plain text', async () => {
+    mockedGetConfigValue.mockImplementation(key => key === 'STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT' ? true : null);
     (Product.findAll as jest.Mock).mockResolvedValue([
       { id: 28, name: 'Pub Crawl', images: [], storefrontConfig: { content: { meetingPoint: {
         name: 'Adam Mickiewicz Monument', address: 'Rynek Glowny, Krakow', instructions: 'Look for the pink umbrella.',
@@ -264,6 +265,7 @@ describe('storefront abandoned cart recovery email', () => {
   });
 
   it('escapes meeting instructions and rejects unsafe directions and photo URLs', async () => {
+    mockedGetConfigValue.mockImplementation(key => key === 'STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT' ? true : null);
     (Product.findAll as jest.Mock).mockResolvedValue([{ id: 28, name: 'Pub Crawl', images: [], storefrontConfig: { content: {
       meetingPoint: { name: 'Place <script>', instructions: 'Find "pink" & yellow', mapUrl: 'javascript:alert(1)', photoUrl: 'data:text/html,unsafe' },
     } } }]);
@@ -277,6 +279,7 @@ describe('storefront abandoned cart recovery email', () => {
   });
 
   it('omits empty meeting details and does not invent a starting time or cash invitation', async () => {
+    mockedGetConfigValue.mockImplementation(key => key === 'STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT' ? true : null);
     (Product.findAll as jest.Mock).mockResolvedValue([{ id: 28, name: 'Pub Crawl', images: [], storefrontConfig: { content: {
       meetingPoint: { name: ' ', mapUrl: 'javascript:alert(1)', photoAlt: 'Unused description' },
     } } }]);
@@ -287,6 +290,28 @@ describe('storefront abandoned cart recovery email', () => {
     expect(email.htmlBody).toContain('Starting time to be confirmed');
     expect(email.htmlBody).not.toContain('Meeting point</h3>');
     expect(email.htmlBody).not.toContain('Prefer to meet the group first?');
+  });
+
+  it.each([false, null])('hides the whole meeting section when its switch is %s while retaining the experience and checkout link', async enabled => {
+    mockedGetConfigValue.mockImplementation(key => key === 'STOREFRONT_RECOVERY_EMAIL_SHOW_MEETING_POINT' ? enabled : null);
+    (Product.findAll as jest.Mock).mockResolvedValue([{ id: 28, name: 'Pub Crawl', images: [], storefrontConfig: { content: {
+      meetingPoint: { name: 'Private meeting sample', address: 'Meeting sample address', instructions: 'Look for the test umbrella',
+        mapUrl: 'https://maps.example.com/meeting', photoUrl: 'https://images.example.com/meeting-photo.jpg' },
+    } } }]);
+    const email = buildStorefrontCartRecoveryEmail(ongoing, await loadStorefrontCartRecoveryProducts(ongoing));
+    for (const content of [email.htmlBody, email.textBody]) {
+      expect(content).not.toContain('Prefer to meet the group first?');
+      expect(content).not.toContain('Private meeting sample');
+      expect(content).not.toContain('Meeting sample address');
+      expect(content).not.toContain('Look for the test umbrella');
+      expect(content).not.toContain('maps.example.com/meeting');
+      expect(content).not.toContain('images.example.com/meeting-photo.jpg');
+      expect(content).not.toContain('You can also pay in cash');
+      expect(content).toContain('Pub Crawl');
+      expect(content).toContain('21:00');
+      expect(content).toContain('https://');
+    }
+    expect(email.htmlBody).toContain('CONTINUE MY BOOKING');
   });
 
   it('escapes customer and product content and renders every saved experience separately', () => {

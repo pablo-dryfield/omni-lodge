@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import StorefrontPromotion from '../models/StorefrontPromotion.js';
 import type StorefrontOngoingCart from '../models/StorefrontOngoingCart.js';
 import HttpError from '../errors/HttpError.js';
-import { DEFAULT_RECOVERY_OFFER_RULES, RECOVERY_OFFER_CONFIG_KEY, parseRecoveryOfferRules } from '../config/storefrontRecoveryOfferConfig.js';
+import { DEFAULT_RECOVERY_OFFER_RULES, RECOVERY_OFFER_CONFIG_KEY, RECOVERY_MEETING_POINT_CONFIG_KEY, parseRecoveryOfferRules } from '../config/storefrontRecoveryOfferConfig.js';
 import { getConfigValue, refreshConfigCacheKeys } from './configService.js';
 import { quoteStorefrontCart, type StorefrontCartInput, type StorefrontQuote } from './storefrontCommerceService.js';
 import { ongoingCartFingerprint } from './storefrontOngoingCartService.js';
@@ -32,7 +32,7 @@ const cartWithCoupon = (cart: StorefrontCartInput, code: string): StorefrontCart
 });
 
 export const evaluateRecoveryOffer = async (ongoing: StorefrontOngoingCart): Promise<RecoveryOfferEvaluation> => {
-  await refreshConfigCacheKeys([RECOVERY_OFFER_CONFIG_KEY]);
+  await refreshConfigCacheKeys([RECOVERY_OFFER_CONFIG_KEY, RECOVERY_MEETING_POINT_CONFIG_KEY]);
   const raw = getConfigValue(RECOVERY_OFFER_CONFIG_KEY);
   const rules = raw == null ? DEFAULT_RECOVERY_OFFER_RULES : parseRecoveryOfferRules(raw);
   const override = parseRecoveryOfferOverride(ongoing.metadata?.recoveryOfferOverride);
@@ -77,6 +77,7 @@ export const evaluateRecoveryOffer = async (ongoing: StorefrontOngoingCart): Pro
   }
   const previewVersion = createHash('sha256').update(JSON.stringify({
     cart: ongoingCartFingerprint(ongoing.cart), override, rules, offer, quote, errorMessage,
+    showMeetingPoint: getConfigValue(RECOVERY_MEETING_POINT_CONFIG_KEY) === true,
   })).digest('hex');
   return { override, groupSize, guestCountMode: rules.guestCountMode, offer, quote, warnings, error: errorMessage, previewVersion };
 };
