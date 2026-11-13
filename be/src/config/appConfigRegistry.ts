@@ -6,6 +6,7 @@ import {
 } from './googleAdsConfig.js';
 import { DATABASE_WORKSPACE_CONFIG } from './databaseWorkspaceConfig.js';
 import { REZDY_DEFAULT_START_TIMES_KEY } from './rezdyParserConfig.js';
+import { DEFAULT_RECOVERY_OFFER_RULES, RECOVERY_OFFER_CONFIG_KEY } from './storefrontRecoveryOfferConfig.js';
 
 export type ConfigValueType = 'string' | 'number' | 'boolean' | 'enum' | 'json';
 
@@ -1100,6 +1101,13 @@ Best,
     valueType: 'number',
     defaultValue: 60,
     validation: { min: 15, max: 10080 },
+  },
+  {
+    key: RECOVERY_OFFER_CONFIG_KEY,
+    label: 'Cart recovery discount rules',
+    description: 'Offer an existing storefront coupon to eligible abandoned carts. Rules run from top to bottom; the first eligible coupon that improves the current total wins. Minimum 9 guests means more than 8. Per-cart coupon or no-offer overrides take precedence. Existing better discounts are preserved. Changes apply to the next preview or send without restarting. No rules means no automatic offers.',
+    category: 'Storefront', valueType: 'json', defaultValue: JSON.stringify(DEFAULT_RECOVERY_OFFER_RULES),
+    impact: 'high', validation: { required: true, format: 'storefront-recovery-offers', maxLength: 20000 },
   },
   {
     key: 'STOREFRONT_ONGOING_CART_DEDUPE_WINDOW_MINUTES',

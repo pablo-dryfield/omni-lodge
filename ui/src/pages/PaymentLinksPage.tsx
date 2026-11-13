@@ -49,6 +49,7 @@ import { PAGE_SLUGS } from "../constants/pageSlugs";
 import { useModuleAccess } from "../hooks/useModuleAccess";
 import OngoingCartsPanel from "../components/storefront/OngoingCartsPanel";
 import type { OngoingCart } from "../types/storefrontOngoingCarts";
+import { RecoveryOfferControls, type RecoveryOfferSettings, type RecoveryOfferUpdate } from "../components/storefront/RecoveryOfferControls";
 
 type AddonConfig = {
   selectionMode?: "boolean" | "quantity" | "range" | "options";
@@ -210,6 +211,8 @@ type RecoveryEmailPreview = {
   subject: string;
   htmlBody: string;
   textBody: string;
+  previewVersion?: string;
+  recoveryOffer?: RecoveryOfferSettings;
 };
 
 type JourneyEvent = {
@@ -573,6 +576,8 @@ const PaymentLinksPage = () => {
   const [sendingRecoveryId, setSendingRecoveryId] = useState<string | null>(null);
   const [previewingRecoveryId, setPreviewingRecoveryId] = useState<string | null>(null);
   const [recoveryEmailPreview, setRecoveryEmailPreview] = useState<RecoveryEmailPreview | null>(null);
+  const [recoveryOfferDirty, setRecoveryOfferDirty] = useState(false);
+  const [savingRecoveryOffer, setSavingRecoveryOffer] = useState(false);
   const [activityCart, setActivityCart] = useState<OngoingCart | null>(null);
   const [activity, setActivity] = useState<CartActivity | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -1294,6 +1299,7 @@ const PaymentLinksPage = () => {
         `/storefront-ongoing-carts/${ongoingCart.publicId}/recovery-preview`,
       );
       setRecoveryEmailPreview({ cart: ongoingCart, ...response.data.data });
+      setRecoveryOfferDirty(false);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -1307,6 +1313,7 @@ const PaymentLinksPage = () => {
     try {
       await axiosInstance.post<{ data: OngoingCart }>(
         `/storefront-ongoing-carts/${ongoingCart.publicId}/send-recovery`,
+        { previewVersion: recoveryEmailPreview?.previewVersion },
       );
       setRecoveryEmailPreview(null);
     } catch (requestError) {
@@ -1319,6 +1326,17 @@ const PaymentLinksPage = () => {
       setOngoingRevision(value => value + 1);
       setSendingRecoveryId(null);
     }
+  };
+
+  const saveRecoveryOffer = async (value: RecoveryOfferUpdate) => {
+    if (!recoveryEmailPreview) return;
+    setSavingRecoveryOffer(true); setError("");
+    try {
+      await axiosInstance.put(`/storefront-ongoing-carts/${recoveryEmailPreview.cart.publicId}/recovery-offer`, value);
+      await previewRecoveryEmail(recoveryEmailPreview.cart);
+      setOngoingRevision(revision => revision + 1);
+    } catch (requestError) { setError(errorMessage(requestError)); }
+    finally { setSavingRecoveryOffer(false); }
   };
 
   const sortedBankTransferOrders = useMemo(
@@ -1953,6 +1971,8 @@ const PaymentLinksPage = () => {
               </Box>
             </SimpleGrid>
             {error && <Alert color="red" title="Recovery email unavailable">{error}</Alert>}
+            {recoveryEmailPreview.recoveryOffer && <RecoveryOfferControls settings={recoveryEmailPreview.recoveryOffer}
+              saving={savingRecoveryOffer} onSave={saveRecoveryOffer} onDirtyChange={setRecoveryOfferDirty} />}
             <Box style={{ flex: 1, minHeight: 0, border: "1px solid var(--mantine-color-gray-4)" }}>
               <iframe
                 title="Recovery email"
@@ -1966,6 +1986,7 @@ const PaymentLinksPage = () => {
               <Button
                 leftSection={<IconSend size={18} />}
                 loading={sendingRecoveryId === recoveryEmailPreview.cart.publicId}
+                disabled={savingRecoveryOffer || recoveryOfferDirty || Boolean(recoveryEmailPreview.recoveryOffer?.error)}
                 onClick={() => void sendRecoveryEmail(recoveryEmailPreview.cart)}
               >
                 Send email

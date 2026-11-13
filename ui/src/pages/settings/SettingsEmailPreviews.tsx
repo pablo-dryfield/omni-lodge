@@ -20,6 +20,7 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import { IconMail, IconRefresh, IconSearch } from "@tabler/icons-react";
+import { useSearchParams } from "react-router-dom";
 import { PageAccessGuard } from "../../components/access/PageAccessGuard";
 import { PAGE_SLUGS } from "../../constants/pageSlugs";
 import axiosInstance from "../../utils/axiosInstance";
@@ -53,8 +54,8 @@ const extractErrorMessage = (error: unknown): string => {
 };
 
 const SettingsEmailPreviews = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [previews, setPreviews] = useState<EmailPreview[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -71,11 +72,6 @@ const SettingsEmailPreviews = () => {
       });
       const nextPreviews = Array.isArray(response.data.previews) ? response.data.previews : [];
       setPreviews(nextPreviews);
-      setSelectedId((current) =>
-        current && nextPreviews.some((preview) => preview.id === current)
-          ? current
-          : nextPreviews[0]?.id ?? null,
-      );
     } catch (loadError) {
       setError(extractErrorMessage(loadError));
     } finally {
@@ -102,7 +98,23 @@ const SettingsEmailPreviews = () => {
         .includes(normalizedQuery);
     });
   }, [category, previews, query]);
-  const selected = previews.find((preview) => preview.id === selectedId) ?? null;
+  const requestedId = searchParams.get("template");
+  const selected = previews.find((preview) => preview.id === requestedId) ?? previews[0] ?? null;
+  const selectedId = selected?.id ?? null;
+
+  const selectPreview = useCallback((id: string, replace = false) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("template", id);
+      return next;
+    }, { replace, preventScrollReset: true });
+  }, [setSearchParams]);
+
+  useEffect(() => {
+    // Wait for the gallery before validating a deep link. A missing or removed
+    // template falls back to the first available preview without adding history.
+    if (selectedId && requestedId !== selectedId) selectPreview(selectedId, true);
+  }, [requestedId, selectedId, selectPreview]);
 
   return (
     <PageAccessGuard pageSlug={PAGE_SLUGS.settingsControlPanel}>
@@ -178,7 +190,7 @@ const SettingsEmailPreviews = () => {
                             className={classes.previewOption}
                             data-selected={isSelected || undefined}
                             aria-pressed={isSelected}
-                            onClick={() => setSelectedId(preview.id)}
+                            onClick={() => selectPreview(preview.id)}
                           >
                             <Group wrap="nowrap" gap="sm" align="center">
                               <Box style={{ flex: 1, minWidth: 0 }}>

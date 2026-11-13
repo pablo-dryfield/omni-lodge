@@ -1,6 +1,7 @@
 import { validateSystemManagementValue, validateManagementOrigin } from '../config/systemManagementConfig.js';
 import { parseWalkInTicketTypes } from '../config/walkInTicketConfig.js';
 import { parseRezdyDefaultStartTimes } from '../config/rezdyParserConfig.js';
+import { parseRecoveryOfferRules } from '../config/storefrontRecoveryOfferConfig.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import type {Transaction} from 'sequelize';
 import ConfigKey from '../models/ConfigKey.js';
@@ -205,6 +206,10 @@ const validateWhatsAppQueueKeyEntries = (
 
 const validateValue = (definition: ConfigDefinition, raw: string | null): void => {
   const rules = definition.validation ?? {};
+  if (raw !== null && rules.format === 'storefront-recovery-offers') {
+    try { parseRecoveryOfferRules(raw); }
+    catch (error) { throw new HttpError(400, error instanceof Error ? error.message : 'Invalid recovery offers.'); }
+  }
   if (raw !== null && rules.format === 'walk-in-ticket-types') {
     try { parseWalkInTicketTypes(raw); }
     catch (error) { throw new HttpError(400, error instanceof Error ? error.message : 'Invalid ticket types.'); }

@@ -8,6 +8,7 @@ import {
   markOngoingCartConverted,
   assertOngoingCartVersion,
   ongoingCartFingerprint,
+  serializeOngoingCart,
   recordOngoingCartEvent,
   recordOngoingCartEventByIdentity,
   upsertOngoingCart,
@@ -59,6 +60,19 @@ const quote = {
 } as StorefrontQuote;
 
 describe('storefront ongoing cart service', () => {
+  it('keeps recovery override reasons and sent-offer audit history out of customer recovery responses', () => {
+    const row = { cart: { items: [experience] }, total: 120, metadata: { events: [
+      { type: 'cart_saved', message: 'Saved' },
+      { type: 'recovery_offer_updated', details: { reason: 'Internal management note' } },
+      { type: 'recovery_email_sent', details: { offer: { code: 'OLDER-CODE' } } },
+    ] } } as unknown as StorefrontOngoingCart;
+    expect(serializeOngoingCart(row).events).toHaveLength(3);
+    const customer = serializeOngoingCart(row, null, { includeRecoveryOfferAudit: false });
+    expect(customer.events).toEqual([{ type: 'cart_saved', message: 'Saved' }]);
+    expect(JSON.stringify(customer)).not.toContain('Internal management note');
+    expect(JSON.stringify(customer)).not.toContain('OLDER-CODE');
+  });
+
   beforeEach(() => {
     jest.resetAllMocks();
     (sequelize.transaction as jest.Mock).mockImplementation(callback => callback(transaction));
