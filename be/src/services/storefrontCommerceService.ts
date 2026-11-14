@@ -110,6 +110,8 @@ export type StorefrontQuote = {
 
 export type StorefrontQuoteOptions = {
   allowMissingCustomerDetails?: boolean;
+  /** Server-only: exclude this order's own commitments when validating an amendment. */
+  inventoryReservationOrderId?: number;
   /** Staff-prepared links retain their explicitly authored line items. */
   preserveExperienceLines?: boolean;
   allowPastExperienceDates?: boolean;
@@ -687,7 +689,7 @@ export const quoteStorefrontCart = async (
   );
   const [prices, inventoryByAddon] = await Promise.all([
     resolveProductPrices(products, currencyCode, currencyExchangeRateToPln, transaction),
-    getAddonInventoryAvailability(availableAddonIds, transaction),
+    options.inventoryReservationOrderId ? getAddonInventoryAvailability(availableAddonIds, transaction, options.inventoryReservationOrderId) : getAddonInventoryAvailability(availableAddonIds, transaction),
   ]);
 
   // Resolve product defaults first: omitted and explicit default slots are the same experience.

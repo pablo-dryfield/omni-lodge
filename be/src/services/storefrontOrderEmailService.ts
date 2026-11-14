@@ -404,12 +404,12 @@ const referenceHtml = (
 
 const paymentHtml = (order: StorefrontOrder): string => `
   <div style="margin:26px 0 8px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase">Payment</div>
-  <div style="margin-bottom:10px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:30px;font-weight:900;text-transform:uppercase">Paid in full</div>
+  <div style="margin-bottom:10px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:30px;font-weight:900;text-transform:uppercase">${order.orderSource === 'partner' && order.paymentStatus !== 'paid' ? 'Payment due at arrival' : 'Paid in full'}</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #49353f;border-bottom:1px solid #49353f">
     ${detailRow('Experiences', money(order.subtotal, order.currency))}
     ${detailRow('Add-ons', money(order.addonTotal, order.currency))}
     ${Number(order.discountTotal) > 0 ? detailRow('Discount', `-${money(order.discountTotal, order.currency)}`) : ''}
-    ${detailRow('Total paid', money(order.total, order.currency))}
+    ${detailRow(order.orderSource === 'partner' && order.paymentStatus !== 'paid' ? 'Amount due' : 'Total paid', money(order.total, order.currency))}
   </table>`;
 
 const customerHtml = (order: StorefrontOrder): string => {
@@ -530,11 +530,11 @@ const coreText = (
 ): string[] => [
     ...bookingDetailsText(order, bookingIdsByItemId, productDetailsByProductId),
     'PAYMENT',
-    'Status: Paid in full',
+    order.orderSource === 'partner' && order.paymentStatus !== 'paid' ? 'Status: Payment due at arrival' : 'Status: Paid in full',
     `Experiences: ${money(order.subtotal, order.currency)}`,
     `Add-ons: ${money(order.addonTotal, order.currency)}`,
     ...(Number(order.discountTotal) > 0 ? [`Discount: -${money(order.discountTotal, order.currency)}`] : []),
-    `Total paid: ${money(order.total, order.currency)}`,
+    `${order.orderSource === 'partner' && order.paymentStatus !== 'paid' ? 'Amount due' : 'Total paid'}: ${money(order.total, order.currency)}`,
     '',
     'CUSTOMER DETAILS',
     `Name: ${order.customerFirstName} ${order.customerLastName}`.trim(),
@@ -680,13 +680,14 @@ export const buildCustomerStorefrontEmail = async (
   );
   const cancellationPolicy = getStorefrontCancellationPolicy();
   const firstItem = items[0];
-  const preheader = `Payment received. Your ${firstItem?.productName ?? 'Krakow experience'} is confirmed.`;
+  const payAtArrival = order.orderSource === 'partner' && order.paymentStatus !== 'paid';
+  const preheader = `${payAtArrival ? 'Pay at the meeting point.' : 'Payment received.'} Your ${firstItem?.productName ?? 'Krakow experience'} is confirmed.`;
   const content = `
     <div style="text-align:center;color:#ffd438;font-family:Arial,sans-serif;font-size:12px;font-weight:800;letter-spacing:1.7px;text-transform:uppercase">Krawl Through Krakow</div>
-    <div style="margin-top:13px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2.2px;text-transform:uppercase">Payment confirmed</div>
+    <div style="margin-top:13px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2.2px;text-transform:uppercase">${payAtArrival ? 'Reservation confirmed — payment due' : 'Payment confirmed'}</div>
     <h1 style="margin:10px 0 11px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:43px;font-weight:900;line-height:1.05;text-transform:uppercase">You're booked, ${escapeHtml(firstName)}!</h1>
     ${coreHtml(order, bookingIdsByItemId, productDetailsByProductId, barcodes.imageSources,
-      'Your payment was successful. Your plans, meeting details, and everything you need for the experience are below.')}
+      payAtArrival ? 'Your reservation is confirmed. Payment is due at the meeting point. Your plans and meeting details are below.' : 'Your payment was successful. Your plans, meeting details, and everything you need for the experience are below.')}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:22px;background:#ffd438">
       <tr><td style="padding:20px;color:#080708;font-family:Arial,sans-serif;font-size:14px;line-height:1.65;text-align:center">
         <div style="font-size:17px;font-weight:900">Keep this email handy</div>
@@ -754,12 +755,16 @@ export const buildInternalStorefrontEmail = (
     ...utmTags,
     ...(discountCode ? [['Discount Code', discountCode] as const] : []),
   ];
-  const preheader = `${guest} completed a paid storefront checkout.`;
+  const partnerArrival = order.orderSource === 'partner' && order.paymentStatus !== 'paid';
+  const partnerCollected = order.orderSource === 'partner' && order.paymentMethod === 'partner_collected';
+  const paymentHeading = partnerArrival ? 'Payment due at arrival' : partnerCollected ? 'Partner collected payment' : 'Payment received';
+  const paymentDescription = partnerArrival ? `${guest} reserved through a partner. Collect payment at arrival.` : partnerCollected ? `${guest} paid the partner. The partner settlement remains separate.` : `${guest} completed payment.`;
+  const preheader = order.orderSource === 'partner' ? paymentDescription : `${guest} completed a paid storefront checkout.`;
   const content = `
     <div style="text-align:center;color:#ffd438;font-family:Arial,sans-serif;font-size:12px;font-weight:800;letter-spacing:1.7px;text-transform:uppercase">Krawl Through Krakow</div>
     <div style="margin-top:13px;text-align:center;color:#ff168f;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:2.2px;text-transform:uppercase">New storefront booking</div>
-    <h1 style="margin:10px 0 12px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:41px;font-weight:900;line-height:1.05;text-transform:uppercase">Payment received</h1>
-    <p style="margin:0 auto ${trackingDetails.length ? 12 : 25}px;max-width:500px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:16px;line-height:1.65">${escapeHtml(guest)} completed payment.</p>
+    <h1 style="margin:10px 0 12px;text-align:center;color:#fff8f2;font-family:Impact,'Arial Black',Arial,sans-serif;font-size:41px;font-weight:900;line-height:1.05;text-transform:uppercase">${paymentHeading}</h1>
+    <p style="margin:0 auto ${trackingDetails.length ? 12 : 25}px;max-width:500px;text-align:center;color:#c9bdc2;font-family:Arial,sans-serif;font-size:16px;line-height:1.65">${escapeHtml(paymentDescription)}</p>
     ${trackingDetails.length ? `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 25px;table-layout:fixed;background:#171315;border:1px solid #49353f">
       <tr><td style="padding:12px 16px;text-align:center;font-family:Arial,sans-serif;font-size:13px;line-height:1.7;word-break:break-word;overflow-wrap:anywhere">
@@ -787,7 +792,7 @@ export const buildInternalStorefrontEmail = (
 export const deliverStorefrontOrderEmails = async (publicId: string): Promise<void> => {
   await sequelize.transaction(async (transaction) => {
     const order = await findLockedStorefrontOrderWithItems(publicId, transaction);
-    if (!order || order.paymentStatus !== 'paid') return;
+    if (!order || (order.paymentStatus !== 'paid' && !(order.orderSource === 'partner' && order.status === 'confirmed'))) return;
     const notificationPreferences = getStorefrontOrderConfirmationNotificationPreferences(order);
 
     const bookings = await Booking.findAll({

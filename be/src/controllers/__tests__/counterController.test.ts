@@ -129,7 +129,7 @@ describe('finalizeCounterReservations', () => {
       photos: 0,
     });
     expect(booking.attendanceStatus).toBe('checked_in_full');
-    expect(mockUpsertMetrics).toHaveBeenCalledWith(920, [], 191);
+    expect(mockUpsertMetrics).toHaveBeenCalledWith(920, [], 191, undefined);
     expect(response.status).toHaveBeenCalledWith(200);
   });
 });

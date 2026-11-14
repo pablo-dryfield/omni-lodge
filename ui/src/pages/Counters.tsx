@@ -1,3 +1,4 @@
+import { partnerCashOnArrival, reservationChannelId, walkInReservationBaseline } from '../utils/reservationChannel';
 import { buildWalkInSummary, formatWalkInSummaryNotes, staffRowsFromNotes } from '../utils/walkInSummary';
 import WalkInSummaryDetails from '../components/counters/WalkInSummaryDetails';
 import { emptyStaffFreeDraft, hasStaffFreeDraft, restoreStaffFreeDraft, staffFreeDraftChanges, staffFreeDraftCount, type StaffFreeDraft } from '../utils/staffFreeDraft';
@@ -755,6 +756,7 @@ const XPERIENCEPOLAND_RESALE_CASH_TICKET_PREFIX = 'booking-cash:xperiencepoland:
 const AUTOMATIC_ADDON_REFUND_PLATFORM_KEYS = new Set(['ecwid', 'omnilodge']);
 
 const isXperiencePolandCashArrivalOrder = (order: UnifiedOrder): boolean => {
+  if (partnerCashOnArrival(order)) return true;
   if (normalizePlatformLookupKey(order.platform) !== XPERIENCEPOLAND_PLATFORM_KEY) {
     return false;
   }
@@ -4214,7 +4216,7 @@ const loadCounterById = useCallback(
       }, 0);
       const normalPeople = getNormalPeopleFromTotal(totalPeople, cocktailAddonTotal);
       const peopleMetric = getMetric(channelId, 'attended', null, 'people', null);
-      if (peopleMetric || normalPeople > 0) {
+      if ((peopleMetric || normalPeople > 0) && !onlineReservationOrders.some(order => Number(order.rawData?.channelId) === channelId)) {
         handleMetricChange(channelId, 'attended', null, 'people', null, normalPeople);
       }
 
@@ -4226,7 +4228,7 @@ const loadCounterById = useCallback(
         }
         const addonTotal = Math.max(0, addonTotals.get(numericAddonId) ?? 0);
         const addonMetric = getMetric(channelId, 'attended', null, 'addon', numericAddonId);
-        if (addonMetric || addonTotal > 0) {
+        if ((addonMetric || addonTotal > 0) && !onlineReservationOrders.some(order => Number(order.rawData?.channelId) === channelId)) {
           handleMetricChange(channelId, 'attended', null, 'addon', numericAddonId, addonTotal);
         }
       });
@@ -4264,6 +4266,7 @@ const loadCounterById = useCallback(
     walkInNoteDirty,
     walkInChannelIds,
     walkInTicketDataByChannel,
+    onlineReservationOrders,
   ]);
 
   const handleStaffChange = useCallback(
@@ -4678,13 +4681,14 @@ useEffect(() => {
     const base =
       selectedChannelIds.length > 0 ? selectedChannelIds : savedPlatformChannelIds;
     const combined = new Set<number>(base);
+    onlineReservationOrders.forEach(order => { const id = Number(order.rawData?.channelId); if (Number.isSafeInteger(id) && id > 0 && registry.channels.some(channel => channel.id === id)) combined.add(id); });
     channelIdsWithAnyData.forEach((id) => {
       if (!walkInChannelIdSet.has(id)) {
         combined.add(id);
       }
     });
     return Array.from(combined);
-  }, [channelIdsWithAnyData, savedPlatformChannelIds, selectedChannelIds, walkInChannelIdSet]);
+  }, [channelIdsWithAnyData, savedPlatformChannelIds, selectedChannelIds, walkInChannelIdSet, onlineReservationOrders, registry.channels]);
 
   const effectiveAfterCutoffIds = useMemo<number[]>(() => {
     const base =
@@ -4762,14 +4766,13 @@ useEffect(() => {
 
       const bookingId = getOrderBookingId(order);
       if (!bookingId) {
-        setOnlineReservationsError('Booking ID is missing for this XperiencePoland cash-on-arrival reservation.');
+        setOnlineReservationsError('Booking ID is missing for this cash-on-arrival reservation.');
         return undefined;
       }
 
-      const platformKey = normalizePlatformLookupKey(order.platform);
-      const channelId = onlineChannelIdByPlatform.get(platformKey);
+      const channelId = reservationChannelId(order, onlineChannelIdByPlatform);
       if (!channelId) {
-        setOnlineReservationsError('XperiencePoland channel is missing from the counter channel setup.');
+        setOnlineReservationsError('The booking Channel is missing from the counter setup.');
         return undefined;
       }
 
@@ -4784,7 +4787,7 @@ useEffect(() => {
         parseMoneyLikeNumber(order.rawData?.priceGross) ??
         null;
       if (totalCashDue == null || totalCashDue <= 0 || quantity <= 0) {
-        setOnlineReservationsError('Cash-to-collect amount is missing for this XperiencePoland reservation.');
+        setOnlineReservationsError('Cash-to-collect amount is missing for this reservation.');
         return undefined;
       }
 
@@ -4841,8 +4844,8 @@ useEffect(() => {
   );
 
   const onlineManagedChannelIdSet = useMemo(
-    () => new Set<number>(Array.from(onlineChannelIdByPlatform.values())),
-    [onlineChannelIdByPlatform],
+    () => new Set<number>([...onlineChannelIdByPlatform.values(), ...onlineReservationOrders.map(order => Number(order.rawData?.channelId)).filter(id => Number.isSafeInteger(id) && id > 0)]),
+    [onlineChannelIdByPlatform, onlineReservationOrders],
   );
 
   const onlineSelectedChannelIds = useMemo(
@@ -5292,8 +5295,7 @@ useEffect(() => {
 
   const onlineReservationsScoped = useMemo(() => {
     const scoped = onlineReservationOrders.filter((order) => {
-      const platformKey = normalizePlatformLookupKey(order.platform);
-      const channelId = onlineChannelIdByPlatform.get(platformKey);
+      const channelId = reservationChannelId(order, onlineChannelIdByPlatform);
       return channelId != null && onlineScopedChannelIdSet.has(channelId);
     });
     return scoped.slice().sort((left, right) => {
@@ -6265,8 +6267,7 @@ useEffect(() => {
       if (!MANIFEST_INCLUDED_STATUSES.has(order.status)) {
         return;
       }
-      const platformKey = normalizePlatformLookupKey(order.platform);
-      const channelId = onlineChannelIdByPlatform.get(platformKey);
+      const channelId = reservationChannelId(order, onlineChannelIdByPlatform);
       if (!channelId || !onlineSelectedChannelIdSet.has(channelId)) {
         return;
       }
@@ -6287,14 +6288,15 @@ useEffect(() => {
         people: 0,
         extras: { cocktails: 0, tshirts: 0, photos: 0 },
       };
+      const baseline = walkInReservationBaseline(walkInTicketDataByChannel[channelId], registry.addons.filter(isCocktailAddonConfig).map(addon => Number(addon.addonId)));
       (Object.keys(totals.extras) as Array<keyof OrderExtras>).forEach((extraKey) => {
         const qty = Math.max(0, Math.round(Number(totals.extras[extraKey]) || 0));
         const addonsForKey = addonByExtraKey.get(extraKey) ?? [];
         addonsForKey.forEach((addon) => {
-          handleMetricChange(channelId, 'attended', null, 'addon', addon.addonId, qty);
+          handleMetricChange(channelId, 'attended', null, 'addon', addon.addonId, qty + (baseline.addons.get(addon.addonId) || 0));
         });
       });
-      handleMetricChange(channelId, 'attended', null, 'people', null, Math.max(0, Math.round(totals.people)));
+      handleMetricChange(channelId, 'attended', null, 'people', null, Math.max(0, Math.round(totals.people)) + baseline.people);
     });
   }, [
     activeRegistryStep,
@@ -6306,6 +6308,7 @@ useEffect(() => {
     onlineSelectedChannelIdSet,
     onlineSelectedChannelIds,
     registry.addons,
+    walkInTicketDataByChannel,
   ]);
 
   const summaryChannelOrder = useMemo<number[]>(() => {
@@ -8435,8 +8438,7 @@ type SummaryRowOptions = {
           return false;
         }
         if (params.channelId != null) {
-          const platformKey = normalizePlatformLookupKey(order.platform);
-          const orderChannelId = onlineChannelIdByPlatform.get(platformKey);
+          const orderChannelId = reservationChannelId(order, onlineChannelIdByPlatform);
           if (orderChannelId !== params.channelId) {
             return false;
           }
@@ -8496,8 +8498,7 @@ type SummaryRowOptions = {
       return map;
     }
     onlineReservationsScoped.forEach((order) => {
-      const platformKey = normalizePlatformLookupKey(order.platform);
-      const channelId = onlineChannelIdByPlatform.get(platformKey);
+      const channelId = reservationChannelId(order, onlineChannelIdByPlatform);
       if (!channelId || !onlineScopedChannelIdSet.has(channelId)) {
         return;
       }

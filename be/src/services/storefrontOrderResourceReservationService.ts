@@ -57,6 +57,7 @@ type ReservableOrder = {
   paymentMethod: string;
   paymentStatus: string;
   paymentDueAt: Date | null;
+  orderSource?: string;
 };
 
 type ScheduledOrderItem = {
@@ -591,8 +592,7 @@ export const lockStorefrontInventoryReservationsForCounter = async (
     const orders = await StorefrontOrder.findAll({
       where: {
         publicId: { [Op.in]: publicIds },
-        orderSource: 'backoffice',
-        paymentMethod: 'bank_transfer',
+        [Op.or]: [{ orderSource: 'backoffice', paymentMethod: 'bank_transfer' }, { orderSource: 'partner' }],
       },
       attributes: ['id'],
       order: [['id', 'ASC']],
@@ -667,7 +667,7 @@ export const refreshStorefrontOrderInventoryReservationExpiries = async (
   order: ReservableOrder,
   transaction: Transaction,
 ): Promise<number> => {
-  if (order.paymentMethod !== 'bank_transfer') return 0;
+  if (order.paymentMethod !== 'bank_transfer' && order.orderSource !== 'partner') return 0;
 
   const reservations = await StorefrontOrderResourceReservation.findAll({
     where: {

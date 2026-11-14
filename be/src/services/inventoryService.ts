@@ -37,16 +37,17 @@ const compareTshirtVariants = (left: string, right: string): number => {
   return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
 };
 
-export async function getAvailableStock(inventoryItemId:number, transaction?:Transaction):Promise<number>{
+export async function getAvailableStock(inventoryItemId:number, transaction?:Transaction, excludeOrderId?: number):Promise<number>{
   const onHand=Number(await InventoryMovement.sum('quantityDelta',{where:{inventoryItemId},transaction})??0);
   const reserved=Number(await InventoryFulfillment.sum('quantity',{where:{inventoryItemId,status:{[Op.in]:['ready','packed']}},transaction})??0);
-  const storefrontReserved=Number(await StorefrontOrderResourceReservation.sum('quantity',{where:{resourceType:'inventory',inventoryItemId,status:{[Op.in]:['held','consumed']},[Op.or]:[{expiresAt:null},{expiresAt:{[Op.gt]:new Date()}}]},transaction})??0);
+  const storefrontReserved=Number(await StorefrontOrderResourceReservation.sum('quantity',{where:{resourceType:'inventory',inventoryItemId,...(excludeOrderId ? {orderId:{[Op.ne]:excludeOrderId}} : {}),status:{[Op.in]:['held','consumed']},[Op.or]:[{expiresAt:null},{expiresAt:{[Op.gt]:new Date()}}]},transaction})??0);
   return onHand-reserved-storefrontReserved;
 }
 
 export async function getAddonInventoryAvailability(
   addonIds: number[],
   transaction?: Transaction,
+  excludeOrderId?: number,
 ): Promise<Map<number, AddonInventoryAvailability>> {
   const normalizedAddonIds = Array.from(
     new Set(addonIds.map(Number).filter((addonId) => Number.isInteger(addonId) && addonId > 0)),
@@ -71,7 +72,7 @@ export async function getAddonInventoryAvailability(
       .filter((inventoryItemId) => activeItemIds.has(inventoryItemId))
       .map(async (inventoryItemId) => [
         inventoryItemId,
-        await getAvailableStock(inventoryItemId, transaction),
+        await getAvailableStock(inventoryItemId, transaction, excludeOrderId),
       ] as const),
   );
   const stockByItem = new Map(stockEntries);

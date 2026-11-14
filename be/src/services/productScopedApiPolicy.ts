@@ -12,6 +12,9 @@ export const PRODUCT_SCOPED_MODULES = new Set([
 
 export type ScopedApiRoute = { resource: string; module?: string; id?: number; passthrough?: boolean; action?: string };
 export function productScopedApiRoute(method: string, path: string): ScopedApiRoute | null {
+  // Partner routes independently authorize exact company membership on every operation.
+  // Product-scoped users receive no company-wide partner administration rights.
+  if (/^\/api\/partners(?:\/|$)/.test(path)) return { resource: 'partners', passthrough: true };
   const read = method === 'GET';
   const amendment = (read ? /^\/api\/bookings\/([1-9]\d*)\/amend-products$/
     : method === 'POST' ? /^\/api\/bookings\/([1-9]\d*)\/direct-actions\/amend$/ : null)?.exec(path);

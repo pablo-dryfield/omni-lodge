@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import { ensurePartnerAccessControl } from '../services/partners/partnerAccessSeed.js';
 import { DataTypes, QueryTypes } from "sequelize";
 import sequelize from "../config/database.js";
 import { defineAssociations } from "../models/defineAssociations.js";
@@ -191,6 +192,7 @@ async function syncAccessControl() {
       }
     }
     await initializeAccessControl();
+    await ensurePartnerAccessControl();
     console.log("Access control data synchronised.");
   } catch (error) {
     console.error("Failed to synchronise access control data:", error);

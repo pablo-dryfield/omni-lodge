@@ -1,3 +1,4 @@
+import { allocateRefundMinor } from './partners/partnerRefundAllocation.js';
 import type { Transaction } from 'sequelize';
 import Booking from '../models/Booking.js';
 import BookingAddon from '../models/BookingAddon.js';
@@ -145,14 +146,16 @@ export const projectStorefrontOrderBookings = async (
   const grossBeforeDiscount = Number(order.subtotal) + Number(order.addonTotal);
   const orderDiscount = Number(order.discountTotal);
   const projected: Booking[] = [];
+  const partnerDiscountAmounts = order.orderSource === 'partner' ? allocateRefundMinor(Math.round(orderDiscount * 100), (order.items || []).map(value => Math.round(Number(value.total) * 100))) : [];
+  const partnerDiscounts = order.orderSource === 'partner' ? new Map((order.items || []).map((item, index) => [String(item.id), partnerDiscountAmounts[index] / 100])) : null;
 
   for (const item of order.items || []) {
     const platformBookingId = `${order.publicId}-${item.id}`;
     const current = existingByPlatformId.get(platformBookingId) ?? null;
     const itemGross = Number(item.total);
-    const allocatedDiscount = grossBeforeDiscount > 0
+    const allocatedDiscount = partnerDiscounts?.get(String(item.id)) ?? (grossBeforeDiscount > 0
       ? roundMoney(orderDiscount * (itemGross / grossBeforeDiscount))
-      : 0;
+      : 0);
     const itemNet = Math.max(0, roundMoney(itemGross - allocatedDiscount));
     const addons = Array.isArray(item.addons) ? item.addons : [];
     const notes = appendNotes(current?.notes ?? null, [
@@ -200,6 +203,8 @@ export const projectStorefrontOrderBookings = async (
           paymentMethod: options.paymentMethod,
         };
     const commonValues = {
+      ...(order.orderSource === 'partner' && Number(order.metadata?.partnerChannelId) > 0
+        ? { channelId: Number(order.metadata?.partnerChannelId) } : {}),
       guestId: guest.id,
       ...settlementValues,
       paymentMethodCountry: order.customerCountryCode,

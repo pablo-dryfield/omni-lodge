@@ -29,6 +29,7 @@ export const getPostLoginDestination = (
   roleSlug: string | null | undefined,
   location: LoginRedirectLocation,
 ): string => {
+  if (String(roleSlug ?? '').trim().toLowerCase() === 'partner') return '/partners';
   if (String(roleSlug ?? '').trim().toLowerCase() === 'affiliate') {
     return AFFILIATE_DESTINATION;
   }
