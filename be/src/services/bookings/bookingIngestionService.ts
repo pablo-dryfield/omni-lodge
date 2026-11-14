@@ -47,6 +47,7 @@ import { maybeSendTshirtSizeSelectionEmail } from './tshirtSizeEmailAutomationSe
 import { normalizeForwardedBackupPayload } from './forwardedEmailNormalizer.js';
 import { applyAutomaticBookingReassignmentRules } from './bookingReassignmentRulesService.js';
 import { applyRezdyFinancials, getRezdySource, isRezdyLinkedViatorBooking, prepareRezdyLinkedViatorEvent, resolveRezdyBookingIdentity } from './rezdyIngestionPolicy.js';
+import { describeBookingIngestionFailure } from './bookingIngestionFailure.js';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);
@@ -1129,7 +1130,7 @@ const buildParserContext = (email: BookingEmail, payload: GmailMessagePayload): 
   };
 };
 
-const saveEmailRecord = async (payload: GmailMessagePayload): Promise<BookingEmail> => {
+export const saveEmailRecord = async (payload: GmailMessagePayload): Promise<BookingEmail> => {
   const { message, textBody } = payload;
   const messageId = message.id ?? '';
   const existing = await BookingEmail.findOne({ where: { messageId } });
@@ -1151,10 +1152,10 @@ const saveEmailRecord = async (payload: GmailMessagePayload): Promise<BookingEma
   }
   const record =
     existing ??
-    BookingEmail.build({
-      messageId,
-      ingestionStatus: 'pending',
-    } as BookingEmail);
+    (await BookingEmail.findOrCreate({
+      where: { messageId },
+      defaults: { messageId, ingestionStatus: 'pending' } as BookingEmail,
+    }))[0];
 
   record.threadId = message.threadId ?? null;
   record.historyId = message.historyId ?? null;
@@ -2898,15 +2899,17 @@ export async function reprocessProductBookingEmail(messageId: string, productTyp
 }
 
 type ProcessResult = 'processed' | 'skipped_lower' | 'skipped_upper' | 'ignored' | 'failed';
+type ProcessOptions = {
+  force?: boolean;
+  receivedAfter?: Date | null;
+  receivedBefore?: Date | null;
+  scopedHints?: ScopedReprocessHint[];
+};
+const processingMessages = new Map<string, Promise<ProcessResult>>();
 
-export const processBookingEmail = async (
+const processBookingEmailOnce = async (
   messageId: string,
-  options: {
-    force?: boolean;
-    receivedAfter?: Date | null;
-    receivedBefore?: Date | null;
-    scopedHints?: ScopedReprocessHint[];
-  } = {},
+  options: ProcessOptions = {},
 ): Promise<ProcessResult> => {
   const scopedHints = normalizeScopedReprocessHints(options.scopedHints);
   const isScopedReprocess = scopedHints.length > 0;
@@ -2936,7 +2939,7 @@ export const processBookingEmail = async (
       );
     }
   } catch (error) {
-    if (isGmailRateLimitError(error)) {
+    if (isGmailRateLimitError(error) || isGmailCooldownError(error)) {
       throw error;
     }
     logger.error(`[booking-email] Unable to fetch message ${messageId}: ${(error as Error).message}`);
@@ -3037,6 +3040,32 @@ export const processBookingEmail = async (
   }
 };
 
+/** Coalesce identical ordinary ingestion requests in the primary process.
+ * Explicit replays keep their existing semantics (including recursive timeline
+ * rebuilds) and database uniqueness still protects snapshots across processes. */
+export const processBookingEmail = (messageId: string, options: ProcessOptions = {}): Promise<ProcessResult> => {
+  if (options.force || options.scopedHints?.length) return processBookingEmailOnce(messageId, options);
+  const key = JSON.stringify([messageId, options.receivedAfter?.valueOf() ?? null, options.receivedBefore?.valueOf() ?? null]);
+  const active = processingMessages.get(key);
+  if (active) return active;
+  const pending = processBookingEmailOnce(messageId, options).finally(() => {
+    if (processingMessages.get(key) === pending) processingMessages.delete(key);
+  });
+  processingMessages.set(key, pending);
+  return pending;
+};
+
+const processBatchMessage = async (messageId: string, options: ProcessOptions = {}): Promise<ProcessResult> => {
+  try {
+    return await processBookingEmail(messageId, options);
+  } catch (error) {
+    // Provider cooldowns must stop the batch rather than repeatedly hitting Gmail.
+    if (isGmailCooldownError(error) || isGmailRateLimitError(error)) throw error;
+    logger.error(`[booking-email] Message ${messageId} failed before completion: ${describeBookingIngestionFailure(error)}. Retry remains available.`);
+    return 'failed';
+  }
+};
+
 const rebuildBookingTimeline = async (
   platform: BookingPlatform,
   platformBookingId: string,
@@ -3086,7 +3115,7 @@ const rebuildBookingTimeline = async (
   }
 };
 
-export const ingestLatestBookingEmails = async (): Promise<void> => {
+const runLatestBookingEmailIngestion = async (): Promise<void> => {
   try {
     const processAllIncomingMessages = shouldProcessAllIncomingMessages();
     const listParams = {
@@ -3137,7 +3166,7 @@ export const ingestLatestBookingEmails = async (): Promise<void> => {
 
     logger.info(`[booking-email] Inspecting ${newMessageIds.length} new incoming Gmail message(s)`);
     for (const messageId of newMessageIds) {
-      await processBookingEmail(messageId);
+      await processBatchMessage(messageId);
     }
   } catch (error) {
     if (isGmailCooldownError(error)) {
@@ -3146,6 +3175,16 @@ export const ingestLatestBookingEmails = async (): Promise<void> => {
       logger.error(`[booking-email] Failed to ingest booking emails: ${(error as Error).message}`);
     }
   }
+};
+
+let latestIngestion: Promise<void> | null = null;
+export const ingestLatestBookingEmails = (): Promise<void> => {
+  if (latestIngestion) return latestIngestion;
+  const pending = runLatestBookingEmailIngestion().finally(() => {
+    if (latestIngestion === pending) latestIngestion = null;
+  });
+  latestIngestion = pending;
+  return pending;
 };
 
 export const reprocessBookingEmails = async (limit = 10): Promise<void> => {
@@ -3160,7 +3199,7 @@ export const reprocessBookingEmails = async (limit = 10): Promise<void> => {
   });
 
   for (const email of pendingEmails) {
-    await processBookingEmail(email.messageId, { force: true });
+    await processBatchMessage(email.messageId, { force: true });
   }
 };
 
@@ -3221,7 +3260,7 @@ export const ingestAllBookingEmails = async (options: IngestAllOptions = {}): Pr
         if (!message.id) {
           continue;
         }
-        const result = await processBookingEmail(message.id, { receivedAfter, receivedBefore });
+        const result = await processBatchMessage(message.id, { receivedAfter, receivedBefore });
         if (result === 'skipped_lower') {
           hitLowerBound = true;
         }
