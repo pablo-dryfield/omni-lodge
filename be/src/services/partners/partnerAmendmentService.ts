@@ -1,3 +1,4 @@
+import { calculatePartnerCommission } from './partnerCommission.js';
 import { Op, type Transaction } from 'sequelize';
 import sequelize from '../../config/database.js';
 import { PartnerAmendment, PartnerBooking, PartnerPayment, PartnerProfile } from '../../models/Partner.js';
@@ -44,7 +45,7 @@ export async function quotePartnerAmendment(context: PartnerContext, id: number,
   if (!booking?.orderId) throw new HttpError(404, 'Booking not found.');
   const order = (await StorefrontOrder.findByPk(booking.orderId))!;
   const selection = parsePartnerSelection({ ...booking.selection, offeringCode: undefined, items: body.items, ...(body.discountCode !== undefined ? { discountCode: body.discountCode } : {}) });
-  const quote = await quotePartnerBooking(context.partner, selection, undefined, { inventoryReservationOrderId: order.id });
+  const quote = await quotePartnerBooking(context.partner, selection, undefined, { inventoryReservationOrderId: order.id }, booking.snapshot);
   return { ...quote, difference: money(quote.total - Number(order.total)) };
 }
 
@@ -70,7 +71,7 @@ export async function amendPartnerBooking(context: PartnerContext, id: number, b
     if (!context.admin && (!starts.length || Math.min(...starts) - Date.now() < booking.snapshot.cancellationHours * 3600000)) throw new HttpError(409, 'The partner change deadline has passed.');
     const selection = parsePartnerSelection({ ...booking.selection, offeringCode: undefined, items: body.items, ...(body.discountCode !== undefined ? { discountCode: body.discountCode } : {}) });
     await lockStorefrontCartReservationResources(selection, transaction);
-    const quote = await quotePartnerBooking(context.partner, selection, transaction, { inventoryReservationOrderId: order.id });
+    const quote = await quotePartnerBooking(context.partner, selection, transaction, { inventoryReservationOrderId: order.id }, booking.snapshot);
     let difference = money(quote.total - Number(order.total));
     if (booking.paymentMode === 'platform' && booking.paymentReceived) {
       const payments = await verifiedPartnerPayments(order, booking, transaction);
@@ -116,8 +117,10 @@ async function applySelection(order: StorefrontOrder, booking: PartnerBooking, r
   await lockStorefrontCartReservationResources(selection, transaction);
   // Stored quote is the price the customer accepted. Validate current availability and product rules again.
   const partner = (await PartnerProfile.findByPk(booking.partnerId, { transaction }))!;
-  await quotePartnerBooking(partner, selection, transaction, { inventoryReservationOrderId: order.id });
+  await quotePartnerBooking(partner, selection, transaction, { inventoryReservationOrderId: order.id }, booking.snapshot);
   const quote = row.quote as unknown as StorefrontQuote;
+  const previousCommission = booking.commissionCalculation;
+  const nextCommission = previousCommission ? calculatePartnerCommission(booking.snapshot, quote) : null;
   const previousStartAt = affected[0]?.experienceStartAt || null;
   // Replace inventory commitments atomically; promotion redemption remains the original single sale.
   await StorefrontOrderResourceReservation.destroy({ where: { orderId: order.id, resourceType: 'inventory' }, transaction });
@@ -152,16 +155,17 @@ async function applySelection(order: StorefrontOrder, booking: PartnerBooking, r
     await booking.update({ amendmentRefundedAmount: money(Number(booking.amendmentRefundedAmount || 0) - Number(row.difference)) }, { transaction });
   }
   if (booking.paymentMode !== 'platform') {
-    if (!booking.paymentReceived) await booking.update({ total: quote.total, commission: money(quote.total * booking.snapshot.commissionPercent / 100) }, { transaction });
-    else if (Number(row.difference) >= 0) await booking.update({ total: money(Number(booking.total) + Number(row.difference)), commission: money(Number(booking.commission) + Number(row.difference) * booking.snapshot.commissionPercent / 100) }, { transaction });
+    if (!booking.paymentReceived) await booking.update({ total: quote.total, commission: nextCommission?.commission ?? money(quote.total * booking.snapshot.commissionPercent / 100) }, { transaction });
+    else if (Number(row.difference) >= 0) await booking.update({ total: money(Number(booking.total) + Number(row.difference)), commission: nextCommission?.commission ?? money(Number(booking.commission) + Number(row.difference) * booking.snapshot.commissionPercent / 100) }, { transaction });
     else await booking.update({ refundedAmount: money(Number(booking.refundedAmount) - Number(row.difference)), amendmentRefundedAmount: money(Number(booking.amendmentRefundedAmount || 0) - Number(row.difference)) }, { transaction });
     await projectPartnerRefund(order.publicId, Math.max(0, minor(Number(booking.refundedAmount)) - minor(Number(booking.amendmentRefundedAmount || 0))), transaction);
+    if (nextCommission) await booking.update({ commissionCalculation: nextCommission, commission: nextCommission.commission }, { transaction });
     const debts = await PartnerBooking.findAll({ where: { partnerId: partner.id, paymentMode: 'partner', paymentReceived: true }, transaction });
     if (money(debts.reduce((sum, value) => sum + partnerStatement(value).partnerOwes, 0)) > partner.agreement.creditLimit) throw new HttpError(409, 'The partner credit limit would be exceeded.');
   }
-  await booking.update({ selection: row.selection }, { transaction });
+  await booking.update({ selection: row.selection, ...(nextCommission ? { commissionCalculation: nextCommission, commission: nextCommission.commission } : {}) }, { transaction });
   await row.update({ status: 'completed', failureReason: null }, { transaction });
-  await partnerEvent(booking.partnerId, 'booking.amended', { amendmentId: row.id, reference: row.reference, items: selection.items, difference: Number(row.difference), total: quote.total, reason: row.reason }, row.actorId, booking.id, transaction);
+  await partnerEvent(booking.partnerId, 'booking.amended', { amendmentId: row.id, reference: row.reference, items: selection.items, difference: Number(row.difference), total: quote.total, reason: row.reason, ...(nextCommission ? { previousCommission, commission: nextCommission } : {}) }, row.actorId, booking.id, transaction);
   for (const value of affected) await BookingEvent.create({ bookingId: value.id, eventType: 'amended', platform: 'omnilodge', occurredAt: new Date(), eventPayload: { amendmentId: row.id, reason: row.reason, difference: Number(row.difference) } } as never, { transaction });
   return { affected, previousStartAt, actorId: row.actorId ?? partner.createdBy };
 }
@@ -186,7 +190,7 @@ export async function completePartnerAmendment(id: number) {
       const locked = (await PartnerBooking.findByPk(booking.id, { transaction, lock: transaction.LOCK.UPDATE }))!;
       const order = (await StorefrontOrder.findByPk(booking.orderId!, { transaction }))!;
       if (order.stripePaymentIntentId) await verifiedPartnerPayments(order, locked, transaction);
-      await PartnerPayment.findOrCreate({ where: { bookingId: booking.id, reference: `amendment-${id}` }, defaults: { amount: row.difference, commission: money(Number(row.difference) * booking.snapshot.commissionPercent / 100), paymentIntentId: intent.id }, transaction });
+      await PartnerPayment.findOrCreate({ where: { bookingId: booking.id, reference: `amendment-${id}` }, defaults: { amount: row.difference, commission: booking.commissionCalculation ? 0 : money(Number(row.difference) * booking.snapshot.commissionPercent / 100), paymentIntentId: intent.id }, transaction });
     });
   }
   try {

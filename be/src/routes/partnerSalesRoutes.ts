@@ -39,7 +39,8 @@ router.get('/:code/qr', route(async (req, res) => {
 }));
 router.post('/:code/quote', route(async (req, res) => {
   const partner = await partnerFor(req.params.code);
-  return res.json(await quotePartnerBooking(partner, parsePartnerSelection(req.body)));
+  const { partnerCommission: _privateCommission, ...customerQuote } = await quotePartnerBooking(partner, parsePartnerSelection(req.body));
+  return res.json(customerQuote);
 }));
 router.post('/:code/book', route(async (req, res) => {
   const partner = await partnerFor(req.params.code);

@@ -1,9 +1,12 @@
+import { parseCommissionRule, type PartnerCommissionRule, type PartnerProductCommission } from './partnerCommission.js';
 import { createHash, randomBytes } from 'node:crypto';
 import HttpError from '../../errors/HttpError.js';
 
 export type PartnerAgreement = {
   productIds: number[];
   commissionPercent: number;
+  commissionRule?: PartnerCommissionRule | null;
+  productCommissions?: PartnerProductCommission[];
   paymentModes: Array<'platform' | 'partner' | 'arrival'>;
   creditLimit: number;
   connectSplit: boolean;
@@ -13,7 +16,7 @@ export type PartnerAgreement = {
   cancellationHours: number;
   allowedOrigins: string[];
 };
-export const defaultAgreement: PartnerAgreement = { productIds: [], commissionPercent: 0, paymentModes: ['platform'], creditLimit: 0, connectSplit: false, allowCancellation: false, allowAmendment: false, allowRefunds: false, cancellationHours: 24, allowedOrigins: [] };
+export const defaultAgreement: PartnerAgreement = { productIds: [], commissionPercent: 0, commissionRule: null, productCommissions: [], paymentModes: ['platform'], creditLimit: 0, connectSplit: false, allowCancellation: false, allowAmendment: false, allowRefunds: false, cancellationHours: 24, allowedOrigins: [] };
 export const opaqueToken = (): string => randomBytes(32).toString('base64url');
 export const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex');
 export const money = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -33,6 +36,16 @@ export const parseAgreement = (input: unknown): PartnerAgreement => {
   if (Object.keys(x).some(key => !(key in defaultAgreement))) throw new HttpError(400, 'Unknown agreement field.');
   if (!Array.isArray(result.productIds) || result.productIds.length > 100) throw new HttpError(400, 'Select up to 100 approved products.');
   result.productIds = [...new Set(result.productIds.map(positiveId))];
+  result.commissionRule = result.commissionRule == null ? null : parseCommissionRule(result.commissionRule);
+  if (!Array.isArray(result.productCommissions) || result.productCommissions.length > 100) throw new HttpError(400, 'Select up to 100 product commission overrides.');
+  result.productCommissions = result.productCommissions.map(entry => {
+    if (!entry || typeof entry !== 'object' || Object.keys(entry).some(key => !['productId', 'rule'].includes(key))) throw new HttpError(400, 'Invalid product commission override.');
+    const productId = positiveId(entry.productId);
+    if (!result.productIds.includes(productId)) throw new HttpError(400, 'Commission overrides must use approved products.');
+    return { productId, rule: parseCommissionRule(entry.rule) };
+  });
+  if (new Set(result.productCommissions.map(entry => entry.productId)).size !== result.productCommissions.length) throw new HttpError(400, 'Use one commission override per product.');
+
   for (const [field, max] of [['commissionPercent', 100], ['creditLimit', 1000000], ['cancellationHours', 8760]] as const) {
     if (typeof result[field] !== 'number' || !Number.isFinite(result[field]) || result[field] < 0 || result[field] > max) throw new HttpError(400, `Invalid ${field}.`);
   }

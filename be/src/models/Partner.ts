@@ -1,3 +1,4 @@
+import type { PartnerCommissionCalculation } from '../services/partners/partnerCommission.js';
 import { AllowNull, Column, CreatedAt, DataType, Default, Model, PrimaryKey, AutoIncrement, Table, UpdatedAt } from 'sequelize-typescript';
 import type { PartnerAgreement } from '../services/partners/partnerPolicy.js';
 
@@ -51,11 +52,14 @@ export class PartnerBooking extends PartnerRow {
   @AllowNull(false) @Column(DataType.JSONB) declare snapshot: PartnerAgreement;
   @Default(0) @Column(DataType.DECIMAL(12, 2)) declare total: number;
   @Default(0) @Column(DataType.DECIMAL(12, 2)) declare commission: number;
+  @Column({ field: 'commission_calculation', type: DataType.JSONB }) declare commissionCalculation: PartnerCommissionCalculation | null;
+  @Column({ field: 'commission_transferred', type: DataType.DECIMAL(12, 2) }) declare commissionTransferred: number | null;
   @Column({ field: 'commission_earned', type: DataType.DECIMAL(12, 2) }) declare commissionEarned: number | null;
   @Default(false) @Column({ field: 'payment_received', type: DataType.BOOLEAN }) declare paymentReceived: boolean;
   @Default(0) @Column({ field: 'refunded_amount', type: DataType.DECIMAL(12, 2) }) declare refundedAmount: number;
   @Default(0) @Column({ field: 'amendment_refunded_amount', type: DataType.DECIMAL(12, 2) }) declare amendmentRefundedAmount: number;
   @Default(0) @Column({ field: 'settled_amount', type: DataType.DECIMAL(12, 2) }) declare settledAmount: number;
+  @Default(0) @Column({ field: 'partner_credit_paid', type: DataType.DECIMAL(12, 2) }) declare partnerCreditPaid: number;
   @Column({ field: 'transfer_id', type: DataType.STRING(128) }) declare transferId: string | null;
   @Default(0) @Column({ field: 'reversed_amount', type: DataType.INTEGER }) declare reversedAmount: number;
   @Column({ field: 'checkout_url', type: DataType.TEXT }) declare checkoutUrl: string | null;

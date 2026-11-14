@@ -192,12 +192,12 @@ router.post('/:partnerId/bookings/:id/settlement-return', route(async (req, res)
   if (!Number.isFinite(amount) || amount <= 0 || money(amount) !== amount || !reference || reference.length > 160 || !reason || reason.length > 1000) throw new HttpError(400, 'A returned amount, receipt reference and reason are required.');
   await sequelize.transaction(async transaction => {
     const row = await PartnerBooking.findOne({ where: { id: positiveId(req.params.id), partnerId: ctx.partner.id }, transaction, lock: transaction.LOCK.UPDATE });
-    if (!row || Number(row.settledAmount) <= 0) throw new HttpError(409, 'Only previously recorded manual settlements use this receipt action.');
+    if (!row || (row.paymentMode !== 'partner' && Number(row.settledAmount) <= 0)) throw new HttpError(409, 'A partner credit or recorded manual overpayment is required.');
     const previous = await PartnerEvent.findOne({ where: { partnerId: ctx.partner.id, bookingId: row.id, type: 'settlement.returned', data: { reference } }, transaction });
     if (previous) { if (Number(previous.data.amount) !== amount) throw new HttpError(409, 'This receipt was used for another amount.'); return; }
     const statement = partnerStatement(row);
-    if (amount > Math.max(statement.partnerCredit, statement.commissionOverpaid) || amount > Number(row.settledAmount)) throw new HttpError(409, 'The amount exceeds the settlement credit or overpayment.');
-    await row.update({ settledAmount: money(Number(row.settledAmount) - amount) }, { transaction });
+    if (amount > Math.max(statement.partnerCredit, statement.commissionOverpaid) || (row.paymentMode !== 'partner' && amount > Number(row.settledAmount))) throw new HttpError(409, 'The amount exceeds the settlement credit or overpayment.');
+    await row.update(row.paymentMode === 'partner' ? { partnerCreditPaid: money(Number(row.partnerCreditPaid || 0) + amount) } : { settledAmount: money(Number(row.settledAmount) - amount) }, { transaction });
     await partnerEvent(ctx.partner.id, 'settlement.returned', { reference, reason, amount, direction: row.paymentMode === 'partner' ? 'platform_to_partner' : 'partner_to_platform' }, ctx.actorId, row.id, transaction);
   });
   return res.json({ recorded: true, message: 'Completed settlement return recorded. No bank funds were moved.' });

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Alert, Button, Card, Checkbox, Group, NumberInput, Select, SimpleGrid, Stack, Text, TextInput, Textarea, Title } from '@mantine/core';
 import { IconPlus, IconTrash } from '@tabler/icons-react';
-import { formatPartnerMoney, partnerApi, partnerError, paymentLabel, type BookingLine, type PartnerBookingInput, type PartnerBookingRow, type PartnerOverview } from '../../api/partners';
+import { formatPartnerMoney, partnerApi, partnerError, paymentLabel, type BookingLine, type PartnerBookingInput, type PartnerBookingRow, type PartnerOverview, type PartnerQuote } from '../../api/partners';
 
 export function PartnerBookingForm({ overview, onCreated, amending }: { overview: PartnerOverview; onCreated: () => void; amending?: PartnerBookingRow }) {
   const [customer, setCustomer] = useState({ firstName: amending?.customer.firstName || '', lastName: amending?.customer.lastName || '', email: amending?.customer.email || '', phone: amending?.customer.phone || '' });
@@ -17,7 +17,7 @@ export function PartnerBookingForm({ overview, onCreated, amending }: { overview
   const [offeringCode, setOfferingCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [quote, setQuote] = useState<{ total: number; items: Array<{ productName: string; total: number; quantity: number }> } | null>(null);
+  const [quote, setQuote] = useState<PartnerQuote | null>(null);
   const [result, setResult] = useState<{ id: number; checkoutUrl?: string; status: string } | null>(null);
   const changed = () => { setQuote(null); setResult(null); setReference(crypto.randomUUID()); };
   const patchLine = (index: number, patch: Partial<BookingLine>) => { changed(); setLines(current => current.map((line, i) => i === index ? { ...line, ...patch } : line)); };
@@ -26,7 +26,7 @@ export function PartnerBookingForm({ overview, onCreated, amending }: { overview
     setBusy(true); setError('');
     try {
       const input = payload();
-      const value = await partnerApi.post<{ total: number; items: Array<{ productName: string; total: number; quantity: number }> }>(overview.partner.id, amending ? `bookings/${amending.id}/amend/quote` : 'quote', input);
+      const value = await partnerApi.post<PartnerQuote>(overview.partner.id, amending ? `bookings/${amending.id}/amend/quote` : 'quote', input);
       setQuote(value);
       if (create) { setResult(await partnerApi.post(overview.partner.id, amending ? `bookings/${amending.id}/amend` : 'bookings', amending ? { items: input.items, reference, reason, notifyCustomer, discountCode, paymentReference } : input)); onCreated(); }
     } catch (e) { setError(partnerError(e)); } finally { setBusy(false); }
@@ -61,7 +61,7 @@ export function PartnerBookingForm({ overview, onCreated, amending }: { overview
     {amending && <><Alert>Extra Stripe payment opens a secure payment link. Your existing booking stays until payment and availability are verified. Lower prices refund the difference automatically. Payments collected outside Stripe require a verified receipt from operations.</Alert><Textarea label="Reason for amendment" required value={reason} onChange={e => setReason(e.currentTarget.value)} /><Checkbox label="Notify the customer by email" checked={notifyCustomer} onChange={e => setNotifyCustomer(e.currentTarget.checked)} /></>}
     {!amending && paymentMode === 'partner' && <Alert color="blue">The customer paid your company. The net amount remains payable to OmniLodge until a settlement is recorded.</Alert>}
     {error && <Alert color="red" title="Booking not submitted">{error}</Alert>}
-    {quote && <Card withBorder ta="center"><Text c="dimmed">{amending ? 'Updated experience total' : 'Customer total'}</Text><Title order={2}>{formatPartnerMoney(quote.total)}</Title>{quote.items.map((item, i) => <Text key={i} size="sm">{item.productName} · {item.quantity} guests · {formatPartnerMoney(item.total)}</Text>)}</Card>}
+    {quote && <Card withBorder ta="center"><Text c="dimmed">{amending ? 'Updated experience total' : 'Customer total'}</Text><Title order={2}>{formatPartnerMoney(quote.total)}</Title>{quote.partnerCommission && <Text fw={600}>Partner commission: {formatPartnerMoney(quote.partnerCommission.commission)}</Text>}{quote.items.map((item, i) => <Text key={i} size="sm">{item.productName} · {item.quantity} guests · {formatPartnerMoney(item.total)}</Text>)}</Card>}
     {result && <Alert color="green" title={amending ? 'Amendment submitted' : result.status === 'requested' ? 'Request submitted' : 'Booking created'}><Text>Reference: {reference}</Text>{result.checkoutUrl && <Group mt="xs"><Button component="a" href={result.checkoutUrl} target="_blank" rel="noopener noreferrer" size="xs">Open customer payment</Button><Button size="xs" variant="light" onClick={() => void navigator.clipboard.writeText(result.checkoutUrl!)}>Copy payment link</Button></Group>}</Alert>}
     <Group justify="flex-end"><Button variant="default" loading={busy} onClick={() => void submit(false)}>Check price</Button><Button type="submit" loading={busy} disabled={!!result}>{amending ? 'Confirm amendment' : requestApproval ? 'Submit group request' : paymentMode === 'platform' ? 'Create payment link' : 'Confirm booking'}</Button></Group>
   </Stack></form>;

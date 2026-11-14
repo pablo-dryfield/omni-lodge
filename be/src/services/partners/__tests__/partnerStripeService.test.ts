@@ -105,3 +105,24 @@ it('recognizes arrival payment only after every operational experience is record
   expect(booking.update).toHaveBeenCalledWith({ paymentReceived: true }, expect.anything());
   expect(stripe.paymentIntents.retrieve).not.toHaveBeenCalled();
 });
+
+const fixedCalculation = { version: 1 as const, currency: 'PLN' as const, total: 100, commission: 20,
+  groups: [{ productId: null, rule: { type: 'fixed' as const, basis: 'booking' as const, value: 20 }, units: 1, base: 100, commission: 20 }] };
+it('retains the fixed fee after an amount-only refund even when the platform has to fund a shortfall', () => {
+  const result = partnerStatement({ ...booking, status: 'confirmed', commissionCalculation: fixedCalculation,
+    commissionTransferred: 20, transferId: 'tr_fixed', refundedAmount: 90 } as any);
+  expect(result.commission).toBe(20); expect(result.transferred).toBe(20); expect(result.commissionOverpaid).toBe(0);
+});
+it('shows and clears a credit owed to a collecting partner without needing negative settlement values', () => {
+  const source = { ...booking, status: 'confirmed', paymentMode: 'partner', commissionCalculation: fixedCalculation,
+    refundedAmount: 90, partnerCreditPaid: 0, snapshot: { connectSplit: true } };
+  const due = partnerStatement(source as any);
+  expect(due.partnerOwes).toBe(0); expect(due.partnerCredit).toBe(10);
+  expect(due.manualSettlementAllowed).toBe(true); expect(due.manualReturnAllowed).toBe(true);
+  expect(partnerStatement({ ...source, partnerCreditPaid: 10 } as any).partnerCredit).toBe(0);
+});
+it('removes fixed entitlement after cancellation and reports an unrecovered payout separately', () => {
+  const result = partnerStatement({ ...booking, status: 'cancelled', commissionCalculation: fixedCalculation,
+    commissionTransferred: 20, transferId: 'tr_fixed' } as any);
+  expect(result.commission).toBe(0); expect(result.commissionOverpaid).toBe(20);
+});

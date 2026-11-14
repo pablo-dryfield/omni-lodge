@@ -28,7 +28,7 @@ export async function changePartnerBooking(context: PartnerContext, id: number, 
     if (!order || booking.partnerId !== context.partner.id) throw new HttpError(404, 'Booking not found.');
     if (action === 'cancel' && booking.status === 'cancelled') return { booking, affected: [] as Booking[], previousStartAt: null as Date | null };
     if (await PartnerAmendment.count({ where: { bookingId: id, status: { [Op.in]: ['pending_payment', 'applying'] } }, transaction })) throw new HttpError(409, 'Complete or cancel the pending amendment first.');
-    if (booking.status !== 'confirmed') throw new HttpError(409, 'Only confirmed bookings can be changed.');
+    if (!['confirmed', 'refunded'].includes(booking.status)) throw new HttpError(409, 'Only confirmed or refunded bookings can be cancelled.');
     const affected = await Booking.findAll({ where: { platformOrderId: order.publicId }, transaction, lock: transaction.LOCK.UPDATE });
     if (affected.some(b => ['checked_in_full', 'checked_in_partial'].includes(b.attendanceStatus))) throw new HttpError(409, 'A checked-in booking must be managed by the operations team.');
     const starts = affected.map(b => b.experienceStartAt?.getTime()).filter((x): x is number => typeof x === 'number');

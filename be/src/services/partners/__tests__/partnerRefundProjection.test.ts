@@ -32,3 +32,11 @@ it('uses the actual discounted payment as the refundable capacity', async () => 
   await projectPartnerRefund('order', 8000, transaction);
   expect(row.update).toHaveBeenCalledWith(expect.objectContaining({ refundedAmount: '80.00', baseAmount: '0.00', paymentStatus: 'refunded' }), expect.anything());
 });
+
+it('keeps lifetime refund receipts separate from a lower-priced amended selection', async () => {
+  const row = line(100, 150);
+  (Booking.findAll as jest.Mock).mockResolvedValue([row]);
+  const result = await projectPartnerRefund('order', 25000, transaction);
+  expect(row.update).toHaveBeenCalledWith(expect.objectContaining({ refundedAmount: '100.00', baseAmount: '0.00' }), expect.anything());
+  expect(result).toEqual({ previousAllocated: 150, refunded: 100, lifetimeRefunded: 250 });
+});
