@@ -1,4 +1,5 @@
 import { SYSTEM_MANAGEMENT_CONFIG } from './systemManagementConfig.js';
+import { partnerConfigDefinitions } from './partnerConfig.js';
 import { DEFAULT_WALK_IN_TICKET_TYPES, WALK_IN_TICKET_CONFIG_KEY } from './walkInTicketConfig.js';
 import {
   DEFAULT_GOOGLE_ADS_API_VERSION,
@@ -27,6 +28,7 @@ export type ConfigDefinition = {
 };
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
+  ...partnerConfigDefinitions,
   {
     key: 'SEARCH_CONSOLE_PAGE_SIZE', label: 'Search Console detail page size', category: 'Google API',
     description: 'Maximum detail rows fetched per Search Console page. Additional rows are loaded explicitly. Summary totals use a separate ungrouped Google request and are never summed from these rows. Applies on the next report request without restart.',

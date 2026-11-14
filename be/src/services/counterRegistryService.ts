@@ -51,6 +51,7 @@ import {
 import { normalizeBookingExtrasSnapshot } from '../utils/bookingExtras.js';
 import { getWalkInTicketTypes } from './walkInTicketService.js';
 import { validateCounterWalkInNotes } from './walkInPaymentService.js';
+import { partnerCounterWalkIns } from './partners/partnerCounterBaseline.js';
 import { reconcileStaffFreeAllowances, staffFreeCounterEntries } from './staffFreeEntryService.js';
 import { getStaffFreeCounterMetrics } from './staffFreeCounterMetricsService.js';
 import StaffFreeEntry from '../models/StaffFreeEntry.js';
@@ -947,6 +948,7 @@ export default class CounterRegistryService {
     counterId: number,
     rows: MetricInput[],
     actorUserId: number,
+    notesOverride?: string | null,
   ): Promise<{ metrics: MetricCell[]; derivedSummary: CounterSummary }> {
     const counter = await this.loadCounterById(counterId);
     if (!counter) {
@@ -983,6 +985,7 @@ export default class CounterRegistryService {
       }
     });
     const onlineChannelIdSet = new Set<number>(Array.from(onlineChannelIdByPlatform.values()));
+    const registeredChannelIds = new Set(channelRecords.map(channel => Number(channel.id)));
     const preservesManualAttendance =
       counter.date >= '2025-10-01' && counter.date < COUNTER_SUMMARY_ATTENDANCE_NOSHOW_FROM_DATE;
 
@@ -1004,7 +1007,7 @@ export default class CounterRegistryService {
     const bookedAddonByChannelPeriod = new Map<string, number>();
     const attendedPeopleByChannel = new Map<number, number>();
     const attendedAddonByChannel = new Map<string, number>();
-    if (counter.productId && onlineChannelIdSet.size > 0) {
+    if (counter.productId) {
       const bookings = await Booking.findAll({
         where: {
           experienceDate: counter.date,
@@ -1014,6 +1017,7 @@ export default class CounterRegistryService {
         attributes: [
           'id',
           'platform',
+          'channelId',
           'guestEmail',
           'guestFirstName',
           'guestLastName',
@@ -1032,7 +1036,9 @@ export default class CounterRegistryService {
 
       bookings.forEach((booking) => {
         const platformKey = normalizeChannelSlug(booking.platform);
-        const channelId = onlineChannelIdByPlatform.get(platformKey);
+        const explicitChannelId = Number(booking.channelId);
+        const channelId = Number.isSafeInteger(explicitChannelId) && registeredChannelIds.has(explicitChannelId) ? explicitChannelId : onlineChannelIdByPlatform.get(platformKey);
+        if (channelId) onlineChannelIdSet.add(channelId);
         if (!channelId) {
           return;
         }
@@ -1252,12 +1258,13 @@ export default class CounterRegistryService {
         };
 
         onlineChannelIdSet.forEach((channelId) => {
+          const walkIns = partnerCounterWalkIns(notesOverride === undefined ? counter.notes : notesOverride, channelId, addonIdByExtraKey.cocktails);
           const beforePeopleQty = bookedPeopleByChannelPeriod.get(`${channelId}|before_cutoff`) ?? 0;
-          const afterPeopleQty = bookedPeopleByChannelPeriod.get(`${channelId}|after_cutoff`) ?? 0;
+          const afterPeopleQty = (bookedPeopleByChannelPeriod.get(`${channelId}|after_cutoff`) ?? 0) + walkIns.people;
           setBookedMetricFromSource(channelId, 'people', null, 'before_cutoff', beforePeopleQty);
           setBookedMetricFromSource(channelId, 'people', null, 'after_cutoff', afterPeopleQty);
           if (!preservesManualAttendance) {
-            setAttendedMetricFromSource(channelId, 'people', null, attendedPeopleByChannel.get(channelId) ?? 0);
+            setAttendedMetricFromSource(channelId, 'people', null, (attendedPeopleByChannel.get(channelId) ?? 0) + walkIns.people);
           }
 
           const addonIds = new Set<number>();
@@ -1289,11 +1296,11 @@ export default class CounterRegistryService {
 
           addonIds.forEach((addonId) => {
             const beforeAddonQty = bookedAddonByChannelPeriod.get(`${channelId}|before_cutoff|${addonId}`) ?? 0;
-            const afterAddonQty = bookedAddonByChannelPeriod.get(`${channelId}|after_cutoff|${addonId}`) ?? 0;
+            const afterAddonQty = (bookedAddonByChannelPeriod.get(`${channelId}|after_cutoff|${addonId}`) ?? 0) + (walkIns.addons.get(addonId) || 0);
             setBookedMetricFromSource(channelId, 'addon', addonId, 'before_cutoff', beforeAddonQty);
             setBookedMetricFromSource(channelId, 'addon', addonId, 'after_cutoff', afterAddonQty);
             if (!preservesManualAttendance) {
-              setAttendedMetricFromSource(channelId, 'addon', addonId, attendedAddonByChannel.get(`${channelId}|${addonId}`) ?? 0);
+              setAttendedMetricFromSource(channelId, 'addon', addonId, (attendedAddonByChannel.get(`${channelId}|${addonId}`) ?? 0) + (walkIns.addons.get(addonId) || 0));
             }
           });
         });
@@ -1349,6 +1356,7 @@ export default class CounterRegistryService {
         };
 
         walkInChannelIdSet.forEach((channelId) => {
+          if (onlineChannelIdSet.has(channelId)) return; // Source bookings and genuine Walk-Ins were already combined above.
           ensureAfterCutoffMetric(channelId, 'people', null);
           const addonIds = new Set<number>();
           incomingByKey.forEach((row) => {
@@ -1766,7 +1774,7 @@ export default class CounterRegistryService {
       if (slug === 'walkin') {
         return false;
       }
-      return !channel.cashPaymentEligible;
+      return true;
     });
     if (onlineChannels.length === 0) {
       return summary;
@@ -1789,6 +1797,7 @@ export default class CounterRegistryService {
       attributes: [
         'id',
         'platform',
+        'channelId',
         'status',
         'attendanceStatus',
         'attendedTotal',
@@ -1818,7 +1827,7 @@ export default class CounterRegistryService {
 
     bookings.forEach((booking) => {
       const platformKey = normalizeChannelSlug(booking.platform);
-      const channelId = channelIdByPlatform.get(platformKey);
+      const channelId = onlineChannels.some(channel => channel.id === Number(booking.channelId)) ? Number(booking.channelId) : channelIdByPlatform.get(platformKey);
       if (!channelId) {
         return;
       }
@@ -1831,7 +1840,7 @@ export default class CounterRegistryService {
 
     bookings.forEach((booking) => {
       const platformKey = normalizeChannelSlug(booking.platform);
-      const channelId = channelIdByPlatform.get(platformKey);
+      const channelId = onlineChannels.some(channel => channel.id === Number(booking.channelId)) ? Number(booking.channelId) : channelIdByPlatform.get(platformKey);
       if (!channelId) {
         return;
       }

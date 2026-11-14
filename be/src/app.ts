@@ -94,6 +94,10 @@ import migrationAuditRoutes from './routes/migrationAuditRoutes.js';
 import maintenanceCommandRoutes from './routes/maintenanceCommandRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import affiliateRoutes from './routes/affiliateRoutes.js';
+import partnerRoutes from './routes/partnerRoutes.js';
+import partnerSalesRoutes from './routes/partnerSalesRoutes.js';
+import { startPartnerJob } from './jobs/partners.cron.js';
+import { ensurePartnerAccessControl } from './services/partners/partnerAccessSeed.js';
 import performanceRoutes from './routes/performanceRoutes.js';
 import searchConsoleRoutes from './routes/searchConsoleRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
@@ -216,6 +220,7 @@ const startApplicationBackgroundJobs = (): void => {
   startReviewFullSyncJob();
   startStorefrontAbandonedCartJob();
   startBookingStripeFeeSyncJob();
+  startPartnerJob();
   startWhatsAppRetentionJob();
   startWhatsAppWebhookQueueJob();
   startErrorMonitoringRetentionJob();
@@ -392,6 +397,8 @@ app.use('/api/integrations/whatsapp/admin', whatsappAdminRoutes);
 app.use('/api/integrations/whatsapp/test', whatsappTestRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/affiliates', affiliateRoutes);
+app.use('/api/partners', partnerRoutes);
+app.use('/api/partner-sales', partnerSalesRoutes);
 app.use('/api/performance', performanceRoutes);
 app.use('/api/search-console', searchConsoleRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -457,6 +464,7 @@ async function bootstrap(): Promise<void> {
 
       try {
         await ensureAffiliateAccessControl();
+        await ensurePartnerAccessControl();
       } catch (error) {
         logger.warn('[access-control] Failed to ensure affiliate access control records', error);
       }

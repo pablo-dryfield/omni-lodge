@@ -5,6 +5,7 @@ import {
   storefrontStripeWebhookConfigKey,
 } from '../finance/services/stripeClient.js';
 import StorefrontOrder from '../models/StorefrontOrder.js';
+import { PartnerPayment, PartnerBooking } from '../models/Partner.js';
 import { getConfigValueRaw } from '../services/configService.js';
 import { recordOngoingCartEventByIdentity } from '../services/storefrontOngoingCartService.js';
 import logger from '../utils/logger.js';
@@ -153,6 +154,14 @@ export const storefrontStripeWebhook = async (
     }
 
     const event = getStorefrontStripeClient().webhooks.constructEvent(request.body, signature, secret);
+    const amendmentId = (event.data.object as { metadata?: Record<string, string> | null }).metadata?.partnerAmendmentId;
+    if (amendmentId && /^\d+$/.test(amendmentId) && ['checkout.session.completed', 'checkout.session.expired', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed', 'payment_intent.succeeded', 'payment_intent.payment_failed', 'payment_intent.canceled'].includes(event.type)) {
+      const { completePartnerAmendment } = await import('../services/partners/partnerAmendmentService.js');
+      await completePartnerAmendment(Number(amendmentId));
+      response.json({ received: true });
+      return;
+    }
+
     if (
       event.type === 'checkout.session.completed'
       || event.type === 'checkout.session.async_payment_succeeded'
@@ -190,6 +199,21 @@ export const storefrontStripeWebhook = async (
       || event.type === 'payment_intent.canceled'
     ) {
       await recordPaymentIntentFailure(event, event.data.object as Stripe.PaymentIntent);
+    } else if (event.type === 'charge.refunded' || event.type.startsWith('charge.dispute.')) {
+      const object = event.data.object as Stripe.Charge | Stripe.Dispute;
+      const paymentId = typeof object.payment_intent === 'string' ? object.payment_intent : object.payment_intent?.id;
+      if (paymentId) {
+        let order = await StorefrontOrder.findOne({ where: { stripePaymentIntentId: paymentId, orderSource: 'partner' } });
+        if (!order) {
+          const payment = await PartnerPayment.findOne({ where: { paymentIntentId: paymentId } });
+          const booking = payment ? await PartnerBooking.findByPk(payment.bookingId) : null;
+          if (booking?.orderId) order = await StorefrontOrder.findByPk(booking.orderId);
+        }
+        if (order) {
+          const { reconcilePartnerOrder } = await import('../services/partners/partnerStripeService.js');
+          await reconcilePartnerOrder(order.id);
+        }
+      }
     }
 
     response.json({ received: true });

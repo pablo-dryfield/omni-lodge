@@ -22,6 +22,7 @@ export const PAGE_SLUGS = {
   socialMedia: "social-media",
   searchConsole: "search-console",
   affiliates: "affiliates",
+  partners: "partners",
   requests: "requests",
   performance: "performance",
   errorMonitoring: "error-monitoring",

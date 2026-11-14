@@ -134,9 +134,23 @@ const loadAccessControlPayload = async (userTypeId: number): Promise<AccessContr
 
 export const getCurrentUserAccess = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const productTypeIds = await getAllowedProductTypeIds(req);
-  const scopedPayload = (payload: AccessControlPayload) => productTypeIds === null ? payload : {
+  let partnerMember = false;
+  if (req.authContext?.id) {
+    try {
+      const { PartnerMember, PartnerProfile } = await import('../models/Partner.js');
+      const memberships = await PartnerMember.findAll({ where: { userId: req.authContext.id, active: true }, attributes: ['partnerId'] });
+      if (memberships.length) {
+        const { Op } = await import('sequelize');
+        partnerMember = await PartnerProfile.count({ where: { id: { [Op.in]: memberships.map(m => m.partnerId) }, status: 'active' } }) > 0;
+      }
+    } catch { /* Missing/unavailable membership storage grants no partner access. */ }
+  }
+  const scopedPayload = (payload: AccessControlPayload) => {
+    const scoped = productTypeIds === null ? payload : {
     pages: payload.pages.filter(page => PRODUCT_SCOPED_PAGES.has(page)),
     modules: Object.fromEntries(Object.entries(payload.modules).filter(([module]) => PRODUCT_SCOPED_MODULES.has(module))),
+    };
+    return partnerMember ? { ...scoped, pages: [...new Set([...scoped.pages, 'partners'])] } : scoped;
   };
   const userTypeId = req.authContext?.userTypeId;
   const userTypeSlug = normalizeRole(req.authContext?.userTypeSlug ?? req.authContext?.roleSlug ?? null);

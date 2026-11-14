@@ -1003,7 +1003,7 @@ export const commitCounterRegistry = async (req: AuthenticatedRequest, res: Resp
 
     if (body.metrics !== undefined) {
       const rows = parseBodyAsArray(body.metrics);
-      await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
+      await CounterRegistryService.upsertMetrics(counterId, rows, actorId, body.notes);
     }
 
     // Save current Walk-In prices before applying the staff allowance rules, but defer
@@ -1093,7 +1093,7 @@ export const finalizeCounterReservations = async (req: AuthenticatedRequest, res
 
     if (body.metrics !== undefined || attendanceUpdates.length > 0) {
       const rows = body.metrics !== undefined ? parseBodyAsArray(body.metrics) : [];
-      await CounterRegistryService.upsertMetrics(counterId, rows, actorId);
+      await CounterRegistryService.upsertMetrics(counterId, rows, actorId, body.notes);
     }
 
     // Save current Walk-In prices before applying the staff allowance rules, but defer

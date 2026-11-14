@@ -166,6 +166,11 @@ export const HOME_MODULE_PRESENTATIONS: Record<string, HomeModulePresentation> =
     tone: "cyan",
     icon: HandshakeRoundedIcon,
   },
+  [PAGE_SLUGS.partners]: {
+    description: "Manage partner companies, reservations, integrations and settlements.",
+    staffDescription: "Create and manage your company's bookings and integrations.",
+    group: "growth", tone: "cyan", icon: HandshakeRoundedIcon,
+  },
   [PAGE_SLUGS.finance]: {
     description: "Record transactions, plan budgets, and control cash flow.",
     staffDescription: "Record and review the finance activity available to you.",

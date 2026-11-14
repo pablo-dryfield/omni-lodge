@@ -86,12 +86,15 @@ describe('CounterRegistryService.upsertMetrics', () => {
   });
 
   it.each([
-    ['original storefront snapshot', 4],
-    ['Stripe-rectified canonical extras', 2],
-  ])('rebuilds add-ons and normal people from %s', async (_source, remainingCocktails) => {
+    ['original storefront snapshot', 4, false],
+    ['Stripe-rectified canonical extras', 2, false],
+    ['partner Channel storefront snapshot', 4, true],
+    ['cash partner with genuine Walk-Ins', 2, true, true],
+  ])('rebuilds add-ons and normal people from %s', async (_source, remainingCocktails, partnerBooking, mixedWalkIns = false) => {
     const counter = {
       id: 920,
       date: '2026-08-20',
+      notes: mixedWalkIns ? '-- CASH-SNAPSHOT START --' + JSON.stringify({ channels: { 15: { tickets: [{ key: 'normal', currencies: [{ people: 3, addons: { 1: 1 } }] }] } } }) + '-- CASH-SNAPSHOT END --' : null,
       productId: 28,
     };
     jest.spyOn(CounterRegistryService, 'loadCounterById').mockResolvedValue(counter as never);
@@ -100,12 +103,12 @@ describe('CounterRegistryService.upsertMetrics', () => {
       channels: [
         {
           id: 15,
-          name: 'OmniLodge',
+          name: partnerBooking ? 'Partner Walking Tours' : 'OmniLodge',
           sortOrder: 0,
           paymentMethodId: null,
-          paymentMethodName: 'Card',
+          paymentMethodName: mixedWalkIns ? 'Cash' : 'Card',
           cashPrice: null,
-          cashPaymentEligible: false,
+          cashPaymentEligible: mixedWalkIns,
           walkInTicketPrices: [],
         },
       ],
@@ -123,15 +126,17 @@ describe('CounterRegistryService.upsertMetrics', () => {
     mockChannelFindAll.mockResolvedValue([
       {
         id: 15,
-        name: 'OmniLodge',
+        name: partnerBooking ? 'Partner Walking Tours' : 'OmniLodge',
         paymentMethodId: null,
-        paymentMethod: { name: 'Card' },
+        paymentMethod: { name: mixedWalkIns ? 'Cash' : 'Card' },
       },
+      ...(partnerBooking ? [{ id: 99, name: 'OmniLodge', paymentMethodId: null, paymentMethod: { name: 'Card' } }] : []),
     ]);
     mockAddonFindAll.mockResolvedValue([{ id: 1, name: 'Cocktails' }]);
     mockBookingFindAll.mockResolvedValue([
       {
         id: 9918,
+        ...(partnerBooking ? { channelId: 15 } : {}),
         platform: 'omnilodge',
         status: 'confirmed',
         guestEmail: 'guest@example.com',
@@ -177,12 +182,13 @@ describe('CounterRegistryService.upsertMetrics', () => {
           addonId: 1,
           tallyType: 'attended',
           period: null,
-          qty: remainingCocktails,
+          qty: remainingCocktails + (mixedWalkIns ? 1 : 0),
         }),
       ]),
     );
-    expect(result.derivedSummary.totals.addons.cocktails).toMatchObject({ attended: remainingCocktails, nonShow: 0 });
-    expect(result.derivedSummary.totals.people.attended).toBe(4 - Number(remainingCocktails));
+    expect(result.derivedSummary.totals.addons.cocktails).toMatchObject({ attended: remainingCocktails + (mixedWalkIns ? 1 : 0), nonShow: 0 });
+    expect(result.derivedSummary.totals.people.attended).toBe(4 - Number(remainingCocktails) + (mixedWalkIns ? 2 : 0));
+    if (mixedWalkIns) expect(mockMetricBulkCreate.mock.calls[0][0]).toEqual(expect.arrayContaining([expect.objectContaining({ channelId: 15, kind: 'people', tallyType: 'booked', period: 'after_cutoff', qty: 2 })]));
   });
 
   it('keeps declined external add-ons as booked no-shows while preserving the people split', async () => {

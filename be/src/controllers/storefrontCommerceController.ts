@@ -217,7 +217,7 @@ const persistPaidOrder = async (
           .filter((promotionId) => Number.isInteger(promotionId) && promotionId > 0),
       ),
     );
-    const reservedPromotionIds = policy.firstSettlement && policy.paymentMethod === 'bank_transfer'
+    const reservedPromotionIds = policy.firstSettlement && (policy.paymentMethod === 'bank_transfer' || order.orderSource === 'partner')
       ? new Set((await consumeStorefrontOrderResourceReservations({
           orderId: Number(order.id),
           promotionIds,
@@ -373,6 +373,12 @@ export const fulfillPaidOrder = async (
     logger.error(`[storefront-email] T-shirt size automation failed for paid order ${publicId}: ${(error as Error).message}`);
   }
   logger.info(`[storefront-fulfillment] Completed order=${publicId} payment=${paymentId}`);
+  if (order.orderSource === 'partner') {
+    try {
+      const { reconcilePartnerOrder } = await import('../services/partners/partnerStripeService.js');
+      await reconcilePartnerOrder(order.id);
+    } catch { logger.warn(`[partners] Payment confirmed; allocation awaits reconciliation for order ${publicId}.`); }
+  }
   return order;
 };
 

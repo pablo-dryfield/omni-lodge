@@ -15,6 +15,7 @@ export type LocalActionEmailContext = {
   operation: LocalBookingAction; reason: string; actorId: number;
   previousStartAt: Date | null; emailFamily: 'DIRECT_BOOKINGS' | 'STOREFRONT'; sendCustomerEmail: boolean;
   previousProductName?: string | null;
+  partnerFinancialSummary?: string;
 };
 type Delivery = { status: 'sent' | 'skipped' | 'failed'; messageId?: string | null; reason?: string };
 const keys = ['STOREFRONT_EMAIL_FROM_ADDRESS', 'STOREFRONT_EMAIL_FROM_NAME', 'STOREFRONT_NOTIFICATION_EMAIL',
@@ -39,8 +40,10 @@ export const buildLocalBookingActionEmail = (booking: Booking, context: LocalAct
       `Previous start: ${displayStart(context.previousStartAt)}`,
     ] : []),
     `Start: ${displayStart(booking.experienceStartAt)}`, '',
-    'This updates our OmniLodge reservation only. It does not change the booking on the original platform.',
-    'No payment or refund was processed. Any platform changes or refunds must be handled separately with the booking platform.',
+    ...(context.partnerFinancialSummary ? [context.partnerFinancialSummary] : [
+      'This updates our OmniLodge reservation only. It does not change the booking on the original platform.',
+      'No payment or refund was processed. Any platform changes or refunds must be handled separately with the booking platform.',
+    ]),
     ...(internal ? ['', `OmniLodge booking ID: ${booking.id}`, `Changed by user: ${context.actorId}`,
       `Management reason: ${context.reason}`] : []),
   ];

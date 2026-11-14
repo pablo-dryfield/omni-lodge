@@ -11,6 +11,7 @@ export const baseNavigationPages: NavigationPage[] = [
   { name: "Social Media", path: "/social-media", slug: PAGE_SLUGS.socialMedia, icon: 'barChart' },
   { name: "Search Console", path: "/search-console", slug: PAGE_SLUGS.searchConsole, icon: 'barChart' },
   { name: "Affiliates", path: "/affiliates", slug: PAGE_SLUGS.affiliates, icon: 'barChart' },
+  { name: "Partners", path: "/partners", slug: PAGE_SLUGS.partners, icon: 'barChart' },
   { name: "Requests", path: "/requests", slug: PAGE_SLUGS.requests, icon: 'assignmentTurnedIn' },
   { name: "Performance", path: "/performance", slug: PAGE_SLUGS.performance, icon: 'barChart' },
   { name: "Error Monitor", path: "/error-monitoring", slug: PAGE_SLUGS.errorMonitoring, icon: 'errorOutline' },

@@ -7,6 +7,7 @@ import BookingEmail from "../models/BookingEmail.js";
 import BookingEvent from "../models/BookingEvent.js";
 import EmailTemplate from "../models/EmailTemplate.js";
 import Channel from "../models/Channel.js";
+import { partnerModels } from "../models/Partner.js";
 import Guest from "../models/Guest.js";
 import Review from "../models/Review.js";
 import Counter from "../models/Counter.js";
@@ -235,7 +236,7 @@ const sequelize = new Sequelize({
     // Sequelize may inline bind values in diagnostic SQL. WhatsApp rows contain
     // short-lived customer content, so never retain those statements in the
     // longer-lived query diagnostics buffer.
-    if (/\bwhatsapp_(?:messages|source_state|webhook_inbox|templates|template_events|template_sends)\b/i.test(sql)) {
+    if (/\b(?:whatsapp_(?:messages|source_state|webhook_inbox|templates|template_events|template_sends)|partner_credentials|partner_webhooks)\b/i.test(sql)) {
       return;
     }
     queryDiagnosticsService.recordQuery(sql, timing);
@@ -244,6 +245,7 @@ const sequelize = new Sequelize({
     ssl: false,
   },
   models: [
+    ...partnerModels,
     User,
     Currency,
     CurrencyExchangeRate,
