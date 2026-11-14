@@ -949,8 +949,12 @@ export default class CounterRegistryService {
     rows: MetricInput[],
     actorUserId: number,
     notesOverride?: string | null,
+    outerTransaction?: Transaction,
   ): Promise<{ metrics: MetricCell[]; derivedSummary: CounterSummary }> {
-    const counter = await this.loadCounterById(counterId);
+    if (!outerTransaction) {
+      return sequelize.transaction(transaction => this.upsertMetrics(counterId, rows, actorUserId, notesOverride, transaction));
+    }
+    const counter = await this.loadCounterById(counterId, outerTransaction);
     if (!counter) {
       throw new HttpError(404, 'Counter not found');
     }
@@ -1009,6 +1013,7 @@ export default class CounterRegistryService {
     const attendedAddonByChannel = new Map<string, number>();
     if (counter.productId) {
       const bookings = await Booking.findAll({
+        transaction: outerTransaction,
         where: {
           experienceDate: counter.date,
           productId: counter.productId,
@@ -1151,7 +1156,7 @@ export default class CounterRegistryService {
       });
     }
 
-    const job = await sequelize.transaction(async (transaction) => {
+    const persistMetrics = async (transaction: Transaction) => {
       const existingMetrics = await CounterChannelMetric.findAll({
         where: { counterId },
         transaction,
@@ -1459,7 +1464,8 @@ export default class CounterRegistryService {
           qty: Number(metric.qty ?? 0),
         }),
       );
-    });
+    };
+    const job = await persistMetrics(outerTransaction);
 
     const context = await this.buildContext(counter);
     const metrics = createMetricGrid({
@@ -1511,9 +1517,10 @@ export default class CounterRegistryService {
     return null;
   }
 
-  static async loadCounter(where: WhereOptions<Counter>) {
+  static async loadCounter(where: WhereOptions<Counter>, transaction?: Transaction) {
     return Counter.findOne({
       where,
+      ...(transaction ? { transaction, lock: { level: transaction.LOCK.UPDATE, of: Counter } } : {}),
       include: [
         { model: User, as: 'manager' },
         { model: Product, as: 'product' },
@@ -1521,8 +1528,8 @@ export default class CounterRegistryService {
     });
   }
 
-  static async loadCounterById(counterId: number) {
-    return this.loadCounter({ id: counterId });
+  static async loadCounterById(counterId: number, transaction?: Transaction) {
+    return this.loadCounter({ id: counterId }, transaction);
   }
 
   static resolveStaffRole(slug: string): CounterStaffRole | null {

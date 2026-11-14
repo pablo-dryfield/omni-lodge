@@ -32,10 +32,11 @@ import { selectAllowedNavigationPages } from "../selectors/accessControlSelector
 import { PageAccessGuard } from "../components/access/PageAccessGuard";
 import HomeQuickActions from "../components/home/HomeQuickActions";
 import HomeModuleLauncher from "../components/home/HomeModuleLauncher";
+import HomeExternalRefunds from "../components/home/HomeExternalRefunds";
 import HomePlannedExpenses from "../components/home/HomePlannedExpenses";
 import HomeVolunteerProgress from "../components/home/HomeVolunteerProgress";
 import HomeCleaningTasks from "../components/volunteerCleaning/HomeCleaningTasks";
-import { HOME_PLANNED_PAYMENTS_VISIBILITY_KEY, HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY } from "../components/home/homeExperienceConfigRegistry";
+import { HOME_EXTERNAL_REFUNDS_VISIBILITY_KEY, HOME_PLANNED_PAYMENTS_VISIBILITY_KEY, HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY } from "../components/home/homeExperienceConfigRegistry";
 import { resolveHomeNativeDashboard } from "../components/home/homeNativeDashboard";
 import { isHomeQuickActionVisibilityMap } from "../components/home/homeQuickActionRegistry";
 import { isHomeManagementRole } from "../components/home/homeModuleRegistry";
@@ -1604,6 +1605,7 @@ const Home = (props: GenericPageProps) => {
     homePreferenceQuery.isSuccess
     && !homePreferenceQuery.isFetching
     && resolvedQuickActionVisibility !== null;
+  const externalRefundsVisible = quickActionVisibility[HOME_EXTERNAL_REFUNDS_VISIBILITY_KEY] !== false;
   const plannedPaymentsVisible =
     quickActionVisibility[HOME_PLANNED_PAYMENTS_VISIBILITY_KEY] !== false;
   const volunteerProgressVisible = quickActionVisibility[HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY] !== false;
@@ -3472,6 +3474,7 @@ const Home = (props: GenericPageProps) => {
             quickActionVisibility={quickActionVisibility}
             audienceReady={homeExperienceAudienceReady}
           />
+          <HomeExternalRefunds configuredVisible={externalRefundsVisible} audienceReady={homeExperienceAudienceReady} />
           <HomePlannedExpenses
             configuredVisible={plannedPaymentsVisible}
             audienceReady={homeExperienceAudienceReady}
@@ -3655,6 +3658,7 @@ const Home = (props: GenericPageProps) => {
                   quickActionVisibility={quickActionVisibility}
                   audienceReady={homeExperienceAudienceReady}
                 />
+                <HomeExternalRefunds compact configuredVisible={externalRefundsVisible} audienceReady={homeExperienceAudienceReady} />
                 <HomePlannedExpenses
                   compact
                   configuredVisible={plannedPaymentsVisible}

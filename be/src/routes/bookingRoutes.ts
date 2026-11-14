@@ -1,6 +1,7 @@
+import { getPendingExternalRefunds } from '../controllers/pendingExternalRefundController.js';
 import { Router } from 'express';
 import authMiddleware from '../middleware/authMiddleware.js';
-import { requireRoles } from '../middleware/authorizationMiddleware.js';
+import { authorizeModuleAction, requireRoles } from '../middleware/authorizationMiddleware.js';
 import { MANAGER_ROLES } from './schedulingRoles.js';
 import { requireBookingProductScope } from '../services/productScopeService.js';
 import {
@@ -56,6 +57,7 @@ import { previewLocalBookingAction, amendLocalBooking, cancelLocalBooking, getBo
 const router = Router();
 
 router.get(['/', ''], authMiddleware, listBookingsWithSummary);
+router.get('/pending-external-refunds', authMiddleware, requireRoles(MANAGER_ROLES), authorizeModuleAction('booking-management', 'view'), getPendingExternalRefunds);
 router.get('/emails', authMiddleware, listBookingEmails);
 router.get('/emails/mailbox', authMiddleware, listBookingMailboxEmails);
 router.get('/emails/tshirt-availability', authMiddleware, getBookingEmailTshirtAvailability);
@@ -83,8 +85,8 @@ router.post('/import-ecwid', authMiddleware, importEcwidBooking);
 router.patch('/attendance/bulk', authMiddleware, updateBulkBookingAttendance);
 router.patch('/:bookingId/attendance', authMiddleware, requireBookingProductScope, updateBookingAttendance);
 router.post('/:bookingId/counter-addon-refunds/:operation', authMiddleware, requireRoles(MANAGER_ROLES), requireBookingProductScope, counterBookingAddonRefund);
-router.patch('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, completeBookingAddonRefundAction);
-router.delete('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireBookingProductScope, deleteBookingAddonRefundAction);
+router.patch('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireRoles(MANAGER_ROLES), authorizeModuleAction('booking-management', 'update'), requireBookingProductScope, completeBookingAddonRefundAction);
+router.delete('/:bookingId/addon-refund-actions/:actionId', authMiddleware, requireRoles(MANAGER_ROLES), authorizeModuleAction('booking-management', 'update'), requireBookingProductScope, deleteBookingAddonRefundAction);
 router.get('/:bookingId/details', authMiddleware, requireBookingProductScope, getBookingDetails);
 router.get('/:bookingId/payments', authMiddleware, requireBookingProductScope, bookingPaymentDetails);
 router.get('/:bookingId/payments/events', authMiddleware, requireBookingProductScope, bookingPaymentEvents);

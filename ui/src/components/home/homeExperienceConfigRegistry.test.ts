@@ -2,6 +2,7 @@ import {
   HOME_CONFIGURABLE_SECTIONS,
   HOME_EXPERIENCE_CONFIGURABLE_ITEMS,
   HOME_PLANNED_PAYMENTS_VISIBILITY_KEY,
+  HOME_EXTERNAL_REFUNDS_VISIBILITY_KEY,
 } from "./homeExperienceConfigRegistry";
 import { HOME_QUICK_ACTIONS } from "./homeQuickActionRegistry";
 
@@ -20,4 +21,8 @@ describe("home experience configuration registry", () => {
     const ids = HOME_EXPERIENCE_CONFIGURABLE_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
+});
+
+it('includes the external refund section in the existing audience settings', () => {
+  expect(HOME_CONFIGURABLE_SECTIONS).toContainEqual(expect.objectContaining({ id: HOME_EXTERNAL_REFUNDS_VISIBILITY_KEY, kind: 'section' }));
 });

@@ -1,3 +1,4 @@
+jest.mock('../../controllers/pendingExternalRefundController.js', () => ({ getPendingExternalRefunds: (_req: any, res: any) => res.status(200).json({ data: [] }) }));
 import express from 'express';
 import request from 'supertest';
 import type { Response } from 'express';
