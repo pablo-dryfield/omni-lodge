@@ -1232,10 +1232,12 @@ const FinanceTransactions = () => {
     return (
       <Tooltip
         label={isReadOnly ? readOnlyReason : "Edit transaction"}
-        multiline
-        maw={280}
+        position="left"
+        multiline={isReadOnly}
+        maw={isReadOnly ? 280 : undefined}
       >
         <span
+          style={{ display: "inline-flex", verticalAlign: "middle" }}
           tabIndex={isReadOnly ? 0 : undefined}
           aria-label={isReadOnly ? "Managed finance transaction is view-only" : undefined}
         >
