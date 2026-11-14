@@ -1,3 +1,4 @@
+import { calculatePartnerCommission } from './partnerCommission.js';
 import { type Transaction } from 'sequelize';
 import sequelize from '../../config/database.js';
 import HttpError from '../../errors/HttpError.js';
@@ -52,13 +53,14 @@ async function expandedSelection(partner: PartnerProfile, input: PartnerSelectio
   return input;
 }
 
-export async function quotePartnerBooking(partner: PartnerProfile, input: PartnerSelection, transaction?: Transaction, options: StorefrontQuoteOptions = {}) {
+export async function quotePartnerBooking(partner: PartnerProfile, input: PartnerSelection, transaction?: Transaction, options: StorefrontQuoteOptions = {}, commissionAgreement = partner.agreement) {
   const selection = await expandedSelection(partner, input, transaction);
   assertProducts(partner.agreement, selection.items);
-  return quoteStorefrontCart({ items: selection.items.map(item => ({ ...item, options: { fullName: `${selection.customer.firstName} ${selection.customer.lastName}`, email: selection.customer.email, phone: selection.customer.phone || '', ...item.options } })), discountCode: selection.discountCode }, transaction, { ...options, preserveExperienceLines: true, currencyCode: 'PLN' });
+  const quote = await quoteStorefrontCart({ items: selection.items.map(item => ({ ...item, options: { fullName: `${selection.customer.firstName} ${selection.customer.lastName}`, email: selection.customer.email, phone: selection.customer.phone || '', ...item.options } })), discountCode: selection.discountCode }, transaction, { ...options, preserveExperienceLines: true, currencyCode: 'PLN' });
+  return { ...quote, partnerCommission: calculatePartnerCommission(commissionAgreement, quote) };
 }
 
-const safeBooking = (booking: PartnerBooking) => ({ id: booking.id, reference: booking.externalReference, status: booking.status, paymentMode: booking.paymentMode, paymentReceived: booking.paymentReceived, total: Number(booking.total), commission: Number(booking.commission), commissionEarned: partnerStatement(booking).commission, refundedAmount: Number(booking.refundedAmount), checkoutUrl: booking.status === 'pending_payment' ? booking.checkoutUrl : null, reconciliationError: booking.reconciliationError });
+const safeBooking = (booking: PartnerBooking) => ({ id: booking.id, reference: booking.externalReference, status: booking.status, paymentMode: booking.paymentMode, paymentReceived: booking.paymentReceived, total: Number(booking.total), commission: Number(booking.commission), commissionCalculation: booking.commissionCalculation, commissionEarned: partnerStatement(booking).commission, refundedAmount: Number(booking.refundedAmount), checkoutUrl: booking.status === 'pending_payment' ? booking.checkoutUrl : null, reconciliationError: booking.reconciliationError });
 export { safeBooking };
 
 async function checkoutForBooking(bookingId: number): Promise<PartnerBooking> {
@@ -103,13 +105,14 @@ export async function createPartnerBooking(context: PartnerContext, rawInput: un
     if (existing) { assertIdempotentReplay(existing.requestHash, fingerprint); return existing; }
     await lockStorefrontCartReservationResources(selection, transaction);
     const quote = await quotePartnerBooking(partner, selection, transaction);
-    const commission = money(quote.total * partner.agreement.commissionPercent / 100);
+    const calculation = calculatePartnerCommission(partner.agreement, quote);
+    const commission = calculation.commission;
     if (selection.paymentMode === 'partner' && !selection.requestApproval) {
       const debts = await PartnerBooking.findAll({ where: { partnerId: partner.id, paymentMode: 'partner', paymentReceived: true }, transaction });
       const owed = debts.reduce((sum, b) => sum + partnerStatement(b).partnerOwes, 0);
       if (money(owed + quote.total - commission) > partner.agreement.creditLimit) throw new HttpError(409, 'Partner credit limit would be exceeded. Use an OmniLodge payment link or settle outstanding bookings.');
     }
-    const booking = await PartnerBooking.create({ partnerId: partner.id, externalReference: selection.reference, requestHash: fingerprint, status: selection.requestApproval ? 'requested' : 'pending_payment', source, selection, paymentMode: selection.paymentMode, snapshot: partner.agreement, total: quote.total, commission, createdBy: context.actorId }, { transaction });
+    const booking = await PartnerBooking.create({ partnerId: partner.id, externalReference: selection.reference, requestHash: fingerprint, status: selection.requestApproval ? 'requested' : 'pending_payment', source, selection, paymentMode: selection.paymentMode, snapshot: partner.agreement, total: quote.total, commission, commissionCalculation: calculation, commissionTransferred: 0, createdBy: context.actorId }, { transaction });
     if (selection.requestApproval) {
       await partnerEvent(partner.id, 'booking.requested', { reference: selection.reference, total: quote.total }, context.actorId, booking.id, transaction);
       return booking;

@@ -47,6 +47,37 @@ Use a unique reference for each booking and operation. Retry the same reference 
 
 Use catalog IDs and configured times, not the example IDs. Products requiring gender counts use `options.participants`. Sized add-ons use `variants: [{"value":"M","quantity":1}]`; other selection add-ons use `value`. Product rules remain authoritative.
 
+## Commission agreements
+
+Company-wide management configures a default commission and optional rules for individual approved products under Partners / Agreement. A rule uses `type: "fixed" | "percentage"`, `basis: "person" | "experience" | "booking"` and a non-negative `value` with up to two decimals. Fixed rates are PLN; percentages are 0-100. For example, these agreement fields set PLN 10 per guest place by default and PLN 25 per experience for product 44:
+
+```json
+{
+  "commissionRule": {"type": "fixed", "basis": "person", "value": 10},
+  "productCommissions": [
+    {"productId": 44, "rule": {"type": "fixed", "basis": "experience", "value": 25}}
+  ]
+}
+```
+
+These are fields within the complete agreement, not a replacement for its approved products, permissions and payment arrangements. Product IDs must be approved and each can have only one override. Products without an override share the default rule.
+
+| Basis | Units for a fixed commission | Percentage calculation |
+| --- | --- | --- |
+| `person` | Guest places across the applicable experiences. Four guests on two experiences means eight places. | Percentage of the applicable discounted guest/experience prices, including extras. |
+| `experience` | Distinct product/date/start-time departures. Repeated lines for the same departure count once; 17:00 and 19:30 count separately. | Percentage of the applicable discounted experience prices, including extras. |
+| `booking` | Once for all products using the default rule; each product override applies once across its own departures. | Percentage of the applicable discounted booking portion. |
+
+A uniform percentage produces the same total for all three bases; the booking total is never multiplied again by guests or experiences. Discounts are allocated in integer cents to the product groups. A new quote is rejected if the promised commission exceeds its customer total.
+
+Authenticated quotes expose `partnerCommission` with the currency, total, aggregate commission and per-rule groups (`productId`, `rule`, `units`, `base`, `commission`). Public customer quotes exclude this private breakdown. Bookings save their agreement and calculation; later agreement edits do not rewrite existing bookings or their amendment rates. Legacy agreements without these fields continue using `commissionPercent` as a percentage per booking.
+
+An amount-only refund reduces percentage commissions proportionally to retained customer payment. Fixed commissions stay payable until the booked guests/experiences change or the booking is cancelled. A fixed fee can therefore exceed the remaining customer money, including after a full monetary refund. Amend the selection to remove guest places or experiences; cancel to remove the whole commission. A fully refunded booking can still be cancelled within the existing permissions/deadline.
+
+Statements distinguish earned commission, verified transferred money, outstanding amounts and overpayments. For partner-collected payments, a refund can create a credit owed to the partner. Management records an already completed outgoing credit payment using `POST /bookings/{id}/settlement-return` with `amount`, a unique `reference`, and `reason`; this records evidence and does not send money. The original incoming settlements and outgoing credit payments remain separately auditable. Reusing a receipt cannot pay it twice; later cancellation can make a previously paid credit recoverable.
+
+## Payment arrangements
+
 Payment arrangements, where enabled:
 
 | Value | Customer payment | Confirmation |

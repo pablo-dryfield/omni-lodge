@@ -1,3 +1,5 @@
+import { earnedRuleCommission } from './partnerCommission.js';
+import { reconcileRuleCommission } from './partnerRuleReconciliation.js';
 import type Stripe from 'stripe';
 import { Op } from 'sequelize';
 import sequelize from '../../config/database.js';
@@ -72,6 +74,10 @@ export async function reconcilePartnerOrder(orderId: number): Promise<void> {
         const disputes = await stripe.disputes.list({ charge: charge.id, limit: 100 });
         disputed ||= disputes.data.some(dispute => dispute.status !== 'won' && dispute.status !== 'warning_closed');
       }
+      if (booking.commissionCalculation) {
+        await reconcileRuleCommission(stripe, booking, order, payments, disputed, transaction, { connectEnabled: config.connectEnabled, mode: mode() });
+        return;
+      }
       let commissionEarned = 0;
       let restoredCommissionMinor = 0;
       let reconciliationError: string | null = null;
@@ -131,10 +137,15 @@ export async function reconcilePartnerOrder(orderId: number): Promise<void> {
 }
 
 export function partnerStatement(row: PartnerBooking) {
-  const earned = row.status === 'disputed' ? 0 : row.paymentMode === 'platform' && row.commissionEarned != null ? Number(row.commissionEarned) : commissionAfterRefund(Number(row.total), Number(row.commission), Number(row.refundedAmount));
+  const earned = row.commissionCalculation
+    ? earnedRuleCommission(row.commissionCalculation, Number(row.total) - Number(row.refundedAmount), ['disputed', 'cancelled'].includes(row.status))
+    : row.status === 'disputed' ? 0 : row.paymentMode === 'platform' && row.commissionEarned != null ? Number(row.commissionEarned) : commissionAfterRefund(Number(row.total), Number(row.commission), Number(row.refundedAmount));
   const earnedConfirmed = row.paymentReceived && ['confirmed', 'refunded', 'disputed'].includes(row.status);
-  const net = money(Math.max(0, Number(row.total) - Number(row.refundedAmount) - (earnedConfirmed ? earned : 0)));
-  const paidToPartner = row.transferId ? money(Number(row.commission) - row.reversedAmount / 100 + Number(row.settledAmount)) : row.paymentMode !== 'partner' ? Number(row.settledAmount) : 0;
+  const net = money(Number(row.total) - Number(row.refundedAmount) - (earnedConfirmed ? earned : 0));
+  const paidToPartner = row.commissionCalculation ? (row.paymentMode === 'partner' ? 0 : money(Number(row.commissionTransferred || 0) + Number(row.settledAmount)))
+    : row.transferId ? money(Number(row.commission) - row.reversedAmount / 100 + Number(row.settledAmount)) : row.paymentMode !== 'partner' ? Number(row.settledAmount) : 0;
   const commissionPayable = ['platform', 'arrival'].includes(row.paymentMode);
-  return { id: row.id, reference: row.externalReference, status: row.status, paymentMode: row.paymentMode, currency: 'PLN', customerTotal: Number(row.total), refunded: Number(row.refundedAmount), commission: earnedConfirmed ? earned : 0, transferred: paidToPartner, partnerOwes: row.paymentMode === 'partner' && row.paymentReceived ? money(Math.max(0, net - Number(row.settledAmount))) : 0, partnerCredit: row.paymentMode === 'partner' ? money(Math.max(0, Number(row.settledAmount) - net)) : 0, commissionOutstanding: commissionPayable && earnedConfirmed ? money(Math.max(0, earned - paidToPartner)) : 0, commissionOverpaid: commissionPayable ? money(Math.max(0, paidToPartner - (earnedConfirmed ? earned : 0))) : 0, manualSettlementAllowed: row.transferId ? !!row.reconciliationError?.includes('restored commission') : (!row.snapshot.connectSplit || row.paymentMode === 'arrival'), manualReturnAllowed: Number(row.settledAmount) > 0, reconciliationError: row.reconciliationError };
+  const netPartnerSettlement = money(Number(row.settledAmount) - Number(row.partnerCreditPaid || 0));
+  const partnerCredit = row.paymentMode === 'partner' ? money(Math.max(0, netPartnerSettlement - net)) : 0;
+  return { id: row.id, reference: row.externalReference, status: row.status, paymentMode: row.paymentMode, currency: 'PLN', customerTotal: Number(row.total), refunded: Number(row.refundedAmount), commission: earnedConfirmed ? earned : 0, transferred: paidToPartner, partnerOwes: row.paymentMode === 'partner' && row.paymentReceived ? money(Math.max(0, net - netPartnerSettlement)) : 0, partnerCredit, commissionOutstanding: commissionPayable && earnedConfirmed ? money(Math.max(0, earned - paidToPartner)) : 0, commissionOverpaid: commissionPayable ? money(Math.max(0, paidToPartner - (earnedConfirmed ? earned : 0))) : 0, manualSettlementAllowed: row.paymentMode === 'partner' ? true : row.transferId ? !!row.reconciliationError?.includes('restored commission') : (!row.snapshot.connectSplit || row.paymentMode === 'arrival'), manualReturnAllowed: row.paymentMode === 'partner' ? partnerCredit > 0 : Number(row.settledAmount) > 0, reconciliationError: row.reconciliationError };
 }
