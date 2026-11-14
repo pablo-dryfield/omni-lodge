@@ -1,3 +1,9 @@
+jest.mock('../../middleware/authorizationMiddleware.js', () => ({
+  ...jest.requireActual('../../middleware/authorizationMiddleware.js'),
+  authorizeModuleAction: (_module: string, _action: string) => (req: any, res: any, next: () => void) =>
+    req.headers['x-no-module'] ? res.sendStatus(403) : next(),
+}));
+jest.mock('../../controllers/pendingExternalRefundController.js', () => ({ getPendingExternalRefunds: (_req: any, res: any) => res.status(200).json({ data: [] }) }));
 jest.mock('../../controllers/localBookingActionController.js', () => new Proxy({ __esModule: true }, {
   get: (_target, key) => key === '__esModule' ? true : (_req: any, res: any) => res.sendStatus(200),
 }));
@@ -48,5 +54,22 @@ describe('counter Stripe add-on refund route authorization', () => {
     const response = await request(app).post('/bookings/21/counter-addon-refunds/rectify')
       .set('x-test-role', 'assistant-manager').set('x-out-of-scope', 'true').send({});
     expect(response.status).toBe(403);
+  });
+});
+
+describe('shared external refund queue and Counter Summary action authorization', () => {
+  it.each(MANAGER_ROLES)('allows management %s to view outstanding refunds', async role => {
+    expect((await request(app).get('/bookings/pending-external-refunds').set('x-test-role', role)).status).toBe(200);
+  });
+  it.each(['get', 'patch', 'delete'] as const)('blocks ordinary users and missing module permissions for %s', async method => {
+    const path = method === 'get' ? '/bookings/pending-external-refunds' : '/bookings/21/addon-refund-actions/task-1';
+    expect((await request(app)[method](path).set('x-test-role', 'guide').send({ status: 'completed' })).status).toBe(403);
+    expect((await request(app)[method](path).set('x-test-role', 'manager').set('x-no-module', 'yes').send({ status: 'completed' })).status).toBe(403);
+  });
+  it.each(['patch', 'delete'] as const)('keeps scope validation and routes %s to existing Counter Summary handlers', async method => {
+    const path = '/bookings/21/addon-refund-actions/task-1';
+    expect((await request(app)[method](path).set('x-test-role', 'manager').set('x-out-of-scope', 'yes').send({ status: 'completed' })).status).toBe(403);
+    expect((await request(app)[method](path).set('x-test-role', 'assistant-manager').send({ status: 'completed' })).body.operation)
+      .toBe(method === 'patch' ? 'completeBookingAddonRefundAction' : 'deleteBookingAddonRefundAction');
   });
 });

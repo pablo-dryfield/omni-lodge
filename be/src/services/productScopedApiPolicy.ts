@@ -16,6 +16,12 @@ export function productScopedApiRoute(method: string, path: string): ScopedApiRo
   // Product-scoped users receive no company-wide partner administration rights.
   if (/^\/api\/partners(?:\/|$)/.test(path)) return { resource: 'partners', passthrough: true };
   const read = method === 'GET';
+  if (read && path === '/api/bookings/pending-external-refunds') {
+    return { resource: 'pending-external-refunds', module: 'booking-management', passthrough: true };
+  }
+  if (['PATCH', 'DELETE'].includes(method) && /^\/api\/bookings\/[1-9]\d*\/addon-refund-actions\/[^/]+$/.test(path)) {
+    return { resource: 'external-refund-action', module: 'booking-management', passthrough: true, action: 'update' };
+  }
   const amendment = (read ? /^\/api\/bookings\/([1-9]\d*)\/amend-products$/
     : method === 'POST' ? /^\/api\/bookings\/([1-9]\d*)\/direct-actions\/amend$/ : null)?.exec(path);
   if (amendment && Number.isSafeInteger(Number(amendment[1]))) {

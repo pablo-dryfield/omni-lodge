@@ -17,9 +17,17 @@ export type HomeExperienceConfigurableItem = {
  * showing planned payments until an administrator saves a different rule.
  */
 export const HOME_PLANNED_PAYMENTS_VISIBILITY_KEY = "home-planned-payments";
+export const HOME_EXTERNAL_REFUNDS_VISIBILITY_KEY = "home-pending-external-refunds";
 export const HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY = "home-volunteer-progress";
 
 export const HOME_CONFIGURABLE_SECTIONS: HomeExperienceConfigurableItem[] = [
+  {
+    id: HOME_EXTERNAL_REFUNDS_VISIBILITY_KEY,
+    label: "Pending External Refunds",
+    description: "Show outstanding external add-on refunds across counters. Completion and deletion use the same booking and counter workflow as Counter Summary. Requires management and booking access.",
+    group: "Homepage section",
+    kind: "section",
+  },
   {
     id: HOME_VOLUNTEER_PROGRESS_VISIBILITY_KEY,
     label: "Volunteer progress",
