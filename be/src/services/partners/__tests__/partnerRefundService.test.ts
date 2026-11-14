@@ -50,10 +50,10 @@ it('cannot refund another collector payment through the platform Stripe account'
 it('verifies the merchant payment and uses a stable provider operation identity', async () => {
   const result = await refundPartnerBooking(context, 4, body);
   expect(result.refundId).toBe('re_test');
-  expect(stripe.refunds.create).toHaveBeenCalledWith(expect.objectContaining({ amount: 3000, payment_intent: 'pi_55' }), { idempotencyKey: `partner-refund-${hashToken('4:refund-1:4')}` });
+  expect(stripe.refunds.create).toHaveBeenCalledWith(expect.objectContaining({ amount: 3000, payment_intent: 'pi_55' }), { idempotencyKey: `partner-refund-${hashToken('4:refund-1:pi_55')}` });
 });
 it('recovers an existing provider refund after a database rollback without refunding twice', async () => {
-  stripe.refunds.list.mockResolvedValue({ data: [{ id: 're_existing', amount: 3000, status: 'succeeded', metadata: { partnerOperation: hashToken('4:refund-1:4') } }], has_more: false });
+  stripe.refunds.list.mockResolvedValue({ data: [{ id: 're_existing', amount: 3000, status: 'succeeded', metadata: { partnerOperation: hashToken('4:refund-1:pi_55') } }], has_more: false });
   const result = await refundPartnerBooking(context, 4, body);
   expect(result.refundId).toBe('re_existing');
   expect(stripe.refunds.create).not.toHaveBeenCalled();

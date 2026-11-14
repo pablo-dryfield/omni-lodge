@@ -29,7 +29,7 @@ it('rejects an excessive refund before any provider mutation', async () => {
   expect(stripe.refunds.create).not.toHaveBeenCalled();
 });
 it('recovers a completed refund part before continuing the remaining original charge', async () => {
-  stripe.refunds.list.mockImplementation(async ({ payment_intent }: any) => ({ data: payment_intent === 'pi_extra' ? [{ id: 're_existing', amount: 5000, status: 'succeeded', metadata: { partnerOperation: hashToken('9:request:2'), partnerRequestedMinor: '7500' } }] : [], has_more: false }));
+  stripe.refunds.list.mockImplementation(async ({ payment_intent }: any) => ({ data: payment_intent === 'pi_extra' ? [{ id: 're_existing', amount: 5000, status: 'succeeded', metadata: { partnerOperation: hashToken('9:request:pi_extra'), partnerRequestedMinor: '7500' } }] : [], has_more: false }));
   const result = await refundPartnerPayments(order, booking, 75, 'request', 'Reason', transaction);
   expect(result[0].refundId).toBe('re_existing');
   expect(stripe.refunds.create).toHaveBeenCalledTimes(1);
@@ -38,4 +38,14 @@ it('recovers a completed refund part before continuing the remaining original ch
 it('does not trust a succeeded payment from another booking', async () => {
   stripe.paymentIntents.retrieve.mockResolvedValue({ status: 'succeeded', amount_received: 10000, currency: 'pln', metadata: { orderPublicId: 'another-order' } });
   await expect(verifiedPartnerPayments(order, booking, transaction)).rejects.toThrow(/does not match/);
+});
+it('keeps refund identity after a rolled-back initial ledger insert receives a different database ID', async () => {
+  (PartnerPayment.findAll as jest.Mock).mockResolvedValue([{ id: 1, reference: 'initial', amount: 100, paymentIntentId: 'pi_initial' }]);
+  await refundPartnerPayments(order, booking, 30, 'rollback-retry', 'Reason', transaction);
+  const submitted = stripe.refunds.create.mock.calls[0][0];
+  (PartnerPayment.findAll as jest.Mock).mockResolvedValue([{ id: 999, reference: 'initial', amount: 100, paymentIntentId: 'pi_initial' }]);
+  stripe.refunds.list.mockResolvedValue({ data: [{ id: 're_already_submitted', amount: 3000, status: 'succeeded', metadata: submitted.metadata }], has_more: false });
+  const result = await refundPartnerPayments(order, booking, 30, 'rollback-retry', 'Reason', transaction);
+  expect(result[0].refundId).toBe('re_already_submitted');
+  expect(stripe.refunds.create).toHaveBeenCalledTimes(1);
 });

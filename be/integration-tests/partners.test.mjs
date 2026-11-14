@@ -140,11 +140,30 @@ test('local PostgreSQL partner booking, retries, credit and tenant boundaries', 
       const retained = await PartnerBooking.findByPk(first.id);
       assert.equal(Number(retained.total) - Number(retained.refundedAmount), 150, 'Unavailable upgrade must return only the extra payment');
       assert.equal(Number((await Booking.findByPk(operational.id)).baseAmount), 150);
+      const rollbackBooking = await createPartnerBooking(context, { ...selection, reference: 'qa-refund-rollback' }, 'portal');
+      const rollbackRow = await PartnerBooking.findByPk(rollbackBooking.id);
+      const rollbackOrder = await StorefrontOrder.findByPk(rollbackRow.orderId);
+      await rollbackRow.update({ paymentMode: 'platform', paymentReceived: true });
+      await rollbackOrder.update({ paymentStatus: 'paid', paymentMethod: 'stripe', stripePaymentIntentId: 'pi_offline_rollback' });
+      intents.set('pi_offline_rollback', intent('pi_offline_rollback', 20000, { orderPublicId: rollbackOrder.publicId }));
+      const originalEventCreate = PartnerEvent.create;
+      PartnerEvent.create = async function(values, options) {
+        if (values.bookingId === rollbackRow.id && values.type === 'refund.submitted') throw new Error('Injected database transaction rollback after provider success');
+        return originalEventCreate.call(this, values, options);
+      };
+      const refundRequest = { amount: 10, reference: 'same-ref-after-rollback', reason: 'Offline rollback regression', notifyCustomer: false };
+      try { await assert.rejects(refundPartnerBooking(context, rollbackRow.id, refundRequest), /Injected database/); }
+      finally { PartnerEvent.create = originalEventCreate; }
+      assert.equal(await PartnerPayment.count({ where: { bookingId: rollbackRow.id } }), 0, 'Initial payment ledger insert must actually roll back');
+      const refundsBeforeRetry = refunds.size;
+      await refundPartnerBooking(context, rollbackRow.id, refundRequest);
+      assert.equal(refunds.size, refundsBeforeRetry, 'Retry with a regenerated ledger row must not issue another refund');
+      assert.equal(Number((await PartnerBooking.findByPk(rollbackRow.id)).refundedAmount), 10);
     } finally {
       [stripe.paymentIntents.retrieve, stripe.checkout.sessions.create, stripe.checkout.sessions.retrieve, stripe.checkout.sessions.expire, stripe.refunds.list, stripe.refunds.create] = methods;
       stripe._requestSender._request = originalRequest;
     }
-    console.log(JSON.stringify({ duplicateBookings: 0, distinctDepartures: true, creditLimitEnforced: true, channelProjection: true, localMailDisabled: true, automaticPriceAdjustments: true, multiChargeRefunds: true, unavailableUpgradeRefunded: true }));
+    console.log(JSON.stringify({ duplicateBookings: 0, distinctDepartures: true, creditLimitEnforced: true, channelProjection: true, localMailDisabled: true, automaticPriceAdjustments: true, multiChargeRefunds: true, unavailableUpgradeRefunded: true, actualDatabaseRollbackRefundDeduplicated: true }));
   } finally {
     if (partner) {
       const rows = await PartnerBooking.findAll({ where: { partnerId: partner.id } });

@@ -32,7 +32,7 @@ export async function refundPartnerPayments(order: StorefrontOrder, booking: Par
   const results: Array<{ refundId: string; status: string | null; amount: number }> = [];
   const parts: Array<{ payment: PartnerPayment; charge: Stripe.Charge; operation: string; recovered?: Stripe.Refund }> = [];
   for (const { payment, charge } of verified) {
-    const operation = hashToken(`${booking.id}:${reference}:${payment.id}`);
+    const operation = hashToken(`${booking.id}:${reference}:${payment.paymentIntentId}`);
     let recovered: Stripe.Refund | undefined;
     let after: string | undefined;
     do {

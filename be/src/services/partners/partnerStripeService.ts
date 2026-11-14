@@ -90,18 +90,18 @@ export async function reconcilePartnerOrder(orderId: number): Promise<void> {
           if (!accountId) throw new HttpError(409, 'Partner Stripe onboarding is incomplete.');
           const account = await stripe.accounts.retrieve(accountId);
           if (account.capabilities?.transfers !== 'active' || !account.payouts_enabled) throw new HttpError(409, 'Partner Stripe account cannot receive payouts yet.');
-          const group = payment.reference === 'initial' ? `partner_${booking.id}` : `partner_payment_${payment.id}`;
+          const group = payment.reference === 'initial' ? `partner_${booking.id}` : `partner_charge_${payment.paymentIntentId}`;
           const previous = await stripe.transfers.list({ transfer_group: group, limit: 10 });
           if (previous.data.length > 1) throw new HttpError(409, 'Multiple Stripe allocations require operations review.');
           allocation = previous.data[0] || null;
           if (allocation && (allocation.amount !== minor(Number(payment.commission)) || allocation.destination !== accountId || allocation.source_transaction !== charge.id)) throw new HttpError(409, 'The existing Stripe allocation does not match this agreement.');
-          if (!allocation) allocation = await stripe.transfers.create({ amount: minor(Number(payment.commission)), currency: 'pln', destination: accountId, source_transaction: charge.id, transfer_group: group, metadata: { partnerBookingId: String(booking.id), partnerPaymentId: String(payment.id) } }, { idempotencyKey: `partner-transfer-${mode()}-${booking.id}-${payment.id}` });
+          if (!allocation) allocation = await stripe.transfers.create({ amount: minor(Number(payment.commission)), currency: 'pln', destination: accountId, source_transaction: charge.id, transfer_group: group, metadata: { partnerBookingId: String(booking.id), partnerPaymentId: String(payment.id) } }, { idempotencyKey: `partner-transfer-${mode()}-${booking.id}-${payment.paymentIntentId}` });
           await partnerEvent(booking.partnerId, 'commission.transferred', { transferId: allocation.id, amount: Number(payment.commission), paymentId: payment.id }, null, booking.id, transaction);
         }
         if (allocation) {
           const target = Math.max(0, allocation.amount - minor(earned));
           if (allocation.amount_reversed < target) {
-            await stripe.transfers.createReversal(allocation.id, { amount: target - allocation.amount_reversed, metadata: { partnerBookingId: String(booking.id), cumulativeTarget: String(target) } }, { idempotencyKey: `partner-reversal-${payment.id}-${target}` });
+            await stripe.transfers.createReversal(allocation.id, { amount: target - allocation.amount_reversed, metadata: { partnerBookingId: String(booking.id), cumulativeTarget: String(target) } }, { idempotencyKey: `partner-reversal-${payment.paymentIntentId}-${target}` });
             await partnerEvent(booking.partnerId, 'commission.reversed', { amount: (target - allocation.amount_reversed) / 100, paymentId: payment.id }, null, booking.id, transaction);
           }
           const reversed = Math.max(allocation.amount_reversed, target);

@@ -33,8 +33,15 @@ beforeEach(() => {
 });
 it('uses a verified charge and stable idempotency when splitting commission', async () => {
   await reconcilePartnerOrder(55);
-  expect(stripe.transfers.create).toHaveBeenCalledWith(expect.objectContaining({ amount: 2000, destination: 'acct_test', source_transaction: 'ch_55' }), { idempotencyKey: 'partner-transfer-test-4-4' });
+  expect(stripe.transfers.create).toHaveBeenCalledWith(expect.objectContaining({ amount: 2000, destination: 'acct_test', source_transaction: 'ch_55' }), { idempotencyKey: 'partner-transfer-test-4-pi_55' });
   expect(booking.update).toHaveBeenCalledWith(expect.objectContaining({ transferId: 'tr_55', status: 'confirmed' }), expect.anything());
+});
+it('keeps the provider transfer key unchanged when a rolled-back ledger row is regenerated', async () => {
+  await reconcilePartnerOrder(55);
+  const firstKey = stripe.transfers.create.mock.calls[0][1].idempotencyKey;
+  (PartnerPayment.findAll as jest.Mock).mockResolvedValue([{ id: 999, reference: 'initial', amount: 100, commission: 20, paymentIntentId: 'pi_55', transferId: null, update: jest.fn() }]);
+  await reconcilePartnerOrder(55);
+  expect(stripe.transfers.create.mock.calls[1][1].idempotencyKey).toBe(firstKey);
 });
 it('never creates a payout for an unverified or mismatched payment', async () => {
   stripe.paymentIntents.retrieve.mockResolvedValue({ status: 'succeeded', amount_received: 9999, currency: 'pln', metadata: { orderPublicId: 'order-55' } });
@@ -52,7 +59,7 @@ it('reverses only the unpaid refund adjustment and tolerates already-reversed re
   stripe.paymentIntents.retrieve.mockResolvedValue({ status: 'succeeded', amount_received: 10000, currency: 'pln', metadata: { orderPublicId: 'order-55' }, latest_charge: { id: 'ch_55', paid: true, amount_refunded: 5000 } });
   stripe.transfers.retrieve.mockResolvedValue({ id: 'tr_55', amount: 2000, amount_reversed: 400 });
   await reconcilePartnerOrder(55);
-  expect(stripe.transfers.createReversal).toHaveBeenCalledWith('tr_55', expect.objectContaining({ amount: 600 }), { idempotencyKey: 'partner-reversal-4-1000' });
+  expect(stripe.transfers.createReversal).toHaveBeenCalledWith('tr_55', expect.objectContaining({ amount: 600 }), { idempotencyKey: 'partner-reversal-pi_55-1000' });
   stripe.transfers.createReversal.mockClear(); stripe.transfers.retrieve.mockResolvedValue({ id: 'tr_55', amount: 2000, amount_reversed: 1000 });
   await reconcilePartnerOrder(55);
   expect(stripe.transfers.createReversal).not.toHaveBeenCalled();
