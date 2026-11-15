@@ -1,6 +1,7 @@
 import type { PartnerCommissionCalculation } from '../services/partners/partnerCommission.js';
 import { AllowNull, Column, CreatedAt, DataType, Default, Model, PrimaryKey, AutoIncrement, Table, UpdatedAt } from 'sequelize-typescript';
 import type { PartnerAgreement } from '../services/partners/partnerPolicy.js';
+import type { SalesPageConfig } from '../services/partners/partnerSalesPresentation.js';
 
 class PartnerRow extends Model {
   @PrimaryKey @AutoIncrement @Column(DataType.INTEGER) declare id: number;
@@ -15,6 +16,7 @@ export class PartnerProfile extends PartnerRow {
   @AllowNull(false) @Column(DataType.STRING(160)) declare name: string;
   @Default('active') @Column(DataType.STRING(24)) declare status: string;
   @AllowNull(false) @Column(DataType.JSONB) declare agreement: PartnerAgreement;
+  @AllowNull(false) @Default({}) @Column({ field: 'sales_page_config', type: DataType.JSONB }) declare salesPageConfig: SalesPageConfig;
   @Default(1) @Column(DataType.INTEGER) declare version: number;
   @AllowNull(false) @Column({ field: 'created_by', type: DataType.INTEGER }) declare createdBy: number;
   @Column({ field: 'connect_accounts', type: DataType.JSONB }) declare connectAccounts: Record<string, string> | null;
