@@ -1,5 +1,6 @@
 import { Router, type NextFunction, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
+import multer from 'multer';
 import { Op, QueryTypes, type WhereOptions } from 'sequelize';
 import authMiddleware from '../middleware/authMiddleware.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
@@ -22,6 +23,8 @@ import { webhookUrl } from '../services/partners/partnerWebhookService.js';
 import { parsePartnerCsv } from '../services/partners/partnerCsvImport.js';
 import { cancelPartnerAmendment, quotePartnerAmendment, completePartnerAmendment } from '../services/partners/partnerAmendmentService.js';
 import { refundPartnerBooking, recordExternalPartnerRefund } from '../services/partners/partnerRefundService.js';
+import { parseSalesPageConfig, salesAppearanceDefaults, salesLinkUrl } from '../services/partners/partnerSalesPresentation.js';
+import { uploadPartnerLogo } from '../services/storefrontMediaService.js';
 
 const router = Router();
 type Handler = (request: AuthenticatedRequest, response: Response) => Promise<unknown>;
@@ -34,6 +37,43 @@ router.use((request: AuthenticatedRequest, response, next) => {
   authMiddleware(request, response, next);
 });
 router.use((_req, _res, next) => { loadPartnerConfig(false).then(() => next(), next); });
+
+async function salesPageResponse(partner: PartnerProfile) {
+  const config = await loadPartnerConfig(false);
+  const stored = partner.salesPageConfig;
+  return { version: partner.version, defaults: stored?.defaults ?? {}, systemDefaults: salesAppearanceDefaults,
+    links: (stored?.links ?? []).map(link => ({ ...link, url: salesLinkUrl(config.baseUrl, partner.publicCode, link.code) })),
+    url: salesLinkUrl(config.baseUrl, partner.publicCode) };
+}
+router.get('/:partnerId/sales-page', route(async (req, res) => {
+  const ctx = await resolvePartner(req, 'integrations');
+  return res.json(await salesPageResponse(ctx.partner));
+}));
+router.put('/:partnerId/sales-page', route(async (req, res) => {
+  const ctx = await resolvePartner(req, 'integrations');
+  if (!ctx.actorId || ctx.scopes) throw new HttpError(403, 'Sign in to customize booking pages.');
+  if (typeof req.body.reason !== 'string' || !req.body.reason.trim() || req.body.reason.length > 1000) throw new HttpError(400, 'Record a reason for this page change.');
+  const partner = await sequelize.transaction(async transaction => {
+    const row = (await PartnerProfile.findByPk(ctx.partner.id, { transaction, lock: transaction.LOCK.UPDATE }))!;
+    if (row.version !== req.body.version) throw new HttpError(409, 'This partner changed in another session. Reload before saving; your draft has been kept.');
+    const salesPageConfig = parseSalesPageConfig(req.body, row.salesPageConfig, row.agreement.productIds);
+    await partnerEvent(row.id, 'sales_page.updated', { before: row.salesPageConfig, after: salesPageConfig, reason: req.body.reason.trim(), version: row.version + 1 }, ctx.actorId, null, transaction);
+    await row.update({ salesPageConfig, version: row.version + 1 }, { transaction });
+    return row;
+  });
+  return res.json(await salesPageResponse(partner));
+}));
+const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 0 } }).single('logo');
+router.post('/:partnerId/sales-page/logo', route(async (req, res) => {
+  const ctx = await resolvePartner(req, 'integrations');
+  if (!ctx.actorId || ctx.scopes) throw new HttpError(403, 'Sign in to upload a partner logo.');
+  await new Promise<void>((done, reject) => logoUpload(req, res, error => error ? reject(new HttpError(400, 'Choose one logo image, up to 5 MB.')) : done()));
+  if (!req.file) throw new HttpError(400, 'Choose a logo image.');
+  let url: string;
+  try { url = await uploadPartnerLogo(ctx.partner.id, req.file); } catch (e) { throw new HttpError(400, e instanceof Error ? e.message : 'Logo upload failed.'); }
+  await partnerEvent(ctx.partner.id, 'sales_page.logo_uploaded', { url }, ctx.actorId, null);
+  return res.status(201).json({ url });
+}));
 
 router.get('/', route(async (req, res) => {
   const admin = partnerAdministrator(req);

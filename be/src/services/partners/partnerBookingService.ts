@@ -17,6 +17,7 @@ import { partnerStatement } from './partnerStripeService.js';
 import { deliverStorefrontOrderEmails } from '../storefrontOrderEmailService.js';
 import logger from '../../utils/logger.js';
 import type { PartnerContext } from './partnerAccess.js';
+import { resolveSalesPresentation, salesProductIds, salesLinkUrl } from './partnerSalesPresentation.js';
 
 export type PartnerSelection = {
   reference: string;
@@ -74,14 +75,14 @@ async function checkoutForBooking(bookingId: number): Promise<PartnerBooking> {
     const partner = (await PartnerProfile.findByPk(booking.partnerId, { transaction }))!;
     const base = new URL(config.baseUrl);
     if (base.protocol !== 'https:' && !(process.env.NODE_ENV !== 'production' && base.hostname === 'localhost')) throw new HttpError(503, 'Partner public URL must be configured as HTTPS.');
-    const returnUrl = `${base.origin}/api/partner-sales/${encodeURIComponent(partner.publicCode)}`;
+    const returnUrl = salesLinkUrl(base.origin, partner.publicCode, typeof order.metadata?.partnerSalesLinkCode === 'string' ? order.metadata.partnerSalesLinkCode : undefined);
     const stripe = getStorefrontStripeClient();
     const session = await stripe.checkout.sessions.create({
       mode: 'payment', customer_email: order.customerEmail,
       line_items: [{ price_data: { currency: 'pln', unit_amount: minor(Number(order.total)), product_data: { name: `Experience booking — ${partner.name}` } }, quantity: 1 }],
       metadata: { orderPublicId: order.publicId, partnerBookingId: String(booking.id) },
       payment_intent_data: { metadata: { orderPublicId: order.publicId, partnerBookingId: String(booking.id) }, transfer_group: `partner_${booking.id}` },
-      success_url: `${returnUrl}?payment=returned`, cancel_url: `${returnUrl}?payment=cancelled`,
+      success_url: `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}payment=returned`, cancel_url: `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}payment=cancelled`,
       expires_at: Math.floor(Date.now() / 1000) + config.holdMinutes * 60,
     }, { idempotencyKey: `partner-checkout-${booking.id}` });
     if (!session.url) throw new HttpError(502, 'Stripe did not return a payment link.');
@@ -91,7 +92,7 @@ async function checkoutForBooking(bookingId: number): Promise<PartnerBooking> {
   });
 }
 
-export async function createPartnerBooking(context: PartnerContext, rawInput: unknown, source: string, publicCustomer = false): Promise<ReturnType<typeof safeBooking>> {
+export async function createPartnerBooking(context: PartnerContext, rawInput: unknown, source: string, publicCustomer = false, salesLinkCode?: string): Promise<ReturnType<typeof safeBooking>> {
   const config = await loadPartnerConfig();
   const selection = parsePartnerSelection(rawInput);
   if (source !== 'group' && selection.reference.startsWith('approved:')) throw new HttpError(400, 'The approved: reference prefix is reserved for management-approved requests.');
@@ -100,6 +101,11 @@ export async function createPartnerBooking(context: PartnerContext, rawInput: un
   const result = await sequelize.transaction(async transaction => {
     const partner = await PartnerProfile.findByPk(context.partner.id, { transaction, lock: transaction.LOCK.UPDATE });
     if (!partner || partner.status !== 'active') throw new HttpError(403, 'Partner is unavailable.');
+    if (publicCustomer) {
+      const { appearance } = resolveSalesPresentation(partner.salesPageConfig, salesLinkCode);
+      const ids = salesProductIds(partner.agreement.productIds, appearance);
+      if (selection.items.some(item => !ids.includes(Number(item.productId)))) throw new HttpError(403, 'An experience is not available through this booking link.');
+    }
     if (!partner.agreement.paymentModes.includes(selection.paymentMode)) throw new HttpError(403, 'This payment arrangement is not enabled for the partner.');
     const existing = await PartnerBooking.findOne({ where: { partnerId: partner.id, externalReference: selection.reference }, transaction });
     if (existing) { assertIdempotentReplay(existing.requestHash, fingerprint); return existing; }
@@ -126,7 +132,7 @@ export async function createPartnerBooking(context: PartnerContext, rawInput: un
       currency: quote.currency, subtotal: quote.subtotal, addonTotal: quote.addonTotal, discountTotal: quote.discountTotal, total: quote.total,
       customerFirstName: selection.customer.firstName, customerLastName: selection.customer.lastName, customerEmail: selection.customer.email, customerPhone: selection.customer.phone || null,
       discountCode: quote.discountCode, createdByUserId: actorId, paidAt: paid ? now : null,
-      metadata: { partnerId: partner.id, partnerBookingId: booking.id, partnerChannelId: partner.channelId, partnerPaymentReference: selection.paymentReference || null, promotionIds: quote.discounts.map(d => d.promotionId), discounts: quote.discounts },
+      metadata: { partnerId: partner.id, partnerBookingId: booking.id, partnerChannelId: partner.channelId, ...(salesLinkCode ? { partnerSalesLinkCode: salesLinkCode } : {}), partnerPaymentReference: selection.paymentReference || null, promotionIds: quote.discounts.map(d => d.promotionId), discounts: quote.discounts },
       attribution: { utm_source: `partner-${partner.id}`, utm_medium: source },
     } as never, { transaction });
     const items = await StorefrontOrderItem.bulkCreate(quote.items.map(item => ({ ...item, orderId: order.id })) as never[], { transaction });

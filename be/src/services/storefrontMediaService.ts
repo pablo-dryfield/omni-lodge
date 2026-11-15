@@ -1,6 +1,34 @@
 import { randomUUID } from 'node:crypto';
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getConfigValue } from './configService.js';
+import sharp from 'sharp';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+export const localPartnerLogoDirectory = resolve(process.cwd(), 'uploads', 'partner-logos');
+
+/** Re-encode raster input, stripping metadata. Development never writes to R2. */
+export async function uploadPartnerLogo(partnerId: number, file: Express.Multer.File): Promise<string> {
+  let buffer: Buffer;
+  try {
+    const source = sharp(file.buffer, { limitInputPixels: 20000000, failOn: 'error' });
+    const metadata = await source.metadata();
+    if (!['jpeg', 'png', 'webp', 'gif'].includes(metadata.format || '')) throw new Error('Unsupported format');
+    buffer = await source.rotate().resize({ width: 1000, height: 400, fit: 'inside', withoutEnlargement: true }).webp({ quality: 88 }).toBuffer();
+  } catch { throw new Error('Choose a valid JPEG, PNG, WebP or GIF logo.'); }
+  const filename = `${partnerId}-${randomUUID()}.webp`;
+  if (process.env.NODE_ENV !== 'production') {
+    await mkdir(localPartnerLogoDirectory, { recursive: true });
+    await writeFile(resolve(localPartnerLogoDirectory, filename), buffer);
+    const { loadPartnerConfig } = await import('./partners/partnerConfig.js');
+    const config = await loadPartnerConfig(false);
+    return new URL(`/api/partner-sales/local-logos/${filename}`, config.baseUrl).href;
+  }
+  const { bucket, publicBaseUrl, client } = getMediaConfig();
+  const key = `partners/${partnerId}/logos/${filename}`;
+  await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: 'image/webp', CacheControl: 'public, max-age=31536000, immutable' }));
+  return `${publicBaseUrl}/${key}`;
+}
 
 const ALLOWED_IMAGE_TYPES = new Map([
   ['image/jpeg', 'jpg'],

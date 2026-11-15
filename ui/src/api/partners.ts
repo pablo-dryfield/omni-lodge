@@ -1,6 +1,17 @@
 import axios from '../utils/axiosInstance';
 
 export type PartnerCommissionRule = { type: 'fixed' | 'percentage'; basis: 'person' | 'experience' | 'booking'; value: number };
+export type SalesAppearance = {
+  showBrand: boolean; brandDisplay: 'name' | 'logo' | 'both'; logoUrl: string;
+  showPoweredBy: boolean; poweredByText: string; showStepper: boolean;
+  showEyebrow: boolean; eyebrow: string; showTitle: boolean; title: string;
+  showDescription: boolean; description: string; showCount: boolean; hideSingleCount: boolean;
+  showSecureBooking: boolean; secureBookingText: string; showPaymentTrust: boolean; paymentTrustText: string;
+  showEmailTrust: boolean; emailTrustText: string; showPartnerTrust: boolean; partnerTrustText: string;
+  entryMode: 'catalog' | 'single' | 'product'; entryProductId: number | null; productIds: number[] | null;
+};
+export type PartnerSalesLink = { id?: string; code?: string; url?: string; name: string; active: boolean; overrides: Partial<SalesAppearance> };
+export type PartnerSalesPage = { version: number; defaults: Partial<SalesAppearance>; systemDefaults: SalesAppearance; links: PartnerSalesLink[]; url: string };
 export type PartnerCommissionCalculation = { version: 1; currency: 'PLN'; total: number; commission: number;
   groups: Array<{ productId: number | null; rule: PartnerCommissionRule; units: number; base: number; commission: number }> };
 export type PartnerQuote = { total: number; items: Array<{ productName: string; total: number; quantity: number }>; partnerCommission?: PartnerCommissionCalculation };
@@ -18,6 +29,7 @@ export const partnerApi = {
   get: async <T,>(id: number, path: string, params?: Record<string, unknown>): Promise<T> => (await axios.get<T>(`/partners/${id}/${path}`, { params })).data,
   post: async <T,>(id: number, path: string, body: unknown): Promise<T> => (await axios.post<T>(`/partners/${id}/${path}`, body)).data,
   put: async (id: number, path: string, body: unknown) => (await axios.put(`/partners/${id}/${path}`, body)).data,
+  uploadLogo: async (id: number, file: File): Promise<{ url: string }> => { const body = new FormData(); body.append('logo', file); return (await axios.post(`/partners/${id}/sales-page/logo`, body)).data; },
   revoke: async (id: number, tokenId: number) => axios.delete(`/partners/${id}/credentials/${tokenId}`),
   create: async (body: unknown) => (await axios.post<{ id: number }>('/partners', body)).data,
 };

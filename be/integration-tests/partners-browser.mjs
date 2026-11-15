@@ -38,7 +38,7 @@ try {
   user = await User.create({ username: prefix, email: `${prefix}@example.invalid`, firstName: 'Portal', lastName: 'QA', password: await bcrypt.hash(password, 10), userTypeId: role.id, roleKey: commissions ? 'admin' : 'guide', badgeRequired: false, profilePhotoUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', approved: true, status: true, createdBy: actor.id });
   channel = await Channel.create({ name: 'QA Walking Tours', description: prefix, apiKey: '', apiSecret: '', createdBy: actor.id, paymentMethodId: method.id });
   product = await Product.create({ name: 'QA City Pub Crawl', price: 100, productTypeId: (await Product.findOne()).productTypeId, createdBy: actor.id, status: true, storefrontConfig: { dateRequired: true, timeMode: 'select', startTimes: ['17:00', '19:30'], minParticipants: 1, maxParticipants: 50, content: { meetingPoint: { name: 'City Square' } } } });
-  partner = await PartnerProfile.create({ channelId: channel.id, publicCode: opaqueToken(), name: 'QA Walking Tours', createdBy: actor.id, agreement: { ...defaultAgreement, productIds: [product.id], commissionPercent: 20, paymentModes: ['platform', 'arrival'] } });
+  partner = await PartnerProfile.create({ channelId: channel.id, publicCode: opaqueToken(), name: 'QA Walking Tours', createdBy: actor.id, agreement: { ...defaultAgreement, productIds: [product.id], commissionPercent: 20, paymentModes: ['platform', 'arrival'], allowedOrigins: ['http://localhost:3000'] } });
   await PartnerMember.create({ partnerId: partner.id, userId: user.id, role: 'owner', active: true });
   const response = await fetch('http://localhost:3001/api/users/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: user.username, password }) });
   assert.equal(response.status, 200, `Local QA login returned ${response.status}`);
@@ -133,11 +133,24 @@ try {
   await page.waitForFunction(() => document.body.innerText.includes('API credentials'));
   assert.ok(await page.$('textarea'));
   checks.push('Integration links, embeds and API controls');
+  const embedCode = await page.$eval('textarea', field => field.value);
+  assert.ok(embedCode.includes('?embed=1') && embedCode.includes('/api/partner-sales/embed.js'));
+  await page.locator('button ::-p-text(Preview widget)').click();
+  await page.waitForSelector('iframe[title="Partner booking widget preview"]');
+  const preview = await page.$('iframe[title="Partner booking widget preview"]');
+  assert.equal(await preview.evaluate(frame => new URL(frame.src).origin), 'http://localhost:3001');
+  const frame = await preview.contentFrame();
+  await frame.waitForSelector('.activity-card');
+  assert.deepEqual(await frame.$$eval('.activity-card', cards => cards.map(card => Number(card.dataset.productId))), [product.id]);
+  await page.screenshot({ path: join(output, 'integration-widget-preview.png'), fullPage: true });
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('iframe[title="Partner booking widget preview"]', { hidden: true });
+  checks.push('Actual integration modal previews only the local partner approved activity');
   await tab('Activity');
   await page.waitForFunction(text => document.body.innerText.includes(text), {}, commissions ? 'agreement updated' : 'No activity recorded yet.');
   checks.push('Scoped activity history and empty state');
   await page.goto(`http://localhost:3001/api/partner-sales/${partner.publicCode}`, { waitUntil: 'networkidle2' });
-  await page.waitForSelector('.line');
+  await page.waitForSelector('.activity-card');
   for (const width of [1440, 390, 320]) {
     await page.setViewport({ width, height: 1000 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `Widget overflows at ${width}`);
